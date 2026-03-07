@@ -4,11 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
-[lib]
-crate-type = ["lib", "staticlib", "cdylib"]
-
 [dependencies]
-mello-sys = { path = "../mello-sys" }
 tokio = { workspace = true }
 tokio-tungstenite = { version = "0.21", features = ["native-tls"] }
 futures = "0.3"
@@ -16,7 +12,9 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 log = { workspace = true }
 thiserror = { workspace = true }
+reqwest = { workspace = true }
 chrono = { version = "0.4", features = ["serde"] }
+base64 = "0.22"
 
 [dev-dependencies]
 tokio-test = "0.4"

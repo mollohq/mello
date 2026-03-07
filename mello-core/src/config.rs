@@ -1,18 +1,35 @@
-//! Client configuration
-
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
-    pub nakama_url: String,
+    pub nakama_host: String,
+    pub nakama_port: u16,
     pub nakama_key: String,
+    pub nakama_ssl: bool,
+}
+
+impl Config {
+    pub fn http_base(&self) -> String {
+        let scheme = if self.nakama_ssl { "https" } else { "http" };
+        format!("{}://{}:{}", scheme, self.nakama_host, self.nakama_port)
+    }
+
+    pub fn ws_url(&self, token: &str) -> String {
+        let scheme = if self.nakama_ssl { "wss" } else { "ws" };
+        format!(
+            "{}://{}:{}/ws?lang=en&status=true&token={}",
+            scheme, self.nakama_host, self.nakama_port, token
+        )
+    }
 }
 
 impl Default for Config {
     fn default() -> Self {
         Self {
-            nakama_url: "http://localhost:7350".into(),
+            nakama_host: "127.0.0.1".into(),
+            nakama_port: 7350,
             nakama_key: "defaultkey".into(),
+            nakama_ssl: false,
         }
     }
 }

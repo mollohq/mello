@@ -1,6 +1,9 @@
 import { Theme } from "../theme.slint";
+import { MemberData } from "../types.slint";
 
 export component StreamView inherits Rectangle {
+    in property <[MemberData]> members: [];
+
     background: Theme.bg-secondary;
     border-radius: Theme.radius-md;
 
@@ -27,6 +30,31 @@ export component StreamView inherits Rectangle {
                 color: Theme.text-muted;
                 horizontal-alignment: center;
                 vertical-alignment: center;
+            }
+        }
+
+        // Crew members bar
+        if members.length > 0: HorizontalLayout {
+            spacing: Theme.spacing-sm;
+            height: 40px;
+
+            for member in members: Rectangle {
+                width: 36px;
+                height: 36px;
+                border-radius: 18px;
+                background: Theme.bg-primary;
+                border-width: 2px;
+                border-color: member.online ? Theme.accent-green : Theme.border-light;
+
+                Text {
+                    text: member.name;
+                    font-size: Theme.font-xs;
+                    color: Theme.text-secondary;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                    overflow: elide;
+                    max-width: 30px;
+                }
             }
         }
     }

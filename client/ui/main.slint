@@ -1,8 +1,11 @@
 import { Theme } from "theme.slint";
+import { CrewData, MemberData, ChatMessageData } from "types.slint";
 import { CrewPanel } from "panels/crew_panel.slint";
 import { StreamView } from "panels/stream_view.slint";
 import { ChatPanel } from "panels/chat_panel.slint";
 import { ControlBar } from "panels/control_bar.slint";
+
+export { CrewData, MemberData, ChatMessageData }
 
 export component MainWindow inherits Window {
     title: "Mello";
@@ -12,36 +15,197 @@ export component MainWindow inherits Window {
     preferred-height: 800px;
     background: Theme.bg-primary;
 
-    HorizontalLayout {
+    // Auth state
+    in property <bool> logged-in: false;
+    in property <string> login-error: "";
+    in property <bool> login-loading: false;
+
+    // User info
+    in property <string> user-name: "";
+    in property <string> user-tag: "";
+
+    // Crew data
+    in property <[CrewData]> crews: [];
+    in property <string> active-crew-id: "";
+    in property <[MemberData]> members: [];
+
+    // Chat data
+    in property <[ChatMessageData]> messages: [];
+
+    // Voice state
+    in-out property <bool> mic-muted: false;
+    in-out property <bool> deafened: false;
+
+    // Callbacks
+    callback login(string, string);
+    callback create-crew(string);
+    callback select-crew(string);
+    callback send-message(string);
+    callback mic-toggle();
+    callback deafen-toggle();
+
+    // --- Login Screen ---
+    if !logged-in: Rectangle {
+        background: Theme.bg-primary;
+
+        VerticalLayout {
+            alignment: center;
+            spacing: Theme.spacing-lg;
+
+            // Title
+            Text {
+                text: "mello";
+                font-size: 48px;
+                font-weight: 700;
+                color: Theme.text-primary;
+                horizontal-alignment: center;
+            }
+            Text {
+                text: "Hang out with your crew";
+                font-size: Theme.font-lg;
+                color: Theme.text-muted;
+                horizontal-alignment: center;
+            }
+
+            // Form container
+            HorizontalLayout {
+                alignment: center;
+
+                VerticalLayout {
+                    spacing: Theme.spacing-md;
+                    width: 360px;
+
+                    // Email
+                    Rectangle {
+                        height: 44px;
+                        background: Theme.bg-secondary;
+                        border-radius: Theme.radius-md;
+                        border-width: 1px;
+                        border-color: Theme.border-light;
+
+                        email-input := TextInput {
+                            x: Theme.spacing-md;
+                            width: parent.width - Theme.spacing-md * 2;
+                            height: parent.height;
+                            font-size: Theme.font-md;
+                            color: Theme.text-primary;
+                            horizontal-alignment: left;
+                            vertical-alignment: center;
+                        }
+                        if email-input.text == "": Text {
+                            x: Theme.spacing-md;
+                            color: Theme.text-muted;
+                            font-size: Theme.font-md;
+                            vertical-alignment: center;
+                            text: "Email";
+                        }
+                    }
+
+                    // Password
+                    Rectangle {
+                        height: 44px;
+                        background: Theme.bg-secondary;
+                        border-radius: Theme.radius-md;
+                        border-width: 1px;
+                        border-color: Theme.border-light;
+
+                        password-input := TextInput {
+                            x: Theme.spacing-md;
+                            width: parent.width - Theme.spacing-md * 2;
+                            height: parent.height;
+                            font-size: Theme.font-md;
+                            color: Theme.text-primary;
+                            horizontal-alignment: left;
+                            vertical-alignment: center;
+                            input-type: password;
+                            accepted => {
+                                root.login(email-input.text, password-input.text);
+                            }
+                        }
+                        if password-input.text == "": Text {
+                            x: Theme.spacing-md;
+                            color: Theme.text-muted;
+                            font-size: Theme.font-md;
+                            vertical-alignment: center;
+                            text: "Password";
+                        }
+                    }
+
+                    // Error
+                    if login-error != "": Text {
+                        text: login-error;
+                        color: Theme.accent-red;
+                        font-size: Theme.font-sm;
+                        horizontal-alignment: center;
+                    }
+
+                    // Login button
+                    Rectangle {
+                        height: 44px;
+                        background: login-loading ? Theme.bg-tertiary : Theme.bg-dark;
+                        border-radius: Theme.radius-md;
+
+                        Text {
+                            text: login-loading ? "Signing in..." : "Sign In";
+                            color: white;
+                            font-size: Theme.font-md;
+                            font-weight: 600;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+
+                        TouchArea {
+                            clicked => {
+                                if !login-loading {
+                                    root.login(email-input.text, password-input.text);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // --- Main Screen ---
+    if logged-in: HorizontalLayout {
         padding: Theme.spacing-md;
         spacing: Theme.spacing-md;
 
-        // Left: Crew Panel
         CrewPanel {
             width: 240px;
+            crews: root.crews;
+            active-crew-id: root.active-crew-id;
+            crew-selected(id) => { root.select-crew(id); }
+            crew-create-requested(name) => { root.create-crew(name); }
         }
 
-        // Center + Right
         VerticalLayout {
             spacing: Theme.spacing-md;
-            
+
             HorizontalLayout {
                 spacing: Theme.spacing-md;
-                
-                // Center: Stream View
+
                 StreamView {
                     horizontal-stretch: 1;
+                    members: root.members;
                 }
-                
-                // Right: Chat Panel
+
                 ChatPanel {
                     width: 300px;
+                    messages: root.messages;
+                    message-submitted(text) => { root.send-message(text); }
                 }
             }
-            
-            // Bottom: Control Bar
+
             ControlBar {
                 height: 72px;
+                user-name: root.user-name;
+                user-tag: root.user-tag;
+                mic-muted: root.mic-muted;
+                deafened: root.deafened;
+                mic-toggled => { root.mic-toggle(); }
+                deafen-toggled => { root.deafen-toggle(); }
             }
         }
     }

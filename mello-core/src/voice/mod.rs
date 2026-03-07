@@ -1,5 +1,3 @@
-//! Voice chat management
-
 pub struct VoiceManager {
     muted: bool,
     deafened: bool,
@@ -12,14 +10,20 @@ impl VoiceManager {
             deafened: false,
         }
     }
-    
+
     pub fn set_mute(&mut self, muted: bool) {
         self.muted = muted;
-        // TODO: Call libmello
     }
-    
+
     pub fn set_deafen(&mut self, deafened: bool) {
         self.deafened = deafened;
-        // TODO: Call libmello
+    }
+
+    pub fn is_muted(&self) -> bool {
+        self.muted
+    }
+
+    pub fn is_deafened(&self) -> bool {
+        self.deafened
     }
 }

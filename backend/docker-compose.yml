@@ -18,12 +18,26 @@ services:
       timeout: 5s
       retries: 5
 
+  nakama-build:
+    image: heroiclabs/nakama-pluginbuilder:3.21.0
+    container_name: mello-nakama-build
+    volumes:
+      - ./nakama/data/modules:/backend
+    working_dir: /backend
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        go mod tidy && go build -buildmode=plugin -trimpath -o ./backend.so .
+
   nakama:
     image: heroiclabs/nakama:3.21.0
     container_name: mello-nakama
     depends_on:
       postgres:
         condition: service_healthy
+      nakama-build:
+        condition: service_completed_successfully
     environment:
       - DISCORD_CLIENT_ID=${DISCORD_CLIENT_ID:-}
       - DISCORD_CLIENT_SECRET=${DISCORD_CLIENT_SECRET:-}
@@ -34,7 +48,7 @@ services:
         /nakama/nakama migrate up --database.address nakama:localdev@postgres:5432/nakama &&
         exec /nakama/nakama --config /nakama/data/local.yml
     volumes:
-      - ./nakama/data:/nakama/data:ro
+      - ./nakama/data:/nakama/data
     ports:
       - "7350:7350" # gRPC API
       - "7351:7351" # HTTP API / Admin Console

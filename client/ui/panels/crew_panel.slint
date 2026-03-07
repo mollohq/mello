@@ -1,6 +1,13 @@
 import { Theme } from "../theme.slint";
+import { CrewData } from "../types.slint";
 
 export component CrewPanel inherits Rectangle {
+    in property <[CrewData]> crews: [];
+    in property <string> active-crew-id: "";
+
+    callback crew-selected(string);
+    callback crew-create-requested(string);
+
     background: Theme.bg-primary;
     border-width: 1px;
     border-color: Theme.border-light;
@@ -11,22 +18,126 @@ export component CrewPanel inherits Rectangle {
         spacing: Theme.spacing-md;
 
         // Header
-        Text {
-            text: "YOUR CREWS";
-            font-size: Theme.font-xs;
-            color: Theme.text-muted;
-            letter-spacing: 1px;
+        HorizontalLayout {
+            Text {
+                text: "YOUR CREWS";
+                font-size: Theme.font-xs;
+                color: Theme.text-muted;
+                letter-spacing: 1px;
+                vertical-alignment: center;
+            }
+            Rectangle { horizontal-stretch: 1; }
+            // Online indicator
+            Rectangle {
+                width: 8px;
+                height: 8px;
+                border-radius: 4px;
+                background: Theme.accent-green;
+            }
         }
 
-        // Placeholder
-        Rectangle {
+        // Crew list
+        if crews.length == 0: Rectangle {
             vertical-stretch: 1;
-            
             Text {
-                text: "No crews yet";
+                text: "No crews yet.\nCreate one below.";
                 color: Theme.text-muted;
                 horizontal-alignment: center;
                 vertical-alignment: center;
+                font-size: Theme.font-sm;
+            }
+        }
+
+        if crews.length > 0: VerticalLayout {
+            spacing: Theme.spacing-sm;
+            vertical-stretch: 1;
+
+            for crew[i] in crews: Rectangle {
+                height: 48px;
+                border-radius: Theme.radius-sm;
+                background: crew.id == active-crew-id ? Theme.bg-secondary : transparent;
+
+                HorizontalLayout {
+                    padding-left: Theme.spacing-sm;
+                    padding-right: Theme.spacing-sm;
+                    spacing: Theme.spacing-sm;
+                    alignment: center;
+
+                    // Crew initial
+                    Rectangle {
+                        width: 32px;
+                        height: 32px;
+                        border-radius: 16px;
+                        background: Theme.bg-tertiary;
+
+                        Text {
+                            text: crew.name;
+                            font-size: Theme.font-xs;
+                            color: Theme.text-secondary;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                            overflow: elide;
+                            max-width: 28px;
+                        }
+                    }
+
+                    VerticalLayout {
+                        alignment: center;
+                        horizontal-stretch: 1;
+
+                        Text {
+                            text: crew.name;
+                            font-size: Theme.font-md;
+                            font-weight: 500;
+                            color: Theme.text-primary;
+                            overflow: elide;
+                        }
+                        Text {
+                            text: crew.member-count + " members";
+                            font-size: Theme.font-xs;
+                            color: Theme.text-muted;
+                        }
+                    }
+                }
+
+                TouchArea {
+                    clicked => { crew-selected(crew.id); }
+                }
+            }
+        }
+
+        // Create crew
+        Rectangle {
+            height: 40px;
+            background: Theme.bg-secondary;
+            border-radius: Theme.radius-md;
+
+            HorizontalLayout {
+                padding-left: Theme.spacing-sm;
+                padding-right: Theme.spacing-sm;
+
+                crew-name-input := TextInput {
+                    width: parent.width - 40px;
+                    height: parent.height;
+                    font-size: Theme.font-sm;
+                    color: Theme.text-primary;
+                    vertical-alignment: center;
+                    accepted => {
+                        if crew-name-input.text != "" {
+                            crew-create-requested(crew-name-input.text);
+                            crew-name-input.text = "";
+                        }
+                    }
+                }
+                if crew-name-input.text == "": Rectangle {
+                    Text {
+                        color: Theme.text-muted;
+                        font-size: Theme.font-sm;
+                        vertical-alignment: center;
+                        text: "+ New crew";
+                        x: Theme.spacing-sm;
+                    }
+                }
             }
         }
     }

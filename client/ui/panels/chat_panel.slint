@@ -1,6 +1,10 @@
 import { Theme } from "../theme.slint";
+import { ChatMessageData } from "../types.slint";
 
 export component ChatPanel inherits Rectangle {
+    in property <[ChatMessageData]> messages: [];
+    callback message-submitted(string);
+
     background: Theme.bg-primary;
     border-width: 1px;
     border-color: Theme.border-light;
@@ -18,29 +22,72 @@ export component ChatPanel inherits Rectangle {
             letter-spacing: 1px;
         }
 
-        // Messages placeholder
+        // Messages
         Rectangle {
             vertical-stretch: 1;
-            
-            Text {
-                text: "No messages";
+            clip: true;
+
+            if messages.length == 0: Text {
+                text: "No messages yet";
                 color: Theme.text-muted;
                 horizontal-alignment: center;
                 vertical-alignment: center;
+                font-size: Theme.font-sm;
+            }
+
+            if messages.length > 0: Flickable {
+                viewport-height: self.height;
+
+                VerticalLayout {
+                    spacing: Theme.spacing-sm;
+                    alignment: end;
+
+                    for msg in messages: VerticalLayout {
+                        spacing: 2px;
+
+                        Text {
+                            text: msg.sender-name;
+                            font-size: Theme.font-xs;
+                            font-weight: 600;
+                            color: Theme.text-secondary;
+                        }
+                        Text {
+                            text: msg.text;
+                            font-size: Theme.font-md;
+                            color: Theme.text-primary;
+                            wrap: word-wrap;
+                        }
+                    }
+                }
             }
         }
 
-        // Input placeholder
+        // Input
         Rectangle {
             height: 40px;
             background: Theme.bg-secondary;
             border-radius: Theme.radius-md;
 
-            Text {
-                text: "Message...";
-                color: Theme.text-muted;
+            chat-input := TextInput {
                 x: Theme.spacing-md;
+                width: parent.width - Theme.spacing-md * 2;
+                height: parent.height;
+                font-size: Theme.font-md;
+                color: Theme.text-primary;
                 vertical-alignment: center;
+                accepted => {
+                    if chat-input.text != "" {
+                        message-submitted(chat-input.text);
+                        chat-input.text = "";
+                    }
+                }
+            }
+            if chat-input.text == "": Text {
+                x: Theme.spacing-md;
+                color: Theme.text-muted;
+                font-size: Theme.font-md;
+                vertical-alignment: center;
+                text: "Message crewmates...";
             }
         }
     }

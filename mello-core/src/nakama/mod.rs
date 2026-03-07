@@ -1,5 +1,4 @@
-//! Nakama client implementation
-
 pub mod client;
+pub mod types;
 
 pub use client::NakamaClient;

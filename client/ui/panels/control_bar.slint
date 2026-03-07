@@ -1,6 +1,14 @@
 import { Theme } from "../theme.slint";
 
 export component ControlBar inherits Rectangle {
+    in property <string> user-name: "";
+    in property <string> user-tag: "";
+    in-out property <bool> mic-muted: false;
+    in-out property <bool> deafened: false;
+
+    callback mic-toggled();
+    callback deafen-toggled();
+
     background: Theme.bg-primary;
     border-width: 1px;
     border-color: Theme.border-light;
@@ -9,47 +17,99 @@ export component ControlBar inherits Rectangle {
     HorizontalLayout {
         padding: Theme.spacing-md;
         spacing: Theme.spacing-lg;
-        alignment: center;
 
-        // User info placeholder
-        Rectangle {
-            width: 40px;
-            height: 40px;
-            border-radius: 20px;
-            background: Theme.bg-secondary;
-
-            Text {
-                text: "ME";
-                font-size: Theme.font-sm;
-                color: Theme.text-muted;
-                horizontal-alignment: center;
-                vertical-alignment: center;
-            }
-        }
-
-        Text {
-            text: "Not logged in";
-            color: Theme.text-secondary;
-            vertical-alignment: center;
-        }
-
-        Rectangle { horizontal-stretch: 1; }
-
-        // Control buttons placeholder
+        // User info
         HorizontalLayout {
             spacing: Theme.spacing-sm;
+            alignment: center;
 
-            for icon in ["🎤", "🎧", "⚙️"]: Rectangle {
+            // Avatar
+            Rectangle {
                 width: 40px;
                 height: 40px;
                 border-radius: 20px;
                 background: Theme.bg-secondary;
 
                 Text {
-                    text: icon;
-                    font-size: Theme.font-lg;
+                    text: user-name != "" ? user-name : "?";
+                    font-size: Theme.font-sm;
+                    color: Theme.text-secondary;
                     horizontal-alignment: center;
                     vertical-alignment: center;
+                    overflow: elide;
+                    max-width: 36px;
+                }
+            }
+
+            VerticalLayout {
+                alignment: center;
+
+                Text {
+                    text: user-name != "" ? user-name : "Not logged in";
+                    font-size: Theme.font-md;
+                    font-weight: 600;
+                    color: Theme.text-primary;
+                }
+                if user-tag != "": Text {
+                    text: user-tag;
+                    font-size: Theme.font-xs;
+                    color: Theme.text-muted;
+                }
+            }
+        }
+
+        Rectangle { horizontal-stretch: 1; }
+
+        // Controls
+        HorizontalLayout {
+            spacing: Theme.spacing-sm;
+            alignment: center;
+
+            // Mic
+            Rectangle {
+                width: 40px;
+                height: 40px;
+                border-radius: 20px;
+                background: mic-muted ? Theme.accent-red : Theme.bg-secondary;
+
+                Text {
+                    text: mic-muted ? "X" : "M";
+                    font-size: Theme.font-md;
+                    font-weight: 600;
+                    color: mic-muted ? white : Theme.text-secondary;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+
+                TouchArea {
+                    clicked => {
+                        mic-muted = !mic-muted;
+                        mic-toggled();
+                    }
+                }
+            }
+
+            // Deafen
+            Rectangle {
+                width: 40px;
+                height: 40px;
+                border-radius: 20px;
+                background: deafened ? Theme.accent-red : Theme.bg-secondary;
+
+                Text {
+                    text: deafened ? "X" : "D";
+                    font-size: Theme.font-md;
+                    font-weight: 600;
+                    color: deafened ? white : Theme.text-secondary;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+
+                TouchArea {
+                    clicked => {
+                        deafened = !deafened;
+                        deafen-toggled();
+                    }
                 }
             }
         }

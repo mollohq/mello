@@ -1,5 +1,3 @@
-//! Crew (group) management
-
 pub type CrewId = String;
 pub type MemberId = String;
 
@@ -7,12 +5,15 @@ pub type MemberId = String;
 pub struct Crew {
     pub id: CrewId,
     pub name: String,
-    pub members: Vec<Member>,
+    pub member_count: i32,
+    pub max_members: i32,
+    pub open: bool,
 }
 
 #[derive(Debug, Clone)]
 pub struct Member {
     pub id: MemberId,
-    pub name: String,
+    pub username: String,
+    pub display_name: String,
     pub online: bool,
 }
