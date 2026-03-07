@@ -155,7 +155,10 @@ impl NakamaClient {
 
     pub async fn list_user_groups(&self) -> Result<Vec<Crew>> {
         let token = self.bearer()?;
-        let url = format!("{}/v2/user/group", self.config.http_base());
+        let user_id = self.current_user.as_ref()
+            .ok_or(Error::NotConnected)?
+            .id.clone();
+        let url = format!("{}/v2/user/{}/group", self.config.http_base(), user_id);
 
         let resp = self.http.get(&url)
             .bearer_auth(&token)

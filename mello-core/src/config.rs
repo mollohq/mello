@@ -28,7 +28,7 @@ impl Default for Config {
         Self {
             nakama_host: "127.0.0.1".into(),
             nakama_port: 7350,
-            nakama_key: "defaultkey".into(),
+            nakama_key: "mello_dev_key".into(),
             nakama_ssl: false,
         }
     }
