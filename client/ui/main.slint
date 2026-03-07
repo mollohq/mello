@@ -38,6 +38,7 @@ export component MainWindow inherits Window {
 
     // Callbacks
     callback login(string, string);
+    callback logout();
     callback create-crew(string);
     callback select-crew(string);
     callback send-message(string);
@@ -206,6 +207,7 @@ export component MainWindow inherits Window {
                 deafened: root.deafened;
                 mic-toggled => { root.mic-toggle(); }
                 deafen-toggled => { root.deafen-toggle(); }
+                logout-clicked => { root.logout(); }
             }
         }
     }

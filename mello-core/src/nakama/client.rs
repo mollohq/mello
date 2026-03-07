@@ -18,6 +18,7 @@ pub struct NakamaClient {
     config: Config,
     http: reqwest::Client,
     token: Option<String>,
+    refresh_token: Option<String>,
     current_user: Option<User>,
     active_crew_id: Option<String>,
     ws_tx: Option<mpsc::Sender<String>>,
@@ -31,6 +32,7 @@ impl NakamaClient {
             config,
             http: reqwest::Client::new(),
             token: None,
+            refresh_token: None,
             current_user: None,
             active_crew_id: None,
             ws_tx: None,
@@ -79,10 +81,43 @@ impl NakamaClient {
 
         let session: ApiSession = resp.json().await?;
         self.token = Some(session.token.clone());
+        self.refresh_token = session.refresh_token;
 
         let user = self.get_account().await?;
         self.current_user = Some(user.clone());
         Ok(user)
+    }
+
+    pub async fn refresh_session(&mut self, refresh_token: &str) -> Result<User> {
+        let url = format!(
+            "{}/v2/account/session/refresh",
+            self.config.http_base()
+        );
+
+        let resp = self.http.post(&url)
+            .basic_auth(&self.config.nakama_key, Some(""))
+            .json(&serde_json::json!({ "token": refresh_token }))
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            log::warn!("Refresh failed: {} -- {}", status, body);
+            return Err(Error::AuthFailed(format!("refresh failed ({})", status)));
+        }
+
+        let session: ApiSession = resp.json().await?;
+        self.token = Some(session.token.clone());
+        self.refresh_token = session.refresh_token;
+
+        let user = self.get_account().await?;
+        self.current_user = Some(user.clone());
+        Ok(user)
+    }
+
+    pub fn refresh_token(&self) -> Option<&str> {
+        self.refresh_token.as_deref()
     }
 
     async fn get_account(&self) -> Result<User> {

@@ -20,6 +20,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let app = MainWindow::new()?;
 
+    // --- Attempt session restore on startup ---
+    let _ = cmd_tx.try_send(Command::TryRestore);
+
     // --- Wire login callback ---
     {
         let cmd = cmd_tx.clone();
@@ -64,6 +67,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
+    // --- Wire logout ---
+    {
+        let cmd = cmd_tx.clone();
+        let app_weak = app.as_weak();
+        app.on_logout(move || {
+            let _ = cmd.try_send(Command::Logout);
+            if let Some(app) = app_weak.upgrade() {
+                app.set_logged_in(false);
+                app.set_user_name("".into());
+                app.set_user_tag("".into());
+                app.set_active_crew_id("".into());
+            }
+        });
+    }
+
     // --- Wire voice toggles ---
     {
         let cmd = cmd_tx.clone();
@@ -105,6 +123,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 fn handle_event(app: &MainWindow, event: Event) {
     match event {
+        Event::Restoring => {
+            app.set_login_loading(true);
+        }
         Event::LoggedIn { user } => {
             log::info!("UI: logged in as {}", user.display_name);
             app.set_logged_in(true);

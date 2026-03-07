@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Deserialize)]
 pub struct ApiSession {
     pub token: String,
+    #[serde(alias = "refreshToken")]
     pub refresh_token: Option<String>,
     pub created: Option<bool>,
 }

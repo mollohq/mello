@@ -5,6 +5,7 @@ pub mod crew;
 pub mod error;
 pub mod events;
 pub mod nakama;
+pub mod session;
 pub mod stream;
 pub mod voice;
 

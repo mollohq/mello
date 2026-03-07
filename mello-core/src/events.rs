@@ -19,6 +19,7 @@ pub struct ChatMessage {
 
 #[derive(Debug, Clone)]
 pub enum Event {
+    Restoring,
     LoggedIn { user: User },
     LoginFailed { reason: String },
 

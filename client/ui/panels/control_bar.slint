@@ -8,6 +8,7 @@ export component ControlBar inherits Rectangle {
 
     callback mic-toggled();
     callback deafen-toggled();
+    callback logout-clicked();
 
     background: Theme.bg-primary;
     border-width: 1px;
@@ -110,6 +111,27 @@ export component ControlBar inherits Rectangle {
                         deafened = !deafened;
                         deafen-toggled();
                     }
+                }
+            }
+
+            // Logout
+            Rectangle {
+                width: 40px;
+                height: 40px;
+                border-radius: 20px;
+                background: logout-hover.has-hover ? Theme.accent-red : Theme.bg-secondary;
+
+                Text {
+                    text: "⏻";
+                    font-size: Theme.font-lg;
+                    font-weight: 600;
+                    color: logout-hover.has-hover ? white : Theme.text-muted;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+
+                logout-hover := TouchArea {
+                    clicked => { logout-clicked(); }
                 }
             }
         }

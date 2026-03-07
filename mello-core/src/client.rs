@@ -4,6 +4,7 @@ use crate::command::Command;
 use crate::config::Config;
 use crate::events::Event;
 use crate::nakama::NakamaClient;
+use crate::session;
 
 pub struct Client {
     nakama: NakamaClient,
@@ -32,8 +33,14 @@ impl Client {
 
     async fn handle_command(&mut self, cmd: Command) {
         match cmd {
+            Command::TryRestore => {
+                self.handle_restore().await;
+            }
             Command::Login { email, password } => {
                 self.handle_login(&email, &password).await;
+            }
+            Command::Logout => {
+                self.handle_logout().await;
             }
             Command::CreateCrew { name } => {
                 self.handle_create_crew(&name).await;
@@ -56,10 +63,60 @@ impl Client {
         }
     }
 
+    async fn handle_restore(&mut self) {
+        let token = match session::load() {
+            Some(t) => {
+                log::info!("Found stored refresh token, attempting restore...");
+                t
+            }
+            None => {
+                log::info!("No stored session found");
+                return;
+            }
+        };
+
+        let _ = self.event_tx.send(Event::Restoring);
+
+        match self.nakama.refresh_session(&token).await {
+            Ok(user) => {
+                log::info!("Session restored for {}", user.display_name);
+
+                if let Some(new_rt) = self.nakama.refresh_token() {
+                    let _ = session::save(new_rt);
+                }
+
+                if let Err(e) = self.nakama.connect_ws(self.event_tx.clone()).await {
+                    log::error!("WebSocket connect failed on restore: {}", e);
+                    session::clear();
+                    return;
+                }
+
+                let _ = self.event_tx.send(Event::LoggedIn { user });
+                self.load_crews().await;
+            }
+            Err(e) => {
+                log::warn!("Session restore failed ({}), clearing", e);
+                session::clear();
+            }
+        }
+    }
+
     async fn handle_login(&mut self, email: &str, password: &str) {
         match self.nakama.login_email(email, password).await {
             Ok(user) => {
                 log::info!("Logged in as {} ({})", user.display_name, user.tag);
+
+                match self.nakama.refresh_token() {
+                    Some(rt) => {
+                        log::info!("Saving refresh token to keyring");
+                        if let Err(e) = session::save(rt) {
+                            log::warn!("Failed to save session: {}", e);
+                        }
+                    }
+                    None => {
+                        log::warn!("No refresh token returned by server");
+                    }
+                }
 
                 if let Err(e) = self.nakama.connect_ws(self.event_tx.clone()).await {
                     log::error!("WebSocket connect failed: {}", e);
@@ -79,6 +136,14 @@ impl Client {
                 });
             }
         }
+    }
+
+    async fn handle_logout(&mut self) {
+        session::clear();
+        if let Err(e) = self.nakama.leave_crew_channel().await {
+            log::warn!("Leave channel on logout: {}", e);
+        }
+        log::info!("Logged out, session cleared");
     }
 
     async fn load_crews(&self) {
