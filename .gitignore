@@ -41,3 +41,6 @@ logs/
 
 # Build artifacts
 *.pdb
+
+# Temp files
+temp/
