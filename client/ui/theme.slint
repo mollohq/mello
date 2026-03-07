@@ -1,38 +1,74 @@
+import "./fonts/Inter-Regular.ttf";
+import "./fonts/Inter-Medium.ttf";
+import "./fonts/Inter-SemiBold.ttf";
+import "./fonts/Inter-Bold.ttf";
+import "./fonts/JetBrainsMono-Regular.ttf";
+import "./fonts/JetBrainsMono-Medium.ttf";
+
 export global Theme {
-    // Backgrounds
-    out property <color> bg-primary: #FFFFFF;
-    out property <color> bg-secondary: #F5F5F5;
-    out property <color> bg-tertiary: #E8E8E8;
-    out property <color> bg-dark: #1A1A1A;
-    
-    // Text
-    out property <color> text-primary: #1A1A1A;
-    out property <color> text-secondary: #666666;
-    out property <color> text-muted: #999999;
-    
-    // Accent
-    out property <color> accent-red: #FF4444;
-    out property <color> accent-green: #44CC44;
-    
-    // Border
-    out property <color> border-light: #E0E0E0;
-    
-    // Spacing
+    in property <bool> dark: true;
+
+    // --- Surfaces ---
+    out property <color> bg-app:     dark ? #181818 : #F5F5F5;
+    out property <color> surface:    dark ? #202020 : #FFFFFF;
+    out property <color> titlebar:   dark ? #161616 : #ECECEC;
+
+    // --- Text ---
+    out property <color> text-primary:   dark ? #F5F5F5 : #121212;
+    out property <color> text-secondary: dark ? #606060 : #888888;
+    out property <color> text-tertiary:  dark ? #404040 : #B0B0B0;
+
+    // --- Graphic / border ---
+    out property <color> graphic-light: dark ? #2E2E2E : #E0E0E0;
+    out property <color> graphic-med:   dark ? #404040 : #D0D0D0;
+    out property <color> graphic-dark:  dark ? #F5F5F5 : #121212;
+
+    // --- Accent ---
+    out property <color> accent:       #E02020;
+    out property <color> accent-bg:    dark ? #E020201A : #E0202014;
+
+    // --- Convenience aliases (backward compat) ---
+    out property <color> bg-primary:   surface;
+    out property <color> bg-secondary: bg-app;
+    out property <color> bg-tertiary:  graphic-light;
+    out property <color> bg-dark:      dark ? #F5F5F5 : #1A1A1A;
+    out property <color> text-muted:   text-secondary;
+    out property <color> accent-red:   accent;
+    out property <color> accent-green: #28C840;
+    out property <color> border-light: graphic-light;
+
+    // --- Radii ---
+    out property <length> r-outer: 10px;
+    out property <length> r-inner: 6px;
+    out property <length> r-pill:  20px;
+
+    // backward compat
+    out property <length> radius-sm: 4px;
+    out property <length> radius-md: r-outer;
+    out property <length> radius-lg: 16px;
+
+    // --- Spacing ---
+    out property <length> gap: 12px;
+    out property <length> pad: 24px;
+
     out property <length> spacing-xs: 4px;
     out property <length> spacing-sm: 8px;
     out property <length> spacing-md: 16px;
     out property <length> spacing-lg: 24px;
     out property <length> spacing-xl: 32px;
-    
-    // Border radius
-    out property <length> radius-sm: 4px;
-    out property <length> radius-md: 8px;
-    out property <length> radius-lg: 16px;
-    
-    // Font sizes
-    out property <length> font-xs: 10px;
-    out property <length> font-sm: 12px;
-    out property <length> font-md: 14px;
-    out property <length> font-lg: 16px;
-    out property <length> font-xl: 24px;
+
+    // --- Font sizes ---
+    out property <length> font-xs:  10px;
+    out property <length> font-sm:  11px;
+    out property <length> font-md:  13px;
+    out property <length> font-lg:  14px;
+    out property <length> font-xl:  20px;
+    out property <length> font-xxl: 32px;
+
+    // --- Font families ---
+    out property <string> font-sans: "Inter";
+    out property <string> font-mono: "JetBrains Mono";
+
+    // --- Hover helpers ---
+    out property <color> hover-overlay: dark ? #FFFFFF0D : #0000000D;
 }

@@ -8,136 +8,184 @@ export component CrewPanel inherits Rectangle {
     callback crew-selected(string);
     callback crew-create-requested(string);
 
-    background: Theme.bg-primary;
+    background: Theme.surface;
     border-width: 1px;
-    border-color: Theme.border-light;
-    border-radius: Theme.radius-md;
+    border-color: Theme.graphic-light;
+    border-radius: Theme.r-outer;
 
     VerticalLayout {
-        padding: Theme.spacing-md;
-        spacing: Theme.spacing-md;
+        padding: Theme.pad;
+        spacing: 0px;
 
-        // Header
+        // --- Header kicker ---
         HorizontalLayout {
+            height: 16px;
+            spacing: 8px;
+
             Text {
                 text: "YOUR CREWS";
-                font-size: Theme.font-xs;
-                color: Theme.text-muted;
-                letter-spacing: 1px;
-                vertical-alignment: center;
-            }
-            Rectangle { horizontal-stretch: 1; }
-            // Online indicator
-            Rectangle {
-                width: 8px;
-                height: 8px;
-                border-radius: 4px;
-                background: Theme.accent-green;
-            }
-        }
-
-        // Crew list
-        if crews.length == 0: Rectangle {
-            vertical-stretch: 1;
-            Text {
-                text: "No crews yet.\nCreate one below.";
-                color: Theme.text-muted;
-                horizontal-alignment: center;
-                vertical-alignment: center;
                 font-size: Theme.font-sm;
+                font-weight: 600;
+                letter-spacing: 1.3px;
+                color: Theme.text-secondary;
+                vertical-alignment: center;
+            }
+
+            Rectangle { horizontal-stretch: 1; }
+
+            Rectangle {
+                width: 6px;
+                height: 6px;
+                border-radius: 3px;
+                background: Theme.accent;
+                y: (parent.height - self.height) / 2;
             }
         }
 
-        if crews.length > 0: VerticalLayout {
-            spacing: Theme.spacing-sm;
+        Rectangle { height: 20px; }
+
+        // --- Stats ---
+        HorizontalLayout {
+            height: 36px;
+
+            Text {
+                text: crews.length;
+                font-size: Theme.font-xxl;
+                font-weight: 400;
+                color: Theme.text-primary;
+                vertical-alignment: bottom;
+                letter-spacing: -0.5px;
+            }
+
+            Rectangle { width: 6px; }
+
+            Text {
+                text: "ACT";
+                font-size: Theme.font-md;
+                font-weight: 600;
+                color: Theme.text-primary;
+                vertical-alignment: bottom;
+                letter-spacing: 0.5px;
+            }
+        }
+
+        Text {
+            text: "GLOBAL NETWORK";
+            font-family: Theme.font-mono;
+            font-size: Theme.font-md;
+            color: Theme.text-secondary;
+            letter-spacing: -0.3px;
+        }
+
+        Rectangle { height: 40px; }
+
+        // --- Crew list (scrollable) ---
+        Flickable {
             vertical-stretch: 1;
 
-            for crew[i] in crews: Rectangle {
-                height: 48px;
-                border-radius: Theme.radius-sm;
-                background: crew.id == active-crew-id ? Theme.bg-secondary : transparent;
+            VerticalLayout {
+                spacing: 0px;
 
-                HorizontalLayout {
-                    padding-left: Theme.spacing-sm;
-                    padding-right: Theme.spacing-sm;
-                    spacing: Theme.spacing-sm;
-                    alignment: center;
-
-                    // Crew initial
-                    Rectangle {
-                        width: 32px;
-                        height: 32px;
-                        border-radius: 16px;
-                        background: Theme.bg-tertiary;
-
-                        Text {
-                            text: crew.name;
-                            font-size: Theme.font-xs;
-                            color: Theme.text-secondary;
-                            horizontal-alignment: center;
-                            vertical-alignment: center;
-                            overflow: elide;
-                            max-width: 28px;
-                        }
-                    }
-
-                    VerticalLayout {
-                        alignment: center;
-                        horizontal-stretch: 1;
-
-                        Text {
-                            text: crew.name;
-                            font-size: Theme.font-md;
-                            font-weight: 500;
-                            color: Theme.text-primary;
-                            overflow: elide;
-                        }
-                        Text {
-                            text: crew.member-count + " members";
-                            font-size: Theme.font-xs;
-                            color: Theme.text-muted;
-                        }
-                    }
+                // "ACTIVE NOW" section kicker
+                Text {
+                    text: "ACTIVE NOW";
+                    font-size: Theme.font-xs;
+                    font-weight: 600;
+                    letter-spacing: 1.3px;
+                    color: Theme.text-secondary;
+                    height: 16px;
                 }
 
-                TouchArea {
-                    clicked => { crew-selected(crew.id); }
+                Rectangle { height: 12px; }
+
+                for crew[i] in crews: Rectangle {
+                    height: 44px;
+                    border-radius: Theme.r-inner;
+                    background: crew.id == active-crew-id
+                        ? Theme.bg-app
+                        : (item-hover.has-hover ? Theme.bg-app : transparent);
+
+                    HorizontalLayout {
+                        padding-left: 12px;
+                        padding-right: 12px;
+                        spacing: 12px;
+                        alignment: center;
+
+                        // Status dot
+                        Rectangle {
+                            width: 8px;
+                            height: 8px;
+                            border-radius: 4px;
+                            background: crew.id == active-crew-id
+                                ? Theme.accent
+                                : Theme.graphic-med;
+                        }
+
+                        // Crew name
+                        Text {
+                            text: crew.name;
+                            font-family: Theme.font-mono;
+                            font-size: Theme.font-md;
+                            font-weight: crew.id == active-crew-id ? 500 : 400;
+                            color: crew.id == active-crew-id
+                                ? Theme.text-primary
+                                : (item-hover.has-hover ? Theme.text-primary : Theme.text-secondary);
+                            horizontal-stretch: 1;
+                            overflow: elide;
+                            vertical-alignment: center;
+                        }
+
+                        // Member count
+                        Text {
+                            text: crew.online-count > 0
+                                ? crew.online-count + "/" + crew.member-count
+                                : crew.member-count;
+                            font-family: Theme.font-mono;
+                            font-size: Theme.font-sm;
+                            color: Theme.text-tertiary;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    item-hover := TouchArea {
+                        clicked => { crew-selected(crew.id); }
+                    }
                 }
             }
         }
 
-        // Create crew
+        // --- Create crew input ---
+        Rectangle { height: Theme.gap; }
+
         Rectangle {
             height: 40px;
-            background: Theme.bg-secondary;
-            border-radius: Theme.radius-md;
+            background: Theme.bg-app;
+            border-radius: Theme.r-inner;
+            border-width: 1px;
+            border-color: Theme.graphic-light;
 
-            HorizontalLayout {
-                padding-left: Theme.spacing-sm;
-                padding-right: Theme.spacing-sm;
-
-                crew-name-input := TextInput {
-                    width: parent.width - 40px;
-                    height: parent.height;
-                    font-size: Theme.font-sm;
-                    color: Theme.text-primary;
-                    vertical-alignment: center;
-                    accepted => {
-                        if crew-name-input.text != "" {
-                            crew-create-requested(crew-name-input.text);
-                            crew-name-input.text = "";
-                        }
+            crew-name-input := TextInput {
+                x: 14px;
+                width: parent.width - 28px;
+                height: parent.height;
+                font-family: Theme.font-mono;
+                font-size: Theme.font-md;
+                color: Theme.text-primary;
+                vertical-alignment: center;
+                accepted => {
+                    if crew-name-input.text != "" {
+                        crew-create-requested(crew-name-input.text);
+                        crew-name-input.text = "";
                     }
                 }
-                if crew-name-input.text == "": Rectangle {
-                    Text {
-                        color: Theme.text-muted;
-                        font-size: Theme.font-sm;
-                        vertical-alignment: center;
-                        text: "+ New crew";
-                        x: Theme.spacing-sm;
-                    }
-                }
+            }
+            if crew-name-input.text == "": Text {
+                x: 14px;
+                color: Theme.text-tertiary;
+                font-family: Theme.font-mono;
+                font-size: Theme.font-md;
+                vertical-alignment: center;
+                text: "+ New crew";
             }
         }
     }

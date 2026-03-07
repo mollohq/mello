@@ -1,42 +1,47 @@
 import { Theme } from "theme.slint";
-import { CrewData, MemberData, ChatMessageData } from "types.slint";
+import { CrewData, MemberData, ChatMessageData, CrewTabData } from "types.slint";
 import { CrewPanel } from "panels/crew_panel.slint";
 import { StreamView } from "panels/stream_view.slint";
 import { ChatPanel } from "panels/chat_panel.slint";
 import { ControlBar } from "panels/control_bar.slint";
 
-export { CrewData, MemberData, ChatMessageData }
+export { CrewData, MemberData, ChatMessageData, CrewTabData, Theme }
 
 export component MainWindow inherits Window {
     title: "Mello";
     min-width: 1024px;
     min-height: 768px;
-    preferred-width: 1280px;
-    preferred-height: 800px;
-    background: Theme.bg-primary;
+    preferred-width: 1440px;
+    preferred-height: 900px;
+    background: Theme.bg-app;
+    default-font-family: Theme.font-sans;
 
-    // Auth state
+    // --- Auth state ---
     in property <bool> logged-in: false;
     in property <string> login-error: "";
     in property <bool> login-loading: false;
 
-    // User info
+    // --- User ---
     in property <string> user-name: "";
     in property <string> user-tag: "";
 
-    // Crew data
+    // --- Crews ---
     in property <[CrewData]> crews: [];
     in property <string> active-crew-id: "";
-    in property <[MemberData]> members: [];
+    in property <[CrewTabData]> crew-tabs: [];
 
-    // Chat data
+    // --- Members / chat ---
+    in property <[MemberData]> members: [];
     in property <[ChatMessageData]> messages: [];
 
-    // Voice state
+    // --- Voice ---
     in-out property <bool> mic-muted: false;
     in-out property <bool> deafened: false;
 
-    // Callbacks
+    // --- Presence (0=online, 1=idle, 2=dnd, 3=invisible) ---
+    in-out property <int> presence-status: 0;
+
+    // --- Callbacks ---
     callback login(string, string);
     callback logout();
     callback create-crew(string);
@@ -44,49 +49,57 @@ export component MainWindow inherits Window {
     callback send-message(string);
     callback mic-toggle();
     callback deafen-toggle();
+    callback tab-selected(string);
+    callback tab-closed(string);
+    callback tab-add-clicked();
+    callback presence-changed(int);
+    callback theme-toggled();
 
-    // --- Login Screen ---
+    // ===================== LOGIN SCREEN =====================
     if !logged-in: Rectangle {
-        background: Theme.bg-primary;
+        background: Theme.bg-app;
 
         VerticalLayout {
             alignment: center;
-            spacing: Theme.spacing-lg;
+            spacing: Theme.pad;
 
-            // Title
             Text {
                 text: "mello";
+                font-family: Theme.font-mono;
                 font-size: 48px;
                 font-weight: 700;
                 color: Theme.text-primary;
                 horizontal-alignment: center;
+                letter-spacing: -1px;
             }
             Text {
-                text: "Hang out with your crew";
+                text: "hang out with your crew";
                 font-size: Theme.font-lg;
-                color: Theme.text-muted;
+                color: Theme.text-secondary;
                 horizontal-alignment: center;
             }
 
-            // Form container
+            // Spacer
+            Rectangle { height: 8px; }
+
             HorizontalLayout {
                 alignment: center;
 
                 VerticalLayout {
-                    spacing: Theme.spacing-md;
+                    spacing: Theme.gap;
                     width: 360px;
 
-                    // Email
+                    // Email field
                     Rectangle {
-                        height: 44px;
-                        background: Theme.bg-secondary;
-                        border-radius: Theme.radius-md;
+                        height: 48px;
+                        background: Theme.surface;
+                        border-radius: Theme.r-inner;
                         border-width: 1px;
-                        border-color: Theme.border-light;
+                        border-color: Theme.graphic-light;
 
                         email-input := TextInput {
-                            x: Theme.spacing-md;
-                            width: parent.width - Theme.spacing-md * 2;
+                            x: 18px;
+                            width: parent.width - 36px;
                             height: parent.height;
                             font-size: Theme.font-md;
                             color: Theme.text-primary;
@@ -94,25 +107,25 @@ export component MainWindow inherits Window {
                             vertical-alignment: center;
                         }
                         if email-input.text == "": Text {
-                            x: Theme.spacing-md;
-                            color: Theme.text-muted;
+                            x: 18px;
+                            color: Theme.text-tertiary;
                             font-size: Theme.font-md;
                             vertical-alignment: center;
                             text: "Email";
                         }
                     }
 
-                    // Password
+                    // Password field
                     Rectangle {
-                        height: 44px;
-                        background: Theme.bg-secondary;
-                        border-radius: Theme.radius-md;
+                        height: 48px;
+                        background: Theme.surface;
+                        border-radius: Theme.r-inner;
                         border-width: 1px;
-                        border-color: Theme.border-light;
+                        border-color: Theme.graphic-light;
 
                         password-input := TextInput {
-                            x: Theme.spacing-md;
-                            width: parent.width - Theme.spacing-md * 2;
+                            x: 18px;
+                            width: parent.width - 36px;
                             height: parent.height;
                             font-size: Theme.font-md;
                             color: Theme.text-primary;
@@ -120,12 +133,14 @@ export component MainWindow inherits Window {
                             vertical-alignment: center;
                             input-type: password;
                             accepted => {
-                                root.login(email-input.text, password-input.text);
+                                if !login-loading {
+                                    root.login(email-input.text, password-input.text);
+                                }
                             }
                         }
                         if password-input.text == "": Text {
-                            x: Theme.spacing-md;
-                            color: Theme.text-muted;
+                            x: 18px;
+                            color: Theme.text-tertiary;
                             font-size: Theme.font-md;
                             vertical-alignment: center;
                             text: "Password";
@@ -135,24 +150,26 @@ export component MainWindow inherits Window {
                     // Error
                     if login-error != "": Text {
                         text: login-error;
-                        color: Theme.accent-red;
+                        color: Theme.accent;
                         font-size: Theme.font-sm;
                         horizontal-alignment: center;
                     }
 
-                    // Login button
+                    // Sign-in button
                     Rectangle {
-                        height: 44px;
-                        background: login-loading ? Theme.bg-tertiary : Theme.bg-dark;
-                        border-radius: Theme.radius-md;
+                        height: 48px;
+                        background: login-loading ? Theme.graphic-med : Theme.graphic-dark;
+                        border-radius: Theme.r-inner;
 
                         Text {
-                            text: login-loading ? "Signing in..." : "Sign In";
-                            color: white;
+                            text: login-loading ? "signing in..." : "Sign In";
+                            font-family: Theme.font-mono;
+                            color: Theme.dark ? Theme.bg-app : #FFFFFF;
                             font-size: Theme.font-md;
                             font-weight: 600;
                             horizontal-alignment: center;
                             vertical-alignment: center;
+                            letter-spacing: 0.5px;
                         }
 
                         TouchArea {
@@ -168,46 +185,152 @@ export component MainWindow inherits Window {
         }
     }
 
-    // --- Main Screen ---
-    if logged-in: HorizontalLayout {
-        padding: Theme.spacing-md;
-        spacing: Theme.spacing-md;
+    // ===================== MAIN APP =====================
+    if logged-in: VerticalLayout {
+        spacing: 0px;
 
-        CrewPanel {
-            width: 240px;
-            crews: root.crews;
-            active-crew-id: root.active-crew-id;
-            crew-selected(id) => { root.select-crew(id); }
-            crew-create-requested(name) => { root.create-crew(name); }
-        }
-
-        VerticalLayout {
-            spacing: Theme.spacing-md;
+        // --- Crew tab strip ---
+        Rectangle {
+            height: 40px;
+            background: Theme.titlebar;
+            border-width: 0px;
 
             HorizontalLayout {
-                spacing: Theme.spacing-md;
+                padding-left: 12px;
+                padding-right: 12px;
+                spacing: 4px;
+                alignment: start;
 
-                StreamView {
-                    horizontal-stretch: 1;
-                    members: root.members;
+                for tab in crew-tabs: Rectangle {
+                    height: 28px;
+                    min-width: 80px;
+                    border-radius: Theme.r-inner;
+                    background: tab.active ? Theme.surface : transparent;
+                    border-width: tab.active ? 1px : 0px;
+                    border-color: Theme.graphic-light;
+                    vertical-stretch: 0;
+                    y: (parent.height - self.height) / 2;
+
+                    HorizontalLayout {
+                        padding-left: 14px;
+                        padding-right: 10px;
+                        spacing: 8px;
+                        alignment: center;
+
+                        // Status dot
+                        Rectangle {
+                            width: 6px;
+                            height: 6px;
+                            border-radius: 3px;
+                            background: tab.active ? Theme.accent : Theme.text-secondary;
+                        }
+
+                        // Tab name
+                        Text {
+                            text: tab.name;
+                            font-family: Theme.font-mono;
+                            font-size: 12px;
+                            font-weight: 500;
+                            color: tab.active ? Theme.text-primary : Theme.text-secondary;
+                            vertical-alignment: center;
+                        }
+
+                        // Close button
+                        Text {
+                            text: "×";
+                            font-size: 14px;
+                            color: Theme.text-tertiary;
+                            vertical-alignment: center;
+                            horizontal-alignment: center;
+                            width: 14px;
+
+                            TouchArea {
+                                clicked => { root.tab-closed(tab.id); }
+                            }
+                        }
+                    }
+
+                    TouchArea {
+                        clicked => { root.tab-selected(tab.id); }
+                    }
                 }
 
+                // Add tab button
+                Rectangle {
+                    width: 28px;
+                    height: 28px;
+                    border-radius: Theme.r-inner;
+                    y: (parent.height - self.height) / 2;
+
+                    Text {
+                        text: "+";
+                        font-size: 18px;
+                        color: tab-add-hover.has-hover ? Theme.text-primary : Theme.text-secondary;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+
+                    tab-add-hover := TouchArea {
+                        clicked => { root.tab-add-clicked(); }
+                    }
+                }
+            }
+        }
+
+        // --- Bottom border of tab strip ---
+        Rectangle {
+            height: 1px;
+            background: Theme.graphic-light;
+        }
+
+        // --- Main grid area ---
+        Rectangle {
+            background: Theme.bg-app;
+
+            HorizontalLayout {
+                padding: Theme.gap;
+                spacing: Theme.gap;
+
+                // LEFT: Crew sidebar (280px, spans full height)
+                CrewPanel {
+                    width: 280px;
+                    crews: root.crews;
+                    active-crew-id: root.active-crew-id;
+                    crew-selected(id) => { root.select-crew(id); }
+                    crew-create-requested(name) => { root.create-crew(name); }
+                }
+
+                // CENTER: stage area + controls bar
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    spacing: Theme.gap;
+
+                    StreamView {
+                        vertical-stretch: 1;
+                        members: root.members;
+                    }
+
+                    ControlBar {
+                        height: 92px;
+                        user-name: root.user-name;
+                        user-tag: root.user-tag;
+                        mic-muted: root.mic-muted;
+                        deafened: root.deafened;
+                        presence-status <=> root.presence-status;
+                        mic-toggled => { root.mic-toggle(); }
+                        deafen-toggled => { root.deafen-toggle(); }
+                        logout-clicked => { root.logout(); }
+                        presence-changed(status) => { root.presence-changed(status); }
+                        theme-toggled => { root.theme-toggled(); }
+                    }
+                }
+
+                // RIGHT: Chat panel (340px, spans full height)
                 ChatPanel {
-                    width: 300px;
+                    width: 340px;
                     messages: root.messages;
                     message-submitted(text) => { root.send-message(text); }
                 }
-            }
-
-            ControlBar {
-                height: 72px;
-                user-name: root.user-name;
-                user-tag: root.user-tag;
-                mic-muted: root.mic-muted;
-                deafened: root.deafened;
-                mic-toggled => { root.mic-toggle(); }
-                deafen-toggled => { root.deafen-toggle(); }
-                logout-clicked => { root.logout(); }
             }
         }
     }

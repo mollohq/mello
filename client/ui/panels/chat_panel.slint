@@ -5,72 +5,100 @@ export component ChatPanel inherits Rectangle {
     in property <[ChatMessageData]> messages: [];
     callback message-submitted(string);
 
-    background: Theme.bg-primary;
+    background: Theme.surface;
     border-width: 1px;
-    border-color: Theme.border-light;
-    border-radius: Theme.radius-md;
+    border-color: Theme.graphic-light;
+    border-radius: Theme.r-outer;
 
     VerticalLayout {
-        padding: Theme.spacing-md;
-        spacing: Theme.spacing-md;
+        padding: Theme.pad;
+        spacing: 0px;
 
-        // Header
+        // --- Header kicker ---
         Text {
-            text: "CHAT";
-            font-size: Theme.font-xs;
-            color: Theme.text-muted;
-            letter-spacing: 1px;
+            text: "CREW CHAT";
+            font-size: Theme.font-sm;
+            font-weight: 600;
+            letter-spacing: 1.3px;
+            color: Theme.text-secondary;
+            height: 16px;
         }
 
-        // Messages
-        Rectangle {
+        // --- Chat feed ---
+        Flickable {
             vertical-stretch: 1;
-            clip: true;
 
-            if messages.length == 0: Text {
-                text: "No messages yet";
-                color: Theme.text-muted;
-                horizontal-alignment: center;
-                vertical-alignment: center;
-                font-size: Theme.font-sm;
-            }
+            VerticalLayout {
+                spacing: 20px;
+                padding-top: 12px;
+                alignment: end;
 
-            if messages.length > 0: Flickable {
-                viewport-height: self.height;
+                if messages.length == 0: Rectangle {
+                    vertical-stretch: 1;
 
-                VerticalLayout {
-                    spacing: Theme.spacing-sm;
-                    alignment: end;
+                    Text {
+                        text: "No messages yet";
+                        font-size: Theme.font-md;
+                        color: Theme.text-tertiary;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
 
-                    for msg in messages: VerticalLayout {
-                        spacing: 2px;
+                for msg in messages: VerticalLayout {
+                    spacing: 4px;
+
+                    // Meta row: sender + timestamp
+                    HorizontalLayout {
+                        spacing: 8px;
 
                         Text {
                             text: msg.sender-name;
-                            font-size: Theme.font-xs;
-                            font-weight: 600;
-                            color: Theme.text-secondary;
-                        }
-                        Text {
-                            text: msg.text;
                             font-size: Theme.font-md;
+                            font-weight: 600;
                             color: Theme.text-primary;
-                            wrap: word-wrap;
+                            horizontal-stretch: 1;
                         }
+
+                        Text {
+                            text: msg.timestamp;
+                            font-family: Theme.font-mono;
+                            font-size: Theme.font-xs;
+                            color: Theme.text-tertiary;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    // Message body
+                    Text {
+                        text: msg.text;
+                        font-size: Theme.font-md;
+                        color: Theme.text-secondary;
+                        wrap: word-wrap;
                     }
                 }
             }
         }
 
-        // Input
+        // --- Separator ---
         Rectangle {
-            height: 40px;
-            background: Theme.bg-secondary;
-            border-radius: Theme.radius-md;
+            height: 1px;
+            background: Theme.graphic-light;
+        }
+
+        Rectangle { height: 4px; }
+
+        // --- Chat input ---
+        Rectangle {
+            height: 48px;
+            background: Theme.bg-app;
+            border-radius: Theme.r-inner;
+            border-width: 1px;
+            border-color: Theme.graphic-light;
 
             chat-input := TextInput {
-                x: Theme.spacing-md;
-                width: parent.width - Theme.spacing-md * 2;
+                x: 18px;
+                width: parent.width - 36px;
                 height: parent.height;
                 font-size: Theme.font-md;
                 color: Theme.text-primary;
@@ -83,8 +111,8 @@ export component ChatPanel inherits Rectangle {
                 }
             }
             if chat-input.text == "": Text {
-                x: Theme.spacing-md;
-                color: Theme.text-muted;
+                x: 18px;
+                color: Theme.text-tertiary;
                 font-size: Theme.font-md;
                 vertical-alignment: center;
                 text: "Message crewmates...";

@@ -1,59 +1,260 @@
 import { Theme } from "../theme.slint";
 import { MemberData } from "../types.slint";
 
-export component StreamView inherits Rectangle {
+export component StreamView inherits VerticalLayout {
     in property <[MemberData]> members: [];
+    in property <string> streamer-name: "";
+    in property <string> stream-label: "";
+    in property <bool> stream-live: false;
 
-    background: Theme.bg-secondary;
-    border-radius: Theme.radius-md;
+    spacing: Theme.gap;
 
-    VerticalLayout {
-        padding: Theme.spacing-md;
-        spacing: Theme.spacing-md;
+    // ==================== STREAM VIEW ====================
+    Rectangle {
+        vertical-stretch: 1;
+        background: Theme.surface;
+        border-radius: Theme.r-outer;
+        border-width: 1px;
+        border-color: Theme.graphic-light;
 
-        // Header
-        Text {
-            text: "STREAM";
-            font-size: Theme.font-xs;
-            color: Theme.text-muted;
-            letter-spacing: 1px;
-        }
+        VerticalLayout {
+            padding: Theme.pad;
+            spacing: 0px;
 
-        // Video placeholder
-        Rectangle {
-            vertical-stretch: 1;
-            background: Theme.bg-tertiary;
-            border-radius: Theme.radius-sm;
+            // --- Stream header ---
+            HorizontalLayout {
+                height: 56px;
+                spacing: 8px;
 
-            Text {
-                text: "No active stream";
-                color: Theme.text-muted;
-                horizontal-alignment: center;
-                vertical-alignment: center;
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    alignment: start;
+
+                    Text {
+                        text: "CREWMATE STREAM";
+                        font-size: Theme.font-sm;
+                        font-weight: 600;
+                        letter-spacing: 1.3px;
+                        color: Theme.text-secondary;
+                    }
+
+                    Rectangle { height: 4px; }
+
+                    Text {
+                        text: streamer-name != "" ? streamer-name : "No stream";
+                        font-size: Theme.font-xl;
+                        font-weight: 500;
+                        color: Theme.text-primary;
+                    }
+                }
+
+                // Live badge
+                if stream-live: Rectangle {
+                    width: 100px;
+                    height: 28px;
+                    background: Theme.bg-app;
+                    border-radius: Theme.r-pill;
+                    y: 0;
+
+                    HorizontalLayout {
+                        alignment: center;
+                        spacing: 8px;
+
+                        Rectangle {
+                            width: 6px;
+                            height: 6px;
+                            border-radius: 3px;
+                            background: Theme.accent;
+                        }
+
+                        Text {
+                            text: "00:00:00";
+                            font-family: Theme.font-mono;
+                            font-size: Theme.font-sm;
+                            color: Theme.text-primary;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
             }
-        }
 
-        // Crew members bar
-        if members.length > 0: HorizontalLayout {
-            spacing: Theme.spacing-sm;
-            height: 40px;
+            Rectangle { height: Theme.pad; }
 
-            for member in members: Rectangle {
-                width: 36px;
-                height: 36px;
-                border-radius: 18px;
-                background: Theme.bg-primary;
-                border-width: 2px;
-                border-color: member.online ? Theme.accent-green : Theme.border-light;
+            // --- Stream preview area ---
+            Rectangle {
+                vertical-stretch: 1;
+                background: Theme.bg-app;
+                border-radius: Theme.r-inner;
 
-                Text {
-                    text: member.name;
-                    font-size: Theme.font-xs;
-                    color: Theme.text-secondary;
+                if !stream-live: Text {
+                    text: "No active stream";
+                    font-family: Theme.font-mono;
+                    font-size: Theme.font-md;
+                    color: Theme.text-tertiary;
                     horizontal-alignment: center;
                     vertical-alignment: center;
+                }
+            }
+
+            Rectangle { height: Theme.pad; }
+
+            // --- Stream footer ---
+            HorizontalLayout {
+                height: 20px;
+                spacing: 16px;
+
+                Text {
+                    text: stream-label != "" ? stream-label : "";
+                    font-family: Theme.font-mono;
+                    font-size: Theme.font-lg;
+                    font-weight: 500;
+                    color: Theme.text-secondary;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                }
+
+                // Scrub bar (visual placeholder)
+                if stream-live: Rectangle {
+                    width: 240px;
+                    height: 6px;
+                    background: Theme.bg-app;
+                    border-radius: 3px;
+                    y: (parent.height - self.height) / 2;
+
+                    Rectangle {
+                        width: parent.width * 45%;
+                        height: parent.height;
+                        background: Theme.graphic-dark;
+                        border-radius: 3px;
+                    }
+                }
+            }
+        }
+    }
+
+    // ==================== VOICE SECTION ====================
+    Rectangle {
+        height: 200px;
+        background: Theme.surface;
+        border-radius: Theme.r-outer;
+        border-width: 1px;
+        border-color: Theme.graphic-light;
+
+        HorizontalLayout {
+            padding: Theme.pad;
+            spacing: 32px;
+            alignment: start;
+
+            for member in members: VerticalLayout {
+                width: 120px;
+                alignment: center;
+                spacing: 14px;
+                horizontal-stretch: 0;
+
+                // Avatar
+                Rectangle {
+                    width: 68px;
+                    height: 68px;
+                    border-radius: Theme.r-inner;
+                    background: Theme.bg-app;
+                    border-width: member.speaking ? 2px : 0px;
+                    border-color: member.speaking ? Theme.graphic-dark : transparent;
+                    x: (parent.width - self.width) / 2;
+
+                    Text {
+                        text: member.initials;
+                        font-weight: 600;
+                        font-size: 18px;
+                        color: member.speaking ? Theme.text-primary : Theme.text-secondary;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+
+                // Voice indicator bars
+                HorizontalLayout {
+                    alignment: center;
+                    spacing: 4px;
+                    height: 8px;
+
+                    Rectangle {
+                        width: 4px;
+                        height: 4px;
+                        border-radius: 2px;
+                        background: member.speaking ? Theme.graphic-dark : Theme.graphic-light;
+                    }
+                    Rectangle {
+                        width: member.speaking ? 24px : 12px;
+                        height: 4px;
+                        border-radius: 2px;
+                        background: member.speaking ? Theme.accent : Theme.graphic-light;
+                    }
+                    Rectangle {
+                        width: 4px;
+                        height: 4px;
+                        border-radius: 2px;
+                        background: member.speaking ? Theme.graphic-dark : Theme.graphic-light;
+                    }
+                }
+
+                // Name
+                Text {
+                    text: member.name;
+                    font-family: Theme.font-mono;
+                    font-size: 12px;
+                    font-weight: member.speaking ? 500 : 400;
+                    color: member.speaking ? Theme.text-primary : Theme.text-secondary;
+                    horizontal-alignment: center;
                     overflow: elide;
-                    max-width: 30px;
+                }
+            }
+
+            // Invite placeholder
+            if members.length > 0: VerticalLayout {
+                width: 120px;
+                alignment: center;
+                spacing: 14px;
+                horizontal-stretch: 0;
+
+                Rectangle {
+                    width: 68px;
+                    height: 68px;
+                    border-radius: Theme.r-inner;
+                    background: transparent;
+                    border-width: 1px;
+                    border-color: Theme.graphic-med;
+                    x: (parent.width - self.width) / 2;
+
+                    Text {
+                        text: "+";
+                        font-size: 24px;
+                        color: Theme.graphic-med;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+
+                Rectangle { height: 8px; }
+
+                Text {
+                    text: "Invite";
+                    font-family: Theme.font-mono;
+                    font-size: 12px;
+                    color: Theme.text-secondary;
+                    horizontal-alignment: center;
+                }
+            }
+
+            if members.length == 0: Rectangle {
+                horizontal-stretch: 1;
+
+                Text {
+                    text: "No voice participants";
+                    font-family: Theme.font-mono;
+                    font-size: Theme.font-md;
+                    color: Theme.text-tertiary;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
                 }
             }
         }

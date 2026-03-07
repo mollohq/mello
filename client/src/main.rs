@@ -4,6 +4,19 @@ use std::time::Duration;
 use slint::Model;
 use mello_core::{Client, Command, Config, Event};
 
+fn make_initials(name: &str) -> String {
+    let parts: Vec<&str> = name.split_whitespace().collect();
+    match parts.len() {
+        0 => "?".into(),
+        1 => parts[0].chars().take(2).collect::<String>().to_uppercase(),
+        _ => {
+            let first = parts[0].chars().next().unwrap_or('?');
+            let last = parts[parts.len() - 1].chars().next().unwrap_or('?');
+            format!("{}{}", first, last).to_uppercase()
+        }
+    }
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
     log::info!("Starting Mello...");
@@ -20,10 +33,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let app = MainWindow::new()?;
 
-    // --- Attempt session restore on startup ---
+    // Default to dark theme
+    app.global::<Theme>().set_dark(true);
+
     let _ = cmd_tx.try_send(Command::TryRestore);
 
-    // --- Wire login callback ---
+    // --- Login ---
     {
         let cmd = cmd_tx.clone();
         let app_weak = app.as_weak();
@@ -39,13 +54,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
-    // --- Wire crew callbacks ---
+    // --- Crew selection ---
     {
         let cmd = cmd_tx.clone();
+        let app_weak = app.as_weak();
         app.on_select_crew(move |crew_id| {
             let _ = cmd.try_send(Command::SelectCrew {
                 crew_id: crew_id.to_string(),
             });
+            // Also add/activate tab
+            if let Some(app) = app_weak.upgrade() {
+                update_crew_tab(&app, &crew_id);
+            }
         });
     }
     {
@@ -57,7 +77,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
-    // --- Wire chat ---
+    // --- Chat ---
     {
         let cmd = cmd_tx.clone();
         app.on_send_message(move |text| {
@@ -67,7 +87,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
-    // --- Wire logout ---
+    // --- Logout ---
     {
         let cmd = cmd_tx.clone();
         let app_weak = app.as_weak();
@@ -78,11 +98,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 app.set_user_name("".into());
                 app.set_user_tag("".into());
                 app.set_active_crew_id("".into());
+                app.set_crew_tabs(std::rc::Rc::new(slint::VecModel::from(Vec::<CrewTabData>::new())).into());
             }
         });
     }
 
-    // --- Wire voice toggles ---
+    // --- Voice toggles ---
     {
         let cmd = cmd_tx.clone();
         let app_weak = app.as_weak();
@@ -106,6 +127,45 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
+    // --- Crew tabs ---
+    {
+        let cmd = cmd_tx.clone();
+        let app_weak = app.as_weak();
+        app.on_tab_selected(move |tab_id| {
+            let _ = cmd.try_send(Command::SelectCrew {
+                crew_id: tab_id.to_string(),
+            });
+            if let Some(app) = app_weak.upgrade() {
+                update_crew_tab(&app, &tab_id);
+            }
+        });
+    }
+    {
+        let app_weak = app.as_weak();
+        app.on_tab_closed(move |tab_id| {
+            if let Some(app) = app_weak.upgrade() {
+                remove_crew_tab(&app, &tab_id);
+            }
+        });
+    }
+    app.on_tab_add_clicked(|| {});
+
+    // --- Theme toggle ---
+    {
+        let app_weak = app.as_weak();
+        app.on_theme_toggled(move || {
+            if let Some(app) = app_weak.upgrade() {
+                let current = app.global::<Theme>().get_dark();
+                app.global::<Theme>().set_dark(!current);
+            }
+        });
+    }
+
+    // --- Presence ---
+    app.on_presence_changed(move |status| {
+        log::info!("Presence changed to {}", status);
+    });
+
     // --- Event polling timer ---
     let app_weak = app.as_weak();
     let timer = slint::Timer::default();
@@ -119,6 +179,49 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     app.run()?;
     Ok(())
+}
+
+fn update_crew_tab(app: &MainWindow, crew_id: &str) {
+    let current = app.get_crew_tabs();
+    let mut tabs: Vec<CrewTabData> = (0..current.row_count())
+        .map(|i| current.row_data(i).unwrap())
+        .collect();
+
+    let mut found = false;
+    for tab in tabs.iter_mut() {
+        let is_this = tab.id == crew_id;
+        tab.active = is_this;
+        if is_this { found = true; }
+    }
+
+    if !found {
+        // Find crew name from crews list
+        let crews = app.get_crews();
+        let crew_name: slint::SharedString = (0..crews.row_count())
+            .filter_map(|i| crews.row_data(i))
+            .find(|c| c.id == crew_id)
+            .map(|c| c.name.clone())
+            .unwrap_or_else(|| crew_id.into());
+
+        tabs.push(CrewTabData {
+            id: crew_id.into(),
+            name: crew_name,
+            active: true,
+        });
+    }
+
+    let rc = std::rc::Rc::new(slint::VecModel::from(tabs));
+    app.set_crew_tabs(rc.into());
+}
+
+fn remove_crew_tab(app: &MainWindow, tab_id: &str) {
+    let current = app.get_crew_tabs();
+    let tabs: Vec<CrewTabData> = (0..current.row_count())
+        .map(|i| current.row_data(i).unwrap())
+        .filter(|t| t.id != tab_id)
+        .collect();
+    let rc = std::rc::Rc::new(slint::VecModel::from(tabs));
+    app.set_crew_tabs(rc.into());
 }
 
 fn handle_event(app: &MainWindow, event: Event) {
@@ -140,9 +243,10 @@ fn handle_event(app: &MainWindow, event: Event) {
         }
         Event::CrewsLoaded { crews } => {
             let model: Vec<CrewData> = crews.into_iter().map(|c| CrewData {
-                id: c.id.into(),
+                id: c.id.clone().into(),
                 name: c.name.into(),
                 member_count: c.member_count,
+                online_count: 0,
             }).collect();
             let rc = std::rc::Rc::new(slint::VecModel::from(model));
             app.set_crews(rc.into());
@@ -155,7 +259,8 @@ fn handle_event(app: &MainWindow, event: Event) {
         }
         Event::CrewJoined { crew_id } => {
             log::info!("UI: joined crew {}", crew_id);
-            app.set_active_crew_id(crew_id.into());
+            app.set_active_crew_id(crew_id.clone().into());
+            update_crew_tab(app, &crew_id);
             let empty: Vec<ChatMessageData> = vec![];
             let rc = std::rc::Rc::new(slint::VecModel::from(empty));
             app.set_messages(rc.into());
@@ -180,10 +285,13 @@ fn handle_event(app: &MainWindow, event: Event) {
         }
         Event::MemberJoined { member, .. } => {
             let current = app.get_members();
+            let initials = make_initials(&member.display_name);
             let new_member = MemberData {
                 id: member.id.into(),
                 name: member.display_name.into(),
+                initials: initials.into(),
                 online: true,
+                speaking: false,
             };
             let mut members: Vec<MemberData> = (0..current.row_count())
                 .map(|i| current.row_data(i).unwrap())

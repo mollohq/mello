@@ -2,16 +2,25 @@ export struct CrewData {
     id: string,
     name: string,
     member-count: int,
+    online-count: int,
 }
 
 export struct MemberData {
     id: string,
     name: string,
+    initials: string,
     online: bool,
+    speaking: bool,
 }
 
 export struct ChatMessageData {
     sender-name: string,
     text: string,
     timestamp: string,
+}
+
+export struct CrewTabData {
+    id: string,
+    name: string,
+    active: bool,
 }
