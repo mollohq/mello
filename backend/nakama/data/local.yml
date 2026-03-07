@@ -1,0 +1,24 @@
+name: mello-local
+
+socket:
+  server_key: "mello_dev_key"
+  port: 7350
+
+console:
+  port: 7351
+  username: "admin"
+  password: "admin"
+
+database:
+  address:
+    - "postgres:localdev@postgres:5432/nakama"
+
+logger:
+  level: "DEBUG"
+  stdout: true
+
+session:
+  token_expiry_sec: 86400
+  
+runtime:
+  path: "/nakama/data/modules"

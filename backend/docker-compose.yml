@@ -1,0 +1,49 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: mello-postgres
+    environment:
+      POSTGRES_DB: nakama
+      POSTGRES_USER: nakama
+      POSTGRES_PASSWORD: localdev
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "nakama"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  nakama:
+    image: heroiclabs/nakama:3.21.0
+    container_name: mello-nakama
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      - DISCORD_CLIENT_ID=${DISCORD_CLIENT_ID:-}
+      - DISCORD_CLIENT_SECRET=${DISCORD_CLIENT_SECRET:-}
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        /nakama/nakama migrate up --database.address postgres:localdev@postgres:5432/nakama &&
+        exec /nakama/nakama --config /nakama/data/local.yml
+    volumes:
+      - ./nakama/data:/nakama/data:ro
+    ports:
+      - "7350:7350"   # gRPC API
+      - "7351:7351"   # HTTP API / Admin Console
+      - "7352:7352"   # gRPC API (alternate)
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:7350/"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_data:

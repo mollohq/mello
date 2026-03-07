@@ -1,0 +1,41 @@
+# Rust
+target/
+Cargo.lock
+**/*.rs.bk
+
+# C++
+build/
+cmake-build-*/
+*.o
+*.a
+*.so
+*.dll
+*.lib
+*.exe
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+.vs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local
+*.local
+
+# Dependencies
+node_modules/
+deps/*/
+
+# Logs
+*.log
+logs/
+
+# Build artifacts
+*.pdb

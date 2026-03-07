@@ -1,0 +1,33 @@
+import { Theme } from "../theme.slint";
+
+export component CrewPanel inherits Rectangle {
+    background: Theme.bg-primary;
+    border-width: 1px;
+    border-color: Theme.border-light;
+    border-radius: Theme.radius-md;
+
+    VerticalLayout {
+        padding: Theme.spacing-md;
+        spacing: Theme.spacing-md;
+
+        // Header
+        Text {
+            text: "YOUR CREWS";
+            font-size: Theme.font-xs;
+            color: Theme.text-muted;
+            letter-spacing: 1px;
+        }
+
+        // Placeholder
+        Rectangle {
+            vertical-stretch: 1;
+            
+            Text {
+                text: "No crews yet";
+                color: Theme.text-muted;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+    }
+}

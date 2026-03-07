@@ -1,0 +1,14 @@
+[package]
+name = "mello-sys"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+links = "mello"
+
+[build-dependencies]
+bindgen = "0.69"
+cc = "1"
+
+[features]
+default = []
+bundled = []  # Build libmello from source

@@ -1,0 +1,57 @@
+import { Theme } from "../theme.slint";
+
+export component ControlBar inherits Rectangle {
+    background: Theme.bg-primary;
+    border-width: 1px;
+    border-color: Theme.border-light;
+    border-radius: Theme.radius-md;
+
+    HorizontalLayout {
+        padding: Theme.spacing-md;
+        spacing: Theme.spacing-lg;
+        alignment: center;
+
+        // User info placeholder
+        Rectangle {
+            width: 40px;
+            height: 40px;
+            border-radius: 20px;
+            background: Theme.bg-secondary;
+
+            Text {
+                text: "ME";
+                font-size: Theme.font-sm;
+                color: Theme.text-muted;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+
+        Text {
+            text: "Not logged in";
+            color: Theme.text-secondary;
+            vertical-alignment: center;
+        }
+
+        Rectangle { horizontal-stretch: 1; }
+
+        // Control buttons placeholder
+        HorizontalLayout {
+            spacing: Theme.spacing-sm;
+
+            for icon in ["🎤", "🎧", "⚙️"]: Rectangle {
+                width: 40px;
+                height: 40px;
+                border-radius: 20px;
+                background: Theme.bg-secondary;
+
+                Text {
+                    text: icon;
+                    font-size: Theme.font-lg;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+        }
+    }
+}

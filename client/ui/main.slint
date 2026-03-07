@@ -1,0 +1,48 @@
+import { Theme } from "theme.slint";
+import { CrewPanel } from "panels/crew_panel.slint";
+import { StreamView } from "panels/stream_view.slint";
+import { ChatPanel } from "panels/chat_panel.slint";
+import { ControlBar } from "panels/control_bar.slint";
+
+export component MainWindow inherits Window {
+    title: "Mello";
+    min-width: 1024px;
+    min-height: 768px;
+    preferred-width: 1280px;
+    preferred-height: 800px;
+    background: Theme.bg-primary;
+
+    HorizontalLayout {
+        padding: Theme.spacing-md;
+        spacing: Theme.spacing-md;
+
+        // Left: Crew Panel
+        CrewPanel {
+            width: 240px;
+        }
+
+        // Center + Right
+        VerticalLayout {
+            spacing: Theme.spacing-md;
+            
+            HorizontalLayout {
+                spacing: Theme.spacing-md;
+                
+                // Center: Stream View
+                StreamView {
+                    horizontal-stretch: 1;
+                }
+                
+                // Right: Chat Panel
+                ChatPanel {
+                    width: 300px;
+                }
+            }
+            
+            // Bottom: Control Bar
+            ControlBar {
+                height: 72px;
+            }
+        }
+    }
+}

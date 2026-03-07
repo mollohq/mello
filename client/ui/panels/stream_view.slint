@@ -1,0 +1,33 @@
+import { Theme } from "../theme.slint";
+
+export component StreamView inherits Rectangle {
+    background: Theme.bg-secondary;
+    border-radius: Theme.radius-md;
+
+    VerticalLayout {
+        padding: Theme.spacing-md;
+        spacing: Theme.spacing-md;
+
+        // Header
+        Text {
+            text: "STREAM";
+            font-size: Theme.font-xs;
+            color: Theme.text-muted;
+            letter-spacing: 1px;
+        }
+
+        // Video placeholder
+        Rectangle {
+            vertical-stretch: 1;
+            background: Theme.bg-tertiary;
+            border-radius: Theme.radius-sm;
+
+            Text {
+                text: "No active stream";
+                color: Theme.text-muted;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+    }
+}

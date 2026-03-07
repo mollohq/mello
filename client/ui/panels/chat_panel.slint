@@ -1,0 +1,47 @@
+import { Theme } from "../theme.slint";
+
+export component ChatPanel inherits Rectangle {
+    background: Theme.bg-primary;
+    border-width: 1px;
+    border-color: Theme.border-light;
+    border-radius: Theme.radius-md;
+
+    VerticalLayout {
+        padding: Theme.spacing-md;
+        spacing: Theme.spacing-md;
+
+        // Header
+        Text {
+            text: "CHAT";
+            font-size: Theme.font-xs;
+            color: Theme.text-muted;
+            letter-spacing: 1px;
+        }
+
+        // Messages placeholder
+        Rectangle {
+            vertical-stretch: 1;
+            
+            Text {
+                text: "No messages";
+                color: Theme.text-muted;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+
+        // Input placeholder
+        Rectangle {
+            height: 40px;
+            background: Theme.bg-secondary;
+            border-radius: Theme.radius-md;
+
+            Text {
+                text: "Message...";
+                color: Theme.text-muted;
+                x: Theme.spacing-md;
+                vertical-alignment: center;
+            }
+        }
+    }
+}
