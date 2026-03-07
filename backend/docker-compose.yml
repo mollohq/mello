@@ -1,4 +1,4 @@
-version: '3.8'
+version: "3.8"
 
 services:
   postgres:
@@ -31,14 +31,14 @@ services:
       - /bin/sh
       - -c
       - |
-        /nakama/nakama migrate up --database.address postgres:localdev@postgres:5432/nakama &&
+        /nakama/nakama migrate up --database.address nakama:localdev@postgres:5432/nakama &&
         exec /nakama/nakama --config /nakama/data/local.yml
     volumes:
       - ./nakama/data:/nakama/data:ro
     ports:
-      - "7350:7350"   # gRPC API
-      - "7351:7351"   # HTTP API / Admin Console
-      - "7352:7352"   # gRPC API (alternate)
+      - "7350:7350" # gRPC API
+      - "7351:7351" # HTTP API / Admin Console
+      - "7352:7352" # gRPC API (alternate)
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:7350/"]
       interval: 10s

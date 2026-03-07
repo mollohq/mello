@@ -7,11 +7,11 @@ socket:
 console:
   port: 7351
   username: "admin"
-  password: "admin"
+  password: "adminadmin"
 
 database:
   address:
-    - "postgres:localdev@postgres:5432/nakama"
+    - "nakama:localdev@postgres:5432/nakama"
 
 logger:
   level: "DEBUG"
