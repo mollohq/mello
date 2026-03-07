@@ -10,10 +10,25 @@ PeerConnectionImpl::PeerConnectionImpl(const std::string& peer_id)
 }
 
 PeerConnectionImpl::~PeerConnectionImpl() {
-    if (pc_) {
-        pc_->close();
+    try {
+        // Clear callbacks first to prevent use-after-free from libdatachannel threads
+        if (pc_) {
+            pc_->onLocalDescription(nullptr);
+            pc_->onLocalCandidate(nullptr);
+            pc_->onStateChange(nullptr);
+            pc_->onDataChannel(nullptr);
+            pc_->close();
+        }
+        if (unreliable_dc_) {
+            unreliable_dc_->onMessage(nullptr);
+            unreliable_dc_.reset();
+        }
+        if (reliable_dc_) {
+            reliable_dc_->onMessage(nullptr);
+            reliable_dc_.reset();
+        }
         pc_.reset();
-    }
+    } catch (...) {}
 }
 
 void PeerConnectionImpl::set_ice_servers(const std::vector<std::string>& urls) {

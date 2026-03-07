@@ -12,6 +12,7 @@ use super::types::*;
 #[derive(Default)]
 struct WsShared {
     channel_id: Option<String>,
+    local_user_id: Option<String>,
 }
 
 /// Internal signal from a peer, received via Nakama channel message
@@ -183,6 +184,9 @@ impl NakamaClient {
         self.ws_tx = Some(ws_tx);
 
         let shared = self.ws_shared.clone();
+        if let Some(user) = &self.current_user {
+            shared.write().await.local_user_id = Some(user.id.clone());
+        }
         let signal_tx = self.signal_tx_template.clone().unwrap();
 
         tokio::spawn(ws_writer_task(ws_rx, write));
@@ -495,6 +499,12 @@ async fn handle_ws_message(
         if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&content_str) {
             if parsed.get("signal").and_then(|v| v.as_bool()) == Some(true) {
                 let from = msg.sender_id.unwrap_or_default();
+                let to = parsed.get("to").and_then(|v| v.as_str()).unwrap_or("");
+                let our_id = shared.read().await.local_user_id.clone().unwrap_or_default();
+                if from == our_id || (!to.is_empty() && to != our_id) {
+                    return;
+                }
+
                 let data = parsed.get("data").and_then(|v| v.as_str()).unwrap_or("").to_string();
                 let _ = signal_tx.try_send(InternalSignal { from, payload: data });
                 return;
