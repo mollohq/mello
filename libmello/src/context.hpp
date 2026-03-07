@@ -1,5 +1,7 @@
 #pragma once
+#include "audio/audio_pipeline.hpp"
 #include <string>
+#include <mutex>
 
 namespace mello {
 
@@ -8,25 +10,18 @@ public:
     Context() = default;
     ~Context() = default;
 
-    bool initialize() {
-        // TODO: Initialize subsystems
-        return true;
-    }
+    bool initialize();
+    void shutdown();
 
-    void shutdown() {
-        // TODO: Shutdown subsystems
-    }
+    audio::AudioPipeline& audio() { return audio_; }
 
-    const char* get_error() const {
-        return last_error_.c_str();
-    }
-
-    void set_error(const std::string& error) {
-        last_error_ = error;
-    }
+    void set_error(const std::string& error);
+    const char* get_error() const;
 
 private:
+    audio::AudioPipeline audio_;
     std::string last_error_;
+    mutable std::mutex error_mutex_;
 };
 
 } // namespace mello

@@ -325,6 +325,29 @@ fn handle_event(app: &MainWindow, event: Event) {
             let rc = std::rc::Rc::new(slint::VecModel::from(members));
             app.set_members(rc.into());
         }
+        Event::VoiceConnected { peer_id } => {
+            log::info!("UI: voice connected to {}", peer_id);
+        }
+        Event::VoiceDisconnected { peer_id } => {
+            log::info!("UI: voice disconnected from {}", peer_id);
+        }
+        Event::VoiceActivity { member_id, speaking } => {
+            let current = app.get_members();
+            let members: Vec<MemberData> = (0..current.row_count())
+                .map(|i| {
+                    let mut m = current.row_data(i).unwrap();
+                    if m.id == member_id.as_str() {
+                        m.speaking = speaking;
+                    }
+                    m
+                })
+                .collect();
+            let rc = std::rc::Rc::new(slint::VecModel::from(members));
+            app.set_members(rc.into());
+        }
+        Event::SignalReceived { .. } => {
+            // Handled internally by the client, not the UI
+        }
         Event::Error { message } => {
             log::error!("UI: error: {}", message);
         }

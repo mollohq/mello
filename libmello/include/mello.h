@@ -1,6 +1,6 @@
 /**
  * @file mello.h
- * @brief Mello C API - Audio, Video, and Transport
+ * @brief Mello C API - Audio, Video, and P2P Transport
  */
 
 #ifndef MELLO_H
@@ -17,7 +17,7 @@ extern "C" {
     #ifdef MELLO_EXPORTS
         #define MELLO_API __declspec(dllexport)
     #else
-        #define MELLO_API __declspec(dllimport)
+        #define MELLO_API
     #endif
 #else
     #define MELLO_API
@@ -28,6 +28,7 @@ extern "C" {
  * ============================================================================ */
 
 typedef struct MelloContext MelloContext;
+typedef struct MelloPeerConnection MelloPeerConnection;
 
 typedef enum MelloResult {
     MELLO_OK = 0,
@@ -35,46 +36,113 @@ typedef enum MelloResult {
     MELLO_ERROR_NOT_INITIALIZED = -2,
     MELLO_ERROR_ALREADY_STARTED = -3,
     MELLO_ERROR_FAILED = -4,
+    MELLO_ERROR_TRANSPORT_FAILED = -5,
 } MelloResult;
+
+typedef struct MelloIceCandidate {
+    const char* candidate;
+    const char* sdp_mid;
+    int sdp_mline_index;
+} MelloIceCandidate;
+
+typedef void (*MelloVoiceActivityCallback)(void* user_data, bool speaking);
+typedef void (*MelloIceCandidateCallback)(void* user_data, const MelloIceCandidate* candidate);
+typedef void (*MelloPeerStateCallback)(void* user_data, int state);
+typedef void (*MelloPeerDataCallback)(void* user_data, const uint8_t* data, int size, bool reliable);
 
 /* ============================================================================
  * Context
  * ============================================================================ */
 
-/** Initialize libmello. Call once at startup. */
 MELLO_API MelloContext* mello_init(void);
-
-/** Shutdown and free resources. */
 MELLO_API void mello_destroy(MelloContext* ctx);
-
-/** Get last error message. */
 MELLO_API const char* mello_get_error(MelloContext* ctx);
 
 /* ============================================================================
  * Voice
  * ============================================================================ */
 
-/** Start audio capture from default microphone. */
 MELLO_API MelloResult mello_voice_start_capture(MelloContext* ctx);
-
-/** Stop audio capture. */
 MELLO_API MelloResult mello_voice_stop_capture(MelloContext* ctx);
-
-/** Set mute state. */
 MELLO_API void mello_voice_set_mute(MelloContext* ctx, bool muted);
-
-/** Check if local user is currently speaking (VAD). */
+MELLO_API void mello_voice_set_deafen(MelloContext* ctx, bool deafened);
 MELLO_API bool mello_voice_is_speaking(MelloContext* ctx);
 
+MELLO_API void mello_voice_set_vad_callback(
+    MelloContext* ctx,
+    MelloVoiceActivityCallback callback,
+    void* user_data
+);
+
+/** Get next encoded audio packet to send to peers. Returns packet size, or 0 if none. */
+MELLO_API int mello_voice_get_packet(MelloContext* ctx, uint8_t* buffer, int buffer_size);
+
+/** Feed an encoded audio packet received from a peer. */
+MELLO_API MelloResult mello_voice_feed_packet(
+    MelloContext* ctx,
+    const char* peer_id,
+    const uint8_t* data,
+    int size
+);
+
 /* ============================================================================
- * Streaming
+ * P2P Transport
  * ============================================================================ */
 
-/** Start hosting a stream. */
-MELLO_API MelloResult mello_stream_start_host(MelloContext* ctx);
+MELLO_API MelloPeerConnection* mello_peer_create(MelloContext* ctx, const char* peer_id);
+MELLO_API void mello_peer_destroy(MelloPeerConnection* peer);
 
-/** Stop hosting. */
-MELLO_API MelloResult mello_stream_stop_host(MelloContext* ctx);
+MELLO_API void mello_peer_set_ice_servers(
+    MelloPeerConnection* peer,
+    const char** urls,
+    int count
+);
+
+MELLO_API const char* mello_peer_create_offer(MelloPeerConnection* peer);
+MELLO_API const char* mello_peer_create_answer(MelloPeerConnection* peer, const char* offer_sdp);
+
+MELLO_API MelloResult mello_peer_set_remote_description(
+    MelloPeerConnection* peer,
+    const char* sdp,
+    bool is_offer
+);
+
+MELLO_API MelloResult mello_peer_add_ice_candidate(
+    MelloPeerConnection* peer,
+    const MelloIceCandidate* candidate
+);
+
+MELLO_API void mello_peer_set_ice_callback(
+    MelloPeerConnection* peer,
+    MelloIceCandidateCallback callback,
+    void* user_data
+);
+
+MELLO_API void mello_peer_set_state_callback(
+    MelloPeerConnection* peer,
+    MelloPeerStateCallback callback,
+    void* user_data
+);
+
+MELLO_API void mello_peer_set_data_callback(
+    MelloPeerConnection* peer,
+    MelloPeerDataCallback callback,
+    void* user_data
+);
+
+MELLO_API MelloResult mello_peer_send_unreliable(
+    MelloPeerConnection* peer,
+    const uint8_t* data,
+    int size
+);
+
+MELLO_API MelloResult mello_peer_send_reliable(
+    MelloPeerConnection* peer,
+    const uint8_t* data,
+    int size
+);
+
+MELLO_API bool mello_peer_is_connected(MelloPeerConnection* peer);
 
 #ifdef __cplusplus
 }

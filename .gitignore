@@ -44,3 +44,10 @@ logs/
 
 # Temp files
 temp/
+
+# Third-party vendored source
+libmello/third_party/rnnoise/
+libmello/models/
+
+# Tarball downloads
+*.tar.gz

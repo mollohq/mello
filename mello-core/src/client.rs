@@ -5,30 +5,80 @@ use crate::config::Config;
 use crate::events::Event;
 use crate::nakama::NakamaClient;
 use crate::session;
+use crate::nakama::InternalSignal;
+use crate::voice::{SignalMessage, VoiceManager};
 
 pub struct Client {
     nakama: NakamaClient,
+    voice: VoiceManager,
     event_tx: std::sync::mpsc::Sender<Event>,
-    mic_muted: bool,
-    deafened: bool,
 }
 
 impl Client {
     pub fn new(config: Config, event_tx: std::sync::mpsc::Sender<Event>) -> Self {
         Self {
             nakama: NakamaClient::new(config),
+            voice: VoiceManager::new(event_tx.clone()),
             event_tx,
-            mic_muted: false,
-            deafened: false,
         }
     }
 
     pub async fn run(&mut self, mut cmd_rx: mpsc::Receiver<Command>) {
         log::info!("Mello client started, waiting for commands...");
-        while let Some(cmd) = cmd_rx.recv().await {
-            self.handle_command(cmd).await;
+
+        let mut signal_rx = self.nakama.take_signal_rx().unwrap();
+        let mut voice_tick = tokio::time::interval(tokio::time::Duration::from_millis(20));
+
+        loop {
+            tokio::select! {
+                cmd = cmd_rx.recv() => {
+                    match cmd {
+                        Some(cmd) => self.handle_command(cmd).await,
+                        None => break,
+                    }
+                }
+                signal = signal_rx.recv() => {
+                    if let Some(sig) = signal {
+                        self.handle_signal(sig);
+                    }
+                }
+                _ = voice_tick.tick() => {
+                    self.voice_tick().await;
+                }
+            }
         }
         log::info!("Mello client shutting down");
+    }
+
+    fn handle_signal(&mut self, signal: InternalSignal) {
+        match serde_json::from_str::<SignalMessage>(&signal.payload) {
+            Ok(msg) => {
+                log::info!("Received signal from {}: {:?}", signal.from, msg);
+                self.voice.handle_signal(&signal.from, msg);
+            }
+            Err(e) => {
+                log::warn!("Failed to parse signal from {}: {}", signal.from, e);
+            }
+        }
+    }
+
+    async fn voice_tick(&mut self) {
+        self.voice.tick();
+
+        // Send any pending signaling messages through Nakama
+        let signals = self.voice.drain_signals();
+        for (to, signal) in signals {
+            let payload = match serde_json::to_string(&signal) {
+                Ok(p) => p,
+                Err(e) => {
+                    log::error!("Failed to serialize signal: {}", e);
+                    continue;
+                }
+            };
+            if let Err(e) = self.nakama.send_signal(&to, &payload).await {
+                log::error!("Failed to send signal to {}: {}", to, e);
+            }
+        }
     }
 
     async fn handle_command(&mut self, cmd: Command) {
@@ -55,10 +105,10 @@ impl Client {
                 self.handle_send_message(&content).await;
             }
             Command::SetMute { muted } => {
-                self.mic_muted = muted;
+                self.voice.set_mute(muted);
             }
             Command::SetDeafen { deafened } => {
-                self.deafened = deafened;
+                self.voice.set_deafen(deafened);
             }
         }
     }
@@ -139,6 +189,7 @@ impl Client {
     }
 
     async fn handle_logout(&mut self) {
+        self.voice.leave_voice();
         session::clear();
         if let Err(e) = self.nakama.leave_crew_channel().await {
             log::warn!("Leave channel on logout: {}", e);
@@ -175,6 +226,9 @@ impl Client {
     }
 
     async fn handle_select_crew(&mut self, crew_id: &str) {
+        // Leave voice from previous crew
+        self.voice.leave_voice();
+
         if let Err(e) = self.nakama.leave_crew_channel().await {
             log::warn!("Failed to leave previous channel: {}", e);
         }
@@ -188,15 +242,28 @@ impl Client {
             crew_id: crew_id.to_string(),
         });
 
+        // Get member list and start voice connections
         if let Ok(members) = self.nakama.list_group_users(crew_id).await {
             let user_ids: Vec<String> = members.iter().map(|m| m.id.clone()).collect();
             if let Err(e) = self.nakama.follow_users(&user_ids).await {
                 log::warn!("Failed to follow users: {}", e);
             }
+
+            // Start voice mesh with other members
+            if let Some(local_id) = self.nakama.current_user_id().map(String::from) {
+                let other_ids: Vec<String> = user_ids.iter()
+                    .filter(|id| id.as_str() != local_id)
+                    .cloned()
+                    .collect();
+                if !other_ids.is_empty() {
+                    self.voice.join_voice(&local_id, &other_ids);
+                }
+            }
         }
     }
 
     async fn handle_leave_crew(&mut self) {
+        self.voice.leave_voice();
         let crew_id = self.nakama.active_crew_id().map(String::from);
         if let Err(e) = self.nakama.leave_crew_channel().await {
             log::error!("Failed to leave crew: {}", e);

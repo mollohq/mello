@@ -7,8 +7,4 @@ links = "mello"
 
 [build-dependencies]
 bindgen = "0.69"
-cc = "1"
-
-[features]
-default = []
-bundled = []  # Build libmello from source
+cmake = "0.1"

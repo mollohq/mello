@@ -14,6 +14,13 @@ struct WsShared {
     channel_id: Option<String>,
 }
 
+/// Internal signal from a peer, received via Nakama channel message
+#[derive(Debug)]
+pub struct InternalSignal {
+    pub from: String,
+    pub payload: String,
+}
+
 pub struct NakamaClient {
     config: Config,
     http: reqwest::Client,
@@ -24,10 +31,13 @@ pub struct NakamaClient {
     ws_tx: Option<mpsc::Sender<String>>,
     ws_shared: Arc<RwLock<WsShared>>,
     next_cid: u64,
+    signal_rx: Option<mpsc::Receiver<InternalSignal>>,
+    signal_tx_template: Option<mpsc::Sender<InternalSignal>>,
 }
 
 impl NakamaClient {
     pub fn new(config: Config) -> Self {
+        let (sig_tx, sig_rx) = mpsc::channel(256);
         Self {
             config,
             http: reqwest::Client::new(),
@@ -38,6 +48,8 @@ impl NakamaClient {
             ws_tx: None,
             ws_shared: Arc::new(RwLock::new(WsShared::default())),
             next_cid: 1,
+            signal_rx: Some(sig_rx),
+            signal_tx_template: Some(sig_tx),
         }
     }
 
@@ -171,12 +183,18 @@ impl NakamaClient {
         self.ws_tx = Some(ws_tx);
 
         let shared = self.ws_shared.clone();
+        let signal_tx = self.signal_tx_template.clone().unwrap();
 
         tokio::spawn(ws_writer_task(ws_rx, write));
-        tokio::spawn(ws_reader_task(read, event_tx, shared));
+        tokio::spawn(ws_reader_task(read, event_tx, shared, signal_tx));
 
         log::info!("WebSocket connected");
         Ok(())
+    }
+
+    /// Take the signal receiver (call once, from the client run loop)
+    pub fn take_signal_rx(&mut self) -> Option<mpsc::Receiver<InternalSignal>> {
+        self.signal_rx.take()
     }
 
     async fn ws_send(&self, msg: String) -> Result<()> {
@@ -360,6 +378,32 @@ impl NakamaClient {
     pub fn active_crew_id(&self) -> Option<&str> {
         self.active_crew_id.as_deref()
     }
+
+    pub fn current_user_id(&self) -> Option<&str> {
+        self.current_user.as_ref().map(|u| u.id.as_str())
+    }
+
+    /// Send a P2P signaling message through the Nakama channel.
+    /// The message is a channel message with a special "signal" field.
+    pub async fn send_signal(&self, to: &str, payload: &str) -> Result<()> {
+        let channel_id = self.ws_shared.read().await.channel_id.clone()
+            .ok_or(Error::NotConnected)?;
+
+        let content = serde_json::json!({
+            "signal": true,
+            "to": to,
+            "data": payload
+        }).to_string();
+
+        let msg = serde_json::json!({
+            "channel_message_send": {
+                "channel_id": channel_id,
+                "content": content
+            }
+        }).to_string();
+
+        self.ws_send(msg).await
+    }
 }
 
 // --- WebSocket background tasks ---
@@ -389,11 +433,12 @@ async fn ws_reader_task(
     >,
     event_tx: std::sync::mpsc::Sender<Event>,
     shared: Arc<RwLock<WsShared>>,
+    signal_tx: mpsc::Sender<InternalSignal>,
 ) {
     while let Some(msg) = read.next().await {
         match msg {
             Ok(Message::Text(text)) => {
-                handle_ws_message(&text, &event_tx, &shared).await;
+                handle_ws_message(&text, &event_tx, &shared, &signal_tx).await;
             }
             Ok(Message::Close(_)) => {
                 log::info!("WebSocket closed by server");
@@ -415,6 +460,7 @@ async fn handle_ws_message(
     text: &str,
     event_tx: &std::sync::mpsc::Sender<Event>,
     shared: &Arc<RwLock<WsShared>>,
+    signal_tx: &mpsc::Sender<InternalSignal>,
 ) {
     let envelope: WsEnvelope = match serde_json::from_str(text) {
         Ok(e) => e,
@@ -444,6 +490,17 @@ async fn handle_ws_message(
     // Channel message
     if let Some(msg) = envelope.channel_message {
         let content_str = msg.content.unwrap_or_default();
+
+        // Check if this is a signaling message -- route to internal signal channel
+        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&content_str) {
+            if parsed.get("signal").and_then(|v| v.as_bool()) == Some(true) {
+                let from = msg.sender_id.unwrap_or_default();
+                let data = parsed.get("data").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let _ = signal_tx.try_send(InternalSignal { from, payload: data });
+                return;
+            }
+        }
+
         let text = serde_json::from_str::<ChatContent>(&content_str)
             .ok()
             .and_then(|c| c.text)

@@ -1,0 +1,11 @@
+{
+  "name": "libmello",
+  "version": "0.1.0",
+  "dependencies": [
+    "opus",
+    {
+      "name": "libdatachannel",
+      "features": ["ws"]
+    }
+  ]
+}

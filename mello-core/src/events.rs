@@ -35,5 +35,11 @@ pub enum Event {
 
     MessageReceived { message: ChatMessage },
 
+    VoiceConnected { peer_id: String },
+    VoiceDisconnected { peer_id: String },
+    VoiceActivity { member_id: String, speaking: bool },
+
+    SignalReceived { from: String, payload: String },
+
     Error { message: String },
 }
