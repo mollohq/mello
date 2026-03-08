@@ -45,5 +45,8 @@ func InitModule(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runti
 }
 
 func HealthCheckRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, payload string) (string, error) {
-	return `{"status": "ok"}`, nil
+	if err := db.PingContext(ctx); err != nil {
+		return "", runtime.NewError("database unhealthy", 13)
+	}
+	return `{"status":"healthy","version":"0.2.0"}`, nil
 }

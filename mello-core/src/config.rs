@@ -9,6 +9,19 @@ pub struct Config {
 }
 
 impl Config {
+    pub fn production() -> Self {
+        Self {
+            nakama_host: "mello-api.onrender.com".into(),
+            nakama_port: 443,
+            nakama_key: option_env!("NAKAMA_SERVER_KEY").unwrap_or("defaultkey").into(),
+            nakama_ssl: true,
+        }
+    }
+
+    pub fn development() -> Self {
+        Self::default()
+    }
+
     pub fn http_base(&self) -> String {
         let scheme = if self.nakama_ssl { "https" } else { "http" };
         format!("{}://{}:{}", scheme, self.nakama_host, self.nakama_port)

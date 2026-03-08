@@ -1,0 +1,33 @@
+name: mello
+
+logger:
+  level: INFO
+  stdout: true
+  format: json
+
+session:
+  token_expiry_sec: 3600
+  refresh_token_expiry_sec: 7776000
+
+socket:
+  max_message_size_bytes: 4096
+  max_request_size_bytes: 131072
+  read_buffer_size_bytes: 4096
+  write_buffer_size_bytes: 4096
+  read_timeout_ms: 10000
+  write_timeout_ms: 10000
+  pong_wait_ms: 25000
+  ping_period_ms: 15000
+  ping_backoff_threshold: 20
+
+runtime:
+  path: /nakama/data/modules
+
+match:
+  input_queue_size: 128
+  call_queue_size: 128
+  join_attempt_queue_size: 128
+  deferred_queue_size: 128
+
+tracker:
+  event_queue_size: 1024

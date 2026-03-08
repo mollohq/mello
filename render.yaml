@@ -1,0 +1,33 @@
+services:
+  - type: web
+    name: mello-nakama
+    runtime: docker
+    repo: https://github.com/mollohq/mello
+    branch: main
+    rootDir: backend
+    dockerfilePath: ./Dockerfile
+    plan: starter
+    healthCheckPath: /healthcheck
+    envVars:
+      - key: NAKAMA_CONSOLE_USERNAME
+        value: admin
+      - key: NAKAMA_CONSOLE_PASSWORD
+        generateValue: true
+      - key: NAKAMA_SERVER_KEY
+        generateValue: true
+      - key: NAKAMA_HTTP_KEY
+        generateValue: true
+      - key: DATABASE_URL
+        fromDatabase:
+          name: mello-db
+          property: connectionString
+      - key: DISCORD_CLIENT_ID
+        sync: false
+      - key: DISCORD_CLIENT_SECRET
+        sync: false
+
+databases:
+  - name: mello-db
+    plan: free
+    databaseName: nakama
+    user: nakama

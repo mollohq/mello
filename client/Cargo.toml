@@ -18,6 +18,11 @@ confy = "2.0.0"
 serde = { workspace = true, features = ["derive"] }
 paste = "1"
 
+[features]
+default = ["development"]
+production = []
+development = []
+
 [dev-dependencies]
 toml = "0.8"
 

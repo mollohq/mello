@@ -9,6 +9,14 @@ use slint::Model;
 use mello_core::{Client, Command, Config, Event};
 use settings::Settings;
 
+fn nakama_config() -> Config {
+    #[cfg(feature = "production")]
+    return Config::production();
+
+    #[cfg(not(feature = "production"))]
+    Config::development()
+}
+
 fn make_initials(name: &str) -> String {
     let parts: Vec<&str> = name.split_whitespace().collect();
     match parts.len() {
@@ -63,7 +71,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (event_tx, event_rx) = std::sync::mpsc::channel::<Event>();
 
     rt.spawn(async move {
-        let mut client = Client::new(Config::default(), event_tx, loopback);
+        let mut client = Client::new(nakama_config(), event_tx, loopback);
         client.run(cmd_rx).await;
     });
 
