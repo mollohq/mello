@@ -17,4 +17,5 @@ pub enum Command {
     SetCaptureDevice { id: String },
     SetPlaybackDevice { id: String },
     SetLoopback { enabled: bool },
+    SetDebugMode { enabled: bool },
 }

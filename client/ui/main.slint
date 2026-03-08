@@ -5,6 +5,7 @@ import { StreamView } from "panels/stream_view.slint";
 import { ChatPanel } from "panels/chat_panel.slint";
 import { ControlBar } from "panels/control_bar.slint";
 import { SettingsModal } from "panels/settings_modal.slint";
+import { DebugPanel } from "panels/debug_panel.slint";
 
 export { CrewData, MemberData, ChatMessageData, CrewTabData, AudioDeviceData, Theme }
 
@@ -54,6 +55,31 @@ export component MainWindow inherits Window {
     // --- Presence (0=online, 1=idle, 2=dnd, 3=invisible) ---
     in-out property <int> presence-status: 0;
 
+    // --- Debug panel ---
+    in-out property <bool> debug-open: false;
+    in property <float> dbg-input-level: 0.0;
+    in property <float> dbg-silero-prob: 0.0;
+    in property <float> dbg-rnnoise-prob: 0.0;
+    in property <bool> dbg-speaking: false;
+    in property <bool> dbg-capturing: false;
+    in property <bool> dbg-muted: false;
+    in property <bool> dbg-deafened: false;
+    in property <int> dbg-packets: 0;
+    // Level history (ring buffer, 30 entries)
+    in property <float> lh0;  in property <float> lh1;  in property <float> lh2;  in property <float> lh3;  in property <float> lh4;
+    in property <float> lh5;  in property <float> lh6;  in property <float> lh7;  in property <float> lh8;  in property <float> lh9;
+    in property <float> lh10; in property <float> lh11; in property <float> lh12; in property <float> lh13; in property <float> lh14;
+    in property <float> lh15; in property <float> lh16; in property <float> lh17; in property <float> lh18; in property <float> lh19;
+    in property <float> lh20; in property <float> lh21; in property <float> lh22; in property <float> lh23; in property <float> lh24;
+    in property <float> lh25; in property <float> lh26; in property <float> lh27; in property <float> lh28; in property <float> lh29;
+    // Speaking state per bar
+    in property <bool> sh0;  in property <bool> sh1;  in property <bool> sh2;  in property <bool> sh3;  in property <bool> sh4;
+    in property <bool> sh5;  in property <bool> sh6;  in property <bool> sh7;  in property <bool> sh8;  in property <bool> sh9;
+    in property <bool> sh10; in property <bool> sh11; in property <bool> sh12; in property <bool> sh13; in property <bool> sh14;
+    in property <bool> sh15; in property <bool> sh16; in property <bool> sh17; in property <bool> sh18; in property <bool> sh19;
+    in property <bool> sh20; in property <bool> sh21; in property <bool> sh22; in property <bool> sh23; in property <bool> sh24;
+    in property <bool> sh25; in property <bool> sh26; in property <bool> sh27; in property <bool> sh28; in property <bool> sh29;
+
     // --- Callbacks ---
     callback login(string, string);
     callback logout();
@@ -72,6 +98,7 @@ export component MainWindow inherits Window {
     callback capture-device-selected(string);
     callback playback-device-selected(string);
     callback mic-test-toggled();
+    callback debug-toggled();
 
     // ===================== LOGIN SCREEN =====================
     if !logged-in: Rectangle {
@@ -292,6 +319,33 @@ export component MainWindow inherits Window {
                         clicked => { root.tab-add-clicked(); }
                     }
                 }
+
+                // Spacer to push debug button right
+                Rectangle { horizontal-stretch: 1; }
+
+                // Debug toggle button
+                Rectangle {
+                    width: 28px;
+                    height: 28px;
+                    border-radius: Theme.r-inner;
+                    y: (parent.height - self.height) / 2;
+                    background: debug-open ? Theme.accent-bg : (dbg-btn-hover.has-hover ? Theme.hover-overlay : transparent);
+
+                    Text {
+                        text: "⚙";
+                        font-size: 14px;
+                        color: debug-open ? Theme.accent : Theme.text-tertiary;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+
+                    dbg-btn-hover := TouchArea {
+                        clicked => {
+                            root.debug-open = !root.debug-open;
+                            root.debug-toggled();
+                        }
+                    }
+                }
             }
         }
 
@@ -352,6 +406,41 @@ export component MainWindow inherits Window {
                     messages: root.messages;
                     message-submitted(text) => { root.send-message(text); }
                 }
+            }
+        }
+    }
+
+    // ===================== DEBUG OVERLAY =====================
+    if debug-open && logged-in: Rectangle {
+        // Position top-right, floating over content
+        x: root.width - 332px;
+        y: 50px;
+        width: 320px;
+
+        DebugPanel {
+            input-level: root.dbg-input-level;
+            silero-vad-prob: root.dbg-silero-prob;
+            rnnoise-prob: root.dbg-rnnoise-prob;
+            is-speaking: root.dbg-speaking;
+            is-capturing: root.dbg-capturing;
+            is-muted: root.dbg-muted;
+            is-deafened: root.dbg-deafened;
+            packets-encoded: root.dbg-packets;
+            lh0:  root.lh0;  lh1:  root.lh1;  lh2:  root.lh2;  lh3:  root.lh3;  lh4:  root.lh4;
+            lh5:  root.lh5;  lh6:  root.lh6;  lh7:  root.lh7;  lh8:  root.lh8;  lh9:  root.lh9;
+            lh10: root.lh10; lh11: root.lh11; lh12: root.lh12; lh13: root.lh13; lh14: root.lh14;
+            lh15: root.lh15; lh16: root.lh16; lh17: root.lh17; lh18: root.lh18; lh19: root.lh19;
+            lh20: root.lh20; lh21: root.lh21; lh22: root.lh22; lh23: root.lh23; lh24: root.lh24;
+            lh25: root.lh25; lh26: root.lh26; lh27: root.lh27; lh28: root.lh28; lh29: root.lh29;
+            sh0:  root.sh0;  sh1:  root.sh1;  sh2:  root.sh2;  sh3:  root.sh3;  sh4:  root.sh4;
+            sh5:  root.sh5;  sh6:  root.sh6;  sh7:  root.sh7;  sh8:  root.sh8;  sh9:  root.sh9;
+            sh10: root.sh10; sh11: root.sh11; sh12: root.sh12; sh13: root.sh13; sh14: root.sh14;
+            sh15: root.sh15; sh16: root.sh16; sh17: root.sh17; sh18: root.sh18; sh19: root.sh19;
+            sh20: root.sh20; sh21: root.sh21; sh22: root.sh22; sh23: root.sh23; sh24: root.sh24;
+            sh25: root.sh25; sh26: root.sh26; sh27: root.sh27; sh28: root.sh28; sh29: root.sh29;
+            close-requested => {
+                root.debug-open = false;
+                root.debug-toggled();
             }
         }
     }

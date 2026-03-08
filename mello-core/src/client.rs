@@ -152,6 +152,9 @@ impl Client {
             Command::SetLoopback { enabled } => {
                 self.voice.set_loopback(enabled);
             }
+            Command::SetDebugMode { enabled } => {
+                self.voice.set_debug_mode(enabled);
+            }
         }
     }
 

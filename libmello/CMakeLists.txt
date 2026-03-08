@@ -8,7 +8,15 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 # Dependencies via vcpkg
 find_package(Opus CONFIG REQUIRED)
 find_package(LibDataChannel CONFIG REQUIRED)
-find_package(onnxruntime CONFIG QUIET)
+
+# ONNX Runtime - use prebuilt shared library (static is 2GB+ and impractical)
+set(ORT_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/onnxruntime/onnxruntime-win-x64-1.23.2)
+add_library(onnxruntime SHARED IMPORTED)
+set_target_properties(onnxruntime PROPERTIES
+    IMPORTED_LOCATION "${ORT_DIR}/lib/onnxruntime.dll"
+    IMPORTED_IMPLIB "${ORT_DIR}/lib/onnxruntime.lib"
+    INTERFACE_INCLUDE_DIRECTORIES "${ORT_DIR}/include"
+)
 
 # Build rnnoise from source (not available on Windows via vcpkg)
 set(RNNOISE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/rnnoise)
@@ -55,7 +63,7 @@ endif()
 # Static library for Rust FFI linking
 add_library(mello STATIC ${MELLO_SOURCES})
 
-target_compile_definitions(mello PRIVATE MELLO_EXPORTS NOMINMAX)
+target_compile_definitions(mello PRIVATE MELLO_EXPORTS NOMINMAX MELLO_HAS_ONNX)
 
 if(MSVC)
     target_compile_options(mello PRIVATE /EHsc)
@@ -71,12 +79,8 @@ target_link_libraries(mello
         Opus::opus
         LibDataChannel::LibDataChannel
         rnnoise
+        onnxruntime
 )
-
-if(onnxruntime_FOUND)
-    target_compile_definitions(mello PRIVATE MELLO_HAS_ONNX)
-    target_link_libraries(mello PUBLIC onnxruntime::onnxruntime)
-endif()
 
 if(WIN32)
     target_link_libraries(mello PUBLIC
@@ -95,3 +99,4 @@ install(TARGETS mello rnnoise
     RUNTIME DESTINATION bin
 )
 install(FILES include/mello.h DESTINATION include)
+install(FILES models/silero_vad.onnx DESTINATION models)

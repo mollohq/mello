@@ -47,6 +47,7 @@ temp/
 
 # Third-party vendored source
 libmello/third_party/rnnoise/
+libmello/third_party/onnxruntime/
 libmello/models/
 
 # Tarball downloads

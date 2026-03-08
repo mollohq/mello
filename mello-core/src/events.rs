@@ -48,6 +48,17 @@ pub enum Event {
 
     MicLevel { level: f32 },
 
+    AudioDebugStats {
+        input_level: f32,
+        silero_vad_prob: f32,
+        rnnoise_prob: f32,
+        is_speaking: bool,
+        is_capturing: bool,
+        is_muted: bool,
+        is_deafened: bool,
+        packets_encoded: u32,
+    },
+
     SignalReceived { from: String, payload: String },
 
     Error { message: String },

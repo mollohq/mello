@@ -38,6 +38,34 @@ fn main() {
     println!("cargo:rustc-link-lib=static=juice");
     println!("cargo:rustc-link-lib=static=usrsctp");
 
+    // ONNX Runtime (dynamic linking -- static is 2GB+ and impractical)
+    let manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
+    let ort_dir = Path::new(&manifest_dir)
+        .join("../libmello/third_party/onnxruntime/onnxruntime-win-x64-1.23.2");
+    let ort_dir = ort_dir.canonicalize().expect("onnxruntime prebuilt dir not found");
+    let ort_lib = ort_dir.join("lib");
+    println!("cargo:rustc-link-search=native={}", ort_lib.display());
+    println!("cargo:rustc-link-lib=dylib=onnxruntime");
+
+    // Copy DLLs next to the output binary
+    let out_dir = env::var("OUT_DIR").unwrap();
+    let target_dir = Path::new(&out_dir)
+        .ancestors()
+        .find(|p| p.ends_with("debug") || p.ends_with("release"))
+        .map(|p| p.join("deps"))
+        .unwrap_or_else(|| PathBuf::from(&out_dir));
+
+    for dll in &["onnxruntime.dll", "onnxruntime_providers_shared.dll"] {
+        let src = ort_lib.join(dll);
+        if src.exists() {
+            let _ = std::fs::copy(&src, target_dir.join(dll));
+            // Also copy to the parent (target/debug/) for cargo run
+            if let Some(parent) = target_dir.parent() {
+                let _ = std::fs::copy(&src, parent.join(dll));
+            }
+        }
+    }
+
     match target_os.as_str() {
         "windows" => {
             println!("cargo:rustc-link-lib=static=libssl");

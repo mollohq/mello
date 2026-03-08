@@ -294,6 +294,27 @@ int mello_peer_recv(MelloPeerConnection* peer, uint8_t* buffer, int buffer_size)
 }
 
 /* ============================================================================
+ * Debug / Diagnostics
+ * ============================================================================ */
+
+void mello_get_debug_stats(MelloContext* ctx, MelloDebugStats* out) {
+    if (!ctx || !out) return;
+    try {
+        auto& audio = ctx_cast(ctx)->audio();
+        out->input_level     = audio.input_level();
+        out->silero_vad_prob = audio.speech_probability();
+        out->rnnoise_prob    = audio.rnnoise_probability();
+        out->is_speaking     = audio.is_speaking();
+        out->is_capturing    = audio.is_capturing();
+        out->is_muted        = audio.is_muted();
+        out->is_deafened     = audio.is_deafened();
+        out->packets_encoded = audio.packets_encoded();
+    } catch (...) {
+        memset(out, 0, sizeof(MelloDebugStats));
+    }
+}
+
+/* ============================================================================
  * Devices
  * ============================================================================ */
 

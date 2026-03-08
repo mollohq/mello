@@ -151,6 +151,23 @@ MELLO_API bool mello_peer_is_connected(MelloPeerConnection* peer);
 MELLO_API int mello_peer_recv(MelloPeerConnection* peer, uint8_t* buffer, int buffer_size);
 
 /* ============================================================================
+ * Debug / Diagnostics
+ * ============================================================================ */
+
+typedef struct MelloDebugStats {
+    float input_level;
+    float silero_vad_prob;
+    float rnnoise_prob;
+    bool  is_speaking;
+    bool  is_capturing;
+    bool  is_muted;
+    bool  is_deafened;
+    uint32_t packets_encoded;
+} MelloDebugStats;
+
+MELLO_API void mello_get_debug_stats(MelloContext* ctx, MelloDebugStats* out);
+
+/* ============================================================================
  * Devices
  * ============================================================================ */
 

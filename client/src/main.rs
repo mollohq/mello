@@ -22,6 +22,35 @@ fn make_initials(name: &str) -> String {
     }
 }
 
+const HISTORY_LEN: usize = 30;
+
+struct DebugHistory {
+    levels: [f32; HISTORY_LEN],
+    speaking: [bool; HISTORY_LEN],
+    cursor: usize,
+}
+
+impl DebugHistory {
+    fn new() -> Self {
+        Self {
+            levels: [0.0; HISTORY_LEN],
+            speaking: [false; HISTORY_LEN],
+            cursor: 0,
+        }
+    }
+
+    fn push(&mut self, level: f32, spk: bool) {
+        self.levels[self.cursor] = level;
+        self.speaking[self.cursor] = spk;
+        self.cursor = (self.cursor + 1) % HISTORY_LEN;
+    }
+
+    fn get(&self, i: usize) -> (f32, bool) {
+        let idx = (self.cursor + i) % HISTORY_LEN;
+        (self.levels[idx], self.speaking[idx])
+    }
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
     log::info!("Starting Mello...");
@@ -234,6 +263,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
+    // --- Debug toggle ---
+    {
+        let cmd = cmd_tx.clone();
+        let app_weak = app.as_weak();
+        app.on_debug_toggled(move || {
+            if let Some(app) = app_weak.upgrade() {
+                let enabled = app.get_debug_open();
+                let _ = cmd.try_send(Command::SetDebugMode { enabled });
+            }
+        });
+    }
+
     // --- Presence ---
     app.on_presence_changed(move |status| {
         log::info!("Presence changed to {}", status);
@@ -242,11 +283,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // --- Event polling timer ---
     let app_weak = app.as_weak();
     let s = settings.clone();
+    let dbg_hist = Rc::new(RefCell::new(DebugHistory::new()));
     let timer = slint::Timer::default();
     timer.start(slint::TimerMode::Repeated, Duration::from_millis(50), move || {
         while let Ok(event) = event_rx.try_recv() {
             if let Some(app) = app_weak.upgrade() {
-                handle_event(&app, event, &s);
+                handle_event(&app, event, &s, &dbg_hist);
             }
         }
     });
@@ -298,7 +340,22 @@ fn remove_crew_tab(app: &MainWindow, tab_id: &str) {
     app.set_crew_tabs(rc.into());
 }
 
-fn handle_event(app: &MainWindow, event: Event, settings: &Rc<RefCell<Settings>>) {
+fn set_level_history(app: &MainWindow, hist: &DebugHistory) {
+    macro_rules! set_lh {
+        ($($i:literal),*) => {
+            $(
+                let (level, spk) = hist.get($i);
+                paste::paste! {
+                    app.[<set_lh $i>](level);
+                    app.[<set_sh $i>](spk);
+                }
+            )*
+        };
+    }
+    set_lh!(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29);
+}
+
+fn handle_event(app: &MainWindow, event: Event, settings: &Rc<RefCell<Settings>>, dbg_hist: &Rc<RefCell<DebugHistory>>) {
     match event {
         Event::Restoring => {
             app.set_login_loading(true);
@@ -425,6 +482,23 @@ fn handle_event(app: &MainWindow, event: Event, settings: &Rc<RefCell<Settings>>
         }
         Event::MicLevel { level } => {
             app.set_mic_level(level);
+        }
+        Event::AudioDebugStats {
+            input_level, silero_vad_prob, rnnoise_prob,
+            is_speaking, is_capturing, is_muted, is_deafened, packets_encoded,
+        } => {
+            app.set_dbg_input_level(input_level);
+            app.set_dbg_silero_prob(silero_vad_prob);
+            app.set_dbg_rnnoise_prob(rnnoise_prob);
+            app.set_dbg_speaking(is_speaking);
+            app.set_dbg_capturing(is_capturing);
+            app.set_dbg_muted(is_muted);
+            app.set_dbg_deafened(is_deafened);
+            app.set_dbg_packets(packets_encoded as i32);
+
+            let mut hist = dbg_hist.borrow_mut();
+            hist.push(input_level, is_speaking);
+            set_level_history(app, &hist);
         }
         Event::AudioDevicesListed { capture, playback } => {
             let cap: Vec<AudioDeviceData> = capture.iter().map(|d| AudioDeviceData {

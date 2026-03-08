@@ -30,6 +30,7 @@ pub struct VoiceManager {
     deafened: bool,
     active: bool,
     loopback: bool,
+    debug_mode: bool,
     tick_counter: u32,
 }
 
@@ -59,6 +60,7 @@ impl VoiceManager {
             deafened: false,
             active: false,
             loopback,
+            debug_mode: false,
             tick_counter: 0,
         }
     }
@@ -220,6 +222,11 @@ impl VoiceManager {
         unsafe { mello_sys::mello_voice_get_input_level(self.ctx) }
     }
 
+    pub fn set_debug_mode(&mut self, enabled: bool) {
+        self.debug_mode = enabled;
+        log::info!("Audio debug mode {}", if enabled { "enabled" } else { "disabled" });
+    }
+
     pub fn is_active(&self) -> bool {
         self.active
     }
@@ -259,6 +266,21 @@ impl VoiceManager {
         if self.loopback && (self.tick_counter % 5) == 0 {
             let level = self.get_input_level();
             let _ = self.event_tx.send(Event::MicLevel { level });
+        }
+
+        if self.debug_mode && (self.tick_counter % 3) == 0 {
+            let mut stats: mello_sys::MelloDebugStats = unsafe { std::mem::zeroed() };
+            unsafe { mello_sys::mello_get_debug_stats(self.ctx, &mut stats); }
+            let _ = self.event_tx.send(Event::AudioDebugStats {
+                input_level: stats.input_level,
+                silero_vad_prob: stats.silero_vad_prob,
+                rnnoise_prob: stats.rnnoise_prob,
+                is_speaking: stats.is_speaking,
+                is_capturing: stats.is_capturing,
+                is_muted: stats.is_muted,
+                is_deafened: stats.is_deafened,
+                packets_encoded: stats.packets_encoded,
+            });
         }
 
         let mut buf = [0u8; PACKET_BUF_SIZE];

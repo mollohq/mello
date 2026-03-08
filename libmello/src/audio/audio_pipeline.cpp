@@ -3,8 +3,63 @@
 #include <cstring>
 #include <algorithm>
 #include <cmath>
+#include <fstream>
+
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <unistd.h>
+#include <limits.h>
+#include <libgen.h>
+#endif
 
 namespace mello::audio {
+
+static std::string get_exe_dir() {
+#ifdef _WIN32
+    char buf[MAX_PATH];
+    DWORD len = GetModuleFileNameA(nullptr, buf, MAX_PATH);
+    if (len == 0) return ".";
+    std::string path(buf, len);
+    auto pos = path.find_last_of("\\/");
+    return (pos != std::string::npos) ? path.substr(0, pos) : ".";
+#else
+    char buf[PATH_MAX];
+    ssize_t len = readlink("/proc/self/exe", buf, sizeof(buf) - 1);
+    if (len <= 0) return ".";
+    buf[len] = '\0';
+    return std::string(dirname(buf));
+#endif
+}
+
+static std::string find_model_path() {
+    std::string exe_dir = get_exe_dir();
+
+    // Check next to executable first
+    std::string p1 = exe_dir + "/silero_vad.onnx";
+    if (std::ifstream(p1).good()) return p1;
+
+    // Check models/ subdirectory next to exe
+    std::string p2 = exe_dir + "/models/silero_vad.onnx";
+    if (std::ifstream(p2).good()) return p2;
+
+    // Check source tree path (development)
+    std::string p3 = exe_dir + "/../libmello/models/silero_vad.onnx";
+    if (std::ifstream(p3).good()) return p3;
+
+    // Walk up from exe looking for libmello/models (handles target/debug layout)
+    std::string dir = exe_dir;
+    for (int i = 0; i < 5; ++i) {
+        std::string candidate = dir + "/libmello/models/silero_vad.onnx";
+        if (std::ifstream(candidate).good()) return candidate;
+        auto pos = dir.find_last_of("\\/");
+        if (pos == std::string::npos) break;
+        dir = dir.substr(0, pos);
+    }
+
+    MELLO_LOG_WARN("pipeline", "silero_vad.onnx not found, searched from: %s", exe_dir.c_str());
+    return "";
+}
 
 AudioPipeline::AudioPipeline() = default;
 
@@ -38,6 +93,13 @@ bool AudioPipeline::initialize() {
         MELLO_LOG_ERROR("pipeline", "noise suppressor init failed");
         return false;
     }
+
+    std::string model_path = find_model_path();
+    if (model_path.empty() || !vad_.initialize(model_path)) {
+        MELLO_LOG_ERROR("pipeline", "Silero VAD init failed (model_path=%s)", model_path.c_str());
+        return false;
+    }
+
     if (!playback_->start()) {
         MELLO_LOG_ERROR("pipeline", "playback start failed");
         return false;
@@ -55,6 +117,7 @@ void AudioPipeline::shutdown() {
     stop_capture();
     if (playback_) playback_->stop();
     noise_suppressor_.shutdown();
+    vad_.shutdown();
     capture_.reset();
     playback_.reset();
     initialized_ = false;
@@ -89,7 +152,6 @@ void AudioPipeline::on_captured_audio(const int16_t* samples, size_t count) {
     capture_accum_.insert(capture_accum_.end(), samples, samples + count);
 
     while (capture_accum_.size() >= FRAME_SIZE) {
-        // Compute RMS of the frame for the VU meter
         {
             double sum = 0.0;
             for (int i = 0; i < FRAME_SIZE; ++i) {
@@ -102,17 +164,11 @@ void AudioPipeline::on_captured_audio(const int16_t* samples, size_t count) {
             if (level < 0.0f) level = 0.0f;
             if (level > 1.0f) level = 1.0f;
             input_level_.store(level, std::memory_order_relaxed);
-
-            static int rms_log_counter = 0;
-            if ((++rms_log_counter % 250) == 0) {
-                MELLO_LOG_DEBUG("pipeline", "rms=%.6f db=%.1f level=%.3f stored=%.3f",
-                                rms, db, level, input_level_.load());
-            }
         }
 
         if (!muted_) {
+            vad_.feed(capture_accum_.data(), FRAME_SIZE);
             noise_suppressor_.process(capture_accum_.data(), FRAME_SIZE);
-            update_vad(noise_suppressor_.speech_probability());
 
             uint8_t packet[MAX_PACKET_SIZE];
             int encoded = encoder_.encode(capture_accum_.data(), FRAME_SIZE,
@@ -126,7 +182,7 @@ void AudioPipeline::on_captured_audio(const int16_t* samples, size_t count) {
 
                 if ((pkt.sequence % 250) == 0) {
                     MELLO_LOG_DEBUG("pipeline", "encode: seq=%u size=%d bytes, vad=%.2f, queue=%zu",
-                                    pkt.sequence, encoded, speech_prob_, outgoing_.size());
+                                    pkt.sequence, encoded, vad_.probability(), outgoing_.size());
                 }
             } else if (encoded < 0) {
                 MELLO_LOG_WARN("pipeline", "opus encode error: %d", encoded);
@@ -143,12 +199,11 @@ int AudioPipeline::get_packet(uint8_t* buffer, int buffer_size) {
 
     auto& pkt = outgoing_.front();
     int payload_size = static_cast<int>(pkt.data.size());
-    int total_size = payload_size + 4; // 4-byte sequence header + opus payload
+    int total_size = payload_size + 4;
     if (total_size > buffer_size) {
         outgoing_.pop();
         return 0;
     }
-    // Prepend little-endian sequence number (matches feed_packet's expectation)
     buffer[0] = static_cast<uint8_t>(pkt.sequence);
     buffer[1] = static_cast<uint8_t>(pkt.sequence >> 8);
     buffer[2] = static_cast<uint8_t>(pkt.sequence >> 16);
@@ -213,29 +268,6 @@ void AudioPipeline::feed_packet(const char* peer_id, const uint8_t* data, int si
     if ((seq % 250) == 0 && decoded_count > 0) {
         MELLO_LOG_DEBUG("pipeline", "feed(%s): seq=%u decoded=%d jitter_buf=%d",
                         peer_id, seq, decoded_count, jb.buffered_count());
-    }
-}
-
-void AudioPipeline::update_vad(float prob) {
-    static constexpr float VAD_THRESHOLD = 0.5f;
-    static constexpr int HOLDOVER_FRAMES = 8;
-
-    speech_prob_ = prob;
-    bool now_speaking = (prob >= VAD_THRESHOLD);
-
-    if (now_speaking) {
-        vad_holdover_ = HOLDOVER_FRAMES;
-    } else if (vad_holdover_ > 0) {
-        vad_holdover_--;
-        now_speaking = true;
-    }
-
-    if (now_speaking != was_speaking_) {
-        speaking_ = now_speaking;
-        was_speaking_ = now_speaking;
-        if (vad_callback_) {
-            vad_callback_(now_speaking);
-        }
     }
 }
 

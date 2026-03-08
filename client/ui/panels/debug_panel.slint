@@ -1,0 +1,338 @@
+import { Theme } from "../theme.slint";
+
+component StatBar inherits Rectangle {
+    in property <string> label;
+    in property <float> value: 0.0;
+    in property <color> bar-color: Theme.accent-green;
+    in property <float> threshold: -1.0;
+
+    height: 20px;
+
+    HorizontalLayout {
+        spacing: 6px;
+        alignment: start;
+
+        Text {
+            text: label;
+            font-family: Theme.font-mono;
+            font-size: 10px;
+            color: Theme.text-secondary;
+            width: 70px;
+            vertical-alignment: center;
+        }
+
+        Rectangle {
+            horizontal-stretch: 1;
+            height: 12px;
+            y: (parent.height - self.height) / 2;
+            background: #000000;
+            border-radius: 2px;
+            clip: true;
+
+            Rectangle {
+                x: 0;
+                width: parent.width * clamp(value, 0.0, 1.0);
+                height: parent.height;
+                background: bar-color;
+                border-radius: 2px;
+            }
+
+            // Threshold marker
+            if threshold >= 0.0: Rectangle {
+                x: parent.width * clamp(threshold, 0.0, 1.0) - 1px;
+                width: 2px;
+                height: parent.height;
+                background: #FFFF00AA;
+            }
+        }
+
+        Text {
+            text: "\{Math.round(value * 100)}%";
+            font-family: Theme.font-mono;
+            font-size: 10px;
+            color: Theme.text-primary;
+            width: 36px;
+            horizontal-alignment: right;
+            vertical-alignment: center;
+        }
+    }
+}
+
+component StatusDot inherits Rectangle {
+    in property <bool> active: false;
+    in property <string> label;
+
+    height: 16px;
+
+    HorizontalLayout {
+        spacing: 6px;
+        alignment: start;
+
+        Rectangle {
+            width: 8px;
+            height: 8px;
+            y: (parent.height - self.height) / 2;
+            border-radius: 4px;
+            background: active ? Theme.accent-green : #FF4444;
+        }
+
+        Text {
+            text: label;
+            font-family: Theme.font-mono;
+            font-size: 10px;
+            color: active ? Theme.text-primary : Theme.text-secondary;
+            vertical-alignment: center;
+        }
+    }
+}
+
+// Mini level history bar (shows last N samples as vertical bars)
+component LevelHistory inherits Rectangle {
+    in property <float> v0;
+    in property <float> v1;
+    in property <float> v2;
+    in property <float> v3;
+    in property <float> v4;
+    in property <float> v5;
+    in property <float> v6;
+    in property <float> v7;
+    in property <float> v8;
+    in property <float> v9;
+    in property <float> v10;
+    in property <float> v11;
+    in property <float> v12;
+    in property <float> v13;
+    in property <float> v14;
+    in property <float> v15;
+    in property <float> v16;
+    in property <float> v17;
+    in property <float> v18;
+    in property <float> v19;
+    in property <float> v20;
+    in property <float> v21;
+    in property <float> v22;
+    in property <float> v23;
+    in property <float> v24;
+    in property <float> v25;
+    in property <float> v26;
+    in property <float> v27;
+    in property <float> v28;
+    in property <float> v29;
+
+    in property <bool> s0;
+    in property <bool> s1;
+    in property <bool> s2;
+    in property <bool> s3;
+    in property <bool> s4;
+    in property <bool> s5;
+    in property <bool> s6;
+    in property <bool> s7;
+    in property <bool> s8;
+    in property <bool> s9;
+    in property <bool> s10;
+    in property <bool> s11;
+    in property <bool> s12;
+    in property <bool> s13;
+    in property <bool> s14;
+    in property <bool> s15;
+    in property <bool> s16;
+    in property <bool> s17;
+    in property <bool> s18;
+    in property <bool> s19;
+    in property <bool> s20;
+    in property <bool> s21;
+    in property <bool> s22;
+    in property <bool> s23;
+    in property <bool> s24;
+    in property <bool> s25;
+    in property <bool> s26;
+    in property <bool> s27;
+    in property <bool> s28;
+    in property <bool> s29;
+
+    height: 60px;
+    background: #000000;
+    border-radius: 4px;
+    clip: true;
+
+    property <length> bw: (self.width - 2px) / 30;
+
+    // Each bar: green if speaking, gray if not
+    Rectangle { x: bw * 0  + 1px; width: bw - 1px; height: parent.height * clamp(v0, 0.02, 1.0);  y: parent.height - self.height; background: s0  ? #28C840 : #404040; }
+    Rectangle { x: bw * 1  + 1px; width: bw - 1px; height: parent.height * clamp(v1, 0.02, 1.0);  y: parent.height - self.height; background: s1  ? #28C840 : #404040; }
+    Rectangle { x: bw * 2  + 1px; width: bw - 1px; height: parent.height * clamp(v2, 0.02, 1.0);  y: parent.height - self.height; background: s2  ? #28C840 : #404040; }
+    Rectangle { x: bw * 3  + 1px; width: bw - 1px; height: parent.height * clamp(v3, 0.02, 1.0);  y: parent.height - self.height; background: s3  ? #28C840 : #404040; }
+    Rectangle { x: bw * 4  + 1px; width: bw - 1px; height: parent.height * clamp(v4, 0.02, 1.0);  y: parent.height - self.height; background: s4  ? #28C840 : #404040; }
+    Rectangle { x: bw * 5  + 1px; width: bw - 1px; height: parent.height * clamp(v5, 0.02, 1.0);  y: parent.height - self.height; background: s5  ? #28C840 : #404040; }
+    Rectangle { x: bw * 6  + 1px; width: bw - 1px; height: parent.height * clamp(v6, 0.02, 1.0);  y: parent.height - self.height; background: s6  ? #28C840 : #404040; }
+    Rectangle { x: bw * 7  + 1px; width: bw - 1px; height: parent.height * clamp(v7, 0.02, 1.0);  y: parent.height - self.height; background: s7  ? #28C840 : #404040; }
+    Rectangle { x: bw * 8  + 1px; width: bw - 1px; height: parent.height * clamp(v8, 0.02, 1.0);  y: parent.height - self.height; background: s8  ? #28C840 : #404040; }
+    Rectangle { x: bw * 9  + 1px; width: bw - 1px; height: parent.height * clamp(v9, 0.02, 1.0);  y: parent.height - self.height; background: s9  ? #28C840 : #404040; }
+    Rectangle { x: bw * 10 + 1px; width: bw - 1px; height: parent.height * clamp(v10, 0.02, 1.0); y: parent.height - self.height; background: s10 ? #28C840 : #404040; }
+    Rectangle { x: bw * 11 + 1px; width: bw - 1px; height: parent.height * clamp(v11, 0.02, 1.0); y: parent.height - self.height; background: s11 ? #28C840 : #404040; }
+    Rectangle { x: bw * 12 + 1px; width: bw - 1px; height: parent.height * clamp(v12, 0.02, 1.0); y: parent.height - self.height; background: s12 ? #28C840 : #404040; }
+    Rectangle { x: bw * 13 + 1px; width: bw - 1px; height: parent.height * clamp(v13, 0.02, 1.0); y: parent.height - self.height; background: s13 ? #28C840 : #404040; }
+    Rectangle { x: bw * 14 + 1px; width: bw - 1px; height: parent.height * clamp(v14, 0.02, 1.0); y: parent.height - self.height; background: s14 ? #28C840 : #404040; }
+    Rectangle { x: bw * 15 + 1px; width: bw - 1px; height: parent.height * clamp(v15, 0.02, 1.0); y: parent.height - self.height; background: s15 ? #28C840 : #404040; }
+    Rectangle { x: bw * 16 + 1px; width: bw - 1px; height: parent.height * clamp(v16, 0.02, 1.0); y: parent.height - self.height; background: s16 ? #28C840 : #404040; }
+    Rectangle { x: bw * 17 + 1px; width: bw - 1px; height: parent.height * clamp(v17, 0.02, 1.0); y: parent.height - self.height; background: s17 ? #28C840 : #404040; }
+    Rectangle { x: bw * 18 + 1px; width: bw - 1px; height: parent.height * clamp(v18, 0.02, 1.0); y: parent.height - self.height; background: s18 ? #28C840 : #404040; }
+    Rectangle { x: bw * 19 + 1px; width: bw - 1px; height: parent.height * clamp(v19, 0.02, 1.0); y: parent.height - self.height; background: s19 ? #28C840 : #404040; }
+    Rectangle { x: bw * 20 + 1px; width: bw - 1px; height: parent.height * clamp(v20, 0.02, 1.0); y: parent.height - self.height; background: s20 ? #28C840 : #404040; }
+    Rectangle { x: bw * 21 + 1px; width: bw - 1px; height: parent.height * clamp(v21, 0.02, 1.0); y: parent.height - self.height; background: s21 ? #28C840 : #404040; }
+    Rectangle { x: bw * 22 + 1px; width: bw - 1px; height: parent.height * clamp(v22, 0.02, 1.0); y: parent.height - self.height; background: s22 ? #28C840 : #404040; }
+    Rectangle { x: bw * 23 + 1px; width: bw - 1px; height: parent.height * clamp(v23, 0.02, 1.0); y: parent.height - self.height; background: s23 ? #28C840 : #404040; }
+    Rectangle { x: bw * 24 + 1px; width: bw - 1px; height: parent.height * clamp(v24, 0.02, 1.0); y: parent.height - self.height; background: s24 ? #28C840 : #404040; }
+    Rectangle { x: bw * 25 + 1px; width: bw - 1px; height: parent.height * clamp(v25, 0.02, 1.0); y: parent.height - self.height; background: s25 ? #28C840 : #404040; }
+    Rectangle { x: bw * 26 + 1px; width: bw - 1px; height: parent.height * clamp(v26, 0.02, 1.0); y: parent.height - self.height; background: s26 ? #28C840 : #404040; }
+    Rectangle { x: bw * 27 + 1px; width: bw - 1px; height: parent.height * clamp(v27, 0.02, 1.0); y: parent.height - self.height; background: s27 ? #28C840 : #404040; }
+    Rectangle { x: bw * 28 + 1px; width: bw - 1px; height: parent.height * clamp(v28, 0.02, 1.0); y: parent.height - self.height; background: s28 ? #28C840 : #404040; }
+    Rectangle { x: bw * 29 + 1px; width: bw - 1px; height: parent.height * clamp(v29, 0.02, 1.0); y: parent.height - self.height; background: s29 ? #28C840 : #404040; }
+}
+
+export component DebugPanel inherits Rectangle {
+    in property <float> input-level: 0.0;
+    in property <float> silero-vad-prob: 0.0;
+    in property <float> rnnoise-prob: 0.0;
+    in property <bool> is-speaking: false;
+    in property <bool> is-capturing: false;
+    in property <bool> is-muted: false;
+    in property <bool> is-deafened: false;
+    in property <int> packets-encoded: 0;
+
+    // Level history ring buffer (set from Rust)
+    in property <float> lh0;  in property <float> lh1;  in property <float> lh2;  in property <float> lh3;  in property <float> lh4;
+    in property <float> lh5;  in property <float> lh6;  in property <float> lh7;  in property <float> lh8;  in property <float> lh9;
+    in property <float> lh10; in property <float> lh11; in property <float> lh12; in property <float> lh13; in property <float> lh14;
+    in property <float> lh15; in property <float> lh16; in property <float> lh17; in property <float> lh18; in property <float> lh19;
+    in property <float> lh20; in property <float> lh21; in property <float> lh22; in property <float> lh23; in property <float> lh24;
+    in property <float> lh25; in property <float> lh26; in property <float> lh27; in property <float> lh28; in property <float> lh29;
+    // Speaking state per bar
+    in property <bool> sh0;  in property <bool> sh1;  in property <bool> sh2;  in property <bool> sh3;  in property <bool> sh4;
+    in property <bool> sh5;  in property <bool> sh6;  in property <bool> sh7;  in property <bool> sh8;  in property <bool> sh9;
+    in property <bool> sh10; in property <bool> sh11; in property <bool> sh12; in property <bool> sh13; in property <bool> sh14;
+    in property <bool> sh15; in property <bool> sh16; in property <bool> sh17; in property <bool> sh18; in property <bool> sh19;
+    in property <bool> sh20; in property <bool> sh21; in property <bool> sh22; in property <bool> sh23; in property <bool> sh24;
+    in property <bool> sh25; in property <bool> sh26; in property <bool> sh27; in property <bool> sh28; in property <bool> sh29;
+
+    callback close-requested();
+
+    width: 320px;
+    background: Theme.dark ? #181818E8 : #F0F0F0F0;
+    border-radius: Theme.r-outer;
+    border-width: 1px;
+    border-color: Theme.graphic-light;
+
+    VerticalLayout {
+        padding: 12px;
+        spacing: 8px;
+
+        // Title bar
+        HorizontalLayout {
+            spacing: 4px;
+            alignment: space-between;
+
+            Text {
+                text: "🔊 Audio Debug";
+                font-family: Theme.font-mono;
+                font-size: 11px;
+                font-weight: 600;
+                color: Theme.text-primary;
+                vertical-alignment: center;
+            }
+
+            Rectangle {
+                width: 20px;
+                height: 20px;
+                border-radius: 4px;
+                background: close-hover.has-hover ? Theme.graphic-light : transparent;
+
+                Text {
+                    text: "×";
+                    font-size: 14px;
+                    color: Theme.text-secondary;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+
+                close-hover := TouchArea {
+                    clicked => { root.close-requested(); }
+                }
+            }
+        }
+
+        // Divider
+        Rectangle { height: 1px; background: Theme.graphic-light; }
+
+        // Level waveform
+        Text {
+            text: "Input Level (green = speaking)";
+            font-family: Theme.font-mono;
+            font-size: 9px;
+            color: Theme.text-tertiary;
+        }
+
+        LevelHistory {
+            v0:  root.lh0;  v1:  root.lh1;  v2:  root.lh2;  v3:  root.lh3;  v4:  root.lh4;
+            v5:  root.lh5;  v6:  root.lh6;  v7:  root.lh7;  v8:  root.lh8;  v9:  root.lh9;
+            v10: root.lh10; v11: root.lh11; v12: root.lh12; v13: root.lh13; v14: root.lh14;
+            v15: root.lh15; v16: root.lh16; v17: root.lh17; v18: root.lh18; v19: root.lh19;
+            v20: root.lh20; v21: root.lh21; v22: root.lh22; v23: root.lh23; v24: root.lh24;
+            v25: root.lh25; v26: root.lh26; v27: root.lh27; v28: root.lh28; v29: root.lh29;
+            s0:  root.sh0;  s1:  root.sh1;  s2:  root.sh2;  s3:  root.sh3;  s4:  root.sh4;
+            s5:  root.sh5;  s6:  root.sh6;  s7:  root.sh7;  s8:  root.sh8;  s9:  root.sh9;
+            s10: root.sh10; s11: root.sh11; s12: root.sh12; s13: root.sh13; s14: root.sh14;
+            s15: root.sh15; s16: root.sh16; s17: root.sh17; s18: root.sh18; s19: root.sh19;
+            s20: root.sh20; s21: root.sh21; s22: root.sh22; s23: root.sh23; s24: root.sh24;
+            s25: root.sh25; s26: root.sh26; s27: root.sh27; s28: root.sh28; s29: root.sh29;
+        }
+
+        Rectangle { height: 4px; }
+
+        // Probability bars
+        StatBar {
+            label: "Silero";
+            value: root.silero-vad-prob;
+            bar-color: root.silero-vad-prob >= 0.5 ? #28C840 : #E06020;
+            threshold: 0.5;
+        }
+        StatBar {
+            label: "RNNoise";
+            value: root.rnnoise-prob;
+            bar-color: #3090E0;
+        }
+        StatBar {
+            label: "Level";
+            value: root.input-level;
+            bar-color: #9060D0;
+        }
+
+        Rectangle { height: 4px; }
+
+        // Status indicators
+        HorizontalLayout {
+            spacing: 16px;
+
+            VerticalLayout {
+                spacing: 4px;
+                StatusDot { label: "Speaking"; active: root.is-speaking; }
+                StatusDot { label: "Capturing"; active: root.is-capturing; }
+            }
+            VerticalLayout {
+                spacing: 4px;
+                StatusDot { label: root.is-muted ? "Muted ✓" : "Unmuted"; active: !root.is-muted; }
+                StatusDot { label: root.is-deafened ? "Deaf ✓" : "Listening"; active: !root.is-deafened; }
+            }
+        }
+
+        Rectangle { height: 2px; }
+
+        // Packet counter
+        Text {
+            text: "Packets: \{root.packets-encoded}";
+            font-family: Theme.font-mono;
+            font-size: 10px;
+            color: Theme.text-secondary;
+        }
+    }
+}

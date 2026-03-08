@@ -5,6 +5,7 @@
 #include "noise_suppressor.hpp"
 #include "jitter_buffer.hpp"
 #include "device_enumerator.hpp"
+#include "vad.hpp"
 #include "../util/ring_buffer.hpp"
 #include <mutex>
 #include <vector>
@@ -43,26 +44,27 @@ public:
     void feed_packet(const char* peer_id, const uint8_t* data, int size);
 
     bool is_capturing() const { return capturing_; }
-    bool is_speaking() const { return speaking_; }
-    float speech_probability() const { return speech_prob_; }
+    bool is_speaking() const { return vad_.is_speaking(); }
+    float speech_probability() const { return vad_.probability(); }
+    float rnnoise_probability() const { return noise_suppressor_.speech_probability(); }
     float input_level() const { return input_level_.load(std::memory_order_relaxed); }
+    uint32_t packets_encoded() const { return sequence_; }
 
     using VadCallback = std::function<void(bool speaking)>;
-    void set_vad_callback(VadCallback cb) { vad_callback_ = std::move(cb); }
+    void set_vad_callback(VadCallback cb) { vad_.set_callback(std::move(cb)); }
 
-    // Device management
     AudioDeviceEnumerator& device_enumerator();
     bool set_capture_device(const char* device_id);
     bool set_playback_device(const char* device_id);
 
 private:
     void on_captured_audio(const int16_t* samples, size_t count);
-    void update_vad(float prob);
 
     std::unique_ptr<WasapiCapture> capture_;
     std::unique_ptr<WasapiPlayback> playback_;
     OpusEnc encoder_;
     NoiseSuppressor noise_suppressor_;
+    VoiceActivityDetector vad_;
     std::unordered_map<std::string, OpusDec> decoders_;
     std::unordered_map<std::string, JitterBuffer> jitter_buffers_;
     std::unique_ptr<AudioDeviceEnumerator> device_enum_;
@@ -77,12 +79,7 @@ private:
     std::atomic<bool> muted_{false};
     std::atomic<bool> deafened_{false};
     std::atomic<bool> capturing_{false};
-    std::atomic<bool> speaking_{false};
-    float speech_prob_ = 0.0f;
-    bool was_speaking_ = false;
-    int vad_holdover_ = 0;
     std::atomic<float> input_level_{0.0f};
-    VadCallback vad_callback_;
     bool initialized_ = false;
 };
 
