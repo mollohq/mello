@@ -11,7 +11,7 @@ pub struct Config {
 impl Config {
     pub fn production() -> Self {
         Self {
-            nakama_host: "mello-api.onrender.com".into(),
+            nakama_host: "mello-api-1iiv.onrender.com".into(),
             nakama_port: 443,
             nakama_key: option_env!("NAKAMA_SERVER_KEY").unwrap_or("defaultkey").into(),
             nakama_ssl: true,
