@@ -1,7 +1,17 @@
 #include "mello.h"
 #include "context.hpp"
 #include "transport/peer_connection_impl.hpp"
+#include "util/log.hpp"
 #include <cstring>
+#include <cstdlib>
+
+static char* dup_str(const char* s) {
+    if (!s) return nullptr;
+    size_t len = strlen(s) + 1;
+    char* copy = static_cast<char*>(malloc(len));
+    if (copy) memcpy(copy, s, len);
+    return copy;
+}
 
 static mello::Context* ctx_cast(MelloContext* ctx) {
     return reinterpret_cast<mello::Context*>(ctx);
@@ -15,13 +25,17 @@ extern "C" {
 
 MelloContext* mello_init(void) {
     try {
+        MELLO_LOG_INFO("api", "mello_init()");
         auto* ctx = new mello::Context();
         if (!ctx->initialize()) {
+            MELLO_LOG_ERROR("api", "mello_init: context init failed");
             delete ctx;
             return nullptr;
         }
+        MELLO_LOG_INFO("api", "mello_init: ok");
         return reinterpret_cast<MelloContext*>(ctx);
     } catch (...) {
+        MELLO_LOG_ERROR("api", "mello_init: exception caught");
         return nullptr;
     }
 }
@@ -100,6 +114,20 @@ void mello_voice_set_vad_callback(
             callback(user_data, speaking);
         });
     } catch (...) {}
+}
+
+float mello_voice_get_input_level(MelloContext* ctx) {
+    if (!ctx) return 0.0f;
+    try {
+        float level = ctx_cast(ctx)->audio().input_level();
+        static int call_count = 0;
+        if ((++call_count % 50) == 0) {
+            MELLO_LOG_DEBUG("api", "get_input_level: %.4f", level);
+        }
+        return level;
+    } catch (...) {
+        return 0.0f;
+    }
 }
 
 int mello_voice_get_packet(MelloContext* ctx, uint8_t* buffer, int buffer_size) {
@@ -262,6 +290,76 @@ int mello_peer_recv(MelloPeerConnection* peer, uint8_t* buffer, int buffer_size)
         return pc->recv(buffer, buffer_size);
     } catch (...) {
         return 0;
+    }
+}
+
+/* ============================================================================
+ * Devices
+ * ============================================================================ */
+
+int mello_get_audio_inputs(MelloContext* ctx, MelloDevice* devices, int max_count) {
+    if (!ctx || !devices || max_count <= 0) return 0;
+    try {
+        auto& enumerator = ctx_cast(ctx)->audio().device_enumerator();
+        auto list = enumerator.list_capture_devices();
+        int count = static_cast<int>(list.size());
+        if (count > max_count) count = max_count;
+        for (int i = 0; i < count; ++i) {
+            devices[i].id = dup_str(list[i].id.c_str());
+            devices[i].name = dup_str(list[i].name.c_str());
+            devices[i].is_default = list[i].is_default;
+        }
+        return count;
+    } catch (...) {
+        return 0;
+    }
+}
+
+int mello_get_audio_outputs(MelloContext* ctx, MelloDevice* devices, int max_count) {
+    if (!ctx || !devices || max_count <= 0) return 0;
+    try {
+        auto& enumerator = ctx_cast(ctx)->audio().device_enumerator();
+        auto list = enumerator.list_playback_devices();
+        int count = static_cast<int>(list.size());
+        if (count > max_count) count = max_count;
+        for (int i = 0; i < count; ++i) {
+            devices[i].id = dup_str(list[i].id.c_str());
+            devices[i].name = dup_str(list[i].name.c_str());
+            devices[i].is_default = list[i].is_default;
+        }
+        return count;
+    } catch (...) {
+        return 0;
+    }
+}
+
+void mello_free_device_list(MelloDevice* devices, int count) {
+    if (!devices) return;
+    for (int i = 0; i < count; ++i) {
+        free(const_cast<char*>(devices[i].id));
+        free(const_cast<char*>(devices[i].name));
+        devices[i].id = nullptr;
+        devices[i].name = nullptr;
+    }
+}
+
+MelloResult mello_set_audio_input(MelloContext* ctx, const char* device_id) {
+    if (!ctx) return MELLO_ERROR_INVALID_PARAM;
+    try {
+        return ctx_cast(ctx)->audio().set_capture_device(device_id)
+            ? MELLO_OK : MELLO_ERROR_FAILED;
+    } catch (...) {
+        return MELLO_ERROR_FAILED;
+    }
+}
+
+MelloResult mello_set_audio_output(MelloContext* ctx, const char* device_id) {
+    if (!ctx) return MELLO_ERROR_INVALID_PARAM;
+    try {
+        return ctx_cast(ctx)->audio().set_playback_device(device_id)
+            ? MELLO_OK : MELLO_ERROR_FAILED;
+    } catch (...) {
+        return MELLO_ERROR_FAILED;
     }
 }
 

@@ -1,5 +1,6 @@
 #ifdef _WIN32
 #include "playback_wasapi.hpp"
+#include "../util/log.hpp"
 #include <combaseapi.h>
 #include <vector>
 
@@ -20,9 +21,14 @@ WasapiPlayback::~WasapiPlayback() {
     if (device_) device_->Release();
 }
 
-bool WasapiPlayback::initialize(const char* /*device_id*/) {
+bool WasapiPlayback::initialize(const char* device_id) {
+    MELLO_LOG_INFO("playback", "initializing (device=%s)", device_id ? device_id : "default");
+
     HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
-    if (FAILED(hr) && hr != S_FALSE && hr != RPC_E_CHANGED_MODE) return false;
+    if (FAILED(hr) && hr != S_FALSE && hr != RPC_E_CHANGED_MODE) {
+        MELLO_LOG_ERROR("playback", "COM init failed hr=0x%08lx", hr);
+        return false;
+    }
 
     IMMDeviceEnumerator* enumerator = nullptr;
     hr = CoCreateInstance(
@@ -30,7 +36,14 @@ bool WasapiPlayback::initialize(const char* /*device_id*/) {
         IID_IMMDeviceEnumerator_PB, reinterpret_cast<void**>(&enumerator));
     if (FAILED(hr)) return false;
 
-    hr = enumerator->GetDefaultAudioEndpoint(eRender, eCommunications, &device_);
+    if (device_id && device_id[0] != '\0') {
+        int len = MultiByteToWideChar(CP_UTF8, 0, device_id, -1, nullptr, 0);
+        std::vector<wchar_t> wid(len);
+        MultiByteToWideChar(CP_UTF8, 0, device_id, -1, wid.data(), len);
+        hr = enumerator->GetDevice(wid.data(), &device_);
+    } else {
+        hr = enumerator->GetDefaultAudioEndpoint(eRender, eCommunications, &device_);
+    }
     enumerator->Release();
     if (FAILED(hr)) return false;
 
@@ -64,8 +77,13 @@ bool WasapiPlayback::initialize(const char* /*device_id*/) {
 
     hr = audio_client_->GetService(IID_IAudioRenderClient_PB,
                                    reinterpret_cast<void**>(&render_client_));
-    if (FAILED(hr)) return false;
+    if (FAILED(hr)) {
+        MELLO_LOG_ERROR("playback", "GetService(RenderClient) failed hr=0x%08lx", hr);
+        return false;
+    }
 
+    MELLO_LOG_INFO("playback", "initialized: rate=%u ch=%u buf=%u frames",
+                   sample_rate_, device_channels_, buffer_frames_);
     return true;
 }
 
@@ -74,9 +92,14 @@ bool WasapiPlayback::start() {
     running_ = true;
 
     HRESULT hr = audio_client_->Start();
-    if (FAILED(hr)) { running_ = false; return false; }
+    if (FAILED(hr)) {
+        MELLO_LOG_ERROR("playback", "Start() failed hr=0x%08lx", hr);
+        running_ = false;
+        return false;
+    }
 
     thread_ = std::thread(&WasapiPlayback::playback_thread, this);
+    MELLO_LOG_INFO("playback", "started");
     return true;
 }
 
@@ -86,6 +109,7 @@ void WasapiPlayback::stop() {
     if (event_) SetEvent(event_);
     if (thread_.joinable()) thread_.join();
     if (audio_client_) audio_client_->Stop();
+    MELLO_LOG_INFO("playback", "stopped");
 }
 
 size_t WasapiPlayback::feed(const int16_t* samples, size_t count) {

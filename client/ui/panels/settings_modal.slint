@@ -1,0 +1,318 @@
+import { Theme } from "../theme.slint";
+import { AudioDeviceData } from "../types.slint";
+
+component DeviceDropdown inherits Rectangle {
+    in property <string> label;
+    in property <[AudioDeviceData]> devices: [];
+    in property <string> selected-id: "";
+    in-out property <string> selected-name: "System Default";
+    callback device-selected(string);
+
+    property <bool> expanded: false;
+
+    VerticalLayout {
+        spacing: 0px;
+
+        Rectangle {
+            height: 44px;
+            background: dropdown-hover.has-hover ? Theme.graphic-light : Theme.bg-app;
+            border-radius: Theme.r-inner;
+            border-width: 1px;
+            border-color: Theme.graphic-light;
+
+            HorizontalLayout {
+                padding-left: 14px;
+                padding-right: 14px;
+                spacing: 8px;
+                alignment: center;
+
+                Text {
+                    text: selected-name;
+                    font-size: Theme.font-md;
+                    color: Theme.text-primary;
+                    horizontal-stretch: 1;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+
+                Text {
+                    text: expanded ? "▲" : "▼";
+                    font-size: 10px;
+                    color: Theme.text-secondary;
+                    vertical-alignment: center;
+                }
+            }
+
+            dropdown-hover := TouchArea {
+                clicked => { expanded = !expanded; }
+            }
+        }
+
+        if expanded: Rectangle {
+            background: Theme.surface;
+            border-radius: Theme.r-inner;
+            border-width: 1px;
+            border-color: Theme.graphic-light;
+
+            VerticalLayout {
+                padding: 4px;
+
+                for dev[i] in devices: Rectangle {
+                    height: 36px;
+                    border-radius: Theme.r-inner;
+                    background: item-hover.has-hover ? Theme.hover-overlay : transparent;
+
+                    HorizontalLayout {
+                        padding-left: 12px;
+                        padding-right: 12px;
+                        spacing: 8px;
+                        alignment: center;
+
+                        Text {
+                            text: dev.name;
+                            font-size: Theme.font-md;
+                            color: Theme.text-primary;
+                            horizontal-stretch: 1;
+                            vertical-alignment: center;
+                            overflow: elide;
+                        }
+
+                        if dev.is-default: Text {
+                            text: "default";
+                            font-size: Theme.font-xs;
+                            font-family: Theme.font-mono;
+                            color: Theme.text-tertiary;
+                            vertical-alignment: center;
+                        }
+
+                        if dev.id == selected-id: Text {
+                            text: "✓";
+                            font-size: Theme.font-md;
+                            color: Theme.accent-green;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    item-hover := TouchArea {
+                        clicked => {
+                            selected-name = dev.name;
+                            device-selected(dev.id);
+                            expanded = false;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+component VuBar inherits Rectangle {
+    in property <float> level: 0.0;
+
+    height: 28px;
+    horizontal-stretch: 1;
+    border-radius: Theme.r-inner;
+    background: Theme.bg-app;
+    border-width: 1px;
+    border-color: Theme.graphic-light;
+
+    HorizontalLayout {
+        padding: 3px;
+        spacing: 2px;
+
+        for idx in [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]:
+        Rectangle {
+            horizontal-stretch: 1;
+            border-radius: 2px;
+            background: idx < 15
+                ? #43b581
+                : (idx < 20 ? #faa61a : #f04747);
+            opacity: (idx / 24.0) < level ? 1.0 : 0.15;
+        }
+    }
+}
+
+export component SettingsModal inherits Rectangle {
+    in property <[AudioDeviceData]> capture-devices: [];
+    in property <[AudioDeviceData]> playback-devices: [];
+    in property <string> selected-capture-id: "";
+    in property <string> selected-playback-id: "";
+    in-out property <string> selected-capture-name: "System Default";
+    in-out property <string> selected-playback-name: "System Default";
+    in property <float> mic-level: 0.0;
+    in-out property <bool> mic-testing: false;
+
+    callback close-requested();
+    callback capture-device-selected(string);
+    callback playback-device-selected(string);
+    callback mic-test-toggled();
+
+    // Full-screen overlay backdrop
+    background: Theme.dark ? #00000088 : #00000044;
+
+    TouchArea {
+        clicked => { close-requested(); }
+    }
+
+    // Centered modal panel
+    Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: 480px;
+        height: content.preferred-height + 48px;
+        background: Theme.surface;
+        border-radius: Theme.r-outer;
+        border-width: 1px;
+        border-color: Theme.graphic-light;
+        drop-shadow-blur: 32px;
+        drop-shadow-color: Theme.dark ? #00000060 : #00000020;
+        drop-shadow-offset-y: 8px;
+
+        // Block clicks from reaching the backdrop
+        TouchArea {}
+
+        content := VerticalLayout {
+            padding: Theme.pad;
+            spacing: Theme.spacing-md;
+
+            // Header
+            HorizontalLayout {
+                spacing: 0px;
+
+                Text {
+                    text: "Voice Settings";
+                    font-size: Theme.font-xl;
+                    font-weight: 700;
+                    color: Theme.text-primary;
+                    horizontal-stretch: 1;
+                    vertical-alignment: center;
+                }
+
+                // Close button
+                Rectangle {
+                    width: 32px;
+                    height: 32px;
+                    border-radius: Theme.r-inner;
+                    background: close-hover.has-hover ? Theme.hover-overlay : transparent;
+
+                    Text {
+                        text: "✕";
+                        font-size: 16px;
+                        color: Theme.text-secondary;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+
+                    close-hover := TouchArea {
+                        clicked => { close-requested(); }
+                    }
+                }
+            }
+
+            // Divider
+            Rectangle {
+                height: 1px;
+                background: Theme.graphic-light;
+            }
+
+            // Input device
+            VerticalLayout {
+                spacing: Theme.spacing-xs;
+
+                Text {
+                    text: "INPUT DEVICE";
+                    font-size: Theme.font-xs;
+                    font-weight: 600;
+                    letter-spacing: 1.2px;
+                    color: Theme.text-tertiary;
+                }
+
+                DeviceDropdown {
+                    devices: capture-devices;
+                    selected-id: selected-capture-id;
+                    selected-name <=> root.selected-capture-name;
+                    device-selected(id) => { capture-device-selected(id); }
+                }
+            }
+
+            // Output device
+            VerticalLayout {
+                spacing: Theme.spacing-xs;
+
+                Text {
+                    text: "OUTPUT DEVICE";
+                    font-size: Theme.font-xs;
+                    font-weight: 600;
+                    letter-spacing: 1.2px;
+                    color: Theme.text-tertiary;
+                }
+
+                DeviceDropdown {
+                    devices: playback-devices;
+                    selected-id: selected-playback-id;
+                    selected-name <=> root.selected-playback-name;
+                    device-selected(id) => { playback-device-selected(id); }
+                }
+            }
+
+            // Divider
+            Rectangle {
+                height: 1px;
+                background: Theme.graphic-light;
+            }
+
+            // Mic Test
+            VerticalLayout {
+                spacing: Theme.spacing-sm;
+
+                Text {
+                    text: "MIC TEST";
+                    font-size: Theme.font-xs;
+                    font-weight: 600;
+                    letter-spacing: 1.2px;
+                    color: Theme.text-tertiary;
+                }
+
+                HorizontalLayout {
+                    spacing: Theme.spacing-md;
+
+                    Rectangle {
+                        width: 140px;
+                        height: 40px;
+                        border-radius: Theme.r-inner;
+                        background: mic-testing
+                            ? Theme.accent-bg
+                            : (test-hover.has-hover ? Theme.graphic-light : Theme.bg-app);
+                        border-width: 1px;
+                        border-color: mic-testing ? Theme.accent : Theme.graphic-light;
+
+                        Text {
+                            text: mic-testing ? "Stop Testing" : "Start Test";
+                            font-family: Theme.font-mono;
+                            font-size: Theme.font-md;
+                            font-weight: 500;
+                            color: mic-testing ? Theme.accent : Theme.text-primary;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+
+                        test-hover := TouchArea {
+                            clicked => { mic-test-toggled(); }
+                        }
+                    }
+
+                    VuBar {
+                        horizontal-stretch: 1;
+                        level: mic-testing ? root.mic-level : 0.0;
+                    }
+                }
+
+                if mic-testing: Text {
+                    text: "Playing back your beautiful voice";
+                    font-size: Theme.font-sm;
+                    color: Theme.text-secondary;
+                }
+            }
+        }
+    }
+}

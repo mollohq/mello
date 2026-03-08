@@ -1,11 +1,12 @@
 import { Theme } from "theme.slint";
-import { CrewData, MemberData, ChatMessageData, CrewTabData } from "types.slint";
+import { CrewData, MemberData, ChatMessageData, CrewTabData, AudioDeviceData } from "types.slint";
 import { CrewPanel } from "panels/crew_panel.slint";
 import { StreamView } from "panels/stream_view.slint";
 import { ChatPanel } from "panels/chat_panel.slint";
 import { ControlBar } from "panels/control_bar.slint";
+import { SettingsModal } from "panels/settings_modal.slint";
 
-export { CrewData, MemberData, ChatMessageData, CrewTabData, Theme }
+export { CrewData, MemberData, ChatMessageData, CrewTabData, AudioDeviceData, Theme }
 
 export component MainWindow inherits Window {
     title: "Mello";
@@ -39,6 +40,17 @@ export component MainWindow inherits Window {
     in-out property <bool> deafened: false;
     in-out property <bool> in-voice: false;
 
+    // --- Settings ---
+    in-out property <bool> settings-open: false;
+    in property <[AudioDeviceData]> capture-devices: [];
+    in property <[AudioDeviceData]> playback-devices: [];
+    in-out property <string> selected-capture-id: "";
+    in-out property <string> selected-playback-id: "";
+    in-out property <string> selected-capture-name: "System Default";
+    in-out property <string> selected-playback-name: "System Default";
+    in-out property <bool> mic-testing: false;
+    in-out property <float> mic-level: 0.0;
+
     // --- Presence (0=online, 1=idle, 2=dnd, 3=invisible) ---
     in-out property <int> presence-status: 0;
 
@@ -56,6 +68,10 @@ export component MainWindow inherits Window {
     callback tab-add-clicked();
     callback presence-changed(int);
     callback theme-toggled();
+    callback settings-requested();
+    callback capture-device-selected(string);
+    callback playback-device-selected(string);
+    callback mic-test-toggled();
 
     // ===================== LOGIN SCREEN =====================
     if !logged-in: Rectangle {
@@ -326,6 +342,7 @@ export component MainWindow inherits Window {
                         logout-clicked => { root.logout(); }
                         presence-changed(status) => { root.presence-changed(status); }
                         theme-toggled => { root.theme-toggled(); }
+                        settings-clicked => { root.settings-requested(); }
                     }
                 }
 
@@ -336,6 +353,37 @@ export component MainWindow inherits Window {
                     message-submitted(text) => { root.send-message(text); }
                 }
             }
+        }
+    }
+
+    // ===================== SETTINGS OVERLAY =====================
+    if settings-open: SettingsModal {
+        capture-devices: root.capture-devices;
+        playback-devices: root.playback-devices;
+        selected-capture-id: root.selected-capture-id;
+        selected-playback-id: root.selected-playback-id;
+        selected-capture-name <=> root.selected-capture-name;
+        selected-playback-name <=> root.selected-playback-name;
+        mic-testing: root.mic-testing;
+        mic-level: root.mic-level;
+        close-requested => {
+            root.settings-open = false;
+            if root.mic-testing {
+                root.mic-testing = false;
+                root.mic-test-toggled();
+            }
+        }
+        capture-device-selected(id) => {
+            root.selected-capture-id = id;
+            root.capture-device-selected(id);
+        }
+        playback-device-selected(id) => {
+            root.selected-playback-id = id;
+            root.playback-device-selected(id);
+        }
+        mic-test-toggled => {
+            root.mic-testing = !root.mic-testing;
+            root.mic-test-toggled();
         }
     }
 }

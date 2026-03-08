@@ -13,4 +13,8 @@ pub enum Command {
     LeaveVoice,
     SetMute { muted: bool },
     SetDeafen { deafened: bool },
+    ListAudioDevices,
+    SetCaptureDevice { id: String },
+    SetPlaybackDevice { id: String },
+    SetLoopback { enabled: bool },
 }

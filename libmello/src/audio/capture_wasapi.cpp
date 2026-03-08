@@ -1,5 +1,6 @@
 #ifdef _WIN32
 #include "capture_wasapi.hpp"
+#include "../util/log.hpp"
 #include <functiondiscoverykeys_devpkey.h>
 #include <combaseapi.h>
 #include <vector>
@@ -35,18 +36,36 @@ bool WasapiCapture::init_com() {
     return false;
 }
 
-bool WasapiCapture::initialize(const char* /*device_id*/) {
-    if (!init_com()) return false;
+bool WasapiCapture::initialize(const char* device_id) {
+    MELLO_LOG_INFO("capture", "initializing (device=%s)", device_id ? device_id : "default");
+
+    if (!init_com()) {
+        MELLO_LOG_ERROR("capture", "COM init failed");
+        return false;
+    }
 
     IMMDeviceEnumerator* enumerator = nullptr;
     HRESULT hr = CoCreateInstance(
         CLSID_MMDeviceEnumerator_, nullptr, CLSCTX_ALL,
         IID_IMMDeviceEnumerator_, reinterpret_cast<void**>(&enumerator));
-    if (FAILED(hr)) return false;
+    if (FAILED(hr)) {
+        MELLO_LOG_ERROR("capture", "CoCreateInstance failed hr=0x%08lx", hr);
+        return false;
+    }
 
-    hr = enumerator->GetDefaultAudioEndpoint(eCapture, eCommunications, &device_);
+    if (device_id && device_id[0] != '\0') {
+        int len = MultiByteToWideChar(CP_UTF8, 0, device_id, -1, nullptr, 0);
+        std::vector<wchar_t> wid(len);
+        MultiByteToWideChar(CP_UTF8, 0, device_id, -1, wid.data(), len);
+        hr = enumerator->GetDevice(wid.data(), &device_);
+    } else {
+        hr = enumerator->GetDefaultAudioEndpoint(eCapture, eCommunications, &device_);
+    }
     enumerator->Release();
-    if (FAILED(hr)) return false;
+    if (FAILED(hr)) {
+        MELLO_LOG_ERROR("capture", "device open failed hr=0x%08lx", hr);
+        return false;
+    }
 
     hr = device_->Activate(IID_IAudioClient_, CLSCTX_ALL, nullptr,
                            reinterpret_cast<void**>(&audio_client_));
@@ -108,8 +127,13 @@ bool WasapiCapture::initialize(const char* /*device_id*/) {
 
     hr = audio_client_->GetService(IID_IAudioCaptureClient_,
                                    reinterpret_cast<void**>(&capture_client_));
-    if (FAILED(hr)) return false;
+    if (FAILED(hr)) {
+        MELLO_LOG_ERROR("capture", "GetService(CaptureClient) failed hr=0x%08lx", hr);
+        return false;
+    }
 
+    MELLO_LOG_INFO("capture", "initialized: rate=%u ch=%u buf=%u frames",
+                   sample_rate_, channels_, buffer_frames_);
     return true;
 }
 
@@ -119,9 +143,14 @@ bool WasapiCapture::start(Callback callback) {
     running_ = true;
 
     HRESULT hr = audio_client_->Start();
-    if (FAILED(hr)) { running_ = false; return false; }
+    if (FAILED(hr)) {
+        MELLO_LOG_ERROR("capture", "Start() failed hr=0x%08lx", hr);
+        running_ = false;
+        return false;
+    }
 
     thread_ = std::thread(&WasapiCapture::capture_thread, this);
+    MELLO_LOG_INFO("capture", "started");
     return true;
 }
 
@@ -131,6 +160,7 @@ void WasapiCapture::stop() {
     if (event_) SetEvent(event_);
     if (thread_.joinable()) thread_.join();
     if (audio_client_) audio_client_->Stop();
+    MELLO_LOG_INFO("capture", "stopped");
 }
 
 void WasapiCapture::capture_thread() {

@@ -417,4 +417,16 @@ mello/
 
 ---
 
+## 15. Logging
+
+All layers have logging infrastructure -- **use it liberally**. This is a complex multi-threaded, multi-language, real-time application. When something breaks, logs are often the only way to diagnose it.
+
+- **libmello (C++):** Use `MELLO_LOG_INFO/WARN/ERROR/DEBUG(tag, fmt, ...)` from `util/log.hpp`. Writes to stderr.
+- **mello-core (Rust):** Use `log::info!/warn!/error!/debug!` via `env_logger`. Also writes to stderr.
+- **Both streams are interleaved**, so timestamps and context from both layers appear together in one output.
+
+Log at every critical juncture: device init, pipeline state changes, encode/decode errors, connection state, packet flow. Debug-level periodic stats (e.g. every N packets) are encouraged for hot paths.
+
+---
+
 *This document is the north star. All implementation decisions should align with it.*

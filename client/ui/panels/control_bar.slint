@@ -104,6 +104,7 @@ export component ControlBar inherits Rectangle {
     callback logout-clicked();
     callback presence-changed(int);
     callback theme-toggled();
+    callback settings-clicked();
 
     background: Theme.surface;
     border-width: 1px;
@@ -302,7 +303,7 @@ export component ControlBar inherits Rectangle {
 
             ActionButton {
                 icon: @image-url("../icons/settings.svg");
-                clicked => { }
+                clicked => { settings-clicked(); }
             }
         }
     }

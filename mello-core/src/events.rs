@@ -1,4 +1,5 @@
 use crate::crew::{Crew, Member};
+use crate::voice::AudioDevice;
 
 #[derive(Debug, Clone)]
 pub struct User {
@@ -39,6 +40,13 @@ pub enum Event {
     VoiceConnected { peer_id: String },
     VoiceDisconnected { peer_id: String },
     VoiceActivity { member_id: String, speaking: bool },
+
+    AudioDevicesListed {
+        capture: Vec<AudioDevice>,
+        playback: Vec<AudioDevice>,
+    },
+
+    MicLevel { level: f32 },
 
     SignalReceived { from: String, payload: String },
 

@@ -1,5 +1,6 @@
 mod mesh;
 
+use std::ffi::CString;
 use std::sync::mpsc as std_mpsc;
 
 use crate::events::Event;
@@ -7,10 +8,18 @@ use crate::events::Event;
 pub use mesh::{SignalMessage, VoiceMesh};
 
 const PACKET_BUF_SIZE: usize = 4000;
+const MAX_DEVICES: usize = 32;
 
 struct VadCallbackData {
     tx: std_mpsc::Sender<Event>,
     local_id: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct AudioDevice {
+    pub id: String,
+    pub name: String,
+    pub is_default: bool,
 }
 
 pub struct VoiceManager {
@@ -21,6 +30,7 @@ pub struct VoiceManager {
     deafened: bool,
     active: bool,
     loopback: bool,
+    tick_counter: u32,
 }
 
 // Safety: VoiceManager is only ever accessed from a single tokio task (the client run loop).
@@ -49,6 +59,7 @@ impl VoiceManager {
             deafened: false,
             active: false,
             loopback,
+            tick_counter: 0,
         }
     }
 
@@ -115,6 +126,100 @@ impl VoiceManager {
         }
     }
 
+    pub fn set_loopback(&mut self, enabled: bool) {
+        if self.ctx.is_null() { return; }
+        self.loopback = enabled;
+
+        if enabled && !self.active {
+            let result = unsafe { mello_sys::mello_voice_start_capture(self.ctx) };
+            if result != mello_sys::MelloResult_MELLO_OK {
+                log::error!("Failed to start capture for mic test: {}", result);
+            } else {
+                log::info!("Loopback enabled (started capture for mic test)");
+            }
+        } else if !enabled && !self.active {
+            unsafe { mello_sys::mello_voice_stop_capture(self.ctx); }
+            log::info!("Loopback disabled (stopped mic test capture)");
+        } else {
+            log::info!("Loopback {}", if enabled { "enabled" } else { "disabled" });
+        }
+    }
+
+    pub fn list_capture_devices(&self) -> Vec<AudioDevice> {
+        if self.ctx.is_null() { return vec![]; }
+        self.list_devices(true)
+    }
+
+    pub fn list_playback_devices(&self) -> Vec<AudioDevice> {
+        if self.ctx.is_null() { return vec![]; }
+        self.list_devices(false)
+    }
+
+    fn list_devices(&self, capture: bool) -> Vec<AudioDevice> {
+        let mut raw = vec![mello_sys::MelloDevice {
+            id: std::ptr::null(),
+            name: std::ptr::null(),
+            is_default: false,
+        }; MAX_DEVICES];
+
+        let count = unsafe {
+            if capture {
+                mello_sys::mello_get_audio_inputs(self.ctx, raw.as_mut_ptr(), MAX_DEVICES as i32)
+            } else {
+                mello_sys::mello_get_audio_outputs(self.ctx, raw.as_mut_ptr(), MAX_DEVICES as i32)
+            }
+        };
+
+        let mut devices = Vec::with_capacity(count as usize);
+        for i in 0..count as usize {
+            let id = if raw[i].id.is_null() {
+                String::new()
+            } else {
+                unsafe { std::ffi::CStr::from_ptr(raw[i].id).to_string_lossy().into_owned() }
+            };
+            let name = if raw[i].name.is_null() {
+                String::new()
+            } else {
+                unsafe { std::ffi::CStr::from_ptr(raw[i].name).to_string_lossy().into_owned() }
+            };
+            devices.push(AudioDevice {
+                id,
+                name,
+                is_default: raw[i].is_default,
+            });
+        }
+
+        unsafe { mello_sys::mello_free_device_list(raw.as_mut_ptr(), count); }
+        devices
+    }
+
+    pub fn set_capture_device(&mut self, device_id: &str) {
+        if self.ctx.is_null() { return; }
+        let c_id = CString::new(device_id).unwrap_or_default();
+        let result = unsafe { mello_sys::mello_set_audio_input(self.ctx, c_id.as_ptr()) };
+        if result != mello_sys::MelloResult_MELLO_OK {
+            log::error!("Failed to set capture device: {}", result);
+        } else {
+            log::info!("Capture device set to: {}", device_id);
+        }
+    }
+
+    pub fn set_playback_device(&mut self, device_id: &str) {
+        if self.ctx.is_null() { return; }
+        let c_id = CString::new(device_id).unwrap_or_default();
+        let result = unsafe { mello_sys::mello_set_audio_output(self.ctx, c_id.as_ptr()) };
+        if result != mello_sys::MelloResult_MELLO_OK {
+            log::error!("Failed to set playback device: {}", result);
+        } else {
+            log::info!("Playback device set to: {}", device_id);
+        }
+    }
+
+    pub fn get_input_level(&self) -> f32 {
+        if self.ctx.is_null() { return 0.0; }
+        unsafe { mello_sys::mello_voice_get_input_level(self.ctx) }
+    }
+
     pub fn is_active(&self) -> bool {
         self.active
     }
@@ -146,7 +251,15 @@ impl VoiceManager {
     /// Poll audio: read encoded packets from capture and send to all peers,
     /// and feed received packets from peers to the playback pipeline.
     pub fn tick(&mut self) {
-        if !self.active || self.ctx.is_null() { return; }
+        if self.ctx.is_null() { return; }
+        if !self.active && !self.loopback { return; }
+
+        self.tick_counter = self.tick_counter.wrapping_add(1);
+
+        if self.loopback && (self.tick_counter % 5) == 0 {
+            let level = self.get_input_level();
+            let _ = self.event_tx.send(Event::MicLevel { level });
+        }
 
         let mut buf = [0u8; PACKET_BUF_SIZE];
         let loopback_id = std::ffi::CString::new("loopback").unwrap();
@@ -162,7 +275,10 @@ impl VoiceManager {
             if size <= 0 { break; }
 
             let pkt = &buf[..size as usize];
-            self.mesh.broadcast_audio(pkt);
+
+            if self.active {
+                self.mesh.broadcast_audio(pkt);
+            }
 
             if self.loopback {
                 unsafe {
@@ -176,7 +292,9 @@ impl VoiceManager {
             }
         }
 
-        self.mesh.poll_incoming(self.ctx);
+        if self.active {
+            self.mesh.poll_incoming(self.ctx);
+        }
     }
 }
 

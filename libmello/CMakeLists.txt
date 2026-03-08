@@ -46,6 +46,12 @@ set(MELLO_SOURCES
     src/transport/peer_connection.cpp
 )
 
+if(WIN32)
+    list(APPEND MELLO_SOURCES src/audio/device_enumerator_wasapi.cpp)
+else()
+    list(APPEND MELLO_SOURCES src/audio/device_enumerator_stub.cpp)
+endif()
+
 # Static library for Rust FFI linking
 add_library(mello STATIC ${MELLO_SOURCES})
 

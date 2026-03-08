@@ -74,6 +74,9 @@ MELLO_API void mello_voice_set_vad_callback(
     void* user_data
 );
 
+/** Get current input audio level (0.0 = silence, 1.0 = peak). Updated per frame. */
+MELLO_API float mello_voice_get_input_level(MelloContext* ctx);
+
 /** Get next encoded audio packet to send to peers. Returns packet size, or 0 if none. */
 MELLO_API int mello_voice_get_packet(MelloContext* ctx, uint8_t* buffer, int buffer_size);
 
@@ -146,6 +149,31 @@ MELLO_API bool mello_peer_is_connected(MelloPeerConnection* peer);
 
 /** Poll next received unreliable packet. Returns bytes copied, 0 if empty. */
 MELLO_API int mello_peer_recv(MelloPeerConnection* peer, uint8_t* buffer, int buffer_size);
+
+/* ============================================================================
+ * Devices
+ * ============================================================================ */
+
+typedef struct MelloDevice {
+    const char* id;
+    const char* name;
+    bool is_default;
+} MelloDevice;
+
+/** Get available audio input (capture) devices. Returns count written. */
+MELLO_API int mello_get_audio_inputs(MelloContext* ctx, MelloDevice* devices, int max_count);
+
+/** Get available audio output (playback) devices. Returns count written. */
+MELLO_API int mello_get_audio_outputs(MelloContext* ctx, MelloDevice* devices, int max_count);
+
+/** Free strings allocated by mello_get_audio_inputs / mello_get_audio_outputs. */
+MELLO_API void mello_free_device_list(MelloDevice* devices, int count);
+
+/** Set audio input device. Pass NULL to revert to system default. */
+MELLO_API MelloResult mello_set_audio_input(MelloContext* ctx, const char* device_id);
+
+/** Set audio output device. Pass NULL to revert to system default. */
+MELLO_API MelloResult mello_set_audio_output(MelloContext* ctx, const char* device_id);
 
 #ifdef __cplusplus
 }

@@ -1,8 +1,13 @@
+mod settings;
+
 slint::include_modules!();
 
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::time::Duration;
 use slint::Model;
 use mello_core::{Client, Command, Config, Event};
+use settings::Settings;
 
 fn make_initials(name: &str) -> String {
     let parts: Vec<&str> = name.split_whitespace().collect();
@@ -35,8 +40,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let app = MainWindow::new()?;
 
-    // Default to dark theme
-    app.global::<Theme>().set_dark(true);
+    let settings = Rc::new(RefCell::new(Settings::load()));
+
+    app.global::<Theme>().set_dark(settings.borrow().dark_theme);
+
+    // Apply saved audio device selections
+    {
+        let s = settings.borrow();
+        if let Some(ref id) = s.capture_device_id {
+            let _ = cmd_tx.try_send(Command::SetCaptureDevice { id: id.clone() });
+        }
+        if let Some(ref id) = s.playback_device_id {
+            let _ = cmd_tx.try_send(Command::SetPlaybackDevice { id: id.clone() });
+        }
+    }
 
     let _ = cmd_tx.try_send(Command::TryRestore);
 
@@ -161,10 +178,58 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // --- Theme toggle ---
     {
         let app_weak = app.as_weak();
+        let s = settings.clone();
         app.on_theme_toggled(move || {
             if let Some(app) = app_weak.upgrade() {
-                let current = app.global::<Theme>().get_dark();
-                app.global::<Theme>().set_dark(!current);
+                let new_dark = !app.global::<Theme>().get_dark();
+                app.global::<Theme>().set_dark(new_dark);
+                let mut settings = s.borrow_mut();
+                settings.dark_theme = new_dark;
+                settings.save();
+            }
+        });
+    }
+
+    // --- Settings ---
+    {
+        let cmd = cmd_tx.clone();
+        let app_weak = app.as_weak();
+        app.on_settings_requested(move || {
+            let _ = cmd.try_send(Command::ListAudioDevices);
+            if let Some(app) = app_weak.upgrade() {
+                app.set_settings_open(true);
+            }
+        });
+    }
+    {
+        let cmd = cmd_tx.clone();
+        let s = settings.clone();
+        app.on_capture_device_selected(move |id| {
+            let id_str = id.to_string();
+            let _ = cmd.try_send(Command::SetCaptureDevice { id: id_str.clone() });
+            let mut settings = s.borrow_mut();
+            settings.capture_device_id = Some(id_str);
+            settings.save();
+        });
+    }
+    {
+        let cmd = cmd_tx.clone();
+        let s = settings.clone();
+        app.on_playback_device_selected(move |id| {
+            let id_str = id.to_string();
+            let _ = cmd.try_send(Command::SetPlaybackDevice { id: id_str.clone() });
+            let mut settings = s.borrow_mut();
+            settings.playback_device_id = Some(id_str);
+            settings.save();
+        });
+    }
+    {
+        let cmd = cmd_tx.clone();
+        let app_weak = app.as_weak();
+        app.on_mic_test_toggled(move || {
+            if let Some(app) = app_weak.upgrade() {
+                let enabled = app.get_mic_testing();
+                let _ = cmd.try_send(Command::SetLoopback { enabled });
             }
         });
     }
@@ -176,11 +241,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // --- Event polling timer ---
     let app_weak = app.as_weak();
+    let s = settings.clone();
     let timer = slint::Timer::default();
     timer.start(slint::TimerMode::Repeated, Duration::from_millis(50), move || {
         while let Ok(event) = event_rx.try_recv() {
             if let Some(app) = app_weak.upgrade() {
-                handle_event(&app, event);
+                handle_event(&app, event, &s);
             }
         }
     });
@@ -232,7 +298,7 @@ fn remove_crew_tab(app: &MainWindow, tab_id: &str) {
     app.set_crew_tabs(rc.into());
 }
 
-fn handle_event(app: &MainWindow, event: Event) {
+fn handle_event(app: &MainWindow, event: Event, settings: &Rc<RefCell<Settings>>) {
     match event {
         Event::Restoring => {
             app.set_login_loading(true);
@@ -356,6 +422,37 @@ fn handle_event(app: &MainWindow, event: Event) {
                 .collect();
             let rc = std::rc::Rc::new(slint::VecModel::from(members));
             app.set_members(rc.into());
+        }
+        Event::MicLevel { level } => {
+            app.set_mic_level(level);
+        }
+        Event::AudioDevicesListed { capture, playback } => {
+            let cap: Vec<AudioDeviceData> = capture.iter().map(|d| AudioDeviceData {
+                id: d.id.clone().into(),
+                name: d.name.clone().into(),
+                is_default: d.is_default,
+            }).collect();
+            let play: Vec<AudioDeviceData> = playback.iter().map(|d| AudioDeviceData {
+                id: d.id.clone().into(),
+                name: d.name.clone().into(),
+                is_default: d.is_default,
+            }).collect();
+            app.set_capture_devices(Rc::new(slint::VecModel::from(cap)).into());
+            app.set_playback_devices(Rc::new(slint::VecModel::from(play)).into());
+
+            let s = settings.borrow();
+            if let Some(ref saved_id) = s.capture_device_id {
+                if let Some(dev) = capture.iter().find(|d| &d.id == saved_id) {
+                    app.set_selected_capture_id(saved_id.as_str().into());
+                    app.set_selected_capture_name(dev.name.as_str().into());
+                }
+            }
+            if let Some(ref saved_id) = s.playback_device_id {
+                if let Some(dev) = playback.iter().find(|d| &d.id == saved_id) {
+                    app.set_selected_playback_id(saved_id.as_str().into());
+                    app.set_selected_playback_name(dev.name.as_str().into());
+                }
+            }
         }
         Event::SignalReceived { .. } => {
             // Handled internally by the client, not the UI

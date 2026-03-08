@@ -14,6 +14,7 @@ pub use command::Command;
 pub use config::Config;
 pub use error::{Error, Result};
 pub use events::Event;
+pub use voice::AudioDevice;
 
 pub mod prelude {
     pub use crate::{Client, Command, Config, Error, Event, Result};

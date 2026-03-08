@@ -138,6 +138,20 @@ impl Client {
             Command::SetDeafen { deafened } => {
                 self.voice.set_deafen(deafened);
             }
+            Command::ListAudioDevices => {
+                let capture = self.voice.list_capture_devices();
+                let playback = self.voice.list_playback_devices();
+                let _ = self.event_tx.send(Event::AudioDevicesListed { capture, playback });
+            }
+            Command::SetCaptureDevice { id } => {
+                self.voice.set_capture_device(&id);
+            }
+            Command::SetPlaybackDevice { id } => {
+                self.voice.set_playback_device(&id);
+            }
+            Command::SetLoopback { enabled } => {
+                self.voice.set_loopback(enabled);
+            }
         }
     }
 
