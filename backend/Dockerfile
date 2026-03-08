@@ -24,6 +24,9 @@ ENTRYPOINT ["/bin/sh", "-c", "\
         --runtime.http_key=${NAKAMA_HTTP_KEY:-defaulthttpkey} \
         --console.username=${NAKAMA_CONSOLE_USERNAME:-admin} \
         --console.password=${NAKAMA_CONSOLE_PASSWORD:-admin} \
+        --console.signing_key=${NAKAMA_CONSOLE_SIGNING_KEY:-defaultsigningkey} \
+        --session.encryption_key=${NAKAMA_SESSION_ENCRYPTION_KEY:-defaultencryptionkey} \
+        --session.refresh_encryption_key=${NAKAMA_SESSION_REFRESH_ENCRYPTION_KEY:-defaultrefreshkey} \
         --console.port=7351 \
-        --socket.port=7350 \
+        --socket.port=${PORT:-7350} \
     "]

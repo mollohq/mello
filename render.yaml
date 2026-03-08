@@ -21,6 +21,14 @@ services:
         fromDatabase:
           name: mello-db
           property: connectionString
+      - key: PORT
+        value: "7350"
+      - key: NAKAMA_CONSOLE_SIGNING_KEY
+        generateValue: true
+      - key: NAKAMA_SESSION_ENCRYPTION_KEY
+        generateValue: true
+      - key: NAKAMA_SESSION_REFRESH_ENCRYPTION_KEY
+        generateValue: true
       - key: DISCORD_CLIENT_ID
         sync: false
       - key: DISCORD_CLIENT_SECRET
