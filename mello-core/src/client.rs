@@ -15,10 +15,10 @@ pub struct Client {
 }
 
 impl Client {
-    pub fn new(config: Config, event_tx: std::sync::mpsc::Sender<Event>) -> Self {
+    pub fn new(config: Config, event_tx: std::sync::mpsc::Sender<Event>, loopback: bool) -> Self {
         Self {
             nakama: NakamaClient::new(config),
-            voice: VoiceManager::new(event_tx.clone()),
+            voice: VoiceManager::new(event_tx.clone(), loopback),
             event_tx,
         }
     }
@@ -283,11 +283,11 @@ impl Client {
                 log::warn!("Failed to follow users: {}", e);
             }
 
-            // Auto-join voice
+            // Auto-join voice with online members only
             if let Some(local_id) = self.nakama.current_user_id().map(String::from) {
-                let other_ids: Vec<String> = user_ids.iter()
-                    .filter(|id| id.as_str() != local_id)
-                    .cloned()
+                let other_ids: Vec<String> = members.iter()
+                    .filter(|m| m.online && m.id != local_id)
+                    .map(|m| m.id.clone())
                     .collect();
                 self.voice.join_voice(&local_id, &other_ids);
                 let _ = self.event_tx.send(Event::VoiceStateChanged { in_call: true });

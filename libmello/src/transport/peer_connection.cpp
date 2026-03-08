@@ -1,5 +1,6 @@
 #include "peer_connection_impl.hpp"
 #include <chrono>
+#include <algorithm>
 
 namespace mello::transport {
 
@@ -11,7 +12,6 @@ PeerConnectionImpl::PeerConnectionImpl(const std::string& peer_id)
 
 PeerConnectionImpl::~PeerConnectionImpl() {
     try {
-        // Clear callbacks first to prevent use-after-free from libdatachannel threads
         if (pc_) {
             pc_->onLocalDescription(nullptr);
             pc_->onLocalCandidate(nullptr);
@@ -68,8 +68,29 @@ void PeerConnectionImpl::create_pc() {
     });
 }
 
+void PeerConnectionImpl::setup_dc_handlers(std::shared_ptr<rtc::DataChannel> dc, bool reliable) {
+    dc->onMessage([this, reliable](auto data) {
+        if (auto* bin = std::get_if<rtc::binary>(&data)) {
+            // Push unreliable audio packets into the recv queue for polling
+            if (!reliable) {
+                std::lock_guard<std::mutex> lock(recv_mutex_);
+                if (recv_queue_.size() < MAX_RECV_QUEUE) {
+                    recv_queue_.emplace(
+                        reinterpret_cast<const uint8_t*>(bin->data()),
+                        reinterpret_cast<const uint8_t*>(bin->data()) + bin->size()
+                    );
+                }
+            }
+            // Also fire the user callback if set
+            if (data_cb_) {
+                data_cb_(data_ud_, reinterpret_cast<const uint8_t*>(bin->data()),
+                         static_cast<int>(bin->size()), reliable);
+            }
+        }
+    });
+}
+
 void PeerConnectionImpl::setup_data_channels() {
-    // The offerer creates data channels
     rtc::DataChannelInit unreliable_init;
     unreliable_init.reliability.unordered = true;
     unreliable_init.reliability.maxRetransmits = 0;
@@ -77,19 +98,8 @@ void PeerConnectionImpl::setup_data_channels() {
     unreliable_dc_ = pc_->createDataChannel("audio", unreliable_init);
     reliable_dc_ = pc_->createDataChannel("control");
 
-    auto setup_dc = [this](std::shared_ptr<rtc::DataChannel> dc, bool reliable) {
-        dc->onMessage([this, reliable](auto data) {
-            if (data_cb_) {
-                if (auto* bin = std::get_if<rtc::binary>(&data)) {
-                    data_cb_(data_ud_, reinterpret_cast<const uint8_t*>(bin->data()),
-                             static_cast<int>(bin->size()), reliable);
-                }
-            }
-        });
-    };
-
-    setup_dc(unreliable_dc_, false);
-    setup_dc(reliable_dc_, true);
+    setup_dc_handlers(unreliable_dc_, false);
+    setup_dc_handlers(reliable_dc_, true);
 }
 
 const char* PeerConnectionImpl::create_offer() {
@@ -100,7 +110,6 @@ const char* PeerConnectionImpl::create_offer() {
 
     pc_->setLocalDescription(rtc::Description::Type::Offer);
 
-    // Wait for SDP to be gathered
     {
         std::unique_lock<std::mutex> lk(sdp_mutex_);
         sdp_cv_.wait_for(lk, std::chrono::seconds(5), [this] { return sdp_ready_; });
@@ -114,32 +123,19 @@ const char* PeerConnectionImpl::create_answer(const char* offer_sdp) {
     sdp_ready_ = false;
     create_pc();
 
-    // Set up handler for incoming data channels from the offerer
     pc_->onDataChannel([this](std::shared_ptr<rtc::DataChannel> dc) {
         auto label = dc->label();
-        auto setup = [this](std::shared_ptr<rtc::DataChannel> ch, bool reliable) {
-            ch->onMessage([this, reliable](auto data) {
-                if (data_cb_) {
-                    if (auto* bin = std::get_if<rtc::binary>(&data)) {
-                        data_cb_(data_ud_, reinterpret_cast<const uint8_t*>(bin->data()),
-                                 static_cast<int>(bin->size()), reliable);
-                    }
-                }
-            });
-        };
-
         if (label == "audio") {
             unreliable_dc_ = dc;
-            setup(dc, false);
+            setup_dc_handlers(dc, false);
         } else if (label == "control") {
             reliable_dc_ = dc;
-            setup(dc, true);
+            setup_dc_handlers(dc, true);
         }
     });
 
     rtc::Description offer(offer_sdp, rtc::Description::Type::Offer);
     pc_->setRemoteDescription(offer);
-    pc_->setLocalDescription(rtc::Description::Type::Answer);
 
     {
         std::unique_lock<std::mutex> lk(sdp_mutex_);
@@ -206,6 +202,17 @@ bool PeerConnectionImpl::send_reliable(const uint8_t* data, int size) {
 
 bool PeerConnectionImpl::is_connected() const {
     return connected_;
+}
+
+int PeerConnectionImpl::recv(uint8_t* buffer, int buffer_size) {
+    std::lock_guard<std::mutex> lock(recv_mutex_);
+    if (recv_queue_.empty()) return 0;
+
+    auto& front = recv_queue_.front();
+    int copy_size = std::min(static_cast<int>(front.size()), buffer_size);
+    std::memcpy(buffer, front.data(), copy_size);
+    recv_queue_.pop();
+    return copy_size;
 }
 
 } // namespace mello::transport

@@ -20,6 +20,7 @@ pub struct VoiceManager {
     muted: bool,
     deafened: bool,
     active: bool,
+    loopback: bool,
 }
 
 // Safety: VoiceManager is only ever accessed from a single tokio task (the client run loop).
@@ -28,12 +29,16 @@ unsafe impl Send for VoiceManager {}
 unsafe impl Sync for VoiceManager {}
 
 impl VoiceManager {
-    pub fn new(event_tx: std_mpsc::Sender<Event>) -> Self {
+    pub fn new(event_tx: std_mpsc::Sender<Event>, loopback: bool) -> Self {
         let ctx = unsafe { mello_sys::mello_init() };
         if ctx.is_null() {
             log::error!("Failed to initialize libmello context");
         } else {
             log::info!("libmello context initialized");
+        }
+
+        if loopback {
+            log::info!("Loopback mode enabled -- captured audio will play back locally");
         }
 
         Self {
@@ -43,6 +48,7 @@ impl VoiceManager {
             muted: false,
             deafened: false,
             active: false,
+            loopback,
         }
     }
 
@@ -142,8 +148,9 @@ impl VoiceManager {
     pub fn tick(&mut self) {
         if !self.active || self.ctx.is_null() { return; }
 
-        // Read captured packets and send to all connected peers
         let mut buf = [0u8; PACKET_BUF_SIZE];
+        let loopback_id = std::ffi::CString::new("loopback").unwrap();
+
         loop {
             let size = unsafe {
                 mello_sys::mello_voice_get_packet(
@@ -153,10 +160,22 @@ impl VoiceManager {
                 )
             };
             if size <= 0 { break; }
-            self.mesh.broadcast_audio(&buf[..size as usize]);
+
+            let pkt = &buf[..size as usize];
+            self.mesh.broadcast_audio(pkt);
+
+            if self.loopback {
+                unsafe {
+                    mello_sys::mello_voice_feed_packet(
+                        self.ctx,
+                        loopback_id.as_ptr(),
+                        pkt.as_ptr(),
+                        size,
+                    );
+                }
+            }
         }
 
-        // Read incoming audio from peers and feed to decoder/playback
         self.mesh.poll_incoming(self.ctx);
     }
 }

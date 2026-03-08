@@ -149,12 +149,12 @@ void mello_peer_destroy(MelloPeerConnection* peer) {
 }
 
 void mello_peer_set_ice_servers(MelloPeerConnection* peer, const char** urls, int count) {
-    if (!peer || !urls || count <= 0) return;
+    if (!peer) return;
     try {
         auto* pc = reinterpret_cast<mello::transport::PeerConnectionImpl*>(peer);
         std::vector<std::string> servers;
         for (int i = 0; i < count; ++i) {
-            if (urls[i]) servers.emplace_back(urls[i]);
+            if (urls && urls[i]) servers.emplace_back(urls[i]);
         }
         pc->set_ice_servers(servers);
     } catch (...) {}
@@ -252,6 +252,16 @@ bool mello_peer_is_connected(MelloPeerConnection* peer) {
         return pc->is_connected();
     } catch (...) {
         return false;
+    }
+}
+
+int mello_peer_recv(MelloPeerConnection* peer, uint8_t* buffer, int buffer_size) {
+    if (!peer || !buffer || buffer_size <= 0) return 0;
+    try {
+        auto* pc = reinterpret_cast<mello::transport::PeerConnectionImpl*>(peer);
+        return pc->recv(buffer, buffer_size);
+    } catch (...) {
+        return 0;
     }
 }
 

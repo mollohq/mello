@@ -148,11 +148,25 @@ impl VoiceMesh {
     }
 
     /// Poll received audio from all peers and feed to the audio pipeline
-    pub fn poll_incoming(&self, _ctx: *mut mello_sys::MelloContext) {
-        // For now we rely on the data callback mechanism in libdatachannel
-        // which fires asynchronously. We could poll here instead but the
-        // callback approach is lower latency.
-        // TODO: Implement callback-driven receive with feed_packet
+    pub fn poll_incoming(&self, ctx: *mut mello_sys::MelloContext) {
+        let mut buf = [0u8; 4000];
+        for (peer_id, state) in &self.peers {
+            loop {
+                let size = unsafe {
+                    mello_sys::mello_peer_recv(state.peer, buf.as_mut_ptr(), buf.len() as i32)
+                };
+                if size <= 0 { break; }
+                let peer_id_c = std::ffi::CString::new(peer_id.as_str()).unwrap();
+                unsafe {
+                    mello_sys::mello_voice_feed_packet(
+                        ctx,
+                        peer_id_c.as_ptr(),
+                        buf.as_ptr(),
+                        size,
+                    );
+                }
+            }
+        }
     }
 
     pub fn destroy_peer(&mut self, member_id: &str) {

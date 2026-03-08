@@ -21,13 +21,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
     log::info!("Starting Mello...");
 
+    let loopback = std::env::args().any(|a| a == "--loopback");
+
     let rt = tokio::runtime::Runtime::new()?;
 
     let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel::<Command>(256);
     let (event_tx, event_rx) = std::sync::mpsc::channel::<Event>();
 
     rt.spawn(async move {
-        let mut client = Client::new(Config::default(), event_tx);
+        let mut client = Client::new(Config::default(), event_tx, loopback);
         client.run(cmd_rx).await;
     });
 

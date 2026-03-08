@@ -144,6 +144,9 @@ MELLO_API MelloResult mello_peer_send_reliable(
 
 MELLO_API bool mello_peer_is_connected(MelloPeerConnection* peer);
 
+/** Poll next received unreliable packet. Returns bytes copied, 0 if empty. */
+MELLO_API int mello_peer_recv(MelloPeerConnection* peer, uint8_t* buffer, int buffer_size);
+
 #ifdef __cplusplus
 }
 #endif

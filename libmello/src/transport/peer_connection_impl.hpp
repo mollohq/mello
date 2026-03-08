@@ -2,6 +2,7 @@
 #include <rtc/rtc.hpp>
 #include <string>
 #include <vector>
+#include <queue>
 #include <mutex>
 #include <atomic>
 #include <condition_variable>
@@ -18,7 +19,6 @@ public:
 
     void set_ice_servers(const std::vector<std::string>& urls);
 
-    // Returns SDP string (caller owns nothing - pointer valid until next call or destroy)
     const char* create_offer();
     const char* create_answer(const char* offer_sdp);
     bool set_remote_description(const char* sdp, bool is_offer);
@@ -32,9 +32,13 @@ public:
     bool send_reliable(const uint8_t* data, int size);
     bool is_connected() const;
 
+    // Poll next received unreliable packet. Returns size copied, 0 if empty.
+    int recv(uint8_t* buffer, int buffer_size);
+
 private:
     void create_pc();
     void setup_data_channels();
+    void setup_dc_handlers(std::shared_ptr<rtc::DataChannel> dc, bool reliable);
 
     std::string peer_id_;
     rtc::Configuration config_;
@@ -56,6 +60,11 @@ private:
 
     std::atomic<bool> connected_{false};
     std::mutex mutex_;
+
+    // Thread-safe receive queue for incoming unreliable audio packets
+    std::mutex recv_mutex_;
+    std::queue<std::vector<uint8_t>> recv_queue_;
+    static constexpr size_t MAX_RECV_QUEUE = 200;
 };
 
 } // namespace mello::transport
