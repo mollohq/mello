@@ -1,6 +1,190 @@
 import { Theme } from "../theme.slint";
 import { CrewData } from "../types.slint";
 
+component VoiceBars inherits HorizontalLayout {
+    in property <bool> speaking: false;
+    spacing: 2px;
+    alignment: center;
+
+    Rectangle {
+        width: 2px;
+        height: speaking ? 8px : 4px;
+        border-radius: 1px;
+        background: speaking ? Theme.accent : Theme.graphic-med;
+    }
+    Rectangle {
+        width: 2px;
+        height: speaking ? 12px : 4px;
+        border-radius: 1px;
+        background: speaking ? Theme.accent : Theme.graphic-med;
+    }
+    Rectangle {
+        width: 2px;
+        height: speaking ? 8px : 4px;
+        border-radius: 1px;
+        background: speaking ? Theme.accent : Theme.graphic-med;
+    }
+}
+
+component MemberChip inherits Rectangle {
+    in property <string> initials;
+    in property <string> name;
+    in property <bool> speaking: false;
+
+    height: 26px;
+    border-radius: 4px;
+    background: Theme.bg-app;
+
+    HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 8px;
+        spacing: 5px;
+        alignment: center;
+
+        Rectangle {
+            width: 18px;
+            height: 18px;
+            border-radius: 3px;
+            background: speaking ? Theme.graphic-med : Theme.graphic-light;
+            border-width: speaking ? 1px : 0px;
+            border-color: Theme.graphic-dark;
+
+            Text {
+                text: initials;
+                font-family: Theme.font-mono;
+                font-size: 8px;
+                font-weight: 600;
+                color: speaking ? Theme.text-primary : Theme.text-secondary;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+
+        Text {
+            text: name;
+            font-family: Theme.font-mono;
+            font-size: Theme.font-xs;
+            color: speaking ? Theme.text-primary : Theme.text-secondary;
+            vertical-alignment: center;
+        }
+
+        if speaking: VoiceBars { speaking: true; }
+    }
+}
+
+component VoiceMiniRow inherits Rectangle {
+    in property <string> initials;
+    in property <string> name;
+    in property <bool> speaking: false;
+
+    height: 18px;
+
+    HorizontalLayout {
+        spacing: 6px;
+        alignment: center;
+
+        Rectangle {
+            width: 18px;
+            height: 18px;
+            border-radius: 3px;
+            background: speaking ? Theme.graphic-med : Theme.graphic-light;
+            border-width: speaking ? 1px : 0px;
+            border-color: speaking ? Theme.graphic-dark : transparent;
+
+            Text {
+                text: initials;
+                font-family: Theme.font-mono;
+                font-size: 8px;
+                font-weight: 600;
+                color: speaking ? Theme.text-primary : Theme.text-secondary;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+
+        Text {
+            text: name;
+            font-family: Theme.font-mono;
+            font-size: Theme.font-xs;
+            color: Theme.text-secondary;
+            horizontal-stretch: 1;
+            overflow: elide;
+            vertical-alignment: center;
+        }
+
+        VoiceBars { speaking: speaking; }
+    }
+}
+
+component StreamThumbnail inherits Rectangle {
+    in property <bool> small: false;
+
+    width: small ? 56px : 72px;
+    height: small ? 36px : 44px;
+    border-radius: 4px;
+    background: Theme.dark ? #111111 : Theme.surface;
+    border-width: 1px;
+    border-color: Theme.graphic-light;
+
+    // Live dot
+    Rectangle {
+        x: 3px;
+        y: 3px;
+        width: 4px;
+        height: 4px;
+        border-radius: 2px;
+        background: Theme.accent;
+    }
+
+    // Placeholder lines
+    VerticalLayout {
+        alignment: center;
+        spacing: 3px;
+        padding-left: (parent.width - 32px) / 2;
+        padding-right: (parent.width - 32px) / 2;
+
+        Rectangle {
+            height: 2px;
+            border-radius: 1px;
+            background: Theme.graphic-dark;
+            opacity: 0.4;
+        }
+        Rectangle {
+            height: 2px;
+            width: 22px;
+            border-radius: 1px;
+            background: Theme.graphic-dark;
+            opacity: 0.4;
+        }
+    }
+}
+
+component CrewMsg inherits HorizontalLayout {
+    in property <string> author;
+    in property <string> body;
+
+    spacing: 6px;
+    height: 14px;
+
+    Text {
+        text: author;
+        font-family: Theme.font-mono;
+        font-size: 9px;
+        font-weight: 600;
+        color: Theme.text-secondary;
+        vertical-alignment: center;
+    }
+    Text {
+        text: body;
+        font-family: Theme.font-mono;
+        font-size: 9px;
+        color: Theme.text-tertiary;
+        horizontal-stretch: 1;
+        overflow: elide;
+        vertical-alignment: center;
+    }
+}
+
 export component CrewPanel inherits Rectangle {
     in property <[CrewData]> crews: [];
     in property <string> active-crew-id: "";
@@ -44,49 +228,14 @@ export component CrewPanel inherits Rectangle {
 
         Rectangle { height: 20px; }
 
-        // --- Stats ---
-        HorizontalLayout {
-            height: 36px;
-
-            Text {
-                text: crews.length;
-                font-size: Theme.font-xxl;
-                font-weight: 400;
-                color: Theme.text-primary;
-                vertical-alignment: bottom;
-                letter-spacing: -0.5px;
-            }
-
-            Rectangle { width: 6px; }
-
-            Text {
-                text: "ACT";
-                font-size: Theme.font-md;
-                font-weight: 600;
-                color: Theme.text-primary;
-                vertical-alignment: bottom;
-                letter-spacing: 0.5px;
-            }
-        }
-
-        Text {
-            text: "GLOBAL NETWORK";
-            font-family: Theme.font-mono;
-            font-size: Theme.font-md;
-            color: Theme.text-secondary;
-            letter-spacing: -0.3px;
-        }
-
-        Rectangle { height: 40px; }
-
-        // --- Crew list (scrollable) ---
+        // --- Crew cards (scrollable) ---
         Flickable {
             vertical-stretch: 1;
 
             VerticalLayout {
                 spacing: 0px;
 
-                // "ACTIVE NOW" section kicker
+                // ===== ACTIVE NOW section =====
                 Text {
                     text: "ACTIVE NOW";
                     font-size: Theme.font-xs;
@@ -99,56 +248,275 @@ export component CrewPanel inherits Rectangle {
                 Rectangle { height: 12px; }
 
                 for crew[i] in crews: Rectangle {
-                    height: 44px;
-                    border-radius: Theme.r-inner;
-                    background: crew.id == active-crew-id
-                        ? Theme.bg-app
-                        : (item-hover.has-hover ? Theme.bg-app : transparent);
+                    visible: crew.online-count > 0 || crew.id == active-crew-id;
+                    height: self.visible ? self.preferred-height : 0px;
 
-                    HorizontalLayout {
-                        padding-left: 12px;
-                        padding-right: 12px;
-                        spacing: 12px;
-                        alignment: center;
+                    // Card wrapper
+                    VerticalLayout {
+                        spacing: 0px;
 
-                        // Status dot
                         Rectangle {
-                            width: 8px;
-                            height: 8px;
-                            border-radius: 4px;
+                            border-radius: Theme.r-inner;
                             background: crew.id == active-crew-id
+                                ? (Theme.dark ? #FF1E5612 : #FF1E560D)
+                                : Theme.bg-app;
+                            border-width: 1px;
+                            border-color: crew.id == active-crew-id
                                 ? Theme.accent
-                                : Theme.graphic-med;
+                                : (card-hover.has-hover ? Theme.graphic-med : transparent);
+                            clip: true;
+
+                            VerticalLayout {
+                                padding: 12px;
+                                spacing: 0px;
+
+                                // --- Card header ---
+                                HorizontalLayout {
+                                    height: 18px;
+                                    spacing: 8px;
+
+                                    Rectangle {
+                                        width: 6px;
+                                        height: 6px;
+                                        border-radius: 3px;
+                                        background: crew.id == active-crew-id
+                                            ? Theme.accent
+                                            : Theme.accent;
+                                        y: (parent.height - self.height) / 2;
+                                    }
+
+                                    Text {
+                                        text: crew.name;
+                                        font-family: Theme.font-mono;
+                                        font-size: crew.id == active-crew-id ? 14px : 12px;
+                                        font-weight: 500;
+                                        color: Theme.text-primary;
+                                        horizontal-stretch: 1;
+                                        overflow: elide;
+                                        vertical-alignment: center;
+                                    }
+
+                                    Text {
+                                        text: crew.online-count + " / " + crew.member-count;
+                                        font-family: Theme.font-mono;
+                                        font-size: crew.id == active-crew-id ? Theme.font-sm : Theme.font-xs;
+                                        color: crew.id == active-crew-id
+                                            ? Theme.text-primary
+                                            : Theme.text-secondary;
+                                        vertical-alignment: center;
+                                    }
+                                }
+
+                                // ===== ACTIVE card body =====
+                                if crew.id == active-crew-id: VerticalLayout {
+                                    spacing: 0px;
+
+                                    Rectangle { height: 14px; }
+
+                                    // Member chips (flow-wrapped via VerticalLayout of rows)
+                                    HorizontalLayout {
+                                        spacing: 6px;
+
+                                        if crew.voice-count >= 1: MemberChip {
+                                            initials: crew.v0-initials;
+                                            name: crew.v0-name;
+                                            speaking: crew.v0-speaking;
+                                        }
+                                        if crew.voice-count >= 2: MemberChip {
+                                            initials: crew.v1-initials;
+                                            name: crew.v1-name;
+                                            speaking: crew.v1-speaking;
+                                        }
+                                    }
+
+                                    if crew.voice-count >= 3: Rectangle { height: 6px; }
+
+                                    if crew.voice-count >= 3: HorizontalLayout {
+                                        spacing: 6px;
+
+                                        MemberChip {
+                                            initials: crew.v2-initials;
+                                            name: crew.v2-name;
+                                            speaking: crew.v2-speaking;
+                                        }
+                                        if crew.voice-count >= 4: MemberChip {
+                                            initials: crew.v3-initials;
+                                            name: crew.v3-name;
+                                            speaking: crew.v3-speaking;
+                                        }
+                                    }
+
+                                    // Stream preview (if streaming)
+                                    if crew.has-stream: Rectangle { height: 10px; }
+
+                                    if crew.has-stream: HorizontalLayout {
+                                        spacing: 6px;
+                                        alignment: center;
+
+                                        StreamThumbnail { small: true; }
+
+                                        VerticalLayout {
+                                            alignment: center;
+                                            spacing: 2px;
+
+                                            Text {
+                                                text: "LIVE STREAM";
+                                                font-family: Theme.font-mono;
+                                                font-size: 9px;
+                                                color: Theme.text-tertiary;
+                                                letter-spacing: 0.7px;
+                                            }
+                                            Text {
+                                                text: crew.stream-name;
+                                                font-family: Theme.font-mono;
+                                                font-size: Theme.font-sm;
+                                                color: Theme.text-primary;
+                                            }
+                                        }
+                                    }
+                                }
+
+                                // ===== INACTIVE card body =====
+                                if crew.id != active-crew-id && crew.online-count > 0: VerticalLayout {
+                                    spacing: 0px;
+
+                                    Rectangle { height: 10px; }
+
+                                    // Preview: stream thumbnail + voice rows
+                                    HorizontalLayout {
+                                        spacing: 8px;
+                                        alignment: start;
+
+                                        if crew.has-stream: StreamThumbnail { small: false; }
+
+                                        VerticalLayout {
+                                            spacing: 6px;
+                                            vertical-stretch: 1;
+
+                                            if crew.voice-count >= 1: VoiceMiniRow {
+                                                initials: crew.v0-initials;
+                                                name: crew.v0-name;
+                                                speaking: crew.v0-speaking;
+                                            }
+                                            if crew.voice-count >= 2: VoiceMiniRow {
+                                                initials: crew.v1-initials;
+                                                name: crew.v1-name;
+                                                speaking: crew.v1-speaking;
+                                            }
+                                            if crew.voice-count >= 3: VoiceMiniRow {
+                                                initials: crew.v2-initials;
+                                                name: crew.v2-name;
+                                                speaking: crew.v2-speaking;
+                                            }
+                                        }
+                                    }
+
+                                    // Messages
+                                    if crew.msg-count > 0: Rectangle { height: 10px; }
+
+                                    if crew.msg-count > 0: Rectangle {
+                                        height: 1px;
+                                        background: Theme.graphic-light;
+                                    }
+
+                                    if crew.msg-count > 0: Rectangle { height: 10px; }
+
+                                    if crew.msg-count >= 1: CrewMsg {
+                                        author: crew.m0-author;
+                                        body: crew.m0-text;
+                                    }
+
+                                    if crew.msg-count >= 1: Rectangle { height: 5px; }
+
+                                    if crew.msg-count >= 2: CrewMsg {
+                                        author: crew.m1-author;
+                                        body: crew.m1-text;
+                                    }
+                                }
+                            }
+
+                            card-hover := TouchArea {
+                                clicked => { crew-selected(crew.id); }
+                            }
                         }
 
-                        // Crew name
-                        Text {
-                            text: crew.name;
-                            font-family: Theme.font-mono;
-                            font-size: Theme.font-md;
-                            font-weight: crew.id == active-crew-id ? 500 : 400;
-                            color: crew.id == active-crew-id
-                                ? Theme.text-primary
-                                : (item-hover.has-hover ? Theme.text-primary : Theme.text-secondary);
-                            horizontal-stretch: 1;
-                            overflow: elide;
-                            vertical-alignment: center;
-                        }
-
-                        // Member count
-                        Text {
-                            text: crew.online-count > 0
-                                ? crew.online-count + "/" + crew.member-count
-                                : crew.member-count;
-                            font-family: Theme.font-mono;
-                            font-size: Theme.font-sm;
-                            color: Theme.text-tertiary;
-                            vertical-alignment: center;
-                        }
+                        // Spacing between cards
+                        Rectangle { height: 8px; }
                     }
+                }
 
-                    item-hover := TouchArea {
-                        clicked => { crew-selected(crew.id); }
+                // ===== IDLE section =====
+                Rectangle { height: 20px; }
+
+                Text {
+                    text: "IDLE";
+                    font-size: Theme.font-xs;
+                    font-weight: 600;
+                    letter-spacing: 1.3px;
+                    color: Theme.text-secondary;
+                    height: 16px;
+                }
+
+                Rectangle { height: 12px; }
+
+                for crew[i] in crews: Rectangle {
+                    visible: crew.online-count <= 0 && crew.id != active-crew-id;
+                    height: self.visible ? self.preferred-height : 0px;
+                    opacity: 0.5;
+
+                    VerticalLayout {
+                        spacing: 0px;
+
+                        Rectangle {
+                            border-radius: Theme.r-inner;
+                            background: Theme.bg-app;
+                            border-width: 1px;
+                            border-color: idle-hover.has-hover ? Theme.graphic-med : transparent;
+
+                            VerticalLayout {
+                                padding: 12px;
+                                spacing: 0px;
+
+                                HorizontalLayout {
+                                    height: 18px;
+                                    spacing: 8px;
+
+                                    Text {
+                                        text: crew.name;
+                                        font-family: Theme.font-mono;
+                                        font-size: 12px;
+                                        font-weight: 500;
+                                        color: Theme.text-secondary;
+                                        horizontal-stretch: 1;
+                                        overflow: elide;
+                                        vertical-alignment: center;
+                                    }
+
+                                    Text {
+                                        text: "0";
+                                        font-family: Theme.font-mono;
+                                        font-size: Theme.font-xs;
+                                        color: Theme.text-secondary;
+                                        vertical-alignment: center;
+                                    }
+                                }
+
+                                Rectangle { height: 4px; }
+
+                                Text {
+                                    text: "No members online";
+                                    font-family: Theme.font-mono;
+                                    font-size: Theme.font-xs;
+                                    color: Theme.text-tertiary;
+                                }
+                            }
+
+                            idle-hover := TouchArea {
+                                clicked => { crew-selected(crew.id); }
+                            }
+                        }
+
+                        Rectangle { height: 8px; }
                     }
                 }
             }

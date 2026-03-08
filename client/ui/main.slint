@@ -1,5 +1,5 @@
 import { Theme } from "theme.slint";
-import { CrewData, MemberData, ChatMessageData, CrewTabData, AudioDeviceData } from "types.slint";
+import { CrewData, MemberData, ChatMessageData, AudioDeviceData } from "types.slint";
 import { CrewPanel } from "panels/crew_panel.slint";
 import { StreamView } from "panels/stream_view.slint";
 import { ChatPanel } from "panels/chat_panel.slint";
@@ -7,7 +7,7 @@ import { ControlBar } from "panels/control_bar.slint";
 import { SettingsModal } from "panels/settings_modal.slint";
 import { DebugPanel } from "panels/debug_panel.slint";
 
-export { CrewData, MemberData, ChatMessageData, CrewTabData, AudioDeviceData, Theme }
+export { CrewData, MemberData, ChatMessageData, AudioDeviceData, Theme }
 
 export component MainWindow inherits Window {
     title: "Mello";
@@ -30,7 +30,6 @@ export component MainWindow inherits Window {
     // --- Crews ---
     in property <[CrewData]> crews: [];
     in property <string> active-crew-id: "";
-    in property <[CrewTabData]> crew-tabs: [];
 
     // --- Members / chat ---
     in property <[MemberData]> members: [];
@@ -89,9 +88,6 @@ export component MainWindow inherits Window {
     callback mic-toggle();
     callback deafen-toggle();
     callback voice-toggle();
-    callback tab-selected(string);
-    callback tab-closed(string);
-    callback tab-add-clicked();
     callback presence-changed(int);
     callback theme-toggled();
     callback settings-requested();
@@ -231,181 +227,59 @@ export component MainWindow inherits Window {
     }
 
     // ===================== MAIN APP =====================
-    if logged-in: VerticalLayout {
-        spacing: 0px;
+    if logged-in: Rectangle {
+        background: Theme.bg-app;
 
-        // --- Crew tab strip ---
-        Rectangle {
-            height: 40px;
-            background: Theme.titlebar;
-            border-width: 0px;
+        HorizontalLayout {
+            padding: Theme.gap;
+            spacing: Theme.gap;
 
-            HorizontalLayout {
-                padding-left: 12px;
-                padding-right: 12px;
-                spacing: 4px;
-                alignment: start;
+            // LEFT: Crew sidebar (280px, spans full height)
+            CrewPanel {
+                width: 280px;
+                crews: root.crews;
+                active-crew-id: root.active-crew-id;
+                crew-selected(id) => { root.select-crew(id); }
+                crew-create-requested(name) => { root.create-crew(name); }
+            }
 
-                for tab in crew-tabs: Rectangle {
-                    height: 28px;
-                    min-width: 80px;
-                    border-radius: Theme.r-inner;
-                    background: tab.active ? Theme.surface : transparent;
-                    border-width: tab.active ? 1px : 0px;
-                    border-color: Theme.graphic-light;
-                    vertical-stretch: 0;
-                    y: (parent.height - self.height) / 2;
+            // CENTER: stage area + controls bar
+            VerticalLayout {
+                horizontal-stretch: 1;
+                spacing: Theme.gap;
 
-                    HorizontalLayout {
-                        padding-left: 14px;
-                        padding-right: 10px;
-                        spacing: 8px;
-                        alignment: center;
-
-                        // Status dot
-                        Rectangle {
-                            width: 6px;
-                            height: 6px;
-                            border-radius: 3px;
-                            background: tab.active ? Theme.accent : Theme.text-secondary;
-                        }
-
-                        // Tab name
-                        Text {
-                            text: tab.name;
-                            font-family: Theme.font-mono;
-                            font-size: 12px;
-                            font-weight: 500;
-                            color: tab.active ? Theme.text-primary : Theme.text-secondary;
-                            vertical-alignment: center;
-                        }
-
-                        // Close button
-                        Text {
-                            text: "×";
-                            font-size: 14px;
-                            color: Theme.text-tertiary;
-                            vertical-alignment: center;
-                            horizontal-alignment: center;
-                            width: 14px;
-
-                            TouchArea {
-                                clicked => { root.tab-closed(tab.id); }
-                            }
-                        }
-                    }
-
-                    TouchArea {
-                        clicked => { root.tab-selected(tab.id); }
-                    }
+                StreamView {
+                    vertical-stretch: 1;
+                    members: root.members;
                 }
 
-                // Add tab button
-                Rectangle {
-                    width: 28px;
-                    height: 28px;
-                    border-radius: Theme.r-inner;
-                    y: (parent.height - self.height) / 2;
-
-                    Text {
-                        text: "+";
-                        font-size: 18px;
-                        color: tab-add-hover.has-hover ? Theme.text-primary : Theme.text-secondary;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
-                    }
-
-                    tab-add-hover := TouchArea {
-                        clicked => { root.tab-add-clicked(); }
-                    }
-                }
-
-                // Spacer to push debug button right
-                Rectangle { horizontal-stretch: 1; }
-
-                // Debug toggle button
-                Rectangle {
-                    width: 28px;
-                    height: 28px;
-                    border-radius: Theme.r-inner;
-                    y: (parent.height - self.height) / 2;
-                    background: debug-open ? Theme.accent-bg : (dbg-btn-hover.has-hover ? Theme.hover-overlay : transparent);
-
-                    Text {
-                        text: "⚙";
-                        font-size: 14px;
-                        color: debug-open ? Theme.accent : Theme.text-tertiary;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
-                    }
-
-                    dbg-btn-hover := TouchArea {
-                        clicked => {
-                            root.debug-open = !root.debug-open;
-                            root.debug-toggled();
-                        }
+                ControlBar {
+                    height: 92px;
+                    user-name: root.user-name;
+                    user-tag: root.user-tag;
+                    mic-muted: root.mic-muted;
+                    deafened: root.deafened;
+                    in-voice: root.in-voice;
+                    presence-status <=> root.presence-status;
+                    mic-toggled => { root.mic-toggle(); }
+                    deafen-toggled => { root.deafen-toggle(); }
+                    voice-toggled => { root.voice-toggle(); }
+                    logout-clicked => { root.logout(); }
+                    presence-changed(status) => { root.presence-changed(status); }
+                    theme-toggled => { root.theme-toggled(); }
+                    settings-clicked => { root.settings-requested(); }
+                    debug-toggled => {
+                        root.debug-open = !root.debug-open;
+                        root.debug-toggled();
                     }
                 }
             }
-        }
 
-        // --- Bottom border of tab strip ---
-        Rectangle {
-            height: 1px;
-            background: Theme.graphic-light;
-        }
-
-        // --- Main grid area ---
-        Rectangle {
-            background: Theme.bg-app;
-
-            HorizontalLayout {
-                padding: Theme.gap;
-                spacing: Theme.gap;
-
-                // LEFT: Crew sidebar (280px, spans full height)
-                CrewPanel {
-                    width: 280px;
-                    crews: root.crews;
-                    active-crew-id: root.active-crew-id;
-                    crew-selected(id) => { root.select-crew(id); }
-                    crew-create-requested(name) => { root.create-crew(name); }
-                }
-
-                // CENTER: stage area + controls bar
-                VerticalLayout {
-                    horizontal-stretch: 1;
-                    spacing: Theme.gap;
-
-                    StreamView {
-                        vertical-stretch: 1;
-                        members: root.members;
-                    }
-
-                    ControlBar {
-                        height: 92px;
-                        user-name: root.user-name;
-                        user-tag: root.user-tag;
-                        mic-muted: root.mic-muted;
-                        deafened: root.deafened;
-                        in-voice: root.in-voice;
-                        presence-status <=> root.presence-status;
-                        mic-toggled => { root.mic-toggle(); }
-                        deafen-toggled => { root.deafen-toggle(); }
-                        voice-toggled => { root.voice-toggle(); }
-                        logout-clicked => { root.logout(); }
-                        presence-changed(status) => { root.presence-changed(status); }
-                        theme-toggled => { root.theme-toggled(); }
-                        settings-clicked => { root.settings-requested(); }
-                    }
-                }
-
-                // RIGHT: Chat panel (340px, spans full height)
-                ChatPanel {
-                    width: 340px;
-                    messages: root.messages;
-                    message-submitted(text) => { root.send-message(text); }
-                }
+            // RIGHT: Chat panel (340px, spans full height)
+            ChatPanel {
+                width: 340px;
+                messages: root.messages;
+                message-submitted(text) => { root.send-message(text); }
             }
         }
     }

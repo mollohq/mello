@@ -105,15 +105,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // --- Crew selection ---
     {
         let cmd = cmd_tx.clone();
-        let app_weak = app.as_weak();
         app.on_select_crew(move |crew_id| {
             let _ = cmd.try_send(Command::SelectCrew {
                 crew_id: crew_id.to_string(),
             });
-            // Also add/activate tab
-            if let Some(app) = app_weak.upgrade() {
-                update_crew_tab(&app, &crew_id);
-            }
         });
     }
     {
@@ -146,7 +141,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 app.set_user_name("".into());
                 app.set_user_tag("".into());
                 app.set_active_crew_id("".into());
-                app.set_crew_tabs(std::rc::Rc::new(slint::VecModel::from(Vec::<CrewTabData>::new())).into());
             }
         });
     }
@@ -180,29 +174,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         });
     }
-
-    // --- Crew tabs ---
-    {
-        let cmd = cmd_tx.clone();
-        let app_weak = app.as_weak();
-        app.on_tab_selected(move |tab_id| {
-            let _ = cmd.try_send(Command::SelectCrew {
-                crew_id: tab_id.to_string(),
-            });
-            if let Some(app) = app_weak.upgrade() {
-                update_crew_tab(&app, &tab_id);
-            }
-        });
-    }
-    {
-        let app_weak = app.as_weak();
-        app.on_tab_closed(move |tab_id| {
-            if let Some(app) = app_weak.upgrade() {
-                remove_crew_tab(&app, &tab_id);
-            }
-        });
-    }
-    app.on_tab_add_clicked(|| {});
 
     // --- Theme toggle ---
     {
@@ -297,47 +268,52 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn update_crew_tab(app: &MainWindow, crew_id: &str) {
-    let current = app.get_crew_tabs();
-    let mut tabs: Vec<CrewTabData> = (0..current.row_count())
-        .map(|i| current.row_data(i).unwrap())
+fn update_active_crew_card(app: &MainWindow) {
+    let active_id = app.get_active_crew_id();
+    if active_id.is_empty() { return; }
+
+    let members = app.get_members();
+    let online_members: Vec<MemberData> = (0..members.row_count())
+        .filter_map(|i| members.row_data(i))
+        .filter(|m| m.online)
         .collect();
 
-    let mut found = false;
-    for tab in tabs.iter_mut() {
-        let is_this = tab.id == crew_id;
-        tab.active = is_this;
-        if is_this { found = true; }
-    }
+    let online_count = online_members.len().max(1) as i32;
+    let voice_count = online_members.len().min(4) as i32;
 
-    if !found {
-        // Find crew name from crews list
-        let crews = app.get_crews();
-        let crew_name: slint::SharedString = (0..crews.row_count())
-            .filter_map(|i| crews.row_data(i))
-            .find(|c| c.id == crew_id)
-            .map(|c| c.name.clone())
-            .unwrap_or_else(|| crew_id.into());
+    let crews = app.get_crews();
+    let updated: Vec<CrewData> = (0..crews.row_count())
+        .map(|i| {
+            let mut c = crews.row_data(i).unwrap();
+            if c.id == active_id {
+                c.online_count = online_count;
+                c.voice_count = voice_count;
 
-        tabs.push(CrewTabData {
-            id: crew_id.into(),
-            name: crew_name,
-            active: true,
-        });
-    }
-
-    let rc = std::rc::Rc::new(slint::VecModel::from(tabs));
-    app.set_crew_tabs(rc.into());
-}
-
-fn remove_crew_tab(app: &MainWindow, tab_id: &str) {
-    let current = app.get_crew_tabs();
-    let tabs: Vec<CrewTabData> = (0..current.row_count())
-        .map(|i| current.row_data(i).unwrap())
-        .filter(|t| t.id != tab_id)
+                if let Some(m) = online_members.get(0) {
+                    c.v0_initials = m.initials.clone();
+                    c.v0_name = m.name.clone();
+                    c.v0_speaking = m.speaking;
+                }
+                if let Some(m) = online_members.get(1) {
+                    c.v1_initials = m.initials.clone();
+                    c.v1_name = m.name.clone();
+                    c.v1_speaking = m.speaking;
+                }
+                if let Some(m) = online_members.get(2) {
+                    c.v2_initials = m.initials.clone();
+                    c.v2_name = m.name.clone();
+                    c.v2_speaking = m.speaking;
+                }
+                if let Some(m) = online_members.get(3) {
+                    c.v3_initials = m.initials.clone();
+                    c.v3_name = m.name.clone();
+                    c.v3_speaking = m.speaking;
+                }
+            }
+            c
+        })
         .collect();
-    let rc = std::rc::Rc::new(slint::VecModel::from(tabs));
-    app.set_crew_tabs(rc.into());
+    app.set_crews(Rc::new(slint::VecModel::from(updated)).into());
 }
 
 fn set_level_history(app: &MainWindow, hist: &DebugHistory) {
@@ -378,6 +354,7 @@ fn handle_event(app: &MainWindow, event: Event, settings: &Rc<RefCell<Settings>>
                 name: c.name.into(),
                 member_count: c.member_count,
                 online_count: 0,
+                ..Default::default()
             }).collect();
             let rc = std::rc::Rc::new(slint::VecModel::from(model));
             app.set_crews(rc.into());
@@ -391,13 +368,25 @@ fn handle_event(app: &MainWindow, event: Event, settings: &Rc<RefCell<Settings>>
         Event::CrewJoined { crew_id } => {
             log::info!("UI: joined crew {}", crew_id);
             app.set_active_crew_id(crew_id.clone().into());
-            update_crew_tab(app, &crew_id);
             let empty: Vec<ChatMessageData> = vec![];
             let rc = std::rc::Rc::new(slint::VecModel::from(empty));
             app.set_messages(rc.into());
+            update_active_crew_card(app);
         }
         Event::CrewLeft { crew_id } => {
             log::info!("UI: left crew {}", crew_id);
+            // Reset online count for the crew we're leaving
+            let crews = app.get_crews();
+            let updated: Vec<CrewData> = (0..crews.row_count())
+                .map(|i| {
+                    let mut c = crews.row_data(i).unwrap();
+                    if c.id == crew_id.as_str() {
+                        c.online_count = 0;
+                    }
+                    c
+                })
+                .collect();
+            app.set_crews(Rc::new(slint::VecModel::from(updated)).into());
             app.set_active_crew_id("".into());
         }
         Event::MessageReceived { message } => {
@@ -432,6 +421,7 @@ fn handle_event(app: &MainWindow, event: Event, settings: &Rc<RefCell<Settings>>
             }
             let rc = std::rc::Rc::new(slint::VecModel::from(members));
             app.set_members(rc.into());
+            update_active_crew_card(app);
         }
         Event::MemberLeft { member_id, .. } => {
             let current = app.get_members();
@@ -441,6 +431,7 @@ fn handle_event(app: &MainWindow, event: Event, settings: &Rc<RefCell<Settings>>
                 .collect();
             let rc = std::rc::Rc::new(slint::VecModel::from(members));
             app.set_members(rc.into());
+            update_active_crew_card(app);
         }
         Event::PresenceUpdated { user_id, online } => {
             let current = app.get_members();
@@ -479,6 +470,7 @@ fn handle_event(app: &MainWindow, event: Event, settings: &Rc<RefCell<Settings>>
                 .collect();
             let rc = std::rc::Rc::new(slint::VecModel::from(members));
             app.set_members(rc.into());
+            update_active_crew_card(app);
         }
         Event::MicLevel { level } => {
             app.set_mic_level(level);

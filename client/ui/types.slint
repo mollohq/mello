@@ -3,6 +3,19 @@ export struct CrewData {
     name: string,
     member-count: int,
     online-count: int,
+
+    has-stream: bool,
+    stream-name: string,
+
+    voice-count: int,
+    v0-initials: string, v0-name: string, v0-speaking: bool,
+    v1-initials: string, v1-name: string, v1-speaking: bool,
+    v2-initials: string, v2-name: string, v2-speaking: bool,
+    v3-initials: string, v3-name: string, v3-speaking: bool,
+
+    msg-count: int,
+    m0-author: string, m0-text: string,
+    m1-author: string, m1-text: string,
 }
 
 export struct MemberData {
@@ -17,12 +30,6 @@ export struct ChatMessageData {
     sender-name: string,
     text: string,
     timestamp: string,
-}
-
-export struct CrewTabData {
-    id: string,
-    name: string,
-    active: bool,
 }
 
 export struct AudioDeviceData {

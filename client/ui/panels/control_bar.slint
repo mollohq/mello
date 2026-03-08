@@ -105,6 +105,7 @@ export component ControlBar inherits Rectangle {
     callback presence-changed(int);
     callback theme-toggled();
     callback settings-clicked();
+    callback debug-toggled();
 
     background: Theme.surface;
     border-width: 1px;
@@ -194,7 +195,7 @@ export component ControlBar inherits Rectangle {
 
             user-menu := PopupWindow {
                 x: 0;
-                y: -306px;
+                y: -344px;
                 width: 220px;
 
                 Rectangle {
@@ -256,6 +257,10 @@ export component ControlBar inherits Rectangle {
                         MenuItem {
                             label: Theme.dark ? "Light Mode" : "Dark Mode";
                             clicked => { theme-toggled(); }
+                        }
+                        MenuItem {
+                            label: "Debug Audio";
+                            clicked => { debug-toggled(); }
                         }
 
                         MenuSeparator { }

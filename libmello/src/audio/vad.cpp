@@ -143,7 +143,7 @@ void VoiceActivityDetector::run_inference() {
                 rms += accum_buf_[i] * accum_buf_[i];
             }
             rms = std::sqrt(rms / VAD_CHUNK_SIZE);
-            MELLO_LOG_INFO("vad", "prob=%.4f absmax=%.4f rms=%.6f",
+            MELLO_LOG_DEBUG("vad", "prob=%.4f absmax=%.4f rms=%.6f",
                            prob, abs_max, rms);
         }
 

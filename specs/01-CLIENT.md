@@ -750,6 +750,7 @@ fn main() {
 - **Animations:** Smooth transitions, micro-interactions
 - **Accessibility:** Screen reader support, keyboard navigation
 - **Localization:** i18n support
+- **TODO:** Add optimized `[profile.release]` settings (`lto = true`, `strip = true`, `codegen-units = 1`, `opt-level = "s"`) to workspace Cargo.toml for smallest binary
 
 ---
 
