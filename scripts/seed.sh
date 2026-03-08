@@ -1,12 +1,25 @@
 #!/usr/bin/env zsh
 # Seed Mello backend with test users, crews, and memberships.
 # Idempotent — safe to run multiple times.
+#
+# Usage:
+#   ./seed.sh                                                          # local dev
+#   ./seed.sh --base https://mello-nakama.onrender.com --key "YOUR_KEY"
 
 set -euo pipefail
 
-BASE="http://127.0.0.1:7350"
-SERVER_KEY="mello_dev_key"
-PASSWORD="password123"
+BASE="${BASE:-http://127.0.0.1:7350}"
+SERVER_KEY="${SERVER_KEY:-mello_dev_key}"
+PASSWORD="${PASSWORD:-password123}"
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --base)      BASE="$2";       shift 2 ;;
+        --key)       SERVER_KEY="$2"; shift 2 ;;
+        --password)  PASSWORD="$2";   shift 2 ;;
+        *) echo "Unknown arg: $1" >&2; exit 1 ;;
+    esac
+done
 
 # ── helpers ──────────────────────────────────────────────────────
 

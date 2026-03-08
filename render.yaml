@@ -1,11 +1,12 @@
 services:
   - type: web
-    name: mello-nakama
+    name: mello-api
     runtime: docker
     repo: https://github.com/mollohq/mello
     branch: main
     rootDir: backend
     dockerfilePath: ./Dockerfile
+    region: frankfurt
     plan: starter
     healthCheckPath: /healthcheck
     envVars:
@@ -36,6 +37,7 @@ services:
 
 databases:
   - name: mello-db
+    region: frankfurt
     plan: free
     databaseName: nakama
     user: nakama

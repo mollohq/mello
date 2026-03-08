@@ -1,12 +1,22 @@
 #!/usr/bin/env pwsh
 # Seed Mello backend with test users, crews, and memberships.
 # Idempotent — safe to run multiple times.
+#
+# Usage:
+#   .\seed.ps1                                       # local dev (default)
+#   .\seed.ps1 -Base https://mello-nakama.onrender.com -ServerKey "YOUR_KEY"
+
+param(
+    [string]$Base      = "http://127.0.0.1:7350",
+    [string]$ServerKey = "mello_dev_key",
+    [string]$Password  = "password123"
+)
 
 $ErrorActionPreference = "Stop"
 
-$BASE       = "http://127.0.0.1:7350"
-$SERVER_KEY = "mello_dev_key"
-$PASSWORD   = "password123"
+$BASE       = $Base
+$SERVER_KEY = $ServerKey
+$PASSWORD   = $Password
 
 # ── helpers ──────────────────────────────────────────────────────
 
