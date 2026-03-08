@@ -294,6 +294,18 @@ impl Client {
             crew_id: crew_id.to_string(),
         });
 
+        // Wait for WS reader to set channel_id (up to 2s)
+        let channel_id = self.wait_for_channel_id().await;
+        if let Some(ch_id) = channel_id {
+            match self.nakama.list_channel_messages(&ch_id, 50).await {
+                Ok(mut messages) => {
+                    messages.reverse();
+                    let _ = self.event_tx.send(Event::MessagesLoaded { messages });
+                }
+                Err(e) => log::error!("Failed to fetch message history: {}", e),
+            }
+        }
+
         if let Ok(members) = self.nakama.list_group_users(crew_id).await {
             let user_ids: Vec<String> = members.iter().map(|m| m.id.clone()).collect();
             if let Err(e) = self.nakama.follow_users(&user_ids).await {
@@ -310,6 +322,17 @@ impl Client {
                 let _ = self.event_tx.send(Event::VoiceStateChanged { in_call: true });
             }
         }
+    }
+
+    async fn wait_for_channel_id(&self) -> Option<String> {
+        for _ in 0..20 {
+            if let Some(id) = self.nakama.channel_id().await {
+                return Some(id);
+            }
+            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        }
+        log::warn!("Timed out waiting for channel_id");
+        None
     }
 
     fn handle_leave_voice(&mut self) {

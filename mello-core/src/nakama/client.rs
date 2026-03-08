@@ -336,6 +336,28 @@ impl NakamaClient {
         self.ws_send(msg).await
     }
 
+    pub async fn list_channel_messages(&self, channel_id: &str, limit: u32) -> Result<Vec<ChatMessage>> {
+        let token = self.bearer()?;
+        let url = format!(
+            "{}/v2/channel/{}?limit={}&forward=false",
+            self.config.http_base(),
+            channel_id,
+            limit
+        );
+
+        let resp = self.http.get(&url)
+            .bearer_auth(&token)
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            return Err(Error::Server("Failed to list channel messages".into()));
+        }
+
+        let list: ApiChannelMessageList = resp.json().await?;
+        Ok(parse_channel_messages(list))
+    }
+
     // --- Crew members ---
 
     pub async fn list_group_users(&self, group_id: &str) -> Result<Vec<Member>> {
@@ -379,6 +401,10 @@ impl NakamaClient {
         self.ws_send(msg).await
     }
 
+    pub async fn channel_id(&self) -> Option<String> {
+        self.ws_shared.read().await.channel_id.clone()
+    }
+
     pub fn active_crew_id(&self) -> Option<&str> {
         self.active_crew_id.as_deref()
     }
@@ -408,6 +434,34 @@ impl NakamaClient {
 
         self.ws_send(msg).await
     }
+}
+
+// --- Message parsing (extracted for testability) ---
+
+pub(crate) fn parse_channel_messages(list: ApiChannelMessageList) -> Vec<ChatMessage> {
+    list.messages.unwrap_or_default()
+        .into_iter()
+        .filter_map(|m| {
+            let content_str = m.content.as_deref().unwrap_or("");
+            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(content_str) {
+                if parsed.get("signal").and_then(|v| v.as_bool()) == Some(true) {
+                    return None;
+                }
+            }
+            let text = serde_json::from_str::<ChatContent>(content_str)
+                .ok()
+                .and_then(|c| c.text)
+                .unwrap_or_else(|| content_str.to_string());
+
+            Some(ChatMessage {
+                message_id: m.message_id.unwrap_or_default(),
+                sender_id: m.sender_id.unwrap_or_default(),
+                sender_name: m.username.unwrap_or_default(),
+                content: text,
+                timestamp: m.create_time.unwrap_or_default(),
+            })
+        })
+        .collect()
 }
 
 // --- WebSocket background tasks ---
@@ -577,5 +631,210 @@ async fn handle_ws_message(
         let _ = event_tx.send(Event::Error {
             message: err.message.unwrap_or_default(),
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_api_msg(content: &str, sender_id: &str, username: &str) -> ApiChannelMessage {
+        ApiChannelMessage {
+            channel_id: Some("ch-1".into()),
+            message_id: Some(format!("msg-{}", sender_id)),
+            sender_id: Some(sender_id.into()),
+            username: Some(username.into()),
+            content: Some(content.into()),
+            create_time: Some("2026-03-08T12:00:00Z".into()),
+            code: Some(0),
+        }
+    }
+
+    #[test]
+    fn deserialize_channel_message_list() {
+        let json = r#"{
+            "messages": [
+                {
+                    "channel_id": "abc",
+                    "message_id": "m1",
+                    "sender_id": "u1",
+                    "username": "alice",
+                    "content": "{\"text\":\"hello\"}",
+                    "create_time": "2026-03-08T12:00:00Z",
+                    "code": 0
+                }
+            ],
+            "next_cursor": "cur123",
+            "prev_cursor": ""
+        }"#;
+
+        let list: ApiChannelMessageList = serde_json::from_str(json).unwrap();
+        let msgs = list.messages.unwrap();
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(msgs[0].username.as_deref(), Some("alice"));
+        assert_eq!(msgs[0].content.as_deref(), Some("{\"text\":\"hello\"}"));
+    }
+
+    #[test]
+    fn parse_extracts_text_from_chat_content() {
+        let list = ApiChannelMessageList {
+            messages: Some(vec![
+                make_api_msg(r#"{"text":"hello world"}"#, "u1", "alice"),
+            ]),
+            next_cursor: None,
+            prev_cursor: None,
+        };
+
+        let result = parse_channel_messages(list);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].content, "hello world");
+        assert_eq!(result[0].sender_name, "alice");
+        assert_eq!(result[0].sender_id, "u1");
+    }
+
+    #[test]
+    fn parse_filters_out_signal_messages() {
+        let list = ApiChannelMessageList {
+            messages: Some(vec![
+                make_api_msg(r#"{"text":"hi"}"#, "u1", "alice"),
+                make_api_msg(
+                    r#"{"signal":true,"to":"u1","data":"{\"Offer\":{\"sdp\":\"v=0\"}}"}"#,
+                    "u2", "bob",
+                ),
+                make_api_msg(r#"{"text":"bye"}"#, "u3", "carol"),
+            ]),
+            next_cursor: None,
+            prev_cursor: None,
+        };
+
+        let result = parse_channel_messages(list);
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].content, "hi");
+        assert_eq!(result[1].content, "bye");
+    }
+
+    #[test]
+    fn parse_handles_empty_messages_list() {
+        let list = ApiChannelMessageList {
+            messages: None,
+            next_cursor: None,
+            prev_cursor: None,
+        };
+        assert!(parse_channel_messages(list).is_empty());
+
+        let list2 = ApiChannelMessageList {
+            messages: Some(vec![]),
+            next_cursor: None,
+            prev_cursor: None,
+        };
+        assert!(parse_channel_messages(list2).is_empty());
+    }
+
+    #[test]
+    fn parse_handles_missing_fields_gracefully() {
+        let list = ApiChannelMessageList {
+            messages: Some(vec![ApiChannelMessage {
+                channel_id: None,
+                message_id: None,
+                sender_id: None,
+                username: None,
+                content: None,
+                create_time: None,
+                code: None,
+            }]),
+            next_cursor: None,
+            prev_cursor: None,
+        };
+
+        let result = parse_channel_messages(list);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].content, "");
+        assert_eq!(result[0].sender_name, "");
+        assert_eq!(result[0].message_id, "");
+    }
+
+    #[test]
+    fn parse_falls_back_to_raw_content_when_not_json() {
+        let list = ApiChannelMessageList {
+            messages: Some(vec![
+                make_api_msg("plain text, not json", "u1", "alice"),
+            ]),
+            next_cursor: None,
+            prev_cursor: None,
+        };
+
+        let result = parse_channel_messages(list);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].content, "plain text, not json");
+    }
+
+    #[test]
+    fn parse_signal_false_is_not_filtered() {
+        let list = ApiChannelMessageList {
+            messages: Some(vec![
+                make_api_msg(r#"{"signal":false,"text":"keep me"}"#, "u1", "alice"),
+            ]),
+            next_cursor: None,
+            prev_cursor: None,
+        };
+
+        let result = parse_channel_messages(list);
+        assert_eq!(result.len(), 1);
+    }
+
+    #[test]
+    fn full_nakama_response_roundtrip() {
+        let json = r#"{
+            "messages": [
+                {
+                    "channel_id": "group-abc-123",
+                    "message_id": "msg-001",
+                    "sender_id": "user-aaa",
+                    "username": "alice",
+                    "content": "{\"signal\":true,\"to\":\"user-bbb\",\"data\":\"{}\"}",
+                    "create_time": "2026-03-08T11:00:00Z",
+                    "code": 0
+                },
+                {
+                    "channel_id": "group-abc-123",
+                    "message_id": "msg-002",
+                    "sender_id": "user-bbb",
+                    "username": "bob",
+                    "content": "{\"text\":\"hey everyone\"}",
+                    "create_time": "2026-03-08T11:01:00Z",
+                    "code": 0
+                },
+                {
+                    "channel_id": "group-abc-123",
+                    "message_id": "msg-003",
+                    "sender_id": "user-aaa",
+                    "username": "alice",
+                    "content": "{\"signal\":true,\"to\":\"user-ccc\",\"data\":\"{\\\"IceCandidate\\\":{}}\"}",
+                    "create_time": "2026-03-08T11:02:00Z",
+                    "code": 0
+                },
+                {
+                    "channel_id": "group-abc-123",
+                    "message_id": "msg-004",
+                    "sender_id": "user-ccc",
+                    "username": "carol",
+                    "content": "{\"text\":\"yo bob!\"}",
+                    "create_time": "2026-03-08T11:03:00Z",
+                    "code": 0
+                }
+            ],
+            "next_cursor": "",
+            "prev_cursor": "cursor-prev-xyz"
+        }"#;
+
+        let list: ApiChannelMessageList = serde_json::from_str(json).unwrap();
+        let result = parse_channel_messages(list);
+
+        assert_eq!(result.len(), 2, "signal messages should be filtered");
+        assert_eq!(result[0].sender_name, "bob");
+        assert_eq!(result[0].content, "hey everyone");
+        assert_eq!(result[0].timestamp, "2026-03-08T11:01:00Z");
+        assert_eq!(result[1].sender_name, "carol");
+        assert_eq!(result[1].content, "yo bob!");
     }
 }

@@ -170,6 +170,26 @@ pub struct WsError {
     pub message: Option<String>,
 }
 
+// --- REST API: channel message history ---
+
+#[derive(Debug, Deserialize)]
+pub struct ApiChannelMessageList {
+    pub messages: Option<Vec<ApiChannelMessage>>,
+    pub next_cursor: Option<String>,
+    pub prev_cursor: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ApiChannelMessage {
+    pub channel_id: Option<String>,
+    pub message_id: Option<String>,
+    pub sender_id: Option<String>,
+    pub username: Option<String>,
+    pub content: Option<String>,
+    pub create_time: Option<String>,
+    pub code: Option<i32>,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct ChatContent {
     pub text: Option<String>,

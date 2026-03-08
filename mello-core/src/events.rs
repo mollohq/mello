@@ -35,6 +35,7 @@ pub enum Event {
     PresenceUpdated { user_id: String, online: bool },
 
     MessageReceived { message: ChatMessage },
+    MessagesLoaded { messages: Vec<ChatMessage> },
 
     VoiceStateChanged { in_call: bool },
     VoiceConnected { peer_id: String },

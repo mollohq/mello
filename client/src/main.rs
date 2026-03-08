@@ -389,6 +389,17 @@ fn handle_event(app: &MainWindow, event: Event, settings: &Rc<RefCell<Settings>>
             app.set_crews(Rc::new(slint::VecModel::from(updated)).into());
             app.set_active_crew_id("".into());
         }
+        Event::MessagesLoaded { messages } => {
+            let msgs: Vec<ChatMessageData> = messages.into_iter().map(|m| {
+                ChatMessageData {
+                    sender_name: m.sender_name.into(),
+                    text: m.content.into(),
+                    timestamp: m.timestamp.into(),
+                }
+            }).collect();
+            let rc = std::rc::Rc::new(slint::VecModel::from(msgs));
+            app.set_messages(rc.into());
+        }
         Event::MessageReceived { message } => {
             let current = app.get_messages();
             let new_msg = ChatMessageData {
