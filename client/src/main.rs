@@ -106,6 +106,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // --- Voice toggles ---
     {
         let cmd = cmd_tx.clone();
+        app.on_voice_toggle(move || {
+            let _ = cmd.try_send(Command::LeaveVoice);
+        });
+    }
+    {
+        let cmd = cmd_tx.clone();
         let app_weak = app.as_weak();
         app.on_mic_toggle(move || {
             if let Some(app) = app_weak.upgrade() {
@@ -324,6 +330,10 @@ fn handle_event(app: &MainWindow, event: Event) {
                 .collect();
             let rc = std::rc::Rc::new(slint::VecModel::from(members));
             app.set_members(rc.into());
+        }
+        Event::VoiceStateChanged { in_call } => {
+            app.set_in_voice(in_call);
+            log::info!("UI: voice state changed, in_call={}", in_call);
         }
         Event::VoiceConnected { peer_id } => {
             log::info!("UI: voice connected to {}", peer_id);

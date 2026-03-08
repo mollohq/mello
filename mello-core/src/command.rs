@@ -9,6 +9,8 @@ pub enum Command {
     SelectCrew { crew_id: String },
     LeaveCrew,
     SendMessage { content: String },
+    JoinVoice,
+    LeaveVoice,
     SetMute { muted: bool },
     SetDeafen { deafened: bool },
 }

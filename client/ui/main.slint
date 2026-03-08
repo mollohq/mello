@@ -37,6 +37,7 @@ export component MainWindow inherits Window {
     // --- Voice ---
     in-out property <bool> mic-muted: false;
     in-out property <bool> deafened: false;
+    in-out property <bool> in-voice: false;
 
     // --- Presence (0=online, 1=idle, 2=dnd, 3=invisible) ---
     in-out property <int> presence-status: 0;
@@ -49,6 +50,7 @@ export component MainWindow inherits Window {
     callback send-message(string);
     callback mic-toggle();
     callback deafen-toggle();
+    callback voice-toggle();
     callback tab-selected(string);
     callback tab-closed(string);
     callback tab-add-clicked();
@@ -316,9 +318,11 @@ export component MainWindow inherits Window {
                         user-tag: root.user-tag;
                         mic-muted: root.mic-muted;
                         deafened: root.deafened;
+                        in-voice: root.in-voice;
                         presence-status <=> root.presence-status;
                         mic-toggled => { root.mic-toggle(); }
                         deafen-toggled => { root.deafen-toggle(); }
+                        voice-toggled => { root.voice-toggle(); }
                         logout-clicked => { root.logout(); }
                         presence-changed(status) => { root.presence-changed(status); }
                         theme-toggled => { root.theme-toggled(); }

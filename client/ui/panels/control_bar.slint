@@ -94,11 +94,13 @@ export component ControlBar inherits Rectangle {
     in property <string> user-tag: "";
     in-out property <bool> mic-muted: false;
     in-out property <bool> deafened: false;
+    in-out property <bool> in-voice: false;
     // 0=online, 1=idle, 2=dnd, 3=invisible
     in-out property <int> presence-status: 0;
 
     callback mic-toggled();
     callback deafen-toggled();
+    callback voice-toggled();
     callback logout-clicked();
     callback presence-changed(int);
     callback theme-toggled();
@@ -274,9 +276,15 @@ export component ControlBar inherits Rectangle {
             spacing: 16px;
             alignment: center;
 
+            if in-voice: ActionButton {
+                icon: @image-url("../icons/phone-off.svg");
+                alert: true;
+                clicked => { voice-toggled(); }
+            }
+
             ActionButton {
                 icon: @image-url("../icons/mic.svg");
-                active: !mic-muted;
+                active: in-voice && !mic-muted;
                 clicked => {
                     mic-muted = !mic-muted;
                     mic-toggled();
@@ -285,7 +293,7 @@ export component ControlBar inherits Rectangle {
 
             ActionButton {
                 icon: @image-url("../icons/headphones.svg");
-                active: false;
+                active: in-voice && !deafened;
                 clicked => {
                     deafened = !deafened;
                     deafen-toggled();

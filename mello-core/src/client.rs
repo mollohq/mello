@@ -28,6 +28,9 @@ impl Client {
 
         let mut signal_rx = self.nakama.take_signal_rx().unwrap();
         let mut voice_tick = tokio::time::interval(tokio::time::Duration::from_millis(20));
+        // Refresh access token every 45 minutes (token lives 1 hour)
+        let mut refresh_tick = tokio::time::interval(tokio::time::Duration::from_secs(45 * 60));
+        refresh_tick.tick().await; // consume the immediate first tick
 
         loop {
             tokio::select! {
@@ -45,6 +48,9 @@ impl Client {
                 _ = voice_tick.tick() => {
                     self.voice_tick().await;
                 }
+                _ = refresh_tick.tick() => {
+                    self.refresh_token().await;
+                }
             }
         }
         log::info!("Mello client shutting down");
@@ -58,6 +64,24 @@ impl Client {
             }
             Err(e) => {
                 log::warn!("Failed to parse signal from {}: {}", signal.from, e);
+            }
+        }
+    }
+
+    async fn refresh_token(&mut self) {
+        if let Some(rt) = self.nakama.refresh_token().map(String::from) {
+            match self.nakama.refresh_session(&rt).await {
+                Ok(user) => {
+                    log::info!("Access token refreshed for {}", user.display_name);
+                    if let Some(new_rt) = self.nakama.refresh_token() {
+                        if let Err(e) = session::save(new_rt) {
+                            log::warn!("Failed to save refreshed token: {}", e);
+                        }
+                    }
+                }
+                Err(e) => {
+                    log::error!("Token refresh failed: {}", e);
+                }
             }
         }
     }
@@ -104,6 +128,10 @@ impl Client {
             Command::SendMessage { content } => {
                 self.handle_send_message(&content).await;
             }
+            Command::JoinVoice => {}
+            Command::LeaveVoice => {
+                self.handle_leave_voice();
+            }
             Command::SetMute { muted } => {
                 self.voice.set_mute(muted);
             }
@@ -138,6 +166,9 @@ impl Client {
                 if let Err(e) = self.nakama.connect_ws(self.event_tx.clone()).await {
                     log::error!("WebSocket connect failed on restore: {}", e);
                     session::clear();
+                    let _ = self.event_tx.send(Event::LoginFailed {
+                        reason: format!("WebSocket failed: {}", e),
+                    });
                     return;
                 }
 
@@ -147,6 +178,9 @@ impl Client {
             Err(e) => {
                 log::warn!("Session restore failed ({}), clearing", e);
                 session::clear();
+                let _ = self.event_tx.send(Event::LoginFailed {
+                    reason: String::new(),
+                });
             }
         }
     }
@@ -190,6 +224,7 @@ impl Client {
 
     async fn handle_logout(&mut self) {
         self.voice.leave_voice();
+        let _ = self.event_tx.send(Event::VoiceStateChanged { in_call: false });
         session::clear();
         if let Err(e) = self.nakama.leave_crew_channel().await {
             log::warn!("Leave channel on logout: {}", e);
@@ -226,8 +261,8 @@ impl Client {
     }
 
     async fn handle_select_crew(&mut self, crew_id: &str) {
-        // Leave voice from previous crew
         self.voice.leave_voice();
+        let _ = self.event_tx.send(Event::VoiceStateChanged { in_call: false });
 
         if let Err(e) = self.nakama.leave_crew_channel().await {
             log::warn!("Failed to leave previous channel: {}", e);
@@ -242,28 +277,32 @@ impl Client {
             crew_id: crew_id.to_string(),
         });
 
-        // Get member list and start voice connections
         if let Ok(members) = self.nakama.list_group_users(crew_id).await {
             let user_ids: Vec<String> = members.iter().map(|m| m.id.clone()).collect();
             if let Err(e) = self.nakama.follow_users(&user_ids).await {
                 log::warn!("Failed to follow users: {}", e);
             }
 
-            // Start voice mesh with other members
+            // Auto-join voice
             if let Some(local_id) = self.nakama.current_user_id().map(String::from) {
                 let other_ids: Vec<String> = user_ids.iter()
                     .filter(|id| id.as_str() != local_id)
                     .cloned()
                     .collect();
-                if !other_ids.is_empty() {
-                    self.voice.join_voice(&local_id, &other_ids);
-                }
+                self.voice.join_voice(&local_id, &other_ids);
+                let _ = self.event_tx.send(Event::VoiceStateChanged { in_call: true });
             }
         }
     }
 
+    fn handle_leave_voice(&mut self) {
+        self.voice.leave_voice();
+        let _ = self.event_tx.send(Event::VoiceStateChanged { in_call: false });
+    }
+
     async fn handle_leave_crew(&mut self) {
         self.voice.leave_voice();
+        let _ = self.event_tx.send(Event::VoiceStateChanged { in_call: false });
         let crew_id = self.nakama.active_crew_id().map(String::from);
         if let Err(e) = self.nakama.leave_crew_channel().await {
             log::error!("Failed to leave crew: {}", e);
