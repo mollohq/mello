@@ -18,5 +18,8 @@ confy = "2.0.0"
 serde = { workspace = true, features = ["derive"] }
 paste = "1"
 
+[dev-dependencies]
+toml = "0.8"
+
 [build-dependencies]
 slint-build = "1.5"

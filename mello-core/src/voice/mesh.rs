@@ -183,3 +183,58 @@ impl VoiceMesh {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::SignalMessage;
+
+    #[test]
+    fn signal_offer_roundtrip() {
+        let msg = SignalMessage::Offer { sdp: "v=0\r\no=- 123 456 IN IP4 0.0.0.0\r\n".into() };
+        let json = serde_json::to_string(&msg).unwrap();
+        let decoded: SignalMessage = serde_json::from_str(&json).unwrap();
+        match decoded {
+            SignalMessage::Offer { sdp } => assert!(sdp.contains("v=0")),
+            _ => panic!("expected Offer"),
+        }
+    }
+
+    #[test]
+    fn signal_answer_roundtrip() {
+        let msg = SignalMessage::Answer { sdp: "v=0\r\nanswer_sdp\r\n".into() };
+        let json = serde_json::to_string(&msg).unwrap();
+        let decoded: SignalMessage = serde_json::from_str(&json).unwrap();
+        match decoded {
+            SignalMessage::Answer { sdp } => assert!(sdp.contains("answer_sdp")),
+            _ => panic!("expected Answer"),
+        }
+    }
+
+    #[test]
+    fn signal_ice_roundtrip() {
+        let msg = SignalMessage::IceCandidate {
+            candidate: "candidate:1 1 UDP 2122252543 192.168.1.1 12345 typ host".into(),
+            sdp_mid: "0".into(),
+            sdp_mline_index: 0,
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        let decoded: SignalMessage = serde_json::from_str(&json).unwrap();
+        match decoded {
+            SignalMessage::IceCandidate { candidate, sdp_mid, sdp_mline_index } => {
+                assert!(candidate.contains("candidate:1"));
+                assert_eq!(sdp_mid, "0");
+                assert_eq!(sdp_mline_index, 0);
+            }
+            _ => panic!("expected IceCandidate"),
+        }
+    }
+
+    #[test]
+    fn signal_json_format() {
+        let msg = SignalMessage::Offer { sdp: "test_sdp".into() };
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains("\"Offer\""), "variant tag should appear in JSON");
+        assert!(json.contains("\"sdp\""), "field name should appear in JSON");
+        assert!(json.contains("test_sdp"), "sdp value should appear in JSON");
+    }
+}

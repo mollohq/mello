@@ -6,6 +6,7 @@
     {
       "name": "libdatachannel",
       "features": ["ws"]
-    }
+    },
+    "gtest"
   ]
 }

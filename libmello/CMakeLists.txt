@@ -100,3 +100,10 @@ install(TARGETS mello rnnoise
 )
 install(FILES include/mello.h DESTINATION include)
 install(FILES models/silero_vad.onnx DESTINATION models)
+
+# Tests (opt-in via MELLO_BUILD_TESTS)
+option(MELLO_BUILD_TESTS "Build libmello C++ tests" OFF)
+if(MELLO_BUILD_TESTS)
+    enable_testing()
+    add_subdirectory(tests)
+endif()
