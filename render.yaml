@@ -35,6 +35,16 @@ services:
       - key: DISCORD_CLIENT_SECRET
         sync: false
 
+  - type: web
+    name: mello-console
+    runtime: docker
+    repo: https://github.com/mollohq/mello
+    branch: main
+    rootDir: backend/console-proxy
+    dockerfilePath: ./Dockerfile
+    region: frankfurt
+    plan: free
+
 databases:
   - name: mello-db
     region: frankfurt
