@@ -101,7 +101,8 @@ impl NakamaClient {
         Ok(user)
     }
 
-    pub async fn authenticate_device(&mut self, device_id: &str) -> Result<User> {
+    /// Returns (User, created) where `created` is true when Nakama just created the account.
+    pub async fn authenticate_device(&mut self, device_id: &str) -> Result<(User, bool)> {
         let url = format!(
             "{}/v2/account/authenticate/device?create=true",
             self.config.http_base()
@@ -125,12 +126,13 @@ impl NakamaClient {
         }
 
         let session: ApiSession = resp.json().await?;
+        let created = session.created.unwrap_or(false);
         self.token = Some(session.token.clone());
         self.refresh_token = session.refresh_token;
 
         let user = self.get_account().await?;
         self.current_user = Some(user.clone());
-        Ok(user)
+        Ok((user, created))
     }
 
     pub async fn refresh_session(&mut self, refresh_token: &str) -> Result<User> {
@@ -266,6 +268,7 @@ impl NakamaClient {
                 Some(Crew {
                     id: g.id?,
                     name: g.name.unwrap_or_default(),
+                    description: g.description.unwrap_or_default(),
                     member_count: g.edge_count.unwrap_or(0),
                     max_members: g.max_count.unwrap_or(6),
                     open: g.open.unwrap_or(false),
@@ -300,6 +303,7 @@ impl NakamaClient {
                 Some(Crew {
                     id: g.id?,
                     name: g.name.unwrap_or_default(),
+                    description: g.description.unwrap_or_default(),
                     member_count: g.edge_count.unwrap_or(0),
                     max_members: g.max_count.unwrap_or(6),
                     open: g.open.unwrap_or(false),
@@ -316,6 +320,26 @@ impl NakamaClient {
 
         let resp = self.http.post(&url)
             .bearer_auth(&token)
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            let err_text = resp.text().await.unwrap_or_default();
+            return Err(Error::Server(err_text));
+        }
+
+        Ok(())
+    }
+
+    pub async fn update_account(&self, display_name: &str) -> Result<()> {
+        let token = self.bearer()?;
+        let url = format!("{}/v2/account", self.config.http_base());
+
+        let resp = self.http.put(&url)
+            .bearer_auth(&token)
+            .json(&serde_json::json!({
+                "display_name": display_name
+            }))
             .send()
             .await?;
 
@@ -382,6 +406,7 @@ impl NakamaClient {
         Ok(Crew {
             id: result.crew_id,
             name: result.name,
+            description: String::new(),
             member_count: 1,
             max_members: 6,
             open: true,

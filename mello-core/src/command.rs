@@ -22,4 +22,5 @@ pub enum Command {
     SetPlaybackDevice { id: String },
     SetLoopback { enabled: bool },
     SetDebugMode { enabled: bool },
+    UpdateProfile { display_name: String },
 }

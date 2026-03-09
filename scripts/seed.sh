@@ -45,12 +45,12 @@ seed_get_user_id() {
 }
 
 seed_ensure_group() {
-    local token="$1" name="$2" desc="$3"
+    local token="$1" name="$2" desc="$3" open="${4:-true}"
     local resp
     if resp=$(curl -sf -X POST "$BASE/v2/group" \
         -H "Authorization: Bearer $token" \
         -H "Content-Type: application/json" \
-        -d "{\"name\":\"$name\",\"description\":\"$desc\",\"open\":true,\"max_count\":6}") 2>/dev/null; then
+        -d "{\"name\":\"$name\",\"description\":\"$desc\",\"open\":$open,\"max_count\":6}") 2>/dev/null; then
         local gid
         gid=$(echo "$resp" | jq -r '.id')
         echo "$gid new"
@@ -110,12 +110,22 @@ done
 echo ""
 echo "  crews"
 
-crew_names=("Devs" "Gamers" "Music")
-crew_descs=("Development crew" "Gaming nights" "Music production")
+crew_names=("Devs" "Gamers" "Music" "Design" "Ops" "Retro" "Vault" "Phantom")
+crew_descs=(
+    "Development crew"
+    "Gaming nights"
+    "Music production"
+    "UI/UX design and prototyping"
+    "Infrastructure and deployment ops"
+    "Retro hardware tinkering and emulation"
+    "Private archive — invite only"
+    "Stealth ops — closed crew"
+)
+crew_open=(true true true true true true false false)
 typeset -A crew_ids
 
 for ((i=1; i<=${#crew_names[@]}; i++)); do
-    result=$(seed_ensure_group "${tok[alice]}" "${crew_names[$i]}" "${crew_descs[$i]}")
+    result=$(seed_ensure_group "${tok[alice]}" "${crew_names[$i]}" "${crew_descs[$i]}" "${crew_open[$i]}")
     gid=$(echo "$result" | awk '{print $1}')
     tag=$(echo "$result" | awk '{print $2}')
     crew_ids[${crew_names[$i]}]="$gid"
@@ -124,15 +134,20 @@ done
 
 # ── memberships ──────────────────────────────────────────────────
 #
-#   Devs   : alice*, bob, charlie
-#   Gamers : alice*, bob, diana
-#   Music  : alice*, charlie, diana        (* = creator)
+#   Devs     : alice*, bob, charlie
+#   Gamers   : alice*, bob, diana
+#   Music    : alice*, charlie, diana
+#   Design   : alice*, bob, diana
+#   Ops      : alice*, charlie
+#   Retro    : alice*, bob, charlie, diana
+#   Vault    : alice* (closed)
+#   Phantom  : alice* (closed)              (* = creator)
 
 echo ""
 echo "  memberships"
 
-join_user=(bob     charlie bob     diana   charlie diana)
-join_crew=(Devs    Devs    Gamers  Gamers  Music   Music)
+join_user=(bob     charlie bob     diana   charlie diana   bob     diana   charlie bob     charlie diana)
+join_crew=(Devs    Devs    Gamers  Gamers  Music   Music   Design  Design  Ops     Retro   Retro   Retro)
 
 for ((i=1; i<=${#join_user[@]}; i++)); do
     u="${join_user[$i]}"
@@ -150,4 +165,9 @@ echo "  Credentials     <name>@test.com / $PASSWORD"
 echo "  Devs            alice, bob, charlie"
 echo "  Gamers          alice, bob, diana"
 echo "  Music           alice, charlie, diana"
+echo "  Design          alice, bob, diana"
+echo "  Ops             alice, charlie"
+echo "  Retro           alice, bob, charlie, diana"
+echo "  Vault           alice (closed)"
+echo "  Phantom         alice (closed)"
 echo ""

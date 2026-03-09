@@ -5,6 +5,7 @@ pub type MemberId = String;
 pub struct Crew {
     pub id: CrewId,
     pub name: String,
+    pub description: String,
     pub member_count: i32,
     pub max_members: i32,
     pub open: bool,

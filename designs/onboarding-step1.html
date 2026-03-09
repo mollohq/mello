@@ -1,0 +1,879 @@
+<html lang="en" vid="0">
+
+<head vid="1">
+    <meta charset="UTF-8" vid="2">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" vid="3">
+    <title vid="4">Crew Companion - Discover</title>
+    <style vid="5">
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
+
+        :root {
+            --c-bg-app: #0D0D0F;
+            --c-surface: #1A1A1F;
+            --c-surface-hover: #222228;
+            --c-text-primary: #F5F5F5;
+            --c-text-secondary: #8E8E93;
+            --c-text-tertiary: #48484A;
+            --c-accent: #FF1E56;
+            --c-graphic-light: #2C2C2E;
+
+            --f-sans: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            --f-mono: 'JetBrains Mono', monospace;
+
+            --r-outer: 12px;
+            --r-inner: 8px;
+            --r-pill: 999px;
+
+            --s-gap: 20px;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            background-color: #000;
+            color: var(--c-text-primary);
+            font-family: var(--f-sans);
+            height: 100vh;
+            width: 100vw;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        .os-chrome {
+            width: 1440px;
+            height: 900px;
+            background-color: var(--c-bg-app);
+            display: flex;
+            flex-direction: column;
+            border-radius: 8px;
+            overflow: hidden;
+            position: relative;
+            box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.05);
+        }
+
+        .scanline {
+            position: absolute;
+            inset: 0;
+            background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.1) 50%), linear-gradient(90deg, rgba(255, 0, 0, 0.02), rgba(0, 255, 0, 0.01), rgba(0, 0, 255, 0.02));
+            background-size: 100% 2px, 3px 100%;
+            pointer-events: none;
+            z-index: 10;
+            opacity: 0.2;
+        }
+
+        .onboarding-container {
+            flex: 1;
+            padding: 80px 120px;
+            display: flex;
+            flex-direction: column;
+            align-items: flex-start;
+            position: relative;
+            z-index: 1;
+        }
+
+        .header-section {
+            width: 100%;
+            margin-bottom: 56px;
+        }
+
+        .step-indicator {
+            font-family: var(--f-mono);
+            font-size: 13px;
+            color: var(--c-accent);
+            letter-spacing: 0.15em;
+            text-transform: uppercase;
+            margin-bottom: 16px;
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+
+        .step-dots {
+            display: flex;
+            gap: 8px;
+        }
+
+        .step-dot {
+            width: 24px;
+            height: 2px;
+            background: var(--c-graphic-light);
+        }
+
+        .step-dot.active {
+            background: var(--c-accent);
+        }
+
+        .welcome-headline {
+            font-size: 48px;
+            font-weight: 500;
+            letter-spacing: -0.03em;
+            margin-bottom: 12px;
+        }
+
+        .welcome-sub {
+            font-size: 18px;
+            color: var(--c-text-secondary);
+            max-width: 540px;
+            line-height: 1.5;
+        }
+
+        .crew-bento-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            grid-template-rows: repeat(2, 240px);
+            gap: var(--s-gap);
+            width: 100%;
+            max-width: 1200px;
+        }
+
+        .crew-card {
+            background: var(--c-surface);
+            border: 1px solid var(--c-graphic-light);
+            border-radius: var(--r-outer);
+            padding: 24px;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            transition: all 0.3s cubic-bezier(0.23, 1, 0.32, 1);
+            cursor: pointer;
+            position: relative;
+        }
+
+        .crew-card:hover {
+            border-color: var(--c-accent);
+            background: var(--c-surface-hover);
+            transform: translateY(-4px);
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.5);
+        }
+
+        .crew-card.featured {
+            grid-column: span 2;
+        }
+
+        .crew-card.create-card {
+            border: 1px dashed var(--c-text-tertiary);
+            background: transparent;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+        }
+
+        .crew-card.create-card:hover {
+            border: 1px dashed var(--c-accent);
+            background: rgba(255, 30, 86, 0.04);
+        }
+
+        .card-top {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+        }
+
+        .badge-live {
+            background: rgba(255, 30, 86, 0.1);
+            border: 1px solid rgba(255, 30, 86, 0.3);
+            color: var(--c-accent);
+            font-family: var(--f-mono);
+            font-size: 10px;
+            padding: 4px 8px;
+            border-radius: 4px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .badge-live::before {
+            content: "";
+            width: 6px;
+            height: 6px;
+            background: var(--c-accent);
+            border-radius: 50%;
+            box-shadow: 0 0 8px var(--c-accent);
+        }
+
+        .crew-name {
+            font-family: var(--f-mono);
+            font-size: 18px;
+            font-weight: 500;
+            color: var(--c-text-primary);
+            text-transform: uppercase;
+            letter-spacing: 0.02em;
+        }
+
+        .crew-description {
+            font-size: 14px;
+            color: var(--c-text-secondary);
+            margin-top: 8px;
+            line-height: 1.5;
+        }
+
+        .card-meta {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-end;
+            margin-top: auto;
+        }
+
+        .member-info {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .member-count {
+            font-family: var(--f-mono);
+            font-size: 11px;
+            color: var(--c-text-tertiary);
+            text-transform: uppercase;
+        }
+
+        .join-action {
+            font-family: var(--f-mono);
+            font-size: 12px;
+            font-weight: 500;
+            color: var(--c-text-tertiary);
+            transition: color 0.2s;
+        }
+
+        .crew-card:hover .join-action {
+            color: var(--c-accent);
+        }
+
+        .plus-icon {
+            width: 56px;
+            height: 56px;
+            border-radius: 16px;
+            background: var(--c-graphic-light);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--c-text-primary);
+            margin-bottom: 16px;
+            transition: all 0.3s;
+        }
+
+        .create-card:hover .plus-icon {
+            background: var(--c-accent);
+            transform: rotate(90deg);
+        }
+
+        .create-label {
+            font-family: var(--f-mono);
+            font-size: 14px;
+            color: var(--c-text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+        }
+
+        .nav-actions {
+            position: absolute;
+            bottom: 60px;
+            right: 120px;
+            display: flex;
+            gap: 32px;
+            align-items: center;
+        }
+
+        .btn-skip {
+            font-family: var(--f-mono);
+            font-size: 13px;
+            color: var(--c-text-tertiary);
+            text-decoration: none;
+            transition: color 0.2s;
+        }
+
+        .btn-skip:hover {
+            color: var(--c-text-secondary);
+        }
+
+        .btn-primary {
+            background: var(--c-accent);
+            color: white;
+            font-family: var(--f-mono);
+            font-size: 13px;
+            font-weight: 500;
+            padding: 12px 32px;
+            border-radius: 4px;
+            text-decoration: none;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            transition: opacity 0.2s;
+        }
+
+        .btn-primary:hover {
+            opacity: 0.9;
+        }
+
+        .card-bg-gfx {
+            position: absolute;
+            right: 0;
+            bottom: 0;
+            opacity: 0.03;
+            pointer-events: none;
+        }
+
+        .login-pill {
+            position: absolute;
+            top: 80px;
+            right: 120px;
+            display: flex;
+            align-items: center;
+            gap: 0;
+            background: #1A1A1F;
+            border: 1px solid #2A2A32;
+            border-radius: 50px;
+            overflow: hidden;
+            z-index: 100;
+        }
+
+        .login-pill-user {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 8px 16px 8px 8px;
+            border-right: 1px solid #2A2A32;
+        }
+
+        .login-pill-avatar {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #FF1E56 0%, #8B1A3A 100%);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 13px;
+            font-weight: 700;
+            color: #fff;
+            flex-shrink: 0;
+        }
+
+        .login-pill-info {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+
+        .login-pill-label {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 9px;
+            color: #555566;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+        }
+
+        .login-pill-name {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 12px;
+            font-weight: 600;
+            color: #E8E8F0;
+            letter-spacing: 0.02em;
+        }
+
+        .login-pill-cta {
+            padding: 8px 18px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 11px;
+            font-weight: 700;
+            color: #FF1E56;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            cursor: pointer;
+            background: transparent;
+            border: none;
+            transition: background 0.15s;
+            white-space: nowrap;
+        }
+
+        .login-pill-cta:hover {
+            background: rgba(255, 30, 86, 0.08);
+        }
+
+        /* Login Modal */
+        .login-modal-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.72);
+            backdrop-filter: blur(6px);
+            z-index: 200;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .login-modal {
+            background: #16161B;
+            border: 1px solid #2A2A32;
+            border-radius: 16px;
+            padding: 40px;
+            width: 420px;
+            position: relative;
+        }
+
+        .login-modal-close {
+            position: absolute;
+            top: 16px;
+            right: 16px;
+            width: 28px;
+            height: 28px;
+            border-radius: 50%;
+            background: #222228;
+            border: none;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #555566;
+            font-size: 14px;
+            line-height: 1;
+        }
+
+        .login-modal-eyebrow {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 10px;
+            color: #FF1E56;
+            text-transform: uppercase;
+            letter-spacing: 0.14em;
+            margin-bottom: 10px;
+        }
+
+        .login-modal-title {
+            font-size: 22px;
+            font-weight: 600;
+            color: #E8E8F0;
+            letter-spacing: -0.02em;
+            margin-bottom: 6px;
+        }
+
+        .login-modal-sub {
+            font-size: 13px;
+            color: #555566;
+            line-height: 1.5;
+            margin-bottom: 28px;
+        }
+
+        .login-modal-last {
+            background: #1A1A1F;
+            border: 1px solid #2A2A32;
+            border-radius: 10px;
+            padding: 12px 14px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 20px;
+        }
+
+        .login-modal-last-avatar {
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #FF1E56 0%, #8B1A3A 100%);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 14px;
+            font-weight: 700;
+            color: #fff;
+            flex-shrink: 0;
+        }
+
+        .login-modal-last-info {
+            flex: 1;
+        }
+
+        .login-modal-last-label {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 9px;
+            color: #555566;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            margin-bottom: 2px;
+        }
+
+        .login-modal-last-name {
+            font-size: 13px;
+            font-weight: 600;
+            color: #E8E8F0;
+        }
+
+        .login-modal-last-via {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 10px;
+            color: #555566;
+        }
+
+        .login-modal-last-btn {
+            background: #FF1E56;
+            color: #fff;
+            border: none;
+            border-radius: 8px;
+            padding: 8px 14px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 10px;
+            font-weight: 700;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            cursor: pointer;
+            white-space: nowrap;
+        }
+
+        .login-divider {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 16px;
+        }
+
+        .login-divider-line {
+            flex: 1;
+            height: 1px;
+            background: #2A2A32;
+        }
+
+        .login-divider-text {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 10px;
+            color: #3A3A44;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+        }
+
+        .login-social-btns {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 16px;
+        }
+
+        .login-social-btn {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            padding: 11px;
+            background: #1A1A1F;
+            border: 1px solid #2A2A32;
+            border-radius: 10px;
+            cursor: pointer;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 11px;
+            font-weight: 600;
+            color: #C0C0CC;
+            letter-spacing: 0.04em;
+            transition: border-color 0.15s, background 0.15s;
+        }
+
+        .login-social-btn:hover {
+            border-color: #FF1E56;
+            background: rgba(255, 30, 86, 0.06);
+        }
+
+        .login-social-btn svg {
+            flex-shrink: 0;
+        }
+
+        .login-divider2 {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 16px;
+        }
+
+        .login-field {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            margin-bottom: 12px;
+        }
+
+        .login-field label {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 10px;
+            color: #555566;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+        }
+
+        .login-field input {
+            background: #1A1A1F;
+            border: 1px solid #2A2A32;
+            border-radius: 8px;
+            padding: 10px 14px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 13px;
+            color: #E8E8F0;
+            outline: none;
+            transition: border-color 0.15s;
+        }
+
+        .login-field input:focus {
+            border-color: #FF1E56;
+        }
+
+        .login-field input::placeholder {
+            color: #3A3A44;
+        }
+
+        .login-submit-btn {
+            width: 100%;
+            padding: 12px;
+            background: #FF1E56;
+            border: none;
+            border-radius: 10px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 12px;
+            font-weight: 700;
+            color: #fff;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            cursor: pointer;
+            margin-top: 4px;
+        }
+
+        .login-forgot {
+            text-align: center;
+            margin-top: 12px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 10px;
+            color: #3A3A44;
+            letter-spacing: 0.06em;
+        }
+
+        .login-forgot a {
+            color: #555566;
+            text-decoration: underline;
+            cursor: pointer;
+        }
+    </style>
+</head>
+
+<body vid="6">
+
+    <!-- Login Pill (top-right) -->
+    <div class="login-pill" vid="7">
+        <div class="login-pill-user" vid="8">
+            <div class="login-pill-avatar" vid="9">VX</div>
+            <div class="login-pill-info" vid="10">
+                <div class="login-pill-label" vid="11">Last session</div>
+                <div class="login-pill-name" vid="12">vortex_99</div>
+            </div>
+        </div>
+        <button class="login-pill-cta" onclick="document.getElementById('loginModal').style.display='flex'"
+            vid="13">Sign In →</button>
+    </div>
+
+    <!-- Login Modal -->
+    <div class="login-modal-overlay" id="loginModal" style="display:none;" vid="14">
+        <div class="login-modal" vid="15">
+            <button class="login-modal-close" onclick="document.getElementById('loginModal').style.display='none'"
+                vid="16">✕</button>
+            <div class="login-modal-eyebrow" vid="17">Welcome back</div>
+            <div class="login-modal-title" vid="18">Sign in to your crew</div>
+            <div class="login-modal-sub" vid="19">Continue as your last session or choose another method.</div>
+
+            <!-- Last session quick-login -->
+            <div class="login-modal-last" vid="20">
+                <div class="login-modal-last-avatar" vid="21">VX</div>
+                <div class="login-modal-last-info" vid="22">
+                    <div class="login-modal-last-label" vid="23">Last used</div>
+                    <div class="login-modal-last-name" vid="24">vortex_99</div>
+                    <div class="login-modal-last-via" vid="25">via Discord</div>
+                </div>
+                <button class="login-modal-last-btn" vid="26">Continue</button>
+            </div>
+
+            <div class="login-divider" vid="27">
+                <div class="login-divider-line" vid="28"></div>
+                <div class="login-divider-text" vid="29">or sign in with</div>
+                <div class="login-divider-line" vid="30"></div>
+            </div>
+
+            <!-- Social login buttons -->
+            <div class="login-social-btns" vid="31">
+                <button class="login-social-btn" vid="32">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="#5865F2" vid="33">
+                        <path
+                            d="M20.317 4.37a19.791 19.791 0 00-4.885-1.515.074.074 0 00-.079.037c-.21.375-.444.864-.608 1.25a18.27 18.27 0 00-5.487 0 12.64 12.64 0 00-.617-1.25.077.077 0 00-.079-.037A19.736 19.736 0 003.677 4.37a.07.07 0 00-.032.027C.533 9.046-.32 13.58.099 18.057a.082.082 0 00.031.057 19.9 19.9 0 005.993 3.03.078.078 0 00.084-.028 14.09 14.09 0 001.226-1.994.076.076 0 00-.041-.106 13.107 13.107 0 01-1.872-.892.077.077 0 01-.008-.128 10.2 10.2 0 00.372-.292.074.074 0 01.077-.01c3.928 1.793 8.18 1.793 12.062 0a.074.074 0 01.078.01c.12.098.246.198.373.292a.077.077 0 01-.006.127 12.299 12.299 0 01-1.873.892.077.077 0 00-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 00.084.028 19.839 19.839 0 006.002-3.03.077.077 0 00.032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 00-.031-.03z"
+                            vid="34"></path>
+                    </svg>
+                    Discord
+                </button>
+                <button class="login-social-btn" vid="35">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="#C7D5E0" vid="36">
+                        <path
+                            d="M11.979 0C5.678 0 .511 4.86.511 10.808c0 4.553 2.911 8.417 6.945 9.48L11.979 24l4.523-3.712c4.034-1.063 6.945-4.927 6.945-9.48C23.447 4.86 18.28 0 11.979 0zm4.908 8.545l-1.68 7.927-5.042-3.22-2.74 2.564 0.367-5.19-5.507-3.363 7.388-.831 1.454-4.664 1.454 4.664 7.388.831-5.507 3.363z"
+                            vid="37"></path>
+                    </svg>
+                    Steam
+                </button>
+            </div>
+
+            <div class="login-divider" vid="38">
+                <div class="login-divider-line" vid="39"></div>
+                <div class="login-divider-text" vid="40">or email</div>
+                <div class="login-divider-line" vid="41"></div>
+            </div>
+
+            <!-- Email / password -->
+            <div class="login-field" vid="42">
+                <label vid="43">Email</label>
+                <input type="email" placeholder="you@example.com" vid="44">
+            </div>
+            <div class="login-field" vid="45">
+                <label vid="46">Password</label>
+                <input type="password" placeholder="••••••••" vid="47">
+            </div>
+            <button class="login-submit-btn" vid="48">Sign In</button>
+            <div class="login-forgot" vid="49"><a vid="50">Forgot password?</a></div>
+        </div>
+    </div>
+
+    <div class="os-chrome" vid="51">
+        <div class="scanline" vid="52"></div>
+
+        <div class="onboarding-container" vid="53">
+            <div class="header-section" vid="54">
+                <div class="step-indicator" vid="55">
+                    STEP 01 / 03
+                    <div class="step-dots" vid="56">
+                        <div class="step-dot active" vid="57"></div>
+                        <div class="step-dot" vid="58"></div>
+                        <div class="step-dot" vid="59"></div>
+                    </div>
+                </div>
+                <h1 class="welcome-headline" vid="60">Discover Your Crew</h1>
+                <p class="welcome-sub" vid="61">Join a specialized squad to begin your deployment, or establish a new
+                    unit and lead the way.</p>
+            </div>
+
+            <div class="crew-bento-grid" vid="62">
+
+
+                <div class="crew-card featured" vid="63">
+                    <div class="card-top" vid="64">
+                        <div class="crew-header" vid="65">
+                            <div class="crew-name" vid="66">The Vanguard</div>
+                            <div class="crew-description" vid="67">High-frequency logistics and tactical relay
+                                coordination. Active 24/7.</div>
+                        </div>
+                        <div class="badge-live" vid="68">LIVE</div>
+                    </div>
+                    <div class="card-meta" vid="69">
+                        <div class="member-info" vid="70">
+                            <div class="member-count" vid="71">84 ACTIVE MEMBERS</div>
+                        </div>
+                        <div class="join-action" vid="72">INITIATE CONNECTION _</div>
+                    </div>
+                    <svg class="card-bg-gfx" width="160" height="160" viewBox="0 0 100 100" vid="73">
+                        <path d="M10,50 L90,50 M50,10 L50,90" stroke="white" stroke-width="0.5" fill="none" vid="74">
+                        </path>
+                        <circle cx="50" cy="50" r="30" stroke="white" stroke-width="0.5" fill="none" vid="75"></circle>
+                    </svg>
+                </div>
+
+
+                <div class="crew-card create-card" vid="76">
+                    <div class="plus-icon" vid="77">
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2.5" stroke-linecap="square" vid="78">
+                            <line x1="12" y1="5" x2="12" y2="19" vid="79"></line>
+                            <line x1="5" y1="12" x2="19" y2="12" vid="80"></line>
+                        </svg>
+                    </div>
+                    <div class="create-label" vid="81">Create Your Own Crew</div>
+                </div>
+
+
+                <div class="crew-card" vid="82">
+                    <div class="card-top" vid="83">
+                        <div class="crew-header" vid="84">
+                            <div class="crew-name" vid="85">Deep Void</div>
+                            <div class="crew-description" vid="86">Data sanitization and recovery protocols.</div>
+                        </div>
+                    </div>
+                    <div class="card-meta" vid="87">
+                        <div class="member-info" vid="88">
+                            <div class="member-count" vid="89">12 MEMBERS</div>
+                        </div>
+                        <div class="join-action" vid="90">JOIN</div>
+                    </div>
+                </div>
+
+
+                <div class="crew-card" vid="91">
+                    <div class="card-top" vid="92">
+                        <div class="crew-header" vid="93">
+                            <div class="crew-name" vid="94">Neon Synth</div>
+                            <div class="crew-description" vid="95">Audio-visual synthesis and stream hacking.</div>
+                        </div>
+                        <div class="badge-live"
+                            style="background: rgba(255,255,255,0.05); border-color: var(--c-graphic-light); color: var(--c-text-secondary);"
+                            vid="96">
+                            <div style="width: 6px; height: 6px; border-radius: 50%; background: #4ADE80; box-shadow: 0 0 8px #4ADE80;"
+                                vid="97"></div>
+                            SYNCED
+                        </div>
+                    </div>
+                    <div class="card-meta" vid="98">
+                        <div class="member-info" vid="99">
+                            <div class="member-count" vid="100">31 MEMBERS</div>
+                        </div>
+                        <div class="join-action" vid="101">JOIN</div>
+                    </div>
+                </div>
+
+
+                <div class="crew-card featured" style="background: linear-gradient(135deg, #1A1A1F, #0D0D0F);"
+                    vid="102">
+                    <div class="card-top" vid="103">
+                        <div class="crew-header" vid="104">
+                            <div class="crew-name" vid="105">Shadow Operative</div>
+                            <div class="crew-description" vid="106">Underground intelligence network for sector 4.
+                                Encrypted comms mandatory.</div>
+                        </div>
+                    </div>
+                    <div class="card-meta" vid="107">
+                        <div class="member-info" vid="108">
+                            <div class="member-count" vid="109">212 NODES ONLINE</div>
+                        </div>
+                        <div class="join-action" vid="110">DECRYPT ACCESS _</div>
+                    </div>
+                </div>
+
+
+                <div class="crew-card" vid="111">
+                    <div class="card-top" vid="112">
+                        <div class="crew-header" vid="113">
+                            <div class="crew-name" vid="114">Ghost Net</div>
+                            <div class="crew-description" vid="115">Untraceable node routing services.</div>
+                        </div>
+                    </div>
+                    <div class="card-meta" vid="116">
+                        <div class="member-info" vid="117">
+                            <div class="member-count" vid="118">08 MEMBERS</div>
+                        </div>
+                        <div class="join-action" vid="119">JOIN</div>
+                    </div>
+                </div>
+
+            </div>
+
+            <div class="nav-actions" vid="120">
+                <a href="#" class="btn-skip" vid="121">Skip exploration</a>
+                <a href="#" class="btn-primary" vid="122">Continue</a>
+            </div>
+        </div>
+    </div>
+
+</body>
+
+</html>

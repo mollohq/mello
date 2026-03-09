@@ -24,7 +24,7 @@ pub enum Event {
     LoggedIn { user: User },
     LoginFailed { reason: String },
 
-    DeviceAuthed { user: User },
+    DeviceAuthed { user: User, created: bool },
     DiscoverCrewsLoaded { crews: Vec<Crew> },
     EmailLinked,
     EmailLinkFailed { reason: String },

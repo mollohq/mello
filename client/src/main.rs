@@ -101,8 +101,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Decide startup path based on onboarding state
     {
         let mut s = settings.borrow_mut();
+        log::info!("[auth] startup  onboarding_step={} device_id={:?}", s.onboarding_step, s.device_id);
         if s.onboarding_step > 3 {
             // Onboarding complete: normal session restore
+            log::info!("[auth] onboarding done — attempting session restore");
             let _ = cmd_tx.try_send(Command::TryRestore);
         } else {
             // Onboarding needed: device auth first
@@ -112,9 +114,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let id = Uuid::new_v4().to_string();
                     s.device_id = Some(id.clone());
                     s.save();
+                    log::info!("[auth] generated new device_id={}", id);
                     id
                 }
             };
+            log::info!("[auth] onboarding in progress — device auth with id={}", device_id);
             let _ = cmd_tx.try_send(Command::DeviceAuth { device_id });
         }
         app.set_onboarding_step(s.onboarding_step as i32);
@@ -168,6 +172,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     {
         let cmd = cmd_tx.clone();
         let app_weak = app.as_weak();
+        let settings_ref = settings.clone();
         app.on_logout(move || {
             let _ = cmd.try_send(Command::Logout);
             if let Some(app) = app_weak.upgrade() {
@@ -175,6 +180,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 app.set_user_name("".into());
                 app.set_user_tag("".into());
                 app.set_active_crew_id("".into());
+                app.set_onboarding_step(1);
+            }
+            // Reset persisted onboarding state and re-trigger device auth
+            let mut s = settings_ref.borrow_mut();
+            s.onboarding_step = 1;
+            s.save();
+            log::info!("Logged out — returning to onboarding step 1");
+            if let Some(ref device_id) = s.device_id {
+                let _ = cmd.try_send(Command::DeviceAuth { device_id: device_id.clone() });
             }
         });
     }
@@ -320,14 +334,40 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     {
         let app_weak = app.as_weak();
         let s = settings.clone();
+        let cmd = cmd_tx.clone();
         app.on_onboarding_continue(move |step| {
             if let Some(app) = app_weak.upgrade() {
+                // When advancing to step 3, persist the nickname to Nakama
+                if step == 3 {
+                    let nickname = app.get_onboarding_nickname().to_string();
+                    if !nickname.is_empty() {
+                        log::info!("[auth] persisting display_name to Nakama: {}", nickname);
+                        let _ = cmd.try_send(Command::UpdateProfile {
+                            display_name: nickname.clone(),
+                        });
+                        app.set_user_name(nickname.into());
+                    }
+                }
                 app.set_onboarding_step(step);
                 let mut settings = s.borrow_mut();
                 settings.onboarding_step = step as u8;
                 settings.save();
             }
-            
+        });
+    }
+    // --- Onboarding: login requested (pill click) ---
+    {
+        let app_weak = app.as_weak();
+        let s = settings.clone();
+        app.on_onboarding_login_requested(move || {
+            if let Some(app) = app_weak.upgrade() {
+                log::info!("[auth] sign-in pill — entering app as device user");
+                app.set_logged_in(true);
+                app.set_onboarding_step(4);
+                let mut settings = s.borrow_mut();
+                settings.onboarding_step = 4;
+                settings.save();
+            }
         });
     }
     // --- Onboarding: link email ---
@@ -467,22 +507,27 @@ fn set_level_history(app: &MainWindow, hist: &DebugHistory) {
 fn handle_event(app: &MainWindow, event: Event, settings: &Rc<RefCell<Settings>>, dbg_hist: &Rc<RefCell<DebugHistory>>, cmd_tx: &tokio::sync::mpsc::Sender<Command>) {
     match event {
         Event::Restoring => {
+            log::info!("[auth] restoring session…");
             app.set_login_loading(true);
         }
-        Event::DeviceAuthed { user } => {
-            log::info!("UI: device authed as {}", user.id);
+        Event::DeviceAuthed { user, created } => {
+            log::info!("[auth] device-authed  user_id={} name={} tag={} created={}", user.id, user.display_name, user.tag, created);
             app.set_user_name(user.display_name.into());
             app.set_user_tag(user.tag.into());
+            app.set_is_returning_user(!created);
             let step = app.get_onboarding_step();
+            log::info!("[auth] onboarding_step={} is_returning_user={}", step, !created);
             if step == 0 || step == 1 {
                 app.set_onboarding_step(1);
                 let _ = cmd_tx.try_send(Command::DiscoverCrews);
             }
         }
         Event::DiscoverCrewsLoaded { crews } => {
+            log::info!("[auth] discover-crews loaded  count={}", crews.len());
             let model: Vec<CrewData> = crews.into_iter().map(|c| CrewData {
                 id: c.id.clone().into(),
                 name: c.name.into(),
+                description: c.description.into(),
                 member_count: c.member_count,
                 online_count: 0,
                 ..Default::default()
@@ -491,7 +536,7 @@ fn handle_event(app: &MainWindow, event: Event, settings: &Rc<RefCell<Settings>>
             app.set_discover_crews(rc.into());
         }
         Event::EmailLinked => {
-            log::info!("UI: email linked successfully");
+            log::info!("[auth] email linked — onboarding complete");
             app.set_onboarding_step(4);
             app.set_logged_in(true);
             let mut s = settings.borrow_mut();
@@ -499,31 +544,46 @@ fn handle_event(app: &MainWindow, event: Event, settings: &Rc<RefCell<Settings>>
             s.save();
         }
         Event::EmailLinkFailed { reason } => {
-            log::warn!("UI: email link failed: {}", reason);
+            log::warn!("[auth] email-link-failed  reason={}", reason);
             app.set_link_error(reason.into());
         }
         Event::LoggedIn { user } => {
-            log::info!("UI: logged in as {}", user.display_name);
+            log::info!("[auth] logged-in  user_id={} name={} tag={}", user.id, user.display_name, user.tag);
             app.set_logged_in(true);
             app.set_login_loading(false);
             app.set_user_name(user.display_name.into());
             app.set_user_tag(user.tag.into());
+            // Persist onboarding as done so next startup skips it
+            let mut s = settings.borrow_mut();
+            if s.onboarding_step < 4 {
+                s.onboarding_step = 4;
+                s.save();
+            }
         }
         Event::LoginFailed { reason } => {
-            log::warn!("UI: login failed: {}", reason);
+            log::warn!("[auth] login-failed  reason={}", reason);
             app.set_login_loading(false);
             app.set_login_error(reason.into());
         }
         Event::CrewsLoaded { crews } => {
+            let first_id = crews.first().map(|c| c.id.clone());
             let model: Vec<CrewData> = crews.into_iter().map(|c| CrewData {
                 id: c.id.clone().into(),
                 name: c.name.into(),
+                description: c.description.into(),
                 member_count: c.member_count,
                 online_count: 0,
                 ..Default::default()
             }).collect();
             let rc = std::rc::Rc::new(slint::VecModel::from(model));
             app.set_crews(rc.into());
+            // Auto-select first crew if none is active
+            if app.get_active_crew_id().is_empty() {
+                if let Some(id) = first_id {
+                    log::info!("[auth] auto-selecting first crew: {}", id);
+                    let _ = cmd_tx.try_send(Command::SelectCrew { crew_id: id });
+                }
+            }
         }
         Event::CrewCreated { crew } => {
             log::info!("UI: crew created: {}", crew.name);

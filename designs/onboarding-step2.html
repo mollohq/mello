@@ -1,0 +1,481 @@
+<html lang="en" vid="0">
+
+<head vid="1">
+    <meta charset="UTF-8" vid="2">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" vid="3">
+    <title vid="4">Crew Companion - Onboarding Step 2</title>
+    <style vid="5">
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
+
+        :root {
+            --c-bg-app: #0D0D0F;
+            --c-surface: #1A1A1F;
+            --c-surface-elevated: #24242B;
+            --c-text-primary: #F5F5F5;
+            --c-text-secondary: #707075;
+            --c-text-tertiary: #45454A;
+            --c-accent: #FF1E56;
+            --c-graphic-light: #2A2A30;
+            --c-graphic-med: #404045;
+
+            --f-sans: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            --f-mono: 'JetBrains Mono', monospace;
+
+            --r-outer: 8px;
+            --r-inner: 6px;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            background-color: #000;
+            color: var(--c-text-primary);
+            font-family: var(--f-sans);
+            height: 900px;
+            width: 1440px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        .os-chrome {
+            width: 1440px;
+            height: 900px;
+            display: flex;
+            flex-direction: column;
+            border-radius: var(--r-outer);
+            overflow: hidden;
+            background: var(--c-bg-app);
+            position: relative;
+        }
+
+        .titlebar {
+            height: 32px;
+            background: #121214;
+            display: flex;
+            align-items: center;
+            padding: 0 16px;
+            gap: 8px;
+            flex-shrink: 0;
+            border-bottom: 1px solid #1F1F23;
+        }
+
+        .titlebar-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+        }
+
+        .onboarding-container {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            padding: 80px 140px;
+            width: 100%;
+        }
+
+        .header-meta {
+            display: flex;
+            align-items: flex-start;
+            gap: 16px;
+            margin-bottom: 12px;
+        }
+
+        .step-indicator {
+            font-family: var(--f-mono);
+            font-size: 13px;
+            color: var(--c-accent);
+            letter-spacing: 0.15em;
+            font-weight: 500;
+            text-transform: uppercase;
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+
+        .progress-dots {
+            display: flex;
+            gap: 6px;
+        }
+
+        .dot {
+            width: 32px;
+            height: 2px;
+            border-radius: 0;
+            background: var(--c-graphic-light);
+        }
+
+        .dot.active {
+            background: var(--c-accent);
+        }
+
+        .onboarding-title {
+            font-size: 36px;
+            font-weight: 500;
+            letter-spacing: -0.02em;
+            color: var(--c-text-primary);
+            margin-bottom: 64px;
+        }
+
+        .setup-layout {
+            display: grid;
+            grid-template-columns: 440px 1fr;
+            gap: 120px;
+            flex: 1;
+        }
+
+        .label-kicker {
+            font-family: var(--f-mono);
+            font-size: 11px;
+            font-weight: 500;
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
+            color: var(--c-text-secondary);
+            margin-bottom: 20px;
+            display: block;
+        }
+
+        .avatar-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 12px;
+            margin-bottom: 48px;
+        }
+
+        .avatar-option {
+            aspect-ratio: 1;
+            background: var(--c-surface);
+            border-radius: var(--r-inner);
+            border: 1px solid var(--c-graphic-light);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.2s ease;
+        }
+
+        .avatar-option.selected {
+            border-color: var(--c-accent);
+            background: rgba(255, 30, 86, 0.08);
+            box-shadow: 0 0 0 1px var(--c-accent);
+        }
+
+        .pixel-glyph {
+            width: 32px;
+            height: 32px;
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 2px;
+        }
+
+        .pixel-glyph div {
+            background: var(--c-text-tertiary);
+        }
+
+        .selected .pixel-glyph div {
+            background: var(--c-accent);
+        }
+
+        .input-wrapper {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .text-input {
+            background: var(--c-surface);
+            border: 1px solid var(--c-graphic-light);
+            border-radius: var(--r-inner);
+            padding: 18px;
+            font-family: var(--f-mono);
+            font-size: 15px;
+            color: var(--c-text-primary);
+            outline: none;
+            transition: border-color 0.2s;
+        }
+
+        .text-input:focus {
+            border-color: var(--c-graphic-med);
+        }
+
+        .device-stack {
+            display: flex;
+            flex-direction: column;
+            gap: 40px;
+            max-width: 480px;
+        }
+
+        .device-card {
+            background: var(--c-surface);
+            border: 1px solid var(--c-graphic-light);
+            border-radius: var(--r-inner);
+            padding: 24px;
+        }
+
+        .selector-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            cursor: pointer;
+        }
+
+        .device-label {
+            font-family: var(--f-mono);
+            font-size: 14px;
+            color: var(--c-text-primary);
+        }
+
+        .meter-container {
+            display: flex;
+            gap: 3px;
+            height: 6px;
+            width: 100%;
+        }
+
+        .meter-bar {
+            flex: 1;
+            background: var(--c-bg-app);
+            border-radius: 1px;
+        }
+
+        .meter-bar.fill {
+            background: var(--c-accent);
+        }
+
+        .meter-bar.dim {
+            background: #2D141B;
+        }
+
+        .footer-action {
+            position: absolute;
+            bottom: 80px;
+            right: 140px;
+        }
+
+        .btn-continue {
+            background: var(--c-accent);
+            color: #FFF;
+            padding: 18px 40px;
+            border-radius: var(--r-inner);
+            font-family: var(--f-mono);
+            font-size: 15px;
+            font-weight: 500;
+            border: none;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            transition: transform 0.1s;
+        }
+
+        .btn-continue:active {
+            transform: scale(0.98);
+        }
+
+        svg.icon-down {
+            stroke: var(--c-text-secondary);
+        }
+    </style>
+</head>
+
+<body vid="6">
+
+    <div class="os-chrome" vid="7">
+        <div class="titlebar" vid="8">
+            <div class="titlebar-dot" style="background:#FF5F57" vid="9"></div>
+            <div class="titlebar-dot" style="background:#FFBD2E" vid="10"></div>
+            <div class="titlebar-dot" style="background:#28C840" vid="11"></div>
+        </div>
+
+        <div class="onboarding-container" vid="12">
+            <div class="header-meta" vid="13">
+                <div class="step-indicator" vid="14">
+                    STEP 02 / 03
+                    <div class="progress-dots" vid="15">
+                        <div class="dot active" vid="16"></div>
+                        <div class="dot active" vid="17"></div>
+                        <div class="dot" vid="18"></div>
+                    </div>
+                </div>
+            </div>
+
+            <h1 class="onboarding-title" vid="19">Profile &amp; Device Setup</h1>
+
+            <div class="setup-layout" vid="20">
+
+                <div class="left-col" vid="21">
+                    <span class="label-kicker" vid="22">Choose Identity</span>
+                    <div class="avatar-grid" vid="23">
+                        <div class="avatar-option" vid="24">
+                            <div class="pixel-glyph" vid="25">
+                                <div vid="26"></div>
+                                <div style="background:var(--c-text-tertiary)" vid="27"></div>
+                                <div style="background:var(--c-text-tertiary)" vid="28"></div>
+                                <div vid="29"></div>
+                                <div style="background:var(--c-text-tertiary)" vid="30"></div>
+                                <div style="background:var(--c-text-tertiary)" vid="31"></div>
+                                <div style="background:var(--c-text-tertiary)" vid="32"></div>
+                                <div style="background:var(--c-text-tertiary)" vid="33"></div>
+                                <div style="background:var(--c-text-tertiary)" vid="34"></div>
+                                <div vid="35"></div>
+                                <div vid="36"></div>
+                                <div style="background:var(--c-text-tertiary)" vid="37"></div>
+                            </div>
+                        </div>
+                        <div class="avatar-option selected" vid="38">
+                            <div class="pixel-glyph" vid="39">
+                                <div style="background:var(--c-accent)" vid="40"></div>
+                                <div style="background:var(--c-accent)" vid="41"></div>
+                                <div vid="42"></div>
+                                <div vid="43"></div>
+                                <div style="background:var(--c-accent)" vid="44"></div>
+                                <div style="background:var(--c-accent)" vid="45"></div>
+                                <div style="background:var(--c-accent)" vid="46"></div>
+                                <div style="background:var(--c-accent)" vid="47"></div>
+                                <div style="background:var(--c-accent)" vid="48"></div>
+                                <div style="background:var(--c-accent)" vid="49"></div>
+                                <div vid="50"></div>
+                                <div vid="51"></div>
+                                <div style="background:var(--c-accent)" vid="52"></div>
+                                <div style="background:var(--c-accent)" vid="53"></div>
+                                <div vid="54"></div>
+                                <div vid="55"></div>
+                            </div>
+                        </div>
+                        <div class="avatar-option" vid="56">
+                            <div class="pixel-glyph" vid="57">
+                                <div vid="58"></div>
+                                <div style="background:var(--c-text-tertiary)" vid="59"></div>
+                                <div style="background:var(--c-text-tertiary)" vid="60"></div>
+                                <div vid="61"></div>
+                                <div vid="62"></div>
+                                <div style="background:var(--c-text-tertiary)" vid="63"></div>
+                                <div style="background:var(--c-text-tertiary)" vid="64"></div>
+                                <div vid="65"></div>
+                                <div vid="66"></div>
+                                <div style="background:var(--c-text-tertiary)" vid="67"></div>
+                                <div style="background:var(--c-text-tertiary)" vid="68"></div>
+                                <div vid="69"></div>
+                            </div>
+                        </div>
+                        <div class="avatar-option" vid="70">
+                            <div class="pixel-glyph" vid="71">
+                                <div style="background:var(--c-text-tertiary)" vid="72"></div>
+                                <div vid="73"></div>
+                                <div vid="74"></div>
+                                <div style="background:var(--c-text-tertiary)" vid="75"></div>
+                                <div style="background:var(--c-text-tertiary)" vid="76"></div>
+                                <div vid="77"></div>
+                                <div vid="78"></div>
+                                <div style="background:var(--c-text-tertiary)" vid="79"></div>
+                                <div style="background:var(--c-text-tertiary)" vid="80"></div>
+                                <div vid="81"></div>
+                                <div vid="82"></div>
+                                <div style="background:var(--c-text-tertiary)" vid="83"></div>
+                            </div>
+                        </div>
+                        <div class="avatar-option" vid="84"><span
+                                style="font-family:var(--f-mono); color:var(--c-text-tertiary)" vid="85">AX</span></div>
+                        <div class="avatar-option" vid="86"><span
+                                style="font-family:var(--f-mono); color:var(--c-text-tertiary)" vid="87">ZR</span></div>
+                        <div class="avatar-option" vid="88"><span
+                                style="font-family:var(--f-mono); color:var(--c-text-tertiary)" vid="89">LY</span></div>
+                        <div class="avatar-option" vid="90"><span
+                                style="font-family:var(--f-mono); color:var(--c-text-tertiary)" vid="91">KK</span></div>
+                    </div>
+
+                    <div class="input-wrapper" vid="92">
+                        <label class="label-kicker" vid="93">Crew Nickname</label>
+                        <input type="text" class="text-input" value="Navigator_Prime" vid="94">
+                    </div>
+                </div>
+
+
+                <div class="right-col" vid="95">
+                    <div class="device-stack" vid="96">
+                        <div class="device-group" vid="97">
+                            <span class="label-kicker" vid="98">Microphone Input</span>
+                            <div class="device-card" vid="99">
+                                <div class="selector-row" vid="100">
+                                    <span class="device-label" vid="101">XLR-Interface (Bridge 01)</span>
+                                    <svg class="icon-down" width="16" height="16" viewBox="0 0 24 24" fill="none"
+                                        stroke="currentColor" stroke-width="2" vid="102">
+                                        <path d="m6 9 6 6 6-6" vid="103"></path>
+                                    </svg>
+                                </div>
+                                <div class="meter-container" vid="104">
+                                    <div class="meter-bar fill" vid="105"></div>
+                                    <div class="meter-bar fill" vid="106"></div>
+                                    <div class="meter-bar fill" vid="107"></div>
+                                    <div class="meter-bar fill" vid="108"></div>
+                                    <div class="meter-bar fill" vid="109"></div>
+                                    <div class="meter-bar fill" vid="110"></div>
+                                    <div class="meter-bar fill" vid="111"></div>
+                                    <div class="meter-bar" vid="112"></div>
+                                    <div class="meter-bar" vid="113"></div>
+                                    <div class="meter-bar" vid="114"></div>
+                                    <div class="meter-bar" vid="115"></div>
+                                    <div class="meter-bar" vid="116"></div>
+                                    <div class="meter-bar" vid="117"></div>
+                                    <div class="meter-bar" vid="118"></div>
+                                    <div class="meter-bar" vid="119"></div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="device-group" vid="120">
+                            <span class="label-kicker" vid="121">Speaker Output</span>
+                            <div class="device-card" vid="122">
+                                <div class="selector-row" vid="123">
+                                    <span class="device-label" vid="124">System Default (Studio Monitors)</span>
+                                    <svg class="icon-down" width="16" height="16" viewBox="0 0 24 24" fill="none"
+                                        stroke="currentColor" stroke-width="2" vid="125">
+                                        <path d="m6 9 6 6 6-6" vid="126"></path>
+                                    </svg>
+                                </div>
+                                <div class="meter-container" vid="127">
+                                    <div class="meter-bar dim" vid="128"></div>
+                                    <div class="meter-bar dim" vid="129"></div>
+                                    <div class="meter-bar" vid="130"></div>
+                                    <div class="meter-bar" vid="131"></div>
+                                    <div class="meter-bar" vid="132"></div>
+                                    <div class="meter-bar" vid="133"></div>
+                                    <div class="meter-bar" vid="134"></div>
+                                    <div class="meter-bar" vid="135"></div>
+                                    <div class="meter-bar" vid="136"></div>
+                                    <div class="meter-bar" vid="137"></div>
+                                    <div class="meter-bar" vid="138"></div>
+                                    <div class="meter-bar" vid="139"></div>
+                                    <div class="meter-bar" vid="140"></div>
+                                    <div class="meter-bar" vid="141"></div>
+                                    <div class="meter-bar" vid="142"></div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="footer-action" vid="143">
+                <button class="btn-continue" vid="144">
+                    Continue
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
+                        stroke-linecap="round" stroke-linejoin="round" vid="145">
+                        <line x1="5" y1="12" x2="19" y2="12" vid="146"></line>
+                        <polyline points="12 5 19 12 12 19" vid="147"></polyline>
+                    </svg>
+                </button>
+            </div>
+        </div>
+    </div>
+
+</body>
+
+</html>

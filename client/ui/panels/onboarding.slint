@@ -6,9 +6,10 @@ import { DeviceDropdown } from "settings_modal.slint";
 
 component CrewCard inherits Rectangle {
     in property <string> crew-name;
-    in property <string> crew-tagline;
+    in property <string> crew-description;
     in property <int> member-count;
     in property <int> online-count;
+    in property <bool> featured: false;
     callback clicked();
 
     background: Theme.surface;
@@ -26,7 +27,7 @@ component CrewCard inherits Rectangle {
         alignment: space-between;
 
         VerticalLayout {
-            spacing: 4px;
+            spacing: 8px;
 
             HorizontalLayout {
                 alignment: space-between;
@@ -34,19 +35,20 @@ component CrewCard inherits Rectangle {
                 Text {
                     text: crew-name;
                     font-family: Theme.font-mono;
-                    font-size: 16px;
+                    font-size: 18px;
                     font-weight: 500;
                     color: Theme.text-primary;
                     overflow: elide;
+                    letter-spacing: 0.5px;
                 }
 
                 if online-count > 0: Rectangle {
                     width: pill-text.preferred-width + 28px;
-                    height: 20px;
-                    border-radius: Theme.r-pill;
+                    height: 24px;
+                    border-radius: 4px;
                     border-width: 1px;
-                    border-color: Theme.graphic-light;
-                    background: #00000050;
+                    border-color: #FF1E564D;
+                    background: #FF1E561A;
 
                     HorizontalLayout {
                         alignment: center;
@@ -63,16 +65,16 @@ component CrewCard inherits Rectangle {
                             text: "LIVE";
                             font-family: Theme.font-mono;
                             font-size: 10px;
-                            color: Theme.text-secondary;
+                            color: Theme.accent;
                             vertical-alignment: center;
                         }
                     }
                 }
             }
 
-            if crew-tagline != "": Text {
-                text: crew-tagline;
-                font-size: 13px;
+            if crew-description != "": Text {
+                text: crew-description;
+                font-size: 14px;
                 color: Theme.text-secondary;
                 wrap: word-wrap;
                 overflow: elide;
@@ -83,7 +85,9 @@ component CrewCard inherits Rectangle {
             alignment: space-between;
 
             Text {
-                text: member-count + (member-count == 1 ? " member" : " members");
+                text: member-count < 10
+                    ? "0" + member-count + " MEMBERS"
+                    : member-count + " MEMBERS";
                 font-family: Theme.font-mono;
                 font-size: 11px;
                 color: Theme.text-tertiary;
@@ -91,11 +95,11 @@ component CrewCard inherits Rectangle {
             }
 
             Text {
-                text: card-touch.has-hover ? "Connect →" : "Join";
+                text: card-touch.has-hover ? "CONNECT →" : "JOIN";
                 font-family: Theme.font-mono;
-                font-size: 11px;
+                font-size: 12px;
                 font-weight: 500;
-                color: card-touch.has-hover ? Theme.accent : Theme.text-secondary;
+                color: card-touch.has-hover ? Theme.accent : Theme.text-tertiary;
                 vertical-alignment: center;
             }
         }
@@ -108,7 +112,7 @@ component CreateCrewCard inherits Rectangle {
     background: transparent;
     border-radius: Theme.r-outer;
     border-width: 1px;
-    border-color: create-touch.has-hover ? Theme.accent : Theme.graphic-med;
+    border-color: create-touch.has-hover ? Theme.accent : Theme.text-tertiary;
 
     create-touch := TouchArea {
         clicked => { root.clicked(); }
@@ -118,47 +122,33 @@ component CreateCrewCard inherits Rectangle {
         alignment: center;
         spacing: 16px;
 
-        Rectangle {
-            width: 48px;
-            height: 48px;
-            border-radius: 12px;
-            background: create-touch.has-hover ? Theme.accent : Theme.graphic-light;
+        HorizontalLayout {
+            alignment: center;
 
-            Text {
-                text: "+";
-                font-size: 24px;
-                color: Theme.text-primary;
-                horizontal-alignment: center;
-                vertical-alignment: center;
+            Rectangle {
+                width: 56px;
+                height: 56px;
+                border-radius: 16px;
+                background: create-touch.has-hover ? Theme.accent : Theme.graphic-light;
+
+                Text {
+                    text: "+";
+                    font-size: 28px;
+                    font-weight: 300;
+                    color: Theme.text-primary;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
             }
         }
 
         Text {
-            text: "START A NEW CREW";
+            text: "CREATE YOUR\nOWN CREW";
             font-family: Theme.font-mono;
             font-size: 14px;
             color: Theme.text-secondary;
             horizontal-alignment: center;
-            letter-spacing: 1px;
-        }
-    }
-}
-
-component StatsFillerCard inherits Rectangle {
-    background: #FF1E5605;
-    border-radius: Theme.r-outer;
-    border-width: 1px;
-    border-color: Theme.graphic-light;
-
-    VerticalLayout {
-        alignment: center;
-
-        Text {
-            text: "SYNCING GLOBAL FEED...";
-            font-family: Theme.font-mono;
-            font-size: 10px;
-            color: Theme.text-tertiary;
-            horizontal-alignment: center;
+            letter-spacing: 1.5px;
         }
     }
 }
@@ -188,52 +178,54 @@ component AvatarOption inherits Rectangle {
     }
 }
 
-component StepIndicator inherits HorizontalLayout {
+component StepIndicator inherits Rectangle {
     in property <int> current-step: 1;
     callback step-clicked(int);
 
-    spacing: 12px;
-    alignment: start;
-
-    Text {
-        text: current-step < 10 ? "STEP 0" + current-step + " / 03" : "STEP " + current-step + " / 03";
-        font-family: Theme.font-mono;
-        font-size: 12px;
-        color: Theme.accent;
-        letter-spacing: 1px;
-        vertical-alignment: center;
-    }
+    height: 20px;
 
     HorizontalLayout {
-        spacing: 6px;
+        spacing: 16px;
+        alignment: start;
 
-        Rectangle {
-            width: 40px;
-            height: 2px;
-            background: current-step >= 1 ? Theme.accent : Theme.graphic-med;
-
-            TouchArea {
-                clicked => { root.step-clicked(1); }
-            }
+        Text {
+            text: current-step < 10 ? "STEP 0" + current-step + " / 03" : "STEP " + current-step + " / 03";
+            font-family: Theme.font-mono;
+            font-size: 13px;
+            color: Theme.accent;
+            letter-spacing: 2px;
+            vertical-alignment: center;
         }
 
+        // Dots container — explicit centering via y offset
         Rectangle {
-            width: 40px;
-            height: 2px;
-            background: current-step >= 2 ? Theme.accent : Theme.graphic-med;
+            width: 24px * 3 + 8px * 2;
 
-            TouchArea {
-                clicked => { root.step-clicked(2); }
+            Rectangle {
+                x: 0;
+                y: (parent.height - 2px) / 2;
+                width: 24px;
+                height: 2px;
+                background: current-step >= 1 ? Theme.accent : Theme.graphic-light;
+                TouchArea { clicked => { root.step-clicked(1); } }
             }
-        }
 
-        Rectangle {
-            width: 40px;
-            height: 2px;
-            background: current-step >= 3 ? Theme.accent : Theme.graphic-med;
+            Rectangle {
+                x: 24px + 8px;
+                y: (parent.height - 2px) / 2;
+                width: 24px;
+                height: 2px;
+                background: current-step >= 2 ? Theme.accent : Theme.graphic-light;
+                TouchArea { clicked => { root.step-clicked(2); } }
+            }
 
-            TouchArea {
-                clicked => { root.step-clicked(3); }
+            Rectangle {
+                x: (24px + 8px) * 2;
+                y: (parent.height - 2px) / 2;
+                width: 24px;
+                height: 2px;
+                background: current-step >= 3 ? Theme.accent : Theme.graphic-light;
+                TouchArea { clicked => { root.step-clicked(3); } }
             }
         }
     }
@@ -358,9 +350,13 @@ export component Onboarding inherits Rectangle {
     in-out property <string> nickname: "";
     in-out property <int> selected-avatar: 0;
 
+    in property <string> device-user-name: "";
+    in property <bool> is-returning-user: false;
+
     callback crew-selected(string);
     callback create-crew-requested(string);
     callback continue-to-step(int);
+    callback login-requested();
     callback link-email(string, string);
     callback skip-identity();
     callback capture-device-selected(string);
@@ -372,16 +368,108 @@ export component Onboarding inherits Rectangle {
     if step == 1: Rectangle {
         background: Theme.bg-app;
 
+        // Login pill — top-right, absolute positioned (only for returning users)
+        if is-returning-user: Rectangle {
+            x: parent.width - 120px - self.width;
+            y: 80px;
+            width: pill-layout.preferred-width;
+            height: 48px;
+            background: Theme.surface;
+            border-radius: 999px;
+            border-width: 1px;
+            border-color: Theme.graphic-light;
+
+            pill-layout := HorizontalLayout {
+                spacing: 0px;
+
+                // User side
+                HorizontalLayout {
+                    padding-left: 8px;
+                    padding-right: 16px;
+                    padding-top: 8px;
+                    padding-bottom: 8px;
+                    spacing: 10px;
+
+                    Rectangle {
+                        width: 32px;
+                        height: 32px;
+                        border-radius: 16px;
+                        background: Theme.accent;
+
+                        Text {
+                            text: device-user-name != "" ? device-user-name : "?";
+                            font-family: Theme.font-mono;
+                            font-size: 13px;
+                            font-weight: 700;
+                            color: #FFFFFF;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                            overflow: elide;
+                        }
+                    }
+
+                    VerticalLayout {
+                        alignment: center;
+                        spacing: 2px;
+
+                        Text {
+                            text: "DEVICE USER";
+                            font-family: Theme.font-mono;
+                            font-size: 9px;
+                            color: Theme.text-tertiary;
+                            letter-spacing: 1px;
+                        }
+
+                        Text {
+                            text: device-user-name != "" ? device-user-name : "anonymous";
+                            font-family: Theme.font-mono;
+                            font-size: 12px;
+                            font-weight: 600;
+                            color: Theme.text-primary;
+                            letter-spacing: 0.3px;
+                        }
+                    }
+                }
+
+                // Divider
+                Rectangle {
+                    width: 1px;
+                    background: Theme.graphic-light;
+                }
+
+                // Sign In CTA
+                Rectangle {
+                    width: pill-cta-text.preferred-width + 36px;
+                    height: 48px;
+
+                    pill-cta-text := Text {
+                        text: "SIGN IN →";
+                        font-family: Theme.font-mono;
+                        font-size: 11px;
+                        font-weight: 700;
+                        color: pill-cta-touch.has-hover ? Theme.accent : Theme.accent;
+                        letter-spacing: 1px;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+
+                    pill-cta-touch := TouchArea {
+                        clicked => { root.login-requested(); }
+                    }
+                }
+            }
+        }
+
         VerticalLayout {
-            padding-top: 60px;
-            padding-left: 80px;
-            padding-right: 80px;
-            padding-bottom: 40px;
-            spacing: 48px;
+            padding-top: 80px;
+            padding-left: 120px;
+            padding-right: 120px;
+            padding-bottom: 60px;
+            spacing: 0px;
 
             // Header
             VerticalLayout {
-                spacing: 8px;
+                spacing: 16px;
 
                 StepIndicator {
                     current-step: 1;
@@ -390,33 +478,36 @@ export component Onboarding inherits Rectangle {
 
                 Text {
                     text: "Discover Your Crew";
-                    font-size: 42px;
+                    font-size: 48px;
                     font-weight: 500;
                     color: Theme.text-primary;
-                    letter-spacing: -0.5px;
+                    letter-spacing: -1.5px;
                 }
 
                 Text {
-                    text: "Join an existing squad to start collaborating, or forge a new path with your own team.";
-                    font-size: 16px;
+                    text: "Join a specialized squad to begin your deployment, or establish a new unit and lead the way.";
+                    font-size: 18px;
                     color: Theme.text-secondary;
+                    max-width: 540px;
                 }
             }
 
-            // Bento grid
-            VerticalLayout {
-                vertical-stretch: 1;
-                spacing: 16px;
+            Rectangle { height: 56px; }
 
-                // Row 1: [featured crew 0 (2x)] [crew 1] [crew 2]
+            // Bento grid — fixed 240px row heights
+            VerticalLayout {
+                spacing: 20px;
+
+                // Row 1: [featured crew 0 (2x)] [create CTA] [crew 1]
                 HorizontalLayout {
-                    vertical-stretch: 1;
-                    spacing: 16px;
+                    height: 240px;
+                    spacing: 20px;
 
                     CrewCard {
                         horizontal-stretch: 2;
+                        featured: true;
                         crew-name: discover-crews.length > 0 ? discover-crews[0].name : "";
-                        crew-tagline: "";
+                        crew-description: discover-crews.length > 0 ? discover-crews[0].description : "";
                         member-count: discover-crews.length > 0 ? discover-crews[0].member-count : 0;
                         online-count: discover-crews.length > 0 ? discover-crews[0].online-count : 0;
                         visible: discover-crews.length > 0;
@@ -427,10 +518,17 @@ export component Onboarding inherits Rectangle {
                         }
                     }
 
+                    CreateCrewCard {
+                        horizontal-stretch: 1;
+                        clicked => {
+                            root.create-crew-requested("New Crew");
+                        }
+                    }
+
                     CrewCard {
                         horizontal-stretch: 1;
                         crew-name: discover-crews.length > 1 ? discover-crews[1].name : "";
-                        crew-tagline: "";
+                        crew-description: discover-crews.length > 1 ? discover-crews[1].description : "";
                         member-count: discover-crews.length > 1 ? discover-crews[1].member-count : 0;
                         online-count: discover-crews.length > 1 ? discover-crews[1].online-count : 0;
                         visible: discover-crews.length > 1;
@@ -440,11 +538,17 @@ export component Onboarding inherits Rectangle {
                             }
                         }
                     }
+                }
+
+                // Row 2: [crew 2] [featured crew 3 (2x)] [crew 4]
+                HorizontalLayout {
+                    height: 240px;
+                    spacing: 20px;
 
                     CrewCard {
                         horizontal-stretch: 1;
                         crew-name: discover-crews.length > 2 ? discover-crews[2].name : "";
-                        crew-tagline: "";
+                        crew-description: discover-crews.length > 2 ? discover-crews[2].description : "";
                         member-count: discover-crews.length > 2 ? discover-crews[2].member-count : 0;
                         online-count: discover-crews.length > 2 ? discover-crews[2].online-count : 0;
                         visible: discover-crews.length > 2;
@@ -454,24 +558,12 @@ export component Onboarding inherits Rectangle {
                             }
                         }
                     }
-                }
-
-                // Row 2: [create CTA] [featured crew 3 (2x)] [stats filler]
-                HorizontalLayout {
-                    vertical-stretch: 1;
-                    spacing: 16px;
-
-                    CreateCrewCard {
-                        horizontal-stretch: 1;
-                        clicked => {
-                            root.create-crew-requested("New Crew");
-                        }
-                    }
 
                     CrewCard {
                         horizontal-stretch: 2;
+                        featured: true;
                         crew-name: discover-crews.length > 3 ? discover-crews[3].name : "";
-                        crew-tagline: "";
+                        crew-description: discover-crews.length > 3 ? discover-crews[3].description : "";
                         member-count: discover-crews.length > 3 ? discover-crews[3].member-count : 0;
                         online-count: discover-crews.length > 3 ? discover-crews[3].online-count : 0;
                         visible: discover-crews.length > 3;
@@ -482,9 +574,52 @@ export component Onboarding inherits Rectangle {
                         }
                     }
 
-                    StatsFillerCard {
+                    CrewCard {
                         horizontal-stretch: 1;
+                        crew-name: discover-crews.length > 4 ? discover-crews[4].name : "";
+                        crew-description: discover-crews.length > 4 ? discover-crews[4].description : "";
+                        member-count: discover-crews.length > 4 ? discover-crews[4].member-count : 0;
+                        online-count: discover-crews.length > 4 ? discover-crews[4].online-count : 0;
+                        visible: discover-crews.length > 4;
+                        clicked => {
+                            if discover-crews.length > 4 {
+                                root.crew-selected(discover-crews[4].id);
+                            }
+                        }
                     }
+                }
+            }
+
+            // Push nav to bottom
+            Rectangle { vertical-stretch: 1; }
+
+            // Bottom navigation
+            HorizontalLayout {
+                alignment: end;
+                spacing: 32px;
+                height: 48px;
+
+                Rectangle {
+                    width: skip-step1-text.preferred-width + 16px;
+
+                    skip-step1-text := Text {
+                        text: "Skip exploration";
+                        font-family: Theme.font-mono;
+                        font-size: 13px;
+                        color: skip-step1-touch.has-hover ? Theme.text-secondary : Theme.text-tertiary;
+                        vertical-alignment: center;
+                        horizontal-alignment: center;
+                    }
+
+                    skip-step1-touch := TouchArea {
+                        clicked => { root.continue-to-step(2); }
+                    }
+                }
+
+                AccentButton {
+                    width: 160px;
+                    label: "CONTINUE";
+                    clicked => { root.continue-to-step(2); }
                 }
             }
         }
@@ -496,8 +631,8 @@ export component Onboarding inherits Rectangle {
 
         VerticalLayout {
             padding-top: 80px;
-            padding-left: 120px;
-            padding-right: 120px;
+            padding-left: 140px;
+            padding-right: 140px;
             padding-bottom: 40px;
             spacing: 0px;
 
@@ -511,42 +646,42 @@ export component Onboarding inherits Rectangle {
                 }
 
                 Text {
-                    text: "Identify yourself.";
-                    font-size: 32px;
+                    text: "Profile & Device Setup";
+                    font-size: 36px;
                     font-weight: 500;
                     color: Theme.text-primary;
-                    letter-spacing: -0.5px;
+                    letter-spacing: -0.7px;
                 }
-
-                Rectangle { height: 40px; }
             }
 
-            // Two-column grid
-            HorizontalLayout {
-                vertical-stretch: 1;
-                spacing: 80px;
+            Rectangle { height: 64px; }
 
-                // Left column: Avatar + nickname
+            // Two-column grid (440px left | flex right, gap 120px)
+            HorizontalLayout {
+                spacing: 120px;
+
+                // Left column: Avatar + nickname (fixed 440px)
                 VerticalLayout {
-                    horizontal-stretch: 1;
+                    width: 440px;
+                    alignment: start;
 
                     Text {
-                        text: "CHOOSE AN IDENTITY";
+                        text: "CHOOSE IDENTITY";
                         font-size: 11px;
-                        font-weight: 600;
+                        font-weight: 500;
                         color: Theme.text-secondary;
-                        letter-spacing: 1.3px;
+                        letter-spacing: 1.5px;
                     }
 
-                    Rectangle { height: 24px; }
+                    Rectangle { height: 20px; }
 
                     // Avatar grid 4x2
                     VerticalLayout {
-                        spacing: 16px;
+                        spacing: 12px;
 
                         HorizontalLayout {
-                            spacing: 16px;
-                            height: 72px;
+                            spacing: 12px;
+                            height: 96px;
 
                             AvatarOption {
                                 label: "ME";
@@ -571,8 +706,8 @@ export component Onboarding inherits Rectangle {
                         }
 
                         HorizontalLayout {
-                            spacing: 16px;
-                            height: 72px;
+                            spacing: 12px;
+                            height: 96px;
 
                             AvatarOption {
                                 label: "A4";
@@ -597,14 +732,14 @@ export component Onboarding inherits Rectangle {
                         }
                     }
 
-                    Rectangle { height: 40px; }
+                    Rectangle { height: 48px; }
 
                     Text {
-                        text: "NICKNAME";
+                        text: "CREW NICKNAME";
                         font-size: 11px;
-                        font-weight: 600;
+                        font-weight: 500;
                         color: Theme.text-secondary;
-                        letter-spacing: 1.3px;
+                        letter-spacing: 1.5px;
                     }
 
                     Rectangle { height: 12px; }
@@ -618,64 +753,50 @@ export component Onboarding inherits Rectangle {
                 // Right column: Device selectors
                 VerticalLayout {
                     horizontal-stretch: 1;
+                    alignment: start;
 
                     Text {
-                        text: "COMMUNICATION CHANNELS";
-                        font-size: 11px;
+                        text: "MICROPHONE INPUT";
+                        font-size: 10px;
                         font-weight: 600;
                         color: Theme.text-secondary;
                         letter-spacing: 1.3px;
                     }
 
-                    Rectangle { height: 24px; }
+                    Rectangle { height: 8px; }
 
-                    VerticalLayout {
-                        spacing: 32px;
+                    DeviceDropdown {
+                        devices: root.capture-devices;
+                        selected-id: root.selected-capture-id;
+                        selected-name <=> root.selected-capture-name;
+                        device-selected(id) => { root.capture-device-selected(id); }
+                    }
 
-                        VerticalLayout {
-                            spacing: 8px;
+                    Rectangle { height: 32px; }
 
-                            Text {
-                                text: "INPUT DEVICE";
-                                font-size: 10px;
-                                font-weight: 600;
-                                color: Theme.text-secondary;
-                                letter-spacing: 1.3px;
-                            }
+                    Text {
+                        text: "SPEAKER OUTPUT";
+                        font-size: 10px;
+                        font-weight: 600;
+                        color: Theme.text-secondary;
+                        letter-spacing: 1.3px;
+                    }
 
-                            DeviceDropdown {
-                                devices: root.capture-devices;
-                                selected-id: root.selected-capture-id;
-                                selected-name <=> root.selected-capture-name;
-                                device-selected(id) => { root.capture-device-selected(id); }
-                            }
-                        }
+                    Rectangle { height: 8px; }
 
-                        VerticalLayout {
-                            spacing: 8px;
-
-                            Text {
-                                text: "OUTPUT DEVICE";
-                                font-size: 10px;
-                                font-weight: 600;
-                                color: Theme.text-secondary;
-                                letter-spacing: 1.3px;
-                            }
-
-                            DeviceDropdown {
-                                devices: root.playback-devices;
-                                selected-id: root.selected-playback-id;
-                                selected-name <=> root.selected-playback-name;
-                                device-selected(id) => { root.playback-device-selected(id); }
-                            }
-                        }
+                    DeviceDropdown {
+                        devices: root.playback-devices;
+                        selected-id: root.selected-playback-id;
+                        selected-name <=> root.selected-playback-name;
+                        device-selected(id) => { root.playback-device-selected(id); }
                     }
                 }
             }
 
-            // Footer with Continue button
-            Rectangle { height: 24px; }
+            // Push continue button to bottom
+            Rectangle { vertical-stretch: 1; }
 
+            // Footer with Continue button
             HorizontalLayout {
                 height: 52px;
                 alignment: end;
@@ -712,10 +833,10 @@ export component Onboarding inherits Rectangle {
 
                 Text {
                     text: "Lock in your identity.";
-                    font-size: 32px;
+                    font-size: 48px;
                     font-weight: 500;
                     color: Theme.text-primary;
-                    letter-spacing: -0.5px;
+                    letter-spacing: -1.5px;
                     horizontal-alignment: left;
                 }
 
@@ -727,7 +848,7 @@ export component Onboarding inherits Rectangle {
                     horizontal-alignment: left;
                 }
 
-                Rectangle { height: 40px; }
+                Rectangle { height: 48px; }
             }
 
             // Centered content

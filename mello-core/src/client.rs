@@ -167,17 +167,23 @@ impl Client {
             Command::SetDebugMode { enabled } => {
                 self.voice.set_debug_mode(enabled);
             }
+            Command::UpdateProfile { display_name } => {
+                self.handle_update_profile(&display_name).await;
+            }
         }
     }
 
     async fn handle_device_auth(&mut self, device_id: &str) {
         match self.nakama.authenticate_device(device_id).await {
-            Ok(user) => {
-                log::info!("Device auth succeeded for {}", user.id);
+            Ok((user, created)) => {
+                log::info!("Device auth succeeded for {} (created={})", user.id, created);
                 if let Some(rt) = self.nakama.refresh_token() {
                     let _ = session::save(rt);
                 }
-                let _ = self.event_tx.send(Event::DeviceAuthed { user });
+                if let Err(e) = self.nakama.connect_ws(self.event_tx.clone()).await {
+                    log::error!("WebSocket connect failed after device auth: {}", e);
+                }
+                let _ = self.event_tx.send(Event::DeviceAuthed { user, created });
             }
             Err(e) => {
                 log::error!("Device auth failed: {}", e);
@@ -303,6 +309,17 @@ impl Client {
                 let _ = self.event_tx.send(Event::LoginFailed {
                     reason: e.to_string(),
                 });
+            }
+        }
+    }
+
+    async fn handle_update_profile(&self, display_name: &str) {
+        match self.nakama.update_account(display_name).await {
+            Ok(()) => {
+                log::info!("Profile updated: display_name={}", display_name);
+            }
+            Err(e) => {
+                log::error!("Failed to update profile: {}", e);
             }
         }
     }

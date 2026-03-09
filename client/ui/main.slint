@@ -28,6 +28,8 @@ export component MainWindow inherits Window {
     in-out property <int> onboarding-step: 0;
     in property <[CrewData]> discover-crews: [];
     in property <string> link-error: "";
+    in property <bool> is-returning-user: false;
+    out property <string> onboarding-nickname;
 
     // --- User ---
     in property <string> user-name: "";
@@ -106,6 +108,7 @@ export component MainWindow inherits Window {
     callback onboarding-crew-selected(string);
     callback onboarding-create-crew(string);
     callback onboarding-continue(int);
+    callback onboarding-login-requested();
     callback onboarding-link-email(string, string);
     callback onboarding-skip-identity();
     callback onboarding-capture-device-selected(string);
@@ -116,15 +119,19 @@ export component MainWindow inherits Window {
         step: root.onboarding-step;
         discover-crews: root.discover-crews;
         link-error: root.link-error;
+        device-user-name: root.user-name;
+        is-returning-user: root.is-returning-user;
         capture-devices: root.capture-devices;
         playback-devices: root.playback-devices;
         selected-capture-id: root.selected-capture-id;
         selected-playback-id: root.selected-playback-id;
         selected-capture-name <=> root.selected-capture-name;
         selected-playback-name <=> root.selected-playback-name;
+        nickname <=> root.onboarding-nickname;
         crew-selected(id) => { root.onboarding-crew-selected(id); }
         create-crew-requested(name) => { root.onboarding-create-crew(name); }
         continue-to-step(s) => { root.onboarding-continue(s); }
+        login-requested => { root.onboarding-login-requested(); }
         link-email(email, pw) => { root.onboarding-link-email(email, pw); }
         skip-identity => { root.onboarding-skip-identity(); }
         capture-device-selected(id) => { root.onboarding-capture-device-selected(id); }
