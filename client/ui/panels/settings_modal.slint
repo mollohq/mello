@@ -1,7 +1,7 @@
 import { Theme } from "../theme.slint";
 import { AudioDeviceData } from "../types.slint";
 
-component DeviceDropdown inherits Rectangle {
+export component DeviceDropdown inherits Rectangle {
     in property <string> label;
     in property <[AudioDeviceData]> devices: [];
     in property <string> selected-id: "";

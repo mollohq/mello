@@ -170,6 +170,14 @@ pub struct WsError {
     pub message: Option<String>,
 }
 
+// --- REST API: group listing ---
+
+#[derive(Debug, Deserialize)]
+pub struct ApiGroupList {
+    pub groups: Option<Vec<ApiGroup>>,
+    pub cursor: Option<String>,
+}
+
 // --- REST API: channel message history ---
 
 #[derive(Debug, Deserialize)]

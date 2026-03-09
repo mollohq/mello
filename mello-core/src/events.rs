@@ -24,6 +24,11 @@ pub enum Event {
     LoggedIn { user: User },
     LoginFailed { reason: String },
 
+    DeviceAuthed { user: User },
+    DiscoverCrewsLoaded { crews: Vec<Crew> },
+    EmailLinked,
+    EmailLinkFailed { reason: String },
+
     CrewCreated { crew: Crew },
     CrewCreateFailed { reason: String },
     CrewsLoaded { crews: Vec<Crew> },

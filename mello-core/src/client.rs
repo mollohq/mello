@@ -110,11 +110,23 @@ impl Client {
             Command::TryRestore => {
                 self.handle_restore().await;
             }
+            Command::DeviceAuth { device_id } => {
+                self.handle_device_auth(&device_id).await;
+            }
             Command::Login { email, password } => {
                 self.handle_login(&email, &password).await;
             }
+            Command::LinkEmail { email, password } => {
+                self.handle_link_email(&email, &password).await;
+            }
             Command::Logout => {
                 self.handle_logout().await;
+            }
+            Command::DiscoverCrews => {
+                self.handle_discover_crews().await;
+            }
+            Command::JoinCrew { crew_id } => {
+                self.handle_join_crew(&crew_id).await;
             }
             Command::CreateCrew { name } => {
                 self.handle_create_crew(&name).await;
@@ -154,6 +166,62 @@ impl Client {
             }
             Command::SetDebugMode { enabled } => {
                 self.voice.set_debug_mode(enabled);
+            }
+        }
+    }
+
+    async fn handle_device_auth(&mut self, device_id: &str) {
+        match self.nakama.authenticate_device(device_id).await {
+            Ok(user) => {
+                log::info!("Device auth succeeded for {}", user.id);
+                if let Some(rt) = self.nakama.refresh_token() {
+                    let _ = session::save(rt);
+                }
+                let _ = self.event_tx.send(Event::DeviceAuthed { user });
+            }
+            Err(e) => {
+                log::error!("Device auth failed: {}", e);
+                let _ = self.event_tx.send(Event::LoginFailed {
+                    reason: e.to_string(),
+                });
+            }
+        }
+    }
+
+    async fn handle_discover_crews(&self) {
+        match self.nakama.list_groups(50).await {
+            Ok(crews) => {
+                let _ = self.event_tx.send(Event::DiscoverCrewsLoaded { crews });
+            }
+            Err(e) => {
+                log::error!("Failed to discover crews: {}", e);
+            }
+        }
+    }
+
+    async fn handle_join_crew(&mut self, crew_id: &str) {
+        if let Err(e) = self.nakama.join_group(crew_id).await {
+            log::error!("Failed to join crew {}: {}", crew_id, e);
+            let _ = self.event_tx.send(Event::Error {
+                message: format!("Failed to join crew: {}", e),
+            });
+            return;
+        }
+        self.handle_select_crew(crew_id).await;
+        self.load_crews().await;
+    }
+
+    async fn handle_link_email(&mut self, email: &str, password: &str) {
+        match self.nakama.link_email(email, password).await {
+            Ok(()) => {
+                log::info!("Email linked successfully");
+                let _ = self.event_tx.send(Event::EmailLinked);
+            }
+            Err(e) => {
+                log::error!("Email link failed: {}", e);
+                let _ = self.event_tx.send(Event::EmailLinkFailed {
+                    reason: e.to_string(),
+                });
             }
         }
     }

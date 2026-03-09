@@ -101,6 +101,38 @@ impl NakamaClient {
         Ok(user)
     }
 
+    pub async fn authenticate_device(&mut self, device_id: &str) -> Result<User> {
+        let url = format!(
+            "{}/v2/account/authenticate/device?create=true",
+            self.config.http_base()
+        );
+
+        let resp = self.http.post(&url)
+            .basic_auth(&self.config.nakama_key, Some(""))
+            .json(&serde_json::json!({ "id": device_id }))
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            let err: ApiError = resp.json().await.unwrap_or(ApiError {
+                error: Some("Unknown error".into()),
+                message: None,
+                code: None,
+            });
+            return Err(Error::AuthFailed(
+                err.message.or(err.error).unwrap_or_default(),
+            ));
+        }
+
+        let session: ApiSession = resp.json().await?;
+        self.token = Some(session.token.clone());
+        self.refresh_token = session.refresh_token;
+
+        let user = self.get_account().await?;
+        self.current_user = Some(user.clone());
+        Ok(user)
+    }
+
     pub async fn refresh_session(&mut self, refresh_token: &str) -> Result<User> {
         let url = format!(
             "{}/v2/account/session/refresh",
@@ -242,6 +274,84 @@ impl NakamaClient {
             .collect();
 
         Ok(crews)
+    }
+
+    pub async fn list_groups(&self, limit: u32) -> Result<Vec<Crew>> {
+        let token = self.bearer()?;
+        let url = format!(
+            "{}/v2/group?limit={}&open=true",
+            self.config.http_base(),
+            limit
+        );
+
+        let resp = self.http.get(&url)
+            .bearer_auth(&token)
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            return Err(Error::Server("Failed to list groups".into()));
+        }
+
+        let list: ApiGroupList = resp.json().await?;
+        let crews = list.groups.unwrap_or_default()
+            .into_iter()
+            .filter_map(|g| {
+                Some(Crew {
+                    id: g.id?,
+                    name: g.name.unwrap_or_default(),
+                    member_count: g.edge_count.unwrap_or(0),
+                    max_members: g.max_count.unwrap_or(6),
+                    open: g.open.unwrap_or(false),
+                })
+            })
+            .collect();
+
+        Ok(crews)
+    }
+
+    pub async fn join_group(&self, group_id: &str) -> Result<()> {
+        let token = self.bearer()?;
+        let url = format!("{}/v2/group/{}/join", self.config.http_base(), group_id);
+
+        let resp = self.http.post(&url)
+            .bearer_auth(&token)
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            let err_text = resp.text().await.unwrap_or_default();
+            return Err(Error::Server(err_text));
+        }
+
+        Ok(())
+    }
+
+    pub async fn link_email(&self, email: &str, password: &str) -> Result<()> {
+        let token = self.bearer()?;
+        let url = format!("{}/v2/account/link/email", self.config.http_base());
+
+        let resp = self.http.post(&url)
+            .bearer_auth(&token)
+            .json(&serde_json::json!({
+                "email": email,
+                "password": password
+            }))
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            let err: ApiError = resp.json().await.unwrap_or(ApiError {
+                error: Some("Unknown error".into()),
+                message: None,
+                code: None,
+            });
+            return Err(Error::AuthFailed(
+                err.message.or(err.error).unwrap_or_default(),
+            ));
+        }
+
+        Ok(())
     }
 
     pub async fn create_crew(&self, name: &str) -> Result<Crew> {

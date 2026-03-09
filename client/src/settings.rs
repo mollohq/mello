@@ -8,6 +8,8 @@ pub struct Settings {
     pub capture_device_id: Option<String>,
     pub playback_device_id: Option<String>,
     pub dark_theme: bool,
+    pub device_id: Option<String>,
+    pub onboarding_step: u8,
 }
 
 impl Default for Settings {
@@ -16,6 +18,8 @@ impl Default for Settings {
             capture_device_id: None,
             playback_device_id: None,
             dark_theme: true,
+            device_id: None,
+            onboarding_step: 0,
         }
     }
 }
@@ -59,6 +63,8 @@ mod tests {
             capture_device_id: Some("mic_123".into()),
             playback_device_id: Some("spk_456".into()),
             dark_theme: false,
+            device_id: Some("dev-abc".into()),
+            onboarding_step: 4,
         };
         let toml_str = toml::to_string(&s).unwrap();
         let decoded: Settings = toml::from_str(&toml_str).unwrap();

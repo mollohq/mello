@@ -3,8 +3,12 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Command {
     TryRestore,
+    DeviceAuth { device_id: String },
     Login { email: String, password: String },
+    LinkEmail { email: String, password: String },
     Logout,
+    DiscoverCrews,
+    JoinCrew { crew_id: String },
     CreateCrew { name: String },
     SelectCrew { crew_id: String },
     LeaveCrew,

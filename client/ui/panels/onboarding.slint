@@ -1,0 +1,885 @@
+import { Theme } from "../theme.slint";
+import { CrewData, AudioDeviceData } from "../types.slint";
+import { DeviceDropdown } from "settings_modal.slint";
+
+// ─── Reusable components ───
+
+component CrewCard inherits Rectangle {
+    in property <string> crew-name;
+    in property <string> crew-tagline;
+    in property <int> member-count;
+    in property <int> online-count;
+    callback clicked();
+
+    background: Theme.surface;
+    border-radius: Theme.r-outer;
+    border-width: 1px;
+    border-color: card-touch.has-hover ? Theme.accent : Theme.graphic-light;
+
+    card-touch := TouchArea {
+        clicked => { root.clicked(); }
+    }
+
+    VerticalLayout {
+        padding: 24px;
+        spacing: 8px;
+        alignment: space-between;
+
+        VerticalLayout {
+            spacing: 4px;
+
+            HorizontalLayout {
+                alignment: space-between;
+
+                Text {
+                    text: crew-name;
+                    font-family: Theme.font-mono;
+                    font-size: 16px;
+                    font-weight: 500;
+                    color: Theme.text-primary;
+                    overflow: elide;
+                }
+
+                if online-count > 0: Rectangle {
+                    width: pill-text.preferred-width + 28px;
+                    height: 20px;
+                    border-radius: Theme.r-pill;
+                    border-width: 1px;
+                    border-color: Theme.graphic-light;
+                    background: #00000050;
+
+                    HorizontalLayout {
+                        alignment: center;
+                        spacing: 6px;
+
+                        Rectangle {
+                            width: 6px;
+                            height: 6px;
+                            border-radius: 3px;
+                            background: Theme.accent;
+                        }
+
+                        pill-text := Text {
+                            text: "LIVE";
+                            font-family: Theme.font-mono;
+                            font-size: 10px;
+                            color: Theme.text-secondary;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+            }
+
+            if crew-tagline != "": Text {
+                text: crew-tagline;
+                font-size: 13px;
+                color: Theme.text-secondary;
+                wrap: word-wrap;
+                overflow: elide;
+            }
+        }
+
+        HorizontalLayout {
+            alignment: space-between;
+
+            Text {
+                text: member-count + (member-count == 1 ? " member" : " members");
+                font-family: Theme.font-mono;
+                font-size: 11px;
+                color: Theme.text-tertiary;
+                vertical-alignment: center;
+            }
+
+            Text {
+                text: card-touch.has-hover ? "Connect →" : "Join";
+                font-family: Theme.font-mono;
+                font-size: 11px;
+                font-weight: 500;
+                color: card-touch.has-hover ? Theme.accent : Theme.text-secondary;
+                vertical-alignment: center;
+            }
+        }
+    }
+}
+
+component CreateCrewCard inherits Rectangle {
+    callback clicked();
+
+    background: transparent;
+    border-radius: Theme.r-outer;
+    border-width: 1px;
+    border-color: create-touch.has-hover ? Theme.accent : Theme.graphic-med;
+
+    create-touch := TouchArea {
+        clicked => { root.clicked(); }
+    }
+
+    VerticalLayout {
+        alignment: center;
+        spacing: 16px;
+
+        Rectangle {
+            width: 48px;
+            height: 48px;
+            border-radius: 12px;
+            background: create-touch.has-hover ? Theme.accent : Theme.graphic-light;
+
+            Text {
+                text: "+";
+                font-size: 24px;
+                color: Theme.text-primary;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+
+        Text {
+            text: "START A NEW CREW";
+            font-family: Theme.font-mono;
+            font-size: 14px;
+            color: Theme.text-secondary;
+            horizontal-alignment: center;
+            letter-spacing: 1px;
+        }
+    }
+}
+
+component StatsFillerCard inherits Rectangle {
+    background: #FF1E5605;
+    border-radius: Theme.r-outer;
+    border-width: 1px;
+    border-color: Theme.graphic-light;
+
+    VerticalLayout {
+        alignment: center;
+
+        Text {
+            text: "SYNCING GLOBAL FEED...";
+            font-family: Theme.font-mono;
+            font-size: 10px;
+            color: Theme.text-tertiary;
+            horizontal-alignment: center;
+        }
+    }
+}
+
+component AvatarOption inherits Rectangle {
+    in property <string> label;
+    in property <bool> selected: false;
+    callback clicked();
+
+    horizontal-stretch: 1;
+    border-radius: Theme.r-inner;
+    background: selected ? #FF1E561A : Theme.surface;
+    border-width: selected ? 2px : 1px;
+    border-color: selected ? Theme.accent : (av-touch.has-hover ? Theme.graphic-med : Theme.graphic-light);
+
+    av-touch := TouchArea {
+        clicked => { root.clicked(); }
+    }
+
+    Text {
+        text: label;
+        font-family: Theme.font-mono;
+        font-size: 18px;
+        color: selected ? Theme.text-primary : Theme.text-tertiary;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
+
+component StepIndicator inherits HorizontalLayout {
+    in property <int> current-step: 1;
+    callback step-clicked(int);
+
+    spacing: 12px;
+    alignment: start;
+
+    Text {
+        text: current-step < 10 ? "STEP 0" + current-step + " / 03" : "STEP " + current-step + " / 03";
+        font-family: Theme.font-mono;
+        font-size: 12px;
+        color: Theme.accent;
+        letter-spacing: 1px;
+        vertical-alignment: center;
+    }
+
+    HorizontalLayout {
+        spacing: 6px;
+
+        Rectangle {
+            width: 40px;
+            height: 2px;
+            background: current-step >= 1 ? Theme.accent : Theme.graphic-med;
+
+            TouchArea {
+                clicked => { root.step-clicked(1); }
+            }
+        }
+
+        Rectangle {
+            width: 40px;
+            height: 2px;
+            background: current-step >= 2 ? Theme.accent : Theme.graphic-med;
+
+            TouchArea {
+                clicked => { root.step-clicked(2); }
+            }
+        }
+
+        Rectangle {
+            width: 40px;
+            height: 2px;
+            background: current-step >= 3 ? Theme.accent : Theme.graphic-med;
+
+            TouchArea {
+                clicked => { root.step-clicked(3); }
+            }
+        }
+    }
+}
+
+component InputField inherits Rectangle {
+    in-out property <string> text <=> ti.text;
+    in property <string> placeholder;
+    in property <bool> is-password: false;
+
+    height: 52px;
+    background: Theme.surface;
+    border-radius: Theme.r-inner;
+    border-width: 1px;
+    border-color: ti.has-focus ? Theme.graphic-med : Theme.graphic-light;
+
+    ti := TextInput {
+        x: 16px;
+        width: parent.width - 32px;
+        height: parent.height;
+        font-family: Theme.font-mono;
+        font-size: 14px;
+        color: Theme.text-primary;
+        horizontal-alignment: left;
+        vertical-alignment: center;
+        input-type: is-password ? InputType.password : InputType.text;
+    }
+
+    if ti.text == "": Text {
+        x: 16px;
+        color: Theme.text-tertiary;
+        font-family: Theme.font-mono;
+        font-size: 14px;
+        vertical-alignment: center;
+        text: placeholder;
+    }
+}
+
+component AccentButton inherits Rectangle {
+    in property <string> label;
+    in property <bool> enabled: true;
+    callback clicked();
+
+    height: 52px;
+    background: enabled ? Theme.accent : Theme.graphic-med;
+    border-radius: Theme.r-inner;
+
+    btn-touch := TouchArea {
+        clicked => {
+            if root.enabled { root.clicked(); }
+        }
+    }
+
+    HorizontalLayout {
+        alignment: center;
+        spacing: 12px;
+
+        Text {
+            text: label;
+            font-family: Theme.font-mono;
+            font-size: 14px;
+            font-weight: 600;
+            color: #FFFFFF;
+            vertical-alignment: center;
+        }
+
+        Text {
+            text: "→";
+            font-size: 16px;
+            color: #FFFFFF;
+            vertical-alignment: center;
+        }
+    }
+}
+
+component AuthButton inherits Rectangle {
+    in property <string> label;
+    in property <bool> subdued: false;
+    callback clicked();
+
+    height: 52px;
+    background: auth-touch.has-hover ? #FFFFFF05 : transparent;
+    border-radius: Theme.r-inner;
+    border-width: 1px;
+    border-color: auth-touch.has-hover ? Theme.graphic-med : Theme.graphic-light;
+    opacity: subdued ? 0.6 : 1.0;
+
+    auth-touch := TouchArea {
+        clicked => { root.clicked(); }
+    }
+
+    HorizontalLayout {
+        padding-left: 16px;
+        spacing: 16px;
+        alignment: start;
+
+        Text {
+            text: label;
+            font-family: Theme.font-mono;
+            font-size: 13px;
+            color: Theme.text-primary;
+            vertical-alignment: center;
+        }
+    }
+}
+
+// ─── Main onboarding component ───
+
+export component Onboarding inherits Rectangle {
+    in property <int> step: 1;
+    in property <[CrewData]> discover-crews: [];
+    in property <string> link-error: "";
+
+    // Audio device props for Step 2
+    in property <[AudioDeviceData]> capture-devices: [];
+    in property <[AudioDeviceData]> playback-devices: [];
+    in property <string> selected-capture-id: "";
+    in property <string> selected-playback-id: "";
+    in-out property <string> selected-capture-name: "System Default";
+    in-out property <string> selected-playback-name: "System Default";
+
+    in-out property <string> nickname: "";
+    in-out property <int> selected-avatar: 0;
+
+    callback crew-selected(string);
+    callback create-crew-requested(string);
+    callback continue-to-step(int);
+    callback link-email(string, string);
+    callback skip-identity();
+    callback capture-device-selected(string);
+    callback playback-device-selected(string);
+
+    background: Theme.bg-app;
+
+    // ===================== STEP 1: Discover crews =====================
+    if step == 1: Rectangle {
+        background: Theme.bg-app;
+
+        VerticalLayout {
+            padding-top: 60px;
+            padding-left: 80px;
+            padding-right: 80px;
+            padding-bottom: 40px;
+            spacing: 48px;
+
+            // Header
+            VerticalLayout {
+                spacing: 8px;
+
+                StepIndicator {
+                    current-step: 1;
+                    step-clicked(s) => { root.continue-to-step(s); }
+                }
+
+                Text {
+                    text: "Discover Your Crew";
+                    font-size: 42px;
+                    font-weight: 500;
+                    color: Theme.text-primary;
+                    letter-spacing: -0.5px;
+                }
+
+                Text {
+                    text: "Join an existing squad to start collaborating, or forge a new path with your own team.";
+                    font-size: 16px;
+                    color: Theme.text-secondary;
+                }
+            }
+
+            // Bento grid
+            VerticalLayout {
+                vertical-stretch: 1;
+                spacing: 16px;
+
+                // Row 1: [featured crew 0 (2x)] [crew 1] [crew 2]
+                HorizontalLayout {
+                    vertical-stretch: 1;
+                    spacing: 16px;
+
+                    CrewCard {
+                        horizontal-stretch: 2;
+                        crew-name: discover-crews.length > 0 ? discover-crews[0].name : "";
+                        crew-tagline: "";
+                        member-count: discover-crews.length > 0 ? discover-crews[0].member-count : 0;
+                        online-count: discover-crews.length > 0 ? discover-crews[0].online-count : 0;
+                        visible: discover-crews.length > 0;
+                        clicked => {
+                            if discover-crews.length > 0 {
+                                root.crew-selected(discover-crews[0].id);
+                            }
+                        }
+                    }
+
+                    CrewCard {
+                        horizontal-stretch: 1;
+                        crew-name: discover-crews.length > 1 ? discover-crews[1].name : "";
+                        crew-tagline: "";
+                        member-count: discover-crews.length > 1 ? discover-crews[1].member-count : 0;
+                        online-count: discover-crews.length > 1 ? discover-crews[1].online-count : 0;
+                        visible: discover-crews.length > 1;
+                        clicked => {
+                            if discover-crews.length > 1 {
+                                root.crew-selected(discover-crews[1].id);
+                            }
+                        }
+                    }
+
+                    CrewCard {
+                        horizontal-stretch: 1;
+                        crew-name: discover-crews.length > 2 ? discover-crews[2].name : "";
+                        crew-tagline: "";
+                        member-count: discover-crews.length > 2 ? discover-crews[2].member-count : 0;
+                        online-count: discover-crews.length > 2 ? discover-crews[2].online-count : 0;
+                        visible: discover-crews.length > 2;
+                        clicked => {
+                            if discover-crews.length > 2 {
+                                root.crew-selected(discover-crews[2].id);
+                            }
+                        }
+                    }
+                }
+
+                // Row 2: [create CTA] [featured crew 3 (2x)] [stats filler]
+                HorizontalLayout {
+                    vertical-stretch: 1;
+                    spacing: 16px;
+
+                    CreateCrewCard {
+                        horizontal-stretch: 1;
+                        clicked => {
+                            root.create-crew-requested("New Crew");
+                        }
+                    }
+
+                    CrewCard {
+                        horizontal-stretch: 2;
+                        crew-name: discover-crews.length > 3 ? discover-crews[3].name : "";
+                        crew-tagline: "";
+                        member-count: discover-crews.length > 3 ? discover-crews[3].member-count : 0;
+                        online-count: discover-crews.length > 3 ? discover-crews[3].online-count : 0;
+                        visible: discover-crews.length > 3;
+                        clicked => {
+                            if discover-crews.length > 3 {
+                                root.crew-selected(discover-crews[3].id);
+                            }
+                        }
+                    }
+
+                    StatsFillerCard {
+                        horizontal-stretch: 1;
+                    }
+                }
+            }
+        }
+    }
+
+    // ===================== STEP 2: Profile setup =====================
+    if step == 2: Rectangle {
+        background: Theme.bg-app;
+
+        VerticalLayout {
+            padding-top: 80px;
+            padding-left: 120px;
+            padding-right: 120px;
+            padding-bottom: 40px;
+            spacing: 0px;
+
+            // Header
+            VerticalLayout {
+                spacing: 12px;
+
+                StepIndicator {
+                    current-step: 2;
+                    step-clicked(s) => { root.continue-to-step(s); }
+                }
+
+                Text {
+                    text: "Identify yourself.";
+                    font-size: 32px;
+                    font-weight: 500;
+                    color: Theme.text-primary;
+                    letter-spacing: -0.5px;
+                }
+
+                Rectangle { height: 40px; }
+            }
+
+            // Two-column grid
+            HorizontalLayout {
+                vertical-stretch: 1;
+                spacing: 80px;
+
+                // Left column: Avatar + nickname
+                VerticalLayout {
+                    horizontal-stretch: 1;
+
+                    Text {
+                        text: "CHOOSE AN IDENTITY";
+                        font-size: 11px;
+                        font-weight: 600;
+                        color: Theme.text-secondary;
+                        letter-spacing: 1.3px;
+                    }
+
+                    Rectangle { height: 24px; }
+
+                    // Avatar grid 4x2
+                    VerticalLayout {
+                        spacing: 16px;
+
+                        HorizontalLayout {
+                            spacing: 16px;
+                            height: 72px;
+
+                            AvatarOption {
+                                label: "ME";
+                                selected: selected-avatar == 0;
+                                clicked => { selected-avatar = 0; }
+                            }
+                            AvatarOption {
+                                label: "A1";
+                                selected: selected-avatar == 1;
+                                clicked => { selected-avatar = 1; }
+                            }
+                            AvatarOption {
+                                label: "A2";
+                                selected: selected-avatar == 2;
+                                clicked => { selected-avatar = 2; }
+                            }
+                            AvatarOption {
+                                label: "A3";
+                                selected: selected-avatar == 3;
+                                clicked => { selected-avatar = 3; }
+                            }
+                        }
+
+                        HorizontalLayout {
+                            spacing: 16px;
+                            height: 72px;
+
+                            AvatarOption {
+                                label: "A4";
+                                selected: selected-avatar == 4;
+                                clicked => { selected-avatar = 4; }
+                            }
+                            AvatarOption {
+                                label: "A5";
+                                selected: selected-avatar == 5;
+                                clicked => { selected-avatar = 5; }
+                            }
+                            AvatarOption {
+                                label: "A6";
+                                selected: selected-avatar == 6;
+                                clicked => { selected-avatar = 6; }
+                            }
+                            AvatarOption {
+                                label: "A7";
+                                selected: selected-avatar == 7;
+                                clicked => { selected-avatar = 7; }
+                            }
+                        }
+                    }
+
+                    Rectangle { height: 40px; }
+
+                    Text {
+                        text: "NICKNAME";
+                        font-size: 11px;
+                        font-weight: 600;
+                        color: Theme.text-secondary;
+                        letter-spacing: 1.3px;
+                    }
+
+                    Rectangle { height: 12px; }
+
+                    InputField {
+                        text <=> root.nickname;
+                        placeholder: "Enter handle...";
+                    }
+                }
+
+                // Right column: Device selectors
+                VerticalLayout {
+                    horizontal-stretch: 1;
+
+                    Text {
+                        text: "COMMUNICATION CHANNELS";
+                        font-size: 11px;
+                        font-weight: 600;
+                        color: Theme.text-secondary;
+                        letter-spacing: 1.3px;
+                    }
+
+                    Rectangle { height: 24px; }
+
+                    VerticalLayout {
+                        spacing: 32px;
+
+                        VerticalLayout {
+                            spacing: 8px;
+
+                            Text {
+                                text: "INPUT DEVICE";
+                                font-size: 10px;
+                                font-weight: 600;
+                                color: Theme.text-secondary;
+                                letter-spacing: 1.3px;
+                            }
+
+                            DeviceDropdown {
+                                devices: root.capture-devices;
+                                selected-id: root.selected-capture-id;
+                                selected-name <=> root.selected-capture-name;
+                                device-selected(id) => { root.capture-device-selected(id); }
+                            }
+                        }
+
+                        VerticalLayout {
+                            spacing: 8px;
+
+                            Text {
+                                text: "OUTPUT DEVICE";
+                                font-size: 10px;
+                                font-weight: 600;
+                                color: Theme.text-secondary;
+                                letter-spacing: 1.3px;
+                            }
+
+                            DeviceDropdown {
+                                devices: root.playback-devices;
+                                selected-id: root.selected-playback-id;
+                                selected-name <=> root.selected-playback-name;
+                                device-selected(id) => { root.playback-device-selected(id); }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Footer with Continue button
+            Rectangle { height: 24px; }
+
+            HorizontalLayout {
+                height: 52px;
+                alignment: end;
+
+                AccentButton {
+                    width: 200px;
+                    label: "Continue";
+                    enabled: nickname != "";
+                    clicked => { root.continue-to-step(3); }
+                }
+            }
+        }
+    }
+
+    // ===================== STEP 3: Lock in identity =====================
+    if step == 3: Rectangle {
+        background: Theme.bg-app;
+
+        VerticalLayout {
+            padding-top: 80px;
+            padding-left: 120px;
+            padding-right: 120px;
+            padding-bottom: 40px;
+            spacing: 0px;
+
+            // Header: top-left aligned
+            VerticalLayout {
+                spacing: 8px;
+
+                StepIndicator {
+                    current-step: 3;
+                    step-clicked(s) => { root.continue-to-step(s); }
+                }
+
+                Text {
+                    text: "Lock in your identity.";
+                    font-size: 32px;
+                    font-weight: 500;
+                    color: Theme.text-primary;
+                    letter-spacing: -0.5px;
+                    horizontal-alignment: left;
+                }
+
+                Text {
+                    text: "Save your setup so you can jump back in anytime.";
+                    font-size: 14px;
+                    color: Theme.text-secondary;
+                    font-family: Theme.font-mono;
+                    horizontal-alignment: left;
+                }
+
+                Rectangle { height: 40px; }
+            }
+
+            // Centered content
+            VerticalLayout {
+                vertical-stretch: 1;
+                alignment: start;
+
+                // Summary card
+                HorizontalLayout {
+                    alignment: center;
+
+                    Rectangle {
+                        width: 320px;
+                        height: 80px;
+                        background: Theme.surface;
+                        border-radius: Theme.r-inner;
+                        border-width: 1px;
+                        border-color: Theme.graphic-light;
+
+                        HorizontalLayout {
+                            padding-left: 24px;
+                            padding-right: 24px;
+                            spacing: 20px;
+                            alignment: start;
+
+                            Rectangle {
+                                width: 48px;
+                                height: 48px;
+                                background: #FF1E561A;
+                                border-radius: 4px;
+                                border-width: 1px;
+                                border-color: Theme.accent;
+
+                                Text {
+                                    text: nickname != "" ? nickname : "?";
+                                    font-family: Theme.font-mono;
+                                    font-size: 18px;
+                                    color: Theme.text-primary;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                    overflow: elide;
+                                }
+                            }
+
+                            VerticalLayout {
+                                alignment: center;
+                                spacing: 4px;
+
+                                Text {
+                                    text: nickname != "" ? nickname : "Anonymous";
+                                    font-family: Theme.font-mono;
+                                    font-size: 16px;
+                                    font-weight: 500;
+                                    color: Theme.text-primary;
+                                }
+
+                                HorizontalLayout {
+                                    spacing: 8px;
+
+                                    Rectangle {
+                                        width: 6px;
+                                        height: 6px;
+                                        border-radius: 3px;
+                                        background: Theme.accent-green;
+                                    }
+
+                                    Text {
+                                        text: "ONLINE";
+                                        font-size: 12px;
+                                        color: Theme.text-secondary;
+                                        letter-spacing: 0.5px;
+                                        vertical-alignment: center;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Rectangle { height: 64px; }
+
+                // Auth grid: 2x2 social buttons + email spanning full width
+                HorizontalLayout {
+                    alignment: center;
+
+                    VerticalLayout {
+                        width: 576px;
+                        spacing: 16px;
+
+                        // Row 1: GitHub | Discord
+                        HorizontalLayout {
+                            spacing: 16px;
+
+                            AuthButton {
+                                horizontal-stretch: 1;
+                                label: "Sync with GitHub";
+                            }
+
+                            AuthButton {
+                                horizontal-stretch: 1;
+                                label: "Sync with Discord";
+                            }
+                        }
+
+                        // Row 2: Steam | (empty to match 2-col)
+                        HorizontalLayout {
+                            spacing: 16px;
+
+                            AuthButton {
+                                horizontal-stretch: 1;
+                                label: "Sync with Steam";
+                            }
+
+                            Rectangle {
+                                horizontal-stretch: 1;
+                            }
+                        }
+
+                        // Email button: full width, subdued
+                        AuthButton {
+                            label: "Use email & password";
+                            subdued: true;
+                        }
+                    }
+                }
+
+                Rectangle { height: 48px; }
+
+                // Skip link
+                HorizontalLayout {
+                    alignment: center;
+
+                    Rectangle {
+                        width: skip-text.preferred-width + 16px;
+                        height: 24px;
+
+                        skip-text := Text {
+                            text: "Skip for now — continue as guest";
+                            font-family: Theme.font-mono;
+                            font-size: 11px;
+                            color: skip-touch.has-hover ? Theme.text-secondary : Theme.text-tertiary;
+                            letter-spacing: 0.5px;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+
+                        skip-touch := TouchArea {
+                            clicked => { root.skip-identity(); }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

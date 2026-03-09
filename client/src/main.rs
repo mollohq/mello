@@ -8,6 +8,7 @@ use std::time::Duration;
 use slint::Model;
 use mello_core::{Client, Command, Config, Event};
 use settings::Settings;
+use uuid::Uuid;
 
 fn nakama_config() -> Config {
     #[cfg(feature = "production")]
@@ -65,6 +66,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let loopback = std::env::args().any(|a| a == "--loopback");
 
+    if std::env::args().any(|a| a == "--reset") {
+        log::info!("--reset flag detected, wiping all settings");
+        Settings::default().save();
+    }
+
     let rt = tokio::runtime::Runtime::new()?;
 
     let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel::<Command>(256);
@@ -92,7 +98,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    let _ = cmd_tx.try_send(Command::TryRestore);
+    // Decide startup path based on onboarding state
+    {
+        let mut s = settings.borrow_mut();
+        if s.onboarding_step > 3 {
+            // Onboarding complete: normal session restore
+            let _ = cmd_tx.try_send(Command::TryRestore);
+        } else {
+            // Onboarding needed: device auth first
+            let device_id = match s.device_id.clone() {
+                Some(id) => id,
+                None => {
+                    let id = Uuid::new_v4().to_string();
+                    s.device_id = Some(id.clone());
+                    s.save();
+                    id
+                }
+            };
+            let _ = cmd_tx.try_send(Command::DeviceAuth { device_id });
+        }
+        app.set_onboarding_step(s.onboarding_step as i32);
+    }
 
     // --- Login ---
     {
@@ -254,6 +280,104 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
+    // --- Onboarding: crew selected ---
+    {
+        let cmd = cmd_tx.clone();
+        let app_weak = app.as_weak();
+        let s = settings.clone();
+        app.on_onboarding_crew_selected(move |crew_id| {
+            let _ = cmd.try_send(Command::JoinCrew {
+                crew_id: crew_id.to_string(),
+            });
+            let _ = cmd.try_send(Command::ListAudioDevices);
+            if let Some(app) = app_weak.upgrade() {
+                app.set_onboarding_step(2);
+                let mut settings = s.borrow_mut();
+                settings.onboarding_step = 2;
+                settings.save();
+            }
+        });
+    }
+    // --- Onboarding: create crew ---
+    {
+        let cmd = cmd_tx.clone();
+        let app_weak = app.as_weak();
+        let s = settings.clone();
+        app.on_onboarding_create_crew(move |name| {
+            let _ = cmd.try_send(Command::CreateCrew {
+                name: name.to_string(),
+            });
+            let _ = cmd.try_send(Command::ListAudioDevices);
+            if let Some(app) = app_weak.upgrade() {
+                app.set_onboarding_step(2);
+                let mut settings = s.borrow_mut();
+                settings.onboarding_step = 2;
+                settings.save();
+            }
+        });
+    }
+    // --- Onboarding: continue to step ---
+    {
+        let app_weak = app.as_weak();
+        let s = settings.clone();
+        app.on_onboarding_continue(move |step| {
+            if let Some(app) = app_weak.upgrade() {
+                app.set_onboarding_step(step);
+                let mut settings = s.borrow_mut();
+                settings.onboarding_step = step as u8;
+                settings.save();
+            }
+            
+        });
+    }
+    // --- Onboarding: link email ---
+    {
+        let cmd = cmd_tx.clone();
+        app.on_onboarding_link_email(move |email, password| {
+            let _ = cmd.try_send(Command::LinkEmail {
+                email: email.to_string(),
+                password: password.to_string(),
+            });
+        });
+    }
+    // --- Onboarding: skip identity ---
+    {
+        let app_weak = app.as_weak();
+        let s = settings.clone();
+        app.on_onboarding_skip_identity(move || {
+            if let Some(app) = app_weak.upgrade() {
+                app.set_onboarding_step(4);
+                app.set_logged_in(true);
+                let mut settings = s.borrow_mut();
+                settings.onboarding_step = 4;
+                settings.save();
+            }
+        });
+    }
+    // --- Onboarding: device selection ---
+    {
+        let cmd = cmd_tx.clone();
+        let s = settings.clone();
+        app.on_onboarding_capture_device_selected(move |id| {
+            let id_str = id.to_string();
+            let _ = cmd.try_send(Command::SetCaptureDevice { id: id_str.clone() });
+            let mut settings = s.borrow_mut();
+            settings.capture_device_id = Some(id_str);
+            settings.save();
+        });
+    }
+    {
+        let cmd = cmd_tx.clone();
+        let s = settings.clone();
+        app.on_onboarding_playback_device_selected(move |id| {
+            let id_str = id.to_string();
+            let _ = cmd.try_send(Command::SetPlaybackDevice { id: id_str.clone() });
+            let mut settings = s.borrow_mut();
+            settings.playback_device_id = Some(id_str);
+            settings.save();
+        });
+    }
+
     // --- Presence ---
     app.on_presence_changed(move |status| {
         log::info!("Presence changed to {}", status);
@@ -263,11 +387,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let app_weak = app.as_weak();
     let s = settings.clone();
     let dbg_hist = Rc::new(RefCell::new(DebugHistory::new()));
+    let event_cmd_tx = cmd_tx.clone();
     let timer = slint::Timer::default();
     timer.start(slint::TimerMode::Repeated, Duration::from_millis(50), move || {
         while let Ok(event) = event_rx.try_recv() {
             if let Some(app) = app_weak.upgrade() {
-                handle_event(&app, event, &s, &dbg_hist);
+                handle_event(&app, event, &s, &dbg_hist, &event_cmd_tx);
             }
         }
     });
@@ -339,10 +464,43 @@ fn set_level_history(app: &MainWindow, hist: &DebugHistory) {
     set_lh!(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29);
 }
 
-fn handle_event(app: &MainWindow, event: Event, settings: &Rc<RefCell<Settings>>, dbg_hist: &Rc<RefCell<DebugHistory>>) {
+fn handle_event(app: &MainWindow, event: Event, settings: &Rc<RefCell<Settings>>, dbg_hist: &Rc<RefCell<DebugHistory>>, cmd_tx: &tokio::sync::mpsc::Sender<Command>) {
     match event {
         Event::Restoring => {
             app.set_login_loading(true);
+        }
+        Event::DeviceAuthed { user } => {
+            log::info!("UI: device authed as {}", user.id);
+            app.set_user_name(user.display_name.into());
+            app.set_user_tag(user.tag.into());
+            let step = app.get_onboarding_step();
+            if step == 0 || step == 1 {
+                app.set_onboarding_step(1);
+                let _ = cmd_tx.try_send(Command::DiscoverCrews);
+            }
+        }
+        Event::DiscoverCrewsLoaded { crews } => {
+            let model: Vec<CrewData> = crews.into_iter().map(|c| CrewData {
+                id: c.id.clone().into(),
+                name: c.name.into(),
+                member_count: c.member_count,
+                online_count: 0,
+                ..Default::default()
+            }).collect();
+            let rc = Rc::new(slint::VecModel::from(model));
+            app.set_discover_crews(rc.into());
+        }
+        Event::EmailLinked => {
+            log::info!("UI: email linked successfully");
+            app.set_onboarding_step(4);
+            app.set_logged_in(true);
+            let mut s = settings.borrow_mut();
+            s.onboarding_step = 4;
+            s.save();
+        }
+        Event::EmailLinkFailed { reason } => {
+            log::warn!("UI: email link failed: {}", reason);
+            app.set_link_error(reason.into());
         }
         Event::LoggedIn { user } => {
             log::info!("UI: logged in as {}", user.display_name);

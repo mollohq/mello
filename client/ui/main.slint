@@ -6,6 +6,7 @@ import { ChatPanel } from "panels/chat_panel.slint";
 import { ControlBar } from "panels/control_bar.slint";
 import { SettingsModal } from "panels/settings_modal.slint";
 import { DebugPanel } from "panels/debug_panel.slint";
+import { Onboarding } from "panels/onboarding.slint";
 
 export { CrewData, MemberData, ChatMessageData, AudioDeviceData, Theme }
 
@@ -22,6 +23,11 @@ export component MainWindow inherits Window {
     in property <bool> logged-in: false;
     in property <string> login-error: "";
     in property <bool> login-loading: false;
+
+    // --- Onboarding (0 = show onboarding, 1-3 = step, 4+ = done) ---
+    in-out property <int> onboarding-step: 0;
+    in property <[CrewData]> discover-crews: [];
+    in property <string> link-error: "";
 
     // --- User ---
     in property <string> user-name: "";
@@ -96,8 +102,37 @@ export component MainWindow inherits Window {
     callback mic-test-toggled();
     callback debug-toggled();
 
-    // ===================== LOGIN SCREEN =====================
-    if !logged-in: Rectangle {
+    // --- Onboarding callbacks ---
+    callback onboarding-crew-selected(string);
+    callback onboarding-create-crew(string);
+    callback onboarding-continue(int);
+    callback onboarding-link-email(string, string);
+    callback onboarding-skip-identity();
+    callback onboarding-capture-device-selected(string);
+    callback onboarding-playback-device-selected(string);
+
+    // ===================== ONBOARDING =====================
+    if onboarding-step >= 1 && onboarding-step <= 3: Onboarding {
+        step: root.onboarding-step;
+        discover-crews: root.discover-crews;
+        link-error: root.link-error;
+        capture-devices: root.capture-devices;
+        playback-devices: root.playback-devices;
+        selected-capture-id: root.selected-capture-id;
+        selected-playback-id: root.selected-playback-id;
+        selected-capture-name <=> root.selected-capture-name;
+        selected-playback-name <=> root.selected-playback-name;
+        crew-selected(id) => { root.onboarding-crew-selected(id); }
+        create-crew-requested(name) => { root.onboarding-create-crew(name); }
+        continue-to-step(s) => { root.onboarding-continue(s); }
+        link-email(email, pw) => { root.onboarding-link-email(email, pw); }
+        skip-identity => { root.onboarding-skip-identity(); }
+        capture-device-selected(id) => { root.onboarding-capture-device-selected(id); }
+        playback-device-selected(id) => { root.onboarding-playback-device-selected(id); }
+    }
+
+    // ===================== LOGIN SCREEN (only during session restore / fallback) =====================
+    if !logged-in && onboarding-step == 0: Rectangle {
         background: Theme.bg-app;
 
         VerticalLayout {
@@ -227,7 +262,7 @@ export component MainWindow inherits Window {
     }
 
     // ===================== MAIN APP =====================
-    if logged-in: Rectangle {
+    if logged-in && (onboarding-step == 0 || onboarding-step > 3): Rectangle {
         background: Theme.bg-app;
 
         HorizontalLayout {
