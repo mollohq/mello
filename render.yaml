@@ -48,6 +48,6 @@ services:
 databases:
   - name: mello-db
     region: frankfurt
-    plan: free
+    plan: basic-256mb
     databaseName: nakama
     user: nakama
