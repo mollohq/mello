@@ -53,3 +53,9 @@ libmello/models/
 
 # Tarball downloads
 *.tar.gz
+
+# Local launcher shortcuts
+client-dev.sh
+client-prod.sh
+client-dev.ps1
+client-prod.ps1

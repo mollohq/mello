@@ -20,8 +20,12 @@ bool VoiceActivityDetector::initialize(const std::string& model_path) {
         session_options_.SetIntraOpNumThreads(1);
         session_options_.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
 
+#ifdef _WIN32
         std::wstring wpath(model_path.begin(), model_path.end());
         session_ = new Ort::Session(env_, wpath.c_str(), session_options_);
+#else
+        session_ = new Ort::Session(env_, model_path.c_str(), session_options_);
+#endif
 
         // Log model metadata
         Ort::AllocatorWithDefaultOptions allocator;
@@ -30,9 +34,10 @@ bool VoiceActivityDetector::initialize(const std::string& model_path) {
         MELLO_LOG_INFO("vad", "model inputs=%zu outputs=%zu", num_in, num_out);
         for (size_t i = 0; i < num_in; ++i) {
             auto name = session_->GetInputNameAllocated(i, allocator);
-            auto info = session_->GetInputTypeInfo(i).GetTensorTypeAndShapeInfo();
-            auto shape = info.GetShape();
-            auto type = info.GetElementType();
+            auto type_info = session_->GetInputTypeInfo(i);
+            auto tensor_info = type_info.GetTensorTypeAndShapeInfo();
+            auto shape = tensor_info.GetShape();
+            auto type = tensor_info.GetElementType();
             std::string shape_str;
             for (auto d : shape) shape_str += std::to_string(d) + ",";
             MELLO_LOG_INFO("vad", "  input[%zu] name='%s' shape=[%s] type=%d",

@@ -1,4 +1,4 @@
-#if !defined(_WIN32)
+#if !defined(_WIN32) && !defined(__APPLE__)
 #include "device_enumerator.hpp"
 
 namespace mello::audio {

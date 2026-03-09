@@ -1,73 +1,129 @@
 use std::env;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 fn main() {
     println!("cargo:rerun-if-changed=../libmello/include/mello.h");
     println!("cargo:rerun-if-changed=../libmello/src/");
     println!("cargo:rerun-if-changed=../libmello/CMakeLists.txt");
-    println!("cargo:rerun-if-env-changed=VCPKG_ROOT");
+    println!("cargo:rerun-if-changed=../libmello/vcpkg.json");
     println!("cargo:rerun-if-env-changed=LIBCLANG_PATH");
 
     let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap();
+    let target_arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap();
+    let manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
 
-    let vcpkg_root = env::var("VCPKG_ROOT")
-        .expect("VCPKG_ROOT must be set (e.g. c:\\dev\\vcpkg or ~/vcpkg)");
-    let toolchain = format!("{}/scripts/buildsystems/vcpkg.cmake", vcpkg_root);
+    // Locate vcpkg inside the repo (external/vcpkg submodule)
+    let vcpkg_root = Path::new(&manifest_dir).join("../external/vcpkg");
+    let vcpkg_root = vcpkg_root
+        .canonicalize()
+        .expect("external/vcpkg not found — run: git submodule update --init");
 
-    let triplet = match target_os.as_str() {
-        "windows" => "x64-windows-static-md",
-        "macos" => "x64-osx",
+    // Bootstrap vcpkg if needed
+    bootstrap_vcpkg(&vcpkg_root);
+
+    let toolchain = vcpkg_root.join("scripts/buildsystems/vcpkg.cmake");
+
+    let triplet = match (target_os.as_str(), target_arch.as_str()) {
+        ("windows", _) => "x64-windows-static-md",
+        ("macos", "aarch64") => "arm64-osx",
+        ("macos", _) => "x64-osx",
         _ => "x64-linux",
     };
 
-    let dst = cmake::Config::new("../libmello")
-        .define("CMAKE_TOOLCHAIN_FILE", &toolchain)
+    let mut cmake_cfg = cmake::Config::new("../libmello");
+    cmake_cfg
+        .define("CMAKE_TOOLCHAIN_FILE", toolchain.to_str().unwrap())
         .define("VCPKG_TARGET_TRIPLET", triplet)
-        .profile("Release")
-        .build();
+        .profile("Release");
 
+    // On macOS arm64, explicitly set architecture to avoid cross-compilation issues
+    if target_os == "macos" && target_arch == "aarch64" {
+        cmake_cfg.define("CMAKE_OSX_ARCHITECTURES", "arm64");
+        cmake_cfg.define("VCPKG_HOST_TRIPLET", "arm64-osx");
+    }
+
+    let dst = cmake_cfg.build();
+
+    // Link libmello + rnnoise (built by cmake)
     let lib_dir = dst.join("lib");
     println!("cargo:rustc-link-search=native={}", lib_dir.display());
     println!("cargo:rustc-link-lib=static=mello");
     println!("cargo:rustc-link-lib=static=rnnoise");
 
-    let vcpkg_lib = format!("{}/installed/{}/lib", vcpkg_root, triplet);
-    println!("cargo:rustc-link-search=native={}", vcpkg_lib);
+    // In manifest mode, vcpkg installs into the cmake build dir
+    let out_dir = env::var("OUT_DIR").unwrap();
+    let vcpkg_installed = Path::new(&out_dir).join("build/vcpkg_installed").join(triplet).join("lib");
+    println!("cargo:rustc-link-search=native={}", vcpkg_installed.display());
     println!("cargo:rustc-link-lib=static=opus");
     println!("cargo:rustc-link-lib=static=datachannel");
     println!("cargo:rustc-link-lib=static=juice");
     println!("cargo:rustc-link-lib=static=usrsctp");
 
-    // ONNX Runtime (dynamic linking -- static is 2GB+ and impractical)
-    let manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
+    // ONNX Runtime (dynamic linking — static is 2GB+ and impractical)
+    let ort_subdir = match (target_os.as_str(), target_arch.as_str()) {
+        ("windows", _) => "onnxruntime-win-x64-1.23.2",
+        ("macos", "aarch64") => "onnxruntime-osx-arm64-1.23.0",
+        ("macos", _) => "onnxruntime-osx-x86_64-1.23.0",
+        _ => "onnxruntime-linux-x64-1.23.0",
+    };
     let ort_dir = Path::new(&manifest_dir)
-        .join("../libmello/third_party/onnxruntime/onnxruntime-win-x64-1.23.2");
-    let ort_dir = ort_dir.canonicalize().expect("onnxruntime prebuilt dir not found");
+        .join(format!("../libmello/third_party/onnxruntime/{}", ort_subdir));
+    let ort_dir = ort_dir
+        .canonicalize()
+        .expect("onnxruntime prebuilt dir not found — run scripts/setup-macos.sh (or equivalent)");
     let ort_lib = ort_dir.join("lib");
     println!("cargo:rustc-link-search=native={}", ort_lib.display());
     println!("cargo:rustc-link-lib=dylib=onnxruntime");
 
-    // Copy DLLs next to the output binary
-    let out_dir = env::var("OUT_DIR").unwrap();
+    // Copy shared libraries next to the output binary so cargo run works
     let target_dir = Path::new(&out_dir)
         .ancestors()
         .find(|p| p.ends_with("debug") || p.ends_with("release"))
         .map(|p| p.join("deps"))
         .unwrap_or_else(|| PathBuf::from(&out_dir));
 
-    for dll in &["onnxruntime.dll", "onnxruntime_providers_shared.dll"] {
-        let src = ort_lib.join(dll);
-        if src.exists() {
-            let _ = std::fs::copy(&src, target_dir.join(dll));
-            // Also copy to the parent (target/debug/) for cargo run
-            if let Some(parent) = target_dir.parent() {
-                let _ = std::fs::copy(&src, parent.join(dll));
+    match target_os.as_str() {
+        "windows" => {
+            for dll in &["onnxruntime.dll", "onnxruntime_providers_shared.dll"] {
+                let src = ort_lib.join(dll);
+                if src.exists() {
+                    let _ = std::fs::copy(&src, target_dir.join(dll));
+                    if let Some(parent) = target_dir.parent() {
+                        let _ = std::fs::copy(&src, parent.join(dll));
+                    }
+                }
+            }
+        }
+        "macos" => {
+            // Copy both the versioned dylib and the unversioned symlink
+            for dylib in &["libonnxruntime.dylib", "libonnxruntime.1.23.0.dylib"] {
+                let src = ort_lib.join(dylib);
+                if src.exists() {
+                    let _ = std::fs::copy(&src, target_dir.join(dylib));
+                    if let Some(parent) = target_dir.parent() {
+                        let _ = std::fs::copy(&src, parent.join(dylib));
+                    }
+                }
+            }
+        }
+        _ => {
+            for so in &["libonnxruntime.so"] {
+                let src = ort_lib.join(so);
+                if src.exists() {
+                    let _ = std::fs::copy(&src, target_dir.join(so));
+                    if let Some(parent) = target_dir.parent() {
+                        let _ = std::fs::copy(&src, parent.join(so));
+                    }
+                }
             }
         }
     }
 
+    // Platform-specific system libraries
     match target_os.as_str() {
         "windows" => {
+            // OpenSSL from vcpkg (Windows names the libs with "lib" prefix)
             println!("cargo:rustc-link-lib=static=libssl");
             println!("cargo:rustc-link-lib=static=libcrypto");
             for lib in &[
@@ -84,6 +140,8 @@ fn main() {
             println!("cargo:rustc-link-lib=framework=CoreAudio");
             println!("cargo:rustc-link-lib=framework=CoreFoundation");
             println!("cargo:rustc-link-lib=framework=Security");
+            // C++ standard library
+            println!("cargo:rustc-link-lib=dylib=c++");
         }
         _ => {
             println!("cargo:rustc-link-lib=static=ssl");
@@ -91,6 +149,7 @@ fn main() {
             println!("cargo:rustc-link-lib=dylib=asound");
             println!("cargo:rustc-link-lib=dylib=pulse");
             println!("cargo:rustc-link-lib=dylib=pthread");
+            println!("cargo:rustc-link-lib=dylib=stdc++");
         }
     }
 
@@ -113,6 +172,35 @@ fn main() {
     bindings
         .write_to_file(out_path.join("bindings.rs"))
         .expect("Failed to write bindings");
+}
+
+/// Bootstrap vcpkg if the binary doesn't exist yet.
+fn bootstrap_vcpkg(vcpkg_root: &Path) {
+    let vcpkg_bin = if cfg!(target_os = "windows") {
+        vcpkg_root.join("vcpkg.exe")
+    } else {
+        vcpkg_root.join("vcpkg")
+    };
+
+    if vcpkg_bin.exists() {
+        return;
+    }
+
+    eprintln!("Bootstrapping vcpkg at {} ...", vcpkg_root.display());
+
+    let script = if cfg!(target_os = "windows") {
+        vcpkg_root.join("bootstrap-vcpkg.bat")
+    } else {
+        vcpkg_root.join("bootstrap-vcpkg.sh")
+    };
+
+    let status = Command::new(&script)
+        .arg("-disableMetrics")
+        .current_dir(vcpkg_root)
+        .status()
+        .expect("failed to run vcpkg bootstrap script");
+
+    assert!(status.success(), "vcpkg bootstrap failed");
 }
 
 fn find_libclang() -> Option<String> {

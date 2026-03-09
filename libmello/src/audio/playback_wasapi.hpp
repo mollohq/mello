@@ -1,28 +1,27 @@
 #pragma once
 
 #ifdef _WIN32
+#include "audio_playback.hpp"
 #include <mmdeviceapi.h>
 #include <audioclient.h>
 #include <thread>
 #include <atomic>
-#include <cstdint>
 #include "../util/ring_buffer.hpp"
 
 namespace mello::audio {
 
-class WasapiPlayback {
+class WasapiPlayback : public AudioPlayback {
 public:
     WasapiPlayback();
-    ~WasapiPlayback();
+    ~WasapiPlayback() override;
 
-    bool initialize(const char* device_id = nullptr);
-    bool start();
-    void stop();
+    bool initialize(const char* device_id = nullptr) override;
+    bool start() override;
+    void stop() override;
 
-    // Feed mono 16-bit PCM samples into the playback buffer
-    size_t feed(const int16_t* samples, size_t count);
+    size_t feed(const int16_t* samples, size_t count) override;
 
-    uint32_t sample_rate() const { return sample_rate_; }
+    uint32_t sample_rate() const override { return sample_rate_; }
 
 private:
     void playback_thread();

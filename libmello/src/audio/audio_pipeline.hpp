@@ -1,6 +1,6 @@
 #pragma once
-#include "capture_wasapi.hpp"
-#include "playback_wasapi.hpp"
+#include "audio_capture.hpp"
+#include "audio_playback.hpp"
 #include "opus_codec.hpp"
 #include "noise_suppressor.hpp"
 #include "jitter_buffer.hpp"
@@ -60,8 +60,8 @@ public:
 private:
     void on_captured_audio(const int16_t* samples, size_t count);
 
-    std::unique_ptr<WasapiCapture> capture_;
-    std::unique_ptr<WasapiPlayback> playback_;
+    std::unique_ptr<AudioCapture> capture_;
+    std::unique_ptr<AudioPlayback> playback_;
     OpusEnc encoder_;
     NoiseSuppressor noise_suppressor_;
     VoiceActivityDetector vad_;

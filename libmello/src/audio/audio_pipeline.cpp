@@ -7,6 +7,10 @@
 
 #ifdef _WIN32
 #include <windows.h>
+#elif defined(__APPLE__)
+#include <mach-o/dyld.h>
+#include <libgen.h>
+#include <climits>
 #else
 #include <unistd.h>
 #include <limits.h>
@@ -23,6 +27,14 @@ static std::string get_exe_dir() {
     std::string path(buf, len);
     auto pos = path.find_last_of("\\/");
     return (pos != std::string::npos) ? path.substr(0, pos) : ".";
+#elif defined(__APPLE__)
+    char buf[PATH_MAX];
+    uint32_t size = sizeof(buf);
+    if (_NSGetExecutablePath(buf, &size) != 0) return ".";
+    // Resolve symlinks
+    char resolved[PATH_MAX];
+    if (!realpath(buf, resolved)) return ".";
+    return std::string(dirname(resolved));
 #else
     char buf[PATH_MAX];
     ssize_t len = readlink("/proc/self/exe", buf, sizeof(buf) - 1);
@@ -73,13 +85,13 @@ bool AudioPipeline::initialize() {
 
     device_enum_ = create_device_enumerator();
 
-    capture_ = std::make_unique<WasapiCapture>();
+    capture_ = create_audio_capture();
     if (!capture_->initialize()) {
         MELLO_LOG_ERROR("pipeline", "capture init failed");
         return false;
     }
 
-    playback_ = std::make_unique<WasapiPlayback>();
+    playback_ = create_audio_playback();
     if (!playback_->initialize()) {
         MELLO_LOG_ERROR("pipeline", "playback init failed");
         return false;
@@ -287,7 +299,7 @@ bool AudioPipeline::set_capture_device(const char* device_id) {
         capturing_ = false;
     }
 
-    capture_ = std::make_unique<WasapiCapture>();
+    capture_ = create_audio_capture();
     if (!capture_->initialize(device_id)) {
         MELLO_LOG_ERROR("pipeline", "capture device switch failed");
         return false;
@@ -309,7 +321,7 @@ bool AudioPipeline::set_playback_device(const char* device_id) {
 
     if (playback_) playback_->stop();
 
-    playback_ = std::make_unique<WasapiPlayback>();
+    playback_ = create_audio_playback();
     if (!playback_->initialize(device_id)) {
         MELLO_LOG_ERROR("pipeline", "playback device switch failed");
         return false;

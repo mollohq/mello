@@ -10,13 +10,29 @@ find_package(Opus CONFIG REQUIRED)
 find_package(LibDataChannel CONFIG REQUIRED)
 
 # ONNX Runtime - use prebuilt shared library (static is 2GB+ and impractical)
-set(ORT_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/onnxruntime/onnxruntime-win-x64-1.23.2)
-add_library(onnxruntime SHARED IMPORTED)
-set_target_properties(onnxruntime PROPERTIES
-    IMPORTED_LOCATION "${ORT_DIR}/lib/onnxruntime.dll"
-    IMPORTED_IMPLIB "${ORT_DIR}/lib/onnxruntime.lib"
-    INTERFACE_INCLUDE_DIRECTORIES "${ORT_DIR}/include"
-)
+if(WIN32)
+    set(ORT_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/onnxruntime/onnxruntime-win-x64-1.23.2)
+    add_library(onnxruntime SHARED IMPORTED)
+    set_target_properties(onnxruntime PROPERTIES
+        IMPORTED_LOCATION "${ORT_DIR}/lib/onnxruntime.dll"
+        IMPORTED_IMPLIB "${ORT_DIR}/lib/onnxruntime.lib"
+        INTERFACE_INCLUDE_DIRECTORIES "${ORT_DIR}/include"
+    )
+elseif(APPLE)
+    set(ORT_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/onnxruntime/onnxruntime-osx-arm64-1.23.0)
+    add_library(onnxruntime SHARED IMPORTED)
+    set_target_properties(onnxruntime PROPERTIES
+        IMPORTED_LOCATION "${ORT_DIR}/lib/libonnxruntime.dylib"
+        INTERFACE_INCLUDE_DIRECTORIES "${ORT_DIR}/include"
+    )
+else()
+    set(ORT_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/onnxruntime/onnxruntime-linux-x64-1.23.0)
+    add_library(onnxruntime SHARED IMPORTED)
+    set_target_properties(onnxruntime PROPERTIES
+        IMPORTED_LOCATION "${ORT_DIR}/lib/libonnxruntime.so"
+        INTERFACE_INCLUDE_DIRECTORIES "${ORT_DIR}/include"
+    )
+endif()
 
 # Build rnnoise from source (not available on Windows via vcpkg)
 set(RNNOISE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/rnnoise)
@@ -40,13 +56,11 @@ if(MSVC)
     target_compile_options(rnnoise PRIVATE /wd4244 /wd4305 /wd4267)
 endif()
 
-# Sources
+# Platform-agnostic sources
 set(MELLO_SOURCES
     src/mello.cpp
     src/context.cpp
     src/audio/audio_pipeline.cpp
-    src/audio/capture_wasapi.cpp
-    src/audio/playback_wasapi.cpp
     src/audio/opus_codec.cpp
     src/audio/noise_suppressor.cpp
     src/audio/jitter_buffer.cpp
@@ -54,10 +68,26 @@ set(MELLO_SOURCES
     src/transport/peer_connection.cpp
 )
 
+# Platform-specific audio sources
 if(WIN32)
-    list(APPEND MELLO_SOURCES src/audio/device_enumerator_wasapi.cpp)
+    list(APPEND MELLO_SOURCES
+        src/audio/capture_wasapi.cpp
+        src/audio/playback_wasapi.cpp
+        src/audio/audio_backend_wasapi.cpp
+        src/audio/device_enumerator_wasapi.cpp
+    )
+elseif(APPLE)
+    list(APPEND MELLO_SOURCES
+        src/audio/capture_coreaudio.cpp
+        src/audio/playback_coreaudio.cpp
+        src/audio/audio_backend_coreaudio.cpp
+        src/audio/device_enumerator_coreaudio.cpp
+    )
 else()
-    list(APPEND MELLO_SOURCES src/audio/device_enumerator_stub.cpp)
+    list(APPEND MELLO_SOURCES
+        src/audio/audio_backend_stub.cpp
+        src/audio/device_enumerator_stub.cpp
+    )
 endif()
 
 # Static library for Rust FFI linking
@@ -90,6 +120,12 @@ if(WIN32)
         mfplat
         mfuuid
         avrt
+    )
+elseif(APPLE)
+    target_link_libraries(mello PUBLIC
+        "-framework AudioToolbox"
+        "-framework CoreAudio"
+        "-framework CoreFoundation"
     )
 endif()
 

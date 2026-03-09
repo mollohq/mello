@@ -1,28 +1,25 @@
 #pragma once
 
 #ifdef _WIN32
+#include "audio_capture.hpp"
 #include <mmdeviceapi.h>
 #include <audioclient.h>
-#include <functional>
 #include <thread>
 #include <atomic>
-#include <cstdint>
 
 namespace mello::audio {
 
-class WasapiCapture {
+class WasapiCapture : public AudioCapture {
 public:
-    using Callback = std::function<void(const int16_t* samples, size_t count)>;
-
     WasapiCapture();
-    ~WasapiCapture();
+    ~WasapiCapture() override;
 
-    bool initialize(const char* device_id = nullptr);
-    bool start(Callback callback);
-    void stop();
+    bool initialize(const char* device_id = nullptr) override;
+    bool start(Callback callback) override;
+    void stop() override;
 
-    uint32_t sample_rate() const { return sample_rate_; }
-    uint32_t channels() const { return channels_; }
+    uint32_t sample_rate() const override { return sample_rate_; }
+    uint32_t channels() const override { return channels_; }
 
 private:
     void capture_thread();
