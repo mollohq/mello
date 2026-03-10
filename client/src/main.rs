@@ -2,7 +2,7 @@ mod settings;
 
 slint::include_modules!();
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::Duration;
 use slint::Model;
@@ -200,25 +200,44 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let _ = cmd.try_send(Command::LeaveVoice);
         });
     }
+    // Track whether the user was manually muted before deafening,
+    // so un-deafen can restore the prior mute state.
+    let muted_before_deafen = Rc::new(Cell::new(false));
     {
         let cmd = cmd_tx.clone();
         let app_weak = app.as_weak();
         app.on_mic_toggle(move || {
             if let Some(app) = app_weak.upgrade() {
-                let _ = cmd.try_send(Command::SetMute {
-                    muted: app.get_mic_muted(),
-                });
+                let new_muted = !app.get_mic_muted();
+                app.set_mic_muted(new_muted);
+                let _ = cmd.try_send(Command::SetMute { muted: new_muted });
             }
         });
     }
     {
         let cmd = cmd_tx.clone();
         let app_weak = app.as_weak();
+        let mbd = muted_before_deafen.clone();
         app.on_deafen_toggle(move || {
             if let Some(app) = app_weak.upgrade() {
-                let _ = cmd.try_send(Command::SetDeafen {
-                    deafened: app.get_deafened(),
-                });
+                let new_deafened = !app.get_deafened();
+                app.set_deafened(new_deafened);
+                let _ = cmd.try_send(Command::SetDeafen { deafened: new_deafened });
+
+                if new_deafened {
+                    // Remember current mute state, then force mute
+                    mbd.set(app.get_mic_muted());
+                    if !app.get_mic_muted() {
+                        app.set_mic_muted(true);
+                        let _ = cmd.try_send(Command::SetMute { muted: true });
+                    }
+                } else {
+                    // Restore: only unmute if user wasn't manually muted before
+                    if !mbd.get() {
+                        app.set_mic_muted(false);
+                        let _ = cmd.try_send(Command::SetMute { muted: false });
+                    }
+                }
             }
         });
     }
@@ -359,6 +378,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     {
         let app_weak = app.as_weak();
         let s = settings.clone();
+        let cmd = cmd_tx.clone();
         app.on_onboarding_login_requested(move || {
             if let Some(app) = app_weak.upgrade() {
                 log::info!("[auth] sign-in pill — entering app as device user");
@@ -367,6 +387,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let mut settings = s.borrow_mut();
                 settings.onboarding_step = 4;
                 settings.save();
+                // Load user's crews so the sidebar populates and auto-select kicks in
+                let _ = cmd.try_send(Command::LoadMyCrews);
             }
         });
     }
@@ -566,7 +588,7 @@ fn handle_event(app: &MainWindow, event: Event, settings: &Rc<RefCell<Settings>>
             app.set_login_error(reason.into());
         }
         Event::CrewsLoaded { crews } => {
-            let first_id = crews.first().map(|c| c.id.clone());
+            let crew_ids: Vec<String> = crews.iter().map(|c| c.id.clone()).collect();
             let model: Vec<CrewData> = crews.into_iter().map(|c| CrewData {
                 id: c.id.clone().into(),
                 name: c.name.into(),
@@ -577,10 +599,22 @@ fn handle_event(app: &MainWindow, event: Event, settings: &Rc<RefCell<Settings>>
             }).collect();
             let rc = std::rc::Rc::new(slint::VecModel::from(model));
             app.set_crews(rc.into());
-            // Auto-select first crew if none is active
+            // Auto-select last active crew (or first if not found)
             if app.get_active_crew_id().is_empty() {
-                if let Some(id) = first_id {
-                    log::info!("[auth] auto-selecting first crew: {}", id);
+                let last = settings.borrow().last_crew_id.clone();
+                let target = match &last {
+                    Some(id) if crew_ids.contains(id) => {
+                        log::info!("[auth] restoring last crew: {}", id);
+                        Some(id.clone())
+                    }
+                    _ => {
+                        crew_ids.first().map(|id| {
+                            log::info!("[auth] auto-selecting first crew: {}", id);
+                            id.clone()
+                        })
+                    }
+                };
+                if let Some(id) = target {
                     let _ = cmd_tx.try_send(Command::SelectCrew { crew_id: id });
                 }
             }
@@ -593,11 +627,38 @@ fn handle_event(app: &MainWindow, event: Event, settings: &Rc<RefCell<Settings>>
         }
         Event::CrewJoined { crew_id } => {
             log::info!("UI: joined crew {}", crew_id);
+            // Clear voice bubbles on the previous crew — we left its channel
+            // so we no longer receive presence updates for it. Keep member_count
+            // (static from API) but zero out voice_count & speaking flags since
+            // that data is now stale.
+            let old_id = app.get_active_crew_id();
+            if !old_id.is_empty() && old_id != crew_id.as_str() {
+                let crews = app.get_crews();
+                let cleared: Vec<CrewData> = (0..crews.row_count())
+                    .map(|i| {
+                        let mut c = crews.row_data(i).unwrap();
+                        if c.id == old_id {
+                            c.voice_count = 0;
+                            c.v0_speaking = false;
+                            c.v1_speaking = false;
+                            c.v2_speaking = false;
+                            c.v3_speaking = false;
+                            // keep online_count & member_count — static data
+                        }
+                        c
+                    })
+                    .collect();
+                app.set_crews(Rc::new(slint::VecModel::from(cleared)).into());
+            }
             app.set_active_crew_id(crew_id.clone().into());
             let empty: Vec<ChatMessageData> = vec![];
             let rc = std::rc::Rc::new(slint::VecModel::from(empty));
             app.set_messages(rc.into());
             update_active_crew_card(app);
+            // Persist last active crew
+            let mut s = settings.borrow_mut();
+            s.last_crew_id = Some(crew_id);
+            s.save();
         }
         Event::CrewLeft { crew_id } => {
             log::info!("UI: left crew {}", crew_id);
@@ -763,5 +824,168 @@ fn handle_event(app: &MainWindow, event: Event, settings: &Rc<RefCell<Settings>>
         Event::Error { message } => {
             log::error!("UI: error: {}", message);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::Cell;
+
+    /// Helper: initialise the Slint testing backend (no display needed).
+    /// Only the first call per process actually sets the backend; subsequent
+    /// calls are harmless no-ops.
+    fn init_test_backend() {
+        i_slint_backend_testing::init_no_event_loop();
+    }
+
+    /// Wire up mic-toggle callback on `app` exactly like main() does.
+    fn wire_mic_toggle(app: &MainWindow, sent: Rc<Cell<Option<bool>>>) {
+        let app_weak = app.as_weak();
+        app.on_mic_toggle(move || {
+            if let Some(app) = app_weak.upgrade() {
+                let new_muted = !app.get_mic_muted();
+                app.set_mic_muted(new_muted);
+                sent.set(Some(new_muted));
+            }
+        });
+    }
+
+    /// Wire up deafen-toggle callback on `app` exactly like main() does,
+    /// including the mute-coupling logic.
+    fn wire_deafen_toggle(
+        app: &MainWindow,
+        sent_deafened: Rc<Cell<Option<bool>>>,
+        sent_muted: Rc<Cell<Option<bool>>>,
+        mbd: Rc<Cell<bool>>,
+    ) {
+        let app_weak = app.as_weak();
+        app.on_deafen_toggle(move || {
+            if let Some(app) = app_weak.upgrade() {
+                let new_deafened = !app.get_deafened();
+                app.set_deafened(new_deafened);
+                sent_deafened.set(Some(new_deafened));
+
+                if new_deafened {
+                    mbd.set(app.get_mic_muted());
+                    if !app.get_mic_muted() {
+                        app.set_mic_muted(true);
+                        sent_muted.set(Some(true));
+                    }
+                } else {
+                    if !mbd.get() {
+                        app.set_mic_muted(false);
+                        sent_muted.set(Some(false));
+                    }
+                }
+            }
+        });
+    }
+
+    #[test]
+    fn mic_toggle_sends_correct_muted_state() {
+        init_test_backend();
+        let app = MainWindow::new().unwrap();
+        let sent = Rc::new(Cell::new(None::<bool>));
+        wire_mic_toggle(&app, sent.clone());
+
+        assert!(!app.get_mic_muted(), "should start unmuted");
+
+        app.invoke_mic_toggle();
+        assert_eq!(sent.get(), Some(true), "first toggle → muted=true");
+        assert!(app.get_mic_muted());
+
+        app.invoke_mic_toggle();
+        assert_eq!(sent.get(), Some(false), "second toggle → muted=false");
+        assert!(!app.get_mic_muted());
+    }
+
+    #[test]
+    fn deafen_toggle_sends_correct_deafened_state() {
+        init_test_backend();
+        let app = MainWindow::new().unwrap();
+        let sent_d = Rc::new(Cell::new(None::<bool>));
+        let sent_m = Rc::new(Cell::new(None::<bool>));
+        let mbd = Rc::new(Cell::new(false));
+        wire_deafen_toggle(&app, sent_d.clone(), sent_m.clone(), mbd);
+
+        assert!(!app.get_deafened(), "should start undeafened");
+
+        app.invoke_deafen_toggle();
+        assert_eq!(sent_d.get(), Some(true));
+        assert!(app.get_deafened());
+
+        app.invoke_deafen_toggle();
+        assert_eq!(sent_d.get(), Some(false));
+        assert!(!app.get_deafened());
+    }
+
+    #[test]
+    fn deafen_auto_mutes_when_unmuted() {
+        init_test_backend();
+        let app = MainWindow::new().unwrap();
+        let sent_d = Rc::new(Cell::new(None::<bool>));
+        let sent_m = Rc::new(Cell::new(None::<bool>));
+        let mbd = Rc::new(Cell::new(false));
+        wire_deafen_toggle(&app, sent_d.clone(), sent_m.clone(), mbd);
+
+        // Start: unmuted, undeafened
+        assert!(!app.get_mic_muted());
+
+        // Deafen → should also mute
+        app.invoke_deafen_toggle();
+        assert!(app.get_deafened());
+        assert!(app.get_mic_muted(), "deafen should auto-mute");
+        assert_eq!(sent_m.get(), Some(true), "SetMute(true) should be sent");
+    }
+
+    #[test]
+    fn undeafen_restores_unmuted_when_was_not_muted() {
+        init_test_backend();
+        let app = MainWindow::new().unwrap();
+        let sent_d = Rc::new(Cell::new(None::<bool>));
+        let sent_m = Rc::new(Cell::new(None::<bool>));
+        let mbd = Rc::new(Cell::new(false));
+        wire_deafen_toggle(&app, sent_d.clone(), sent_m.clone(), mbd);
+
+        // Deafen (auto-mutes)
+        app.invoke_deafen_toggle();
+        assert!(app.get_mic_muted());
+
+        // Un-deafen → should restore unmuted
+        sent_m.set(None);
+        app.invoke_deafen_toggle();
+        assert!(!app.get_deafened());
+        assert!(!app.get_mic_muted(), "un-deafen should restore unmuted state");
+        assert_eq!(sent_m.get(), Some(false));
+    }
+
+    #[test]
+    fn undeafen_keeps_muted_when_was_manually_muted() {
+        init_test_backend();
+        let app = MainWindow::new().unwrap();
+        let sent_mic = Rc::new(Cell::new(None::<bool>));
+        let sent_d = Rc::new(Cell::new(None::<bool>));
+        let sent_m_deafen = Rc::new(Cell::new(None::<bool>));
+        let mbd = Rc::new(Cell::new(false));
+
+        wire_mic_toggle(&app, sent_mic.clone());
+        wire_deafen_toggle(&app, sent_d.clone(), sent_m_deafen.clone(), mbd);
+
+        // Manually mute first
+        app.invoke_mic_toggle();
+        assert!(app.get_mic_muted());
+
+        // Deafen — already muted, should NOT send extra SetMute
+        sent_m_deafen.set(None);
+        app.invoke_deafen_toggle();
+        assert!(app.get_deafened());
+        assert!(app.get_mic_muted());
+        assert_eq!(sent_m_deafen.get(), None, "no extra SetMute when already muted");
+
+        // Un-deafen — was manually muted, should stay muted
+        app.invoke_deafen_toggle();
+        assert!(!app.get_deafened());
+        assert!(app.get_mic_muted(), "should stay muted since user muted before deafen");
     }
 }

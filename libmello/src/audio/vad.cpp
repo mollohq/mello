@@ -31,7 +31,7 @@ bool VoiceActivityDetector::initialize(const std::string& model_path) {
         Ort::AllocatorWithDefaultOptions allocator;
         size_t num_in = session_->GetInputCount();
         size_t num_out = session_->GetOutputCount();
-        MELLO_LOG_INFO("vad", "model inputs=%zu outputs=%zu", num_in, num_out);
+        MELLO_LOG_DEBUG("vad", "model inputs=%zu outputs=%zu", num_in, num_out);
         for (size_t i = 0; i < num_in; ++i) {
             auto name = session_->GetInputNameAllocated(i, allocator);
             auto type_info = session_->GetInputTypeInfo(i);
@@ -40,7 +40,7 @@ bool VoiceActivityDetector::initialize(const std::string& model_path) {
             auto type = tensor_info.GetElementType();
             std::string shape_str;
             for (auto d : shape) shape_str += std::to_string(d) + ",";
-            MELLO_LOG_INFO("vad", "  input[%zu] name='%s' shape=[%s] type=%d",
+            MELLO_LOG_DEBUG("vad", "  input[%zu] name='%s' shape=[%s] type=%d",
                            i, name.get(), shape_str.c_str(), (int)type);
         }
 

@@ -10,6 +10,7 @@ pub struct Settings {
     pub dark_theme: bool,
     pub device_id: Option<String>,
     pub onboarding_step: u8,
+    pub last_crew_id: Option<String>,
 }
 
 impl Default for Settings {
@@ -20,6 +21,7 @@ impl Default for Settings {
             dark_theme: true,
             device_id: None,
             onboarding_step: 0,
+            last_crew_id: None,
         }
     }
 }
@@ -65,6 +67,7 @@ mod tests {
             dark_theme: false,
             device_id: Some("dev-abc".into()),
             onboarding_step: 4,
+            last_crew_id: None,
         };
         let toml_str = toml::to_string(&s).unwrap();
         let decoded: Settings = toml::from_str(&toml_str).unwrap();

@@ -8,6 +8,7 @@ pub enum Command {
     LinkEmail { email: String, password: String },
     Logout,
     DiscoverCrews,
+    LoadMyCrews,
     JoinCrew { crew_id: String },
     CreateCrew { name: String },
     SelectCrew { crew_id: String },

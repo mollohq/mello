@@ -291,19 +291,13 @@ export component ControlBar inherits Rectangle {
             ActionButton {
                 icon: @image-url("../icons/mic.svg");
                 active: in-voice && !mic-muted;
-                clicked => {
-                    mic-muted = !mic-muted;
-                    mic-toggled();
-                }
+                clicked => { mic-toggled(); }
             }
 
             ActionButton {
                 icon: @image-url("../icons/headphones.svg");
                 active: in-voice && !deafened;
-                clicked => {
-                    deafened = !deafened;
-                    deafen-toggled();
-                }
+                clicked => { deafen-toggled(); }
             }
 
             ActionButton {

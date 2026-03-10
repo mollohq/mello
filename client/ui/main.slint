@@ -299,8 +299,8 @@ export component MainWindow inherits Window {
                     height: 92px;
                     user-name: root.user-name;
                     user-tag: root.user-tag;
-                    mic-muted: root.mic-muted;
-                    deafened: root.deafened;
+                    mic-muted <=> root.mic-muted;
+                    deafened <=> root.deafened;
                     in-voice: root.in-voice;
                     presence-status <=> root.presence-status;
                     mic-toggled => { root.mic-toggle(); }

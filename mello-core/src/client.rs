@@ -125,6 +125,9 @@ impl Client {
             Command::DiscoverCrews => {
                 self.handle_discover_crews().await;
             }
+            Command::LoadMyCrews => {
+                self.load_crews().await;
+            }
             Command::JoinCrew { crew_id } => {
                 self.handle_join_crew(&crew_id).await;
             }
