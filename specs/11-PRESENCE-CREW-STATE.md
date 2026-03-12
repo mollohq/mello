@@ -2,7 +2,7 @@
 
 > **Component:** Presence, Crew State, Real-Time Updates  
 > **Version:** 0.2  
-> **Status:** Planned
+> **Status:** Implemented
 
 ---
 
@@ -156,38 +156,41 @@ Server computes and caches this aggregate:
 
 ### 2.3 User Subscription State
 
-In-memory on server (per-connection):
+In-memory on server (per-session, keyed by `sessionID`):
 
-```json
-{
-  "user_id": "user_abc",
-  "session_id": "session_xyz",
-  "active_crew": "crew_xyz",
-  "sidebar_crews": ["crew_abc", "crew_def"],
-  "all_crews": ["crew_xyz", "crew_abc", "crew_def", "crew_123"],
-  "last_sidebar_push": {
-    "crew_abc": "2026-03-08T14:15:00Z",
-    "crew_def": "2026-03-08T14:15:00Z"
-  },
-  "last_messages_push": {
-    "crew_abc": "2026-03-08T14:15:00Z"
-  }
+```go
+type UserSubscription struct {
+    UserID       string
+    SessionID    string
+    ActiveCrew   string
+    SidebarCrews map[string]bool // set of crew IDs
 }
 ```
+
+A reverse index (`crewSubscribers: map[crewID → set[sessionID]`) enables fast
+lookup of all sessions subscribed to a given crew.
 
 ### 2.4 Voice State
 
-In-memory, real-time:
+In-memory, real-time (`voiceRooms: map[crewID → *VoiceRoom]`):
 
-```json
-{
-  "crew_id": "crew_xyz",
-  "members": {
-    "user_a": { "speaking": true, "muted": false, "deafened": false },
-    "user_b": { "speaking": false, "muted": false, "deafened": false }
-  }
+```go
+type VoiceMemberState struct {
+    UserID   string `json:"user_id"`
+    Username string `json:"username"`
+    Speaking bool   `json:"speaking"`
+    Muted    bool   `json:"muted"`
+    Deafened bool   `json:"deafened"`
+}
+
+type VoiceRoom struct {
+    CrewID  string
+    Members map[string]*VoiceMemberState // keyed by user_id
 }
 ```
+
+A reverse map (`voiceUserCrew: map[userID → crewID]`) tracks which room each
+user is in for fast leave/cleanup.
 
 ### 2.5 Stream Thumbnail
 
@@ -721,10 +724,14 @@ Recent messages updated (throttled 10s for sidebar).
 
 ## 6. Push Logic
 
+All push logic lives in `push.go` as free functions operating on package-level
+state (flat package requirement). Two background goroutines are started from
+`InitModule`: the sidebar batcher (30s) and the message throttle flusher (10s).
+
 ### 6.1 Priority Event Handling
 
 ```go
-// push/priority.go
+// push.go
 
 var PriorityEvents = map[string]bool{
     "stream_started": true,
@@ -735,109 +742,54 @@ var PriorityEvents = map[string]bool{
     "dm_received":    true,
 }
 
-func (pm *PushManager) HandleEvent(crewID string, event string, data interface{}) {
-    if PriorityEvents[event] {
-        // Push immediately to all subscribers (active + sidebar)
-        pm.PushToCrewSubscribers(crewID, MsgCrewEvent, map[string]interface{}{
-            "crew_id": crewID,
-            "event":   event,
-            "data":    data,
-        })
+func PushCrewEvent(ctx context.Context, logger runtime.Logger, nk runtime.NakamaModule,
+    crewID, event string, data map[string]interface{}) {
+    // Send NotifyCrewEvent (code 111) to all subscribers of crewID
+    for _, sub := range getSubscribersForCrew(crewID) {
+        nk.NotificationSend(ctx, sub.UserID, "crew_event", content, NotifyCrewEvent, "", false)
     }
 }
 ```
 
-### 6.2 Batched Updates
+### 6.2 Batched Sidebar Updates
 
 ```go
-// push/batcher.go
+// push.go — background goroutine started by InitModule
 
-type SidebarBatcher struct {
-    interval     time.Duration
-    pending      map[string]map[string]*CrewSummary  // userID -> crewID -> summary
-    mu           sync.Mutex
-}
-
-func (b *SidebarBatcher) Queue(userID, crewID string, summary *CrewSummary) {
-    b.mu.Lock()
-    defer b.mu.Unlock()
-    
-    if b.pending[userID] == nil {
-        b.pending[userID] = make(map[string]*CrewSummary)
-    }
-    b.pending[userID][crewID] = summary
-}
-
-func (b *SidebarBatcher) Flush() {
-    b.mu.Lock()
-    pending := b.pending
-    b.pending = make(map[string]map[string]*CrewSummary)
-    b.mu.Unlock()
-    
-    for userID, crews := range pending {
-        summaries := make([]*CrewSummary, 0, len(crews))
-        for _, s := range crews {
-            summaries = append(summaries, s)
-        }
-        
-        pm.PushToUser(userID, MsgSidebarUpdate, map[string]interface{}{
-            "crews": summaries,
-        })
-    }
-}
-
-func (pm *PushManager) StartBatchLoop(interval time.Duration) {
+func StartSidebarBatchLoop(nk runtime.NakamaModule, logger runtime.Logger, interval time.Duration) {
     ticker := time.NewTicker(interval)
     for range ticker.C {
-        pm.sidebarBatcher.Flush()
+        FlushSidebarBatch(context.Background(), logger, nk)
     }
+}
+
+func FlushSidebarBatch(ctx context.Context, logger runtime.Logger, nk runtime.NakamaModule) {
+    // For each session subscription, build sidebar state for their crews
+    // and send NotifySidebarUpdate (code 112)
 }
 ```
 
 ### 6.3 Message Throttling
 
 ```go
-// push/manager.go
+// push.go — throttled message previews (10s per crew)
 
-type ThrottleState struct {
-    lastPush map[string]time.Time  // crewID -> last push time
-    pending  map[string][]Message  // crewID -> pending messages
+var msgThrottle struct {
     mu       sync.Mutex
+    lastPush map[string]time.Time      // crewID → last push time
+    pending  map[string]*MessagePreview // crewID → latest pending message
 }
 
-func (pm *PushManager) OnNewMessage(crewID string, msg Message) {
-    pm.throttle.mu.Lock()
-    defer pm.throttle.mu.Unlock()
-    
-    // Store as pending
-    pm.throttle.pending[crewID] = append(pm.throttle.pending[crewID], msg)
-    // Keep only last 2
-    if len(pm.throttle.pending[crewID]) > 2 {
-        pm.throttle.pending[crewID] = pm.throttle.pending[crewID][len(pm.throttle.pending[crewID])-2:]
-    }
-    
-    // Check throttle
-    lastPush := pm.throttle.lastPush[crewID]
-    if time.Since(lastPush) >= 10*time.Second {
-        pm.pushMessagePreview(crewID)
-        pm.throttle.lastPush[crewID] = time.Now()
-        pm.throttle.pending[crewID] = nil
-    }
+func QueueMessagePreview(ctx context.Context, logger runtime.Logger, nk runtime.NakamaModule,
+    crewID string, msg *MessagePreview) {
+    // If ≥10s since last push: push immediately
+    // Otherwise: store as pending, flushed by StartMessageThrottleLoop
 }
 
-func (pm *PushManager) StartThrottleLoop(interval time.Duration) {
+func StartMessageThrottleLoop(nk runtime.NakamaModule, logger runtime.Logger, interval time.Duration) {
     ticker := time.NewTicker(interval)
     for range ticker.C {
-        pm.throttle.mu.Lock()
-        now := time.Now()
-        for crewID, pending := range pm.throttle.pending {
-            if len(pending) > 0 && now.Sub(pm.throttle.lastPush[crewID]) >= interval {
-                pm.pushMessagePreview(crewID)
-                pm.throttle.lastPush[crewID] = now
-                pm.throttle.pending[crewID] = nil
-            }
-        }
-        pm.throttle.mu.Unlock()
+        FlushThrottledMessages(context.Background(), logger, nk)
     }
 }
 ```
@@ -1206,25 +1158,20 @@ Flush batcher:
 
 ---
 
-## 10. Storage Collections
+## 10. Storage & State
 
-| Collection | Key | Purpose |
-|------------|-----|---------|
-| `presence` | `{user_id}` | User presence state |
-| `crew_state` | `{crew_id}` | Cached crew aggregate |
-| `stream_meta` | `{stream_id}` | Active stream metadata |
-| `voice_state` | `{crew_id}` | Voice room membership |
+| Location | Key | Kind | Purpose |
+|----------|-----|------|---------|
+| Nakama storage `presence` | `{user_id}` | Persistent | User presence state |
+| Nakama storage `stream_meta` | `{stream_id}` | Persistent | Active stream metadata |
+| In-memory `crewStateCache` | `{crew_id}` | Cache | Aggregated crew state (rebuilt on demand) |
+| In-memory `voiceRooms` | `{crew_id}` | Runtime | Voice room membership |
+| In-memory `subscriptions` | `{session_id}` | Runtime | Per-session push subscriptions |
+| In-memory `crewSubscribers` | `{crew_id}` | Runtime | Reverse index: crew → sessions |
 
----
-
-## 11. Environment Variables
-
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `THUMBNAIL_STORAGE_URL` | Yes | Base URL for thumbnail storage |
-| `THUMBNAIL_STORAGE_KEY` | Yes | API key for storage service |
-| `SIDEBAR_BATCH_INTERVAL` | No | Sidebar update interval (default: 30s) |
-| `MESSAGE_THROTTLE_INTERVAL` | No | Message preview throttle (default: 10s) |
+> **Note:** In-memory state is lost on Nakama restart. Presence is restored via
+> session hooks; voice rooms start empty (users rejoin). This is acceptable for
+> the current single-node deployment.
 
 ---
 
