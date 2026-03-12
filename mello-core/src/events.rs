@@ -1,4 +1,7 @@
 use crate::crew::{Crew, Member};
+use crate::crew_state::{
+    CrewEvent, CrewSidebarState, CrewState, MessagePreview, PresenceChange, VoiceMember,
+};
 use crate::voice::AudioDevice;
 
 #[derive(Debug, Clone)]
@@ -66,6 +69,21 @@ pub enum Event {
     },
 
     SignalReceived { from: String, payload: String },
+
+    // --- Presence & crew state ---
+
+    /// Full crew state loaded for the active crew.
+    CrewStateLoaded { state: CrewState },
+    /// Batched sidebar update for non-active crews.
+    SidebarUpdated { crews: Vec<CrewSidebarState> },
+    /// Priority crew event (stream_started, voice_joined, etc.).
+    CrewEventReceived { event: CrewEvent },
+    /// A member's presence changed in the active crew.
+    PresenceChanged { change: PresenceChange },
+    /// Voice state update for the active crew (includes speaking).
+    VoiceUpdated { crew_id: String, members: Vec<VoiceMember> },
+    /// Throttled message preview for a sidebar crew.
+    MessagePreviewUpdated { crew_id: String, messages: Vec<MessagePreview> },
 
     Error { message: String },
 }

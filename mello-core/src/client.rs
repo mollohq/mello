@@ -4,6 +4,7 @@ use crate::command::Command;
 use crate::config::Config;
 use crate::events::Event;
 use crate::nakama::NakamaClient;
+use crate::presence::PresenceStatus;
 use crate::session;
 use crate::nakama::InternalSignal;
 use crate::voice::{SignalMessage, VoiceManager};
@@ -143,9 +144,11 @@ impl Client {
             Command::SendMessage { content } => {
                 self.handle_send_message(&content).await;
             }
-            Command::JoinVoice => {}
+            Command::JoinVoice => {
+                self.handle_join_voice().await;
+            }
             Command::LeaveVoice => {
-                self.handle_leave_voice();
+                self.handle_leave_voice().await;
             }
             Command::SetMute { muted } => {
                 self.voice.set_mute(muted);
@@ -173,6 +176,18 @@ impl Client {
             Command::UpdateProfile { display_name } => {
                 self.handle_update_profile(&display_name).await;
             }
+            // --- Presence & crew state ---
+            Command::UpdatePresence { status, activity } => {
+                if let Err(e) = self.nakama.presence_update(&status, activity.as_ref()).await {
+                    log::error!("Failed to update presence: {}", e);
+                }
+            }
+            Command::SetActiveCrew { crew_id } => {
+                self.handle_set_active_crew(&crew_id).await;
+            }
+            Command::SubscribeSidebar { crew_ids } => {
+                self.handle_subscribe_sidebar(&crew_ids).await;
+            }
         }
     }
 
@@ -186,6 +201,7 @@ impl Client {
                 if let Err(e) = self.nakama.connect_ws(self.event_tx.clone()).await {
                     log::error!("WebSocket connect failed after device auth: {}", e);
                 }
+                self.on_connected().await;
                 let _ = self.event_tx.send(Event::DeviceAuthed { user, created });
             }
             Err(e) => {
@@ -243,6 +259,9 @@ impl Client {
             }
             None => {
                 log::info!("No stored session found");
+                let _ = self.event_tx.send(Event::LoginFailed {
+                    reason: String::new(),
+                });
                 return;
             }
         };
@@ -266,6 +285,7 @@ impl Client {
                     return;
                 }
 
+                self.on_connected().await;
                 let _ = self.event_tx.send(Event::LoggedIn { user });
                 self.load_crews().await;
             }
@@ -304,6 +324,7 @@ impl Client {
                     return;
                 }
 
+                self.on_connected().await;
                 let _ = self.event_tx.send(Event::LoggedIn { user });
                 self.load_crews().await;
             }
@@ -328,8 +349,20 @@ impl Client {
     }
 
     async fn handle_logout(&mut self) {
+        // Notify server we're going offline
+        if let Err(e) = self.nakama.presence_update(&PresenceStatus::Offline, None).await {
+            log::warn!("Failed to set offline presence on logout: {}", e);
+        }
+
+        // Leave voice (local + server-side)
+        if let Some(crew_id) = self.nakama.active_crew_id().map(String::from) {
+            if let Err(e) = self.nakama.voice_leave(&crew_id).await {
+                log::warn!("Failed to voice_leave RPC on logout: {}", e);
+            }
+        }
         self.voice.leave_voice();
         let _ = self.event_tx.send(Event::VoiceStateChanged { in_call: false });
+
         session::clear();
         if let Err(e) = self.nakama.leave_crew_channel().await {
             log::warn!("Leave channel on logout: {}", e);
@@ -340,6 +373,11 @@ impl Client {
     async fn load_crews(&self) {
         match self.nakama.list_user_groups().await {
             Ok(crews) => {
+                // Subscribe sidebar for all crews
+                let crew_ids: Vec<String> = crews.iter().map(|c| c.id.clone()).collect();
+                if !crew_ids.is_empty() {
+                    self.handle_subscribe_sidebar(&crew_ids).await;
+                }
                 let _ = self.event_tx.send(Event::CrewsLoaded { crews });
             }
             Err(e) => {
@@ -382,6 +420,16 @@ impl Client {
             crew_id: crew_id.to_string(),
         });
 
+        // Tell the server this is our active crew (registers subscription + returns state)
+        match self.nakama.set_active_crew(crew_id).await {
+            Ok(state) => {
+                let _ = self.event_tx.send(Event::CrewStateLoaded { state });
+            }
+            Err(e) => {
+                log::warn!("set_active_crew RPC failed: {}", e);
+            }
+        }
+
         // Wait for WS reader to set channel_id (up to 2s)
         let channel_id = self.wait_for_channel_id().await;
         if let Some(ch_id) = channel_id {
@@ -408,6 +456,42 @@ impl Client {
                     .collect();
                 self.voice.join_voice(&local_id, &other_ids);
                 let _ = self.event_tx.send(Event::VoiceStateChanged { in_call: true });
+
+                // Notify server we joined voice
+                if let Err(e) = self.nakama.voice_join(crew_id).await {
+                    log::warn!("voice_join RPC failed: {}", e);
+                }
+            }
+        }
+    }
+
+    /// Called after successful auth + WS connect. Sets online presence.
+    async fn on_connected(&self) {
+        if let Err(e) = self.nakama.presence_update(&PresenceStatus::Online, None).await {
+            log::warn!("Failed to set online presence: {}", e);
+        }
+    }
+
+    /// Tell the server which crew is active and get full state back.
+    async fn handle_set_active_crew(&self, crew_id: &str) {
+        match self.nakama.set_active_crew(crew_id).await {
+            Ok(state) => {
+                let _ = self.event_tx.send(Event::CrewStateLoaded { state });
+            }
+            Err(e) => {
+                log::error!("set_active_crew failed: {}", e);
+            }
+        }
+    }
+
+    /// Subscribe to sidebar updates for the given crews.
+    async fn handle_subscribe_sidebar(&self, crew_ids: &[String]) {
+        match self.nakama.subscribe_sidebar(crew_ids).await {
+            Ok(crews) => {
+                let _ = self.event_tx.send(Event::SidebarUpdated { crews });
+            }
+            Err(e) => {
+                log::warn!("subscribe_sidebar failed: {}", e);
             }
         }
     }
@@ -423,12 +507,32 @@ impl Client {
         None
     }
 
-    fn handle_leave_voice(&mut self) {
+    async fn handle_join_voice(&mut self) {
+        if let Some(crew_id) = self.nakama.active_crew_id().map(String::from) {
+            if let Err(e) = self.nakama.voice_join(&crew_id).await {
+                log::error!("voice_join RPC failed: {}", e);
+            }
+        }
+    }
+
+    async fn handle_leave_voice(&mut self) {
+        // Notify server
+        if let Some(crew_id) = self.nakama.active_crew_id().map(String::from) {
+            if let Err(e) = self.nakama.voice_leave(&crew_id).await {
+                log::warn!("voice_leave RPC failed: {}", e);
+            }
+        }
         self.voice.leave_voice();
         let _ = self.event_tx.send(Event::VoiceStateChanged { in_call: false });
     }
 
     async fn handle_leave_crew(&mut self) {
+        // Leave voice (local + server)
+        if let Some(crew_id) = self.nakama.active_crew_id().map(String::from) {
+            if let Err(e) = self.nakama.voice_leave(&crew_id).await {
+                log::warn!("voice_leave RPC on crew leave: {}", e);
+            }
+        }
         self.voice.leave_voice();
         let _ = self.event_tx.send(Event::VoiceStateChanged { in_call: false });
         let crew_id = self.nakama.active_crew_id().map(String::from);

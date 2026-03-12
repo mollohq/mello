@@ -5,7 +5,9 @@ use tokio_tungstenite::tungstenite::Message;
 
 use crate::config::Config;
 use crate::crew::{Crew, Member};
+use crate::crew_state::CrewState;
 use crate::events::{ChatMessage, Event, User};
+use crate::presence::{Activity, PresenceStatus};
 use crate::{Error, Result};
 use super::types::*;
 
@@ -413,6 +415,93 @@ impl NakamaClient {
         })
     }
 
+    // --- Generic RPC ---
+
+    pub async fn rpc(&self, id: &str, payload: &serde_json::Value) -> Result<String> {
+        let token = self.bearer()?;
+        let url = format!("{}/v2/rpc/{}", self.config.http_base(), id);
+
+        let body = serde_json::Value::String(payload.to_string());
+
+        let resp = self.http.post(&url)
+            .bearer_auth(&token)
+            .json(&body)
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            let err_text = resp.text().await.unwrap_or_default();
+            return Err(Error::Server(err_text));
+        }
+
+        let rpc_resp: ApiRpcResponse = resp.json().await?;
+        Ok(rpc_resp.payload.unwrap_or_default())
+    }
+
+    // --- Presence RPCs ---
+
+    pub async fn presence_update(&self, status: &PresenceStatus, activity: Option<&Activity>) -> Result<()> {
+        let payload = serde_json::json!({
+            "status": status,
+            "activity": activity,
+        });
+        self.rpc("presence_update", &payload).await?;
+        Ok(())
+    }
+
+    pub async fn presence_get(&self, user_ids: &[String]) -> Result<String> {
+        let payload = serde_json::json!({ "user_ids": user_ids });
+        self.rpc("presence_get", &payload).await
+    }
+
+    // --- Crew state RPCs ---
+
+    pub async fn set_active_crew(&self, crew_id: &str) -> Result<CrewState> {
+        let payload = serde_json::json!({ "crew_id": crew_id });
+        let resp = self.rpc("set_active_crew", &payload).await?;
+
+        #[derive(serde::Deserialize)]
+        struct Resp {
+            state: CrewState,
+        }
+        let parsed: Resp = serde_json::from_str(&resp)?;
+        Ok(parsed.state)
+    }
+
+    pub async fn subscribe_sidebar(&self, crew_ids: &[String]) -> Result<Vec<crate::crew_state::CrewSidebarState>> {
+        let payload = serde_json::json!({ "crew_ids": crew_ids });
+        let resp = self.rpc("subscribe_sidebar", &payload).await?;
+
+        #[derive(serde::Deserialize)]
+        struct Resp {
+            crews: Vec<crate::crew_state::CrewSidebarState>,
+        }
+        let parsed: Resp = serde_json::from_str(&resp)?;
+        Ok(parsed.crews)
+    }
+
+    // --- Voice RPCs ---
+
+    pub async fn voice_join(&self, crew_id: &str) -> Result<()> {
+        let payload = serde_json::json!({ "crew_id": crew_id });
+        self.rpc("voice_join", &payload).await?;
+        Ok(())
+    }
+
+    pub async fn voice_leave(&self, crew_id: &str) -> Result<()> {
+        let payload = serde_json::json!({ "crew_id": crew_id });
+        self.rpc("voice_leave", &payload).await?;
+        Ok(())
+    }
+
+    pub async fn voice_speaking(&self, crew_id: &str, speaking: bool) -> Result<()> {
+        let payload = serde_json::json!({ "crew_id": crew_id, "speaking": speaking });
+        self.rpc("voice_speaking", &payload).await?;
+        Ok(())
+    }
+
+    // --- Channel ---
+
     pub async fn join_crew_channel(&mut self, crew_id: &str) -> Result<()> {
         self.active_crew_id = Some(crew_id.to_string());
 
@@ -761,11 +850,96 @@ async fn handle_ws_message(
         }
     }
 
+    // Notifications (push system: codes 110-115)
+    if let Some(notif_list) = envelope.notifications {
+        if let Some(notifications) = notif_list.notifications {
+            for notif in notifications {
+                let code = notif.code.unwrap_or(0);
+                let content = notif.content.as_deref().unwrap_or("{}");
+                handle_notification(code, content, event_tx);
+            }
+        }
+    }
+
     // Error
     if let Some(err) = envelope.error {
         let _ = event_tx.send(Event::Error {
             message: err.message.unwrap_or_default(),
         });
+    }
+}
+
+fn handle_notification(
+    code: i32,
+    content: &str,
+    event_tx: &std::sync::mpsc::Sender<Event>,
+) {
+    use crate::crew_state;
+
+    match code {
+        // 110 = full crew state
+        110 => {
+            match serde_json::from_str::<crew_state::CrewState>(content) {
+                Ok(state) => {
+                    let _ = event_tx.send(Event::CrewStateLoaded { state });
+                }
+                Err(e) => log::warn!("Failed to parse crew_state notification: {}", e),
+            }
+        }
+        // 111 = priority crew event
+        111 => {
+            match serde_json::from_str::<crew_state::CrewEvent>(content) {
+                Ok(event) => {
+                    let _ = event_tx.send(Event::CrewEventReceived { event });
+                }
+                Err(e) => log::warn!("Failed to parse crew_event notification: {}", e),
+            }
+        }
+        // 112 = batched sidebar update
+        112 => {
+            match serde_json::from_str::<crew_state::SidebarUpdate>(content) {
+                Ok(update) => {
+                    let _ = event_tx.send(Event::SidebarUpdated { crews: update.crews });
+                }
+                Err(e) => log::warn!("Failed to parse sidebar_update notification: {}", e),
+            }
+        }
+        // 113 = presence change
+        113 => {
+            match serde_json::from_str::<crew_state::PresenceChange>(content) {
+                Ok(change) => {
+                    let _ = event_tx.send(Event::PresenceChanged { change });
+                }
+                Err(e) => log::warn!("Failed to parse presence_change notification: {}", e),
+            }
+        }
+        // 114 = voice update
+        114 => {
+            match serde_json::from_str::<crew_state::VoiceUpdate>(content) {
+                Ok(update) => {
+                    let _ = event_tx.send(Event::VoiceUpdated {
+                        crew_id: update.crew_id,
+                        members: update.members,
+                    });
+                }
+                Err(e) => log::warn!("Failed to parse voice_update notification: {}", e),
+            }
+        }
+        // 115 = throttled message preview
+        115 => {
+            match serde_json::from_str::<crew_state::MessagePreviewUpdate>(content) {
+                Ok(update) => {
+                    let _ = event_tx.send(Event::MessagePreviewUpdated {
+                        crew_id: update.crew_id,
+                        messages: update.messages,
+                    });
+                }
+                Err(e) => log::warn!("Failed to parse message_preview notification: {}", e),
+            }
+        }
+        _ => {
+            log::debug!("Unhandled notification code: {}", code);
+        }
     }
 }
 

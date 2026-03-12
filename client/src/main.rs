@@ -585,7 +585,21 @@ fn handle_event(app: &MainWindow, event: Event, settings: &Rc<RefCell<Settings>>
         Event::LoginFailed { reason } => {
             log::warn!("[auth] login-failed  reason={}", reason);
             app.set_login_loading(false);
-            app.set_login_error(reason.into());
+            app.set_logged_in(false);
+            app.set_login_error(reason.clone().into());
+
+            // If restore failed (empty reason = expired token), fall back to
+            // device auth so the user sees the login/onboarding screen.
+            if reason.is_empty() {
+                log::info!("[auth] restore failed — falling back to device auth");
+                app.set_onboarding_step(1);
+                let mut s = settings.borrow_mut();
+                s.onboarding_step = 1;
+                s.save();
+                if let Some(ref device_id) = s.device_id {
+                    let _ = cmd_tx.try_send(Command::DeviceAuth { device_id: device_id.clone() });
+                }
+            }
         }
         Event::CrewsLoaded { crews } => {
             let crew_ids: Vec<String> = crews.iter().map(|c| c.id.clone()).collect();
@@ -821,6 +835,95 @@ fn handle_event(app: &MainWindow, event: Event, settings: &Rc<RefCell<Settings>>
         Event::SignalReceived { .. } => {
             // Handled internally by the client, not the UI
         }
+
+        // --- Presence & crew state events ---
+
+        Event::CrewStateLoaded { state } => {
+            log::info!("UI: crew state loaded for {} (online={}, total={})",
+                state.crew_id, state.counts.online, state.counts.total);
+
+            // Update the active crew card's online/voice counts
+            let crews = app.get_crews();
+            let updated: Vec<CrewData> = (0..crews.row_count())
+                .map(|i| {
+                    let mut c = crews.row_data(i).unwrap();
+                    if c.id == state.crew_id.as_str() {
+                        c.online_count = state.counts.online as i32;
+                        c.voice_count = state.voice.members.len().min(4) as i32;
+                    }
+                    c
+                })
+                .collect();
+            app.set_crews(Rc::new(slint::VecModel::from(updated)).into());
+        }
+        Event::SidebarUpdated { crews: sidebar_crews } => {
+            log::info!("UI: sidebar updated for {} crews", sidebar_crews.len());
+
+            let current = app.get_crews();
+            let mut updated: Vec<CrewData> = (0..current.row_count())
+                .map(|i| current.row_data(i).unwrap())
+                .collect();
+
+            for sc in &sidebar_crews {
+                if let Some(c) = updated.iter_mut().find(|c| c.id == sc.crew_id.as_str()) {
+                    c.online_count = sc.counts.online as i32;
+                    if let Some(ref voice) = sc.voice {
+                        c.voice_count = voice.members.len().min(4) as i32;
+                    }
+                }
+            }
+            app.set_crews(Rc::new(slint::VecModel::from(updated)).into());
+        }
+        Event::CrewEventReceived { event } => {
+            log::info!("UI: crew event {} in crew {}", event.event, event.crew_id);
+            // Priority events like stream_started, voice_joined — refresh sidebar counts
+            let _ = cmd_tx.try_send(Command::SetActiveCrew {
+                crew_id: event.crew_id,
+            });
+        }
+        Event::PresenceChanged { change } => {
+            log::debug!("UI: presence change user={} in crew={}", change.user_id, change.crew_id);
+            let active_id = app.get_active_crew_id();
+            if active_id == change.crew_id.as_str() {
+                let current = app.get_members();
+                let is_online = change.presence.status != mello_core::presence::PresenceStatus::Offline;
+                let members: Vec<MemberData> = (0..current.row_count())
+                    .map(|i| {
+                        let mut m = current.row_data(i).unwrap();
+                        if m.id == change.user_id.as_str() {
+                            m.online = is_online;
+                        }
+                        m
+                    })
+                    .collect();
+                app.set_members(Rc::new(slint::VecModel::from(members)).into());
+                update_active_crew_card(app);
+            }
+        }
+        Event::VoiceUpdated { crew_id, members: voice_members } => {
+            log::debug!("UI: voice update crew={} members={}", crew_id, voice_members.len());
+            let active_id = app.get_active_crew_id();
+            if active_id == crew_id.as_str() {
+                // Update speaking state on members list
+                let current = app.get_members();
+                let members: Vec<MemberData> = (0..current.row_count())
+                    .map(|i| {
+                        let mut m = current.row_data(i).unwrap();
+                        if let Some(vm) = voice_members.iter().find(|vm| vm.user_id == m.id.as_ref()) {
+                            m.speaking = vm.speaking.unwrap_or(false);
+                        }
+                        m
+                    })
+                    .collect();
+                app.set_members(Rc::new(slint::VecModel::from(members)).into());
+                update_active_crew_card(app);
+            }
+        }
+        Event::MessagePreviewUpdated { crew_id, messages } => {
+            log::debug!("UI: message preview for crew={} count={}", crew_id, messages.len());
+            // Update sidebar crew card — no separate field yet, just log for now
+        }
+
         Event::Error { message } => {
             log::error!("UI: error: {}", message);
         }

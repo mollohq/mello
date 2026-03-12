@@ -1,0 +1,408 @@
+use serde::{Deserialize, Serialize};
+
+use crate::presence::{Activity, PresenceStatus, UserPresence};
+
+// ---------------------------------------------------------------------------
+// Full crew state (returned by crew_state_get for the active crew)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CrewState {
+    pub crew_id: String,
+    pub name: String,
+    pub counts: CrewCounts,
+    #[serde(default)]
+    pub members: Option<Vec<CrewMember>>,
+    pub voice: VoiceState,
+    #[serde(default)]
+    pub stream: Option<StreamState>,
+    #[serde(default)]
+    pub recent_messages: Vec<MessagePreview>,
+    #[serde(default)]
+    pub updated_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CrewCounts {
+    pub online: u32,
+    pub total: u32,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CrewMember {
+    pub user_id: String,
+    #[serde(default)]
+    pub username: String,
+    #[serde(default)]
+    pub avatar: Option<String>,
+    #[serde(default)]
+    pub presence: Option<UserPresence>,
+}
+
+// ---------------------------------------------------------------------------
+// Voice state
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct VoiceState {
+    pub active: bool,
+    #[serde(default)]
+    pub members: Vec<VoiceMember>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct VoiceMember {
+    pub user_id: String,
+    #[serde(default)]
+    pub username: String,
+    #[serde(default)]
+    pub speaking: Option<bool>,
+}
+
+// ---------------------------------------------------------------------------
+// Stream state
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct StreamState {
+    pub active: bool,
+    #[serde(default)]
+    pub stream_id: Option<String>,
+    #[serde(default)]
+    pub streamer_id: Option<String>,
+    #[serde(default)]
+    pub streamer_username: Option<String>,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub viewer_count: u32,
+    #[serde(default)]
+    pub thumbnail_url: Option<String>,
+}
+
+// ---------------------------------------------------------------------------
+// Message preview
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct MessagePreview {
+    #[serde(default)]
+    pub message_id: Option<String>,
+    #[serde(default)]
+    pub user_id: Option<String>,
+    #[serde(default)]
+    pub username: String,
+    #[serde(default)]
+    pub preview: String,
+    #[serde(default)]
+    pub timestamp: String,
+}
+
+// ---------------------------------------------------------------------------
+// Sidebar state (lighter view returned by crew_state_get_sidebar)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CrewSidebarState {
+    pub crew_id: String,
+    #[serde(default)]
+    pub name: String,
+    pub counts: CrewCounts,
+    #[serde(default)]
+    pub voice: Option<VoiceState>,
+    #[serde(default)]
+    pub stream: Option<StreamState>,
+    #[serde(default)]
+    pub recent_messages: Vec<MessagePreview>,
+    #[serde(default)]
+    pub idle: bool,
+}
+
+// ---------------------------------------------------------------------------
+// Crew event (priority push from server)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CrewEvent {
+    pub crew_id: String,
+    pub event: String,
+    #[serde(default)]
+    pub data: serde_json::Value,
+}
+
+// ---------------------------------------------------------------------------
+// Presence change push
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PresenceChange {
+    pub crew_id: String,
+    pub user_id: String,
+    pub presence: PresenceInfo,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PresenceInfo {
+    pub status: PresenceStatus,
+    #[serde(default)]
+    pub activity: Option<Activity>,
+}
+
+// ---------------------------------------------------------------------------
+// Voice update push
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VoiceUpdate {
+    pub crew_id: String,
+    #[serde(default)]
+    pub members: Vec<VoiceMember>,
+}
+
+// ---------------------------------------------------------------------------
+// Message preview push
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MessagePreviewUpdate {
+    pub crew_id: String,
+    #[serde(default)]
+    pub messages: Vec<MessagePreview>,
+}
+
+// ---------------------------------------------------------------------------
+// Sidebar batch push
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SidebarUpdate {
+    pub crews: Vec<CrewSidebarState>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn crew_state_full_json() {
+        // Simulate what set_active_crew RPC returns
+        let json = r#"{
+            "crew_id": "crew_xyz",
+            "name": "The Vanguard",
+            "counts": { "online": 8, "total": 12 },
+            "members": [
+                {
+                    "user_id": "user_a",
+                    "username": "k0ji_tech",
+                    "avatar": "https://example.com/avatar.png",
+                    "presence": {
+                        "user_id": "user_a",
+                        "status": "online",
+                        "activity": { "type": "streaming", "crew_id": "crew_xyz", "stream_id": "s1", "stream_title": "AVALON" }
+                    }
+                }
+            ],
+            "voice": {
+                "active": true,
+                "members": [
+                    { "user_id": "user_a", "username": "k0ji_tech", "speaking": false },
+                    { "user_id": "user_b", "username": "ash_22" }
+                ]
+            },
+            "stream": {
+                "active": true,
+                "stream_id": "stream_123",
+                "streamer_id": "user_a",
+                "streamer_username": "k0ji_tech",
+                "title": "PROJECT AVALON",
+                "viewer_count": 3,
+                "thumbnail_url": "https://example.com/thumb.jpg"
+            },
+            "recent_messages": [
+                { "username": "ash_22", "preview": "status check?", "timestamp": "2026-03-08T14:15:00Z" }
+            ],
+            "updated_at": "2026-03-08T14:16:00Z"
+        }"#;
+
+        let state: CrewState = serde_json::from_str(json).unwrap();
+        assert_eq!(state.crew_id, "crew_xyz");
+        assert_eq!(state.name, "The Vanguard");
+        assert_eq!(state.counts.online, 8);
+        assert_eq!(state.counts.total, 12);
+        assert!(state.members.is_some());
+        assert_eq!(state.members.as_ref().unwrap().len(), 1);
+        assert!(state.voice.active);
+        assert_eq!(state.voice.members.len(), 2);
+        assert!(state.stream.is_some());
+        assert_eq!(state.recent_messages.len(), 1);
+    }
+
+    #[test]
+    fn crew_state_no_members() {
+        // Sidebar-style: no members array
+        let json = r#"{
+            "crew_id": "crew_1",
+            "name": "Crew",
+            "counts": { "online": 0, "total": 5 },
+            "voice": { "active": false, "members": [] },
+            "recent_messages": []
+        }"#;
+
+        let state: CrewState = serde_json::from_str(json).unwrap();
+        assert!(state.members.is_none());
+        assert!(state.stream.is_none());
+        assert!(!state.voice.active);
+    }
+
+    #[test]
+    fn sidebar_state_json() {
+        let json = r#"{
+            "crew_id": "crew_abc",
+            "name": "Neon Syndicate",
+            "counts": { "online": 4, "total": 20 },
+            "voice": {
+                "active": true,
+                "members": [
+                    { "user_id": "u1", "username": "vex_r" },
+                    { "user_id": "u2", "username": "lune" }
+                ]
+            },
+            "stream": null,
+            "recent_messages": [
+                { "username": "vex_r", "preview": "yo who has the stash...", "timestamp": "2026-03-08T14:15:00Z" }
+            ]
+        }"#;
+
+        let sidebar: CrewSidebarState = serde_json::from_str(json).unwrap();
+        assert_eq!(sidebar.crew_id, "crew_abc");
+        assert_eq!(sidebar.counts.online, 4);
+        assert!(sidebar.voice.is_some());
+        assert_eq!(sidebar.voice.as_ref().unwrap().members.len(), 2);
+        assert!(sidebar.stream.is_none());
+        assert!(!sidebar.idle);
+    }
+
+    #[test]
+    fn sidebar_state_idle_crew() {
+        let json = r#"{
+            "crew_id": "crew_123",
+            "name": "Ghost Recon",
+            "counts": { "online": 0, "total": 8 },
+            "idle": true
+        }"#;
+
+        let sidebar: CrewSidebarState = serde_json::from_str(json).unwrap();
+        assert!(sidebar.idle);
+        assert_eq!(sidebar.counts.online, 0);
+    }
+
+    #[test]
+    fn crew_event_json() {
+        let json = r#"{
+            "crew_id": "crew_xyz",
+            "event": "stream_started",
+            "data": {
+                "stream_id": "stream_123",
+                "streamer_id": "user_a",
+                "title": "PROJECT AVALON"
+            }
+        }"#;
+
+        let event: CrewEvent = serde_json::from_str(json).unwrap();
+        assert_eq!(event.crew_id, "crew_xyz");
+        assert_eq!(event.event, "stream_started");
+        assert_eq!(event.data["stream_id"], "stream_123");
+    }
+
+    #[test]
+    fn presence_change_json() {
+        let json = r#"{
+            "crew_id": "crew_xyz",
+            "user_id": "user_a",
+            "presence": {
+                "status": "online",
+                "activity": { "type": "in_voice", "crew_id": "crew_xyz" }
+            }
+        }"#;
+
+        let change: PresenceChange = serde_json::from_str(json).unwrap();
+        assert_eq!(change.crew_id, "crew_xyz");
+        assert_eq!(change.user_id, "user_a");
+        assert_eq!(change.presence.status, crate::presence::PresenceStatus::Online);
+    }
+
+    #[test]
+    fn voice_update_json() {
+        let json = r#"{
+            "crew_id": "crew_xyz",
+            "members": [
+                { "user_id": "user_a", "username": "vex_r", "speaking": true },
+                { "user_id": "user_b", "username": "lune", "speaking": false }
+            ]
+        }"#;
+
+        let update: VoiceUpdate = serde_json::from_str(json).unwrap();
+        assert_eq!(update.crew_id, "crew_xyz");
+        assert_eq!(update.members.len(), 2);
+        assert_eq!(update.members[0].speaking, Some(true));
+        assert_eq!(update.members[1].speaking, Some(false));
+    }
+
+    #[test]
+    fn message_preview_update_json() {
+        let json = r#"{
+            "crew_id": "crew_abc",
+            "messages": [
+                { "username": "vex_r", "preview": "new msg here...", "timestamp": "2026-03-08T14:15:00Z" },
+                { "username": "lune", "preview": "previous msg...", "timestamp": "2026-03-08T14:14:30Z" }
+            ]
+        }"#;
+
+        let update: MessagePreviewUpdate = serde_json::from_str(json).unwrap();
+        assert_eq!(update.crew_id, "crew_abc");
+        assert_eq!(update.messages.len(), 2);
+        assert_eq!(update.messages[0].username, "vex_r");
+    }
+
+    #[test]
+    fn sidebar_update_json() {
+        let json = r#"{
+            "crews": [
+                {
+                    "crew_id": "crew_abc",
+                    "name": "Neon Syndicate",
+                    "counts": { "online": 4, "total": 20 }
+                },
+                {
+                    "crew_id": "crew_def",
+                    "name": "Deep Space",
+                    "counts": { "online": 0, "total": 6 },
+                    "idle": true
+                }
+            ]
+        }"#;
+
+        let update: SidebarUpdate = serde_json::from_str(json).unwrap();
+        assert_eq!(update.crews.len(), 2);
+        assert_eq!(update.crews[0].crew_id, "crew_abc");
+        assert!(update.crews[1].idle);
+    }
+
+    #[test]
+    fn voice_member_without_speaking() {
+        // Sidebar voice members don't include speaking
+        let json = r#"{ "user_id": "u1", "username": "alice" }"#;
+        let vm: VoiceMember = serde_json::from_str(json).unwrap();
+        assert_eq!(vm.user_id, "u1");
+        assert!(vm.speaking.is_none());
+    }
+
+    #[test]
+    fn stream_state_inactive() {
+        let json = r#"{ "active": false }"#;
+        let ss: StreamState = serde_json::from_str(json).unwrap();
+        assert!(!ss.active);
+        assert!(ss.stream_id.is_none());
+        assert!(ss.thumbnail_url.is_none());
+    }
+}
