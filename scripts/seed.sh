@@ -156,6 +156,22 @@ for ((i=1; i<=${#join_user[@]}; i++)); do
     echo "    $u -> $c  ($tag)"
 done
 
+# ── dev state (presence, voice, streams, chat previews) ──────────
+
+echo ""
+echo "  dev state"
+
+if seed_resp=$(curl -sf -X POST \
+    "$BASE/v2/rpc/dev_seed_state" \
+    -H "Authorization: Bearer ${tok[alice]}" \
+    -H "Content-Type: application/json" \
+    -d '""' 2>&1); then
+    echo "    $seed_resp"
+else
+    echo "    [!] dev_seed_state failed (backend may need rebuild)"
+    echo "    $seed_resp"
+fi
+
 # ── summary ──────────────────────────────────────────────────────
 
 echo ""
@@ -170,4 +186,12 @@ echo "  Ops             alice, charlie"
 echo "  Retro           alice, bob, charlie, diana"
 echo "  Vault           alice (closed)"
 echo "  Phantom         alice (closed)"
+echo ""
+
+echo "  Dev state (transient - rerun after backend restart):"
+echo "    alice:   online, in voice (Gamers)"
+echo "    bob:     online, in voice (Gamers), speaking"
+echo "    charlie: online, streaming CS2 in voice (Devs)"
+echo "    diana:   idle"
+echo "    Chat previews in Devs, Gamers, Music, Design, Retro"
 echo ""

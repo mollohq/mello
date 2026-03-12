@@ -603,13 +603,31 @@ fn handle_event(app: &MainWindow, event: Event, settings: &Rc<RefCell<Settings>>
         }
         Event::CrewsLoaded { crews } => {
             let crew_ids: Vec<String> = crews.iter().map(|c| c.id.clone()).collect();
-            let model: Vec<CrewData> = crews.into_iter().map(|c| CrewData {
-                id: c.id.clone().into(),
-                name: c.name.into(),
-                description: c.description.into(),
-                member_count: c.member_count,
-                online_count: 0,
-                ..Default::default()
+
+            // Merge: preserve any sidebar data that arrived before this event
+            let current = app.get_crews();
+            let mut existing: std::collections::HashMap<String, CrewData> = (0..current.row_count())
+                .filter_map(|i| current.row_data(i))
+                .map(|c| (c.id.to_string(), c))
+                .collect();
+
+            let model: Vec<CrewData> = crews.into_iter().map(|c| {
+                if let Some(mut prev) = existing.remove(&c.id) {
+                    // Keep sidebar data, update authoritative fields from CrewsLoaded
+                    prev.name = c.name.into();
+                    prev.description = c.description.into();
+                    prev.member_count = c.member_count;
+                    prev
+                } else {
+                    CrewData {
+                        id: c.id.clone().into(),
+                        name: c.name.into(),
+                        description: c.description.into(),
+                        member_count: c.member_count,
+                        online_count: 0,
+                        ..Default::default()
+                    }
+                }
             }).collect();
             let rc = std::rc::Rc::new(slint::VecModel::from(model));
             app.set_crews(rc.into());
@@ -842,14 +860,51 @@ fn handle_event(app: &MainWindow, event: Event, settings: &Rc<RefCell<Settings>>
             log::info!("UI: crew state loaded for {} (online={}, total={})",
                 state.crew_id, state.counts.online, state.counts.total);
 
-            // Update the active crew card's online/voice counts
+            // Update the active crew card's online/voice/stream/message data
             let crews = app.get_crews();
             let updated: Vec<CrewData> = (0..crews.row_count())
                 .map(|i| {
                     let mut c = crews.row_data(i).unwrap();
                     if c.id == state.crew_id.as_str() {
                         c.online_count = state.counts.online as i32;
-                        c.voice_count = state.voice.members.len().min(4) as i32;
+                        let vlen = state.voice.members.len().min(4);
+                        c.voice_count = vlen as i32;
+                        // Populate voice chips from authoritative state
+                        if let Some(m) = state.voice.members.get(0) {
+                            c.v0_name = m.username.clone().into();
+                            c.v0_initials = make_initials(&m.username).into();
+                            c.v0_speaking = m.speaking.unwrap_or(false);
+                        }
+                        if let Some(m) = state.voice.members.get(1) {
+                            c.v1_name = m.username.clone().into();
+                            c.v1_initials = make_initials(&m.username).into();
+                            c.v1_speaking = m.speaking.unwrap_or(false);
+                        }
+                        if let Some(m) = state.voice.members.get(2) {
+                            c.v2_name = m.username.clone().into();
+                            c.v2_initials = make_initials(&m.username).into();
+                            c.v2_speaking = m.speaking.unwrap_or(false);
+                        }
+                        if let Some(m) = state.voice.members.get(3) {
+                            c.v3_name = m.username.clone().into();
+                            c.v3_initials = make_initials(&m.username).into();
+                            c.v3_speaking = m.speaking.unwrap_or(false);
+                        }
+                        // Stream
+                        if let Some(ref stream) = state.stream {
+                            c.has_stream = stream.active;
+                            c.stream_name = stream.title.clone().unwrap_or_default().into();
+                        }
+                        // Recent messages
+                        c.msg_count = state.recent_messages.len().min(2) as i32;
+                        if let Some(m) = state.recent_messages.get(0) {
+                            c.m0_author = m.username.clone().into();
+                            c.m0_text = m.preview.clone().into();
+                        }
+                        if let Some(m) = state.recent_messages.get(1) {
+                            c.m1_author = m.username.clone().into();
+                            c.m1_text = m.preview.clone().into();
+                        }
                     }
                     c
                 })
@@ -865,11 +920,54 @@ fn handle_event(app: &MainWindow, event: Event, settings: &Rc<RefCell<Settings>>
                 .collect();
 
             for sc in &sidebar_crews {
-                if let Some(c) = updated.iter_mut().find(|c| c.id == sc.crew_id.as_str()) {
-                    c.online_count = sc.counts.online as i32;
-                    if let Some(ref voice) = sc.voice {
-                        c.voice_count = voice.members.len().min(4) as i32;
+                let c = if let Some(c) = updated.iter_mut().find(|c| c.id == sc.crew_id.as_str()) {
+                    c
+                } else {
+                    // Crew not yet in model (SidebarUpdated arrived before CrewsLoaded) — create stub
+                    updated.push(CrewData {
+                        id: sc.crew_id.clone().into(),
+                        name: sc.name.clone().into(),
+                        member_count: sc.counts.total as i32,
+                        ..Default::default()
+                    });
+                    updated.last_mut().unwrap()
+                };
+
+                c.online_count = sc.counts.online as i32;
+                if let Some(ref voice) = sc.voice {
+                    let vlen = voice.members.len().min(4);
+                    c.voice_count = vlen as i32;
+                    if let Some(m) = voice.members.get(0) {
+                        c.v0_name = m.username.clone().into();
+                        c.v0_initials = make_initials(&m.username).into();
                     }
+                    if let Some(m) = voice.members.get(1) {
+                        c.v1_name = m.username.clone().into();
+                        c.v1_initials = make_initials(&m.username).into();
+                    }
+                    if let Some(m) = voice.members.get(2) {
+                        c.v2_name = m.username.clone().into();
+                        c.v2_initials = make_initials(&m.username).into();
+                    }
+                    if let Some(m) = voice.members.get(3) {
+                        c.v3_name = m.username.clone().into();
+                        c.v3_initials = make_initials(&m.username).into();
+                    }
+                }
+                // Stream
+                if let Some(ref stream) = sc.stream {
+                    c.has_stream = stream.active;
+                    c.stream_name = stream.title.clone().unwrap_or_default().into();
+                }
+                // Recent messages
+                c.msg_count = sc.recent_messages.len().min(2) as i32;
+                if let Some(m) = sc.recent_messages.get(0) {
+                    c.m0_author = m.username.clone().into();
+                    c.m0_text = m.preview.clone().into();
+                }
+                if let Some(m) = sc.recent_messages.get(1) {
+                    c.m1_author = m.username.clone().into();
+                    c.m1_text = m.preview.clone().into();
                 }
             }
             app.set_crews(Rc::new(slint::VecModel::from(updated)).into());
@@ -921,7 +1019,22 @@ fn handle_event(app: &MainWindow, event: Event, settings: &Rc<RefCell<Settings>>
         }
         Event::MessagePreviewUpdated { crew_id, messages } => {
             log::debug!("UI: message preview for crew={} count={}", crew_id, messages.len());
-            // Update sidebar crew card — no separate field yet, just log for now
+            let current = app.get_crews();
+            let mut updated: Vec<CrewData> = (0..current.row_count())
+                .map(|i| current.row_data(i).unwrap())
+                .collect();
+            if let Some(c) = updated.iter_mut().find(|c| c.id == crew_id.as_str()) {
+                c.msg_count = messages.len().min(2) as i32;
+                if let Some(m) = messages.get(0) {
+                    c.m0_author = m.username.clone().into();
+                    c.m0_text = m.preview.clone().into();
+                }
+                if let Some(m) = messages.get(1) {
+                    c.m1_author = m.username.clone().into();
+                    c.m1_text = m.preview.clone().into();
+                }
+            }
+            app.set_crews(Rc::new(slint::VecModel::from(updated)).into());
         }
 
         Event::Error { message } => {

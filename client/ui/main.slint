@@ -121,6 +121,8 @@ export component MainWindow inherits Window {
         link-error: root.link-error;
         device-user-name: root.user-name;
         is-returning-user: root.is-returning-user;
+        sign-in-error: root.login-error;
+        sign-in-loading: root.login-loading;
         capture-devices: root.capture-devices;
         playback-devices: root.playback-devices;
         selected-capture-id: root.selected-capture-id;
@@ -132,6 +134,7 @@ export component MainWindow inherits Window {
         create-crew-requested(name) => { root.onboarding-create-crew(name); }
         continue-to-step(s) => { root.onboarding-continue(s); }
         login-requested => { root.onboarding-login-requested(); }
+        sign-in(email, pw) => { root.login(email, pw); }
         link-email(email, pw) => { root.onboarding-link-email(email, pw); }
         skip-identity => { root.onboarding-skip-identity(); }
         capture-device-selected(id) => { root.onboarding-capture-device-selected(id); }
@@ -321,6 +324,7 @@ export component MainWindow inherits Window {
             ChatPanel {
                 width: 340px;
                 messages: root.messages;
+                user-name: root.user-name;
                 message-submitted(text) => { root.send-message(text); }
             }
         }

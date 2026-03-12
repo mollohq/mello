@@ -132,6 +132,13 @@ func InitModule(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runti
 	}
 
 	// -----------------------------------------------------------------------
+	// RPCs — dev tools
+	// -----------------------------------------------------------------------
+	if err := initializer.RegisterRpc("dev_seed_state", DevSeedStateRPC); err != nil {
+		return err
+	}
+
+	// -----------------------------------------------------------------------
 	// Background goroutines
 	// -----------------------------------------------------------------------
 	go StartSidebarBatchLoop(nk, logger, 30*time.Second)

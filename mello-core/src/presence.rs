@@ -20,16 +20,23 @@ impl Default for PresenceStatus {
 pub enum Activity {
     None,
     InVoice {
+        #[serde(default)]
         crew_id: String,
     },
     Streaming {
+        #[serde(default)]
         crew_id: String,
+        #[serde(default)]
         stream_id: String,
+        #[serde(default)]
         stream_title: String,
     },
     Watching {
+        #[serde(default)]
         crew_id: String,
+        #[serde(default)]
         stream_id: String,
+        #[serde(default)]
         streamer_id: String,
     },
 }

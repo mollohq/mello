@@ -282,12 +282,6 @@ export component ControlBar inherits Rectangle {
             spacing: 16px;
             alignment: center;
 
-            if in-voice: ActionButton {
-                icon: @image-url("../icons/phone-off.svg");
-                alert: true;
-                clicked => { voice-toggled(); }
-            }
-
             ActionButton {
                 icon: @image-url("../icons/mic.svg");
                 active: in-voice && !mic-muted;
@@ -303,6 +297,16 @@ export component ControlBar inherits Rectangle {
             ActionButton {
                 icon: @image-url("../icons/settings.svg");
                 clicked => { settings-clicked(); }
+            }
+
+            ActionButton {
+                icon: @image-url("../icons/power.svg");
+                alert: in-voice;
+                clicked => {
+                    if in-voice {
+                        voice-toggled();
+                    }
+                }
             }
         }
     }

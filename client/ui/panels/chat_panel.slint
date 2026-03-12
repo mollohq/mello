@@ -3,6 +3,7 @@ import { ChatMessageData } from "../types.slint";
 
 export component ChatPanel inherits Rectangle {
     in property <[ChatMessageData]> messages: [];
+    in property <string> user-name: "";
     callback message-submitted(string);
 
     background: Theme.surface;
@@ -56,7 +57,7 @@ export component ChatPanel inherits Rectangle {
                             text: msg.sender-name;
                             font-size: Theme.font-md;
                             font-weight: 600;
-                            color: Theme.text-primary;
+                            color: msg.sender-name == root.user-name ? Theme.accent : Theme.text-primary;
                             horizontal-stretch: 1;
                         }
 
