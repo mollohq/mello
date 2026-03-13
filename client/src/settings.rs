@@ -11,6 +11,8 @@ pub struct Settings {
     pub device_id: Option<String>,
     pub onboarding_step: u8,
     pub last_crew_id: Option<String>,
+    pub start_on_boot: bool,
+    pub ptt_key: Option<String>,
 }
 
 impl Default for Settings {
@@ -22,6 +24,8 @@ impl Default for Settings {
             device_id: None,
             onboarding_step: 0,
             last_crew_id: None,
+            start_on_boot: false,
+            ptt_key: None,
         }
     }
 }

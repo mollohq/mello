@@ -1,0 +1,746 @@
+<html lang="en" vid="0">
+
+<head vid="1">
+    <meta charset="UTF-8" vid="2">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" vid="3">
+    <title vid="4">Settings Modal</title>
+    <script src="https://cdn.tailwindcss.com/3.4.17" vid="5"></script>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap"
+        rel="stylesheet" vid="6">
+    <script vid="7">
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        app: '#0D0D0F',
+                        surface: '#1A1A1F',
+                        'surface-hover': '#222228',
+                        accent: '#FF1E56',
+                        'graphic-light': '#2C2C2E',
+                        'text-primary': '#F5F5F5',
+                        'text-secondary': '#8E8E93',
+                        'text-tertiary': '#48484A',
+                    },
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                        mono: ['JetBrains Mono', 'monospace'],
+                    }
+                }
+            }
+        }
+    </script>
+    <style vid="8">
+        body {
+            background-color: #000;
+            color: #F5F5F5;
+            -webkit-font-smoothing: antialiased;
+            overflow: hidden;
+        }
+
+        .scanline {
+            position: absolute;
+            inset: 0;
+            background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.1) 50%), linear-gradient(90deg, rgba(255, 0, 0, 0.02), rgba(0, 255, 0, 0.01), rgba(0, 0, 255, 0.02));
+            background-size: 100% 2px, 3px 100%;
+            pointer-events: none;
+            z-index: 10;
+            opacity: 0.15;
+        }
+
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: #2C2C2E;
+            border-radius: 4px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: #48484A;
+        }
+
+        input[type=range] {
+            -webkit-appearance: none;
+            width: 100%;
+            background: transparent;
+        }
+
+        input[type=range]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            height: 16px;
+            width: 8px;
+            border-radius: 2px;
+            background: #F5F5F5;
+            cursor: pointer;
+            margin-top: -6px;
+            box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.5);
+        }
+
+        input[type=range]::-webkit-slider-runnable-track {
+            width: 100%;
+            height: 4px;
+            cursor: pointer;
+            background: #2C2C2E;
+            border-radius: 2px;
+        }
+
+        input[type=range]:focus {
+            outline: none;
+        }
+
+        .range-accent {
+            background: linear-gradient(to right, #FF1E56 0%, #FF1E56 50%, #2C2C2E 50%, #2C2C2E 100%);
+        }
+
+        select {
+            -webkit-appearance: none;
+            -moz-appearance: none;
+            appearance: none;
+            background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%238E8E93' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3e%3cpolyline points='6 9 12 15 18 9'%3e%3c/polyline%3e%3c/svg%3e");
+            background-repeat: no-repeat;
+            background-position: right 1rem center;
+            background-size: 1em;
+        }
+
+        .modal-enter {
+            animation: modalIn 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+        }
+
+        @keyframes modalIn {
+            from {
+                opacity: 0;
+                transform: scale(0.95) translateY(10px);
+            }
+
+            to {
+                opacity: 1;
+                transform: scale(1) translateY(0);
+            }
+        }
+
+        .tab-content {
+            display: none;
+        }
+
+        .tab-content.active {
+            display: block;
+            animation: fadeIn 0.2s ease-out forwards;
+        }
+
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(4px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .segmented-control input[type="radio"]:checked+label {
+            background-color: #1A1A1F;
+            border-color: #2C2C2E;
+            color: #F5F5F5;
+            box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+        }
+    </style>
+</head>
+
+<body
+    class="w-screen h-screen flex items-center justify-center font-sans bg-[url('https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?q=80&amp;w=2564&amp;auto=format&amp;fit=crop')] bg-cover bg-center"
+    vid="9">
+
+    <div class="absolute inset-0 bg-black/80 backdrop-blur-md" vid="10"></div>
+    <div class="scanline" vid="11"></div>
+
+    <div class="relative z-40 w-full max-w-4xl h-[680px] flex flex-col bg-app border border-graphic-light rounded-xl shadow-[0_24px_64px_rgba(0,0,0,0.9)] modal-enter overflow-hidden"
+        vid="12">
+
+        <div class="flex items-center justify-between px-6 py-5 border-b border-graphic-light bg-app z-20 shadow-[0_4px_20px_rgba(0,0,0,0.2)]"
+            vid="13">
+            <div class="flex items-center gap-3" vid="14">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#FF1E56" stroke-width="2"
+                    stroke-linecap="round" stroke-linejoin="round" vid="15">
+                    <path
+                        d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"
+                        vid="16"></path>
+                    <circle cx="12" cy="12" r="3" vid="17"></circle>
+                </svg>
+                <h2 class="font-mono text-[13px] tracking-[0.15em] text-text-primary uppercase font-medium" vid="18">
+                    System Parameters</h2>
+            </div>
+            <button
+                class="text-text-secondary hover:text-text-primary transition-colors focus:outline-none bg-transparent hover:bg-surface-hover p-1.5 rounded-md"
+                vid="19">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                    stroke-linecap="round" stroke-linejoin="round" vid="20">
+                    <line x1="18" y1="6" x2="6" y2="18" vid="21"></line>
+                    <line x1="6" y1="6" x2="18" y2="18" vid="22"></line>
+                </svg>
+            </button>
+        </div>
+
+        <div class="flex flex-1 overflow-hidden relative" vid="23">
+
+            <div class="w-[260px] bg-app border-r border-graphic-light flex flex-col py-6 z-10 shadow-[4px_0_24px_rgba(0,0,0,0.2)]"
+                vid="24">
+                <nav class="flex flex-col px-4 gap-1.5" id="nav-menu" vid="25">
+                    <button
+                        class="tab-btn w-full flex items-center gap-3 px-3 py-2.5 rounded-md text-left transition-colors bg-surface text-text-primary border border-graphic-light shadow-sm"
+                        data-target="tab-general" vid="26">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="opacity-80" vid="27">
+                            <rect x="2" y="3" width="20" height="14" rx="2" ry="2" vid="28"></rect>
+                            <line x1="8" y1="21" x2="16" y2="21" vid="29"></line>
+                            <line x1="12" y1="17" x2="12" y2="21" vid="30"></line>
+                        </svg>
+                        <span class="font-mono text-[12px] tracking-[0.05em] uppercase font-medium"
+                            vid="31">General</span>
+                    </button>
+
+                    <button
+                        class="tab-btn w-full flex items-center gap-3 px-3 py-2.5 rounded-md text-left transition-colors text-text-secondary hover:bg-surface-hover hover:text-text-primary border border-transparent"
+                        data-target="tab-audio" vid="32">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="opacity-80" vid="33">
+                            <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" vid="34"></path>
+                            <path d="M19 10v2a7 7 0 0 1-14 0v-2" vid="35"></path>
+                            <line x1="12" y1="19" x2="12" y2="22" vid="36"></line>
+                        </svg>
+                        <span class="font-mono text-[12px] tracking-[0.05em] uppercase font-medium" vid="37">Audio &amp;
+                            Video</span>
+                    </button>
+
+                    <button
+                        class="w-full flex items-center gap-3 px-3 py-2.5 rounded-md text-left transition-colors text-text-secondary hover:bg-surface-hover hover:text-text-primary opacity-50 cursor-not-allowed border border-transparent mt-4"
+                        vid="38">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="opacity-80" vid="39">
+                            <path
+                                d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"
+                                vid="40"></path>
+                        </svg>
+                        <span class="font-mono text-[12px] tracking-[0.05em] uppercase font-medium"
+                            vid="41">Keybinds</span>
+                    </button>
+
+                    <button
+                        class="w-full flex items-center gap-3 px-3 py-2.5 rounded-md text-left transition-colors text-text-secondary hover:bg-surface-hover hover:text-text-primary opacity-50 cursor-not-allowed border border-transparent"
+                        vid="42">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="opacity-80" vid="43">
+                            <rect x="3" y="11" width="18" height="11" rx="2" ry="2" vid="44"></rect>
+                            <path d="M7 11V7a5 5 0 0 1 10 0v4" vid="45"></path>
+                        </svg>
+                        <span class="font-mono text-[12px] tracking-[0.05em] uppercase font-medium"
+                            vid="46">Security</span>
+                    </button>
+                </nav>
+
+                <div class="mt-auto px-7 mb-2 flex flex-col gap-1" vid="47">
+                    <div class="text-[10px] font-mono text-text-tertiary uppercase tracking-[0.2em] font-medium"
+                        vid="48">Build Version</div>
+                    <div class="text-[12px] font-mono text-text-secondary" vid="49">v2.4.11-b</div>
+                </div>
+            </div>
+
+            <div class="flex-1 bg-surface overflow-y-auto relative scroll-smooth" vid="50">
+
+                <div id="tab-general" class="tab-content active p-10 pb-20" vid="51">
+
+                    <div class="mb-12" vid="52">
+                        <div class="flex items-center gap-4 mb-6" vid="53">
+                            <span class="font-mono text-[11px] text-accent tracking-[0.2em] uppercase font-semibold"
+                                vid="54">Startup &amp; Window</span>
+                            <div class="h-[1px] flex-1 bg-gradient-to-r from-graphic-light to-transparent" vid="55">
+                            </div>
+                        </div>
+
+                        <div class="flex flex-col gap-2" vid="56">
+                            <div class="flex items-center justify-between py-3.5 px-5 rounded-lg hover:bg-surface-hover transition-colors group cursor-pointer"
+                                onclick="this.querySelector('input').click()" vid="57">
+                                <div class="flex flex-col gap-1.5 pr-8" vid="58">
+                                    <span class="text-[15px] font-medium text-text-primary tracking-wide"
+                                        vid="59">Launch on system startup</span>
+                                    <span class="text-[13px] text-text-secondary leading-snug" vid="60">Automatically
+                                        start the application when you log in to your computer.</span>
+                                </div>
+                                <label
+                                    class="relative inline-flex items-center cursor-pointer pointer-events-none shrink-0"
+                                    vid="61">
+                                    <input type="checkbox" class="sr-only peer" vid="62">
+                                    <div class="w-11 h-6 bg-app border border-graphic-light rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-text-secondary after:border-text-secondary after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-accent peer-checked:border-accent peer-checked:after:bg-white shadow-inner"
+                                        vid="63"></div>
+                                </label>
+                            </div>
+
+                            <div class="flex items-center justify-between py-3.5 px-5 rounded-lg hover:bg-surface-hover transition-colors group cursor-pointer"
+                                onclick="this.querySelector('input').click()" vid="64">
+                                <div class="flex flex-col gap-1.5 pr-8" vid="65">
+                                    <span class="text-[15px] font-medium text-text-primary tracking-wide" vid="66">Start
+                                        minimized</span>
+                                    <span class="text-[13px] text-text-secondary leading-snug" vid="67">Launch directly
+                                        into the system tray without opening the main window.</span>
+                                </div>
+                                <label
+                                    class="relative inline-flex items-center cursor-pointer pointer-events-none shrink-0"
+                                    vid="68">
+                                    <input type="checkbox" class="sr-only peer" checked="" vid="69">
+                                    <div class="w-11 h-6 bg-app border border-graphic-light rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-text-secondary after:border-text-secondary after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-accent peer-checked:border-accent peer-checked:after:bg-white shadow-inner"
+                                        vid="70"></div>
+                                </label>
+                            </div>
+
+                            <div class="flex items-center justify-between py-3.5 px-5 rounded-lg hover:bg-surface-hover transition-colors group cursor-pointer"
+                                onclick="this.querySelector('input').click()" vid="71">
+                                <div class="flex flex-col gap-1.5 pr-8" vid="72">
+                                    <span class="text-[15px] font-medium text-text-primary tracking-wide" vid="73">Quit
+                                        to system tray</span>
+                                    <span class="text-[13px] text-text-secondary leading-snug" vid="74">Keep the
+                                        application running in the background when closing the window.</span>
+                                </div>
+                                <label
+                                    class="relative inline-flex items-center cursor-pointer pointer-events-none shrink-0"
+                                    vid="75">
+                                    <input type="checkbox" class="sr-only peer" checked="" vid="76">
+                                    <div class="w-11 h-6 bg-app border border-graphic-light rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-text-secondary after:border-text-secondary after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-accent peer-checked:border-accent peer-checked:after:bg-white shadow-inner"
+                                        vid="77"></div>
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="mb-12" vid="78">
+                        <div class="flex items-center gap-4 mb-6" vid="79">
+                            <span class="font-mono text-[11px] text-accent tracking-[0.2em] uppercase font-semibold"
+                                vid="80">Connection &amp; Presence</span>
+                            <div class="h-[1px] flex-1 bg-gradient-to-r from-graphic-light to-transparent" vid="81">
+                            </div>
+                        </div>
+
+                        <div class="flex flex-col gap-2" vid="82">
+                            <div class="flex items-center justify-between py-3.5 px-5 rounded-lg hover:bg-surface-hover transition-colors group cursor-pointer"
+                                onclick="this.querySelector('input').click()" vid="83">
+                                <div class="flex flex-col gap-1.5 pr-8" vid="84">
+                                    <span class="text-[15px] font-medium text-text-primary tracking-wide"
+                                        vid="85">Auto-connect to last session</span>
+                                    <span class="text-[13px] text-text-secondary leading-snug" vid="86">Skip the
+                                        discovery screen and immediately join your previous active session.</span>
+                                </div>
+                                <label
+                                    class="relative inline-flex items-center cursor-pointer pointer-events-none shrink-0"
+                                    vid="87">
+                                    <input type="checkbox" class="sr-only peer" checked="" vid="88">
+                                    <div class="w-11 h-6 bg-app border border-graphic-light rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-text-secondary after:border-text-secondary after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-accent peer-checked:border-accent peer-checked:after:bg-white shadow-inner"
+                                        vid="89"></div>
+                                </label>
+                            </div>
+
+                            <div class="flex items-center justify-between py-3.5 px-5 rounded-lg hover:bg-surface-hover transition-colors group cursor-pointer"
+                                onclick="this.querySelector('input').click()" vid="90">
+                                <div class="flex flex-col gap-1.5 pr-8" vid="91">
+                                    <span class="text-[15px] font-medium text-text-primary tracking-wide"
+                                        vid="92">Minimize on session join</span>
+                                    <span class="text-[13px] text-text-secondary leading-snug" vid="93">Automatically
+                                        hide the main interface once a secure connection is established.</span>
+                                </div>
+                                <label
+                                    class="relative inline-flex items-center cursor-pointer pointer-events-none shrink-0"
+                                    vid="94">
+                                    <input type="checkbox" class="sr-only peer" vid="95">
+                                    <div class="w-11 h-6 bg-app border border-graphic-light rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-text-secondary after:border-text-secondary after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-accent peer-checked:border-accent peer-checked:after:bg-white shadow-inner"
+                                        vid="96"></div>
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="mb-4" vid="97">
+                        <div class="flex items-center gap-4 mb-6" vid="98">
+                            <span class="font-mono text-[11px] text-accent tracking-[0.2em] uppercase font-semibold"
+                                vid="99">Appearance</span>
+                            <div class="h-[1px] flex-1 bg-gradient-to-r from-graphic-light to-transparent" vid="100">
+                            </div>
+                        </div>
+
+                        <div class="flex flex-col gap-2" vid="101">
+                            <div class="flex items-center justify-between py-3.5 px-5 rounded-lg hover:bg-surface-hover transition-colors group cursor-pointer"
+                                onclick="this.querySelector('input').click()" vid="102">
+                                <div class="flex flex-col gap-1.5 pr-8" vid="103">
+                                    <span class="text-[15px] font-medium text-text-primary tracking-wide"
+                                        vid="104">Hardware Acceleration</span>
+                                    <span class="text-[13px] text-text-secondary leading-snug" vid="105">Use GPU for
+                                        rendering UI elements. Disabling this may resolve visual glitches.</span>
+                                </div>
+                                <label
+                                    class="relative inline-flex items-center cursor-pointer pointer-events-none shrink-0"
+                                    vid="106">
+                                    <input type="checkbox" class="sr-only peer" checked="" vid="107">
+                                    <div class="w-11 h-6 bg-app border border-graphic-light rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-text-secondary after:border-text-secondary after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-accent peer-checked:border-accent peer-checked:after:bg-white shadow-inner"
+                                        vid="108"></div>
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="tab-audio" class="tab-content p-10 pb-20" vid="109">
+
+                    <div class="mb-12" vid="110">
+                        <div class="flex items-center gap-4 mb-6" vid="111">
+                            <span class="font-mono text-[11px] text-accent tracking-[0.2em] uppercase font-semibold"
+                                vid="112">Hardware Interfaces</span>
+                            <div class="h-[1px] flex-1 bg-gradient-to-r from-graphic-light to-transparent" vid="113">
+                            </div>
+                        </div>
+
+                        <div class="grid grid-cols-2 gap-8" vid="114">
+                            <div class="flex flex-col gap-2.5" vid="115">
+                                <label
+                                    class="text-[12px] font-mono text-text-secondary uppercase tracking-widest font-medium pl-1"
+                                    vid="116">Input Device</label>
+                                <div class="relative group" vid="117">
+                                    <select
+                                        class="w-full bg-app border border-graphic-light text-text-primary text-[14px] rounded-lg px-4 py-3.5 focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent transition-all cursor-pointer hover:border-text-tertiary appearance-none shadow-sm"
+                                        vid="118">
+                                        <option vid="119">Default System Device</option>
+                                        <option selected="" vid="120">HyperX QuadCast S</option>
+                                        <option vid="121">Logitech StreamCam Mic</option>
+                                    </select>
+                                </div>
+                            </div>
+
+                            <div class="flex flex-col gap-2.5" vid="122">
+                                <label
+                                    class="text-[12px] font-mono text-text-secondary uppercase tracking-widest font-medium pl-1"
+                                    vid="123">Output Device</label>
+                                <div class="relative group" vid="124">
+                                    <select
+                                        class="w-full bg-app border border-graphic-light text-text-primary text-[14px] rounded-lg px-4 py-3.5 focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent transition-all cursor-pointer hover:border-text-tertiary appearance-none shadow-sm"
+                                        vid="125">
+                                        <option vid="126">Default System Device</option>
+                                        <option selected="" vid="127">Schiit Modi/Magni Stack (USB)</option>
+                                        <option vid="128">Realtek High Definition Audio</option>
+                                    </select>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="mb-12" vid="129">
+                        <div class="flex items-center gap-4 mb-6" vid="130">
+                            <span class="font-mono text-[11px] text-accent tracking-[0.2em] uppercase font-semibold"
+                                vid="131">Audio Levels</span>
+                            <div class="h-[1px] flex-1 bg-gradient-to-r from-graphic-light to-transparent" vid="132">
+                            </div>
+                        </div>
+
+                        <div class="flex flex-col gap-8 bg-app p-6 rounded-xl border border-graphic-light" vid="133">
+                            <div class="flex flex-col gap-4" vid="134">
+                                <div class="flex justify-between items-end px-1" vid="135">
+                                    <label class="text-[14px] font-medium text-text-primary tracking-wide"
+                                        vid="136">Input Volume</label>
+                                    <span class="text-[13px] font-mono text-accent bg-accent/10 px-2 py-0.5 rounded"
+                                        id="input-val" vid="137">70%</span>
+                                </div>
+                                <div class="flex items-center gap-5" vid="138">
+                                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                        stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+                                        class="text-text-secondary shrink-0" vid="139">
+                                        <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" vid="140"></path>
+                                        <path d="M19 10v2a7 7 0 0 1-14 0v-2" vid="141"></path>
+                                        <line x1="12" y1="19" x2="12" y2="22" vid="142"></line>
+                                    </svg>
+                                    <div class="flex-1 relative" vid="143">
+                                        <input type="range" min="0" max="100" value="70"
+                                            class="range-custom h-1.5 w-full outline-none" data-target="input-val"
+                                            vid="144">
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="w-full h-[1px] bg-graphic-light/50" vid="145"></div>
+
+                            <div class="flex flex-col gap-4" vid="146">
+                                <div class="flex justify-between items-end px-1" vid="147">
+                                    <label class="text-[14px] font-medium text-text-primary tracking-wide"
+                                        vid="148">Output Volume</label>
+                                    <span class="text-[13px] font-mono text-accent bg-accent/10 px-2 py-0.5 rounded"
+                                        id="output-val" vid="149">85%</span>
+                                </div>
+                                <div class="flex items-center gap-5" vid="150">
+                                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                        stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+                                        class="text-text-secondary shrink-0" vid="151">
+                                        <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" vid="152"></polygon>
+                                        <path d="M15.54 8.46a5 5 0 0 1 0 7.07" vid="153"></path>
+                                        <path d="M19.07 4.93a10 10 0 0 1 0 14.14" vid="154"></path>
+                                    </svg>
+                                    <div class="flex-1 relative" vid="155">
+                                        <input type="range" min="0" max="100" value="85"
+                                            class="range-custom h-1.5 w-full outline-none" data-target="output-val"
+                                            vid="156">
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="mb-12" vid="157">
+                        <div class="flex items-center gap-4 mb-6" vid="158">
+                            <span class="font-mono text-[11px] text-accent tracking-[0.2em] uppercase font-semibold"
+                                vid="159">Signal Processing</span>
+                            <div class="h-[1px] flex-1 bg-gradient-to-r from-graphic-light to-transparent" vid="160">
+                            </div>
+                        </div>
+
+                        <div class="grid grid-cols-2 gap-6" vid="161">
+                            <div class="flex items-center justify-between p-4 bg-app rounded-lg border border-graphic-light hover:border-text-tertiary transition-colors cursor-pointer"
+                                onclick="this.querySelector('input').click()" vid="162">
+                                <div class="flex flex-col gap-1.5" vid="163">
+                                    <span class="text-[14px] font-medium text-text-primary" vid="164">Noise
+                                        Suppression</span>
+                                    <span class="text-[12px] text-text-secondary leading-tight" vid="165">Filter out
+                                        background hum and typing.</span>
+                                </div>
+                                <label class="relative inline-flex items-center cursor-pointer pointer-events-none"
+                                    vid="166">
+                                    <input type="checkbox" class="sr-only peer" checked="" vid="167">
+                                    <div class="w-10 h-5 bg-surface border border-graphic-light rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-text-secondary after:border-text-secondary after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-accent peer-checked:border-accent peer-checked:after:bg-white shadow-inner"
+                                        vid="168"></div>
+                                </label>
+                            </div>
+
+                            <div class="flex items-center justify-between p-4 bg-app rounded-lg border border-graphic-light hover:border-text-tertiary transition-colors cursor-pointer"
+                                onclick="this.querySelector('input').click()" vid="169">
+                                <div class="flex flex-col gap-1.5" vid="170">
+                                    <span class="text-[14px] font-medium text-text-primary" vid="171">Echo
+                                        Cancellation</span>
+                                    <span class="text-[12px] text-text-secondary leading-tight" vid="172">Prevent audio
+                                        feedback loop from speakers.</span>
+                                </div>
+                                <label class="relative inline-flex items-center cursor-pointer pointer-events-none"
+                                    vid="173">
+                                    <input type="checkbox" class="sr-only peer" checked="" vid="174">
+                                    <div class="w-10 h-5 bg-surface border border-graphic-light rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-text-secondary after:border-text-secondary after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-accent peer-checked:border-accent peer-checked:after:bg-white shadow-inner"
+                                        vid="175"></div>
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="mb-4" vid="176">
+                        <div class="flex items-center gap-4 mb-6" vid="177">
+                            <span class="font-mono text-[11px] text-accent tracking-[0.2em] uppercase font-semibold"
+                                vid="178">Voice Activity</span>
+                            <div class="h-[1px] flex-1 bg-gradient-to-r from-graphic-light to-transparent" vid="179">
+                            </div>
+                        </div>
+
+                        <div class="flex flex-col gap-8 bg-app p-6 rounded-xl border border-graphic-light" vid="180">
+                            <div class="flex items-start gap-10" vid="181">
+                                <div class="flex-1 flex flex-col gap-3" vid="182">
+                                    <label class="text-[13px] font-medium text-text-primary" vid="183">Input
+                                        Mode</label>
+                                    <div class="flex bg-surface rounded-lg border border-graphic-light p-1 segmented-control relative"
+                                        vid="184">
+                                        <input type="radio" name="input-mode" id="mode-va" class="hidden" checked=""
+                                            vid="185">
+                                        <label for="mode-va"
+                                            class="flex-1 text-center py-2 text-[13px] font-medium rounded-md text-text-secondary cursor-pointer transition-all hover:text-text-primary"
+                                            vid="186">Voice Activity</label>
+
+                                        <input type="radio" name="input-mode" id="mode-ptt" class="hidden" vid="187">
+                                        <label for="mode-ptt"
+                                            class="flex-1 text-center py-2 text-[13px] font-medium rounded-md text-text-secondary cursor-pointer transition-all hover:text-text-primary border border-transparent"
+                                            vid="188">Push to Talk</label>
+                                    </div>
+                                </div>
+
+                                <div class="flex-1 flex flex-col gap-3 opacity-50 transition-opacity" id="ptt-settings"
+                                    vid="189">
+                                    <label class="text-[13px] font-medium text-text-primary flex justify-between"
+                                        vid="190">
+                                        Push-to-talk Key
+                                        <span class="text-[11px] text-text-secondary font-mono tracking-wide"
+                                            vid="191">Unassigned</span>
+                                    </label>
+                                    <button
+                                        class="w-full bg-surface border border-graphic-light hover:border-text-tertiary transition-colors text-text-tertiary hover:text-text-secondary text-[14px] font-mono rounded-lg px-4 py-3 text-left flex justify-between items-center shadow-sm"
+                                        vid="192">
+                                        <span vid="193">Click to bind...</span>
+                                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
+                                            stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                                            stroke-linejoin="round" vid="194">
+                                            <rect x="3" y="3" width="18" height="18" rx="2" ry="2" vid="195"></rect>
+                                            <circle cx="12" cy="12" r="3" vid="196"></circle>
+                                        </svg>
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div class="w-full h-[1px] bg-graphic-light/50" vid="197"></div>
+
+                            <div class="flex flex-col gap-3" id="sensitivity-settings" vid="198">
+                                <div class="flex justify-between items-end" vid="199">
+                                    <label class="text-[13px] font-medium text-text-primary" vid="200">Activation
+                                        Sensitivity</label>
+                                    <span class="text-[11px] text-text-secondary" vid="201">Automatically determine
+                                        input sensitivity</span>
+                                </div>
+
+                                <div class="relative pt-6 pb-2" vid="202">
+                                    <div class="absolute inset-x-0 top-1 h-3 flex rounded-md overflow-hidden opacity-40"
+                                        vid="203">
+                                        <div class="h-full bg-green-500 w-[30%]" vid="204"></div>
+                                        <div class="h-full bg-yellow-500 w-[20%]" vid="205"></div>
+                                        <div class="h-full bg-red-500 w-[50%]" vid="206"></div>
+                                    </div>
+
+                                    <input type="range" min="-100" max="0" value="-40"
+                                        class="relative z-10 w-full outline-none range-sensitivity"
+                                        style="background: transparent;" vid="207">
+
+                                    <div class="absolute inset-x-0 bottom-3 h-[4px] bg-graphic-light rounded-full pointer-events-none"
+                                        vid="208"></div>
+
+                                    <div class="absolute w-0.5 h-6 bg-white left-[60%] top-1 pointer-events-none shadow-[0_0_8px_rgba(255,255,255,0.8)] z-20 rounded-full"
+                                        id="sensitivity-marker" vid="209"></div>
+                                    <div class="absolute top-8 left-[60%] -ml-4 text-[10px] font-mono text-white bg-surface px-1.5 py-0.5 rounded border border-graphic-light shadow-md"
+                                        id="sensitivity-label" vid="210">-40dB</div>
+                                </div>
+                                <div class="flex justify-between text-[11px] font-mono text-text-tertiary mt-2"
+                                    vid="211">
+                                    <span vid="212">-100dB</span>
+                                    <span vid="213">0dB</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                </div>
+
+                <div class="fixed bottom-[72px] left-[260px] right-0 h-16 bg-gradient-to-t from-surface to-transparent pointer-events-none z-10"
+                    vid="214"></div>
+            </div>
+        </div>
+
+        <div class="flex items-center justify-between px-8 py-5 border-t border-graphic-light bg-app z-20 shadow-[0_-4px_20px_rgba(0,0,0,0.2)]"
+            vid="215">
+            <button
+                class="font-mono text-[12px] tracking-[0.1em] text-text-tertiary hover:text-accent transition-colors"
+                vid="216">
+                RESET TO DEFAULTS
+            </button>
+            <div class="flex items-center gap-4" vid="217">
+                <button
+                    class="font-mono text-[13px] font-medium tracking-wide text-text-primary hover:bg-surface-hover transition-colors px-6 py-2.5 rounded-md border border-graphic-light"
+                    vid="218">
+                    Cancel
+                </button>
+                <button
+                    class="bg-accent text-white font-mono text-[13px] font-semibold tracking-wide uppercase px-8 py-2.5 rounded-md hover:bg-[#ff3b6b] transition-all shadow-[0_0_20px_rgba(255,30,86,0.25)] hover:shadow-[0_0_30px_rgba(255,30,86,0.4)] transform hover:-translate-y-[1px]"
+                    vid="219">
+                    Save Changes
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script vid="220">
+        document.addEventListener('DOMContentLoaded', () => {
+            const tabBtns = document.querySelectorAll('.tab-btn');
+            const tabContents = document.querySelectorAll('.tab-content');
+
+            tabBtns.forEach(btn => {
+                btn.addEventListener('click', () => {
+                    tabBtns.forEach(b => {
+                        b.classList.remove('bg-surface', 'text-text-primary', 'border-graphic-light', 'shadow-sm');
+                        b.classList.add('text-text-secondary', 'hover:bg-surface-hover', 'hover:text-text-primary', 'border-transparent');
+                    });
+
+                    btn.classList.remove('text-text-secondary', 'hover:bg-surface-hover', 'hover:text-text-primary', 'border-transparent');
+                    btn.classList.add('bg-surface', 'text-text-primary', 'border-graphic-light', 'shadow-sm');
+
+                    tabContents.forEach(content => {
+                        content.classList.remove('active');
+                    });
+
+                    const targetId = btn.getAttribute('data-target');
+                    document.getElementById(targetId).classList.add('active');
+                });
+            });
+
+            const updateRangeStyle = (range) => {
+                const val = range.value;
+                const min = range.min ? range.min : 0;
+                const max = range.max ? range.max : 100;
+                const percentage = ((val - min) / (max - min)) * 100;
+
+                if (range.classList.contains('range-custom')) {
+                    range.style.background = `linear-gradient(to right, #FF1E56 0%, #FF1E56 ${percentage}%, #2C2C2E ${percentage}%, #2C2C2E 100%)`;
+                }
+
+                const targetId = range.getAttribute('data-target');
+                if (targetId) {
+                    document.getElementById(targetId).innerText = val + '%';
+                }
+            };
+
+            const ranges = document.querySelectorAll('input.range-custom');
+            ranges.forEach(range => {
+                updateRangeStyle(range);
+                range.addEventListener('input', (e) => updateRangeStyle(e.target));
+            });
+
+            const modeVa = document.getElementById('mode-va');
+            const modePtt = document.getElementById('mode-ptt');
+            const pttSettings = document.getElementById('ptt-settings');
+            const sensitivitySettings = document.getElementById('sensitivity-settings');
+
+            const updateInputMode = () => {
+                if (modePtt.checked) {
+                    pttSettings.classList.remove('opacity-50', 'pointer-events-none');
+                    sensitivitySettings.classList.add('opacity-30', 'pointer-events-none');
+                } else {
+                    pttSettings.classList.add('opacity-50', 'pointer-events-none');
+                    sensitivitySettings.classList.remove('opacity-30', 'pointer-events-none');
+                }
+            };
+
+            modeVa.addEventListener('change', updateInputMode);
+            modePtt.addEventListener('change', updateInputMode);
+            updateInputMode();
+
+            const sensitivityRange = document.querySelector('.range-sensitivity');
+            const sensitivityMarker = document.getElementById('sensitivity-marker');
+            const sensitivityLabel = document.getElementById('sensitivity-label');
+
+            const updateSensitivity = () => {
+                const val = sensitivityRange.value;
+                const min = sensitivityRange.min;
+                const max = sensitivityRange.max;
+                const percentage = ((val - min) / (max - min)) * 100;
+
+                sensitivityMarker.style.left = `${percentage}%`;
+                sensitivityLabel.style.left = `${percentage}%`;
+                sensitivityLabel.innerText = `${val}dB`;
+            };
+
+            sensitivityRange.addEventListener('input', updateSensitivity);
+            updateSensitivity();
+        });
+    </script>
+
+</body>
+
+</html>

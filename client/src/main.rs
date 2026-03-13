@@ -1,3 +1,7 @@
+mod autolaunch;
+mod deep_link;
+mod notifications;
+mod platform;
 mod settings;
 
 slint::include_modules!();
@@ -8,7 +12,9 @@ use std::time::Duration;
 use slint::Model;
 use mello_core::{Client, Command, Config, Event};
 use settings::Settings;
+use platform::{StatusItem, VoiceState};
 use uuid::Uuid;
+use single_instance::SingleInstance;
 
 fn nakama_config() -> Config {
     #[cfg(feature = "production")]
@@ -64,6 +70,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
     log::info!("Starting Mello...");
 
+    // --- Single instance enforcement ---
+    let _instance = SingleInstance::new("app.mello.desktop")?;
+    if !_instance.is_single() {
+        eprintln!("Mello is already running.");
+        std::process::exit(0);
+    }
+
+    // --- Deep link from argv ---
+    if let Some(url) = deep_link::extract_deep_link() {
+        if let Some(link) = deep_link::parse(&url) {
+            log::info!("Deep link: {:?}", link);
+            // TODO: route deep link to running instance or handle at startup
+        }
+    }
+
     let loopback = std::env::args().any(|a| a == "--loopback");
 
     if std::env::args().any(|a| a == "--reset") {
@@ -81,7 +102,45 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         client.run(cmd_rx).await;
     });
 
+    // --- macOS: disable Slint's default menu bar so we can install our own ---
+    #[cfg(target_os = "macos")]
+    {
+        let backend = i_slint_backend_winit::Backend::builder()
+            .with_default_menu_bar(false)
+            .build()?;
+        slint::platform::set_platform(Box::new(backend))?;
+    }
+
     let app = MainWindow::new()?;
+
+    // --- macOS native menu bar ---
+    #[cfg(target_os = "macos")]
+    let _menu_bar = {
+        let menu = platform::macos::build_menu_bar();
+        menu.init_for_nsapp();
+        menu // keep alive
+    };
+
+    // --- Tray / status item ---
+    let status_item = Rc::new(RefCell::new(
+        StatusItem::new().expect("failed to create tray icon"),
+    ));
+
+    // --- Global hotkey manager ---
+    let _hotkey_mgr = Rc::new(RefCell::new(
+        platform::hotkeys::HotkeyManager::new().expect("failed to init hotkey manager"),
+    ));
+
+    // --- Close → tray ---
+    {
+        let window_ref = app.as_weak();
+        app.window().on_close_requested(move || {
+            if let Some(w) = window_ref.upgrade() {
+                w.hide().ok();
+            }
+            slint::CloseRequestResponse::KeepWindowShown
+        });
+    }
 
     let settings = Rc::new(RefCell::new(Settings::load()));
 
@@ -450,11 +509,77 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let s = settings.clone();
     let dbg_hist = Rc::new(RefCell::new(DebugHistory::new()));
     let event_cmd_tx = cmd_tx.clone();
+    let status_ref = status_item.clone();
+    let hotkey_ref = _hotkey_mgr.clone();
+    let hotkey_cmd_tx = cmd_tx.clone();
     let timer = slint::Timer::default();
     timer.start(slint::TimerMode::Repeated, Duration::from_millis(50), move || {
+        // --- Core events ---
         while let Ok(event) = event_rx.try_recv() {
             if let Some(app) = app_weak.upgrade() {
+                // Update tray icon based on voice state changes
+                match &event {
+                    Event::VoiceStateChanged { in_call } => {
+                        let state = if *in_call {
+                            VoiceState::Connected
+                        } else {
+                            VoiceState::Inactive
+                        };
+                        status_ref.borrow_mut().set_voice_state(state);
+                    }
+                    Event::VoiceActivity { speaking, .. } => {
+                        if app.get_mic_muted() {
+                            status_ref.borrow_mut().set_voice_state(VoiceState::Muted);
+                        } else if *speaking {
+                            status_ref.borrow_mut().set_voice_state(VoiceState::Speaking);
+                        } else {
+                            status_ref.borrow_mut().set_voice_state(VoiceState::Connected);
+                        }
+                    }
+                    // Show OS notifications when window is hidden
+                    Event::MemberJoined { member, .. } => {
+                        if !app.window().is_visible() {
+                            notifications::notify_member_joined(&member.display_name);
+                        }
+                    }
+                    Event::MessageReceived { message } => {
+                        if !app.window().is_visible() {
+                            let crew_name = app.get_active_crew_id().to_string();
+                            notifications::notify_message(
+                                &crew_name,
+                                &message.sender_name,
+                                &message.content,
+                            );
+                        }
+                    }
+                    _ => {}
+                }
                 handle_event(&app, event, &s, &dbg_hist, &event_cmd_tx);
+            }
+        }
+
+        // --- Tray icon click: toggle window visibility ---
+        while let Some(event) = StatusItem::poll_tray_event() {
+            if let tray_icon::TrayIconEvent::Click { .. } = event {
+                if let Some(app) = app_weak.upgrade() {
+                    if app.window().is_visible() {
+                        app.hide().ok();
+                    } else {
+                        app.show().ok();
+                    }
+                }
+            }
+        }
+
+        // --- Global hotkey events (PTT) ---
+        while let Some(event) = platform::hotkeys::HotkeyManager::poll() {
+            let mgr = hotkey_ref.borrow();
+            if let Some(ptt_id) = mgr.ptt_id() {
+                if event.id == ptt_id {
+                    let pressed = event.state == global_hotkey::HotKeyState::Pressed;
+                    // PTT: pressed = unmute, released = mute
+                    let _ = hotkey_cmd_tx.try_send(Command::SetMute { muted: !pressed });
+                }
             }
         }
     });
