@@ -1,7 +1,7 @@
 # MELLO Auto-Updater Specification
 
 > **Component:** Auto-Update System  
-> **Version:** 0.2  
+> **Version:** 0.3  
 > **Status:** Planned  
 > **Parent:** [00-ARCHITECTURE.md](./00-ARCHITECTURE.md)
 
@@ -9,14 +9,16 @@
 
 ## 1. Overview
 
-Mello includes a built-in auto-updater that checks for new versions on startup and allows users to update without leaving the app. Updates are distributed via GitHub Releases.
+Mello includes a built-in auto-updater powered by [Velopack](https://velopack.io). Velopack handles packaging, code signing, delta updates, and the full install/update lifecycle on Windows and macOS. Updates are distributed via GitHub Releases.
 
 ### Goals
 
 - **Seamless:** Check on startup, non-blocking UI
 - **User-controlled:** User decides when to install
-- **Reliable:** Atomic updates with rollback capability
+- **Reliable:** Atomic updates with automatic rollback
 - **Transparent:** Show release notes and download progress
+- **Signed:** All binaries are code-signed (Azure Trusted Signing on Windows, Apple Developer ID + notarization on macOS)
+- **Efficient:** Delta updates minimize download size between versions
 
 ---
 
@@ -31,73 +33,74 @@ Mello includes a built-in auto-updater that checks for new versions on startup a
 │   └──────┬──────┘                                                       │
 │          │                                                              │
 │          ▼                                                              │
-│   ┌─────────────────────┐                                               │
-│   │ Check GitHub API    │◀──── GET /repos/mollohq/mello/releases/latest │
-│   │ (background thread) │                                               │
-│   └──────┬──────────────┘                                               │
+│   ┌───────────────────────────┐                                         │
+│   │ VelopackApp::build().run()│  ← MUST be first call in main()        │
+│   │ (handles install/uninstall│    Velopack lifecycle hooks run here    │
+│   │  hooks silently)          │                                         │
+│   └──────┬────────────────────┘                                         │
 │          │                                                              │
 │          ▼                                                              │
-│   ┌─────────────────────┐     ┌─────────────────────────────────────┐   │
-│   │ Compare versions    │────▶│ v0.2.0 > v0.1.0 → Update available │   │
-│   │ (semver)            │     │ v0.2.0 = v0.2.0 → Up to date       │   │
-│   └──────┬──────────────┘     └─────────────────────────────────────┘   │
+│   ┌─────────────────────────┐                                           │
+│   │ UpdateManager::new()    │◀── Source: GitHub Releases                │
+│   │ check_for_updates()     │    (reads releases.{channel}.json)       │
+│   │ (background thread)     │                                           │
+│   └──────┬──────────────────┘                                           │
 │          │                                                              │
-│          ▼ (if update available)                                        │
-│   ┌─────────────────────┐                                               │
-│   │ Show banner in UI   │                                               │
-│   │ "Update available"  │                                               │
-│   └──────┬──────────────┘                                               │
+│          ▼                                                              │
+│   ┌─────────────────────────┐     ┌────────────────────────────────┐    │
+│   │ Update available?       │────▶│ Yes → show banner in UI        │    │
+│   │ (Velopack compares      │     │ No  → up to date, done         │    │
+│   │  against release index) │     └────────────────────────────────┘    │
+│   └──────┬──────────────────┘                                           │
 │          │                                                              │
 │          ▼ (user clicks "Update")                                       │
-│   ┌─────────────────────┐                                               │
-│   │ Download update     │──── Progress: 0% ─────▶ 100%                  │
-│   │ (background)        │                                               │
-│   └──────┬──────────────┘                                               │
+│   ┌─────────────────────────┐                                           │
+│   │ download_updates()      │──── Velopack downloads delta or full     │
+│   │ (background)            │     nupkg, shows progress via callback   │
+│   └──────┬──────────────────┘                                           │
 │          │                                                              │
 │          ▼                                                              │
-│   ┌─────────────────────┐                                               │
-│   │ Extract & verify    │                                               │
-│   └──────┬──────────────┘                                               │
-│          │                                                              │
-│          ▼                                                              │
-│   ┌─────────────────────┐                                               │
-│   │ "Restart to update" │                                               │
-│   └──────┬──────────────┘                                               │
-│          │                                                              │
-│          ▼ (user clicks "Restart")                                      │
-│   ┌─────────────────────┐                                               │
-│   │ Replace binary      │                                               │
-│   │ Restart app         │                                               │
-│   └─────────────────────┘                                               │
+│   ┌─────────────────────────┐                                           │
+│   │ apply_updates_and_      │                                           │
+│   │ restart()               │──── Velopack applies update atomically   │
+│   │                         │     and restarts the app                 │
+│   └─────────────────────────┘                                           │
 │                                                                         │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
+
+**Key difference from a hand-rolled updater:** Velopack handles delta computation, checksum verification, atomic binary replacement, and restart internally. The client code only calls three methods: `check_for_updates()`, `download_updates()`, `apply_updates_and_restart()`.
 
 ---
 
 ## 3. GitHub Releases Structure
 
+Velopack generates platform-specific artifacts that are uploaded to each GitHub Release.
+
 ```
 mollohq/mello
 └── releases
     └── v0.2.0
-        ├── mello-windows-x64.zip      (Windows build)
-        ├── mello-macos-x64.zip        (macOS Intel)
-        ├── mello-macos-arm64.zip      (macOS Apple Silicon)
-        ├── mello-linux-x64.tar.gz     (Linux)
-        ├── checksums.txt              (SHA256 for all files)
-        └── RELEASE_NOTES.md           (Auto-generated or manual)
+        ├── Mello-Setup.exe                     (Windows installer, signed via ATS)
+        ├── Mello-0.2.0-win-x64-full.nupkg      (Windows full update package)
+        ├── Mello-0.2.0-win-x64-delta.nupkg     (Windows delta update, if prev release exists)
+        ├── releases.win-x64.json                (Windows release index — Velopack reads this)
+        │
+        ├── Mello.pkg                            (macOS installer, signed + notarized)
+        ├── Mello-0.2.0-osx-arm64-full.nupkg    (macOS full update package)
+        ├── Mello-0.2.0-osx-arm64-delta.nupkg   (macOS delta update, if prev release exists)
+        └── releases.osx-arm64.json              (macOS release index — Velopack reads this)
 ```
 
-### Release Asset Naming Convention
+### How Velopack uses the release index
 
-```
-mello-{os}-{arch}.{ext}
+The `releases.{channel}.json` file is the source of truth for updates. `UpdateManager` fetches this file from GitHub Releases and compares it against the installed version. It contains:
 
-os:   windows | macos | linux
-arch: x64 | arm64
-ext:  zip (Windows/macOS) | tar.gz (Linux)
-```
+- Current latest version number
+- List of available full and delta packages with SHA checksums
+- Download URLs for each package
+
+Velopack generates and updates this file automatically during `vpk pack`.
 
 ---
 
@@ -109,68 +112,71 @@ ext:  zip (Windows/macOS) | tar.gz (Linux)
 # client/Cargo.toml
 
 [dependencies]
-self_update = { version = "0.39", features = ["archive-zip", "archive-tar"] }
+velopack = "0.0.914"       # Velopack Rust SDK
 semver = "1"
-reqwest = { version = "0.11", features = ["json", "stream"] }
 tokio = { workspace = true }
-futures-util = "0.3"
-sha2 = "0.10"           # Checksum verification
-hex = "0.4"
 ```
 
-### 4.2 Core Types
+The `self_update`, `sha2`, `hex`, `futures-util`, and `reqwest` (for update purposes) dependencies from the previous spec are **removed** — Velopack handles all of this internally.
+
+### 4.2 Startup Hook
+
+`VelopackApp::build().run()` **must** be the very first call in `main()`, before any other initialization. This is how Velopack handles install, uninstall, and update lifecycle hooks (e.g., creating/removing Start Menu shortcuts on Windows).
+
+```rust
+// client/src/main.rs
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // ──── Velopack lifecycle hook — MUST be first ────
+    velopack::VelopackApp::build().run();
+    // ─────────────────────────────────────────────────
+
+    env_logger::init();
+
+    // ... rest of startup (Slint, updater, etc.)
+}
+```
+
+If the process was spawned by Velopack for a lifecycle event (install, uninstall, update apply), `run()` performs the hook and exits. Otherwise it returns immediately and normal startup continues.
+
+### 4.3 Core Types
 
 ```rust
 // client/src/updater/mod.rs
 
-use semver::Version;
-use std::path::PathBuf;
-
-/// Update information from GitHub
-#[derive(Debug, Clone)]
-pub struct UpdateInfo {
-    pub current_version: Version,
-    pub latest_version: Version,
-    pub download_url: String,
-    pub download_size: u64,
-    pub checksum: Option<String>,
-    pub release_notes: String,
-    pub published_at: String,
-}
-
-/// Current state of the updater
+/// Simplified update status for the UI layer.
+/// Wraps Velopack's internal update info.
 #[derive(Debug, Clone, PartialEq)]
 pub enum UpdateStatus {
     /// Haven't checked yet
     Idle,
-    
+
     /// Checking GitHub for updates
     Checking,
-    
+
     /// No update available (already on latest)
     UpToDate,
-    
+
     /// Update available, waiting for user action
-    Available(UpdateInfo),
-    
-    /// Downloading update
-    Downloading { 
-        progress: f32,      // 0.0 to 1.0
-        bytes_downloaded: u64,
-        total_bytes: u64,
+    Available {
+        version: String,
+        /// Delta size if available, otherwise full size (bytes)
+        download_size: u64,
     },
-    
+
+    /// Downloading update
+    Downloading {
+        progress: f32,      // 0.0 to 1.0
+    },
+
     /// Downloaded, ready to install
-    ReadyToInstall(PathBuf),
-    
-    /// Installing (replacing binary)
-    Installing,
-    
+    ReadyToInstall,
+
     /// Update failed
     Error(String),
 }
 
-/// Events emitted by updater
+/// Events emitted by updater for the UI
 #[derive(Debug, Clone)]
 pub enum UpdateEvent {
     CheckStarted,
@@ -182,370 +188,167 @@ pub enum UpdateEvent {
 }
 ```
 
-### 4.3 Updater Implementation
+### 4.4 Updater Implementation
 
 ```rust
 // client/src/updater/updater.rs
 
-use super::*;
-use reqwest::Client;
-use semver::Version;
-use std::path::PathBuf;
+use velopack::{UpdateManager, UpdateOptions, sources::GithubSource};
 use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock};
-use futures_util::StreamExt;
 
 const GITHUB_REPO_OWNER: &str = "mollohq";
 const GITHUB_REPO_NAME: &str = "mello";
-const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub struct Updater {
+    manager: UpdateManager<GithubSource>,
     status: Arc<RwLock<UpdateStatus>>,
     event_tx: mpsc::Sender<UpdateEvent>,
-    event_rx: mpsc::Receiver<UpdateEvent>,
-    http_client: Client,
-    download_dir: PathBuf,
 }
 
 impl Updater {
-    pub fn new() -> Self {
-        let (event_tx, event_rx) = mpsc::channel(32);
-        
-        // Download to temp directory
-        let download_dir = std::env::temp_dir().join("mello_update");
-        std::fs::create_dir_all(&download_dir).ok();
-        
-        Self {
+    pub fn new(event_tx: mpsc::Sender<UpdateEvent>) -> Result<Self, Box<dyn std::error::Error>> {
+        let source = GithubSource::new(
+            &format!("https://github.com/{}/{}", GITHUB_REPO_OWNER, GITHUB_REPO_NAME),
+            None,  // no pre-release filter
+            false, // not pre-release channel
+        );
+
+        let manager = UpdateManager::new(
+            source,
+            None, // default options
+            None, // default locator
+        )?;
+
+        Ok(Self {
+            manager,
             status: Arc::new(RwLock::new(UpdateStatus::Idle)),
             event_tx,
-            event_rx,
-            http_client: Client::new(),
-            download_dir,
-        }
+        })
     }
-    
+
     /// Get current status
     pub async fn status(&self) -> UpdateStatus {
         self.status.read().await.clone()
     }
-    
-    /// Poll for events (non-blocking)
-    pub fn poll_event(&mut self) -> Option<UpdateEvent> {
-        self.event_rx.try_recv().ok()
-    }
-    
+
     /// Check for updates (run in background)
-    pub async fn check_for_updates(&self) -> Result<Option<UpdateInfo>, UpdateError> {
+    pub async fn check_for_updates(&self) -> Result<bool, Box<dyn std::error::Error>> {
         *self.status.write().await = UpdateStatus::Checking;
         self.event_tx.send(UpdateEvent::CheckStarted).await.ok();
-        
-        let current = Version::parse(CURRENT_VERSION)?;
-        
-        // Fetch latest release from GitHub
-        let url = format!(
-            "https://api.github.com/repos/{}/{}/releases/latest",
-            GITHUB_REPO_OWNER,
-            GITHUB_REPO_NAME
-        );
-        
-        let response: GitHubRelease = self.http_client
-            .get(&url)
-            .header("User-Agent", format!("mello/{}", CURRENT_VERSION))
-            .send()
-            .await?
-            .json()
-            .await?;
-        
-        // Parse version (strip 'v' prefix if present)
-        let version_str = response.tag_name.strip_prefix('v')
-            .unwrap_or(&response.tag_name);
-        let latest = Version::parse(version_str)?;
-        
-        if latest <= current {
-            *self.status.write().await = UpdateStatus::UpToDate;
-            self.event_tx.send(UpdateEvent::CheckComplete { update_available: false }).await.ok();
-            log::info!("Already on latest version: {}", current);
-            return Ok(None);
-        }
-        
-        // Find the right asset for this platform
-        let asset = self.find_platform_asset(&response.assets)?;
-        
-        // Try to get checksum
-        let checksum = self.fetch_checksum(&response.assets, &asset.name).await.ok();
-        
-        let info = UpdateInfo {
-            current_version: current,
-            latest_version: latest.clone(),
-            download_url: asset.browser_download_url.clone(),
-            download_size: asset.size,
-            checksum,
-            release_notes: response.body.unwrap_or_default(),
-            published_at: response.published_at,
-        };
-        
-        *self.status.write().await = UpdateStatus::Available(info.clone());
-        self.event_tx.send(UpdateEvent::CheckComplete { update_available: true }).await.ok();
-        
-        log::info!("Update available: {} -> {}", current, latest);
-        Ok(Some(info))
-    }
-    
-    /// Download the update
-    pub async fn download(&self) -> Result<PathBuf, UpdateError> {
-        let info = match &*self.status.read().await {
-            UpdateStatus::Available(info) => info.clone(),
-            _ => return Err(UpdateError::NoUpdateAvailable),
-        };
-        
-        let file_name = info.download_url.split('/').last()
-            .ok_or_else(|| UpdateError::InvalidUrl)?;
-        let file_path = self.download_dir.join(file_name);
-        
-        log::info!("Downloading update from: {}", info.download_url);
-        
-        let response = self.http_client
-            .get(&info.download_url)
-            .header("User-Agent", format!("mello/{}", CURRENT_VERSION))
-            .send()
-            .await?;
-        
-        let total_size = response.content_length().unwrap_or(info.download_size);
-        let mut downloaded: u64 = 0;
-        
-        let mut file = tokio::fs::File::create(&file_path).await?;
-        let mut stream = response.bytes_stream();
-        
-        while let Some(chunk) = stream.next().await {
-            let chunk = chunk?;
-            downloaded += chunk.len() as u64;
-            
-            tokio::io::AsyncWriteExt::write_all(&mut file, &chunk).await?;
-            
-            let progress = downloaded as f32 / total_size as f32;
-            
-            *self.status.write().await = UpdateStatus::Downloading {
-                progress,
-                bytes_downloaded: downloaded,
-                total_bytes: total_size,
-            };
-            
-            self.event_tx.send(UpdateEvent::DownloadProgress { progress }).await.ok();
-        }
-        
-        // Verify checksum if available
-        if let Some(expected) = &info.checksum {
-            log::info!("Verifying checksum...");
-            let actual = self.compute_checksum(&file_path).await?;
-            if &actual != expected {
-                return Err(UpdateError::ChecksumMismatch {
-                    expected: expected.clone(),
-                    actual,
-                });
+
+        match self.manager.check_for_updates() {
+            Ok(Some(update_info)) => {
+                let version = update_info.target_full_release.version.to_string();
+                let download_size = update_info.target_full_release.size as u64;
+
+                *self.status.write().await = UpdateStatus::Available {
+                    version: version.clone(),
+                    download_size,
+                };
+                self.event_tx.send(UpdateEvent::CheckComplete { update_available: true }).await.ok();
+
+                log::info!("Update available: v{}", version);
+                Ok(true)
             }
-            log::info!("Checksum verified!");
+            Ok(None) => {
+                *self.status.write().await = UpdateStatus::UpToDate;
+                self.event_tx.send(UpdateEvent::CheckComplete { update_available: false }).await.ok();
+                log::info!("Already on latest version");
+                Ok(false)
+            }
+            Err(e) => {
+                let msg = format!("Update check failed: {}", e);
+                *self.status.write().await = UpdateStatus::Error(msg.clone());
+                self.event_tx.send(UpdateEvent::Error(msg)).await.ok();
+                Err(e.into())
+            }
         }
-        
-        *self.status.write().await = UpdateStatus::ReadyToInstall(file_path.clone());
-        self.event_tx.send(UpdateEvent::DownloadComplete).await.ok();
-        
-        Ok(file_path)
     }
-    
-    /// Install the update (replaces current binary, then restarts)
-    pub async fn install(&self) -> Result<(), UpdateError> {
-        let archive_path = match &*self.status.read().await {
-            UpdateStatus::ReadyToInstall(path) => path.clone(),
-            _ => return Err(UpdateError::NotReadyToInstall),
-        };
-        
-        *self.status.write().await = UpdateStatus::Installing;
-        
-        log::info!("Installing update from: {:?}", archive_path);
-        
-        // Use self_update to handle the atomic replacement
-        self_update::self_replace::self_replace(&archive_path)?;
-        
-        // Restart the application
-        self.restart()?;
-        
+
+    /// Download the update with progress reporting
+    pub async fn download(&self) -> Result<(), Box<dyn std::error::Error>> {
+        let update_info = self.manager.check_for_updates()?
+            .ok_or("No update available")?;
+
+        let status = self.status.clone();
+        let tx = self.event_tx.clone();
+
+        self.manager.download_updates(&update_info, Some(move |progress: i16| {
+            let pct = progress as f32 / 100.0;
+            // Fire-and-forget status update
+            let _ = tx.try_send(UpdateEvent::DownloadProgress { progress: pct });
+        }))?;
+
+        *self.status.write().await = UpdateStatus::ReadyToInstall;
+        self.event_tx.send(UpdateEvent::DownloadComplete).await.ok();
+
         Ok(())
     }
-    
-    /// Find the appropriate asset for this platform
-    fn find_platform_asset(&self, assets: &[GitHubAsset]) -> Result<&GitHubAsset, UpdateError> {
-        let target = if cfg!(target_os = "windows") {
-            if cfg!(target_arch = "x86_64") {
-                "mello-windows-x64.zip"
-            } else {
-                "mello-windows-arm64.zip"
-            }
-        } else if cfg!(target_os = "macos") {
-            if cfg!(target_arch = "x86_64") {
-                "mello-macos-x64.zip"
-            } else {
-                "mello-macos-arm64.zip"
-            }
-        } else if cfg!(target_os = "linux") {
-            "mello-linux-x64.tar.gz"
-        } else {
-            return Err(UpdateError::UnsupportedPlatform);
-        };
-        
-        assets.iter()
-            .find(|a| a.name == target)
-            .ok_or(UpdateError::NoAssetForPlatform)
-    }
-    
-    /// Fetch checksum from checksums.txt if available
-    async fn fetch_checksum(&self, assets: &[GitHubAsset], target_name: &str) -> Result<String, UpdateError> {
-        let checksums_asset = assets.iter()
-            .find(|a| a.name == "checksums.txt")
-            .ok_or(UpdateError::NoChecksumFile)?;
-        
-        let content = self.http_client
-            .get(&checksums_asset.browser_download_url)
-            .header("User-Agent", format!("mello/{}", CURRENT_VERSION))
-            .send()
-            .await?
-            .text()
-            .await?;
-        
-        // Format: "sha256hash  filename"
-        for line in content.lines() {
-            let parts: Vec<&str> = line.split_whitespace().collect();
-            if parts.len() == 2 && parts[1] == target_name {
-                return Ok(parts[0].to_string());
-            }
-        }
-        
-        Err(UpdateError::NoChecksumForFile)
-    }
-    
-    /// Compute SHA256 checksum of a file
-    async fn compute_checksum(&self, path: &PathBuf) -> Result<String, UpdateError> {
-        use sha2::{Sha256, Digest};
-        
-        let data = tokio::fs::read(path).await?;
-        let mut hasher = Sha256::new();
-        hasher.update(&data);
-        let result = hasher.finalize();
-        
-        Ok(hex::encode(result))
-    }
-    
-    /// Restart the application
-    fn restart(&self) -> Result<(), UpdateError> {
-        let exe = std::env::current_exe()?;
-        let args: Vec<String> = std::env::args().skip(1).collect();
-        
-        std::process::Command::new(&exe)
-            .args(&args)
-            .spawn()?;
-        
-        std::process::exit(0);
-    }
-}
 
-// GitHub API types
-#[derive(Debug, serde::Deserialize)]
-struct GitHubRelease {
-    tag_name: String,
-    body: Option<String>,
-    published_at: String,
-    assets: Vec<GitHubAsset>,
-}
+    /// Apply the downloaded update and restart the app.
+    /// This function does not return on success — the process is replaced.
+    pub fn apply_and_restart(&self) -> Result<(), Box<dyn std::error::Error>> {
+        let update_info = self.manager.check_for_updates()?
+            .ok_or("No update available")?;
 
-#[derive(Debug, serde::Deserialize)]
-struct GitHubAsset {
-    name: String,
-    size: u64,
-    browser_download_url: String,
-}
+        // This replaces the current process and restarts into the new version.
+        self.manager.apply_updates_and_restart(&update_info, &[])?;
 
-#[derive(Debug, thiserror::Error)]
-pub enum UpdateError {
-    #[error("HTTP error: {0}")]
-    Http(#[from] reqwest::Error),
-    
-    #[error("IO error: {0}")]
-    Io(#[from] std::io::Error),
-    
-    #[error("Version parse error: {0}")]
-    Version(#[from] semver::Error),
-    
-    #[error("No update available")]
-    NoUpdateAvailable,
-    
-    #[error("Not ready to install")]
-    NotReadyToInstall,
-    
-    #[error("Invalid download URL")]
-    InvalidUrl,
-    
-    #[error("Unsupported platform")]
-    UnsupportedPlatform,
-    
-    #[error("No asset available for this platform")]
-    NoAssetForPlatform,
-    
-    #[error("No checksum file found")]
-    NoChecksumFile,
-    
-    #[error("No checksum for this file")]
-    NoChecksumForFile,
-    
-    #[error("Checksum mismatch: expected {expected}, got {actual}")]
-    ChecksumMismatch { expected: String, actual: String },
-    
-    #[error("Self-update error: {0}")]
-    SelfUpdate(#[from] self_update::errors::Error),
+        // Should not reach here
+        Ok(())
+    }
 }
 ```
 
-### 4.4 Integration with App Startup
+### 4.5 Integration with App Startup
 
 ```rust
 // client/src/main.rs
 
 mod updater;
 
-use updater::Updater;
-use std::sync::Arc;
-use tokio::sync::RwLock;
+use updater::{Updater, UpdateEvent};
+use tokio::sync::mpsc;
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // ──── Velopack lifecycle hook — MUST be first ────
+    velopack::VelopackApp::build().run();
+    // ─────────────────────────────────────────────────
+
     env_logger::init();
-    
-    // Create updater
-    let updater = Arc::new(RwLock::new(Updater::new()));
-    
+
+    let rt = tokio::runtime::Runtime::new()?;
+
+    let (event_tx, mut event_rx) = mpsc::channel::<UpdateEvent>(32);
+
+    // Create updater (may fail if not installed via Velopack — dev mode)
+    let updater = match Updater::new(event_tx) {
+        Ok(u) => Some(u),
+        Err(e) => {
+            log::warn!("Updater init failed (dev mode?): {}", e);
+            None
+        }
+    };
+
     // Check for updates in background
-    let updater_clone = updater.clone();
-    tokio::spawn(async move {
-        let updater = updater_clone.read().await;
-        match updater.check_for_updates().await {
-            Ok(Some(info)) => {
-                log::info!("Update available: v{}", info.latest_version);
-            }
-            Ok(None) => {
-                log::info!("Already on latest version");
-            }
-            Err(e) => {
+    if let Some(ref updater) = updater {
+        let updater_ref = updater.clone();
+        rt.spawn(async move {
+            if let Err(e) = updater_ref.check_for_updates().await {
                 log::warn!("Update check failed: {}", e);
             }
-        }
-    });
-    
+        });
+    }
+
     // Continue with normal startup...
     let app = MainWindow::new()?;
-    
-    // Wire up update events to UI
+
+    // Wire up update events to UI (poll event_rx in the Slint event loop)
     // ...
-    
+
     app.run()?;
-    
+
     Ok(())
 }
 ```
@@ -787,116 +590,378 @@ export component UpdateDialog inherits Rectangle {
 }
 ```
 
+The UI components are wired to the Velopack-backed `Updater` events rather than the old custom updater. The callbacks map as follows:
+
+| UI callback | Updater method |
+|---|---|
+| `update-clicked()` | `updater.download()` |
+| `restart-clicked()` | `updater.apply_and_restart()` |
+| `dismiss-clicked()` | Set `UpdateStatus::Idle` (hide banner until next startup) |
+
 ---
 
 ## 6. GitHub Actions: Build & Release
 
-```yaml
-# .github/workflows/release.yml
+Two separate workflows — one for Windows, one for macOS. Each builds the client, packages with Velopack, signs, and uploads artifacts to a GitHub Release.
 
-name: Release
+### 6.1 Windows Workflow
+
+```yaml
+# .github/workflows/release-windows.yml
+
+name: Windows Release
 
 on:
-  push:
-    tags:
-      - 'v*'
+  release:
+    types: [published]
+
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: "Why are you triggering a manual build?"
+        required: true
+        default: "I need a binary package for testing!"
 
 permissions:
   contents: write
 
+env:
+  RELEASE_CHANNEL: "win-x64-stable"
+
 jobs:
-  build:
-    strategy:
-      matrix:
-        include:
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-            artifact: mello-windows-x64.zip
-          # - os: macos-latest
-          #   target: x86_64-apple-darwin
-          #   artifact: mello-macos-x64.zip
-          # - os: macos-latest
-          #   target: aarch64-apple-darwin
-          #   artifact: mello-macos-arm64.zip
-    
-    runs-on: ${{ matrix.os }}
-    
+  build-windows:
+    runs-on: windows-latest
+
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
         with:
+          fetch-depth: 0
           submodules: recursive
-      
-      - uses: dtolnay/rust-toolchain@stable
+          token: ${{ secrets.GH_PAT }}
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.target }}
-      
-      - uses: Swatinem/rust-cache@v2
-      
-      # Build libmello
+          targets: x86_64-pc-windows-msvc
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Set version from release
+        if: github.event_name == 'release'
+        run: |
+          $version = "${{ github.event.release.tag_name }}" -replace '^v',''
+          echo "RELEASE_VERSION=$version" >> $env:GITHUB_ENV
+
+      - name: Set dev version
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          echo "RELEASE_VERSION=0.0.${{ github.run_number }}" >> $env:GITHUB_ENV
+
+      # Build libmello (cmake)
       - name: Build libmello
         shell: bash
         run: |
           cd libmello
           cmake -B build -DCMAKE_BUILD_TYPE=Release
           cmake --build build --config Release
-      
-      # Build client
+
+      # Build Mello client
       - name: Build client
-        run: cargo build --release --target ${{ matrix.target }}
-      
-      # Package
-      - name: Package (Windows)
-        if: matrix.os == 'windows-latest'
+        run: cargo build --release --target x86_64-pc-windows-msvc
+
+      # Assemble dist folder for vpk pack
+      - name: Assemble dist
         shell: pwsh
         run: |
           mkdir dist
-          cp target/${{ matrix.target }}/release/mello.exe dist/
-          cp libmello/build/Release/*.dll dist/
-          Compress-Archive -Path dist/* -DestinationPath ${{ matrix.artifact }}
-      
-      - name: Upload artifact
+          cp target/x86_64-pc-windows-msvc/release/mello.exe dist/
+          # ONNX Runtime dynamic libraries
+          cp libmello/third_party/onnxruntime/onnxruntime-win-x64-*/lib/onnxruntime.dll dist/
+          cp libmello/third_party/onnxruntime/onnxruntime-win-x64-*/lib/onnxruntime_providers_shared.dll dist/
+          # Remove any .lib files that snuck in
+          del dist/*.lib -ErrorAction SilentlyContinue
+
+      # Azure login for Trusted Signing
+      - name: Login to Azure
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Verify Azure Login
+        run: az account show --output table
+
+      # Velopack: download previous release for delta generation, then pack
+      - name: Velopack Package
+        shell: cmd
+        run: |
+          dotnet tool install -g vpk
+          mkdir vpk-out
+          vpk download github --repoUrl https://github.com/mollohq/mello --outputDir vpk-out --channel %RELEASE_CHANNEL% --token ${{ secrets.GH_PAT }}
+          vpk pack ^
+            --packId Mello ^
+            --packVersion %RELEASE_VERSION% ^
+            --packDir dist ^
+            --mainExe mello.exe ^
+            --packTitle Mello ^
+            --channel %RELEASE_CHANNEL% ^
+            --outputDir vpk-out ^
+            --icon assets/icons/app_icon.ico ^
+            --azureTrustedSignFile windows/signing-metadata.json
+
+      # Upload Velopack artifacts to the GitHub Release
+      - name: Upload to GitHub Release
+        if: github.event_name == 'release'
+        shell: pwsh
+        run: |
+          $files = Get-ChildItem vpk-out -File
+          foreach ($f in $files) {
+            gh release upload "${{ github.event.release.tag_name }}" $f.FullName --clobber
+          }
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+
+      # Also upload as build artifacts for manual/dispatch runs
+      - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact }}
-          path: ${{ matrix.artifact }}
+          name: mello-windows-x64
+          path: vpk-out/*
+```
 
+### 6.2 macOS Workflow
+
+```yaml
+# .github/workflows/release-macos.yml
+
+name: macOS Release
+
+on:
   release:
-    needs: build
-    runs-on: ubuntu-latest
-    
+    types: [published]
+
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: "Why are you triggering a manual build?"
+        required: true
+        default: "I need a binary package for testing!"
+
+permissions:
+  contents: write
+
+env:
+  RELEASE_CHANNEL: "osx-arm64-stable"
+
+jobs:
+  build-macos:
+    runs-on: self-hosted  # macOS self-hosted runner with Apple certs
+
     steps:
-      - uses: actions/checkout@v4
-      
-      - uses: actions/download-artifact@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
         with:
-          path: artifacts
-      
-      # Generate checksums
-      - name: Generate checksums
+          fetch-depth: 0
+          submodules: recursive
+          token: ${{ secrets.GH_PAT }}
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Set version from release
+        if: github.event_name == 'release'
         run: |
-          cd artifacts
-          find . -type f \( -name "*.zip" -o -name "*.tar.gz" \) -exec sha256sum {} \; > checksums.txt
-          cat checksums.txt
-      
-      # Create release
-      - name: Create Release
-        uses: softprops/action-gh-release@v2
+          version="${{ github.event.release.tag_name }}"
+          version="${version#v}"
+          echo "RELEASE_VERSION=$version" >> $GITHUB_ENV
+
+      - name: Set dev version
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          echo "RELEASE_VERSION=0.0.${{ github.run_number }}" >> $GITHUB_ENV
+
+      # Build libmello (cmake)
+      - name: Build libmello
+        run: |
+          cd libmello
+          cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=arm64
+          cmake --build build --config Release
+
+      # Build Mello client
+      - name: Build client
+        run: cargo build --release --target aarch64-apple-darwin
+
+      # Assemble dist folder
+      - name: Assemble dist
+        run: |
+          mkdir -p dist
+          cp target/aarch64-apple-darwin/release/mello dist/
+          # ONNX Runtime dynamic library
+          cp libmello/third_party/onnxruntime/onnxruntime-osx-arm64-*/lib/libonnxruntime*.dylib dist/
+
+      # Import Apple signing certificates
+      - name: Import Apple certificates
+        uses: apple-actions/import-codesign-certs@v2
         with:
-          draft: false
-          generate_release_notes: true
-          files: |
-            artifacts/**/*.zip
-            artifacts/**/*.tar.gz
-            artifacts/checksums.txt
+          p12-file-base64: ${{ secrets.MACOS_BUILD_AND_INSTALLER_CERTIFICATES }}
+          p12-password: ${{ secrets.P12_PASSWORD }}
+
+      # Store notarytool credentials in a temporary keychain profile
+      - name: Store notarytool credentials
+        run: |
+          xcrun notarytool store-credentials "AC_PASSWORD" \
+            --apple-id "${{ secrets.APPLE_ID }}" \
+            --team-id "${{ secrets.APPLE_TEAM }}" \
+            --password "${{ secrets.APPLE_PASSWORD }}"
+
+      # Manually codesign ONNX Runtime dylib before Velopack packaging
+      # (Velopack signs the main binary, but external dylibs must be pre-signed)
+      - name: Codesign ONNX Runtime dylib
+        run: |
+          for dylib in dist/libonnxruntime*.dylib; do
+            codesign --force --options runtime --timestamp \
+              --sign "Developer ID Application: ${{ secrets.APPLE_TEAM_NAME }}" \
+              "$dylib"
+          done
+
+      # Velopack: download previous release for delta, then pack + sign + notarize
+      - name: Velopack Package
+        run: |
+          dotnet tool install -g vpk
+          mkdir -p vpk-out
+          vpk download github --repoUrl https://github.com/mollohq/mello --outputDir vpk-out --channel $RELEASE_CHANNEL --token ${{ secrets.GH_PAT }}
+          vpk pack \
+            --packId Mello \
+            --packVersion $RELEASE_VERSION \
+            --packDir dist \
+            --mainExe mello \
+            --packTitle Mello \
+            --channel $RELEASE_CHANNEL \
+            --outputDir vpk-out \
+            --icon assets/icons/app_icon.icns \
+            --signAppIdentity "Developer ID Application: ${{ secrets.APPLE_TEAM_NAME }}" \
+            --signInstallIdentity "Developer ID Installer: ${{ secrets.APPLE_TEAM_NAME }}" \
+            --notaryProfile "AC_PASSWORD" \
+            --signEntitlements macos/entitlements.plist
+
+      # Upload Velopack artifacts to the GitHub Release
+      - name: Upload to GitHub Release
+        if: github.event_name == 'release'
+        run: |
+          for f in vpk-out/*; do
+            gh release upload "${{ github.event.release.tag_name }}" "$f" --clobber
+          done
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+
+      # Also upload as build artifacts
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: mello-macos-arm64
+          path: vpk-out/*
+
+      # Clean up keychain (always, even if build fails)
+      - name: Cleanup keychain
+        if: always()
+        run: |
+          security delete-keychain signing_temp.keychain || true
 ```
 
 ---
 
-## 7. Configuration
+## 7. Code Signing Setup
 
-### 7.1 Update Settings
+### 7.1 Windows — Azure Trusted Signing (ATS)
+
+Azure Trusted Signing provides EV-equivalent code signing with instant SmartScreen reputation (no more "Windows protected your PC" dialogs).
+
+**Setup:**
+
+1. Create an Azure Trusted Signing resource in the Azure Portal
+2. Create a certificate profile (public trust, code signing)
+3. Create a service principal with `Trusted Signing Certificate Profile Signer` role
+4. Save the service principal credentials as the `AZURE_CREDENTIALS` GitHub secret
+
+**Signing metadata file** (committed to the repo):
+
+```json
+// windows/signing-metadata.json
+{
+  "Endpoint": "https://eus.codesigning.azure.net/",
+  "CodeSigningAccountName": "mollohq",
+  "CertificateProfileName": "mollohq"
+}
+```
+
+The `vpk pack --azureTrustedSignFile` flag tells Velopack to sign the installer, update packages, and the main executable using these credentials. Azure login must happen before `vpk pack`.
+
+### 7.2 macOS — Apple Developer ID + Notarization
+
+macOS requires two layers: code signing (Developer ID certificates) and notarization (Apple's automated security check).
+
+**Certificates required:**
+
+| Certificate | Used for |
+|---|---|
+| Developer ID Application | Signing the app binary, frameworks, dylibs |
+| Developer ID Installer | Signing the `.pkg` installer |
+
+Both are exported as a single `.p12` file and stored as a base64-encoded GitHub secret.
+
+**Entitlements file** (committed to the repo):
+
+```xml
+<!-- macos/entitlements.plist -->
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+    <key>com.apple.security.device.audio-input</key>
+    <true/>
+    <key>com.apple.security.network.client</key>
+    <true/>
+    <key>com.apple.security.network.server</key>
+    <true/>
+</dict>
+</plist>
+```
+
+Entitlements grant the app permissions for:
+- JIT and unsigned executable memory (needed by ONNX Runtime)
+- Microphone access (core feature)
+- Network client/server (WebRTC, API calls)
+
+**External dylib pre-signing:** `libonnxruntime.dylib` must be codesigned with the Developer ID Application identity *before* `vpk pack` runs. Velopack signs the main executable and the `.pkg`, but external dynamic libraries need to be pre-signed manually. This is the same pattern used for Molly.
+
+### 7.3 Required GitHub Secrets
+
+| Secret | Platform | Description |
+|---|---|---|
+| `GH_PAT` | Both | GitHub Personal Access Token (for release uploads + Velopack delta download) |
+| `AZURE_CREDENTIALS` | Windows | Azure service principal JSON for Trusted Signing |
+| `MACOS_BUILD_AND_INSTALLER_CERTIFICATES` | macOS | Base64-encoded `.p12` containing both Developer ID Application and Installer certs |
+| `P12_PASSWORD` | macOS | Password for the `.p12` file |
+| `APPLE_ID` | macOS | Apple ID email for notarytool |
+| `APPLE_TEAM` | macOS | Apple Developer Team ID |
+| `APPLE_TEAM_NAME` | macOS | Full team name string (e.g. "Mollo HQ Ltd") used in signing identity |
+| `APPLE_PASSWORD` | macOS | App-specific password for notarytool |
+
+---
+
+## 8. Configuration
+
+### 8.1 Update Settings
 
 ```rust
 // client/src/config.rs
@@ -920,7 +985,6 @@ pub struct UpdateConfig {
 pub enum UpdateChannel {
     Stable,
     Beta,
-    Nightly,
 }
 
 impl Default for UpdateConfig {
@@ -935,42 +999,61 @@ impl Default for UpdateConfig {
 }
 ```
 
+Velopack channels map to the `--channel` flag used during `vpk pack`:
+
+| UpdateChannel | Velopack channel (Windows) | Velopack channel (macOS) |
+|---|---|---|
+| Stable | `win-x64-stable` | `osx-arm64-stable` |
+| Beta | `win-x64-beta` | `osx-arm64-beta` |
+
+The channel determines which `releases.{channel}.json` the `UpdateManager` reads from GitHub Releases.
+
 ---
 
-## 8. Testing Checklist
+## 9. Testing Checklist
 
-- [ ] Update check works on startup (background)
-- [ ] UI shows update banner when available
-- [ ] Download shows progress accurately
-- [ ] Download can be cancelled
-- [ ] Checksum verification works
-- [ ] Install replaces binary correctly
-- [ ] Restart launches new version
-- [ ] Rollback works if install fails
+- [ ] `VelopackApp::build().run()` is the first call in `main()`
+- [ ] Update check works on startup (background, non-blocking)
+- [ ] UI shows update banner when update is available
+- [ ] Download shows progress via Velopack callback
+- [ ] "Update Now" triggers download, then shows "Restart"
+- [ ] "Restart" calls `apply_updates_and_restart()` — app relaunches on new version
+- [ ] Delta updates work when previous release exists
+- [ ] Full update works for first install or when delta is unavailable
 - [ ] "Later" dismisses banner until next startup
-- [ ] Works behind proxies
-- [ ] Handles offline gracefully
+- [ ] Handles offline gracefully (update check fails silently)
+- [ ] Updater init fails gracefully in dev mode (not installed via Velopack)
+- [ ] **Windows:** Installer (`Mello-Setup.exe`) runs without SmartScreen warning
+- [ ] **Windows:** Installed app has valid Authenticode signature (check with `signtool verify`)
+- [ ] **macOS:** `.pkg` installer runs without Gatekeeper warning
+- [ ] **macOS:** App binary passes `codesign --verify --deep --strict`
+- [ ] **macOS:** App passes `spctl --assess --type install` (notarization check)
+- [ ] **macOS:** `libonnxruntime.dylib` is correctly signed alongside the app
 
 ---
 
-## 9. Security Considerations
+## 10. Security Considerations
 
 | Concern | Mitigation |
 |---------|------------|
-| MITM attacks | HTTPS only, checksum verification |
-| Binary tampering | SHA256 checksums in release |
-| Privilege escalation | No admin required on Windows |
-| Rollback attacks | Only allow updating to newer versions |
+| MITM attacks | HTTPS only for all GitHub API and download traffic |
+| Binary tampering | Velopack verifies SHA checksums on all packages; code signing provides authenticity |
+| Code signing bypass | Azure Trusted Signing (Windows) and Apple notarization (macOS) ensure OS-level trust |
+| SmartScreen / Gatekeeper warnings | ATS provides instant reputation on Windows; notarization satisfies Gatekeeper on macOS |
+| Privilege escalation | No admin required on Windows (per-user install); macOS uses standard `.pkg` flow |
+| Rollback attacks | Velopack only applies updates to newer versions |
+| Supply chain | GitHub Actions secrets are encrypted; signing keys never leave Azure (ATS) or the self-hosted runner keychain |
 
 ---
 
-## 10. Rollback Strategy
+## 11. Rollback Strategy
 
-If an update causes issues:
+Velopack keeps the previous full `.nupkg` in its local package cache. If an update causes issues:
 
-1. **Manual rollback:** Download previous version from GitHub releases
-2. **Future:** Keep previous version and add "Rollback" button in settings
+1. **Automatic:** If the new version crashes on startup, Velopack can detect this and roll back to the previous version automatically (configurable via `VelopackApp::build()` options)
+2. **Manual:** Users can download the previous version's installer from GitHub Releases
+3. **Future:** Add a "Rollback to previous version" button in Settings that triggers Velopack's rollback API
 
 ---
 
-*This spec covers auto-updates. For backend hosting, see [08-BACKEND-HOSTING.md](./08-BACKEND-HOSTING.md).*
+*This spec covers auto-updates, packaging, and code signing. For backend hosting, see [08-BACKEND-HOSTING.md](./08-BACKEND-HOSTING.md). For native platform integration, see [12-NATIVE-PLATFORM.md](./12-NATIVE-PLATFORM.md).*
