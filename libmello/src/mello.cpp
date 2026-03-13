@@ -384,4 +384,46 @@ MelloResult mello_set_audio_output(MelloContext* ctx, const char* device_id) {
     }
 }
 
+// ============================================================================
+// Streaming stubs — capture/encode pipeline not yet implemented.
+// These allow the Rust orchestration layer to link and call through FFI.
+// They will be replaced by real implementations in the capture spec.
+// ============================================================================
+
+MelloStreamHost* mello_stream_start_host(MelloContext* ctx, const MelloStreamConfig* config) {
+    if (!ctx || !config) return nullptr;
+    MELLO_LOG_WARN("stream", "mello_stream_start_host: stub (capture not implemented)");
+    // Return a non-null sentinel so the caller knows it "succeeded"
+    // but no actual capture/encode happens.
+    static int sentinel = 0;
+    return reinterpret_cast<MelloStreamHost*>(&sentinel);
+}
+
+void mello_stream_stop_host(MelloStreamHost* host) {
+    (void)host;
+    MELLO_LOG_INFO("stream", "mello_stream_stop_host: stub");
+}
+
+int mello_stream_get_video_packet(MelloStreamHost* host, uint8_t* buffer, int buffer_size, bool* is_keyframe) {
+    (void)host; (void)buffer; (void)buffer_size;
+    if (is_keyframe) *is_keyframe = false;
+    return 0; // no packets available
+}
+
+int mello_stream_get_audio_packet(MelloStreamHost* host, uint8_t* buffer, int buffer_size) {
+    (void)host; (void)buffer; (void)buffer_size;
+    return 0; // no packets available
+}
+
+void mello_stream_request_keyframe(MelloStreamHost* host) {
+    (void)host;
+    MELLO_LOG_DEBUG("stream", "mello_stream_request_keyframe: stub");
+}
+
+MelloResult mello_stream_set_bitrate(MelloStreamHost* host, uint32_t bitrate_kbps) {
+    (void)host; (void)bitrate_kbps;
+    MELLO_LOG_DEBUG("stream", "mello_stream_set_bitrate(%u): stub", bitrate_kbps);
+    return MELLO_OK;
+}
+
 } // extern "C"

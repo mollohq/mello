@@ -1,21 +1,17 @@
-pub struct StreamManager {
-    hosting: bool,
-    watching: Option<String>,
-}
+pub mod abr;
+pub mod config;
+pub mod error;
+pub mod fec;
+pub mod host;
+pub mod input;
+pub mod manager;
+pub mod packet;
+pub mod sink;
+pub mod sink_p2p;
+pub mod sink_sfu;
+pub mod viewer;
 
-impl StreamManager {
-    pub fn new() -> Self {
-        Self {
-            hosting: false,
-            watching: None,
-        }
-    }
-
-    pub fn is_hosting(&self) -> bool {
-        self.hosting
-    }
-
-    pub fn is_watching(&self) -> bool {
-        self.watching.is_some()
-    }
-}
+pub use config::{Codec, QualityPreset, StreamConfig};
+pub use error::StreamError;
+pub use manager::StreamManager;
+pub use packet::{PacketFlags, PacketType, StreamPacket};

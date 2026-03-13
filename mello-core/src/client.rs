@@ -7,12 +7,14 @@ use crate::nakama::NakamaClient;
 use crate::presence::PresenceStatus;
 use crate::session;
 use crate::nakama::{InternalPresence, InternalSignal};
+use crate::stream::manager::StreamSession;
 use crate::voice::{SignalMessage, VoiceManager};
 
 pub struct Client {
     nakama: NakamaClient,
     voice: VoiceManager,
     event_tx: std::sync::mpsc::Sender<Event>,
+    stream_session: Option<StreamSession>,
 }
 
 impl Client {
@@ -21,6 +23,7 @@ impl Client {
             nakama: NakamaClient::new(config),
             voice: VoiceManager::new(event_tx.clone(), loopback),
             event_tx,
+            stream_session: None,
         }
     }
 
@@ -206,6 +209,22 @@ impl Client {
             Command::UpdateProfile { display_name } => {
                 self.handle_update_profile(&display_name).await;
             }
+            // --- Streaming ---
+            Command::StartStream { crew_id, title } => {
+                self.handle_start_stream(&crew_id, &title).await;
+            }
+            Command::StopStream => {
+                self.handle_stop_stream().await;
+            }
+            Command::WatchStream { host_id } => {
+                log::info!("WatchStream requested for host {}", host_id);
+                // TODO: viewer-side peer connection + stream viewing
+            }
+            Command::StopWatching => {
+                log::info!("StopWatching requested");
+                // TODO: tear down viewer-side stream
+            }
+
             // --- Presence & crew state ---
             Command::UpdatePresence { status, activity } => {
                 if let Err(e) = self.nakama.presence_update(&status, activity.as_ref()).await {
@@ -587,6 +606,88 @@ impl Client {
     async fn handle_send_message(&self, content: &str) {
         if let Err(e) = self.nakama.send_chat_message(content).await {
             log::error!("Failed to send message: {}", e);
+        }
+    }
+
+    // --- Streaming ---
+
+    async fn handle_start_stream(&mut self, crew_id: &str, _title: &str) {
+        if self.stream_session.is_some() {
+            let _ = self.event_tx.send(Event::StreamError {
+                message: "Already streaming".to_string(),
+            });
+            return;
+        }
+
+        // Step 1: async RPC call (no raw pointers held across await)
+        let resp = match crate::stream::host::request_start_stream(
+            &self.nakama,
+            crew_id,
+            false, // supports_av1
+        )
+        .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                log::error!("start_stream RPC failed: {}", e);
+                let _ = self.event_tx.send(Event::StreamError {
+                    message: e.to_string(),
+                });
+                return;
+            }
+        };
+
+        // Step 2: sync FFI calls + session creation (raw pointers, no await)
+        let config = crate::stream::StreamConfig::default();
+        let ctx = self.voice.mello_ctx();
+        let mello_config = mello_sys::MelloStreamConfig {
+            width: config.width,
+            height: config.height,
+            fps: config.fps,
+            bitrate_kbps: config.bitrate_kbps,
+            encoder: mello_sys::MelloEncoderType_MELLO_ENCODER_AUTO,
+        };
+
+        let host = unsafe { mello_sys::mello_stream_start_host(ctx, &mello_config) };
+        if host.is_null() {
+            let _ = self.event_tx.send(Event::StreamError {
+                message: "Failed to start stream host (libmello)".to_string(),
+            });
+            return;
+        }
+
+        match crate::stream::host::create_stream_session(ctx, host, &resp, config) {
+            Ok(session) => {
+                let _ = self.event_tx.send(Event::StreamStarted {
+                    crew_id: crew_id.to_string(),
+                    session_id: session.session_id.clone(),
+                    mode: session.mode.clone(),
+                });
+                self.stream_session = Some(session);
+            }
+            Err(e) => {
+                log::error!("Failed to create stream session: {}", e);
+                unsafe {
+                    mello_sys::mello_stream_stop_host(host);
+                }
+                let _ = self.event_tx.send(Event::StreamError {
+                    message: e.to_string(),
+                });
+            }
+        }
+    }
+
+    async fn handle_stop_stream(&mut self) {
+        if let Some(mut session) = self.stream_session.take() {
+            session.stop();
+
+            if let Some(crew_id) = self.nakama.active_crew_id().map(String::from) {
+                let payload = serde_json::json!({ "crew_id": crew_id });
+                if let Err(e) = self.nakama.rpc("stop_stream", &payload).await {
+                    log::warn!("stop_stream RPC failed: {}", e);
+                }
+                let _ = self.event_tx.send(Event::StreamEnded { crew_id });
+            }
         }
     }
 }

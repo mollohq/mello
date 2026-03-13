@@ -16,9 +16,12 @@ import (
 // ---------------------------------------------------------------------------
 
 type StartStreamRequest struct {
-	CrewID string `json:"crew_id"`
-	Title  string `json:"title,omitempty"`
+	CrewID      string `json:"crew_id"`
+	Title       string `json:"title,omitempty"`
+	SupportsAV1 bool   `json:"supports_av1,omitempty"`
 }
+
+const MaxP2PViewers = 5
 
 type StopStreamRequest struct {
 	CrewID string `json:"crew_id"`
@@ -162,7 +165,10 @@ func StartStreamRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk r
 
 	logger.Info("User %s started stream %s in crew %s", userID, streamID, req.CrewID)
 	resp, _ := json.Marshal(map[string]interface{}{
-		"stream_id": streamID,
+		"stream_id":   streamID,
+		"session_id":  streamID,
+		"mode":        "p2p",
+		"max_viewers": MaxP2PViewers,
 	})
 	return string(resp), nil
 }

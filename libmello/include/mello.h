@@ -151,6 +151,58 @@ MELLO_API bool mello_peer_is_connected(MelloPeerConnection* peer);
 MELLO_API int mello_peer_recv(MelloPeerConnection* peer, uint8_t* buffer, int buffer_size);
 
 /* ============================================================================
+ * Streaming (Host)
+ * ============================================================================ */
+
+typedef struct MelloStreamHost MelloStreamHost;
+typedef struct MelloStreamView MelloStreamView;
+
+typedef enum MelloEncoderType {
+    MELLO_ENCODER_AUTO  = 0,
+    MELLO_ENCODER_NVENC = 1,
+    MELLO_ENCODER_AMF   = 2,
+    MELLO_ENCODER_QSV   = 3,
+} MelloEncoderType;
+
+typedef struct MelloStreamConfig {
+    uint32_t         width;
+    uint32_t         height;
+    uint32_t         fps;
+    uint32_t         bitrate_kbps;
+    MelloEncoderType encoder;
+} MelloStreamConfig;
+
+/** Start hosting a stream (capture + encode pipeline). */
+MELLO_API MelloStreamHost* mello_stream_start_host(
+    MelloContext* ctx,
+    const MelloStreamConfig* config
+);
+
+/** Stop hosting and release resources. */
+MELLO_API void mello_stream_stop_host(MelloStreamHost* host);
+
+/** Get next encoded video packet. Returns bytes written, 0 if none available. */
+MELLO_API int mello_stream_get_video_packet(
+    MelloStreamHost* host,
+    uint8_t* buffer,
+    int buffer_size,
+    bool* is_keyframe
+);
+
+/** Get next encoded game-audio (loopback) Opus packet. Returns bytes, 0 if none. */
+MELLO_API int mello_stream_get_audio_packet(
+    MelloStreamHost* host,
+    uint8_t* buffer,
+    int buffer_size
+);
+
+/** Request the encoder to produce a keyframe on the next frame. */
+MELLO_API void mello_stream_request_keyframe(MelloStreamHost* host);
+
+/** Hot-reconfigure encoder bitrate without stopping the session. */
+MELLO_API MelloResult mello_stream_set_bitrate(MelloStreamHost* host, uint32_t bitrate_kbps);
+
+/* ============================================================================
  * Debug / Diagnostics
  * ============================================================================ */
 

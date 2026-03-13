@@ -65,6 +65,10 @@ impl VoiceManager {
         }
     }
 
+    pub fn mello_ctx(&self) -> *mut mello_sys::MelloContext {
+        self.ctx
+    }
+
     pub fn join_voice(&mut self, local_id: &str, members: &[String]) {
         if self.ctx.is_null() { return; }
 
