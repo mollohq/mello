@@ -6,7 +6,7 @@ use crate::events::Event;
 use crate::nakama::NakamaClient;
 use crate::presence::PresenceStatus;
 use crate::session;
-use crate::nakama::InternalSignal;
+use crate::nakama::{InternalPresence, InternalSignal};
 use crate::voice::{SignalMessage, VoiceManager};
 
 pub struct Client {
@@ -28,6 +28,7 @@ impl Client {
         log::info!("Mello client started, waiting for commands...");
 
         let mut signal_rx = self.nakama.take_signal_rx().unwrap();
+        let mut presence_rx = self.nakama.take_presence_rx().unwrap();
         let mut voice_tick = tokio::time::interval(tokio::time::Duration::from_millis(20));
         // Refresh access token every 45 minutes (token lives 1 hour)
         let mut refresh_tick = tokio::time::interval(tokio::time::Duration::from_secs(45 * 60));
@@ -46,6 +47,11 @@ impl Client {
                         self.handle_signal(sig);
                     }
                 }
+                presence = presence_rx.recv() => {
+                    if let Some(p) = presence {
+                        self.handle_presence(p);
+                    }
+                }
                 _ = voice_tick.tick() => {
                     self.voice_tick().await;
                 }
@@ -55,6 +61,30 @@ impl Client {
             }
         }
         log::info!("Mello client shutting down");
+    }
+
+    fn handle_presence(&mut self, presence: InternalPresence) {
+        if !self.voice.is_active() { return; }
+
+        let local_id = match self.nakama.current_user_id() {
+            Some(id) => id.to_string(),
+            None => return,
+        };
+
+        match presence {
+            InternalPresence::Joined { user_id } => {
+                if user_id != local_id {
+                    log::info!("Presence: member {} joined channel, adding to voice mesh", user_id);
+                    self.voice.on_member_joined(&local_id, &user_id);
+                }
+            }
+            InternalPresence::Left { user_id } => {
+                if user_id != local_id {
+                    log::info!("Presence: member {} left channel, removing from voice mesh", user_id);
+                    self.voice.on_member_left(&user_id);
+                }
+            }
+        }
     }
 
     fn handle_signal(&mut self, signal: InternalSignal) {
@@ -465,10 +495,20 @@ impl Client {
         }
     }
 
-    /// Called after successful auth + WS connect. Sets online presence.
-    async fn on_connected(&self) {
+    /// Called after successful auth + WS connect. Sets online presence and fetches ICE config.
+    async fn on_connected(&mut self) {
         if let Err(e) = self.nakama.presence_update(&PresenceStatus::Online, None).await {
             log::warn!("Failed to set online presence: {}", e);
+        }
+
+        match self.nakama.get_ice_servers().await {
+            Ok(urls) => {
+                log::info!("Fetched {} ICE server(s) from backend", urls.len());
+                self.voice.set_ice_servers(urls);
+            }
+            Err(e) => {
+                log::warn!("Failed to fetch ICE servers, using defaults: {}", e);
+            }
         }
     }
 

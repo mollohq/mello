@@ -1,4 +1,4 @@
 pub mod client;
 pub mod types;
 
-pub use client::{InternalSignal, NakamaClient};
+pub use client::{InternalPresence, InternalSignal, NakamaClient};

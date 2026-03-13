@@ -231,6 +231,10 @@ impl VoiceManager {
         self.active
     }
 
+    pub fn set_ice_servers(&mut self, urls: Vec<String>) {
+        self.mesh.set_ice_servers(urls);
+    }
+
     /// Get pending signal messages that need to be sent via Nakama
     pub fn drain_signals(&mut self) -> Vec<(String, SignalMessage)> {
         self.mesh.drain_signals()

@@ -24,6 +24,13 @@ pub struct InternalSignal {
     pub payload: String,
 }
 
+/// Channel presence change forwarded to the client run loop for voice wiring
+#[derive(Debug)]
+pub enum InternalPresence {
+    Joined { user_id: String },
+    Left { user_id: String },
+}
+
 pub struct NakamaClient {
     config: Config,
     http: reqwest::Client,
@@ -36,11 +43,14 @@ pub struct NakamaClient {
     next_cid: u64,
     signal_rx: Option<mpsc::Receiver<InternalSignal>>,
     signal_tx_template: Option<mpsc::Sender<InternalSignal>>,
+    presence_rx: Option<mpsc::Receiver<InternalPresence>>,
+    presence_tx_template: Option<mpsc::Sender<InternalPresence>>,
 }
 
 impl NakamaClient {
     pub fn new(config: Config) -> Self {
         let (sig_tx, sig_rx) = mpsc::channel(256);
+        let (pres_tx, pres_rx) = mpsc::channel(256);
         Self {
             config,
             http: reqwest::Client::new(),
@@ -53,6 +63,8 @@ impl NakamaClient {
             next_cid: 1,
             signal_rx: Some(sig_rx),
             signal_tx_template: Some(sig_tx),
+            presence_rx: Some(pres_rx),
+            presence_tx_template: Some(pres_tx),
         }
     }
 
@@ -224,9 +236,10 @@ impl NakamaClient {
             shared.write().await.local_user_id = Some(user.id.clone());
         }
         let signal_tx = self.signal_tx_template.clone().unwrap();
+        let presence_tx = self.presence_tx_template.clone().unwrap();
 
         tokio::spawn(ws_writer_task(ws_rx, write));
-        tokio::spawn(ws_reader_task(read, event_tx, shared, signal_tx));
+        tokio::spawn(ws_reader_task(read, event_tx, shared, signal_tx, presence_tx));
 
         log::info!("WebSocket connected");
         Ok(())
@@ -235,6 +248,11 @@ impl NakamaClient {
     /// Take the signal receiver (call once, from the client run loop)
     pub fn take_signal_rx(&mut self) -> Option<mpsc::Receiver<InternalSignal>> {
         self.signal_rx.take()
+    }
+
+    /// Take the presence receiver (call once, from the client run loop)
+    pub fn take_presence_rx(&mut self) -> Option<mpsc::Receiver<InternalPresence>> {
+        self.presence_rx.take()
     }
 
     async fn ws_send(&self, msg: String) -> Result<()> {
@@ -480,7 +498,44 @@ impl NakamaClient {
         Ok(parsed.crews)
     }
 
-    // --- Voice RPCs ---
+    // --- ICE / Voice RPCs ---
+
+    pub async fn get_ice_servers(&self) -> Result<Vec<String>> {
+        let resp = self.rpc("get_ice_servers", &serde_json::json!({})).await?;
+
+        #[derive(serde::Deserialize)]
+        struct IceServer {
+            urls: Vec<String>,
+            #[serde(default)]
+            username: String,
+            #[serde(default)]
+            credential: String,
+        }
+        #[derive(serde::Deserialize)]
+        struct Resp {
+            ice_servers: Vec<IceServer>,
+        }
+
+        let parsed: Resp = serde_json::from_str(&resp)?;
+        let mut urls = Vec::new();
+        for server in parsed.ice_servers {
+            if !server.username.is_empty() && !server.credential.is_empty() {
+                for url in &server.urls {
+                    if let Some(host) = url.strip_prefix("turn:") {
+                        // libdatachannel format: turn:user:pass@host:port
+                        urls.push(format!("turn:{}:{}@{}", server.username, server.credential, host));
+                    } else if let Some(host) = url.strip_prefix("turns:") {
+                        urls.push(format!("turns:{}:{}@{}", server.username, server.credential, host));
+                    } else {
+                        urls.push(url.clone());
+                    }
+                }
+            } else {
+                urls.extend(server.urls);
+            }
+        }
+        Ok(urls)
+    }
 
     pub async fn voice_join(&self, crew_id: &str) -> Result<()> {
         let payload = serde_json::json!({ "crew_id": crew_id });
@@ -716,11 +771,12 @@ async fn ws_reader_task(
     event_tx: std::sync::mpsc::Sender<Event>,
     shared: Arc<RwLock<WsShared>>,
     signal_tx: mpsc::Sender<InternalSignal>,
+    presence_tx: mpsc::Sender<InternalPresence>,
 ) {
     while let Some(msg) = read.next().await {
         match msg {
             Ok(Message::Text(text)) => {
-                handle_ws_message(&text, &event_tx, &shared, &signal_tx).await;
+                handle_ws_message(&text, &event_tx, &shared, &signal_tx, &presence_tx).await;
             }
             Ok(Message::Close(_)) => {
                 log::info!("WebSocket closed by server");
@@ -743,6 +799,7 @@ async fn handle_ws_message(
     event_tx: &std::sync::mpsc::Sender<Event>,
     shared: &Arc<RwLock<WsShared>>,
     signal_tx: &mpsc::Sender<InternalSignal>,
+    presence_tx: &mpsc::Sender<InternalPresence>,
 ) {
     let envelope: WsEnvelope = match serde_json::from_str(text) {
         Ok(e) => e,
@@ -809,23 +866,27 @@ async fn handle_ws_message(
     if let Some(presence) = envelope.channel_presence_event {
         if let Some(joins) = presence.joins {
             for p in joins {
+                let user_id = p.user_id.clone().unwrap_or_default();
                 let _ = event_tx.send(Event::MemberJoined {
                     crew_id: presence.channel_id.clone().unwrap_or_default(),
                     member: Member {
-                        id: p.user_id.clone().unwrap_or_default(),
+                        id: user_id.clone(),
                         username: p.username.clone().unwrap_or_default(),
                         display_name: p.username.unwrap_or_default(),
                         online: true,
                     },
                 });
+                let _ = presence_tx.try_send(InternalPresence::Joined { user_id });
             }
         }
         if let Some(leaves) = presence.leaves {
             for p in leaves {
+                let user_id = p.user_id.unwrap_or_default();
                 let _ = event_tx.send(Event::MemberLeft {
                     crew_id: presence.channel_id.clone().unwrap_or_default(),
-                    member_id: p.user_id.unwrap_or_default(),
+                    member_id: user_id.clone(),
                 });
+                let _ = presence_tx.try_send(InternalPresence::Left { user_id });
             }
         }
     }

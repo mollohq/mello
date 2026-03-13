@@ -8,6 +8,7 @@ PeerConnectionImpl::PeerConnectionImpl(const std::string& peer_id)
     : peer_id_(peer_id)
 {
     config_.iceServers.emplace_back("stun:stun.l.google.com:19302");
+    config_.iceServers.emplace_back("stun:stun1.l.google.com:19302");
 }
 
 PeerConnectionImpl::~PeerConnectionImpl() {

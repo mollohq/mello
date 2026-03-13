@@ -1,5 +1,6 @@
 use std::collections::HashMap;
-use std::ffi::CString;
+use std::ffi::{CStr, CString};
+use std::sync::{Arc, Mutex};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -9,9 +10,15 @@ pub enum SignalMessage {
     IceCandidate { candidate: String, sdp_mid: String, sdp_mline_index: i32 },
 }
 
+struct IceCallbackData {
+    peer_id: String,
+    queue: Arc<Mutex<Vec<(String, SignalMessage)>>>,
+}
+
 struct PeerState {
     peer: *mut mello_sys::MelloPeerConnection,
     _peer_id_c: CString,
+    ice_cb_data: *mut IceCallbackData,
 }
 
 unsafe impl Send for PeerState {}
@@ -21,6 +28,8 @@ pub struct VoiceMesh {
     local_id: String,
     peers: HashMap<String, PeerState>,
     outgoing_signals: Vec<(String, SignalMessage)>,
+    ice_signal_queue: Arc<Mutex<Vec<(String, SignalMessage)>>>,
+    ice_servers: Vec<CString>,
 }
 
 impl VoiceMesh {
@@ -29,7 +38,17 @@ impl VoiceMesh {
             local_id: String::new(),
             peers: HashMap::new(),
             outgoing_signals: Vec::new(),
+            ice_signal_queue: Arc::new(Mutex::new(Vec::new())),
+            ice_servers: Vec::new(),
         }
+    }
+
+    pub fn set_ice_servers(&mut self, urls: Vec<String>) {
+        self.ice_servers = urls
+            .into_iter()
+            .filter_map(|u| CString::new(u).ok())
+            .collect();
+        log::info!("ICE servers configured: {} entries", self.ice_servers.len());
     }
 
     pub fn init(&mut self, local_id: &str, _member_ids: &[String]) {
@@ -37,27 +56,82 @@ impl VoiceMesh {
         self.destroy_all_peers();
     }
 
+    fn make_peer(&self, ctx: *mut mello_sys::MelloContext, member_id: &str) -> Option<PeerState> {
+        let peer_id_c = CString::new(member_id).unwrap();
+        let peer = unsafe { mello_sys::mello_peer_create(ctx, peer_id_c.as_ptr()) };
+        if peer.is_null() {
+            log::error!("Failed to create peer connection for {}", member_id);
+            return None;
+        }
+
+        if !self.ice_servers.is_empty() {
+            let ptrs: Vec<*const std::os::raw::c_char> =
+                self.ice_servers.iter().map(|s| s.as_ptr()).collect();
+            unsafe {
+                mello_sys::mello_peer_set_ice_servers(
+                    peer,
+                    ptrs.as_ptr() as *mut *const std::os::raw::c_char,
+                    ptrs.len() as std::os::raw::c_int,
+                );
+            }
+        }
+
+        let cb_data = Box::into_raw(Box::new(IceCallbackData {
+            peer_id: member_id.to_string(),
+            queue: Arc::clone(&self.ice_signal_queue),
+        }));
+
+        unsafe extern "C" fn ice_callback(
+            user_data: *mut std::ffi::c_void,
+            candidate: *const mello_sys::MelloIceCandidate,
+        ) {
+            if user_data.is_null() || candidate.is_null() { return; }
+            let data = &*(user_data as *const IceCallbackData);
+            let c = &*candidate;
+            let cand = CStr::from_ptr(c.candidate).to_string_lossy().into_owned();
+            let mid = CStr::from_ptr(c.sdp_mid).to_string_lossy().into_owned();
+            let idx = c.sdp_mline_index;
+            log::debug!("ICE candidate gathered for peer {}: {}", data.peer_id, cand);
+            if let Ok(mut queue) = data.queue.lock() {
+                queue.push((
+                    data.peer_id.clone(),
+                    SignalMessage::IceCandidate {
+                        candidate: cand,
+                        sdp_mid: mid,
+                        sdp_mline_index: idx,
+                    },
+                ));
+            }
+        }
+
+        unsafe {
+            mello_sys::mello_peer_set_ice_callback(
+                peer,
+                Some(ice_callback),
+                cb_data as *mut std::ffi::c_void,
+            );
+        }
+
+        Some(PeerState { peer, _peer_id_c: peer_id_c, ice_cb_data: cb_data })
+    }
+
     /// Create a peer connection. The lower ID creates the offer (deterministic).
     pub fn create_peer(&mut self, ctx: *mut mello_sys::MelloContext, local_id: &str, member_id: &str) {
         if self.peers.contains_key(member_id) { return; }
         if local_id == member_id { return; }
 
-        let peer_id_c = CString::new(member_id).unwrap();
-        let peer = unsafe {
-            mello_sys::mello_peer_create(ctx, peer_id_c.as_ptr())
+        let state = match self.make_peer(ctx, member_id) {
+            Some(s) => s,
+            None => return,
         };
-        if peer.is_null() {
-            log::error!("Failed to create peer connection for {}", member_id);
-            return;
-        }
-
-        self.peers.insert(member_id.to_string(), PeerState { peer, _peer_id_c: peer_id_c });
+        let peer = state.peer;
+        self.peers.insert(member_id.to_string(), state);
 
         let should_offer = local_id < member_id;
         if should_offer {
             let sdp_ptr = unsafe { mello_sys::mello_peer_create_offer(peer) };
             if !sdp_ptr.is_null() {
-                let sdp = unsafe { std::ffi::CStr::from_ptr(sdp_ptr) }
+                let sdp = unsafe { CStr::from_ptr(sdp_ptr) }
                     .to_string_lossy()
                     .into_owned();
                 log::info!("Created offer for peer {}", member_id);
@@ -74,15 +148,12 @@ impl VoiceMesh {
     pub fn handle_signal(&mut self, ctx: *mut mello_sys::MelloContext, from: &str, signal: SignalMessage) {
         match signal {
             SignalMessage::Offer { sdp } => {
-                // If we don't have a peer for this sender yet, create one
                 if !self.peers.contains_key(from) {
-                    let peer_id_c = CString::new(from).unwrap();
-                    let peer = unsafe { mello_sys::mello_peer_create(ctx, peer_id_c.as_ptr()) };
-                    if peer.is_null() {
-                        log::error!("Failed to create peer for incoming offer from {}", from);
-                        return;
-                    }
-                    self.peers.insert(from.to_string(), PeerState { peer, _peer_id_c: peer_id_c });
+                    let state = match self.make_peer(ctx, from) {
+                        Some(s) => s,
+                        None => return,
+                    };
+                    self.peers.insert(from.to_string(), state);
                 }
 
                 let state = self.peers.get(from).unwrap();
@@ -91,7 +162,7 @@ impl VoiceMesh {
                     mello_sys::mello_peer_create_answer(state.peer, sdp_c.as_ptr())
                 };
                 if !answer_ptr.is_null() {
-                    let answer = unsafe { std::ffi::CStr::from_ptr(answer_ptr) }
+                    let answer = unsafe { CStr::from_ptr(answer_ptr) }
                         .to_string_lossy()
                         .into_owned();
                     log::info!("Created answer for peer {}", from);
@@ -122,13 +193,18 @@ impl VoiceMesh {
                     unsafe {
                         mello_sys::mello_peer_add_ice_candidate(state.peer, &ice);
                     }
+                    log::debug!("Added remote ICE candidate from peer {}", from);
                 }
             }
         }
     }
 
     pub fn drain_signals(&mut self) -> Vec<(String, SignalMessage)> {
-        std::mem::take(&mut self.outgoing_signals)
+        let mut signals = std::mem::take(&mut self.outgoing_signals);
+        if let Ok(mut ice_signals) = self.ice_signal_queue.lock() {
+            signals.append(&mut ice_signals);
+        }
+        signals
     }
 
     /// Send audio data to all connected peers via unreliable channel
@@ -172,6 +248,9 @@ impl VoiceMesh {
     pub fn destroy_peer(&mut self, member_id: &str) {
         if let Some(state) = self.peers.remove(member_id) {
             unsafe { mello_sys::mello_peer_destroy(state.peer); }
+            if !state.ice_cb_data.is_null() {
+                unsafe { let _ = Box::from_raw(state.ice_cb_data); }
+            }
             log::info!("Destroyed peer connection for {}", member_id);
         }
     }
@@ -179,6 +258,9 @@ impl VoiceMesh {
     pub fn destroy_all_peers(&mut self) {
         for (id, state) in self.peers.drain() {
             unsafe { mello_sys::mello_peer_destroy(state.peer); }
+            if !state.ice_cb_data.is_null() {
+                unsafe { let _ = Box::from_raw(state.ice_cb_data); }
+            }
             log::info!("Destroyed peer connection for {}", id);
         }
     }
