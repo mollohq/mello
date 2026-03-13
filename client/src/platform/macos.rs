@@ -13,12 +13,29 @@ pub fn build_menu_bar() -> Menu {
     app_menu.append(&PredefinedMenuItem::separator()).ok();
     app_menu
         .append(&MenuItem::with_id(
+            MenuId::new("check_updates"),
+            "Check for Updates…",
+            true,
+            None,
+        ))
+        .ok();
+    app_menu.append(&PredefinedMenuItem::separator()).ok();
+    app_menu
+        .append(&MenuItem::with_id(
             MenuId::new("prefs"),
             "Preferences…",
             true,
             Some("cmd+,".parse().unwrap()),
         ))
         .ok();
+    app_menu.append(&PredefinedMenuItem::separator()).ok();
+    app_menu.append(&PredefinedMenuItem::services(None)).ok();
+    app_menu.append(&PredefinedMenuItem::separator()).ok();
+    app_menu
+        .append(&PredefinedMenuItem::hide(Some("Hide Mello")))
+        .ok();
+    app_menu.append(&PredefinedMenuItem::hide_others(None)).ok();
+    app_menu.append(&PredefinedMenuItem::show_all(None)).ok();
     app_menu.append(&PredefinedMenuItem::separator()).ok();
     app_menu
         .append(&PredefinedMenuItem::quit(Some("Quit Mello")))

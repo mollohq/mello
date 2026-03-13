@@ -13,6 +13,19 @@ pub struct Settings {
     pub last_crew_id: Option<String>,
     pub start_on_boot: bool,
     pub ptt_key: Option<String>,
+    // General tab
+    pub start_minimized: bool,
+    pub close_to_tray: bool,
+    pub auto_connect: bool,
+    pub minimize_on_join: bool,
+    pub hardware_acceleration: bool,
+    // Audio tab
+    pub input_volume: f32,
+    pub output_volume: f32,
+    pub noise_suppression: bool,
+    pub echo_cancellation: bool,
+    pub input_mode: String, // "voice_activity" or "push_to_talk"
+    pub vad_threshold: f32,
 }
 
 impl Default for Settings {
@@ -26,6 +39,17 @@ impl Default for Settings {
             last_crew_id: None,
             start_on_boot: false,
             ptt_key: None,
+            start_minimized: false,
+            close_to_tray: true,
+            auto_connect: false,
+            minimize_on_join: false,
+            hardware_acceleration: true,
+            input_volume: 1.0,
+            output_volume: 1.0,
+            noise_suppression: true,
+            echo_cancellation: true,
+            input_mode: "voice_activity".into(),
+            vad_threshold: -40.0,
         }
     }
 }
@@ -72,6 +96,7 @@ mod tests {
             device_id: Some("dev-abc".into()),
             onboarding_step: 4,
             last_crew_id: None,
+            ..Default::default()
         };
         let toml_str = toml::to_string(&s).unwrap();
         let decoded: Settings = toml::from_str(&toml_str).unwrap();

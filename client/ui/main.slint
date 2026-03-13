@@ -58,6 +58,23 @@ export component MainWindow inherits Window {
     in-out property <string> selected-playback-name: "System Default";
     in-out property <bool> mic-testing: false;
     in-out property <float> mic-level: 0.0;
+    // General settings
+    in-out property <bool> settings-start-on-boot: false;
+    in-out property <bool> settings-start-minimized: false;
+    in-out property <bool> settings-close-to-tray: true;
+    in-out property <bool> settings-auto-connect: false;
+    in-out property <bool> settings-minimize-on-join: false;
+    in-out property <bool> settings-hw-acceleration: true;
+    // Audio settings
+    in-out property <float> settings-input-volume: 1.0;
+    in-out property <float> settings-output-volume: 1.0;
+    in-out property <bool> settings-noise-suppression: true;
+    in-out property <bool> settings-echo-cancellation: true;
+    in-out property <bool> settings-ptt-mode: false;
+    in property <string> settings-ptt-key-label: "Unassigned";
+    in-out property <float> settings-vad-threshold: -40.0;
+    in property <string> settings-build-version: "v0.1.0";
+    in-out property <bool> settings-show-saved: false;
 
     // --- Presence (0=online, 1=idle, 2=dnd, 3=invisible) ---
     in-out property <int> presence-status: 0;
@@ -103,6 +120,21 @@ export component MainWindow inherits Window {
     callback playback-device-selected(string);
     callback mic-test-toggled();
     callback debug-toggled();
+    // Settings change callbacks
+    callback setting-changed-start-on-boot(bool);
+    callback setting-changed-start-minimized(bool);
+    callback setting-changed-close-to-tray(bool);
+    callback setting-changed-auto-connect(bool);
+    callback setting-changed-minimize-on-join(bool);
+    callback setting-changed-hw-acceleration(bool);
+    callback setting-changed-input-volume(float);
+    callback setting-changed-output-volume(float);
+    callback setting-changed-noise-suppression(bool);
+    callback setting-changed-echo-cancellation(bool);
+    callback setting-changed-input-mode(bool);
+    callback setting-changed-vad-threshold(float);
+    callback settings-ptt-key-captured(/* key_text */ string, /* ctrl */ bool, /* alt */ bool, /* shift */ bool, /* meta */ bool);
+    callback settings-reset-defaults();
 
     // --- Onboarding callbacks ---
     callback onboarding-crew-selected(string);
@@ -367,14 +399,33 @@ export component MainWindow inherits Window {
 
     // ===================== SETTINGS OVERLAY =====================
     if settings-open: SettingsModal {
+        // Audio devices
         capture-devices: root.capture-devices;
         playback-devices: root.playback-devices;
         selected-capture-id: root.selected-capture-id;
         selected-playback-id: root.selected-playback-id;
         selected-capture-name <=> root.selected-capture-name;
         selected-playback-name <=> root.selected-playback-name;
-        mic-testing: root.mic-testing;
+        mic-testing <=> root.mic-testing;
         mic-level: root.mic-level;
+        // General
+        start-on-boot <=> root.settings-start-on-boot;
+        start-minimized <=> root.settings-start-minimized;
+        close-to-tray <=> root.settings-close-to-tray;
+        auto-connect <=> root.settings-auto-connect;
+        minimize-on-join <=> root.settings-minimize-on-join;
+        hw-acceleration <=> root.settings-hw-acceleration;
+        // Audio
+        input-volume <=> root.settings-input-volume;
+        output-volume <=> root.settings-output-volume;
+        noise-suppression <=> root.settings-noise-suppression;
+        echo-cancellation <=> root.settings-echo-cancellation;
+        ptt-mode <=> root.settings-ptt-mode;
+        ptt-key-label: root.settings-ptt-key-label;
+        vad-threshold <=> root.settings-vad-threshold;
+        build-version: root.settings-build-version;
+        show-saved <=> root.settings-show-saved;
+        // Callbacks
         close-requested => {
             root.settings-open = false;
             if root.mic-testing {
@@ -394,5 +445,20 @@ export component MainWindow inherits Window {
             root.mic-testing = !root.mic-testing;
             root.mic-test-toggled();
         }
+        // Settings change callbacks — flash "Saved ✓" on each
+        setting-changed-start-on-boot(v) => { root.settings-show-saved = true; root.setting-changed-start-on-boot(v); }
+        setting-changed-start-minimized(v) => { root.settings-show-saved = true; root.setting-changed-start-minimized(v); }
+        setting-changed-close-to-tray(v) => { root.settings-show-saved = true; root.setting-changed-close-to-tray(v); }
+        setting-changed-auto-connect(v) => { root.settings-show-saved = true; root.setting-changed-auto-connect(v); }
+        setting-changed-minimize-on-join(v) => { root.settings-show-saved = true; root.setting-changed-minimize-on-join(v); }
+        setting-changed-hw-acceleration(v) => { root.settings-show-saved = true; root.setting-changed-hw-acceleration(v); }
+        setting-changed-input-volume(v) => { root.settings-show-saved = true; root.setting-changed-input-volume(v); }
+        setting-changed-output-volume(v) => { root.settings-show-saved = true; root.setting-changed-output-volume(v); }
+        setting-changed-noise-suppression(v) => { root.settings-show-saved = true; root.setting-changed-noise-suppression(v); }
+        setting-changed-echo-cancellation(v) => { root.settings-show-saved = true; root.setting-changed-echo-cancellation(v); }
+        setting-changed-input-mode(v) => { root.settings-show-saved = true; root.setting-changed-input-mode(v); }
+        setting-changed-vad-threshold(v) => { root.settings-show-saved = true; root.setting-changed-vad-threshold(v); }
+        ptt-key-captured(key, ctrl, alt, shift, meta) => { root.settings-show-saved = true; root.settings-ptt-key-captured(key, ctrl, alt, shift, meta); }
+        reset-defaults => { root.settings-show-saved = true; root.settings-reset-defaults(); }
     }
 }

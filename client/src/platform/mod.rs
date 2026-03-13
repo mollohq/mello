@@ -4,6 +4,9 @@ pub mod hotkeys;
 
 use tray_icon::{Icon, TrayIcon, TrayIconBuilder, TrayIconEvent};
 
+#[cfg(target_os = "macos")]
+use muda::{CheckMenuItem, Menu, MenuId, MenuItem, PredefinedMenuItem};
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum VoiceState {
     Inactive,
@@ -15,20 +18,56 @@ pub enum VoiceState {
 pub struct StatusItem {
     _tray: TrayIcon,
     current_state: VoiceState,
+    #[cfg(target_os = "macos")]
+    _menu: Menu,
+    #[cfg(target_os = "macos")]
+    mute_item: CheckMenuItem,
+    #[cfg(target_os = "macos")]
+    leave_item: MenuItem,
 }
 
 impl StatusItem {
     pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
         let icon = Self::render_icon(VoiceState::Inactive);
 
-        let tray = TrayIconBuilder::new()
+        #[cfg(target_os = "macos")]
+        let (menu, mute_item, leave_item) = {
+            let menu = Menu::new();
+            menu.append(&MenuItem::with_id(MenuId::new("tray_open"), "Open Mello", true, None)).ok();
+            menu.append(&PredefinedMenuItem::separator()).ok();
+            let mute_item = CheckMenuItem::with_id(MenuId::new("tray_mute"), "Mute", false, false, None);
+            menu.append(&mute_item).ok();
+            let leave_item = MenuItem::with_id(MenuId::new("tray_leave"), "Leave Voice", false, None);
+            menu.append(&leave_item).ok();
+            menu.append(&PredefinedMenuItem::separator()).ok();
+            menu.append(&MenuItem::with_id(MenuId::new("tray_quit"), "Quit Mello", true, None)).ok();
+            (menu, mute_item, leave_item)
+        };
+
+        let mut builder = TrayIconBuilder::new()
             .with_icon(icon)
-            .with_tooltip("Mello")
-            .build()?;
+            .with_tooltip("Mello");
+
+        #[cfg(target_os = "macos")]
+        {
+            // Menu shows on right-click only; left-click is handled as
+            // a TrayIconEvent to toggle window visibility (Discord-style).
+            builder = builder
+                .with_menu(Box::new(menu.clone()))
+                .with_menu_on_left_click(false);
+        }
+
+        let tray = builder.build()?;
 
         Ok(Self {
             _tray: tray,
             current_state: VoiceState::Inactive,
+            #[cfg(target_os = "macos")]
+            _menu: menu,
+            #[cfg(target_os = "macos")]
+            mute_item,
+            #[cfg(target_os = "macos")]
+            leave_item,
         })
     }
 
@@ -38,6 +77,21 @@ impl StatusItem {
         }
         self.current_state = state;
         self._tray.set_icon(Some(Self::render_icon(state))).ok();
+
+        // Enable/disable tray context menu items based on voice state
+        #[cfg(target_os = "macos")]
+        {
+            let in_voice = matches!(state, VoiceState::Connected | VoiceState::Speaking | VoiceState::Muted);
+            self.mute_item.set_enabled(in_voice);
+            self.leave_item.set_enabled(in_voice);
+            self.mute_item.set_checked(matches!(state, VoiceState::Muted));
+        }
+    }
+
+    /// Update the mute checkmark on the tray context menu.
+    #[cfg(target_os = "macos")]
+    pub fn set_mute_checked(&mut self, muted: bool) {
+        self.mute_item.set_checked(muted);
     }
 
     /// Poll for tray icon click events.

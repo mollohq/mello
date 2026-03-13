@@ -140,7 +140,15 @@ Mello
 │
 ├── About Mello
 ├── ─────────────
+├── Check for Updates…
+├── ─────────────
 ├── Preferences…    Cmd+,
+├── ─────────────
+├── Services        ►
+├── ─────────────
+├── Hide Mello      Cmd+H
+├── Hide Others     Cmd+Opt+H
+├── Show All
 ├── ─────────────
 └── Quit Mello      Cmd+Q
 ```
@@ -603,6 +611,8 @@ HKEY_CLASSES_ROOT\mello
 The installer must write this. For development, a helper script can register it manually.
 
 ### 9.3 Handling deep links at runtime
+
+> **Status: Deferred.** Deep links are parsed but not acted upon at runtime. Joining a crew or accepting an invite via `mello://` URLs requires server-side support (invite resolution, crew join RPC) that is not yet implemented. This will be wired up once the backend endpoints are available.
 
 When Mello is already running and a `mello://` link is opened, the OS launches a second process. The second process detects it is not the single instance, passes the URL to the running instance via a named pipe / Unix socket, then exits.
 
