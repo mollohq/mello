@@ -1,14 +1,19 @@
 use muda::{Menu, MenuId, MenuItem, PredefinedMenuItem, Submenu};
 
+use crate::APP_NAME;
+
 /// Build the macOS NSMenuBar. Must be called on the main thread before
 /// the Slint event loop starts.
 pub fn build_menu_bar() -> Menu {
     let menu = Menu::new();
 
     // -- Mello --
-    let app_menu = Submenu::with_id("app", "Mello", true);
+    let app_menu = Submenu::with_id("app", APP_NAME, true);
     app_menu
-        .append(&PredefinedMenuItem::about(Some("About Mello"), None))
+        .append(&PredefinedMenuItem::about(
+            Some(&format!("About {APP_NAME}")),
+            None,
+        ))
         .ok();
     app_menu.append(&PredefinedMenuItem::separator()).ok();
     app_menu
@@ -38,7 +43,7 @@ pub fn build_menu_bar() -> Menu {
     app_menu.append(&PredefinedMenuItem::show_all(None)).ok();
     app_menu.append(&PredefinedMenuItem::separator()).ok();
     app_menu
-        .append(&PredefinedMenuItem::quit(Some("Quit Mello")))
+        .append(&PredefinedMenuItem::quit(Some(&format!("Quit {APP_NAME}"))))
         .ok();
     menu.append(&app_menu).ok();
 

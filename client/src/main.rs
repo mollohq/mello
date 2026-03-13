@@ -4,6 +4,8 @@ mod notifications;
 mod platform;
 mod settings;
 
+pub const APP_NAME: &str = "Mello";
+
 slint::include_modules!();
 
 use std::cell::{Cell, RefCell};

@@ -33,20 +33,21 @@ impl StatusItem {
         #[cfg(target_os = "macos")]
         let (menu, mute_item, leave_item) = {
             let menu = Menu::new();
-            menu.append(&MenuItem::with_id(MenuId::new("tray_open"), "Open Mello", true, None)).ok();
+            menu.append(&MenuItem::with_id(MenuId::new("tray_open"), &format!("Open {}", crate::APP_NAME), true, None)).ok();
             menu.append(&PredefinedMenuItem::separator()).ok();
             let mute_item = CheckMenuItem::with_id(MenuId::new("tray_mute"), "Mute", false, false, None);
             menu.append(&mute_item).ok();
             let leave_item = MenuItem::with_id(MenuId::new("tray_leave"), "Leave Voice", false, None);
             menu.append(&leave_item).ok();
             menu.append(&PredefinedMenuItem::separator()).ok();
-            menu.append(&MenuItem::with_id(MenuId::new("tray_quit"), "Quit Mello", true, None)).ok();
+            menu.append(&MenuItem::with_id(MenuId::new("tray_quit"), &format!("Quit {}", crate::APP_NAME), true, None)).ok();
             (menu, mute_item, leave_item)
         };
 
+        #[allow(unused_mut)]
         let mut builder = TrayIconBuilder::new()
             .with_icon(icon)
-            .with_tooltip("Mello");
+            .with_tooltip(crate::APP_NAME);
 
         #[cfg(target_os = "macos")]
         {
