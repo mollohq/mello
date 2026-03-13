@@ -15,9 +15,11 @@ fn main() {
 
     // Locate vcpkg inside the repo (external/vcpkg submodule)
     let vcpkg_root = Path::new(&manifest_dir).join("../external/vcpkg");
-    let vcpkg_root = vcpkg_root
-        .canonicalize()
-        .expect("external/vcpkg not found — run: git submodule update --init");
+    let vcpkg_root = strip_win_prefix(
+        &vcpkg_root
+            .canonicalize()
+            .expect("external/vcpkg not found — run: git submodule update --init"),
+    );
 
     // Bootstrap vcpkg if needed
     bootstrap_vcpkg(&vcpkg_root);
@@ -69,9 +71,11 @@ fn main() {
     };
     let ort_dir = Path::new(&manifest_dir)
         .join(format!("../libmello/third_party/onnxruntime/{}", ort_subdir));
-    let ort_dir = ort_dir
-        .canonicalize()
-        .expect("onnxruntime prebuilt dir not found — run scripts/setup-macos.sh (or equivalent)");
+    let ort_dir = strip_win_prefix(
+        &ort_dir
+            .canonicalize()
+            .expect("onnxruntime prebuilt dir not found — run scripts/setup-macos.sh (or equivalent)"),
+    );
     let ort_lib = ort_dir.join("lib");
     println!("cargo:rustc-link-search=native={}", ort_lib.display());
     println!("cargo:rustc-link-lib=dylib=onnxruntime");
@@ -201,6 +205,21 @@ fn bootstrap_vcpkg(vcpkg_root: &Path) {
         .expect("failed to run vcpkg bootstrap script");
 
     assert!(status.success(), "vcpkg bootstrap failed");
+}
+
+#[cfg(target_os = "windows")]
+fn strip_win_prefix(p: &Path) -> PathBuf {
+    let s = p.to_string_lossy();
+    if s.starts_with(r"\\?\") {
+        PathBuf::from(&s[4..])
+    } else {
+        p.to_path_buf()
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn strip_win_prefix(p: &Path) -> PathBuf {
+    p.to_path_buf()
 }
 
 fn find_libclang() -> Option<String> {

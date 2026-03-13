@@ -1132,7 +1132,7 @@ fn handle_event(app: &MainWindow, event: Event, settings: &Rc<RefCell<Settings>>
                 let members: Vec<MemberData> = (0..current.row_count())
                     .map(|i| {
                         let mut m = current.row_data(i).unwrap();
-                        if let Some(vm) = voice_members.iter().find(|vm| vm.user_id == m.id.as_ref()) {
+                        if let Some(vm) = voice_members.iter().find(|vm| vm.user_id == m.id.as_str()) {
                             m.speaking = vm.speaking.unwrap_or(false);
                         }
                         m
