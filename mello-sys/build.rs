@@ -62,6 +62,11 @@ fn main() {
     println!("cargo:rustc-link-lib=static=juice");
     println!("cargo:rustc-link-lib=static=usrsctp");
 
+    // dav1d AV1 decoder (statically linked via vcpkg)
+    if vcpkg_installed.join("dav1d.lib").exists() || vcpkg_installed.join("libdav1d.a").exists() {
+        println!("cargo:rustc-link-lib=static=dav1d");
+    }
+
     // ONNX Runtime (dynamic linking — static is 2GB+ and impractical)
     let ort_subdir = match (target_os.as_str(), target_arch.as_str()) {
         ("windows", _) => "onnxruntime-win-x64-1.23.2",
@@ -95,6 +100,20 @@ fn main() {
                     let _ = std::fs::copy(&src, target_dir.join(dll));
                     if let Some(parent) = target_dir.parent() {
                         let _ = std::fs::copy(&src, parent.join(dll));
+                    }
+                }
+            }
+
+            // OpenH264 Cisco prebuilt DLL (runtime-loaded, not linked)
+            let oh264_dir = Path::new(&manifest_dir).join("../libmello/third_party/openh264");
+            if oh264_dir.exists() {
+                for dll in &["openh264-2.6.0-win64.dll", "openh264-2.5.0-win64.dll", "openh264.dll"] {
+                    let src = oh264_dir.join(dll);
+                    if src.exists() {
+                        let _ = std::fs::copy(&src, target_dir.join(dll));
+                        if let Some(parent) = target_dir.parent() {
+                            let _ = std::fs::copy(&src, parent.join(dll));
+                        }
                     }
                 }
             }
@@ -133,6 +152,8 @@ fn main() {
             for lib in &[
                 "ole32", "winmm", "ksuser", "mfplat", "mfuuid", "avrt",
                 "ws2_32", "crypt32", "bcrypt", "user32", "advapi32",
+                "d3d11", "dxgi", "dxguid", "d3dcompiler",
+                "windowsapp",
             ] {
                 println!("cargo:rustc-link-lib=dylib={}", lib);
             }

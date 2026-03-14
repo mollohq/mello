@@ -151,6 +151,138 @@ MELLO_API bool mello_peer_is_connected(MelloPeerConnection* peer);
 MELLO_API int mello_peer_recv(MelloPeerConnection* peer, uint8_t* buffer, int buffer_size);
 
 /* ============================================================================
+ * Video / Streaming
+ * ============================================================================ */
+
+typedef struct MelloStreamHost MelloStreamHost;
+typedef struct MelloStreamView MelloStreamView;
+
+typedef enum MelloCodec {
+    MELLO_CODEC_H264 = 0,
+    MELLO_CODEC_AV1  = 1,
+} MelloCodec;
+
+typedef enum MelloEncoderBackend {
+    MELLO_ENCODER_NVENC = 0,
+    MELLO_ENCODER_AMF   = 1,
+    MELLO_ENCODER_QSV   = 2,
+} MelloEncoderBackend;
+
+typedef enum MelloDecoderBackend {
+    MELLO_DECODER_NVDEC    = 0,
+    MELLO_DECODER_AMF      = 1,
+    MELLO_DECODER_D3D11VA  = 2,
+    MELLO_DECODER_OPENH264 = 3,
+    MELLO_DECODER_DAV1D    = 4,
+} MelloDecoderBackend;
+
+/** Returns available encoder backends on this machine, in priority order. */
+MELLO_API int mello_get_encoders(MelloContext* ctx, MelloEncoderBackend* out, int max_count);
+
+/** Returns available decoder backends on this machine, in priority order. */
+MELLO_API int mello_get_decoders(MelloContext* ctx, MelloDecoderBackend* out, int max_count);
+
+/** Returns true if a HW encoder (NVENC/AMF/QSV) is available on this machine. */
+MELLO_API bool mello_encoder_available(MelloContext* ctx);
+
+/* ---- Capture source ---- */
+
+typedef enum MelloCaptureMode {
+    MELLO_CAPTURE_MONITOR = 0,
+    MELLO_CAPTURE_WINDOW  = 1,
+    MELLO_CAPTURE_PROCESS = 2,
+} MelloCaptureMode;
+
+typedef struct MelloCaptureSource {
+    MelloCaptureMode mode;
+    uint32_t         monitor_index;
+    void*            hwnd;
+    uint32_t         pid;
+} MelloCaptureSource;
+
+typedef struct MelloGameProcess {
+    uint32_t pid;
+    char     name[128];
+    char     exe[260];
+    bool     is_fullscreen;
+} MelloGameProcess;
+
+/** List running processes matching the bundled game list. */
+MELLO_API int mello_enumerate_games(MelloContext* ctx, MelloGameProcess* out, int max_count);
+
+/* ---- Stream config ---- */
+
+typedef struct MelloStreamConfig {
+    uint32_t width;
+    uint32_t height;
+    uint32_t fps;
+    uint32_t bitrate_kbps;
+} MelloStreamConfig;
+
+typedef void (*MelloPacketCallback)(void* user_data, const uint8_t* data, int size, bool is_keyframe, uint64_t ts);
+typedef void (*MelloFrameCallback)(void* user_data, const uint8_t* rgba, uint32_t w, uint32_t h, uint64_t ts);
+
+/** Start hosting with a specific capture source. Returns an opaque handle. */
+MELLO_API MelloStreamHost* mello_stream_start_host(
+    MelloContext*             ctx,
+    const MelloCaptureSource* source,
+    const MelloStreamConfig*  config,
+    MelloPacketCallback       on_packet,
+    void*                     user_data
+);
+
+MELLO_API void mello_stream_stop_host(MelloStreamHost* host);
+
+MELLO_API void mello_stream_request_keyframe(MelloStreamHost* host);
+
+/** Hot-reconfigure encoder bitrate without restarting the session. */
+MELLO_API MelloResult mello_stream_set_bitrate(MelloStreamHost* host, uint32_t bitrate_kbps);
+
+/** Start viewer pipeline. Returns an opaque handle. */
+MELLO_API MelloStreamView* mello_stream_start_viewer(
+    MelloContext*            ctx,
+    const MelloStreamConfig* config,
+    MelloFrameCallback       on_frame,
+    void*                    user_data
+);
+
+MELLO_API void mello_stream_stop_viewer(MelloStreamView* view);
+
+MELLO_API bool mello_stream_feed_packet(MelloStreamView* view, const uint8_t* data, int size, bool is_keyframe);
+
+/* ---- Stats ---- */
+
+typedef struct MelloStreamStats {
+    uint32_t bitrate_kbps;
+    uint32_t fps_actual;
+    uint32_t keyframes_sent;
+    uint64_t bytes_sent;
+    char     encoder_name[32];
+    char     decoder_name[32];
+} MelloStreamStats;
+
+MELLO_API void mello_stream_get_stats(MelloStreamHost* host, MelloStreamStats* stats);
+
+/* ---- Cursor ---- */
+
+/** Get latest cursor packet from host. Returns packet size, or 0 if no update. */
+MELLO_API int mello_stream_get_cursor_packet(MelloStreamHost* host, uint8_t* buf, int buf_size);
+
+/** Apply a received cursor packet on the viewer side. */
+MELLO_API MelloResult mello_stream_apply_cursor_packet(MelloStreamView* view, const uint8_t* buf, int size);
+
+typedef struct MelloCursorState {
+    int32_t  x;
+    int32_t  y;
+    bool     visible;
+    uint8_t* shape_rgba;
+    uint32_t shape_w;
+    uint32_t shape_h;
+} MelloCursorState;
+
+MELLO_API void mello_stream_get_cursor_state(MelloStreamView* view, MelloCursorState* out);
+
+/* ============================================================================
  * Debug / Diagnostics
  * ============================================================================ */
 

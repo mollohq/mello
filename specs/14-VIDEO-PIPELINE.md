@@ -541,8 +541,9 @@ public:
 
 namespace mello::video {
 
-/// Priority order: NVENC → AMF → QSV (oneVPL) → x264
+/// Priority order: NVENC → AMF → QSV (oneVPL)
 /// Probes each in order; returns first that initialises successfully.
+/// If none are available, returns Err — streaming requires hardware encode.
 std::unique_ptr<Encoder> create_best_encoder(
     const GraphicsDevice& device,
     const EncoderConfig&  config
@@ -554,7 +555,7 @@ std::vector<const char*> enumerate_encoders(const GraphicsDevice& device);
 } // namespace mello::video
 ```
 
-When x264 (software) is selected, the pipeline caps config to 720p30 before passing it to the encoder, and sets `EncoderStats::name = "x264"` so mello-core can surface the UI warning.
+If no hardware encoder is found, `create_best_encoder()` returns `Err`. mello-core surfaces a user-facing error: *"Streaming requires a hardware encoder (NVIDIA, AMD, or Intel). None was found on this machine."* No software encode fallback exists.
 
 ### 6.4 NVENC Encoder
 
@@ -676,47 +677,11 @@ private:
 } // namespace mello::video
 ```
 
-### 6.7 x264 Software Encoder (Fallback)
+### 6.7 No Software Encoder
 
-No D3D11 interop. Requires a readback from VRAM to system memory — this is the one CPU copy in the host pipeline, and it only occurs when no hardware encoder is available. Input is converted to I420 (x264's native format) before encoding.
+There is no software encoder fallback. Streaming requires a hardware encoder. This is an intentional product and licensing decision — GPL-licensed software encoders (x264, x265) are incompatible with Mello's Apache 2.0 licence, and AV1 software encoders are too slow for real-time use.
 
-Capped at 720p30 by `EncoderFactory` before `initialize()` is called.
-
-```cpp
-// src/video/encoder_x264.hpp
-
-#pragma once
-#include "encoder.hpp"
-#include <x264.h>
-
-namespace mello::video {
-
-class X264Encoder : public Encoder {
-public:
-    bool        initialize(const GraphicsDevice& device, const EncoderConfig& config) override;
-    void        shutdown() override;
-    bool        encode(ID3D11Texture2D* nv12_texture, EncodedPacket& out) override;
-    void        request_keyframe() override;
-    void        set_bitrate(uint32_t kbps) override;
-    void        get_stats(EncoderStats& out) const override;
-    bool        supports_codec(VideoCodec codec) const override { return codec == VideoCodec::H264; }
-    const char* name() const override { return "x264"; }
-
-private:
-    x264_t*         encoder_   = nullptr;
-    x264_picture_t  pic_in_{};
-    x264_picture_t  pic_out_{};
-
-    // Staging buffer for VRAM→CPU readback (only path with a CPU copy)
-    Microsoft::WRL::ComPtr<ID3D11Texture2D>    staging_tex_;
-    Microsoft::WRL::ComPtr<ID3D11DeviceContext> context_;
-
-    bool        force_idr_ = false;
-    EncoderStats stats_{};
-};
-
-} // namespace mello::video
-```
+If `EncoderFactory` exhausts all hardware candidates without success, it returns `Err`. The stream cannot start and the user is shown a clear error message. In practice this affects only machines with no GPU at all — any system with NVIDIA, AMD, or Intel graphics from the last decade has hardware H.264 encode capability.
 
 ---
 
@@ -773,7 +738,7 @@ public:
 
 namespace mello::video {
 
-/// Priority order: NVDEC → AMF → D3D11VA → Software (FFmpeg)
+/// Priority order: NVDEC → AMF → D3D11VA → OpenH264 (H.264 SW) / dav1d (AV1 SW)
 std::unique_ptr<Decoder> create_best_decoder(
     const GraphicsDevice& device,
     const DecoderConfig&  config
@@ -885,25 +850,33 @@ private:
 } // namespace mello::video
 ```
 
-### 7.6 Software Decoder (FFmpeg Fallback)
+### 7.6 Software Decoders (OpenH264 + dav1d)
 
-Last resort. FFmpeg `libavcodec` with H.264 software decode. Outputs `AVFrame` in YUV420P; converted to RGBA in CPU before upload to a staging texture for Slint.
+Two software decode libraries cover the fallback path, one per codec. Both are BSD-licensed and compatible with Mello's Apache 2.0 licence. FFmpeg is not used.
 
-Bundled with libmello. Should never be the active decoder on any modern machine.
+**OpenH264** (Cisco, BSD 2-clause) — H.264 software decode. Cisco distributes pre-built binaries and covers MPEG-LA patent licensing for those binaries. Mello must distribute the official Cisco-built `openh264.dll` rather than building from source to remain within the patent covenant.
+
+**dav1d** (VideoLAN, BSD 2-clause) — AV1 software decode. No patent concerns. Statically linkable or distributed as a DLL. Fastest available AV1 software decoder; real-time 1080p is achievable on modest hardware.
+
+Both decoders output a CPU-side frame buffer (I420/YUV420P) which is converted to RGBA and uploaded to a staging texture for the Slint handoff — the same CPU copy path used by all software decoders. The codec field in `DecoderConfig` determines which library is instantiated.
 
 ```cpp
 // src/video/decoder_software.hpp
 
 #pragma once
 #include "decoder.hpp"
+#include <wrl/client.h>
 
-extern "C" {
-#include <libavcodec/avcodec.h>
-#include <libswscale/swscale.h>
-}
+// OpenH264
+#include <wels/codec_api.h>
+
+// dav1d
+#include <dav1d/dav1d.h>
 
 namespace mello::video {
 
+/// Software decoder — OpenH264 for H.264, dav1d for AV1.
+/// Instantiated by DecoderFactory only when all hardware decoders fail.
 class SoftwareDecoder : public Decoder {
 public:
     bool             initialize(const GraphicsDevice& device, const DecoderConfig& config) override;
@@ -911,21 +884,29 @@ public:
     bool             decode(const uint8_t* data, size_t size, bool is_keyframe) override;
     ID3D11Texture2D* get_frame() override;
     bool             supports_codec(VideoCodec codec) const override { return true; }
-    const char*      name() const override { return "SW-FFmpeg"; }
+    const char*      name() const override;   // "OpenH264" or "dav1d" depending on codec
 
 private:
-    AVCodecContext*  codec_ctx_  = nullptr;
-    AVFrame*         frame_      = nullptr;
-    AVPacket*        packet_     = nullptr;
-    SwsContext*      sws_ctx_    = nullptr;
+    VideoCodec codec_ = VideoCodec::H264;
 
-    // Upload buffer: CPU RGBA → GPU texture for Slint
-    Microsoft::WRL::ComPtr<ID3D11Texture2D>         upload_tex_;
-    Microsoft::WRL::ComPtr<ID3D11DeviceContext>      context_;
+    // OpenH264 (H.264 path)
+    ISVCDecoder* oh264_decoder_ = nullptr;
+
+    // dav1d (AV1 path)
+    Dav1dContext*   dav1d_ctx_   = nullptr;
+    Dav1dPicture    dav1d_pic_{};
+
+    // CPU→GPU upload for Slint handoff
+    Microsoft::WRL::ComPtr<ID3D11Texture2D>      upload_tex_;
+    Microsoft::WRL::ComPtr<ID3D11DeviceContext>   context_;
 };
 
 } // namespace mello::video
 ```
+
+**Distribution:**
+- `openh264.dll` — must be the official Cisco pre-built binary (for patent coverage). Distributed alongside `mello.exe`.
+- `dav1d.dll` — can be built from source via vcpkg (`x64-windows` triplet) or statically linked (`x64-windows-static`). No patent obligations.
 
 ---
 
@@ -1029,14 +1010,15 @@ typedef enum MelloEncoderBackend {
     MELLO_ENCODER_NVENC  = 0,
     MELLO_ENCODER_AMF    = 1,
     MELLO_ENCODER_QSV    = 2,
-    MELLO_ENCODER_X264   = 3,   // Software fallback
+    // No software encoder — streaming requires hardware encode
 } MelloEncoderBackend;
 
 typedef enum MelloDecoderBackend {
     MELLO_DECODER_NVDEC   = 0,
     MELLO_DECODER_AMF     = 1,
     MELLO_DECODER_D3D11VA = 2,
-    MELLO_DECODER_SW      = 3,  // Software fallback
+    MELLO_DECODER_OPENH264 = 3, // OpenH264 software fallback (H.264)
+    MELLO_DECODER_DAV1D    = 4, // dav1d software fallback (AV1)
 } MelloDecoderBackend;
 
 /// Returns available encoder backends on this machine, in priority order.
@@ -1045,9 +1027,8 @@ int mello_get_encoders(MelloContext* ctx, MelloEncoderBackend* out, int max_coun
 /// Returns available decoder backends on this machine, in priority order.
 int mello_get_decoders(MelloContext* ctx, MelloDecoderBackend* out, int max_count);
 
-/// Returns whether the active encoder is software (x264).
-/// Used by mello-core to surface the UI warning.
-bool mello_encoder_is_software(MelloContext* ctx);
+/// Returns whether no hardware encoder was found (stream cannot start).
+bool mello_encoder_available(MelloContext* ctx);
 
 // ---- Capture source ----
 
@@ -1094,8 +1075,8 @@ typedef struct MelloStreamStats {
     uint32_t fps_actual;
     uint32_t keyframes_sent;
     uint64_t bytes_sent;
-    char     encoder_name[32];  // "NVENC", "AMF", "QSV-oneVPL", "x264"
-    char     decoder_name[32];  // "NVDEC", "AMF-Decode", "D3D11VA", "SW-FFmpeg"
+    char     encoder_name[32];  // "NVENC", "AMF", "QSV-oneVPL"
+    char     decoder_name[32];  // "NVDEC", "AMF-Decode", "D3D11VA", "OpenH264", "dav1d"
 } MelloStreamStats;
 
 void mello_stream_get_stats(MelloStreamHost* host, MelloStreamStats* stats);
@@ -1158,13 +1139,146 @@ libmello/src/video/
 ├── encoder_nvenc.hpp / .cpp        # NVIDIA NVENC
 ├── encoder_amf.hpp / .cpp          # AMD AMF
 ├── encoder_qsv.hpp / .cpp          # Intel oneVPL
-├── encoder_x264.hpp / .cpp         # x264 software fallback
+│   (no software encoder)           # HW required; see §6.7
 ├── decoder.hpp                     # Abstract decoder interface
 ├── decoder_factory.hpp / .cpp      # Probe + instantiate best decoder
 ├── decoder_nvdec.hpp / .cpp        # NVIDIA NVDEC
 ├── decoder_amf.hpp / .cpp          # AMD AMF decode
 ├── decoder_d3d11va.hpp / .cpp      # D3D11VA (Intel + generic HW)
-├── decoder_software.hpp / .cpp     # FFmpeg software fallback
+├── decoder_software.hpp / .cpp     # OpenH264 (H.264) + dav1d (AV1) fallback
 ├── staging_texture.hpp / .cpp      # VRAM→CPU handoff for Slint
 └── cursor.hpp / .cpp               # Cursor packet encode/decode
+```
+
+---
+
+## 13. Logging Guidelines
+
+These guidelines describe what to log and when within libmello's video pipeline. No new logging infrastructure is required — use the existing libmello log callback (registered at `mello_init()` time) and emit at the appropriate level. mello-core bridges all libmello log output into its own `tracing` subscriber (see `15-DEBUG-TELEMETRY.md`).
+
+### Log Levels
+
+| Level | When to use |
+|---|---|
+| `ERROR` | Unrecoverable failure — pipeline cannot continue without intervention |
+| `WARN` | Unexpected but recoverable event — pipeline continues but something changed |
+| `INFO` | Normal lifecycle events — start, stop, configuration, selection |
+| `DEBUG` | Diagnostic detail useful during development — periodic stats, probe results |
+
+### 13.1 D3D11 Device Initialisation
+
+**Level:** `INFO` on success, `ERROR` on failure.
+
+Log the selected GPU adapter name, available VRAM (dedicated and shared), and D3D11 feature level. If `create_d3d11_device()` fails, log the HRESULT error code and a human-readable description. Example output:
+
+```
+[video/device] D3D11 device created: adapter="NVIDIA GeForce RTX 4070" vram=8176MB feature_level=D3D_FEATURE_LEVEL_11_1
+[video/device] ERROR: D3D11 device creation failed: hr=0x887A0004 (DXGI_ERROR_DRIVER_INTERNAL_ERROR)
+```
+
+### 13.2 Encoder and Decoder Probing
+
+**Level:** `DEBUG` for each candidate probed, `INFO` for the final selection, `WARN` if falling back to software.
+
+The factory probes candidates in priority order. Log each probe attempt and its outcome so it is clear why a particular encoder/decoder was or was not selected.
+
+```
+[video/encoder] Probing NVENC... ok
+[video/encoder] Selected encoder: NVENC codec=H264 resolution=1920x1080 fps=60 bitrate=12000kbps
+```
+
+```
+[video/encoder] Probing NVENC... not available (no NVIDIA GPU)
+[video/encoder] Probing AMF... not available (AMD driver not found)
+[video/encoder] Probing QSV... not available (oneVPL runtime missing)
+[video/encoder] ERROR: No hardware encoder found — streaming unavailable on this machine
+```
+
+Same pattern applies to `DecoderFactory`.
+
+### 13.3 Capture Backend Selection
+
+**Level:** `INFO` on selection, `DEBUG` for detection reasoning.
+
+For `Monitor` and `Window` modes the backend is fixed — log the selection and source description. For `Process` mode, log the detection result that drove the decision.
+
+```
+[video/capture] Source: Monitor(0) backend=DXGI-DDI resolution=2560x1440
+[video/capture] Source: Process(pid=18432 "Minecraft") exclusive_fullscreen=false → backend=WGC hwnd=0x000A01C0
+[video/capture] Source: Process(pid=9812 "FortniteClient") exclusive_fullscreen=true output=0 → backend=DXGI-DDI
+```
+
+### 13.4 Capture Backend Hot-swap
+
+**Level:** `WARN` — this is unexpected mid-session and always worth flagging.
+
+Log the old backend, new backend, and the reason (fullscreen gained or lost).
+
+```
+[video/capture] WARN: Hot-swap triggered for pid=9812 — exclusive_fullscreen gained → switching WGC → DXGI-DDI
+[video/capture] WARN: Hot-swap triggered for pid=9812 — exclusive_fullscreen lost → switching DXGI-DDI → WGC
+[video/capture] Hot-swap complete, keyframe requested
+```
+
+### 13.5 Pipeline Start and Stop
+
+**Level:** `INFO`
+
+Log the full effective configuration on start so it is unambiguous what the pipeline is running with. Log elapsed time on stop.
+
+```
+[video/pipeline] Host pipeline starting: encoder=NVENC decoder=none codec=H264 capture=WGC res=1920x1080 fps=60 bitrate=12000kbps low_latency=true
+[video/pipeline] Host pipeline stopped: uptime=142s frames_encoded=8520 keyframes=4 bytes_out=213MB
+[video/pipeline] Viewer pipeline starting: decoder=NVDEC codec=H264 res=1920x1080
+[video/pipeline] Viewer pipeline stopped: uptime=140s frames_decoded=8390 frames_dropped=12 bytes_in=211MB
+```
+
+### 13.6 Encode and Decode Errors
+
+**Level:** `ERROR` always — these should never be silently swallowed.
+
+Log the SDK-specific error code and, where available, a description. Include the frame sequence number so errors can be correlated with packet logs in mello-core.
+
+```
+[video/encoder] ERROR: NVENC encode failed: NV_ENC_ERR_INVALID_PARAM (seq=14302)
+[video/decoder] ERROR: NVDEC decode failed: CUDA_ERROR_INVALID_VALUE (seq=9871 keyframe=false)
+[video/decoder] ERROR: D3D11VA decode failed: hr=0x88960003 (seq=2201)
+```
+
+### 13.7 Keyframe Events
+
+**Level:** `DEBUG`
+
+Log every keyframe encode/request with the reason. This is invaluable for understanding loss recovery behaviour.
+
+```
+[video/encoder] Keyframe encoded (reason=scheduled interval seq=3600)
+[video/encoder] Keyframe encoded (reason=viewer_joined viewer_id=abc123 seq=3714)
+[video/encoder] Keyframe encoded (reason=loss_recovery seq=4100)
+```
+
+### 13.8 Periodic Stats (Hot Path)
+
+**Level:** `DEBUG`
+
+Emitted every 300 frames (~5 seconds at 60fps) from the host encoder and viewer decoder. These are the primary tool for monitoring pipeline health during development. Do not log more frequently than this on the hot path.
+
+Host:
+```
+[video/stats] enc=NVENC fps=59.8 bitrate=11840kbps keyframes=2 frames=300 bytes=24.6MB
+```
+
+Viewer:
+```
+[video/stats] dec=NVDEC fps=59.6 frames=300 dropped=1 staging_copy_avg=0.4ms bytes=24.4MB
+```
+
+### 13.9 Staging Texture
+
+**Level:** `WARN` if `Map()` stalls beyond 2ms (indicates GPU pipeline pressure).
+
+Normal operation is silent. Only log when something is wrong.
+
+```
+[video/staging] WARN: Map() stall 4.2ms — possible GPU pipeline pressure (frame seq=7823)
 ```

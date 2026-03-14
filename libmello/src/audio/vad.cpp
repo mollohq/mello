@@ -27,7 +27,6 @@ bool VoiceActivityDetector::initialize(const std::string& model_path) {
         session_ = new Ort::Session(env_, model_path.c_str(), session_options_);
 #endif
 
-        // Log model metadata
         Ort::AllocatorWithDefaultOptions allocator;
         size_t num_in = session_->GetInputCount();
         size_t num_out = session_->GetOutputCount();
@@ -89,31 +88,26 @@ void VoiceActivityDetector::run_inference() {
     if (!session_) return;
 
     try {
-        // Build model input: [context(64) + chunk(512)] = 576 samples
         std::copy(context_.begin(), context_.end(), model_input_buf_.begin());
         std::copy(accum_buf_.begin(), accum_buf_.begin() + VAD_CHUNK_SIZE,
                   model_input_buf_.begin() + VAD_CONTEXT_SIZE);
 
-        // Save last 64 samples as context for next chunk
         std::copy(accum_buf_.begin() + VAD_CHUNK_SIZE - VAD_CONTEXT_SIZE,
                   accum_buf_.begin() + VAD_CHUNK_SIZE,
                   context_.begin());
 
         auto memory_info = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
 
-        // Input 0: audio [1, 576]
         std::vector<int64_t> audio_shape = {1, VAD_CONTEXT_SIZE + VAD_CHUNK_SIZE};
         Ort::Value audio_tensor = Ort::Value::CreateTensor<float>(
             memory_info, model_input_buf_.data(), model_input_buf_.size(),
             audio_shape.data(), audio_shape.size());
 
-        // Input 1: state [2, 1, 128]
         std::vector<int64_t> state_shape = {2, 1, 128};
         Ort::Value state_tensor = Ort::Value::CreateTensor<float>(
             memory_info, h_state_.data(), h_state_.size(),
             state_shape.data(), state_shape.size());
 
-        // Input 2: sr - scalar (empty shape)
         int64_t sr_val = sample_rate_;
         std::vector<int64_t> sr_shape = {};
         Ort::Value sr_tensor = Ort::Value::CreateTensor<int64_t>(
@@ -135,22 +129,8 @@ void VoiceActivityDetector::run_inference() {
 
         float prob = results[0].GetTensorData<float>()[0];
 
-        // Copy output state back for next iteration
         float* state_data = results[1].GetTensorMutableData<float>();
         std::copy(state_data, state_data + VAD_STATE_SIZE, h_state_.begin());
-
-        static int dbg_counter = 0;
-        if ((dbg_counter++ % 5) == 0) {
-            float abs_max = 0, rms = 0;
-            for (int i = 0; i < VAD_CHUNK_SIZE; ++i) {
-                float a = std::fabs(accum_buf_[i]);
-                if (a > abs_max) abs_max = a;
-                rms += accum_buf_[i] * accum_buf_[i];
-            }
-            rms = std::sqrt(rms / VAD_CHUNK_SIZE);
-            MELLO_LOG_DEBUG("vad", "prob=%.4f absmax=%.4f rms=%.6f",
-                           prob, abs_max, rms);
-        }
 
         probability_ = prob;
 

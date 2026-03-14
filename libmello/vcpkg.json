@@ -8,6 +8,8 @@
       "name": "libdatachannel",
       "features": ["ws"]
     },
-    "gtest"
+    "gtest",
+    "cppwinrt",
+    "dav1d"
   ]
 }

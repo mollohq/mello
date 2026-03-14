@@ -1,6 +1,10 @@
 #include "mello.h"
 #include "context.hpp"
 #include "transport/peer_connection_impl.hpp"
+#include "video/video_pipeline.hpp"
+#include "video/encoder_factory.hpp"
+#include "video/decoder_factory.hpp"
+#include "video/process_enum.hpp"
 #include "util/log.hpp"
 #include <cstring>
 #include <cstdlib>
@@ -16,6 +20,18 @@ static char* dup_str(const char* s) {
 static mello::Context* ctx_cast(MelloContext* ctx) {
     return reinterpret_cast<mello::Context*>(ctx);
 }
+
+struct MelloStreamHost {
+    mello::Context*          ctx;
+    MelloPacketCallback      callback;
+    void*                    user_data;
+};
+
+struct MelloStreamView {
+    mello::Context*          ctx;
+    MelloFrameCallback       callback;
+    void*                    user_data;
+};
 
 extern "C" {
 
@@ -381,6 +397,238 @@ MelloResult mello_set_audio_output(MelloContext* ctx, const char* device_id) {
             ? MELLO_OK : MELLO_ERROR_FAILED;
     } catch (...) {
         return MELLO_ERROR_FAILED;
+    }
+}
+
+/* ============================================================================
+ * Video / Streaming
+ * ============================================================================ */
+
+int mello_get_encoders(MelloContext* ctx, MelloEncoderBackend* out, int max_count) {
+    if (!ctx || !out || max_count <= 0) return 0;
+    try {
+        auto& video = ctx_cast(ctx)->video();
+        if (!video.init_device()) return 0;
+        auto names = mello::video::enumerate_encoders(video.device());
+        int count = 0;
+        for (auto* name : names) {
+            if (count >= max_count) break;
+            if (strcmp(name, "NVENC") == 0)      out[count++] = MELLO_ENCODER_NVENC;
+            else if (strcmp(name, "AMF") == 0)    out[count++] = MELLO_ENCODER_AMF;
+            else if (strcmp(name, "QSV-oneVPL") == 0) out[count++] = MELLO_ENCODER_QSV;
+            // HW only — no software encoder entries
+        }
+        return count;
+    } catch (...) { return 0; }
+}
+
+int mello_get_decoders(MelloContext* ctx, MelloDecoderBackend* out, int max_count) {
+    if (!ctx || !out || max_count <= 0) return 0;
+    try {
+        auto& video = ctx_cast(ctx)->video();
+        if (!video.init_device()) return 0;
+        auto names = mello::video::enumerate_decoders(video.device());
+        int count = 0;
+        for (auto* name : names) {
+            if (count >= max_count) break;
+            if (strcmp(name, "NVDEC") == 0)          out[count++] = MELLO_DECODER_NVDEC;
+            else if (strcmp(name, "AMF-Decode") == 0) out[count++] = MELLO_DECODER_AMF;
+            else if (strcmp(name, "D3D11VA") == 0)    out[count++] = MELLO_DECODER_D3D11VA;
+            else if (strcmp(name, "OpenH264") == 0)   out[count++] = MELLO_DECODER_OPENH264;
+            else if (strcmp(name, "dav1d") == 0)      out[count++] = MELLO_DECODER_DAV1D;
+        }
+        return count;
+    } catch (...) { return 0; }
+}
+
+bool mello_encoder_available(MelloContext* ctx) {
+    if (!ctx) return false;
+    try {
+        return ctx_cast(ctx)->video().encoder_available();
+    } catch (...) { return false; }
+}
+
+int mello_enumerate_games(MelloContext* ctx, MelloGameProcess* out, int max_count) {
+    if (!ctx || !out || max_count <= 0) return 0;
+    try {
+        auto games = mello::video::enumerate_game_processes();
+        int count = static_cast<int>(games.size());
+        if (count > max_count) count = max_count;
+        for (int i = 0; i < count; ++i) {
+            out[i].pid = games[i].pid;
+            out[i].is_fullscreen = games[i].is_fullscreen;
+            strncpy(out[i].name, games[i].name.c_str(), sizeof(out[i].name) - 1);
+            out[i].name[sizeof(out[i].name) - 1] = '\0';
+            strncpy(out[i].exe, games[i].exe.c_str(), sizeof(out[i].exe) - 1);
+            out[i].exe[sizeof(out[i].exe) - 1] = '\0';
+        }
+        return count;
+    } catch (...) { return 0; }
+}
+
+MelloStreamHost* mello_stream_start_host(
+    MelloContext*             ctx,
+    const MelloCaptureSource* source,
+    const MelloStreamConfig*  config,
+    MelloPacketCallback       on_packet,
+    void*                     user_data)
+{
+    if (!ctx || !source || !config || !on_packet) return nullptr;
+    try {
+        auto* c = ctx_cast(ctx);
+        mello::video::CaptureSourceDesc desc{};
+        switch (source->mode) {
+            case MELLO_CAPTURE_MONITOR:
+                desc.mode = mello::video::CaptureMode::Monitor;
+                desc.monitor_index = source->monitor_index;
+                break;
+            case MELLO_CAPTURE_WINDOW:
+                desc.mode = mello::video::CaptureMode::Window;
+                desc.hwnd = source->hwnd;
+                break;
+            case MELLO_CAPTURE_PROCESS:
+                desc.mode = mello::video::CaptureMode::Process;
+                desc.pid = source->pid;
+                break;
+        }
+
+        mello::video::PipelineConfig pc{};
+        pc.width        = config->width;
+        pc.height       = config->height;
+        pc.fps          = config->fps;
+        pc.bitrate_kbps = config->bitrate_kbps;
+        pc.low_latency  = true;
+
+        auto* host = new MelloStreamHost{c, on_packet, user_data};
+
+        auto cb = [host](const uint8_t* data, size_t size, bool is_keyframe, uint64_t ts) {
+            host->callback(host->user_data, data, static_cast<int>(size), is_keyframe, ts);
+        };
+
+        if (!c->video().start_host(desc, pc, cb)) {
+            delete host;
+            return nullptr;
+        }
+        return host;
+    } catch (...) { return nullptr; }
+}
+
+void mello_stream_stop_host(MelloStreamHost* host) {
+    if (!host) return;
+    try {
+        host->ctx->video().stop_host();
+        delete host;
+    } catch (...) {}
+}
+
+void mello_stream_request_keyframe(MelloStreamHost* host) {
+    if (!host) return;
+    try { host->ctx->video().request_keyframe(); } catch (...) {}
+}
+
+MelloResult mello_stream_set_bitrate(MelloStreamHost* host, uint32_t bitrate_kbps) {
+    if (!host) return MELLO_ERROR_INVALID_PARAM;
+    try {
+        host->ctx->video().set_bitrate(bitrate_kbps);
+        return MELLO_OK;
+    } catch (...) { return MELLO_ERROR_FAILED; }
+}
+
+MelloStreamView* mello_stream_start_viewer(
+    MelloContext*            ctx,
+    const MelloStreamConfig* config,
+    MelloFrameCallback       on_frame,
+    void*                    user_data)
+{
+    if (!ctx || !config || !on_frame) return nullptr;
+    try {
+        auto* c = ctx_cast(ctx);
+
+        mello::video::PipelineConfig pc{};
+        pc.width        = config->width;
+        pc.height       = config->height;
+        pc.fps          = config->fps;
+        pc.bitrate_kbps = config->bitrate_kbps;
+
+        auto* view = new MelloStreamView{c, on_frame, user_data};
+
+        auto cb = [view](const uint8_t* rgba, uint32_t w, uint32_t h, uint64_t ts) {
+            view->callback(view->user_data, rgba, w, h, ts);
+        };
+
+        if (!c->video().start_viewer(pc, cb)) {
+            delete view;
+            return nullptr;
+        }
+        return view;
+    } catch (...) { return nullptr; }
+}
+
+void mello_stream_stop_viewer(MelloStreamView* view) {
+    if (!view) return;
+    try {
+        view->ctx->video().stop_viewer();
+        delete view;
+    } catch (...) {}
+}
+
+bool mello_stream_feed_packet(MelloStreamView* view, const uint8_t* data, int size, bool is_keyframe) {
+    if (!view || !data || size <= 0) return false;
+    try {
+        return view->ctx->video().feed_packet(data, static_cast<size_t>(size), is_keyframe);
+    } catch (...) { return false; }
+}
+
+void mello_stream_get_stats(MelloStreamHost* host, MelloStreamStats* stats) {
+    if (!host || !stats) return;
+    try {
+        memset(stats, 0, sizeof(MelloStreamStats));
+        mello::video::EncoderStats es{};
+        host->ctx->video().get_stats(es);
+        stats->bitrate_kbps  = es.bitrate_kbps;
+        stats->fps_actual    = es.fps_actual;
+        stats->keyframes_sent = es.keyframes_sent;
+        stats->bytes_sent    = es.bytes_sent;
+        // encoder_name is set from the active encoder
+        // (decoder_name is viewer-side, not relevant on host handle)
+    } catch (...) {
+        memset(stats, 0, sizeof(MelloStreamStats));
+    }
+}
+
+int mello_stream_get_cursor_packet(MelloStreamHost* host, uint8_t* buf, int buf_size) {
+    if (!host || !buf || buf_size <= 0) return 0;
+    try {
+        size_t size = static_cast<size_t>(buf_size);
+        if (host->ctx->video().get_cursor_packet(buf, &size)) {
+            return static_cast<int>(size);
+        }
+        return 0;
+    } catch (...) { return 0; }
+}
+
+MelloResult mello_stream_apply_cursor_packet(MelloStreamView* view, const uint8_t* buf, int size) {
+    if (!view || !buf || size <= 0) return MELLO_ERROR_INVALID_PARAM;
+    try {
+        view->ctx->video().apply_cursor_packet(buf, static_cast<size_t>(size));
+        return MELLO_OK;
+    } catch (...) { return MELLO_ERROR_FAILED; }
+}
+
+void mello_stream_get_cursor_state(MelloStreamView* view, MelloCursorState* out) {
+    if (!view || !out) return;
+    try {
+        mello::video::CursorState cs{};
+        view->ctx->video().get_cursor_state(cs);
+        out->x       = cs.x;
+        out->y       = cs.y;
+        out->visible = cs.visible;
+        out->shape_w = cs.shape_w;
+        out->shape_h = cs.shape_h;
+        // shape_rgba pointer is not owned by this struct — caller should not free it
+        out->shape_rgba = nullptr;
+    } catch (...) {
+        memset(out, 0, sizeof(MelloCursorState));
     }
 }
 
