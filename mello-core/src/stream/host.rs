@@ -1,12 +1,13 @@
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
+use tokio::sync::mpsc;
 
 use crate::nakama::NakamaClient;
 
 use super::config::StreamConfig;
 use super::error::StreamError;
-use super::manager::{StreamManager, StreamSession};
+use super::manager::{AudioPacket, StreamManager, StreamSession, VideoPacket};
 use super::sink::PacketSink;
 use super::sink_p2p::P2PFanoutSink;
 
@@ -75,13 +76,136 @@ pub async fn request_start_stream(
     Ok(resp)
 }
 
+// ---------------------------------------------------------------------------
+// C callback trampolines
+// ---------------------------------------------------------------------------
+
+struct VideoCallbackCtx {
+    tx: mpsc::UnboundedSender<VideoPacket>,
+}
+
+struct AudioCallbackCtx {
+    tx: mpsc::UnboundedSender<AudioPacket>,
+}
+
+unsafe extern "C" fn on_video_packet(
+    user_data: *mut std::ffi::c_void,
+    data: *const u8,
+    size: i32,
+    is_keyframe: bool,
+    ts: u64,
+) {
+    let ctx = &*(user_data as *const VideoCallbackCtx);
+    let payload = std::slice::from_raw_parts(data, size as usize).to_vec();
+    let _ = ctx.tx.send(VideoPacket {
+        data: payload,
+        is_keyframe,
+        timestamp: ts,
+    });
+}
+
+unsafe extern "C" fn on_audio_packet(
+    user_data: *mut std::ffi::c_void,
+    data: *const u8,
+    size: i32,
+    ts: u64,
+) {
+    let ctx = &*(user_data as *const AudioCallbackCtx);
+    let payload = std::slice::from_raw_parts(data, size as usize).to_vec();
+    let _ = ctx.tx.send(AudioPacket {
+        data: payload,
+        timestamp: ts,
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Stream host lifecycle
+// ---------------------------------------------------------------------------
+
+/// Holds the leaked callback contexts so they can be reclaimed on drop.
+pub struct HostResources {
+    video_ctx: *mut VideoCallbackCtx,
+    audio_ctx: *mut AudioCallbackCtx,
+}
+
+unsafe impl Send for HostResources {}
+unsafe impl Sync for HostResources {}
+
+impl Drop for HostResources {
+    fn drop(&mut self) {
+        unsafe {
+            drop(Box::from_raw(self.video_ctx));
+            drop(Box::from_raw(self.audio_ctx));
+        }
+    }
+}
+
+/// Start the C++ host pipeline with callback-based packet delivery.
+/// Returns the host handle, channel receivers, and ownership of leaked callback contexts.
+pub fn start_host(
+    ctx: *mut mello_sys::MelloContext,
+    source: &mello_sys::MelloCaptureSource,
+    config: &mello_sys::MelloStreamConfig,
+) -> Result<
+    (
+        *mut mello_sys::MelloStreamHost,
+        mpsc::UnboundedReceiver<VideoPacket>,
+        mpsc::UnboundedReceiver<AudioPacket>,
+        HostResources,
+    ),
+    StreamError,
+> {
+    let (video_tx, video_rx) = mpsc::unbounded_channel();
+    let (audio_tx, audio_rx) = mpsc::unbounded_channel();
+
+    let video_cb_ctx = Box::into_raw(Box::new(VideoCallbackCtx { tx: video_tx }));
+    let audio_cb_ctx = Box::into_raw(Box::new(AudioCallbackCtx { tx: audio_tx }));
+
+    let host = unsafe {
+        mello_sys::mello_stream_start_host(
+            ctx,
+            source,
+            config,
+            Some(on_video_packet),
+            video_cb_ctx as *mut std::ffi::c_void,
+        )
+    };
+
+    if host.is_null() {
+        unsafe {
+            drop(Box::from_raw(video_cb_ctx));
+            drop(Box::from_raw(audio_cb_ctx));
+        }
+        return Err(StreamError::EncodeFailed(
+            "Failed to start stream host (libmello)".to_string(),
+        ));
+    }
+
+    unsafe {
+        mello_sys::mello_stream_set_audio_callback(
+            host,
+            Some(on_audio_packet),
+            audio_cb_ctx as *mut std::ffi::c_void,
+        );
+    }
+
+    let resources = HostResources {
+        video_ctx: video_cb_ctx,
+        audio_ctx: audio_cb_ctx,
+    };
+
+    Ok((host, video_rx, audio_rx, resources))
+}
+
 /// Create the sink and manager based on the backend response, then spawn the run loop.
-/// This is synchronous (no await) so raw pointers are safe.
 pub fn create_stream_session(
     ctx: *mut mello_sys::MelloContext,
     host: *mut mello_sys::MelloStreamHost,
     resp: &StartStreamResponse,
     config: StreamConfig,
+    video_rx: mpsc::UnboundedReceiver<VideoPacket>,
+    audio_rx: mpsc::UnboundedReceiver<AudioPacket>,
+    _resources: HostResources,
 ) -> Result<StreamSession, StreamError> {
     let session_id = resp.session_id();
     let mode = resp.mode.clone();
@@ -89,20 +213,20 @@ pub fn create_stream_session(
     let sink: Arc<dyn PacketSink> = match mode.as_str() {
         "p2p" => Arc::new(P2PFanoutSink::new()),
         "sfu" => {
-            // SfuSink::new is async but always returns Err for now.
-            // We can't call async from sync, so just return the error directly.
             return Err(StreamError::SfuNotImplemented);
         }
         other => return Err(StreamError::UnknownMode(other.to_string())),
     };
 
-    let manager = StreamManager::new(ctx, host, sink, config);
+    let manager = StreamManager::new(ctx, host, sink, config, video_rx, audio_rx);
 
     let (stop_tx, stop_rx) = tokio::sync::oneshot::channel();
     let session = StreamSession::new(session_id, mode, stop_tx);
 
     tokio::spawn(async move {
         let mut mgr = manager;
+        // _resources is moved into this task — dropped when the task exits
+        let _res = _resources;
         mgr.run(stop_rx).await;
     });
 

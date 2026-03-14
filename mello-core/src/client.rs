@@ -640,28 +640,51 @@ impl Client {
         // Step 2: sync FFI calls + session creation (raw pointers, no await)
         let config = crate::stream::StreamConfig::default();
         let ctx = self.voice.mello_ctx();
+
+        if !crate::stream::encoder_available(ctx) {
+            let msg = "Streaming requires a hardware encoder \
+                       (NVIDIA, AMD, or Intel). None was found on this machine.";
+            log::error!("{}", msg);
+            let _ = self.event_tx.send(Event::StreamError {
+                message: msg.to_string(),
+            });
+            return;
+        }
+
         let mello_config = mello_sys::MelloStreamConfig {
             width: config.width,
             height: config.height,
             fps: config.fps,
             bitrate_kbps: config.bitrate_kbps,
-            encoder: mello_sys::MelloEncoderType_MELLO_ENCODER_AUTO,
         };
 
-        let host = unsafe { mello_sys::mello_stream_start_host(ctx, &mello_config) };
-        if host.is_null() {
-            let _ = self.event_tx.send(Event::StreamError {
-                message: "Failed to start stream host (libmello)".to_string(),
-            });
-            return;
-        }
+        // TODO: let the user pick a capture source; default to primary monitor for now
+        let source = mello_sys::MelloCaptureSource {
+            mode: mello_sys::MelloCaptureMode_MELLO_CAPTURE_MONITOR,
+            monitor_index: 0,
+            hwnd: std::ptr::null_mut(),
+            pid: 0,
+        };
+
+        let (host, video_rx, audio_rx, resources) =
+            match crate::stream::host::start_host(ctx, &source, &mello_config) {
+                Ok(v) => v,
+                Err(e) => {
+                    let _ = self.event_tx.send(Event::StreamError {
+                        message: e.to_string(),
+                    });
+                    return;
+                }
+            };
 
         // Start game-audio loopback capture (WASAPI)
         unsafe {
             mello_sys::mello_stream_start_audio(host);
         }
 
-        match crate::stream::host::create_stream_session(ctx, host, &resp, config) {
+        match crate::stream::host::create_stream_session(
+            ctx, host, &resp, config, video_rx, audio_rx, resources,
+        ) {
             Ok(session) => {
                 let _ = self.event_tx.send(Event::StreamStarted {
                     crew_id: crew_id.to_string(),

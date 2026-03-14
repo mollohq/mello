@@ -1,8 +1,7 @@
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
 
-use tokio::sync::oneshot;
+use tokio::sync::{mpsc, oneshot};
 
 use super::abr::AbrController;
 use super::config::StreamConfig;
@@ -10,6 +9,17 @@ use super::fec::FecEncoder;
 use super::input::{InputPassthrough, InputPassthroughStub};
 use super::packet::{ControlSubtype, LossReport, PacketType, StreamPacket};
 use super::sink::PacketSink;
+
+pub struct VideoPacket {
+    pub data: Vec<u8>,
+    pub is_keyframe: bool,
+    pub timestamp: u64,
+}
+
+pub struct AudioPacket {
+    pub data: Vec<u8>,
+    pub timestamp: u64,
+}
 
 /// Active streaming session returned by `start_stream`.
 pub struct StreamSession {
@@ -27,7 +37,6 @@ impl StreamSession {
         }
     }
 
-    /// Stop the stream session. The manager run loop will exit.
     pub fn stop(&mut self) {
         if let Some(tx) = self.stop_tx.take() {
             let _ = tx.send(());
@@ -42,7 +51,7 @@ impl Drop for StreamSession {
 }
 
 /// The stream manager orchestrates the host-side streaming pipeline:
-/// polls encoded packets from libmello, applies FEC, and sends through the sink.
+/// receives encoded packets from libmello via channels, applies FEC, and sends through the sink.
 pub struct StreamManager {
     #[allow(dead_code)]
     ctx: *mut mello_sys::MelloContext,
@@ -55,6 +64,8 @@ pub struct StreamManager {
     config: StreamConfig,
     #[allow(dead_code)]
     input: Arc<dyn InputPassthrough>,
+    video_rx: mpsc::UnboundedReceiver<VideoPacket>,
+    audio_rx: mpsc::UnboundedReceiver<AudioPacket>,
 }
 
 unsafe impl Send for StreamManager {}
@@ -76,6 +87,8 @@ impl StreamManager {
         host: *mut mello_sys::MelloStreamHost,
         sink: Arc<dyn PacketSink>,
         config: StreamConfig,
+        video_rx: mpsc::UnboundedReceiver<VideoPacket>,
+        audio_rx: mpsc::UnboundedReceiver<AudioPacket>,
     ) -> Self {
         let fec_n = config.fec_n;
         Self {
@@ -88,6 +101,8 @@ impl StreamManager {
             abr: AbrController::new(&config),
             config,
             input: Arc::new(InputPassthroughStub),
+            video_rx,
+            audio_rx,
         }
     }
 
@@ -102,7 +117,6 @@ impl StreamManager {
     /// Main run loop — called from a dedicated tokio task after stream start.
     pub async fn run(&mut self, mut stop: oneshot::Receiver<()>) {
         log::info!("Stream manager run loop started");
-        let mut poll_interval = tokio::time::interval(Duration::from_millis(1));
 
         loop {
             tokio::select! {
@@ -110,9 +124,11 @@ impl StreamManager {
                     log::info!("Stream manager received stop signal");
                     break;
                 }
-                _ = poll_interval.tick() => {
-                    self.poll_video().await;
-                    self.poll_audio().await;
+                Some(pkt) = self.video_rx.recv() => {
+                    self.handle_video(pkt).await;
+                }
+                Some(pkt) = self.audio_rx.recv() => {
+                    self.handle_audio(pkt).await;
                 }
             }
         }
@@ -120,66 +136,28 @@ impl StreamManager {
         log::info!("Stream manager run loop exited");
     }
 
-    async fn poll_video(&mut self) {
-        let mut buf = [0u8; 256 * 1024]; // 256KB max encoded frame
-        let mut is_keyframe = false;
-
-        let n = unsafe {
-            mello_sys::mello_stream_get_video_packet(
-                self.host,
-                buf.as_mut_ptr(),
-                buf.len() as i32,
-                &mut is_keyframe,
-            )
-        };
-        if n <= 0 {
-            return;
-        }
-
-        let payload = buf[..n as usize].to_vec();
+    async fn handle_video(&mut self, pkt: VideoPacket) {
         let seq = self.video_seq.fetch_add(1, Ordering::Relaxed);
 
-        // FEC group boundary resets on keyframe
-        if is_keyframe {
+        if pkt.is_keyframe {
             self.fec_encoder.reset();
         }
 
-        // This packet is the last in the FEC group if the encoder has N-1
-        // pending already (this push will complete the group).
         let fec_group_last =
             self.fec_encoder.pending_count() == self.fec_encoder.group_size() - 1;
 
-        let packet = StreamPacket::video(payload.clone(), seq, is_keyframe, fec_group_last);
-
-        // Send the data packet
+        let packet = StreamPacket::video(pkt.data.clone(), seq, pkt.is_keyframe, fec_group_last);
         let _ = self.sink.send_video(&packet).await;
 
-        // FEC: accumulate and send parity when group completes
-        if let Some(parity) = self.fec_encoder.push(&payload) {
+        if let Some(parity) = self.fec_encoder.push(&pkt.data) {
             let fec_packet = StreamPacket::fec(parity, seq);
             let _ = self.sink.send_video(&fec_packet).await;
         }
     }
 
-    async fn poll_audio(&mut self) {
-        let mut buf = [0u8; 4000]; // Opus packets are small
-
-        let n = unsafe {
-            mello_sys::mello_stream_get_audio_packet(
-                self.host,
-                buf.as_mut_ptr(),
-                buf.len() as i32,
-            )
-        };
-        if n <= 0 {
-            return;
-        }
-
-        let payload = buf[..n as usize].to_vec();
+    async fn handle_audio(&mut self, pkt: AudioPacket) {
         let seq = self.audio_seq.fetch_add(1, Ordering::Relaxed);
-        let packet = StreamPacket::audio(payload, seq);
-
-        // No FEC for audio — Opus has built-in PLC
+        let packet = StreamPacket::audio(pkt.data, seq);
         let _ = self.sink.send_audio(&packet).await;
     }
 

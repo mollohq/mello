@@ -25,6 +25,8 @@ struct MelloStreamHost {
     mello::Context*          ctx;
     MelloPacketCallback      callback;
     void*                    user_data;
+    MelloAudioPacketCallback audio_callback;
+    void*                    audio_user_data;
 };
 
 struct MelloStreamView {
@@ -498,7 +500,7 @@ MelloStreamHost* mello_stream_start_host(
         pc.bitrate_kbps = config->bitrate_kbps;
         pc.low_latency  = true;
 
-        auto* host = new MelloStreamHost{c, on_packet, user_data};
+        auto* host = new MelloStreamHost{c, on_packet, user_data, nullptr, nullptr};
 
         auto cb = [host](const uint8_t* data, size_t size, bool is_keyframe, uint64_t ts) {
             host->callback(host->user_data, data, static_cast<int>(size), is_keyframe, ts);
@@ -533,6 +535,16 @@ MelloResult mello_stream_set_bitrate(MelloStreamHost* host, uint32_t bitrate_kbp
     } catch (...) { return MELLO_ERROR_FAILED; }
 }
 
+void mello_stream_set_audio_callback(
+    MelloStreamHost* host,
+    MelloAudioPacketCallback callback,
+    void* user_data)
+{
+    if (!host) return;
+    host->audio_callback = callback;
+    host->audio_user_data = user_data;
+}
+
 MelloResult mello_stream_start_audio(MelloStreamHost* host) {
     if (!host) return MELLO_ERROR_INVALID_PARAM;
     MELLO_LOG_WARN("stream", "mello_stream_start_audio: stub (loopback not yet implemented)");
@@ -542,11 +554,6 @@ MelloResult mello_stream_start_audio(MelloStreamHost* host) {
 void mello_stream_stop_audio(MelloStreamHost* host) {
     (void)host;
     MELLO_LOG_INFO("stream", "mello_stream_stop_audio: stub");
-}
-
-int mello_stream_get_audio_packet(MelloStreamHost* host, uint8_t* buffer, int buffer_size) {
-    (void)host; (void)buffer; (void)buffer_size;
-    return 0;
 }
 
 MelloStreamView* mello_stream_start_viewer(
