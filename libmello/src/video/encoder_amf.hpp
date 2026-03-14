@@ -3,14 +3,11 @@
 
 #ifdef _WIN32
 #include <wrl/client.h>
-
-#ifdef MELLO_HAS_AMF
 #include <AMF/core/Factory.h>
 #include <AMF/core/Context.h>
 #include <AMF/core/Compute.h>
 #include <AMF/components/VideoEncoderVCE.h>
 #include <AMF/components/VideoEncoderAV1.h>
-#endif
 
 namespace mello::video {
 
@@ -30,11 +27,9 @@ public:
 private:
     HMODULE dll_ = nullptr;
 
-#ifdef MELLO_HAS_AMF
     amf::AMFFactory*     factory_  = nullptr;
     amf::AMFContextPtr   context_;
     amf::AMFComponentPtr encoder_;
-#endif
 
     VideoCodec    codec_     = VideoCodec::H264;
     bool          force_idr_ = false;

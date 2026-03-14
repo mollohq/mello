@@ -210,6 +210,15 @@ typedef struct MelloGameProcess {
 /** List running processes matching the bundled game list. */
 MELLO_API int mello_enumerate_games(MelloContext* ctx, MelloGameProcess* out, int max_count);
 
+typedef struct MelloWindow {
+    void*    hwnd;
+    char     title[256];
+    uint32_t pid;
+} MelloWindow;
+
+/** List visible top-level windows suitable for capture. Returns count written. */
+MELLO_API int mello_enumerate_windows(MelloContext* ctx, MelloWindow* out, int max_count);
+
 /* ---- Stream config ---- */
 
 typedef struct MelloStreamConfig {

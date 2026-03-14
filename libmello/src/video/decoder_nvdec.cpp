@@ -30,7 +30,6 @@ bool NvdecDecoder::initialize(const GraphicsDevice& device, const DecoderConfig&
     device_->GetImmediateContext(&context_);
     config_ = config;
 
-#ifdef MELLO_HAS_NVENC
     cuda_dll_  = load_cuda_dll();
     cuvid_dll_ = load_nvcuvid_dll();
     if (!cuda_dll_ || !cuvid_dll_) {
@@ -120,14 +119,9 @@ bool NvdecDecoder::initialize(const GraphicsDevice& device, const DecoderConfig&
         config.codec == VideoCodec::H264 ? "H264" : "AV1",
         config.width, config.height);
     return true;
-#else
-    MELLO_LOG_DEBUG(TAG, "Probing NVDEC... SDK headers not available at build time");
-    return false;
-#endif
 }
 
 void NvdecDecoder::shutdown() {
-#ifdef MELLO_HAS_NVENC
     if (parser_) {
         auto cuvidDestroyVideoParser_fn = reinterpret_cast<decltype(&cuvidDestroyVideoParser)>(
             GetProcAddress(cuvid_dll_, "cuvidDestroyVideoParser"));
@@ -147,14 +141,12 @@ void NvdecDecoder::shutdown() {
     }
     if (cuvid_dll_) { FreeLibrary(cuvid_dll_); cuvid_dll_ = nullptr; }
     if (cuda_dll_)  { FreeLibrary(cuda_dll_);  cuda_dll_ = nullptr; }
-#endif
     frame_tex_.Reset();
     staging_tex_.Reset();
     nv12_buf_.clear();
 }
 
 bool NvdecDecoder::decode(const uint8_t* data, size_t size, bool is_keyframe) {
-#ifdef MELLO_HAS_NVENC
     if (!parser_) return false;
     (void)is_keyframe;
 
@@ -177,13 +169,8 @@ bool NvdecDecoder::decode(const uint8_t* data, size_t size, bool is_keyframe) {
     }
 
     return frame_ready_;
-#else
-    (void)data; (void)size; (void)is_keyframe;
-    return false;
-#endif
 }
 
-#ifdef MELLO_HAS_NVENC
 int CUDAAPI NvdecDecoder::handle_video_sequence(void* user, CUVIDEOFORMAT* fmt) {
     auto* self = static_cast<NvdecDecoder*>(user);
 
@@ -279,7 +266,6 @@ int CUDAAPI NvdecDecoder::handle_picture_display(void* user, CUVIDPARSERDISPINFO
     self->frame_ready_ = true;
     return 1;
 }
-#endif
 
 ID3D11Texture2D* NvdecDecoder::get_frame() {
     return frame_tex_.Get();

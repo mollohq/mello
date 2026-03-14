@@ -38,24 +38,40 @@ bool NvencEncoder::initialize(const GraphicsDevice& device, const EncoderConfig&
         return false;
     }
 
-#ifdef MELLO_HAS_NVENC
     auto pfn_create = reinterpret_cast<PFN_NvEncodeAPICreateInstance>(
         GetProcAddress(dll_, "NvEncodeAPICreateInstance"));
+    auto pfn_max_ver = reinterpret_cast<PFN_NvEncodeAPIGetMaxSupportedVersion>(
+        GetProcAddress(dll_, "NvEncodeAPIGetMaxSupportedVersion"));
     if (!pfn_create) {
-        MELLO_LOG_DEBUG(TAG, "Probing NVENC... not available (entry point not found)");
+        MELLO_LOG_WARN(TAG, "NVENC: NvEncodeAPICreateInstance entry point not found");
         FreeLibrary(dll_); dll_ = nullptr;
         return false;
     }
+
+    if (pfn_max_ver) {
+        uint32_t driver_packed = 0;
+        pfn_max_ver(&driver_packed);
+        uint32_t drv_major = driver_packed >> 4;
+        uint32_t drv_minor = driver_packed & 0xF;
+        MELLO_LOG_INFO(TAG, "NVENC: SDK header v%d.%d, driver supports up to v%u.%u",
+            NVENCAPI_MAJOR_VERSION, NVENCAPI_MINOR_VERSION, drv_major, drv_minor);
+    }
+
+    MELLO_LOG_INFO(TAG, "NVENC: NVENCAPI_VERSION=0x%08X FnListVer=0x%08X SessionVer=0x%08X",
+        (uint32_t)NVENCAPI_VERSION, (uint32_t)NV_ENCODE_API_FUNCTION_LIST_VER,
+        (uint32_t)NV_ENC_OPEN_ENCODE_SESSION_EX_PARAMS_VER);
+    MELLO_LOG_INFO(TAG, "NVENC: ConfigVer=0x%08X InitVer=0x%08X PresetCfgVer=0x%08X RcVer=0x%08X",
+        (uint32_t)NV_ENC_CONFIG_VER, (uint32_t)NV_ENC_INITIALIZE_PARAMS_VER,
+        (uint32_t)NV_ENC_PRESET_CONFIG_VER, (uint32_t)NV_ENC_RC_PARAMS_VER);
 
     fn_ = {NV_ENCODE_API_FUNCTION_LIST_VER};
     NVENCSTATUS status = pfn_create(&fn_);
     if (status != NV_ENC_SUCCESS) {
-        MELLO_LOG_DEBUG(TAG, "Probing NVENC... NvEncodeAPICreateInstance failed: %d", status);
+        MELLO_LOG_WARN(TAG, "NVENC: NvEncodeAPICreateInstance failed: %d", status);
         FreeLibrary(dll_); dll_ = nullptr;
         return false;
     }
 
-    // Open encode session with D3D11 device
     NV_ENC_OPEN_ENCODE_SESSION_EX_PARAMS session_params = {NV_ENC_OPEN_ENCODE_SESSION_EX_PARAMS_VER};
     session_params.device     = device_.Get();
     session_params.deviceType = NV_ENC_DEVICE_TYPE_DIRECTX;
@@ -63,43 +79,87 @@ bool NvencEncoder::initialize(const GraphicsDevice& device, const EncoderConfig&
 
     status = fn_.nvEncOpenEncodeSessionEx(&session_params, &encoder_);
     if (status != NV_ENC_SUCCESS) {
-        MELLO_LOG_DEBUG(TAG, "Probing NVENC... nvEncOpenEncodeSessionEx failed: %d", status);
+        MELLO_LOG_WARN(TAG, "NVENC: nvEncOpenEncodeSessionEx failed: %d (apiVersion=0x%08X)",
+            status, (uint32_t)NVENCAPI_VERSION);
         FreeLibrary(dll_); dll_ = nullptr;
         return false;
     }
+    MELLO_LOG_INFO(TAG, "NVENC: session opened OK (handle=%p)", encoder_);
 
-    // Initialize encoder
-    GUID codec_guid = (config.codec == VideoCodec::AV1) ? NV_ENC_CODEC_AV1_GUID : NV_ENC_CODEC_H264_GUID;
-    GUID preset_guid = NV_ENC_PRESET_P1_GUID; // Lowest latency
+    // Verify session with simplest possible call
+    uint32_t guid_count = 0;
+    status = fn_.nvEncGetEncodeGUIDCount(encoder_, &guid_count);
+    MELLO_LOG_INFO(TAG, "NVENC: nvEncGetEncodeGUIDCount => status=%d count=%u", status, guid_count);
 
-    NV_ENC_PRESET_CONFIG preset_config = {NV_ENC_PRESET_CONFIG_VER, {NV_ENC_CONFIG_VER}};
-    status = fn_.nvEncGetEncodePresetConfigEx(encoder_, codec_guid, preset_guid,
-                                              NV_ENC_TUNING_INFO_ULTRA_LOW_LATENCY, &preset_config);
-    if (status != NV_ENC_SUCCESS) {
-        MELLO_LOG_WARN(TAG, "nvEncGetEncodePresetConfigEx failed: %d, trying default", status);
-        status = fn_.nvEncGetEncodePresetConfig(encoder_, codec_guid, preset_guid, &preset_config);
+    if (status == NV_ENC_SUCCESS && guid_count > 0) {
+        std::vector<GUID> guids(guid_count);
+        uint32_t actual = 0;
+        fn_.nvEncGetEncodeGUIDs(encoder_, guids.data(), guid_count, &actual);
+        for (uint32_t i = 0; i < actual; i++) {
+            const char* name = "unknown";
+            if (guids[i] == NV_ENC_CODEC_H264_GUID) name = "H264";
+            else if (guids[i] == NV_ENC_CODEC_HEVC_GUID) name = "HEVC";
+            else if (guids[i] == NV_ENC_CODEC_AV1_GUID) name = "AV1";
+            MELLO_LOG_INFO(TAG, "NVENC:   codec[%u] = %s", i, name);
+        }
     }
 
-    NV_ENC_CONFIG enc_config = preset_config.presetCfg;
-    enc_config.version = NV_ENC_CONFIG_VER;
+    GUID codec_guid = (config.codec == VideoCodec::AV1) ? NV_ENC_CODEC_AV1_GUID : NV_ENC_CODEC_H264_GUID;
 
-    // Rate control: CBR, no B-frames, low-latency
+    // Try preset config with multiple combos (diagnostic)
+    NV_ENC_PRESET_CONFIG preset_config;
+    memset(&preset_config, 0, sizeof(preset_config));
+    preset_config.version = NV_ENC_PRESET_CONFIG_VER;
+    preset_config.presetCfg.version = NV_ENC_CONFIG_VER;
+
+    struct { GUID preset; NV_ENC_TUNING_INFO tuning; const char* label; } attempts[] = {
+        { NV_ENC_PRESET_P4_GUID, NV_ENC_TUNING_INFO_ULTRA_LOW_LATENCY, "P4+ULL" },
+        { NV_ENC_PRESET_P4_GUID, NV_ENC_TUNING_INFO_LOW_LATENCY,       "P4+LL"  },
+        { NV_ENC_PRESET_P1_GUID, NV_ENC_TUNING_INFO_LOW_LATENCY,       "P1+LL"  },
+    };
+
+    bool have_preset = false;
+    GUID used_preset = NV_ENC_PRESET_P4_GUID;
+    for (auto& a : attempts) {
+        memset(&preset_config, 0, sizeof(preset_config));
+        preset_config.version = NV_ENC_PRESET_CONFIG_VER;
+        preset_config.presetCfg.version = NV_ENC_CONFIG_VER;
+        status = fn_.nvEncGetEncodePresetConfigEx(encoder_, codec_guid, a.preset, a.tuning, &preset_config);
+        MELLO_LOG_INFO(TAG, "NVENC: PresetConfigEx(%s) => %d", a.label, status);
+        if (status == NV_ENC_SUCCESS) {
+            have_preset = true;
+            used_preset = a.preset;
+            break;
+        }
+    }
+
+    NV_ENC_CONFIG enc_config;
+    if (have_preset) {
+        enc_config = preset_config.presetCfg;
+    } else {
+        MELLO_LOG_WARN(TAG, "NVENC: all preset queries failed — building config from scratch");
+        memset(&enc_config, 0, sizeof(enc_config));
+    }
+    enc_config.version = NV_ENC_CONFIG_VER;
+    enc_config.rcParams.version = NV_ENC_RC_PARAMS_VER;
     enc_config.rcParams.rateControlMode = NV_ENC_PARAMS_RC_CBR;
     enc_config.rcParams.averageBitRate  = config.bitrate_kbps * 1000;
     enc_config.rcParams.maxBitRate      = config.bitrate_kbps * 1000;
-    enc_config.rcParams.vbvBufferSize   = config.bitrate_kbps * 1000; // 1-second VBV
-    enc_config.frameIntervalP = 1; // No B-frames
+    enc_config.rcParams.vbvBufferSize   = config.bitrate_kbps * 1000;
+    enc_config.frameIntervalP = 1;
     enc_config.gopLength      = config.keyframe_interval;
 
     if (config.codec == VideoCodec::H264) {
-        enc_config.encodeCodecConfig.h264Config.idrPeriod       = config.keyframe_interval;
+        enc_config.encodeCodecConfig.h264Config.idrPeriod         = config.keyframe_interval;
         enc_config.encodeCodecConfig.h264Config.enableIntraRefresh = 0;
-        enc_config.encodeCodecConfig.h264Config.repeatSPSPPS    = 1;
+        enc_config.encodeCodecConfig.h264Config.repeatSPSPPS      = 1;
     }
 
-    NV_ENC_INITIALIZE_PARAMS init_params = {NV_ENC_INITIALIZE_PARAMS_VER};
+    NV_ENC_INITIALIZE_PARAMS init_params;
+    memset(&init_params, 0, sizeof(init_params));
+    init_params.version       = NV_ENC_INITIALIZE_PARAMS_VER;
     init_params.encodeGUID    = codec_guid;
-    init_params.presetGUID    = preset_guid;
+    init_params.presetGUID    = used_preset;
     init_params.encodeWidth   = config.width;
     init_params.encodeHeight  = config.height;
     init_params.darWidth      = config.width;
@@ -110,15 +170,22 @@ bool NvencEncoder::initialize(const GraphicsDevice& device, const EncoderConfig&
     init_params.encodeConfig  = &enc_config;
     init_params.tuningInfo    = NV_ENC_TUNING_INFO_ULTRA_LOW_LATENCY;
 
+    MELLO_LOG_INFO(TAG, "NVENC: nvEncInitializeEncoder %ux%u (initVer=0x%08X cfgVer=0x%08X rcVer=0x%08X)",
+        config.width, config.height, init_params.version, enc_config.version, enc_config.rcParams.version);
+
     status = fn_.nvEncInitializeEncoder(encoder_, &init_params);
     if (status != NV_ENC_SUCCESS) {
-        MELLO_LOG_ERROR(TAG, "nvEncInitializeEncoder failed: %d", status);
+        MELLO_LOG_WARN(TAG, "NVENC: nvEncInitializeEncoder failed: %d — retrying with LOW_LATENCY tuning", status);
+        init_params.tuningInfo = NV_ENC_TUNING_INFO_LOW_LATENCY;
+        status = fn_.nvEncInitializeEncoder(encoder_, &init_params);
+    }
+    if (status != NV_ENC_SUCCESS) {
+        MELLO_LOG_ERROR(TAG, "NVENC: nvEncInitializeEncoder final failure: %d", status);
         fn_.nvEncDestroyEncoder(encoder_); encoder_ = nullptr;
         FreeLibrary(dll_); dll_ = nullptr;
         return false;
     }
 
-    // Create output bitstream buffer
     NV_ENC_CREATE_BITSTREAM_BUFFER bstream = {NV_ENC_CREATE_BITSTREAM_BUFFER_VER};
     status = fn_.nvEncCreateBitstreamBuffer(encoder_, &bstream);
     if (status != NV_ENC_SUCCESS) {
@@ -129,21 +196,14 @@ bool NvencEncoder::initialize(const GraphicsDevice& device, const EncoderConfig&
     }
     out_buf_ = bstream.bitstreamBuffer;
 
-    MELLO_LOG_DEBUG(TAG, "Probing NVENC... ok");
     MELLO_LOG_INFO(TAG, "Selected encoder: NVENC codec=%s resolution=%ux%u fps=%u bitrate=%ukbps",
         config.codec == VideoCodec::H264 ? "H264" : "AV1",
         config.width, config.height, config.fps, config.bitrate_kbps);
 
     return true;
-#else
-    MELLO_LOG_DEBUG(TAG, "Probing NVENC... SDK headers not available at build time");
-    FreeLibrary(dll_); dll_ = nullptr;
-    return false;
-#endif
 }
 
 void NvencEncoder::shutdown() {
-#ifdef MELLO_HAS_NVENC
     if (encoder_) {
         if (reg_res_) {
             fn_.nvEncUnregisterResource(encoder_, reg_res_);
@@ -156,7 +216,6 @@ void NvencEncoder::shutdown() {
         fn_.nvEncDestroyEncoder(encoder_);
         encoder_ = nullptr;
     }
-#endif
     if (dll_) {
         FreeLibrary(dll_);
         dll_ = nullptr;
@@ -164,7 +223,6 @@ void NvencEncoder::shutdown() {
 }
 
 bool NvencEncoder::encode(ID3D11Texture2D* nv12_texture, EncodedPacket& out) {
-#ifdef MELLO_HAS_NVENC
     if (!encoder_) return false;
 
     // Register the input texture if this is the first frame or texture changed.
@@ -259,10 +317,6 @@ bool NvencEncoder::encode(ID3D11Texture2D* nv12_texture, EncodedPacket& out) {
     }
 
     return true;
-#else
-    (void)nv12_texture; (void)out;
-    return false;
-#endif
 }
 
 void NvencEncoder::request_keyframe() {
@@ -271,7 +325,6 @@ void NvencEncoder::request_keyframe() {
 }
 
 void NvencEncoder::set_bitrate(uint32_t kbps) {
-#ifdef MELLO_HAS_NVENC
     if (encoder_) {
         NV_ENC_RECONFIGURE_PARAMS reconfig = {NV_ENC_RECONFIGURE_PARAMS_VER};
         NV_ENC_CONFIG enc_config = {NV_ENC_CONFIG_VER};
@@ -291,7 +344,6 @@ void NvencEncoder::set_bitrate(uint32_t kbps) {
         reconfig.forceIDR = 1;
         fn_.nvEncReconfigureEncoder(encoder_, &reconfig);
     }
-#endif
     config_.bitrate_kbps = kbps;
 }
 

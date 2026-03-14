@@ -3,12 +3,9 @@
 
 #ifdef _WIN32
 #include <wrl/client.h>
-
-#ifdef MELLO_HAS_AMF
 #include <AMF/core/Factory.h>
 #include <AMF/core/Context.h>
 #include <AMF/components/VideoDecoderUVD.h>
-#endif
 
 namespace mello::video {
 
@@ -26,11 +23,9 @@ public:
 private:
     HMODULE dll_ = nullptr;
 
-#ifdef MELLO_HAS_AMF
     amf::AMFFactory*     factory_ = nullptr;
     amf::AMFContextPtr   context_;
     amf::AMFComponentPtr decoder_;
-#endif
 
     DecoderConfig config_{};
     Microsoft::WRL::ComPtr<ID3D11Device>    device_;

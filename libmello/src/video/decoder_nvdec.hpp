@@ -3,11 +3,8 @@
 
 #ifdef _WIN32
 #include <wrl/client.h>
-
-#ifdef MELLO_HAS_NVENC
 #include <nvcuvid.h>
 #include <cuviddec.h>
-#endif
 
 namespace mello::video {
 
@@ -23,8 +20,6 @@ public:
     static bool is_available();
 
 private:
-#ifdef MELLO_HAS_NVENC
-    // CUDA handles loaded at runtime
     typedef int (*CuInit_t)(unsigned int);
     typedef int (*CuDeviceGet_t)(int*, int);
     typedef int (*CuCtxCreate_t)(void**, unsigned int, int);
@@ -37,20 +32,17 @@ private:
     CUvideodecoder decoder_ = nullptr;
     CUvideoparser  parser_  = nullptr;
 
-    // Callback stubs for the parser
     static int CUDAAPI handle_video_sequence(void* user, CUVIDEOFORMAT* fmt);
     static int CUDAAPI handle_picture_decode(void* user, CUVIDPICPARAMS* pic);
     static int CUDAAPI handle_picture_display(void* user, CUVIDPARSERDISPINFO* disp);
 
     bool frame_ready_ = false;
-#endif
 
     DecoderConfig config_{};
     Microsoft::WRL::ComPtr<ID3D11Device>    device_;
     Microsoft::WRL::ComPtr<ID3D11DeviceContext> context_;
     Microsoft::WRL::ComPtr<ID3D11Texture2D> frame_tex_;
 
-    // CPU staging for CUDA->D3D11 transfer
     Microsoft::WRL::ComPtr<ID3D11Texture2D> staging_tex_;
     std::vector<uint8_t> nv12_buf_;
 };

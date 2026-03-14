@@ -32,33 +32,12 @@ if(WIN32)
 endif()
 
 # ---- Hardware SDK detection (header-only, runtime-loaded) ----
+# SDK headers are bundled in the repo (MIT / Apache 2.0 — redistributable).
+# All three encoder/decoder backends are always compiled; runtime LoadLibrary
+# determines which are actually available on the user's machine.
 set(MELLO_NV_CODEC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/nv-codec/include)
-set(MELLO_AMF_DIR      ${CMAKE_CURRENT_SOURCE_DIR}/third_party/amf/include)
-set(MELLO_VPL_DIR      ${CMAKE_CURRENT_SOURCE_DIR}/third_party/vpl/include)
-
-if(EXISTS "${MELLO_NV_CODEC_DIR}/nvEncodeAPI.h")
-    set(MELLO_HAS_NVENC TRUE)
-    message(STATUS "[mello] NVIDIA Video Codec SDK found — NVENC/NVDEC enabled")
-else()
-    set(MELLO_HAS_NVENC FALSE)
-    message(STATUS "[mello] NVIDIA Video Codec SDK not found — NVENC/NVDEC disabled (see third_party/nv-codec/README.md)")
-endif()
-
-if(EXISTS "${MELLO_AMF_DIR}/AMF/core/Factory.h")
-    set(MELLO_HAS_AMF TRUE)
-    message(STATUS "[mello] AMD AMF SDK found — AMF encode/decode enabled")
-else()
-    set(MELLO_HAS_AMF FALSE)
-    message(STATUS "[mello] AMD AMF SDK not found — AMF disabled (see third_party/amf/README.md)")
-endif()
-
-if(EXISTS "${MELLO_VPL_DIR}/vpl/mfx.h")
-    set(MELLO_HAS_QSV TRUE)
-    message(STATUS "[mello] Intel oneVPL found — QSV enabled")
-else()
-    set(MELLO_HAS_QSV FALSE)
-    message(STATUS "[mello] Intel oneVPL not found — QSV disabled (see third_party/vpl/README.md)")
-endif()
+set(MELLO_AMF_DIR      ${CMAKE_CURRENT_SOURCE_DIR}/third_party)
+set(MELLO_VPL_DIR      ${CMAKE_CURRENT_SOURCE_DIR}/third_party)
 
 # OpenH264 decoder: Cisco prebuilt DLL loaded at runtime (not linked).
 # Always enabled — the DLL is shipped next to the binary.
@@ -240,21 +219,13 @@ add_library(mello STATIC ${MELLO_SOURCES})
 
 target_compile_definitions(mello PRIVATE MELLO_EXPORTS NOMINMAX)
 
-if(MELLO_HAS_NVENC)
-    target_compile_definitions(mello PRIVATE MELLO_HAS_NVENC)
-    target_include_directories(mello PRIVATE ${MELLO_NV_CODEC_DIR})
-    # NVDEC headers (cuviddec.h) require CUDA SDK headers
-    if(DEFINED ENV{CUDA_PATH})
-        target_include_directories(mello PRIVATE "$ENV{CUDA_PATH}/include")
-    endif()
-endif()
-if(MELLO_HAS_AMF)
-    target_compile_definitions(mello PRIVATE MELLO_HAS_AMF)
-    target_include_directories(mello PRIVATE ${MELLO_AMF_DIR})
-endif()
-if(MELLO_HAS_QSV)
-    target_compile_definitions(mello PRIVATE MELLO_HAS_QSV)
-    target_include_directories(mello PRIVATE ${MELLO_VPL_DIR})
+target_include_directories(mello PRIVATE
+    ${MELLO_NV_CODEC_DIR}
+    ${MELLO_AMF_DIR}
+    ${MELLO_VPL_DIR}
+)
+if(DEFINED ENV{CUDA_PATH})
+    target_include_directories(mello PRIVATE "$ENV{CUDA_PATH}/include")
 endif()
 if(MELLO_HAS_DAV1D)
     target_compile_definitions(mello PRIVATE MELLO_HAS_DAV1D)

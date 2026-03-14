@@ -60,17 +60,21 @@ bool VideoPipeline::start_host(const CaptureSourceDesc& source,
     }
 
 #ifdef _WIN32
+    // NV12 requires even dimensions (chroma plane is half-res)
+    uint32_t enc_w = capture_->width()  & ~1u;
+    uint32_t enc_h = capture_->height() & ~1u;
+
     // 2. Color converter
     converter_ = std::make_unique<ColorConverter>();
-    if (!converter_->initialize(device_, capture_->width(), capture_->height())) {
+    if (!converter_->initialize(device_, enc_w, enc_h)) {
         MELLO_LOG_ERROR(TAG, "Failed to initialize color converter");
         return false;
     }
 
     // 3. Encoder
     EncoderConfig enc_config{};
-    enc_config.width         = capture_->width();
-    enc_config.height        = capture_->height();
+    enc_config.width         = enc_w;
+    enc_config.height        = enc_h;
     enc_config.fps           = config.fps;
     enc_config.bitrate_kbps  = config.bitrate_kbps;
     enc_config.keyframe_interval = 120;

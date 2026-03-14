@@ -3,10 +3,7 @@
 
 #ifdef _WIN32
 #include <wrl/client.h>
-
-#ifdef MELLO_HAS_NVENC
 #include <nvEncodeAPI.h>
-#endif
 
 namespace mello::video {
 
@@ -26,13 +23,11 @@ public:
 private:
     HMODULE dll_ = nullptr;
 
-#ifdef MELLO_HAS_NVENC
     NV_ENCODE_API_FUNCTION_LIST fn_{};
     void*                       encoder_   = nullptr;
     NV_ENC_REGISTERED_PTR       reg_res_   = nullptr;
     NV_ENC_OUTPUT_PTR           out_buf_   = nullptr;
     NV_ENC_INPUT_PTR            mapped_input_ = nullptr;
-#endif
 
     bool  force_idr_  = false;
     EncoderConfig config_{};

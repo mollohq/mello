@@ -7,6 +7,7 @@ fn main() {
     println!("cargo:rerun-if-changed=../libmello/src/");
     println!("cargo:rerun-if-changed=../libmello/CMakeLists.txt");
     println!("cargo:rerun-if-changed=../libmello/vcpkg.json");
+    println!("cargo:rerun-if-changed=../libmello/third_party/");
     println!("cargo:rerun-if-env-changed=LIBCLANG_PATH");
 
     let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap();

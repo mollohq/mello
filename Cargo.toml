@@ -4,6 +4,8 @@ members = [
     "client",
     "mello-core",
     "mello-sys",
+    "tools/stream-host",
+    "tools/stream-viewer",
 ]
 
 [workspace.package]

@@ -467,6 +467,22 @@ int mello_enumerate_games(MelloContext* ctx, MelloGameProcess* out, int max_coun
     } catch (...) { return 0; }
 }
 
+int mello_enumerate_windows(MelloContext* ctx, MelloWindow* out, int max_count) {
+    if (!ctx || !out || max_count <= 0) return 0;
+    try {
+        auto windows = mello::video::enumerate_visible_windows();
+        int count = static_cast<int>(windows.size());
+        if (count > max_count) count = max_count;
+        for (int i = 0; i < count; ++i) {
+            out[i].hwnd = windows[i].hwnd;
+            out[i].pid  = windows[i].pid;
+            strncpy(out[i].title, windows[i].title.c_str(), sizeof(out[i].title) - 1);
+            out[i].title[sizeof(out[i].title) - 1] = '\0';
+        }
+        return count;
+    } catch (...) { return 0; }
+}
+
 MelloStreamHost* mello_stream_start_host(
     MelloContext*             ctx,
     const MelloCaptureSource* source,

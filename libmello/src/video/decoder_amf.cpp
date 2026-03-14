@@ -3,12 +3,10 @@
 #include "../util/log.hpp"
 #include <Windows.h>
 
-#ifdef MELLO_HAS_AMF
 #include <AMF/core/Data.h>
 #include <AMF/core/Surface.h>
 #include <AMF/core/Buffer.h>
 typedef AMF_RESULT(AMF_CDECL_CALL* AMFInit_Fn)(amf_uint64, amf::AMFFactory**);
-#endif
 
 namespace mello::video {
 
@@ -32,7 +30,6 @@ bool AmfDecoder::initialize(const GraphicsDevice& device, const DecoderConfig& c
         return false;
     }
 
-#ifdef MELLO_HAS_AMF
     auto amf_init = reinterpret_cast<AMFInit_Fn>(GetProcAddress(dll_, AMF_INIT_FUNCTION_NAME));
     if (!amf_init) {
         MELLO_LOG_DEBUG(TAG, "Probing AMF decode... init function not found");
@@ -100,25 +97,17 @@ bool AmfDecoder::initialize(const GraphicsDevice& device, const DecoderConfig& c
         config.codec == VideoCodec::H264 ? "H264" : "AV1",
         config.width, config.height);
     return true;
-#else
-    MELLO_LOG_DEBUG(TAG, "Probing AMF decode... SDK headers not available at build time");
-    FreeLibrary(dll_); dll_ = nullptr;
-    return false;
-#endif
 }
 
 void AmfDecoder::shutdown() {
-#ifdef MELLO_HAS_AMF
     if (decoder_) { decoder_->Terminate(); decoder_.Release(); }
     if (context_) { context_->Terminate(); context_.Release(); }
     factory_ = nullptr;
-#endif
     frame_tex_.Reset();
     if (dll_) { FreeLibrary(dll_); dll_ = nullptr; }
 }
 
 bool AmfDecoder::decode(const uint8_t* data, size_t size, bool is_keyframe) {
-#ifdef MELLO_HAS_AMF
     if (!decoder_) return false;
     (void)is_keyframe;
 
@@ -155,10 +144,6 @@ bool AmfDecoder::decode(const uint8_t* data, size_t size, bool is_keyframe) {
     }
 
     return true;
-#else
-    (void)data; (void)size; (void)is_keyframe;
-    return false;
-#endif
 }
 
 ID3D11Texture2D* AmfDecoder::get_frame() {

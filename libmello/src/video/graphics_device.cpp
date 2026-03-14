@@ -29,15 +29,36 @@ GraphicsDevice create_d3d11_device() {
         return {GraphicsBackend::D3D11, nullptr};
     }
 
-    ComPtr<IDXGIAdapter1> adapter;
-    hr = factory->EnumAdapters1(0, &adapter);
-    if (FAILED(hr)) {
-        MELLO_LOG_ERROR(TAG, "EnumAdapters1 failed: hr=0x%08X", hr);
-        return {GraphicsBackend::D3D11, nullptr};
+    // Enumerate all adapters, prefer discrete GPU (most VRAM) for HW encoding
+    ComPtr<IDXGIAdapter1> best_adapter;
+    DXGI_ADAPTER_DESC1 best_desc{};
+    SIZE_T best_vram = 0;
+
+    for (UINT i = 0; ; ++i) {
+        ComPtr<IDXGIAdapter1> candidate;
+        if (factory->EnumAdapters1(i, &candidate) == DXGI_ERROR_NOT_FOUND) break;
+
+        DXGI_ADAPTER_DESC1 desc{};
+        candidate->GetDesc1(&desc);
+
+        if (desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) continue;
+
+        char name[128]{};
+        WideCharToMultiByte(CP_UTF8, 0, desc.Description, -1, name, sizeof(name), nullptr, nullptr);
+        MELLO_LOG_INFO(TAG, "  adapter[%u]: \"%s\" vram=%lluMB",
+            i, name, desc.DedicatedVideoMemory / (1024 * 1024));
+
+        if (desc.DedicatedVideoMemory > best_vram) {
+            best_vram = desc.DedicatedVideoMemory;
+            best_adapter = candidate;
+            best_desc = desc;
+        }
     }
 
-    DXGI_ADAPTER_DESC1 desc{};
-    adapter->GetDesc1(&desc);
+    if (!best_adapter) {
+        MELLO_LOG_ERROR(TAG, "No suitable DXGI adapter found");
+        return {GraphicsBackend::D3D11, nullptr};
+    }
 
     D3D_FEATURE_LEVEL feature_levels[] = {
         D3D_FEATURE_LEVEL_11_1,
@@ -47,12 +68,9 @@ GraphicsDevice create_d3d11_device() {
     ComPtr<ID3D11Device> device;
     D3D_FEATURE_LEVEL achieved_level{};
     UINT flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT;
-#ifndef NDEBUG
-    flags |= D3D11_CREATE_DEVICE_DEBUG;
-#endif
 
     hr = D3D11CreateDevice(
-        adapter.Get(),
+        best_adapter.Get(),
         D3D_DRIVER_TYPE_UNKNOWN,
         nullptr,
         flags,
@@ -70,14 +88,13 @@ GraphicsDevice create_d3d11_device() {
     }
 
     char adapter_name[128]{};
-    WideCharToMultiByte(CP_UTF8, 0, desc.Description, -1, adapter_name, sizeof(adapter_name), nullptr, nullptr);
+    WideCharToMultiByte(CP_UTF8, 0, best_desc.Description, -1, adapter_name, sizeof(adapter_name), nullptr, nullptr);
 
     MELLO_LOG_INFO(TAG, "D3D11 device created: adapter=\"%s\" vram=%lluMB feature_level=0x%04X",
         adapter_name,
-        desc.DedicatedVideoMemory / (1024 * 1024),
+        best_desc.DedicatedVideoMemory / (1024 * 1024),
         achieved_level);
 
-    // AddRef because we're handing out a raw pointer that the pipeline will own
     device->AddRef();
     return {GraphicsBackend::D3D11, device.Get()};
 }

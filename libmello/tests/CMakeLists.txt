@@ -5,6 +5,7 @@ add_executable(mello_tests
     test_noise_suppressor.cpp
     test_jitter_buffer.cpp
     test_vad.cpp
+    test_video_pipeline.cpp
 )
 
 target_link_libraries(mello_tests PRIVATE

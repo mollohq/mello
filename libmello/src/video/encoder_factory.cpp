@@ -17,24 +17,30 @@ std::unique_ptr<Encoder> create_best_encoder(
 {
 #ifdef _WIN32
     if (NvencEncoder::is_available()) {
+        MELLO_LOG_INFO(TAG, "NVENC DLL found, attempting init...");
         auto enc = std::make_unique<NvencEncoder>();
         if (enc->initialize(device, config)) return enc;
+        MELLO_LOG_WARN(TAG, "NVENC: DLL present but initialize() failed");
     } else {
-        MELLO_LOG_DEBUG(TAG, "Probing NVENC... not available (no NVIDIA GPU)");
+        MELLO_LOG_INFO(TAG, "NVENC: nvEncodeAPI64.dll not found — skipping");
     }
 
     if (AmfEncoder::is_available()) {
+        MELLO_LOG_INFO(TAG, "AMF DLL found, attempting init...");
         auto enc = std::make_unique<AmfEncoder>();
         if (enc->initialize(device, config)) return enc;
+        MELLO_LOG_WARN(TAG, "AMF: DLL present but initialize() failed");
     } else {
-        MELLO_LOG_DEBUG(TAG, "Probing AMF... not available (AMD driver not found)");
+        MELLO_LOG_INFO(TAG, "AMF: amfrt64.dll not found — skipping");
     }
 
     if (QsvEncoder::is_available()) {
+        MELLO_LOG_INFO(TAG, "QSV DLL found, attempting init...");
         auto enc = std::make_unique<QsvEncoder>();
         if (enc->initialize(device, config)) return enc;
+        MELLO_LOG_WARN(TAG, "QSV: DLL present but initialize() failed");
     } else {
-        MELLO_LOG_DEBUG(TAG, "Probing QSV... not available (oneVPL runtime missing)");
+        MELLO_LOG_INFO(TAG, "QSV: libvpl.dll not found — skipping");
     }
 
     MELLO_LOG_ERROR(TAG, "No hardware encoder available (NVENC, AMF, QSV all failed)");

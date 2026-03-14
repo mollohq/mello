@@ -3,12 +3,25 @@
 
 #ifdef _WIN32
 #include <wrl/client.h>
-
-#ifdef MELLO_HAS_QSV
 #include <vpl/mfx.h>
-#endif
 
 namespace mello::video {
+
+struct MfxDispatchFn {
+    decltype(&MFXLoad)                          Load;
+    decltype(&MFXUnload)                        Unload;
+    decltype(&MFXCreateConfig)                  CreateConfig;
+    decltype(&MFXSetConfigFilterProperty)       SetConfigFilterProperty;
+    decltype(&MFXCreateSession)                 CreateSession;
+    decltype(&MFXClose)                         Close;
+    decltype(&MFXVideoCORE_SetHandle)           CoreSetHandle;
+    decltype(&MFXVideoCORE_SyncOperation)       CoreSyncOp;
+    decltype(&MFXVideoENCODE_Init)              EncInit;
+    decltype(&MFXVideoENCODE_Reset)             EncReset;
+    decltype(&MFXVideoENCODE_Close)             EncClose;
+    decltype(&MFXVideoENCODE_GetVideoParam)     EncGetVideoParam;
+    decltype(&MFXVideoENCODE_EncodeFrameAsync)  EncFrameAsync;
+};
 
 class QsvEncoder : public Encoder {
 public:
@@ -24,13 +37,13 @@ public:
     static bool is_available();
 
 private:
-#ifdef MELLO_HAS_QSV
+    HMODULE    dll_     = nullptr;
+    MfxDispatchFn fn_{};
     mfxLoader  loader_  = nullptr;
     mfxSession session_ = nullptr;
     mfxVideoParam     video_params_{};
     mfxBitstream      bitstream_{};
     std::vector<uint8_t> bs_buf_;
-#endif
 
     bool  force_idr_ = false;
     EncoderConfig config_{};

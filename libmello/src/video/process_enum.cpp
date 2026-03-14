@@ -4,9 +4,11 @@
 #ifdef _WIN32
 #include "capture_process.hpp"
 #include <Windows.h>
+#include <dwmapi.h>
 #include <TlHelp32.h>
 #include <algorithm>
 #include <cctype>
+#pragma comment(lib, "dwmapi.lib")
 #endif
 
 namespace mello::video {
@@ -81,10 +83,59 @@ std::vector<GameProcess> enumerate_game_processes() {
     return result;
 }
 
+static BOOL CALLBACK enum_windows_cb(HWND hwnd, LPARAM lparam) {
+    auto* result = reinterpret_cast<std::vector<VisibleWindow>*>(lparam);
+
+    if (!IsWindowVisible(hwnd)) return TRUE;
+    if (hwnd == GetDesktopWindow()) return TRUE;
+    if (hwnd == GetShellWindow()) return TRUE;
+
+    // Skip tool windows (floating toolbars, tooltips, etc.)
+    LONG_PTR ex_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+    if (ex_style & WS_EX_TOOLWINDOW) return TRUE;
+
+    // Skip cloaked UWP windows (hidden Store apps, etc.)
+    BOOL cloaked = FALSE;
+    DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED, &cloaked, sizeof(cloaked));
+    if (cloaked) return TRUE;
+
+    int title_len = GetWindowTextLengthW(hwnd);
+    if (title_len <= 0) return TRUE;
+
+    std::wstring wtitle(title_len + 1, L'\0');
+    GetWindowTextW(hwnd, wtitle.data(), title_len + 1);
+
+    char title_utf8[256]{};
+    WideCharToMultiByte(CP_UTF8, 0, wtitle.c_str(), -1, title_utf8, sizeof(title_utf8), nullptr, nullptr);
+
+    DWORD pid = 0;
+    GetWindowThreadProcessId(hwnd, &pid);
+
+    VisibleWindow vw;
+    vw.hwnd  = hwnd;
+    vw.title = title_utf8;
+    vw.pid   = pid;
+    result->push_back(std::move(vw));
+
+    return TRUE;
+}
+
+std::vector<VisibleWindow> enumerate_visible_windows() {
+    std::vector<VisibleWindow> result;
+    EnumWindows(enum_windows_cb, reinterpret_cast<LPARAM>(&result));
+    MELLO_LOG_DEBUG(TAG, "Enumerated %zu visible windows", result.size());
+    return result;
+}
+
 #else
 
 std::vector<GameProcess> enumerate_game_processes() {
     MELLO_LOG_WARN(TAG, "Game process enumeration not supported on this platform");
+    return {};
+}
+
+std::vector<VisibleWindow> enumerate_visible_windows() {
+    MELLO_LOG_WARN(TAG, "Window enumeration not supported on this platform");
     return {};
 }
 

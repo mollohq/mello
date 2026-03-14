@@ -4,11 +4,9 @@
 #include <Windows.h>
 #include <chrono>
 
-#ifdef MELLO_HAS_AMF
 #include <AMF/core/Data.h>
 #include <AMF/core/Surface.h>
 typedef AMF_RESULT(AMF_CDECL_CALL* AMFInit_Fn)(amf_uint64, amf::AMFFactory**);
-#endif
 
 namespace mello::video {
 
@@ -37,7 +35,6 @@ bool AmfEncoder::initialize(const GraphicsDevice& device, const EncoderConfig& c
         return false;
     }
 
-#ifdef MELLO_HAS_AMF
     auto amf_init = reinterpret_cast<AMFInit_Fn>(GetProcAddress(dll_, AMF_INIT_FUNCTION_NAME));
     if (!amf_init) {
         MELLO_LOG_DEBUG(TAG, "Probing AMF... init function not found");
@@ -105,24 +102,16 @@ bool AmfEncoder::initialize(const GraphicsDevice& device, const EncoderConfig& c
         config.codec == VideoCodec::H264 ? "H264" : "AV1",
         config.width, config.height, config.fps, config.bitrate_kbps);
     return true;
-#else
-    MELLO_LOG_DEBUG(TAG, "Probing AMF... SDK headers not available at build time");
-    FreeLibrary(dll_); dll_ = nullptr;
-    return false;
-#endif
 }
 
 void AmfEncoder::shutdown() {
-#ifdef MELLO_HAS_AMF
     if (encoder_) { encoder_->Terminate(); encoder_.Release(); }
     if (context_) { context_->Terminate(); context_.Release(); }
     factory_ = nullptr;
-#endif
     if (dll_) { FreeLibrary(dll_); dll_ = nullptr; }
 }
 
 bool AmfEncoder::encode(ID3D11Texture2D* nv12_texture, EncodedPacket& out) {
-#ifdef MELLO_HAS_AMF
     if (!encoder_) return false;
 
     // Wrap the D3D11 NV12 texture as an AMF surface (zero-copy)
@@ -184,10 +173,6 @@ bool AmfEncoder::encode(ID3D11Texture2D* nv12_texture, EncodedPacket& out) {
     }
 
     return true;
-#else
-    (void)nv12_texture; (void)out;
-    return false;
-#endif
 }
 
 void AmfEncoder::request_keyframe() {
@@ -196,12 +181,10 @@ void AmfEncoder::request_keyframe() {
 }
 
 void AmfEncoder::set_bitrate(uint32_t kbps) {
-#ifdef MELLO_HAS_AMF
     if (encoder_ && codec_ == VideoCodec::H264) {
         encoder_->SetProperty(AMF_VIDEO_ENCODER_TARGET_BITRATE, static_cast<amf_int64>(kbps * 1000));
         encoder_->SetProperty(AMF_VIDEO_ENCODER_PEAK_BITRATE, static_cast<amf_int64>(kbps * 1000));
     }
-#endif
     config_.bitrate_kbps = kbps;
 }
 
