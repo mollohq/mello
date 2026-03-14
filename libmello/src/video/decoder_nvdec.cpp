@@ -16,6 +16,33 @@ static HMODULE load_cuda_dll() {
     return dll;
 }
 
+// CUDA_MEMCPY2D layout (no cuda.h available — matched to CUDA driver API struct)
+struct CudaMemcpy2D {
+    size_t            srcXInBytes;
+    size_t            srcY;
+    unsigned int      srcMemoryType; // 1=HOST, 2=DEVICE, 3=ARRAY
+    const void*       srcHost;
+    unsigned long long srcDevice;
+    void*             srcArray;
+    size_t            srcPitch;
+    size_t            dstXInBytes;
+    size_t            dstY;
+    unsigned int      dstMemoryType;
+    void*             dstHost;
+    unsigned long long dstDevice;
+    void*             dstArray;
+    size_t            dstPitch;
+    size_t            WidthInBytes;
+    size_t            Height;
+};
+
+typedef int (*CuMemcpy2D_t)(const CudaMemcpy2D*);
+typedef int (*CuGfxD3D11Register_t)(void** resource, void* d3dResource, unsigned int flags);
+typedef int (*CuGfxMapResources_t)(unsigned int count, void** resources, void* stream);
+typedef int (*CuGfxUnmapResources_t)(unsigned int count, void** resources, void* stream);
+typedef int (*CuGfxGetMappedArray_t)(void** array, void* resource, unsigned int arrayIndex, unsigned int mipLevel);
+typedef int (*CuGfxUnregister_t)(void* resource);
+
 bool NvdecDecoder::is_available() {
     HMODULE cuvid = load_nvcuvid_dll();
     HMODULE cuda  = load_cuda_dll();
@@ -95,29 +122,64 @@ bool NvdecDecoder::initialize(const GraphicsDevice& device, const DecoderConfig&
         return false;
     }
 
-    // Allocate output textures
-    nv12_buf_.resize(static_cast<size_t>(config.width) * config.height * 3 / 2);
+    // CUDA can't interop with NV12 planar textures. Instead, use R8_UNORM
+    // sized w × (h*3/2) — same memory layout as NV12 (Y then UV), but a
+    // single-plane format CUDA can register and copy to directly.
+    auto cuGfxRegister = reinterpret_cast<CuGfxD3D11Register_t>(
+        GetProcAddress(cuda_dll_, "cuGraphicsD3D11RegisterResource"));
 
-    D3D11_TEXTURE2D_DESC tex_desc{};
-    tex_desc.Width  = config.width;
-    tex_desc.Height = config.height;
-    tex_desc.MipLevels = 1;
-    tex_desc.ArraySize = 1;
-    tex_desc.Format = DXGI_FORMAT_NV12;
-    tex_desc.SampleDesc.Count = 1;
-    tex_desc.Usage = D3D11_USAGE_DEFAULT;
-    tex_desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+    if (cuGfxRegister) {
+        D3D11_TEXTURE2D_DESC tex_desc{};
+        tex_desc.Width  = config.width;
+        tex_desc.Height = config.height + config.height / 2; // Y + UV
+        tex_desc.MipLevels = 1;
+        tex_desc.ArraySize = 1;
+        tex_desc.Format = DXGI_FORMAT_R8_UNORM;
+        tex_desc.SampleDesc.Count = 1;
+        tex_desc.Usage = D3D11_USAGE_DEFAULT;
+        tex_desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
 
-    HRESULT hr = device_->CreateTexture2D(&tex_desc, nullptr, &frame_tex_);
-    if (FAILED(hr)) {
-        MELLO_LOG_ERROR(TAG, "NVDEC: Failed to create output texture: hr=0x%08X", hr);
-        return false;
+        HRESULT hr = device_->CreateTexture2D(&tex_desc, nullptr, &frame_tex_);
+        if (SUCCEEDED(hr)) {
+            int rc = cuGfxRegister(&cuda_gfx_resource_, frame_tex_.Get(), 0);
+            if (rc == 0 && cuda_gfx_resource_) {
+                use_interop_ = true;
+                MELLO_LOG_INFO(TAG, "NVDEC: CUDA-D3D11 interop enabled (zero-copy R8 %ux%u)",
+                    tex_desc.Width, tex_desc.Height);
+            } else {
+                MELLO_LOG_WARN(TAG, "NVDEC: cuGraphicsD3D11RegisterResource failed (%d), trying NV12 fallback", rc);
+                cuda_gfx_resource_ = nullptr;
+                frame_tex_.Reset();
+            }
+        } else {
+            MELLO_LOG_WARN(TAG, "NVDEC: R8 texture creation failed (0x%08X), trying NV12 fallback", hr);
+        }
+    }
+
+    if (!use_interop_) {
+        D3D11_TEXTURE2D_DESC tex_desc{};
+        tex_desc.Width  = config.width;
+        tex_desc.Height = config.height;
+        tex_desc.MipLevels = 1;
+        tex_desc.ArraySize = 1;
+        tex_desc.Format = DXGI_FORMAT_NV12;
+        tex_desc.SampleDesc.Count = 1;
+        tex_desc.Usage = D3D11_USAGE_DEFAULT;
+        tex_desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+
+        HRESULT hr = device_->CreateTexture2D(&tex_desc, nullptr, &frame_tex_);
+        if (FAILED(hr)) {
+            MELLO_LOG_ERROR(TAG, "NVDEC: Failed to create output texture: hr=0x%08X", hr);
+            return false;
+        }
+        nv12_buf_.resize(static_cast<size_t>(config.width) * config.height * 3 / 2);
     }
 
     MELLO_LOG_DEBUG(TAG, "Probing NVDEC... ok");
-    MELLO_LOG_INFO(TAG, "Selected decoder: NVDEC codec=%s resolution=%ux%u",
+    MELLO_LOG_INFO(TAG, "Selected decoder: NVDEC codec=%s resolution=%ux%u interop=%s",
         config.codec == VideoCodec::H264 ? "H264" : "AV1",
-        config.width, config.height);
+        config.width, config.height,
+        use_interop_ ? "true" : "false");
     return true;
 }
 
@@ -134,6 +196,13 @@ void NvdecDecoder::shutdown() {
         if (cuvidDestroyDecoder_fn) cuvidDestroyDecoder_fn(decoder_);
         decoder_ = nullptr;
     }
+    if (cuda_gfx_resource_) {
+        auto cuGfxUnreg = reinterpret_cast<CuGfxUnregister_t>(
+            GetProcAddress(cuda_dll_, "cuGraphicsUnregisterResource"));
+        if (cuGfxUnreg) cuGfxUnreg(cuda_gfx_resource_);
+        cuda_gfx_resource_ = nullptr;
+        use_interop_ = false;
+    }
     if (cu_context_) {
         auto cuCtxDestroy = reinterpret_cast<CuCtxDestroy_t>(GetProcAddress(cuda_dll_, "cuCtxDestroy_v2"));
         if (cuCtxDestroy) cuCtxDestroy(cu_context_);
@@ -142,7 +211,6 @@ void NvdecDecoder::shutdown() {
     if (cuvid_dll_) { FreeLibrary(cuvid_dll_); cuvid_dll_ = nullptr; }
     if (cuda_dll_)  { FreeLibrary(cuda_dll_);  cuda_dll_ = nullptr; }
     frame_tex_.Reset();
-    staging_tex_.Reset();
     nv12_buf_.clear();
 }
 
@@ -218,7 +286,6 @@ int CUDAAPI NvdecDecoder::handle_picture_display(void* user, CUVIDPARSERDISPINFO
     auto* self = static_cast<NvdecDecoder*>(user);
     if (!self->decoder_) return 0;
 
-    // Map the decoded frame from CUDA memory
     CUVIDPROCPARAMS proc{};
     proc.progressive_frame = disp->progressive_frame;
     proc.top_field_first   = disp->top_field_first;
@@ -237,56 +304,59 @@ int CUDAAPI NvdecDecoder::handle_picture_display(void* user, CUVIDPARSERDISPINFO
                                           &dev_ptr, &pitch, &proc);
     if (res != CUDA_SUCCESS) return 0;
 
-    // Copy from CUDA device memory to CPU buffer, then upload to D3D11 texture.
-    // This requires cuMemcpyDtoH which needs the CUDA driver API.
-    // For a fully optimized path, CUDA-D3D11 interop (cuD3D11GetDevice / register resource)
-    // would skip the CPU copy entirely.
+    uint32_t w = self->config_.width;
+    uint32_t h = self->config_.height;
 
-    // Single cuMemcpy2D to replace 1000+ per-row cuMemcpyDtoH calls.
-    // CUDA_MEMCPY2D layout from CUDA driver API (no cuda.h available):
-    struct CudaMemcpy2D {
-        size_t            srcXInBytes;
-        size_t            srcY;
-        unsigned int      srcMemoryType; // CU_MEMORYTYPE_DEVICE = 2
-        // 4 bytes implicit padding on x64
-        const void*       srcHost;
-        unsigned long long srcDevice;
-        void*             srcArray;
-        size_t            srcPitch;
-        size_t            dstXInBytes;
-        size_t            dstY;
-        unsigned int      dstMemoryType; // CU_MEMORYTYPE_HOST = 1
-        // 4 bytes implicit padding on x64
-        void*             dstHost;
-        unsigned long long dstDevice;
-        void*             dstArray;
-        size_t            dstPitch;
-        size_t            WidthInBytes;
-        size_t            Height;
-    };
+    if (self->use_interop_) {
+        // Zero-copy: NVDEC CUDA memory → R8_UNORM frame_tex_ (single copy, GPU-only)
+        auto cuGfxMap = reinterpret_cast<CuGfxMapResources_t>(
+            GetProcAddress(self->cuda_dll_, "cuGraphicsMapResources"));
+        auto cuGfxUnmap = reinterpret_cast<CuGfxUnmapResources_t>(
+            GetProcAddress(self->cuda_dll_, "cuGraphicsUnmapResources"));
+        auto cuGfxGetArray = reinterpret_cast<CuGfxGetMappedArray_t>(
+            GetProcAddress(self->cuda_dll_, "cuGraphicsSubResourceGetMappedArray"));
+        auto cuMemcpy2D_fn = reinterpret_cast<CuMemcpy2D_t>(
+            GetProcAddress(self->cuda_dll_, "cuMemcpy2D_v2"));
 
-    typedef int (*CuMemcpy2D_t)(const CudaMemcpy2D*);
-    auto cuMemcpy2D_fn = reinterpret_cast<CuMemcpy2D_t>(
-        GetProcAddress(self->cuda_dll_, "cuMemcpy2D_v2"));
-    if (cuMemcpy2D_fn) {
-        uint32_t w = self->config_.width;
-        uint32_t h = self->config_.height;
+        if (cuGfxMap && cuGfxUnmap && cuGfxGetArray && cuMemcpy2D_fn) {
+            cuGfxMap(1, &self->cuda_gfx_resource_, nullptr);
 
-        CudaMemcpy2D cp{};
-        cp.srcMemoryType = 2;
-        cp.srcDevice     = dev_ptr;
-        cp.srcPitch      = pitch;
-        cp.dstMemoryType = 1;
-        cp.dstHost       = self->nv12_buf_.data();
-        cp.dstPitch      = w;
-        cp.WidthInBytes  = w;
-        cp.Height        = h + h / 2; // Y plane + UV plane
+            void* array = nullptr;
+            cuGfxGetArray(&array, self->cuda_gfx_resource_, 0, 0);
+            if (array) {
+                CudaMemcpy2D cp{};
+                cp.srcMemoryType = 2; // CU_MEMORYTYPE_DEVICE
+                cp.srcDevice     = dev_ptr;
+                cp.srcPitch      = pitch;
+                cp.dstMemoryType = 3; // CU_MEMORYTYPE_ARRAY
+                cp.dstArray      = array;
+                cp.WidthInBytes  = w;
+                cp.Height        = h + h / 2;
+                cuMemcpy2D_fn(&cp);
+            }
 
-        cuMemcpy2D_fn(&cp);
+            cuGfxUnmap(1, &self->cuda_gfx_resource_, nullptr);
+        }
+    } else {
+        // Fallback: CUDA → CPU → D3D11 (two PCIe crossings)
+        auto cuMemcpy2D_fn = reinterpret_cast<CuMemcpy2D_t>(
+            GetProcAddress(self->cuda_dll_, "cuMemcpy2D_v2"));
+        if (cuMemcpy2D_fn) {
+            CudaMemcpy2D cp{};
+            cp.srcMemoryType = 2;
+            cp.srcDevice     = dev_ptr;
+            cp.srcPitch      = pitch;
+            cp.dstMemoryType = 1; // CU_MEMORYTYPE_HOST
+            cp.dstHost       = self->nv12_buf_.data();
+            cp.dstPitch      = w;
+            cp.WidthInBytes  = w;
+            cp.Height        = h + h / 2;
+            cuMemcpy2D_fn(&cp);
 
-        self->context_->UpdateSubresource(
-            self->frame_tex_.Get(), 0, nullptr,
-            self->nv12_buf_.data(), w, 0);
+            self->context_->UpdateSubresource(
+                self->frame_tex_.Get(), 0, nullptr,
+                self->nv12_buf_.data(), w, 0);
+        }
     }
 
     cuvidUnmapVideoFrame_fn(self->decoder_, dev_ptr);
@@ -296,6 +366,10 @@ int CUDAAPI NvdecDecoder::handle_picture_display(void* user, CUVIDPARSERDISPINFO
 
 ID3D11Texture2D* NvdecDecoder::get_frame() {
     return frame_tex_.Get();
+}
+
+DXGI_FORMAT NvdecDecoder::frame_format() const {
+    return use_interop_ ? DXGI_FORMAT_R8_UNORM : DXGI_FORMAT_NV12;
 }
 
 bool NvdecDecoder::supports_codec(VideoCodec codec) const {

@@ -168,7 +168,7 @@ fn main() {
         // Receive UDP packets — limit decoded frames per window iteration to keep
         // the decode cost bounded (~10ms/frame in NVDEC's current CPU-copy path).
         let mut frames_this_iter = 0u32;
-        const MAX_FRAMES_PER_ITER: u32 = 4;
+        const MAX_FRAMES_PER_ITER: u32 = 16;
         for _ in 0..256 {
             if frames_this_iter >= MAX_FRAMES_PER_ITER {
                 break;

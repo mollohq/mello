@@ -48,6 +48,25 @@ bool ColorConverter::initialize(const GraphicsDevice& device, uint32_t width, ui
         return false;
     }
 
+    // Pin input/output color spaces so the decode side can match exactly.
+    // Input: full-range RGB (desktop capture). Output: BT.709 studio-swing NV12.
+    D3D11_VIDEO_PROCESSOR_COLOR_SPACE input_cs{};
+    input_cs.Usage         = 0; // playback
+    input_cs.RGB_Range     = 0; // full range (0-255)
+    input_cs.YCbCr_Matrix  = 1; // BT.709
+    input_cs.Nominal_Range = 2; // 0-255
+    video_context_->VideoProcessorSetStreamColorSpace(video_processor_.Get(), 0, &input_cs);
+
+    D3D11_VIDEO_PROCESSOR_COLOR_SPACE output_cs{};
+    output_cs.Usage         = 0;
+    output_cs.RGB_Range     = 0;
+    output_cs.YCbCr_Matrix  = 1; // BT.709
+    output_cs.Nominal_Range = 1; // 16-235 (studio swing)
+    video_context_->VideoProcessorSetOutputColorSpace(video_processor_.Get(), &output_cs);
+
+    // Disable all auto-processing that could alter colors
+    video_context_->VideoProcessorSetStreamAutoProcessingMode(video_processor_.Get(), 0, FALSE);
+
     // NV12 output texture — used as video processor output and NVENC input
     D3D11_TEXTURE2D_DESC nv12_desc{};
     nv12_desc.Width  = width;

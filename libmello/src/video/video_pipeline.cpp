@@ -229,9 +229,10 @@ bool VideoPipeline::start_viewer(const PipelineConfig& config, FrameCallback on_
         return false;
     }
 
-    // Staging texture for VRAM → CPU handoff
+    // Staging texture for VRAM → CPU handoff (format matches decoder output)
     staging_ = std::make_unique<StagingTexture>();
-    if (!staging_->initialize(device_, config.width, config.height)) {
+    DXGI_FORMAT frame_fmt = decoder_->frame_format();
+    if (!staging_->initialize(device_, config.width, config.height, frame_fmt)) {
         MELLO_LOG_ERROR(TAG, "Failed to initialize staging texture");
         return false;
     }

@@ -26,6 +26,9 @@ public:
 
 #ifdef _WIN32
     virtual ID3D11Texture2D* get_frame() = 0;
+
+    /// Returns the DXGI format of the frame texture (NV12 by default, R8 for zero-copy NVDEC).
+    virtual DXGI_FORMAT frame_format() const { return DXGI_FORMAT_NV12; }
 #endif
 
     virtual bool        supports_codec(VideoCodec codec) const = 0;

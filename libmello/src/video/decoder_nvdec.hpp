@@ -14,6 +14,7 @@ public:
     void             shutdown() override;
     bool             decode(const uint8_t* data, size_t size, bool is_keyframe) override;
     ID3D11Texture2D* get_frame() override;
+    DXGI_FORMAT      frame_format() const override;
     bool             supports_codec(VideoCodec codec) const override;
     const char*      name() const override { return "NVDEC"; }
 
@@ -37,14 +38,15 @@ private:
     static int CUDAAPI handle_picture_display(void* user, CUVIDPARSERDISPINFO* disp);
 
     bool frame_ready_ = false;
+    bool use_interop_ = false;
 
     DecoderConfig config_{};
     Microsoft::WRL::ComPtr<ID3D11Device>    device_;
     Microsoft::WRL::ComPtr<ID3D11DeviceContext> context_;
     Microsoft::WRL::ComPtr<ID3D11Texture2D> frame_tex_;
 
-    Microsoft::WRL::ComPtr<ID3D11Texture2D> staging_tex_;
-    std::vector<uint8_t> nv12_buf_;
+    void* cuda_gfx_resource_ = nullptr; // CUgraphicsResource for frame_tex_ (interop only)
+    std::vector<uint8_t> nv12_buf_;    // fallback only (when interop unavailable)
 };
 
 } // namespace mello::video
