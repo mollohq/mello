@@ -41,6 +41,8 @@ type UserPresence struct {
 type Activity struct {
 	Type        string `json:"type"`
 	CrewID      string `json:"crew_id,omitempty"`
+	ChannelID   string `json:"channel_id,omitempty"`
+	ChannelName string `json:"channel_name,omitempty"`
 	StreamID    string `json:"stream_id,omitempty"`
 	StreamTitle string `json:"stream_title,omitempty"`
 	StreamerID  string `json:"streamer_id,omitempty"`

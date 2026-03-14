@@ -16,7 +16,7 @@ pub enum Command {
     SelectCrew { crew_id: String },
     LeaveCrew,
     SendMessage { content: String },
-    JoinVoice,
+    JoinVoice { channel_id: String },
     LeaveVoice,
     SetMute { muted: bool },
     SetDeafen { deafened: bool },
@@ -38,6 +38,11 @@ pub enum Command {
         host_id: String,
     },
     StopWatching,
+
+    // --- Voice channels CRUD ---
+    CreateVoiceChannel { crew_id: String, name: String },
+    RenameVoiceChannel { crew_id: String, channel_id: String, name: String },
+    DeleteVoiceChannel { crew_id: String, channel_id: String },
 
     // --- Presence & crew state ---
     UpdatePresence {

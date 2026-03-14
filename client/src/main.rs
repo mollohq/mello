@@ -134,6 +134,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     ));
 
     let settings = Rc::new(RefCell::new(Settings::load()));
+    let active_voice_channel: Rc<RefCell<String>> = Rc::new(RefCell::new(String::new()));
 
     // --- Close → tray (respects close_to_tray setting) ---
     {
@@ -317,6 +318,39 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         let _ = cmd.try_send(Command::SetMute { muted: false });
                     }
                 }
+            }
+        });
+    }
+
+    // --- Voice channel callbacks ---
+    {
+        let cmd = cmd_tx.clone();
+        app.on_join_voice_channel(move |channel_id| {
+            log::info!("UI: join voice channel '{}'", channel_id);
+            // Just dispatch the command — VoiceJoined event from core handles all UI updates
+            let _ = cmd.try_send(Command::JoinVoice {
+                channel_id: channel_id.to_string(),
+            });
+        });
+    }
+    {
+        let app_weak = app.as_weak();
+        app.on_toggle_voice_channel(move |channel_id| {
+            log::info!("UI: toggle voice channel '{}'", channel_id);
+            if let Some(app) = app_weak.upgrade() {
+                let current = app.get_voice_channels();
+                log::info!("UI: current voice channels count={}", current.row_count());
+                let updated: Vec<VoiceChannelData> = (0..current.row_count())
+                    .map(|i| {
+                        let mut ch = current.row_data(i).unwrap();
+                        if ch.id == channel_id {
+                            log::info!("UI: toggling '{}' expanded {} -> {}", ch.name, ch.expanded, !ch.expanded);
+                            ch.expanded = !ch.expanded;
+                        }
+                        ch
+                    })
+                    .collect();
+                app.set_voice_channels(Rc::new(slint::VecModel::from(updated)).into());
             }
         });
     }
@@ -765,7 +799,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     _ => {}
                 }
-                handle_event(&app, event, &s, &dbg_hist, &event_cmd_tx);
+                handle_event(&app, event, &s, &dbg_hist, &event_cmd_tx, &active_voice_channel);
             }
         }
 
@@ -914,6 +948,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+fn channel_to_ui(ch: &mello_core::crew_state::VoiceChannelState, active_channel_id: &str) -> VoiceChannelData {
+    let members: Vec<VoiceChannelMember> = ch.members.iter().map(|m| {
+        VoiceChannelMember {
+            id: m.user_id.clone().into(),
+            name: m.username.clone().into(),
+            initials: make_initials(&m.username).into(),
+            speaking: m.speaking.unwrap_or(false),
+        }
+    }).collect();
+    let member_count = members.len() as i32;
+    let is_active = ch.id == active_channel_id;
+    VoiceChannelData {
+        id: ch.id.clone().into(),
+        name: ch.name.clone().into(),
+        member_count,
+        is_default: ch.is_default,
+        expanded: is_active || ch.is_default || member_count > 0,
+        active: is_active,
+        members: Rc::new(slint::VecModel::from(members)).into(),
+    }
+}
+
+fn channels_to_ui(channels: &[mello_core::crew_state::VoiceChannelState], active_channel_id: &str) -> Vec<VoiceChannelData> {
+    channels.iter().map(|ch| channel_to_ui(ch, active_channel_id)).collect()
+}
+
 fn update_active_crew_card(app: &MainWindow) {
     let active_id = app.get_active_crew_id();
     if active_id.is_empty() { return; }
@@ -977,7 +1037,7 @@ fn set_level_history(app: &MainWindow, hist: &DebugHistory) {
     set_lh!(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29);
 }
 
-fn handle_event(app: &MainWindow, event: Event, settings: &Rc<RefCell<Settings>>, dbg_hist: &Rc<RefCell<DebugHistory>>, cmd_tx: &tokio::sync::mpsc::Sender<Command>) {
+fn handle_event(app: &MainWindow, event: Event, settings: &Rc<RefCell<Settings>>, dbg_hist: &Rc<RefCell<DebugHistory>>, cmd_tx: &tokio::sync::mpsc::Sender<Command>, active_voice_channel: &Rc<RefCell<String>>) {
     match event {
         Event::Restoring => {
             log::info!("[auth] restoring session…");
@@ -985,6 +1045,7 @@ fn handle_event(app: &MainWindow, event: Event, settings: &Rc<RefCell<Settings>>
         }
         Event::DeviceAuthed { user, created } => {
             log::info!("[auth] device-authed  user_id={} name={} tag={} created={}", user.id, user.display_name, user.tag, created);
+            app.set_user_id(user.id.into());
             app.set_user_name(user.display_name.into());
             app.set_user_tag(user.tag.into());
             app.set_is_returning_user(!created);
@@ -1024,6 +1085,7 @@ fn handle_event(app: &MainWindow, event: Event, settings: &Rc<RefCell<Settings>>
             log::info!("[auth] logged-in  user_id={} name={} tag={}", user.id, user.display_name, user.tag);
             app.set_logged_in(true);
             app.set_login_loading(false);
+            app.set_user_id(user.id.into());
             app.set_user_name(user.display_name.into());
             app.set_user_tag(user.tag.into());
             // Persist onboarding as done so next startup skips it
@@ -1110,6 +1172,8 @@ fn handle_event(app: &MainWindow, event: Event, settings: &Rc<RefCell<Settings>>
         }
         Event::CrewJoined { crew_id } => {
             log::info!("UI: joined crew {}", crew_id);
+            // Reset active voice channel — will be set when CrewStateLoaded arrives
+            *active_voice_channel.borrow_mut() = String::new();
             // Clear voice bubbles on the previous crew — we left its channel
             // so we no longer receive presence updates for it. Keep member_count
             // (static from API) but zero out voice_count & speaking flags since
@@ -1134,6 +1198,9 @@ fn handle_event(app: &MainWindow, event: Event, settings: &Rc<RefCell<Settings>>
                 app.set_crews(Rc::new(slint::VecModel::from(cleared)).into());
             }
             app.set_active_crew_id(crew_id.clone().into());
+            // Clear voice channels and messages for the new crew (will be repopulated by CrewStateLoaded)
+            let empty_channels: Vec<VoiceChannelData> = vec![];
+            app.set_voice_channels(Rc::new(slint::VecModel::from(empty_channels)).into());
             let empty: Vec<ChatMessageData> = vec![];
             let rc = std::rc::Rc::new(slint::VecModel::from(empty));
             app.set_messages(rc.into());
@@ -1239,6 +1306,7 @@ fn handle_event(app: &MainWindow, event: Event, settings: &Rc<RefCell<Settings>>
             log::info!("UI: voice disconnected from {}", peer_id);
         }
         Event::VoiceActivity { member_id, speaking } => {
+            // Update sidebar member list
             let current = app.get_members();
             let members: Vec<MemberData> = (0..current.row_count())
                 .map(|i| {
@@ -1252,6 +1320,32 @@ fn handle_event(app: &MainWindow, event: Event, settings: &Rc<RefCell<Settings>>
             let rc = std::rc::Rc::new(slint::VecModel::from(members));
             app.set_members(rc.into());
             update_active_crew_card(app);
+
+            // Update speaking state in voice channel members
+            let current_channels = app.get_voice_channels();
+            let mut changed = false;
+            let updated_channels: Vec<VoiceChannelData> = (0..current_channels.row_count())
+                .map(|i| {
+                    let mut ch = current_channels.row_data(i).unwrap();
+                    let ch_members: Vec<VoiceChannelMember> = (0..ch.members.row_count())
+                        .map(|j| ch.members.row_data(j).unwrap())
+                        .collect();
+                    if ch_members.iter().any(|m| m.id == member_id.as_str()) {
+                        let new_members: Vec<VoiceChannelMember> = ch_members.into_iter().map(|mut m| {
+                            if m.id == member_id.as_str() {
+                                m.speaking = speaking;
+                                changed = true;
+                            }
+                            m
+                        }).collect();
+                        ch.members = Rc::new(slint::VecModel::from(new_members)).into();
+                    }
+                    ch
+                })
+                .collect();
+            if changed {
+                app.set_voice_channels(Rc::new(slint::VecModel::from(updated_channels)).into());
+            }
         }
         Event::MicLevel { level } => {
             app.set_mic_level(level);
@@ -1308,8 +1402,8 @@ fn handle_event(app: &MainWindow, event: Event, settings: &Rc<RefCell<Settings>>
         // --- Presence & crew state events ---
 
         Event::CrewStateLoaded { state } => {
-            log::info!("UI: crew state loaded for {} (online={}, total={})",
-                state.crew_id, state.counts.online, state.counts.total);
+            log::info!("UI: crew state loaded for {} (online={}, total={}, voice_channels={})",
+                state.crew_id, state.counts.online, state.counts.total, state.voice_channels.len());
 
             // Update the active crew card's online/voice/stream/message data
             let crews = app.get_crews();
@@ -1366,6 +1460,25 @@ fn handle_event(app: &MainWindow, event: Event, settings: &Rc<RefCell<Settings>>
                 })
                 .collect();
             app.set_crews(Rc::new(slint::VecModel::from(updated)).into());
+
+            // Populate voice channels for the active crew
+            if app.get_active_crew_id() == state.crew_id.as_str() {
+                // Determine active channel: use tracked one, or default to the crew's default channel
+                let current_avc = active_voice_channel.borrow().clone();
+                let avc_id = if current_avc.is_empty() {
+                    let default_id = state.voice_channels.iter()
+                        .find(|ch| ch.is_default)
+                        .or_else(|| state.voice_channels.first())
+                        .map(|ch| ch.id.clone())
+                        .unwrap_or_default();
+                    *active_voice_channel.borrow_mut() = default_id.clone();
+                    default_id
+                } else {
+                    current_avc
+                };
+                let vc_data = channels_to_ui(&state.voice_channels, &avc_id);
+                app.set_voice_channels(Rc::new(slint::VecModel::from(vc_data)).into());
+            }
         }
         Event::SidebarUpdated { crews: sidebar_crews } => {
             log::info!("UI: sidebar updated for {} crews", sidebar_crews.len());
@@ -1454,8 +1567,57 @@ fn handle_event(app: &MainWindow, event: Event, settings: &Rc<RefCell<Settings>>
                 update_active_crew_card(app);
             }
         }
-        Event::VoiceUpdated { crew_id, members: voice_members } => {
-            log::debug!("UI: voice update crew={} members={}", crew_id, voice_members.len());
+        Event::VoiceJoined { crew_id, channel_id, members: voice_members } => {
+            log::info!("UI: voice joined channel={} in crew={} members={}", channel_id, crew_id, voice_members.len());
+            // Authoritative state from voice_join RPC response — set active channel and members
+            let prev_channel = active_voice_channel.borrow().clone();
+            *active_voice_channel.borrow_mut() = channel_id.clone();
+            let active_id = app.get_active_crew_id();
+            if active_id == crew_id.as_str() {
+                let my_id = app.get_user_id();
+                let current_channels = app.get_voice_channels();
+                let updated_channels: Vec<VoiceChannelData> = (0..current_channels.row_count())
+                    .map(|i| {
+                        let mut ch = current_channels.row_data(i).unwrap();
+                        let is_joined = ch.id == channel_id.as_str();
+                        let was_active = ch.id.as_str() == prev_channel && !prev_channel.is_empty();
+                        ch.active = is_joined;
+                        if is_joined {
+                            // Set authoritative member list from server response
+                            ch.expanded = true;
+                            let ch_members: Vec<VoiceChannelMember> = voice_members.iter().map(|vm| {
+                                VoiceChannelMember {
+                                    id: vm.user_id.clone().into(),
+                                    name: vm.username.clone().into(),
+                                    initials: make_initials(&vm.username).into(),
+                                    speaking: vm.speaking.unwrap_or(false),
+                                }
+                            }).collect();
+                            ch.member_count = ch_members.len() as i32;
+                            ch.members = Rc::new(slint::VecModel::from(ch_members)).into();
+                        } else {
+                            // Remove current user from all other channels
+                            // (handles stale server state from previous sessions)
+                            let members: Vec<VoiceChannelMember> = (0..ch.members.row_count())
+                                .filter_map(|j| {
+                                    let m = ch.members.row_data(j).unwrap();
+                                    if m.id == my_id { None } else { Some(m) }
+                                })
+                                .collect();
+                            ch.member_count = members.len() as i32;
+                            ch.members = Rc::new(slint::VecModel::from(members)).into();
+                            if was_active {
+                                ch.expanded = false;
+                            }
+                        }
+                        ch
+                    })
+                    .collect();
+                app.set_voice_channels(Rc::new(slint::VecModel::from(updated_channels)).into());
+            }
+        }
+        Event::VoiceUpdated { crew_id, channel_id, members: voice_members } => {
+            log::debug!("UI: voice update crew={} channel={} members={}", crew_id, channel_id, voice_members.len());
             let active_id = app.get_active_crew_id();
             if active_id == crew_id.as_str() {
                 // Update speaking state on members list
@@ -1471,6 +1633,78 @@ fn handle_event(app: &MainWindow, event: Event, settings: &Rc<RefCell<Settings>>
                     .collect();
                 app.set_members(Rc::new(slint::VecModel::from(members)).into());
                 update_active_crew_card(app);
+
+                // Update voice channel members for the specific channel
+                let current_channels = app.get_voice_channels();
+                let updated_channels: Vec<VoiceChannelData> = (0..current_channels.row_count())
+                    .map(|i| {
+                        let mut ch = current_channels.row_data(i).unwrap();
+                        if ch.id == channel_id.as_str() {
+                            let ch_members: Vec<VoiceChannelMember> = voice_members.iter().map(|vm| {
+                                VoiceChannelMember {
+                                    id: vm.user_id.clone().into(),
+                                    name: vm.username.clone().into(),
+                                    initials: make_initials(&vm.username).into(),
+                                    speaking: vm.speaking.unwrap_or(false),
+                                }
+                            }).collect();
+                            ch.member_count = ch_members.len() as i32;
+                            ch.members = Rc::new(slint::VecModel::from(ch_members)).into();
+                        }
+                        ch
+                    })
+                    .collect();
+                app.set_voice_channels(Rc::new(slint::VecModel::from(updated_channels)).into());
+            }
+        }
+        Event::VoiceChannelsUpdated { crew_id, channels } => {
+            log::debug!("UI: voice channels updated crew={} count={}", crew_id, channels.len());
+            let active_id = app.get_active_crew_id();
+            if active_id == crew_id.as_str() {
+                let avc_id = active_voice_channel.borrow().clone();
+                let vc_data = channels_to_ui(&channels, &avc_id);
+                app.set_voice_channels(Rc::new(slint::VecModel::from(vc_data)).into());
+            }
+        }
+        Event::VoiceChannelCreated { crew_id, channel } => {
+            log::info!("UI: voice channel created in crew={}: {}", crew_id, channel.name);
+            let active_id = app.get_active_crew_id();
+            if active_id == crew_id.as_str() {
+                let current = app.get_voice_channels();
+                let mut channels: Vec<VoiceChannelData> = (0..current.row_count())
+                    .map(|i| current.row_data(i).unwrap())
+                    .collect();
+                channels.push(channel_to_ui(&channel, &active_voice_channel.borrow()));
+                app.set_voice_channels(Rc::new(slint::VecModel::from(channels)).into());
+            }
+        }
+        Event::VoiceChannelRenamed { crew_id, channel_id, name } => {
+            log::info!("UI: voice channel renamed in crew={}: {} -> {}", crew_id, channel_id, name);
+            let active_id = app.get_active_crew_id();
+            if active_id == crew_id.as_str() {
+                let current = app.get_voice_channels();
+                let updated: Vec<VoiceChannelData> = (0..current.row_count())
+                    .map(|i| {
+                        let mut ch = current.row_data(i).unwrap();
+                        if ch.id == channel_id.as_str() {
+                            ch.name = name.clone().into();
+                        }
+                        ch
+                    })
+                    .collect();
+                app.set_voice_channels(Rc::new(slint::VecModel::from(updated)).into());
+            }
+        }
+        Event::VoiceChannelDeleted { crew_id, channel_id } => {
+            log::info!("UI: voice channel deleted in crew={}: {}", crew_id, channel_id);
+            let active_id = app.get_active_crew_id();
+            if active_id == crew_id.as_str() {
+                let current = app.get_voice_channels();
+                let updated: Vec<VoiceChannelData> = (0..current.row_count())
+                    .map(|i| current.row_data(i).unwrap())
+                    .filter(|ch| ch.id != channel_id.as_str())
+                    .collect();
+                app.set_voice_channels(Rc::new(slint::VecModel::from(updated)).into());
             }
         }
         Event::MessagePreviewUpdated { crew_id, messages } => {

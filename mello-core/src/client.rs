@@ -177,8 +177,8 @@ impl Client {
             Command::SendMessage { content } => {
                 self.handle_send_message(&content).await;
             }
-            Command::JoinVoice => {
-                self.handle_join_voice().await;
+            Command::JoinVoice { channel_id } => {
+                self.handle_join_voice(&channel_id).await;
             }
             Command::LeaveVoice => {
                 self.handle_leave_voice().await;
@@ -223,6 +223,17 @@ impl Client {
             Command::StopWatching => {
                 log::info!("StopWatching requested");
                 // TODO: tear down viewer-side stream
+            }
+
+            // --- Voice channels CRUD ---
+            Command::CreateVoiceChannel { crew_id, name } => {
+                self.handle_create_voice_channel(&crew_id, &name).await;
+            }
+            Command::RenameVoiceChannel { crew_id, channel_id, name } => {
+                self.handle_rename_voice_channel(&crew_id, &channel_id, &name).await;
+            }
+            Command::DeleteVoiceChannel { crew_id, channel_id } => {
+                self.handle_delete_voice_channel(&crew_id, &channel_id).await;
             }
 
             // --- Presence & crew state ---
@@ -470,14 +481,30 @@ impl Client {
         });
 
         // Tell the server this is our active crew (registers subscription + returns state)
-        match self.nakama.set_active_crew(crew_id).await {
+        let local_user_id = self.nakama.current_user_id().map(String::from).unwrap_or_default();
+        let voice_channel_id = match self.nakama.set_active_crew(crew_id).await {
             Ok(state) => {
+                // Check if user is already in a channel (server remembers from last session)
+                let already_in = state
+                    .voice_channels
+                    .iter()
+                    .find(|ch| ch.members.iter().any(|m| m.user_id == local_user_id))
+                    .map(|ch| ch.id.clone());
+                // Fall back to default channel
+                let target = already_in.or_else(|| {
+                    state.voice_channels.iter()
+                        .find(|ch| ch.is_default)
+                        .or_else(|| state.voice_channels.first())
+                        .map(|ch| ch.id.clone())
+                });
                 let _ = self.event_tx.send(Event::CrewStateLoaded { state });
+                target
             }
             Err(e) => {
                 log::warn!("set_active_crew RPC failed: {}", e);
+                None
             }
-        }
+        };
 
         // Wait for WS reader to set channel_id (up to 2s)
         let channel_id = self.wait_for_channel_id().await;
@@ -497,19 +524,9 @@ impl Client {
                 log::warn!("Failed to follow users: {}", e);
             }
 
-            // Auto-join voice with online members only
-            if let Some(local_id) = self.nakama.current_user_id().map(String::from) {
-                let other_ids: Vec<String> = members.iter()
-                    .filter(|m| m.online && m.id != local_id)
-                    .map(|m| m.id.clone())
-                    .collect();
-                self.voice.join_voice(&local_id, &other_ids);
-                let _ = self.event_tx.send(Event::VoiceStateChanged { in_call: true });
-
-                // Notify server we joined voice
-                if let Err(e) = self.nakama.voice_join(crew_id).await {
-                    log::warn!("voice_join RPC failed: {}", e);
-                }
+            // Auto-join voice (last-used channel, or default if first time)
+            if let Some(ch_id) = &voice_channel_id {
+                self.handle_join_voice(ch_id).await;
             }
         }
     }
@@ -566,12 +583,38 @@ impl Client {
         None
     }
 
-    async fn handle_join_voice(&mut self) {
-        if let Some(crew_id) = self.nakama.active_crew_id().map(String::from) {
-            if let Err(e) = self.nakama.voice_join(&crew_id).await {
+    async fn handle_join_voice(&mut self, channel_id: &str) {
+        let crew_id = match self.nakama.active_crew_id().map(String::from) {
+            Some(id) => id,
+            None => return,
+        };
+
+        // RPC returns the authoritative channel state after join
+        let resp = match self.nakama.voice_join(&crew_id, channel_id).await {
+            Ok(r) => r,
+            Err(e) => {
                 log::error!("voice_join RPC failed: {}", e);
+                return;
             }
+        };
+
+        // Rejoin local voice mesh with the members from the response
+        self.voice.leave_voice();
+        if let Some(local_id) = self.nakama.current_user_id().map(String::from) {
+            let peer_ids: Vec<String> = resp.voice_state.members.iter()
+                .filter(|m| m.user_id != local_id)
+                .map(|m| m.user_id.clone())
+                .collect();
+            self.voice.join_voice(&local_id, &peer_ids);
+            let _ = self.event_tx.send(Event::VoiceStateChanged { in_call: true });
         }
+
+        // Emit authoritative state so the UI can update members + active channel
+        let _ = self.event_tx.send(Event::VoiceJoined {
+            crew_id,
+            channel_id: resp.channel_id,
+            members: resp.voice_state.members,
+        });
     }
 
     async fn handle_leave_voice(&mut self) {
@@ -583,6 +626,58 @@ impl Client {
         }
         self.voice.leave_voice();
         let _ = self.event_tx.send(Event::VoiceStateChanged { in_call: false });
+    }
+
+    async fn handle_create_voice_channel(&self, crew_id: &str, name: &str) {
+        match self.nakama.channel_create(crew_id, name).await {
+            Ok(channel) => {
+                let _ = self.event_tx.send(Event::VoiceChannelCreated {
+                    crew_id: crew_id.to_string(),
+                    channel,
+                });
+            }
+            Err(e) => {
+                log::error!("channel_create RPC failed: {}", e);
+                let _ = self.event_tx.send(Event::Error {
+                    message: format!("Failed to create voice channel: {}", e),
+                });
+            }
+        }
+    }
+
+    async fn handle_rename_voice_channel(&self, crew_id: &str, channel_id: &str, name: &str) {
+        match self.nakama.channel_rename(crew_id, channel_id, name).await {
+            Ok(()) => {
+                let _ = self.event_tx.send(Event::VoiceChannelRenamed {
+                    crew_id: crew_id.to_string(),
+                    channel_id: channel_id.to_string(),
+                    name: name.to_string(),
+                });
+            }
+            Err(e) => {
+                log::error!("channel_rename RPC failed: {}", e);
+                let _ = self.event_tx.send(Event::Error {
+                    message: format!("Failed to rename voice channel: {}", e),
+                });
+            }
+        }
+    }
+
+    async fn handle_delete_voice_channel(&self, crew_id: &str, channel_id: &str) {
+        match self.nakama.channel_delete(crew_id, channel_id).await {
+            Ok(()) => {
+                let _ = self.event_tx.send(Event::VoiceChannelDeleted {
+                    crew_id: crew_id.to_string(),
+                    channel_id: channel_id.to_string(),
+                });
+            }
+            Err(e) => {
+                log::error!("channel_delete RPC failed: {}", e);
+                let _ = self.event_tx.send(Event::Error {
+                    message: format!("Failed to delete voice channel: {}", e),
+                });
+            }
+        }
     }
 
     async fn handle_leave_crew(&mut self) {

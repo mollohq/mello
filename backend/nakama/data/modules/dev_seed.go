@@ -65,6 +65,9 @@ func DevSeedStateRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk 
 	now := time.Now().UTC().Format(time.RFC3339)
 
 	// ── 1. presence ─────────────────────────────────────────────────
+	// NOTE: ChannelID/ChannelName on voice activities are set after
+	// channels are created in step 2.  We write presence twice for
+	// voice users: once here (basic), then patched in step 3.
 	presences := map[string]*UserPresence{
 		"alice": {
 			UserID: users["alice"].id, Status: StatusOnline,
@@ -86,9 +89,9 @@ func DevSeedStateRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk 
 			},
 		},
 		"diana": {
-			UserID: users["diana"].id, Status: StatusIdle,
+			UserID: users["diana"].id, Status: StatusOnline,
 			LastSeen: now, UpdatedAt: now,
-			Activity: &Activity{Type: ActivityNone},
+			Activity: &Activity{Type: ActivityInVoice, CrewID: crewIDs["Gamers"]},
 		},
 	}
 	for uname, p := range presences {
@@ -98,52 +101,182 @@ func DevSeedStateRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk 
 	}
 	logger.Info("dev_seed: presence set for %d users", len(presences))
 
-	// ── 2. voice rooms ──────────────────────────────────────────────
-	// Gamers: alice + bob in voice, bob currently speaking
-	if gid, ok := crewIDs["Gamers"]; ok {
+	// ── 2. voice channels per crew ─────────────────────────────────
+	// Rich channel layouts for Gamers + Devs; default-only for the rest.
+	type channelSeed struct {
+		Name      string
+		IsDefault bool
+	}
+	crewChannelSeeds := map[string][]channelSeed{
+		"Gamers": {
+			{Name: "General", IsDefault: true},
+			{Name: "Strategy", IsDefault: false},
+			{Name: "AFK", IsDefault: false},
+		},
+		"Devs": {
+			{Name: "General", IsDefault: true},
+			{Name: "Code Review", IsDefault: false},
+		},
+	}
+
+	// channelIDs[crewName][channelName] = generated ID
+	channelIDs := make(map[string]map[string]string)
+
+	for crewName, gid := range crewIDs {
+		seeds, hasCustom := crewChannelSeeds[crewName]
+		if !hasCustom {
+			// Just ensure a default General channel
+			if err := InitDefaultChannel(ctx, nk, gid); err != nil {
+				logger.Warn("dev_seed: default channel for %s: %v", crewName, err)
+			}
+			continue
+		}
+
+		defs := make([]*VoiceChannelDef, len(seeds))
+		nameMap := make(map[string]string, len(seeds))
+		for i, s := range seeds {
+			id := generateChannelID()
+			defs[i] = &VoiceChannelDef{
+				ID:        id,
+				Name:      s.Name,
+				IsDefault: s.IsDefault,
+				SortOrder: i,
+			}
+			nameMap[s.Name] = id
+		}
+		list := &VoiceChannelList{Channels: defs}
+		if err := saveVoiceChannels(ctx, nk, gid, list); err != nil {
+			logger.Warn("dev_seed: save channels for %s: %v", crewName, err)
+		}
+		channelIDs[crewName] = nameMap
+	}
+	logger.Info("dev_seed: voice channels created (Gamers: 3, Devs: 2, others: default)")
+
+	// ── 3. voice rooms ──────────────────────────────────────────────
+	// Helper to populate a voice room + reverse maps
+	seedVoiceRoom := func(crewName, channelName string, memberPairs []struct {
+		user     string
+		speaking bool
+	}) {
+		gid, ok := crewIDs[crewName]
+		if !ok {
+			return
+		}
+		chMap, ok := channelIDs[crewName]
+		if !ok {
+			return
+		}
+		chID, ok := chMap[channelName]
+		if !ok {
+			return
+		}
+
+		members := make(map[string]*VoiceMemberState, len(memberPairs))
+		for _, mp := range memberPairs {
+			u := users[mp.user]
+			if u == nil {
+				continue
+			}
+			members[u.id] = &VoiceMemberState{
+				UserID:   u.id,
+				Username: u.displayName,
+				Speaking: mp.speaking,
+			}
+		}
+
 		voiceRoomsMu.Lock()
-		voiceRooms[gid] = &VoiceRoom{
-			CrewID: gid,
-			Members: map[string]*VoiceMemberState{
-				users["alice"].id: {
-					UserID: users["alice"].id, Username: users["alice"].displayName,
-					Speaking: false,
-				},
-				users["bob"].id: {
-					UserID: users["bob"].id, Username: users["bob"].displayName,
-					Speaking: true,
-				},
-			},
+		voiceRooms[chID] = &VoiceRoom{
+			ChannelID: chID,
+			CrewID:    gid,
+			Members:   members,
 		}
 		voiceRoomsMu.Unlock()
 
-		voiceUserCrewMu.Lock()
-		voiceUserCrew[users["alice"].id] = gid
-		voiceUserCrew[users["bob"].id] = gid
-		voiceUserCrewMu.Unlock()
-	}
-
-	// Devs: charlie in voice (also streaming)
-	if gid, ok := crewIDs["Devs"]; ok {
-		voiceRoomsMu.Lock()
-		voiceRooms[gid] = &VoiceRoom{
-			CrewID: gid,
-			Members: map[string]*VoiceMemberState{
-				users["charlie"].id: {
-					UserID: users["charlie"].id, Username: users["charlie"].displayName,
-					Speaking: false,
-				},
-			},
+		voiceUserChannelMu.Lock()
+		for _, mp := range memberPairs {
+			if u := users[mp.user]; u != nil {
+				voiceUserChannel[u.id] = chID
+			}
 		}
-		voiceRoomsMu.Unlock()
+		voiceUserChannelMu.Unlock()
 
-		voiceUserCrewMu.Lock()
-		voiceUserCrew[users["charlie"].id] = gid
-		voiceUserCrewMu.Unlock()
+		voiceChannelCrewMu.Lock()
+		voiceChannelCrew[chID] = gid
+		voiceChannelCrewMu.Unlock()
 	}
-	logger.Info("dev_seed: voice rooms populated (Gamers: 2, Devs: 1)")
 
-	// ── 3. stream in Devs (charlie → Counter-Strike 2) ──────────────
+	// Gamers → General: alice + bob (bob speaking)
+	seedVoiceRoom("Gamers", "General", []struct {
+		user     string
+		speaking bool
+	}{
+		{user: "alice", speaking: false},
+		{user: "bob", speaking: true},
+	})
+
+	// Gamers → Strategy: diana hanging out (idle)
+	seedVoiceRoom("Gamers", "Strategy", []struct {
+		user     string
+		speaking bool
+	}{
+		{user: "diana", speaking: false},
+	})
+	// (AFK channel left empty on purpose)
+
+	// Devs → General: charlie in voice (also streaming)
+	seedVoiceRoom("Devs", "General", []struct {
+		user     string
+		speaking bool
+	}{
+		{user: "charlie", speaking: false},
+	})
+	// (Code Review channel left empty on purpose)
+
+	logger.Info("dev_seed: voice rooms populated (Gamers General: 2, Gamers Strategy: 1, Devs General: 1)")
+
+	// Patch presence with channel IDs now that channels exist
+	voicePresence := []struct {
+		user        string
+		crewName    string
+		channelName string
+	}{
+		{"alice", "Gamers", "General"},
+		{"bob", "Gamers", "General"},
+		{"diana", "Gamers", "Strategy"},
+		{"charlie", "Devs", "General"},
+	}
+	for _, vp := range voicePresence {
+		u := users[vp.user]
+		if u == nil {
+			continue
+		}
+		gid := crewIDs[vp.crewName]
+		chMap := channelIDs[vp.crewName]
+		if chMap == nil {
+			continue
+		}
+		chID := chMap[vp.channelName]
+
+		activity := &Activity{
+			Type:        ActivityInVoice,
+			CrewID:      gid,
+			ChannelID:   chID,
+			ChannelName: vp.channelName,
+		}
+		// charlie is also streaming
+		if vp.user == "charlie" {
+			activity.Type = ActivityStreaming
+			activity.StreamTitle = "Counter-Strike 2"
+		}
+		_ = WritePresence(ctx, nk, &UserPresence{
+			UserID: u.id, Status: StatusOnline,
+			LastSeen: now, UpdatedAt: now,
+			Activity: activity,
+		})
+	}
+	logger.Info("dev_seed: presence patched with channel IDs")
+
+	// ── 4. stream in Devs (charlie → Counter-Strike 2) ──────────────
 	if gid, ok := crewIDs["Devs"]; ok {
 		streamID := fmt.Sprintf("stream_%s_seed", users["charlie"].id[:8])
 		meta := StreamMeta{
@@ -182,7 +315,7 @@ func DevSeedStateRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk 
 		logger.Info("dev_seed: stream started in Devs by %s", users["charlie"].displayName)
 	}
 
-	// ── 4. chat message previews ────────────────────────────────────
+	// ── 5. chat message previews ────────────────────────────────────
 	previews := map[string][]*MessagePreview{
 		"Gamers": {
 			{Username: users["bob"].displayName, Preview: "anyone down for ranked?", Timestamp: now},
@@ -213,17 +346,18 @@ func DevSeedStateRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk 
 	crewRecentMsgsMu.Unlock()
 	logger.Info("dev_seed: chat previews injected for %d crews", len(previews))
 
-	// ── 5. invalidate caches ────────────────────────────────────────
+	// ── 6. invalidate caches ────────────────────────────────────────
 	for _, cid := range crewIDs {
 		InvalidateCrewState(cid)
 	}
 
 	resp, _ := json.Marshal(map[string]interface{}{
-		"success":     true,
-		"users":       len(users),
-		"crews":       len(crewIDs),
-		"voice_rooms": 2,
-		"streams":     1,
+		"success":        true,
+		"users":          len(users),
+		"crews":          len(crewIDs),
+		"voice_rooms":    3,
+		"voice_channels": 5 + (len(crewIDs) - 2), // 3 Gamers + 2 Devs + 1 default per remaining crew
+		"streams":        1,
 	})
 	return string(resp), nil
 }

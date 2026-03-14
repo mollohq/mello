@@ -1,0 +1,317 @@
+import { Theme } from "../theme.slint";
+import { VoiceChannelData, VoiceChannelMember } from "../types.slint";
+
+// ── Collapsed voice channel row (compact single-line) ──
+component VoiceChannelRow inherits Rectangle {
+    in property <string> channel-name;
+    in property <string> status-text: "0 Members";
+    in property <bool> show-join: false;
+
+    callback clicked();
+    callback join-clicked();
+
+    background: touch.has-hover ? #FFFFFF06 : transparent;
+
+    // Row-level touch BEFORE layout so the join button renders on top
+    touch := TouchArea {
+        clicked => { root.clicked(); }
+    }
+
+    HorizontalLayout {
+        padding-top: 10px;
+        padding-bottom: 10px;
+        padding-left: 20px;
+        padding-right: 20px;
+        spacing: 8px;
+
+        Image {
+            source: @image-url("../icons/mic.svg");
+            width: 14px;
+            height: 14px;
+            colorize: Theme.text-secondary;
+            y: (parent.height - self.height) / 2;
+        }
+
+        Text {
+            text: channel-name;
+            font-family: Theme.font-mono;
+            font-size: 12px;
+            font-weight: 600;
+            color: Theme.text-secondary;
+            vertical-alignment: center;
+        }
+
+        Text {
+            text: status-text;
+            font-family: Theme.font-mono;
+            font-size: 10px;
+            color: Theme.text-tertiary;
+            vertical-alignment: center;
+        }
+
+        Rectangle { horizontal-stretch: 1; }
+
+        if show-join: Rectangle {
+            width: join-label.preferred-width + 20px;
+            height: 22px;
+            border-radius: 11px;
+            background: join-touch.has-hover ? #28C84030 : #28C84018;
+            border-width: 1px;
+            border-color: join-touch.has-hover ? #28C84060 : #28C84030;
+            vertical-stretch: 0;
+
+            join-label := Text {
+                text: "Join";
+                font-family: Theme.font-mono;
+                font-size: 10px;
+                font-weight: 600;
+                color: join-touch.has-hover ? #28C840 : #28C840A0;
+                letter-spacing: 0.3px;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+
+            join-touch := TouchArea {
+                clicked => { root.join-clicked(); }
+            }
+        }
+
+        Text {
+            text: "▾";
+            font-size: 14px;
+            color: Theme.text-tertiary;
+            vertical-alignment: center;
+        }
+    }
+}
+
+// ── Expanded voice channel with participant avatars ──
+component VoiceChannelExpanded inherits Rectangle {
+    in property <string> channel-name;
+    in property <[VoiceChannelMember]> members: [];
+
+    callback clicked();
+
+    background: Theme.bg-app;
+
+    VerticalLayout {
+        padding-top: 12px;
+        padding-bottom: 14px;
+        padding-left: 20px;
+        padding-right: 20px;
+        spacing: 0px;
+
+        // ── Top row: channel meta + badge ──
+        Rectangle {
+            height: 20px;
+
+            HorizontalLayout {
+                spacing: 16px;
+
+                HorizontalLayout {
+                    spacing: 8px;
+
+                    Image {
+                        source: @image-url("../icons/mic.svg");
+                        width: 14px;
+                        height: 14px;
+                        colorize: Theme.text-primary;
+                        y: (parent.height - self.height) / 2;
+                    }
+
+                    Text {
+                        text: channel-name;
+                        font-family: Theme.font-mono;
+                        font-size: 12px;
+                        font-weight: 600;
+                        color: Theme.text-primary;
+                        vertical-alignment: center;
+                    }
+
+                    Text {
+                        text: "·";
+                        font-size: 14px;
+                        color: Theme.text-tertiary;
+                        vertical-alignment: center;
+                    }
+
+                    Text {
+                        text: members.length > 0 ? "Active Session" : "Empty";
+                        font-family: Theme.font-mono;
+                        font-size: 10px;
+                        color: Theme.text-tertiary;
+                        letter-spacing: 0.5px;
+                        vertical-alignment: center;
+                    }
+                }
+
+                Rectangle { horizontal-stretch: 1; }
+
+                if members.length > 0: HorizontalLayout {
+                    spacing: 8px;
+                    alignment: center;
+
+                    Text {
+                        text: "ACTIVE SESSION";
+                        font-family: Theme.font-mono;
+                        font-size: Theme.font-xs;
+                        color: Theme.text-tertiary;
+                        letter-spacing: 0.5px;
+                        vertical-alignment: center;
+                    }
+
+                    Rectangle {
+                        width: 5px;
+                        height: 5px;
+                        border-radius: 2.5px;
+                        background: Theme.accent;
+                    }
+                }
+
+                Text {
+                    text: "▴";
+                    font-size: 14px;
+                    color: Theme.text-tertiary;
+                    vertical-alignment: center;
+                }
+            }
+
+            header-touch := TouchArea {
+                clicked => { root.clicked(); }
+            }
+        }
+
+        Rectangle { height: 12px; }
+
+        // ── Participant avatars ──
+        HorizontalLayout {
+            spacing: 20px;
+            alignment: start;
+
+            for member in members: VerticalLayout {
+                alignment: center;
+                spacing: 8px;
+
+                Rectangle {
+                    width: 48px;
+                    height: 48px;
+                    border-radius: Theme.r-inner;
+                    background: Theme.surface;
+                    border-width: 1px;
+                    border-color: member.speaking ? Theme.accent : Theme.graphic-light;
+
+                    Text {
+                        text: member.initials;
+                        font-size: 14px;
+                        font-family: Theme.font-mono;
+                        font-weight: 600;
+                        color: member.speaking ? Theme.text-primary : Theme.text-secondary;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+
+                // Voice indicator bars
+                HorizontalLayout {
+                    alignment: center;
+                    spacing: 4px;
+                    height: 6px;
+
+                    Rectangle {
+                        width: 3px;
+                        height: 3px;
+                        border-radius: 1.5px;
+                        background: member.speaking ? Theme.graphic-dark : Theme.graphic-light;
+                    }
+                    Rectangle {
+                        width: member.speaking ? 20px : 10px;
+                        height: 3px;
+                        border-radius: 1.5px;
+                        background: member.speaking ? Theme.accent : Theme.graphic-light;
+                    }
+                    Rectangle {
+                        width: 3px;
+                        height: 3px;
+                        border-radius: 1.5px;
+                        background: member.speaking ? Theme.graphic-dark : Theme.graphic-light;
+                    }
+                }
+
+                Text {
+                    text: member.name;
+                    font-family: Theme.font-mono;
+                    font-size: 10px;
+                    font-weight: member.speaking ? 500 : 400;
+                    color: member.speaking ? Theme.text-primary : Theme.text-secondary;
+                    horizontal-alignment: center;
+                }
+            }
+
+            // Empty state when expanded with no members
+            if members.length == 0: Text {
+                text: "No one here yet";
+                font-family: Theme.font-mono;
+                font-size: 11px;
+                color: Theme.text-tertiary;
+                vertical-alignment: center;
+            }
+        }
+    }
+}
+
+// ── Exported accordion container ──
+export component VoiceChannelView inherits Rectangle {
+    in property <[VoiceChannelData]> voice-channels: [];
+
+    callback join-voice-channel(/* channel_id */ string);
+    callback toggle-channel(/* channel_id */ string);
+
+    vertical-stretch: 0;
+    background: Theme.surface;
+    border-radius: Theme.r-outer;
+    border-width: 1px;
+    border-color: Theme.graphic-light;
+    clip: true;
+
+    VerticalLayout {
+        spacing: 0px;
+
+        for channel[idx] in voice-channels: VerticalLayout {
+            spacing: 0px;
+
+            // Separator between channels (not before first)
+            if idx > 0: Rectangle { height: 1px; background: Theme.graphic-light; }
+
+            if channel.expanded: VoiceChannelExpanded {
+                channel-name: channel.name;
+                members: channel.members;
+                clicked => { root.toggle-channel(channel.id); }
+            }
+
+            if !channel.expanded: VoiceChannelRow {
+                channel-name: channel.name;
+                status-text: channel.active
+                    ? "Connected"
+                    : (channel.member-count > 0
+                        ? "\{channel.member-count} Active"
+                        : "0 Members");
+                show-join: !channel.active;
+                clicked => { root.toggle-channel(channel.id); }
+                join-clicked => { root.join-voice-channel(channel.id); }
+            }
+        }
+
+        // Empty state when no channels
+        if voice-channels.length == 0: Rectangle {
+            height: 48px;
+            Text {
+                text: "No voice channels";
+                font-family: Theme.font-mono;
+                font-size: Theme.font-md;
+                color: Theme.text-tertiary;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+    }
+}

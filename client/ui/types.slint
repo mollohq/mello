@@ -33,6 +33,23 @@ export struct ChatMessageData {
     timestamp: string,
 }
 
+export struct VoiceChannelMember {
+    id: string,
+    name: string,
+    initials: string,
+    speaking: bool,
+}
+
+export struct VoiceChannelData {
+    id: string,
+    name: string,
+    member-count: int,
+    is-default: bool,
+    expanded: bool,
+    active: bool,
+    members: [VoiceChannelMember],
+}
+
 export struct AudioDeviceData {
     id: string,
     name: string,

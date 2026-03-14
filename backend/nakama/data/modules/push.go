@@ -22,12 +22,15 @@ const (
 
 // Priority events are always pushed immediately to all subscribers.
 var PriorityEvents = map[string]bool{
-	"stream_started": true,
-	"stream_ended":   true,
-	"voice_joined":   true,
-	"voice_left":     true,
-	"mention":        true,
-	"dm_received":    true,
+	"stream_started":  true,
+	"stream_ended":    true,
+	"voice_joined":    true,
+	"voice_left":      true,
+	"mention":         true,
+	"dm_received":     true,
+	"channel_created": true,
+	"channel_renamed": true,
+	"channel_deleted": true,
 }
 
 // ---------------------------------------------------------------------------
@@ -279,12 +282,37 @@ func PushPresenceChange(ctx context.Context, logger runtime.Logger, nk runtime.N
 }
 
 // PushVoiceUpdate sends voice state to active crew subscribers (includes speaking).
+// Sends per-channel voice data so clients can render multi-channel state.
 func PushVoiceUpdate(ctx context.Context, logger runtime.Logger, nk runtime.NakamaModule, crewID string) {
-	snap := GetVoiceSnapshot(crewID)
+	// Build per-channel voice data
+	channelDefs, _ := GetVoiceChannels(ctx, nk, crewID)
+	var channels []map[string]interface{}
+	if channelDefs != nil && len(channelDefs.Channels) > 0 {
+		channels = make([]map[string]interface{}, 0, len(channelDefs.Channels))
+		for _, ch := range channelDefs.Channels {
+			snap := GetVoiceChannelSnapshot(ch.ID)
+			members := make([]map[string]interface{}, 0, len(snap.Members))
+			for _, m := range snap.Members {
+				members = append(members, map[string]interface{}{
+					"user_id":  m.UserID,
+					"username": m.Username,
+					"speaking": m.Speaking,
+				})
+			}
+			channels = append(channels, map[string]interface{}{
+				"id":         ch.ID,
+				"name":       ch.Name,
+				"is_default": ch.IsDefault,
+				"members":    members,
+			})
+		}
+	}
 
-	members := make([]map[string]interface{}, 0, len(snap.Members))
-	for _, m := range snap.Members {
-		members = append(members, map[string]interface{}{
+	// Legacy flat members list (first active channel) for backward compat
+	legacySnap := GetVoiceSnapshot(crewID)
+	legacyMembers := make([]map[string]interface{}, 0, len(legacySnap.Members))
+	for _, m := range legacySnap.Members {
+		legacyMembers = append(legacyMembers, map[string]interface{}{
 			"user_id":  m.UserID,
 			"username": m.Username,
 			"speaking": m.Speaking,
@@ -292,9 +320,10 @@ func PushVoiceUpdate(ctx context.Context, logger runtime.Logger, nk runtime.Naka
 	}
 
 	content := map[string]interface{}{
-		"type":    "voice_update",
-		"crew_id": crewID,
-		"members": members,
+		"type":           "voice_update",
+		"crew_id":        crewID,
+		"members":        legacyMembers,
+		"voice_channels": channels,
 	}
 
 	subs := getActiveSubscribersForCrew(crewID)

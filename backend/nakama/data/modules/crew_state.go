@@ -35,6 +35,14 @@ type VoiceMemberInfo struct {
 	Speaking *bool  `json:"speaking,omitempty"` // nil for sidebar (not included)
 }
 
+// VoiceChannelStateView is a per-channel voice state returned in CrewState.
+type VoiceChannelStateView struct {
+	ID        string             `json:"id"`
+	Name      string             `json:"name"`
+	IsDefault bool               `json:"is_default"`
+	Members   []*VoiceMemberInfo `json:"members"`
+}
+
 type CrewStreamState struct {
 	Active            bool   `json:"active"`
 	StreamID          string `json:"stream_id,omitempty"`
@@ -62,25 +70,27 @@ type CrewMemberInfo struct {
 }
 
 type CrewState struct {
-	CrewID         string           `json:"crew_id"`
-	Name           string           `json:"name"`
-	Counts         CrewCounts       `json:"counts"`
-	Members        []*CrewMemberInfo `json:"members,omitempty"` // only for active crew (full view)
-	Voice          *CrewVoiceState  `json:"voice"`
-	Stream         *CrewStreamState `json:"stream"`
-	RecentMessages []*MessagePreview `json:"recent_messages"`
-	UpdatedAt      string           `json:"updated_at"`
+	CrewID         string                   `json:"crew_id"`
+	Name           string                   `json:"name"`
+	Counts         CrewCounts               `json:"counts"`
+	Members        []*CrewMemberInfo        `json:"members,omitempty"` // only for active crew (full view)
+	Voice          *CrewVoiceState          `json:"voice"`
+	VoiceChannels  []*VoiceChannelStateView `json:"voice_channels"`
+	Stream         *CrewStreamState         `json:"stream"`
+	RecentMessages []*MessagePreview        `json:"recent_messages"`
+	UpdatedAt      string                   `json:"updated_at"`
 }
 
 // CrewSidebarState is a lighter view for the sidebar.
 type CrewSidebarState struct {
-	CrewID         string            `json:"crew_id"`
-	Name           string            `json:"name"`
-	Counts         CrewCounts        `json:"counts"`
-	Voice          *CrewVoiceState   `json:"voice"`
-	Stream         *CrewStreamState  `json:"stream"`
-	RecentMessages []*MessagePreview `json:"recent_messages,omitempty"`
-	Idle           bool              `json:"idle,omitempty"`
+	CrewID         string                   `json:"crew_id"`
+	Name           string                   `json:"name"`
+	Counts         CrewCounts               `json:"counts"`
+	Voice          *CrewVoiceState          `json:"voice"`
+	VoiceChannels  []*VoiceChannelStateView `json:"voice_channels,omitempty"`
+	Stream         *CrewStreamState         `json:"stream"`
+	RecentMessages []*MessagePreview        `json:"recent_messages,omitempty"`
+	Idle           bool                     `json:"idle,omitempty"`
 }
 
 // ---------------------------------------------------------------------------
@@ -154,7 +164,7 @@ func ComputeCrewState(ctx context.Context, logger runtime.Logger, nk runtime.Nak
 		}
 	}
 
-	// Voice state
+	// Voice state (legacy single-voice field for backward compat)
 	voiceSnap := GetVoiceSnapshot(crewID)
 	voiceState := &CrewVoiceState{
 		Active:  voiceSnap.Active,
@@ -170,6 +180,33 @@ func ComputeCrewState(ctx context.Context, logger runtime.Logger, nk runtime.Nak
 				Speaking: &speaking,
 			})
 		}
+	}
+
+	// Voice channels (new multi-channel state)
+	channelDefs, _ := GetVoiceChannels(ctx, nk, crewID)
+	var voiceChannels []*VoiceChannelStateView
+	if channelDefs != nil && len(channelDefs.Channels) > 0 {
+		voiceChannels = make([]*VoiceChannelStateView, 0, len(channelDefs.Channels))
+		for _, ch := range channelDefs.Channels {
+			chSnap := GetVoiceChannelSnapshot(ch.ID)
+			chView := &VoiceChannelStateView{
+				ID:        ch.ID,
+				Name:      ch.Name,
+				IsDefault: ch.IsDefault,
+				Members:   make([]*VoiceMemberInfo, 0, len(chSnap.Members)),
+			}
+			for _, vm := range chSnap.Members {
+				speaking := vm.Speaking
+				chView.Members = append(chView.Members, &VoiceMemberInfo{
+					UserID:   vm.UserID,
+					Username: vm.Username,
+					Speaking: &speaking,
+				})
+			}
+			voiceChannels = append(voiceChannels, chView)
+		}
+	} else {
+		voiceChannels = []*VoiceChannelStateView{}
 	}
 
 	// Stream state
@@ -192,6 +229,7 @@ func ComputeCrewState(ctx context.Context, logger runtime.Logger, nk runtime.Nak
 		},
 		Members:        memberInfos,
 		Voice:          voiceState,
+		VoiceChannels:  voiceChannels,
 		Stream:         streamState,
 		RecentMessages: recentMsgs,
 		UpdatedAt:      time.Now().UTC().Format(time.RFC3339),
@@ -260,6 +298,25 @@ func (cs *CrewState) ToSidebar() *CrewSidebarState {
 			}
 		}
 		sidebar.Voice = sidebarVoice
+	}
+	// Sidebar voice channels: strip speaking state
+	if len(cs.VoiceChannels) > 0 {
+		sidebar.VoiceChannels = make([]*VoiceChannelStateView, len(cs.VoiceChannels))
+		for i, ch := range cs.VoiceChannels {
+			sidebarCh := &VoiceChannelStateView{
+				ID:        ch.ID,
+				Name:      ch.Name,
+				IsDefault: ch.IsDefault,
+				Members:   make([]*VoiceMemberInfo, len(ch.Members)),
+			}
+			for j, m := range ch.Members {
+				sidebarCh.Members[j] = &VoiceMemberInfo{
+					UserID:   m.UserID,
+					Username: m.Username,
+				}
+			}
+			sidebar.VoiceChannels[i] = sidebarCh
+		}
 	}
 	return sidebar
 }

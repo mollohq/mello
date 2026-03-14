@@ -1,7 +1,7 @@
 # MELLO Presence & Crew State Implementation
 
 > **Component:** Presence, Crew State, Real-Time Updates  
-> **Version:** 0.2  
+> **Version:** 0.3  
 > **Status:** Implemented
 
 ---
@@ -77,10 +77,10 @@ Stored in Nakama storage: `presence/{user_id}`
   "status": "online",
   "last_seen": "2026-03-08T14:15:00Z",
   "activity": {
-    "type": "streaming",
+    "type": "in_voice",
     "crew_id": "crew_xyz",
-    "stream_id": "stream_123",
-    "stream_title": "PROJECT AVALON"
+    "channel_id": "ch_abc12345",
+    "channel_name": "General"
   },
   "updated_at": "2026-03-08T14:16:00Z"
 }
@@ -93,7 +93,7 @@ Stored in Nakama storage: `presence/{user_id}`
 | Type | Fields | Description |
 |------|--------|-------------|
 | `none` | — | Just online, not doing anything |
-| `in_voice` | `crew_id` | In voice channel |
+| `in_voice` | `crew_id`, `channel_id`, `channel_name` | In a voice channel |
 | `streaming` | `crew_id`, `stream_id`, `stream_title` | Streaming |
 | `watching` | `crew_id`, `stream_id`, `streamer_id` | Watching someone |
 
@@ -101,7 +101,10 @@ Stored in Nakama storage: `presence/{user_id}`
 
 Stored in Nakama storage: `crew_state/{crew_id}`
 
-Server computes and caches this aggregate:
+Server computes and caches this aggregate. Voice state is represented as a
+`voice_channels` array — one entry per channel defined for the crew. Whether
+voice is "active" for the crew is derived from whether any channel has members
+(no top-level `voice.active` boolean).
 
 ```json
 {
@@ -113,13 +116,31 @@ Server computes and caches this aggregate:
     "total": 20
   },
   
+  "voice_channels": [
+    {
+      "id": "ch_abc12345",
+      "name": "General",
+      "is_default": true,
+      "sort_order": 0,
+      "active": true,
+      "members": [
+        { "user_id": "user_a", "username": "vex_r", "speaking": true },
+        { "user_id": "user_b", "username": "lune", "speaking": false }
+      ]
+    },
+    {
+      "id": "ch_def67890",
+      "name": "Strategy",
+      "is_default": false,
+      "sort_order": 1,
+      "active": false,
+      "members": []
+    }
+  ],
+  
   "voice": {
     "active": true,
-    "member_ids": ["user_a", "user_b"],
-    "members": [
-      { "user_id": "user_a", "username": "vex_r", "avatar": "..." },
-      { "user_id": "user_b", "username": "lune", "avatar": "..." }
-    ]
+    "members": [...]
   },
   
   "stream": {
@@ -154,6 +175,10 @@ Server computes and caches this aggregate:
 }
 ```
 
+> **Note:** The legacy flat `voice` object is still included for backward
+> compatibility but should be considered deprecated. New clients should read
+> `voice_channels` exclusively.
+
 ### 2.3 User Subscription State
 
 In-memory on server (per-session, keyed by `sessionID`):
@@ -172,7 +197,12 @@ lookup of all sessions subscribed to a given crew.
 
 ### 2.4 Voice State
 
-In-memory, real-time (`voiceRooms: map[crewID → *VoiceRoom]`):
+In-memory, real-time. Rooms are keyed by **channel ID** (not crew ID), since a
+crew has multiple voice channels:
+
+```go
+voiceRooms: map[channelID → *VoiceRoom]
+```
 
 ```go
 type VoiceMemberState struct {
@@ -184,13 +214,20 @@ type VoiceMemberState struct {
 }
 
 type VoiceRoom struct {
-    CrewID  string
-    Members map[string]*VoiceMemberState // keyed by user_id
+    ChannelID string                       `json:"channel_id"`
+    CrewID    string                       `json:"crew_id"`
+    Members   map[string]*VoiceMemberState // keyed by user_id
 }
 ```
 
-A reverse map (`voiceUserCrew: map[userID → crewID]`) tracks which room each
-user is in for fast leave/cleanup.
+**Reverse maps:**
+
+| Map | Type | Purpose |
+|-----|------|---------|
+| `voiceUserChannel` | `map[userID → channelID]` | Which channel a user is in (fast leave/cleanup) |
+| `voiceChannelCrew` | `map[channelID → crewID]` | Which crew a channel belongs to (resolve crew on leave) |
+
+Each map has its own `sync.RWMutex` for concurrent access.
 
 ### 2.5 Stream Thumbnail
 
@@ -231,6 +268,7 @@ backend/nakama/data/modules/
 ├── crew_state.go        # CrewState aggregation, cache, RPCs, chat hook
 ├── push.go              # PushManager, subscriptions, batcher, throttle
 ├── voice_state.go       # In-memory voice rooms, RPCs, cleanup
+├── voice_channels.go    # Voice channel definitions, CRUD RPCs, storage
 ├── streaming.go         # Stream start/stop, thumbnail upload RPC
 ├── crews.go             # create_crew RPC, group hooks
 └── ice.go               # ICE server RPC
@@ -273,6 +311,12 @@ func InitModule(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runti
     initializer.RegisterRpc("voice_join", VoiceJoinRPC)
     initializer.RegisterRpc("voice_leave", VoiceLeaveRPC)
     initializer.RegisterRpc("voice_speaking", VoiceSpeakingRPC)
+
+    // RPCs — voice channels (CRUD)
+    initializer.RegisterRpc("channel_create", ChannelCreateRPC)
+    initializer.RegisterRpc("channel_rename", ChannelRenameRPC)
+    initializer.RegisterRpc("channel_delete", ChannelDeleteRPC)
+    initializer.RegisterRpc("channel_reorder", ChannelReorderRPC)
 
     // RPCs — streaming
     initializer.RegisterRpc("start_stream", StartStreamRPC)
@@ -338,7 +382,7 @@ Get presence for specific users.
   "presences": {
     "user_a": {
       "status": "online",
-      "activity": { "type": "in_voice", "crew_id": "crew_xyz" }
+      "activity": { "type": "in_voice", "crew_id": "crew_xyz", "channel_id": "ch_abc12345", "channel_name": "General" }
     },
     "user_b": {
       "status": "online",
@@ -385,12 +429,30 @@ Get full state for a single crew (used for active crew).
       }
     }
   ],
+  "voice_channels": [
+    {
+      "id": "ch_abc12345",
+      "name": "General",
+      "is_default": true,
+      "sort_order": 0,
+      "active": true,
+      "members": [
+        { "user_id": "user_a", "username": "k0ji_tech", "speaking": false },
+        { "user_id": "user_b", "username": "ash_22", "speaking": false }
+      ]
+    },
+    {
+      "id": "ch_def67890",
+      "name": "Strategy",
+      "is_default": false,
+      "sort_order": 1,
+      "active": false,
+      "members": []
+    }
+  ],
   "voice": {
     "active": true,
-    "members": [
-      { "user_id": "user_a", "username": "k0ji_tech", "speaking": false },
-      { "user_id": "user_b", "username": "ash_22", "speaking": false }
-    ]
+    "members": [...]
   },
   "stream": {
     "active": true,
@@ -407,6 +469,9 @@ Get full state for a single crew (used for active crew).
   ]
 }
 ```
+
+> **Note:** `voice` (legacy flat object) is kept for backward compatibility.
+> New clients should use `voice_channels`.
 
 #### `crew_state_get_sidebar`
 
@@ -427,13 +492,23 @@ Get summary state for multiple crews (sidebar view).
       "crew_id": "crew_abc",
       "name": "Neon Syndicate",
       "counts": { "online": 4, "total": 20 },
-      "voice": {
-        "active": true,
-        "members": [
-          { "user_id": "...", "username": "vex_r" },
-          { "user_id": "...", "username": "lune" }
-        ]
-      },
+      "voice_channels": [
+        {
+          "id": "ch_abc12345",
+          "name": "General",
+          "is_default": true,
+          "members": [
+            { "user_id": "...", "username": "vex_r" },
+            { "user_id": "...", "username": "lune" }
+          ]
+        },
+        {
+          "id": "ch_def67890",
+          "name": "Strategy",
+          "is_default": false,
+          "members": []
+        }
+      ],
       "stream": null,
       "recent_messages": [
         { "username": "vex_r", "preview": "yo who has the stash...", "timestamp": "..." },
@@ -445,7 +520,7 @@ Get summary state for multiple crews (sidebar view).
       "crew_id": "crew_def",
       "name": "Deep Space",
       "counts": { "online": 2, "total": 6 },
-      "voice": { "active": false, "members": [] },
+      "voice_channels": [],
       "stream": {
         "active": true,
         "streamer_username": "nova_9",
@@ -464,6 +539,9 @@ Get summary state for multiple crews (sidebar view).
   ]
 }
 ```
+
+> **Note:** Sidebar voice channel members do **not** include `speaking` state
+> (same rule as before, now per-channel). Only active crew gets speaking.
 
 ### 4.3 Subscription RPCs
 
@@ -509,12 +587,16 @@ Subscribe to sidebar updates for crews.
 
 #### `voice_join`
 
-Join voice channel in a crew.
+Join a voice channel. If the user is already in another channel, they are
+automatically removed from the old channel first (implicit move).
+
+If `channel_id` is omitted, the server picks the crew's default channel.
 
 **Request:**
 ```json
 {
-  "crew_id": "crew_xyz"
+  "crew_id": "crew_xyz",
+  "channel_id": "ch_abc12345"
 }
 ```
 
@@ -522,15 +604,21 @@ Join voice channel in a crew.
 ```json
 {
   "success": true,
+  "channel_id": "ch_abc12345",
   "voice_state": {
-    "members": [...]
+    "channel_id": "ch_abc12345",
+    "active": true,
+    "members": [
+      { "user_id": "user_a", "username": "k0ji_tech", "speaking": false }
+    ]
   }
 }
 ```
 
 #### `voice_leave`
 
-Leave voice channel.
+Leave voice channel. No `channel_id` needed — server resolves it from the
+`voiceUserChannel` reverse map.
 
 **Request:**
 ```json
@@ -541,7 +629,9 @@ Leave voice channel.
 
 #### `voice_speaking`
 
-Update speaking status (called frequently from client).
+Update speaking status (called frequently from client). No `channel_id`
+needed — the server resolves the user's current channel from the
+`voiceUserChannel` reverse map.
 
 **Request:**
 ```json
@@ -589,9 +679,13 @@ and thin typed wrappers for each call. See Section 4 for payloads.
 | Get presence | `presence_get` | On demand |
 | Set active crew | `set_active_crew` | Crew focused in UI |
 | Subscribe sidebar | `subscribe_sidebar` | After crews loaded |
-| Join voice | `voice_join` | User clicks join / auto-join |
+| Join voice | `voice_join` | User clicks channel / auto-join |
 | Leave voice | `voice_leave` | User leaves voice or crew |
 | Speaking update | `voice_speaking` | VAD state changes |
+| Create channel | `channel_create` | Admin creates voice channel |
+| Rename channel | `channel_rename` | Admin renames voice channel |
+| Delete channel | `channel_delete` | Admin deletes voice channel |
+| Reorder channels | `channel_reorder` | Admin reorders voice channels |
 
 ### 5.2 Server → Client (Nakama Notifications)
 
@@ -614,13 +708,17 @@ const (
 #### Code 110 — `crew_state`
 
 Full crew state (sent on focus / request via `set_active_crew` RPC response, or
-pushed when significant change occurs).
+pushed when significant change occurs). Includes `voice_channels` array.
 
 ```json
 {
   "crew_id": "crew_xyz",
   "counts": { "online": 8, "total": 12 },
   "members": [...],
+  "voice_channels": [
+    { "id": "ch_abc12345", "name": "General", "is_default": true, "members": [...] },
+    { "id": "ch_def67890", "name": "Strategy", "is_default": false, "members": [] }
+  ],
   "voice": {...},
   "stream": {...},
   "recent_messages": [...]
@@ -647,14 +745,32 @@ Priority event (immediate to all subscribers).
 Event types:
 - `stream_started`
 - `stream_ended`
-- `voice_joined` (sidebar)
-- `voice_left` (sidebar)
+- `voice_joined` — includes `channel_id` and `channel_name` in `data`
+- `voice_left` — includes `channel_id` and `channel_name` in `data`
+- `channel_created` — a new voice channel was added
+- `channel_renamed` — a voice channel was renamed
+- `channel_deleted` — a voice channel was removed
 - `mention` (always immediate)
 - `dm_received` (always immediate)
 
+**Example — voice_joined:**
+```json
+{
+  "crew_id": "crew_xyz",
+  "event": "voice_joined",
+  "data": {
+    "user_id": "user_a",
+    "username": "k0ji_tech",
+    "channel_id": "ch_abc12345",
+    "channel_name": "General"
+  }
+}
+```
+
 #### Code 112 — `sidebar_update`
 
-Batched sidebar update (every 30s).
+Batched sidebar update (every 30s). Includes `voice_channels` per crew (members
+without speaking state).
 
 ```json
 {
@@ -663,7 +779,17 @@ Batched sidebar update (every 30s).
     {
       "crew_id": "crew_abc",
       "counts": { "online": 4, "total": 20 },
-      "voice": { "active": true, "members": [...] },
+      "voice_channels": [
+        {
+          "id": "ch_abc12345",
+          "name": "General",
+          "is_default": true,
+          "members": [
+            { "user_id": "...", "username": "vex_r" },
+            { "user_id": "...", "username": "lune" }
+          ]
+        }
+      ],
       "stream": {
         "active": true,
         "thumbnail_url": "https://...",
@@ -691,11 +817,31 @@ Member presence changed (active crew only).
 
 #### Code 114 — `voice_update`
 
-Voice state changed.
+Voice state changed. Pushed to active crew subscribers and includes per-channel
+data with speaking state. Also includes a legacy flat `members` list for
+backward compatibility.
 
 ```json
 {
+  "type": "voice_update",
   "crew_id": "crew_xyz",
+  "voice_channels": [
+    {
+      "id": "ch_abc12345",
+      "name": "General",
+      "is_default": true,
+      "members": [
+        { "user_id": "user_a", "username": "vex_r", "speaking": true },
+        { "user_id": "user_b", "username": "lune", "speaking": false }
+      ]
+    },
+    {
+      "id": "ch_def67890",
+      "name": "Strategy",
+      "is_default": false,
+      "members": []
+    }
+  ],
   "members": [
     { "user_id": "user_a", "username": "vex_r", "speaking": true },
     { "user_id": "user_b", "username": "lune", "speaking": false }
@@ -703,8 +849,8 @@ Voice state changed.
 }
 ```
 
-For active crew: includes speaking state.
-For sidebar: only join/leave events, no speaking state.
+For active crew: includes speaking state per channel.
+For sidebar: only join/leave events via crew_event (code 111), no voice_update push.
 
 #### Code 115 — `message_preview`
 
@@ -734,12 +880,15 @@ state (flat package requirement). Two background goroutines are started from
 // push.go
 
 var PriorityEvents = map[string]bool{
-    "stream_started": true,
-    "stream_ended":   true,
-    "voice_joined":   true,
-    "voice_left":     true,
-    "mention":        true,
-    "dm_received":    true,
+    "stream_started":   true,
+    "stream_ended":     true,
+    "voice_joined":     true,
+    "voice_left":       true,
+    "channel_created":  true,
+    "channel_renamed":  true,
+    "channel_deleted":  true,
+    "mention":          true,
+    "dm_received":      true,
 }
 
 func PushCrewEvent(ctx context.Context, logger runtime.Logger, nk runtime.NakamaModule,
@@ -945,7 +1094,7 @@ pub enum PresenceStatus { Online, Idle, Dnd, Offline }
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Activity {
     None,
-    InVoice { crew_id: String },
+    InVoice { crew_id: String, channel_id: Option<String>, channel_name: Option<String> },
     Streaming { crew_id: String, stream_id: String, stream_title: String },
     Watching { crew_id: String, stream_id: String, streamer_id: String },
 }
@@ -968,7 +1117,8 @@ pub struct CrewState {
     pub name: String,
     pub counts: CrewCounts,
     pub members: Option<Vec<CrewMember>>,  // Only for active crew
-    pub voice: VoiceState,
+    pub voice: VoiceState,                 // Legacy — prefer voice_channels
+    pub voice_channels: Vec<VoiceChannelState>,
     pub stream: Option<StreamState>,
     pub recent_messages: Vec<MessagePreview>,
     pub updated_at: Option<String>,
@@ -986,6 +1136,13 @@ pub struct CrewMember {
 pub struct VoiceState { pub active: bool, pub members: Vec<VoiceMember> }
 pub struct VoiceMember { pub user_id: String, pub username: String, pub speaking: Option<bool> }
 
+pub struct VoiceChannelState {
+    pub id: String,
+    pub name: String,
+    pub is_default: bool,
+    pub members: Vec<VoiceMember>,
+}
+
 pub struct StreamState {
     pub active: bool,
     pub stream_id: Option<String>,
@@ -999,12 +1156,17 @@ pub struct StreamState {
 pub struct MessagePreview { pub message_id: Option<String>, pub user_id: Option<String>, pub username: String, pub preview: String, pub timestamp: String }
 
 // Sidebar (lighter)
-pub struct CrewSidebarState { pub crew_id: String, pub name: String, pub counts: CrewCounts, pub voice: Option<VoiceState>, pub stream: Option<StreamState>, pub recent_messages: Vec<MessagePreview>, pub idle: bool }
+pub struct CrewSidebarState {
+    pub crew_id: String, pub name: String, pub counts: CrewCounts,
+    pub voice: Option<VoiceState>,  // Legacy — prefer voice_channels
+    pub voice_channels: Vec<VoiceChannelState>,
+    pub stream: Option<StreamState>, pub recent_messages: Vec<MessagePreview>, pub idle: bool,
+}
 
 // Push payloads parsed from Nakama notification content
 pub struct CrewEvent    { pub crew_id: String, pub event: String, pub data: serde_json::Value }
 pub struct PresenceChange { pub crew_id: String, pub user_id: String, pub presence: PresenceInfo }
-pub struct VoiceUpdate  { pub crew_id: String, pub members: Vec<VoiceMember> }
+pub struct VoiceUpdate  { pub crew_id: String, pub channel_id: String, pub members: Vec<VoiceMember> }
 pub struct MessagePreviewUpdate { pub crew_id: String, pub messages: Vec<MessagePreview> }
 pub struct SidebarUpdate { pub crews: Vec<CrewSidebarState> }
 ```
@@ -1019,21 +1181,29 @@ dispatched as events in the same way.
 **Commands** (UI → core):
 
 ```rust
-// mello-core/src/command.rs — new variants
+// mello-core/src/command.rs
 Command::UpdatePresence { status, activity }
 Command::SetActiveCrew { crew_id }
 Command::SubscribeSidebar { crew_ids }
+Command::JoinVoice { channel_id }
+Command::CreateVoiceChannel { name }
+Command::RenameVoiceChannel { channel_id, name }
+Command::DeleteVoiceChannel { channel_id }
 ```
 
 **Events** (core → UI):
 
 ```rust
-// mello-core/src/events.rs — new variants
+// mello-core/src/events.rs
 Event::CrewStateLoaded { state: CrewState }
 Event::SidebarUpdated { crews: Vec<CrewSidebarState> }
 Event::CrewEventReceived { event: CrewEvent }
 Event::PresenceChanged { change: PresenceChange }
-Event::VoiceUpdated { crew_id, members: Vec<VoiceMember> }
+Event::VoiceUpdated { crew_id, channel_id, members: Vec<VoiceMember> }
+Event::VoiceChannelsUpdated { crew_id, channels: Vec<VoiceChannelState> }
+Event::VoiceChannelCreated { crew_id, channel: VoiceChannelState }
+Event::VoiceChannelRenamed { crew_id, channel_id, name }
+Event::VoiceChannelDeleted { crew_id, channel_id }
 Event::MessagePreviewUpdated { crew_id, messages: Vec<MessagePreview> }
 ```
 
@@ -1081,20 +1251,25 @@ async fn handle_logout(&mut self) {
 ### 9.1 User Joins Voice
 
 ```
-User A clicks "Join Voice" in crew_xyz
+User A clicks a voice channel ("Strategy") in crew_xyz
     │
     ▼
-Client: RPC voice_join(crew_xyz)
+Client: RPC voice_join(crew_xyz, ch_def67890)
     │
     ▼
 Server:
-    1. Add user to voice state
-    2. Update user presence: activity = in_voice
-    3. Update crew state: voice.members += user
-    4. Push to crew_xyz active subscribers:
-       { type: "voice_update", members: [...] }
-    5. Push to crew_xyz sidebar subscribers:
-       { type: "crew_event", event: "voice_joined", data: { user: "A" } }
+    0. If user is already in a different channel → implicit leave
+       (remove from old room, push voice_left event, update presence)
+    1. Resolve channel — if channel_id omitted, pick default channel
+    2. Check capacity (max 6 per channel)
+    3. Add user to voiceRooms[ch_def67890]
+    4. Update reverse maps: voiceUserChannel[user_a] = ch_def67890
+    5. Update user presence: activity = { in_voice, channel_id, channel_name }
+    6. Push to crew_xyz active subscribers:
+       { type: "voice_update", voice_channels: [...] }
+    7. Push to crew_xyz sidebar subscribers:
+       { type: "crew_event", event: "voice_joined",
+         data: { user_id: "A", channel_id: "ch_def67890", channel_name: "Strategy" } }
 ```
 
 ### 9.2 User Starts Streaming
@@ -1164,8 +1339,11 @@ Flush batcher:
 |----------|-----|------|---------|
 | Nakama storage `presence` | `{user_id}` | Persistent | User presence state |
 | Nakama storage `stream_meta` | `{stream_id}` | Persistent | Active stream metadata |
+| Nakama storage `voice_channels` | `{crew_id}` | Persistent | Voice channel definitions per crew |
 | In-memory `crewStateCache` | `{crew_id}` | Cache | Aggregated crew state (rebuilt on demand) |
-| In-memory `voiceRooms` | `{crew_id}` | Runtime | Voice room membership |
+| In-memory `voiceRooms` | `{channel_id}` | Runtime | Voice room membership per channel |
+| In-memory `voiceUserChannel` | `{user_id}` | Runtime | Reverse: user → channel |
+| In-memory `voiceChannelCrew` | `{channel_id}` | Runtime | Reverse: channel → crew |
 | In-memory `subscriptions` | `{session_id}` | Runtime | Per-session push subscriptions |
 | In-memory `crewSubscribers` | `{crew_id}` | Runtime | Reverse index: crew → sessions |
 

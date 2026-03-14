@@ -116,6 +116,22 @@ func InitModule(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runti
 	}
 
 	// -----------------------------------------------------------------------
+	// RPCs — voice channels
+	// -----------------------------------------------------------------------
+	if err := initializer.RegisterRpc("channel_create", ChannelCreateRPC); err != nil {
+		return err
+	}
+	if err := initializer.RegisterRpc("channel_rename", ChannelRenameRPC); err != nil {
+		return err
+	}
+	if err := initializer.RegisterRpc("channel_delete", ChannelDeleteRPC); err != nil {
+		return err
+	}
+	if err := initializer.RegisterRpc("channel_reorder", ChannelReorderRPC); err != nil {
+		return err
+	}
+
+	// -----------------------------------------------------------------------
 	// RPCs — streaming
 	// -----------------------------------------------------------------------
 	if err := initializer.RegisterRpc("get_ice_servers", GetIceServersRPC); err != nil {

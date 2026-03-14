@@ -537,10 +537,11 @@ impl NakamaClient {
         Ok(urls)
     }
 
-    pub async fn voice_join(&self, crew_id: &str) -> Result<()> {
-        let payload = serde_json::json!({ "crew_id": crew_id });
-        self.rpc("voice_join", &payload).await?;
-        Ok(())
+    pub async fn voice_join(&self, crew_id: &str, channel_id: &str) -> Result<crate::crew_state::VoiceJoinResponse> {
+        let payload = serde_json::json!({ "crew_id": crew_id, "channel_id": channel_id });
+        let resp = self.rpc("voice_join", &payload).await?;
+        let parsed: crate::crew_state::VoiceJoinResponse = serde_json::from_str(&resp)?;
+        Ok(parsed)
     }
 
     pub async fn voice_leave(&self, crew_id: &str) -> Result<()> {
@@ -553,6 +554,47 @@ impl NakamaClient {
         let payload = serde_json::json!({ "crew_id": crew_id, "speaking": speaking });
         self.rpc("voice_speaking", &payload).await?;
         Ok(())
+    }
+
+    // --- Voice channel CRUD ---
+
+    pub async fn channel_create(
+        &self,
+        crew_id: &str,
+        name: &str,
+    ) -> Result<crate::crew_state::VoiceChannelState> {
+        let payload = serde_json::json!({ "crew_id": crew_id, "name": name });
+        let resp = self.rpc("channel_create", &payload).await?;
+        let channel: crate::crew_state::VoiceChannelState = serde_json::from_str(&resp)?;
+        Ok(channel)
+    }
+
+    pub async fn channel_rename(
+        &self,
+        crew_id: &str,
+        channel_id: &str,
+        name: &str,
+    ) -> Result<()> {
+        let payload =
+            serde_json::json!({ "crew_id": crew_id, "channel_id": channel_id, "name": name });
+        self.rpc("channel_rename", &payload).await?;
+        Ok(())
+    }
+
+    pub async fn channel_delete(&self, crew_id: &str, channel_id: &str) -> Result<()> {
+        let payload = serde_json::json!({ "crew_id": crew_id, "channel_id": channel_id });
+        self.rpc("channel_delete", &payload).await?;
+        Ok(())
+    }
+
+    pub async fn channel_list(
+        &self,
+        crew_id: &str,
+    ) -> Result<Vec<crate::crew_state::VoiceChannelState>> {
+        let payload = serde_json::json!({ "crew_id": crew_id });
+        let resp = self.rpc("channel_list", &payload).await?;
+        let list: Vec<crate::crew_state::VoiceChannelState> = serde_json::from_str(&resp)?;
+        Ok(list)
     }
 
     // --- Channel ---
@@ -980,6 +1022,7 @@ fn handle_notification(
                 Ok(update) => {
                     let _ = event_tx.send(Event::VoiceUpdated {
                         crew_id: update.crew_id,
+                        channel_id: update.channel_id,
                         members: update.members,
                     });
                 }

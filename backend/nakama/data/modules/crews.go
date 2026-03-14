@@ -61,6 +61,11 @@ func CreateCrewRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk ru
 		return "", runtime.NewError("failed to create crew", 13)
 	}
 
+	// Create the default voice channel for this crew
+	if err := InitDefaultChannel(ctx, nk, group.Id); err != nil {
+		logger.Warn("Failed to create default voice channel for crew %s: %v", group.Id, err)
+	}
+
 	resp := CreateCrewResponse{
 		CrewID: group.Id,
 		Name:   group.Name,

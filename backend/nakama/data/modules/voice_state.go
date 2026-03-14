@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"sync"
 	"time"
 
@@ -23,14 +24,16 @@ type VoiceMemberState struct {
 }
 
 type VoiceRoom struct {
-	CrewID  string                       `json:"crew_id"`
-	Members map[string]*VoiceMemberState `json:"members"` // keyed by user_id
+	ChannelID string                       `json:"channel_id"`
+	CrewID    string                       `json:"crew_id"`
+	Members   map[string]*VoiceMemberState `json:"members"` // keyed by user_id
 }
 
 // VoiceSnapshot is a read-only view returned to callers.
 type VoiceSnapshot struct {
+	ChannelID string              `json:"channel_id"`
 	Active    bool                `json:"active"`
-	MemberIDs []string           `json:"member_ids"`
+	MemberIDs []string            `json:"member_ids"`
 	Members   []*VoiceMemberState `json:"members"`
 }
 
@@ -39,24 +42,29 @@ type VoiceSnapshot struct {
 // ---------------------------------------------------------------------------
 
 var (
-	voiceRooms   = make(map[string]*VoiceRoom) // crewID -> room
+	voiceRooms   = make(map[string]*VoiceRoom) // channelID -> room
 	voiceRoomsMu sync.RWMutex
-	// Reverse map: userID -> crewID so we can find them on disconnect
-	voiceUserCrew   = make(map[string]string)
-	voiceUserCrewMu sync.RWMutex
+
+	// Reverse maps
+	voiceUserChannel   = make(map[string]string) // userID -> channelID
+	voiceUserChannelMu sync.RWMutex
+
+	voiceChannelCrew   = make(map[string]string) // channelID -> crewID
+	voiceChannelCrewMu sync.RWMutex
 )
 
-// GetVoiceSnapshot returns a read-only snapshot for a crew's voice state.
-func GetVoiceSnapshot(crewID string) *VoiceSnapshot {
+// GetVoiceChannelSnapshot returns a read-only snapshot for a single voice channel.
+func GetVoiceChannelSnapshot(channelID string) *VoiceSnapshot {
 	voiceRoomsMu.RLock()
 	defer voiceRoomsMu.RUnlock()
 
-	room, ok := voiceRooms[crewID]
+	room, ok := voiceRooms[channelID]
 	if !ok || len(room.Members) == 0 {
-		return &VoiceSnapshot{Active: false, Members: []*VoiceMemberState{}}
+		return &VoiceSnapshot{ChannelID: channelID, Active: false, Members: []*VoiceMemberState{}}
 	}
 
 	snap := &VoiceSnapshot{
+		ChannelID: channelID,
 		Active:    true,
 		MemberIDs: make([]string, 0, len(room.Members)),
 		Members:   make([]*VoiceMemberState, 0, len(room.Members)),
@@ -67,6 +75,46 @@ func GetVoiceSnapshot(crewID string) *VoiceSnapshot {
 		snap.Members = append(snap.Members, &copy)
 	}
 	return snap
+}
+
+// GetCrewVoiceSnapshots returns snapshots for all voice channels belonging to a crew.
+func GetCrewVoiceSnapshots(ctx context.Context, nk runtime.NakamaModule, crewID string) []*VoiceSnapshot {
+	list, err := GetVoiceChannels(ctx, nk, crewID)
+	if err != nil || len(list.Channels) == 0 {
+		return nil
+	}
+
+	snapshots := make([]*VoiceSnapshot, 0, len(list.Channels))
+	for _, ch := range list.Channels {
+		snapshots = append(snapshots, GetVoiceChannelSnapshot(ch.ID))
+	}
+	return snapshots
+}
+
+// GetVoiceSnapshot returns the legacy single-crew snapshot (picks the first active channel).
+// Kept for backward compatibility during migration.
+func GetVoiceSnapshot(crewID string) *VoiceSnapshot {
+	voiceRoomsMu.RLock()
+	defer voiceRoomsMu.RUnlock()
+
+	// Find the first room belonging to this crew
+	for _, room := range voiceRooms {
+		if room.CrewID == crewID && len(room.Members) > 0 {
+			snap := &VoiceSnapshot{
+				ChannelID: room.ChannelID,
+				Active:    true,
+				MemberIDs: make([]string, 0, len(room.Members)),
+				Members:   make([]*VoiceMemberState, 0, len(room.Members)),
+			}
+			for uid, m := range room.Members {
+				snap.MemberIDs = append(snap.MemberIDs, uid)
+				copy := *m
+				snap.Members = append(snap.Members, &copy)
+			}
+			return snap
+		}
+	}
+	return &VoiceSnapshot{Active: false, Members: []*VoiceMemberState{}}
 }
 
 // ---------------------------------------------------------------------------
@@ -80,7 +128,8 @@ func VoiceJoinRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk run
 	}
 
 	var req struct {
-		CrewID string `json:"crew_id"`
+		CrewID    string `json:"crew_id"`
+		ChannelID string `json:"channel_id"`
 	}
 	if err := json.Unmarshal([]byte(payload), &req); err != nil {
 		return "", runtime.NewError("invalid request", 3)
@@ -89,10 +138,47 @@ func VoiceJoinRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk run
 		return "", runtime.NewError("crew_id required", 3)
 	}
 
+	// Load channel list — needed to resolve default and channel name
+	channelList, err := GetVoiceChannels(ctx, nk, req.CrewID)
+	if err != nil || len(channelList.Channels) == 0 {
+		return "", runtime.NewError("no voice channels for crew", 5)
+	}
+
+	// If no channel_id provided, use the default channel for this crew
+	if req.ChannelID == "" {
+		for _, ch := range channelList.Channels {
+			if ch.IsDefault {
+				req.ChannelID = ch.ID
+				break
+			}
+		}
+		if req.ChannelID == "" {
+			req.ChannelID = channelList.Channels[0].ID
+		}
+	}
+
+	// Resolve channel name
+	channelName := ""
+	for _, ch := range channelList.Channels {
+		if ch.ID == req.ChannelID {
+			channelName = ch.Name
+			break
+		}
+	}
+
 	// Verify membership
 	if !isCrewMember(ctx, nk, req.CrewID, userID) {
 		return "", runtime.NewError("not a crew member", 7)
 	}
+
+	// Check capacity
+	voiceRoomsMu.RLock()
+	room, exists := voiceRooms[req.ChannelID]
+	if exists && len(room.Members) >= MaxVoiceChannelMembers {
+		voiceRoomsMu.RUnlock()
+		return "", runtime.NewError(fmt.Sprintf("channel full (%d members max)", MaxVoiceChannelMembers), 9)
+	}
+	voiceRoomsMu.RUnlock()
 
 	// Resolve username
 	username := resolveUsername(ctx, nk, userID)
@@ -102,13 +188,14 @@ func VoiceJoinRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk run
 
 	// Join the new room
 	voiceRoomsMu.Lock()
-	room, exists := voiceRooms[req.CrewID]
+	room, exists = voiceRooms[req.ChannelID]
 	if !exists {
 		room = &VoiceRoom{
-			CrewID:  req.CrewID,
-			Members: make(map[string]*VoiceMemberState),
+			ChannelID: req.ChannelID,
+			CrewID:    req.CrewID,
+			Members:   make(map[string]*VoiceMemberState),
 		}
-		voiceRooms[req.CrewID] = room
+		voiceRooms[req.ChannelID] = room
 	}
 	room.Members[userID] = &VoiceMemberState{
 		UserID:   userID,
@@ -116,17 +203,26 @@ func VoiceJoinRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk run
 	}
 	voiceRoomsMu.Unlock()
 
-	voiceUserCrewMu.Lock()
-	voiceUserCrew[userID] = req.CrewID
-	voiceUserCrewMu.Unlock()
+	voiceUserChannelMu.Lock()
+	voiceUserChannel[userID] = req.ChannelID
+	voiceUserChannelMu.Unlock()
+
+	voiceChannelCrewMu.Lock()
+	voiceChannelCrew[req.ChannelID] = req.CrewID
+	voiceChannelCrewMu.Unlock()
 
 	// Update user presence activity
 	now := time.Now().UTC().Format(time.RFC3339)
 	_ = WritePresence(ctx, nk, &UserPresence{
-		UserID:    userID,
-		Status:    StatusOnline,
-		LastSeen:  now,
-		Activity:  &Activity{Type: ActivityInVoice, CrewID: req.CrewID},
+		UserID:   userID,
+		Status:   StatusOnline,
+		LastSeen: now,
+		Activity: &Activity{
+			Type:        ActivityInVoice,
+			CrewID:      req.CrewID,
+			ChannelID:   req.ChannelID,
+			ChannelName: channelName,
+		},
 		UpdatedAt: now,
 	})
 
@@ -134,15 +230,18 @@ func VoiceJoinRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk run
 
 	// Push priority event: voice_joined to all crew subscribers
 	PushCrewEvent(ctx, logger, nk, req.CrewID, "voice_joined", map[string]interface{}{
-		"user_id":  userID,
-		"username": username,
+		"user_id":      userID,
+		"username":     username,
+		"channel_id":   req.ChannelID,
+		"channel_name": channelName,
 	})
 	// Push voice_update to active crew subscribers
 	PushVoiceUpdate(ctx, logger, nk, req.CrewID)
 
-	snap := GetVoiceSnapshot(req.CrewID)
+	snap := GetVoiceChannelSnapshot(req.ChannelID)
 	resp, _ := json.Marshal(map[string]interface{}{
 		"success":     true,
+		"channel_id":  req.ChannelID,
 		"voice_state": snap,
 	})
 	return string(resp), nil
@@ -180,8 +279,17 @@ func VoiceSpeakingRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk
 		return "", runtime.NewError("invalid request", 3)
 	}
 
+	// Resolve channel from user
+	voiceUserChannelMu.RLock()
+	channelID := voiceUserChannel[userID]
+	voiceUserChannelMu.RUnlock()
+
+	if channelID == "" {
+		return `{"success":true}`, nil
+	}
+
 	voiceRoomsMu.Lock()
-	room, ok := voiceRooms[req.CrewID]
+	room, ok := voiceRooms[channelID]
 	if ok {
 		if m, exists := room.Members[userID]; exists {
 			m.Speaking = req.Speaking
@@ -189,8 +297,17 @@ func VoiceSpeakingRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk
 	}
 	voiceRoomsMu.Unlock()
 
-	// Push speaking update only to active crew subscribers (not sidebar)
-	PushVoiceUpdate(ctx, logger, nk, req.CrewID)
+	// Resolve crew from channel for push
+	crewID := req.CrewID
+	if crewID == "" {
+		voiceChannelCrewMu.RLock()
+		crewID = voiceChannelCrew[channelID]
+		voiceChannelCrewMu.RUnlock()
+	}
+
+	if crewID != "" {
+		PushVoiceUpdate(ctx, logger, nk, crewID)
+	}
 
 	return `{"success":true}`, nil
 }
@@ -200,24 +317,32 @@ func VoiceSpeakingRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk
 // ---------------------------------------------------------------------------
 
 func voiceLeaveInternal(ctx context.Context, logger runtime.Logger, nk runtime.NakamaModule, userID string) {
-	voiceUserCrewMu.Lock()
-	crewID, wasInVoice := voiceUserCrew[userID]
-	delete(voiceUserCrew, userID)
-	voiceUserCrewMu.Unlock()
+	voiceUserChannelMu.Lock()
+	channelID, wasInVoice := voiceUserChannel[userID]
+	delete(voiceUserChannel, userID)
+	voiceUserChannelMu.Unlock()
 
 	if !wasInVoice {
 		return
 	}
 
+	// Resolve crew
+	voiceChannelCrewMu.RLock()
+	crewID := voiceChannelCrew[channelID]
+	voiceChannelCrewMu.RUnlock()
+
 	username := ""
 	voiceRoomsMu.Lock()
-	if room, ok := voiceRooms[crewID]; ok {
+	if room, ok := voiceRooms[channelID]; ok {
 		if m, exists := room.Members[userID]; exists {
 			username = m.Username
 		}
 		delete(room.Members, userID)
 		if len(room.Members) == 0 {
-			delete(voiceRooms, crewID)
+			delete(voiceRooms, channelID)
+			voiceChannelCrewMu.Lock()
+			delete(voiceChannelCrew, channelID)
+			voiceChannelCrewMu.Unlock()
 		}
 	}
 	voiceRoomsMu.Unlock()
@@ -232,13 +357,38 @@ func voiceLeaveInternal(ctx context.Context, logger runtime.Logger, nk runtime.N
 		UpdatedAt: now,
 	})
 
-	InvalidateCrewState(crewID)
+	if crewID != "" {
+		InvalidateCrewState(crewID)
 
-	PushCrewEvent(ctx, logger, nk, crewID, "voice_left", map[string]interface{}{
-		"user_id":  userID,
-		"username": username,
-	})
-	PushVoiceUpdate(ctx, logger, nk, crewID)
+		// Resolve channel name for the event
+		channelName := resolveChannelName(ctx, nk, crewID, channelID)
+		PushCrewEvent(ctx, logger, nk, crewID, "voice_left", map[string]interface{}{
+			"user_id":      userID,
+			"username":     username,
+			"channel_id":   channelID,
+			"channel_name": channelName,
+		})
+		PushVoiceUpdate(ctx, logger, nk, crewID)
+	}
+}
+
+// VoiceEvictChannel removes all users from a specific channel (used when channel is deleted).
+func VoiceEvictChannel(ctx context.Context, logger runtime.Logger, nk runtime.NakamaModule, channelID string) {
+	voiceRoomsMu.RLock()
+	room, ok := voiceRooms[channelID]
+	if !ok {
+		voiceRoomsMu.RUnlock()
+		return
+	}
+	userIDs := make([]string, 0, len(room.Members))
+	for uid := range room.Members {
+		userIDs = append(userIDs, uid)
+	}
+	voiceRoomsMu.RUnlock()
+
+	for _, uid := range userIDs {
+		voiceLeaveInternal(ctx, logger, nk, uid)
+	}
 }
 
 // VoiceCleanupUser removes a user from any voice room (called on disconnect).

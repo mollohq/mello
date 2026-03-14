@@ -1,6 +1,7 @@
 use crate::crew::{Crew, Member};
 use crate::crew_state::{
-    CrewEvent, CrewSidebarState, CrewState, MessagePreview, PresenceChange, VoiceMember,
+    CrewEvent, CrewSidebarState, CrewState, MessagePreview, PresenceChange, VoiceChannelState,
+    VoiceMember,
 };
 use crate::voice::AudioDevice;
 
@@ -99,8 +100,39 @@ pub enum Event {
     CrewEventReceived { event: CrewEvent },
     /// A member's presence changed in the active crew.
     PresenceChanged { change: PresenceChange },
-    /// Voice state update for the active crew (includes speaking).
-    VoiceUpdated { crew_id: String, members: Vec<VoiceMember> },
+    /// Local user successfully joined a voice channel (RPC response).
+    VoiceJoined {
+        crew_id: String,
+        channel_id: String,
+        members: Vec<VoiceMember>,
+    },
+    /// Voice state update for a channel in the active crew (includes speaking).
+    VoiceUpdated {
+        crew_id: String,
+        channel_id: String,
+        members: Vec<VoiceMember>,
+    },
+    /// Full voice channels state refreshed for the active crew.
+    VoiceChannelsUpdated {
+        crew_id: String,
+        channels: Vec<VoiceChannelState>,
+    },
+    /// A voice channel was created.
+    VoiceChannelCreated {
+        crew_id: String,
+        channel: VoiceChannelState,
+    },
+    /// A voice channel was renamed.
+    VoiceChannelRenamed {
+        crew_id: String,
+        channel_id: String,
+        name: String,
+    },
+    /// A voice channel was deleted.
+    VoiceChannelDeleted {
+        crew_id: String,
+        channel_id: String,
+    },
     /// Throttled message preview for a sidebar crew.
     MessagePreviewUpdated { crew_id: String, messages: Vec<MessagePreview> },
 

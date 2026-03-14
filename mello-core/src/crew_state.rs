@@ -15,6 +15,8 @@ pub struct CrewState {
     pub members: Option<Vec<CrewMember>>,
     pub voice: VoiceState,
     #[serde(default)]
+    pub voice_channels: Vec<VoiceChannelState>,
+    #[serde(default)]
     pub stream: Option<StreamState>,
     #[serde(default)]
     pub recent_messages: Vec<MessagePreview>,
@@ -57,6 +59,40 @@ pub struct VoiceMember {
     pub username: String,
     #[serde(default)]
     pub speaking: Option<bool>,
+}
+
+// ---------------------------------------------------------------------------
+// Voice join RPC response
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct VoiceJoinResponse {
+    pub channel_id: String,
+    pub voice_state: VoiceSnapshot,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct VoiceSnapshot {
+    pub channel_id: String,
+    #[serde(default)]
+    pub active: bool,
+    #[serde(default)]
+    pub members: Vec<VoiceMember>,
+}
+
+// ---------------------------------------------------------------------------
+// Voice channel state (multi-channel)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct VoiceChannelState {
+    pub id: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub is_default: bool,
+    #[serde(default)]
+    pub members: Vec<VoiceMember>,
 }
 
 // ---------------------------------------------------------------------------
@@ -111,6 +147,8 @@ pub struct CrewSidebarState {
     #[serde(default)]
     pub voice: Option<VoiceState>,
     #[serde(default)]
+    pub voice_channels: Vec<VoiceChannelState>,
+    #[serde(default)]
     pub stream: Option<StreamState>,
     #[serde(default)]
     pub recent_messages: Vec<MessagePreview>,
@@ -155,6 +193,8 @@ pub struct PresenceInfo {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VoiceUpdate {
     pub crew_id: String,
+    #[serde(default)]
+    pub channel_id: String,
     #[serde(default)]
     pub members: Vec<VoiceMember>,
 }
@@ -404,5 +444,162 @@ mod tests {
         assert!(!ss.active);
         assert!(ss.stream_id.is_none());
         assert!(ss.thumbnail_url.is_none());
+    }
+
+    // ── Voice Channel Tests ─────────────────────────────────────────
+
+    #[test]
+    fn voice_channel_state_json() {
+        // Backend may send extra fields (sort_order, active) — serde should ignore them
+        let json = r#"{
+            "id": "ch_abc12345",
+            "name": "General",
+            "is_default": true,
+            "sort_order": 0,
+            "active": true,
+            "members": [
+                { "user_id": "user_a", "username": "alice", "speaking": true },
+                { "user_id": "user_b", "username": "bob" }
+            ]
+        }"#;
+
+        let ch: VoiceChannelState = serde_json::from_str(json).unwrap();
+        assert_eq!(ch.id, "ch_abc12345");
+        assert_eq!(ch.name, "General");
+        assert!(ch.is_default);
+        assert_eq!(ch.members.len(), 2);
+        assert_eq!(ch.members[0].speaking, Some(true));
+        assert!(ch.members[1].speaking.is_none());
+    }
+
+    #[test]
+    fn voice_channel_state_empty_members() {
+        let json = r#"{
+            "id": "ch_empty",
+            "name": "AFK",
+            "is_default": false
+        }"#;
+
+        let ch: VoiceChannelState = serde_json::from_str(json).unwrap();
+        assert_eq!(ch.id, "ch_empty");
+        assert!(!ch.is_default);
+        assert!(ch.members.is_empty());
+    }
+
+    #[test]
+    fn crew_state_with_voice_channels() {
+        let json = r#"{
+            "crew_id": "crew_vc",
+            "name": "Vanguard",
+            "counts": { "online": 3, "total": 10 },
+            "voice": { "active": true, "members": [] },
+            "voice_channels": [
+                {
+                    "id": "ch_gen",
+                    "name": "General",
+                    "is_default": true,
+                    "members": [
+                        { "user_id": "u1", "username": "alice", "speaking": false }
+                    ]
+                },
+                {
+                    "id": "ch_strat",
+                    "name": "Strategy",
+                    "is_default": false,
+                    "members": []
+                }
+            ],
+            "recent_messages": []
+        }"#;
+
+        let state: CrewState = serde_json::from_str(json).unwrap();
+        assert_eq!(state.voice_channels.len(), 2);
+        assert_eq!(state.voice_channels[0].name, "General");
+        assert!(state.voice_channels[0].is_default);
+        assert_eq!(state.voice_channels[0].members.len(), 1);
+        assert_eq!(state.voice_channels[1].name, "Strategy");
+        assert!(!state.voice_channels[1].is_default);
+    }
+
+    #[test]
+    fn crew_state_without_voice_channels_defaults_empty() {
+        // Backward compat: old JSON without voice_channels field
+        let json = r#"{
+            "crew_id": "crew_old",
+            "name": "Legacy",
+            "counts": { "online": 1, "total": 5 },
+            "voice": { "active": false, "members": [] },
+            "recent_messages": []
+        }"#;
+
+        let state: CrewState = serde_json::from_str(json).unwrap();
+        assert!(state.voice_channels.is_empty());
+    }
+
+    #[test]
+    fn sidebar_state_with_voice_channels() {
+        let json = r#"{
+            "crew_id": "crew_sb",
+            "name": "Sidebar Crew",
+            "counts": { "online": 2, "total": 8 },
+            "voice_channels": [
+                {
+                    "id": "ch_1",
+                    "name": "Lobby",
+                    "is_default": true,
+                    "sort_order": 0,
+                    "active": true,
+                    "members": [
+                        { "user_id": "u1", "username": "vex" }
+                    ]
+                }
+            ]
+        }"#;
+
+        let sidebar: CrewSidebarState = serde_json::from_str(json).unwrap();
+        assert_eq!(sidebar.voice_channels.len(), 1);
+        assert_eq!(sidebar.voice_channels[0].name, "Lobby");
+        assert!(sidebar.voice_channels[0].is_default);
+    }
+
+    #[test]
+    fn voice_update_with_channel_id() {
+        let json = r#"{
+            "crew_id": "crew_xyz",
+            "channel_id": "ch_general",
+            "members": [
+                { "user_id": "user_a", "username": "alice", "speaking": true }
+            ]
+        }"#;
+
+        let update: VoiceUpdate = serde_json::from_str(json).unwrap();
+        assert_eq!(update.crew_id, "crew_xyz");
+        assert_eq!(update.channel_id, "ch_general");
+        assert_eq!(update.members.len(), 1);
+    }
+
+    #[test]
+    fn voice_channel_state_roundtrip() {
+        let ch = VoiceChannelState {
+            id: "ch_test".to_string(),
+            name: "Test".to_string(),
+            is_default: false,
+            members: vec![
+                VoiceMember {
+                    user_id: "u1".to_string(),
+                    username: "alice".to_string(),
+                    speaking: Some(true),
+                },
+            ],
+        };
+
+        let serialized = serde_json::to_string(&ch).unwrap();
+        let deserialized: VoiceChannelState = serde_json::from_str(&serialized).unwrap();
+
+        assert_eq!(deserialized.id, "ch_test");
+        assert_eq!(deserialized.name, "Test");
+        assert!(!deserialized.is_default);
+        assert_eq!(deserialized.members.len(), 1);
+        assert_eq!(deserialized.members[0].speaking, Some(true));
     }
 }

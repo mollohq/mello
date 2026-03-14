@@ -1,435 +1,153 @@
 import { Theme } from "../theme.slint";
 import { MemberData } from "../types.slint";
 
-// ── Collapsed voice channel row (compact single-line) ──
-component VoiceChannelRow inherits Rectangle {
-    in property <string> channel-name;
-    in property <string> status-text: "0 Members";
-
-    background: transparent;
-
-    HorizontalLayout {
-        padding-top: 10px;
-        padding-bottom: 10px;
-        padding-left: 20px;
-        padding-right: 20px;
-        spacing: 8px;
-
-        Image {
-            source: @image-url("../icons/mic.svg");
-            width: 14px;
-            height: 14px;
-            colorize: Theme.text-secondary;
-            y: (parent.height - self.height) / 2;
-        }
-
-        Text {
-            text: channel-name;
-            font-family: Theme.font-mono;
-            font-size: 12px;
-            font-weight: 600;
-            color: Theme.text-secondary;
-            vertical-alignment: center;
-        }
-
-        Text {
-            text: status-text;
-            font-family: Theme.font-mono;
-            font-size: 10px;
-            color: Theme.text-tertiary;
-            vertical-alignment: center;
-        }
-
-        Rectangle { horizontal-stretch: 1; }
-
-        Text {
-            text: "▾";
-            font-size: 14px;
-            color: Theme.text-tertiary;
-            vertical-alignment: center;
-        }
-    }
-}
-
-export component StreamView inherits VerticalLayout {
+export component StreamView inherits Rectangle {
     in property <[MemberData]> members: [];
     in property <string> streamer-name: "k0ji_tech";
     in property <string> stream-label: "COUNTER-STRIKE 2";
     in property <bool> stream-live: true;
 
-    spacing: Theme.gap;
+    vertical-stretch: 1;
+    background: Theme.surface;
+    border-radius: Theme.r-outer;
+    border-width: 1px;
+    border-color: Theme.graphic-light;
 
-    // ==================== STREAM VIEW ====================
-    Rectangle {
-        vertical-stretch: 1;
-        background: Theme.surface;
-        border-radius: Theme.r-outer;
-        border-width: 1px;
-        border-color: Theme.graphic-light;
+    VerticalLayout {
+        padding: Theme.pad;
+        spacing: 0px;
 
-        VerticalLayout {
-            padding: Theme.pad;
-            spacing: 0px;
+        // --- Stream header ---
+        HorizontalLayout {
+            height: 48px;
+            spacing: 8px;
 
-            // --- Stream header ---
-            HorizontalLayout {
-                height: 48px;
-                spacing: 8px;
-
-                VerticalLayout {
-                    horizontal-stretch: 1;
-                    alignment: start;
-
-                    Text {
-                        text: "CREWMATE STREAM";
-                        font-size: Theme.font-sm;
-                        font-weight: 600;
-                        letter-spacing: 1.3px;
-                        color: Theme.text-secondary;
-                    }
-
-                    Rectangle { height: 4px; }
-
-                    Text {
-                        text: streamer-name != "" ? streamer-name : "No stream";
-                        font-size: Theme.font-xl;
-                        font-weight: 500;
-                        color: Theme.text-primary;
-                    }
-                }
-
-                // Live badge
-                if stream-live: Rectangle {
-                    width: 110px;
-                    height: 28px;
-                    background: Theme.bg-app;
-                    border-radius: Theme.r-pill;
-                    y: 0;
-
-                    HorizontalLayout {
-                        alignment: center;
-                        spacing: 8px;
-
-                        Rectangle {
-                            width: 6px;
-                            height: 6px;
-                            border-radius: 3px;
-                            background: Theme.accent;
-                        }
-
-                        Text {
-                            text: "00:42:15";
-                            font-family: Theme.font-mono;
-                            font-size: Theme.font-sm;
-                            color: Theme.text-primary;
-                            vertical-alignment: center;
-                        }
-                    }
-                }
-            }
-
-            Rectangle { height: 16px; }
-
-            // --- Stream preview area ---
-            Rectangle {
-                vertical-stretch: 1;
-                background: Theme.bg-app;
-                border-radius: Theme.r-inner;
-                clip: true;
-
-                if stream-live: Image {
-                    source: @image-url("../../../designs/example-images/Counter-Strike-2.jpg");
-                    width: parent.width;
-                    height: parent.height;
-                    image-fit: cover;
-                }
-
-                // Placeholder art when no stream
-                if !stream-live: Rectangle {
-                    width: parent.width * 60%;
-                    height: 4px;
-                    background: Theme.graphic-med;
-                    border-radius: 2px;
-                    x: (parent.width - self.width) / 2;
-                    y: (parent.height - self.height) / 2;
-                }
-                if !stream-live: Rectangle {
-                    width: 64px;
-                    height: 4px;
-                    background: Theme.graphic-dark;
-                    border-radius: 2px;
-                    x: parent.width * 28%;
-                    y: parent.height / 2 - 32px;
-                }
-                if !stream-live: Rectangle {
-                    width: parent.width * 18%;
-                    height: 4px;
-                    background: Theme.graphic-light;
-                    border-radius: 2px;
-                    x: parent.width * 56%;
-                    y: parent.height / 2 + 28px;
-                }
-            }
-
-            Rectangle { height: 16px; }
-
-            // --- Stream footer ---
-            HorizontalLayout {
-                height: 20px;
-                spacing: 16px;
+            VerticalLayout {
+                horizontal-stretch: 1;
+                alignment: start;
 
                 Text {
-                    text: stream-label;
-                    font-family: Theme.font-mono;
-                    font-size: Theme.font-lg;
-                    font-weight: 500;
+                    text: "CREWMATE STREAM";
+                    font-size: Theme.font-sm;
+                    font-weight: 600;
+                    letter-spacing: 1.3px;
                     color: Theme.text-secondary;
-                    vertical-alignment: center;
-                    horizontal-stretch: 1;
                 }
 
-                // Scrub bar
-                if stream-live: Rectangle {
-                    width: 240px;
-                    height: 6px;
-                    background: Theme.bg-app;
-                    border-radius: 3px;
-                    y: (parent.height - self.height) / 2;
+                Rectangle { height: 4px; }
+
+                Text {
+                    text: streamer-name != "" ? streamer-name : "No stream";
+                    font-size: Theme.font-xl;
+                    font-weight: 500;
+                    color: Theme.text-primary;
+                }
+            }
+
+            // Live badge
+            if stream-live: Rectangle {
+                width: 110px;
+                height: 28px;
+                background: Theme.bg-app;
+                border-radius: Theme.r-pill;
+                y: 0;
+
+                HorizontalLayout {
+                    alignment: center;
+                    spacing: 8px;
 
                     Rectangle {
-                        width: parent.width * 45%;
-                        height: parent.height;
-                        background: Theme.graphic-dark;
+                        width: 6px;
+                        height: 6px;
                         border-radius: 3px;
+                        background: Theme.accent;
+                    }
+
+                    Text {
+                        text: "00:42:15";
+                        font-family: Theme.font-mono;
+                        font-size: Theme.font-sm;
+                        color: Theme.text-primary;
+                        vertical-alignment: center;
                     }
                 }
             }
         }
-    }
 
-    // ==================== VOICE SECTION (Accordion) ====================
-    Rectangle {
-        vertical-stretch: 0;
-        background: Theme.surface;
-        border-radius: Theme.r-outer;
-        border-width: 1px;
-        border-color: Theme.graphic-light;
-        clip: true;
+        Rectangle { height: 16px; }
 
-        VerticalLayout {
-            spacing: 0px;
+        // --- Stream preview area ---
+        Rectangle {
+            vertical-stretch: 1;
+            background: Theme.bg-app;
+            border-radius: Theme.r-inner;
+            clip: true;
 
-            // === General Channel (expanded / active) ===
-            Rectangle {
+            if stream-live: Image {
+                source: @image-url("../../../designs/example-images/Counter-Strike-2.jpg");
+                width: parent.width;
+                height: parent.height;
+                image-fit: cover;
+            }
+
+            // Placeholder art when no stream
+            if !stream-live: Rectangle {
+                width: parent.width * 60%;
+                height: 4px;
+                background: Theme.graphic-med;
+                border-radius: 2px;
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+            }
+            if !stream-live: Rectangle {
+                width: 64px;
+                height: 4px;
+                background: Theme.graphic-dark;
+                border-radius: 2px;
+                x: parent.width * 28%;
+                y: parent.height / 2 - 32px;
+            }
+            if !stream-live: Rectangle {
+                width: parent.width * 18%;
+                height: 4px;
+                background: Theme.graphic-light;
+                border-radius: 2px;
+                x: parent.width * 56%;
+                y: parent.height / 2 + 28px;
+            }
+        }
+
+        Rectangle { height: 16px; }
+
+        // --- Stream footer ---
+        HorizontalLayout {
+            height: 20px;
+            spacing: 16px;
+
+            Text {
+                text: stream-label;
+                font-family: Theme.font-mono;
+                font-size: Theme.font-lg;
+                font-weight: 500;
+                color: Theme.text-secondary;
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+            }
+
+            // Scrub bar
+            if stream-live: Rectangle {
+                width: 240px;
+                height: 6px;
                 background: Theme.bg-app;
+                border-radius: 3px;
+                y: (parent.height - self.height) / 2;
 
-                VerticalLayout {
-                    padding-top: 12px;
-                    padding-bottom: 14px;
-                    padding-left: 20px;
-                    padding-right: 20px;
-                    spacing: 0px;
-
-                    // ── Top row: channel meta + badge ──
-                    HorizontalLayout {
-                        height: 20px;
-                        spacing: 16px;
-
-                        HorizontalLayout {
-                            spacing: 8px;
-
-                            Image {
-                                source: @image-url("../icons/mic.svg");
-                                width: 14px;
-                                height: 14px;
-                                colorize: Theme.text-primary;
-                                y: (parent.height - self.height) / 2;
-                            }
-
-                            Text {
-                                text: "General";
-                                font-family: Theme.font-mono;
-                                font-size: 12px;
-                                font-weight: 600;
-                                color: Theme.text-primary;
-                                vertical-alignment: center;
-                            }
-
-                            Text {
-                                text: "·";
-                                font-size: 14px;
-                                color: Theme.text-tertiary;
-                                vertical-alignment: center;
-                            }
-
-                            Text {
-                                text: "Active Session";
-                                font-family: Theme.font-mono;
-                                font-size: 10px;
-                                color: Theme.text-tertiary;
-                                letter-spacing: 0.5px;
-                                vertical-alignment: center;
-                            }
-                        }
-
-                        Rectangle { horizontal-stretch: 1; }
-
-                        HorizontalLayout {
-                            spacing: 8px;
-                            alignment: center;
-
-                            Text {
-                                text: "ACTIVE SESSION";
-                                font-family: Theme.font-mono;
-                                font-size: Theme.font-xs;
-                                color: Theme.text-tertiary;
-                                letter-spacing: 0.5px;
-                                vertical-alignment: center;
-                            }
-
-                            Rectangle {
-                                width: 5px;
-                                height: 5px;
-                                border-radius: 2.5px;
-                                background: Theme.accent;
-                            }
-                        }
-                    }
-
-                    Rectangle { height: 12px; }
-
-                    // ── Participant avatars ──
-                    HorizontalLayout {
-                        spacing: 20px;
-                        alignment: start;
-
-                        for member in members: VerticalLayout {
-                            alignment: center;
-                            spacing: 8px;
-
-                            Rectangle {
-                                width: 48px;
-                                height: 48px;
-                                border-radius: Theme.r-inner;
-                                background: Theme.surface;
-                                border-width: 1px;
-                                border-color: member.speaking ? Theme.accent : Theme.graphic-light;
-
-                                Text {
-                                    text: member.initials;
-                                    font-size: 14px;
-                                    font-family: Theme.font-mono;
-                                    font-weight: 600;
-                                    color: member.speaking ? Theme.text-primary : Theme.text-secondary;
-                                    horizontal-alignment: center;
-                                    vertical-alignment: center;
-                                }
-                            }
-
-                            // Voice indicator bars
-                            HorizontalLayout {
-                                alignment: center;
-                                spacing: 4px;
-                                height: 6px;
-
-                                Rectangle {
-                                    width: 3px;
-                                    height: 3px;
-                                    border-radius: 1.5px;
-                                    background: member.speaking ? Theme.graphic-dark : Theme.graphic-light;
-                                }
-                                Rectangle {
-                                    width: member.speaking ? 20px : 10px;
-                                    height: 3px;
-                                    border-radius: 1.5px;
-                                    background: member.speaking ? Theme.accent : Theme.graphic-light;
-                                }
-                                Rectangle {
-                                    width: 3px;
-                                    height: 3px;
-                                    border-radius: 1.5px;
-                                    background: member.speaking ? Theme.graphic-dark : Theme.graphic-light;
-                                }
-                            }
-
-                            Text {
-                                text: member.name;
-                                font-family: Theme.font-mono;
-                                font-size: 10px;
-                                font-weight: member.speaking ? 500 : 400;
-                                color: member.speaking ? Theme.text-primary : Theme.text-secondary;
-                                horizontal-alignment: center;
-                            }
-                        }
-
-                        // Invite placeholder
-                        if members.length > 0: VerticalLayout {
-                            alignment: center;
-                            spacing: 8px;
-
-                            Rectangle {
-                                width: 48px;
-                                height: 48px;
-                                border-radius: Theme.r-inner;
-                                background: transparent;
-                                border-width: 1px;
-                                border-color: Theme.graphic-light;
-                                opacity: 0.4;
-
-                                Text {
-                                    text: "+";
-                                    font-size: 18px;
-                                    color: Theme.text-secondary;
-                                    horizontal-alignment: center;
-                                    vertical-alignment: center;
-                                }
-                            }
-
-                            Rectangle { height: 6px; }
-
-                            Text {
-                                text: "Invite";
-                                font-family: Theme.font-mono;
-                                font-size: 10px;
-                                color: Theme.text-secondary;
-                                horizontal-alignment: center;
-                            }
-                        }
-
-                        // Empty state
-                        if members.length == 0: Rectangle {
-                            horizontal-stretch: 1;
-                            height: 48px;
-
-                            Text {
-                                text: "No voice participants";
-                                font-family: Theme.font-mono;
-                                font-size: Theme.font-md;
-                                color: Theme.text-tertiary;
-                                horizontal-alignment: center;
-                                vertical-alignment: center;
-                            }
-                        }
-                    }
+                Rectangle {
+                    width: parent.width * 45%;
+                    height: parent.height;
+                    background: Theme.graphic-dark;
+                    border-radius: 3px;
                 }
-            }
-
-            // Separator
-            Rectangle { height: 1px; background: Theme.graphic-light; }
-
-            // === Strategy Channel (collapsed) ===
-            VoiceChannelRow {
-                channel-name: "Strategy";
-                status-text: "0 Members";
-            }
-
-            // Separator
-            Rectangle { height: 1px; background: Theme.graphic-light; }
-
-            // === AFK Channel (collapsed) ===
-            VoiceChannelRow {
-                channel-name: "AFK";
-                status-text: "0 Members";
             }
         }
     }
