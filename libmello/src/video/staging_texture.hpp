@@ -12,8 +12,9 @@ class StagingTexture {
 public:
     /// @param format  DXGI_FORMAT_NV12 (default) or DXGI_FORMAT_R8_UNORM (NVDEC zero-copy).
     ///                R8 sources get GPU-converted to RGBA via compute shader.
+    /// @param uv_y_offset  Row where UV plane starts in R8 layout (coded_height, may differ from video_height).
     bool initialize(const GraphicsDevice& device, uint32_t width, uint32_t video_height,
-                    DXGI_FORMAT format = DXGI_FORMAT_NV12);
+                    DXGI_FORMAT format = DXGI_FORMAT_NV12, uint32_t uv_y_offset = 0);
 
     void copy_from(ID3D11Texture2D* source);
 
@@ -28,6 +29,7 @@ public:
 
 private:
     bool init_gpu_converter();
+    void debug_trace_source(ID3D11Texture2D* source);
 
     Microsoft::WRL::ComPtr<ID3D11Device>        device_;
     Microsoft::WRL::ComPtr<ID3D11DeviceContext> context_;
@@ -35,6 +37,7 @@ private:
 
     uint32_t width_        = 0;
     uint32_t video_height_ = 0;
+    uint32_t uv_y_offset_  = 0; // UV plane start row in R8 texture (coded_height)
     DXGI_FORMAT format_    = DXGI_FORMAT_NV12;
     uint64_t read_count_   = 0;
 

@@ -17,6 +17,7 @@ RWTexture2D<float4> rgba : register(u0);
 cbuffer CB : register(b0) {
     uint vid_w;
     uint vid_h;
+    uint uv_y;  // UV plane row offset (coded_height, may differ from vid_h due to macroblock alignment)
 };
 
 [numthreads(16, 16, 1)]
@@ -25,7 +26,7 @@ void CSMain(uint3 id : SV_DispatchThreadID) {
 
     float y_raw = nv12[uint2(id.x, id.y)].r * 255.0;
 
-    uint uv_row = vid_h + id.y / 2;
+    uint uv_row = uv_y + id.y / 2;
     uint uv_col = id.x & ~1u;
     float u_raw = nv12[uint2(uv_col,     uv_row)].r * 255.0;
     float v_raw = nv12[uint2(uv_col + 1, uv_row)].r * 255.0;
@@ -113,8 +114,8 @@ bool StagingTexture::init_gpu_converter() {
         return false;
     }
 
-    // Constant buffer (video_width, video_height)
-    struct { uint32_t w, h, pad[2]; } cb_data = { width_, video_height_, {0, 0} };
+    // Constant buffer (video_width, video_height, uv_y_offset)
+    struct { uint32_t w, h, uv_y, pad; } cb_data = { width_, video_height_, uv_y_offset_, 0 };
     D3D11_BUFFER_DESC cb_desc{};
     cb_desc.ByteWidth = sizeof(cb_data);
     cb_desc.Usage = D3D11_USAGE_IMMUTABLE;
@@ -131,11 +132,12 @@ bool StagingTexture::init_gpu_converter() {
 }
 
 bool StagingTexture::initialize(const GraphicsDevice& device, uint32_t width, uint32_t video_height,
-                                DXGI_FORMAT format) {
+                                DXGI_FORMAT format, uint32_t uv_y_offset) {
     device_ = device.d3d11();
     device_->GetImmediateContext(&context_);
     width_        = width;
     video_height_ = video_height;
+    uv_y_offset_  = uv_y_offset ? uv_y_offset : video_height;
     format_       = format;
 
     // For R8 sources, try GPU compute shader path
@@ -177,13 +179,63 @@ bool StagingTexture::initialize(const GraphicsDevice& device, uint32_t width, ui
     const char* path_str = gpu_convert_ ? "GPU compute" : "CPU";
     const char* fmt_str  = (staging_fmt == DXGI_FORMAT_R8G8B8A8_UNORM) ? "RGBA"
                          : (staging_fmt == DXGI_FORMAT_R8_UNORM) ? "R8" : "NV12";
-    MELLO_LOG_INFO(TAG, "Staging texture initialized: %ux%u %s (video %ux%u, convert=%s)",
-        width, staging_h, fmt_str, width, video_height, path_str);
+    MELLO_LOG_INFO(TAG, "Staging texture initialized: %ux%u %s (video %ux%u, uv_offset=%u, convert=%s)",
+        width, staging_h, fmt_str, width, video_height, uv_y_offset_, path_str);
     return true;
+}
+
+void StagingTexture::debug_trace_source(ID3D11Texture2D* source) {
+    // Read back raw R8 source to verify NV12 values and trace the conversion
+    D3D11_TEXTURE2D_DESC src_desc{};
+    source->GetDesc(&src_desc);
+
+    D3D11_TEXTURE2D_DESC stg_desc = src_desc;
+    stg_desc.Usage = D3D11_USAGE_STAGING;
+    stg_desc.BindFlags = 0;
+    stg_desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> dbg_staging;
+    if (FAILED(device_->CreateTexture2D(&stg_desc, nullptr, &dbg_staging))) return;
+
+    context_->CopyResource(dbg_staging.Get(), source);
+
+    D3D11_MAPPED_SUBRESOURCE m{};
+    if (FAILED(context_->Map(dbg_staging.Get(), 0, D3D11_MAP_READ, 0, &m))) return;
+
+    const uint8_t* data = static_cast<const uint8_t*>(m.pData);
+    uint32_t cx = width_ / 2;
+    uint32_t cy = video_height_ / 2;
+
+    // Sample a few pixels from Y and UV planes
+    uint8_t y_tl = data[0];
+    uint8_t y_c  = data[cy * m.RowPitch + cx];
+    uint8_t y_br = data[(video_height_ - 1) * m.RowPitch + (width_ - 1)];
+
+    const uint8_t* uv_base = data + m.RowPitch * uv_y_offset_;
+    uint8_t u_c = uv_base[(cy / 2) * m.RowPitch + (cx & ~1u)];
+    uint8_t v_c = uv_base[(cy / 2) * m.RowPitch + (cx & ~1u) + 1];
+
+    // Manual BT.709 conversion
+    int c = y_c - 16;
+    int d = u_c - 128;
+    int e = v_c - 128;
+    int exp_r = std::clamp((298 * c + 459 * e + 128) >> 8, 0, 255);
+    int exp_g = std::clamp((298 * c -  55 * d - 136 * e + 128) >> 8, 0, 255);
+    int exp_b = std::clamp((298 * c + 541 * d + 128) >> 8, 0, 255);
+
+    MELLO_LOG_DEBUG(TAG, "TRACE src R8: pitch=%u Y[0,0]=%u Y[center]=%u Y[br]=%u UV[center]=(%u,%u) "
+        "-> expected RGBA=(%d,%d,%d,255)",
+        m.RowPitch, y_tl, y_c, y_br, u_c, v_c, exp_r, exp_g, exp_b);
+
+    context_->Unmap(dbg_staging.Get(), 0);
 }
 
 void StagingTexture::copy_from(ID3D11Texture2D* source) {
     if (gpu_convert_) {
+        if (read_count_ < 3) {
+            debug_trace_source(source);
+        }
+
         // Create/cache SRV for the source R8 texture
         if (source != src_tex_cached_) {
             src_srv_.Reset();
@@ -261,7 +313,7 @@ void StagingTexture::read_rgba(uint8_t* out) {
     } else {
         // CPU NV12→RGBA fallback
         const uint8_t* y_plane  = static_cast<const uint8_t*>(mapped.pData);
-        const uint8_t* uv_plane = y_plane + mapped.RowPitch * video_height_;
+        const uint8_t* uv_plane = y_plane + mapped.RowPitch * uv_y_offset_;
 
         if (read_count_ < 3) {
             uint32_t cx = width_ / 2;

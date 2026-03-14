@@ -248,15 +248,16 @@ fn main() {
     unsafe { mello_sys::mello_stream_get_host_resolution(host, &mut cap_w, &mut cap_h) };
     println!("Capture resolution: {}x{}", cap_w, cap_h);
 
-    // Config packet uses the old format (no chunking needed, it's tiny)
-    let config_pkt_w = cap_w as u16;
-    let config_pkt_h = cap_h as u16;
+    // Config packet (no chunking needed, it's tiny)
     let mut config_pkt = vec![HEADER_CONFIG];
-    config_pkt.extend_from_slice(&config_pkt_w.to_le_bytes());
-    config_pkt.extend_from_slice(&config_pkt_h.to_le_bytes());
+    config_pkt.extend_from_slice(&(cap_w as u16).to_le_bytes());
+    config_pkt.extend_from_slice(&(cap_h as u16).to_le_bytes());
     config_pkt.push(fps as u8);
-    if let Err(e) = host_state.socket.send_to(&config_pkt, dest) {
-        log::warn!("Failed to send config packet: {}", e);
+
+    // Send a few times at startup — UDP can drop a single packet
+    for _ in 0..3 {
+        let _ = host_state.socket.send_to(&config_pkt, dest);
+        std::thread::sleep(Duration::from_millis(50));
     }
 
     println!("Streaming... (Ctrl+C to stop)\n");
@@ -287,6 +288,9 @@ fn main() {
         } else {
             String::new()
         };
+
+        // Resend config every stats tick so late-joining viewers pick it up
+        let _ = host_state.socket.send_to(&config_pkt, dest);
 
         print!(
             "\r[{:3}s] fps={:.0} bitrate={:.0}kbps keyframes={} total={:.1}MB{}   ",

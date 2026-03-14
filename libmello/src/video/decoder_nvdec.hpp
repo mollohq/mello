@@ -15,6 +15,7 @@ public:
     bool             decode(const uint8_t* data, size_t size, bool is_keyframe) override;
     ID3D11Texture2D* get_frame() override;
     DXGI_FORMAT      frame_format() const override;
+    uint32_t         coded_height() const { return coded_height_; }
     bool             supports_codec(VideoCodec codec) const override;
     const char*      name() const override { return "NVDEC"; }
 
@@ -39,6 +40,7 @@ private:
 
     bool frame_ready_ = false;
     bool use_interop_ = false;
+    uint32_t coded_height_ = 0;
 
     DecoderConfig config_{};
     Microsoft::WRL::ComPtr<ID3D11Device>    device_;

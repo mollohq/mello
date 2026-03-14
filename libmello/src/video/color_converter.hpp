@@ -24,7 +24,7 @@ public:
     void shutdown();
 
 private:
-    void verify_nv12_output();
+    void verify_nv12_output(ID3D11Texture2D* bgra_source);
 
     ComPtr<ID3D11Device>                      device_;
     ComPtr<ID3D11DeviceContext>               context_;

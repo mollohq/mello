@@ -128,10 +128,14 @@ bool NvdecDecoder::initialize(const GraphicsDevice& device, const DecoderConfig&
     auto cuGfxRegister = reinterpret_cast<CuGfxD3D11Register_t>(
         GetProcAddress(cuda_dll_, "cuGraphicsD3D11RegisterResource"));
 
+    // H.264 macroblock-aligned dimensions (16x16 blocks)
+    uint32_t mb_height = ((config.height + 15) / 16) * 16;
+    coded_height_ = mb_height;
+
     if (cuGfxRegister) {
         D3D11_TEXTURE2D_DESC tex_desc{};
         tex_desc.Width  = config.width;
-        tex_desc.Height = config.height + config.height / 2; // Y + UV
+        tex_desc.Height = mb_height + mb_height / 2; // Y + UV (macroblock-aligned)
         tex_desc.MipLevels = 1;
         tex_desc.ArraySize = 1;
         tex_desc.Format = DXGI_FORMAT_R8_UNORM;
@@ -242,6 +246,11 @@ bool NvdecDecoder::decode(const uint8_t* data, size_t size, bool is_keyframe) {
 int CUDAAPI NvdecDecoder::handle_video_sequence(void* user, CUVIDEOFORMAT* fmt) {
     auto* self = static_cast<NvdecDecoder*>(user);
 
+    self->coded_height_ = fmt->coded_height;
+    MELLO_LOG_DEBUG(TAG, "NVDEC sequence: coded=%ux%u display=%ux%u",
+        fmt->coded_width, fmt->coded_height,
+        self->config_.width, self->config_.height);
+
     CUVIDDECODECREATEINFO create_info{};
     create_info.CodecType   = fmt->codec;
     create_info.ChromaFormat = fmt->chroma_format;
@@ -305,10 +314,9 @@ int CUDAAPI NvdecDecoder::handle_picture_display(void* user, CUVIDPARSERDISPINFO
     if (res != CUDA_SUCCESS) return 0;
 
     uint32_t w = self->config_.width;
-    uint32_t h = self->config_.height;
+    uint32_t h = self->coded_height_; // macroblock-aligned height (UV plane offset)
 
     if (self->use_interop_) {
-        // Zero-copy: NVDEC CUDA memory → R8_UNORM frame_tex_ (single copy, GPU-only)
         auto cuGfxMap = reinterpret_cast<CuGfxMapResources_t>(
             GetProcAddress(self->cuda_dll_, "cuGraphicsMapResources"));
         auto cuGfxUnmap = reinterpret_cast<CuGfxUnmapResources_t>(
@@ -319,29 +327,45 @@ int CUDAAPI NvdecDecoder::handle_picture_display(void* user, CUVIDPARSERDISPINFO
             GetProcAddress(self->cuda_dll_, "cuMemcpy2D_v2"));
 
         if (cuGfxMap && cuGfxUnmap && cuGfxGetArray && cuMemcpy2D_fn) {
-            cuGfxMap(1, &self->cuda_gfx_resource_, nullptr);
+            int rc_map = cuGfxMap(1, &self->cuda_gfx_resource_, nullptr);
+            if (rc_map != 0) {
+                MELLO_LOG_ERROR(TAG, "cuGraphicsMapResources failed: %d", rc_map);
+            }
 
             void* array = nullptr;
-            cuGfxGetArray(&array, self->cuda_gfx_resource_, 0, 0);
+            int rc_arr = cuGfxGetArray(&array, self->cuda_gfx_resource_, 0, 0);
+            if (rc_arr != 0 || !array) {
+                MELLO_LOG_ERROR(TAG, "cuGraphicsSubResourceGetMappedArray failed: rc=%d array=%p", rc_arr, array);
+            }
+
             if (array) {
+                uint32_t copy_w = (w <= pitch) ? w : pitch;
                 CudaMemcpy2D cp{};
                 cp.srcMemoryType = 2; // CU_MEMORYTYPE_DEVICE
                 cp.srcDevice     = dev_ptr;
                 cp.srcPitch      = pitch;
                 cp.dstMemoryType = 3; // CU_MEMORYTYPE_ARRAY
                 cp.dstArray      = array;
-                cp.WidthInBytes  = w;
+                cp.WidthInBytes  = copy_w;
                 cp.Height        = h + h / 2;
-                cuMemcpy2D_fn(&cp);
+                int rc_cpy = cuMemcpy2D_fn(&cp);
+                if (rc_cpy != 0) {
+                    MELLO_LOG_ERROR(TAG, "cuMemcpy2D failed: %d (copy_w=%u h=%u pitch=%u w=%u dev=0x%llX)",
+                        rc_cpy, copy_w, h + h / 2, pitch, w, dev_ptr);
+                }
             }
 
-            cuGfxUnmap(1, &self->cuda_gfx_resource_, nullptr);
+            int rc_unmap = cuGfxUnmap(1, &self->cuda_gfx_resource_, nullptr);
+            if (rc_unmap != 0) {
+                MELLO_LOG_ERROR(TAG, "cuGraphicsUnmapResources failed: %d", rc_unmap);
+            }
         }
     } else {
         // Fallback: CUDA → CPU → D3D11 (two PCIe crossings)
         auto cuMemcpy2D_fn = reinterpret_cast<CuMemcpy2D_t>(
             GetProcAddress(self->cuda_dll_, "cuMemcpy2D_v2"));
         if (cuMemcpy2D_fn) {
+            uint32_t copy_w = (w <= pitch) ? w : pitch;
             CudaMemcpy2D cp{};
             cp.srcMemoryType = 2;
             cp.srcDevice     = dev_ptr;
@@ -349,7 +373,7 @@ int CUDAAPI NvdecDecoder::handle_picture_display(void* user, CUVIDPARSERDISPINFO
             cp.dstMemoryType = 1; // CU_MEMORYTYPE_HOST
             cp.dstHost       = self->nv12_buf_.data();
             cp.dstPitch      = w;
-            cp.WidthInBytes  = w;
+            cp.WidthInBytes  = copy_w;
             cp.Height        = h + h / 2;
             cuMemcpy2D_fn(&cp);
 

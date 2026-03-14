@@ -15,8 +15,8 @@ const HEADER_KEYFRAME: u8 = 0x02;
 
 const CHUNK_HEADER_SIZE: usize = 7; // type(1) + frame_id(2) + chunk_idx(2) + chunk_count(2)
 
-const DEFAULT_W: u32 = 1920;
-const DEFAULT_H: u32 = 1080;
+const WINDOW_W: u32 = 1920;
+const WINDOW_H: u32 = 1080;
 
 struct FrameBuffer {
     buf: Vec<u32>,
@@ -109,8 +109,6 @@ fn main() {
 
     let args: Vec<String> = std::env::args().collect();
     let port: u16 = parse_arg(&args, "--port").unwrap_or(DEFAULT_PORT);
-    let initial_w: u32 = parse_arg(&args, "--width").unwrap_or(DEFAULT_W);
-    let initial_h: u32 = parse_arg(&args, "--height").unwrap_or(DEFAULT_H);
 
     let ctx = unsafe { mello_sys::mello_init() };
     if ctx.is_null() {
@@ -140,17 +138,20 @@ fn main() {
     let mut recv_buf = [0u8; 64 * 1024]; // 64KB — enough for one chunk
     let mut viewer: *mut mello_sys::MelloStreamView = std::ptr::null_mut();
     let mut got_keyframe = false;
-    let mut frame_w = initial_w;
-    let mut frame_h = initial_h;
+    let mut got_config = false;
+    let mut frame_w: u32 = 0;
+    let mut frame_h: u32 = 0;
 
     let mut assembly: HashMap<u16, FrameAssembly> = HashMap::new();
     let mut frames_dropped: u32 = 0;
 
-    // Create window
+    // Display buffer: always 1920x1080 with black background, stream centered
+    let mut display_buf = vec![0u32; (WINDOW_W * WINDOW_H) as usize];
+
     let mut window = Window::new(
-        "Mello Viewer — waiting for stream...",
-        frame_w as usize,
-        frame_h as usize,
+        "Mello Viewer \u{2014} waiting for stream...",
+        WINDOW_W as usize,
+        WINDOW_H as usize,
         WindowOptions {
             resize: true,
             ..WindowOptions::default()
@@ -186,8 +187,11 @@ fn main() {
                             if w > 0 && h > 0 {
                                 frame_w = w;
                                 frame_h = h;
+                                if !got_config {
+                                    log::info!("Config: {}x{} fps={}", frame_w, frame_h, payload[4]);
+                                    got_config = true;
+                                }
                             }
-                            log::info!("Config: {}x{} fps={}", frame_w, frame_h, payload[4]);
                         }
                         continue;
                     }
@@ -228,8 +232,8 @@ fn main() {
 
                         let is_keyframe = frame_type == HEADER_KEYFRAME;
 
-                        // Initialize viewer on first keyframe
-                        if !got_keyframe && is_keyframe {
+                        // Initialize viewer on first keyframe (only after config received)
+                        if !got_keyframe && is_keyframe && got_config {
                             got_keyframe = true;
                             println!("First keyframe received ({} bytes, {} chunks), starting decode...",
                                 payload.len(), chunk_count);
@@ -278,17 +282,30 @@ fn main() {
             unsafe { mello_sys::mello_stream_present_frame(viewer); }
         }
 
-        // Update window with latest decoded frame
+        // Blit decoded frame centered into 1080p display buffer
         let mut frame = FRAME.lock().unwrap();
         if let Some(ref mut fb) = *frame {
             if fb.dirty {
                 if fb.width != frame_w || fb.height != frame_h {
                     frame_w = fb.width;
                     frame_h = fb.height;
+                    display_buf.fill(0); // clear to black on resolution change
+                }
+
+                let ox = (WINDOW_W.saturating_sub(fb.width) / 2) as usize;
+                let oy = (WINDOW_H.saturating_sub(fb.height) / 2) as usize;
+                let src_w = fb.width.min(WINDOW_W) as usize;
+                let src_h = fb.height.min(WINDOW_H) as usize;
+
+                for row in 0..src_h {
+                    let dst_start = (oy + row) * WINDOW_W as usize + ox;
+                    let src_start = row * fb.width as usize;
+                    display_buf[dst_start..dst_start + src_w]
+                        .copy_from_slice(&fb.buf[src_start..src_start + src_w]);
                 }
 
                 window
-                    .update_with_buffer(&fb.buf, fb.width as usize, fb.height as usize)
+                    .update_with_buffer(&display_buf, WINDOW_W as usize, WINDOW_H as usize)
                     .unwrap_or_else(|e| {
                         log::warn!("Window update failed: {}", e);
                     });

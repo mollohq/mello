@@ -1,10 +1,49 @@
 #ifdef _WIN32
 #include "color_converter.hpp"
 #include "../util/log.hpp"
+#include <cstdio>
+#include <cstring>
 
 namespace mello::video {
 
 static constexpr const char* TAG = "video/color";
+
+static void save_bmp(const char* path, const uint8_t* pixels, uint32_t w, uint32_t h,
+                     uint32_t src_pitch, bool is_bgra) {
+    FILE* f = fopen(path, "wb");
+    if (!f) return;
+
+    uint32_t row_bytes = w * 4;
+    uint32_t img_size  = row_bytes * h;
+    uint32_t file_size = 54 + img_size;
+
+    uint8_t hdr[54]{};
+    hdr[0] = 'B'; hdr[1] = 'M';
+    memcpy(hdr + 2, &file_size, 4);
+    uint32_t off = 54; memcpy(hdr + 10, &off, 4);
+    uint32_t dib = 40;  memcpy(hdr + 14, &dib, 4);
+    memcpy(hdr + 18, &w, 4);
+    int32_t neg_h = -(int32_t)h;
+    memcpy(hdr + 22, &neg_h, 4);
+    uint16_t planes = 1; memcpy(hdr + 26, &planes, 2);
+    uint16_t bpp = 32;   memcpy(hdr + 28, &bpp, 2);
+    memcpy(hdr + 34, &img_size, 4);
+    fwrite(hdr, 1, 54, f);
+
+    for (uint32_t y = 0; y < h; ++y) {
+        const uint8_t* row = pixels + y * src_pitch;
+        if (is_bgra) {
+            fwrite(row, 1, row_bytes, f);
+        } else {
+            for (uint32_t x = 0; x < w; ++x) {
+                uint8_t bgra[4] = { row[x*4+2], row[x*4+1], row[x*4+0], row[x*4+3] };
+                fwrite(bgra, 1, 4, f);
+            }
+        }
+    }
+    fclose(f);
+    MELLO_LOG_INFO(TAG, "Saved debug frame: %s (%ux%u)", path, w, h);
+}
 
 ColorConverter::~ColorConverter() {
     shutdown();
@@ -138,17 +177,18 @@ ID3D11Texture2D* ColorConverter::convert(ID3D11Texture2D* bgra_source) {
 
     // Debug: on first frame, readback a few NV12 pixels to verify conversion
     if (frame_count_ < 3) {
-        verify_nv12_output();
+        verify_nv12_output(bgra_source);
     }
     frame_count_++;
 
     return nv12_texture_.Get();
 }
 
-void ColorConverter::verify_nv12_output() {
+void ColorConverter::verify_nv12_output(ID3D11Texture2D* bgra_source) {
     D3D11_TEXTURE2D_DESC desc{};
     nv12_texture_->GetDesc(&desc);
 
+    // Stage the NV12 output
     D3D11_TEXTURE2D_DESC staging_desc = desc;
     staging_desc.Usage = D3D11_USAGE_STAGING;
     staging_desc.BindFlags = 0;
@@ -156,39 +196,86 @@ void ColorConverter::verify_nv12_output() {
 
     ComPtr<ID3D11Texture2D> staging;
     HRESULT hr = device_->CreateTexture2D(&staging_desc, nullptr, &staging);
-    if (FAILED(hr)) {
-        MELLO_LOG_WARN(TAG, "verify: CreateTexture2D staging failed: hr=0x%08X", hr);
-        return;
-    }
+    if (FAILED(hr)) return;
 
     context_->CopyResource(staging.Get(), nv12_texture_.Get());
 
     D3D11_MAPPED_SUBRESOURCE mapped{};
     hr = context_->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &mapped);
-    if (FAILED(hr)) {
-        MELLO_LOG_WARN(TAG, "verify: Map failed: hr=0x%08X", hr);
-        return;
-    }
+    if (FAILED(hr)) return;
 
     const uint8_t* data = static_cast<const uint8_t*>(mapped.pData);
     uint32_t pitch = mapped.RowPitch;
 
-    // Sample Y values from center of frame
-    uint32_t cx = width_ / 2;
-    uint32_t cy = height_ / 2;
-    uint8_t y_tl = data[0];
-    uint8_t y_center = data[cy * pitch + cx];
-    uint8_t y_br = data[(height_ - 1) * pitch + (width_ - 1)];
+    // Stage the BGRA source
+    D3D11_TEXTURE2D_DESC src_desc{};
+    bgra_source->GetDesc(&src_desc);
 
-    // UV plane starts after Y plane
-    const uint8_t* uv_data = data + pitch * height_;
-    uint8_t u_center = uv_data[(cy / 2) * pitch + (cx & ~1u)];
-    uint8_t v_center = uv_data[(cy / 2) * pitch + (cx & ~1u) + 1];
+    D3D11_TEXTURE2D_DESC bgra_stg_desc = src_desc;
+    bgra_stg_desc.Usage = D3D11_USAGE_STAGING;
+    bgra_stg_desc.BindFlags = 0;
+    bgra_stg_desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+    bgra_stg_desc.MiscFlags = 0;
 
-    MELLO_LOG_DEBUG(TAG, "verify NV12: Y[0,0]=%u Y[center]=%u Y[br]=%u  UV[center]=(%u,%u)  pitch=%u",
-        y_tl, y_center, y_br, u_center, v_center, pitch);
+    ComPtr<ID3D11Texture2D> bgra_staging;
+    hr = device_->CreateTexture2D(&bgra_stg_desc, nullptr, &bgra_staging);
+    bool have_bgra = false;
+    D3D11_MAPPED_SUBRESOURCE bgra_mapped{};
+    if (SUCCEEDED(hr)) {
+        context_->CopyResource(bgra_staging.Get(), bgra_source);
+        hr = context_->Map(bgra_staging.Get(), 0, D3D11_MAP_READ, 0, &bgra_mapped);
+        have_bgra = SUCCEEDED(hr);
+    }
+
+    // Sample several positions: center, and scan UV for max-chroma pixel
+    struct SamplePoint { uint32_t x, y; const char* name; };
+    SamplePoint points[] = {
+        { width_ / 2, height_ / 2, "center" },
+        { width_ / 4, height_ / 4, "q1" },
+        { 3 * width_ / 4, height_ / 4, "q2" },
+    };
+
+    for (auto& pt : points) {
+        uint8_t y_val = data[pt.y * pitch + pt.x];
+        const uint8_t* uv_row = data + pitch * height_ + (pt.y / 2) * pitch;
+        uint8_t u_val = uv_row[(pt.x & ~1u)];
+        uint8_t v_val = uv_row[(pt.x & ~1u) + 1];
+
+        if (have_bgra) {
+            const uint8_t* bgra_row = static_cast<const uint8_t*>(bgra_mapped.pData) + pt.y * bgra_mapped.RowPitch;
+            uint8_t b = bgra_row[pt.x * 4 + 0];
+            uint8_t g = bgra_row[pt.x * 4 + 1];
+            uint8_t r = bgra_row[pt.x * 4 + 2];
+
+            // Expected NV12 under BT.709 (studio-swing)
+            float rf = r / 255.0f, gf = g / 255.0f, bf = b / 255.0f;
+            int y709 = (int)(16.0f + 219.0f * (0.2126f * rf + 0.7152f * gf + 0.0722f * bf) + 0.5f);
+            int u709 = (int)(128.0f + 224.0f * ((bf - (0.2126f * rf + 0.7152f * gf + 0.0722f * bf)) / 1.8556f) + 0.5f);
+            int v709 = (int)(128.0f + 224.0f * ((rf - (0.2126f * rf + 0.7152f * gf + 0.0722f * bf)) / 1.5748f) + 0.5f);
+
+            // Expected NV12 under BT.601 (studio-swing)
+            int y601 = (int)(16.0f + 219.0f * (0.299f * rf + 0.587f * gf + 0.114f * bf) + 0.5f);
+            int u601 = (int)(128.0f + 224.0f * ((bf - (0.299f * rf + 0.587f * gf + 0.114f * bf)) / 1.772f) + 0.5f);
+            int v601 = (int)(128.0f + 224.0f * ((rf - (0.299f * rf + 0.587f * gf + 0.114f * bf)) / 1.402f) + 0.5f);
+
+            MELLO_LOG_DEBUG(TAG, "verify[%s] BGRA=(%u,%u,%u) -> NV12 Y=%u U=%u V=%u | expect709=(%d,%d,%d) expect601=(%d,%d,%d)",
+                pt.name, r, g, b, y_val, u_val, v_val,
+                y709, u709, v709, y601, u601, v601);
+        } else {
+            MELLO_LOG_DEBUG(TAG, "verify[%s] NV12 Y=%u U=%u V=%u",
+                pt.name, y_val, u_val, v_val);
+        }
+    }
+
+    if (have_bgra && frame_count_ == 0 && getenv("MELLO_DUMP_FRAMES")) {
+        char path[256];
+        snprintf(path, sizeof(path), "mello_host_frame_%llu.bmp", frame_count_);
+        save_bmp(path, static_cast<const uint8_t*>(bgra_mapped.pData),
+                 width_, height_, bgra_mapped.RowPitch, true);
+    }
 
     context_->Unmap(staging.Get(), 0);
+    if (have_bgra) context_->Unmap(bgra_staging.Get(), 0);
 }
 
 void ColorConverter::shutdown() {

@@ -29,6 +29,9 @@ public:
 
     /// Returns the DXGI format of the frame texture (NV12 by default, R8 for zero-copy NVDEC).
     virtual DXGI_FORMAT frame_format() const { return DXGI_FORMAT_NV12; }
+
+    /// Macroblock-aligned height (UV plane offset in decoded NV12 surface). 0 = same as config height.
+    virtual uint32_t coded_height() const { return 0; }
 #endif
 
     virtual bool        supports_codec(VideoCodec codec) const = 0;

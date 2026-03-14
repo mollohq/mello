@@ -4,10 +4,40 @@
 #include "../util/log.hpp"
 #include <chrono>
 #include <cstring>
+#include <cstdio>
 
 namespace mello::video {
 
 static constexpr const char* TAG = "video/pipeline";
+
+static void save_bmp_rgba(const char* path, const uint8_t* rgba, uint32_t w, uint32_t h) {
+    FILE* f = fopen(path, "wb");
+    if (!f) return;
+
+    uint32_t row_bytes = w * 4;
+    uint32_t img_size  = row_bytes * h;
+    uint32_t file_size = 54 + img_size;
+
+    uint8_t hdr[54]{};
+    hdr[0] = 'B'; hdr[1] = 'M';
+    memcpy(hdr + 2, &file_size, 4);
+    uint32_t off = 54; memcpy(hdr + 10, &off, 4);
+    uint32_t dib = 40;  memcpy(hdr + 14, &dib, 4);
+    memcpy(hdr + 18, &w, 4);
+    int32_t neg_h = -(int32_t)h;
+    memcpy(hdr + 22, &neg_h, 4);
+    uint16_t planes = 1; memcpy(hdr + 26, &planes, 2);
+    uint16_t bpp = 32;   memcpy(hdr + 28, &bpp, 2);
+    memcpy(hdr + 34, &img_size, 4);
+    fwrite(hdr, 1, 54, f);
+
+    for (uint32_t i = 0; i < w * h; ++i) {
+        uint8_t bgra[4] = { rgba[i*4+2], rgba[i*4+1], rgba[i*4+0], rgba[i*4+3] };
+        fwrite(bgra, 1, 4, f);
+    }
+    fclose(f);
+    MELLO_LOG_INFO(TAG, "Saved debug frame: %s (%ux%u)", path, w, h);
+}
 
 static uint64_t now_us() {
     return static_cast<uint64_t>(
@@ -232,7 +262,8 @@ bool VideoPipeline::start_viewer(const PipelineConfig& config, FrameCallback on_
     // Staging texture for VRAM → CPU handoff (format matches decoder output)
     staging_ = std::make_unique<StagingTexture>();
     DXGI_FORMAT frame_fmt = decoder_->frame_format();
-    if (!staging_->initialize(device_, config.width, config.height, frame_fmt)) {
+    uint32_t uv_offset = decoder_->coded_height();
+    if (!staging_->initialize(device_, config.width, config.height, frame_fmt, uv_offset)) {
         MELLO_LOG_ERROR(TAG, "Failed to initialize staging texture");
         return false;
     }
@@ -300,6 +331,12 @@ bool VideoPipeline::present_frame() {
 
     staging_->copy_from(latest_decoded_);
     staging_->read_rgba(rgba_buf_.data());
+
+    if (frames_decoded_ < 2 && getenv("MELLO_DUMP_FRAMES")) {
+        char path[256];
+        snprintf(path, sizeof(path), "mello_viewer_frame_%llu.bmp", frames_decoded_);
+        save_bmp_rgba(path, rgba_buf_.data(), config_.width, config_.height);
+    }
 
     if (frame_cb_) {
         frame_cb_(rgba_buf_.data(), config_.width, config_.height, now_us());
