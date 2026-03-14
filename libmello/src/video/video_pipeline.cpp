@@ -180,6 +180,13 @@ void VideoPipeline::request_keyframe() {
     if (encoder_) encoder_->request_keyframe();
 }
 
+// NOTE for future adaptive bitrate/framerate: avoid reconfiguring the encoder's
+// target FPS based on observed/achieved FPS. If frames are dropped (by the
+// transport or a frame dropper), lowering the target FPS gives each remaining
+// frame a larger bit budget, which increases per-frame size, which triggers
+// MORE drops — a cascade that can halve the frame rate permanently. Instead,
+// keep the target FPS constant and leave headroom between target and actual
+// bitrate so the encoder naturally recovers after transient drops.
 void VideoPipeline::set_bitrate(uint32_t kbps) {
     if (encoder_) encoder_->set_bitrate(kbps);
 }

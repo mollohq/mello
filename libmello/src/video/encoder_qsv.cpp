@@ -100,9 +100,11 @@ bool QsvEncoder::initialize(const GraphicsDevice& device, const EncoderConfig& c
     memset(&video_params_, 0, sizeof(video_params_));
     video_params_.mfx.CodecId                  = MFX_CODEC_AVC;
     video_params_.mfx.TargetUsage              = MFX_TARGETUSAGE_BEST_SPEED;
+    // VBR with headroom: keyframes need more bits than delta frames. Strict
+    // CBR starves keyframes, reducing quality of all subsequent references.
     video_params_.mfx.TargetKbps               = static_cast<mfxU16>(config.bitrate_kbps);
-    video_params_.mfx.MaxKbps                  = static_cast<mfxU16>(config.bitrate_kbps);
-    video_params_.mfx.RateControlMethod        = MFX_RATECONTROL_CBR;
+    video_params_.mfx.MaxKbps                  = static_cast<mfxU16>(config.bitrate_kbps + config.bitrate_kbps / 2);
+    video_params_.mfx.RateControlMethod        = MFX_RATECONTROL_VBR;
     video_params_.mfx.FrameInfo.FrameRateExtN  = config.fps;
     video_params_.mfx.FrameInfo.FrameRateExtD  = 1;
     video_params_.mfx.FrameInfo.FourCC         = MFX_FOURCC_NV12;
@@ -219,7 +221,7 @@ void QsvEncoder::request_keyframe() {
 void QsvEncoder::set_bitrate(uint32_t kbps) {
     if (session_ && fn_.EncReset) {
         video_params_.mfx.TargetKbps = static_cast<mfxU16>(kbps);
-        video_params_.mfx.MaxKbps    = static_cast<mfxU16>(kbps);
+        video_params_.mfx.MaxKbps    = static_cast<mfxU16>(kbps + kbps / 2);
         fn_.EncReset(session_, &video_params_);
     }
     config_.bitrate_kbps = kbps;

@@ -142,10 +142,17 @@ bool NvencEncoder::initialize(const GraphicsDevice& device, const EncoderConfig&
     }
     enc_config.version = NV_ENC_CONFIG_VER;
     enc_config.rcParams.version = NV_ENC_RC_PARAMS_VER;
-    enc_config.rcParams.rateControlMode = NV_ENC_PARAMS_RC_CBR;
-    enc_config.rcParams.averageBitRate  = config.bitrate_kbps * 1000;
-    enc_config.rcParams.maxBitRate      = config.bitrate_kbps * 1000;
-    enc_config.rcParams.vbvBufferSize   = config.bitrate_kbps * 1000;
+
+    // VBR with headroom: keyframes need significantly more bits than delta
+    // frames. Strict CBR (avg==max) starves keyframes, dragging down quality
+    // of subsequent frames that reference them. A 1.5x max and 2x VBV window
+    // lets the encoder spend more on keyframes while averaging to the target.
+    uint32_t avg = config.bitrate_kbps * 1000;
+    uint32_t max = avg + avg / 2;
+    enc_config.rcParams.rateControlMode = NV_ENC_PARAMS_RC_VBR;
+    enc_config.rcParams.averageBitRate  = avg;
+    enc_config.rcParams.maxBitRate      = max;
+    enc_config.rcParams.vbvBufferSize   = avg * 2;
     enc_config.frameIntervalP = 1;
     enc_config.gopLength      = config.keyframe_interval;
 
@@ -326,12 +333,15 @@ void NvencEncoder::request_keyframe() {
 
 void NvencEncoder::set_bitrate(uint32_t kbps) {
     if (encoder_) {
+        uint32_t avg = kbps * 1000;
+        uint32_t max = avg + avg / 2; // 1.5x headroom for keyframes and scene changes
+
         NV_ENC_RECONFIGURE_PARAMS reconfig = {NV_ENC_RECONFIGURE_PARAMS_VER};
         NV_ENC_CONFIG enc_config = {NV_ENC_CONFIG_VER};
-        enc_config.rcParams.rateControlMode = NV_ENC_PARAMS_RC_CBR;
-        enc_config.rcParams.averageBitRate  = kbps * 1000;
-        enc_config.rcParams.maxBitRate      = kbps * 1000;
-        enc_config.rcParams.vbvBufferSize   = kbps * 1000;
+        enc_config.rcParams.rateControlMode = NV_ENC_PARAMS_RC_VBR;
+        enc_config.rcParams.averageBitRate  = avg;
+        enc_config.rcParams.maxBitRate      = max;
+        enc_config.rcParams.vbvBufferSize   = avg * 2;
 
         NV_ENC_INITIALIZE_PARAMS init = {NV_ENC_INITIALIZE_PARAMS_VER};
         init.encodeWidth  = config_.width;
@@ -341,7 +351,10 @@ void NvencEncoder::set_bitrate(uint32_t kbps) {
         init.encodeConfig = &enc_config;
 
         reconfig.reInitEncodeParams = init;
-        reconfig.forceIDR = 1;
+        // Bitrate changes should not force a keyframe — unnecessary IDRs waste
+        // bandwidth and cause quality dips. Keyframes come from request_keyframe()
+        // or the scheduled GOP interval only.
+        reconfig.forceIDR = 0;
         fn_.nvEncReconfigureEncoder(encoder_, &reconfig);
     }
     config_.bitrate_kbps = kbps;
