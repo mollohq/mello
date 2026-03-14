@@ -95,7 +95,9 @@ private:
     uint64_t frames_dropped_   = 0;
 
     std::vector<uint8_t> rgba_buf_;
+#ifdef _WIN32
     ID3D11Texture2D*     latest_decoded_ = nullptr;
+#endif
 };
 
 } // namespace mello::video

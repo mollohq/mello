@@ -12,12 +12,14 @@ component VoiceBars inherits HorizontalLayout {
         border-radius: 1px;
         background: speaking ? Theme.accent : Theme.graphic-med;
     }
+
     Rectangle {
         width: 2px;
         height: speaking ? 12px : 4px;
         border-radius: 1px;
         background: speaking ? Theme.accent : Theme.graphic-med;
     }
+
     Rectangle {
         width: 2px;
         height: speaking ? 8px : 4px;
@@ -68,7 +70,9 @@ component MemberChip inherits Rectangle {
             vertical-alignment: center;
         }
 
-        if speaking: VoiceBars { speaking: true; }
+        if speaking: VoiceBars {
+            speaking: true;
+        }
     }
 }
 
@@ -112,7 +116,9 @@ component VoiceMiniRow inherits Rectangle {
             vertical-alignment: center;
         }
 
-        VoiceBars { speaking: speaking; }
+        VoiceBars {
+            speaking: speaking;
+        }
     }
 }
 
@@ -149,6 +155,7 @@ component StreamThumbnail inherits Rectangle {
             background: Theme.graphic-dark;
             opacity: 0.4;
         }
+
         Rectangle {
             height: 2px;
             width: 22px;
@@ -174,6 +181,7 @@ component CrewMsg inherits HorizontalLayout {
         color: Theme.text-secondary;
         vertical-alignment: center;
     }
+
     Text {
         text: body;
         font-family: Theme.font-mono;
@@ -215,7 +223,9 @@ export component CrewPanel inherits Rectangle {
                 vertical-alignment: center;
             }
 
-            Rectangle { horizontal-stretch: 1; }
+            Rectangle {
+                horizontal-stretch: 1;
+            }
 
             Rectangle {
                 width: 6px;
@@ -226,7 +236,9 @@ export component CrewPanel inherits Rectangle {
             }
         }
 
-        Rectangle { height: 20px; }
+        Rectangle {
+            height: 20px;
+        }
 
         // --- Crew cards (scrollable) ---
         Flickable {
@@ -245,7 +257,9 @@ export component CrewPanel inherits Rectangle {
                     height: 16px;
                 }
 
-                Rectangle { height: 12px; }
+                Rectangle {
+                    height: 12px;
+                }
 
                 for crew[i] in crews: Rectangle {
                     visible: crew.online-count > 0 || crew.id == active-crew-id;
@@ -257,13 +271,9 @@ export component CrewPanel inherits Rectangle {
 
                         Rectangle {
                             border-radius: Theme.r-inner;
-                            background: crew.id == active-crew-id
-                                ? (Theme.dark ? #FF1E5612 : #FF1E560D)
-                                : Theme.bg-app;
+                            background: crew.id == active-crew-id ? (Theme.dark ? #FF1E5612 : #FF1E560D) : Theme.bg-app;
                             border-width: 1px;
-                            border-color: crew.id == active-crew-id
-                                ? Theme.accent
-                                : (card-hover.has-hover ? Theme.graphic-med : transparent);
+                            border-color: crew.id == active-crew-id ? Theme.accent : (card-hover.has-hover ? Theme.graphic-med : transparent);
                             clip: true;
 
                             VerticalLayout {
@@ -272,17 +282,19 @@ export component CrewPanel inherits Rectangle {
 
                                 // --- Card header ---
                                 HorizontalLayout {
-                                    height: 18px;
+                                    height: crew.id == active-crew-id ? 20px : 18px;
                                     spacing: 8px;
 
-                                    Rectangle {
+                                    VerticalLayout {
+                                        alignment: center;
                                         width: 6px;
-                                        height: 6px;
-                                        border-radius: 3px;
-                                        background: crew.id == active-crew-id
-                                            ? Theme.accent
-                                            : Theme.accent;
-                                        y: (parent.height - self.height) / 2;
+
+                                        Rectangle {
+                                            width: 6px;
+                                            height: 6px;
+                                            border-radius: 3px;
+                                            background: Theme.accent;
+                                        }
                                     }
 
                                     Text {
@@ -300,9 +312,7 @@ export component CrewPanel inherits Rectangle {
                                         text: crew.online-count + " / " + crew.member-count;
                                         font-family: Theme.font-mono;
                                         font-size: crew.id == active-crew-id ? Theme.font-sm : Theme.font-xs;
-                                        color: crew.id == active-crew-id
-                                            ? Theme.text-primary
-                                            : Theme.text-secondary;
+                                        color: crew.id == active-crew-id ? Theme.text-primary : Theme.text-secondary;
                                         vertical-alignment: center;
                                     }
                                 }
@@ -311,7 +321,9 @@ export component CrewPanel inherits Rectangle {
                                 if crew.id == active-crew-id: VerticalLayout {
                                     spacing: 0px;
 
-                                    Rectangle { height: 14px; }
+                                    Rectangle {
+                                        height: 14px;
+                                    }
 
                                     // Member chips (flow-wrapped via VerticalLayout of rows)
                                     HorizontalLayout {
@@ -329,7 +341,9 @@ export component CrewPanel inherits Rectangle {
                                         }
                                     }
 
-                                    if crew.voice-count >= 3: Rectangle { height: 6px; }
+                                    if crew.voice-count >= 3: Rectangle {
+                                        height: 6px;
+                                    }
 
                                     if crew.voice-count >= 3: HorizontalLayout {
                                         spacing: 6px;
@@ -339,6 +353,7 @@ export component CrewPanel inherits Rectangle {
                                             name: crew.v2-name;
                                             speaking: crew.v2-speaking;
                                         }
+
                                         if crew.voice-count >= 4: MemberChip {
                                             initials: crew.v3-initials;
                                             name: crew.v3-name;
@@ -347,13 +362,16 @@ export component CrewPanel inherits Rectangle {
                                     }
 
                                     // Stream preview (if streaming)
-                                    if crew.has-stream: Rectangle { height: 10px; }
+                                    if crew.has-stream: Rectangle {
+                                        height: 10px;
+                                    }
 
                                     if crew.has-stream: HorizontalLayout {
                                         spacing: 6px;
-                                        alignment: center;
 
-                                        StreamThumbnail { small: true; }
+                                        StreamThumbnail {
+                                            small: true;
+                                        }
 
                                         VerticalLayout {
                                             alignment: center;
@@ -366,6 +384,7 @@ export component CrewPanel inherits Rectangle {
                                                 color: Theme.text-tertiary;
                                                 letter-spacing: 0.7px;
                                             }
+
                                             Text {
                                                 text: crew.stream-name;
                                                 font-family: Theme.font-mono;
@@ -377,19 +396,22 @@ export component CrewPanel inherits Rectangle {
                                 }
 
                                 // ===== INACTIVE card body =====
-                                if crew.id != active-crew-id && crew.online-count > 0: VerticalLayout {
+                                if crew.id != active-crew-id && (crew.voice-count > 0 || crew.has-stream): VerticalLayout {
                                     spacing: 0px;
 
-                                    Rectangle { height: 10px; }
+                                    Rectangle {
+                                        height: 10px;
+                                    }
 
                                     // Preview: stream thumbnail + voice rows
                                     HorizontalLayout {
                                         spacing: 8px;
-                                        alignment: start;
 
-                                        if crew.has-stream: StreamThumbnail { small: false; }
+                                        if crew.has-stream: StreamThumbnail {
+                                            small: false;
+                                        }
 
-                                        VerticalLayout {
+                                        if crew.voice-count > 0: VerticalLayout {
                                             spacing: 6px;
                                             vertical-stretch: 1;
 
@@ -410,23 +432,33 @@ export component CrewPanel inherits Rectangle {
                                             }
                                         }
                                     }
+                                }
 
-                                    // Messages
-                                    if crew.msg-count > 0: Rectangle { height: 10px; }
+                                // Messages (shown for any non-active crew with messages)
+                                if crew.id != active-crew-id && crew.msg-count > 0: VerticalLayout {
+                                    spacing: 0px;
 
-                                    if crew.msg-count > 0: Rectangle {
+                                    Rectangle {
+                                        height: 10px;
+                                    }
+
+                                    Rectangle {
                                         height: 1px;
                                         background: Theme.graphic-light;
                                     }
 
-                                    if crew.msg-count > 0: Rectangle { height: 10px; }
+                                    Rectangle {
+                                        height: 10px;
+                                    }
 
-                                    if crew.msg-count >= 1: CrewMsg {
+                                    CrewMsg {
                                         author: crew.m0-author;
                                         body: crew.m0-text;
                                     }
 
-                                    if crew.msg-count >= 1: Rectangle { height: 5px; }
+                                    if crew.msg-count >= 2: Rectangle {
+                                        height: 5px;
+                                    }
 
                                     if crew.msg-count >= 2: CrewMsg {
                                         author: crew.m1-author;
@@ -436,17 +468,23 @@ export component CrewPanel inherits Rectangle {
                             }
 
                             card-hover := TouchArea {
-                                clicked => { crew-selected(crew.id); }
+                                clicked => {
+                                    crew-selected(crew.id);
+                                }
                             }
                         }
 
                         // Spacing between cards
-                        Rectangle { height: 8px; }
+                        Rectangle {
+                            height: 8px;
+                        }
                     }
                 }
 
                 // ===== IDLE section =====
-                Rectangle { height: 20px; }
+                Rectangle {
+                    height: 20px;
+                }
 
                 Text {
                     text: "IDLE";
@@ -457,7 +495,9 @@ export component CrewPanel inherits Rectangle {
                     height: 16px;
                 }
 
-                Rectangle { height: 12px; }
+                Rectangle {
+                    height: 12px;
+                }
 
                 for crew[i] in crews: Rectangle {
                     visible: crew.online-count <= 0 && crew.id != active-crew-id;
@@ -501,7 +541,9 @@ export component CrewPanel inherits Rectangle {
                                     }
                                 }
 
-                                Rectangle { height: 4px; }
+                                Rectangle {
+                                    height: 4px;
+                                }
 
                                 Text {
                                     text: "No members online";
@@ -512,18 +554,24 @@ export component CrewPanel inherits Rectangle {
                             }
 
                             idle-hover := TouchArea {
-                                clicked => { crew-selected(crew.id); }
+                                clicked => {
+                                    crew-selected(crew.id);
+                                }
                             }
                         }
 
-                        Rectangle { height: 8px; }
+                        Rectangle {
+                            height: 8px;
+                        }
                     }
                 }
             }
         }
 
         // --- Create crew input ---
-        Rectangle { height: Theme.gap; }
+        Rectangle {
+            height: Theme.gap;
+        }
 
         Rectangle {
             height: 40px;
@@ -547,6 +595,7 @@ export component CrewPanel inherits Rectangle {
                     }
                 }
             }
+
             if crew-name-input.text == "": Text {
                 x: 14px;
                 color: Theme.text-tertiary;

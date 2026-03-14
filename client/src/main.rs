@@ -1317,6 +1317,11 @@ fn handle_event(app: &MainWindow, event: Event, settings: &Rc<RefCell<Settings>>
                 .map(|i| {
                     let mut c = crews.row_data(i).unwrap();
                     if c.id == state.crew_id.as_str() {
+                        // Always update name from authoritative state
+                        if !state.name.is_empty() {
+                            c.name = state.name.clone().into();
+                        }
+                        c.member_count = state.counts.total as i32;
                         c.online_count = state.counts.online as i32;
                         let vlen = state.voice.members.len().min(4);
                         c.voice_count = vlen as i32;

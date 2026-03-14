@@ -9,6 +9,13 @@
 #include <cstring>
 #include <cstdlib>
 
+#ifdef _WIN32
+#define mello_stricmp _stricmp
+#else
+#include <strings.h>
+#define mello_stricmp strcasecmp
+#endif
+
 static char* dup_str(const char* s) {
     if (!s) return nullptr;
     size_t len = strlen(s) + 1;
@@ -46,11 +53,11 @@ static void init_log_level() {
     if (!env) env = std::getenv("RUST_LOG");
     if (!env) return;
 
-    if (_stricmp(env, "debug") == 0 || _stricmp(env, "trace") == 0)
+    if (mello_stricmp(env, "debug") == 0 || mello_stricmp(env, "trace") == 0)
         mello::set_log_level(mello::LogLevel::Debug);
-    else if (_stricmp(env, "warn") == 0 || _stricmp(env, "warning") == 0)
+    else if (mello_stricmp(env, "warn") == 0 || mello_stricmp(env, "warning") == 0)
         mello::set_log_level(mello::LogLevel::Warn);
-    else if (_stricmp(env, "error") == 0)
+    else if (mello_stricmp(env, "error") == 0)
         mello::set_log_level(mello::LogLevel::Error);
 }
 
