@@ -7,7 +7,7 @@ use tokio::sync::oneshot;
 use super::abr::AbrController;
 use super::config::StreamConfig;
 use super::fec::FecEncoder;
-use super::input::InputPassthroughStub;
+use super::input::{InputPassthrough, InputPassthroughStub};
 use super::packet::{ControlSubtype, LossReport, PacketType, StreamPacket};
 use super::sink::PacketSink;
 
@@ -54,11 +54,21 @@ pub struct StreamManager {
     abr: AbrController,
     config: StreamConfig,
     #[allow(dead_code)]
-    input: InputPassthroughStub,
+    input: Arc<dyn InputPassthrough>,
 }
 
 unsafe impl Send for StreamManager {}
 unsafe impl Sync for StreamManager {}
+
+impl Drop for StreamManager {
+    fn drop(&mut self) {
+        log::info!("StreamManager dropping — cleaning up C++ host resources");
+        unsafe {
+            mello_sys::mello_stream_stop_audio(self.host);
+            mello_sys::mello_stream_stop_host(self.host);
+        }
+    }
+}
 
 impl StreamManager {
     pub fn new(
@@ -77,7 +87,7 @@ impl StreamManager {
             audio_seq: AtomicU16::new(0),
             abr: AbrController::new(&config),
             config,
-            input: InputPassthroughStub,
+            input: Arc::new(InputPassthroughStub),
         }
     }
 
@@ -134,14 +144,14 @@ impl StreamManager {
             self.fec_encoder.reset();
         }
 
-        // Determine if this is the last packet in the FEC group
-        // (we track this by checking if the next push would complete the group)
-        let group_pos = seq as usize % self.fec_encoder.group_size();
-        let fec_group_last = group_pos == self.fec_encoder.group_size() - 1;
+        // This packet is the last in the FEC group if the encoder has N-1
+        // pending already (this push will complete the group).
+        let fec_group_last =
+            self.fec_encoder.pending_count() == self.fec_encoder.group_size() - 1;
 
         let packet = StreamPacket::video(payload.clone(), seq, is_keyframe, fec_group_last);
 
-        // Send the data packet first
+        // Send the data packet
         let _ = self.sink.send_video(&packet).await;
 
         // FEC: accumulate and send parity when group completes

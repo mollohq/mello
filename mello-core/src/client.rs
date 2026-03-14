@@ -656,6 +656,11 @@ impl Client {
             return;
         }
 
+        // Start game-audio loopback capture (WASAPI)
+        unsafe {
+            mello_sys::mello_stream_start_audio(host);
+        }
+
         match crate::stream::host::create_stream_session(ctx, host, &resp, config) {
             Ok(session) => {
                 let _ = self.event_tx.send(Event::StreamStarted {
@@ -668,6 +673,7 @@ impl Client {
             Err(e) => {
                 log::error!("Failed to create stream session: {}", e);
                 unsafe {
+                    mello_sys::mello_stream_stop_audio(host);
                     mello_sys::mello_stream_stop_host(host);
                 }
                 let _ = self.event_tx.send(Event::StreamError {

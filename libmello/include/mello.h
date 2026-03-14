@@ -202,6 +202,23 @@ MELLO_API void mello_stream_request_keyframe(MelloStreamHost* host);
 /** Hot-reconfigure encoder bitrate without stopping the session. */
 MELLO_API MelloResult mello_stream_set_bitrate(MelloStreamHost* host, uint32_t bitrate_kbps);
 
+/** Start game-audio loopback capture (WASAPI). */
+MELLO_API MelloResult mello_stream_start_audio(MelloStreamHost* host);
+
+/** Stop game-audio loopback capture. */
+MELLO_API void mello_stream_stop_audio(MelloStreamHost* host);
+
+/* ============================================================================
+ * Streaming (Viewer)
+ * ============================================================================ */
+
+/** Feed an encoded game-audio packet received from the host for playback. */
+MELLO_API MelloResult mello_stream_feed_audio_packet(
+    MelloStreamView* view,
+    const uint8_t*   data,
+    int              size
+);
+
 /* ============================================================================
  * Debug / Diagnostics
  * ============================================================================ */

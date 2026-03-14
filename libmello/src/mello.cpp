@@ -426,4 +426,21 @@ MelloResult mello_stream_set_bitrate(MelloStreamHost* host, uint32_t bitrate_kbp
     return MELLO_OK;
 }
 
+MelloResult mello_stream_start_audio(MelloStreamHost* host) {
+    (void)host;
+    MELLO_LOG_WARN("stream", "mello_stream_start_audio: stub (loopback not implemented)");
+    return MELLO_OK;
+}
+
+void mello_stream_stop_audio(MelloStreamHost* host) {
+    (void)host;
+    MELLO_LOG_INFO("stream", "mello_stream_stop_audio: stub");
+}
+
+MelloResult mello_stream_feed_audio_packet(MelloStreamView* view, const uint8_t* data, int size) {
+    (void)view; (void)data; (void)size;
+    MELLO_LOG_DEBUG("stream", "mello_stream_feed_audio_packet: stub");
+    return MELLO_OK;
+}
+
 } // extern "C"

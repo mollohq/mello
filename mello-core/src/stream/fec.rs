@@ -25,6 +25,11 @@ impl FecEncoder {
         self.n
     }
 
+    /// How many data packets have been pushed into the current (incomplete) group.
+    pub fn pending_count(&self) -> usize {
+        self.group.len()
+    }
+
     /// Push a data packet's payload. Returns `Some(parity_payload)` when the
     /// group is complete (after N data packets have been pushed).
     pub fn push(&mut self, payload: &[u8]) -> Option<Vec<u8>> {
