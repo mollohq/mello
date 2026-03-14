@@ -8,6 +8,11 @@
 
 namespace mello::video {
 
+#ifndef _WIN32
+// Stub — no capture sources available outside Windows (yet)
+std::unique_ptr<CaptureSource> create_capture_source(const CaptureSourceDesc&) { return nullptr; }
+#endif
+
 static constexpr const char* TAG = "video/pipeline";
 
 static void save_bmp_rgba(const char* path, const uint8_t* rgba, uint32_t w, uint32_t h) {
@@ -148,7 +153,9 @@ void VideoPipeline::stop_host() {
 
     if (capture_)   capture_->stop();
     if (encoder_)   encoder_->shutdown();
+#ifdef _WIN32
     if (converter_) converter_->shutdown();
+#endif
 
     uint64_t uptime_s = (now_us() - host_start_time_) / 1'000'000;
     EncoderStats stats{};
@@ -159,7 +166,9 @@ void VideoPipeline::stop_host() {
 
     capture_.reset();
     encoder_.reset();
+#ifdef _WIN32
     converter_.reset();
+#endif
 }
 
 void VideoPipeline::get_host_resolution(uint32_t& w, uint32_t& h) const {
@@ -293,9 +302,13 @@ void VideoPipeline::stop_viewer() {
         uptime_s, frames_decoded_, frames_dropped_);
 
     if (decoder_) decoder_->shutdown();
+#ifdef _WIN32
     if (staging_) staging_->shutdown();
+#endif
     decoder_.reset();
+#ifdef _WIN32
     staging_.reset();
+#endif
     rgba_buf_.clear();
 }
 

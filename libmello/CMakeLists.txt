@@ -9,25 +9,23 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 find_package(Opus CONFIG REQUIRED)
 find_package(LibDataChannel CONFIG REQUIRED)
 
-if(WIN32)
-    # dav1d uses meson/pkgconfig — no CMake config. Try pkg-config first,
-    # fall back to probing the vcpkg installed path directly.
-    find_package(PkgConfig QUIET)
-    if(PkgConfig_FOUND)
-        pkg_check_modules(DAV1D QUIET IMPORTED_TARGET dav1d)
-    endif()
-    if(NOT DAV1D_FOUND)
-        # Manual fallback: check vcpkg installed dir
-        find_path(DAV1D_INCLUDE_DIR NAMES dav1d/dav1d.h)
-        find_library(DAV1D_LIBRARY NAMES dav1d)
-        if(DAV1D_INCLUDE_DIR AND DAV1D_LIBRARY)
-            set(DAV1D_FOUND TRUE)
-            add_library(dav1d::dav1d STATIC IMPORTED)
-            set_target_properties(dav1d::dav1d PROPERTIES
-                IMPORTED_LOCATION "${DAV1D_LIBRARY}"
-                INTERFACE_INCLUDE_DIRECTORIES "${DAV1D_INCLUDE_DIR}"
-            )
-        endif()
+# dav1d uses meson/pkgconfig — no CMake config. Try pkg-config first,
+# fall back to probing the vcpkg installed path directly.
+find_package(PkgConfig QUIET)
+if(PkgConfig_FOUND)
+    pkg_check_modules(DAV1D QUIET IMPORTED_TARGET dav1d)
+endif()
+if(NOT DAV1D_FOUND)
+    # Manual fallback: check vcpkg installed dir
+    find_path(DAV1D_INCLUDE_DIR NAMES dav1d/dav1d.h)
+    find_library(DAV1D_LIBRARY NAMES dav1d)
+    if(DAV1D_INCLUDE_DIR AND DAV1D_LIBRARY)
+        set(DAV1D_FOUND TRUE)
+        add_library(dav1d::dav1d STATIC IMPORTED)
+        set_target_properties(dav1d::dav1d PROPERTIES
+            IMPORTED_LOCATION "${DAV1D_LIBRARY}"
+            INTERFACE_INCLUDE_DIRECTORIES "${DAV1D_INCLUDE_DIR}"
+        )
     endif()
 endif()
 
@@ -211,6 +209,7 @@ else()
     list(APPEND MELLO_SOURCES
         src/video/graphics_device.cpp
         src/video/video_pipeline.cpp
+        src/video/process_enum.cpp
     )
 endif()
 
@@ -262,13 +261,6 @@ if(WIN32)
         d3dcompiler
         windowsapp
     )
-    if(MELLO_HAS_DAV1D)
-        if(TARGET PkgConfig::DAV1D)
-            target_link_libraries(mello PRIVATE PkgConfig::DAV1D)
-        elseif(TARGET dav1d::dav1d)
-            target_link_libraries(mello PRIVATE dav1d::dav1d)
-        endif()
-    endif()
     # OpenH264 is NOT linked — Cisco prebuilt DLL loaded at runtime via LoadLibrary
 elseif(APPLE)
     target_link_libraries(mello PUBLIC
@@ -276,6 +268,14 @@ elseif(APPLE)
         "-framework CoreAudio"
         "-framework CoreFoundation"
     )
+endif()
+
+if(MELLO_HAS_DAV1D)
+    if(TARGET PkgConfig::DAV1D)
+        target_link_libraries(mello PRIVATE PkgConfig::DAV1D)
+    elseif(TARGET dav1d::dav1d)
+        target_link_libraries(mello PRIVATE dav1d::dav1d)
+    endif()
 endif()
 
 # Download Silero VAD v6.2 model if missing

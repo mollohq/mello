@@ -1,15 +1,18 @@
 #pragma once
 #include "graphics_device.hpp"
 #include "capture_source.hpp"
-#include "color_converter.hpp"
 #include "encoder.hpp"
 #include "decoder.hpp"
-#include "staging_texture.hpp"
 #include "cursor.hpp"
 #include <memory>
 #include <functional>
 #include <mutex>
 #include <atomic>
+
+#ifdef _WIN32
+#include "color_converter.hpp"
+#include "staging_texture.hpp"
+#endif
 
 namespace mello::video {
 
@@ -63,10 +66,12 @@ private:
 
     GraphicsDevice                       device_{};
     std::unique_ptr<CaptureSource>       capture_;
-    std::unique_ptr<ColorConverter>      converter_;
     std::unique_ptr<Encoder>             encoder_;
     std::unique_ptr<Decoder>             decoder_;
+#ifdef _WIN32
+    std::unique_ptr<ColorConverter>      converter_;
     std::unique_ptr<StagingTexture>      staging_;
+#endif
 
     PacketCallback  packet_cb_;
     FrameCallback   frame_cb_;
