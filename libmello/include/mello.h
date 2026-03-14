@@ -250,6 +250,9 @@ MELLO_API MelloStreamHost* mello_stream_start_host(
 
 MELLO_API void mello_stream_stop_host(MelloStreamHost* host);
 
+/** Get the actual capture resolution after host pipeline has started. */
+MELLO_API void mello_stream_get_host_resolution(MelloStreamHost* host, uint32_t* width, uint32_t* height);
+
 MELLO_API void mello_stream_request_keyframe(MelloStreamHost* host);
 
 /** Hot-reconfigure encoder bitrate without restarting the session. */
@@ -281,6 +284,10 @@ MELLO_API MelloStreamView* mello_stream_start_viewer(
 MELLO_API void mello_stream_stop_viewer(MelloStreamView* view);
 
 MELLO_API bool mello_stream_feed_packet(MelloStreamView* view, const uint8_t* data, int size, bool is_keyframe);
+
+/** Read back the latest decoded frame and deliver it via the frame callback.
+ *  Call once per display frame after feeding all available packets. */
+MELLO_API bool mello_stream_present_frame(MelloStreamView* view);
 
 /** Feed an encoded game-audio packet received from the host for playback. */
 MELLO_API MelloResult mello_stream_feed_audio_packet(

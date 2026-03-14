@@ -242,24 +242,51 @@ int CUDAAPI NvdecDecoder::handle_picture_display(void* user, CUVIDPARSERDISPINFO
     // For a fully optimized path, CUDA-D3D11 interop (cuD3D11GetDevice / register resource)
     // would skip the CPU copy entirely.
 
-    // Simplified path: cuMemcpyDtoH -> nv12_buf_ -> UpdateSubresource to frame_tex_
-    auto cuMemcpyDtoH = reinterpret_cast<int(*)(void*, unsigned long long, size_t)>(
-        GetProcAddress(self->cuda_dll_, "cuMemcpyDtoH_v2"));
-    if (cuMemcpyDtoH) {
-        uint32_t h = self->config_.height;
-        uint32_t nv12_h = h + h / 2;
-        for (uint32_t row = 0; row < nv12_h; ++row) {
-            cuMemcpyDtoH(
-                self->nv12_buf_.data() + row * self->config_.width,
-                dev_ptr + row * pitch,
-                self->config_.width);
-        }
+    // Single cuMemcpy2D to replace 1000+ per-row cuMemcpyDtoH calls.
+    // CUDA_MEMCPY2D layout from CUDA driver API (no cuda.h available):
+    struct CudaMemcpy2D {
+        size_t            srcXInBytes;
+        size_t            srcY;
+        unsigned int      srcMemoryType; // CU_MEMORYTYPE_DEVICE = 2
+        // 4 bytes implicit padding on x64
+        const void*       srcHost;
+        unsigned long long srcDevice;
+        void*             srcArray;
+        size_t            srcPitch;
+        size_t            dstXInBytes;
+        size_t            dstY;
+        unsigned int      dstMemoryType; // CU_MEMORYTYPE_HOST = 1
+        // 4 bytes implicit padding on x64
+        void*             dstHost;
+        unsigned long long dstDevice;
+        void*             dstArray;
+        size_t            dstPitch;
+        size_t            WidthInBytes;
+        size_t            Height;
+    };
 
-        // Upload to D3D11 texture
-        D3D11_BOX box{0, 0, 0, self->config_.width, h + h / 2, 1};
+    typedef int (*CuMemcpy2D_t)(const CudaMemcpy2D*);
+    auto cuMemcpy2D_fn = reinterpret_cast<CuMemcpy2D_t>(
+        GetProcAddress(self->cuda_dll_, "cuMemcpy2D_v2"));
+    if (cuMemcpy2D_fn) {
+        uint32_t w = self->config_.width;
+        uint32_t h = self->config_.height;
+
+        CudaMemcpy2D cp{};
+        cp.srcMemoryType = 2;
+        cp.srcDevice     = dev_ptr;
+        cp.srcPitch      = pitch;
+        cp.dstMemoryType = 1;
+        cp.dstHost       = self->nv12_buf_.data();
+        cp.dstPitch      = w;
+        cp.WidthInBytes  = w;
+        cp.Height        = h + h / 2; // Y plane + UV plane
+
+        cuMemcpy2D_fn(&cp);
+
         self->context_->UpdateSubresource(
             self->frame_tex_.Get(), 0, nullptr,
-            self->nv12_buf_.data(), self->config_.width, 0);
+            self->nv12_buf_.data(), w, 0);
     }
 
     cuvidUnmapVideoFrame_fn(self->decoder_, dev_ptr);

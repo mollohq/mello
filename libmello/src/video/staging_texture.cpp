@@ -59,6 +59,18 @@ void StagingTexture::read_rgba(uint8_t* out) {
     const uint8_t* y_plane  = static_cast<const uint8_t*>(mapped.pData);
     const uint8_t* uv_plane = y_plane + mapped.RowPitch * height_;
 
+    if (read_count_ < 3) {
+        uint32_t cx = width_ / 2;
+        uint32_t cy = height_ / 2;
+        uint8_t y_tl = y_plane[0];
+        uint8_t y_c  = y_plane[cy * mapped.RowPitch + cx];
+        uint8_t u_c  = uv_plane[(cy / 2) * mapped.RowPitch + (cx & ~1u)];
+        uint8_t v_c  = uv_plane[(cy / 2) * mapped.RowPitch + (cx & ~1u) + 1];
+        MELLO_LOG_DEBUG(TAG, "read_rgba[%llu]: pitch=%u Y[0,0]=%u Y[center]=%u UV[center]=(%u,%u)",
+            read_count_, mapped.RowPitch, y_tl, y_c, u_c, v_c);
+        read_count_++;
+    }
+
     for (uint32_t row = 0; row < height_; ++row) {
         const uint8_t* y_row  = y_plane + row * mapped.RowPitch;
         const uint8_t* uv_row = uv_plane + (row / 2) * mapped.RowPitch;

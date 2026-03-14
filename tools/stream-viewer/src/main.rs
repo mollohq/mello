@@ -1,15 +1,19 @@
+use std::collections::HashMap;
 use std::ffi::c_void;
 use std::net::UdpSocket;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 use std::time::Instant;
 
 use minifb::{Key, Window, WindowOptions};
+use socket2::SockRef;
 
 const DEFAULT_PORT: u16 = 9800;
 const HEADER_CONFIG: u8 = 0x00;
 const HEADER_VIDEO: u8 = 0x01;
 const HEADER_KEYFRAME: u8 = 0x02;
+
+const CHUNK_HEADER_SIZE: usize = 7; // type(1) + frame_id(2) + chunk_idx(2) + chunk_count(2)
 
 const DEFAULT_W: u32 = 1920;
 const DEFAULT_H: u32 = 1080;
@@ -19,6 +23,51 @@ struct FrameBuffer {
     width: u32,
     height: u32,
     dirty: bool,
+}
+
+struct FrameAssembly {
+    frame_type: u8,
+    chunk_count: u16,
+    chunks_received: u16,
+    chunks: Vec<Option<Vec<u8>>>,
+}
+
+impl FrameAssembly {
+    fn new(frame_type: u8, chunk_count: u16) -> Self {
+        Self {
+            frame_type,
+            chunk_count,
+            chunks_received: 0,
+            chunks: (0..chunk_count).map(|_| None).collect(),
+        }
+    }
+
+    fn insert(&mut self, chunk_idx: u16, data: Vec<u8>) -> bool {
+        let idx = chunk_idx as usize;
+        if idx >= self.chunks.len() {
+            return false;
+        }
+        if self.chunks[idx].is_none() {
+            self.chunks[idx] = Some(data);
+            self.chunks_received += 1;
+        }
+        self.is_complete()
+    }
+
+    fn is_complete(&self) -> bool {
+        self.chunks_received == self.chunk_count
+    }
+
+    fn assemble(self) -> (u8, Vec<u8>) {
+        let total: usize = self.chunks.iter().map(|c| c.as_ref().map_or(0, |v| v.len())).sum();
+        let mut payload = Vec::with_capacity(total);
+        for chunk in self.chunks {
+            if let Some(data) = chunk {
+                payload.extend_from_slice(&data);
+            }
+        }
+        (self.frame_type, payload)
+    }
 }
 
 static FRAME: Mutex<Option<FrameBuffer>> = Mutex::new(None);
@@ -74,20 +123,28 @@ fn main() {
 
     let socket = UdpSocket::bind(format!("0.0.0.0:{}", port)).expect("Failed to bind UDP socket");
     socket
-        .set_nonblocking(false)
-        .expect("Failed to set socket blocking");
-    socket
-        .set_read_timeout(Some(std::time::Duration::from_millis(50)))
-        .ok();
+        .set_nonblocking(true)
+        .expect("Failed to set socket non-blocking");
 
-    // Wait for first packet (blocking)
+    // Increase receive buffer so multi-chunk keyframes don't get dropped
+    let sock_ref = SockRef::from(&socket);
+    let desired_buf = 4 * 1024 * 1024; // 4 MB
+    if let Err(e) = sock_ref.set_recv_buffer_size(desired_buf) {
+        log::warn!("Failed to set SO_RCVBUF to {}B: {}", desired_buf, e);
+    }
+    let actual = sock_ref.recv_buffer_size().unwrap_or(0);
+    log::info!("UDP recv buffer: requested {}B, actual {}B", desired_buf, actual);
+
     println!("Waiting for stream from host...");
 
-    let mut recv_buf = [0u8; 512 * 1024]; // 512KB max packet
+    let mut recv_buf = [0u8; 64 * 1024]; // 64KB — enough for one chunk
     let mut viewer: *mut mello_sys::MelloStreamView = std::ptr::null_mut();
     let mut got_keyframe = false;
     let mut frame_w = initial_w;
     let mut frame_h = initial_h;
+
+    let mut assembly: HashMap<u16, FrameAssembly> = HashMap::new();
+    let mut frames_dropped: u32 = 0;
 
     // Create window
     let mut window = Window::new(
@@ -108,14 +165,21 @@ fn main() {
     let mut last_frame_count = 0u32;
 
     while window.is_open() && !window.is_key_down(Key::Escape) {
-        // Receive UDP packets
-        match socket.recv_from(&mut recv_buf) {
-            Ok((n, _addr)) if n >= 2 => {
-                let header = recv_buf[0];
-                let payload = &recv_buf[1..n];
+        // Receive UDP packets — limit decoded frames per window iteration to keep
+        // the decode cost bounded (~10ms/frame in NVDEC's current CPU-copy path).
+        let mut frames_this_iter = 0u32;
+        const MAX_FRAMES_PER_ITER: u32 = 4;
+        for _ in 0..256 {
+            if frames_this_iter >= MAX_FRAMES_PER_ITER {
+                break;
+            }
+            match socket.recv_from(&mut recv_buf) {
+                Ok((n, _addr)) if n >= 1 => {
+                    let pkt_type = recv_buf[0];
 
-                match header {
-                    HEADER_CONFIG => {
+                    // Config packets use the old format (no chunking)
+                    if pkt_type == HEADER_CONFIG {
+                        let payload = &recv_buf[1..n];
                         if payload.len() >= 5 {
                             let w = u16::from_le_bytes([payload[0], payload[1]]) as u32;
                             let h = u16::from_le_bytes([payload[2], payload[3]]) as u32;
@@ -125,14 +189,50 @@ fn main() {
                             }
                             log::info!("Config: {}x{} fps={}", frame_w, frame_h, payload[4]);
                         }
+                        continue;
                     }
-                    HEADER_VIDEO | HEADER_KEYFRAME => {
-                        let is_keyframe = header == HEADER_KEYFRAME;
+
+                    // Chunked video packets: [type(1)][frame_id(2)][chunk_idx(2)][chunk_count(2)][payload]
+                    if n < CHUNK_HEADER_SIZE {
+                        continue;
+                    }
+                    let frame_id = u16::from_le_bytes([recv_buf[1], recv_buf[2]]);
+                    let chunk_idx = u16::from_le_bytes([recv_buf[3], recv_buf[4]]);
+                    let chunk_count = u16::from_le_bytes([recv_buf[5], recv_buf[6]]);
+                    let chunk_data = &recv_buf[CHUNK_HEADER_SIZE..n];
+
+                    if chunk_count == 0 {
+                        continue;
+                    }
+
+                    // Evict stale assemblies (keep only frames within a small window)
+                    assembly.retain(|&id, a| {
+                        let diff = frame_id.wrapping_sub(id);
+                        if diff >= 16 {
+                            log::debug!("Evicting incomplete frame {}: {}/{} chunks",
+                                id, a.chunks_received, a.chunk_count);
+                            frames_dropped += 1;
+                            false
+                        } else {
+                            true
+                        }
+                    });
+
+                    let entry = assembly
+                        .entry(frame_id)
+                        .or_insert_with(|| FrameAssembly::new(pkt_type, chunk_count));
+
+                    if entry.insert(chunk_idx, chunk_data.to_vec()) {
+                        let frame = assembly.remove(&frame_id).unwrap();
+                        let (frame_type, payload) = frame.assemble();
+
+                        let is_keyframe = frame_type == HEADER_KEYFRAME;
 
                         // Initialize viewer on first keyframe
                         if !got_keyframe && is_keyframe {
                             got_keyframe = true;
-                            println!("First keyframe received, starting decode...");
+                            println!("First keyframe received ({} bytes, {} chunks), starting decode...",
+                                payload.len(), chunk_count);
 
                             let config = mello_sys::MelloStreamConfig {
                                 width: frame_w,
@@ -165,19 +265,23 @@ fn main() {
                                     is_keyframe,
                                 );
                             }
+                            frames_this_iter += 1;
                         }
                     }
-                    _ => {}
                 }
+                _ => break, // timeout or error — exit recv loop
             }
-            _ => {} // timeout or error — continue to update window
+        }
+
+        // Read back the latest decoded frame (one GPU sync per window frame)
+        if !viewer.is_null() {
+            unsafe { mello_sys::mello_stream_present_frame(viewer); }
         }
 
         // Update window with latest decoded frame
         let mut frame = FRAME.lock().unwrap();
         if let Some(ref mut fb) = *frame {
             if fb.dirty {
-                // Resize window if frame dimensions changed
                 if fb.width != frame_w || fb.height != frame_h {
                     frame_w = fb.width;
                     frame_h = fb.height;
@@ -206,9 +310,14 @@ fn main() {
             let elapsed = start_time.elapsed().as_secs();
 
             let title = if got_keyframe {
+                let drop_str = if frames_dropped > 0 {
+                    format!(" | drop={}", frames_dropped)
+                } else {
+                    String::new()
+                };
                 format!(
-                    "Mello Viewer — {}x{} @ {}fps | {}s",
-                    frame_w, frame_h, fps, elapsed
+                    "Mello Viewer — {}x{} @ {}fps | {}s{}",
+                    frame_w, frame_h, fps, elapsed, drop_str
                 )
             } else {
                 "Mello Viewer — waiting for keyframe...".to_string()

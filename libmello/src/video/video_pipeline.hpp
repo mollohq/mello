@@ -34,6 +34,7 @@ public:
     // HOST SIDE
     bool start_host(const CaptureSourceDesc& source, const PipelineConfig& config, PacketCallback on_packet);
     void stop_host();
+    void get_host_resolution(uint32_t& w, uint32_t& h) const;
     void request_keyframe();
     void set_bitrate(uint32_t kbps);
     void get_stats(EncoderStats& out) const;
@@ -42,6 +43,7 @@ public:
     bool start_viewer(const PipelineConfig& config, FrameCallback on_frame);
     void stop_viewer();
     bool feed_packet(const uint8_t* data, size_t size, bool is_keyframe);
+    bool present_frame();
 
     // CURSOR
     bool get_cursor_packet(uint8_t* buf, size_t* size);
@@ -76,6 +78,10 @@ private:
     mutable std::mutex cursor_mutex_;
     CursorState        viewer_cursor_;
 
+    // Encode dimensions (even-aligned from capture)
+    uint32_t encode_w_ = 0;
+    uint32_t encode_h_ = 0;
+
     // Stats
     uint64_t host_start_time_  = 0;
     uint64_t frames_encoded_   = 0;
@@ -84,6 +90,7 @@ private:
     uint64_t frames_dropped_   = 0;
 
     std::vector<uint8_t> rgba_buf_;
+    ID3D11Texture2D*     latest_decoded_ = nullptr;
 };
 
 } // namespace mello::video

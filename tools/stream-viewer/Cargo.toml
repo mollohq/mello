@@ -12,5 +12,6 @@ path = "src/main.rs"
 [dependencies]
 mello-sys = { path = "../../mello-sys" }
 minifb = "0.27"
+socket2 = "0.5"
 log = { workspace = true }
 env_logger = "0.11"

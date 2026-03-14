@@ -41,8 +41,22 @@ extern "C" {
  * Context
  * ============================================================================ */
 
+static void init_log_level() {
+    const char* env = std::getenv("MELLO_LOG");
+    if (!env) env = std::getenv("RUST_LOG");
+    if (!env) return;
+
+    if (_stricmp(env, "debug") == 0 || _stricmp(env, "trace") == 0)
+        mello::set_log_level(mello::LogLevel::Debug);
+    else if (_stricmp(env, "warn") == 0 || _stricmp(env, "warning") == 0)
+        mello::set_log_level(mello::LogLevel::Warn);
+    else if (_stricmp(env, "error") == 0)
+        mello::set_log_level(mello::LogLevel::Error);
+}
+
 MelloContext* mello_init(void) {
     try {
+        init_log_level();
         MELLO_LOG_INFO("api", "mello_init()");
         auto* ctx = new mello::Context();
         if (!ctx->initialize()) {
@@ -538,6 +552,11 @@ void mello_stream_stop_host(MelloStreamHost* host) {
     } catch (...) {}
 }
 
+void mello_stream_get_host_resolution(MelloStreamHost* host, uint32_t* width, uint32_t* height) {
+    if (!host || !width || !height) return;
+    host->ctx->video().get_host_resolution(*width, *height);
+}
+
 void mello_stream_request_keyframe(MelloStreamHost* host) {
     if (!host) return;
     try { host->ctx->video().request_keyframe(); } catch (...) {}
@@ -614,6 +633,13 @@ bool mello_stream_feed_packet(MelloStreamView* view, const uint8_t* data, int si
     if (!view || !data || size <= 0) return false;
     try {
         return view->ctx->video().feed_packet(data, static_cast<size_t>(size), is_keyframe);
+    } catch (...) { return false; }
+}
+
+bool mello_stream_present_frame(MelloStreamView* view) {
+    if (!view) return false;
+    try {
+        return view->ctx->video().present_frame();
     } catch (...) { return false; }
 }
 

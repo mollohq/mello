@@ -61,8 +61,10 @@ bool VideoPipeline::start_host(const CaptureSourceDesc& source,
 
 #ifdef _WIN32
     // NV12 requires even dimensions (chroma plane is half-res)
-    uint32_t enc_w = capture_->width()  & ~1u;
-    uint32_t enc_h = capture_->height() & ~1u;
+    encode_w_ = capture_->width()  & ~1u;
+    encode_h_ = capture_->height() & ~1u;
+    uint32_t enc_w = encode_w_;
+    uint32_t enc_h = encode_h_;
 
     // 2. Color converter
     converter_ = std::make_unique<ColorConverter>();
@@ -130,6 +132,11 @@ void VideoPipeline::stop_host() {
     converter_.reset();
 }
 
+void VideoPipeline::get_host_resolution(uint32_t& w, uint32_t& h) const {
+    w = encode_w_;
+    h = encode_h_;
+}
+
 void VideoPipeline::request_keyframe() {
     if (encoder_) encoder_->request_keyframe();
 }
@@ -156,20 +163,34 @@ bool VideoPipeline::encoder_available() const {
 void VideoPipeline::on_captured_frame(ID3D11Texture2D* texture, uint64_t timestamp_us) {
     if (!host_running_.load()) return;
 
+    if (frames_encoded_ < 3) {
+        D3D11_TEXTURE2D_DESC cap_desc{};
+        texture->GetDesc(&cap_desc);
+        MELLO_LOG_DEBUG(TAG, "on_captured_frame[%llu]: capture tex fmt=%u %ux%u bind=0x%X",
+            frames_encoded_, cap_desc.Format, cap_desc.Width, cap_desc.Height, cap_desc.BindFlags);
+    }
+
     // Capture → Color Convert → Encode → Packet callback
     ID3D11Texture2D* nv12 = converter_->convert(texture);
-    if (!nv12) return;
+    if (!nv12) {
+        MELLO_LOG_WARN(TAG, "on_captured_frame: convert() returned null");
+        return;
+    }
 
     EncodedPacket packet{};
     if (encoder_->encode(nv12, packet)) {
         frames_encoded_++;
+        if (frames_encoded_ <= 3) {
+            MELLO_LOG_DEBUG(TAG, "on_captured_frame[%llu]: encoded %zu bytes keyframe=%d",
+                frames_encoded_, packet.data.size(), packet.is_keyframe);
+        }
 
-        // Periodic stats logging every 300 frames
         if (frames_encoded_ % 300 == 0) {
+            uint64_t uptime_s = (now_us() - host_start_time_) / 1'000'000;
             EncoderStats stats{};
             encoder_->get_stats(stats);
-            MELLO_LOG_DEBUG("video/stats", "enc=%s fps=%u bitrate=%ukbps keyframes=%u frames=300 bytes=%.1fMB",
-                encoder_->name(), stats.fps_actual, stats.bitrate_kbps,
+            MELLO_LOG_INFO(TAG, "host: uptime=%llus frames=%llu fps=%u bitrate=%ukbps keyframes=%u bytes=%.1fMB",
+                uptime_s, frames_encoded_, stats.fps_actual, stats.bitrate_kbps,
                 stats.keyframes_sent, static_cast<double>(stats.bytes_sent) / (1024 * 1024));
         }
 
@@ -256,29 +277,38 @@ bool VideoPipeline::feed_packet(const uint8_t* data, size_t size, bool is_keyfra
     }
 
     ID3D11Texture2D* decoded = decoder_->get_frame();
-    if (!decoded) return false;
-
-    staging_->copy_from(decoded);
-    staging_->read_rgba(rgba_buf_.data());
+    if (decoded) latest_decoded_ = decoded;
 
     frames_decoded_++;
 
-    // Periodic stats
     if (frames_decoded_ % 300 == 0) {
-        MELLO_LOG_DEBUG("video/stats", "dec=%s fps=-- frames=300 dropped=%llu",
-            decoder_->name(), frames_dropped_);
-        frames_dropped_ = 0;
-    }
-
-    if (frame_cb_) {
-        frame_cb_(rgba_buf_.data(), config_.width, config_.height,
-                  now_us());
+        uint64_t uptime_s = (now_us() - viewer_start_time_) / 1'000'000;
+        MELLO_LOG_INFO(TAG, "viewer: uptime=%llus decoded=%llu dropped=%llu dec=%s",
+            uptime_s, frames_decoded_, frames_dropped_, decoder_->name());
     }
 #else
     (void)data; (void)size; (void)is_keyframe;
 #endif
 
     return true;
+}
+
+bool VideoPipeline::present_frame() {
+#ifdef _WIN32
+    if (!viewer_running_.load() || !latest_decoded_) return false;
+
+    staging_->copy_from(latest_decoded_);
+    staging_->read_rgba(rgba_buf_.data());
+
+    if (frame_cb_) {
+        frame_cb_(rgba_buf_.data(), config_.width, config_.height, now_us());
+    }
+
+    latest_decoded_ = nullptr;
+    return true;
+#else
+    return false;
+#endif
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -33,6 +33,7 @@ private:
 
     uint32_t width_  = 0;
     uint32_t height_ = 0;
+    uint64_t read_count_ = 0;
 };
 
 } // namespace mello::video
