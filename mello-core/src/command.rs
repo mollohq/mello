@@ -27,6 +27,18 @@ pub enum Command {
     SetDebugMode { enabled: bool },
     UpdateProfile { display_name: String },
 
+    // --- Streaming ---
+    StartStream {
+        crew_id: String,
+        #[serde(default)]
+        title: String,
+    },
+    StopStream,
+    WatchStream {
+        host_id: String,
+    },
+    StopWatching,
+
     // --- Presence & crew state ---
     UpdatePresence {
         status: PresenceStatus,

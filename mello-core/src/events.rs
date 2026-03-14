@@ -70,6 +70,25 @@ pub enum Event {
 
     SignalReceived { from: String, payload: String },
 
+    // --- Streaming ---
+    StreamStarted {
+        crew_id: String,
+        session_id: String,
+        mode: String,
+    },
+    StreamEnded {
+        crew_id: String,
+    },
+    StreamViewerJoined {
+        viewer_id: String,
+    },
+    StreamViewerLeft {
+        viewer_id: String,
+    },
+    StreamError {
+        message: String,
+    },
+
     // --- Presence & crew state ---
 
     /// Full crew state loaded for the active crew.

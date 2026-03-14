@@ -1491,6 +1491,23 @@ fn handle_event(app: &MainWindow, event: Event, settings: &Rc<RefCell<Settings>>
         Event::Error { message } => {
             log::error!("UI: error: {}", message);
         }
+
+        // --- Streaming events (UI integration TBD) ---
+        Event::StreamStarted { crew_id, session_id, mode } => {
+            log::info!("Stream started: crew={} session={} mode={}", crew_id, session_id, mode);
+        }
+        Event::StreamEnded { crew_id } => {
+            log::info!("Stream ended: crew={}", crew_id);
+        }
+        Event::StreamViewerJoined { viewer_id } => {
+            log::info!("Stream viewer joined: {}", viewer_id);
+        }
+        Event::StreamViewerLeft { viewer_id } => {
+            log::info!("Stream viewer left: {}", viewer_id);
+        }
+        Event::StreamError { message } => {
+            log::error!("Stream error: {}", message);
+        }
     }
 }
 

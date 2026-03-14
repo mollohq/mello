@@ -1,76 +1,25 @@
-use std::sync::mpsc as std_mpsc;
+pub mod abr;
+pub mod config;
+pub mod error;
+pub mod fec;
+pub mod host;
+pub mod input;
+pub mod manager;
+pub mod packet;
+pub mod sink;
+pub mod sink_p2p;
+pub mod sink_sfu;
+pub mod viewer;
 
-use crate::events::Event;
+pub use config::{Codec, QualityPreset, StreamConfig};
+pub use error::StreamError;
+pub use manager::StreamManager;
+pub use packet::{PacketFlags, PacketType, StreamPacket};
 
-#[derive(Debug, Clone)]
-pub struct StreamError {
-    pub message: String,
-}
-
-impl std::fmt::Display for StreamError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.message)
+/// Returns true if a HW encoder (NVENC/AMF/QSV) is available on this machine.
+pub fn encoder_available(ctx: *mut mello_sys::MelloContext) -> bool {
+    if ctx.is_null() {
+        return false;
     }
-}
-
-pub struct StreamManager {
-    ctx: *mut mello_sys::MelloContext,
-    event_tx: std_mpsc::Sender<Event>,
-    hosting: bool,
-    watching: Option<String>,
-}
-
-impl StreamManager {
-    pub fn new(ctx: *mut mello_sys::MelloContext, event_tx: std_mpsc::Sender<Event>) -> Self {
-        Self {
-            ctx,
-            event_tx,
-            hosting: false,
-            watching: None,
-        }
-    }
-
-    pub fn is_hosting(&self) -> bool {
-        self.hosting
-    }
-
-    pub fn is_watching(&self) -> bool {
-        self.watching.is_some()
-    }
-
-    pub fn encoder_available(&self) -> bool {
-        if self.ctx.is_null() {
-            return false;
-        }
-        unsafe { mello_sys::mello_encoder_available(self.ctx) }
-    }
-
-    pub fn start_hosting(&mut self) -> Result<(), StreamError> {
-        if self.hosting {
-            return Err(StreamError {
-                message: "Already hosting a stream.".into(),
-            });
-        }
-
-        if !self.encoder_available() {
-            let msg = "Streaming requires a hardware encoder \
-                       (NVIDIA, AMD, or Intel). None was found on this machine.";
-            log::error!("{}", msg);
-            return Err(StreamError {
-                message: msg.into(),
-            });
-        }
-
-        self.hosting = true;
-        log::info!("Stream hosting started");
-        Ok(())
-    }
-
-    pub fn stop_hosting(&mut self) {
-        if !self.hosting {
-            return;
-        }
-        self.hosting = false;
-        log::info!("Stream hosting stopped");
-    }
+    unsafe { mello_sys::mello_encoder_available(ctx) }
 }

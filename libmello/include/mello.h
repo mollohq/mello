@@ -222,6 +222,8 @@ typedef struct MelloStreamConfig {
 typedef void (*MelloPacketCallback)(void* user_data, const uint8_t* data, int size, bool is_keyframe, uint64_t ts);
 typedef void (*MelloFrameCallback)(void* user_data, const uint8_t* rgba, uint32_t w, uint32_t h, uint64_t ts);
 
+/* ---- Host ---- */
+
 /** Start hosting with a specific capture source. Returns an opaque handle. */
 MELLO_API MelloStreamHost* mello_stream_start_host(
     MelloContext*             ctx,
@@ -238,6 +240,21 @@ MELLO_API void mello_stream_request_keyframe(MelloStreamHost* host);
 /** Hot-reconfigure encoder bitrate without restarting the session. */
 MELLO_API MelloResult mello_stream_set_bitrate(MelloStreamHost* host, uint32_t bitrate_kbps);
 
+/** Start game-audio loopback capture (WASAPI). */
+MELLO_API MelloResult mello_stream_start_audio(MelloStreamHost* host);
+
+/** Stop game-audio loopback capture. */
+MELLO_API void mello_stream_stop_audio(MelloStreamHost* host);
+
+/** Get next encoded game-audio (loopback) Opus packet. Returns bytes, 0 if none. */
+MELLO_API int mello_stream_get_audio_packet(
+    MelloStreamHost* host,
+    uint8_t* buffer,
+    int buffer_size
+);
+
+/* ---- Viewer ---- */
+
 /** Start viewer pipeline. Returns an opaque handle. */
 MELLO_API MelloStreamView* mello_stream_start_viewer(
     MelloContext*            ctx,
@@ -249,6 +266,13 @@ MELLO_API MelloStreamView* mello_stream_start_viewer(
 MELLO_API void mello_stream_stop_viewer(MelloStreamView* view);
 
 MELLO_API bool mello_stream_feed_packet(MelloStreamView* view, const uint8_t* data, int size, bool is_keyframe);
+
+/** Feed an encoded game-audio packet received from the host for playback. */
+MELLO_API MelloResult mello_stream_feed_audio_packet(
+    MelloStreamView* view,
+    const uint8_t*   data,
+    int              size
+);
 
 /* ---- Stats ---- */
 

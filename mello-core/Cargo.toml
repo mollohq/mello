@@ -17,6 +17,8 @@ chrono = { version = "0.4", features = ["serde"] }
 base64 = "0.22"
 keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
 mello-sys = { path = "../mello-sys" }
+bitflags = "2"
+async-trait = "0.1"
 
 [dev-dependencies]
 tokio-test = "0.4"
