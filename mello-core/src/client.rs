@@ -574,6 +574,8 @@ impl Client {
             log::warn!("Failed to set online presence: {}", e);
         }
 
+        self.check_protocol_version().await;
+
         match self.nakama.get_ice_servers().await {
             Ok(urls) => {
                 log::info!("Fetched {} ICE server(s) from backend", urls.len());
@@ -581,6 +583,49 @@ impl Client {
             }
             Err(e) => {
                 log::warn!("Failed to fetch ICE servers, using defaults: {}", e);
+            }
+        }
+    }
+
+    async fn check_protocol_version(&self) {
+        match self.nakama.health_check().await {
+            Ok(health) => {
+                log::info!(
+                    "Server health: status={} version={} protocol={}",
+                    health.status, health.version,
+                    health.protocol_version.unwrap_or(0),
+                );
+
+                if let Some(min_client) = health.min_client_protocol {
+                    if crate::PROTOCOL_VERSION < min_client {
+                        let msg = format!(
+                            "Server requires protocol {} but client speaks {}. Please update Mello.",
+                            min_client, crate::PROTOCOL_VERSION,
+                        );
+                        log::warn!("{}", msg);
+                        let _ = self.event_tx.send(Event::ProtocolMismatch {
+                            message: msg,
+                            client_outdated: true,
+                        });
+                    }
+                }
+
+                if let Some(server_proto) = health.protocol_version {
+                    if server_proto < crate::MIN_SERVER_PROTOCOL {
+                        let msg = format!(
+                            "Client requires server protocol {} but server speaks {}. Server needs updating.",
+                            crate::MIN_SERVER_PROTOCOL, server_proto,
+                        );
+                        log::warn!("{}", msg);
+                        let _ = self.event_tx.send(Event::ProtocolMismatch {
+                            message: msg,
+                            client_outdated: false,
+                        });
+                    }
+                }
+            }
+            Err(e) => {
+                log::warn!("Health check failed (server may be old): {}", e);
             }
         }
     }

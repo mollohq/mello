@@ -1,0 +1,111 @@
+import { Theme } from "../theme.slint";
+
+export component UpdateBanner inherits Rectangle {
+    in property <bool> update-available: false;
+    in property <string> version: "";
+    in property <float> download-progress: -1.0;
+    in property <bool> ready-to-install: false;
+    in property <string> protocol-warning: "";
+
+    callback update-clicked();
+    callback restart-clicked();
+    callback dismiss-clicked();
+
+    property <bool> is-protocol-warning: protocol-warning != "";
+    property <bool> show: update-available || is-protocol-warning;
+
+    height: show ? 48px : 0px;
+    clip: true;
+    background: is-protocol-warning ? Theme.accent : #2563eb;
+    border-radius: Theme.r-inner;
+
+    animate height { duration: 200ms; easing: ease-out; }
+
+    if show: HorizontalLayout {
+        padding-left: 16px;
+        padding-right: 12px;
+        spacing: 12px;
+        alignment: center;
+
+        // Message
+        Text {
+            text: is-protocol-warning
+                ? protocol-warning
+                : ready-to-install
+                    ? "Update ready — restart to complete."
+                    : download-progress >= 0
+                        ? "Downloading v" + version + "…"
+                        : "Mello v" + version + " is available";
+            color: white;
+            font-size: Theme.font-sm;
+            font-weight: 500;
+            vertical-alignment: center;
+        }
+
+        // Progress bar (downloading state)
+        if download-progress >= 0 && !ready-to-install && !is-protocol-warning: Rectangle {
+            width: 120px;
+            height: 6px;
+            background: #ffffff33;
+            border-radius: 3px;
+            y: (parent.height - self.height) / 2;
+
+            Rectangle {
+                width: parent.width * clamp(download-progress, 0, 1);
+                height: parent.height;
+                background: white;
+                border-radius: 3px;
+
+                animate width { duration: 100ms; }
+            }
+        }
+
+        Rectangle { horizontal-stretch: 1; }
+
+        // Action button (not shown for protocol warnings)
+        if !is-protocol-warning: Rectangle {
+            width: ready-to-install ? 80px : 100px;
+            height: 30px;
+            background: white;
+            border-radius: Theme.r-inner;
+
+            Text {
+                text: ready-to-install ? "Restart" : "Update Now";
+                color: #2563eb;
+                font-size: Theme.font-sm;
+                font-weight: 600;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+
+            TouchArea {
+                clicked => {
+                    if ready-to-install {
+                        root.restart-clicked();
+                    } else {
+                        root.update-clicked();
+                    }
+                }
+            }
+        }
+
+        // Dismiss button (only for update banners, not protocol warnings)
+        if !is-protocol-warning: Rectangle {
+            width: 30px;
+            height: 30px;
+            border-radius: 15px;
+
+            Text {
+                text: "✕";
+                color: #ffffffcc;
+                font-size: Theme.font-md;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+
+            TouchArea {
+                clicked => { root.dismiss-clicked(); }
+            }
+        }
+    }
+}

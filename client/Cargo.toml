@@ -26,6 +26,10 @@ uuid = { version = "1", features = ["v4"] }
 serde = { workspace = true, features = ["derive"] }
 paste = "1"
 
+# Auto-updater
+velopack = "0.0.1298"
+semver = "1"
+
 # Native platform integration
 open = "5"
 tray-icon = "0.21"

@@ -112,7 +112,7 @@ Velopack generates and updates this file automatically during `vpk pack`.
 # client/Cargo.toml
 
 [dependencies]
-velopack = "0.0.914"       # Velopack Rust SDK
+velopack = "0.0.1298"       # Velopack Rust SDK
 semver = "1"
 tokio = { workspace = true }
 ```
@@ -1056,4 +1056,70 @@ Velopack keeps the previous full `.nupkg` in its local package cache. If an upda
 
 ---
 
-*This spec covers auto-updates, packaging, and code signing. For backend hosting, see [08-BACKEND-HOSTING.md](./08-BACKEND-HOSTING.md). For native platform integration, see [12-NATIVE-PLATFORM.md](./12-NATIVE-PLATFORM.md).*
+## 12. Protocol Version Handshake (Client ↔ Server Compatibility)
+
+During early development both client and backend change frequently. Self-hosters run their own Nakama server but receive client updates from GitHub Releases, so the two can drift apart. A lightweight **protocol version** integer prevents silent breakage.
+
+### Design
+
+| Constant | Lives in | Meaning |
+|---|---|---|
+| `PROTOCOL_VERSION` | Client (mello-core) **and** Server (Go) | The protocol revision this build speaks |
+| `MIN_SERVER_PROTOCOL` | Client (mello-core) | Oldest server protocol the client can tolerate |
+| `MinClientProtocol` | Server (Go) | Oldest client protocol the server can tolerate |
+
+**When to bump `PROTOCOL_VERSION`:** any breaking change to the client ↔ server contract — new required RPCs, changed RPC payloads, removed endpoints, changed match/presence data formats. Additive, backwards-compatible changes (new optional fields) do **not** require a bump.
+
+### Server side
+
+The existing `health` RPC is extended:
+
+```go
+// backend/nakama/data/modules/main.go
+
+const (
+    ProtocolVersion    = 1
+    MinClientProtocol  = 1
+)
+
+func HealthCheckRPC(...) (string, error) {
+    ...
+    return fmt.Sprintf(
+        `{"status":"healthy","version":"0.3.0","protocol_version":%d,"min_client_protocol":%d}`,
+        ProtocolVersion, MinClientProtocol,
+    ), nil
+}
+```
+
+### Client side
+
+After successful auth the client calls the `health` RPC and compares versions:
+
+```
+client.PROTOCOL_VERSION < server.min_client_protocol  →  "Please update Mello"
+server.protocol_version < client.MIN_SERVER_PROTOCOL   →  "Server needs updating"
+```
+
+Both cases emit a `ProtocolMismatch` event that the UI renders as a non-dismissable banner (update banner component, see §5). The app remains functional for best-effort use but warns clearly.
+
+### Constants (initial values)
+
+```rust
+// mello-core
+pub const PROTOCOL_VERSION: u32 = 1;
+pub const MIN_SERVER_PROTOCOL: u32 = 1;
+```
+
+```go
+// backend
+const ProtocolVersion = 1
+const MinClientProtocol = 1
+```
+
+### Why not semver / API versioning?
+
+Semver doesn't map cleanly to "can these two talk to each other." A single integer is trivial to reason about, costs zero bytes on the wire beyond the health response, and requires no compatibility matrices. Good enough for beta; revisit if/when we have a public API.
+
+---
+
+*This spec covers auto-updates, packaging, code signing, and client-server version compatibility. For backend hosting, see [08-BACKEND-HOSTING.md](./08-BACKEND-HOSTING.md). For native platform integration, see [12-NATIVE-PLATFORM.md](./12-NATIVE-PLATFORM.md).*

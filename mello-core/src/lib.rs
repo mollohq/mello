@@ -19,6 +19,11 @@ pub use events::Event;
 pub use stream::{Codec, QualityPreset, StreamConfig, StreamError};
 pub use voice::AudioDevice;
 
+/// Protocol version this build speaks. Bump on breaking client↔server changes.
+pub const PROTOCOL_VERSION: u32 = 1;
+/// Oldest server protocol this client can tolerate.
+pub const MIN_SERVER_PROTOCOL: u32 = 1;
+
 pub mod prelude {
     pub use crate::{Client, Command, Config, Error, Event, Result};
 }

@@ -136,5 +136,12 @@ pub enum Event {
     /// Throttled message preview for a sidebar crew.
     MessagePreviewUpdated { crew_id: String, messages: Vec<MessagePreview> },
 
+    /// Client-server protocol version mismatch.
+    ProtocolMismatch {
+        message: String,
+        /// true = client too old (needs update), false = server too old
+        client_outdated: bool,
+    },
+
     Error { message: String },
 }

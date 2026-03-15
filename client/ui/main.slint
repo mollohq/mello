@@ -8,6 +8,7 @@ import { ControlBar } from "panels/control_bar.slint";
 import { SettingsModal } from "panels/settings_modal.slint";
 import { DebugPanel } from "panels/debug_panel.slint";
 import { Onboarding } from "panels/onboarding.slint";
+import { UpdateBanner } from "panels/update_banner.slint";
 
 export { CrewData, MemberData, ChatMessageData, AudioDeviceData, VoiceChannelData, VoiceChannelMember, Theme }
 
@@ -107,7 +108,17 @@ export component MainWindow inherits Window {
     in property <bool> sh20; in property <bool> sh21; in property <bool> sh22; in property <bool> sh23; in property <bool> sh24;
     in property <bool> sh25; in property <bool> sh26; in property <bool> sh27; in property <bool> sh28; in property <bool> sh29;
 
+    // --- Update banner ---
+    in property <bool> update-available: false;
+    in property <string> update-version: "";
+    in property <float> update-download-progress: -1.0;
+    in property <bool> update-ready-to-install: false;
+    in property <string> protocol-warning: "";
+
     // --- Callbacks ---
+    callback update-now-clicked();
+    callback update-restart-clicked();
+    callback update-dismiss-clicked();
     callback login(string, string);
     callback logout();
     callback create-crew(string);
@@ -325,63 +336,79 @@ export component MainWindow inherits Window {
     if logged-in && (onboarding-step == 0 || onboarding-step > 3): Rectangle {
         background: Theme.bg-app;
 
-        HorizontalLayout {
+        VerticalLayout {
             padding: Theme.gap;
             spacing: Theme.gap;
 
-            // LEFT: Crew sidebar (280px, spans full height)
-            CrewPanel {
-                width: 280px;
-                crews: root.crews;
-                active-crew-id: root.active-crew-id;
-                crew-selected(id) => { root.select-crew(id); }
-                crew-create-requested(name) => { root.create-crew(name); }
+            UpdateBanner {
+                update-available: root.update-available;
+                version: root.update-version;
+                download-progress: root.update-download-progress;
+                ready-to-install: root.update-ready-to-install;
+                protocol-warning: root.protocol-warning;
+                update-clicked => { root.update-now-clicked(); }
+                restart-clicked => { root.update-restart-clicked(); }
+                dismiss-clicked => { root.update-dismiss-clicked(); }
             }
 
-            // CENTER: stage area + controls bar
-            VerticalLayout {
-                horizontal-stretch: 1;
+            HorizontalLayout {
                 spacing: Theme.gap;
+                vertical-stretch: 1;
 
-                StreamView {
-                    vertical-stretch: 1;
-                    members: root.members;
+                // LEFT: Crew sidebar
+                CrewPanel {
+                    width: 280px;
+                    crews: root.crews;
+                    active-crew-id: root.active-crew-id;
+                    crew-selected(id) => { root.select-crew(id); }
+                    crew-create-requested(name) => { root.create-crew(name); }
                 }
 
-                VoiceChannelView {
-                    voice-channels: root.voice-channels;
-                    join-voice-channel(id) => { root.join-voice-channel(id); }
-                    toggle-channel(id) => { root.toggle-voice-channel(id); }
-                }
+                // CENTER: stage area + controls bar
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    spacing: Theme.gap;
 
-                ControlBar {
-                    height: 92px;
-                    user-name: root.user-name;
-                    user-tag: root.user-tag;
-                    mic-muted <=> root.mic-muted;
-                    deafened <=> root.deafened;
-                    in-voice: root.in-voice;
-                    presence-status <=> root.presence-status;
-                    mic-toggled => { root.mic-toggle(); }
-                    deafen-toggled => { root.deafen-toggle(); }
-                    voice-toggled => { root.voice-toggle(); }
-                    logout-clicked => { root.logout(); }
-                    presence-changed(status) => { root.presence-changed(status); }
-                    theme-toggled => { root.theme-toggled(); }
-                    settings-clicked => { root.settings-requested(); }
-                    debug-toggled => {
-                        root.debug-open = !root.debug-open;
-                        root.debug-toggled();
+                    StreamView {
+                        vertical-stretch: 1;
+                        members: root.members;
+                    }
+
+                    VoiceChannelView {
+                        voice-channels: root.voice-channels;
+                        join-voice-channel(id) => { root.join-voice-channel(id); }
+                        toggle-channel(id) => { root.toggle-voice-channel(id); }
+                    }
+
+                    ControlBar {
+                        height: 92px;
+                        user-name: root.user-name;
+                        user-tag: root.user-tag;
+                        mic-muted <=> root.mic-muted;
+                        deafened <=> root.deafened;
+                        in-voice: root.in-voice;
+                        presence-status <=> root.presence-status;
+                        mic-toggled => { root.mic-toggle(); }
+                        deafen-toggled => { root.deafen-toggle(); }
+                        voice-toggled => { root.voice-toggle(); }
+                        logout-clicked => { root.logout(); }
+                        presence-changed(status) => { root.presence-changed(status); }
+                        theme-toggled => { root.theme-toggled(); }
+                        settings-clicked => { root.settings-requested(); }
+                        debug-toggled => {
+                            root.debug-open = !root.debug-open;
+                            root.debug-toggled();
+                        }
                     }
                 }
-            }
 
-            // RIGHT: Chat panel (340px, spans full height)
-            ChatPanel {
-                width: 340px;
-                messages: root.messages;
-                user-name: root.user-name;
-                message-submitted(text) => { root.send-message(text); }
+                // RIGHT: Chat panel
+                ChatPanel {
+                    width: 340px;
+                    messages: root.messages;
+                    user-name: root.user-name;
+                    message-submitted(text) => { root.send-message(text); }
+                }
             }
         }
     }

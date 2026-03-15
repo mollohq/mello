@@ -78,6 +78,18 @@ pub struct UserMetadata {
     pub created_at: Option<i64>,
 }
 
+// --- Health / version ---
+
+#[derive(Debug, Deserialize)]
+pub struct HealthResponse {
+    pub status: String,
+    pub version: String,
+    #[serde(default)]
+    pub protocol_version: Option<u32>,
+    #[serde(default)]
+    pub min_client_protocol: Option<u32>,
+}
+
 // --- RPC request/response types ---
 
 #[derive(Debug, Serialize)]

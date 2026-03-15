@@ -1,0 +1,104 @@
+name: Windows Release
+
+on:
+  release:
+    types: [published]
+
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: "Why are you triggering a manual build?"
+        required: true
+        default: "I need a binary package for testing!"
+
+permissions:
+  contents: write
+
+env:
+  RELEASE_CHANNEL: "win-x64-stable"
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+          token: ${{ secrets.GH_PAT }}
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Set version from release
+        if: github.event_name == 'release'
+        run: |
+          $version = "${{ github.event.release.tag_name }}" -replace '^v',''
+          echo "RELEASE_VERSION=$version" >> $env:GITHUB_ENV
+
+      - name: Set dev version
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          echo "RELEASE_VERSION=0.0.${{ github.run_number }}" >> $env:GITHUB_ENV
+
+      - name: Build client
+        run: cargo build --release --target x86_64-pc-windows-msvc --features production
+
+      - name: Assemble dist
+        shell: pwsh
+        run: |
+          mkdir dist
+          cp target/x86_64-pc-windows-msvc/release/mello.exe dist/
+          cp libmello/third_party/onnxruntime/onnxruntime-win-x64-*/lib/onnxruntime.dll dist/
+          cp libmello/third_party/onnxruntime/onnxruntime-win-x64-*/lib/onnxruntime_providers_shared.dll dist/
+          cp (Get-ChildItem target/x86_64-pc-windows-msvc/release/build -Recurse -Filter silero_vad.onnx | Select -First 1).FullName dist/
+          del dist/*.lib -ErrorAction SilentlyContinue
+
+      - name: Login to Azure
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Verify Azure Login
+        run: az account show --output table
+
+      - name: Velopack Package
+        shell: cmd
+        run: |
+          dotnet tool install -g vpk
+          mkdir vpk-out
+          vpk download github --repoUrl https://github.com/mollohq/mello --outputDir vpk-out --channel %RELEASE_CHANNEL% --token ${{ secrets.GH_PAT }}
+          vpk pack ^
+            --packId Mello ^
+            --packVersion %RELEASE_VERSION% ^
+            --packDir dist ^
+            --mainExe mello.exe ^
+            --packTitle Mello ^
+            --channel %RELEASE_CHANNEL% ^
+            --outputDir vpk-out ^
+            --icon client/assets/icons/app_icon.ico ^
+            --azureTrustedSignFile client/windows/signing-metadata.json
+
+      - name: Upload to GitHub Release
+        if: github.event_name == 'release'
+        shell: pwsh
+        run: |
+          $files = Get-ChildItem vpk-out -File
+          foreach ($f in $files) {
+            gh release upload "${{ github.event.release.tag_name }}" $f.FullName --clobber
+          }
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: mello-windows-x64
+          path: vpk-out/*

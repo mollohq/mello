@@ -3,6 +3,7 @@ mod deep_link;
 mod notifications;
 mod platform;
 mod settings;
+mod updater;
 
 pub const APP_NAME: &str = "Mello";
 
@@ -15,6 +16,7 @@ use slint::Model;
 use mello_core::{Client, Command, Config, Event};
 use settings::Settings;
 use platform::{StatusItem, VoiceState};
+use updater::{Updater, UpdateEvent};
 use uuid::Uuid;
 use single_instance::SingleInstance;
 
@@ -69,6 +71,9 @@ impl DebugHistory {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Velopack lifecycle hook — MUST be first. Handles install/uninstall/update hooks.
+    Updater::run_lifecycle_hooks();
+
     env_logger::init();
     log::info!("Starting Mello...");
 
@@ -98,6 +103,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel::<Command>(256);
     let (event_tx, event_rx) = std::sync::mpsc::channel::<Event>();
+
+    // --- Auto-updater (graceful fallback in dev mode) ---
+    let (update_event_tx, update_event_rx) = std::sync::mpsc::channel::<UpdateEvent>();
+    let updater: Rc<RefCell<Option<Updater>>> = Rc::new(RefCell::new(
+        match Updater::new(update_event_tx) {
+            Ok(u) => {
+                log::info!("Updater ready — v{}", u.current_version());
+                Some(u)
+            }
+            Err(e) => {
+                log::warn!("Updater init failed (dev mode?): {}", e);
+                None
+            }
+        }
+    ));
+
+    // Background update check on startup
+    if let Some(ref mut u) = *updater.borrow_mut() {
+        u.check_for_updates();
+    }
 
     rt.spawn(async move {
         let mut client = Client::new(nakama_config(), event_tx, loopback);
@@ -775,6 +800,36 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         log::info!("Presence changed to {}", status);
     });
 
+    // --- Update banner callbacks ---
+    {
+        let u = updater.clone();
+        app.on_update_now_clicked(move || {
+            if let Some(ref mut updater) = *u.borrow_mut() {
+                if let Err(e) = updater.download() {
+                    log::warn!("Failed to download update: {}", e);
+                }
+            }
+        });
+    }
+    {
+        let u = updater.clone();
+        app.on_update_restart_clicked(move || {
+            if let Some(ref updater) = *u.borrow() {
+                if let Err(e) = updater.apply_and_restart() {
+                    log::warn!("Failed to apply update: {}", e);
+                }
+            }
+        });
+    }
+    {
+        let app_weak = app.as_weak();
+        app.on_update_dismiss_clicked(move || {
+            if let Some(app) = app_weak.upgrade() {
+                app.set_update_available(false);
+            }
+        });
+    }
+
     // --- Event polling timer ---
     let app_weak = app.as_weak();
     let s = settings.clone();
@@ -788,8 +843,38 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let menu_settings = settings.clone();
     let saved_timer_ref = saved_timer.clone();
     let saved_app_weak = app.as_weak();
+    let _updater_ref = updater.clone();
     let timer = slint::Timer::default();
     timer.start(slint::TimerMode::Repeated, Duration::from_millis(50), move || {
+        // --- Update events ---
+        while let Ok(ue) = update_event_rx.try_recv() {
+            if let Some(app) = app_weak.upgrade() {
+                match ue {
+                    UpdateEvent::CheckComplete { update_available, version, download_size, .. } => {
+                        if update_available {
+                            app.set_update_available(true);
+                            if let Some(v) = version {
+                                app.set_update_version(v.into());
+                            }
+                            log::info!("Update available, size: {:?} bytes", download_size);
+                        }
+                    }
+                    UpdateEvent::DownloadProgress { progress } => {
+                        app.set_update_download_progress(progress);
+                    }
+                    UpdateEvent::DownloadComplete => {
+                        app.set_update_download_progress(1.0);
+                        app.set_update_ready_to_install(true);
+                    }
+                    UpdateEvent::Error(msg) => {
+                        log::warn!("Update error: {}", msg);
+                        app.set_update_available(false);
+                    }
+                    UpdateEvent::CheckStarted => {}
+                }
+            }
+        }
+
         // --- Core events ---
         while let Ok(event) = event_rx.try_recv() {
             if let Some(app) = app_weak.upgrade() {
@@ -916,8 +1001,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
                 "check_updates" => {
-                    // TODO: Implement proper auto-updater; for now open releases page
-                    if let Err(e) = open::that("https://github.com/mollohq/mello/releases") {
+                    if let Some(ref mut u) = *_updater_ref.borrow_mut() {
+                        u.check_for_updates();
+                    } else if let Err(e) = open::that("https://github.com/mollohq/mello/releases") {
                         log::warn!("Failed to open releases URL: {}", e);
                     }
                 }
@@ -1756,6 +1842,11 @@ fn handle_event(app: &MainWindow, event: Event, settings: &Rc<RefCell<Settings>>
                 }
             }
             app.set_crews(Rc::new(slint::VecModel::from(updated)).into());
+        }
+
+        Event::ProtocolMismatch { message, client_outdated } => {
+            log::warn!("Protocol mismatch (client_outdated={}): {}", client_outdated, message);
+            app.set_protocol_warning(message.into());
         }
 
         Event::Error { message } => {

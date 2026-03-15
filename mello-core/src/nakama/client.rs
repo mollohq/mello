@@ -498,6 +498,14 @@ impl NakamaClient {
         Ok(parsed.crews)
     }
 
+    // --- Health / version RPCs ---
+
+    pub async fn health_check(&self) -> Result<HealthResponse> {
+        let resp = self.rpc("health", &serde_json::json!({})).await?;
+        let parsed: HealthResponse = serde_json::from_str(&resp)?;
+        Ok(parsed)
+    }
+
     // --- ICE / Voice RPCs ---
 
     pub async fn get_ice_servers(&self) -> Result<Vec<String>> {

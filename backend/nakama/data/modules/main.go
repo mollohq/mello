@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"time"
 
 	"github.com/heroiclabs/nakama-common/runtime"
@@ -174,9 +175,17 @@ func InitModule(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runti
 	return nil
 }
 
+const (
+	ProtocolVersion   = 1
+	MinClientProtocol = 1
+)
+
 func HealthCheckRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, payload string) (string, error) {
 	if err := db.PingContext(ctx); err != nil {
 		return "", runtime.NewError("database unhealthy", 13)
 	}
-	return `{"status":"healthy","version":"0.3.0"}`, nil
+	return fmt.Sprintf(
+		`{"status":"healthy","version":"0.3.0","protocol_version":%d,"min_client_protocol":%d}`,
+		ProtocolVersion, MinClientProtocol,
+	), nil
 }

@@ -1,0 +1,120 @@
+name: macOS Release
+
+on:
+  release:
+    types: [published]
+
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: "Why are you triggering a manual build?"
+        required: true
+        default: "I need a binary package for testing!"
+
+permissions:
+  contents: write
+
+env:
+  RELEASE_CHANNEL: "osx-arm64-stable"
+
+jobs:
+  build-macos:
+    runs-on: self-hosted
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+          token: ${{ secrets.GH_PAT }}
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Set version from release
+        if: github.event_name == 'release'
+        run: |
+          version="${{ github.event.release.tag_name }}"
+          version="${version#v}"
+          echo "RELEASE_VERSION=$version" >> $GITHUB_ENV
+
+      - name: Set dev version
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          echo "RELEASE_VERSION=0.0.${{ github.run_number }}" >> $GITHUB_ENV
+
+      - name: Build client
+        run: cargo build --release --target aarch64-apple-darwin --features production
+
+      - name: Assemble dist
+        run: |
+          mkdir -p dist
+          cp target/aarch64-apple-darwin/release/mello dist/
+          cp libmello/third_party/onnxruntime/onnxruntime-osx-arm64-*/lib/libonnxruntime*.dylib dist/
+          cp $(find target/aarch64-apple-darwin/release/build -name silero_vad.onnx | head -1) dist/
+
+      - name: Import Apple certificates
+        uses: apple-actions/import-codesign-certs@v2
+        with:
+          p12-file-base64: ${{ secrets.MACOS_BUILD_AND_INSTALLER_CERTIFICATES }}
+          p12-password: ${{ secrets.P12_PASSWORD }}
+
+      - name: Store notarytool credentials
+        run: |
+          xcrun notarytool store-credentials "AC_PASSWORD" \
+            --apple-id "${{ secrets.APPLE_ID }}" \
+            --team-id "${{ secrets.APPLE_TEAM }}" \
+            --password "${{ secrets.APPLE_PASSWORD }}"
+
+      - name: Codesign ONNX Runtime dylib
+        run: |
+          for dylib in dist/libonnxruntime*.dylib; do
+            codesign --force --options runtime --timestamp \
+              --sign "Developer ID Application: ${{ secrets.APPLE_TEAM_NAME }}" \
+              "$dylib"
+          done
+
+      - name: Velopack Package
+        run: |
+          dotnet tool install -g vpk
+          mkdir -p vpk-out
+          vpk download github --repoUrl https://github.com/mollohq/mello --outputDir vpk-out --channel $RELEASE_CHANNEL --token ${{ secrets.GH_PAT }}
+          vpk pack \
+            --packId Mello \
+            --packVersion $RELEASE_VERSION \
+            --packDir dist \
+            --mainExe mello \
+            --packTitle Mello \
+            --channel $RELEASE_CHANNEL \
+            --outputDir vpk-out \
+            --icon client/assets/icons/app_icon.icns \
+            --signAppIdentity "Developer ID Application: ${{ secrets.APPLE_TEAM_NAME }}" \
+            --signInstallIdentity "Developer ID Installer: ${{ secrets.APPLE_TEAM_NAME }}" \
+            --notaryProfile "AC_PASSWORD" \
+            --signEntitlements client/macos/entitlements.plist
+
+      - name: Upload to GitHub Release
+        if: github.event_name == 'release'
+        run: |
+          for f in vpk-out/*; do
+            gh release upload "${{ github.event.release.tag_name }}" "$f" --clobber
+          done
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: mello-macos-arm64
+          path: vpk-out/*
+
+      - name: Cleanup keychain
+        if: always()
+        run: |
+          security delete-keychain signing_temp.keychain || true
