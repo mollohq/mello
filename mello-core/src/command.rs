@@ -10,12 +10,16 @@ pub enum Command {
     LinkEmail { email: String, password: String },
     Logout,
 
-    // Social auth
+    // Social auth (login screen — creates or logs into account)
     AuthSteam,
     AuthGoogle,
     AuthTwitch,
     AuthDiscord,
     AuthApple,
+
+    // Social link (onboarding step 3 — links identity to existing device account)
+    LinkGoogle,
+    LinkDiscord,
     DiscoverCrews,
     LoadMyCrews,
     JoinCrew { crew_id: String },

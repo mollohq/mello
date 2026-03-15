@@ -21,17 +21,17 @@ session:
   token_expiry_sec: 3600
   refresh_token_expiry_sec: 7776000
 
-# Social auth — populated from env vars in production;
-# leave empty/commented for local dev (email-only).
-google_auth:
-  credentials_json: ""
-
-apple_auth:
-  bundle_id: ""
+# Social auth — values come from env vars forwarded by docker-compose.
+# Leave blank in .env for email-only local dev.
+social:
+  google:
+    client_id: "${GOOGLE_CLIENT_ID}"
+  apple:
+    bundle_id: "${APPLE_CLIENT_ID}"
 
 steam:
-  publisher_key: ""
-  app_id: 0
+  publisher_key: "${STEAM_PUBLISHER_KEY}"
+  app_id: ${STEAM_APP_ID:-0}
   
 runtime:
   path: "/nakama/data/modules"

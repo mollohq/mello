@@ -87,6 +87,41 @@ func handleTwitchAuth(logger runtime.Logger, in *api.AuthenticateCustomRequest, 
 }
 
 // ---------------------------------------------------------------------------
+// BeforeLinkCustom — same validation as BeforeAuthenticateCustom so that
+// linking a Discord/Twitch identity during onboarding works correctly.
+// ---------------------------------------------------------------------------
+
+func BeforeLinkCustom(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, in *api.AccountCustom) (*api.AccountCustom, error) {
+	if in.Vars == nil {
+		return in, nil
+	}
+
+	provider := in.Vars["provider"]
+	token := in.Id
+
+	switch provider {
+	case "discord":
+		user, err := validateDiscordToken(token)
+		if err != nil {
+			logger.Error("Discord validation failed (link): %v", err)
+			return nil, runtime.NewError("Invalid Discord token", 16)
+		}
+		in.Id = fmt.Sprintf("discord_%s", user.ID)
+		logger.Info("Discord link for user: %s (%s)", user.Username, user.ID)
+	case "twitch":
+		user, err := validateTwitchToken(token)
+		if err != nil {
+			logger.Error("Twitch validation failed (link): %v", err)
+			return nil, runtime.NewError("Invalid Twitch token", 16)
+		}
+		in.Id = fmt.Sprintf("twitch_%s", user.ID)
+		logger.Info("Twitch link for user: %s (%s)", user.DisplayName, user.ID)
+	}
+
+	return in, nil
+}
+
+// ---------------------------------------------------------------------------
 // Token validation helpers
 // ---------------------------------------------------------------------------
 

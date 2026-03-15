@@ -20,5 +20,13 @@ mello-sys = { path = "../mello-sys" }
 bitflags = "2"
 async-trait = "0.1"
 
+# OAuth
+tiny_http = "0.12"
+webbrowser = "1.0"
+urlencoding = "2"
+sha2 = "0.10"
+rand = "0.8"
+url = "2"
+
 [dev-dependencies]
 tokio-test = "0.4"

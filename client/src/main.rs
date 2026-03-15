@@ -761,7 +761,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     {
         let cmd = cmd_tx.clone();
         app.on_onboarding_auth_google(move || {
-            let _ = cmd.try_send(Command::AuthGoogle);
+            let _ = cmd.try_send(Command::LinkGoogle);
         });
     }
     {
@@ -773,7 +773,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     {
         let cmd = cmd_tx.clone();
         app.on_onboarding_auth_discord(move || {
-            let _ = cmd.try_send(Command::AuthDiscord);
+            let _ = cmd.try_send(Command::LinkDiscord);
         });
     }
     {
@@ -1223,6 +1223,19 @@ fn handle_event(app: &MainWindow, event: Event, settings: &Rc<RefCell<Settings>>
             log::warn!("[auth] email-link-failed  reason={}", reason);
             app.set_link_error(reason.into());
         }
+        Event::SocialLinked => {
+            log::info!("[auth] social identity linked — onboarding complete");
+            app.set_onboarding_step(4);
+            app.set_logged_in(true);
+            let mut s = settings.borrow_mut();
+            s.onboarding_step = 4;
+            s.save();
+        }
+        Event::SocialLinkFailed { reason } => {
+            log::warn!("[auth] social-link-failed  reason={}", reason);
+            app.set_login_loading(false);
+            app.set_link_error(reason.into());
+        }
         Event::LoggedIn { user } => {
             log::info!("[auth] logged-in  user_id={} name={} tag={}", user.id, user.display_name, user.tag);
             app.set_logged_in(true);
@@ -1230,9 +1243,10 @@ fn handle_event(app: &MainWindow, event: Event, settings: &Rc<RefCell<Settings>>
             app.set_user_id(user.id.into());
             app.set_user_name(user.display_name.into());
             app.set_user_tag(user.tag.into());
-            // Persist onboarding as done so next startup skips it
+            // Advance onboarding UI and persist so next startup skips it
             let mut s = settings.borrow_mut();
             if s.onboarding_step < 4 {
+                app.set_onboarding_step(4);
                 s.onboarding_step = 4;
                 s.save();
             }

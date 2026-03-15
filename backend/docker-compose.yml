@@ -39,8 +39,16 @@ services:
       nakama-build:
         condition: service_completed_successfully
     environment:
+      - STEAM_PUBLISHER_KEY=${STEAM_PUBLISHER_KEY:-}
+      - STEAM_APP_ID=${STEAM_APP_ID:-}
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-}
+      - TWITCH_CLIENT_ID=${TWITCH_CLIENT_ID:-}
       - DISCORD_CLIENT_ID=${DISCORD_CLIENT_ID:-}
-      - DISCORD_CLIENT_SECRET=${DISCORD_CLIENT_SECRET:-}
+      - APPLE_CLIENT_ID=${APPLE_CLIENT_ID:-}
+      - APPLE_TEAM_ID=${APPLE_TEAM_ID:-}
+      - APPLE_KEY_ID=${APPLE_KEY_ID:-}
+      - TURN_SECRET=${TURN_SECRET:-}
+      - TURN_HOST=${TURN_HOST:-}
     entrypoint:
       - /bin/sh
       - -c

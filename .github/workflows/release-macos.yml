@@ -54,6 +54,10 @@ jobs:
 
       - name: Build client
         run: cargo build --release --target aarch64-apple-darwin --features production
+        env:
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          DISCORD_CLIENT_ID: ${{ secrets.DISCORD_CLIENT_ID }}
 
       - name: Run tests
         run: cargo test --workspace --target aarch64-apple-darwin

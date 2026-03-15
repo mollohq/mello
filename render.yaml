@@ -30,9 +30,21 @@ services:
         generateValue: true
       - key: NAKAMA_SESSION_REFRESH_ENCRYPTION_KEY
         generateValue: true
+      - key: STEAM_PUBLISHER_KEY
+        sync: false
+      - key: STEAM_APP_ID
+        sync: false
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: TWITCH_CLIENT_ID
+        sync: false
       - key: DISCORD_CLIENT_ID
         sync: false
-      - key: DISCORD_CLIENT_SECRET
+      - key: APPLE_CLIENT_ID
+        sync: false
+      - key: APPLE_TEAM_ID
+        sync: false
+      - key: APPLE_KEY_ID
         sync: false
 
   - type: web

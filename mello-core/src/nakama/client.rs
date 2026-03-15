@@ -78,6 +78,10 @@ impl NakamaClient {
         self.token.clone().ok_or(Error::NotConnected)
     }
 
+    pub fn config(&self) -> &Config {
+        &self.config
+    }
+
     // --- Authentication ---
 
     pub async fn login_email(&mut self, email: &str, password: &str) -> Result<User> {
@@ -113,6 +117,216 @@ impl NakamaClient {
         let user = self.get_account().await?;
         self.current_user = Some(user.clone());
         Ok(user)
+    }
+
+    /// Exchange a Google authorization code + PKCE verifier for an id_token,
+    /// then authenticate with Nakama's native Google endpoint.
+    pub async fn authenticate_google(
+        &mut self,
+        code: &str,
+        pkce_verifier: &str,
+    ) -> Result<User> {
+        let google_client_id = self.config.google_client_id.as_deref()
+            .ok_or_else(|| Error::AuthFailed("GOOGLE_CLIENT_ID not configured".into()))?;
+        let google_client_secret = self.config.google_client_secret.as_deref()
+            .ok_or_else(|| Error::AuthFailed("GOOGLE_CLIENT_SECRET not configured".into()))?;
+
+        #[derive(serde::Deserialize)]
+        struct TokenResponse {
+            id_token: Option<String>,
+            error: Option<String>,
+            error_description: Option<String>,
+        }
+
+        let token_resp = self.http
+            .post("https://oauth2.googleapis.com/token")
+            .form(&[
+                ("code", code),
+                ("client_id", google_client_id),
+                ("client_secret", google_client_secret),
+                ("redirect_uri", crate::oauth::REDIRECT_URI),
+                ("grant_type", "authorization_code"),
+                ("code_verifier", pkce_verifier),
+            ])
+            .send()
+            .await?;
+
+        let tokens: TokenResponse = token_resp.json().await
+            .map_err(|_| Error::AuthFailed("Google token exchange failed".into()))?;
+
+        if let Some(err) = tokens.error {
+            let desc = tokens.error_description.unwrap_or_default();
+            return Err(Error::AuthFailed(format!("Google: {err} — {desc}")));
+        }
+
+        let id_token = tokens.id_token
+            .ok_or_else(|| Error::AuthFailed("No id_token from Google".into()))?;
+
+        let url = format!(
+            "{}/v2/account/authenticate/google?create=true",
+            self.config.http_base()
+        );
+
+        let resp = self.http.post(&url)
+            .basic_auth(&self.config.nakama_key, Some(""))
+            .json(&serde_json::json!({ "token": id_token }))
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            let err: ApiError = resp.json().await.unwrap_or(ApiError {
+                error: Some("Unknown error".into()),
+                message: None,
+                code: None,
+            });
+            return Err(Error::AuthFailed(
+                err.message.or(err.error).unwrap_or_default(),
+            ));
+        }
+
+        let session: ApiSession = resp.json().await?;
+        self.token = Some(session.token.clone());
+        self.refresh_token = session.refresh_token;
+
+        let user = self.get_account().await?;
+        self.current_user = Some(user.clone());
+        Ok(user)
+    }
+
+    /// Authenticate with a provider token via Nakama's custom auth endpoint.
+    /// Used for Discord and Twitch whose tokens are validated by the backend hook.
+    pub async fn authenticate_custom(
+        &mut self,
+        token: &str,
+        provider: &str,
+    ) -> Result<User> {
+        let url = format!(
+            "{}/v2/account/authenticate/custom?create=true",
+            self.config.http_base()
+        );
+
+        let resp = self.http.post(&url)
+            .basic_auth(&self.config.nakama_key, Some(""))
+            .json(&serde_json::json!({
+                "id": token,
+                "vars": { "provider": provider }
+            }))
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            let err: ApiError = resp.json().await.unwrap_or(ApiError {
+                error: Some("Unknown error".into()),
+                message: None,
+                code: None,
+            });
+            return Err(Error::AuthFailed(
+                err.message.or(err.error).unwrap_or_default(),
+            ));
+        }
+
+        let session: ApiSession = resp.json().await?;
+        self.token = Some(session.token.clone());
+        self.refresh_token = session.refresh_token;
+
+        let user = self.get_account().await?;
+        self.current_user = Some(user.clone());
+        Ok(user)
+    }
+
+    /// Link a Google identity to the current (device-authed) account.
+    /// Same token exchange as authenticate_google, but hits /v2/account/link/google
+    /// with Bearer auth so the identity is attached to the existing user.
+    pub async fn link_google(
+        &self,
+        code: &str,
+        pkce_verifier: &str,
+    ) -> Result<()> {
+        let google_client_id = self.config.google_client_id.as_deref()
+            .ok_or_else(|| Error::AuthFailed("GOOGLE_CLIENT_ID not configured".into()))?;
+        let google_client_secret = self.config.google_client_secret.as_deref()
+            .ok_or_else(|| Error::AuthFailed("GOOGLE_CLIENT_SECRET not configured".into()))?;
+
+        #[derive(serde::Deserialize)]
+        struct TokenResponse {
+            id_token: Option<String>,
+            error: Option<String>,
+            error_description: Option<String>,
+        }
+
+        let token_resp = self.http
+            .post("https://oauth2.googleapis.com/token")
+            .form(&[
+                ("code", code),
+                ("client_id", google_client_id),
+                ("client_secret", google_client_secret),
+                ("redirect_uri", crate::oauth::REDIRECT_URI),
+                ("grant_type", "authorization_code"),
+                ("code_verifier", pkce_verifier),
+            ])
+            .send()
+            .await?;
+
+        let tokens: TokenResponse = token_resp.json().await
+            .map_err(|_| Error::AuthFailed("Google token exchange failed".into()))?;
+
+        if let Some(err) = tokens.error {
+            let desc = tokens.error_description.unwrap_or_default();
+            return Err(Error::AuthFailed(format!("Google: {err} — {desc}")));
+        }
+
+        let id_token = tokens.id_token
+            .ok_or_else(|| Error::AuthFailed("No id_token from Google".into()))?;
+
+        let token = self.bearer()?;
+        let url = format!("{}/v2/account/link/google", self.config.http_base());
+
+        let resp = self.http.post(&url)
+            .bearer_auth(&token)
+            .json(&serde_json::json!({ "token": id_token }))
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            let err: ApiError = resp.json().await.unwrap_or(ApiError {
+                error: Some("Unknown error".into()),
+                message: None,
+                code: None,
+            });
+            return Err(Error::AuthFailed(
+                err.message.or(err.error).unwrap_or_default(),
+            ));
+        }
+
+        Ok(())
+    }
+
+    /// Link a custom provider identity (Discord, Twitch) to the current account.
+    pub async fn link_custom(&self, token: &str, provider: &str) -> Result<()> {
+        let bearer = self.bearer()?;
+        let url = format!("{}/v2/account/link/custom", self.config.http_base());
+
+        let resp = self.http.post(&url)
+            .bearer_auth(&bearer)
+            .json(&serde_json::json!({
+                "id": token,
+                "vars": { "provider": provider }
+            }))
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            let err: ApiError = resp.json().await.unwrap_or(ApiError {
+                error: Some("Unknown error".into()),
+                message: None,
+                code: None,
+            });
+            return Err(Error::AuthFailed(
+                err.message.or(err.error).unwrap_or_default(),
+            ));
+        }
+
+        Ok(())
     }
 
     /// Returns (User, created) where `created` is true when Nakama just created the account.

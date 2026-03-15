@@ -1,3 +1,5 @@
+pub mod auth_discord;
+pub mod auth_google;
 pub mod client;
 pub mod command;
 pub mod config;
@@ -6,6 +8,7 @@ pub mod crew_state;
 pub mod error;
 pub mod events;
 pub mod nakama;
+pub mod oauth;
 pub mod presence;
 pub mod session;
 pub mod stream;

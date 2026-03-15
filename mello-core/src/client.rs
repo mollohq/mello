@@ -167,10 +167,7 @@ impl Client {
             }
             Command::AuthGoogle => {
                 log::info!("[auth] Google auth requested");
-                // TODO: OAuth2 PKCE flow -> id_token -> Nakama /authenticate/google
-                let _ = self.event_tx.send(Event::LoginFailed {
-                    reason: "Google auth not yet implemented".into(),
-                });
+                self.handle_auth_google().await;
             }
             Command::AuthTwitch => {
                 log::info!("[auth] Twitch auth requested");
@@ -181,10 +178,7 @@ impl Client {
             }
             Command::AuthDiscord => {
                 log::info!("[auth] Discord auth requested");
-                // TODO: OAuth2 implicit flow -> access_token -> Nakama /authenticate/custom
-                let _ = self.event_tx.send(Event::LoginFailed {
-                    reason: "Discord auth not yet implemented".into(),
-                });
+                self.handle_auth_discord().await;
             }
             Command::AuthApple => {
                 log::info!("[auth] Apple auth requested");
@@ -192,6 +186,16 @@ impl Client {
                 let _ = self.event_tx.send(Event::LoginFailed {
                     reason: "Apple auth not yet implemented".into(),
                 });
+            }
+
+            // Social link (onboarding — attaches identity to current device account)
+            Command::LinkGoogle => {
+                log::info!("[auth] Google link requested");
+                self.handle_link_google().await;
+            }
+            Command::LinkDiscord => {
+                log::info!("[auth] Discord link requested");
+                self.handle_link_discord().await;
             }
             Command::DiscoverCrews => {
                 self.handle_discover_crews().await;
@@ -428,6 +432,224 @@ impl Client {
             Err(e) => {
                 log::error!("Login failed: {}", e);
                 let _ = self.event_tx.send(Event::LoginFailed {
+                    reason: e.to_string(),
+                });
+            }
+        }
+    }
+
+    async fn handle_auth_google(&mut self) {
+        let client_id = match self.nakama.config().google_client_id.clone() {
+            Some(id) => id,
+            None => {
+                log::warn!("[auth] GOOGLE_CLIENT_ID not configured");
+                let _ = self.event_tx.send(Event::LoginFailed {
+                    reason: "Google login not configured".into(),
+                });
+                return;
+            }
+        };
+
+        let oauth_result = tokio::task::spawn_blocking(move || {
+            crate::auth_google::GoogleAuth::authenticate(&client_id)
+        })
+        .await;
+
+        let (code, verifier) = match oauth_result {
+            Ok(Ok(pair)) => pair,
+            Ok(Err(e)) => {
+                log::error!("[auth] Google OAuth flow failed: {}", e);
+                let _ = self.event_tx.send(Event::LoginFailed {
+                    reason: format!("Google sign-in failed: {}", e),
+                });
+                return;
+            }
+            Err(e) => {
+                log::error!("[auth] Google OAuth task panicked: {}", e);
+                let _ = self.event_tx.send(Event::LoginFailed {
+                    reason: "Google sign-in failed unexpectedly".into(),
+                });
+                return;
+            }
+        };
+
+        match self.nakama.authenticate_google(&code, &verifier).await {
+            Ok(user) => self.on_social_login(user).await,
+            Err(e) => {
+                log::error!("[auth] Google Nakama auth failed: {}", e);
+                let _ = self.event_tx.send(Event::LoginFailed {
+                    reason: e.to_string(),
+                });
+            }
+        }
+    }
+
+    async fn handle_auth_discord(&mut self) {
+        let client_id = match self.nakama.config().discord_client_id.clone() {
+            Some(id) => id,
+            None => {
+                log::warn!("[auth] DISCORD_CLIENT_ID not configured");
+                let _ = self.event_tx.send(Event::LoginFailed {
+                    reason: "Discord login not configured".into(),
+                });
+                return;
+            }
+        };
+
+        let oauth_result = tokio::task::spawn_blocking(move || {
+            crate::auth_discord::DiscordAuth::authenticate(&client_id)
+        })
+        .await;
+
+        let token = match oauth_result {
+            Ok(Ok(t)) => t,
+            Ok(Err(e)) => {
+                log::error!("[auth] Discord OAuth flow failed: {}", e);
+                let _ = self.event_tx.send(Event::LoginFailed {
+                    reason: format!("Discord sign-in failed: {}", e),
+                });
+                return;
+            }
+            Err(e) => {
+                log::error!("[auth] Discord OAuth task panicked: {}", e);
+                let _ = self.event_tx.send(Event::LoginFailed {
+                    reason: "Discord sign-in failed unexpectedly".into(),
+                });
+                return;
+            }
+        };
+
+        match self.nakama.authenticate_custom(&token, "discord").await {
+            Ok(user) => self.on_social_login(user).await,
+            Err(e) => {
+                log::error!("[auth] Discord Nakama auth failed: {}", e);
+                let _ = self.event_tx.send(Event::LoginFailed {
+                    reason: e.to_string(),
+                });
+            }
+        }
+    }
+
+    /// Shared post-auth flow for social logins (same as handle_login success path).
+    async fn on_social_login(&mut self, user: crate::events::User) {
+        log::info!("[auth] Social login success: {} ({})", user.display_name, user.tag);
+
+        match self.nakama.refresh_token() {
+            Some(rt) => {
+                if let Err(e) = session::save(rt) {
+                    log::warn!("Failed to save session: {}", e);
+                }
+            }
+            None => {
+                log::warn!("No refresh token returned by server");
+            }
+        }
+
+        if let Err(e) = self.nakama.connect_ws(self.event_tx.clone()).await {
+            log::error!("WebSocket connect failed: {}", e);
+            let _ = self.event_tx.send(Event::LoginFailed {
+                reason: format!("WebSocket failed: {}", e),
+            });
+            return;
+        }
+
+        self.on_connected().await;
+        let _ = self.event_tx.send(Event::LoggedIn { user });
+        self.load_crews().await;
+    }
+
+    async fn handle_link_google(&mut self) {
+        let client_id = match self.nakama.config().google_client_id.clone() {
+            Some(id) => id,
+            None => {
+                log::warn!("[auth] GOOGLE_CLIENT_ID not configured");
+                let _ = self.event_tx.send(Event::SocialLinkFailed {
+                    reason: "Google login not configured".into(),
+                });
+                return;
+            }
+        };
+
+        let oauth_result = tokio::task::spawn_blocking(move || {
+            crate::auth_google::GoogleAuth::authenticate(&client_id)
+        })
+        .await;
+
+        let (code, verifier) = match oauth_result {
+            Ok(Ok(pair)) => pair,
+            Ok(Err(e)) => {
+                log::error!("[auth] Google OAuth flow failed: {}", e);
+                let _ = self.event_tx.send(Event::SocialLinkFailed {
+                    reason: format!("Google sign-in failed: {}", e),
+                });
+                return;
+            }
+            Err(e) => {
+                log::error!("[auth] Google OAuth task panicked: {}", e);
+                let _ = self.event_tx.send(Event::SocialLinkFailed {
+                    reason: "Google sign-in failed unexpectedly".into(),
+                });
+                return;
+            }
+        };
+
+        match self.nakama.link_google(&code, &verifier).await {
+            Ok(()) => {
+                log::info!("[auth] Google identity linked to device account");
+                let _ = self.event_tx.send(Event::SocialLinked);
+            }
+            Err(e) => {
+                log::error!("[auth] Google link failed: {}", e);
+                let _ = self.event_tx.send(Event::SocialLinkFailed {
+                    reason: e.to_string(),
+                });
+            }
+        }
+    }
+
+    async fn handle_link_discord(&mut self) {
+        let client_id = match self.nakama.config().discord_client_id.clone() {
+            Some(id) => id,
+            None => {
+                log::warn!("[auth] DISCORD_CLIENT_ID not configured");
+                let _ = self.event_tx.send(Event::SocialLinkFailed {
+                    reason: "Discord login not configured".into(),
+                });
+                return;
+            }
+        };
+
+        let oauth_result = tokio::task::spawn_blocking(move || {
+            crate::auth_discord::DiscordAuth::authenticate(&client_id)
+        })
+        .await;
+
+        let token = match oauth_result {
+            Ok(Ok(t)) => t,
+            Ok(Err(e)) => {
+                log::error!("[auth] Discord OAuth flow failed: {}", e);
+                let _ = self.event_tx.send(Event::SocialLinkFailed {
+                    reason: format!("Discord sign-in failed: {}", e),
+                });
+                return;
+            }
+            Err(e) => {
+                log::error!("[auth] Discord OAuth task panicked: {}", e);
+                let _ = self.event_tx.send(Event::SocialLinkFailed {
+                    reason: "Discord sign-in failed unexpectedly".into(),
+                });
+                return;
+            }
+        };
+
+        match self.nakama.link_custom(&token, "discord").await {
+            Ok(()) => {
+                log::info!("[auth] Discord identity linked to device account");
+                let _ = self.event_tx.send(Event::SocialLinked);
+            }
+            Err(e) => {
+                log::error!("[auth] Discord link failed: {}", e);
+                let _ = self.event_tx.send(Event::SocialLinkFailed {
                     reason: e.to_string(),
                 });
             }

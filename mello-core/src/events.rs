@@ -32,6 +32,8 @@ pub enum Event {
     DiscoverCrewsLoaded { crews: Vec<Crew> },
     EmailLinked,
     EmailLinkFailed { reason: String },
+    SocialLinked,
+    SocialLinkFailed { reason: String },
 
     CrewCreated { crew: Crew },
     CrewCreateFailed { reason: String },

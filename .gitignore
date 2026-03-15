@@ -27,6 +27,7 @@ Thumbs.db
 # Environment
 .env
 .env.local
+.cargo/config.toml
 
 # Nakama runtime artifacts
 backend/nakama/data/.cookie

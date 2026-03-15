@@ -1,0 +1,10 @@
+# Cargo build-time environment variables.
+# Copy to .cargo/config.toml and fill in your values.
+# This file is NOT committed to git (.cargo/config.toml is gitignored).
+
+[env]
+# OAuth client IDs — baked into the binary at compile time via option_env!()
+# Get these from your provider developer consoles (see specs/06a-SOCIAL-LOGIN-SETUP.md)
+GOOGLE_CLIENT_ID = ""
+GOOGLE_CLIENT_SECRET = ""
+DISCORD_CLIENT_ID = ""

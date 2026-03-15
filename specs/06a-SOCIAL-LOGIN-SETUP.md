@@ -64,8 +64,9 @@ This lets you test the Steam SDK integration. Nakama won't validate the ticket a
 | Credential | Where it goes |
 |------------|---------------|
 | OAuth 2.0 Client ID | `GOOGLE_CLIENT_ID` env var (client + backend) |
+| OAuth 2.0 Client Secret | `GOOGLE_CLIENT_SECRET` env var (client only, compile-time) |
 
-No client secret is needed — we use PKCE.
+Google requires the client secret even for Desktop app clients. It is not truly secret (ships in the binary) — PKCE provides the actual security.
 
 ### Steps
 
@@ -76,10 +77,7 @@ No client secret is needed — we use PKCE.
    - Click "Select a project" → "New Project"
    - Name: `mello` (or similar)
 
-3. **Enable the Google Identity API**
-   - APIs & Services → Library → search "Google Identity" → Enable
-
-4. **Configure OAuth consent screen**
+3. **Configure OAuth consent screen**
    - APIs & Services → OAuth consent screen
    - User type: **External**
    - App name: `Mello`
@@ -88,22 +86,22 @@ No client secret is needed — we use PKCE.
    - Scopes: add `openid`, `profile`, `email`
    - Save
 
-5. **Create OAuth 2.0 Client ID**
+4. **Create OAuth 2.0 Client ID**
    - APIs & Services → Credentials → "Create Credentials" → "OAuth client ID"
-   - Application type: **Desktop app** (or Web application)
+   - Application type: **Desktop app**
    - Name: `Mello Desktop`
-   - If Web application: add `http://localhost:29405/callback` to "Authorized redirect URIs"
    - Click Create
 
-6. **Copy the Client ID**
-   - It looks like: `123456789-abcdef.apps.googleusercontent.com`
-   - Set as `GOOGLE_CLIENT_ID` in your `.env`
+5. **Copy the Client ID and Client Secret**
+   - Client ID looks like: `123456789-abcdef.apps.googleusercontent.com`
+   - Set as `GOOGLE_CLIENT_ID` in your `backend/.env` and `.cargo/config.toml`
+   - Copy the Client Secret and set as `GOOGLE_CLIENT_SECRET` in `.cargo/config.toml`
 
 ### Notes
 
 - In development, Google shows a "This app isn't verified" warning — that's normal
 - For production, submit the app for verification through the consent screen settings
-- No client secret is needed in the client binary (PKCE handles it)
+- The client secret is required by Google even for Desktop apps — it ships in the binary (PKCE provides the real security)
 
 ---
 
