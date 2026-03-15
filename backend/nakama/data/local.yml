@@ -22,10 +22,9 @@ session:
   refresh_token_expiry_sec: 7776000
 
 # Social auth — values come from env vars forwarded by docker-compose.
-# Leave blank in .env for email-only local dev.
+# Google auth doesn't need server config; Nakama validates id_tokens against
+# Google's public keys. GOOGLE_CLIENT_ID is only used by the Go module via os.Getenv().
 social:
-  google:
-    client_id: "${GOOGLE_CLIENT_ID}"
   apple:
     bundle_id: "${APPLE_CLIENT_ID}"
 

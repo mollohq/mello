@@ -29,7 +29,6 @@ ENTRYPOINT ["/bin/sh", "-c", "\
         --session.refresh_encryption_key=${NAKAMA_SESSION_REFRESH_ENCRYPTION_KEY:-defaultrefreshkey} \
         --console.port=7351 \
         --socket.port=${PORT:-7350} \
-        --social.google.client_id=${GOOGLE_CLIENT_ID:-} \
         --social.apple.bundle_id=${APPLE_CLIENT_ID:-} \
         --social.steam.publisher_key=${STEAM_PUBLISHER_KEY:-} \
         --social.steam.app_id=${STEAM_APP_ID:-0} \
