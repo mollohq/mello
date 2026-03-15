@@ -156,6 +156,43 @@ impl Client {
             Command::Logout => {
                 self.handle_logout().await;
             }
+
+            // Social auth
+            Command::AuthSteam => {
+                log::info!("[auth] Steam auth requested");
+                // TODO: implemented by client/src/auth/steam.rs -> sends ticket to Nakama
+                let _ = self.event_tx.send(Event::LoginFailed {
+                    reason: "Steam auth not yet implemented".into(),
+                });
+            }
+            Command::AuthGoogle => {
+                log::info!("[auth] Google auth requested");
+                // TODO: OAuth2 PKCE flow -> id_token -> Nakama /authenticate/google
+                let _ = self.event_tx.send(Event::LoginFailed {
+                    reason: "Google auth not yet implemented".into(),
+                });
+            }
+            Command::AuthTwitch => {
+                log::info!("[auth] Twitch auth requested");
+                // TODO: OAuth2 PKCE flow -> access_token -> Nakama /authenticate/custom
+                let _ = self.event_tx.send(Event::LoginFailed {
+                    reason: "Twitch auth not yet implemented".into(),
+                });
+            }
+            Command::AuthDiscord => {
+                log::info!("[auth] Discord auth requested");
+                // TODO: OAuth2 implicit flow -> access_token -> Nakama /authenticate/custom
+                let _ = self.event_tx.send(Event::LoginFailed {
+                    reason: "Discord auth not yet implemented".into(),
+                });
+            }
+            Command::AuthApple => {
+                log::info!("[auth] Apple auth requested");
+                // TODO: Apple Sign In -> id_token -> Nakama /authenticate/apple
+                let _ = self.event_tx.send(Event::LoginFailed {
+                    reason: "Apple auth not yet implemented".into(),
+                });
+            }
             Command::DiscoverCrews => {
                 self.handle_discover_crews().await;
             }

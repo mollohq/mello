@@ -30,6 +30,9 @@ func InitModule(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runti
 	if err := initializer.RegisterAfterAuthenticateEmail(AfterAuthenticateEmail); err != nil {
 		return err
 	}
+	if err := initializer.RegisterBeforeAuthenticateCustom(BeforeAuthenticateCustom); err != nil {
+		return err
+	}
 
 	// -----------------------------------------------------------------------
 	// Session lifecycle hooks
@@ -55,6 +58,13 @@ func InitModule(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runti
 	// Chat hooks (RegisterAfterRt for channel messages)
 	// -----------------------------------------------------------------------
 	if err := initializer.RegisterAfterRt("ChannelMessageSend", OnChatMessage); err != nil {
+		return err
+	}
+
+	// -----------------------------------------------------------------------
+	// RPCs — auth
+	// -----------------------------------------------------------------------
+	if err := initializer.RegisterRpc("auth/providers", AuthProvidersRPC); err != nil {
 		return err
 	}
 

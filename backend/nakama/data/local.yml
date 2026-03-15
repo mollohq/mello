@@ -20,6 +20,18 @@ logger:
 session:
   token_expiry_sec: 3600
   refresh_token_expiry_sec: 7776000
+
+# Social auth — populated from env vars in production;
+# leave empty/commented for local dev (email-only).
+google_auth:
+  credentials_json: ""
+
+apple_auth:
+  bundle_id: ""
+
+steam:
+  publisher_key: ""
+  app_id: 0
   
 runtime:
   path: "/nakama/data/modules"

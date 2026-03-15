@@ -152,6 +152,13 @@ export component MainWindow inherits Window {
     callback onboarding-capture-device-selected(string);
     callback onboarding-playback-device-selected(string);
 
+    // --- Social auth callbacks ---
+    callback onboarding-auth-steam();
+    callback onboarding-auth-google();
+    callback onboarding-auth-twitch();
+    callback onboarding-auth-discord();
+    callback onboarding-auth-apple();
+
     // ===================== ONBOARDING =====================
     if onboarding-step >= 1 && onboarding-step <= 3: Onboarding {
         step: root.onboarding-step;
@@ -177,6 +184,11 @@ export component MainWindow inherits Window {
         skip-identity => { root.onboarding-skip-identity(); }
         capture-device-selected(id) => { root.onboarding-capture-device-selected(id); }
         playback-device-selected(id) => { root.onboarding-playback-device-selected(id); }
+        auth-steam => { root.onboarding-auth-steam(); }
+        auth-google => { root.onboarding-auth-google(); }
+        auth-twitch => { root.onboarding-auth-twitch(); }
+        auth-discord => { root.onboarding-auth-discord(); }
+        auth-apple => { root.onboarding-auth-apple(); }
     }
 
     // ===================== LOGIN SCREEN (only during session restore / fallback) =====================

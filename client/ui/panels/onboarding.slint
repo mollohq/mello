@@ -18,7 +18,9 @@ component CrewCard inherits Rectangle {
     border-color: card-touch.has-hover ? Theme.accent : Theme.graphic-light;
 
     card-touch := TouchArea {
-        clicked => { root.clicked(); }
+        clicked => {
+            root.clicked();
+        }
     }
 
     VerticalLayout {
@@ -85,9 +87,7 @@ component CrewCard inherits Rectangle {
             alignment: space-between;
 
             Text {
-                text: member-count < 10
-                    ? "0" + member-count + " MEMBERS"
-                    : member-count + " MEMBERS";
+                text: member-count < 10 ? "0" + member-count + " MEMBERS" : member-count + " MEMBERS";
                 font-family: Theme.font-mono;
                 font-size: 11px;
                 color: Theme.text-tertiary;
@@ -115,7 +115,9 @@ component CreateCrewCard inherits Rectangle {
     border-color: create-touch.has-hover ? Theme.accent : Theme.text-tertiary;
 
     create-touch := TouchArea {
-        clicked => { root.clicked(); }
+        clicked => {
+            root.clicked();
+        }
     }
 
     VerticalLayout {
@@ -165,7 +167,9 @@ component AvatarOption inherits Rectangle {
     border-color: selected ? Theme.accent : (av-touch.has-hover ? Theme.graphic-med : Theme.graphic-light);
 
     av-touch := TouchArea {
-        clicked => { root.clicked(); }
+        clicked => {
+            root.clicked();
+        }
     }
 
     Text {
@@ -207,7 +211,11 @@ component StepIndicator inherits Rectangle {
                 width: 24px;
                 height: 2px;
                 background: current-step >= 1 ? Theme.accent : Theme.graphic-light;
-                TouchArea { clicked => { root.step-clicked(1); } }
+                TouchArea {
+                    clicked => {
+                        root.step-clicked(1);
+                    }
+                }
             }
 
             Rectangle {
@@ -216,7 +224,11 @@ component StepIndicator inherits Rectangle {
                 width: 24px;
                 height: 2px;
                 background: current-step >= 2 ? Theme.accent : Theme.graphic-light;
-                TouchArea { clicked => { root.step-clicked(2); } }
+                TouchArea {
+                    clicked => {
+                        root.step-clicked(2);
+                    }
+                }
             }
 
             Rectangle {
@@ -225,7 +237,11 @@ component StepIndicator inherits Rectangle {
                 width: 24px;
                 height: 2px;
                 background: current-step >= 3 ? Theme.accent : Theme.graphic-light;
-                TouchArea { clicked => { root.step-clicked(3); } }
+                TouchArea {
+                    clicked => {
+                        root.step-clicked(3);
+                    }
+                }
             }
         }
     }
@@ -275,7 +291,9 @@ component AccentButton inherits Rectangle {
 
     btn-touch := TouchArea {
         clicked => {
-            if root.enabled { root.clicked(); }
+            if root.enabled {
+                root.clicked();
+            }
         }
     }
 
@@ -303,10 +321,13 @@ component AccentButton inherits Rectangle {
 
 component AuthButton inherits Rectangle {
     in property <string> label;
+    in property <image> icon;
+    in property <bool> has-icon: false;
     in property <bool> subdued: false;
     callback clicked();
 
-    height: 52px;
+    height: 56px;
+    preferred-width: 0px;
     background: auth-touch.has-hover ? #FFFFFF05 : transparent;
     border-radius: Theme.r-inner;
     border-width: 1px;
@@ -314,7 +335,9 @@ component AuthButton inherits Rectangle {
     opacity: subdued ? 0.6 : 1.0;
 
     auth-touch := TouchArea {
-        clicked => { root.clicked(); }
+        clicked => {
+            root.clicked();
+        }
     }
 
     HorizontalLayout {
@@ -322,12 +345,22 @@ component AuthButton inherits Rectangle {
         spacing: 16px;
         alignment: start;
 
+        if has-icon: Image {
+            source: icon;
+            width: 20px;
+            height: 20px;
+            colorize: Theme.text-primary;
+            y: (parent.height - self.height) / 2;
+            opacity: 0.8;
+        }
+
         Text {
             text: label;
             font-family: Theme.font-mono;
             font-size: 13px;
             color: Theme.text-primary;
             vertical-alignment: center;
+            overflow: elide;
         }
     }
 }
@@ -347,6 +380,8 @@ export component Onboarding inherits Rectangle {
     in-out property <string> selected-capture-name: "System Default";
     in-out property <string> selected-playback-name: "System Default";
 
+    min-height: 800px;
+    min-width: 1024px;
     in-out property <string> nickname: "";
     in-out property <int> selected-avatar: 0;
 
@@ -360,6 +395,11 @@ export component Onboarding inherits Rectangle {
     property <string> si-email;
     property <string> si-password;
 
+    // Email link form state (step 3)
+    property <bool> show-email-form: false;
+    property <string> link-email-value;
+    property <string> link-password-value;
+
     callback crew-selected(string);
     callback create-crew-requested(string);
     callback continue-to-step(int);
@@ -369,6 +409,13 @@ export component Onboarding inherits Rectangle {
     callback skip-identity();
     callback capture-device-selected(string);
     callback playback-device-selected(string);
+
+    // Social auth callbacks
+    callback auth-steam();
+    callback auth-google();
+    callback auth-twitch();
+    callback auth-discord();
+    callback auth-apple();
 
     background: Theme.bg-app;
 
@@ -398,7 +445,9 @@ export component Onboarding inherits Rectangle {
                 }
 
                 signin-link-touch := TouchArea {
-                    clicked => { show-sign-in = true; }
+                    clicked => {
+                        show-sign-in = true;
+                    }
                 }
             }
 
@@ -488,7 +537,9 @@ export component Onboarding inherits Rectangle {
                         }
 
                         pill-cta-touch := TouchArea {
-                            clicked => { root.login-requested(); }
+                            clicked => {
+                                root.login-requested();
+                            }
                         }
                     }
                 }
@@ -507,7 +558,9 @@ export component Onboarding inherits Rectangle {
 
                     StepIndicator {
                         current-step: 1;
-                        step-clicked(s) => { root.continue-to-step(s); }
+                        step-clicked(s) => {
+                            root.continue-to-step(s);
+                        }
                     }
 
                     Text {
@@ -526,7 +579,9 @@ export component Onboarding inherits Rectangle {
                     }
                 }
 
-                Rectangle { height: 56px; }
+                Rectangle {
+                    height: 56px;
+                }
 
                 // Bento grid — fixed 240px row heights
                 VerticalLayout {
@@ -625,7 +680,9 @@ export component Onboarding inherits Rectangle {
                 }
 
                 // Push nav to bottom
-                Rectangle { vertical-stretch: 1; }
+                Rectangle {
+                    vertical-stretch: 1;
+                }
 
                 // Bottom navigation
                 HorizontalLayout {
@@ -646,14 +703,18 @@ export component Onboarding inherits Rectangle {
                         }
 
                         skip-step1-touch := TouchArea {
-                            clicked => { root.continue-to-step(2); }
+                            clicked => {
+                                root.continue-to-step(2);
+                            }
                         }
                     }
 
                     AccentButton {
                         width: 160px;
                         label: "CONTINUE";
-                        clicked => { root.continue-to-step(2); }
+                        clicked => {
+                            root.continue-to-step(2);
+                        }
                     }
                 }
             }
@@ -687,12 +748,16 @@ export component Onboarding inherits Rectangle {
                         }
 
                         back-touch := TouchArea {
-                            clicked => { show-sign-in = false; }
+                            clicked => {
+                                show-sign-in = false;
+                            }
                         }
                     }
                 }
 
-                Rectangle { height: 32px; }
+                Rectangle {
+                    height: 32px;
+                }
 
                 // Header
                 VerticalLayout {
@@ -714,24 +779,68 @@ export component Onboarding inherits Rectangle {
                     }
                 }
 
-                Rectangle { height: 56px; }
+                Rectangle {
+                    height: 56px;
+                }
 
                 // Auth options
                 VerticalLayout {
                     width: 400px;
                     spacing: 16px;
 
-                    // Social auth
-                    AuthButton {
-                        label: "Continue with GitHub";
-                    }
-
-                    AuthButton {
-                        label: "Continue with Discord";
-                    }
-
+                    // P0 social auth (full-width)
                     AuthButton {
                         label: "Continue with Steam";
+                        icon: @image-url("../icons/brands/steam.svg");
+                        has-icon: true;
+                        clicked => {
+                            root.auth-steam();
+                        }
+                    }
+
+                    AuthButton {
+                        label: "Continue with Google";
+                        icon: @image-url("../icons/brands/google.svg");
+                        has-icon: true;
+                        clicked => {
+                            root.auth-google();
+                        }
+                    }
+
+                    AuthButton {
+                        label: "Continue with Twitch";
+                        icon: @image-url("../icons/brands/twitch.svg");
+                        has-icon: true;
+                        clicked => {
+                            root.auth-twitch();
+                        }
+                    }
+
+                    // P1 social auth (half-width row)
+                    HorizontalLayout {
+                        spacing: 16px;
+
+                        AuthButton {
+                            horizontal-stretch: 1;
+                            label: "Discord";
+                            icon: @image-url("../icons/brands/discord.svg");
+                            has-icon: true;
+                            subdued: true;
+                            clicked => {
+                                root.auth-discord();
+                            }
+                        }
+
+                        AuthButton {
+                            horizontal-stretch: 1;
+                            label: "Apple";
+                            icon: @image-url("../icons/brands/apple.svg");
+                            has-icon: true;
+                            subdued: true;
+                            clicked => {
+                                root.auth-apple();
+                            }
+                        }
                     }
 
                     // Divider
@@ -795,7 +904,9 @@ export component Onboarding inherits Rectangle {
                 }
 
                 // Push to bottom
-                Rectangle { vertical-stretch: 1; }
+                Rectangle {
+                    vertical-stretch: 1;
+                }
             }
         }
     }
@@ -817,7 +928,9 @@ export component Onboarding inherits Rectangle {
 
                 StepIndicator {
                     current-step: 2;
-                    step-clicked(s) => { root.continue-to-step(s); }
+                    step-clicked(s) => {
+                        root.continue-to-step(s);
+                    }
                 }
 
                 Text {
@@ -829,7 +942,9 @@ export component Onboarding inherits Rectangle {
                 }
             }
 
-            Rectangle { height: 64px; }
+            Rectangle {
+                height: 64px;
+            }
 
             // Two-column grid (440px left | flex right, gap 120px)
             HorizontalLayout {
@@ -848,7 +963,9 @@ export component Onboarding inherits Rectangle {
                         letter-spacing: 1.5px;
                     }
 
-                    Rectangle { height: 20px; }
+                    Rectangle {
+                        height: 20px;
+                    }
 
                     // Avatar grid 4x2
                     VerticalLayout {
@@ -861,22 +978,33 @@ export component Onboarding inherits Rectangle {
                             AvatarOption {
                                 label: "ME";
                                 selected: selected-avatar == 0;
-                                clicked => { selected-avatar = 0; }
+                                clicked => {
+                                    selected-avatar = 0;
+                                }
                             }
+
                             AvatarOption {
                                 label: "A1";
                                 selected: selected-avatar == 1;
-                                clicked => { selected-avatar = 1; }
+                                clicked => {
+                                    selected-avatar = 1;
+                                }
                             }
+
                             AvatarOption {
                                 label: "A2";
                                 selected: selected-avatar == 2;
-                                clicked => { selected-avatar = 2; }
+                                clicked => {
+                                    selected-avatar = 2;
+                                }
                             }
+
                             AvatarOption {
                                 label: "A3";
                                 selected: selected-avatar == 3;
-                                clicked => { selected-avatar = 3; }
+                                clicked => {
+                                    selected-avatar = 3;
+                                }
                             }
                         }
 
@@ -887,27 +1015,40 @@ export component Onboarding inherits Rectangle {
                             AvatarOption {
                                 label: "A4";
                                 selected: selected-avatar == 4;
-                                clicked => { selected-avatar = 4; }
+                                clicked => {
+                                    selected-avatar = 4;
+                                }
                             }
+
                             AvatarOption {
                                 label: "A5";
                                 selected: selected-avatar == 5;
-                                clicked => { selected-avatar = 5; }
+                                clicked => {
+                                    selected-avatar = 5;
+                                }
                             }
+
                             AvatarOption {
                                 label: "A6";
                                 selected: selected-avatar == 6;
-                                clicked => { selected-avatar = 6; }
+                                clicked => {
+                                    selected-avatar = 6;
+                                }
                             }
+
                             AvatarOption {
                                 label: "A7";
                                 selected: selected-avatar == 7;
-                                clicked => { selected-avatar = 7; }
+                                clicked => {
+                                    selected-avatar = 7;
+                                }
                             }
                         }
                     }
 
-                    Rectangle { height: 48px; }
+                    Rectangle {
+                        height: 48px;
+                    }
 
                     Text {
                         text: "CREW NICKNAME";
@@ -917,7 +1058,9 @@ export component Onboarding inherits Rectangle {
                         letter-spacing: 1.5px;
                     }
 
-                    Rectangle { height: 12px; }
+                    Rectangle {
+                        height: 12px;
+                    }
 
                     InputField {
                         text <=> root.nickname;
@@ -938,16 +1081,22 @@ export component Onboarding inherits Rectangle {
                         letter-spacing: 1.3px;
                     }
 
-                    Rectangle { height: 8px; }
+                    Rectangle {
+                        height: 8px;
+                    }
 
                     DeviceDropdown {
                         devices: root.capture-devices;
                         selected-id: root.selected-capture-id;
                         selected-name <=> root.selected-capture-name;
-                        device-selected(id) => { root.capture-device-selected(id); }
+                        device-selected(id) => {
+                            root.capture-device-selected(id);
+                        }
                     }
 
-                    Rectangle { height: 32px; }
+                    Rectangle {
+                        height: 32px;
+                    }
 
                     Text {
                         text: "SPEAKER OUTPUT";
@@ -957,19 +1106,25 @@ export component Onboarding inherits Rectangle {
                         letter-spacing: 1.3px;
                     }
 
-                    Rectangle { height: 8px; }
+                    Rectangle {
+                        height: 8px;
+                    }
 
                     DeviceDropdown {
                         devices: root.playback-devices;
                         selected-id: root.selected-playback-id;
                         selected-name <=> root.selected-playback-name;
-                        device-selected(id) => { root.playback-device-selected(id); }
+                        device-selected(id) => {
+                            root.playback-device-selected(id);
+                        }
                     }
                 }
             }
 
             // Push continue button to bottom
-            Rectangle { vertical-stretch: 1; }
+            Rectangle {
+                vertical-stretch: 1;
+            }
 
             // Footer with Continue button
             HorizontalLayout {
@@ -980,7 +1135,9 @@ export component Onboarding inherits Rectangle {
                     width: 200px;
                     label: "Continue";
                     enabled: nickname != "";
-                    clicked => { root.continue-to-step(3); }
+                    clicked => {
+                        root.continue-to-step(3);
+                    }
                 }
             }
         }
@@ -1003,7 +1160,9 @@ export component Onboarding inherits Rectangle {
 
                 StepIndicator {
                     current-step: 3;
-                    step-clicked(s) => { root.continue-to-step(s); }
+                    step-clicked(s) => {
+                        root.continue-to-step(s);
+                    }
                 }
 
                 Text {
@@ -1023,7 +1182,9 @@ export component Onboarding inherits Rectangle {
                     horizontal-alignment: left;
                 }
 
-                Rectangle { height: 48px; }
+                Rectangle {
+                    height: 48px;
+                }
             }
 
             // Centered content
@@ -1046,6 +1207,8 @@ export component Onboarding inherits Rectangle {
                         HorizontalLayout {
                             padding-left: 24px;
                             padding-right: 24px;
+                            padding-top: 16px;
+                            padding-bottom: 16px;
                             spacing: 20px;
                             alignment: start;
 
@@ -1103,57 +1266,101 @@ export component Onboarding inherits Rectangle {
                     }
                 }
 
-                Rectangle { height: 64px; }
+                // ── Auth grid view (default) ──
+                if !show-email-form: Rectangle {
+                    height: 64px;
+                }
 
-                // Auth grid: 2x2 social buttons + email spanning full width
-                HorizontalLayout {
+                if !show-email-form: HorizontalLayout {
                     alignment: center;
 
                     VerticalLayout {
                         width: 576px;
                         spacing: 16px;
 
-                        // Row 1: GitHub | Discord
+                        // Row 1: Steam | Twitch
                         HorizontalLayout {
                             spacing: 16px;
 
                             AuthButton {
                                 horizontal-stretch: 1;
-                                label: "Sync with GitHub";
+                                label: "Steam";
+                                icon: @image-url("../icons/brands/steam.svg");
+                                has-icon: true;
+                                clicked => {
+                                    root.auth-steam();
+                                }
                             }
 
                             AuthButton {
                                 horizontal-stretch: 1;
-                                label: "Sync with Discord";
+                                label: "Twitch";
+                                icon: @image-url("../icons/brands/twitch.svg");
+                                has-icon: true;
+                                clicked => {
+                                    root.auth-twitch();
+                                }
                             }
                         }
 
-                        // Row 2: Steam | (empty to match 2-col)
+                        // Row 2: Google | Apple
                         HorizontalLayout {
                             spacing: 16px;
 
                             AuthButton {
                                 horizontal-stretch: 1;
-                                label: "Sync with Steam";
+                                label: "Google";
+                                icon: @image-url("../icons/brands/google.svg");
+                                has-icon: true;
+                                clicked => {
+                                    root.auth-google();
+                                }
                             }
 
-                            Rectangle {
+                            AuthButton {
                                 horizontal-stretch: 1;
+                                label: "Apple";
+                                icon: @image-url("../icons/brands/apple.svg");
+                                has-icon: true;
+                                clicked => {
+                                    root.auth-apple();
+                                }
                             }
                         }
 
-                        // Email button: full width, subdued
-                        AuthButton {
-                            label: "Use email & password";
-                            subdued: true;
+                        // Row 3: Discord | Email+password
+                        HorizontalLayout {
+                            spacing: 16px;
+
+                            AuthButton {
+                                horizontal-stretch: 1;
+                                label: "Discord";
+                                icon: @image-url("../icons/brands/discord.svg");
+                                has-icon: true;
+                                clicked => {
+                                    root.auth-discord();
+                                }
+                            }
+
+                            AuthButton {
+                                horizontal-stretch: 1;
+                                label: "Email + password";
+                                icon: @image-url("../icons/mail.svg");
+                                has-icon: true;
+                                subdued: true;
+                                clicked => {
+                                    root.show-email-form = true;
+                                }
+                            }
                         }
                     }
                 }
 
-                Rectangle { height: 48px; }
+                if !show-email-form: Rectangle {
+                    height: 48px;
+                }
 
-                // Skip link
-                HorizontalLayout {
+                if !show-email-form: HorizontalLayout {
                     alignment: center;
 
                     Rectangle {
@@ -1171,7 +1378,141 @@ export component Onboarding inherits Rectangle {
                         }
 
                         skip-touch := TouchArea {
-                            clicked => { root.skip-identity(); }
+                            clicked => {
+                                root.skip-identity();
+                            }
+                        }
+                    }
+                }
+
+                // ── Email+password sub-view ──
+                if show-email-form: Rectangle {
+                    height: 48px;
+                }
+
+                if show-email-form: HorizontalLayout {
+                    alignment: center;
+
+                    VerticalLayout {
+                        width: 400px;
+                        spacing: 16px;
+
+                        Text {
+                            text: "Link email & password";
+                            font-size: 20px;
+                            font-weight: 500;
+                            color: Theme.text-primary;
+                            letter-spacing: -0.3px;
+                            horizontal-alignment: center;
+                        }
+
+                        Text {
+                            text: "Your account will be tied to this email.";
+                            font-family: Theme.font-mono;
+                            font-size: 13px;
+                            color: Theme.text-secondary;
+                            horizontal-alignment: center;
+                        }
+
+                        Rectangle {
+                            height: 8px;
+                        }
+
+                        InputField {
+                            text <=> root.link-email-value;
+                            placeholder: "Email";
+                        }
+
+                        InputField {
+                            text <=> root.link-password-value;
+                            placeholder: "Password";
+                            is-password: true;
+                        }
+
+                        if link-error != "": Text {
+                            text: link-error;
+                            color: Theme.accent;
+                            font-size: 13px;
+                        }
+
+                        // Action row: ← Back (secondary) + Link account → (primary CTA)
+                        HorizontalLayout {
+                            spacing: 12px;
+
+                            // ← Back — secondary button
+                            Rectangle {
+                                horizontal-stretch: 0;
+                                width: 120px;
+                                height: 52px;
+                                background: email-back-touch.has-hover ? Theme.graphic-light : transparent;
+                                border-radius: Theme.r-inner;
+                                border-width: 1px;
+                                border-color: Theme.graphic-light;
+
+                                email-back-touch := TouchArea {
+                                    clicked => {
+                                        root.show-email-form = false;
+                                    }
+                                }
+
+                                HorizontalLayout {
+                                    alignment: center;
+                                    spacing: 8px;
+
+                                    Text {
+                                        text: "←";
+                                        font-size: 16px;
+                                        color: Theme.text-secondary;
+                                        vertical-alignment: center;
+                                    }
+
+                                    Text {
+                                        text: "Back";
+                                        font-family: Theme.font-mono;
+                                        font-size: 13px;
+                                        font-weight: 500;
+                                        color: Theme.text-secondary;
+                                        vertical-alignment: center;
+                                    }
+                                }
+                            }
+
+                            // Link account → primary CTA
+                            Rectangle {
+                                horizontal-stretch: 1;
+                                height: 52px;
+                                border-radius: Theme.r-inner;
+                                background: root.link-email-value != "" && root.link-password-value != "" ? Theme.accent : Theme.graphic-med;
+
+                                link-touch := TouchArea {
+                                    clicked => {
+                                        if root.link-email-value != "" && root.link-password-value != "" {
+                                            root.link-email(root.link-email-value, root.link-password-value);
+                                        }
+                                    }
+                                }
+
+                                HorizontalLayout {
+                                    alignment: center;
+                                    spacing: 12px;
+
+                                    Text {
+                                        text: "Link account";
+                                        font-family: Theme.font-mono;
+                                        font-size: 14px;
+                                        font-weight: 600;
+                                        color: #FFFFFF;
+                                        vertical-alignment: center;
+                                    }
+
+                                    Text {
+                                        text: "→";
+                                        font-size: 16px;
+                                        color: #FFFFFF;
+                                        vertical-alignment: center;
+                                    }
+                                }
+                            }
                         }
                     }
                 }

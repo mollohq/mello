@@ -691,6 +691,37 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         });
     }
+    // --- Onboarding: social auth ---
+    {
+        let cmd = cmd_tx.clone();
+        app.on_onboarding_auth_steam(move || {
+            let _ = cmd.try_send(Command::AuthSteam);
+        });
+    }
+    {
+        let cmd = cmd_tx.clone();
+        app.on_onboarding_auth_google(move || {
+            let _ = cmd.try_send(Command::AuthGoogle);
+        });
+    }
+    {
+        let cmd = cmd_tx.clone();
+        app.on_onboarding_auth_twitch(move || {
+            let _ = cmd.try_send(Command::AuthTwitch);
+        });
+    }
+    {
+        let cmd = cmd_tx.clone();
+        app.on_onboarding_auth_discord(move || {
+            let _ = cmd.try_send(Command::AuthDiscord);
+        });
+    }
+    {
+        let cmd = cmd_tx.clone();
+        app.on_onboarding_auth_apple(move || {
+            let _ = cmd.try_send(Command::AuthApple);
+        });
+    }
     // --- Onboarding: link email ---
     {
         let cmd = cmd_tx.clone();

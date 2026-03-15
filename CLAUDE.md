@@ -55,6 +55,12 @@ Do not repeat a corrected mistake in the same session.
 - Before adding a dependency: will it fit inside the size/RAM budget? Check binary size impact.
 - Prefer P2P for media; only touch the server for signaling and state.
 
+## Slint UI Rules
+- `Image` has NO `vertical-alignment` property — only `Text` does.
+  To vertically center an `Image` inside a layout or container, use:
+  `y: (parent.height - self.height) / 2;`
+  This is the established pattern throughout the codebase (see control_bar.slint, voice_channel_view.slint, settings_modal.slint).
+
 ## What Not To Do
 - Do not change existing public API signatures without flagging it first.
 - Do not add new Cargo/CMake/npm dependencies without asking.

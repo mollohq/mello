@@ -9,6 +9,13 @@ pub enum Command {
     Login { email: String, password: String },
     LinkEmail { email: String, password: String },
     Logout,
+
+    // Social auth
+    AuthSteam,
+    AuthGoogle,
+    AuthTwitch,
+    AuthDiscord,
+    AuthApple,
     DiscoverCrews,
     LoadMyCrews,
     JoinCrew { crew_id: String },
