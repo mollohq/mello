@@ -172,7 +172,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 slint::CloseRequestResponse::KeepWindowShown
             } else {
-                slint::CloseRequestResponse::HideWindow
+                slint::quit_event_loop().ok();
+                slint::CloseRequestResponse::KeepWindowShown
             }
         });
     }
@@ -839,8 +840,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let hotkey_ref = _hotkey_mgr.clone();
     let hotkey_cmd_tx = cmd_tx.clone();
     let menu_cmd_tx = cmd_tx.clone();
-    let menu_mbd = muted_before_deafen.clone();
-    let menu_settings = settings.clone();
+    let _menu_mbd = muted_before_deafen.clone();
+    let _menu_settings = settings.clone();
     let saved_timer_ref = saved_timer.clone();
     let saved_app_weak = app.as_weak();
     let _updater_ref = updater.clone();
@@ -938,75 +939,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
 
-        // --- Menu bar + tray context-menu events ---
-        #[cfg(target_os = "macos")]
-        while let Ok(event) = muda::MenuEvent::receiver().try_recv() {
+        // --- Tray context-menu + menu bar events ---
+        while let Ok(event) = tray_icon::menu::MenuEvent::receiver().try_recv() {
             let id = event.id().as_ref();
             match id {
-                "prefs" => {
-                    // Open settings - replicate on_settings_requested logic
-                    let _ = menu_cmd_tx.try_send(Command::ListAudioDevices);
-                    if let Some(app) = app_weak.upgrade() {
-                        let settings = menu_settings.borrow();
-                        app.set_settings_start_on_boot(settings.start_on_boot);
-                        app.set_settings_start_minimized(settings.start_minimized);
-                        app.set_settings_close_to_tray(settings.close_to_tray);
-                        app.set_settings_auto_connect(settings.auto_connect);
-                        app.set_settings_minimize_on_join(settings.minimize_on_join);
-                        app.set_settings_hw_acceleration(settings.hardware_acceleration);
-                        app.set_settings_input_volume(settings.input_volume);
-                        app.set_settings_output_volume(settings.output_volume);
-                        app.set_settings_noise_suppression(settings.noise_suppression);
-                        app.set_settings_echo_cancellation(settings.echo_cancellation);
-                        app.set_settings_ptt_mode(settings.input_mode == "push_to_talk");
-                        app.set_settings_vad_threshold(settings.vad_threshold);
-                        let ptt_label: slint::SharedString = if let Some(ref key_str) = settings.ptt_key {
-                            platform::hotkeys::parse_hotkey_string(key_str)
-                                .map(|(_, label)| label)
-                                .unwrap_or_else(|| "Unassigned".into())
-                        } else {
-                            "Unassigned".into()
-                        }.into();
-                        app.set_settings_ptt_key_label(ptt_label);
-                        app.set_settings_open(true);
-                    }
-                }
-                "mute" => {
-                    if let Some(app) = app_weak.upgrade() {
-                        let new_muted = !app.get_mic_muted();
-                        app.set_mic_muted(new_muted);
-                        let _ = menu_cmd_tx.try_send(Command::SetMute { muted: new_muted });
-                    }
-                }
-                "deafen" => {
-                    if let Some(app) = app_weak.upgrade() {
-                        let new_deafened = !app.get_deafened();
-                        app.set_deafened(new_deafened);
-                        let _ = menu_cmd_tx.try_send(Command::SetDeafen { deafened: new_deafened });
-                        if new_deafened {
-                            menu_mbd.set(app.get_mic_muted());
-                            if !app.get_mic_muted() {
-                                app.set_mic_muted(true);
-                                let _ = menu_cmd_tx.try_send(Command::SetMute { muted: true });
-                            }
-                        } else if !menu_mbd.get() {
-                            app.set_mic_muted(false);
-                            let _ = menu_cmd_tx.try_send(Command::SetMute { muted: false });
-                        }
-                    }
-                }
-                "github" => {
-                    if let Err(e) = open::that("https://github.com/mollohq/mello") {
-                        log::warn!("Failed to open GitHub URL: {}", e);
-                    }
-                }
-                "check_updates" => {
-                    if let Some(ref mut u) = *_updater_ref.borrow_mut() {
-                        u.check_for_updates();
-                    } else if let Err(e) = open::that("https://github.com/mollohq/mello/releases") {
-                        log::warn!("Failed to open releases URL: {}", e);
-                    }
-                }
+                // Tray context menu (cross-platform)
                 "tray_open" => {
                     if let Some(app) = app_weak.upgrade() {
                         app.show().ok();
@@ -1017,7 +954,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         let new_muted = !app.get_mic_muted();
                         app.set_mic_muted(new_muted);
                         let _ = menu_cmd_tx.try_send(Command::SetMute { muted: new_muted });
-                        // Update tray menu checkmark
                         status_ref.borrow_mut().set_mute_checked(new_muted);
                     }
                 }
@@ -1028,7 +964,76 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     slint::quit_event_loop().ok();
                 }
                 _ => {
-                    log::debug!("Unhandled menu event: {}", id);
+                    // macOS menu bar items
+                    #[cfg(target_os = "macos")]
+                    match id {
+                        "prefs" => {
+                            let _ = menu_cmd_tx.try_send(Command::ListAudioDevices);
+                            if let Some(app) = app_weak.upgrade() {
+                                let settings = _menu_settings.borrow();
+                                app.set_settings_start_on_boot(settings.start_on_boot);
+                                app.set_settings_start_minimized(settings.start_minimized);
+                                app.set_settings_close_to_tray(settings.close_to_tray);
+                                app.set_settings_auto_connect(settings.auto_connect);
+                                app.set_settings_minimize_on_join(settings.minimize_on_join);
+                                app.set_settings_hw_acceleration(settings.hardware_acceleration);
+                                app.set_settings_input_volume(settings.input_volume);
+                                app.set_settings_output_volume(settings.output_volume);
+                                app.set_settings_noise_suppression(settings.noise_suppression);
+                                app.set_settings_echo_cancellation(settings.echo_cancellation);
+                                app.set_settings_ptt_mode(settings.input_mode == "push_to_talk");
+                                app.set_settings_vad_threshold(settings.vad_threshold);
+                                let ptt_label: slint::SharedString = if let Some(ref key_str) = settings.ptt_key {
+                                    platform::hotkeys::parse_hotkey_string(key_str)
+                                        .map(|(_, label)| label)
+                                        .unwrap_or_else(|| "Unassigned".into())
+                                } else {
+                                    "Unassigned".into()
+                                }.into();
+                                app.set_settings_ptt_key_label(ptt_label);
+                                app.set_settings_open(true);
+                            }
+                        }
+                        "mute" => {
+                            if let Some(app) = app_weak.upgrade() {
+                                let new_muted = !app.get_mic_muted();
+                                app.set_mic_muted(new_muted);
+                                let _ = menu_cmd_tx.try_send(Command::SetMute { muted: new_muted });
+                            }
+                        }
+                        "deafen" => {
+                            if let Some(app) = app_weak.upgrade() {
+                                let new_deafened = !app.get_deafened();
+                                app.set_deafened(new_deafened);
+                                let _ = menu_cmd_tx.try_send(Command::SetDeafen { deafened: new_deafened });
+                                if new_deafened {
+                                    _menu_mbd.set(app.get_mic_muted());
+                                    if !app.get_mic_muted() {
+                                        app.set_mic_muted(true);
+                                        let _ = menu_cmd_tx.try_send(Command::SetMute { muted: true });
+                                    }
+                                } else if !_menu_mbd.get() {
+                                    app.set_mic_muted(false);
+                                    let _ = menu_cmd_tx.try_send(Command::SetMute { muted: false });
+                                }
+                            }
+                        }
+                        "github" => {
+                            if let Err(e) = open::that("https://github.com/mollohq/mello") {
+                                log::warn!("Failed to open GitHub URL: {}", e);
+                            }
+                        }
+                        "check_updates" => {
+                            if let Some(ref mut u) = *_updater_ref.borrow_mut() {
+                                u.check_for_updates();
+                            } else if let Err(e) = open::that("https://github.com/mollohq/mello/releases") {
+                                log::warn!("Failed to open releases URL: {}", e);
+                            }
+                        }
+                        _ => {
+                            log::debug!("Unhandled menu event: {}", id);
+                        }
+                    }
                 }
             }
         }
