@@ -39,8 +39,33 @@ pub struct VoiceManager {
 unsafe impl Send for VoiceManager {}
 unsafe impl Sync for VoiceManager {}
 
+unsafe extern "C" fn libmello_log_bridge(
+    _user_data: *mut std::ffi::c_void,
+    level: i32,
+    tag: *const std::ffi::c_char,
+    message: *const std::ffi::c_char,
+) {
+    let tag = if tag.is_null() { "?" } else {
+        std::ffi::CStr::from_ptr(tag).to_str().unwrap_or("?")
+    };
+    let msg = if message.is_null() { "" } else {
+        std::ffi::CStr::from_ptr(message).to_str().unwrap_or("")
+    };
+    let target = &format!("libmello::{}", tag);
+    match level {
+        0 => log::debug!(target: target, "{}", msg),
+        1 => log::info!(target: target, "{}", msg),
+        2 => log::warn!(target: target, "{}", msg),
+        _ => log::error!(target: target, "{}", msg),
+    }
+}
+
 impl VoiceManager {
     pub fn new(event_tx: std_mpsc::Sender<Event>, loopback: bool) -> Self {
+        unsafe {
+            mello_sys::mello_set_log_callback(Some(libmello_log_bridge), std::ptr::null_mut());
+        }
+
         let ctx = unsafe { mello_sys::mello_init() };
         if ctx.is_null() {
             log::error!("Failed to initialize libmello context");
@@ -332,7 +357,10 @@ impl Drop for VoiceManager {
     fn drop(&mut self) {
         if !self.ctx.is_null() {
             self.leave_voice();
-            unsafe { mello_sys::mello_destroy(self.ctx); }
+            unsafe {
+                mello_sys::mello_destroy(self.ctx);
+                mello_sys::mello_set_log_callback(None, std::ptr::null_mut());
+            }
         }
     }
 }

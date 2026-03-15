@@ -89,6 +89,10 @@ void mello_destroy(MelloContext* ctx) {
     } catch (...) {}
 }
 
+void mello_set_log_callback(MelloLogCallback callback, void* user_data) {
+    mello::set_log_callback(callback, user_data);
+}
+
 const char* mello_get_error(MelloContext* ctx) {
     if (!ctx) return "Context is null";
     try {

@@ -48,6 +48,13 @@ jobs:
         run: |
           echo "RELEASE_VERSION=0.0.${{ github.run_number }}" >> $env:GITHUB_ENV
 
+      - name: Stamp version in Cargo.toml
+        shell: pwsh
+        run: |
+          $content = Get-Content Cargo.toml -Raw
+          $content = $content -replace '(?m)^(version\s*=\s*")[^"]+"', "`${1}$env:RELEASE_VERSION`""
+          Set-Content Cargo.toml -Value $content -NoNewline
+
       - name: Build client
         run: cargo build --release --target x86_64-pc-windows-msvc --features production
 
@@ -89,7 +96,7 @@ jobs:
             --packTitle Mello ^
             --channel %RELEASE_CHANNEL% ^
             --outputDir vpk-out ^
-            --icon client/assets/icons/app_icon.ico ^
+            --icon client/assets/icons/mello.ico ^
             --azureTrustedSignFile client/windows/signing-metadata.json
 
       - name: Upload to GitHub Release

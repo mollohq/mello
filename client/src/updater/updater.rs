@@ -2,21 +2,19 @@ use velopack::sources::{FileSource, HttpSource};
 use velopack::{UpdateCheck, UpdateInfo, UpdateManager, VelopackApp};
 use std::sync::mpsc;
 
-use super::{UpdateEvent, UpdateStatus};
+use super::UpdateEvent;
 
 const GITHUB_RELEASES_URL: &str =
     "https://github.com/mollohq/mello/releases/latest/download/";
 
 pub struct Updater {
     manager: UpdateManager,
-    status: UpdateStatus,
     event_tx: mpsc::Sender<UpdateEvent>,
     cached_update: Option<UpdateInfo>,
 }
 
 impl Updater {
     /// Must be called as the very first thing in main(), before any other init.
-    /// Handles Velopack install/uninstall/update lifecycle hooks.
     pub fn run_lifecycle_hooks() {
         VelopackApp::build().run();
     }
@@ -44,15 +42,9 @@ impl Updater {
 
         Ok(Self {
             manager,
-            status: UpdateStatus::Idle,
             event_tx,
             cached_update: None,
         })
-    }
-
-    #[allow(dead_code)]
-    pub fn status(&self) -> &UpdateStatus {
-        &self.status
     }
 
     pub fn current_version(&self) -> String {
@@ -61,7 +53,6 @@ impl Updater {
 
     /// Check for updates. Returns true if an update is available.
     pub fn check_for_updates(&mut self) -> bool {
-        self.status = UpdateStatus::Checking;
         self.event_tx.send(UpdateEvent::CheckStarted).ok();
 
         match self.manager.check_for_updates() {
@@ -71,10 +62,6 @@ impl Updater {
 
                 log::info!("Update available: v{} ({} bytes)", version, size);
 
-                self.status = UpdateStatus::Available {
-                    version: version.clone(),
-                    download_size: size,
-                };
                 self.event_tx
                     .send(UpdateEvent::CheckComplete {
                         update_available: true,
@@ -87,7 +74,6 @@ impl Updater {
             }
             Ok(UpdateCheck::NoUpdateAvailable | UpdateCheck::RemoteIsEmpty) => {
                 log::info!("Already on latest version");
-                self.status = UpdateStatus::UpToDate;
                 self.event_tx
                     .send(UpdateEvent::CheckComplete {
                         update_available: false,
@@ -101,7 +87,6 @@ impl Updater {
             Err(e) => {
                 let msg = format!("Update check failed: {}", e);
                 log::warn!("{}", msg);
-                self.status = UpdateStatus::Error(msg.clone());
                 self.event_tx.send(UpdateEvent::Error(msg)).ok();
                 self.cached_update = None;
                 false
@@ -109,8 +94,9 @@ impl Updater {
         }
     }
 
-    /// Download the pending update. Must call check_for_updates first.
-    pub fn download(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+    /// Download the pending update and immediately restart the app.
+    /// This replaces the current process on success — does not return.
+    pub fn update_and_restart(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         let info = self
             .cached_update
             .as_ref()
@@ -118,7 +104,6 @@ impl Updater {
 
         let (progress_tx, progress_rx) = std::sync::mpsc::channel::<i16>();
 
-        // Forward progress updates to our event channel
         let event_tx = self.event_tx.clone();
         std::thread::spawn(move || {
             while let Ok(pct) = progress_rx.recv() {
@@ -129,24 +114,9 @@ impl Updater {
             }
         });
 
-        self.status = UpdateStatus::Downloading { progress: 0.0 };
-
         self.manager.download_updates(info, Some(progress_tx))?;
 
-        self.status = UpdateStatus::ReadyToInstall;
-        self.event_tx.send(UpdateEvent::DownloadComplete).ok();
-        Ok(())
-    }
-
-    /// Apply the downloaded update and restart the app.
-    /// This replaces the current process on success — does not return.
-    pub fn apply_and_restart(&self) -> Result<(), Box<dyn std::error::Error>> {
-        let info = self
-            .cached_update
-            .as_ref()
-            .ok_or("No update available to apply")?;
-
-        log::info!("Applying update and restarting...");
+        log::info!("Download complete, applying update and restarting...");
         self.manager.apply_updates_and_restart(info)?;
 
         Ok(())

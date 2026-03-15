@@ -1,0 +1,1355 @@
+<html lang="en" vid="0"><head vid="1">
+    <meta charset="UTF-8" vid="2">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" vid="3">
+    <title vid="4">Crew Companion - Home</title>
+    <style vid="5">
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
+
+        :root {
+            --c-bg-app: #181818;
+            --c-surface: #202020;
+            --c-text-primary: #F5F5F5;
+            --c-text-secondary: #606060;
+            --c-text-tertiary: #404040;
+            --c-accent: #FF1E56;
+            --c-graphic-light: #2E2E2E;
+            --c-graphic-med: #404040;
+            --c-graphic-dark: #F5F5F5;
+            
+            --f-sans: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            --f-mono: 'JetBrains Mono', monospace;
+            
+            --r-outer: 10px;
+            --r-inner: 6px;
+            --r-pill: 999px;
+            
+            --s-gap: 12px;
+        --s-pad: 24px;
+    }
+
+        .notification-toast {
+            position: fixed;
+            top: 48px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 1000;
+            background: var(--c-surface);
+            border: 1px solid var(--c-graphic-med);
+            border-radius: var(--r-inner);
+            padding: 12px 16px;
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.4), 0 0 0 1px rgba(255,255,255,0.03);
+        }
+
+        .notification-content {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+
+        .notification-title {
+            font-family: var(--f-sans);
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--c-text-primary);
+            letter-spacing: -0.02em;
+        }
+
+        .notification-subtitle {
+            font-family: var(--f-mono);
+            font-size: 10px;
+            color: var(--c-text-secondary);
+        }
+
+        .btn-notification {
+            height: 28px;
+            padding: 0 14px;
+            background: var(--c-accent);
+            border: none;
+            border-radius: var(--r-inner);
+            color: #fff;
+            font-family: var(--f-mono);
+            font-size: 10px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            cursor: pointer;
+            transition: all 0.15s ease;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .btn-notification:hover {
+            background: #FF3D6E;
+            transform: translateY(-1px);
+        }
+
+        .notification-close {
+            width: 20px;
+            height: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--c-text-tertiary);
+            cursor: pointer;
+            font-size: 14px;
+            line-height: 1;
+            transition: color 0.15s;
+        }
+
+        .notification-close:hover {
+            color: var(--c-text-primary);
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            background-color: #111111;
+            color: var(--c-text-primary);
+            font-family: var(--f-sans);
+            height: 100vh;
+            width: 100vw;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        .os-chrome {
+            width: 1440px;
+            height: 900px;
+            display: flex;
+            flex-direction: column;
+            border-radius: 10px;
+            overflow: hidden;
+            box-shadow: 0 24px 64px rgba(0,0,0,0.8), 0 0 0 1px rgba(255,255,255,0.05);
+            position: relative;
+        }
+
+        .titlebar {
+            height: 32px;
+            background: #161616;
+            display: flex;
+            align-items: center;
+            padding: 0 16px;
+            gap: 8px;
+            flex-shrink: 0;
+            position: relative;
+            border-bottom: 1px solid #2A2A2A;
+        }
+
+        .titlebar-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+        }
+
+        .titlebar-title {
+            position: absolute;
+            left: 50%;
+            transform: translateX(-50%);
+            font-size: 11px;
+            font-weight: 500;
+            color: rgba(255,255,255,0.2);
+            font-family: var(--f-mono);
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+        }
+
+        .crew-tabs {
+            height: 40px;
+            background: #161616;
+            display: flex;
+            align-items: center;
+            padding: 0 12px;
+            gap: 4px;
+            flex-shrink: 0;
+            border-bottom: 1px solid #2A2A2A;
+        }
+
+        .crew-tab {
+            height: 28px;
+            padding: 0 14px;
+            border-radius: var(--r-inner);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 12px;
+            font-family: var(--f-mono);
+            font-weight: 500;
+            cursor: pointer;
+            color: var(--c-text-secondary);
+            white-space: nowrap;
+            transition: all 0.15s;
+        }
+
+        .crew-tab.active {
+            background: var(--c-surface);
+            color: var(--c-text-primary);
+            border: 1px solid var(--c-graphic-light);
+        }
+
+        .crew-tab:not(.active):hover {
+            background: rgba(255,255,255,0.05);
+            color: var(--c-text-primary);
+        }
+
+        .crew-tab-dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            flex-shrink: 0;
+        }
+
+        .crew-tab-close {
+            opacity: 0.3;
+            font-size: 14px;
+            line-height: 1;
+            margin-left: 2px;
+        }
+
+        .crew-tab-close:hover {
+            opacity: 1;
+        }
+
+        .crew-tab-add {
+            width: 28px;
+            height: 28px;
+            border-radius: var(--r-inner);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--c-text-secondary);
+            font-size: 18px;
+            cursor: pointer;
+            margin-left: 2px;
+        }
+
+        .crew-tab-add:hover {
+            background: rgba(255,255,255,0.05);
+            color: var(--c-text-primary);
+        }
+
+        .app-container {
+            width: 1440px;
+            height: 900px;
+            display: grid;
+            grid-template-columns: 280px 1fr 340px;
+            grid-template-rows: 1fr 92px;
+            gap: var(--s-gap);
+            padding: var(--s-gap);
+        }
+
+        .panel {
+            background: var(--c-surface);
+            border-radius: var(--r-outer);
+            padding: var(--s-pad);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            position: relative;
+            border: 1px solid var(--c-graphic-light);
+        }
+
+        .label-kicker {
+            font-family: var(--f-sans);
+            font-size: 11px;
+            font-weight: 600;
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
+            color: var(--c-text-secondary);
+            margin-bottom: 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .stat-lg {
+            font-size: 32px;
+            font-weight: 400;
+            letter-spacing: -0.02em;
+            line-height: 1;
+            margin-bottom: 4px;
+            display: flex;
+            align-items: baseline;
+            gap: 6px;
+            color: var(--c-text-primary);
+        }
+
+        .stat-lg span {
+            font-size: 13px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            transform: translateY(-4px);
+        }
+
+        .mono-time {
+            font-family: var(--f-mono);
+            font-size: 13px;
+            color: var(--c-text-secondary);
+            letter-spacing: -0.02em;
+        }
+
+        .sidebar-crews {
+            grid-column: 1;
+            grid-row: 1 / -1;
+        }
+
+        .crew-group {
+            margin-bottom: 32px;
+        }
+
+                .crew-card {
+            background: var(--c-bg-app);
+            border-radius: var(--r-inner);
+            padding: 12px;
+            margin-bottom: 8px;
+            cursor: pointer;
+            border: 1px solid transparent;
+            transition: border-color 0.15s;
+        }
+
+        .crew-card:hover {
+            border-color: var(--c-graphic-med);
+        }
+
+        .crew-card.active {
+            border-color: #FF1E56;
+            background: rgba(255, 30, 86, 0.07);
+            box-shadow: 0 0 0 1px rgba(255, 30, 86, 0.18);
+        }
+
+        .crew-card.active .crew-card-name {
+            font-size: 14px;
+        }
+
+        .crew-card.active .status-dot {
+            background: #FF1E56;
+            box-shadow: 0 0 0 2px rgba(255, 30, 86, 0.25);
+        }
+
+        .crew-card.active .crew-card-count {
+            font-size: 11px;
+            color: var(--c-text-primary);
+        }
+
+        .crew-card-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 10px;
+        }
+
+        .crew-card.active .crew-card-header {
+            margin-bottom: 0;
+        }
+
+        .crew-card.active .crew-card-header {
+            margin-bottom: 0;
+        }
+
+        .crew-card-name {
+            font-family: var(--f-mono);
+            font-size: 12px;
+            font-weight: 500;
+            color: var(--c-text-primary);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .crew-card-name .status-dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: var(--c-accent);
+            flex-shrink: 0;
+        }
+
+        .crew-card-count {
+            font-family: var(--f-mono);
+            font-size: 10px;
+            color: var(--c-text-secondary);
+        }
+
+        .crew-card-preview {
+            display: flex;
+            gap: 8px;
+            align-items: flex-start;
+        }
+
+        .crew-card-stream {
+            width: 72px;
+            height: 44px;
+            background: #111;
+            border-radius: 4px;
+            flex-shrink: 0;
+            overflow: hidden;
+            position: relative;
+            border: 1px solid var(--c-graphic-light);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .crew-card-stream-lines {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            opacity: 0.4;
+        }
+
+        .stream-line {
+            height: 2px;
+            background: var(--c-graphic-dark);
+            border-radius: 1px;
+        }
+
+        .crew-card-stream-badge {
+            position: absolute;
+            top: 4px;
+            left: 4px;
+            width: 4px;
+            height: 4px;
+            border-radius: 50%;
+            background: var(--c-accent);
+        }
+
+        .crew-card-voices {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .voice-mini-row {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .voice-mini-avatar {
+            width: 18px;
+            height: 18px;
+            border-radius: 3px;
+            background: var(--c-graphic-light);
+            font-size: 8px;
+            font-weight: 600;
+            color: var(--c-text-secondary);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-family: var(--f-mono);
+            flex-shrink: 0;
+        }
+
+        .voice-mini-avatar.speaking {
+            background: var(--c-graphic-med);
+            color: var(--c-text-primary);
+            box-shadow: 0 0 0 1px var(--c-graphic-dark);
+        }
+
+        .voice-mini-name {
+            font-family: var(--f-mono);
+            font-size: 10px;
+            color: var(--c-text-secondary);
+            flex: 1;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .voice-mini-bars {
+            display: flex;
+            align-items: center;
+            gap: 2px;
+        }
+
+        .vmb {
+            width: 2px;
+            border-radius: 1px;
+            background: var(--c-graphic-med);
+        }
+
+        .vmb.speaking {
+            background: var(--c-accent);
+        }
+
+        .crew-card-idle {
+            font-family: var(--f-mono);
+            font-size: 10px;
+            color: var(--c-text-tertiary);
+            padding: 4px 0 2px;
+        }
+
+        .crew-card-messages {
+            margin-top: 10px;
+            padding-top: 10px;
+            border-top: 1px solid var(--c-graphic-light);
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+
+        .crew-msg {
+            display: flex;
+            gap: 6px;
+            align-items: baseline;
+            overflow: hidden;
+        }
+
+        .crew-msg-author {
+            font-family: var(--f-mono);
+            font-size: 9px;
+            font-weight: 600;
+            color: var(--c-text-secondary);
+            flex-shrink: 0;
+            white-space: nowrap;
+        }
+
+        .crew-msg-text {
+            font-family: var(--f-mono);
+            font-size: 9px;
+            color: var(--c-text-tertiary);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .crew-card-messages {
+            margin-top: 10px;
+            padding-top: 10px;
+            border-top: 1px solid var(--c-graphic-light);
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+
+        .crew-msg {
+            display: flex;
+            gap: 6px;
+            align-items: baseline;
+            overflow: hidden;
+        }
+
+        .crew-msg-author {
+            font-family: var(--f-mono);
+            font-size: 9px;
+            font-weight: 600;
+            color: var(--c-text-secondary);
+            flex-shrink: 0;
+            white-space: nowrap;
+        }
+
+        .crew-msg-text {
+            font-family: var(--f-mono);
+            font-size: 9px;
+            color: var(--c-text-tertiary);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .stage-area {
+            grid-column: 2;
+            grid-row: 1;
+            display: flex;
+            flex-direction: column;
+            gap: var(--s-gap);
+        }
+
+        .stream-view {
+            background: var(--c-surface);
+            border-radius: var(--r-outer);
+            flex: 1;
+            padding: var(--s-pad);
+            display: flex;
+            flex-direction: column;
+            border: 1px solid var(--c-graphic-light);
+        }
+
+        .stream-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            margin-bottom: 24px;
+        }
+
+        .live-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 14px;
+            background: var(--c-bg-app);
+            border-radius: var(--r-pill);
+            font-family: var(--f-mono);
+            font-size: 11px;
+            color: var(--c-text-primary);
+        }
+
+        .live-dot {
+            width: 6px;
+            height: 6px;
+            background-color: var(--c-accent);
+            border-radius: 50%;
+        }
+
+        .stream-preview {
+            flex: 1;
+            background-color: var(--c-bg-app);
+            border-radius: var(--r-inner);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .placeholder-art {
+            width: 60%;
+            height: 4px;
+            background: var(--c-graphic-med);
+            border-radius: 2px;
+            position: relative;
+        }
+        .placeholder-art::before {
+            content: '';
+            position: absolute;
+            left: 20%;
+            top: -32px;
+            width: 64px;
+            height: 4px;
+            background: var(--c-graphic-dark);
+            border-radius: 2px;
+        }
+        .placeholder-art::after {
+            content: '';
+            position: absolute;
+            right: 10%;
+            bottom: -32px;
+            width: 30%;
+            height: 4px;
+            background: var(--c-graphic-light);
+            border-radius: 2px;
+        }
+
+        .voice-section {
+            background: var(--c-surface);
+            border-radius: var(--r-outer);
+            padding: 16px var(--s-pad);
+            display: flex;
+            flex-direction: column;
+            gap: 0;
+            border: 1px solid var(--c-graphic-light);
+            flex-shrink: 0;
+        }
+
+        .voice-channel {
+            border-radius: var(--r-inner);
+            overflow: hidden;
+            border: 1px solid transparent;
+            transition: border-color 0.15s;
+        }
+
+        .voice-channel.active {
+            border-color: var(--c-graphic-light);
+            background: var(--c-bg-app);
+            margin: 4px 0;
+        }
+
+        .voice-channel-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 8px 10px;
+            cursor: pointer;
+            border-radius: var(--r-inner);
+        }
+
+        .voice-channel-header:hover {
+            background: rgba(255,255,255,0.04);
+        }
+
+        .voice-channel.active .voice-channel-header:hover {
+            background: transparent;
+        }
+
+        .voice-channel-left {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .voice-channel-icon {
+            width: 16px;
+            height: 16px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--c-text-secondary);
+            flex-shrink: 0;
+        }
+
+        .voice-channel.active .voice-channel-icon {
+            color: var(--c-text-primary);
+        }
+
+        .voice-channel-name {
+            font-family: var(--f-mono);
+            font-size: 11px;
+            font-weight: 500;
+            color: var(--c-text-secondary);
+            letter-spacing: 0.04em;
+        }
+
+        .voice-channel.active .voice-channel-name {
+            color: var(--c-text-primary);
+        }
+
+        .voice-channel-right {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .voice-channel-avatars {
+            display: flex;
+            align-items: center;
+        }
+
+        .voice-mini-pill {
+            width: 20px;
+            height: 20px;
+            border-radius: 4px;
+            background: var(--c-graphic-light);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-family: var(--f-mono);
+            font-size: 7px;
+            font-weight: 600;
+            color: var(--c-text-secondary);
+            margin-left: -4px;
+            border: 1px solid var(--c-surface);
+        }
+
+        .voice-mini-pill:first-child {
+            margin-left: 0;
+        }
+
+        .voice-mini-pill.speaking {
+            background: var(--c-graphic-med);
+            color: var(--c-text-primary);
+            box-shadow: 0 0 0 1px var(--c-graphic-dark);
+        }
+
+        .voice-channel-count {
+            font-family: var(--f-mono);
+            font-size: 10px;
+            color: var(--c-text-tertiary);
+        }
+
+        .voice-channel-participants {
+            display: none;
+            padding: 4px 10px 12px;
+            gap: 24px;
+            overflow-x: auto;
+            justify-content: flex-start;
+        }
+
+        .voice-channel.active .voice-channel-participants {
+            display: flex;
+        }
+
+        .voice-divider {
+            height: 1px;
+            background: var(--c-graphic-light);
+            margin: 2px 0;
+        }
+
+        .participant {
+            flex: 0 0 auto;
+            width: 120px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 14px;
+        }
+
+        .avatar {
+            width: 68px;
+            height: 68px;
+            background-color: var(--c-bg-app);
+            border-radius: var(--r-inner);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 600;
+            font-size: 18px;
+            color: var(--c-text-secondary);
+            transition: all 0.2s ease;
+        }
+
+        .avatar.speaking {
+            box-shadow: 0 0 0 2px var(--c-surface), 0 0 0 4px var(--c-graphic-dark);
+            color: var(--c-text-primary);
+        }
+
+        .voice-indicator {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            height: 8px;
+        }
+        
+        .v-bar {
+            height: 4px;
+            background-color: var(--c-graphic-light);
+            border-radius: 2px;
+        }
+
+        .v-s { width: 4px; }
+        .v-m { width: 12px; }
+        
+        .speaking .v-m { width: 24px; background-color: var(--c-accent); }
+        .speaking .v-bar { background-color: var(--c-graphic-dark); }
+
+        .p-label {
+            font-family: var(--f-mono);
+            font-size: 12px;
+            color: var(--c-text-secondary);
+        }
+
+        .speaking .p-label {
+            color: var(--c-text-primary);
+            font-weight: 500;
+        }
+
+        .controls-bar {
+            grid-column: 2;
+            grid-row: 2;
+            background: var(--c-surface);
+            border-radius: var(--r-outer);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 var(--s-pad);
+            border: 1px solid var(--c-graphic-light);
+        }
+
+        .btn-action {
+            width: 48px;
+            height: 48px;
+            border-radius: var(--r-inner);
+            background: var(--c-bg-app);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            color: var(--c-text-primary);
+            transition: all 0.2s ease;
+        }
+
+        .btn-action:hover {
+            background: var(--c-graphic-light);
+        }
+
+        .btn-action.active {
+            background: var(--c-text-primary);
+            color: var(--c-surface);
+        }
+
+        .btn-alert {
+            background: rgba(224, 32, 32, 0.1);
+            color: var(--c-accent);
+        }
+
+        .sidebar-chat {
+            grid-column: 3;
+            grid-row: 1 / -1;
+        }
+
+        .chat-feed {
+            flex: 1;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+            margin-top: 12px;
+        }
+
+        .chat-entry {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .entry-meta {
+            display: flex;
+            justify-content: space-between;
+            align-items: baseline;
+        }
+
+        .user-name {
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--c-text-primary);
+        }
+
+        .entry-time {
+            font-family: var(--f-mono);
+            font-size: 10px;
+            color: var(--c-text-tertiary);
+        }
+
+        .entry-body {
+            font-size: 13px;
+            line-height: 1.5;
+            color: var(--c-text-secondary);
+        }
+
+        .chat-box {
+            width: 100%;
+            background: var(--c-bg-app);
+            border: 1px solid var(--c-graphic-light);
+            padding: 14px 18px;
+            border-radius: var(--r-inner);
+            font-family: var(--f-sans);
+            font-size: 13px;
+            color: var(--c-text-primary);
+            outline: none;
+            margin-top: 16px;
+        }
+
+        .stream-scrub {
+            height: 6px;
+            background: var(--c-bg-app);
+            border-radius: 3px;
+            width: 240px;
+            position: relative;
+        }
+        .scrub-progress {
+            height: 100%;
+            background: var(--c-graphic-dark);
+            border-radius: 3px;
+            width: 45%;
+        }
+        .scrub-handle {
+            position: absolute;
+            top: 50%;
+            left: 45%;
+            width: 8px;
+            height: 8px;
+            background: var(--c-surface);
+            border: 2px solid var(--c-graphic-dark);
+            border-radius: 50%;
+            transform: translate(-50%, -50%);
+        }
+    </style>
+</head>
+<body vid="6">
+
+    <div class="os-chrome" vid="7">
+      <div class="titlebar" vid="8">
+        <div class="titlebar-dot" style="background:#FF5F57" vid="9"></div>
+        <div class="titlebar-dot" style="background:#FFBD2E" vid="10"></div>
+        <div class="titlebar-dot" style="background:#28C840" vid="11"></div>
+        <div class="titlebar-title" vid="12">Crew</div>
+      </div>
+
+        <div class="notification-toast" style="position: absolute; top: 40px; left: 50%; transform: translateX(-50%); z-index: 100;" vid="13">
+            <div class="notification-content" vid="14">
+                <div class="notification-title" vid="15">New version available</div>
+                <div class="notification-subtitle" vid="16">v2.4.1 • Voice optimization</div>
+            </div>
+            <button class="btn-notification" style="margin-left: auto;" vid="17">Update</button>
+        </div>
+
+    <div class="app-container" vid="18">
+        
+        <div class="panel sidebar-crews" vid="19">
+            <div class="label-kicker" vid="20">
+                YOUR CREWS
+                <div style="width: 6px; height: 6px; border-radius: 50%; background: var(--c-accent);" vid="21"></div>
+            </div>
+            <div class="crew-group" vid="22">
+                <div class="label-kicker" style="margin-bottom: 12px; font-size: 10px;" vid="23">ACTIVE NOW</div>
+
+                <!-- Active / selected crew: simple highlight -->
+                <div class="crew-card active" vid="24">
+                    <div class="crew-card-header" vid="25">
+                        <div class="crew-card-name" vid="26">
+                            <div class="status-dot" vid="27"></div>
+                            The Vanguard
+                        </div>
+                        <div class="crew-card-count" vid="28">8 / 12</div>
+                    </div>
+                    <div style="margin-top: 14px; display: flex; gap: 6px; flex-wrap: wrap;" vid="29">
+                        <div style="display:flex;align-items:center;gap:5px;background:var(--c-bg-app);border-radius:4px;padding:4px 8px;" vid="30">
+                            <div style="width:18px;height:18px;border-radius:3px;background:var(--c-graphic-med);display:flex;align-items:center;justify-content:center;font-size:8px;font-weight:600;font-family:var(--f-mono);color:var(--c-text-primary);box-shadow:0 0 0 1px var(--c-graphic-dark);" vid="31">KT</div>
+                            <span style="font-family:var(--f-mono);font-size:10px;color:var(--c-text-primary);" vid="32">k0ji_tech</span>
+                            <div style="display:flex;align-items:center;gap:2px;" vid="33">
+                                <div style="width:2px;height:8px;border-radius:1px;background:var(--c-accent);" vid="34"></div>
+                                <div style="width:2px;height:12px;border-radius:1px;background:var(--c-accent);" vid="35"></div>
+                                <div style="width:2px;height:8px;border-radius:1px;background:var(--c-accent);" vid="36"></div>
+                            </div>
+                        </div>
+                        <div style="display:flex;align-items:center;gap:5px;background:var(--c-bg-app);border-radius:4px;padding:4px 8px;" vid="37">
+                            <div style="width:18px;height:18px;border-radius:3px;background:var(--c-graphic-light);display:flex;align-items:center;justify-content:center;font-size:8px;font-weight:600;font-family:var(--f-mono);color:var(--c-text-secondary);" vid="38">AS</div>
+                            <span style="font-family:var(--f-mono);font-size:10px;color:var(--c-text-secondary);" vid="39">ash_22</span>
+                        </div>
+                        <div style="display:flex;align-items:center;gap:5px;background:var(--c-bg-app);border-radius:4px;padding:4px 8px;" vid="40">
+                            <div style="width:18px;height:18px;border-radius:3px;background:var(--c-graphic-light);display:flex;align-items:center;justify-content:center;font-size:8px;font-weight:600;font-family:var(--f-mono);color:var(--c-text-secondary);" vid="41">MR</div>
+                            <span style="font-family:var(--f-mono);font-size:10px;color:var(--c-text-secondary);" vid="42">m1ra</span>
+                        </div>
+                    </div>
+                    <div style="margin-top: 10px; display:flex; align-items:center; gap:6px;" vid="43">
+                        <div style="width:56px;height:36px;background:#111;border-radius:4px;border:1px solid var(--c-graphic-med);display:flex;align-items:center;justify-content:center;position:relative;flex-shrink:0;" vid="44">
+                            <div style="position:absolute;top:3px;left:3px;width:4px;height:4px;border-radius:50%;background:var(--c-accent);" vid="45"></div>
+                            <div style="display:flex;flex-direction:column;gap:3px;opacity:0.4;" vid="46">
+                                <div style="width:32px;height:2px;background:var(--c-graphic-dark);border-radius:1px;" vid="47"></div>
+                                <div style="width:22px;height:2px;background:var(--c-graphic-dark);border-radius:1px;" vid="48"></div>
+                            </div>
+                        </div>
+                        <div vid="49">
+                            <div style="font-family:var(--f-mono);font-size:9px;color:var(--c-text-tertiary);text-transform:uppercase;letter-spacing:0.06em;" vid="50">Live stream</div>
+                            <div style="font-family:var(--f-mono);font-size:11px;color:var(--c-text-primary);margin-top:2px;" vid="51">PROJECT AVALON</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Inactive crew: stream preview + voice avatars + messages -->
+                <div class="crew-card" vid="52">
+                    <div class="crew-card-header" vid="53">
+                        <div class="crew-card-name" vid="54">
+                            <div class="status-dot" vid="55"></div>
+                            Neon Syndicate
+                        </div>
+                        <div class="crew-card-count" vid="56">4 / 20</div>
+                    </div>
+                    <div class="crew-card-preview" vid="57">
+                        <div class="crew-card-stream" vid="58">
+                            <div class="crew-card-stream-badge" vid="59"></div>
+                            <div class="crew-card-stream-lines" vid="60">
+                                <div class="stream-line" style="width:40px" vid="61"></div>
+                                <div class="stream-line" style="width:28px" vid="62"></div>
+                                <div class="stream-line" style="width:36px" vid="63"></div>
+                            </div>
+                        </div>
+                        <div class="crew-card-voices" vid="64">
+                            <div class="voice-mini-row" vid="65">
+                                <div class="voice-mini-avatar speaking" vid="66">VX</div>
+                                <div class="voice-mini-name" vid="67">vex_r</div>
+                                <div class="voice-mini-bars" vid="68">
+                                    <div class="vmb speaking" style="height:6px" vid="69"></div>
+                                    <div class="vmb speaking" style="height:10px" vid="70"></div>
+                                    <div class="vmb speaking" style="height:6px" vid="71"></div>
+                                </div>
+                            </div>
+                            <div class="voice-mini-row" vid="72">
+                                <div class="voice-mini-avatar" vid="73">LN</div>
+                                <div class="voice-mini-name" vid="74">lune</div>
+                                <div class="voice-mini-bars" vid="75">
+                                    <div class="vmb" style="height:4px" vid="76"></div>
+                                    <div class="vmb" style="height:4px" vid="77"></div>
+                                    <div class="vmb" style="height:4px" vid="78"></div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="crew-card-messages" vid="79">
+                        <div class="crew-msg" vid="80">
+                            <span class="crew-msg-author" vid="81">vex_r</span>
+                            <span class="crew-msg-text" vid="82">yo who has the stash coordinates</span>
+                        </div>
+                        <div class="crew-msg" vid="83">
+                            <span class="crew-msg-author" vid="84">lune</span>
+                            <span class="crew-msg-text" vid="85">check the drop box, i pinned it</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Inactive crew: voice only, no stream + messages -->
+                <div class="crew-card" vid="86">
+                    <div class="crew-card-header" vid="87">
+                        <div class="crew-card-name" vid="88">
+                            <div class="status-dot" vid="89"></div>
+                            Deep Space
+                        </div>
+                        <div class="crew-card-count" vid="90">2 / 6</div>
+                    </div>
+                    <div class="crew-card-preview" vid="91">
+                        <div class="crew-card-voices" vid="92">
+                            <div class="voice-mini-row" vid="93">
+                                <div class="voice-mini-avatar" vid="94">ZR</div>
+                                <div class="voice-mini-name" vid="95">zeroX</div>
+                                <div class="voice-mini-bars" vid="96">
+                                    <div class="vmb" style="height:4px" vid="97"></div>
+                                    <div class="vmb" style="height:6px" vid="98"></div>
+                                    <div class="vmb" style="height:4px" vid="99"></div>
+                                </div>
+                            </div>
+                            <div class="voice-mini-row" vid="100">
+                                <div class="voice-mini-avatar speaking" vid="101">NV</div>
+                                <div class="voice-mini-name" vid="102">nova_9</div>
+                                <div class="voice-mini-bars" vid="103">
+                                    <div class="vmb speaking" style="height:8px" vid="104"></div>
+                                    <div class="vmb speaking" style="height:12px" vid="105"></div>
+                                    <div class="vmb speaking" style="height:8px" vid="106"></div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="crew-card-messages" vid="107">
+                        <div class="crew-msg" vid="108">
+                            <span class="crew-msg-author" vid="109">nova_9</span>
+                            <span class="crew-msg-text" vid="110">anyone else lagging on sector 4?</span>
+                        </div>
+                        <div class="crew-msg" vid="111">
+                            <span class="crew-msg-author" vid="112">zeroX</span>
+                            <span class="crew-msg-text" vid="113">yeah something's off, checking routes</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="crew-group" vid="114">
+                <div class="label-kicker" style="margin-bottom: 12px; font-size: 10px;" vid="115">IDLE</div>
+                <div class="crew-card" style="opacity: 0.5;" vid="116">
+                    <div class="crew-card-header" vid="117">
+                        <div class="crew-card-name" style="color: var(--c-text-secondary);" vid="118">Ghost Recon</div>
+                        <div class="crew-card-count" vid="119">0</div>
+                    </div>
+                    <div class="crew-card-idle" vid="120">No members online</div>
+                </div>
+                <div class="crew-card" style="opacity: 0.5;" vid="121">
+                    <div class="crew-card-header" vid="122">
+                        <div class="crew-card-name" style="color: var(--c-text-secondary);" vid="123">Null Sector</div>
+                        <div class="crew-card-count" vid="124">0</div>
+                    </div>
+                    <div class="crew-card-idle" vid="125">No members online</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="stage-area" vid="126">
+            <div class="stream-view" vid="127">
+                <div class="stream-header" vid="128">
+                    <div vid="129">
+                        <div class="label-kicker" style="margin-bottom: 4px;" vid="130">CREWMATE STREAM</div>
+                        <div style="font-size: 20px; font-weight: 500; color: var(--c-text-primary);" vid="131">k0ji_tech</div>
+                    </div>
+                    <div class="live-badge" vid="132">
+                        <div class="live-dot" vid="133"></div>
+                        00:42:15
+                    </div>
+                </div>
+                
+                <div class="stream-preview" vid="134">
+                    <div class="placeholder-art" vid="135"></div>
+                </div>
+                
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 24px;" vid="136">
+                    <div class="mono-time" style="font-size: 14px; font-weight: 500;" vid="137">PROJECT AVALON</div>
+                    <div class="stream-scrub" vid="138">
+                        <div class="scrub-progress" vid="139"></div>
+                        <div class="scrub-handle" vid="140"></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="voice-section" vid="141">
+                <div class="label-kicker" style="margin-bottom: 12px;" vid="142">VOICE CHANNELS</div>
+
+                <!-- Channel 1: General — active/joined -->
+                <div class="voice-channel active" vid="143">
+                    <div class="voice-channel-header" vid="144">
+                        <div class="voice-channel-left" vid="145">
+                            <div class="voice-channel-icon" vid="146">
+                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" vid="147"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" vid="148"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2" vid="149"></path></svg>
+                            </div>
+                            <span class="voice-channel-name" vid="150">GENERAL</span>
+                            <div style="width:5px;height:5px;border-radius:50%;background:var(--c-accent);flex-shrink:0;" vid="151"></div>
+                        </div>
+                        <div class="voice-channel-right" vid="152">
+                            <div class="voice-channel-avatars" vid="153">
+                                <div class="voice-mini-pill speaking" vid="154">KT</div>
+                                <div class="voice-mini-pill" vid="155">AS</div>
+                                <div class="voice-mini-pill" vid="156">MR</div>
+                            </div>
+                            <span class="voice-channel-count" vid="157">3</span>
+                        </div>
+                    </div>
+                    <div class="voice-channel-participants" vid="158">
+                        <div class="participant speaking" vid="159">
+                            <div class="avatar speaking" vid="160">KT</div>
+                            <div class="voice-indicator speaking" vid="161">
+                                <div class="v-bar v-s" vid="162"></div>
+                                <div class="v-bar v-m" vid="163"></div>
+                                <div class="v-bar v-s" vid="164"></div>
+                            </div>
+                            <div class="p-label" vid="165">k0ji_tech</div>
+                        </div>
+                        <div class="participant" vid="166">
+                            <div class="avatar" vid="167">AS</div>
+                            <div class="voice-indicator" vid="168">
+                                <div class="v-bar v-s" vid="169"></div>
+                                <div class="v-bar v-m" vid="170"></div>
+                                <div class="v-bar v-s" vid="171"></div>
+                            </div>
+                            <div class="p-label" vid="172">ash_22</div>
+                        </div>
+                        <div class="participant" vid="173">
+                            <div class="avatar" vid="174">MR</div>
+                            <div class="voice-indicator" vid="175">
+                                <div class="v-bar v-s" vid="176"></div>
+                                <div class="v-bar v-m" vid="177"></div>
+                                <div class="v-bar v-s" vid="178"></div>
+                            </div>
+                            <div class="p-label" vid="179">m1ra</div>
+                        </div>
+                        <div class="participant" vid="180">
+                            <div class="avatar" style="border: 1px dashed var(--c-graphic-med); background: transparent; color: var(--c-graphic-med);" vid="181">+</div>
+                            <div class="voice-indicator" style="opacity: 0;" vid="182"></div>
+                            <div class="p-label" vid="183">Invite</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="voice-divider" vid="184"></div>
+
+                <!-- Channel 2: Strategy — has members, collapsed -->
+                <div class="voice-channel" vid="185">
+                    <div class="voice-channel-header" vid="186">
+                        <div class="voice-channel-left" vid="187">
+                            <div class="voice-channel-icon" vid="188">
+                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" vid="189"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" vid="190"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2" vid="191"></path></svg>
+                            </div>
+                            <span class="voice-channel-name" vid="192">STRATEGY</span>
+                        </div>
+                        <div class="voice-channel-right" vid="193">
+                            <div class="voice-channel-avatars" vid="194">
+                                <div class="voice-mini-pill" vid="195">VX</div>
+                                <div class="voice-mini-pill speaking" vid="196">NV</div>
+                            </div>
+                            <span class="voice-channel-count" vid="197">2</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="voice-divider" vid="198"></div>
+
+                <!-- Channel 3: AFK — empty -->
+                <div class="voice-channel" vid="199">
+                    <div class="voice-channel-header" vid="200">
+                        <div class="voice-channel-left" vid="201">
+                            <div class="voice-channel-icon" vid="202">
+                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" vid="203"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" vid="204"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2" vid="205"></path></svg>
+                            </div>
+                            <span class="voice-channel-name" vid="206">AFK</span>
+                        </div>
+                        <div class="voice-channel-right" vid="207">
+                            <span class="voice-channel-count" vid="208">0</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="controls-bar" vid="209">
+            <div style="display: flex; gap: 16px; align-items: center;" vid="210">
+                <div class="avatar" style="width: 44px; height: 44px; border-radius: 8px; font-size: 14px;" vid="211">ME</div>
+                <div vid="212">
+                    <div style="font-size: 13px; font-weight: 600; color: var(--c-text-primary);" vid="213">Navigator</div>
+                    <div class="mono-time" style="font-size: 10px;" vid="214">#001</div>
+                </div>
+            </div>
+
+            <div style="display: flex; align-items: center; gap: 12px; padding: 8px 12px; background: var(--c-bg-app); border: 1px solid var(--c-graphic-light); border-radius: var(--r-inner);" vid="215">
+                <div style="display: flex; align-items: center; gap: 8px;" vid="216">
+                    <div style="width: 24px; height: 24px; border-radius: 4px; background: linear-gradient(135deg, #FF6B35 0%, #FF8C42 100%); display: flex; align-items: center; justify-content: center; font-family: var(--f-mono); font-size: 8px; font-weight: 700; color: #fff;" vid="217">CS</div>
+                    <div vid="218">
+                        <div style="font-family: var(--f-mono); font-size: 10px; color: var(--c-text-secondary); letter-spacing: 0.04em;" vid="219">NOW PLAYING</div>
+                        <div style="font-size: 12px; font-weight: 600; color: var(--c-text-primary); margin-top: 1px;" vid="220">Counter-Strike 2</div>
+                    </div>
+                </div>
+                <button style="height: 24px; padding: 0 12px; background: var(--c-accent); border: none; border-radius: 4px; font-family: var(--f-mono); font-size: 9px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: #fff; cursor: pointer; transition: all 0.15s ease; white-space: nowrap;" vid="221">Stream</button>
+            </div>
+
+            <div style="display: flex; gap: 16px;" vid="222">
+                <div class="btn-action btn-alert" vid="223">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" vid="224"><path d="M10.68 13.31a16 16 0 0 0 3.41 2.6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92v3a2 2 0 0 1-2.29 2A19 19 0 0 1 2 5.29 2 2 0 0 1 4 3h3a2 2 0 0 1 2 1.72c.12.96.35 1.9.7 2.81a2 2 0 0 1-.45 2.11L7.09 10.68" vid="225"></path></svg>
+                </div>
+                <div class="btn-action active" vid="226">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" vid="227"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" vid="228"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2" vid="229"></path><line x1="12" y1="19" x2="12" y2="23" vid="230"></line><line x1="8" y1="23" x2="16" y2="23" vid="231"></line></svg>
+                </div>
+                <div class="btn-action" vid="232">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" vid="233"><path d="M3 18v-6a9 9 0 0 1 18 0v6" vid="234"></path><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z" vid="235"></path></svg>
+                </div>
+                <div class="btn-action" vid="236">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" vid="237"><circle cx="12" cy="12" r="3" vid="238"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" vid="239"></path></svg>
+                </div>
+            </div>
+        </div>
+
+        <div class="panel sidebar-chat" vid="240">
+            <div class="label-kicker" vid="241">CREW CHAT</div>
+            
+            <div class="chat-feed" vid="242">
+                <div class="chat-entry" vid="243">
+                    <div class="entry-meta" vid="244">
+                        <span class="user-name" vid="245">ash_22</span>
+                        <span class="entry-time" vid="246">14:12</span>
+                    </div>
+                    <div class="entry-body" vid="247">status check?</div>
+                </div>
+
+                <div class="chat-entry" vid="248">
+                    <div class="entry-meta" vid="249">
+                        <span class="user-name" vid="250">m1ra</span>
+                        <span class="entry-time" vid="251">14:14</span>
+                    </div>
+                    <div class="entry-body" vid="252">All systems clear. Waiting for lead.</div>
+                </div>
+
+                <div class="chat-entry" vid="253">
+                    <div class="entry-meta" vid="254">
+                        <span class="user-name" style="color: var(--c-accent);" vid="255">k0ji_tech</span>
+                        <span class="entry-time" vid="256">14:15</span>
+                    </div>
+                    <div class="entry-body" vid="257">Sharing my terminal view now.</div>
+                </div>
+                
+                <div class="chat-entry" vid="258">
+                    <div class="entry-meta" vid="259">
+                        <span class="user-name" vid="260">system</span>
+                        <span class="entry-time" vid="261">14:15</span>
+                    </div>
+                    <div class="entry-body" style="color: var(--c-text-tertiary);" vid="262">Stream session started by k0ji_tech</div>
+                </div>
+                
+                 <div class="chat-entry" vid="263">
+                    <div class="entry-meta" vid="264">
+                        <span class="user-name" vid="265">ash_22</span>
+                        <span class="entry-time" vid="266">14:16</span>
+                    </div>
+                    <div class="entry-body" vid="267">Copy that. Connecting.</div>
+                </div>
+            </div>
+
+            <div style="border-top: 1px solid var(--c-graphic-light); padding-top: 4px;" vid="268">
+                <input type="text" class="chat-box" placeholder="Message crewmates..." vid="269">
+            </div>
+        </div>
+    </div>
+
+</div></body></html>

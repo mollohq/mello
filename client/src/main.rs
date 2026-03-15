@@ -1,3 +1,5 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 mod autolaunch;
 mod deep_link;
 mod notifications;
@@ -70,11 +72,43 @@ impl DebugHistory {
     }
 }
 
+fn init_logging() {
+    use tracing_subscriber::{fmt, EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
+
+    let filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new("info"));
+
+    let stderr_layer = fmt::layer()
+        .with_target(true)
+        .with_writer(std::io::stderr);
+
+    let registry = tracing_subscriber::registry()
+        .with(filter)
+        .with(stderr_layer);
+
+    // File logging — write to {data_dir}/mello/logs/
+    if let Some(data_dir) = directories::ProjectDirs::from("app", "mello", "mello") {
+        let log_dir = data_dir.data_dir().join("logs");
+        if std::fs::create_dir_all(&log_dir).is_ok() {
+            let file_appender = tracing_appender::rolling::daily(&log_dir, "mello.log");
+            let file_layer = fmt::layer()
+                .with_target(true)
+                .with_ansi(false)
+                .with_writer(file_appender);
+            registry.with(file_layer).init();
+            return;
+        }
+    }
+
+    // Fallback: stderr only
+    registry.init();
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Velopack lifecycle hook — MUST be first. Handles install/uninstall/update hooks.
     Updater::run_lifecycle_hooks();
 
-    env_logger::init();
+    init_logging();
     log::info!("Starting Mello...");
 
     // --- Single instance enforcement ---
@@ -801,23 +835,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         log::info!("Presence changed to {}", status);
     });
 
-    // --- Update banner callbacks ---
+    // --- Update toast callbacks ---
     {
         let u = updater.clone();
         app.on_update_now_clicked(move || {
             if let Some(ref mut updater) = *u.borrow_mut() {
-                if let Err(e) = updater.download() {
-                    log::warn!("Failed to download update: {}", e);
-                }
-            }
-        });
-    }
-    {
-        let u = updater.clone();
-        app.on_update_restart_clicked(move || {
-            if let Some(ref updater) = *u.borrow() {
-                if let Err(e) = updater.apply_and_restart() {
-                    log::warn!("Failed to apply update: {}", e);
+                if let Err(e) = updater.update_and_restart() {
+                    log::warn!("Failed to update: {}", e);
                 }
             }
         });
@@ -862,10 +886,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     UpdateEvent::DownloadProgress { progress } => {
                         app.set_update_download_progress(progress);
-                    }
-                    UpdateEvent::DownloadComplete => {
-                        app.set_update_download_progress(1.0);
-                        app.set_update_ready_to_install(true);
                     }
                     UpdateEvent::Error(msg) => {
                         log::warn!("Update error: {}", msg);

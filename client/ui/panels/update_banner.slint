@@ -1,110 +1,102 @@
 import { Theme } from "../theme.slint";
 
-export component UpdateBanner inherits Rectangle {
+export component UpdateToast inherits Rectangle {
     in property <bool> update-available: false;
     in property <string> version: "";
     in property <float> download-progress: -1.0;
-    in property <bool> ready-to-install: false;
     in property <string> protocol-warning: "";
 
     callback update-clicked();
-    callback restart-clicked();
     callback dismiss-clicked();
 
-    property <bool> is-protocol-warning: protocol-warning != "";
-    property <bool> show: update-available || is-protocol-warning;
+    property <bool> show: update-available || protocol-warning != "";
+    property <bool> downloading: download-progress >= 0;
 
-    height: show ? 48px : 0px;
-    clip: true;
-    background: is-protocol-warning ? Theme.accent : #2563eb;
+    visible: show;
+    width: toast.preferred-width + 2 * 16px;
+    height: toast.preferred-height + 2 * 12px;
+    background: Theme.surface;
+    border-color: Theme.graphic-med;
+    border-width: 1px;
     border-radius: Theme.r-inner;
+    drop-shadow-blur: 32px;
+    drop-shadow-color: #00000066;
+    drop-shadow-offset-y: 8px;
 
-    animate height { duration: 200ms; easing: ease-out; }
-
-    if show: HorizontalLayout {
+    toast := HorizontalLayout {
         padding-left: 16px;
-        padding-right: 12px;
-        spacing: 12px;
+        padding-right: 16px;
+        padding-top: 12px;
+        padding-bottom: 12px;
+        spacing: 16px;
         alignment: center;
 
-        // Message
-        Text {
-            text: is-protocol-warning
-                ? protocol-warning
-                : ready-to-install
-                    ? "Update ready — restart to complete."
-                    : download-progress >= 0
-                        ? "Downloading v" + version + "…"
-                        : "Mello v" + version + " is available";
-            color: white;
-            font-size: Theme.font-sm;
-            font-weight: 500;
-            vertical-alignment: center;
+        VerticalLayout {
+            alignment: center;
+            spacing: 2px;
+
+            Text {
+                text: protocol-warning != "" ? protocol-warning
+                    : downloading ? "Updating…"
+                    : "New version available";
+                color: Theme.text-primary;
+                font-family: Theme.font-sans;
+                font-size: 12px;
+                font-weight: 600;
+                letter-spacing: -0.02 * 1px;
+            }
+
+            if protocol-warning == "": Text {
+                text: downloading ? "Downloading v" + version
+                    : "v" + version;
+                color: Theme.text-secondary;
+                font-family: Theme.font-mono;
+                font-size: Theme.font-xs;
+            }
         }
 
-        // Progress bar (downloading state)
-        if download-progress >= 0 && !ready-to-install && !is-protocol-warning: Rectangle {
-            width: 120px;
-            height: 6px;
-            background: #ffffff33;
-            border-radius: 3px;
+        if downloading && protocol-warning == "": Rectangle {
+            width: 80px;
+            height: 4px;
+            background: Theme.graphic-light;
+            border-radius: 2px;
             y: (parent.height - self.height) / 2;
 
             Rectangle {
                 width: parent.width * clamp(download-progress, 0, 1);
                 height: parent.height;
-                background: white;
-                border-radius: 3px;
-
+                background: Theme.accent;
+                border-radius: 2px;
                 animate width { duration: 100ms; }
             }
         }
 
-        Rectangle { horizontal-stretch: 1; }
-
-        // Action button (not shown for protocol warnings)
-        if !is-protocol-warning: Rectangle {
-            width: ready-to-install ? 80px : 100px;
-            height: 30px;
-            background: white;
+        if !downloading && protocol-warning == "": Rectangle {
+            width: btn-layout.preferred-width;
+            height: 28px;
+            background: ta.has-hover ? #FF3D6E : Theme.accent;
             border-radius: Theme.r-inner;
+            animate background { duration: 150ms; }
 
-            Text {
-                text: ready-to-install ? "Restart" : "Update Now";
-                color: #2563eb;
-                font-size: Theme.font-sm;
-                font-weight: 600;
-                horizontal-alignment: center;
-                vertical-alignment: center;
-            }
+            btn-layout := HorizontalLayout {
+                alignment: center;
+                padding-left: 14px;
+                padding-right: 14px;
 
-            TouchArea {
-                clicked => {
-                    if ready-to-install {
-                        root.restart-clicked();
-                    } else {
-                        root.update-clicked();
-                    }
+                Text {
+                    text: "UPDATE";
+                    color: white;
+                    font-family: Theme.font-mono;
+                    font-size: Theme.font-xs;
+                    font-weight: 600;
+                    letter-spacing: 0.06 * 1px;
+                    vertical-alignment: center;
                 }
             }
-        }
 
-        // Dismiss button (only for update banners, not protocol warnings)
-        if !is-protocol-warning: Rectangle {
-            width: 30px;
-            height: 30px;
-            border-radius: 15px;
-
-            Text {
-                text: "✕";
-                color: #ffffffcc;
-                font-size: Theme.font-md;
-                horizontal-alignment: center;
-                vertical-alignment: center;
-            }
-
-            TouchArea {
-                clicked => { root.dismiss-clicked(); }
+            ta := TouchArea {
+                mouse-cursor: pointer;
+                clicked => { root.update-clicked(); }
             }
         }
     }

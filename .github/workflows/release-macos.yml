@@ -49,6 +49,9 @@ jobs:
         run: |
           echo "RELEASE_VERSION=0.0.${{ github.run_number }}" >> $GITHUB_ENV
 
+      - name: Stamp version in Cargo.toml
+        run: sed -i'' -e "s/^version = \"[^\"]*\"/version = \"$RELEASE_VERSION\"/" Cargo.toml
+
       - name: Build client
         run: cargo build --release --target aarch64-apple-darwin --features production
 
@@ -99,7 +102,7 @@ jobs:
             --packTitle Mello \
             --channel $RELEASE_CHANNEL \
             --outputDir vpk-out \
-            --icon client/assets/icons/app_icon.icns \
+            --icon client/assets/icons/mello.icns \
             --signAppIdentity "Developer ID Application: ${{ secrets.APPLE_TEAM_NAME }}" \
             --signInstallIdentity "Developer ID Installer: ${{ secrets.APPLE_TEAM_NAME }}" \
             --notaryProfile "AC_PASSWORD" \

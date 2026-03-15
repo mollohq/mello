@@ -42,7 +42,13 @@ function Do-Pack {
         exit 1
     }
 
-    Write-Host "  [1/3] Building client (release)..." -ForegroundColor Yellow
+    Write-Host "  [1/3] Building client (release) v$Version..." -ForegroundColor Yellow
+
+    $cargoToml = Join-Path $RepoRoot "Cargo.toml"
+    $content = Get-Content $cargoToml -Raw
+    $content = $content -replace '(?m)^(version\s*=\s*")[^"]+"', "`${1}$Version`""
+    Set-Content $cargoToml -Value $content -NoNewline
+
     Push-Location $RepoRoot
     try {
         cargo build --release -p mello-client
@@ -87,7 +93,8 @@ function Do-Pack {
         --mainExe mello.exe `
         --packTitle Mello `
         --channel $Channel `
-        --outputDir $VpkOut
+        --outputDir $VpkOut `
+        --icon (Join-Path $RepoRoot "client\assets\icons\mello.ico")
 
     if ($LASTEXITCODE -ne 0) { throw "vpk pack failed" }
 

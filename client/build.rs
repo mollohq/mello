@@ -4,6 +4,13 @@ fn main() {
     #[cfg(target_os = "macos")]
     println!("cargo:rustc-link-arg=-Wl,-rpath,@executable_path");
 
+    #[cfg(target_os = "windows")]
+    {
+        let mut res = winresource::WindowsResource::new();
+        res.set_icon("assets/icons/mello.ico");
+        res.compile().expect("failed to compile windows resources");
+    }
+
     let style = if cfg!(target_os = "macos") {
         "cupertino"
     } else if cfg!(target_os = "windows") {

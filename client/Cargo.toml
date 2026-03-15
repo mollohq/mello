@@ -7,7 +7,7 @@ license.workspace = true
 [package.metadata.bundle]
 name = "Mello"
 identifier = "app.mello.desktop"
-icon = ["assets/icons/mello.icns"]
+icon = ["assets/icons/mello.ico", "assets/icons/mello.icns"]
 short_description = "Hang out with your crew."
 osx_url_schemes = ["mello"]
 
@@ -20,7 +20,10 @@ mello-core = { path = "../mello-core" }
 slint = { version = "1.5", features = ["renderer-winit-skia"] }
 tokio = { workspace = true }
 log = { workspace = true }
-env_logger = "0.11"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+tracing-appender = "0.2"
+directories = "5"
 confy = "2.0.0"
 uuid = { version = "1", features = ["v4"] }
 serde = { workspace = true, features = ["derive"] }
@@ -53,3 +56,4 @@ i-slint-backend-testing = "1.5"
 
 [build-dependencies]
 slint-build = "1.5"
+winresource = "0.1"
