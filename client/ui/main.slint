@@ -399,7 +399,7 @@ export component MainWindow inherits Window {
     // ===================== UPDATE TOAST =====================
     if logged-in && (onboarding-step == 0 || onboarding-step > 3): UpdateToast {
         x: (root.width - self.width) / 2;
-        y: 40px;
+        y: 5px;
         update-available: root.update-available;
         version: root.update-version;
         download-progress: root.update-download-progress;

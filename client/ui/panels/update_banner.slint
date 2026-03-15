@@ -13,8 +13,7 @@ export component UpdateToast inherits Rectangle {
     property <bool> downloading: download-progress >= 0;
 
     visible: show;
-    width: toast.preferred-width + 2 * 16px;
-    height: toast.preferred-height + 2 * 12px;
+    height: 52px;
     background: Theme.surface;
     border-color: Theme.graphic-med;
     border-width: 1px;
@@ -23,14 +22,13 @@ export component UpdateToast inherits Rectangle {
     drop-shadow-color: #00000066;
     drop-shadow-offset-y: 8px;
 
-    toast := HorizontalLayout {
+    HorizontalLayout {
         padding-left: 16px;
         padding-right: 16px;
-        padding-top: 12px;
-        padding-bottom: 12px;
         spacing: 16px;
-        alignment: center;
+        alignment: stretch;
 
+        // Text column
         VerticalLayout {
             alignment: center;
             spacing: 2px;
@@ -43,7 +41,6 @@ export component UpdateToast inherits Rectangle {
                 font-family: Theme.font-sans;
                 font-size: 12px;
                 font-weight: 600;
-                letter-spacing: -0.02 * 1px;
             }
 
             if protocol-warning == "": Text {
@@ -55,48 +52,50 @@ export component UpdateToast inherits Rectangle {
             }
         }
 
-        if downloading && protocol-warning == "": Rectangle {
-            width: 80px;
-            height: 4px;
-            background: Theme.graphic-light;
-            border-radius: 2px;
-            y: (parent.height - self.height) / 2;
-
+        // Progress bar (during download)
+        if downloading && protocol-warning == "": VerticalLayout {
+            alignment: center;
             Rectangle {
-                width: parent.width * clamp(download-progress, 0, 1);
-                height: parent.height;
-                background: Theme.accent;
+                width: 80px;
+                height: 4px;
+                background: Theme.graphic-light;
                 border-radius: 2px;
-                animate width { duration: 100ms; }
+
+                Rectangle {
+                    width: parent.width * clamp(download-progress, 0, 1);
+                    height: parent.height;
+                    background: Theme.accent;
+                    border-radius: 2px;
+                    animate width { duration: 100ms; }
+                }
             }
         }
 
-        if !downloading && protocol-warning == "": Rectangle {
-            width: btn-layout.preferred-width;
-            height: 28px;
-            background: ta.has-hover ? #FF3D6E : Theme.accent;
-            border-radius: Theme.r-inner;
-            animate background { duration: 150ms; }
+        // Update button
+        if !downloading && protocol-warning == "": VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: btn-text.preferred-width + 28px;
+                height: 28px;
+                background: ta.has-hover ? #FF3D6E : Theme.accent;
+                border-radius: Theme.r-inner;
+                animate background { duration: 150ms; }
 
-            btn-layout := HorizontalLayout {
-                alignment: center;
-                padding-left: 14px;
-                padding-right: 14px;
-
-                Text {
+                btn-text := Text {
                     text: "UPDATE";
                     color: white;
                     font-family: Theme.font-mono;
                     font-size: Theme.font-xs;
                     font-weight: 600;
                     letter-spacing: 0.06 * 1px;
+                    horizontal-alignment: center;
                     vertical-alignment: center;
                 }
-            }
 
-            ta := TouchArea {
-                mouse-cursor: pointer;
-                clicked => { root.update-clicked(); }
+                ta := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { root.update-clicked(); }
+                }
             }
         }
     }
