@@ -45,6 +45,7 @@ logs/
 # Temp files
 temp/
 build_test/
+vpk-out/
 
 # Third-party vendored source
 libmello/third_party/rnnoise/
