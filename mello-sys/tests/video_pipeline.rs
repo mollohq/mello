@@ -145,6 +145,9 @@ fn host_to_viewer_loopback() {
             );
         }
 
+        // Trigger staging readback + RGBA conversion + callback
+        mello_sys::mello_stream_present_frame(view);
+
         std::thread::sleep(Duration::from_millis(200));
 
         mello_sys::mello_stream_stop_viewer(view);

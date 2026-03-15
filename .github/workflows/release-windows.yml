@@ -51,6 +51,12 @@ jobs:
       - name: Build client
         run: cargo build --release --target x86_64-pc-windows-msvc --features production
 
+      - name: Run tests
+        run: cargo test --workspace --target x86_64-pc-windows-msvc
+
+      - name: Clippy
+        run: cargo clippy --all-targets --target x86_64-pc-windows-msvc -- -D warnings
+
       - name: Assemble dist
         shell: pwsh
         run: |

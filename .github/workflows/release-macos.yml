@@ -52,6 +52,12 @@ jobs:
       - name: Build client
         run: cargo build --release --target aarch64-apple-darwin --features production
 
+      - name: Run tests
+        run: cargo test --workspace --target aarch64-apple-darwin
+
+      - name: Clippy
+        run: cargo clippy --all-targets --target aarch64-apple-darwin -- -D warnings
+
       - name: Assemble dist
         run: |
           mkdir -p dist
