@@ -132,7 +132,8 @@ fn main() {
             }
         }
         _ => {
-            for so in &["libonnxruntime.so"] {
+            {
+                let so = "libonnxruntime.so";
                 let src = ort_lib.join(so);
                 if src.exists() {
                     let _ = std::fs::copy(&src, target_dir.join(so));

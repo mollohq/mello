@@ -29,14 +29,6 @@ jobs:
           submodules: recursive
           token: ${{ secrets.GH_PAT }}
 
-      - name: Setup Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-apple-darwin
-
-      - name: Rust cache
-        uses: Swatinem/rust-cache@v2
-
       - name: Set version from release
         if: github.event_name == 'release'
         run: |
@@ -53,24 +45,24 @@ jobs:
         run: sed -i'' -e "s/^version = \"[^\"]*\"/version = \"$RELEASE_VERSION\"/" Cargo.toml
 
       - name: Build client
-        run: cargo build --release --target aarch64-apple-darwin --features production
+        run: cargo build --release --features production
         env:
           GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
           DISCORD_CLIENT_ID: ${{ secrets.DISCORD_CLIENT_ID }}
 
       - name: Run tests
-        run: cargo test --workspace --target aarch64-apple-darwin
+        run: cargo test --workspace
 
       - name: Clippy
-        run: cargo clippy --all-targets --target aarch64-apple-darwin -- -D warnings
+        run: cargo clippy --all-targets -- -D warnings
 
       - name: Assemble dist
         run: |
           mkdir -p dist
-          cp target/aarch64-apple-darwin/release/mello dist/
+          cp target/release/mello dist/
           cp libmello/third_party/onnxruntime/onnxruntime-osx-arm64-*/lib/libonnxruntime*.dylib dist/
-          cp $(find target/aarch64-apple-darwin/release/build -name silero_vad.onnx | head -1) dist/
+          cp $(find target/release/build -name silero_vad.onnx | head -1) dist/
 
       - name: Import Apple certificates
         uses: apple-actions/import-codesign-certs@v2

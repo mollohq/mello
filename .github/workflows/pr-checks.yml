@@ -53,20 +53,11 @@ jobs:
           submodules: recursive
           token: ${{ secrets.GH_PAT }}
 
-      - name: Setup Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-apple-darwin
-          components: clippy, rustfmt
-
-      - name: Rust cache
-        uses: Swatinem/rust-cache@v2
-
       - name: Check formatting
         run: cargo fmt --all -- --check
 
       - name: Clippy
-        run: cargo clippy --all-targets --target aarch64-apple-darwin -- -D warnings
+        run: cargo clippy --all-targets -- -D warnings
 
       - name: Run tests
-        run: cargo test --workspace --target aarch64-apple-darwin
+        run: cargo test --workspace

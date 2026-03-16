@@ -30,6 +30,8 @@ pub enum Event {
 
     DeviceAuthed { user: User, created: bool },
     DiscoverCrewsLoaded { crews: Vec<Crew> },
+    OnboardingReady { user: User },
+    OnboardingFailed { reason: String },
     EmailLinked,
     EmailLinkFailed { reason: String },
     SocialLinked,

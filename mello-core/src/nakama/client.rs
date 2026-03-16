@@ -119,13 +119,12 @@ impl NakamaClient {
         Ok(user)
     }
 
-    /// Exchange a Google authorization code + PKCE verifier for an id_token,
-    /// then authenticate with Nakama's native Google endpoint.
-    pub async fn authenticate_google(
-        &mut self,
+    /// Exchange a Google authorization code + PKCE verifier for an id_token.
+    pub async fn google_exchange_code(
+        &self,
         code: &str,
         pkce_verifier: &str,
-    ) -> Result<User> {
+    ) -> Result<String> {
         let google_client_id = self.config.google_client_id.as_deref()
             .ok_or_else(|| Error::AuthFailed("GOOGLE_CLIENT_ID not configured".into()))?;
         let google_client_secret = self.config.google_client_secret.as_deref()
@@ -159,9 +158,12 @@ impl NakamaClient {
             return Err(Error::AuthFailed(format!("Google: {err} — {desc}")));
         }
 
-        let id_token = tokens.id_token
-            .ok_or_else(|| Error::AuthFailed("No id_token from Google".into()))?;
+        tokens.id_token
+            .ok_or_else(|| Error::AuthFailed("No id_token from Google".into()))
+    }
 
+    /// Authenticate with Nakama using a Google id_token (creates or logs into account).
+    pub async fn authenticate_google(&mut self, id_token: &str) -> Result<User> {
         let url = format!(
             "{}/v2/account/authenticate/google?create=true",
             self.config.http_base()
@@ -234,50 +236,8 @@ impl NakamaClient {
         Ok(user)
     }
 
-    /// Link a Google identity to the current (device-authed) account.
-    /// Same token exchange as authenticate_google, but hits /v2/account/link/google
-    /// with Bearer auth so the identity is attached to the existing user.
-    pub async fn link_google(
-        &self,
-        code: &str,
-        pkce_verifier: &str,
-    ) -> Result<()> {
-        let google_client_id = self.config.google_client_id.as_deref()
-            .ok_or_else(|| Error::AuthFailed("GOOGLE_CLIENT_ID not configured".into()))?;
-        let google_client_secret = self.config.google_client_secret.as_deref()
-            .ok_or_else(|| Error::AuthFailed("GOOGLE_CLIENT_SECRET not configured".into()))?;
-
-        #[derive(serde::Deserialize)]
-        struct TokenResponse {
-            id_token: Option<String>,
-            error: Option<String>,
-            error_description: Option<String>,
-        }
-
-        let token_resp = self.http
-            .post("https://oauth2.googleapis.com/token")
-            .form(&[
-                ("code", code),
-                ("client_id", google_client_id),
-                ("client_secret", google_client_secret),
-                ("redirect_uri", crate::oauth::REDIRECT_URI),
-                ("grant_type", "authorization_code"),
-                ("code_verifier", pkce_verifier),
-            ])
-            .send()
-            .await?;
-
-        let tokens: TokenResponse = token_resp.json().await
-            .map_err(|_| Error::AuthFailed("Google token exchange failed".into()))?;
-
-        if let Some(err) = tokens.error {
-            let desc = tokens.error_description.unwrap_or_default();
-            return Err(Error::AuthFailed(format!("Google: {err} — {desc}")));
-        }
-
-        let id_token = tokens.id_token
-            .ok_or_else(|| Error::AuthFailed("No id_token from Google".into()))?;
-
+    /// Link a Google identity to the current (device-authed) account using an id_token.
+    pub async fn link_google(&self, id_token: &str) -> Result<()> {
         let token = self.bearer()?;
         let url = format!("{}/v2/account/link/google", self.config.http_base());
 
@@ -509,6 +469,65 @@ impl NakamaClient {
                 })
             })
             .collect();
+
+        Ok(crews)
+    }
+
+    /// List open crews via the `discover_crews` RPC (no user session needed).
+    pub async fn discover_crews_public(&self, _limit: u32) -> Result<Vec<Crew>> {
+        let url = format!(
+            "{}/v2/rpc/discover_crews?http_key={}",
+            self.config.http_base(),
+            self.config.nakama_http_key,
+        );
+
+        let resp = self.http.post(&url)
+            .header("Content-Type", "application/json")
+            .body("\"\"")
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(Error::Server(format!("discover_crews RPC failed ({}): {}", status, body)));
+        }
+
+        #[derive(serde::Deserialize)]
+        struct RpcResponse {
+            payload: String,
+        }
+        #[derive(serde::Deserialize)]
+        struct DiscoverPayload {
+            #[serde(default)]
+            crews: Vec<DiscoverCrew>,
+        }
+        #[derive(serde::Deserialize)]
+        struct DiscoverCrew {
+            id: String,
+            #[serde(default)]
+            name: String,
+            #[serde(default)]
+            description: String,
+            #[serde(default)]
+            member_count: i32,
+            #[serde(default)]
+            max_members: i32,
+            #[serde(default)]
+            open: bool,
+        }
+
+        let rpc: RpcResponse = resp.json().await?;
+        let payload: DiscoverPayload = serde_json::from_str(&rpc.payload)?;
+
+        let crews = payload.crews.into_iter().map(|c| Crew {
+            id: c.id,
+            name: c.name,
+            description: c.description,
+            member_count: c.member_count,
+            max_members: c.max_members,
+            open: c.open,
+        }).collect();
 
         Ok(crews)
     }

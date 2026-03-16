@@ -8,6 +8,7 @@ import { ControlBar } from "panels/control_bar.slint";
 import { SettingsModal } from "panels/settings_modal.slint";
 import { DebugPanel } from "panels/debug_panel.slint";
 import { Onboarding } from "panels/onboarding.slint";
+import { SignInPanel } from "panels/sign_in.slint";
 import { UpdateToast } from "panels/update_banner.slint";
 
 
@@ -33,6 +34,8 @@ export component MainWindow inherits Window {
     in property <string> link-error: "";
     in property <bool> is-returning-user: false;
     out property <string> onboarding-nickname;
+    out property <int> selected-avatar;
+    in-out property <bool> show-sign-in: false;
 
     // --- User ---
     in property <string> user-id: "";
@@ -162,22 +165,27 @@ export component MainWindow inherits Window {
     callback onboarding-capture-device-selected(string);
     callback onboarding-playback-device-selected(string);
 
-    // --- Social auth callbacks ---
+    // --- Social auth callbacks (onboarding link) ---
     callback onboarding-auth-steam();
     callback onboarding-auth-google();
     callback onboarding-auth-twitch();
     callback onboarding-auth-discord();
     callback onboarding-auth-apple();
 
+    // --- Sign-in callbacks (returning user) ---
+    callback signin-steam();
+    callback signin-google();
+    callback signin-twitch();
+    callback signin-discord();
+    callback signin-apple();
+
     // ===================== ONBOARDING =====================
-    if onboarding-step >= 1 && onboarding-step <= 3: Onboarding {
+    if onboarding-step >= 1 && onboarding-step <= 3 && !show-sign-in: Onboarding {
         step: root.onboarding-step;
         discover-crews: root.discover-crews;
         link-error: root.link-error;
         device-user-name: root.user-name;
         is-returning-user: root.is-returning-user;
-        sign-in-error: root.login-error;
-        sign-in-loading: root.login-loading;
         capture-devices: root.capture-devices;
         playback-devices: root.playback-devices;
         selected-capture-id: root.selected-capture-id;
@@ -185,11 +193,12 @@ export component MainWindow inherits Window {
         selected-capture-name <=> root.selected-capture-name;
         selected-playback-name <=> root.selected-playback-name;
         nickname <=> root.onboarding-nickname;
+        selected-avatar <=> root.selected-avatar;
         crew-selected(id) => { root.onboarding-crew-selected(id); }
         create-crew-requested(name) => { root.onboarding-create-crew(name); }
         continue-to-step(s) => { root.onboarding-continue(s); }
         login-requested => { root.onboarding-login-requested(); }
-        sign-in(email, pw) => { root.login(email, pw); }
+        open-sign-in => { root.show-sign-in = true; }
         link-email(email, pw) => { root.onboarding-link-email(email, pw); }
         skip-identity => { root.onboarding-skip-identity(); }
         capture-device-selected(id) => { root.onboarding-capture-device-selected(id); }
@@ -201,134 +210,17 @@ export component MainWindow inherits Window {
         auth-apple => { root.onboarding-auth-apple(); }
     }
 
-    // ===================== LOGIN SCREEN (only during session restore / fallback) =====================
-    if !logged-in && onboarding-step == 0: Rectangle {
-        background: Theme.bg-app;
-
-        VerticalLayout {
-            alignment: center;
-            spacing: Theme.pad;
-
-            Text {
-                text: "mello";
-                font-family: Theme.font-mono;
-                font-size: 48px;
-                font-weight: 700;
-                color: Theme.text-primary;
-                horizontal-alignment: center;
-                letter-spacing: -1px;
-            }
-            Text {
-                text: "hang out with your crew";
-                font-size: Theme.font-lg;
-                color: Theme.text-secondary;
-                horizontal-alignment: center;
-            }
-
-            // Spacer
-            Rectangle { height: 8px; }
-
-            HorizontalLayout {
-                alignment: center;
-
-                VerticalLayout {
-                    spacing: Theme.gap;
-                    width: 360px;
-
-                    // Email field
-                    Rectangle {
-                        height: 48px;
-                        background: Theme.surface;
-                        border-radius: Theme.r-inner;
-                        border-width: 1px;
-                        border-color: Theme.graphic-light;
-
-                        email-input := TextInput {
-                            x: 18px;
-                            width: parent.width - 36px;
-                            height: parent.height;
-                            font-size: Theme.font-md;
-                            color: Theme.text-primary;
-                            horizontal-alignment: left;
-                            vertical-alignment: center;
-                        }
-                        if email-input.text == "": Text {
-                            x: 18px;
-                            color: Theme.text-tertiary;
-                            font-size: Theme.font-md;
-                            vertical-alignment: center;
-                            text: "Email";
-                        }
-                    }
-
-                    // Password field
-                    Rectangle {
-                        height: 48px;
-                        background: Theme.surface;
-                        border-radius: Theme.r-inner;
-                        border-width: 1px;
-                        border-color: Theme.graphic-light;
-
-                        password-input := TextInput {
-                            x: 18px;
-                            width: parent.width - 36px;
-                            height: parent.height;
-                            font-size: Theme.font-md;
-                            color: Theme.text-primary;
-                            horizontal-alignment: left;
-                            vertical-alignment: center;
-                            input-type: password;
-                            accepted => {
-                                if !login-loading {
-                                    root.login(email-input.text, password-input.text);
-                                }
-                            }
-                        }
-                        if password-input.text == "": Text {
-                            x: 18px;
-                            color: Theme.text-tertiary;
-                            font-size: Theme.font-md;
-                            vertical-alignment: center;
-                            text: "Password";
-                        }
-                    }
-
-                    // Error
-                    if login-error != "": Text {
-                        text: login-error;
-                        color: Theme.accent;
-                        font-size: Theme.font-sm;
-                        horizontal-alignment: center;
-                    }
-
-                    // Sign-in button
-                    Rectangle {
-                        height: 48px;
-                        background: login-loading ? Theme.graphic-med : Theme.graphic-dark;
-                        border-radius: Theme.r-inner;
-
-                        Text {
-                            text: login-loading ? "signing in..." : "Sign In";
-                            font-family: Theme.font-mono;
-                            color: Theme.dark ? Theme.bg-app : #FFFFFF;
-                            font-size: Theme.font-md;
-                            font-weight: 600;
-                            horizontal-alignment: center;
-                            vertical-alignment: center;
-                            letter-spacing: 0.5px;
-                        }
-
-                        TouchArea {
-                            clicked => {
-                                if !login-loading {
-                                    root.login(email-input.text, password-input.text);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
+    // ===================== SIGN-IN PANEL (from onboarding "Sign in" link) =====================
+    if show-sign-in && !logged-in: SignInPanel {
+        error: root.login-error;
+        loading: root.login-loading;
+        back => { root.show-sign-in = false; }
+        signin-steam => { root.signin-steam(); }
+        signin-google => { root.signin-google(); }
+        signin-twitch => { root.signin-twitch(); }
+        signin-discord => { root.signin-discord(); }
+        signin-apple => { root.signin-apple(); }
+        signin-email(email, pw) => { root.login(email, pw); }
     }
 
     // ===================== MAIN APP =====================

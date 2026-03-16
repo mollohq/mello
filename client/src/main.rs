@@ -19,7 +19,7 @@ use mello_core::{Client, Command, Config, Event};
 use settings::Settings;
 use platform::{StatusItem, VoiceState};
 use updater::{Updater, UpdateEvent};
-use uuid::Uuid;
+
 use single_instance::SingleInstance;
 
 fn nakama_config() -> Config {
@@ -240,26 +240,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Decide startup path based on onboarding state
     {
-        let mut s = settings.borrow_mut();
-        log::info!("[auth] startup  onboarding_step={} device_id={:?}", s.onboarding_step, s.device_id);
+        let s = settings.borrow();
+        log::info!("[auth] startup  onboarding_step={}", s.onboarding_step);
         if s.onboarding_step > 3 {
-            // Onboarding complete: normal session restore
             log::info!("[auth] onboarding done — attempting session restore");
             let _ = cmd_tx.try_send(Command::TryRestore);
         } else {
-            // Onboarding needed: device auth first
-            let device_id = match s.device_id.clone() {
-                Some(id) => id,
-                None => {
-                    let id = Uuid::new_v4().to_string();
-                    s.device_id = Some(id.clone());
-                    s.save();
-                    log::info!("[auth] generated new device_id={}", id);
-                    id
-                }
-            };
-            log::info!("[auth] onboarding in progress — device auth with id={}", device_id);
-            let _ = cmd_tx.try_send(Command::DeviceAuth { device_id });
+            log::info!("[auth] onboarding in progress — fetching crews (no auth)");
+            let _ = cmd_tx.try_send(Command::DiscoverCrews);
         }
         app.set_onboarding_step(s.onboarding_step as i32);
     }
@@ -678,15 +666,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let app_weak = app.as_weak();
         let s = settings.clone();
         app.on_onboarding_crew_selected(move |crew_id| {
-            let _ = cmd.try_send(Command::JoinCrew {
-                crew_id: crew_id.to_string(),
-            });
             let _ = cmd.try_send(Command::ListAudioDevices);
             if let Some(app) = app_weak.upgrade() {
                 app.set_onboarding_step(2);
                 let mut settings = s.borrow_mut();
+                settings.pending_crew_id = Some(crew_id.to_string());
+                settings.pending_crew_name = None;
                 settings.onboarding_step = 2;
                 settings.save();
+                log::info!("[onboarding] crew selected (stored locally): {}", crew_id);
             }
         });
     }
@@ -696,15 +684,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let app_weak = app.as_weak();
         let s = settings.clone();
         app.on_onboarding_create_crew(move |name| {
-            let _ = cmd.try_send(Command::CreateCrew {
-                name: name.to_string(),
-            });
             let _ = cmd.try_send(Command::ListAudioDevices);
             if let Some(app) = app_weak.upgrade() {
                 app.set_onboarding_step(2);
                 let mut settings = s.borrow_mut();
+                settings.pending_crew_id = None;
+                settings.pending_crew_name = Some(name.to_string());
                 settings.onboarding_step = 2;
                 settings.save();
+                log::info!("[onboarding] crew creation queued (stored locally): {}", name);
             }
         });
     }
@@ -715,16 +703,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let cmd = cmd_tx.clone();
         app.on_onboarding_continue(move |step| {
             if let Some(app) = app_weak.upgrade() {
-                // When advancing to step 3, persist the nickname to Nakama
                 if step == 3 {
                     let nickname = app.get_onboarding_nickname().to_string();
-                    if !nickname.is_empty() {
-                        log::info!("[auth] persisting display_name to Nakama: {}", nickname);
-                        let _ = cmd.try_send(Command::UpdateProfile {
-                            display_name: nickname.clone(),
-                        });
-                        app.set_user_name(nickname.into());
-                    }
+                    let avatar = app.get_selected_avatar() as u8;
+                    let settings = s.borrow();
+                    let crew_id = settings.pending_crew_id.clone();
+                    let crew_name = settings.pending_crew_name.clone();
+                    drop(settings);
+                    log::info!("[onboarding] finalizing — nickname={} crew_id={:?} crew_name={:?}", nickname, crew_id, crew_name);
+                    let _ = cmd.try_send(Command::FinalizeOnboarding {
+                        crew_id,
+                        crew_name,
+                        display_name: nickname,
+                        avatar,
+                    });
+                    // Don't advance step yet — wait for OnboardingReady event
+                    return;
                 }
                 app.set_onboarding_step(step);
                 let mut settings = s.borrow_mut();
@@ -779,6 +773,47 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     {
         let cmd = cmd_tx.clone();
         app.on_onboarding_auth_apple(move || {
+            let _ = cmd.try_send(Command::AuthApple);
+        });
+    }
+    // --- Sign-in panel: social auth (returning user — uses Auth* commands) ---
+    {
+        let cmd = cmd_tx.clone();
+        let app_weak = app.as_weak();
+        app.on_signin_steam(move || {
+            if let Some(app) = app_weak.upgrade() { app.set_show_sign_in(false); }
+            let _ = cmd.try_send(Command::AuthSteam);
+        });
+    }
+    {
+        let cmd = cmd_tx.clone();
+        let app_weak = app.as_weak();
+        app.on_signin_google(move || {
+            if let Some(app) = app_weak.upgrade() { app.set_show_sign_in(false); }
+            let _ = cmd.try_send(Command::AuthGoogle);
+        });
+    }
+    {
+        let cmd = cmd_tx.clone();
+        let app_weak = app.as_weak();
+        app.on_signin_twitch(move || {
+            if let Some(app) = app_weak.upgrade() { app.set_show_sign_in(false); }
+            let _ = cmd.try_send(Command::AuthTwitch);
+        });
+    }
+    {
+        let cmd = cmd_tx.clone();
+        let app_weak = app.as_weak();
+        app.on_signin_discord(move || {
+            if let Some(app) = app_weak.upgrade() { app.set_show_sign_in(false); }
+            let _ = cmd.try_send(Command::AuthDiscord);
+        });
+    }
+    {
+        let cmd = cmd_tx.clone();
+        let app_weak = app.as_weak();
+        app.on_signin_apple(move || {
+            if let Some(app) = app_weak.upgrade() { app.set_show_sign_in(false); }
             let _ = cmd.try_send(Command::AuthApple);
         });
     }
@@ -1191,12 +1226,6 @@ fn handle_event(app: &MainWindow, event: Event, settings: &Rc<RefCell<Settings>>
             app.set_user_name(user.display_name.into());
             app.set_user_tag(user.tag.into());
             app.set_is_returning_user(!created);
-            let step = app.get_onboarding_step();
-            log::info!("[auth] onboarding_step={} is_returning_user={}", step, !created);
-            if step == 0 || step == 1 {
-                app.set_onboarding_step(1);
-                let _ = cmd_tx.try_send(Command::DiscoverCrews);
-            }
         }
         Event::DiscoverCrewsLoaded { crews } => {
             log::info!("[auth] discover-crews loaded  count={}", crews.len());
@@ -1210,6 +1239,27 @@ fn handle_event(app: &MainWindow, event: Event, settings: &Rc<RefCell<Settings>>
             }).collect();
             let rc = Rc::new(slint::VecModel::from(model));
             app.set_discover_crews(rc.into());
+            let step = app.get_onboarding_step();
+            if step == 0 || step == 1 {
+                app.set_onboarding_step(1);
+            }
+        }
+        Event::OnboardingReady { user } => {
+            log::info!("[onboarding] ready — user_id={} name={}", user.id, user.display_name);
+            app.set_user_id(user.id.into());
+            app.set_user_name(user.display_name.into());
+            app.set_user_tag(user.tag.into());
+            app.set_logged_in(true);
+            app.set_onboarding_step(3);
+            let mut s = settings.borrow_mut();
+            s.pending_crew_id = None;
+            s.pending_crew_name = None;
+            s.onboarding_step = 3;
+            s.save();
+        }
+        Event::OnboardingFailed { reason } => {
+            log::error!("[onboarding] finalization failed: {}", reason);
+            app.set_link_error(reason.into());
         }
         Event::EmailLinked => {
             log::info!("[auth] email linked — onboarding complete");
@@ -1240,10 +1290,10 @@ fn handle_event(app: &MainWindow, event: Event, settings: &Rc<RefCell<Settings>>
             log::info!("[auth] logged-in  user_id={} name={} tag={}", user.id, user.display_name, user.tag);
             app.set_logged_in(true);
             app.set_login_loading(false);
+            app.set_show_sign_in(false);
             app.set_user_id(user.id.into());
             app.set_user_name(user.display_name.into());
             app.set_user_tag(user.tag.into());
-            // Advance onboarding UI and persist so next startup skips it
             let mut s = settings.borrow_mut();
             if s.onboarding_step < 4 {
                 app.set_onboarding_step(4);

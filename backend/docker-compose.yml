@@ -47,6 +47,7 @@ services:
       - APPLE_CLIENT_ID=${APPLE_CLIENT_ID:-}
       - APPLE_TEAM_ID=${APPLE_TEAM_ID:-}
       - APPLE_KEY_ID=${APPLE_KEY_ID:-}
+      - NAKAMA_HTTP_KEY=${NAKAMA_HTTP_KEY:-defaulthttpkey}
       - TURN_SECRET=${TURN_SECRET:-}
       - TURN_HOST=${TURN_HOST:-}
     entrypoint:
@@ -54,7 +55,7 @@ services:
       - -c
       - |
         /nakama/nakama migrate up --database.address nakama:localdev@postgres:5432/nakama &&
-        exec /nakama/nakama --config /nakama/data/local.yml
+        exec /nakama/nakama --config /nakama/data/local.yml --runtime.http_key ${NAKAMA_HTTP_KEY:-defaulthttpkey}
     volumes:
       - ./nakama/data:/nakama/data
     ports:

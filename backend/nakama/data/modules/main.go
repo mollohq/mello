@@ -112,6 +112,9 @@ func InitModule(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runti
 	// -----------------------------------------------------------------------
 	// RPCs — crews
 	// -----------------------------------------------------------------------
+	if err := initializer.RegisterRpc("discover_crews", DiscoverCrewsRPC); err != nil {
+		return err
+	}
 	if err := initializer.RegisterRpc("create_crew", CreateCrewRPC); err != nil {
 		return err
 	}

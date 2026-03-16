@@ -388,13 +388,6 @@ export component Onboarding inherits Rectangle {
     in property <string> device-user-name: "";
     in property <bool> is-returning-user: false;
 
-    // Sign-in view state (email/password login from step 1)
-    in property <string> sign-in-error: "";
-    in property <bool> sign-in-loading: false;
-    property <bool> show-sign-in: false;
-    property <string> si-email;
-    property <string> si-password;
-
     // Email link form state (step 3)
     property <bool> show-email-form: false;
     property <string> link-email-value;
@@ -404,7 +397,7 @@ export component Onboarding inherits Rectangle {
     callback create-crew-requested(string);
     callback continue-to-step(int);
     callback login-requested();
-    callback sign-in(string, string);
+    callback open-sign-in();
     callback link-email(string, string);
     callback skip-identity();
     callback capture-device-selected(string);
@@ -423,8 +416,8 @@ export component Onboarding inherits Rectangle {
     if step == 1: Rectangle {
         background: Theme.bg-app;
 
-        // ── Crew discovery (default sub-view) ──
-        if !show-sign-in: Rectangle {
+        // ── Crew discovery view ──
+        Rectangle {
 
             // "Sign in" text link — top-right
             Rectangle {
@@ -446,7 +439,7 @@ export component Onboarding inherits Rectangle {
 
                 signin-link-touch := TouchArea {
                     clicked => {
-                        show-sign-in = true;
+                        root.open-sign-in();
                     }
                 }
             }
@@ -720,195 +713,6 @@ export component Onboarding inherits Rectangle {
             }
         }
 
-        // ── Sign-in sub-view ──
-        if show-sign-in: Rectangle {
-
-            VerticalLayout {
-                padding-top: 80px;
-                padding-left: 120px;
-                padding-right: 120px;
-                padding-bottom: 60px;
-                spacing: 0px;
-
-                // Back link
-                HorizontalLayout {
-                    alignment: start;
-                    height: 32px;
-
-                    Rectangle {
-                        width: back-text.preferred-width + 16px;
-                        height: 32px;
-
-                        back-text := Text {
-                            text: "← Back";
-                            font-family: Theme.font-mono;
-                            font-size: 13px;
-                            color: back-touch.has-hover ? Theme.text-secondary : Theme.text-tertiary;
-                            vertical-alignment: center;
-                        }
-
-                        back-touch := TouchArea {
-                            clicked => {
-                                show-sign-in = false;
-                            }
-                        }
-                    }
-                }
-
-                Rectangle {
-                    height: 32px;
-                }
-
-                // Header
-                VerticalLayout {
-                    spacing: 16px;
-
-                    Text {
-                        text: "Sign In";
-                        font-size: 48px;
-                        font-weight: 500;
-                        color: Theme.text-primary;
-                        letter-spacing: -1.5px;
-                    }
-
-                    Text {
-                        text: "Sign in with an existing account or link a new identity.";
-                        font-size: 18px;
-                        color: Theme.text-secondary;
-                        max-width: 540px;
-                    }
-                }
-
-                Rectangle {
-                    height: 56px;
-                }
-
-                // Auth options
-                VerticalLayout {
-                    width: 400px;
-                    spacing: 16px;
-
-                    // P0 social auth (full-width)
-                    AuthButton {
-                        label: "Continue with Steam";
-                        icon: @image-url("../icons/brands/steam.svg");
-                        has-icon: true;
-                        clicked => {
-                            root.auth-steam();
-                        }
-                    }
-
-                    AuthButton {
-                        label: "Continue with Google";
-                        icon: @image-url("../icons/brands/google.svg");
-                        has-icon: true;
-                        clicked => {
-                            root.auth-google();
-                        }
-                    }
-
-                    AuthButton {
-                        label: "Continue with Twitch";
-                        icon: @image-url("../icons/brands/twitch.svg");
-                        has-icon: true;
-                        clicked => {
-                            root.auth-twitch();
-                        }
-                    }
-
-                    // P1 social auth (half-width row)
-                    HorizontalLayout {
-                        spacing: 16px;
-
-                        AuthButton {
-                            horizontal-stretch: 1;
-                            label: "Discord";
-                            icon: @image-url("../icons/brands/discord.svg");
-                            has-icon: true;
-                            subdued: true;
-                            clicked => {
-                                root.auth-discord();
-                            }
-                        }
-
-                        AuthButton {
-                            horizontal-stretch: 1;
-                            label: "Apple";
-                            icon: @image-url("../icons/brands/apple.svg");
-                            has-icon: true;
-                            subdued: true;
-                            clicked => {
-                                root.auth-apple();
-                            }
-                        }
-                    }
-
-                    // Divider
-                    HorizontalLayout {
-                        height: 32px;
-                        spacing: 16px;
-                        alignment: center;
-
-                        Rectangle {
-                            vertical-stretch: 0;
-                            height: 1px;
-                            horizontal-stretch: 1;
-                            background: Theme.graphic-light;
-                            y: parent.height / 2;
-                        }
-
-                        Text {
-                            text: "or";
-                            font-family: Theme.font-mono;
-                            font-size: 12px;
-                            color: Theme.text-tertiary;
-                            vertical-alignment: center;
-                        }
-
-                        Rectangle {
-                            vertical-stretch: 0;
-                            height: 1px;
-                            horizontal-stretch: 1;
-                            background: Theme.graphic-light;
-                            y: parent.height / 2;
-                        }
-                    }
-
-                    // Email / password
-                    InputField {
-                        text <=> root.si-email;
-                        placeholder: "Email";
-                    }
-
-                    InputField {
-                        text <=> root.si-password;
-                        placeholder: "Password";
-                        is-password: true;
-                    }
-
-                    // Error
-                    if sign-in-error != "": Text {
-                        text: sign-in-error;
-                        color: Theme.accent;
-                        font-size: 13px;
-                    }
-
-                    // Sign-in button
-                    AccentButton {
-                        label: sign-in-loading ? "SIGNING IN…" : "SIGN IN";
-                        enabled: !sign-in-loading;
-                        clicked => {
-                            root.sign-in(root.si-email, root.si-password);
-                        }
-                    }
-                }
-
-                // Push to bottom
-                Rectangle {
-                    vertical-stretch: 1;
-                }
-            }
-        }
     }
 
     // ===================== STEP 2: Profile setup =====================
