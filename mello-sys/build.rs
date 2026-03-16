@@ -87,11 +87,7 @@ fn main() {
     let ort_dir = std::fs::read_dir(&ort_base)
         .expect("third_party/onnxruntime dir not found — CMake should have created it")
         .filter_map(|e| e.ok())
-        .find(|e| {
-            e.file_name()
-                .to_string_lossy()
-                .starts_with(ort_prefix)
-        })
+        .find(|e| e.file_name().to_string_lossy().starts_with(ort_prefix))
         .map(|e| e.path())
         .expect("onnxruntime prebuilt dir not found after CMake build");
     let ort_dir = strip_win_prefix(
