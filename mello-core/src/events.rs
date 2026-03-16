@@ -23,6 +23,19 @@ pub struct ChatMessage {
 }
 
 #[derive(Debug, Clone)]
+pub struct CaptureSource {
+    pub id: String,
+    pub name: String,
+    pub mode: String,
+    pub monitor_index: Option<u32>,
+    pub hwnd: Option<u64>,
+    pub pid: Option<u32>,
+    pub exe: String,
+    pub is_fullscreen: bool,
+    pub resolution: String,
+}
+
+#[derive(Debug, Clone)]
 pub enum Event {
     Restoring,
     LoggedIn { user: User },
@@ -74,6 +87,11 @@ pub enum Event {
     SignalReceived { from: String, payload: String },
 
     // --- Streaming ---
+    CaptureSourcesListed {
+        monitors: Vec<CaptureSource>,
+        games: Vec<CaptureSource>,
+        windows: Vec<CaptureSource>,
+    },
     StreamStarted {
         crew_id: String,
         session_id: String,
@@ -87,6 +105,17 @@ pub enum Event {
     },
     StreamViewerLeft {
         viewer_id: String,
+    },
+    StreamWatching {
+        host_id: String,
+        width: u32,
+        height: u32,
+    },
+    StreamWatchingStopped,
+    StreamFrame {
+        width: u32,
+        height: u32,
+        rgba: Vec<u8>,
     },
     StreamError {
         message: String,

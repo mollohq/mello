@@ -55,3 +55,13 @@ export struct AudioDeviceData {
     name: string,
     is-default: bool,
 }
+
+export struct CaptureSourceData {
+    id: string,
+    name: string,
+    mode: string,
+    pid: int,
+    exe: string,
+    is-fullscreen: bool,
+    resolution: string,
+}

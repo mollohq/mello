@@ -22,6 +22,16 @@ use updater::{Updater, UpdateEvent};
 use uuid::Uuid;
 use single_instance::SingleInstance;
 
+fn parse_capture_source_id(id: &str, mode: &str) -> (Option<u32>, Option<u64>, Option<u32>) {
+    let num_part = id.rsplit('-').next().unwrap_or("");
+    match mode {
+        "monitor" => (num_part.parse().ok(), None, None),
+        "window" => (None, num_part.parse().ok(), None),
+        "process" => (None, None, num_part.parse().ok()),
+        _ => (None, None, None),
+    }
+}
+
 fn nakama_config() -> Config {
     #[cfg(feature = "production")]
     return Config::production();
@@ -669,6 +679,52 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let enabled = app.get_debug_open();
                 let _ = cmd.try_send(Command::SetDebugMode { enabled });
             }
+        });
+    }
+
+    // --- Streaming ---
+    {
+        let cmd = cmd_tx.clone();
+        app.on_list_capture_sources(move || {
+            let _ = cmd.try_send(Command::ListCaptureSources);
+        });
+    }
+    {
+        let cmd = cmd_tx.clone();
+        let app_weak = app.as_weak();
+        app.on_start_stream(move |source_id, source_mode| {
+            let crew_id = if let Some(app) = app_weak.upgrade() {
+                app.get_active_crew_id().to_string()
+            } else {
+                return;
+            };
+            if crew_id.is_empty() { return; }
+
+            let mode = source_mode.to_string();
+            let id = source_id.to_string();
+
+            let (monitor_index, hwnd, pid) = parse_capture_source_id(&id, &mode);
+
+            let _ = cmd.try_send(Command::StartStream {
+                crew_id,
+                title: String::new(),
+                capture_mode: mode,
+                monitor_index,
+                hwnd,
+                pid,
+            });
+        });
+    }
+    {
+        let cmd = cmd_tx.clone();
+        app.on_stop_stream(move || {
+            let _ = cmd.try_send(Command::StopStream);
+        });
+    }
+    {
+        let cmd = cmd_tx.clone();
+        app.on_stop_watching(move || {
+            let _ = cmd.try_send(Command::StopWatching);
         });
     }
 
@@ -1892,18 +1948,79 @@ fn handle_event(app: &MainWindow, event: Event, settings: &Rc<RefCell<Settings>>
             log::error!("UI: error: {}", message);
         }
 
-        // --- Streaming events (UI integration TBD) ---
+        // --- Streaming events ---
+        Event::CaptureSourcesListed { monitors, games, windows } => {
+            log::info!("Capture sources: {} monitors, {} games, {} windows",
+                monitors.len(), games.len(), windows.len());
+            let mon: Vec<CaptureSourceData> = monitors.into_iter().map(|s| CaptureSourceData {
+                id: s.id.into(),
+                name: s.name.into(),
+                mode: s.mode.into(),
+                pid: s.pid.unwrap_or(0) as i32,
+                exe: s.exe.into(),
+                is_fullscreen: s.is_fullscreen,
+                resolution: s.resolution.into(),
+            }).collect();
+            let gam: Vec<CaptureSourceData> = games.into_iter().map(|s| CaptureSourceData {
+                id: s.id.into(),
+                name: s.name.into(),
+                mode: s.mode.into(),
+                pid: s.pid.unwrap_or(0) as i32,
+                exe: s.exe.into(),
+                is_fullscreen: s.is_fullscreen,
+                resolution: s.resolution.into(),
+            }).collect();
+            let win: Vec<CaptureSourceData> = windows.into_iter().map(|s| CaptureSourceData {
+                id: s.id.into(),
+                name: s.name.into(),
+                mode: s.mode.into(),
+                pid: s.pid.unwrap_or(0) as i32,
+                exe: s.exe.into(),
+                is_fullscreen: s.is_fullscreen,
+                resolution: s.resolution.into(),
+            }).collect();
+            app.set_stream_monitors(Rc::new(slint::VecModel::from(mon)).into());
+            app.set_stream_games(Rc::new(slint::VecModel::from(gam)).into());
+            app.set_stream_windows(Rc::new(slint::VecModel::from(win)).into());
+        }
         Event::StreamStarted { crew_id, session_id, mode } => {
             log::info!("Stream started: crew={} session={} mode={}", crew_id, session_id, mode);
+            app.set_is_hosting(true);
+            app.set_streamer_name(app.get_user_name());
+            app.set_stream_label("STREAMING".into());
         }
         Event::StreamEnded { crew_id } => {
             log::info!("Stream ended: crew={}", crew_id);
+            app.set_is_hosting(false);
+            app.set_is_watching(false);
+            app.set_streamer_name("".into());
+            app.set_stream_label("".into());
         }
         Event::StreamViewerJoined { viewer_id } => {
             log::info!("Stream viewer joined: {}", viewer_id);
         }
         Event::StreamViewerLeft { viewer_id } => {
             log::info!("Stream viewer left: {}", viewer_id);
+        }
+        Event::StreamWatching { host_id, width, height } => {
+            log::info!("Watching stream from {} ({}x{})", host_id, width, height);
+            app.set_is_watching(true);
+            app.set_streamer_name(host_id.into());
+        }
+        Event::StreamWatchingStopped => {
+            log::info!("Stopped watching stream");
+            app.set_is_watching(false);
+            app.set_streamer_name("".into());
+            app.set_stream_label("".into());
+        }
+        Event::StreamFrame { width, height, rgba } => {
+            let pixel_count = (width * height) as usize;
+            if rgba.len() == pixel_count * 4 {
+                let buf = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
+                    &rgba, width, height,
+                );
+                app.set_stream_frame(slint::Image::from_rgba8(buf));
+            }
         }
         Event::StreamError { message } => {
             log::error!("Stream error: {}", message);

@@ -5,7 +5,7 @@ use std::sync::mpsc as std_mpsc;
 
 use crate::events::Event;
 
-pub use mesh::{SignalMessage, VoiceMesh};
+pub use mesh::{SignalEnvelope, SignalMessage, SignalPurpose, VoiceMesh};
 
 const PACKET_BUF_SIZE: usize = 4000;
 const MAX_DEVICES: usize = 32;

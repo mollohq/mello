@@ -9,7 +9,6 @@ use super::config::StreamConfig;
 use super::error::StreamError;
 use super::manager::{AudioPacket, StreamManager, StreamSession, VideoPacket};
 use super::sink::PacketSink;
-use super::sink_p2p::P2PFanoutSink;
 
 #[derive(Debug, Serialize)]
 pub struct StartStreamRequest {
@@ -197,7 +196,7 @@ pub fn start_host(
     Ok((host, video_rx, audio_rx, resources))
 }
 
-/// Create the sink and manager based on the backend response, then spawn the run loop.
+/// Create the manager and spawn the run loop. The caller provides the sink.
 pub fn create_stream_session(
     ctx: *mut mello_sys::MelloContext,
     host: *mut mello_sys::MelloStreamHost,
@@ -206,17 +205,10 @@ pub fn create_stream_session(
     video_rx: mpsc::UnboundedReceiver<VideoPacket>,
     audio_rx: mpsc::UnboundedReceiver<AudioPacket>,
     _resources: HostResources,
+    sink: Arc<dyn PacketSink>,
 ) -> Result<StreamSession, StreamError> {
     let session_id = resp.session_id();
     let mode = resp.mode.clone();
-
-    let sink: Arc<dyn PacketSink> = match mode.as_str() {
-        "p2p" => Arc::new(P2PFanoutSink::new()),
-        "sfu" => {
-            return Err(StreamError::SfuNotImplemented);
-        }
-        other => return Err(StreamError::UnknownMode(other.to_string())),
-    };
 
     let manager = StreamManager::new(ctx, host, sink, config, video_rx, audio_rx);
 

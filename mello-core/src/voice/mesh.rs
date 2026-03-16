@@ -3,11 +3,34 @@ use std::ffi::{CStr, CString};
 use std::sync::{Arc, Mutex};
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SignalPurpose {
+    Voice,
+    Stream,
+}
+
+impl Default for SignalPurpose {
+    fn default() -> Self {
+        Self::Voice
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum SignalMessage {
     Offer { sdp: String },
     Answer { sdp: String },
     IceCandidate { candidate: String, sdp_mid: String, sdp_mline_index: i32 },
+}
+
+/// Wire-format envelope that wraps SignalMessage with a purpose discriminator.
+/// Old clients that omit `purpose` will deserialize as Voice (backward compat).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SignalEnvelope {
+    #[serde(default)]
+    pub purpose: SignalPurpose,
+    #[serde(flatten)]
+    pub message: SignalMessage,
 }
 
 struct IceCallbackData {

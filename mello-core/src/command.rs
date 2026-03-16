@@ -39,10 +39,19 @@ pub enum Command {
     UpdateProfile { display_name: String },
 
     // --- Streaming ---
+    ListCaptureSources,
     StartStream {
         crew_id: String,
         #[serde(default)]
         title: String,
+        #[serde(default)]
+        capture_mode: String,
+        #[serde(default)]
+        monitor_index: Option<u32>,
+        #[serde(default)]
+        hwnd: Option<u64>,
+        #[serde(default)]
+        pid: Option<u32>,
     },
     StopStream,
     WatchStream {

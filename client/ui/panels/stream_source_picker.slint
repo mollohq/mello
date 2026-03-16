@@ -1,0 +1,407 @@
+import { Theme } from "../theme.slint";
+import { CaptureSourceData } from "../types.slint";
+
+component SectionHeader inherits Rectangle {
+    in property <string> title;
+
+    height: 16px;
+
+    HorizontalLayout {
+        spacing: 16px;
+
+        Text {
+            text: title;
+            font-family: Theme.font-mono;
+            font-size: 11px;
+            font-weight: 600;
+            letter-spacing: 2.4px;
+            color: Theme.accent;
+        }
+
+        Rectangle {
+            horizontal-stretch: 1;
+            height: 1px;
+            y: (parent.height - self.height) / 2;
+            background: Theme.graphic-light;
+        }
+    }
+}
+
+component SourceCard inherits Rectangle {
+    in property <string> source-name;
+    in property <string> source-subtitle;
+    in property <bool> selected: false;
+    in property <bool> is-fullscreen: false;
+    callback clicked();
+
+    height: card-col.preferred-height;
+    border-radius: Theme.r-inner;
+    background: selected ? #1a1a1a : (card-ta.has-hover ? #1a1a1a : Theme.bg-app);
+    border-width: selected ? 2px : 1px;
+    border-color: selected ? Theme.accent : (card-ta.has-hover ? Theme.graphic-med : Theme.graphic-light);
+
+    card-col := VerticalLayout {
+        padding: 12px;
+        spacing: 8px;
+
+        // Preview placeholder
+        Rectangle {
+            height: 80px;
+            background: selected ? Theme.accent-bg : Theme.surface;
+            border-radius: 4px;
+
+            if !selected: Rectangle {
+                width: parent.width * 60%;
+                height: 2px;
+                background: Theme.graphic-med;
+                border-radius: 1px;
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+            }
+
+            if selected: Rectangle {
+                width: 8px;
+                height: 8px;
+                border-radius: 4px;
+                background: Theme.accent;
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+            }
+        }
+
+        // Source name
+        Text {
+            text: source-name;
+            font-size: 13px;
+            font-weight: 600;
+            color: selected ? Theme.accent : Theme.text-primary;
+            overflow: elide;
+        }
+
+        // Subtitle row
+        HorizontalLayout {
+            spacing: 8px;
+
+            Text {
+                text: source-subtitle;
+                font-family: Theme.font-mono;
+                font-size: 10px;
+                color: selected ? Theme.text-primary : Theme.text-secondary;
+                horizontal-stretch: 1;
+                overflow: elide;
+            }
+
+            if is-fullscreen: Rectangle {
+                width: fs-label.preferred-width + 10px;
+                height: 16px;
+                border-radius: 3px;
+                background: Theme.accent-bg;
+
+                fs-label := Text {
+                    text: "FS";
+                    font-family: Theme.font-mono;
+                    font-size: 9px;
+                    font-weight: 600;
+                    color: Theme.accent;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+        }
+    }
+
+    // Selection badge
+    if selected: Rectangle {
+        width: 20px;
+        height: 20px;
+        border-radius: 10px;
+        background: Theme.accent;
+        x: parent.width - self.width - 8px;
+        y: 8px;
+
+        Text {
+            text: "✓";
+            font-size: 12px;
+            font-weight: 700;
+            color: #FFFFFF;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+    }
+
+    card-ta := TouchArea {
+        clicked => { root.clicked(); }
+    }
+}
+
+export component StreamSourcePicker inherits Rectangle {
+    in property <[CaptureSourceData]> monitors: [];
+    in property <[CaptureSourceData]> games: [];
+    in property <[CaptureSourceData]> windows: [];
+
+    in-out property <string> selected-id: "";
+    in-out property <string> selected-mode: "";
+
+    callback close-requested();
+    callback start-stream(string, string);
+
+    property <bool> has-selection: selected-id != "";
+
+    // Backdrop
+    background: #000000AA;
+
+    TouchArea {
+        clicked => { close-requested(); }
+    }
+
+    // Modal container
+    Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: min(780px, parent.width - 64px);
+        height: min(620px, parent.height - 64px);
+        background: Theme.surface;
+        border-radius: 12px;
+        border-width: 1px;
+        border-color: Theme.graphic-light;
+        drop-shadow-blur: 64px;
+        drop-shadow-color: #000000E6;
+        drop-shadow-offset-y: 24px;
+
+        TouchArea {}
+
+        VerticalLayout {
+            // Header
+            Rectangle {
+                height: 64px;
+                background: Theme.surface;
+
+                Rectangle {
+                    y: parent.height - 1px;
+                    height: 1px;
+                    background: Theme.graphic-light;
+                }
+
+                // Accent dot
+                Rectangle {
+                    width: 8px;
+                    height: 8px;
+                    border-radius: 4px;
+                    background: Theme.accent;
+                    x: 32px;
+                    y: (parent.height - self.height) / 2;
+                }
+
+                // Title
+                Text {
+                    text: "SELECT SOURCE";
+                    font-family: Theme.font-mono;
+                    font-size: 16px;
+                    font-weight: 600;
+                    letter-spacing: 0.8px;
+                    color: Theme.text-primary;
+                    x: 32px + 8px + 12px;
+                    y: (parent.height - self.preferred-height) / 2;
+                }
+
+                // Meta label
+                Text {
+                    text: "CAP.01 // INPUT";
+                    font-family: Theme.font-mono;
+                    font-size: 11px;
+                    color: Theme.text-tertiary;
+                    letter-spacing: 1.6px;
+                    x: parent.width - self.preferred-width - 32px;
+                    y: (parent.height - self.preferred-height) / 2;
+                }
+
+                // Close button
+                Rectangle {
+                    width: 32px;
+                    height: 32px;
+                    border-radius: 6px;
+                    x: parent.width - self.width - 16px;
+                    y: (parent.height - self.height) / 2;
+                    background: close-ta.has-hover ? Theme.surface-hover : transparent;
+
+                    Image {
+                        source: @image-url("../icons/x.svg");
+                        width: 18px;
+                        height: 18px;
+                        colorize: close-ta.has-hover ? Theme.text-primary : Theme.text-secondary;
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
+                    }
+
+                    close-ta := TouchArea {
+                        clicked => { close-requested(); }
+                    }
+                }
+            }
+
+            // Body (scrollable)
+            Rectangle {
+                vertical-stretch: 1;
+                background: Theme.surface;
+                clip: true;
+
+                Flickable {
+                    viewport-height: body-col.preferred-height;
+
+                    body-col := VerticalLayout {
+                        padding: 32px;
+                        spacing: 32px;
+
+                        // DISPLAYS section
+                        VerticalLayout {
+                            spacing: 16px;
+
+                            SectionHeader { title: "DISPLAYS"; }
+
+                            HorizontalLayout {
+                                spacing: 16px;
+
+                                for src[i] in monitors: SourceCard {
+                                    horizontal-stretch: 1;
+                                    source-name: src.name;
+                                    source-subtitle: src.resolution != "" ? src.resolution : "Primary";
+                                    selected: selected-id == src.id;
+                                    clicked => {
+                                        selected-id = src.id;
+                                        selected-mode = src.mode;
+                                    }
+                                }
+                            }
+                        }
+
+                        // GAMES section (only if we have games)
+                        if games.length > 0: VerticalLayout {
+                            spacing: 16px;
+
+                            SectionHeader { title: "GAMES"; }
+
+                            HorizontalLayout {
+                                spacing: 16px;
+
+                                for src[i] in games: SourceCard {
+                                    horizontal-stretch: 1;
+                                    source-name: src.name;
+                                    source-subtitle: src.exe;
+                                    is-fullscreen: src.is-fullscreen;
+                                    selected: selected-id == src.id;
+                                    clicked => {
+                                        selected-id = src.id;
+                                        selected-mode = src.mode;
+                                    }
+                                }
+                            }
+                        }
+
+                        // APPLICATION WINDOWS section (only if we have windows)
+                        if windows.length > 0: VerticalLayout {
+                            spacing: 16px;
+
+                            SectionHeader { title: "APPLICATION WINDOWS"; }
+
+                            HorizontalLayout {
+                                spacing: 16px;
+
+                                for src[i] in windows: SourceCard {
+                                    horizontal-stretch: 1;
+                                    source-name: src.name;
+                                    source-subtitle: "window";
+                                    selected: selected-id == src.id;
+                                    clicked => {
+                                        selected-id = src.id;
+                                        selected-mode = src.mode;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Footer
+            Rectangle {
+                height: 72px;
+                background: #1a1a1a;
+
+                Rectangle {
+                    y: 0;
+                    height: 1px;
+                    background: Theme.graphic-light;
+                }
+
+                // Selection status
+                HorizontalLayout {
+                    padding-left: 32px;
+                    spacing: 10px;
+                    alignment: center;
+
+                    if has-selection: Rectangle {
+                        width: 6px;
+                        height: 6px;
+                        border-radius: 3px;
+                        background: Theme.accent-green;
+                        y: (parent.height - self.height) / 2;
+                    }
+
+                    Text {
+                        text: has-selection ? "1 SOURCE SELECTED" : "SELECT A SOURCE";
+                        font-family: Theme.font-mono;
+                        font-size: 11px;
+                        letter-spacing: 0.8px;
+                        color: has-selection ? Theme.text-primary : Theme.text-secondary;
+                        vertical-alignment: center;
+                        horizontal-stretch: 1;
+                    }
+                }
+
+                // Start button
+                Rectangle {
+                    x: parent.width - self.width - 32px;
+                    y: (parent.height - self.height) / 2;
+                    width: start-row.preferred-width + 40px;
+                    height: 44px;
+                    border-radius: 6px;
+                    background: has-selection
+                        ? (start-btn-ta.has-hover ? #E8184E : Theme.accent)
+                        : Theme.graphic-light;
+
+                    start-row := HorizontalLayout {
+                        alignment: center;
+                        spacing: 10px;
+                        padding-left: 20px;
+                        padding-right: 20px;
+
+                        Text {
+                            text: "▶";
+                            font-size: 11px;
+                            color: has-selection ? #FFFFFF : Theme.text-tertiary;
+                            vertical-alignment: center;
+                        }
+
+                        Text {
+                            text: "START STREAMING";
+                            font-family: Theme.font-mono;
+                            font-size: 13px;
+                            font-weight: 600;
+                            letter-spacing: 1.2px;
+                            color: has-selection ? #FFFFFF : Theme.text-tertiary;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    start-btn-ta := TouchArea {
+                        clicked => {
+                            if has-selection {
+                                start-stream(selected-id, selected-mode);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

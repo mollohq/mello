@@ -30,11 +30,11 @@ pub struct StreamViewer {
 /// Result of feeding a packet to the viewer.
 pub enum ViewerFeedResult {
     /// A video payload is ready for decoding.
-    VideoPayload(Vec<u8>),
+    VideoPayload { data: Vec<u8>, is_keyframe: bool },
     /// An audio payload is ready for playback.
     AudioPayload(Vec<u8>),
     /// A recovered video payload from FEC.
-    RecoveredVideoPayload(Vec<u8>),
+    RecoveredVideoPayload { data: Vec<u8>, is_keyframe: bool },
     /// A control action the caller should take.
     Action(ViewerAction),
     /// Packet was consumed but produced no output (e.g. FEC parity stored).
@@ -119,12 +119,14 @@ impl StreamViewer {
             self.group_packets_seen = actual_pos + 1;
         }
 
+        let is_kf = packet.is_keyframe();
+
         // Feed to FEC decoder
         if let Some(recovered) = self.fec_decoder.feed_data(packet.sequence, &packet.payload) {
-            results.push(ViewerFeedResult::RecoveredVideoPayload(recovered));
+            results.push(ViewerFeedResult::RecoveredVideoPayload { data: recovered, is_keyframe: false });
         }
 
-        results.push(ViewerFeedResult::VideoPayload(packet.payload.clone()));
+        results.push(ViewerFeedResult::VideoPayload { data: packet.payload.clone(), is_keyframe: is_kf });
 
         // If this is the last data packet in the FEC group, prepare for parity
         if packet.is_fec_group_last() {
@@ -134,8 +136,8 @@ impl StreamViewer {
 
     fn on_fec_packet(&mut self, packet: &StreamPacket, results: &mut Vec<ViewerFeedResult>) {
         if let Some(recovered) = self.fec_decoder.feed_parity(&packet.payload) {
-            self.packets_lost = self.packets_lost.saturating_sub(1); // one loss recovered
-            results.push(ViewerFeedResult::RecoveredVideoPayload(recovered));
+            self.packets_lost = self.packets_lost.saturating_sub(1);
+            results.push(ViewerFeedResult::RecoveredVideoPayload { data: recovered, is_keyframe: false });
         }
 
         // FEC group is complete after parity — check if it was recoverable
@@ -222,7 +224,7 @@ mod tests {
         let mut viewer = StreamViewer::new(3);
         let pkt = StreamPacket::video(vec![1, 2, 3], 0, true, false);
         let results = viewer.feed_packet(&pkt.serialize());
-        let has_video = results.iter().any(|r| matches!(r, ViewerFeedResult::VideoPayload(_)));
+        let has_video = results.iter().any(|r| matches!(r, ViewerFeedResult::VideoPayload { is_keyframe: true, .. }));
         assert!(has_video);
     }
 
