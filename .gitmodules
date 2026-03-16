@@ -1,3 +1,6 @@
 [submodule "external/vcpkg"]
 	path = external/vcpkg
 	url = https://github.com/microsoft/vcpkg.git
+[submodule "libmello/third_party/rnnoise"]
+	path = libmello/third_party/rnnoise
+	url = https://github.com/xiph/rnnoise.git
