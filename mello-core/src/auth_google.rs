@@ -1,4 +1,4 @@
-use crate::oauth::{OAuthFlow, OAuthMode, OAuthError, PkceChallenge, REDIRECT_URI};
+use crate::oauth::{OAuthError, OAuthFlow, OAuthMode, PkceChallenge, REDIRECT_URI};
 
 pub struct GoogleAuth;
 

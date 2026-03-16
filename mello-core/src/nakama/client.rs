@@ -1,15 +1,15 @@
+use futures::{SinkExt, StreamExt};
 use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock};
-use futures::{SinkExt, StreamExt};
 use tokio_tungstenite::tungstenite::Message;
 
+use super::types::*;
 use crate::config::Config;
 use crate::crew::{Crew, Member};
 use crate::crew_state::CrewState;
 use crate::events::{ChatMessage, Event, User};
 use crate::presence::{Activity, PresenceStatus};
 use crate::{Error, Result};
-use super::types::*;
 
 #[derive(Default)]
 struct WsShared {
@@ -90,7 +90,9 @@ impl NakamaClient {
             self.config.http_base()
         );
 
-        let resp = self.http.post(&url)
+        let resp = self
+            .http
+            .post(&url)
             .basic_auth(&self.config.nakama_key, Some(""))
             .json(&serde_json::json!({
                 "email": email,
@@ -120,14 +122,16 @@ impl NakamaClient {
     }
 
     /// Exchange a Google authorization code + PKCE verifier for an id_token.
-    pub async fn google_exchange_code(
-        &self,
-        code: &str,
-        pkce_verifier: &str,
-    ) -> Result<String> {
-        let google_client_id = self.config.google_client_id.as_deref()
+    pub async fn google_exchange_code(&self, code: &str, pkce_verifier: &str) -> Result<String> {
+        let google_client_id = self
+            .config
+            .google_client_id
+            .as_deref()
             .ok_or_else(|| Error::AuthFailed("GOOGLE_CLIENT_ID not configured".into()))?;
-        let google_client_secret = self.config.google_client_secret.as_deref()
+        let google_client_secret = self
+            .config
+            .google_client_secret
+            .as_deref()
             .ok_or_else(|| Error::AuthFailed("GOOGLE_CLIENT_SECRET not configured".into()))?;
 
         #[derive(serde::Deserialize)]
@@ -137,7 +141,8 @@ impl NakamaClient {
             error_description: Option<String>,
         }
 
-        let token_resp = self.http
+        let token_resp = self
+            .http
             .post("https://oauth2.googleapis.com/token")
             .form(&[
                 ("code", code),
@@ -150,7 +155,9 @@ impl NakamaClient {
             .send()
             .await?;
 
-        let tokens: TokenResponse = token_resp.json().await
+        let tokens: TokenResponse = token_resp
+            .json()
+            .await
             .map_err(|_| Error::AuthFailed("Google token exchange failed".into()))?;
 
         if let Some(err) = tokens.error {
@@ -158,7 +165,8 @@ impl NakamaClient {
             return Err(Error::AuthFailed(format!("Google: {err} — {desc}")));
         }
 
-        tokens.id_token
+        tokens
+            .id_token
             .ok_or_else(|| Error::AuthFailed("No id_token from Google".into()))
     }
 
@@ -169,7 +177,9 @@ impl NakamaClient {
             self.config.http_base()
         );
 
-        let resp = self.http.post(&url)
+        let resp = self
+            .http
+            .post(&url)
             .basic_auth(&self.config.nakama_key, Some(""))
             .json(&serde_json::json!({ "token": id_token }))
             .send()
@@ -197,17 +207,15 @@ impl NakamaClient {
 
     /// Authenticate with a provider token via Nakama's custom auth endpoint.
     /// Used for Discord and Twitch whose tokens are validated by the backend hook.
-    pub async fn authenticate_custom(
-        &mut self,
-        token: &str,
-        provider: &str,
-    ) -> Result<User> {
+    pub async fn authenticate_custom(&mut self, token: &str, provider: &str) -> Result<User> {
         let url = format!(
             "{}/v2/account/authenticate/custom?create=true",
             self.config.http_base()
         );
 
-        let resp = self.http.post(&url)
+        let resp = self
+            .http
+            .post(&url)
             .basic_auth(&self.config.nakama_key, Some(""))
             .json(&serde_json::json!({
                 "id": token,
@@ -241,7 +249,9 @@ impl NakamaClient {
         let token = self.bearer()?;
         let url = format!("{}/v2/account/link/google", self.config.http_base());
 
-        let resp = self.http.post(&url)
+        let resp = self
+            .http
+            .post(&url)
             .bearer_auth(&token)
             .json(&serde_json::json!({ "token": id_token }))
             .send()
@@ -266,7 +276,9 @@ impl NakamaClient {
         let bearer = self.bearer()?;
         let url = format!("{}/v2/account/link/custom", self.config.http_base());
 
-        let resp = self.http.post(&url)
+        let resp = self
+            .http
+            .post(&url)
             .bearer_auth(&bearer)
             .json(&serde_json::json!({
                 "id": token,
@@ -296,7 +308,9 @@ impl NakamaClient {
             self.config.http_base()
         );
 
-        let resp = self.http.post(&url)
+        let resp = self
+            .http
+            .post(&url)
             .basic_auth(&self.config.nakama_key, Some(""))
             .json(&serde_json::json!({ "id": device_id }))
             .send()
@@ -324,12 +338,11 @@ impl NakamaClient {
     }
 
     pub async fn refresh_session(&mut self, refresh_token: &str) -> Result<User> {
-        let url = format!(
-            "{}/v2/account/session/refresh",
-            self.config.http_base()
-        );
+        let url = format!("{}/v2/account/session/refresh", self.config.http_base());
 
-        let resp = self.http.post(&url)
+        let resp = self
+            .http
+            .post(&url)
             .basic_auth(&self.config.nakama_key, Some(""))
             .json(&serde_json::json!({ "token": refresh_token }))
             .send()
@@ -359,17 +372,16 @@ impl NakamaClient {
         let token = self.bearer()?;
         let url = format!("{}/v2/account", self.config.http_base());
 
-        let resp = self.http.get(&url)
-            .bearer_auth(&token)
-            .send()
-            .await?;
+        let resp = self.http.get(&url).bearer_auth(&token).send().await?;
 
         if !resp.status().is_success() {
             return Err(Error::Server("Failed to get account".into()));
         }
 
         let account: ApiAccount = resp.json().await?;
-        let api_user = account.user.ok_or(Error::Internal("No user in account".into()))?;
+        let api_user = account
+            .user
+            .ok_or(Error::Internal("No user in account".into()))?;
 
         let mut tag = String::new();
         if let Some(meta_str) = &api_user.metadata {
@@ -413,7 +425,13 @@ impl NakamaClient {
         let presence_tx = self.presence_tx_template.clone().unwrap();
 
         tokio::spawn(ws_writer_task(ws_rx, write));
-        tokio::spawn(ws_reader_task(read, event_tx, shared, signal_tx, presence_tx));
+        tokio::spawn(ws_reader_task(
+            read,
+            event_tx,
+            shared,
+            signal_tx,
+            presence_tx,
+        ));
 
         log::info!("WebSocket connected");
         Ok(())
@@ -431,7 +449,9 @@ impl NakamaClient {
 
     async fn ws_send(&self, msg: String) -> Result<()> {
         if let Some(tx) = &self.ws_tx {
-            tx.send(msg).await.map_err(|e| Error::WebSocket(e.to_string()))?;
+            tx.send(msg)
+                .await
+                .map_err(|e| Error::WebSocket(e.to_string()))?;
         }
         Ok(())
     }
@@ -440,22 +460,24 @@ impl NakamaClient {
 
     pub async fn list_user_groups(&self) -> Result<Vec<Crew>> {
         let token = self.bearer()?;
-        let user_id = self.current_user.as_ref()
+        let user_id = self
+            .current_user
+            .as_ref()
             .ok_or(Error::NotConnected)?
-            .id.clone();
+            .id
+            .clone();
         let url = format!("{}/v2/user/{}/group", self.config.http_base(), user_id);
 
-        let resp = self.http.get(&url)
-            .bearer_auth(&token)
-            .send()
-            .await?;
+        let resp = self.http.get(&url).bearer_auth(&token).send().await?;
 
         if !resp.status().is_success() {
             return Err(Error::Server("Failed to list groups".into()));
         }
 
         let list: ApiUserGroupList = resp.json().await?;
-        let crews = list.user_groups.unwrap_or_default()
+        let crews = list
+            .user_groups
+            .unwrap_or_default()
             .into_iter()
             .filter_map(|ug| {
                 let g = ug.group?;
@@ -481,7 +503,9 @@ impl NakamaClient {
             self.config.nakama_http_key,
         );
 
-        let resp = self.http.post(&url)
+        let resp = self
+            .http
+            .post(&url)
             .header("Content-Type", "application/json")
             .body("\"\"")
             .send()
@@ -490,7 +514,10 @@ impl NakamaClient {
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
-            return Err(Error::Server(format!("discover_crews RPC failed ({}): {}", status, body)));
+            return Err(Error::Server(format!(
+                "discover_crews RPC failed ({}): {}",
+                status, body
+            )));
         }
 
         #[derive(serde::Deserialize)]
@@ -520,14 +547,18 @@ impl NakamaClient {
         let rpc: RpcResponse = resp.json().await?;
         let payload: DiscoverPayload = serde_json::from_str(&rpc.payload)?;
 
-        let crews = payload.crews.into_iter().map(|c| Crew {
-            id: c.id,
-            name: c.name,
-            description: c.description,
-            member_count: c.member_count,
-            max_members: c.max_members,
-            open: c.open,
-        }).collect();
+        let crews = payload
+            .crews
+            .into_iter()
+            .map(|c| Crew {
+                id: c.id,
+                name: c.name,
+                description: c.description,
+                member_count: c.member_count,
+                max_members: c.max_members,
+                open: c.open,
+            })
+            .collect();
 
         Ok(crews)
     }
@@ -540,17 +571,16 @@ impl NakamaClient {
             limit
         );
 
-        let resp = self.http.get(&url)
-            .bearer_auth(&token)
-            .send()
-            .await?;
+        let resp = self.http.get(&url).bearer_auth(&token).send().await?;
 
         if !resp.status().is_success() {
             return Err(Error::Server("Failed to list groups".into()));
         }
 
         let list: ApiGroupList = resp.json().await?;
-        let crews = list.groups.unwrap_or_default()
+        let crews = list
+            .groups
+            .unwrap_or_default()
             .into_iter()
             .filter_map(|g| {
                 Some(Crew {
@@ -571,10 +601,7 @@ impl NakamaClient {
         let token = self.bearer()?;
         let url = format!("{}/v2/group/{}/join", self.config.http_base(), group_id);
 
-        let resp = self.http.post(&url)
-            .bearer_auth(&token)
-            .send()
-            .await?;
+        let resp = self.http.post(&url).bearer_auth(&token).send().await?;
 
         if !resp.status().is_success() {
             let err_text = resp.text().await.unwrap_or_default();
@@ -588,7 +615,9 @@ impl NakamaClient {
         let token = self.bearer()?;
         let url = format!("{}/v2/account", self.config.http_base());
 
-        let resp = self.http.put(&url)
+        let resp = self
+            .http
+            .put(&url)
             .bearer_auth(&token)
             .json(&serde_json::json!({
                 "display_name": display_name
@@ -608,7 +637,9 @@ impl NakamaClient {
         let token = self.bearer()?;
         let url = format!("{}/v2/account/link/email", self.config.http_base());
 
-        let resp = self.http.post(&url)
+        let resp = self
+            .http
+            .post(&url)
             .bearer_auth(&token)
             .json(&serde_json::json!({
                 "email": email,
@@ -640,7 +671,9 @@ impl NakamaClient {
         })?;
         let body = serde_json::Value::String(payload);
 
-        let resp = self.http.post(&url)
+        let resp = self
+            .http
+            .post(&url)
             .bearer_auth(&token)
             .json(&body)
             .send()
@@ -652,9 +685,7 @@ impl NakamaClient {
         }
 
         let rpc_resp: ApiRpcResponse = resp.json().await?;
-        let result: CreateCrewResult = serde_json::from_str(
-            &rpc_resp.payload.unwrap_or_default(),
-        )?;
+        let result: CreateCrewResult = serde_json::from_str(&rpc_resp.payload.unwrap_or_default())?;
 
         Ok(Crew {
             id: result.crew_id,
@@ -674,7 +705,9 @@ impl NakamaClient {
 
         let body = serde_json::Value::String(payload.to_string());
 
-        let resp = self.http.post(&url)
+        let resp = self
+            .http
+            .post(&url)
             .bearer_auth(&token)
             .json(&body)
             .send()
@@ -691,7 +724,11 @@ impl NakamaClient {
 
     // --- Presence RPCs ---
 
-    pub async fn presence_update(&self, status: &PresenceStatus, activity: Option<&Activity>) -> Result<()> {
+    pub async fn presence_update(
+        &self,
+        status: &PresenceStatus,
+        activity: Option<&Activity>,
+    ) -> Result<()> {
         let payload = serde_json::json!({
             "status": status,
             "activity": activity,
@@ -719,7 +756,10 @@ impl NakamaClient {
         Ok(parsed.state)
     }
 
-    pub async fn subscribe_sidebar(&self, crew_ids: &[String]) -> Result<Vec<crate::crew_state::CrewSidebarState>> {
+    pub async fn subscribe_sidebar(
+        &self,
+        crew_ids: &[String],
+    ) -> Result<Vec<crate::crew_state::CrewSidebarState>> {
         let payload = serde_json::json!({ "crew_ids": crew_ids });
         let resp = self.rpc("subscribe_sidebar", &payload).await?;
 
@@ -764,9 +804,15 @@ impl NakamaClient {
                 for url in &server.urls {
                     if let Some(host) = url.strip_prefix("turn:") {
                         // libdatachannel format: turn:user:pass@host:port
-                        urls.push(format!("turn:{}:{}@{}", server.username, server.credential, host));
+                        urls.push(format!(
+                            "turn:{}:{}@{}",
+                            server.username, server.credential, host
+                        ));
                     } else if let Some(host) = url.strip_prefix("turns:") {
-                        urls.push(format!("turns:{}:{}@{}", server.username, server.credential, host));
+                        urls.push(format!(
+                            "turns:{}:{}@{}",
+                            server.username, server.credential, host
+                        ));
                     } else {
                         urls.push(url.clone());
                     }
@@ -778,7 +824,11 @@ impl NakamaClient {
         Ok(urls)
     }
 
-    pub async fn voice_join(&self, crew_id: &str, channel_id: &str) -> Result<crate::crew_state::VoiceJoinResponse> {
+    pub async fn voice_join(
+        &self,
+        crew_id: &str,
+        channel_id: &str,
+    ) -> Result<crate::crew_state::VoiceJoinResponse> {
         let payload = serde_json::json!({ "crew_id": crew_id, "channel_id": channel_id });
         let resp = self.rpc("voice_join", &payload).await?;
         let parsed: crate::crew_state::VoiceJoinResponse = serde_json::from_str(&resp)?;
@@ -810,12 +860,7 @@ impl NakamaClient {
         Ok(channel)
     }
 
-    pub async fn channel_rename(
-        &self,
-        crew_id: &str,
-        channel_id: &str,
-        name: &str,
-    ) -> Result<()> {
+    pub async fn channel_rename(&self, crew_id: &str, channel_id: &str, name: &str) -> Result<()> {
         let payload =
             serde_json::json!({ "crew_id": crew_id, "channel_id": channel_id, "name": name });
         self.rpc("channel_rename", &payload).await?;
@@ -857,7 +902,8 @@ impl NakamaClient {
                 "persistence": true,
                 "hidden": false
             }
-        }).to_string();
+        })
+        .to_string();
 
         self.ws_send(msg).await
     }
@@ -871,7 +917,8 @@ impl NakamaClient {
                 "channel_leave": {
                     "channel_id": channel_id
                 }
-            }).to_string();
+            })
+            .to_string();
             self.ws_send(msg).await?;
         }
 
@@ -883,7 +930,12 @@ impl NakamaClient {
     // --- Chat ---
 
     pub async fn send_chat_message(&self, text: &str) -> Result<()> {
-        let channel_id = self.ws_shared.read().await.channel_id.clone()
+        let channel_id = self
+            .ws_shared
+            .read()
+            .await
+            .channel_id
+            .clone()
             .ok_or(Error::NotConnected)?;
 
         let content = serde_json::json!({"text": text}).to_string();
@@ -893,12 +945,17 @@ impl NakamaClient {
                 "channel_id": channel_id,
                 "content": content
             }
-        }).to_string();
+        })
+        .to_string();
 
         self.ws_send(msg).await
     }
 
-    pub async fn list_channel_messages(&self, channel_id: &str, limit: u32) -> Result<Vec<ChatMessage>> {
+    pub async fn list_channel_messages(
+        &self,
+        channel_id: &str,
+        limit: u32,
+    ) -> Result<Vec<ChatMessage>> {
         let token = self.bearer()?;
         let url = format!(
             "{}/v2/channel/{}?limit={}&forward=false",
@@ -907,10 +964,7 @@ impl NakamaClient {
             limit
         );
 
-        let resp = self.http.get(&url)
-            .bearer_auth(&token)
-            .send()
-            .await?;
+        let resp = self.http.get(&url).bearer_auth(&token).send().await?;
 
         if !resp.status().is_success() {
             return Err(Error::Server("Failed to list channel messages".into()));
@@ -926,17 +980,16 @@ impl NakamaClient {
         let token = self.bearer()?;
         let url = format!("{}/v2/group/{}/user", self.config.http_base(), group_id);
 
-        let resp = self.http.get(&url)
-            .bearer_auth(&token)
-            .send()
-            .await?;
+        let resp = self.http.get(&url).bearer_auth(&token).send().await?;
 
         if !resp.status().is_success() {
             return Err(Error::Server("Failed to list group users".into()));
         }
 
         let list: ApiGroupUserList = resp.json().await?;
-        let members = list.group_users.unwrap_or_default()
+        let members = list
+            .group_users
+            .unwrap_or_default()
             .into_iter()
             .filter_map(|gu| {
                 let u = gu.user?;
@@ -959,7 +1012,8 @@ impl NakamaClient {
             "status_follow": {
                 "user_ids": user_ids
             }
-        }).to_string();
+        })
+        .to_string();
         self.ws_send(msg).await
     }
 
@@ -978,21 +1032,28 @@ impl NakamaClient {
     /// Send a P2P signaling message through the Nakama channel.
     /// The message is a channel message with a special "signal" field.
     pub async fn send_signal(&self, to: &str, payload: &str) -> Result<()> {
-        let channel_id = self.ws_shared.read().await.channel_id.clone()
+        let channel_id = self
+            .ws_shared
+            .read()
+            .await
+            .channel_id
+            .clone()
             .ok_or(Error::NotConnected)?;
 
         let content = serde_json::json!({
             "signal": true,
             "to": to,
             "data": payload
-        }).to_string();
+        })
+        .to_string();
 
         let msg = serde_json::json!({
             "channel_message_send": {
                 "channel_id": channel_id,
                 "content": content
             }
-        }).to_string();
+        })
+        .to_string();
 
         self.ws_send(msg).await
     }
@@ -1001,7 +1062,8 @@ impl NakamaClient {
 // --- Message parsing (extracted for testability) ---
 
 pub(crate) fn parse_channel_messages(list: ApiChannelMessageList) -> Vec<ChatMessage> {
-    list.messages.unwrap_or_default()
+    list.messages
+        .unwrap_or_default()
         .into_iter()
         .filter_map(|m| {
             let content_str = m.content.as_deref().unwrap_or("");
@@ -1118,13 +1180,25 @@ async fn handle_ws_message(
             if parsed.get("signal").and_then(|v| v.as_bool()) == Some(true) {
                 let from = msg.sender_id.unwrap_or_default();
                 let to = parsed.get("to").and_then(|v| v.as_str()).unwrap_or("");
-                let our_id = shared.read().await.local_user_id.clone().unwrap_or_default();
+                let our_id = shared
+                    .read()
+                    .await
+                    .local_user_id
+                    .clone()
+                    .unwrap_or_default();
                 if from == our_id || (!to.is_empty() && to != our_id) {
                     return;
                 }
 
-                let data = parsed.get("data").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                let _ = signal_tx.try_send(InternalSignal { from, payload: data });
+                let data = parsed
+                    .get("data")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let _ = signal_tx.try_send(InternalSignal {
+                    from,
+                    payload: data,
+                });
                 return;
             }
         }
@@ -1213,75 +1287,61 @@ async fn handle_ws_message(
     }
 }
 
-fn handle_notification(
-    code: i32,
-    content: &str,
-    event_tx: &std::sync::mpsc::Sender<Event>,
-) {
+fn handle_notification(code: i32, content: &str, event_tx: &std::sync::mpsc::Sender<Event>) {
     use crate::crew_state;
 
     match code {
         // 110 = full crew state
-        110 => {
-            match serde_json::from_str::<crew_state::CrewState>(content) {
-                Ok(state) => {
-                    let _ = event_tx.send(Event::CrewStateLoaded { state });
-                }
-                Err(e) => log::warn!("Failed to parse crew_state notification: {}", e),
+        110 => match serde_json::from_str::<crew_state::CrewState>(content) {
+            Ok(state) => {
+                let _ = event_tx.send(Event::CrewStateLoaded { state });
             }
-        }
+            Err(e) => log::warn!("Failed to parse crew_state notification: {}", e),
+        },
         // 111 = priority crew event
-        111 => {
-            match serde_json::from_str::<crew_state::CrewEvent>(content) {
-                Ok(event) => {
-                    let _ = event_tx.send(Event::CrewEventReceived { event });
-                }
-                Err(e) => log::warn!("Failed to parse crew_event notification: {}", e),
+        111 => match serde_json::from_str::<crew_state::CrewEvent>(content) {
+            Ok(event) => {
+                let _ = event_tx.send(Event::CrewEventReceived { event });
             }
-        }
+            Err(e) => log::warn!("Failed to parse crew_event notification: {}", e),
+        },
         // 112 = batched sidebar update
-        112 => {
-            match serde_json::from_str::<crew_state::SidebarUpdate>(content) {
-                Ok(update) => {
-                    let _ = event_tx.send(Event::SidebarUpdated { crews: update.crews });
-                }
-                Err(e) => log::warn!("Failed to parse sidebar_update notification: {}", e),
+        112 => match serde_json::from_str::<crew_state::SidebarUpdate>(content) {
+            Ok(update) => {
+                let _ = event_tx.send(Event::SidebarUpdated {
+                    crews: update.crews,
+                });
             }
-        }
+            Err(e) => log::warn!("Failed to parse sidebar_update notification: {}", e),
+        },
         // 113 = presence change
-        113 => {
-            match serde_json::from_str::<crew_state::PresenceChange>(content) {
-                Ok(change) => {
-                    let _ = event_tx.send(Event::PresenceChanged { change });
-                }
-                Err(e) => log::warn!("Failed to parse presence_change notification: {}", e),
+        113 => match serde_json::from_str::<crew_state::PresenceChange>(content) {
+            Ok(change) => {
+                let _ = event_tx.send(Event::PresenceChanged { change });
             }
-        }
+            Err(e) => log::warn!("Failed to parse presence_change notification: {}", e),
+        },
         // 114 = voice update
-        114 => {
-            match serde_json::from_str::<crew_state::VoiceUpdate>(content) {
-                Ok(update) => {
-                    let _ = event_tx.send(Event::VoiceUpdated {
-                        crew_id: update.crew_id,
-                        channel_id: update.channel_id,
-                        members: update.members,
-                    });
-                }
-                Err(e) => log::warn!("Failed to parse voice_update notification: {}", e),
+        114 => match serde_json::from_str::<crew_state::VoiceUpdate>(content) {
+            Ok(update) => {
+                let _ = event_tx.send(Event::VoiceUpdated {
+                    crew_id: update.crew_id,
+                    channel_id: update.channel_id,
+                    members: update.members,
+                });
             }
-        }
+            Err(e) => log::warn!("Failed to parse voice_update notification: {}", e),
+        },
         // 115 = throttled message preview
-        115 => {
-            match serde_json::from_str::<crew_state::MessagePreviewUpdate>(content) {
-                Ok(update) => {
-                    let _ = event_tx.send(Event::MessagePreviewUpdated {
-                        crew_id: update.crew_id,
-                        messages: update.messages,
-                    });
-                }
-                Err(e) => log::warn!("Failed to parse message_preview notification: {}", e),
+        115 => match serde_json::from_str::<crew_state::MessagePreviewUpdate>(content) {
+            Ok(update) => {
+                let _ = event_tx.send(Event::MessagePreviewUpdated {
+                    crew_id: update.crew_id,
+                    messages: update.messages,
+                });
             }
-        }
+            Err(e) => log::warn!("Failed to parse message_preview notification: {}", e),
+        },
         _ => {
             log::debug!("Unhandled notification code: {}", code);
         }
@@ -1332,9 +1392,11 @@ mod tests {
     #[test]
     fn parse_extracts_text_from_chat_content() {
         let list = ApiChannelMessageList {
-            messages: Some(vec![
-                make_api_msg(r#"{"text":"hello world"}"#, "u1", "alice"),
-            ]),
+            messages: Some(vec![make_api_msg(
+                r#"{"text":"hello world"}"#,
+                "u1",
+                "alice",
+            )]),
             next_cursor: None,
             prev_cursor: None,
         };
@@ -1353,7 +1415,8 @@ mod tests {
                 make_api_msg(r#"{"text":"hi"}"#, "u1", "alice"),
                 make_api_msg(
                     r#"{"signal":true,"to":"u1","data":"{\"Offer\":{\"sdp\":\"v=0\"}}"}"#,
-                    "u2", "bob",
+                    "u2",
+                    "bob",
                 ),
                 make_api_msg(r#"{"text":"bye"}"#, "u3", "carol"),
             ]),
@@ -1410,9 +1473,7 @@ mod tests {
     #[test]
     fn parse_falls_back_to_raw_content_when_not_json() {
         let list = ApiChannelMessageList {
-            messages: Some(vec![
-                make_api_msg("plain text, not json", "u1", "alice"),
-            ]),
+            messages: Some(vec![make_api_msg("plain text, not json", "u1", "alice")]),
             next_cursor: None,
             prev_cursor: None,
         };
@@ -1425,9 +1486,11 @@ mod tests {
     #[test]
     fn parse_signal_false_is_not_filtered() {
         let list = ApiChannelMessageList {
-            messages: Some(vec![
-                make_api_msg(r#"{"signal":false,"text":"keep me"}"#, "u1", "alice"),
-            ]),
+            messages: Some(vec![make_api_msg(
+                r#"{"signal":false,"text":"keep me"}"#,
+                "u1",
+                "alice",
+            )]),
             next_cursor: None,
             prev_cursor: None,
         };

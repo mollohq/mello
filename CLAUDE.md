@@ -17,7 +17,7 @@ When the Human Operator corrects you or says "don't do that" / "we do it this wa
 Do not repeat a corrected mistake in the same session.
 
 ## Before Calling Something Done
-- Run tests: `cargo test --workspace` (Rust), `cd libmello && cmake --build build && ctest` (C++)
+- Run `cargo fmt --all` then `cargo test --workspace` (Rust), `cd libmello && cmake --build build && ctest` (C++)
 - Fix all warnings — treat warnings as errors in this codebase.
 - Check for regressions in adjacent code you touched.
 - If you added behavior, add a test for it. Tests live next to the code they cover.
@@ -30,6 +30,7 @@ Do not repeat a corrected mistake in the same session.
 - Do not open PRs autonomously.
 
 ## Rust Standards (mello-core, client)
+- `cargo fmt --all` must pass before committing. Check with `cargo fmt --all -- --check`.
 - `clippy` must pass: `cargo clippy --all-targets -- -D warnings`
 - No `unwrap()` in non-test code — use `?`, `expect("reason")`, or proper error handling.
 - Keep `async` minimal — prefer structured concurrency over spawning loose tasks.

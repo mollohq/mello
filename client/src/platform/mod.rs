@@ -1,6 +1,6 @@
+pub mod hotkeys;
 #[cfg(target_os = "macos")]
 pub mod macos;
-pub mod hotkeys;
 
 use tray_icon::menu::{CheckMenuItem, Menu, MenuId, MenuItem, PredefinedMenuItem};
 use tray_icon::{Icon, TrayIcon, TrayIconBuilder, TrayIconEvent};
@@ -26,14 +26,27 @@ impl StatusItem {
         let icon = Self::render_icon(VoiceState::Inactive);
 
         let menu = Menu::new();
-        menu.append(&MenuItem::with_id(MenuId::new("tray_open"), &format!("Open {}", crate::APP_NAME), true, None)).ok();
+        menu.append(&MenuItem::with_id(
+            MenuId::new("tray_open"),
+            &format!("Open {}", crate::APP_NAME),
+            true,
+            None,
+        ))
+        .ok();
         menu.append(&PredefinedMenuItem::separator()).ok();
-        let mute_item = CheckMenuItem::with_id(MenuId::new("tray_mute"), "Mute", false, false, None);
+        let mute_item =
+            CheckMenuItem::with_id(MenuId::new("tray_mute"), "Mute", false, false, None);
         menu.append(&mute_item).ok();
         let leave_item = MenuItem::with_id(MenuId::new("tray_leave"), "Leave Voice", false, None);
         menu.append(&leave_item).ok();
         menu.append(&PredefinedMenuItem::separator()).ok();
-        menu.append(&MenuItem::with_id(MenuId::new("tray_quit"), &format!("Quit {}", crate::APP_NAME), true, None)).ok();
+        menu.append(&MenuItem::with_id(
+            MenuId::new("tray_quit"),
+            &format!("Quit {}", crate::APP_NAME),
+            true,
+            None,
+        ))
+        .ok();
 
         let builder = TrayIconBuilder::new()
             .with_icon(icon)
@@ -59,10 +72,14 @@ impl StatusItem {
         self.current_state = state;
         self._tray.set_icon(Some(Self::render_icon(state))).ok();
 
-        let in_voice = matches!(state, VoiceState::Connected | VoiceState::Speaking | VoiceState::Muted);
+        let in_voice = matches!(
+            state,
+            VoiceState::Connected | VoiceState::Speaking | VoiceState::Muted
+        );
         self.mute_item.set_enabled(in_voice);
         self.leave_item.set_enabled(in_voice);
-        self.mute_item.set_checked(matches!(state, VoiceState::Muted));
+        self.mute_item
+            .set_checked(matches!(state, VoiceState::Muted));
     }
 
     pub fn set_mute_checked(&mut self, muted: bool) {
@@ -76,10 +93,10 @@ impl StatusItem {
 
     fn render_icon(state: VoiceState) -> Icon {
         let (r, g, b, a): (u8, u8, u8, u8) = match state {
-            VoiceState::Inactive => (255, 255, 255, 153),  // white 60%
+            VoiceState::Inactive => (255, 255, 255, 153), // white 60%
             VoiceState::Connected => (255, 255, 255, 255), // white 100%
-            VoiceState::Speaking => (68, 204, 68, 255),    // green
-            VoiceState::Muted => (255, 68, 68, 255),       // red
+            VoiceState::Speaking => (68, 204, 68, 255),   // green
+            VoiceState::Muted => (255, 68, 68, 255),      // red
         };
 
         // Rasterise a filled circle into a 22x22 RGBA buffer

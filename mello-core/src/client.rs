@@ -4,9 +4,9 @@ use crate::command::Command;
 use crate::config::Config;
 use crate::events::Event;
 use crate::nakama::NakamaClient;
+use crate::nakama::{InternalPresence, InternalSignal};
 use crate::presence::PresenceStatus;
 use crate::session;
-use crate::nakama::{InternalPresence, InternalSignal};
 use crate::stream::manager::StreamSession;
 use crate::voice::{SignalMessage, VoiceManager};
 
@@ -67,7 +67,9 @@ impl Client {
     }
 
     fn handle_presence(&mut self, presence: InternalPresence) {
-        if !self.voice.is_active() { return; }
+        if !self.voice.is_active() {
+            return;
+        }
 
         let local_id = match self.nakama.current_user_id() {
             Some(id) => id.to_string(),
@@ -77,13 +79,19 @@ impl Client {
         match presence {
             InternalPresence::Joined { user_id } => {
                 if user_id != local_id {
-                    log::info!("Presence: member {} joined channel, adding to voice mesh", user_id);
+                    log::info!(
+                        "Presence: member {} joined channel, adding to voice mesh",
+                        user_id
+                    );
                     self.voice.on_member_joined(&local_id, &user_id);
                 }
             }
             InternalPresence::Left { user_id } => {
                 if user_id != local_id {
-                    log::info!("Presence: member {} left channel, removing from voice mesh", user_id);
+                    log::info!(
+                        "Presence: member {} left channel, removing from voice mesh",
+                        user_id
+                    );
                     self.voice.on_member_left(&user_id);
                 }
             }
@@ -200,8 +208,14 @@ impl Client {
             Command::DiscoverCrews => {
                 self.handle_discover_crews().await;
             }
-            Command::FinalizeOnboarding { crew_id, crew_name, display_name, avatar } => {
-                self.handle_finalize_onboarding(crew_id, crew_name, &display_name, avatar).await;
+            Command::FinalizeOnboarding {
+                crew_id,
+                crew_name,
+                display_name,
+                avatar,
+            } => {
+                self.handle_finalize_onboarding(crew_id, crew_name, &display_name, avatar)
+                    .await;
             }
             Command::LoadMyCrews => {
                 self.load_crews().await;
@@ -236,7 +250,9 @@ impl Client {
             Command::ListAudioDevices => {
                 let capture = self.voice.list_capture_devices();
                 let playback = self.voice.list_playback_devices();
-                let _ = self.event_tx.send(Event::AudioDevicesListed { capture, playback });
+                let _ = self
+                    .event_tx
+                    .send(Event::AudioDevicesListed { capture, playback });
             }
             Command::SetCaptureDevice { id } => {
                 self.voice.set_capture_device(&id);
@@ -273,16 +289,29 @@ impl Client {
             Command::CreateVoiceChannel { crew_id, name } => {
                 self.handle_create_voice_channel(&crew_id, &name).await;
             }
-            Command::RenameVoiceChannel { crew_id, channel_id, name } => {
-                self.handle_rename_voice_channel(&crew_id, &channel_id, &name).await;
+            Command::RenameVoiceChannel {
+                crew_id,
+                channel_id,
+                name,
+            } => {
+                self.handle_rename_voice_channel(&crew_id, &channel_id, &name)
+                    .await;
             }
-            Command::DeleteVoiceChannel { crew_id, channel_id } => {
-                self.handle_delete_voice_channel(&crew_id, &channel_id).await;
+            Command::DeleteVoiceChannel {
+                crew_id,
+                channel_id,
+            } => {
+                self.handle_delete_voice_channel(&crew_id, &channel_id)
+                    .await;
             }
 
             // --- Presence & crew state ---
             Command::UpdatePresence { status, activity } => {
-                if let Err(e) = self.nakama.presence_update(&status, activity.as_ref()).await {
+                if let Err(e) = self
+                    .nakama
+                    .presence_update(&status, activity.as_ref())
+                    .await
+                {
                     log::error!("Failed to update presence: {}", e);
                 }
             }
@@ -298,7 +327,11 @@ impl Client {
     async fn handle_device_auth(&mut self, device_id: &str) {
         match self.nakama.authenticate_device(device_id).await {
             Ok((user, created)) => {
-                log::info!("Device auth succeeded for {} (created={})", user.id, created);
+                log::info!(
+                    "Device auth succeeded for {} (created={})",
+                    user.id,
+                    created
+                );
                 if let Some(rt) = self.nakama.refresh_token() {
                     let _ = session::save(rt);
                 }
@@ -338,9 +371,15 @@ impl Client {
         let device_id = {
             use rand::Rng;
             let bytes: [u8; 16] = rand::thread_rng().gen();
-            bytes.iter().map(|b| format!("{:02x}", b)).collect::<String>()
+            bytes
+                .iter()
+                .map(|b| format!("{:02x}", b))
+                .collect::<String>()
         };
-        log::info!("[onboarding] finalizing — device auth with id={}", device_id);
+        log::info!(
+            "[onboarding] finalizing — device auth with id={}",
+            device_id
+        );
 
         let (user, _created) = match self.nakama.authenticate_device(&device_id).await {
             Ok(pair) => pair,
@@ -409,7 +448,9 @@ impl Client {
 
         let mut updated_user = user;
         updated_user.display_name = display_name.to_string();
-        let _ = self.event_tx.send(Event::OnboardingReady { user: updated_user });
+        let _ = self
+            .event_tx
+            .send(Event::OnboardingReady { user: updated_user });
     }
 
     async fn handle_join_crew(&mut self, crew_id: &str) {
@@ -630,7 +671,11 @@ impl Client {
 
     /// Shared post-auth flow for social logins (same as handle_login success path).
     async fn on_social_login(&mut self, user: crate::events::User) {
-        log::info!("[auth] Social login success: {} ({})", user.display_name, user.tag);
+        log::info!(
+            "[auth] Social login success: {} ({})",
+            user.display_name,
+            user.tag
+        );
 
         match self.nakama.refresh_token() {
             Some(rt) => {
@@ -802,7 +847,11 @@ impl Client {
 
     async fn handle_logout(&mut self) {
         // Notify server we're going offline
-        if let Err(e) = self.nakama.presence_update(&PresenceStatus::Offline, None).await {
+        if let Err(e) = self
+            .nakama
+            .presence_update(&PresenceStatus::Offline, None)
+            .await
+        {
             log::warn!("Failed to set offline presence on logout: {}", e);
         }
 
@@ -813,7 +862,9 @@ impl Client {
             }
         }
         self.voice.leave_voice();
-        let _ = self.event_tx.send(Event::VoiceStateChanged { in_call: false });
+        let _ = self
+            .event_tx
+            .send(Event::VoiceStateChanged { in_call: false });
 
         session::clear();
         if let Err(e) = self.nakama.leave_crew_channel().await {
@@ -857,7 +908,9 @@ impl Client {
 
     async fn handle_select_crew(&mut self, crew_id: &str) {
         self.voice.leave_voice();
-        let _ = self.event_tx.send(Event::VoiceStateChanged { in_call: false });
+        let _ = self
+            .event_tx
+            .send(Event::VoiceStateChanged { in_call: false });
 
         if let Err(e) = self.nakama.leave_crew_channel().await {
             log::warn!("Failed to leave previous channel: {}", e);
@@ -873,7 +926,11 @@ impl Client {
         });
 
         // Tell the server this is our active crew (registers subscription + returns state)
-        let local_user_id = self.nakama.current_user_id().map(String::from).unwrap_or_default();
+        let local_user_id = self
+            .nakama
+            .current_user_id()
+            .map(String::from)
+            .unwrap_or_default();
         let voice_channel_id = match self.nakama.set_active_crew(crew_id).await {
             Ok(state) => {
                 // Check if user is already in a channel (server remembers from last session)
@@ -884,7 +941,9 @@ impl Client {
                     .map(|ch| ch.id.clone());
                 // Fall back to default channel
                 let target = already_in.or_else(|| {
-                    state.voice_channels.iter()
+                    state
+                        .voice_channels
+                        .iter()
                         .find(|ch| ch.is_default)
                         .or_else(|| state.voice_channels.first())
                         .map(|ch| ch.id.clone())
@@ -925,7 +984,11 @@ impl Client {
 
     /// Called after successful auth + WS connect. Sets online presence and fetches ICE config.
     async fn on_connected(&mut self) {
-        if let Err(e) = self.nakama.presence_update(&PresenceStatus::Online, None).await {
+        if let Err(e) = self
+            .nakama
+            .presence_update(&PresenceStatus::Online, None)
+            .await
+        {
             log::warn!("Failed to set online presence: {}", e);
         }
 
@@ -947,7 +1010,8 @@ impl Client {
             Ok(health) => {
                 log::info!(
                     "Server health: status={} version={} protocol={}",
-                    health.status, health.version,
+                    health.status,
+                    health.version,
                     health.protocol_version.unwrap_or(0),
                 );
 
@@ -1038,12 +1102,17 @@ impl Client {
         // Rejoin local voice mesh with the members from the response
         self.voice.leave_voice();
         if let Some(local_id) = self.nakama.current_user_id().map(String::from) {
-            let peer_ids: Vec<String> = resp.voice_state.members.iter()
+            let peer_ids: Vec<String> = resp
+                .voice_state
+                .members
+                .iter()
                 .filter(|m| m.user_id != local_id)
                 .map(|m| m.user_id.clone())
                 .collect();
             self.voice.join_voice(&local_id, &peer_ids);
-            let _ = self.event_tx.send(Event::VoiceStateChanged { in_call: true });
+            let _ = self
+                .event_tx
+                .send(Event::VoiceStateChanged { in_call: true });
         }
 
         // Emit authoritative state so the UI can update members + active channel
@@ -1062,7 +1131,9 @@ impl Client {
             }
         }
         self.voice.leave_voice();
-        let _ = self.event_tx.send(Event::VoiceStateChanged { in_call: false });
+        let _ = self
+            .event_tx
+            .send(Event::VoiceStateChanged { in_call: false });
     }
 
     async fn handle_create_voice_channel(&self, crew_id: &str, name: &str) {
@@ -1125,7 +1196,9 @@ impl Client {
             }
         }
         self.voice.leave_voice();
-        let _ = self.event_tx.send(Event::VoiceStateChanged { in_call: false });
+        let _ = self
+            .event_tx
+            .send(Event::VoiceStateChanged { in_call: false });
         let crew_id = self.nakama.active_crew_id().map(String::from);
         if let Err(e) = self.nakama.leave_crew_channel().await {
             log::error!("Failed to leave crew: {}", e);

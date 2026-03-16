@@ -35,7 +35,11 @@ unsafe extern "C" fn on_video_packet(
 ) {
     let state = &*HOST_STATE;
     let payload = std::slice::from_raw_parts(data, size as usize);
-    let header = if is_keyframe { HEADER_KEYFRAME } else { HEADER_VIDEO };
+    let header = if is_keyframe {
+        HEADER_KEYFRAME
+    } else {
+        HEADER_VIDEO
+    };
     let frame_id = state.frame_id.fetch_add(1, Ordering::Relaxed);
 
     let chunk_count = (payload.len() + MAX_CHUNK_PAYLOAD - 1) / MAX_CHUNK_PAYLOAD;
@@ -55,7 +59,9 @@ unsafe extern "C" fn on_video_packet(
 
         match state.socket.send_to(&buf, state.dest) {
             Ok(_) => {
-                state.bytes_sent.fetch_add(buf.len() as u64, Ordering::Relaxed);
+                state
+                    .bytes_sent
+                    .fetch_add(buf.len() as u64, Ordering::Relaxed);
             }
             Err(_) => {
                 state.send_errors.fetch_add(1, Ordering::Relaxed);
@@ -113,12 +119,15 @@ fn main() {
     }
 
     // Game processes
-    let mut games = vec![mello_sys::MelloGameProcess {
-        pid: 0,
-        name: [0i8; 128],
-        exe: [0i8; 260],
-        is_fullscreen: false,
-    }; 16];
+    let mut games = vec![
+        mello_sys::MelloGameProcess {
+            pid: 0,
+            name: [0i8; 128],
+            exe: [0i8; 260],
+            is_fullscreen: false,
+        };
+        16
+    ];
     let game_count = unsafe { mello_sys::mello_enumerate_games(ctx, games.as_mut_ptr(), 16) };
     if game_count > 0 {
         println!("\n  -- Games --");
@@ -220,7 +229,7 @@ fn main() {
 
     // Start host pipeline (captures at native resolution of the source)
     let config = mello_sys::MelloStreamConfig {
-        width: 0,  // 0 = use capture source native resolution
+        width: 0, // 0 = use capture source native resolution
         height: 0,
         fps,
         bitrate_kbps: bitrate,
@@ -294,7 +303,10 @@ fn main() {
 
         print!(
             "\r[{:3}s] fps={:.0} bitrate={:.0}kbps keyframes={} total={:.1}MB{}   ",
-            elapsed, pps, bps, total_keyframes,
+            elapsed,
+            pps,
+            bps,
+            total_keyframes,
             total_bytes as f64 / (1024.0 * 1024.0),
             err_str,
         );

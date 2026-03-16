@@ -17,8 +17,12 @@ impl Config {
         Self {
             nakama_host: "mello-api-1iiv.onrender.com".into(),
             nakama_port: 443,
-            nakama_key: option_env!("NAKAMA_SERVER_KEY").unwrap_or("defaultkey").into(),
-            nakama_http_key: option_env!("NAKAMA_HTTP_KEY").unwrap_or("defaulthttpkey").into(),
+            nakama_key: option_env!("NAKAMA_SERVER_KEY")
+                .unwrap_or("defaultkey")
+                .into(),
+            nakama_http_key: option_env!("NAKAMA_HTTP_KEY")
+                .unwrap_or("defaulthttpkey")
+                .into(),
             nakama_ssl: true,
             google_client_id: option_env!("GOOGLE_CLIENT_ID").map(Into::into),
             google_client_secret: option_env!("GOOGLE_CLIENT_SECRET").map(Into::into),
@@ -50,7 +54,9 @@ impl Default for Config {
             nakama_host: "127.0.0.1".into(),
             nakama_port: 7350,
             nakama_key: "mello_dev_key".into(),
-            nakama_http_key: option_env!("NAKAMA_HTTP_KEY").unwrap_or("mello_http_key_dev").into(),
+            nakama_http_key: option_env!("NAKAMA_HTTP_KEY")
+                .unwrap_or("mello_http_key_dev")
+                .into(),
             nakama_ssl: false,
             google_client_id: option_env!("GOOGLE_CLIENT_ID").map(Into::into),
             google_client_secret: option_env!("GOOGLE_CLIENT_SECRET").map(Into::into),

@@ -1,13 +1,21 @@
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::ffi::{CStr, CString};
 use std::sync::{Arc, Mutex};
-use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum SignalMessage {
-    Offer { sdp: String },
-    Answer { sdp: String },
-    IceCandidate { candidate: String, sdp_mid: String, sdp_mline_index: i32 },
+    Offer {
+        sdp: String,
+    },
+    Answer {
+        sdp: String,
+    },
+    IceCandidate {
+        candidate: String,
+        sdp_mid: String,
+        sdp_mline_index: i32,
+    },
 }
 
 struct IceCallbackData {
@@ -85,7 +93,9 @@ impl VoiceMesh {
             user_data: *mut std::ffi::c_void,
             candidate: *const mello_sys::MelloIceCandidate,
         ) {
-            if user_data.is_null() || candidate.is_null() { return; }
+            if user_data.is_null() || candidate.is_null() {
+                return;
+            }
             let data = &*(user_data as *const IceCallbackData);
             let c = &*candidate;
             let cand = CStr::from_ptr(c.candidate).to_string_lossy().into_owned();
@@ -112,13 +122,26 @@ impl VoiceMesh {
             );
         }
 
-        Some(PeerState { peer, _peer_id_c: peer_id_c, ice_cb_data: cb_data })
+        Some(PeerState {
+            peer,
+            _peer_id_c: peer_id_c,
+            ice_cb_data: cb_data,
+        })
     }
 
     /// Create a peer connection. The lower ID creates the offer (deterministic).
-    pub fn create_peer(&mut self, ctx: *mut mello_sys::MelloContext, local_id: &str, member_id: &str) {
-        if self.peers.contains_key(member_id) { return; }
-        if local_id == member_id { return; }
+    pub fn create_peer(
+        &mut self,
+        ctx: *mut mello_sys::MelloContext,
+        local_id: &str,
+        member_id: &str,
+    ) {
+        if self.peers.contains_key(member_id) {
+            return;
+        }
+        if local_id == member_id {
+            return;
+        }
 
         let state = match self.make_peer(ctx, member_id) {
             Some(s) => s,
@@ -135,17 +158,20 @@ impl VoiceMesh {
                     .to_string_lossy()
                     .into_owned();
                 log::info!("Created offer for peer {}", member_id);
-                self.outgoing_signals.push((
-                    member_id.to_string(),
-                    SignalMessage::Offer { sdp },
-                ));
+                self.outgoing_signals
+                    .push((member_id.to_string(), SignalMessage::Offer { sdp }));
             }
         } else {
             log::info!("Waiting for offer from peer {}", member_id);
         }
     }
 
-    pub fn handle_signal(&mut self, ctx: *mut mello_sys::MelloContext, from: &str, signal: SignalMessage) {
+    pub fn handle_signal(
+        &mut self,
+        ctx: *mut mello_sys::MelloContext,
+        from: &str,
+        signal: SignalMessage,
+    ) {
         match signal {
             SignalMessage::Offer { sdp } => {
                 if !self.peers.contains_key(from) {
@@ -158,30 +184,35 @@ impl VoiceMesh {
 
                 let state = self.peers.get(from).unwrap();
                 let sdp_c = CString::new(sdp).unwrap();
-                let answer_ptr = unsafe {
-                    mello_sys::mello_peer_create_answer(state.peer, sdp_c.as_ptr())
-                };
+                let answer_ptr =
+                    unsafe { mello_sys::mello_peer_create_answer(state.peer, sdp_c.as_ptr()) };
                 if !answer_ptr.is_null() {
                     let answer = unsafe { CStr::from_ptr(answer_ptr) }
                         .to_string_lossy()
                         .into_owned();
                     log::info!("Created answer for peer {}", from);
-                    self.outgoing_signals.push((
-                        from.to_string(),
-                        SignalMessage::Answer { sdp: answer },
-                    ));
+                    self.outgoing_signals
+                        .push((from.to_string(), SignalMessage::Answer { sdp: answer }));
                 }
             }
             SignalMessage::Answer { sdp } => {
                 if let Some(state) = self.peers.get(from) {
                     let sdp_c = CString::new(sdp).unwrap();
                     unsafe {
-                        mello_sys::mello_peer_set_remote_description(state.peer, sdp_c.as_ptr(), false);
+                        mello_sys::mello_peer_set_remote_description(
+                            state.peer,
+                            sdp_c.as_ptr(),
+                            false,
+                        );
                     }
                     log::info!("Set remote answer from peer {}", from);
                 }
             }
-            SignalMessage::IceCandidate { candidate, sdp_mid, sdp_mline_index } => {
+            SignalMessage::IceCandidate {
+                candidate,
+                sdp_mid,
+                sdp_mline_index,
+            } => {
                 if let Some(state) = self.peers.get(from) {
                     let cand_c = CString::new(candidate).unwrap();
                     let mid_c = CString::new(sdp_mid).unwrap();
@@ -231,15 +262,12 @@ impl VoiceMesh {
                 let size = unsafe {
                     mello_sys::mello_peer_recv(state.peer, buf.as_mut_ptr(), buf.len() as i32)
                 };
-                if size <= 0 { break; }
+                if size <= 0 {
+                    break;
+                }
                 let peer_id_c = std::ffi::CString::new(peer_id.as_str()).unwrap();
                 unsafe {
-                    mello_sys::mello_voice_feed_packet(
-                        ctx,
-                        peer_id_c.as_ptr(),
-                        buf.as_ptr(),
-                        size,
-                    );
+                    mello_sys::mello_voice_feed_packet(ctx, peer_id_c.as_ptr(), buf.as_ptr(), size);
                 }
             }
         }
@@ -247,9 +275,13 @@ impl VoiceMesh {
 
     pub fn destroy_peer(&mut self, member_id: &str) {
         if let Some(state) = self.peers.remove(member_id) {
-            unsafe { mello_sys::mello_peer_destroy(state.peer); }
+            unsafe {
+                mello_sys::mello_peer_destroy(state.peer);
+            }
             if !state.ice_cb_data.is_null() {
-                unsafe { let _ = Box::from_raw(state.ice_cb_data); }
+                unsafe {
+                    let _ = Box::from_raw(state.ice_cb_data);
+                }
             }
             log::info!("Destroyed peer connection for {}", member_id);
         }
@@ -257,9 +289,13 @@ impl VoiceMesh {
 
     pub fn destroy_all_peers(&mut self) {
         for (id, state) in self.peers.drain() {
-            unsafe { mello_sys::mello_peer_destroy(state.peer); }
+            unsafe {
+                mello_sys::mello_peer_destroy(state.peer);
+            }
             if !state.ice_cb_data.is_null() {
-                unsafe { let _ = Box::from_raw(state.ice_cb_data); }
+                unsafe {
+                    let _ = Box::from_raw(state.ice_cb_data);
+                }
             }
             log::info!("Destroyed peer connection for {}", id);
         }
@@ -272,7 +308,9 @@ mod tests {
 
     #[test]
     fn signal_offer_roundtrip() {
-        let msg = SignalMessage::Offer { sdp: "v=0\r\no=- 123 456 IN IP4 0.0.0.0\r\n".into() };
+        let msg = SignalMessage::Offer {
+            sdp: "v=0\r\no=- 123 456 IN IP4 0.0.0.0\r\n".into(),
+        };
         let json = serde_json::to_string(&msg).unwrap();
         let decoded: SignalMessage = serde_json::from_str(&json).unwrap();
         match decoded {
@@ -283,7 +321,9 @@ mod tests {
 
     #[test]
     fn signal_answer_roundtrip() {
-        let msg = SignalMessage::Answer { sdp: "v=0\r\nanswer_sdp\r\n".into() };
+        let msg = SignalMessage::Answer {
+            sdp: "v=0\r\nanswer_sdp\r\n".into(),
+        };
         let json = serde_json::to_string(&msg).unwrap();
         let decoded: SignalMessage = serde_json::from_str(&json).unwrap();
         match decoded {
@@ -302,7 +342,11 @@ mod tests {
         let json = serde_json::to_string(&msg).unwrap();
         let decoded: SignalMessage = serde_json::from_str(&json).unwrap();
         match decoded {
-            SignalMessage::IceCandidate { candidate, sdp_mid, sdp_mline_index } => {
+            SignalMessage::IceCandidate {
+                candidate,
+                sdp_mid,
+                sdp_mline_index,
+            } => {
                 assert!(candidate.contains("candidate:1"));
                 assert_eq!(sdp_mid, "0");
                 assert_eq!(sdp_mline_index, 0);
@@ -313,9 +357,14 @@ mod tests {
 
     #[test]
     fn signal_json_format() {
-        let msg = SignalMessage::Offer { sdp: "test_sdp".into() };
+        let msg = SignalMessage::Offer {
+            sdp: "test_sdp".into(),
+        };
         let json = serde_json::to_string(&msg).unwrap();
-        assert!(json.contains("\"Offer\""), "variant tag should appear in JSON");
+        assert!(
+            json.contains("\"Offer\""),
+            "variant tag should appear in JSON"
+        );
         assert!(json.contains("\"sdp\""), "field name should appear in JSON");
         assert!(json.contains("test_sdp"), "sdp value should appear in JSON");
     }

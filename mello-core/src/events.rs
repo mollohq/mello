@@ -25,42 +25,93 @@ pub struct ChatMessage {
 #[derive(Debug, Clone)]
 pub enum Event {
     Restoring,
-    LoggedIn { user: User },
-    LoginFailed { reason: String },
+    LoggedIn {
+        user: User,
+    },
+    LoginFailed {
+        reason: String,
+    },
 
-    DeviceAuthed { user: User, created: bool },
-    DiscoverCrewsLoaded { crews: Vec<Crew> },
-    OnboardingReady { user: User },
-    OnboardingFailed { reason: String },
+    DeviceAuthed {
+        user: User,
+        created: bool,
+    },
+    DiscoverCrewsLoaded {
+        crews: Vec<Crew>,
+    },
+    OnboardingReady {
+        user: User,
+    },
+    OnboardingFailed {
+        reason: String,
+    },
     EmailLinked,
-    EmailLinkFailed { reason: String },
+    EmailLinkFailed {
+        reason: String,
+    },
     SocialLinked,
-    SocialLinkFailed { reason: String },
+    SocialLinkFailed {
+        reason: String,
+    },
 
-    CrewCreated { crew: Crew },
-    CrewCreateFailed { reason: String },
-    CrewsLoaded { crews: Vec<Crew> },
-    CrewJoined { crew_id: String },
-    CrewLeft { crew_id: String },
+    CrewCreated {
+        crew: Crew,
+    },
+    CrewCreateFailed {
+        reason: String,
+    },
+    CrewsLoaded {
+        crews: Vec<Crew>,
+    },
+    CrewJoined {
+        crew_id: String,
+    },
+    CrewLeft {
+        crew_id: String,
+    },
 
-    MemberJoined { crew_id: String, member: Member },
-    MemberLeft { crew_id: String, member_id: String },
-    PresenceUpdated { user_id: String, online: bool },
+    MemberJoined {
+        crew_id: String,
+        member: Member,
+    },
+    MemberLeft {
+        crew_id: String,
+        member_id: String,
+    },
+    PresenceUpdated {
+        user_id: String,
+        online: bool,
+    },
 
-    MessageReceived { message: ChatMessage },
-    MessagesLoaded { messages: Vec<ChatMessage> },
+    MessageReceived {
+        message: ChatMessage,
+    },
+    MessagesLoaded {
+        messages: Vec<ChatMessage>,
+    },
 
-    VoiceStateChanged { in_call: bool },
-    VoiceConnected { peer_id: String },
-    VoiceDisconnected { peer_id: String },
-    VoiceActivity { member_id: String, speaking: bool },
+    VoiceStateChanged {
+        in_call: bool,
+    },
+    VoiceConnected {
+        peer_id: String,
+    },
+    VoiceDisconnected {
+        peer_id: String,
+    },
+    VoiceActivity {
+        member_id: String,
+        speaking: bool,
+    },
 
     AudioDevicesListed {
         capture: Vec<AudioDevice>,
         playback: Vec<AudioDevice>,
     },
 
-    MicLevel { level: f32 },
+    MicLevel {
+        level: f32,
+    },
 
     AudioDebugStats {
         input_level: f32,
@@ -73,7 +124,10 @@ pub enum Event {
         packets_encoded: u32,
     },
 
-    SignalReceived { from: String, payload: String },
+    SignalReceived {
+        from: String,
+        payload: String,
+    },
 
     // --- Streaming ---
     StreamStarted {
@@ -95,15 +149,22 @@ pub enum Event {
     },
 
     // --- Presence & crew state ---
-
     /// Full crew state loaded for the active crew.
-    CrewStateLoaded { state: CrewState },
+    CrewStateLoaded {
+        state: CrewState,
+    },
     /// Batched sidebar update for non-active crews.
-    SidebarUpdated { crews: Vec<CrewSidebarState> },
+    SidebarUpdated {
+        crews: Vec<CrewSidebarState>,
+    },
     /// Priority crew event (stream_started, voice_joined, etc.).
-    CrewEventReceived { event: CrewEvent },
+    CrewEventReceived {
+        event: CrewEvent,
+    },
     /// A member's presence changed in the active crew.
-    PresenceChanged { change: PresenceChange },
+    PresenceChanged {
+        change: PresenceChange,
+    },
     /// Local user successfully joined a voice channel (RPC response).
     VoiceJoined {
         crew_id: String,
@@ -138,7 +199,10 @@ pub enum Event {
         channel_id: String,
     },
     /// Throttled message preview for a sidebar crew.
-    MessagePreviewUpdated { crew_id: String, messages: Vec<MessagePreview> },
+    MessagePreviewUpdated {
+        crew_id: String,
+        messages: Vec<MessagePreview>,
+    },
 
     /// Client-server protocol version mismatch.
     ProtocolMismatch {
@@ -147,5 +211,7 @@ pub enum Event {
         client_outdated: bool,
     },
 
-    Error { message: String },
+    Error {
+        message: String,
+    },
 }

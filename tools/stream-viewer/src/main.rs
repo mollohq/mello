@@ -59,7 +59,11 @@ impl FrameAssembly {
     }
 
     fn assemble(self) -> (u8, Vec<u8>) {
-        let total: usize = self.chunks.iter().map(|c| c.as_ref().map_or(0, |v| v.len())).sum();
+        let total: usize = self
+            .chunks
+            .iter()
+            .map(|c| c.as_ref().map_or(0, |v| v.len()))
+            .sum();
         let mut payload = Vec::with_capacity(total);
         for chunk in self.chunks {
             if let Some(data) = chunk {
@@ -131,7 +135,11 @@ fn main() {
         log::warn!("Failed to set SO_RCVBUF to {}B: {}", desired_buf, e);
     }
     let actual = sock_ref.recv_buffer_size().unwrap_or(0);
-    log::info!("UDP recv buffer: requested {}B, actual {}B", desired_buf, actual);
+    log::info!(
+        "UDP recv buffer: requested {}B, actual {}B",
+        desired_buf,
+        actual
+    );
 
     println!("Waiting for stream from host...");
 
@@ -188,7 +196,12 @@ fn main() {
                                 frame_w = w;
                                 frame_h = h;
                                 if !got_config {
-                                    log::info!("Config: {}x{} fps={}", frame_w, frame_h, payload[4]);
+                                    log::info!(
+                                        "Config: {}x{} fps={}",
+                                        frame_w,
+                                        frame_h,
+                                        payload[4]
+                                    );
                                     got_config = true;
                                 }
                             }
@@ -213,8 +226,12 @@ fn main() {
                     assembly.retain(|&id, a| {
                         let diff = frame_id.wrapping_sub(id);
                         if diff >= 16 {
-                            log::debug!("Evicting incomplete frame {}: {}/{} chunks",
-                                id, a.chunks_received, a.chunk_count);
+                            log::debug!(
+                                "Evicting incomplete frame {}: {}/{} chunks",
+                                id,
+                                a.chunks_received,
+                                a.chunk_count
+                            );
                             frames_dropped += 1;
                             false
                         } else {
@@ -235,8 +252,11 @@ fn main() {
                         // Initialize viewer on first keyframe (only after config received)
                         if !got_keyframe && is_keyframe && got_config {
                             got_keyframe = true;
-                            println!("First keyframe received ({} bytes, {} chunks), starting decode...",
-                                payload.len(), chunk_count);
+                            println!(
+                                "First keyframe received ({} bytes, {} chunks), starting decode...",
+                                payload.len(),
+                                chunk_count
+                            );
 
                             let config = mello_sys::MelloStreamConfig {
                                 width: frame_w,
@@ -279,7 +299,9 @@ fn main() {
 
         // Read back the latest decoded frame (one GPU sync per window frame)
         if !viewer.is_null() {
-            unsafe { mello_sys::mello_stream_present_frame(viewer); }
+            unsafe {
+                mello_sys::mello_stream_present_frame(viewer);
+            }
         }
 
         // Blit decoded frame centered into 1080p display buffer

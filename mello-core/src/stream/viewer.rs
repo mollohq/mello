@@ -222,7 +222,9 @@ mod tests {
         let mut viewer = StreamViewer::new(3);
         let pkt = StreamPacket::video(vec![1, 2, 3], 0, true, false);
         let results = viewer.feed_packet(&pkt.serialize());
-        let has_video = results.iter().any(|r| matches!(r, ViewerFeedResult::VideoPayload(_)));
+        let has_video = results
+            .iter()
+            .any(|r| matches!(r, ViewerFeedResult::VideoPayload(_)));
         assert!(has_video);
     }
 
@@ -231,7 +233,9 @@ mod tests {
         let mut viewer = StreamViewer::new(3);
         let pkt = StreamPacket::audio(vec![0xAA; 160], 0);
         let results = viewer.feed_packet(&pkt.serialize());
-        let has_audio = results.iter().any(|r| matches!(r, ViewerFeedResult::AudioPayload(_)));
+        let has_audio = results
+            .iter()
+            .any(|r| matches!(r, ViewerFeedResult::AudioPayload(_)));
         assert!(has_audio);
     }
 }

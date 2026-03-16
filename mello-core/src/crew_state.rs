@@ -368,7 +368,10 @@ mod tests {
         let change: PresenceChange = serde_json::from_str(json).unwrap();
         assert_eq!(change.crew_id, "crew_xyz");
         assert_eq!(change.user_id, "user_a");
-        assert_eq!(change.presence.status, crate::presence::PresenceStatus::Online);
+        assert_eq!(
+            change.presence.status,
+            crate::presence::PresenceStatus::Online
+        );
     }
 
     #[test]
@@ -584,13 +587,11 @@ mod tests {
             id: "ch_test".to_string(),
             name: "Test".to_string(),
             is_default: false,
-            members: vec![
-                VoiceMember {
-                    user_id: "u1".to_string(),
-                    username: "alice".to_string(),
-                    speaking: Some(true),
-                },
-            ],
+            members: vec![VoiceMember {
+                user_id: "u1".to_string(),
+                username: "alice".to_string(),
+                speaking: Some(true),
+            }],
         };
 
         let serialized = serde_json::to_string(&ch).unwrap();

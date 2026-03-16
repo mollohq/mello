@@ -6,7 +6,9 @@ fn with_ctx(f: impl FnOnce(*mut mello_sys::MelloContext)) {
     let ctx = unsafe { mello_sys::mello_init() };
     assert!(!ctx.is_null(), "mello_init failed");
     f(ctx);
-    unsafe { mello_sys::mello_destroy(ctx); }
+    unsafe {
+        mello_sys::mello_destroy(ctx);
+    }
 }
 
 #[test]
@@ -27,8 +29,10 @@ fn voice_start_stop_capture() {
 fn voice_mute_deafen() {
     with_ctx(|ctx| unsafe {
         mello_sys::mello_voice_set_mute(ctx, true);
-        assert!(!mello_sys::mello_voice_is_speaking(ctx),
-                "should not be speaking when muted");
+        assert!(
+            !mello_sys::mello_voice_is_speaking(ctx),
+            "should not be speaking when muted"
+        );
 
         mello_sys::mello_voice_set_mute(ctx, false);
 
@@ -91,10 +95,16 @@ fn audio_loopback_packet_round_trip() {
         let peer_id = std::ffi::CString::new("loopback_test").unwrap();
         // 4-byte sequence header + some Opus-like payload
         let mut packet = vec![0u8; 100];
-        packet[0] = 0x00; packet[1] = 0x00; packet[2] = 0x00; packet[3] = 0x01;
+        packet[0] = 0x00;
+        packet[1] = 0x00;
+        packet[2] = 0x00;
+        packet[3] = 0x01;
 
         let r = mello_sys::mello_voice_feed_packet(
-            ctx, peer_id.as_ptr(), packet.as_ptr(), packet.len() as i32
+            ctx,
+            peer_id.as_ptr(),
+            packet.as_ptr(),
+            packet.len() as i32,
         );
         // Should not crash regardless of result
         let _ = r;

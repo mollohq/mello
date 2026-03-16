@@ -25,7 +25,10 @@ impl PkceChallenge {
         let digest = Sha256::digest(verifier.as_bytes());
         let challenge = URL_SAFE_NO_PAD.encode(digest);
 
-        Self { verifier, challenge }
+        Self {
+            verifier,
+            challenge,
+        }
     }
 }
 
@@ -45,8 +48,7 @@ impl OAuthFlow {
         let server = Server::http(format!("127.0.0.1:{REDIRECT_PORT}"))
             .map_err(|e| OAuthError::ServerStart(e.to_string()))?;
 
-        webbrowser::open(auth_url)
-            .map_err(|e| OAuthError::Browser(e.to_string()))?;
+        webbrowser::open(auth_url).map_err(|e| OAuthError::Browser(e.to_string()))?;
 
         match mode {
             OAuthMode::AuthorizationCode => Self::wait_for_code(&server),

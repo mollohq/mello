@@ -13,8 +13,13 @@ struct IceRelay {
 static RELAY_A_TO_B: std::sync::OnceLock<Arc<Mutex<IceRelay>>> = std::sync::OnceLock::new();
 static RELAY_B_TO_A: std::sync::OnceLock<Arc<Mutex<IceRelay>>> = std::sync::OnceLock::new();
 
-unsafe extern "C" fn ice_cb_a(_ud: *mut std::ffi::c_void, candidate: *const mello_sys::MelloIceCandidate) {
-    if candidate.is_null() { return; }
+unsafe extern "C" fn ice_cb_a(
+    _ud: *mut std::ffi::c_void,
+    candidate: *const mello_sys::MelloIceCandidate,
+) {
+    if candidate.is_null() {
+        return;
+    }
     let c = &*candidate;
     let cand = CStr::from_ptr(c.candidate).to_string_lossy().into_owned();
     let mid = CStr::from_ptr(c.sdp_mid).to_string_lossy().into_owned();
@@ -24,8 +29,13 @@ unsafe extern "C" fn ice_cb_a(_ud: *mut std::ffi::c_void, candidate: *const mell
     }
 }
 
-unsafe extern "C" fn ice_cb_b(_ud: *mut std::ffi::c_void, candidate: *const mello_sys::MelloIceCandidate) {
-    if candidate.is_null() { return; }
+unsafe extern "C" fn ice_cb_b(
+    _ud: *mut std::ffi::c_void,
+    candidate: *const mello_sys::MelloIceCandidate,
+) {
+    if candidate.is_null() {
+        return;
+    }
     let c = &*candidate;
     let cand = CStr::from_ptr(c.candidate).to_string_lossy().into_owned();
     let mid = CStr::from_ptr(c.sdp_mid).to_string_lossy().into_owned();
@@ -49,7 +59,9 @@ fn drain_candidates(
             sdp_mid: CString::new(mid).unwrap().into_raw(),
             sdp_mline_index: idx,
         };
-        unsafe { mello_sys::mello_peer_add_ice_candidate(target_peer, &mc); }
+        unsafe {
+            mello_sys::mello_peer_add_ice_candidate(target_peer, &mc);
+        }
         // Reclaim the CStrings
         unsafe {
             let _ = CString::from_raw(mc.candidate as *mut _);
@@ -60,8 +72,10 @@ fn drain_candidates(
 
 #[test]
 fn two_peers_exchange_packets() {
-    let relay_a_to_b = RELAY_A_TO_B.get_or_init(|| Arc::new(Mutex::new(IceRelay { candidates: vec![] })));
-    let relay_b_to_a = RELAY_B_TO_A.get_or_init(|| Arc::new(Mutex::new(IceRelay { candidates: vec![] })));
+    let relay_a_to_b =
+        RELAY_A_TO_B.get_or_init(|| Arc::new(Mutex::new(IceRelay { candidates: vec![] })));
+    let relay_b_to_a =
+        RELAY_B_TO_A.get_or_init(|| Arc::new(Mutex::new(IceRelay { candidates: vec![] })));
 
     let ctx_a = unsafe { mello_sys::mello_init() };
     let ctx_b = unsafe { mello_sys::mello_init() };
@@ -101,10 +115,13 @@ fn two_peers_exchange_packets() {
 
     // A sets B's answer as remote description
     let answer_c = CString::new(answer_sdp).unwrap();
-    let result = unsafe {
-        mello_sys::mello_peer_set_remote_description(peer_a, answer_c.as_ptr(), false)
-    };
-    assert_eq!(result, mello_sys::MelloResult_MELLO_OK, "set remote desc failed");
+    let result =
+        unsafe { mello_sys::mello_peer_set_remote_description(peer_a, answer_c.as_ptr(), false) };
+    assert_eq!(
+        result,
+        mello_sys::MelloResult_MELLO_OK,
+        "set remote desc failed"
+    );
 
     // Exchange ICE candidates and wait for connection
     let mut connected = false;
@@ -134,27 +151,45 @@ fn two_peers_exchange_packets() {
 
     // B polls for the received packet
     let mut recv_buf = [0u8; 4000];
-    let recv_size = unsafe {
-        mello_sys::mello_peer_recv(peer_b, recv_buf.as_mut_ptr(), recv_buf.len() as i32)
-    };
-    assert!(recv_size > 0, "peer B received no data (size={})", recv_size);
-    assert_eq!(recv_size as usize, test_data.len(), "received size mismatch");
-    assert_eq!(&recv_buf[..recv_size as usize], &test_data[..], "received data mismatch");
+    let recv_size =
+        unsafe { mello_sys::mello_peer_recv(peer_b, recv_buf.as_mut_ptr(), recv_buf.len() as i32) };
+    assert!(
+        recv_size > 0,
+        "peer B received no data (size={})",
+        recv_size
+    );
+    assert_eq!(
+        recv_size as usize,
+        test_data.len(),
+        "received size mismatch"
+    );
+    assert_eq!(
+        &recv_buf[..recv_size as usize],
+        &test_data[..],
+        "received data mismatch"
+    );
 
     // B sends back to A
     let reply: Vec<u8> = vec![0xDE, 0xAD, 0xBE, 0xEF];
     let send_result = unsafe {
         mello_sys::mello_peer_send_unreliable(peer_b, reply.as_ptr(), reply.len() as i32)
     };
-    assert_eq!(send_result, mello_sys::MelloResult_MELLO_OK, "reply send failed");
+    assert_eq!(
+        send_result,
+        mello_sys::MelloResult_MELLO_OK,
+        "reply send failed"
+    );
 
     thread::sleep(Duration::from_millis(500));
 
-    let recv_size = unsafe {
-        mello_sys::mello_peer_recv(peer_a, recv_buf.as_mut_ptr(), recv_buf.len() as i32)
-    };
+    let recv_size =
+        unsafe { mello_sys::mello_peer_recv(peer_a, recv_buf.as_mut_ptr(), recv_buf.len() as i32) };
     assert_eq!(recv_size as usize, reply.len(), "reply size mismatch");
-    assert_eq!(&recv_buf[..recv_size as usize], &reply[..], "reply data mismatch");
+    assert_eq!(
+        &recv_buf[..recv_size as usize],
+        &reply[..],
+        "reply data mismatch"
+    );
 
     // Cleanup
     unsafe {
@@ -169,15 +204,18 @@ fn two_peers_exchange_packets() {
 fn context_init_destroy() {
     let ctx = unsafe { mello_sys::mello_init() };
     assert!(!ctx.is_null());
-    unsafe { mello_sys::mello_destroy(ctx); }
+    unsafe {
+        mello_sys::mello_destroy(ctx);
+    }
 }
 
 #[test]
 fn peer_null_safety() {
     assert!(unsafe { mello_sys::mello_peer_create_offer(std::ptr::null_mut()) }.is_null());
-    assert!(unsafe {
-        mello_sys::mello_peer_create_answer(std::ptr::null_mut(), std::ptr::null())
-    }.is_null());
+    assert!(
+        unsafe { mello_sys::mello_peer_create_answer(std::ptr::null_mut(), std::ptr::null()) }
+            .is_null()
+    );
     assert!(!unsafe { mello_sys::mello_peer_is_connected(std::ptr::null_mut()) });
 
     let mut buf = [0u8; 100];
@@ -201,9 +239,13 @@ fn peer_create_destroy_many() {
     }
 
     for peer in peers {
-        unsafe { mello_sys::mello_peer_destroy(peer); }
+        unsafe {
+            mello_sys::mello_peer_destroy(peer);
+        }
     }
-    unsafe { mello_sys::mello_destroy(ctx); }
+    unsafe {
+        mello_sys::mello_destroy(ctx);
+    }
 }
 
 #[test]
@@ -218,7 +260,10 @@ fn voice_null_context_safety() {
         assert_eq!(mello_sys::mello_voice_get_input_level(null_ctx), 0.0);
 
         let mut buf = [0u8; 100];
-        assert_eq!(mello_sys::mello_voice_get_packet(null_ctx, buf.as_mut_ptr(), 100), 0);
+        assert_eq!(
+            mello_sys::mello_voice_get_packet(null_ctx, buf.as_mut_ptr(), 100),
+            0
+        );
 
         let peer_id = CString::new("test").unwrap();
         let _ = mello_sys::mello_voice_feed_packet(null_ctx, peer_id.as_ptr(), buf.as_ptr(), 10);

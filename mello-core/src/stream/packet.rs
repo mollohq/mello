@@ -91,7 +91,12 @@ impl StreamPacket {
     }
 
     pub fn fec(parity_payload: Vec<u8>, sequence: u16) -> Self {
-        Self::new(PacketType::Fec, PacketFlags::empty(), sequence, parity_payload)
+        Self::new(
+            PacketType::Fec,
+            PacketFlags::empty(),
+            sequence,
+            parity_payload,
+        )
     }
 
     pub fn control(payload: Vec<u8>, sequence: u16) -> Self {

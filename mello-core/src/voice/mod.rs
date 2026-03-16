@@ -45,10 +45,14 @@ unsafe extern "C" fn libmello_log_bridge(
     tag: *const std::ffi::c_char,
     message: *const std::ffi::c_char,
 ) {
-    let tag = if tag.is_null() { "?" } else {
+    let tag = if tag.is_null() {
+        "?"
+    } else {
         std::ffi::CStr::from_ptr(tag).to_str().unwrap_or("?")
     };
-    let msg = if message.is_null() { "" } else {
+    let msg = if message.is_null() {
+        ""
+    } else {
         std::ffi::CStr::from_ptr(message).to_str().unwrap_or("")
     };
     let target = &format!("libmello::{}", tag);
@@ -95,7 +99,9 @@ impl VoiceManager {
     }
 
     pub fn join_voice(&mut self, local_id: &str, members: &[String]) {
-        if self.ctx.is_null() { return; }
+        if self.ctx.is_null() {
+            return;
+        }
 
         self.mesh.init(local_id, members);
 
@@ -135,9 +141,13 @@ impl VoiceManager {
     }
 
     pub fn leave_voice(&mut self) {
-        if !self.active { return; }
+        if !self.active {
+            return;
+        }
 
-        unsafe { mello_sys::mello_voice_stop_capture(self.ctx); }
+        unsafe {
+            mello_sys::mello_voice_stop_capture(self.ctx);
+        }
         self.mesh.destroy_all_peers();
         self.active = false;
         log::info!("Voice stopped");
@@ -146,19 +156,25 @@ impl VoiceManager {
     pub fn set_mute(&mut self, muted: bool) {
         self.muted = muted;
         if !self.ctx.is_null() {
-            unsafe { mello_sys::mello_voice_set_mute(self.ctx, muted); }
+            unsafe {
+                mello_sys::mello_voice_set_mute(self.ctx, muted);
+            }
         }
     }
 
     pub fn set_deafen(&mut self, deafened: bool) {
         self.deafened = deafened;
         if !self.ctx.is_null() {
-            unsafe { mello_sys::mello_voice_set_deafen(self.ctx, deafened); }
+            unsafe {
+                mello_sys::mello_voice_set_deafen(self.ctx, deafened);
+            }
         }
     }
 
     pub fn set_loopback(&mut self, enabled: bool) {
-        if self.ctx.is_null() { return; }
+        if self.ctx.is_null() {
+            return;
+        }
         self.loopback = enabled;
 
         if enabled && !self.active {
@@ -169,7 +185,9 @@ impl VoiceManager {
                 log::info!("Loopback enabled (started capture for mic test)");
             }
         } else if !enabled && !self.active {
-            unsafe { mello_sys::mello_voice_stop_capture(self.ctx); }
+            unsafe {
+                mello_sys::mello_voice_stop_capture(self.ctx);
+            }
             log::info!("Loopback disabled (stopped mic test capture)");
         } else {
             log::info!("Loopback {}", if enabled { "enabled" } else { "disabled" });
@@ -177,21 +195,28 @@ impl VoiceManager {
     }
 
     pub fn list_capture_devices(&self) -> Vec<AudioDevice> {
-        if self.ctx.is_null() { return vec![]; }
+        if self.ctx.is_null() {
+            return vec![];
+        }
         self.list_devices(true)
     }
 
     pub fn list_playback_devices(&self) -> Vec<AudioDevice> {
-        if self.ctx.is_null() { return vec![]; }
+        if self.ctx.is_null() {
+            return vec![];
+        }
         self.list_devices(false)
     }
 
     fn list_devices(&self, capture: bool) -> Vec<AudioDevice> {
-        let mut raw = vec![mello_sys::MelloDevice {
-            id: std::ptr::null(),
-            name: std::ptr::null(),
-            is_default: false,
-        }; MAX_DEVICES];
+        let mut raw = vec![
+            mello_sys::MelloDevice {
+                id: std::ptr::null(),
+                name: std::ptr::null(),
+                is_default: false,
+            };
+            MAX_DEVICES
+        ];
 
         let count = unsafe {
             if capture {
@@ -206,12 +231,20 @@ impl VoiceManager {
             let id = if raw[i].id.is_null() {
                 String::new()
             } else {
-                unsafe { std::ffi::CStr::from_ptr(raw[i].id).to_string_lossy().into_owned() }
+                unsafe {
+                    std::ffi::CStr::from_ptr(raw[i].id)
+                        .to_string_lossy()
+                        .into_owned()
+                }
             };
             let name = if raw[i].name.is_null() {
                 String::new()
             } else {
-                unsafe { std::ffi::CStr::from_ptr(raw[i].name).to_string_lossy().into_owned() }
+                unsafe {
+                    std::ffi::CStr::from_ptr(raw[i].name)
+                        .to_string_lossy()
+                        .into_owned()
+                }
             };
             devices.push(AudioDevice {
                 id,
@@ -220,12 +253,16 @@ impl VoiceManager {
             });
         }
 
-        unsafe { mello_sys::mello_free_device_list(raw.as_mut_ptr(), count); }
+        unsafe {
+            mello_sys::mello_free_device_list(raw.as_mut_ptr(), count);
+        }
         devices
     }
 
     pub fn set_capture_device(&mut self, device_id: &str) {
-        if self.ctx.is_null() { return; }
+        if self.ctx.is_null() {
+            return;
+        }
         let c_id = CString::new(device_id).unwrap_or_default();
         let result = unsafe { mello_sys::mello_set_audio_input(self.ctx, c_id.as_ptr()) };
         if result != mello_sys::MelloResult_MELLO_OK {
@@ -236,7 +273,9 @@ impl VoiceManager {
     }
 
     pub fn set_playback_device(&mut self, device_id: &str) {
-        if self.ctx.is_null() { return; }
+        if self.ctx.is_null() {
+            return;
+        }
         let c_id = CString::new(device_id).unwrap_or_default();
         let result = unsafe { mello_sys::mello_set_audio_output(self.ctx, c_id.as_ptr()) };
         if result != mello_sys::MelloResult_MELLO_OK {
@@ -247,13 +286,18 @@ impl VoiceManager {
     }
 
     pub fn get_input_level(&self) -> f32 {
-        if self.ctx.is_null() { return 0.0; }
+        if self.ctx.is_null() {
+            return 0.0;
+        }
         unsafe { mello_sys::mello_voice_get_input_level(self.ctx) }
     }
 
     pub fn set_debug_mode(&mut self, enabled: bool) {
         self.debug_mode = enabled;
-        log::info!("Audio debug mode {}", if enabled { "enabled" } else { "disabled" });
+        log::info!(
+            "Audio debug mode {}",
+            if enabled { "enabled" } else { "disabled" }
+        );
     }
 
     pub fn is_active(&self) -> bool {
@@ -276,7 +320,9 @@ impl VoiceManager {
 
     /// Called when a new member joins the crew while voice is active
     pub fn on_member_joined(&mut self, local_id: &str, member_id: &str) {
-        if !self.active { return; }
+        if !self.active {
+            return;
+        }
         self.mesh.create_peer(self.ctx, local_id, member_id);
     }
 
@@ -291,8 +337,12 @@ impl VoiceManager {
     /// Poll audio: read encoded packets from capture and send to all peers,
     /// and feed received packets from peers to the playback pipeline.
     pub fn tick(&mut self) {
-        if self.ctx.is_null() { return; }
-        if !self.active && !self.loopback { return; }
+        if self.ctx.is_null() {
+            return;
+        }
+        if !self.active && !self.loopback {
+            return;
+        }
 
         self.tick_counter = self.tick_counter.wrapping_add(1);
 
@@ -303,7 +353,9 @@ impl VoiceManager {
 
         if self.debug_mode && (self.tick_counter % 3) == 0 {
             let mut stats: mello_sys::MelloDebugStats = unsafe { std::mem::zeroed() };
-            unsafe { mello_sys::mello_get_debug_stats(self.ctx, &mut stats); }
+            unsafe {
+                mello_sys::mello_get_debug_stats(self.ctx, &mut stats);
+            }
             let _ = self.event_tx.send(Event::AudioDebugStats {
                 input_level: stats.input_level,
                 silero_vad_prob: stats.silero_vad_prob,
@@ -327,7 +379,9 @@ impl VoiceManager {
                     PACKET_BUF_SIZE as i32,
                 )
             };
-            if size <= 0 { break; }
+            if size <= 0 {
+                break;
+            }
 
             let pkt = &buf[..size as usize];
 
