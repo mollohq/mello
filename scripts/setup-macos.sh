@@ -30,27 +30,19 @@ else
     echo "vcpkg already bootstrapped, skipping"
 fi
 
-# --- rnnoise ---
+# --- rnnoise (submodule — model data downloaded by CMake) ---
 RNNOISE_DIR="$THIRD_PARTY/rnnoise"
 if [ ! -d "$RNNOISE_DIR/src" ]; then
     echo ""
-    echo "--- Cloning rnnoise ---"
-    mkdir -p "$THIRD_PARTY"
-    git clone --depth 1 https://github.com/xiph/rnnoise.git "$RNNOISE_DIR"
-fi
-
-# Download rnnoise model data (generates rnnoise_data.h/c)
-if [ ! -f "$RNNOISE_DIR/src/rnnoise_data.h" ]; then
-    echo "--- Downloading rnnoise model data ---"
-    cd "$RNNOISE_DIR"
-    bash download_model.sh
+    echo "--- Initializing rnnoise submodule ---"
     cd "$ROOT_DIR"
+    git submodule update --init libmello/third_party/rnnoise
 else
-    echo "rnnoise model data already present, skipping"
+    echo "rnnoise submodule already present, skipping"
 fi
 
 # --- ONNX Runtime (macOS arm64) ---
-ORT_VERSION="1.23.0"
+ORT_VERSION="1.23.2"
 ORT_DIR_NAME="onnxruntime-osx-arm64-${ORT_VERSION}"
 ORT_DIR="$THIRD_PARTY/onnxruntime/$ORT_DIR_NAME"
 if [ ! -d "$ORT_DIR/lib" ]; then
