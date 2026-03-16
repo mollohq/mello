@@ -51,6 +51,7 @@ dist/
 
 # Third-party vendored source
 libmello/third_party/onnxruntime/
+libmello/third_party/rnnoise/src/rnnoise_data.*
 libmello/models/
 
 # Tarball downloads
