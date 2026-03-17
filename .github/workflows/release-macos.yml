@@ -115,7 +115,6 @@ jobs:
           vpk download github --repoUrl https://github.com/mollohq/mello --outputDir vpk-out --channel $RELEASE_CHANNEL --token ${{ secrets.GH_PAT }}
           vpk pack \
             --packId m3llo \
-            --bundleId app.m3llo.macos \
             --packVersion $RELEASE_VERSION \
             --packDir dist \
             --mainExe mello \
