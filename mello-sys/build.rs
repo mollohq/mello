@@ -196,6 +196,7 @@ fn main() {
             println!("cargo:rustc-link-lib=framework=AudioToolbox");
             println!("cargo:rustc-link-lib=framework=CoreAudio");
             println!("cargo:rustc-link-lib=framework=CoreFoundation");
+            println!("cargo:rustc-link-lib=framework=AVFoundation");
             println!("cargo:rustc-link-lib=framework=Security");
             // C++ standard library
             println!("cargo:rustc-link-lib=dylib=c++");

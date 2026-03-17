@@ -127,7 +127,8 @@ jobs:
             --signInstallIdentity "Developer ID Installer: ${{ secrets.APPLE_TEAM_NAME }}" \
             --notaryProfile "${{ env.NOTARY_PROFILE_NAME }}" \
             --keychain "$KEYCHAIN_PATH" \
-            --signEntitlements client/macos/release.entitlements
+            --signEntitlements client/macos/release.entitlements \
+            --plist client/macos/Info.plist
 
       - name: Upload to GitHub Release
         if: github.event_name == 'release'

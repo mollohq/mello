@@ -55,6 +55,8 @@ export component MainWindow inherits Window {
     in-out property <bool> deafened: false;
     in-out property <bool> in-voice: false;
     in property <[VoiceChannelData]> voice-channels: [];
+    in-out property <bool> mic-permission-granted: true;
+    in-out property <bool> mic-permission-denied: false;
 
     // --- Settings ---
     in-out property <bool> settings-open: false;
@@ -139,6 +141,8 @@ export component MainWindow inherits Window {
     // Voice channel callbacks
     callback join-voice-channel(string);
     callback toggle-voice-channel(string);
+    callback request-mic-permission();
+    callback open-mic-settings();
     // Settings change callbacks
     callback setting-changed-start-on-boot(bool);
     callback setting-changed-start-minimized(bool);
@@ -252,6 +256,7 @@ export component MainWindow inherits Window {
 
                 VoiceChannelView {
                     voice-channels: root.voice-channels;
+                    mic-permission-granted: root.mic-permission-granted;
                     join-voice-channel(id) => { root.join-voice-channel(id); }
                     toggle-channel(id) => { root.toggle-voice-channel(id); }
                 }
@@ -263,6 +268,8 @@ export component MainWindow inherits Window {
                     mic-muted <=> root.mic-muted;
                     deafened <=> root.deafened;
                     in-voice: root.in-voice;
+                    mic-permission-granted: root.mic-permission-granted;
+                    mic-permission-denied: root.mic-permission-denied;
                     presence-status <=> root.presence-status;
                     mic-toggled => { root.mic-toggle(); }
                     deafen-toggled => { root.deafen-toggle(); }
@@ -271,6 +278,8 @@ export component MainWindow inherits Window {
                     presence-changed(status) => { root.presence-changed(status); }
                     theme-toggled => { root.theme-toggled(); }
                     settings-clicked => { root.settings-requested(); }
+                    request-mic-permission => { root.request-mic-permission(); }
+                    open-mic-settings => { root.open-mic-settings(); }
                     debug-toggled => {
                         root.debug-open = !root.debug-open;
                         root.debug-toggled();

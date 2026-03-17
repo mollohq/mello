@@ -169,6 +169,7 @@ if(WIN32)
         src/audio/playback_wasapi.cpp
         src/audio/audio_backend_wasapi.cpp
         src/audio/device_enumerator_wasapi.cpp
+        src/audio/mic_permission_stub.cpp
     )
 elseif(APPLE)
     list(APPEND MELLO_SOURCES
@@ -176,11 +177,13 @@ elseif(APPLE)
         src/audio/playback_coreaudio.cpp
         src/audio/audio_backend_coreaudio.cpp
         src/audio/device_enumerator_coreaudio.cpp
+        src/audio/mic_permission_macos.mm
     )
 else()
     list(APPEND MELLO_SOURCES
         src/audio/audio_backend_stub.cpp
         src/audio/device_enumerator_stub.cpp
+        src/audio/mic_permission_stub.cpp
     )
 endif()
 
@@ -267,6 +270,7 @@ elseif(APPLE)
         "-framework AudioToolbox"
         "-framework CoreAudio"
         "-framework CoreFoundation"
+        "-framework AVFoundation"
     )
 endif()
 
