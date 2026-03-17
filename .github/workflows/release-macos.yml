@@ -10,12 +10,18 @@ on:
         description: "Why are you triggering a manual build?"
         required: true
         default: "I need a binary package for testing!"
+      version:
+        description: "Override version number (optional, e.g., 2025.11.2)"
+        required: false
+        default: ""
 
 permissions:
   contents: write
 
 env:
   RELEASE_CHANNEL: "osx-arm64-stable"
+  CODE_SIGNING_KEYCHAIN: "mello_code_signing"
+  NOTARY_PROFILE_NAME: "mello-signing-notary-profile"
 
 jobs:
   build-macos:
@@ -29,20 +35,46 @@ jobs:
           submodules: recursive
           token: ${{ secrets.GH_PAT }}
 
-      - name: Set version from release
-        if: github.event_name == 'release'
+      - name: Set version
         run: |
-          version="${{ github.event.release.tag_name }}"
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ] && [ -n "${{ inputs.version }}" ]; then
+            version="${{ inputs.version }}"
+          elif [ "${{ github.event_name }}" == "release" ]; then
+            version="${{ github.event.release.tag_name }}"
+          else
+            version="0.0.${{ github.run_number }}"
+          fi
           version="${version#v}"
           echo "RELEASE_VERSION=$version" >> $GITHUB_ENV
 
-      - name: Set dev version
-        if: github.event_name == 'workflow_dispatch'
-        run: |
-          echo "RELEASE_VERSION=0.0.${{ github.run_number }}" >> $GITHUB_ENV
-
       - name: Stamp version in Cargo.toml
         run: sed -i'' -e "s/^version = \"[^\"]*\"/version = \"$RELEASE_VERSION\"/" Cargo.toml
+
+      - name: Import build certificate
+        uses: apple-actions/import-codesign-certs@v2
+        with:
+          keychain: ${{ env.CODE_SIGNING_KEYCHAIN }}
+          p12-file-base64: ${{ secrets.BUILD_CERTIFICATE_BASE64 }}
+          p12-password: ${{ secrets.P12_PASSWORD }}
+
+      - name: Import installer certificate
+        uses: apple-actions/import-codesign-certs@v2
+        with:
+          keychain: ${{ env.CODE_SIGNING_KEYCHAIN }}
+          create-keychain: false
+          p12-file-base64: ${{ secrets.INSTALLER_CERTIFICATE_BASE64 }}
+          p12-password: ${{ secrets.P12_PASSWORD }}
+
+      - name: Store notarytool credentials
+        env:
+          KEYCHAIN_PATH: "~/Library/Keychains/${{ env.CODE_SIGNING_KEYCHAIN }}.keychain-db"
+        run: |
+          xcrun notarytool store-credentials \
+            --apple-id "${{ secrets.APPLE_ID }}" \
+            --team-id "${{ secrets.APPLE_TEAM }}" \
+            --password "${{ secrets.APPLE_PASSWORD }}" \
+            --keychain "${{ env.KEYCHAIN_PATH }}" \
+            "${{ env.NOTARY_PROFILE_NAME }}"
 
       - name: Build client
         run: cargo build --release --features production
@@ -64,34 +96,23 @@ jobs:
           cp libmello/third_party/onnxruntime/onnxruntime-osx-arm64-*/lib/libonnxruntime*.dylib dist/
           cp $(find target/release/build -name silero_vad.onnx | head -1) dist/
 
-      - name: Import Apple certificates
-        uses: apple-actions/import-codesign-certs@v2
-        with:
-          p12-file-base64: ${{ secrets.MACOS_BUILD_AND_INSTALLER_CERTIFICATES }}
-          p12-password: ${{ secrets.P12_PASSWORD }}
-
-      - name: Store notarytool credentials
+      - name: Codesign external libraries
         run: |
-          xcrun notarytool store-credentials "AC_PASSWORD" \
-            --apple-id "${{ secrets.APPLE_ID }}" \
-            --team-id "${{ secrets.APPLE_TEAM }}" \
-            --password "${{ secrets.APPLE_PASSWORD }}"
-
-      - name: Codesign ONNX Runtime dylib
-        run: |
+          echo "Signing ONNX Runtime libraries..."
           for dylib in dist/libonnxruntime*.dylib; do
-            codesign --force --options runtime --timestamp \
+            codesign --force --verbose --options runtime --timestamp \
               --sign "Developer ID Application: ${{ secrets.APPLE_TEAM_NAME }}" \
               "$dylib"
           done
 
       - name: Velopack Package
+        env:
+          KEYCHAIN_PATH: "~/Library/Keychains/${{ env.CODE_SIGNING_KEYCHAIN }}.keychain-db"
         run: |
-          dotnet tool install -g vpk
           mkdir -p vpk-out
           vpk download github --repoUrl https://github.com/mollohq/mello --outputDir vpk-out --channel $RELEASE_CHANNEL --token ${{ secrets.GH_PAT }}
           vpk pack \
-            --packId Mello \
+            --packId app.m3llo.macos \
             --packVersion $RELEASE_VERSION \
             --packDir dist \
             --mainExe mello \
@@ -101,7 +122,8 @@ jobs:
             --icon client/assets/icons/mello.icns \
             --signAppIdentity "Developer ID Application: ${{ secrets.APPLE_TEAM_NAME }}" \
             --signInstallIdentity "Developer ID Installer: ${{ secrets.APPLE_TEAM_NAME }}" \
-            --notaryProfile "AC_PASSWORD" \
+            --notaryProfile "${{ env.NOTARY_PROFILE_NAME }}" \
+            --keychain "${{ env.KEYCHAIN_PATH }}" \
             --signEntitlements client/macos/entitlements.plist
 
       - name: Upload to GitHub Release
@@ -122,4 +144,4 @@ jobs:
       - name: Cleanup keychain
         if: always()
         run: |
-          security delete-keychain signing_temp.keychain || true
+          security delete-keychain ${{ env.CODE_SIGNING_KEYCHAIN }}.keychain-db || true
