@@ -68,14 +68,13 @@ jobs:
           p12-password: ${{ secrets.P12_PASSWORD }}
 
       - name: Store notarytool credentials
-        env:
-          KEYCHAIN_PATH: "~/Library/Keychains/${{ env.CODE_SIGNING_KEYCHAIN }}.keychain-db"
         run: |
+          KEYCHAIN_PATH="$HOME/Library/Keychains/${{ env.CODE_SIGNING_KEYCHAIN }}.keychain-db"
           xcrun notarytool store-credentials \
             --apple-id "${{ secrets.APPLE_ID }}" \
             --team-id "${{ secrets.APPLE_TEAM }}" \
             --password "${{ secrets.APPLE_PASSWORD }}" \
-            --keychain "${{ env.KEYCHAIN_PATH }}" \
+            --keychain "$KEYCHAIN_PATH" \
             "${{ env.NOTARY_PROFILE_NAME }}"
 
       - name: Build client
@@ -108,9 +107,8 @@ jobs:
           done
 
       - name: Velopack Package
-        env:
-          KEYCHAIN_PATH: "~/Library/Keychains/${{ env.CODE_SIGNING_KEYCHAIN }}.keychain-db"
         run: |
+          KEYCHAIN_PATH="$HOME/Library/Keychains/${{ env.CODE_SIGNING_KEYCHAIN }}.keychain-db"
           mkdir -p vpk-out
           vpk download github --repoUrl https://github.com/mollohq/mello --outputDir vpk-out --channel $RELEASE_CHANNEL --token ${{ secrets.GH_PAT }}
           vpk pack \
@@ -125,8 +123,8 @@ jobs:
             --signAppIdentity "Developer ID Application: ${{ secrets.APPLE_TEAM_NAME }}" \
             --signInstallIdentity "Developer ID Installer: ${{ secrets.APPLE_TEAM_NAME }}" \
             --notaryProfile "${{ env.NOTARY_PROFILE_NAME }}" \
-            --keychain "${{ env.KEYCHAIN_PATH }}" \
-            --signEntitlements client/macos/entitlements.plist
+            --keychain "$KEYCHAIN_PATH" \
+            --signEntitlements client/macos/release.entitlements
 
       - name: Upload to GitHub Release
         if: github.event_name == 'release'
