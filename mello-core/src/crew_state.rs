@@ -114,6 +114,10 @@ pub struct StreamState {
     pub viewer_count: u32,
     #[serde(default)]
     pub thumbnail_url: Option<String>,
+    #[serde(default)]
+    pub width: u32,
+    #[serde(default)]
+    pub height: u32,
 }
 
 // ---------------------------------------------------------------------------

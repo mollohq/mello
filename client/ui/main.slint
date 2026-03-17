@@ -92,6 +92,10 @@ export component MainWindow inherits Window {
     in property <string> stream-label: "";
     in property <string> streamer-name: "";
     in property <image> stream-frame;
+    in property <string> active-streamer-id: "";
+    in property <string> active-streamer-name: "";
+    in property <int> active-stream-width: 0;
+    in property <int> active-stream-height: 0;
 
     // --- Presence (0=online, 1=idle, 2=dnd, 3=invisible) ---
     in-out property <int> presence-status: 0;
@@ -169,6 +173,7 @@ export component MainWindow inherits Window {
     callback start-stream(string, string);
     callback stop-stream();
     callback stop-watching();
+    callback watch-stream(/* host_id */ string, /* width */ int, /* height */ int);
 
     // --- Onboarding callbacks ---
     callback onboarding-crew-selected(string);
@@ -379,12 +384,17 @@ export component MainWindow inherits Window {
                     stream-label: root.stream-label;
                     streamer-name: root.streamer-name;
                     stream-frame: root.stream-frame;
+                    active-streamer-id: root.active-streamer-id;
+                    active-streamer-name: root.active-streamer-name;
+                    stream-width: root.active-stream-width;
+                    stream-height: root.active-stream-height;
                     start-stream-clicked => {
                         root.list-capture-sources();
                         root.source-picker-open = true;
                     }
                     stop-stream-clicked => { root.stop-stream(); }
                     stop-watching-clicked => { root.stop-watching(); }
+                    watch-stream-clicked(host-id, w, h) => { root.watch-stream(host-id, w, h); }
                 }
 
                 VoiceChannelView {

@@ -61,6 +61,11 @@ Do not repeat a corrected mistake in the same session.
   `y: (parent.height - self.height) / 2;`
   This is the established pattern throughout the codebase (see control_bar.slint, voice_channel_view.slint, settings_modal.slint).
 
+## Fix It Right
+- Never apply band-aid / "simple" fixes. Always implement the proper, robust solution.
+- If a quick hack is tempting, stop and think about the real root cause first.
+- If unsure what the proper fix is, ask - don't ship a workaround.
+
 ## What Not To Do
 - Do not change existing public API signatures without flagging it first.
 - Do not add new Cargo/CMake/npm dependencies without asking.

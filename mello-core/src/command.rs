@@ -56,6 +56,10 @@ pub enum Command {
     StopStream,
     WatchStream {
         host_id: String,
+        #[serde(default)]
+        width: u32,
+        #[serde(default)]
+        height: u32,
     },
     StopWatching,
 

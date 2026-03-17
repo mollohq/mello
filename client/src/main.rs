@@ -122,7 +122,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     log::info!("Starting Mello...");
 
     // --- Single instance enforcement ---
-    let _instance = SingleInstance::new("app.mello.desktop")?;
+    let instance_suffix = std::env::args()
+        .position(|a| a == "--instance")
+        .and_then(|i| std::env::args().nth(i + 1))
+        .unwrap_or_default();
+    let instance_id = if instance_suffix.is_empty() {
+        "app.mello.desktop".to_string()
+    } else {
+        format!("app.mello.desktop.{}", instance_suffix)
+    };
+    let _instance = SingleInstance::new(&instance_id)?;
     if !_instance.is_single() {
         eprintln!("Mello is already running.");
         std::process::exit(0);
@@ -725,6 +734,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let cmd = cmd_tx.clone();
         app.on_stop_watching(move || {
             let _ = cmd.try_send(Command::StopWatching);
+        });
+    }
+    {
+        let cmd = cmd_tx.clone();
+        app.on_watch_stream(move |host_id, width, height| {
+            log::info!("UI: watch stream from host {} ({}x{})", host_id, width, height);
+            let _ = cmd.try_send(Command::WatchStream {
+                host_id: host_id.to_string(),
+                width: width as u32,
+                height: height as u32,
+            });
         });
     }
 
@@ -1673,6 +1693,38 @@ fn handle_event(app: &MainWindow, event: Event, settings: &Rc<RefCell<Settings>>
                 .collect();
             app.set_crews(Rc::new(slint::VecModel::from(updated)).into());
 
+            // Update active streamer info for the StreamView panel
+            if app.get_active_crew_id() == state.crew_id.as_str() {
+                if let Some(ref stream) = state.stream {
+                    if stream.active {
+                        let sid = stream.streamer_id.clone().unwrap_or_default();
+                        let sname = stream.streamer_username.clone().unwrap_or_default();
+                        let local_id = app.get_user_id().to_string();
+                        if sid != local_id {
+                            app.set_active_streamer_id(sid.into());
+                            app.set_active_streamer_name(sname.into());
+                            app.set_active_stream_width(stream.width as i32);
+                            app.set_active_stream_height(stream.height as i32);
+                        } else {
+                            app.set_active_streamer_id("".into());
+                            app.set_active_streamer_name("".into());
+                            app.set_active_stream_width(0);
+                            app.set_active_stream_height(0);
+                        }
+                    } else {
+                        app.set_active_streamer_id("".into());
+                        app.set_active_streamer_name("".into());
+                        app.set_active_stream_width(0);
+                        app.set_active_stream_height(0);
+                    }
+                } else {
+                    app.set_active_streamer_id("".into());
+                    app.set_active_streamer_name("".into());
+                    app.set_active_stream_width(0);
+                    app.set_active_stream_height(0);
+                }
+            }
+
             // Populate voice channels for the active crew
             if app.get_active_crew_id() == state.crew_id.as_str() {
                 // Determine active channel: use tracked one, or default to the crew's default channel
@@ -1739,6 +1791,25 @@ fn handle_event(app: &MainWindow, event: Event, settings: &Rc<RefCell<Settings>>
                 if let Some(ref stream) = sc.stream {
                     c.has_stream = stream.active;
                     c.stream_name = stream.title.clone().unwrap_or_default().into();
+                    // Update active streamer for StreamView if this is the active crew
+                    if c.id == app.get_active_crew_id() {
+                        if stream.active {
+                            let sid = stream.streamer_id.clone().unwrap_or_default();
+                            let sname = stream.streamer_username.clone().unwrap_or_default();
+                            let local_id = app.get_user_id().to_string();
+                            if sid != local_id {
+                                app.set_active_streamer_id(sid.into());
+                                app.set_active_streamer_name(sname.into());
+                                app.set_active_stream_width(stream.width as i32);
+                                app.set_active_stream_height(stream.height as i32);
+                            }
+                        } else {
+                            app.set_active_streamer_id("".into());
+                            app.set_active_streamer_name("".into());
+                            app.set_active_stream_width(0);
+                            app.set_active_stream_height(0);
+                        }
+                    }
                 }
                 // Recent messages
                 c.msg_count = sc.recent_messages.len().min(2) as i32;
@@ -1995,6 +2066,10 @@ fn handle_event(app: &MainWindow, event: Event, settings: &Rc<RefCell<Settings>>
             app.set_is_watching(false);
             app.set_streamer_name("".into());
             app.set_stream_label("".into());
+            app.set_active_streamer_id("".into());
+            app.set_active_streamer_name("".into());
+            app.set_active_stream_width(0);
+            app.set_active_stream_height(0);
         }
         Event::StreamViewerJoined { viewer_id } => {
             log::info!("Stream viewer joined: {}", viewer_id);

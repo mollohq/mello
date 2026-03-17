@@ -16,22 +16,92 @@ use std::collections::HashMap;
 use std::ffi::{CStr, CString};
 use std::sync::Arc;
 
+/// Individual chunks are at most ~60KB + 6 byte header.
 const VIEWER_RECV_BUF_SIZE: usize = 64 * 1024;
 
 struct FrameCallbackData {
     tx: std::sync::mpsc::Sender<Event>,
 }
 
+/// Reassembles chunked DataChannel messages back into full StreamPackets.
+struct ChunkAssembler {
+    pending: HashMap<u16, ChunkAssembly>,
+}
+
+struct ChunkAssembly {
+    chunk_count: u16,
+    chunks_received: u16,
+    chunks: Vec<Option<Vec<u8>>>,
+}
+
+impl ChunkAssembler {
+    fn new() -> Self {
+        Self { pending: HashMap::new() }
+    }
+
+    /// Feed a raw DataChannel message. Returns the reassembled payload if complete.
+    fn feed(&mut self, raw: &[u8]) -> Option<Vec<u8>> {
+        use crate::stream::sink_p2p::CHUNK_HEADER_SIZE;
+        if raw.len() < CHUNK_HEADER_SIZE {
+            return None;
+        }
+
+        let msg_id = u16::from_le_bytes([raw[0], raw[1]]);
+        let chunk_idx = u16::from_le_bytes([raw[2], raw[3]]);
+        let chunk_count = u16::from_le_bytes([raw[4], raw[5]]);
+        let payload = &raw[CHUNK_HEADER_SIZE..];
+
+        if chunk_count == 0 || chunk_idx >= chunk_count {
+            return None;
+        }
+
+        // Evict stale assemblies (keep only messages within a recent window)
+        self.pending.retain(|&id, _| {
+            msg_id.wrapping_sub(id) < 64
+        });
+
+        let entry = self.pending.entry(msg_id).or_insert_with(|| ChunkAssembly {
+            chunk_count,
+            chunks_received: 0,
+            chunks: (0..chunk_count).map(|_| None).collect(),
+        });
+
+        let idx = chunk_idx as usize;
+        if idx < entry.chunks.len() && entry.chunks[idx].is_none() {
+            entry.chunks[idx] = Some(payload.to_vec());
+            entry.chunks_received += 1;
+        }
+
+        if entry.chunks_received == entry.chunk_count {
+            let assembly = self.pending.remove(&msg_id).unwrap();
+            let total: usize = assembly.chunks.iter().map(|c| c.as_ref().map_or(0, |v| v.len())).sum();
+            let mut result = Vec::with_capacity(total);
+            for chunk in assembly.chunks {
+                if let Some(data) = chunk {
+                    result.extend_from_slice(&data);
+                }
+            }
+            Some(result)
+        } else {
+            None
+        }
+    }
+}
+
 /// State for the viewer-side streaming pipeline.
 struct ViewerState {
-    viewer: *mut mello_sys::MelloStreamView,
+    /// The C++ viewer pipeline handle. None until the host's Answer arrives
+    /// with the actual encode resolution so we can initialize the decoder correctly.
+    viewer: Option<*mut mello_sys::MelloStreamView>,
     peer: *mut mello_sys::MelloPeerConnection,
     host_id: String,
     _frame_cb_data: *mut FrameCallbackData,
     _ice_cb_data: *mut StreamIceCallbackData,
     got_keyframe: bool,
+    frames_presented: u64,
     recv_buf: Vec<u8>,
     stream_viewer: StreamViewer,
+    chunk_assembler: ChunkAssembler,
 }
 
 unsafe impl Send for ViewerState {}
@@ -40,8 +110,10 @@ unsafe impl Sync for ViewerState {}
 impl Drop for ViewerState {
     fn drop(&mut self) {
         unsafe {
-            if !self.viewer.is_null() {
-                mello_sys::mello_stream_stop_viewer(self.viewer);
+            if let Some(v) = self.viewer {
+                if !v.is_null() {
+                    mello_sys::mello_stream_stop_viewer(v);
+                }
             }
             if !self.peer.is_null() {
                 mello_sys::mello_peer_destroy(self.peer);
@@ -58,9 +130,11 @@ impl Drop for ViewerState {
 
 struct StreamIceCallbackData {
     peer_id: String,
-    #[allow(dead_code)]
-    purpose: SignalPurpose,
-    queue: std::sync::Arc<std::sync::Mutex<Vec<(String, SignalEnvelope)>>>,
+    send_queue: std::sync::Arc<std::sync::Mutex<Vec<(String, SignalEnvelope)>>>,
+    /// ICE candidates gathered before the offer/answer is queued.
+    /// Once `flushed` is true, new candidates go straight to `send_queue`.
+    pending: std::sync::Mutex<Vec<SignalEnvelope>>,
+    flushed: std::sync::atomic::AtomicBool,
 }
 
 struct StreamHostPeer {
@@ -100,19 +174,48 @@ unsafe extern "C" fn stream_ice_callback(
     let mid = CStr::from_ptr(c.sdp_mid).to_string_lossy().into_owned();
     let idx = c.sdp_mline_index;
     log::debug!("Stream ICE candidate gathered for peer {}: {}", data.peer_id, cand);
-    if let Ok(mut queue) = data.queue.lock() {
-        queue.push((
-            data.peer_id.clone(),
-            SignalEnvelope {
-                purpose: SignalPurpose::Stream,
-                message: SignalMessage::IceCandidate {
-                    candidate: cand,
-                    sdp_mid: mid,
-                    sdp_mline_index: idx,
-                },
-            },
-        ));
+
+    let envelope = SignalEnvelope {
+        purpose: SignalPurpose::Stream,
+        stream_width: None,
+        stream_height: None,
+        message: SignalMessage::IceCandidate {
+            candidate: cand,
+            sdp_mid: mid,
+            sdp_mline_index: idx,
+        },
+    };
+
+    if data.flushed.load(std::sync::atomic::Ordering::Acquire) {
+        // Offer/answer already queued — send directly
+        if let Ok(mut q) = data.send_queue.lock() {
+            q.push((data.peer_id.clone(), envelope));
+        }
+    } else {
+        // Buffer until offer/answer is queued
+        if let Ok(mut buf) = data.pending.lock() {
+            buf.push(envelope);
+        }
     }
+}
+
+/// Flush buffered ICE candidates from a `StreamIceCallbackData` into the main
+/// send queue. Must be called *after* the offer/answer has been pushed to `send_queue`.
+/// Sets `flushed = true` so subsequent candidates go directly to the send queue.
+fn flush_ice_buffer(cb_data: &StreamIceCallbackData) {
+    let buffered: Vec<SignalEnvelope> = cb_data
+        .pending
+        .lock()
+        .map(|mut buf| std::mem::take(&mut *buf))
+        .unwrap_or_default();
+    if !buffered.is_empty() {
+        if let Ok(mut q) = cb_data.send_queue.lock() {
+            for envelope in buffered {
+                q.push((cb_data.peer_id.clone(), envelope));
+            }
+        }
+    }
+    cb_data.flushed.store(true, std::sync::atomic::Ordering::Release);
 }
 
 pub struct Client {
@@ -124,7 +227,12 @@ pub struct Client {
     stream_host_peers: HashMap<String, StreamHostPeer>,
     viewer_state: Option<ViewerState>,
     stream_signal_queue: Arc<std::sync::Mutex<Vec<(String, SignalEnvelope)>>>,
+    /// ICE candidates received before the peer was created (host side).
+    pending_remote_ice: HashMap<String, Vec<SignalMessage>>,
     ice_servers: Vec<String>,
+    /// Actual encode resolution (set after host pipeline starts).
+    stream_encode_width: u32,
+    stream_encode_height: u32,
 }
 
 impl Client {
@@ -138,6 +246,9 @@ impl Client {
             stream_host_peers: HashMap::new(),
             viewer_state: None,
             stream_signal_queue: Arc::new(std::sync::Mutex::new(Vec::new())),
+            stream_encode_width: 0,
+            stream_encode_height: 0,
+            pending_remote_ice: HashMap::new(),
             ice_servers: Vec::new(),
         }
     }
@@ -216,7 +327,7 @@ impl Client {
                     }
                     SignalPurpose::Stream => {
                         log::info!("Stream signal from {}: {:?}", signal.from, env.message);
-                        self.handle_stream_signal(&signal.from, env.message);
+                        self.handle_stream_signal(&signal.from, env);
                     }
                 }
             }
@@ -235,16 +346,16 @@ impl Client {
         }
     }
 
-    fn handle_stream_signal(&mut self, from: &str, message: SignalMessage) {
+    fn handle_stream_signal(&mut self, from: &str, envelope: SignalEnvelope) {
         // Host side: accept viewer offers, add peers to P2PFanoutSink
         if self.stream_session.is_some() {
-            self.handle_stream_signal_as_host(from, message);
+            self.handle_stream_signal_as_host(from, envelope.message);
             return;
         }
 
         // Viewer side: handle answers and ICE from the host
         if self.viewer_state.is_some() {
-            self.handle_stream_signal_as_viewer(from, message);
+            self.handle_stream_signal_as_viewer(from, envelope);
             return;
         }
 
@@ -300,11 +411,12 @@ impl Client {
                     }
                 }
 
-                // ICE callback
+                // ICE callback — candidates are buffered until answer is queued
                 let ice_cb_data = Box::into_raw(Box::new(StreamIceCallbackData {
                     peer_id: from.to_string(),
-                    purpose: SignalPurpose::Stream,
-                    queue: Arc::clone(&self.stream_signal_queue),
+                    send_queue: Arc::clone(&self.stream_signal_queue),
+                    pending: std::sync::Mutex::new(Vec::new()),
+                    flushed: std::sync::atomic::AtomicBool::new(false),
                 }));
                 unsafe {
                     mello_sys::mello_peer_set_ice_callback(
@@ -314,7 +426,7 @@ impl Client {
                     );
                 }
 
-                // Create answer
+                // Create answer (may synchronously gather ICE candidates into buffer)
                 let sdp_c = match CString::new(sdp) {
                     Ok(c) => c,
                     Err(_) => {
@@ -341,16 +453,20 @@ impl Client {
                     .into_owned();
                 log::info!("Created stream answer for viewer {}", from);
 
-                // Queue answer for sending
+                // Queue answer (with encode resolution) first, then flush buffered ICE candidates
+                let (enc_w, enc_h) = (self.stream_encode_width, self.stream_encode_height);
                 if let Ok(mut queue) = self.stream_signal_queue.lock() {
                     queue.push((
                         from.to_string(),
                         SignalEnvelope {
                             purpose: SignalPurpose::Stream,
+                            stream_width: if enc_w > 0 { Some(enc_w) } else { None },
+                            stream_height: if enc_h > 0 { Some(enc_h) } else { None },
                             message: SignalMessage::Answer { sdp: answer },
                         },
                     ));
                 }
+                unsafe { flush_ice_buffer(&*ice_cb_data); }
 
                 // Add peer to P2PFanoutSink
                 if let Some(ref sink) = self.stream_sink {
@@ -369,17 +485,40 @@ impl Client {
                     ice_cb_data,
                 });
 
+                // Apply any ICE candidates that arrived before this Offer
+                if let Some(early_ice) = self.pending_remote_ice.remove(from) {
+                    log::debug!("Applying {} buffered ICE candidates for viewer {}", early_ice.len(), from);
+                    for msg in early_ice {
+                        if let SignalMessage::IceCandidate { candidate, sdp_mid, sdp_mline_index } = msg {
+                            let cand_c = match CString::new(candidate) {
+                                Ok(c) => c,
+                                Err(_) => continue,
+                            };
+                            let mid_c = match CString::new(sdp_mid) {
+                                Ok(c) => c,
+                                Err(_) => continue,
+                            };
+                            let ice = mello_sys::MelloIceCandidate {
+                                candidate: cand_c.as_ptr(),
+                                sdp_mid: mid_c.as_ptr(),
+                                sdp_mline_index,
+                            };
+                            unsafe { mello_sys::mello_peer_add_ice_candidate(peer, &ice); }
+                        }
+                    }
+                }
+
                 let _ = self.event_tx.send(Event::StreamViewerJoined {
                     viewer_id: from.to_string(),
                 });
             }
             SignalMessage::IceCandidate { candidate, sdp_mid, sdp_mline_index } => {
                 if let Some(hp) = self.stream_host_peers.get(from) {
-                    let cand_c = match CString::new(candidate) {
+                    let cand_c = match CString::new(candidate.clone()) {
                         Ok(c) => c,
                         Err(_) => return,
                     };
-                    let mid_c = match CString::new(sdp_mid) {
+                    let mid_c = match CString::new(sdp_mid.clone()) {
                         Ok(c) => c,
                         Err(_) => return,
                     };
@@ -393,7 +532,11 @@ impl Client {
                     }
                     log::debug!("Added stream ICE candidate from viewer {}", from);
                 } else {
-                    log::warn!("Stream ICE candidate from unknown viewer {}", from);
+                    log::debug!("Buffering early ICE candidate from viewer {} (offer not yet received)", from);
+                    self.pending_remote_ice
+                        .entry(from.to_string())
+                        .or_default()
+                        .push(SignalMessage::IceCandidate { candidate, sdp_mid, sdp_mline_index });
                 }
             }
             SignalMessage::Answer { .. } => {
@@ -402,7 +545,7 @@ impl Client {
         }
     }
 
-    fn handle_stream_signal_as_viewer(&mut self, from: &str, message: SignalMessage) {
+    fn handle_stream_signal_as_viewer(&mut self, from: &str, envelope: SignalEnvelope) {
         let vs = match self.viewer_state.as_ref() {
             Some(vs) => vs,
             None => return,
@@ -413,16 +556,64 @@ impl Client {
             return;
         }
 
-        match message {
+        match envelope.message {
             SignalMessage::Answer { sdp } => {
                 let sdp_c = match CString::new(sdp) {
                     Ok(c) => c,
                     Err(_) => return,
                 };
+                let peer = vs.peer;
                 unsafe {
-                    mello_sys::mello_peer_set_remote_description(vs.peer, sdp_c.as_ptr(), false);
+                    mello_sys::mello_peer_set_remote_description(peer, sdp_c.as_ptr(), false);
                 }
                 log::info!("Set stream remote answer from host {}", from);
+
+                // Initialize the decoder pipeline now that we know the host's resolution
+                if vs.viewer.is_none() {
+                    let config = crate::stream::StreamConfig::default();
+                    let (w, h) = match (envelope.stream_width, envelope.stream_height) {
+                        (Some(sw), Some(sh)) if sw > 0 && sh > 0 => {
+                            log::info!("Host encode resolution from signaling: {}x{}", sw, sh);
+                            (sw, sh)
+                        }
+                        _ => {
+                            log::warn!("No resolution in Answer, falling back to {}x{}", config.width, config.height);
+                            (config.width, config.height)
+                        }
+                    };
+
+                    let mello_config = mello_sys::MelloStreamConfig {
+                        width: w,
+                        height: h,
+                        fps: config.fps,
+                        bitrate_kbps: 0,
+                    };
+
+                    let ctx = self.voice.mello_ctx();
+                    let frame_cb_data = self.viewer_state.as_ref().map(|v| v._frame_cb_data).unwrap();
+                    let viewer = unsafe {
+                        mello_sys::mello_stream_start_viewer(
+                            ctx,
+                            &mello_config,
+                            Some(on_viewer_frame),
+                            frame_cb_data as *mut std::ffi::c_void,
+                        )
+                    };
+
+                    if viewer.is_null() {
+                        log::error!("Failed to start stream viewer pipeline at {}x{}", w, h);
+                        let _ = self.event_tx.send(Event::StreamError {
+                            message: "Failed to start video decoder".to_string(),
+                        });
+                        self.viewer_state = None;
+                        return;
+                    }
+
+                    log::info!("Viewer pipeline initialized at {}x{}", w, h);
+                    if let Some(vs) = self.viewer_state.as_mut() {
+                        vs.viewer = Some(viewer);
+                    }
+                }
             }
             SignalMessage::IceCandidate { candidate, sdp_mid, sdp_mline_index } => {
                 let cand_c = match CString::new(candidate) {
@@ -475,6 +666,8 @@ impl Client {
         for (to, signal) in signals {
             let envelope = SignalEnvelope {
                 purpose: SignalPurpose::Voice,
+                stream_width: None,
+                stream_height: None,
                 message: signal,
             };
             let payload = match serde_json::to_string(&envelope) {
@@ -518,16 +711,28 @@ impl Client {
 
         let vs = self.viewer_state.as_mut().unwrap();
         let peer = vs.peer;
-        let viewer = vs.viewer;
+        let viewer = match vs.viewer {
+            Some(v) => v,
+            None => return, // Decoder not yet initialized (waiting for Answer)
+        };
         let mut fed_any = false;
 
-        loop {
+        // Drain DataChannel recv buffer, reassembling chunks into full messages.
+        // Cap recv attempts per tick (matching stream-viewer tool's proven approach).
+        let mut reassembled: Vec<Vec<u8>> = Vec::new();
+        for _ in 0..512 {
             let size = unsafe {
                 mello_sys::mello_peer_recv(peer, vs.recv_buf.as_mut_ptr(), vs.recv_buf.len() as i32)
             };
             if size <= 0 { break; }
 
-            let data = &vs.recv_buf[..size as usize];
+            let raw = &vs.recv_buf[..size as usize];
+            if let Some(full_msg) = vs.chunk_assembler.feed(raw) {
+                reassembled.push(full_msg);
+            }
+        }
+
+        for data in &reassembled {
             let results = vs.stream_viewer.feed_packet(data);
 
             for result in results {
@@ -542,13 +747,16 @@ impl Client {
                                 continue;
                             }
                         }
-                        unsafe {
+                        let ok = unsafe {
                             mello_sys::mello_stream_feed_packet(
                                 viewer,
                                 payload.as_ptr(),
                                 payload.len() as i32,
                                 is_keyframe,
-                            );
+                            )
+                        };
+                        if !ok && is_keyframe {
+                            log::warn!("feed_packet failed for keyframe ({} bytes)", payload.len());
                         }
                         fed_any = true;
                     }
@@ -580,7 +788,13 @@ impl Client {
 
         // Present the latest decoded frame (triggers the frame callback)
         if fed_any {
-            unsafe { mello_sys::mello_stream_present_frame(viewer); }
+            let presented = unsafe { mello_sys::mello_stream_present_frame(viewer) };
+            if presented {
+                vs.frames_presented += 1;
+                if vs.frames_presented <= 3 || vs.frames_presented % 300 == 0 {
+                    log::info!("Stream frame presented #{}", vs.frames_presented);
+                }
+            }
         }
     }
 
@@ -705,8 +919,8 @@ impl Client {
             Command::StopStream => {
                 self.handle_stop_stream().await;
             }
-            Command::WatchStream { host_id } => {
-                self.handle_watch_stream(&host_id);
+            Command::WatchStream { host_id, width, height } => {
+                self.handle_watch_stream(&host_id, width, height);
             }
             Command::StopWatching => {
                 self.handle_stop_watching();
@@ -1565,10 +1779,13 @@ impl Client {
         }
 
         // Step 1: async RPC call (no raw pointers held across await)
+        let config = crate::stream::StreamConfig::default();
         let resp = match crate::stream::host::request_start_stream(
             &self.nakama,
             crew_id,
             false, // supports_av1
+            config.width,
+            config.height,
         )
         .await
         {
@@ -1583,7 +1800,6 @@ impl Client {
         };
 
         // Step 2: sync FFI calls + session creation (raw pointers, no await)
-        let config = crate::stream::StreamConfig::default();
         let ctx = self.voice.mello_ctx();
 
         if !crate::stream::encoder_available(ctx) {
@@ -1635,6 +1851,15 @@ impl Client {
                 }
             };
 
+        // Query actual encode resolution (capture source determines this, not config)
+        let (mut actual_w, mut actual_h) = (config.width, config.height);
+        unsafe {
+            mello_sys::mello_stream_get_host_resolution(host, &mut actual_w, &mut actual_h);
+        }
+        log::info!("Host encode resolution: {}x{}", actual_w, actual_h);
+        self.stream_encode_width = actual_w;
+        self.stream_encode_height = actual_h;
+
         // Start game-audio loopback capture (WASAPI)
         unsafe {
             mello_sys::mello_stream_start_audio(host);
@@ -1683,6 +1908,9 @@ impl Client {
                 log::info!("Destroyed stream host peer {}", id);
             }
             self.stream_sink = None;
+            self.pending_remote_ice.clear();
+            self.stream_encode_width = 0;
+            self.stream_encode_height = 0;
 
             if let Some(crew_id) = self.nakama.active_crew_id().map(String::from) {
                 let payload = serde_json::json!({ "crew_id": crew_id });
@@ -1694,7 +1922,7 @@ impl Client {
         }
     }
 
-    fn handle_watch_stream(&mut self, host_id: &str) {
+    fn handle_watch_stream(&mut self, host_id: &str, stream_width: u32, stream_height: u32) {
         if self.viewer_state.is_some() {
             log::warn!("Already watching a stream, ignoring WatchStream");
             return;
@@ -1739,11 +1967,12 @@ impl Client {
             }
         }
 
-        // ICE callback for stream signaling
+        // ICE callback — candidates are buffered until offer is queued
         let ice_cb_data = Box::into_raw(Box::new(StreamIceCallbackData {
             peer_id: host_id.to_string(),
-            purpose: SignalPurpose::Stream,
-            queue: Arc::clone(&self.stream_signal_queue),
+            send_queue: Arc::clone(&self.stream_signal_queue),
+            pending: std::sync::Mutex::new(Vec::new()),
+            flushed: std::sync::atomic::AtomicBool::new(false),
         }));
         unsafe {
             mello_sys::mello_peer_set_ice_callback(
@@ -1753,7 +1982,7 @@ impl Client {
             );
         }
 
-        // Create offer and queue for sending
+        // Create offer (may synchronously gather ICE candidates into buffer)
         let sdp_ptr = unsafe { mello_sys::mello_peer_create_offer(peer) };
         if sdp_ptr.is_null() {
             log::error!("Failed to create stream offer");
@@ -1769,68 +1998,47 @@ impl Client {
         let sdp = unsafe { CStr::from_ptr(sdp_ptr) }.to_string_lossy().into_owned();
         log::info!("Created stream offer for host {}", host_id);
 
+        // Queue offer first, then flush buffered ICE candidates after it
         if let Ok(mut queue) = self.stream_signal_queue.lock() {
             queue.push((
                 host_id.to_string(),
                 SignalEnvelope {
                     purpose: SignalPurpose::Stream,
+                    stream_width: None,
+                    stream_height: None,
                     message: SignalMessage::Offer { sdp },
                 },
             ));
         }
+        unsafe { flush_ice_buffer(&*ice_cb_data); }
 
-        // Start C++ viewer pipeline with frame callback
+        // Decoder pipeline will be created when the Answer arrives with the
+        // host's actual encode resolution (see handle_stream_signal_as_viewer).
         let config = crate::stream::StreamConfig::default();
-        let mello_config = mello_sys::MelloStreamConfig {
-            width: config.width,
-            height: config.height,
-            fps: config.fps,
-            bitrate_kbps: 0,
-        };
-
         let frame_cb_data = Box::into_raw(Box::new(FrameCallbackData {
             tx: self.event_tx.clone(),
         }));
 
-        let viewer = unsafe {
-            mello_sys::mello_stream_start_viewer(
-                ctx,
-                &mello_config,
-                Some(on_viewer_frame),
-                frame_cb_data as *mut std::ffi::c_void,
-            )
-        };
-        if viewer.is_null() {
-            log::error!("Failed to start stream viewer pipeline");
-            unsafe {
-                mello_sys::mello_peer_destroy(peer);
-                drop(Box::from_raw(ice_cb_data));
-                drop(Box::from_raw(frame_cb_data));
-            }
-            let _ = self.event_tx.send(Event::StreamError {
-                message: "Failed to start video decoder".to_string(),
-            });
-            return;
-        }
-
         let _ = self.event_tx.send(Event::StreamWatching {
             host_id: host_id.to_string(),
-            width: config.width,
-            height: config.height,
+            width: stream_width,
+            height: stream_height,
         });
 
         self.viewer_state = Some(ViewerState {
-            viewer,
+            viewer: None,
             peer,
             host_id: host_id.to_string(),
             _frame_cb_data: frame_cb_data,
             _ice_cb_data: ice_cb_data,
             got_keyframe: false,
+            frames_presented: 0,
             recv_buf: vec![0u8; VIEWER_RECV_BUF_SIZE],
             stream_viewer: StreamViewer::new(config.fec_n),
+            chunk_assembler: ChunkAssembler::new(),
         });
 
-        log::info!("Stream viewer initialized, waiting for WebRTC connection to {}", host_id);
+        log::info!("Stream viewer peer created, waiting for Answer from host {}", host_id);
     }
 
     fn handle_stop_watching(&mut self) {

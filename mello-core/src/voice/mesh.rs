@@ -31,6 +31,12 @@ pub struct SignalEnvelope {
     pub purpose: SignalPurpose,
     #[serde(flatten)]
     pub message: SignalMessage,
+    /// Host encode resolution, included in Stream Answer so the viewer
+    /// can initialize the decoder at the correct size.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stream_width: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stream_height: Option<u32>,
 }
 
 struct IceCallbackData {

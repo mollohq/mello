@@ -72,11 +72,11 @@ impl StreamViewer {
 
         match packet.ptype {
             PacketType::Video => {
-                self.packets_received += 1;
+                self.packets_received = self.packets_received.saturating_add(1);
                 self.on_video_packet(&packet, &mut results);
             }
             PacketType::Audio => {
-                self.packets_received += 1;
+                self.packets_received = self.packets_received.saturating_add(1);
                 results.push(ViewerFeedResult::AudioPayload(packet.payload));
             }
             PacketType::Fec => {
@@ -112,11 +112,14 @@ impl StreamViewer {
         if let Some(base) = self.current_group_base {
             let expected_pos = self.group_packets_seen;
             let actual_pos = packet.sequence.wrapping_sub(base) as usize;
-            if actual_pos > expected_pos {
+            // Guard against wrapping producing absurd gap values
+            if actual_pos > expected_pos && actual_pos < 1000 {
                 let gap = actual_pos - expected_pos;
-                self.packets_lost += gap as u16;
+                self.packets_lost = self.packets_lost.saturating_add(gap as u16);
             }
-            self.group_packets_seen = actual_pos + 1;
+            if actual_pos < 1000 {
+                self.group_packets_seen = actual_pos + 1;
+            }
         }
 
         let is_kf = packet.is_keyframe();
