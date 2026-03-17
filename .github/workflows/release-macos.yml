@@ -83,6 +83,8 @@ jobs:
           GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
           DISCORD_CLIENT_ID: ${{ secrets.DISCORD_CLIENT_ID }}
+          NAKAMA_SERVER_KEY: ${{ secrets.NAKAMA_SERVER_KEY }}
+          NAKAMA_HTTP_KEY: ${{ secrets.NAKAMA_HTTP_KEY }}
 
       - name: Run tests
         run: cargo test --workspace
@@ -112,7 +114,8 @@ jobs:
           mkdir -p vpk-out
           vpk download github --repoUrl https://github.com/mollohq/mello --outputDir vpk-out --channel $RELEASE_CHANNEL --token ${{ secrets.GH_PAT }}
           vpk pack \
-            --packId app.m3llo.macos \
+            --packId m3llo \
+            --bundleId app.m3llo.macos \
             --packVersion $RELEASE_VERSION \
             --packDir dist \
             --mainExe mello \
