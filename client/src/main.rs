@@ -109,7 +109,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     log::info!("Starting Mello...");
 
     // --- Single instance enforcement ---
-    let _instance = SingleInstance::new("app.mello.desktop")?;
+    // On macOS, single-instance uses flock() on a file at this path; must be absolute
+    // since the cwd when launched as a .app bundle is not writable.
+    let _instance = SingleInstance::new("/tmp/app.m3llo.lock")?;
     if !_instance.is_single() {
         eprintln!("Mello is already running.");
         std::process::exit(0);
