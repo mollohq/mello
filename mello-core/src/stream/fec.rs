@@ -5,7 +5,6 @@
 /// payloads are zero-padded to the length of the longest).
 ///
 /// This recovers any single packet loss within a group at zero added latency.
-
 /// Encoder: host side. Accumulates data packets and emits parity.
 pub struct FecEncoder {
     n: usize,

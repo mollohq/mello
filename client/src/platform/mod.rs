@@ -28,7 +28,7 @@ impl StatusItem {
         let menu = Menu::new();
         menu.append(&MenuItem::with_id(
             MenuId::new("tray_open"),
-            &format!("Open {}", crate::APP_NAME),
+            format!("Open {}", crate::APP_NAME),
             true,
             None,
         ))
@@ -42,7 +42,7 @@ impl StatusItem {
         menu.append(&PredefinedMenuItem::separator()).ok();
         menu.append(&MenuItem::with_id(
             MenuId::new("tray_quit"),
-            &format!("Quit {}", crate::APP_NAME),
+            format!("Quit {}", crate::APP_NAME),
             true,
             None,
         ))

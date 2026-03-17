@@ -1252,7 +1252,7 @@ fn update_active_crew_card(app: &MainWindow) {
                 c.online_count = online_count;
                 c.voice_count = voice_count;
 
-                if let Some(m) = online_members.get(0) {
+                if let Some(m) = online_members.first() {
                     c.v0_initials = m.initials.clone();
                     c.v0_name = m.name.clone();
                     c.v0_speaking = m.speaking;
@@ -1761,7 +1761,7 @@ fn handle_event(
                         let vlen = state.voice.members.len().min(4);
                         c.voice_count = vlen as i32;
                         // Populate voice chips from authoritative state
-                        if let Some(m) = state.voice.members.get(0) {
+                        if let Some(m) = state.voice.members.first() {
                             c.v0_name = m.username.clone().into();
                             c.v0_initials = make_initials(&m.username).into();
                             c.v0_speaking = m.speaking.unwrap_or(false);
@@ -1788,7 +1788,7 @@ fn handle_event(
                         }
                         // Recent messages
                         c.msg_count = state.recent_messages.len().min(2) as i32;
-                        if let Some(m) = state.recent_messages.get(0) {
+                        if let Some(m) = state.recent_messages.first() {
                             c.m0_author = m.username.clone().into();
                             c.m0_text = m.preview.clone().into();
                         }
@@ -1851,7 +1851,7 @@ fn handle_event(
                 if let Some(ref voice) = sc.voice {
                     let vlen = voice.members.len().min(4);
                     c.voice_count = vlen as i32;
-                    if let Some(m) = voice.members.get(0) {
+                    if let Some(m) = voice.members.first() {
                         c.v0_name = m.username.clone().into();
                         c.v0_initials = make_initials(&m.username).into();
                     }
@@ -1875,7 +1875,7 @@ fn handle_event(
                 }
                 // Recent messages
                 c.msg_count = sc.recent_messages.len().min(2) as i32;
-                if let Some(m) = sc.recent_messages.get(0) {
+                if let Some(m) = sc.recent_messages.first() {
                     c.m0_author = m.username.clone().into();
                     c.m0_text = m.preview.clone().into();
                 }
@@ -2119,7 +2119,7 @@ fn handle_event(
                 .collect();
             if let Some(c) = updated.iter_mut().find(|c| c.id == crew_id.as_str()) {
                 c.msg_count = messages.len().min(2) as i32;
-                if let Some(m) = messages.get(0) {
+                if let Some(m) = messages.first() {
                     c.m0_author = m.username.clone().into();
                     c.m0_text = m.preview.clone().into();
                 }

@@ -40,6 +40,12 @@ pub struct VoiceMesh {
     ice_servers: Vec<CString>,
 }
 
+impl Default for VoiceMesh {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl VoiceMesh {
     pub fn new() -> Self {
         Self {
@@ -240,7 +246,7 @@ impl VoiceMesh {
 
     /// Send audio data to all connected peers via unreliable channel
     pub fn broadcast_audio(&self, data: &[u8]) {
-        for (_, state) in &self.peers {
+        for state in self.peers.values() {
             let connected = unsafe { mello_sys::mello_peer_is_connected(state.peer) };
             if connected {
                 unsafe {
@@ -255,6 +261,7 @@ impl VoiceMesh {
     }
 
     /// Poll received audio from all peers and feed to the audio pipeline
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
     pub fn poll_incoming(&self, ctx: *mut mello_sys::MelloContext) {
         let mut buf = [0u8; 4000];
         for (peer_id, state) in &self.peers {

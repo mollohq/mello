@@ -1246,7 +1246,7 @@ impl Client {
         let config = crate::stream::StreamConfig::default();
         let ctx = self.voice.mello_ctx();
 
-        if !crate::stream::encoder_available(ctx) {
+        if !unsafe { crate::stream::encoder_available(ctx) } {
             let msg = "Streaming requires a hardware encoder \
                        (NVIDIA, AMD, or Intel). None was found on this machine.";
             log::error!("{}", msg);
@@ -1272,7 +1272,7 @@ impl Client {
         };
 
         let (host, video_rx, audio_rx, resources) =
-            match crate::stream::host::start_host(ctx, &source, &mello_config) {
+            match unsafe { crate::stream::host::start_host(ctx, &source, &mello_config) } {
                 Ok(v) => v,
                 Err(e) => {
                     let _ = self.event_tx.send(Event::StreamError {

@@ -25,6 +25,12 @@ pub struct P2PFanoutSink {
     viewers: RwLock<HashMap<String, ViewerPeer>>,
 }
 
+impl Default for P2PFanoutSink {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl P2PFanoutSink {
     pub fn new() -> Self {
         Self {

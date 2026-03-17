@@ -94,7 +94,7 @@ fn audio_loopback_packet_round_trip() {
     with_ctx(|ctx| unsafe {
         let peer_id = std::ffi::CString::new("loopback_test").unwrap();
         // 4-byte sequence header + some Opus-like payload
-        let mut packet = vec![0u8; 100];
+        let mut packet = [0u8; 100];
         packet[0] = 0x00;
         packet[1] = 0x00;
         packet[2] = 0x00;

@@ -1,23 +1,19 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum PresenceStatus {
     Online,
     Idle,
     Dnd,
+    #[default]
     Offline,
 }
 
-impl Default for PresenceStatus {
-    fn default() -> Self {
-        Self::Offline
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Activity {
+    #[default]
     None,
     InVoice {
         #[serde(default)]
@@ -39,12 +35,6 @@ pub enum Activity {
         #[serde(default)]
         streamer_id: String,
     },
-}
-
-impl Default for Activity {
-    fn default() -> Self {
-        Self::None
-    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

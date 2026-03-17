@@ -1100,7 +1100,7 @@ async fn ws_writer_task(
     >,
 ) {
     while let Some(msg) = rx.recv().await {
-        if let Err(e) = write.send(Message::Text(msg.into())).await {
+        if let Err(e) = write.send(Message::Text(msg)).await {
             log::error!("WebSocket write error: {}", e);
             break;
         }

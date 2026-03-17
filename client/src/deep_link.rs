@@ -1,4 +1,5 @@
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub enum DeepLink {
     Invite { code: String },
     Crew { id: String },

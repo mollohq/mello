@@ -10,7 +10,7 @@ use socket2::SockRef;
 
 const DEFAULT_PORT: u16 = 9800;
 const HEADER_CONFIG: u8 = 0x00;
-const HEADER_VIDEO: u8 = 0x01;
+const _HEADER_VIDEO: u8 = 0x01;
 const HEADER_KEYFRAME: u8 = 0x02;
 
 const CHUNK_HEADER_SIZE: usize = 7; // type(1) + frame_id(2) + chunk_idx(2) + chunk_count(2)
@@ -65,10 +65,8 @@ impl FrameAssembly {
             .map(|c| c.as_ref().map_or(0, |v| v.len()))
             .sum();
         let mut payload = Vec::with_capacity(total);
-        for chunk in self.chunks {
-            if let Some(data) = chunk {
-                payload.extend_from_slice(&data);
-            }
+        for data in self.chunks.into_iter().flatten() {
+            payload.extend_from_slice(&data);
         }
         (self.frame_type, payload)
     }

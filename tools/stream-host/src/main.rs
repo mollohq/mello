@@ -42,7 +42,7 @@ unsafe extern "C" fn on_video_packet(
     };
     let frame_id = state.frame_id.fetch_add(1, Ordering::Relaxed);
 
-    let chunk_count = (payload.len() + MAX_CHUNK_PAYLOAD - 1) / MAX_CHUNK_PAYLOAD;
+    let chunk_count = payload.len().div_ceil(MAX_CHUNK_PAYLOAD);
     let chunk_count = chunk_count.max(1) as u16;
 
     for i in 0..chunk_count {
@@ -131,12 +131,12 @@ fn main() {
     let game_count = unsafe { mello_sys::mello_enumerate_games(ctx, games.as_mut_ptr(), 16) };
     if game_count > 0 {
         println!("\n  -- Games --");
-        for i in 0..game_count as usize {
-            let name = unsafe { std::ffi::CStr::from_ptr(games[i].name.as_ptr()) }
+        for game in games.iter().take(game_count as usize) {
+            let name = unsafe { std::ffi::CStr::from_ptr(game.name.as_ptr()) }
                 .to_string_lossy()
                 .to_string();
-            let pid = games[i].pid;
-            let fs = if games[i].is_fullscreen {
+            let pid = game.pid;
+            let fs = if game.is_fullscreen {
                 " [fullscreen]"
             } else {
                 ""
@@ -167,12 +167,12 @@ fn main() {
     let win_count = unsafe { mello_sys::mello_enumerate_windows(ctx, windows.as_mut_ptr(), 64) };
     if win_count > 0 {
         println!("\n  -- Windows --");
-        for i in 0..win_count as usize {
-            let title = unsafe { std::ffi::CStr::from_ptr(windows[i].title.as_ptr()) }
+        for win in windows.iter().take(win_count as usize) {
+            let title = unsafe { std::ffi::CStr::from_ptr(win.title.as_ptr()) }
                 .to_string_lossy()
                 .to_string();
-            let hwnd = windows[i].hwnd;
-            let pid = windows[i].pid;
+            let hwnd = win.hwnd;
+            let pid = win.pid;
             let idx = sources.len();
             sources.push((
                 format!("{} (pid {})", title, pid),

@@ -18,6 +18,7 @@ pub fn notify_message(crew: &str, sender: &str, preview: &str) {
         .ok();
 }
 
+#[allow(dead_code)]
 pub fn notify_invite(inviter: &str, crew: &str) {
     Notification::new()
         .summary("Mello invite")

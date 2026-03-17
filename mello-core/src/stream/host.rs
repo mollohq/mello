@@ -140,21 +140,23 @@ impl Drop for HostResources {
     }
 }
 
+type StartHostResult = (
+    *mut mello_sys::MelloStreamHost,
+    mpsc::UnboundedReceiver<VideoPacket>,
+    mpsc::UnboundedReceiver<AudioPacket>,
+    HostResources,
+);
+
 /// Start the C++ host pipeline with callback-based packet delivery.
 /// Returns the host handle, channel receivers, and ownership of leaked callback contexts.
-pub fn start_host(
+///
+/// # Safety
+/// `ctx` must be a valid, non-null `MelloContext` pointer returned by libmello.
+pub unsafe fn start_host(
     ctx: *mut mello_sys::MelloContext,
     source: &mello_sys::MelloCaptureSource,
     config: &mello_sys::MelloStreamConfig,
-) -> Result<
-    (
-        *mut mello_sys::MelloStreamHost,
-        mpsc::UnboundedReceiver<VideoPacket>,
-        mpsc::UnboundedReceiver<AudioPacket>,
-        HostResources,
-    ),
-    StreamError,
-> {
+) -> Result<StartHostResult, StreamError> {
     let (video_tx, video_rx) = mpsc::unbounded_channel();
     let (audio_tx, audio_rx) = mpsc::unbounded_channel();
 

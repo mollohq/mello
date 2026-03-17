@@ -227,21 +227,21 @@ impl VoiceManager {
         };
 
         let mut devices = Vec::with_capacity(count as usize);
-        for i in 0..count as usize {
-            let id = if raw[i].id.is_null() {
+        for dev in raw.iter().take(count as usize) {
+            let id = if dev.id.is_null() {
                 String::new()
             } else {
                 unsafe {
-                    std::ffi::CStr::from_ptr(raw[i].id)
+                    std::ffi::CStr::from_ptr(dev.id)
                         .to_string_lossy()
                         .into_owned()
                 }
             };
-            let name = if raw[i].name.is_null() {
+            let name = if dev.name.is_null() {
                 String::new()
             } else {
                 unsafe {
-                    std::ffi::CStr::from_ptr(raw[i].name)
+                    std::ffi::CStr::from_ptr(dev.name)
                         .to_string_lossy()
                         .into_owned()
                 }
@@ -249,7 +249,7 @@ impl VoiceManager {
             devices.push(AudioDevice {
                 id,
                 name,
-                is_default: raw[i].is_default,
+                is_default: dev.is_default,
             });
         }
 
@@ -346,12 +346,12 @@ impl VoiceManager {
 
         self.tick_counter = self.tick_counter.wrapping_add(1);
 
-        if self.loopback && (self.tick_counter % 5) == 0 {
+        if self.loopback && self.tick_counter.is_multiple_of(5) {
             let level = self.get_input_level();
             let _ = self.event_tx.send(Event::MicLevel { level });
         }
 
-        if self.debug_mode && (self.tick_counter % 3) == 0 {
+        if self.debug_mode && self.tick_counter.is_multiple_of(3) {
             let mut stats: mello_sys::MelloDebugStats = unsafe { std::mem::zeroed() };
             unsafe {
                 mello_sys::mello_get_debug_stats(self.ctx, &mut stats);
