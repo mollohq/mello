@@ -129,6 +129,24 @@ jobs:
             --signEntitlements client/macos/release.entitlements \
             --plist client/macos/Info.plist
 
+      - name: Fetch notarization log on failure
+        if: failure()
+        run: |
+          KEYCHAIN_PATH="$HOME/Library/Keychains/${{ env.CODE_SIGNING_KEYCHAIN }}.keychain-db"
+          # Get the most recent submission ID from notarytool history
+          xcrun notarytool history \
+            --keychain-profile "${{ env.NOTARY_PROFILE_NAME }}" \
+            --keychain "$KEYCHAIN_PATH" 2>&1 | head -20
+          SUBMISSION_ID=$(xcrun notarytool history \
+            --keychain-profile "${{ env.NOTARY_PROFILE_NAME }}" \
+            --keychain "$KEYCHAIN_PATH" 2>/dev/null | grep -m1 'id:' | awk '{print $2}')
+          if [ -n "$SUBMISSION_ID" ]; then
+            echo "Fetching log for submission $SUBMISSION_ID..."
+            xcrun notarytool log "$SUBMISSION_ID" \
+              --keychain-profile "${{ env.NOTARY_PROFILE_NAME }}" \
+              --keychain "$KEYCHAIN_PATH" 2>&1
+          fi
+
       - name: Upload to GitHub Release
         if: github.event_name == 'release'
         run: |
