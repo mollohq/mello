@@ -10,6 +10,10 @@ on:
         description: "Why are you triggering a manual build?"
         required: true
         default: "I need a binary package for testing!"
+      version:
+        description: "Override version number (optional, e.g., 2025.11.2)"
+        required: false
+        default: ""
 
 permissions:
   contents: write
@@ -37,16 +41,17 @@ jobs:
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
 
-      - name: Set version from release
-        if: github.event_name == 'release'
+      - name: Set version
+        shell: pwsh
         run: |
-          $version = "${{ github.event.release.tag_name }}" -replace '^v',''
+          if ("${{ github.event_name }}" -eq "workflow_dispatch" -and "${{ inputs.version }}" -ne "") {
+            $version = "${{ inputs.version }}" -replace '^v',''
+          } elseif ("${{ github.event_name }}" -eq "release") {
+            $version = "${{ github.event.release.tag_name }}" -replace '^v',''
+          } else {
+            $version = "0.0.${{ github.run_number }}"
+          }
           echo "RELEASE_VERSION=$version" >> $env:GITHUB_ENV
-
-      - name: Set dev version
-        if: github.event_name == 'workflow_dispatch'
-        run: |
-          echo "RELEASE_VERSION=0.0.${{ github.run_number }}" >> $env:GITHUB_ENV
 
       - name: Stamp version in Cargo.toml
         shell: pwsh
