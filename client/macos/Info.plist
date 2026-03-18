@@ -17,6 +17,8 @@
     <string>m3llo</string>
     <key>NSMicrophoneUsageDescription</key>
     <string>m3llo needs microphone access for voice chat.</string>
+    <key>CFBundleIconFile</key>
+    <string>mello.icns</string>
     <key>NSHighResolutionCapable</key>
     <true/>
 </dict>
