@@ -50,6 +50,14 @@ jobs:
       - name: Stamp version in Cargo.toml
         run: sed -i'' -e "s/^version = \"[^\"]*\"/version = \"$RELEASE_VERSION\"/" Cargo.toml
 
+      - name: Stamp version in Info.plist
+        run: |
+          PLIST=client/macos/Info.plist
+          /usr/libexec/PlistBuddy -c "Add :CFBundleShortVersionString string $RELEASE_VERSION" "$PLIST" 2>/dev/null \
+            || /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $RELEASE_VERSION" "$PLIST"
+          /usr/libexec/PlistBuddy -c "Add :CFBundleVersion string $RELEASE_VERSION" "$PLIST" 2>/dev/null \
+            || /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $RELEASE_VERSION" "$PLIST"
+
       - name: Import build certificate
         uses: apple-actions/import-codesign-certs@v2
         with:

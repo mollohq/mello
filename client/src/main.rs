@@ -171,6 +171,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let app = MainWindow::new()?;
+    app.set_settings_build_version(format!("v{}", env!("CARGO_PKG_VERSION")).into());
 
     // --- macOS native menu bar ---
     #[cfg(target_os = "macos")]
