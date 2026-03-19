@@ -4,9 +4,9 @@ use crate::command::Command;
 use crate::config::Config;
 use crate::events::Event;
 use crate::nakama::NakamaClient;
+use crate::nakama::{InternalPresence, InternalSignal};
 use crate::presence::PresenceStatus;
 use crate::session;
-use crate::nakama::{InternalPresence, InternalSignal};
 use crate::stream::manager::StreamSession;
 use crate::stream::sink_p2p::P2PFanoutSink;
 use crate::stream::viewer::{StreamViewer, ViewerAction, ViewerFeedResult};
@@ -294,7 +294,9 @@ impl Client {
     }
 
     fn handle_presence(&mut self, presence: InternalPresence) {
-        if !self.voice.is_active() { return; }
+        if !self.voice.is_active() {
+            return;
+        }
 
         let local_id = match self.nakama.current_user_id() {
             Some(id) => id.to_string(),
@@ -304,13 +306,19 @@ impl Client {
         match presence {
             InternalPresence::Joined { user_id } => {
                 if user_id != local_id {
-                    log::info!("Presence: member {} joined channel, adding to voice mesh", user_id);
+                    log::info!(
+                        "Presence: member {} joined channel, adding to voice mesh",
+                        user_id
+                    );
                     self.voice.on_member_joined(&local_id, &user_id);
                 }
             }
             InternalPresence::Left { user_id } => {
                 if user_id != local_id {
-                    log::info!("Presence: member {} left channel, removing from voice mesh", user_id);
+                    log::info!(
+                        "Presence: member {} left channel, removing from voice mesh",
+                        user_id
+                    );
                     self.voice.on_member_left(&user_id);
                 }
             }
@@ -859,6 +867,15 @@ impl Client {
             Command::DiscoverCrews => {
                 self.handle_discover_crews().await;
             }
+            Command::FinalizeOnboarding {
+                crew_id,
+                crew_name,
+                display_name,
+                avatar,
+            } => {
+                self.handle_finalize_onboarding(crew_id, crew_name, &display_name, avatar)
+                    .await;
+            }
             Command::LoadMyCrews => {
                 self.load_crews().await;
             }
@@ -892,7 +909,9 @@ impl Client {
             Command::ListAudioDevices => {
                 let capture = self.voice.list_capture_devices();
                 let playback = self.voice.list_playback_devices();
-                let _ = self.event_tx.send(Event::AudioDevicesListed { capture, playback });
+                let _ = self
+                    .event_tx
+                    .send(Event::AudioDevicesListed { capture, playback });
             }
             Command::SetCaptureDevice { id } => {
                 self.voice.set_capture_device(&id);
@@ -930,16 +949,29 @@ impl Client {
             Command::CreateVoiceChannel { crew_id, name } => {
                 self.handle_create_voice_channel(&crew_id, &name).await;
             }
-            Command::RenameVoiceChannel { crew_id, channel_id, name } => {
-                self.handle_rename_voice_channel(&crew_id, &channel_id, &name).await;
+            Command::RenameVoiceChannel {
+                crew_id,
+                channel_id,
+                name,
+            } => {
+                self.handle_rename_voice_channel(&crew_id, &channel_id, &name)
+                    .await;
             }
-            Command::DeleteVoiceChannel { crew_id, channel_id } => {
-                self.handle_delete_voice_channel(&crew_id, &channel_id).await;
+            Command::DeleteVoiceChannel {
+                crew_id,
+                channel_id,
+            } => {
+                self.handle_delete_voice_channel(&crew_id, &channel_id)
+                    .await;
             }
 
             // --- Presence & crew state ---
             Command::UpdatePresence { status, activity } => {
-                if let Err(e) = self.nakama.presence_update(&status, activity.as_ref()).await {
+                if let Err(e) = self
+                    .nakama
+                    .presence_update(&status, activity.as_ref())
+                    .await
+                {
                     log::error!("Failed to update presence: {}", e);
                 }
             }
@@ -955,7 +987,11 @@ impl Client {
     async fn handle_device_auth(&mut self, device_id: &str) {
         match self.nakama.authenticate_device(device_id).await {
             Ok((user, created)) => {
-                log::info!("Device auth succeeded for {} (created={})", user.id, created);
+                log::info!(
+                    "Device auth succeeded for {} (created={})",
+                    user.id,
+                    created
+                );
                 if let Some(rt) = self.nakama.refresh_token() {
                     let _ = session::save(rt);
                 }
@@ -975,7 +1011,7 @@ impl Client {
     }
 
     async fn handle_discover_crews(&self) {
-        match self.nakama.list_groups(50).await {
+        match self.nakama.discover_crews_public(50).await {
             Ok(crews) => {
                 let _ = self.event_tx.send(Event::DiscoverCrewsLoaded { crews });
             }
@@ -983,6 +1019,98 @@ impl Client {
                 log::error!("Failed to discover crews: {}", e);
             }
         }
+    }
+
+    async fn handle_finalize_onboarding(
+        &mut self,
+        crew_id: Option<String>,
+        crew_name: Option<String>,
+        display_name: &str,
+        _avatar: u8,
+    ) {
+        let device_id = {
+            use rand::Rng;
+            let bytes: [u8; 16] = rand::thread_rng().gen();
+            bytes
+                .iter()
+                .map(|b| format!("{:02x}", b))
+                .collect::<String>()
+        };
+        log::info!(
+            "[onboarding] finalizing — device auth with id={}",
+            device_id
+        );
+
+        let (user, _created) = match self.nakama.authenticate_device(&device_id).await {
+            Ok(pair) => pair,
+            Err(e) => {
+                log::error!("[onboarding] device auth failed: {}", e);
+                let _ = self.event_tx.send(Event::OnboardingFailed {
+                    reason: format!("Account creation failed: {}", e),
+                });
+                return;
+            }
+        };
+
+        if let Some(rt) = self.nakama.refresh_token() {
+            let _ = session::save(rt);
+        }
+
+        if let Err(e) = self.nakama.connect_ws(self.event_tx.clone()).await {
+            log::error!("[onboarding] WebSocket connect failed: {}", e);
+            let _ = self.event_tx.send(Event::OnboardingFailed {
+                reason: format!("Connection failed: {}", e),
+            });
+            return;
+        }
+
+        self.on_connected().await;
+
+        if !display_name.is_empty() {
+            if let Err(e) = self.nakama.update_account(display_name).await {
+                log::warn!("[onboarding] failed to set display name: {}", e);
+            }
+        }
+
+        // TODO: persist avatar in user metadata once supported
+
+        let final_crew_id = if let Some(id) = crew_id {
+            if let Err(e) = self.nakama.join_group(&id).await {
+                log::error!("[onboarding] failed to join crew {}: {}", id, e);
+                let _ = self.event_tx.send(Event::OnboardingFailed {
+                    reason: format!("Failed to join crew: {}", e),
+                });
+                return;
+            }
+            Some(id)
+        } else if let Some(name) = crew_name {
+            match self.nakama.create_crew(&name).await {
+                Ok(crew) => {
+                    let id = crew.id.clone();
+                    let _ = self.event_tx.send(Event::CrewCreated { crew });
+                    Some(id)
+                }
+                Err(e) => {
+                    log::error!("[onboarding] failed to create crew: {}", e);
+                    let _ = self.event_tx.send(Event::OnboardingFailed {
+                        reason: format!("Failed to create crew: {}", e),
+                    });
+                    return;
+                }
+            }
+        } else {
+            None
+        };
+
+        if let Some(ref cid) = final_crew_id {
+            self.handle_select_crew(cid).await;
+        }
+
+        let mut updated_user = user;
+        updated_user.display_name = display_name.to_string();
+        let _ = self
+            .event_tx
+            .send(Event::OnboardingReady { user: updated_user });
     }
 
     async fn handle_join_crew(&mut self, crew_id: &str) {
@@ -1133,7 +1261,18 @@ impl Client {
             }
         };
 
-        match self.nakama.authenticate_google(&code, &verifier).await {
+        let id_token = match self.nakama.google_exchange_code(&code, &verifier).await {
+            Ok(t) => t,
+            Err(e) => {
+                log::error!("[auth] Google token exchange failed: {}", e);
+                let _ = self.event_tx.send(Event::LoginFailed {
+                    reason: e.to_string(),
+                });
+                return;
+            }
+        };
+
+        match self.nakama.authenticate_google(&id_token).await {
             Ok(user) => self.on_social_login(user).await,
             Err(e) => {
                 log::error!("[auth] Google Nakama auth failed: {}", e);
@@ -1192,7 +1331,11 @@ impl Client {
 
     /// Shared post-auth flow for social logins (same as handle_login success path).
     async fn on_social_login(&mut self, user: crate::events::User) {
-        log::info!("[auth] Social login success: {} ({})", user.display_name, user.tag);
+        log::info!(
+            "[auth] Social login success: {} ({})",
+            user.display_name,
+            user.tag
+        );
 
         match self.nakama.refresh_token() {
             Some(rt) => {
@@ -1253,10 +1396,33 @@ impl Client {
             }
         };
 
-        match self.nakama.link_google(&code, &verifier).await {
+        let id_token = match self.nakama.google_exchange_code(&code, &verifier).await {
+            Ok(t) => t,
+            Err(e) => {
+                log::error!("[auth] Google token exchange failed: {}", e);
+                let _ = self.event_tx.send(Event::SocialLinkFailed {
+                    reason: e.to_string(),
+                });
+                return;
+            }
+        };
+
+        match self.nakama.link_google(&id_token).await {
             Ok(()) => {
                 log::info!("[auth] Google identity linked to device account");
                 let _ = self.event_tx.send(Event::SocialLinked);
+            }
+            Err(e) if e.to_string().contains("already in use") => {
+                log::info!("[auth] Google already linked elsewhere, falling back to authenticate");
+                match self.nakama.authenticate_google(&id_token).await {
+                    Ok(user) => self.on_social_login(user).await,
+                    Err(e2) => {
+                        log::error!("[auth] Google authenticate fallback failed: {}", e2);
+                        let _ = self.event_tx.send(Event::SocialLinkFailed {
+                            reason: e2.to_string(),
+                        });
+                    }
+                }
             }
             Err(e) => {
                 log::error!("[auth] Google link failed: {}", e);
@@ -1307,6 +1473,18 @@ impl Client {
                 log::info!("[auth] Discord identity linked to device account");
                 let _ = self.event_tx.send(Event::SocialLinked);
             }
+            Err(e) if e.to_string().contains("already in use") => {
+                log::info!("[auth] Discord already linked elsewhere, falling back to authenticate");
+                match self.nakama.authenticate_custom(&token, "discord").await {
+                    Ok(user) => self.on_social_login(user).await,
+                    Err(e2) => {
+                        log::error!("[auth] Discord authenticate fallback failed: {}", e2);
+                        let _ = self.event_tx.send(Event::SocialLinkFailed {
+                            reason: e2.to_string(),
+                        });
+                    }
+                }
+            }
             Err(e) => {
                 log::error!("[auth] Discord link failed: {}", e);
                 let _ = self.event_tx.send(Event::SocialLinkFailed {
@@ -1329,7 +1507,11 @@ impl Client {
 
     async fn handle_logout(&mut self) {
         // Notify server we're going offline
-        if let Err(e) = self.nakama.presence_update(&PresenceStatus::Offline, None).await {
+        if let Err(e) = self
+            .nakama
+            .presence_update(&PresenceStatus::Offline, None)
+            .await
+        {
             log::warn!("Failed to set offline presence on logout: {}", e);
         }
 
@@ -1340,7 +1522,9 @@ impl Client {
             }
         }
         self.voice.leave_voice();
-        let _ = self.event_tx.send(Event::VoiceStateChanged { in_call: false });
+        let _ = self
+            .event_tx
+            .send(Event::VoiceStateChanged { in_call: false });
 
         session::clear();
         if let Err(e) = self.nakama.leave_crew_channel().await {
@@ -1384,7 +1568,9 @@ impl Client {
 
     async fn handle_select_crew(&mut self, crew_id: &str) {
         self.voice.leave_voice();
-        let _ = self.event_tx.send(Event::VoiceStateChanged { in_call: false });
+        let _ = self
+            .event_tx
+            .send(Event::VoiceStateChanged { in_call: false });
 
         if let Err(e) = self.nakama.leave_crew_channel().await {
             log::warn!("Failed to leave previous channel: {}", e);
@@ -1400,7 +1586,11 @@ impl Client {
         });
 
         // Tell the server this is our active crew (registers subscription + returns state)
-        let local_user_id = self.nakama.current_user_id().map(String::from).unwrap_or_default();
+        let local_user_id = self
+            .nakama
+            .current_user_id()
+            .map(String::from)
+            .unwrap_or_default();
         let voice_channel_id = match self.nakama.set_active_crew(crew_id).await {
             Ok(state) => {
                 // Check if user is already in a channel (server remembers from last session)
@@ -1411,7 +1601,9 @@ impl Client {
                     .map(|ch| ch.id.clone());
                 // Fall back to default channel
                 let target = already_in.or_else(|| {
-                    state.voice_channels.iter()
+                    state
+                        .voice_channels
+                        .iter()
                         .find(|ch| ch.is_default)
                         .or_else(|| state.voice_channels.first())
                         .map(|ch| ch.id.clone())
@@ -1452,7 +1644,11 @@ impl Client {
 
     /// Called after successful auth + WS connect. Sets online presence and fetches ICE config.
     async fn on_connected(&mut self) {
-        if let Err(e) = self.nakama.presence_update(&PresenceStatus::Online, None).await {
+        if let Err(e) = self
+            .nakama
+            .presence_update(&PresenceStatus::Online, None)
+            .await
+        {
             log::warn!("Failed to set online presence: {}", e);
         }
 
@@ -1475,7 +1671,8 @@ impl Client {
             Ok(health) => {
                 log::info!(
                     "Server health: status={} version={} protocol={}",
-                    health.status, health.version,
+                    health.status,
+                    health.version,
                     health.protocol_version.unwrap_or(0),
                 );
 
@@ -1566,12 +1763,17 @@ impl Client {
         // Rejoin local voice mesh with the members from the response
         self.voice.leave_voice();
         if let Some(local_id) = self.nakama.current_user_id().map(String::from) {
-            let peer_ids: Vec<String> = resp.voice_state.members.iter()
+            let peer_ids: Vec<String> = resp
+                .voice_state
+                .members
+                .iter()
                 .filter(|m| m.user_id != local_id)
                 .map(|m| m.user_id.clone())
                 .collect();
             self.voice.join_voice(&local_id, &peer_ids);
-            let _ = self.event_tx.send(Event::VoiceStateChanged { in_call: true });
+            let _ = self
+                .event_tx
+                .send(Event::VoiceStateChanged { in_call: true });
         }
 
         // Emit authoritative state so the UI can update members + active channel
@@ -1590,7 +1792,9 @@ impl Client {
             }
         }
         self.voice.leave_voice();
-        let _ = self.event_tx.send(Event::VoiceStateChanged { in_call: false });
+        let _ = self
+            .event_tx
+            .send(Event::VoiceStateChanged { in_call: false });
     }
 
     async fn handle_create_voice_channel(&self, crew_id: &str, name: &str) {
@@ -1653,7 +1857,9 @@ impl Client {
             }
         }
         self.voice.leave_voice();
-        let _ = self.event_tx.send(Event::VoiceStateChanged { in_call: false });
+        let _ = self
+            .event_tx
+            .send(Event::VoiceStateChanged { in_call: false });
         let crew_id = self.nakama.active_crew_id().map(String::from);
         if let Err(e) = self.nakama.leave_crew_channel().await {
             log::error!("Failed to leave crew: {}", e);
@@ -1802,7 +2008,7 @@ impl Client {
         // Step 2: sync FFI calls + session creation (raw pointers, no await)
         let ctx = self.voice.mello_ctx();
 
-        if !crate::stream::encoder_available(ctx) {
+        if !unsafe { crate::stream::encoder_available(ctx) } {
             let msg = "Streaming requires a hardware encoder \
                        (NVIDIA, AMD, or Intel). None was found on this machine.";
             log::error!("{}", msg);
@@ -1841,7 +2047,7 @@ impl Client {
         };
 
         let (host, video_rx, audio_rx, resources) =
-            match crate::stream::host::start_host(ctx, &source, &mello_config) {
+            match unsafe { crate::stream::host::start_host(ctx, &source, &mello_config) } {
                 Ok(v) => v,
                 Err(e) => {
                     let _ = self.event_tx.send(Event::StreamError {

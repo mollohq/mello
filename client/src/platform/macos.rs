@@ -57,9 +57,7 @@ pub fn build_menu_bar() -> Menu {
     edit_menu.append(&PredefinedMenuItem::cut(None)).ok();
     edit_menu.append(&PredefinedMenuItem::copy(None)).ok();
     edit_menu.append(&PredefinedMenuItem::paste(None)).ok();
-    edit_menu
-        .append(&PredefinedMenuItem::select_all(None))
-        .ok();
+    edit_menu.append(&PredefinedMenuItem::select_all(None)).ok();
     edit_menu.append(&PredefinedMenuItem::separator()).ok();
     edit_menu
         .append(&MenuItem::with_id(

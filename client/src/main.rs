@@ -11,15 +11,15 @@ pub const APP_NAME: &str = "Mello";
 
 slint::include_modules!();
 
+use mello_core::{Client, Command, Config, Event};
+use platform::{StatusItem, VoiceState};
+use settings::Settings;
+use slint::Model;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::Duration;
-use slint::Model;
-use mello_core::{Client, Command, Config, Event};
-use settings::Settings;
-use platform::{StatusItem, VoiceState};
-use updater::{Updater, UpdateEvent};
-use uuid::Uuid;
+use updater::{UpdateEvent, Updater};
+
 use single_instance::SingleInstance;
 
 fn parse_capture_source_id(id: &str, mode: &str) -> (Option<u32>, Option<u64>, Option<u32>) {
@@ -83,14 +83,11 @@ impl DebugHistory {
 }
 
 fn init_logging() {
-    use tracing_subscriber::{fmt, EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
+    use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("info"));
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
 
-    let stderr_layer = fmt::layer()
-        .with_target(true)
-        .with_writer(std::io::stderr);
+    let stderr_layer = fmt::layer().with_target(true).with_writer(std::io::stderr);
 
     let registry = tracing_subscriber::registry()
         .with(filter)
@@ -159,8 +156,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // --- Auto-updater (graceful fallback in dev mode) ---
     let (update_event_tx, update_event_rx) = std::sync::mpsc::channel::<UpdateEvent>();
-    let updater: Rc<RefCell<Option<Updater>>> = Rc::new(RefCell::new(
-        match Updater::new(update_event_tx) {
+    let updater: Rc<RefCell<Option<Updater>>> =
+        Rc::new(RefCell::new(match Updater::new(update_event_tx) {
             Ok(u) => {
                 log::info!("Updater ready — v{}", u.current_version());
                 Some(u)
@@ -169,8 +166,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 log::warn!("Updater init failed (dev mode?): {}", e);
                 None
             }
-        }
-    ));
+        }));
 
     // Background update check on startup
     if let Some(ref mut u) = *updater.borrow_mut() {
@@ -259,26 +255,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Decide startup path based on onboarding state
     {
-        let mut s = settings.borrow_mut();
-        log::info!("[auth] startup  onboarding_step={} device_id={:?}", s.onboarding_step, s.device_id);
+        let s = settings.borrow();
+        log::info!("[auth] startup  onboarding_step={}", s.onboarding_step);
         if s.onboarding_step > 3 {
-            // Onboarding complete: normal session restore
             log::info!("[auth] onboarding done — attempting session restore");
             let _ = cmd_tx.try_send(Command::TryRestore);
         } else {
-            // Onboarding needed: device auth first
-            let device_id = match s.device_id.clone() {
-                Some(id) => id,
-                None => {
-                    let id = Uuid::new_v4().to_string();
-                    s.device_id = Some(id.clone());
-                    s.save();
-                    log::info!("[auth] generated new device_id={}", id);
-                    id
-                }
-            };
-            log::info!("[auth] onboarding in progress — device auth with id={}", device_id);
-            let _ = cmd_tx.try_send(Command::DeviceAuth { device_id });
+            log::info!("[auth] onboarding in progress — fetching crews (no auth)");
+            let _ = cmd_tx.try_send(Command::DiscoverCrews);
         }
         app.set_onboarding_step(s.onboarding_step as i32);
     }
@@ -347,7 +331,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             s.save();
             log::info!("Logged out — returning to onboarding step 1");
             if let Some(ref device_id) = s.device_id {
-                let _ = cmd.try_send(Command::DeviceAuth { device_id: device_id.clone() });
+                let _ = cmd.try_send(Command::DeviceAuth {
+                    device_id: device_id.clone(),
+                });
             }
         });
     }
@@ -381,7 +367,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if let Some(app) = app_weak.upgrade() {
                 let new_deafened = !app.get_deafened();
                 app.set_deafened(new_deafened);
-                let _ = cmd.try_send(Command::SetDeafen { deafened: new_deafened });
+                let _ = cmd.try_send(Command::SetDeafen {
+                    deafened: new_deafened,
+                });
 
                 if new_deafened {
                     // Remember current mute state, then force mute
@@ -423,7 +411,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .map(|i| {
                         let mut ch = current.row_data(i).unwrap();
                         if ch.id == channel_id {
-                            log::info!("UI: toggling '{}' expanded {} -> {}", ch.name, ch.expanded, !ch.expanded);
+                            log::info!(
+                                "UI: toggling '{}' expanded {} -> {}",
+                                ch.name,
+                                ch.expanded,
+                                !ch.expanded
+                            );
                             ch.expanded = !ch.expanded;
                         }
                         ch
@@ -478,7 +471,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .unwrap_or_else(|| "Unassigned".into())
                 } else {
                     "Unassigned".into()
-                }.into();
+                }
+                .into();
                 app.set_settings_ptt_key_label(ptt_label);
                 app.set_settings_open(true);
             }
@@ -604,7 +598,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let s = settings.clone();
         app.on_setting_changed_input_mode(move |is_ptt| {
             let mut settings = s.borrow_mut();
-            settings.input_mode = if is_ptt { "push_to_talk".into() } else { "voice_activity".into() };
+            settings.input_mode = if is_ptt {
+                "push_to_talk".into()
+            } else {
+                "voice_activity".into()
+            };
             settings.save();
         });
     }
@@ -621,7 +619,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let app_weak = app.as_weak();
         let hk = _hotkey_mgr.clone();
         app.on_settings_ptt_key_captured(move |key_text, ctrl, alt, shift, meta| {
-            if let Some((hotkey, label)) = platform::hotkeys::slint_key_to_hotkey(key_text.as_str(), ctrl, alt, shift, meta) {
+            if let Some((hotkey, label)) =
+                platform::hotkeys::slint_key_to_hotkey(key_text.as_str(), ctrl, alt, shift, meta)
+            {
                 let hotkey_str = hotkey.into_string();
                 // Register the global hotkey
                 match hk.borrow_mut().register_ptt(hotkey) {
@@ -754,15 +754,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let app_weak = app.as_weak();
         let s = settings.clone();
         app.on_onboarding_crew_selected(move |crew_id| {
-            let _ = cmd.try_send(Command::JoinCrew {
-                crew_id: crew_id.to_string(),
-            });
             let _ = cmd.try_send(Command::ListAudioDevices);
             if let Some(app) = app_weak.upgrade() {
                 app.set_onboarding_step(2);
                 let mut settings = s.borrow_mut();
+                settings.pending_crew_id = Some(crew_id.to_string());
+                settings.pending_crew_name = None;
                 settings.onboarding_step = 2;
                 settings.save();
+                log::info!("[onboarding] crew selected (stored locally): {}", crew_id);
             }
         });
     }
@@ -772,15 +772,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let app_weak = app.as_weak();
         let s = settings.clone();
         app.on_onboarding_create_crew(move |name| {
-            let _ = cmd.try_send(Command::CreateCrew {
-                name: name.to_string(),
-            });
             let _ = cmd.try_send(Command::ListAudioDevices);
             if let Some(app) = app_weak.upgrade() {
                 app.set_onboarding_step(2);
                 let mut settings = s.borrow_mut();
+                settings.pending_crew_id = None;
+                settings.pending_crew_name = Some(name.to_string());
                 settings.onboarding_step = 2;
                 settings.save();
+                log::info!(
+                    "[onboarding] crew creation queued (stored locally): {}",
+                    name
+                );
             }
         });
     }
@@ -791,16 +794,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let cmd = cmd_tx.clone();
         app.on_onboarding_continue(move |step| {
             if let Some(app) = app_weak.upgrade() {
-                // When advancing to step 3, persist the nickname to Nakama
                 if step == 3 {
                     let nickname = app.get_onboarding_nickname().to_string();
-                    if !nickname.is_empty() {
-                        log::info!("[auth] persisting display_name to Nakama: {}", nickname);
-                        let _ = cmd.try_send(Command::UpdateProfile {
-                            display_name: nickname.clone(),
-                        });
-                        app.set_user_name(nickname.into());
-                    }
+                    let avatar = app.get_selected_avatar() as u8;
+                    let settings = s.borrow();
+                    let crew_id = settings.pending_crew_id.clone();
+                    let crew_name = settings.pending_crew_name.clone();
+                    drop(settings);
+                    log::info!(
+                        "[onboarding] finalizing — nickname={} crew_id={:?} crew_name={:?}",
+                        nickname,
+                        crew_id,
+                        crew_name
+                    );
+                    let _ = cmd.try_send(Command::FinalizeOnboarding {
+                        crew_id,
+                        crew_name,
+                        display_name: nickname,
+                        avatar,
+                    });
+                    // Don't advance step yet — wait for OnboardingReady event
+                    return;
                 }
                 app.set_onboarding_step(step);
                 let mut settings = s.borrow_mut();
@@ -855,6 +869,57 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     {
         let cmd = cmd_tx.clone();
         app.on_onboarding_auth_apple(move || {
+            let _ = cmd.try_send(Command::AuthApple);
+        });
+    }
+    // --- Sign-in panel: social auth (returning user — uses Auth* commands) ---
+    {
+        let cmd = cmd_tx.clone();
+        let app_weak = app.as_weak();
+        app.on_signin_steam(move || {
+            if let Some(app) = app_weak.upgrade() {
+                app.set_show_sign_in(false);
+            }
+            let _ = cmd.try_send(Command::AuthSteam);
+        });
+    }
+    {
+        let cmd = cmd_tx.clone();
+        let app_weak = app.as_weak();
+        app.on_signin_google(move || {
+            if let Some(app) = app_weak.upgrade() {
+                app.set_show_sign_in(false);
+            }
+            let _ = cmd.try_send(Command::AuthGoogle);
+        });
+    }
+    {
+        let cmd = cmd_tx.clone();
+        let app_weak = app.as_weak();
+        app.on_signin_twitch(move || {
+            if let Some(app) = app_weak.upgrade() {
+                app.set_show_sign_in(false);
+            }
+            let _ = cmd.try_send(Command::AuthTwitch);
+        });
+    }
+    {
+        let cmd = cmd_tx.clone();
+        let app_weak = app.as_weak();
+        app.on_signin_discord(move || {
+            if let Some(app) = app_weak.upgrade() {
+                app.set_show_sign_in(false);
+            }
+            let _ = cmd.try_send(Command::AuthDiscord);
+        });
+    }
+    {
+        let cmd = cmd_tx.clone();
+        let app_weak = app.as_weak();
+        app.on_signin_apple(move || {
+            if let Some(app) = app_weak.upgrade() {
+                app.set_show_sign_in(false);
+            }
             let _ = cmd.try_send(Command::AuthApple);
         });
     }
@@ -946,218 +1011,255 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let saved_app_weak = app.as_weak();
     let _updater_ref = updater.clone();
     let timer = slint::Timer::default();
-    timer.start(slint::TimerMode::Repeated, Duration::from_millis(50), move || {
-        // --- Update events ---
-        while let Ok(ue) = update_event_rx.try_recv() {
-            if let Some(app) = app_weak.upgrade() {
-                match ue {
-                    UpdateEvent::CheckComplete { update_available, version, download_size, .. } => {
-                        if update_available {
-                            app.set_update_available(true);
-                            if let Some(v) = version {
-                                app.set_update_version(v.into());
-                            }
-                            log::info!("Update available, size: {:?} bytes", download_size);
-                        }
-                    }
-                    UpdateEvent::DownloadProgress { progress } => {
-                        app.set_update_download_progress(progress);
-                    }
-                    UpdateEvent::Error(msg) => {
-                        log::warn!("Update error: {}", msg);
-                        app.set_update_available(false);
-                    }
-                    UpdateEvent::CheckStarted => {}
-                }
-            }
-        }
-
-        // --- Core events ---
-        while let Ok(event) = event_rx.try_recv() {
-            if let Some(app) = app_weak.upgrade() {
-                // Update tray icon based on voice state changes
-                match &event {
-                    Event::VoiceStateChanged { in_call } => {
-                        let state = if *in_call {
-                            VoiceState::Connected
-                        } else {
-                            VoiceState::Inactive
-                        };
-                        status_ref.borrow_mut().set_voice_state(state);
-                    }
-                    Event::VoiceActivity { speaking, .. } => {
-                        if app.get_mic_muted() {
-                            status_ref.borrow_mut().set_voice_state(VoiceState::Muted);
-                        } else if *speaking {
-                            status_ref.borrow_mut().set_voice_state(VoiceState::Speaking);
-                        } else {
-                            status_ref.borrow_mut().set_voice_state(VoiceState::Connected);
-                        }
-                    }
-                    // Show OS notifications when window is hidden
-                    Event::MemberJoined { member, .. } => {
-                        if !app.window().is_visible() {
-                            notifications::notify_member_joined(&member.display_name);
-                        }
-                    }
-                    Event::MessageReceived { message } => {
-                        if !app.window().is_visible() {
-                            let crew_name = app.get_active_crew_id().to_string();
-                            notifications::notify_message(
-                                &crew_name,
-                                &message.sender_name,
-                                &message.content,
-                            );
-                        }
-                    }
-                    _ => {}
-                }
-                handle_event(&app, event, &s, &dbg_hist, &event_cmd_tx, &active_voice_channel);
-            }
-        }
-
-        // --- Tray icon left-click: toggle window visibility ---
-        // Right-click shows the context menu (handled via MenuEvent below).
-        while let Some(event) = StatusItem::poll_tray_event() {
-            if let tray_icon::TrayIconEvent::Click {
-                button: tray_icon::MouseButton::Left,
-                button_state: tray_icon::MouseButtonState::Down,
-                ..
-            } = event
-            {
+    timer.start(
+        slint::TimerMode::Repeated,
+        Duration::from_millis(50),
+        move || {
+            // --- Update events ---
+            while let Ok(ue) = update_event_rx.try_recv() {
                 if let Some(app) = app_weak.upgrade() {
-                    if app.window().is_visible() {
-                        app.hide().ok();
-                    } else {
-                        app.show().ok();
+                    match ue {
+                        UpdateEvent::CheckComplete {
+                            update_available,
+                            version,
+                            download_size,
+                            ..
+                        } => {
+                            if update_available {
+                                app.set_update_available(true);
+                                if let Some(v) = version {
+                                    app.set_update_version(v.into());
+                                }
+                                log::info!("Update available, size: {:?} bytes", download_size);
+                            }
+                        }
+                        UpdateEvent::DownloadProgress { progress } => {
+                            app.set_update_download_progress(progress);
+                        }
+                        UpdateEvent::Error(msg) => {
+                            log::warn!("Update error: {}", msg);
+                            app.set_update_available(false);
+                        }
+                        UpdateEvent::CheckStarted => {}
                     }
                 }
             }
-        }
 
-        // --- Tray context-menu + menu bar events ---
-        while let Ok(event) = tray_icon::menu::MenuEvent::receiver().try_recv() {
-            let id = event.id().as_ref();
-            match id {
-                // Tray context menu (cross-platform)
-                "tray_open" => {
-                    if let Some(app) = app_weak.upgrade() {
-                        app.show().ok();
-                    }
-                }
-                "tray_mute" => {
-                    if let Some(app) = app_weak.upgrade() {
-                        let new_muted = !app.get_mic_muted();
-                        app.set_mic_muted(new_muted);
-                        let _ = menu_cmd_tx.try_send(Command::SetMute { muted: new_muted });
-                        status_ref.borrow_mut().set_mute_checked(new_muted);
-                    }
-                }
-                "tray_leave" => {
-                    let _ = menu_cmd_tx.try_send(Command::LeaveVoice);
-                }
-                "tray_quit" => {
-                    slint::quit_event_loop().ok();
-                }
-                _ => {
-                    // macOS menu bar items
-                    #[cfg(target_os = "macos")]
-                    match id {
-                        "prefs" => {
-                            let _ = menu_cmd_tx.try_send(Command::ListAudioDevices);
-                            if let Some(app) = app_weak.upgrade() {
-                                let settings = _menu_settings.borrow();
-                                app.set_settings_start_on_boot(settings.start_on_boot);
-                                app.set_settings_start_minimized(settings.start_minimized);
-                                app.set_settings_close_to_tray(settings.close_to_tray);
-                                app.set_settings_auto_connect(settings.auto_connect);
-                                app.set_settings_minimize_on_join(settings.minimize_on_join);
-                                app.set_settings_hw_acceleration(settings.hardware_acceleration);
-                                app.set_settings_input_volume(settings.input_volume);
-                                app.set_settings_output_volume(settings.output_volume);
-                                app.set_settings_noise_suppression(settings.noise_suppression);
-                                app.set_settings_echo_cancellation(settings.echo_cancellation);
-                                app.set_settings_ptt_mode(settings.input_mode == "push_to_talk");
-                                app.set_settings_vad_threshold(settings.vad_threshold);
-                                let ptt_label: slint::SharedString = if let Some(ref key_str) = settings.ptt_key {
-                                    platform::hotkeys::parse_hotkey_string(key_str)
-                                        .map(|(_, label)| label)
-                                        .unwrap_or_else(|| "Unassigned".into())
-                                } else {
-                                    "Unassigned".into()
-                                }.into();
-                                app.set_settings_ptt_key_label(ptt_label);
-                                app.set_settings_open(true);
+            // --- Core events ---
+            while let Ok(event) = event_rx.try_recv() {
+                if let Some(app) = app_weak.upgrade() {
+                    // Update tray icon based on voice state changes
+                    match &event {
+                        Event::VoiceStateChanged { in_call } => {
+                            let state = if *in_call {
+                                VoiceState::Connected
+                            } else {
+                                VoiceState::Inactive
+                            };
+                            status_ref.borrow_mut().set_voice_state(state);
+                        }
+                        Event::VoiceActivity { speaking, .. } => {
+                            if app.get_mic_muted() {
+                                status_ref.borrow_mut().set_voice_state(VoiceState::Muted);
+                            } else if *speaking {
+                                status_ref
+                                    .borrow_mut()
+                                    .set_voice_state(VoiceState::Speaking);
+                            } else {
+                                status_ref
+                                    .borrow_mut()
+                                    .set_voice_state(VoiceState::Connected);
                             }
                         }
-                        "mute" => {
-                            if let Some(app) = app_weak.upgrade() {
-                                let new_muted = !app.get_mic_muted();
-                                app.set_mic_muted(new_muted);
-                                let _ = menu_cmd_tx.try_send(Command::SetMute { muted: new_muted });
+                        // Show OS notifications when window is hidden
+                        Event::MemberJoined { member, .. } => {
+                            if !app.window().is_visible() {
+                                notifications::notify_member_joined(&member.display_name);
                             }
                         }
-                        "deafen" => {
-                            if let Some(app) = app_weak.upgrade() {
-                                let new_deafened = !app.get_deafened();
-                                app.set_deafened(new_deafened);
-                                let _ = menu_cmd_tx.try_send(Command::SetDeafen { deafened: new_deafened });
-                                if new_deafened {
-                                    _menu_mbd.set(app.get_mic_muted());
-                                    if !app.get_mic_muted() {
-                                        app.set_mic_muted(true);
-                                        let _ = menu_cmd_tx.try_send(Command::SetMute { muted: true });
-                                    }
-                                } else if !_menu_mbd.get() {
-                                    app.set_mic_muted(false);
-                                    let _ = menu_cmd_tx.try_send(Command::SetMute { muted: false });
+                        Event::MessageReceived { message } => {
+                            if !app.window().is_visible() {
+                                let crew_name = app.get_active_crew_id().to_string();
+                                notifications::notify_message(
+                                    &crew_name,
+                                    &message.sender_name,
+                                    &message.content,
+                                );
+                            }
+                        }
+                        _ => {}
+                    }
+                    handle_event(
+                        &app,
+                        event,
+                        &s,
+                        &dbg_hist,
+                        &event_cmd_tx,
+                        &active_voice_channel,
+                    );
+                }
+            }
+
+            // --- Tray icon left-click: toggle window visibility ---
+            // Right-click shows the context menu (handled via MenuEvent below).
+            while let Some(event) = StatusItem::poll_tray_event() {
+                if let tray_icon::TrayIconEvent::Click {
+                    button: tray_icon::MouseButton::Left,
+                    button_state: tray_icon::MouseButtonState::Down,
+                    ..
+                } = event
+                {
+                    if let Some(app) = app_weak.upgrade() {
+                        if app.window().is_visible() {
+                            app.hide().ok();
+                        } else {
+                            app.show().ok();
+                        }
+                    }
+                }
+            }
+
+            // --- Tray context-menu + menu bar events ---
+            while let Ok(event) = tray_icon::menu::MenuEvent::receiver().try_recv() {
+                let id = event.id().as_ref();
+                match id {
+                    // Tray context menu (cross-platform)
+                    "tray_open" => {
+                        if let Some(app) = app_weak.upgrade() {
+                            app.show().ok();
+                        }
+                    }
+                    "tray_mute" => {
+                        if let Some(app) = app_weak.upgrade() {
+                            let new_muted = !app.get_mic_muted();
+                            app.set_mic_muted(new_muted);
+                            let _ = menu_cmd_tx.try_send(Command::SetMute { muted: new_muted });
+                            status_ref.borrow_mut().set_mute_checked(new_muted);
+                        }
+                    }
+                    "tray_leave" => {
+                        let _ = menu_cmd_tx.try_send(Command::LeaveVoice);
+                    }
+                    "tray_quit" => {
+                        slint::quit_event_loop().ok();
+                    }
+                    _ => {
+                        // macOS menu bar items
+                        #[cfg(target_os = "macos")]
+                        match id {
+                            "prefs" => {
+                                let _ = menu_cmd_tx.try_send(Command::ListAudioDevices);
+                                if let Some(app) = app_weak.upgrade() {
+                                    let settings = _menu_settings.borrow();
+                                    app.set_settings_start_on_boot(settings.start_on_boot);
+                                    app.set_settings_start_minimized(settings.start_minimized);
+                                    app.set_settings_close_to_tray(settings.close_to_tray);
+                                    app.set_settings_auto_connect(settings.auto_connect);
+                                    app.set_settings_minimize_on_join(settings.minimize_on_join);
+                                    app.set_settings_hw_acceleration(
+                                        settings.hardware_acceleration,
+                                    );
+                                    app.set_settings_input_volume(settings.input_volume);
+                                    app.set_settings_output_volume(settings.output_volume);
+                                    app.set_settings_noise_suppression(settings.noise_suppression);
+                                    app.set_settings_echo_cancellation(settings.echo_cancellation);
+                                    app.set_settings_ptt_mode(
+                                        settings.input_mode == "push_to_talk",
+                                    );
+                                    app.set_settings_vad_threshold(settings.vad_threshold);
+                                    let ptt_label: slint::SharedString =
+                                        if let Some(ref key_str) = settings.ptt_key {
+                                            platform::hotkeys::parse_hotkey_string(key_str)
+                                                .map(|(_, label)| label)
+                                                .unwrap_or_else(|| "Unassigned".into())
+                                        } else {
+                                            "Unassigned".into()
+                                        }
+                                        .into();
+                                    app.set_settings_ptt_key_label(ptt_label);
+                                    app.set_settings_open(true);
                                 }
                             }
-                        }
-                        "github" => {
-                            if let Err(e) = open::that("https://github.com/mollohq/mello") {
-                                log::warn!("Failed to open GitHub URL: {}", e);
+                            "mute" => {
+                                if let Some(app) = app_weak.upgrade() {
+                                    let new_muted = !app.get_mic_muted();
+                                    app.set_mic_muted(new_muted);
+                                    let _ =
+                                        menu_cmd_tx.try_send(Command::SetMute { muted: new_muted });
+                                }
                             }
-                        }
-                        "check_updates" => {
-                            if let Some(ref mut u) = *_updater_ref.borrow_mut() {
-                                u.check_for_updates();
-                            } else if let Err(e) = open::that("https://github.com/mollohq/mello/releases") {
-                                log::warn!("Failed to open releases URL: {}", e);
+                            "deafen" => {
+                                if let Some(app) = app_weak.upgrade() {
+                                    let new_deafened = !app.get_deafened();
+                                    app.set_deafened(new_deafened);
+                                    let _ = menu_cmd_tx.try_send(Command::SetDeafen {
+                                        deafened: new_deafened,
+                                    });
+                                    if new_deafened {
+                                        _menu_mbd.set(app.get_mic_muted());
+                                        if !app.get_mic_muted() {
+                                            app.set_mic_muted(true);
+                                            let _ = menu_cmd_tx
+                                                .try_send(Command::SetMute { muted: true });
+                                        }
+                                    } else if !_menu_mbd.get() {
+                                        app.set_mic_muted(false);
+                                        let _ =
+                                            menu_cmd_tx.try_send(Command::SetMute { muted: false });
+                                    }
+                                }
                             }
-                        }
-                        _ => {
-                            log::debug!("Unhandled menu event: {}", id);
+                            "github" => {
+                                if let Err(e) = open::that("https://github.com/mollohq/mello") {
+                                    log::warn!("Failed to open GitHub URL: {}", e);
+                                }
+                            }
+                            "check_updates" => {
+                                if let Some(ref mut u) = *_updater_ref.borrow_mut() {
+                                    u.check_for_updates();
+                                } else if let Err(e) =
+                                    open::that("https://github.com/mollohq/mello/releases")
+                                {
+                                    log::warn!("Failed to open releases URL: {}", e);
+                                }
+                            }
+                            _ => {
+                                log::debug!("Unhandled menu event: {}", id);
+                            }
                         }
                     }
                 }
             }
-        }
 
-        // --- Global hotkey events (PTT) ---
-        while let Some(event) = platform::hotkeys::HotkeyManager::poll() {
-            let mgr = hotkey_ref.borrow();
-            if let Some(ptt_id) = mgr.ptt_id() {
-                if event.id == ptt_id {
-                    let pressed = event.state == global_hotkey::HotKeyState::Pressed;
-                    // PTT: pressed = unmute, released = mute
-                    let _ = hotkey_cmd_tx.try_send(Command::SetMute { muted: !pressed });
+            // --- Global hotkey events (PTT) ---
+            while let Some(event) = platform::hotkeys::HotkeyManager::poll() {
+                let mgr = hotkey_ref.borrow();
+                if let Some(ptt_id) = mgr.ptt_id() {
+                    if event.id == ptt_id {
+                        let pressed = event.state == global_hotkey::HotKeyState::Pressed;
+                        // PTT: pressed = unmute, released = mute
+                        let _ = hotkey_cmd_tx.try_send(Command::SetMute { muted: !pressed });
+                    }
                 }
             }
-        }
 
-        // --- "Saved ✓" indicator: auto-hide after 2s ---
-        if let Some(app) = saved_app_weak.upgrade() {
-            if app.get_settings_show_saved() && !saved_timer_ref.running() {
-                let hide_weak = saved_app_weak.clone();
-                saved_timer_ref.start(slint::TimerMode::SingleShot, Duration::from_secs(2), move || {
-                    if let Some(app) = hide_weak.upgrade() {
-                        app.set_settings_show_saved(false);
-                    }
-                });
+            // --- "Saved ✓" indicator: auto-hide after 2s ---
+            if let Some(app) = saved_app_weak.upgrade() {
+                if app.get_settings_show_saved() && !saved_timer_ref.running() {
+                    let hide_weak = saved_app_weak.clone();
+                    saved_timer_ref.start(
+                        slint::TimerMode::SingleShot,
+                        Duration::from_secs(2),
+                        move || {
+                            if let Some(app) = hide_weak.upgrade() {
+                                app.set_settings_show_saved(false);
+                            }
+                        },
+                    );
+                }
             }
-        }
-    });
+        },
+    );
 
     // Use run_event_loop_until_quit so the event loop stays alive when the
     // window is hidden to the tray.  Only an explicit quit_event_loop() exits.
@@ -1166,15 +1268,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn channel_to_ui(ch: &mello_core::crew_state::VoiceChannelState, active_channel_id: &str) -> VoiceChannelData {
-    let members: Vec<VoiceChannelMember> = ch.members.iter().map(|m| {
-        VoiceChannelMember {
+fn channel_to_ui(
+    ch: &mello_core::crew_state::VoiceChannelState,
+    active_channel_id: &str,
+) -> VoiceChannelData {
+    let members: Vec<VoiceChannelMember> = ch
+        .members
+        .iter()
+        .map(|m| VoiceChannelMember {
             id: m.user_id.clone().into(),
             name: m.username.clone().into(),
             initials: make_initials(&m.username).into(),
             speaking: m.speaking.unwrap_or(false),
-        }
-    }).collect();
+        })
+        .collect();
     let member_count = members.len() as i32;
     let is_active = ch.id == active_channel_id;
     VoiceChannelData {
@@ -1188,13 +1295,21 @@ fn channel_to_ui(ch: &mello_core::crew_state::VoiceChannelState, active_channel_
     }
 }
 
-fn channels_to_ui(channels: &[mello_core::crew_state::VoiceChannelState], active_channel_id: &str) -> Vec<VoiceChannelData> {
-    channels.iter().map(|ch| channel_to_ui(ch, active_channel_id)).collect()
+fn channels_to_ui(
+    channels: &[mello_core::crew_state::VoiceChannelState],
+    active_channel_id: &str,
+) -> Vec<VoiceChannelData> {
+    channels
+        .iter()
+        .map(|ch| channel_to_ui(ch, active_channel_id))
+        .collect()
 }
 
 fn update_active_crew_card(app: &MainWindow) {
     let active_id = app.get_active_crew_id();
-    if active_id.is_empty() { return; }
+    if active_id.is_empty() {
+        return;
+    }
 
     let members = app.get_members();
     let online_members: Vec<MemberData> = (0..members.row_count())
@@ -1213,7 +1328,7 @@ fn update_active_crew_card(app: &MainWindow) {
                 c.online_count = online_count;
                 c.voice_count = voice_count;
 
-                if let Some(m) = online_members.get(0) {
+                if let Some(m) = online_members.first() {
                     c.v0_initials = m.initials.clone();
                     c.v0_name = m.name.clone();
                     c.v0_speaking = m.speaking;
@@ -1252,40 +1367,78 @@ fn set_level_history(app: &MainWindow, hist: &DebugHistory) {
             )*
         };
     }
-    set_lh!(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29);
+    set_lh!(
+        0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
+        25, 26, 27, 28, 29
+    );
 }
 
-fn handle_event(app: &MainWindow, event: Event, settings: &Rc<RefCell<Settings>>, dbg_hist: &Rc<RefCell<DebugHistory>>, cmd_tx: &tokio::sync::mpsc::Sender<Command>, active_voice_channel: &Rc<RefCell<String>>) {
+fn handle_event(
+    app: &MainWindow,
+    event: Event,
+    settings: &Rc<RefCell<Settings>>,
+    dbg_hist: &Rc<RefCell<DebugHistory>>,
+    cmd_tx: &tokio::sync::mpsc::Sender<Command>,
+    active_voice_channel: &Rc<RefCell<String>>,
+) {
     match event {
         Event::Restoring => {
             log::info!("[auth] restoring session…");
             app.set_login_loading(true);
         }
         Event::DeviceAuthed { user, created } => {
-            log::info!("[auth] device-authed  user_id={} name={} tag={} created={}", user.id, user.display_name, user.tag, created);
+            log::info!(
+                "[auth] device-authed  user_id={} name={} tag={} created={}",
+                user.id,
+                user.display_name,
+                user.tag,
+                created
+            );
             app.set_user_id(user.id.into());
             app.set_user_name(user.display_name.into());
             app.set_user_tag(user.tag.into());
             app.set_is_returning_user(!created);
-            let step = app.get_onboarding_step();
-            log::info!("[auth] onboarding_step={} is_returning_user={}", step, !created);
-            if step == 0 || step == 1 {
-                app.set_onboarding_step(1);
-                let _ = cmd_tx.try_send(Command::DiscoverCrews);
-            }
         }
         Event::DiscoverCrewsLoaded { crews } => {
             log::info!("[auth] discover-crews loaded  count={}", crews.len());
-            let model: Vec<CrewData> = crews.into_iter().map(|c| CrewData {
-                id: c.id.clone().into(),
-                name: c.name.into(),
-                description: c.description.into(),
-                member_count: c.member_count,
-                online_count: 0,
-                ..Default::default()
-            }).collect();
+            let model: Vec<CrewData> = crews
+                .into_iter()
+                .map(|c| CrewData {
+                    id: c.id.clone().into(),
+                    name: c.name.into(),
+                    description: c.description.into(),
+                    member_count: c.member_count,
+                    online_count: 0,
+                    ..Default::default()
+                })
+                .collect();
             let rc = Rc::new(slint::VecModel::from(model));
             app.set_discover_crews(rc.into());
+            let step = app.get_onboarding_step();
+            if step == 0 || step == 1 {
+                app.set_onboarding_step(1);
+            }
+        }
+        Event::OnboardingReady { user } => {
+            log::info!(
+                "[onboarding] ready — user_id={} name={}",
+                user.id,
+                user.display_name
+            );
+            app.set_user_id(user.id.into());
+            app.set_user_name(user.display_name.into());
+            app.set_user_tag(user.tag.into());
+            app.set_logged_in(true);
+            app.set_onboarding_step(3);
+            let mut s = settings.borrow_mut();
+            s.pending_crew_id = None;
+            s.pending_crew_name = None;
+            s.onboarding_step = 3;
+            s.save();
+        }
+        Event::OnboardingFailed { reason } => {
+            log::error!("[onboarding] finalization failed: {}", reason);
+            app.set_link_error(reason.into());
         }
         Event::EmailLinked => {
             log::info!("[auth] email linked — onboarding complete");
@@ -1313,13 +1466,18 @@ fn handle_event(app: &MainWindow, event: Event, settings: &Rc<RefCell<Settings>>
             app.set_link_error(reason.into());
         }
         Event::LoggedIn { user } => {
-            log::info!("[auth] logged-in  user_id={} name={} tag={}", user.id, user.display_name, user.tag);
+            log::info!(
+                "[auth] logged-in  user_id={} name={} tag={}",
+                user.id,
+                user.display_name,
+                user.tag
+            );
             app.set_logged_in(true);
             app.set_login_loading(false);
+            app.set_show_sign_in(false);
             app.set_user_id(user.id.into());
             app.set_user_name(user.display_name.into());
             app.set_user_tag(user.tag.into());
-            // Advance onboarding UI and persist so next startup skips it
             let mut s = settings.borrow_mut();
             if s.onboarding_step < 4 {
                 app.set_onboarding_step(4);
@@ -1342,7 +1500,9 @@ fn handle_event(app: &MainWindow, event: Event, settings: &Rc<RefCell<Settings>>
                 s.onboarding_step = 1;
                 s.save();
                 if let Some(ref device_id) = s.device_id {
-                    let _ = cmd_tx.try_send(Command::DeviceAuth { device_id: device_id.clone() });
+                    let _ = cmd_tx.try_send(Command::DeviceAuth {
+                        device_id: device_id.clone(),
+                    });
                 }
             }
         }
@@ -1351,29 +1511,33 @@ fn handle_event(app: &MainWindow, event: Event, settings: &Rc<RefCell<Settings>>
 
             // Merge: preserve any sidebar data that arrived before this event
             let current = app.get_crews();
-            let mut existing: std::collections::HashMap<String, CrewData> = (0..current.row_count())
+            let mut existing: std::collections::HashMap<String, CrewData> = (0..current
+                .row_count())
                 .filter_map(|i| current.row_data(i))
                 .map(|c| (c.id.to_string(), c))
                 .collect();
 
-            let model: Vec<CrewData> = crews.into_iter().map(|c| {
-                if let Some(mut prev) = existing.remove(&c.id) {
-                    // Keep sidebar data, update authoritative fields from CrewsLoaded
-                    prev.name = c.name.into();
-                    prev.description = c.description.into();
-                    prev.member_count = c.member_count;
-                    prev
-                } else {
-                    CrewData {
-                        id: c.id.clone().into(),
-                        name: c.name.into(),
-                        description: c.description.into(),
-                        member_count: c.member_count,
-                        online_count: 0,
-                        ..Default::default()
+            let model: Vec<CrewData> = crews
+                .into_iter()
+                .map(|c| {
+                    if let Some(mut prev) = existing.remove(&c.id) {
+                        // Keep sidebar data, update authoritative fields from CrewsLoaded
+                        prev.name = c.name.into();
+                        prev.description = c.description.into();
+                        prev.member_count = c.member_count;
+                        prev
+                    } else {
+                        CrewData {
+                            id: c.id.clone().into(),
+                            name: c.name.into(),
+                            description: c.description.into(),
+                            member_count: c.member_count,
+                            online_count: 0,
+                            ..Default::default()
+                        }
                     }
-                }
-            }).collect();
+                })
+                .collect();
             let rc = std::rc::Rc::new(slint::VecModel::from(model));
             app.set_crews(rc.into());
             // Auto-select last active crew (or first if not found)
@@ -1384,12 +1548,10 @@ fn handle_event(app: &MainWindow, event: Event, settings: &Rc<RefCell<Settings>>
                         log::info!("[auth] restoring last crew: {}", id);
                         Some(id.clone())
                     }
-                    _ => {
-                        crew_ids.first().map(|id| {
-                            log::info!("[auth] auto-selecting first crew: {}", id);
-                            id.clone()
-                        })
-                    }
+                    _ => crew_ids.first().map(|id| {
+                        log::info!("[auth] auto-selecting first crew: {}", id);
+                        id.clone()
+                    }),
                 };
                 if let Some(id) = target {
                     let _ = cmd_tx.try_send(Command::SelectCrew { crew_id: id });
@@ -1459,13 +1621,14 @@ fn handle_event(app: &MainWindow, event: Event, settings: &Rc<RefCell<Settings>>
             app.set_active_crew_id("".into());
         }
         Event::MessagesLoaded { messages } => {
-            let msgs: Vec<ChatMessageData> = messages.into_iter().map(|m| {
-                ChatMessageData {
+            let msgs: Vec<ChatMessageData> = messages
+                .into_iter()
+                .map(|m| ChatMessageData {
                     sender_name: m.sender_name.into(),
                     text: m.content.into(),
                     timestamp: m.timestamp.into(),
-                }
-            }).collect();
+                })
+                .collect();
             let rc = std::rc::Rc::new(slint::VecModel::from(msgs));
             app.set_messages(rc.into());
         }
@@ -1537,7 +1700,10 @@ fn handle_event(app: &MainWindow, event: Event, settings: &Rc<RefCell<Settings>>
         Event::VoiceDisconnected { peer_id } => {
             log::info!("UI: voice disconnected from {}", peer_id);
         }
-        Event::VoiceActivity { member_id, speaking } => {
+        Event::VoiceActivity {
+            member_id,
+            speaking,
+        } => {
             // Update sidebar member list
             let current = app.get_members();
             let members: Vec<MemberData> = (0..current.row_count())
@@ -1563,13 +1729,16 @@ fn handle_event(app: &MainWindow, event: Event, settings: &Rc<RefCell<Settings>>
                         .map(|j| ch.members.row_data(j).unwrap())
                         .collect();
                     if ch_members.iter().any(|m| m.id == member_id.as_str()) {
-                        let new_members: Vec<VoiceChannelMember> = ch_members.into_iter().map(|mut m| {
-                            if m.id == member_id.as_str() {
-                                m.speaking = speaking;
-                                changed = true;
-                            }
-                            m
-                        }).collect();
+                        let new_members: Vec<VoiceChannelMember> = ch_members
+                            .into_iter()
+                            .map(|mut m| {
+                                if m.id == member_id.as_str() {
+                                    m.speaking = speaking;
+                                    changed = true;
+                                }
+                                m
+                            })
+                            .collect();
                         ch.members = Rc::new(slint::VecModel::from(new_members)).into();
                     }
                     ch
@@ -1583,8 +1752,14 @@ fn handle_event(app: &MainWindow, event: Event, settings: &Rc<RefCell<Settings>>
             app.set_mic_level(level);
         }
         Event::AudioDebugStats {
-            input_level, silero_vad_prob, rnnoise_prob,
-            is_speaking, is_capturing, is_muted, is_deafened, packets_encoded,
+            input_level,
+            silero_vad_prob,
+            rnnoise_prob,
+            is_speaking,
+            is_capturing,
+            is_muted,
+            is_deafened,
+            packets_encoded,
         } => {
             app.set_dbg_input_level(input_level);
             app.set_dbg_silero_prob(silero_vad_prob);
@@ -1600,16 +1775,22 @@ fn handle_event(app: &MainWindow, event: Event, settings: &Rc<RefCell<Settings>>
             set_level_history(app, &hist);
         }
         Event::AudioDevicesListed { capture, playback } => {
-            let cap: Vec<AudioDeviceData> = capture.iter().map(|d| AudioDeviceData {
-                id: d.id.clone().into(),
-                name: d.name.clone().into(),
-                is_default: d.is_default,
-            }).collect();
-            let play: Vec<AudioDeviceData> = playback.iter().map(|d| AudioDeviceData {
-                id: d.id.clone().into(),
-                name: d.name.clone().into(),
-                is_default: d.is_default,
-            }).collect();
+            let cap: Vec<AudioDeviceData> = capture
+                .iter()
+                .map(|d| AudioDeviceData {
+                    id: d.id.clone().into(),
+                    name: d.name.clone().into(),
+                    is_default: d.is_default,
+                })
+                .collect();
+            let play: Vec<AudioDeviceData> = playback
+                .iter()
+                .map(|d| AudioDeviceData {
+                    id: d.id.clone().into(),
+                    name: d.name.clone().into(),
+                    is_default: d.is_default,
+                })
+                .collect();
             app.set_capture_devices(Rc::new(slint::VecModel::from(cap)).into());
             app.set_playback_devices(Rc::new(slint::VecModel::from(play)).into());
 
@@ -1632,10 +1813,14 @@ fn handle_event(app: &MainWindow, event: Event, settings: &Rc<RefCell<Settings>>
         }
 
         // --- Presence & crew state events ---
-
         Event::CrewStateLoaded { state } => {
-            log::info!("UI: crew state loaded for {} (online={}, total={}, voice_channels={})",
-                state.crew_id, state.counts.online, state.counts.total, state.voice_channels.len());
+            log::info!(
+                "UI: crew state loaded for {} (online={}, total={}, voice_channels={})",
+                state.crew_id,
+                state.counts.online,
+                state.counts.total,
+                state.voice_channels.len()
+            );
 
             // Update the active crew card's online/voice/stream/message data
             let crews = app.get_crews();
@@ -1652,7 +1837,7 @@ fn handle_event(app: &MainWindow, event: Event, settings: &Rc<RefCell<Settings>>
                         let vlen = state.voice.members.len().min(4);
                         c.voice_count = vlen as i32;
                         // Populate voice chips from authoritative state
-                        if let Some(m) = state.voice.members.get(0) {
+                        if let Some(m) = state.voice.members.first() {
                             c.v0_name = m.username.clone().into();
                             c.v0_initials = make_initials(&m.username).into();
                             c.v0_speaking = m.speaking.unwrap_or(false);
@@ -1679,7 +1864,7 @@ fn handle_event(app: &MainWindow, event: Event, settings: &Rc<RefCell<Settings>>
                         }
                         // Recent messages
                         c.msg_count = state.recent_messages.len().min(2) as i32;
-                        if let Some(m) = state.recent_messages.get(0) {
+                        if let Some(m) = state.recent_messages.first() {
                             c.m0_author = m.username.clone().into();
                             c.m0_text = m.preview.clone().into();
                         }
@@ -1730,7 +1915,9 @@ fn handle_event(app: &MainWindow, event: Event, settings: &Rc<RefCell<Settings>>
                 // Determine active channel: use tracked one, or default to the crew's default channel
                 let current_avc = active_voice_channel.borrow().clone();
                 let avc_id = if current_avc.is_empty() {
-                    let default_id = state.voice_channels.iter()
+                    let default_id = state
+                        .voice_channels
+                        .iter()
                         .find(|ch| ch.is_default)
                         .or_else(|| state.voice_channels.first())
                         .map(|ch| ch.id.clone())
@@ -1744,7 +1931,9 @@ fn handle_event(app: &MainWindow, event: Event, settings: &Rc<RefCell<Settings>>
                 app.set_voice_channels(Rc::new(slint::VecModel::from(vc_data)).into());
             }
         }
-        Event::SidebarUpdated { crews: sidebar_crews } => {
+        Event::SidebarUpdated {
+            crews: sidebar_crews,
+        } => {
             log::info!("UI: sidebar updated for {} crews", sidebar_crews.len());
 
             let current = app.get_crews();
@@ -1770,7 +1959,7 @@ fn handle_event(app: &MainWindow, event: Event, settings: &Rc<RefCell<Settings>>
                 if let Some(ref voice) = sc.voice {
                     let vlen = voice.members.len().min(4);
                     c.voice_count = vlen as i32;
-                    if let Some(m) = voice.members.get(0) {
+                    if let Some(m) = voice.members.first() {
                         c.v0_name = m.username.clone().into();
                         c.v0_initials = make_initials(&m.username).into();
                     }
@@ -1813,7 +2002,7 @@ fn handle_event(app: &MainWindow, event: Event, settings: &Rc<RefCell<Settings>>
                 }
                 // Recent messages
                 c.msg_count = sc.recent_messages.len().min(2) as i32;
-                if let Some(m) = sc.recent_messages.get(0) {
+                if let Some(m) = sc.recent_messages.first() {
                     c.m0_author = m.username.clone().into();
                     c.m0_text = m.preview.clone().into();
                 }
@@ -1832,11 +2021,16 @@ fn handle_event(app: &MainWindow, event: Event, settings: &Rc<RefCell<Settings>>
             });
         }
         Event::PresenceChanged { change } => {
-            log::debug!("UI: presence change user={} in crew={}", change.user_id, change.crew_id);
+            log::debug!(
+                "UI: presence change user={} in crew={}",
+                change.user_id,
+                change.crew_id
+            );
             let active_id = app.get_active_crew_id();
             if active_id == change.crew_id.as_str() {
                 let current = app.get_members();
-                let is_online = change.presence.status != mello_core::presence::PresenceStatus::Offline;
+                let is_online =
+                    change.presence.status != mello_core::presence::PresenceStatus::Offline;
                 let members: Vec<MemberData> = (0..current.row_count())
                     .map(|i| {
                         let mut m = current.row_data(i).unwrap();
@@ -1850,8 +2044,17 @@ fn handle_event(app: &MainWindow, event: Event, settings: &Rc<RefCell<Settings>>
                 update_active_crew_card(app);
             }
         }
-        Event::VoiceJoined { crew_id, channel_id, members: voice_members } => {
-            log::info!("UI: voice joined channel={} in crew={} members={}", channel_id, crew_id, voice_members.len());
+        Event::VoiceJoined {
+            crew_id,
+            channel_id,
+            members: voice_members,
+        } => {
+            log::info!(
+                "UI: voice joined channel={} in crew={} members={}",
+                channel_id,
+                crew_id,
+                voice_members.len()
+            );
             // Authoritative state from voice_join RPC response — set active channel and members
             let prev_channel = active_voice_channel.borrow().clone();
             *active_voice_channel.borrow_mut() = channel_id.clone();
@@ -1868,14 +2071,15 @@ fn handle_event(app: &MainWindow, event: Event, settings: &Rc<RefCell<Settings>>
                         if is_joined {
                             // Set authoritative member list from server response
                             ch.expanded = true;
-                            let ch_members: Vec<VoiceChannelMember> = voice_members.iter().map(|vm| {
-                                VoiceChannelMember {
+                            let ch_members: Vec<VoiceChannelMember> = voice_members
+                                .iter()
+                                .map(|vm| VoiceChannelMember {
                                     id: vm.user_id.clone().into(),
                                     name: vm.username.clone().into(),
                                     initials: make_initials(&vm.username).into(),
                                     speaking: vm.speaking.unwrap_or(false),
-                                }
-                            }).collect();
+                                })
+                                .collect();
                             ch.member_count = ch_members.len() as i32;
                             ch.members = Rc::new(slint::VecModel::from(ch_members)).into();
                         } else {
@@ -1884,7 +2088,11 @@ fn handle_event(app: &MainWindow, event: Event, settings: &Rc<RefCell<Settings>>
                             let members: Vec<VoiceChannelMember> = (0..ch.members.row_count())
                                 .filter_map(|j| {
                                     let m = ch.members.row_data(j).unwrap();
-                                    if m.id == my_id { None } else { Some(m) }
+                                    if m.id == my_id {
+                                        None
+                                    } else {
+                                        Some(m)
+                                    }
                                 })
                                 .collect();
                             ch.member_count = members.len() as i32;
@@ -1899,8 +2107,17 @@ fn handle_event(app: &MainWindow, event: Event, settings: &Rc<RefCell<Settings>>
                 app.set_voice_channels(Rc::new(slint::VecModel::from(updated_channels)).into());
             }
         }
-        Event::VoiceUpdated { crew_id, channel_id, members: voice_members } => {
-            log::debug!("UI: voice update crew={} channel={} members={}", crew_id, channel_id, voice_members.len());
+        Event::VoiceUpdated {
+            crew_id,
+            channel_id,
+            members: voice_members,
+        } => {
+            log::debug!(
+                "UI: voice update crew={} channel={} members={}",
+                crew_id,
+                channel_id,
+                voice_members.len()
+            );
             let active_id = app.get_active_crew_id();
             if active_id == crew_id.as_str() {
                 // Update speaking state on members list
@@ -1908,7 +2125,9 @@ fn handle_event(app: &MainWindow, event: Event, settings: &Rc<RefCell<Settings>>
                 let members: Vec<MemberData> = (0..current.row_count())
                     .map(|i| {
                         let mut m = current.row_data(i).unwrap();
-                        if let Some(vm) = voice_members.iter().find(|vm| vm.user_id == m.id.as_str()) {
+                        if let Some(vm) =
+                            voice_members.iter().find(|vm| vm.user_id == m.id.as_str())
+                        {
                             m.speaking = vm.speaking.unwrap_or(false);
                         }
                         m
@@ -1923,14 +2142,15 @@ fn handle_event(app: &MainWindow, event: Event, settings: &Rc<RefCell<Settings>>
                     .map(|i| {
                         let mut ch = current_channels.row_data(i).unwrap();
                         if ch.id == channel_id.as_str() {
-                            let ch_members: Vec<VoiceChannelMember> = voice_members.iter().map(|vm| {
-                                VoiceChannelMember {
+                            let ch_members: Vec<VoiceChannelMember> = voice_members
+                                .iter()
+                                .map(|vm| VoiceChannelMember {
                                     id: vm.user_id.clone().into(),
                                     name: vm.username.clone().into(),
                                     initials: make_initials(&vm.username).into(),
                                     speaking: vm.speaking.unwrap_or(false),
-                                }
-                            }).collect();
+                                })
+                                .collect();
                             ch.member_count = ch_members.len() as i32;
                             ch.members = Rc::new(slint::VecModel::from(ch_members)).into();
                         }
@@ -1941,7 +2161,11 @@ fn handle_event(app: &MainWindow, event: Event, settings: &Rc<RefCell<Settings>>
             }
         }
         Event::VoiceChannelsUpdated { crew_id, channels } => {
-            log::debug!("UI: voice channels updated crew={} count={}", crew_id, channels.len());
+            log::debug!(
+                "UI: voice channels updated crew={} count={}",
+                crew_id,
+                channels.len()
+            );
             let active_id = app.get_active_crew_id();
             if active_id == crew_id.as_str() {
                 let avc_id = active_voice_channel.borrow().clone();
@@ -1950,7 +2174,11 @@ fn handle_event(app: &MainWindow, event: Event, settings: &Rc<RefCell<Settings>>
             }
         }
         Event::VoiceChannelCreated { crew_id, channel } => {
-            log::info!("UI: voice channel created in crew={}: {}", crew_id, channel.name);
+            log::info!(
+                "UI: voice channel created in crew={}: {}",
+                crew_id,
+                channel.name
+            );
             let active_id = app.get_active_crew_id();
             if active_id == crew_id.as_str() {
                 let current = app.get_voice_channels();
@@ -1961,8 +2189,17 @@ fn handle_event(app: &MainWindow, event: Event, settings: &Rc<RefCell<Settings>>
                 app.set_voice_channels(Rc::new(slint::VecModel::from(channels)).into());
             }
         }
-        Event::VoiceChannelRenamed { crew_id, channel_id, name } => {
-            log::info!("UI: voice channel renamed in crew={}: {} -> {}", crew_id, channel_id, name);
+        Event::VoiceChannelRenamed {
+            crew_id,
+            channel_id,
+            name,
+        } => {
+            log::info!(
+                "UI: voice channel renamed in crew={}: {} -> {}",
+                crew_id,
+                channel_id,
+                name
+            );
             let active_id = app.get_active_crew_id();
             if active_id == crew_id.as_str() {
                 let current = app.get_voice_channels();
@@ -1978,8 +2215,15 @@ fn handle_event(app: &MainWindow, event: Event, settings: &Rc<RefCell<Settings>>
                 app.set_voice_channels(Rc::new(slint::VecModel::from(updated)).into());
             }
         }
-        Event::VoiceChannelDeleted { crew_id, channel_id } => {
-            log::info!("UI: voice channel deleted in crew={}: {}", crew_id, channel_id);
+        Event::VoiceChannelDeleted {
+            crew_id,
+            channel_id,
+        } => {
+            log::info!(
+                "UI: voice channel deleted in crew={}: {}",
+                crew_id,
+                channel_id
+            );
             let active_id = app.get_active_crew_id();
             if active_id == crew_id.as_str() {
                 let current = app.get_voice_channels();
@@ -1991,14 +2235,18 @@ fn handle_event(app: &MainWindow, event: Event, settings: &Rc<RefCell<Settings>>
             }
         }
         Event::MessagePreviewUpdated { crew_id, messages } => {
-            log::debug!("UI: message preview for crew={} count={}", crew_id, messages.len());
+            log::debug!(
+                "UI: message preview for crew={} count={}",
+                crew_id,
+                messages.len()
+            );
             let current = app.get_crews();
             let mut updated: Vec<CrewData> = (0..current.row_count())
                 .map(|i| current.row_data(i).unwrap())
                 .collect();
             if let Some(c) = updated.iter_mut().find(|c| c.id == crew_id.as_str()) {
                 c.msg_count = messages.len().min(2) as i32;
-                if let Some(m) = messages.get(0) {
+                if let Some(m) = messages.first() {
                     c.m0_author = m.username.clone().into();
                     c.m0_text = m.preview.clone().into();
                 }
@@ -2010,8 +2258,15 @@ fn handle_event(app: &MainWindow, event: Event, settings: &Rc<RefCell<Settings>>
             app.set_crews(Rc::new(slint::VecModel::from(updated)).into());
         }
 
-        Event::ProtocolMismatch { message, client_outdated } => {
-            log::warn!("Protocol mismatch (client_outdated={}): {}", client_outdated, message);
+        Event::ProtocolMismatch {
+            message,
+            client_outdated,
+        } => {
+            log::warn!(
+                "Protocol mismatch (client_outdated={}): {}",
+                client_outdated,
+                message
+            );
             app.set_protocol_warning(message.into());
         }
 
@@ -2232,7 +2487,10 @@ mod tests {
         sent_m.set(None);
         app.invoke_deafen_toggle();
         assert!(!app.get_deafened());
-        assert!(!app.get_mic_muted(), "un-deafen should restore unmuted state");
+        assert!(
+            !app.get_mic_muted(),
+            "un-deafen should restore unmuted state"
+        );
         assert_eq!(sent_m.get(), Some(false));
     }
 
@@ -2257,11 +2515,18 @@ mod tests {
         app.invoke_deafen_toggle();
         assert!(app.get_deafened());
         assert!(app.get_mic_muted());
-        assert_eq!(sent_m_deafen.get(), None, "no extra SetMute when already muted");
+        assert_eq!(
+            sent_m_deafen.get(),
+            None,
+            "no extra SetMute when already muted"
+        );
 
         // Un-deafen — was manually muted, should stay muted
         app.invoke_deafen_toggle();
         assert!(!app.get_deafened());
-        assert!(app.get_mic_muted(), "should stay muted since user muted before deafen");
+        assert!(
+            app.get_mic_muted(),
+            "should stay muted since user muted before deafen"
+        );
     }
 }

@@ -1,4 +1,4 @@
-use crate::oauth::{OAuthFlow, OAuthMode, OAuthError, REDIRECT_URI};
+use crate::oauth::{OAuthError, OAuthFlow, OAuthMode, REDIRECT_URI};
 
 pub struct DiscordAuth;
 

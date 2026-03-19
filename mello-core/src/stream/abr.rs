@@ -80,10 +80,13 @@ impl AbrController {
         let now = Instant::now();
         let loss = report.loss_ratio();
 
-        let state = self.viewers.entry(viewer_id.to_string()).or_insert(ViewerLossState {
-            last_report: now,
-            healthy_since: Some(now),
-        });
+        let state = self
+            .viewers
+            .entry(viewer_id.to_string())
+            .or_insert(ViewerLossState {
+                last_report: now,
+                healthy_since: Some(now),
+            });
         state.last_report = now;
 
         if loss > LOSS_STEP_DOWN_THRESHOLD {

@@ -143,8 +143,7 @@ impl StreamManager {
             self.fec_encoder.reset();
         }
 
-        let fec_group_last =
-            self.fec_encoder.pending_count() == self.fec_encoder.group_size() - 1;
+        let fec_group_last = self.fec_encoder.pending_count() == self.fec_encoder.group_size() - 1;
 
         let packet = StreamPacket::video(pkt.data.clone(), seq, pkt.is_keyframe, fec_group_last);
         let _ = self.sink.send_video(&packet).await;

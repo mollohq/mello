@@ -25,6 +25,7 @@ pub fn set_start_on_boot(enabled: bool) -> Result<(), Box<dyn std::error::Error>
     Ok(())
 }
 
+#[allow(dead_code)]
 pub fn is_start_on_boot_enabled() -> bool {
     build_auto_launch().is_enabled().unwrap_or(false)
 }

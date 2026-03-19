@@ -1,6 +1,4 @@
-use global_hotkey::{
-    hotkey::HotKey, GlobalHotKeyEvent, GlobalHotKeyManager,
-};
+use global_hotkey::{hotkey::HotKey, GlobalHotKeyEvent, GlobalHotKeyManager};
 
 pub struct HotkeyManager {
     manager: GlobalHotKeyManager,
@@ -59,7 +57,7 @@ pub fn slint_key_to_hotkey(
         '\u{0010}' | '\u{0015}' => return None, // Shift / ShiftR
         '\u{0011}' | '\u{0016}' => return None, // Control / ControlR
         '\u{0012}' | '\u{0013}' => return None, // Alt / AltGr
-        '\u{0014}' => return None,               // CapsLock
+        '\u{0014}' => return None,              // CapsLock
         '\u{0017}' | '\u{0018}' => return None, // Meta / MetaR
         _ => {}
     }
@@ -187,27 +185,43 @@ fn hotkey_display_label(hotkey_str: &str) -> String {
             match part {
                 "Ctrl" | "Control" => {
                     #[cfg(target_os = "macos")]
-                    { "⌃" }
+                    {
+                        "⌃"
+                    }
                     #[cfg(not(target_os = "macos"))]
-                    { "Ctrl" }
+                    {
+                        "Ctrl"
+                    }
                 }
                 "Alt" | "Option" => {
                     #[cfg(target_os = "macos")]
-                    { "⌥" }
+                    {
+                        "⌥"
+                    }
                     #[cfg(not(target_os = "macos"))]
-                    { "Alt" }
+                    {
+                        "Alt"
+                    }
                 }
                 "Shift" => {
                     #[cfg(target_os = "macos")]
-                    { "⇧" }
+                    {
+                        "⇧"
+                    }
                     #[cfg(not(target_os = "macos"))]
-                    { "Shift" }
+                    {
+                        "Shift"
+                    }
                 }
                 "Super" | "Cmd" | "Command" => {
                     #[cfg(target_os = "macos")]
-                    { "⌘" }
+                    {
+                        "⌘"
+                    }
                     #[cfg(not(target_os = "macos"))]
-                    { "Super" }
+                    {
+                        "Super"
+                    }
                 }
                 // Strip Key/Digit/Arrow prefixes for readability
                 s if s.starts_with("Key") => &s[3..],

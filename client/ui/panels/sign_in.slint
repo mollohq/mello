@@ -1,0 +1,333 @@
+import { Theme } from "../theme.slint";
+
+component InputField inherits Rectangle {
+    in-out property <string> text <=> ti.text;
+    in property <string> placeholder;
+    in property <bool> is-password: false;
+
+    height: 52px;
+    background: Theme.surface;
+    border-radius: Theme.r-inner;
+    border-width: 1px;
+    border-color: ti.has-focus ? Theme.graphic-med : Theme.graphic-light;
+
+    ti := TextInput {
+        x: 16px;
+        width: parent.width - 32px;
+        height: parent.height;
+        font-family: Theme.font-mono;
+        font-size: 14px;
+        color: Theme.text-primary;
+        horizontal-alignment: left;
+        vertical-alignment: center;
+        input-type: is-password ? InputType.password : InputType.text;
+    }
+
+    if ti.text == "": Text {
+        x: 16px;
+        color: Theme.text-tertiary;
+        font-family: Theme.font-mono;
+        font-size: 14px;
+        vertical-alignment: center;
+        text: placeholder;
+    }
+}
+
+component AccentButton inherits Rectangle {
+    in property <string> label;
+    in property <bool> enabled: true;
+    callback clicked();
+
+    height: 52px;
+    background: enabled ? Theme.accent : Theme.graphic-med;
+    border-radius: Theme.r-inner;
+
+    btn-touch := TouchArea {
+        clicked => {
+            if root.enabled {
+                root.clicked();
+            }
+        }
+    }
+
+    HorizontalLayout {
+        alignment: center;
+        spacing: 12px;
+
+        Text {
+            text: label;
+            font-family: Theme.font-mono;
+            font-size: 14px;
+            font-weight: 600;
+            color: #FFFFFF;
+            vertical-alignment: center;
+        }
+
+        Text {
+            text: "→";
+            font-size: 16px;
+            color: #FFFFFF;
+            vertical-alignment: center;
+        }
+    }
+}
+
+component AuthButton inherits Rectangle {
+    in property <string> label;
+    in property <image> icon;
+    in property <bool> has-icon: false;
+    callback clicked();
+
+    height: 56px;
+    preferred-width: 0px;
+    background: auth-touch.has-hover ? #FFFFFF05 : transparent;
+    border-radius: Theme.r-inner;
+    border-width: 1px;
+    border-color: auth-touch.has-hover ? Theme.graphic-med : Theme.graphic-light;
+
+    auth-touch := TouchArea {
+        clicked => {
+            root.clicked();
+        }
+    }
+
+    HorizontalLayout {
+        padding-left: 16px;
+        spacing: 16px;
+        alignment: start;
+
+        if has-icon: Image {
+            source: icon;
+            width: 20px;
+            height: 20px;
+            colorize: Theme.text-primary;
+            y: (parent.height - self.height) / 2;
+            opacity: 0.8;
+        }
+
+        Text {
+            text: label;
+            font-family: Theme.font-mono;
+            font-size: 13px;
+            color: Theme.text-primary;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+    }
+}
+
+export component SignInPanel inherits Rectangle {
+    in property <string> error: "";
+    in property <bool> loading: false;
+
+    property <string> si-email;
+    property <string> si-password;
+
+    callback back();
+    callback signin-steam();
+    callback signin-google();
+    callback signin-twitch();
+    callback signin-discord();
+    callback signin-apple();
+    callback signin-email(string, string);
+
+    background: Theme.bg-app;
+
+    VerticalLayout {
+        padding-top: 80px;
+        padding-left: 120px;
+        padding-right: 120px;
+        padding-bottom: 40px;
+        spacing: 0px;
+
+        // Back link
+        HorizontalLayout {
+            alignment: start;
+            height: 32px;
+
+            Rectangle {
+                width: back-text.preferred-width + 16px;
+                height: 32px;
+
+                back-text := Text {
+                    text: "← Back";
+                    font-family: Theme.font-mono;
+                    font-size: 13px;
+                    color: back-touch.has-hover ? Theme.text-secondary : Theme.text-tertiary;
+                    vertical-alignment: center;
+                }
+
+                back-touch := TouchArea {
+                    clicked => {
+                        root.back();
+                    }
+                }
+            }
+        }
+
+        Rectangle {
+            height: 32px;
+        }
+
+        // Header
+        VerticalLayout {
+            spacing: 8px;
+
+            Text {
+                text: "Sign In";
+                font-size: 48px;
+                font-weight: 500;
+                color: Theme.text-primary;
+                letter-spacing: -1.5px;
+                horizontal-alignment: left;
+            }
+
+            Text {
+                text: "Sign in with an existing account.";
+                font-size: 14px;
+                color: Theme.text-secondary;
+                font-family: Theme.font-mono;
+                horizontal-alignment: left;
+            }
+        }
+
+        Rectangle {
+            height: 48px;
+        }
+
+        // Auth grid (matches step 3 layout)
+        HorizontalLayout {
+            alignment: center;
+
+            VerticalLayout {
+                width: 576px;
+                spacing: 16px;
+
+                // Row 1: Steam | Twitch
+                HorizontalLayout {
+                    spacing: 16px;
+
+                    AuthButton {
+                        horizontal-stretch: 1;
+                        label: "Steam";
+                        icon: @image-url("../icons/brands/steam.svg");
+                        has-icon: true;
+                        clicked => { root.signin-steam(); }
+                    }
+
+                    AuthButton {
+                        horizontal-stretch: 1;
+                        label: "Twitch";
+                        icon: @image-url("../icons/brands/twitch.svg");
+                        has-icon: true;
+                        clicked => { root.signin-twitch(); }
+                    }
+                }
+
+                // Row 2: Google | Apple
+                HorizontalLayout {
+                    spacing: 16px;
+
+                    AuthButton {
+                        horizontal-stretch: 1;
+                        label: "Google";
+                        icon: @image-url("../icons/brands/google.svg");
+                        has-icon: true;
+                        clicked => { root.signin-google(); }
+                    }
+
+                    AuthButton {
+                        horizontal-stretch: 1;
+                        label: "Apple";
+                        icon: @image-url("../icons/brands/apple.svg");
+                        has-icon: true;
+                        clicked => { root.signin-apple(); }
+                    }
+                }
+
+                // Row 3: Discord | Email+password (toggles form)
+                HorizontalLayout {
+                    spacing: 16px;
+
+                    AuthButton {
+                        horizontal-stretch: 1;
+                        label: "Discord";
+                        icon: @image-url("../icons/brands/discord.svg");
+                        has-icon: true;
+                        clicked => { root.signin-discord(); }
+                    }
+
+                    AuthButton {
+                        horizontal-stretch: 1;
+                        label: "Email + password";
+                        icon: @image-url("../icons/mail.svg");
+                        has-icon: true;
+                        clicked => { show-email-form = true; }
+                    }
+                }
+
+                // Divider + email form (only when toggled)
+                if show-email-form: HorizontalLayout {
+                    height: 32px;
+                    spacing: 16px;
+                    alignment: center;
+
+                    Rectangle {
+                        vertical-stretch: 0;
+                        height: 1px;
+                        horizontal-stretch: 1;
+                        background: Theme.graphic-light;
+                        y: parent.height / 2;
+                    }
+
+                    Text {
+                        text: "or";
+                        font-family: Theme.font-mono;
+                        font-size: 12px;
+                        color: Theme.text-tertiary;
+                        vertical-alignment: center;
+                    }
+
+                    Rectangle {
+                        vertical-stretch: 0;
+                        height: 1px;
+                        horizontal-stretch: 1;
+                        background: Theme.graphic-light;
+                        y: parent.height / 2;
+                    }
+                }
+
+                if show-email-form: InputField {
+                    text <=> root.si-email;
+                    placeholder: "Email";
+                }
+
+                if show-email-form: InputField {
+                    text <=> root.si-password;
+                    placeholder: "Password";
+                    is-password: true;
+                }
+
+                if show-email-form && error != "": Text {
+                    text: error;
+                    color: Theme.accent;
+                    font-size: 13px;
+                }
+
+                if show-email-form: AccentButton {
+                    label: loading ? "SIGNING IN…" : "SIGN IN";
+                    enabled: !loading;
+                    clicked => {
+                        root.signin-email(root.si-email, root.si-password);
+                    }
+                }
+            }
+        }
+
+        Rectangle {
+            vertical-stretch: 1;
+        }
+    }
+
+    property <bool> show-email-form: false;
+}

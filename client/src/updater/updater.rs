@@ -1,11 +1,10 @@
+use std::sync::mpsc;
 use velopack::sources::{FileSource, HttpSource};
 use velopack::{UpdateCheck, UpdateInfo, UpdateManager, VelopackApp};
-use std::sync::mpsc;
 
 use super::UpdateEvent;
 
-const GITHUB_RELEASES_URL: &str =
-    "https://github.com/mollohq/mello/releases/latest/download/";
+const GITHUB_RELEASES_URL: &str = "https://github.com/mollohq/mello/releases/latest/download/";
 
 pub struct Updater {
     manager: UpdateManager,
@@ -30,9 +29,7 @@ impl Updater {
                 log::info!("Update source override (local): {}", path);
                 UpdateManager::new(FileSource::new(path), None, None)?
             }
-            None => {
-                UpdateManager::new(HttpSource::new(GITHUB_RELEASES_URL), None, None)?
-            }
+            None => UpdateManager::new(HttpSource::new(GITHUB_RELEASES_URL), None, None)?,
         };
 
         log::info!(

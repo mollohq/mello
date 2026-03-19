@@ -56,8 +56,14 @@ fn main() {
 
     // In manifest mode, vcpkg installs into the cmake build dir
     let out_dir = env::var("OUT_DIR").unwrap();
-    let vcpkg_installed = Path::new(&out_dir).join("build/vcpkg_installed").join(triplet).join("lib");
-    println!("cargo:rustc-link-search=native={}", vcpkg_installed.display());
+    let vcpkg_installed = Path::new(&out_dir)
+        .join("build/vcpkg_installed")
+        .join(triplet)
+        .join("lib");
+    println!(
+        "cargo:rustc-link-search=native={}",
+        vcpkg_installed.display()
+    );
     println!("cargo:rustc-link-lib=static=opus");
     println!("cargo:rustc-link-lib=static=datachannel");
     println!("cargo:rustc-link-lib=static=juice");
@@ -69,18 +75,25 @@ fn main() {
     }
 
     // ONNX Runtime (dynamic linking — static is 2GB+ and impractical)
-    let ort_subdir = match (target_os.as_str(), target_arch.as_str()) {
-        ("windows", _) => "onnxruntime-win-x64-1.23.2",
-        ("macos", "aarch64") => "onnxruntime-osx-arm64-1.23.0",
-        ("macos", _) => "onnxruntime-osx-x86_64-1.23.0",
-        _ => "onnxruntime-linux-x64-1.23.0",
+    // CMake downloads ORT into third_party/onnxruntime/<platform-dir>/; find it by glob
+    // so we don't duplicate the version string here.
+    let ort_prefix = match (target_os.as_str(), target_arch.as_str()) {
+        ("windows", _) => "onnxruntime-win-x64-",
+        ("macos", "aarch64") => "onnxruntime-osx-arm64-",
+        ("macos", _) => "onnxruntime-osx-x86_64-",
+        _ => "onnxruntime-linux-x64-",
     };
-    let ort_dir = Path::new(&manifest_dir)
-        .join(format!("../libmello/third_party/onnxruntime/{}", ort_subdir));
+    let ort_base = Path::new(&manifest_dir).join("../libmello/third_party/onnxruntime");
+    let ort_dir = std::fs::read_dir(&ort_base)
+        .expect("third_party/onnxruntime dir not found — CMake should have created it")
+        .filter_map(|e| e.ok())
+        .find(|e| e.file_name().to_string_lossy().starts_with(ort_prefix))
+        .map(|e| e.path())
+        .expect("onnxruntime prebuilt dir not found after CMake build");
     let ort_dir = strip_win_prefix(
         &ort_dir
             .canonicalize()
-            .expect("onnxruntime prebuilt dir not found — run scripts/setup-macos.sh (or equivalent)"),
+            .expect("failed to canonicalize onnxruntime path"),
     );
     let ort_lib = ort_dir.join("lib");
     println!("cargo:rustc-link-search=native={}", ort_lib.display());
@@ -108,7 +121,11 @@ fn main() {
             // OpenH264 Cisco prebuilt DLL (runtime-loaded, not linked)
             let oh264_dir = Path::new(&manifest_dir).join("../libmello/third_party/openh264");
             if oh264_dir.exists() {
-                for dll in &["openh264-2.6.0-win64.dll", "openh264-2.5.0-win64.dll", "openh264.dll"] {
+                for dll in &[
+                    "openh264-2.6.0-win64.dll",
+                    "openh264-2.5.0-win64.dll",
+                    "openh264.dll",
+                ] {
                     let src = oh264_dir.join(dll);
                     if src.exists() {
                         let _ = std::fs::copy(&src, target_dir.join(dll));
@@ -120,25 +137,27 @@ fn main() {
             }
         }
         "macos" => {
-            // Copy both the versioned dylib and the unversioned symlink
-            for dylib in &["libonnxruntime.dylib", "libonnxruntime.1.23.0.dylib"] {
-                let src = ort_lib.join(dylib);
-                if src.exists() {
-                    let _ = std::fs::copy(&src, target_dir.join(dylib));
-                    if let Some(parent) = target_dir.parent() {
-                        let _ = std::fs::copy(&src, parent.join(dylib));
+            // Copy all libonnxruntime dylibs (versioned + unversioned symlink)
+            if let Ok(entries) = std::fs::read_dir(&ort_lib) {
+                for entry in entries.filter_map(|e| e.ok()) {
+                    let name = entry.file_name();
+                    let name_str = name.to_string_lossy();
+                    if name_str.starts_with("libonnxruntime") && name_str.ends_with(".dylib") {
+                        let _ = std::fs::copy(entry.path(), target_dir.join(&name));
+                        if let Some(parent) = target_dir.parent() {
+                            let _ = std::fs::copy(entry.path(), parent.join(&name));
+                        }
                     }
                 }
             }
         }
         _ => {
-            for so in &["libonnxruntime.so"] {
-                let src = ort_lib.join(so);
-                if src.exists() {
-                    let _ = std::fs::copy(&src, target_dir.join(so));
-                    if let Some(parent) = target_dir.parent() {
-                        let _ = std::fs::copy(&src, parent.join(so));
-                    }
+            let so = "libonnxruntime.so";
+            let src = ort_lib.join(so);
+            if src.exists() {
+                let _ = std::fs::copy(&src, target_dir.join(so));
+                if let Some(parent) = target_dir.parent() {
+                    let _ = std::fs::copy(&src, parent.join(so));
                 }
             }
         }
@@ -151,9 +170,21 @@ fn main() {
             println!("cargo:rustc-link-lib=static=libssl");
             println!("cargo:rustc-link-lib=static=libcrypto");
             for lib in &[
-                "ole32", "winmm", "ksuser", "mfplat", "mfuuid", "avrt",
-                "ws2_32", "crypt32", "bcrypt", "user32", "advapi32",
-                "d3d11", "dxgi", "dxguid", "d3dcompiler",
+                "ole32",
+                "winmm",
+                "ksuser",
+                "mfplat",
+                "mfuuid",
+                "avrt",
+                "ws2_32",
+                "crypt32",
+                "bcrypt",
+                "user32",
+                "advapi32",
+                "d3d11",
+                "dxgi",
+                "dxguid",
+                "d3dcompiler",
                 "windowsapp",
             ] {
                 println!("cargo:rustc-link-lib=dylib={}", lib);
@@ -232,8 +263,8 @@ fn bootstrap_vcpkg(vcpkg_root: &Path) {
 #[cfg(target_os = "windows")]
 fn strip_win_prefix(p: &Path) -> PathBuf {
     let s = p.to_string_lossy();
-    if s.starts_with(r"\\?\") {
-        PathBuf::from(&s[4..])
+    if let Some(stripped) = s.strip_prefix(r"\\?\") {
+        PathBuf::from(stripped)
     } else {
         p.to_path_buf()
     }

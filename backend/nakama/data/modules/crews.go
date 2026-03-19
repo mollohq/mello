@@ -25,6 +25,43 @@ type CreateCrewResponse struct {
 	Name   string `json:"name"`
 }
 
+// DiscoverCrewsRPC lists open crews. Callable without auth via http_key.
+func DiscoverCrewsRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, payload string) (string, error) {
+	limit := 50
+	groups, _, err := nk.GroupsList(ctx, "", "", nil, nil, limit, "")
+	if err != nil {
+		logger.Error("discover_crews: GroupsList failed: %v", err)
+		return "", runtime.NewError("failed to list crews", 13)
+	}
+
+	type crewEntry struct {
+		ID          string `json:"id"`
+		Name        string `json:"name"`
+		Description string `json:"description"`
+		MemberCount int32  `json:"member_count"`
+		MaxMembers  int32  `json:"max_members"`
+		Open        bool   `json:"open"`
+	}
+
+	var result []crewEntry
+	for _, g := range groups {
+		if !g.GetOpen().GetValue() {
+			continue
+		}
+		result = append(result, crewEntry{
+			ID:          g.GetId(),
+			Name:        g.GetName(),
+			Description: g.GetDescription(),
+			MemberCount: g.GetEdgeCount(),
+			MaxMembers:  g.GetMaxCount(),
+			Open:        true,
+		})
+	}
+
+	resp, _ := json.Marshal(map[string]interface{}{"crews": result})
+	return string(resp), nil
+}
+
 func CreateCrewRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, payload string) (string, error) {
 	userID, ok := ctx.Value(runtime.RUNTIME_CTX_USER_ID).(string)
 	if !ok {

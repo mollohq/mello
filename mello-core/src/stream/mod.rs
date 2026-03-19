@@ -17,9 +17,12 @@ pub use manager::StreamManager;
 pub use packet::{PacketFlags, PacketType, StreamPacket};
 
 /// Returns true if a HW encoder (NVENC/AMF/QSV) is available on this machine.
-pub fn encoder_available(ctx: *mut mello_sys::MelloContext) -> bool {
+///
+/// # Safety
+/// `ctx` must be a valid, non-null `MelloContext` pointer returned by libmello.
+pub unsafe fn encoder_available(ctx: *mut mello_sys::MelloContext) -> bool {
     if ctx.is_null() {
         return false;
     }
-    unsafe { mello_sys::mello_encoder_available(ctx) }
+    mello_sys::mello_encoder_available(ctx)
 }

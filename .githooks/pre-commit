@@ -1,0 +1,13 @@
+#!/bin/sh
+# Auto-format Rust code before committing.
+# Install: git config core.hooksPath .githooks
+
+if command -v cargo >/dev/null 2>&1; then
+    cargo fmt --all -- --check 2>/dev/null
+    if [ $? -ne 0 ]; then
+        echo "Running cargo fmt..."
+        cargo fmt --all
+        echo "Formatted. Re-add changed files and commit again."
+        exit 1
+    fi
+fi
