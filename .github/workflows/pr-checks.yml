@@ -16,7 +16,7 @@ permissions:
 jobs:
   test-windows:
     name: Test (Windows)
-    runs-on: windows-latest
+    runs-on: [self-hosted, Windows]
 
     steps:
       - name: Checkout repository
@@ -24,14 +24,6 @@ jobs:
         with:
           submodules: recursive
           token: ${{ secrets.GH_PAT }}
-
-      - name: Setup Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy, rustfmt
-
-      - name: Rust cache
-        uses: Swatinem/rust-cache@v2
 
       - name: Check formatting
         run: cargo fmt --all -- --check
@@ -44,7 +36,7 @@ jobs:
 
   test-macos:
     name: Test (macOS)
-    runs-on: self-hosted
+    runs-on: [self-hosted, macOS]
 
     steps:
       - name: Checkout repository
