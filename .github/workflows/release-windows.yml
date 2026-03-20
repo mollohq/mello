@@ -23,7 +23,7 @@ env:
 
 jobs:
   build-windows:
-    runs-on: windows-latest
+    runs-on: [self-hosted, Windows]
 
     steps:
       - name: Checkout repository
@@ -32,14 +32,6 @@ jobs:
           fetch-depth: 0
           submodules: recursive
           token: ${{ secrets.GH_PAT }}
-
-      - name: Setup Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: x86_64-pc-windows-msvc
-
-      - name: Rust cache
-        uses: Swatinem/rust-cache@v2
 
       - name: Set version
         shell: pwsh
@@ -61,7 +53,7 @@ jobs:
           Set-Content Cargo.toml -Value $content -NoNewline
 
       - name: Build client
-        run: cargo build --release --target x86_64-pc-windows-msvc --features production
+        run: cargo build --release --features production
         env:
           GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
@@ -70,19 +62,19 @@ jobs:
           NAKAMA_HTTP_KEY: ${{ secrets.NAKAMA_HTTP_KEY }}
 
       - name: Run tests
-        run: cargo test --workspace --target x86_64-pc-windows-msvc
+        run: cargo test --workspace
 
       - name: Clippy
-        run: cargo clippy --all-targets --target x86_64-pc-windows-msvc -- -D warnings
+        run: cargo clippy --all-targets -- -D warnings
 
       - name: Assemble dist
         shell: pwsh
         run: |
           mkdir dist
-          cp target/x86_64-pc-windows-msvc/release/mello.exe dist/
+          cp target/release/mello.exe dist/
           cp libmello/third_party/onnxruntime/onnxruntime-win-x64-*/lib/onnxruntime.dll dist/
           cp libmello/third_party/onnxruntime/onnxruntime-win-x64-*/lib/onnxruntime_providers_shared.dll dist/
-          cp (Get-ChildItem target/x86_64-pc-windows-msvc/release/build -Recurse -Filter silero_vad.onnx | Select -First 1).FullName dist/
+          cp (Get-ChildItem target/release/build -Recurse -Filter silero_vad.onnx | Select -First 1).FullName dist/
           del dist/*.lib -ErrorAction SilentlyContinue
 
       - name: Login to Azure
@@ -96,7 +88,6 @@ jobs:
       - name: Velopack Package
         shell: cmd
         run: |
-          dotnet tool install -g vpk
           mkdir vpk-out
           vpk download github --repoUrl https://github.com/mollohq/mello --outputDir vpk-out --channel %RELEASE_CHANNEL% --token ${{ secrets.GH_PAT }}
           vpk pack ^
