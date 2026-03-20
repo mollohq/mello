@@ -1,5 +1,5 @@
 {
   "Endpoint": "https://eus.codesigning.azure.net/",
-  "CodeSigningAccountName": "mollohq",
-  "CertificateProfileName": "mollohq"
+  "CodeSigningAccountName": "molly-signing",
+  "CertificateProfileName": "mollywindowsprofile"
 }
