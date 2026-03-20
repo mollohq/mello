@@ -166,7 +166,43 @@ FEC does **not** apply to audio packets. Opus has built-in PLC (Packet Loss Conc
 
 **N is configurable per quality preset** (see §7). Lower presets (worse network) use N=3 (33% overhead, higher protection).
 
-#### Rust implementation location
+### 5.4 DataChannel Message Chunking
+
+Unreliable DataChannels use SCTP under the hood. When a message exceeds the SCTP MTU (~1200 bytes), SCTP fragments it internally. In unreliable mode, losing **any single SCTP fragment** drops the **entire application-level message**. A single H.264 keyframe can be 200–400 KB — SCTP splits that into hundreds of fragments, making loss near-certain even on good networks.
+
+To mitigate this, the host performs **application-level chunking** before handing data to the DataChannel. Each serialized `StreamPacket` is split into chunks of at most **60,000 bytes** (well under the 64 KB SCTP message size limit). Each chunk carries a 6-byte header:
+
+```
+ 0       2       4       6
+├───────┼───────┼───────┤
+│msg_id │chunk_i│chunk_n│  payload (≤60,000 bytes)
+│ (u16) │ (u16) │ (u16) │
+└───────┴───────┴───────┘
+
+msg_id:   monotonically increasing message counter (wraps at u16::MAX)
+chunk_i:  0-based index of this chunk within the message
+chunk_n:  total number of chunks in this message
+```
+
+A single-chunk message (payload ≤ 60 KB) still carries the header with `chunk_i=0, chunk_n=1`.
+
+**Viewer reassembly:** The viewer maintains a `ChunkAssembler` that collects incoming chunks keyed by `msg_id`. When all `chunk_n` chunks for a `msg_id` arrive, the original `StreamPacket` payload is reconstructed and fed to `StreamViewer`. Incomplete assemblies are evicted after newer message IDs arrive (stale threshold: 256 msg_ids behind).
+
+This chunking layer sits **between** the StreamPacket serialization and the DataChannel send — it is transparent to FEC, ABR, and all higher-level logic.
+
+```
+Host:  StreamPacket → serialize → chunk (60KB) → DataChannel send
+Viewer: DataChannel recv → reassemble chunks → deserialize → StreamViewer
+```
+
+#### Rust implementation
+
+```
+mello-core/src/stream/sink_p2p.rs   — chunking (host side)
+mello-core/src/client.rs            — ChunkAssembler (viewer side)
+```
+
+#### Rust implementation location (FEC)
 
 ```
 mello-core/src/stream/fec.rs
@@ -423,7 +459,10 @@ The `start_stream` RPC response carries the topology descriptor:
 type StartStreamRequest struct {
     CrewID string `json:"crew_id"`
     // Codec negotiation hint from host
-    SupportsAV1 bool `json:"supports_av1"`
+    SupportsAV1 bool   `json:"supports_av1"`
+    // Actual encode resolution (from capture source, see §9.3)
+    Width       uint32 `json:"width"`
+    Height      uint32 `json:"height"`
 }
 
 type StartStreamResponse struct {
@@ -512,6 +551,37 @@ impl PacketSink for SfuSink {
     // ...
 }
 ```
+
+### 9.3 Resolution Negotiation
+
+The host encodes at its **native capture resolution** (determined by the capture source — e.g. 2560x1440 for a monitor, or the game window size). This resolution is not known until after the capture pipeline starts, so it cannot be hardcoded or assumed by the viewer.
+
+The resolution is propagated through two paths:
+
+**Path 1 — Nakama storage (for stream discovery UI):**
+The host calls `mello_stream_get_host_resolution()` after `mello_stream_start_host()` returns, then includes the actual `width` and `height` in the `start_stream` RPC. The backend stores these in `StreamMeta` and returns them in `CrewState.stream.width/height`. The viewer UI uses these values to display stream info before watching.
+
+**Path 2 — WebRTC signaling (for decoder initialization):**
+When the host responds to a viewer's WebRTC Offer with an Answer, it includes `stream_width` and `stream_height` in the `SignalEnvelope`:
+
+```rust
+// mello-core/src/voice/mesh.rs
+
+pub struct SignalEnvelope {
+    pub purpose: SignalPurpose,
+    pub message: SignalMessage,
+    /// Host encode resolution — included in Stream Answer so the viewer
+    /// can initialize the decoder at the correct size.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stream_width: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stream_height: Option<u32>,
+}
+```
+
+**Viewer deferred initialization:** The viewer does **not** create its decoder pipeline (`mello_stream_start_viewer`) when it sends the Offer. It waits for the Answer, reads the resolution from the envelope, and only then initializes the decoder at the correct dimensions. The `ViewerState.viewer` handle is `Option<*mut MelloStreamView>` — `None` until the Answer arrives.
+
+This prevents the resolution mismatch that occurs when the viewer assumes 1920x1080 but the host encodes at a different resolution (causes green screen / CUDA errors on NVDEC).
 
 ---
 
