@@ -10,8 +10,8 @@ import (
 )
 
 const (
-	MaxCrewMembers  = 6
-	MaxCrewsPerUser = 10
+	MaxCrewMembers  = 10000
+	MaxCrewsPerUser = 100
 )
 
 type CreateCrewRequest struct {
