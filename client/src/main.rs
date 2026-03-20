@@ -175,10 +175,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let frame_slot: mello_core::FrameSlot =
         std::sync::Arc::new(std::sync::Mutex::new(None));
+    let frame_consumed =
+        std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
     let frame_slot_for_client = frame_slot.clone();
+    let frame_consumed_for_client = frame_consumed.clone();
 
     rt.spawn(async move {
-        let mut client = Client::new(nakama_config(), event_tx, loopback, frame_slot_for_client);
+        let mut client = Client::new(
+            nakama_config(),
+            event_tx,
+            loopback,
+            frame_slot_for_client,
+            frame_consumed_for_client,
+        );
         client.run(cmd_rx).await;
     });
 
@@ -1036,7 +1045,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let saved_timer_ref = saved_timer.clone();
     let saved_app_weak = app.as_weak();
     let _updater_ref = updater.clone();
-    let frame_slot_ui = frame_slot.clone();
     let timer = slint::Timer::default();
     timer.start(
         slint::TimerMode::Repeated,
@@ -1124,21 +1132,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         &event_cmd_tx,
                         &active_voice_channel,
                     );
-                }
-            }
-
-            // --- Stream frame from shared slot (avoids unbounded queue) ---
-            if let Ok(mut slot) = frame_slot_ui.lock() {
-                if let Some((w, h, rgba)) = slot.take() {
-                    if let Some(app) = app_weak.upgrade() {
-                        let pixel_count = (w * h) as usize;
-                        if rgba.len() == pixel_count * 4 {
-                            let buf = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
-                                &rgba, w, h,
-                            );
-                            app.set_stream_frame(slint::Image::from_rgba8(buf));
-                        }
-                    }
                 }
             }
 
@@ -1300,6 +1293,36 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     );
                 }
             }
+        },
+    );
+
+    // Dedicated 16ms (~60fps) timer for stream frame display. Kept separate
+    // from the 50ms event timer so frame updates are not bottlenecked by
+    // event processing cadence.
+    let frame_app_weak = app.as_weak();
+    let frame_timer = slint::Timer::default();
+    frame_timer.start(
+        slint::TimerMode::Repeated,
+        Duration::from_millis(16),
+        move || {
+            if frame_consumed.load(std::sync::atomic::Ordering::Acquire) {
+                return; // No new frame since last read
+            }
+            if let Ok(slot) = frame_slot.lock() {
+                if let Some((w, h, rgba)) = slot.as_ref() {
+                    if let Some(app) = frame_app_weak.upgrade() {
+                        let pixel_count = (*w as usize) * (*h as usize);
+                        if rgba.len() == pixel_count * 4 {
+                            let buf =
+                                slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
+                                    rgba, *w, *h,
+                                );
+                            app.set_stream_frame(slint::Image::from_rgba8(buf));
+                        }
+                    }
+                }
+            }
+            frame_consumed.store(true, std::sync::atomic::Ordering::Release);
         },
     );
 

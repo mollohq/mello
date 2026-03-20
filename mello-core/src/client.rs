@@ -27,6 +27,10 @@ pub type FrameSlot = Arc<std::sync::Mutex<Option<(u32, u32, Vec<u8>)>>>;
 
 struct FrameCallbackData {
     frame_slot: FrameSlot,
+    /// Cleared by the callback after writing a frame, set by the UI after
+    /// consuming it. When false, `present_frame` + the expensive GPU readback
+    /// are skipped entirely.
+    frame_consumed: Arc<std::sync::atomic::AtomicBool>,
 }
 
 /// Reassembles chunked DataChannel messages back into full StreamPackets.
@@ -160,10 +164,20 @@ unsafe extern "C" fn on_viewer_frame(
 ) {
     if user_data.is_null() || rgba.is_null() || w == 0 || h == 0 { return; }
     let data = &*(user_data as *const FrameCallbackData);
-    let pixel_count = (w * h) as usize;
-    let buf = std::slice::from_raw_parts(rgba, pixel_count * 4).to_vec();
+    let expected_len = (w * h) as usize * 4;
+    let src = std::slice::from_raw_parts(rgba, expected_len);
     if let Ok(mut slot) = data.frame_slot.lock() {
-        *slot = Some((w, h, buf));
+        match slot.as_mut() {
+            Some((ow, oh, buf)) if buf.len() == expected_len => {
+                buf.copy_from_slice(src);
+                *ow = w;
+                *oh = h;
+            }
+            _ => {
+                *slot = Some((w, h, src.to_vec()));
+            }
+        }
+        data.frame_consumed.store(false, std::sync::atomic::Ordering::Release);
     }
 }
 
@@ -227,6 +241,7 @@ pub struct Client {
     voice: VoiceManager,
     event_tx: std::sync::mpsc::Sender<Event>,
     frame_slot: FrameSlot,
+    frame_consumed: Arc<std::sync::atomic::AtomicBool>,
     stream_session: Option<StreamSession>,
     stream_sink: Option<Arc<P2PFanoutSink>>,
     stream_host_peers: HashMap<String, StreamHostPeer>,
@@ -246,12 +261,14 @@ impl Client {
         event_tx: std::sync::mpsc::Sender<Event>,
         loopback: bool,
         frame_slot: FrameSlot,
+        frame_consumed: Arc<std::sync::atomic::AtomicBool>,
     ) -> Self {
         Self {
             nakama: NakamaClient::new(config),
             voice: VoiceManager::new(event_tx.clone(), loopback),
             event_tx,
             frame_slot,
+            frame_consumed,
             stream_session: None,
             stream_sink: None,
             stream_host_peers: HashMap::new(),
@@ -805,8 +822,14 @@ impl Client {
             }
         }
 
-        // Present the latest decoded frame (triggers the frame callback)
-        if fed_any {
+        // Present the latest decoded frame only if the UI has consumed the
+        // previous one. This skips the entire GPU readback + memcpy chain when
+        // decoding outpaces display (common at >30fps decode vs 60fps UI).
+        if fed_any
+            && self
+                .frame_consumed
+                .load(std::sync::atomic::Ordering::Acquire)
+        {
             let presented = unsafe { mello_sys::mello_stream_present_frame(viewer) };
             if presented {
                 vs.frames_presented += 1;
@@ -2259,6 +2282,7 @@ impl Client {
         let config = crate::stream::StreamConfig::default();
         let frame_cb_data = Box::into_raw(Box::new(FrameCallbackData {
             frame_slot: self.frame_slot.clone(),
+            frame_consumed: self.frame_consumed.clone(),
         }));
 
         let _ = self.event_tx.send(Event::StreamWatching {
