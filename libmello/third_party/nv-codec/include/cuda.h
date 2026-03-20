@@ -11,6 +11,7 @@
 #include <stddef.h>
 
 #define CUDA_VERSION 12000
+#define CUDA_SUCCESS 0
 
 #if defined(_WIN32)
 #define CUDAAPI __stdcall
