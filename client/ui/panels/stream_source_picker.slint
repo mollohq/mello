@@ -141,9 +141,10 @@ export component StreamSourcePicker inherits Rectangle {
 
     in-out property <string> selected-id: "";
     in-out property <string> selected-mode: "";
+    in-out property <int> selected-preset: 2; // 0=Ultra, 1=High, 2=Medium, 3=Low, 4=Potato
 
     callback close-requested();
-    callback start-stream(string, string);
+    callback start-stream(/* source_id */ string, /* source_mode */ string, /* preset */ int);
 
     property <bool> has-selection: selected-id != "";
 
@@ -303,17 +304,85 @@ export component StreamSourcePicker inherits Rectangle {
 
                             SectionHeader { title: "APPLICATION WINDOWS"; }
 
-                            HorizontalLayout {
-                                spacing: 16px;
+                            VerticalLayout {
+                                spacing: 12px;
 
-                                for src[i] in windows: SourceCard {
-                                    horizontal-stretch: 1;
-                                    source-name: src.name;
-                                    source-subtitle: "window";
-                                    selected: selected-id == src.id;
-                                    clicked => {
-                                        selected-id = src.id;
-                                        selected-mode = src.mode;
+                                for src[i] in windows: Rectangle {
+                                    height: win-row.preferred-height;
+                                    border-radius: Theme.r-inner;
+                                    background: selected-id == src.id ? #1a1a1a : (win-ta.has-hover ? #1a1a1a : Theme.bg-app);
+                                    border-width: selected-id == src.id ? 2px : 1px;
+                                    border-color: selected-id == src.id ? Theme.accent : (win-ta.has-hover ? Theme.graphic-med : Theme.graphic-light);
+
+                                    win-row := HorizontalLayout {
+                                        padding: 12px;
+                                        spacing: 12px;
+                                        alignment: start;
+
+                                        // Window icon placeholder
+                                        Rectangle {
+                                            width: 32px;
+                                            height: 32px;
+                                            border-radius: 6px;
+                                            background: selected-id == src.id ? Theme.accent-bg : Theme.surface;
+                                            y: (parent.height - self.height) / 2;
+
+                                            Text {
+                                                text: "◻";
+                                                font-size: 14px;
+                                                color: selected-id == src.id ? Theme.accent : Theme.text-tertiary;
+                                                horizontal-alignment: center;
+                                                vertical-alignment: center;
+                                            }
+                                        }
+
+                                        VerticalLayout {
+                                            horizontal-stretch: 1;
+                                            alignment: center;
+                                            spacing: 2px;
+
+                                            Text {
+                                                text: src.name;
+                                                font-size: 13px;
+                                                font-weight: 600;
+                                                color: selected-id == src.id ? Theme.accent : Theme.text-primary;
+                                                overflow: elide;
+                                            }
+
+                                            if src.exe != "": Text {
+                                                text: src.exe;
+                                                font-family: Theme.font-mono;
+                                                font-size: 10px;
+                                                color: Theme.text-secondary;
+                                                overflow: elide;
+                                            }
+                                        }
+                                    }
+
+                                    // Selection badge
+                                    if selected-id == src.id: Rectangle {
+                                        width: 20px;
+                                        height: 20px;
+                                        border-radius: 10px;
+                                        background: Theme.accent;
+                                        x: parent.width - self.width - 8px;
+                                        y: (parent.height - self.height) / 2;
+
+                                        Text {
+                                            text: "✓";
+                                            font-size: 12px;
+                                            font-weight: 700;
+                                            color: #FFFFFF;
+                                            horizontal-alignment: center;
+                                            vertical-alignment: center;
+                                        }
+                                    }
+
+                                    win-ta := TouchArea {
+                                        clicked => {
+                                            selected-id = src.id;
+                                            selected-mode = src.mode;
+                                        }
                                     }
                                 }
                             }
@@ -324,7 +393,7 @@ export component StreamSourcePicker inherits Rectangle {
 
             // Footer
             Rectangle {
-                height: 72px;
+                height: 112px;
                 background: #1a1a1a;
 
                 Rectangle {
@@ -333,70 +402,118 @@ export component StreamSourcePicker inherits Rectangle {
                     background: Theme.graphic-light;
                 }
 
-                // Selection status
-                HorizontalLayout {
+                VerticalLayout {
                     padding-left: 32px;
-                    spacing: 10px;
-                    alignment: center;
+                    padding-right: 32px;
+                    padding-top: 12px;
+                    spacing: 12px;
 
-                    if has-selection: Rectangle {
-                        width: 6px;
-                        height: 6px;
-                        border-radius: 3px;
-                        background: Theme.accent-green;
-                        y: (parent.height - self.height) / 2;
-                    }
-
-                    Text {
-                        text: has-selection ? "1 SOURCE SELECTED" : "SELECT A SOURCE";
-                        font-family: Theme.font-mono;
-                        font-size: 11px;
-                        letter-spacing: 0.8px;
-                        color: has-selection ? Theme.text-primary : Theme.text-secondary;
-                        vertical-alignment: center;
-                        horizontal-stretch: 1;
-                    }
-                }
-
-                // Start button
-                Rectangle {
-                    x: parent.width - self.width - 32px;
-                    y: (parent.height - self.height) / 2;
-                    width: start-row.preferred-width + 40px;
-                    height: 44px;
-                    border-radius: 6px;
-                    background: has-selection
-                        ? (start-btn-ta.has-hover ? #E8184E : Theme.accent)
-                        : Theme.graphic-light;
-
-                    start-row := HorizontalLayout {
-                        alignment: center;
-                        spacing: 10px;
-                        padding-left: 20px;
-                        padding-right: 20px;
+                    // Preset selector row
+                    HorizontalLayout {
+                        spacing: 8px;
+                        alignment: start;
 
                         Text {
-                            text: "▶";
-                            font-size: 11px;
-                            color: has-selection ? #FFFFFF : Theme.text-tertiary;
-                            vertical-alignment: center;
-                        }
-
-                        Text {
-                            text: "START STREAMING";
+                            text: "QUALITY";
                             font-family: Theme.font-mono;
-                            font-size: 13px;
+                            font-size: 10px;
                             font-weight: 600;
-                            letter-spacing: 1.2px;
-                            color: has-selection ? #FFFFFF : Theme.text-tertiary;
+                            letter-spacing: 1.6px;
+                            color: Theme.text-tertiary;
                             vertical-alignment: center;
+                        }
+
+                        Rectangle { width: 8px; }
+
+                        for preset-label[idx] in ["ULTRA", "HIGH", "MEDIUM", "PRO-POTATO", "POTATO"]: Rectangle {
+                            width: preset-chip-text.preferred-width + 16px;
+                            height: 26px;
+                            border-radius: 4px;
+                            background: selected-preset == idx
+                                ? Theme.accent
+                                : (preset-chip-ta.has-hover ? Theme.surface-hover : transparent);
+                            border-width: selected-preset == idx ? 0 : 1px;
+                            border-color: selected-preset == idx ? transparent : Theme.graphic-light;
+
+                            preset-chip-text := Text {
+                                text: preset-label;
+                                font-family: Theme.font-mono;
+                                font-size: 10px;
+                                font-weight: 600;
+                                letter-spacing: 0.8px;
+                                color: selected-preset == idx ? #FFFFFF : Theme.text-secondary;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+
+                            preset-chip-ta := TouchArea {
+                                clicked => { selected-preset = idx; }
+                            }
                         }
                     }
 
-                    start-btn-ta := TouchArea {
-                        clicked => {
-                            if has-selection {
-                                start-stream(selected-id, selected-mode);
+                    // Bottom row: status + start button
+                    HorizontalLayout {
+                        spacing: 10px;
+                        alignment: center;
+
+                        if has-selection: Rectangle {
+                            width: 6px;
+                            height: 6px;
+                            border-radius: 3px;
+                            background: Theme.accent-green;
+                            y: (parent.height - self.height) / 2;
+                        }
+
+                        Text {
+                            text: has-selection ? "1 SOURCE SELECTED" : "SELECT A SOURCE";
+                            font-family: Theme.font-mono;
+                            font-size: 11px;
+                            letter-spacing: 0.8px;
+                            color: has-selection ? Theme.text-primary : Theme.text-secondary;
+                            vertical-alignment: center;
+                            horizontal-stretch: 1;
+                        }
+
+                        // Start button
+                        Rectangle {
+                            width: start-row.preferred-width + 40px;
+                            height: 40px;
+                            border-radius: 6px;
+                            background: has-selection
+                                ? (start-btn-ta.has-hover ? #E8184E : Theme.accent)
+                                : Theme.graphic-light;
+
+                            start-row := HorizontalLayout {
+                                alignment: center;
+                                spacing: 10px;
+                                padding-left: 20px;
+                                padding-right: 20px;
+
+                                Text {
+                                    text: "▶";
+                                    font-size: 11px;
+                                    color: has-selection ? #FFFFFF : Theme.text-tertiary;
+                                    vertical-alignment: center;
+                                }
+
+                                Text {
+                                    text: "START STREAMING";
+                                    font-family: Theme.font-mono;
+                                    font-size: 13px;
+                                    font-weight: 600;
+                                    letter-spacing: 1.2px;
+                                    color: has-selection ? #FFFFFF : Theme.text-tertiary;
+                                    vertical-alignment: center;
+                                }
+                            }
+
+                            start-btn-ta := TouchArea {
+                                clicked => {
+                                    if has-selection {
+                                        start-stream(selected-id, selected-mode, selected-preset);
+                                    }
+                                }
                             }
                         }
                     }

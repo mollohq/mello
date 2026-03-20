@@ -143,16 +143,15 @@ bool NvencEncoder::initialize(const GraphicsDevice& device, const EncoderConfig&
     enc_config.version = NV_ENC_CONFIG_VER;
     enc_config.rcParams.version = NV_ENC_RC_PARAMS_VER;
 
-    // VBR with headroom: keyframes need significantly more bits than delta
-    // frames. Strict CBR (avg==max) starves keyframes, dragging down quality
-    // of subsequent frames that reference them. A 1.5x max and 2x VBV window
-    // lets the encoder spend more on keyframes while averaging to the target.
+    // VBR with moderate headroom: 1.25x max lets keyframes get extra bits
+    // without large bandwidth spikes. 1x VBV keeps rate control tight for
+    // smooth bandwidth usage over P2P links.
     uint32_t avg = config.bitrate_kbps * 1000;
-    uint32_t max = avg + avg / 2;
+    uint32_t max = avg + avg / 4;
     enc_config.rcParams.rateControlMode = NV_ENC_PARAMS_RC_VBR;
     enc_config.rcParams.averageBitRate  = avg;
     enc_config.rcParams.maxBitRate      = max;
-    enc_config.rcParams.vbvBufferSize   = avg * 2;
+    enc_config.rcParams.vbvBufferSize   = avg;
     enc_config.frameIntervalP = 1;
     enc_config.gopLength      = config.keyframe_interval;
 
@@ -334,14 +333,14 @@ void NvencEncoder::request_keyframe() {
 void NvencEncoder::set_bitrate(uint32_t kbps) {
     if (encoder_) {
         uint32_t avg = kbps * 1000;
-        uint32_t max = avg + avg / 2; // 1.5x headroom for keyframes and scene changes
+        uint32_t max = avg + avg / 4;
 
         NV_ENC_RECONFIGURE_PARAMS reconfig = {NV_ENC_RECONFIGURE_PARAMS_VER};
         NV_ENC_CONFIG enc_config = {NV_ENC_CONFIG_VER};
         enc_config.rcParams.rateControlMode = NV_ENC_PARAMS_RC_VBR;
         enc_config.rcParams.averageBitRate  = avg;
         enc_config.rcParams.maxBitRate      = max;
-        enc_config.rcParams.vbvBufferSize   = avg * 2;
+        enc_config.rcParams.vbvBufferSize   = avg;
 
         NV_ENC_INITIALIZE_PARAMS init = {NV_ENC_INITIALIZE_PARAMS_VER};
         init.encodeWidth  = config_.width;

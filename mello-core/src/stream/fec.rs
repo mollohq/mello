@@ -12,16 +12,27 @@ pub struct FecEncoder {
 }
 
 impl FecEncoder {
+    /// Create with group size `n`. Use 0 to disable FEC.
     pub fn new(n: usize) -> Self {
-        assert!(n >= 2, "FEC group size must be >= 2");
         Self {
             n,
-            group: Vec::with_capacity(n),
+            group: if n >= 2 { Vec::with_capacity(n) } else { Vec::new() },
         }
     }
 
     pub fn group_size(&self) -> usize {
         self.n
+    }
+
+    /// True when FEC is actively generating parity packets.
+    pub fn is_enabled(&self) -> bool {
+        self.n >= 2
+    }
+
+    /// Change the group size at runtime. Flushes any partial group.
+    pub fn set_group_size(&mut self, n: usize) {
+        self.group.clear();
+        self.n = n;
     }
 
     /// How many data packets have been pushed into the current (incomplete) group.
@@ -31,7 +42,11 @@ impl FecEncoder {
 
     /// Push a data packet's payload. Returns `Some(parity_payload)` when the
     /// group is complete (after N data packets have been pushed).
+    /// Returns `None` immediately if FEC is disabled (n < 2).
     pub fn push(&mut self, payload: &[u8]) -> Option<Vec<u8>> {
+        if self.n < 2 {
+            return None;
+        }
         self.group.push(payload.to_vec());
         if self.group.len() == self.n {
             let parity = xor_payloads(&self.group);

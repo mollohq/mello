@@ -3,17 +3,12 @@ use std::collections::HashMap;
 use std::ffi::{CStr, CString};
 use std::sync::{Arc, Mutex};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SignalPurpose {
+    #[default]
     Voice,
     Stream,
-}
-
-impl Default for SignalPurpose {
-    fn default() -> Self {
-        Self::Voice
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

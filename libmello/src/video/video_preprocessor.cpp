@@ -1,5 +1,5 @@
 #ifdef _WIN32
-#include "color_converter.hpp"
+#include "video_preprocessor.hpp"
 #include "../util/log.hpp"
 #include <cstdio>
 #include <cstring>
@@ -45,15 +45,23 @@ static void save_bmp(const char* path, const uint8_t* pixels, uint32_t w, uint32
     MELLO_LOG_INFO(TAG, "Saved debug frame: %s (%ux%u)", path, w, h);
 }
 
-ColorConverter::~ColorConverter() {
+VideoPreprocessor::~VideoPreprocessor() {
     shutdown();
 }
 
-bool ColorConverter::initialize(const GraphicsDevice& device, uint32_t width, uint32_t height) {
+bool VideoPreprocessor::initialize(const GraphicsDevice& device, uint32_t width, uint32_t height) {
+    return initialize(device, width, height, width, height);
+}
+
+bool VideoPreprocessor::initialize(const GraphicsDevice& device,
+                                uint32_t in_w, uint32_t in_h,
+                                uint32_t out_w, uint32_t out_h) {
     device_ = device.d3d11();
     device_->GetImmediateContext(&context_);
-    width_  = width;
-    height_ = height;
+    in_w_   = in_w;
+    in_h_   = in_h;
+    width_  = out_w;
+    height_ = out_h;
 
     HRESULT hr = device_->QueryInterface(IID_PPV_ARGS(&video_device_));
     if (FAILED(hr)) {
@@ -69,10 +77,10 @@ bool ColorConverter::initialize(const GraphicsDevice& device, uint32_t width, ui
 
     D3D11_VIDEO_PROCESSOR_CONTENT_DESC content_desc{};
     content_desc.InputFrameFormat = D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE;
-    content_desc.InputWidth  = width;
-    content_desc.InputHeight = height;
-    content_desc.OutputWidth  = width;
-    content_desc.OutputHeight = height;
+    content_desc.InputWidth  = in_w;
+    content_desc.InputHeight = in_h;
+    content_desc.OutputWidth  = out_w;
+    content_desc.OutputHeight = out_h;
     content_desc.Usage = D3D11_VIDEO_USAGE_PLAYBACK_NORMAL;
 
     hr = video_device_->CreateVideoProcessorEnumerator(&content_desc, &vp_enum_);
@@ -106,10 +114,19 @@ bool ColorConverter::initialize(const GraphicsDevice& device, uint32_t width, ui
     // Disable all auto-processing that could alter colors
     video_context_->VideoProcessorSetStreamAutoProcessingMode(video_processor_.Get(), 0, FALSE);
 
-    // NV12 output texture — used as video processor output and NVENC input
+    // Tell the video processor the source and destination rectangles when scaling
+    if (in_w != out_w || in_h != out_h) {
+        RECT src_rect = { 0, 0, (LONG)in_w, (LONG)in_h };
+        RECT dst_rect = { 0, 0, (LONG)out_w, (LONG)out_h };
+        video_context_->VideoProcessorSetStreamSourceRect(video_processor_.Get(), 0, TRUE, &src_rect);
+        video_context_->VideoProcessorSetStreamDestRect(video_processor_.Get(), 0, TRUE, &dst_rect);
+        video_context_->VideoProcessorSetOutputTargetRect(video_processor_.Get(), TRUE, &dst_rect);
+    }
+
+    // NV12 output texture — used as video processor output and encoder input
     D3D11_TEXTURE2D_DESC nv12_desc{};
-    nv12_desc.Width  = width;
-    nv12_desc.Height = height;
+    nv12_desc.Width  = out_w;
+    nv12_desc.Height = out_h;
     nv12_desc.MipLevels = 1;
     nv12_desc.ArraySize = 1;
     nv12_desc.Format = DXGI_FORMAT_NV12;
@@ -135,11 +152,16 @@ bool ColorConverter::initialize(const GraphicsDevice& device, uint32_t width, ui
         return false;
     }
 
-    MELLO_LOG_INFO(TAG, "Color converter initialized: %ux%u BGRA->NV12 (GPU video processor)", width, height);
+    if (in_w != out_w || in_h != out_h) {
+        MELLO_LOG_INFO(TAG, "VideoPreprocessor initialized: %ux%u -> %ux%u BGRA->NV12 (GPU video processor, downscale)",
+            in_w, in_h, out_w, out_h);
+    } else {
+        MELLO_LOG_INFO(TAG, "VideoPreprocessor initialized: %ux%u BGRA->NV12 (GPU video processor)", out_w, out_h);
+    }
     return true;
 }
 
-ID3D11Texture2D* ColorConverter::convert(ID3D11Texture2D* bgra_source) {
+ID3D11Texture2D* VideoPreprocessor::convert(ID3D11Texture2D* bgra_source) {
     D3D11_TEXTURE2D_DESC src_desc{};
     bgra_source->GetDesc(&src_desc);
 
@@ -184,7 +206,7 @@ ID3D11Texture2D* ColorConverter::convert(ID3D11Texture2D* bgra_source) {
     return nv12_texture_.Get();
 }
 
-void ColorConverter::verify_nv12_output(ID3D11Texture2D* bgra_source) {
+void VideoPreprocessor::verify_nv12_output(ID3D11Texture2D* bgra_source) {
     D3D11_TEXTURE2D_DESC desc{};
     nv12_texture_->GetDesc(&desc);
 
@@ -278,7 +300,7 @@ void ColorConverter::verify_nv12_output(ID3D11Texture2D* bgra_source) {
     if (have_bgra) context_->Unmap(bgra_staging.Get(), 0);
 }
 
-void ColorConverter::shutdown() {
+void VideoPreprocessor::shutdown() {
     output_view_.Reset();
     video_processor_.Reset();
     vp_enum_.Reset();

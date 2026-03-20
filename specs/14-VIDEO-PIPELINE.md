@@ -84,7 +84,7 @@ VideoPipeline
   ├── GraphicsDevice (owns D3D11 device)
   │
   ├── CaptureSource   ← initialised with &device
-  ├── ColorConverter  ← initialised with &device
+  ├── VideoPreprocessor ← initialised with &device
   ├── Encoder         ← initialised with &device
   └── Decoder         ← initialised with &device
 ```
@@ -101,7 +101,7 @@ VideoPipeline
 #pragma once
 #include "graphics_device.hpp"
 #include "capture_source.hpp"
-#include "color_converter.hpp"
+#include "video_preprocessor.hpp"
 #include "encoder.hpp"
 #include "decoder.hpp"
 #include <memory>
@@ -144,7 +144,7 @@ public:
 private:
     GraphicsDevice        device_;
     std::unique_ptr<CaptureSource>   capture_;
-    std::unique_ptr<ColorConverter>  converter_;
+    std::unique_ptr<VideoPreprocessor> preprocessor_;
     std::unique_ptr<Encoder>         encoder_;
     std::unique_ptr<Decoder>         decoder_;
     std::unique_ptr<StagingTexture>  staging_;
@@ -412,7 +412,7 @@ The list is bundled with the client and updated via the auto-updater. Processes 
 Capture produces BGRA textures. Hardware encoders expect NV12 (YUV 4:2:0 planar). Conversion runs as a compute shader on the GPU — no CPU involvement, no texture copy to system memory.
 
 ```cpp
-// src/video/color_converter.hpp
+// src/video/video_preprocessor.hpp
 
 #pragma once
 #include "graphics_device.hpp"
@@ -423,15 +423,15 @@ using Microsoft::WRL::ComPtr;
 
 namespace mello::video {
 
-class ColorConverter {
+class VideoPreprocessor {
 public:
-    ColorConverter();
-    ~ColorConverter();
+    VideoPreprocessor();
+    ~VideoPreprocessor();
 
     bool initialize(const GraphicsDevice& device, uint32_t width, uint32_t height);
 
-    /// Convert BGRA source texture to NV12.
-    /// Output texture is owned by ColorConverter and reused across calls.
+    /// Convert BGRA source texture to NV12 (and downscale if resolutions differ).
+    /// Output texture is owned by VideoPreprocessor and reused across calls.
     /// Returns the NV12 texture pointer (valid until next call to convert()).
     ID3D11Texture2D* convert(ID3D11Texture2D* bgra_source);
 
@@ -455,6 +455,24 @@ private:
 
 The NV12 output texture is allocated once at `initialize()` time with `D3D11_USAGE_DEFAULT` and `D3D11_BIND_UNORDERED_ACCESS | D3D11_BIND_SHADER_RESOURCE`. This is the same texture registered as input to the hardware encoder — it is never read back to CPU.
 
+### 5.5 GPU Downscaling
+
+When the capture source resolution exceeds the streaming preset's target resolution (e.g. a 2560×1440 monitor captured for a 1080p stream), the `VideoPreprocessor` performs **bilinear downscaling in the same GPU pass** as the BGRA→NV12 conversion. This avoids any additional GPU passes or CPU copies.
+
+The `VideoPreprocessor::initialize()` overload accepts separate input and output dimensions:
+
+```cpp
+bool initialize(const GraphicsDevice& device,
+                uint32_t in_w, uint32_t in_h,    // capture resolution
+                uint32_t out_w, uint32_t out_h);  // encode resolution
+```
+
+The D3D11 Video Processor handles scaling automatically when `content_desc.InputWidth/Height` differs from `OutputWidth/Height`. Source and destination rectangles are set explicitly to ensure correct sampling.
+
+In `VideoPipeline::start_host()`, the target encode resolution is determined from `PipelineConfig::width/height` (passed from the Rust preset). If the config resolution is smaller than the capture resolution, the pipeline uses the config resolution for encoding; otherwise it uses the capture resolution. All dimensions are even-aligned for NV12 compatibility.
+
+This reduces encoded pixel count significantly (e.g. 2036×1392 → 1920×1080 = 27% fewer pixels), improving quality per bit and lowering bandwidth.
+
 ---
 
 ## 6. Encoding
@@ -465,10 +483,11 @@ The NV12 output texture is allocated once at `initialize()` time with `D3D11_USA
 
 Low-latency encode profile (mandatory for all hardware encoders):
 - No B-frames (`num_b_frames = 0`)
-- Rate control: CBR
-- VBV buffer: 1× target bitrate (1-second maximum)
+- Rate control: VBR with moderate headroom (`max = avg × 1.25`, `vbv = avg × 1`)
 - Keyframe interval: 120 frames (2 seconds at 60fps) under normal conditions
 - Look-ahead: disabled
+
+The VBR headroom of 1.25× allows keyframes slightly more bits without large bandwidth spikes. The tight VBV (1× average bitrate) keeps rate control smooth for P2P links. This applies to both initial configuration and dynamic `set_bitrate()` reconfiguration.
 
 **Stretch goal: AV1** — activated only when `EncoderFactory` confirms AV1 support on the host GPU and `mello_get_decoders()` confirms AV1 decode on the viewer. Falls back to H.264 if either side can't support it. AV1 uses the same low-latency profile constraints.
 
@@ -1133,7 +1152,7 @@ libmello/src/video/
 ├── capture_wgc.hpp / .cpp          # Windows Graphics Capture backend
 ├── capture_process.hpp / .cpp      # Process mode: auto-selects + hot-swaps
 ├── process_enum.hpp / .cpp         # Game process enumeration
-├── color_converter.hpp / .cpp      # GPU BGRA→NV12 compute shader
+├── video_preprocessor.hpp / .cpp   # GPU BGRA→NV12 + downscale (D3D11 Video Processor)
 ├── encoder.hpp                     # Abstract encoder interface
 ├── encoder_factory.hpp / .cpp      # Probe + instantiate best encoder
 ├── encoder_nvenc.hpp / .cpp        # NVIDIA NVENC

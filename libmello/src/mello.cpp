@@ -503,6 +503,8 @@ int mello_enumerate_windows(MelloContext* ctx, MelloWindow* out, int max_count) 
             out[i].pid  = windows[i].pid;
             strncpy(out[i].title, windows[i].title.c_str(), sizeof(out[i].title) - 1);
             out[i].title[sizeof(out[i].title) - 1] = '\0';
+            strncpy(out[i].exe, windows[i].exe.c_str(), sizeof(out[i].exe) - 1);
+            out[i].exe[sizeof(out[i].exe) - 1] = '\0';
         }
         return count;
     } catch (...) { return 0; }

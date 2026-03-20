@@ -177,7 +177,7 @@ export component MainWindow inherits Window {
 
     // --- Streaming callbacks ---
     callback list-capture-sources();
-    callback start-stream(string, string);
+    callback start-stream(/* source_id */ string, /* source_mode */ string, /* preset */ int);
     callback stop-stream();
     callback stop-watching();
     callback watch-stream(/* host_id */ string, /* width */ int, /* height */ int);
@@ -456,9 +456,9 @@ export component MainWindow inherits Window {
         close-requested => {
             root.source-picker-open = false;
         }
-        start-stream(id, mode) => {
+        start-stream(id, mode, preset) => {
             root.source-picker-open = false;
-            root.start-stream(id, mode);
+            root.start-stream(id, mode, preset);
         }
     }
 }

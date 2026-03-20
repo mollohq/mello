@@ -160,6 +160,7 @@ fn main() {
         mello_sys::MelloWindow {
             hwnd: std::ptr::null_mut(),
             title: [0i8; 256],
+            exe: [0i8; 256],
             pid: 0,
         };
         64

@@ -736,7 +736,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     {
         let cmd = cmd_tx.clone();
         let app_weak = app.as_weak();
-        app.on_start_stream(move |source_id, source_mode| {
+        app.on_start_stream(move |source_id, source_mode, preset_idx| {
             let crew_id = if let Some(app) = app_weak.upgrade() {
                 app.get_active_crew_id().to_string()
             } else {
@@ -756,6 +756,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 monitor_index,
                 hwnd,
                 pid,
+                preset: preset_idx as u32,
             });
         });
     }

@@ -233,6 +233,7 @@ MELLO_API int mello_enumerate_games(MelloContext* ctx, MelloGameProcess* out, in
 typedef struct MelloWindow {
     void*    hwnd;
     char     title[256];
+    char     exe[256];
     uint32_t pid;
 } MelloWindow;
 

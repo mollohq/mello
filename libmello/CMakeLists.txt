@@ -196,7 +196,7 @@ if(WIN32)
         src/video/capture_wgc.cpp
         src/video/capture_process.cpp
         src/video/process_enum.cpp
-        src/video/color_converter.cpp
+        src/video/video_preprocessor.cpp
         src/video/staging_texture.cpp
         src/video/encoder_nvenc.cpp
         src/video/encoder_amf.cpp

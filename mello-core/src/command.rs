@@ -2,6 +2,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::presence::{Activity, PresenceStatus};
 
+fn default_preset() -> u32 { 2 } // Medium
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Command {
     TryRestore,
@@ -94,6 +96,9 @@ pub enum Command {
         hwnd: Option<u64>,
         #[serde(default)]
         pid: Option<u32>,
+        /// Quality preset index: 0=Ultra, 1=High, 2=Medium, 3=Low, 4=Potato
+        #[serde(default = "default_preset")]
+        preset: u32,
     },
     StopStream,
     WatchStream {

@@ -205,6 +205,7 @@ pub unsafe fn start_host(
 }
 
 /// Create the manager and spawn the run loop. The caller provides the sink.
+#[allow(clippy::too_many_arguments)]
 pub fn create_stream_session(
     ctx: *mut mello_sys::MelloContext,
     host: *mut mello_sys::MelloStreamHost,

@@ -10,7 +10,7 @@
 #include <atomic>
 
 #ifdef _WIN32
-#include "color_converter.hpp"
+#include "video_preprocessor.hpp"
 #include "staging_texture.hpp"
 #endif
 
@@ -69,7 +69,7 @@ private:
     std::unique_ptr<Encoder>             encoder_;
     std::unique_ptr<Decoder>             decoder_;
 #ifdef _WIN32
-    std::unique_ptr<ColorConverter>      converter_;
+    std::unique_ptr<VideoPreprocessor>   preprocessor_;
     std::unique_ptr<StagingTexture>      staging_;
 #endif
 

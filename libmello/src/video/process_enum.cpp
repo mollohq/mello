@@ -111,9 +111,24 @@ static BOOL CALLBACK enum_windows_cb(HWND hwnd, LPARAM lparam) {
     DWORD pid = 0;
     GetWindowThreadProcessId(hwnd, &pid);
 
+    std::string exe_name;
+    if (HANDLE proc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid)) {
+        wchar_t exe_path[MAX_PATH]{};
+        DWORD path_len = MAX_PATH;
+        if (QueryFullProcessImageNameW(proc, 0, exe_path, &path_len)) {
+            const wchar_t* slash = wcsrchr(exe_path, L'\\');
+            const wchar_t* fname = slash ? slash + 1 : exe_path;
+            char fname_utf8[256]{};
+            WideCharToMultiByte(CP_UTF8, 0, fname, -1, fname_utf8, sizeof(fname_utf8), nullptr, nullptr);
+            exe_name = fname_utf8;
+        }
+        CloseHandle(proc);
+    }
+
     VisibleWindow vw;
     vw.hwnd  = hwnd;
     vw.title = title_utf8;
+    vw.exe   = std::move(exe_name);
     vw.pid   = pid;
     result->push_back(std::move(vw));
 

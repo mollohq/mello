@@ -18,6 +18,7 @@ std::vector<GameProcess> enumerate_game_processes();
 struct VisibleWindow {
     void*       hwnd;
     std::string title;
+    std::string exe;
     uint32_t    pid;
 };
 

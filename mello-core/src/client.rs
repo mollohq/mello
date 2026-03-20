@@ -86,10 +86,8 @@ impl ChunkAssembler {
             let assembly = self.pending.remove(&msg_id).unwrap();
             let total: usize = assembly.chunks.iter().map(|c| c.as_ref().map_or(0, |v| v.len())).sum();
             let mut result = Vec::with_capacity(total);
-            for chunk in assembly.chunks {
-                if let Some(data) = chunk {
-                    result.extend_from_slice(&data);
-                }
+            for data in assembly.chunks.into_iter().flatten() {
+                result.extend_from_slice(&data);
             }
             Some(result)
         } else {
@@ -833,7 +831,7 @@ impl Client {
             let presented = unsafe { mello_sys::mello_stream_present_frame(viewer) };
             if presented {
                 vs.frames_presented += 1;
-                if vs.frames_presented <= 3 || vs.frames_presented % 300 == 0 {
+                if vs.frames_presented <= 3 || vs.frames_presented.is_multiple_of(300) {
                     log::info!("Stream frame presented #{}", vs.frames_presented);
                 }
             }
@@ -991,8 +989,8 @@ impl Client {
             Command::ListCaptureSources => {
                 self.handle_list_capture_sources();
             }
-            Command::StartStream { crew_id, title, capture_mode, monitor_index, hwnd, pid } => {
-                self.handle_start_stream(&crew_id, &title, &capture_mode, monitor_index, hwnd, pid).await;
+            Command::StartStream { crew_id, title, capture_mode, monitor_index, hwnd, pid, preset } => {
+                self.handle_start_stream(&crew_id, &title, &capture_mode, monitor_index, hwnd, pid, preset).await;
             }
             Command::StopStream => {
                 self.handle_stop_stream().await;
@@ -1968,23 +1966,22 @@ impl Client {
             mello_sys::mello_enumerate_games(ctx, games_raw.as_mut_ptr(), 32)
         };
         let mut games = Vec::new();
-        for i in 0..game_count as usize {
-            let name = unsafe { std::ffi::CStr::from_ptr(games_raw[i].name.as_ptr()) }
+        for game in games_raw.iter().take(game_count as usize) {
+            let name = unsafe { std::ffi::CStr::from_ptr(game.name.as_ptr()) }
                 .to_string_lossy()
                 .to_string();
-            let exe = unsafe { std::ffi::CStr::from_ptr(games_raw[i].exe.as_ptr()) }
+            let exe = unsafe { std::ffi::CStr::from_ptr(game.exe.as_ptr()) }
                 .to_string_lossy()
                 .to_string();
-            let pid = games_raw[i].pid;
             games.push(crate::events::CaptureSource {
-                id: format!("game-{}", pid),
+                id: format!("game-{}", game.pid),
                 name,
                 mode: "process".to_string(),
                 monitor_index: None,
                 hwnd: None,
-                pid: Some(pid),
+                pid: Some(game.pid),
                 exe,
-                is_fullscreen: games_raw[i].is_fullscreen,
+                is_fullscreen: game.is_fullscreen,
                 resolution: String::new(),
             });
         }
@@ -1992,25 +1989,29 @@ impl Client {
         let mut windows_raw = vec![mello_sys::MelloWindow {
             hwnd: std::ptr::null_mut(),
             title: [0i8; 256],
+            exe: [0i8; 256],
             pid: 0,
         }; 64];
         let win_count = unsafe {
             mello_sys::mello_enumerate_windows(ctx, windows_raw.as_mut_ptr(), 64)
         };
         let mut windows = Vec::new();
-        for i in 0..win_count as usize {
-            let title = unsafe { std::ffi::CStr::from_ptr(windows_raw[i].title.as_ptr()) }
+        for win in windows_raw.iter().take(win_count as usize) {
+            let title = unsafe { std::ffi::CStr::from_ptr(win.title.as_ptr()) }
                 .to_string_lossy()
                 .to_string();
-            let hwnd = windows_raw[i].hwnd as u64;
+            let exe = unsafe { std::ffi::CStr::from_ptr(win.exe.as_ptr()) }
+                .to_string_lossy()
+                .to_string();
+            let hwnd = win.hwnd as u64;
             windows.push(crate::events::CaptureSource {
                 id: format!("window-{}", hwnd),
                 name: title,
                 mode: "window".to_string(),
                 monitor_index: None,
                 hwnd: Some(hwnd),
-                pid: Some(windows_raw[i].pid),
-                exe: String::new(),
+                pid: Some(win.pid),
+                exe,
                 is_fullscreen: false,
                 resolution: String::new(),
             });
@@ -2027,6 +2028,7 @@ impl Client {
         });
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn handle_start_stream(
         &mut self,
         crew_id: &str,
@@ -2035,6 +2037,7 @@ impl Client {
         monitor_index: Option<u32>,
         hwnd: Option<u64>,
         pid: Option<u32>,
+        preset_idx: u32,
     ) {
         if self.stream_session.is_some() {
             let _ = self.event_tx.send(Event::StreamError {
@@ -2043,8 +2046,17 @@ impl Client {
             return;
         }
 
+        let quality_preset = match preset_idx {
+            0 => crate::stream::config::QualityPreset::Ultra,
+            1 => crate::stream::config::QualityPreset::High,
+            3 => crate::stream::config::QualityPreset::Low,
+            4 => crate::stream::config::QualityPreset::Potato,
+            _ => crate::stream::config::QualityPreset::Medium,
+        };
+        log::info!("Starting stream with preset: {:?}", quality_preset);
+
         // Step 1: async RPC call (no raw pointers held across await)
-        let config = crate::stream::StreamConfig::default();
+        let config = crate::stream::StreamConfig::from_preset(quality_preset, crate::stream::config::Codec::H264);
         let resp = match crate::stream::host::request_start_stream(
             &self.nakama,
             crew_id,
