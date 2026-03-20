@@ -906,6 +906,31 @@ impl Client {
             Command::SetDeafen { deafened } => {
                 self.voice.set_deafen(deafened);
             }
+            Command::CheckMicPermission => {
+                let status = unsafe { mello_sys::mello_mic_permission_status() };
+                let granted = status == mello_sys::MelloMicPermission_MELLO_MIC_GRANTED;
+                let denied = status == mello_sys::MelloMicPermission_MELLO_MIC_DENIED;
+                let _ = self
+                    .event_tx
+                    .send(Event::MicPermissionChanged { granted, denied });
+            }
+            Command::RequestMicPermission => {
+                let tx = self.event_tx.clone();
+                unsafe extern "C" fn on_result(user_data: *mut std::ffi::c_void, granted: bool) {
+                    let tx = Box::from_raw(user_data as *mut std::sync::mpsc::Sender<Event>);
+                    let _ = tx.send(Event::MicPermissionChanged {
+                        granted,
+                        denied: !granted,
+                    });
+                }
+                let tx_box = Box::new(tx);
+                unsafe {
+                    mello_sys::mello_mic_request_permission(
+                        Some(on_result),
+                        Box::into_raw(tx_box) as *mut std::ffi::c_void,
+                    );
+                }
+            }
             Command::ListAudioDevices => {
                 let capture = self.voice.list_capture_devices();
                 let playback = self.voice.list_playback_devices();

@@ -262,6 +262,7 @@ component VoiceChannelExpanded inherits Rectangle {
 // ── Exported accordion container ──
 export component VoiceChannelView inherits Rectangle {
     in property <[VoiceChannelData]> voice-channels: [];
+    in property <bool> mic-permission-granted: true;
 
     callback join-voice-channel(/* channel_id */ string);
     callback toggle-channel(/* channel_id */ string);
@@ -295,7 +296,7 @@ export component VoiceChannelView inherits Rectangle {
                     : (channel.member-count > 0
                         ? "\{channel.member-count} Active"
                         : "0 Members");
-                show-join: !channel.active;
+                show-join: !channel.active && root.mic-permission-granted;
                 clicked => { root.toggle-channel(channel.id); }
                 join-clicked => { root.join-voice-channel(channel.id); }
             }

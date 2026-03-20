@@ -10,16 +10,22 @@ on:
         description: "Why are you triggering a manual build?"
         required: true
         default: "I need a binary package for testing!"
+      version:
+        description: "Override version number (optional, e.g., 2025.11.2)"
+        required: false
+        default: ""
 
 permissions:
   contents: write
 
 env:
   RELEASE_CHANNEL: "osx-arm64-stable"
+  CODE_SIGNING_KEYCHAIN: "mello_code_signing"
+  NOTARY_PROFILE_NAME: "mello-signing-notary-profile"
 
 jobs:
   build-macos:
-    runs-on: self-hosted
+    runs-on: [self-hosted, macOS]
 
     steps:
       - name: Checkout repository
@@ -29,20 +35,55 @@ jobs:
           submodules: recursive
           token: ${{ secrets.GH_PAT }}
 
-      - name: Set version from release
-        if: github.event_name == 'release'
+      - name: Set version
         run: |
-          version="${{ github.event.release.tag_name }}"
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ] && [ -n "${{ inputs.version }}" ]; then
+            version="${{ inputs.version }}"
+          elif [ "${{ github.event_name }}" == "release" ]; then
+            version="${{ github.event.release.tag_name }}"
+          else
+            version="0.0.${{ github.run_number }}"
+          fi
           version="${version#v}"
           echo "RELEASE_VERSION=$version" >> $GITHUB_ENV
 
-      - name: Set dev version
-        if: github.event_name == 'workflow_dispatch'
-        run: |
-          echo "RELEASE_VERSION=0.0.${{ github.run_number }}" >> $GITHUB_ENV
-
       - name: Stamp version in Cargo.toml
         run: sed -i'' -e "s/^version = \"[^\"]*\"/version = \"$RELEASE_VERSION\"/" Cargo.toml
+
+      - name: Stamp version in Info.plist
+        run: |
+          PLIST=client/macos/Info.plist
+          /usr/libexec/PlistBuddy -c "Add :CFBundleShortVersionString string $RELEASE_VERSION" "$PLIST" 2>/dev/null \
+            || /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $RELEASE_VERSION" "$PLIST"
+          /usr/libexec/PlistBuddy -c "Add :CFBundleVersion string $RELEASE_VERSION" "$PLIST" 2>/dev/null \
+            || /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $RELEASE_VERSION" "$PLIST"
+
+      - name: Import build certificate
+        uses: apple-actions/import-codesign-certs@v2
+        with:
+          keychain: ${{ env.CODE_SIGNING_KEYCHAIN }}
+          keychain-password: ${{ secrets.KEYCHAIN_PASSWORD }}
+          p12-file-base64: ${{ secrets.BUILD_CERTIFICATE_BASE64 }}
+          p12-password: ${{ secrets.P12_PASSWORD }}
+
+      - name: Import installer certificate
+        uses: apple-actions/import-codesign-certs@v2
+        with:
+          keychain: ${{ env.CODE_SIGNING_KEYCHAIN }}
+          keychain-password: ${{ secrets.KEYCHAIN_PASSWORD }}
+          create-keychain: false
+          p12-file-base64: ${{ secrets.INSTALLER_CERTIFICATE_BASE64 }}
+          p12-password: ${{ secrets.P12_PASSWORD }}
+
+      - name: Store notarytool credentials
+        run: |
+          KEYCHAIN_PATH="$HOME/Library/Keychains/${{ env.CODE_SIGNING_KEYCHAIN }}.keychain-db"
+          xcrun notarytool store-credentials \
+            --apple-id "${{ secrets.APPLE_ID }}" \
+            --team-id "${{ secrets.APPLE_TEAM }}" \
+            --password "${{ secrets.APPLE_PASSWORD }}" \
+            --keychain "$KEYCHAIN_PATH" \
+            "${{ env.NOTARY_PROFILE_NAME }}"
 
       - name: Build client
         run: cargo build --release --features production
@@ -50,6 +91,8 @@ jobs:
           GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
           DISCORD_CLIENT_ID: ${{ secrets.DISCORD_CLIENT_ID }}
+          NAKAMA_SERVER_KEY: ${{ secrets.NAKAMA_SERVER_KEY }}
+          NAKAMA_HTTP_KEY: ${{ secrets.NAKAMA_HTTP_KEY }}
 
       - name: Run tests
         run: cargo test --workspace
@@ -64,34 +107,22 @@ jobs:
           cp libmello/third_party/onnxruntime/onnxruntime-osx-arm64-*/lib/libonnxruntime*.dylib dist/
           cp $(find target/release/build -name silero_vad.onnx | head -1) dist/
 
-      - name: Import Apple certificates
-        uses: apple-actions/import-codesign-certs@v2
-        with:
-          p12-file-base64: ${{ secrets.MACOS_BUILD_AND_INSTALLER_CERTIFICATES }}
-          p12-password: ${{ secrets.P12_PASSWORD }}
-
-      - name: Store notarytool credentials
+      - name: Codesign external libraries
         run: |
-          xcrun notarytool store-credentials "AC_PASSWORD" \
-            --apple-id "${{ secrets.APPLE_ID }}" \
-            --team-id "${{ secrets.APPLE_TEAM }}" \
-            --password "${{ secrets.APPLE_PASSWORD }}"
-
-      - name: Codesign ONNX Runtime dylib
-        run: |
+          echo "Signing ONNX Runtime libraries..."
           for dylib in dist/libonnxruntime*.dylib; do
-            codesign --force --options runtime --timestamp \
+            codesign --force --verbose --options runtime --timestamp \
               --sign "Developer ID Application: ${{ secrets.APPLE_TEAM_NAME }}" \
               "$dylib"
           done
 
       - name: Velopack Package
         run: |
-          dotnet tool install -g vpk
+          KEYCHAIN_PATH="$HOME/Library/Keychains/${{ env.CODE_SIGNING_KEYCHAIN }}.keychain-db"
           mkdir -p vpk-out
           vpk download github --repoUrl https://github.com/mollohq/mello --outputDir vpk-out --channel $RELEASE_CHANNEL --token ${{ secrets.GH_PAT }}
           vpk pack \
-            --packId Mello \
+            --packId m3llo \
             --packVersion $RELEASE_VERSION \
             --packDir dist \
             --mainExe mello \
@@ -101,8 +132,28 @@ jobs:
             --icon client/assets/icons/mello.icns \
             --signAppIdentity "Developer ID Application: ${{ secrets.APPLE_TEAM_NAME }}" \
             --signInstallIdentity "Developer ID Installer: ${{ secrets.APPLE_TEAM_NAME }}" \
-            --notaryProfile "AC_PASSWORD" \
-            --signEntitlements client/macos/entitlements.plist
+            --notaryProfile "${{ env.NOTARY_PROFILE_NAME }}" \
+            --keychain "$KEYCHAIN_PATH" \
+            --signEntitlements client/macos/release.entitlements \
+            --plist client/macos/Info.plist
+
+      - name: Fetch notarization log on failure
+        if: failure()
+        run: |
+          KEYCHAIN_PATH="$HOME/Library/Keychains/${{ env.CODE_SIGNING_KEYCHAIN }}.keychain-db"
+          # Get the most recent submission ID from notarytool history
+          xcrun notarytool history \
+            --keychain-profile "${{ env.NOTARY_PROFILE_NAME }}" \
+            --keychain "$KEYCHAIN_PATH" 2>&1 | head -20
+          SUBMISSION_ID=$(xcrun notarytool history \
+            --keychain-profile "${{ env.NOTARY_PROFILE_NAME }}" \
+            --keychain "$KEYCHAIN_PATH" 2>/dev/null | grep -m1 'id:' | awk '{print $2}')
+          if [ -n "$SUBMISSION_ID" ]; then
+            echo "Fetching log for submission $SUBMISSION_ID..."
+            xcrun notarytool log "$SUBMISSION_ID" \
+              --keychain-profile "${{ env.NOTARY_PROFILE_NAME }}" \
+              --keychain "$KEYCHAIN_PATH" 2>&1
+          fi
 
       - name: Upload to GitHub Release
         if: github.event_name == 'release'
@@ -122,4 +173,4 @@ jobs:
       - name: Cleanup keychain
         if: always()
         run: |
-          security delete-keychain signing_temp.keychain || true
+          security delete-keychain ${{ env.CODE_SIGNING_KEYCHAIN }}.keychain-db || true

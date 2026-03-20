@@ -61,6 +61,8 @@ pub enum Command {
     SetDeafen {
         deafened: bool,
     },
+    CheckMicPermission,
+    RequestMicPermission,
     ListAudioDevices,
     SetCaptureDevice {
         id: String,

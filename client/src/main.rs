@@ -188,6 +188,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let app = MainWindow::new()?;
+    app.set_settings_build_version(format!("v{}", env!("CARGO_PKG_VERSION")).into());
 
     // --- macOS native menu bar ---
     #[cfg(target_os = "macos")]
@@ -265,6 +266,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let _ = cmd_tx.try_send(Command::DiscoverCrews);
         }
         app.set_onboarding_step(s.onboarding_step as i32);
+        let _ = cmd_tx.try_send(Command::CheckMicPermission);
     }
 
     // --- Login ---
@@ -423,6 +425,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     })
                     .collect();
                 app.set_voice_channels(Rc::new(slint::VecModel::from(updated)).into());
+            }
+        });
+    }
+
+    // --- Mic permission ---
+    {
+        let cmd = cmd_tx.clone();
+        app.on_request_mic_permission(move || {
+            log::info!("UI: requesting mic permission");
+            let _ = cmd.try_send(Command::RequestMicPermission);
+        });
+    }
+    {
+        app.on_open_mic_settings(move || {
+            log::info!("UI: opening mic settings");
+            #[cfg(target_os = "macos")]
+            {
+                let _ = std::process::Command::new("open")
+                    .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone")
+                    .spawn();
             }
         });
     }
@@ -1747,6 +1769,15 @@ fn handle_event(
             if changed {
                 app.set_voice_channels(Rc::new(slint::VecModel::from(updated_channels)).into());
             }
+        }
+        Event::MicPermissionChanged { granted, denied } => {
+            log::info!(
+                "UI: mic permission changed, granted={} denied={}",
+                granted,
+                denied
+            );
+            app.set_mic_permission_granted(granted);
+            app.set_mic_permission_denied(denied);
         }
         Event::MicLevel { level } => {
             app.set_mic_level(level);

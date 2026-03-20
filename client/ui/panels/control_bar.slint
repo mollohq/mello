@@ -95,6 +95,8 @@ export component ControlBar inherits Rectangle {
     in-out property <bool> mic-muted: false;
     in-out property <bool> deafened: false;
     in-out property <bool> in-voice: false;
+    in property <bool> mic-permission-granted: true;
+    in property <bool> mic-permission-denied: false;
     // 0=online, 1=idle, 2=dnd, 3=invisible
     in-out property <int> presence-status: 0;
 
@@ -106,6 +108,8 @@ export component ControlBar inherits Rectangle {
     callback theme-toggled();
     callback settings-clicked();
     callback debug-toggled();
+    callback request-mic-permission();
+    callback open-mic-settings();
 
     background: Theme.surface;
     border-width: 1px;
@@ -119,7 +123,6 @@ export component ControlBar inherits Rectangle {
         // --- Left: user identity (clickable for menu) ---
         Rectangle {
             width: avatar-row.preferred-width;
-            height: parent.height;
 
             avatar-row := HorizontalLayout {
                 spacing: 16px;
@@ -277,8 +280,11 @@ export component ControlBar inherits Rectangle {
 
         Rectangle { horizontal-stretch: 1; }
 
-        // --- Right: action buttons ---
+        // --- Right: action buttons OR mic permission CTA ---
+        // Both are always present; visibility toggled to avoid layout binding loops.
         HorizontalLayout {
+            visible: mic-permission-granted;
+            horizontal-stretch: 0;
             spacing: 16px;
             alignment: center;
 
@@ -305,6 +311,61 @@ export component ControlBar inherits Rectangle {
                 clicked => {
                     if in-voice {
                         voice-toggled();
+                    }
+                }
+            }
+        }
+
+        HorizontalLayout {
+            visible: !mic-permission-granted;
+            horizontal-stretch: 0;
+            spacing: 12px;
+            alignment: center;
+
+            Text {
+                text: mic-permission-denied
+                    ? "Microphone access denied — enable it in System Settings"
+                    : "Microphone access is needed for voice chat";
+                font-family: Theme.font-mono;
+                font-size: 11px;
+                color: Theme.text-secondary;
+                vertical-alignment: center;
+            }
+
+            Rectangle {
+                width: mic-cta-row.preferred-width + 28px;
+                height: 36px;
+                border-radius: Theme.r-inner;
+                background: Theme.accent;
+
+                mic-cta-row := HorizontalLayout {
+                    alignment: center;
+                    spacing: 8px;
+
+                    Text {
+                        text: mic-permission-denied ? "Open Settings" : "Allow Microphone";
+                        font-family: Theme.font-mono;
+                        font-size: 12px;
+                        font-weight: 600;
+                        color: #FFFFFF;
+                        vertical-alignment: center;
+                    }
+
+                    Text {
+                        text: "→";
+                        font-size: 14px;
+                        color: #FFFFFF;
+                        vertical-alignment: center;
+                    }
+                }
+
+                mic-btn-touch := TouchArea {
+                    clicked => {
+                        if (root.mic-permission-denied) {
+                            root.open-mic-settings();
+                        } else {
+                            root.request-mic-permission();
+                        }
                     }
                 }
             }

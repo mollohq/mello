@@ -117,6 +117,11 @@ pub enum Event {
         speaking: bool,
     },
 
+    MicPermissionChanged {
+        granted: bool,
+        denied: bool,
+    },
+
     AudioDevicesListed {
         capture: Vec<AudioDevice>,
         playback: Vec<AudioDevice>,

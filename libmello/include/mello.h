@@ -48,7 +48,14 @@ typedef struct MelloIceCandidate {
 /** Log callback: level (0=debug,1=info,2=warn,3=error), tag, message. */
 typedef void (*MelloLogCallback)(void* user_data, int level, const char* tag, const char* message);
 
+typedef enum MelloMicPermission {
+    MELLO_MIC_NOT_DETERMINED = 0,
+    MELLO_MIC_GRANTED = 1,
+    MELLO_MIC_DENIED = 2,
+} MelloMicPermission;
+
 typedef void (*MelloVoiceActivityCallback)(void* user_data, bool speaking);
+typedef void (*MelloMicPermissionCallback)(void* user_data, bool granted);
 typedef void (*MelloIceCandidateCallback)(void* user_data, const MelloIceCandidate* candidate);
 typedef void (*MelloPeerStateCallback)(void* user_data, int state);
 typedef void (*MelloPeerDataCallback)(void* user_data, const uint8_t* data, int size, bool reliable);
@@ -63,6 +70,13 @@ MELLO_API const char* mello_get_error(MelloContext* ctx);
 
 /** Set a log callback to receive all libmello log output. Pass NULL to revert to stderr. */
 MELLO_API void mello_set_log_callback(MelloLogCallback callback, void* user_data);
+
+/* ============================================================================
+ * Microphone Permission (macOS: AVCaptureDevice; others: always granted)
+ * ============================================================================ */
+
+MELLO_API MelloMicPermission mello_mic_permission_status(void);
+MELLO_API void mello_mic_request_permission(MelloMicPermissionCallback callback, void* user_data);
 
 /* ============================================================================
  * Voice

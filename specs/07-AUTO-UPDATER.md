@@ -848,7 +848,7 @@ jobs:
             --signAppIdentity "Developer ID Application: ${{ secrets.APPLE_TEAM_NAME }}" \
             --signInstallIdentity "Developer ID Installer: ${{ secrets.APPLE_TEAM_NAME }}" \
             --notaryProfile "AC_PASSWORD" \
-            --signEntitlements macos/entitlements.plist
+            --signEntitlements client/macos/release.entitlements
 
       # Upload Velopack artifacts to the GitHub Release
       - name: Upload to GitHub Release
@@ -918,7 +918,7 @@ Both are exported as a single `.p12` file and stored as a base64-encoded GitHub 
 **Entitlements file** (committed to the repo):
 
 ```xml
-<!-- macos/entitlements.plist -->
+<!-- client/macos/release.entitlements -->
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
