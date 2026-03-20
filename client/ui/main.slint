@@ -1,5 +1,5 @@
 import { Theme } from "theme.slint";
-import { CrewData, MemberData, ChatMessageData, AudioDeviceData, VoiceChannelData, VoiceChannelMember } from "types.slint";
+import { CrewData, MemberData, ChatMessageData, AudioDeviceData, VoiceChannelData, VoiceChannelMember, DiscoverCrewData } from "types.slint";
 import { CrewPanel } from "panels/crew_panel.slint";
 import { StreamView } from "panels/stream_view.slint";
 import { VoiceChannelView } from "panels/voice_channel_view.slint";
@@ -10,9 +10,10 @@ import { DebugPanel } from "panels/debug_panel.slint";
 import { Onboarding } from "panels/onboarding.slint";
 import { SignInPanel } from "panels/sign_in.slint";
 import { UpdateToast } from "panels/update_banner.slint";
+import { DiscoverPanel } from "panels/discover_panel.slint";
 
 
-export { CrewData, MemberData, ChatMessageData, AudioDeviceData, VoiceChannelData, VoiceChannelMember, Theme }
+export { CrewData, MemberData, ChatMessageData, AudioDeviceData, VoiceChannelData, VoiceChannelMember, DiscoverCrewData, Theme }
 
 export component MainWindow inherits Window {
     title: "Mello";
@@ -40,11 +41,16 @@ export component MainWindow inherits Window {
     // --- User ---
     in property <string> user-id: "";
     in property <string> user-name: "";
+    in property <string> user-initials: "";
     in property <string> user-tag: "";
 
     // --- Crews ---
     in property <[CrewData]> crews: [];
     in property <string> active-crew-id: "";
+
+    // --- Discover crews ---
+    in-out property <bool> show-discover: false;
+    in property <[DiscoverCrewData]> discover-crews-list: [];
 
     // --- Members / chat ---
     in property <[MemberData]> members: [];
@@ -183,12 +189,18 @@ export component MainWindow inherits Window {
     callback signin-discord();
     callback signin-apple();
 
+    // --- Discover callbacks ---
+    callback discover-requested();
+    callback discover-join-crew(string);
+    callback discover-join-invite(string);
+
     // ===================== ONBOARDING =====================
     if onboarding-step >= 1 && onboarding-step <= 3 && !show-sign-in: Onboarding {
         step: root.onboarding-step;
         discover-crews: root.discover-crews;
         link-error: root.link-error;
         device-user-name: root.user-name;
+        device-user-initials: root.user-initials;
         is-returning-user: root.is-returning-user;
         capture-devices: root.capture-devices;
         playback-devices: root.playback-devices;
@@ -240,12 +252,19 @@ export component MainWindow inherits Window {
                 width: 280px;
                 crews: root.crews;
                 active-crew-id: root.active-crew-id;
-                crew-selected(id) => { root.select-crew(id); }
+                crew-selected(id) => {
+                    root.show-discover = false;
+                    root.select-crew(id);
+                }
                 crew-create-requested(name) => { root.create-crew(name); }
+                browse-crews-requested => {
+                    root.show-discover = true;
+                    root.discover-requested();
+                }
             }
 
-            // CENTER: stage area + controls bar
-            VerticalLayout {
+            // CENTER: stage area + controls bar  OR  discover panel
+            if !root.show-discover: VerticalLayout {
                 horizontal-stretch: 1;
                 spacing: Theme.gap;
 
@@ -264,6 +283,7 @@ export component MainWindow inherits Window {
                 ControlBar {
                     height: 92px;
                     user-name: root.user-name;
+                    user-initials: root.user-initials;
                     user-tag: root.user-tag;
                     mic-muted <=> root.mic-muted;
                     deafened <=> root.deafened;
@@ -287,8 +307,17 @@ export component MainWindow inherits Window {
                 }
             }
 
+            if root.show-discover: DiscoverPanel {
+                horizontal-stretch: 1;
+                crews: root.discover-crews-list;
+                join-crew(id) => { root.discover-join-crew(id); }
+                join-invite(code) => { root.discover-join-invite(code); }
+                back-requested => { root.show-discover = false; }
+            }
+
             // RIGHT: Chat panel
-            ChatPanel {
+            if !root.show-discover: ChatPanel {
+                horizontal-stretch: 0;
                 width: 340px;
                 messages: root.messages;
                 user-name: root.user-name;

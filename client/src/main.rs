@@ -306,6 +306,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if let Some(app) = app_weak.upgrade() {
                 app.set_logged_in(false);
                 app.set_user_name("".into());
+                app.set_user_initials("".into());
                 app.set_user_tag("".into());
                 app.set_active_crew_id("".into());
                 app.set_onboarding_step(1);
@@ -871,6 +872,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let _ = cmd.try_send(Command::AuthApple);
         });
     }
+    // --- Discover crews ---
+    {
+        let cmd = cmd_tx.clone();
+        app.on_discover_requested(move || {
+            let _ = cmd.try_send(Command::DiscoverCrews);
+        });
+    }
+    {
+        let cmd = cmd_tx.clone();
+        app.on_discover_join_crew(move |crew_id| {
+            let _ = cmd.try_send(Command::JoinCrew {
+                crew_id: crew_id.to_string(),
+            });
+        });
+    }
+    {
+        let cmd = cmd_tx.clone();
+        app.on_discover_join_invite(move |code| {
+            log::info!("[discover] join-by-invite code={}", code);
+            let _ = cmd.try_send(Command::JoinCrew {
+                crew_id: code.to_string(),
+            });
+        });
+    }
     // --- Onboarding: link email ---
     {
         let cmd = cmd_tx.clone();
@@ -1343,29 +1368,44 @@ fn handle_event(
                 created
             );
             app.set_user_id(user.id.into());
+            app.set_user_initials(make_initials(&user.display_name).into());
             app.set_user_name(user.display_name.into());
             app.set_user_tag(user.tag.into());
             app.set_is_returning_user(!created);
         }
         Event::DiscoverCrewsLoaded { crews } => {
             log::info!("[auth] discover-crews loaded  count={}", crews.len());
-            let model: Vec<CrewData> = crews
+            let step = app.get_onboarding_step();
+            if (1..=3).contains(&step) {
+                let model: Vec<CrewData> = crews
+                    .iter()
+                    .map(|c| CrewData {
+                        id: c.id.clone().into(),
+                        name: c.name.clone().into(),
+                        description: c.description.clone().into(),
+                        member_count: c.member_count,
+                        online_count: 0,
+                        ..Default::default()
+                    })
+                    .collect();
+                let rc = Rc::new(slint::VecModel::from(model));
+                app.set_discover_crews(rc.into());
+                if step == 0 || step == 1 {
+                    app.set_onboarding_step(1);
+                }
+            }
+            let discover_model: Vec<DiscoverCrewData> = crews
                 .into_iter()
-                .map(|c| CrewData {
-                    id: c.id.clone().into(),
+                .map(|c| DiscoverCrewData {
+                    id: c.id.into(),
                     name: c.name.into(),
                     description: c.description.into(),
                     member_count: c.member_count,
                     online_count: 0,
-                    ..Default::default()
+                    open: true,
                 })
                 .collect();
-            let rc = Rc::new(slint::VecModel::from(model));
-            app.set_discover_crews(rc.into());
-            let step = app.get_onboarding_step();
-            if step == 0 || step == 1 {
-                app.set_onboarding_step(1);
-            }
+            app.set_discover_crews_list(Rc::new(slint::VecModel::from(discover_model)).into());
         }
         Event::OnboardingReady { user } => {
             log::info!(
@@ -1374,6 +1414,7 @@ fn handle_event(
                 user.display_name
             );
             app.set_user_id(user.id.into());
+            app.set_user_initials(make_initials(&user.display_name).into());
             app.set_user_name(user.display_name.into());
             app.set_user_tag(user.tag.into());
             app.set_logged_in(true);
@@ -1383,6 +1424,8 @@ fn handle_event(
             s.pending_crew_name = None;
             s.onboarding_step = 3;
             s.save();
+            drop(s);
+            let _ = cmd_tx.try_send(Command::LoadMyCrews);
         }
         Event::OnboardingFailed { reason } => {
             log::error!("[onboarding] finalization failed: {}", reason);
@@ -1424,6 +1467,7 @@ fn handle_event(
             app.set_login_loading(false);
             app.set_show_sign_in(false);
             app.set_user_id(user.id.into());
+            app.set_user_initials(make_initials(&user.display_name).into());
             app.set_user_name(user.display_name.into());
             app.set_user_tag(user.tag.into());
             let mut s = settings.borrow_mut();
@@ -1514,6 +1558,7 @@ fn handle_event(
         }
         Event::CrewJoined { crew_id } => {
             log::info!("UI: joined crew {}", crew_id);
+            app.set_show_discover(false);
             // Reset active voice channel — will be set when CrewStateLoaded arrives
             *active_voice_channel.borrow_mut() = String::new();
             // Clear voice bubbles on the previous crew — we left its channel

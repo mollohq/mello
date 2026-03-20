@@ -1,0 +1,490 @@
+import { Theme } from "../theme.slint";
+import { DiscoverCrewData } from "../types.slint";
+
+component DiscoverCrewCard inherits Rectangle {
+    in property <string> crew-id;
+    in property <string> crew-name;
+    in property <string> crew-description;
+    in property <int> member-count;
+    in property <int> online-count;
+    in property <bool> hero: false;
+    callback join-clicked(string);
+
+    background: hero ? (card-touch.has-hover ? #1e1420 : #191119) : (card-touch.has-hover ? Theme.surface-hover : Theme.surface);
+    border-radius: Theme.r-outer;
+    border-width: 1px;
+    border-color: hero ? (card-touch.has-hover ? #FF1E564D : #FF1E5626) : (card-touch.has-hover ? Theme.graphic-med : Theme.graphic-light);
+
+    card-touch := TouchArea {
+        mouse-cursor: pointer;
+    }
+
+    VerticalLayout {
+        padding: hero ? 32px : 24px;
+        spacing: 0px;
+        alignment: space-between;
+
+        // --- Top section ---
+        VerticalLayout {
+            spacing: 0px;
+
+            // Card header: icon + name/stats
+            HorizontalLayout {
+                spacing: 16px;
+                height: hero ? 56px : 48px;
+
+                Rectangle {
+                    width: hero ? 56px : 48px;
+                    height: hero ? 56px : 48px;
+                    background: hero ? #FF1E561A : Theme.bg-app;
+                    border-radius: hero ? 16px : 12px;
+                    border-width: 1px;
+                    border-color: hero ? #FF1E564D : Theme.graphic-light;
+
+                    Text {
+                        text: crew-name;
+                        font-family: Theme.font-mono;
+                        font-weight: 700;
+                        font-size: hero ? 20px : 16px;
+                        color: hero ? Theme.accent : Theme.text-secondary;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                        overflow: elide;
+                        max-width: hero ? 44px : 36px;
+                    }
+                }
+
+                VerticalLayout {
+                    alignment: center;
+                    spacing: 4px;
+                    horizontal-stretch: 1;
+
+                    HorizontalLayout {
+                        spacing: 10px;
+
+                        Text {
+                            text: crew-name;
+                            font-weight: hero ? 600 : 500;
+                            font-size: hero ? 20px : 16px;
+                            color: Theme.text-primary;
+                            overflow: elide;
+                        }
+
+                        if hero && online-count > 0: Rectangle {
+                            width: hero-pill-text.preferred-width + 28px;
+                            height: 22px;
+                            border-radius: 4px;
+                            border-width: 1px;
+                            border-color: #FF1E564D;
+                            background: #FF1E561A;
+                            y: (parent.height - self.height) / 2;
+
+                            HorizontalLayout {
+                                alignment: center;
+                                spacing: 6px;
+
+                                Rectangle {
+                                    width: 6px;
+                                    height: 6px;
+                                    border-radius: 3px;
+                                    background: Theme.accent;
+                                }
+
+                                hero-pill-text := Text {
+                                    text: "LIVE";
+                                    font-family: Theme.font-mono;
+                                    font-size: 10px;
+                                    color: Theme.accent;
+                                    vertical-alignment: center;
+                                }
+                            }
+                        }
+                    }
+
+                    Text {
+                        text: member-count < 10 ? "0" + member-count + " Members" : member-count + " Members";
+                        font-family: Theme.font-mono;
+                        font-size: 11px;
+                        letter-spacing: 0.5px;
+                        color: Theme.text-tertiary;
+                    }
+                }
+            }
+
+            Rectangle {
+                height: hero ? 20px : 14px;
+            }
+
+            // Description
+            Text {
+                text: crew-description;
+                font-size: hero ? 15px : 13px;
+                color: Theme.text-secondary;
+                wrap: word-wrap;
+                overflow: elide;
+            }
+        }
+
+        // --- Footer ---
+        VerticalLayout {
+            spacing: 0px;
+
+            Rectangle {
+                height: 16px;
+            }
+
+            Rectangle {
+                height: 1px;
+                background: hero ? #FF1E5626 : Theme.graphic-light;
+            }
+
+            Rectangle {
+                height: 14px;
+            }
+
+            HorizontalLayout {
+                height: 32px;
+                spacing: 8px;
+
+                // Online indicator
+                HorizontalLayout {
+                    spacing: 8px;
+                    horizontal-stretch: 1;
+                    alignment: start;
+
+                    Rectangle {
+                        width: online-count >= 2 ? 40px : 24px;
+                        height: 24px;
+
+                        Rectangle {
+                            x: 0px;
+                            y: 0px;
+                            width: 24px;
+                            height: 24px;
+                            border-radius: 12px;
+                            background: hero ? #FF1E5633 : Theme.graphic-light;
+                        }
+
+                        if online-count >= 2: Rectangle {
+                            x: 16px;
+                            y: 0px;
+                            width: 24px;
+                            height: 24px;
+                            border-radius: 12px;
+                            background: hero ? #FF1E564D : Theme.graphic-med;
+                            border-width: 2px;
+                            border-color: hero ? #191119 : Theme.surface;
+                        }
+                    }
+
+                    Text {
+                        text: online-count > 0 ? "+" + online-count + " active" : "No one online";
+                        font-family: Theme.font-mono;
+                        font-size: 11px;
+                        color: Theme.text-tertiary;
+                        vertical-alignment: center;
+                    }
+                }
+
+                // Join button
+                Rectangle {
+                    width: join-text.preferred-width + 32px;
+                    height: 32px;
+                    border-radius: Theme.r-inner;
+                    border-width: 1px;
+                    border-color: hero ? (join-touch.has-hover ? Theme.accent : #FF1E564D) : (join-touch.has-hover ? Theme.text-primary : Theme.graphic-light);
+                    background: hero ? (join-touch.has-hover ? #FF1E5633 : #FF1E561A) : (join-touch.has-hover ? Theme.bg-app : transparent);
+
+                    join-text := Text {
+                        text: hero ? "Join Crew →" : "Join";
+                        font-family: Theme.font-mono;
+                        font-size: 12px;
+                        font-weight: 500;
+                        color: hero ? (join-touch.has-hover ? Theme.accent : Theme.text-primary) : Theme.text-primary;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+
+                    join-touch := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            join-clicked(crew-id);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+export component DiscoverPanel inherits Rectangle {
+    in property <[DiscoverCrewData]> crews: [];
+    callback join-crew(string);
+    callback join-invite(string);
+    callback back-requested();
+
+    background: transparent;
+
+    Flickable {
+        width: root.width;
+
+        VerticalLayout {
+            width: root.width;
+            padding-bottom: 48px;
+            spacing: 0px;
+
+            // --- Invite hero section ---
+            Rectangle {
+                background: Theme.surface;
+                border-width: 1px;
+                border-color: Theme.graphic-light;
+                border-radius: Theme.r-outer;
+
+                VerticalLayout {
+                    padding: 48px;
+                    spacing: 0px;
+                    alignment: center;
+
+                    Text {
+                        text: "PRIVATE ENTRY";
+                        font-family: Theme.font-mono;
+                        font-size: Theme.font-xs;
+                        font-weight: 600;
+                        letter-spacing: 1.5px;
+                        color: Theme.text-tertiary;
+                        horizontal-alignment: center;
+                    }
+
+                    Rectangle {
+                        height: 12px;
+                    }
+
+                    Text {
+                        text: "Join a Private Crew";
+                        font-size: Theme.font-xxl;
+                        font-weight: 500;
+                        color: Theme.text-primary;
+                        horizontal-alignment: center;
+                    }
+
+                    Rectangle {
+                        height: 8px;
+                    }
+
+                    Text {
+                        text: "Enter an invite code to join a crew directly.";
+                        font-size: Theme.font-lg;
+                        color: Theme.text-secondary;
+                        horizontal-alignment: center;
+                    }
+
+                    Rectangle {
+                        height: 32px;
+                    }
+
+                    Rectangle {
+                        height: 52px;
+
+                        HorizontalLayout {
+                            x: (parent.width - 520px) / 2;
+                            y: 0px;
+                            width: 520px;
+                            height: 52px;
+                            spacing: 12px;
+
+                            Rectangle {
+                                horizontal-stretch: 1;
+                                background: Theme.bg-app;
+                                border-width: 1px;
+                                border-color: invite-input.has-focus ? Theme.accent : Theme.graphic-light;
+                                border-radius: Theme.r-inner;
+
+                                invite-input := TextInput {
+                                    x: 20px;
+                                    width: parent.width - 40px;
+                                    height: parent.height;
+                                    font-family: Theme.font-mono;
+                                    font-size: 15px;
+                                    color: Theme.text-primary;
+                                    vertical-alignment: center;
+                                    accepted => {
+                                        if invite-input.text != "" {
+                                            join-invite(invite-input.text);
+                                            invite-input.text = "";
+                                        }
+                                    }
+                                }
+
+                                if invite-input.text == "": Text {
+                                    x: 20px;
+                                    color: Theme.text-tertiary;
+                                    font-family: Theme.font-mono;
+                                    font-size: 15px;
+                                    vertical-alignment: center;
+                                    text: "e.g. ALPHA-992-K";
+                                }
+                            }
+
+                            Rectangle {
+                                width: join-btn-label.preferred-width + 56px;
+                                height: 48px;
+                                background: Theme.accent;
+                                border-radius: Theme.r-inner;
+
+                                join-btn-label := Text {
+                                    text: "Join Crew";
+                                    font-weight: 600;
+                                    font-size: Theme.font-lg;
+                                    color: #FFFFFF;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                }
+
+                                TouchArea {
+                                    mouse-cursor: pointer;
+                                    clicked => {
+                                        if invite-input.text != "" {
+                                            join-invite(invite-input.text);
+                                            invite-input.text = "";
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            Rectangle {
+                height: 32px;
+            }
+
+            Text {
+                text: "FEATURED CREWS";
+                font-family: Theme.font-mono;
+                font-size: Theme.font-xs;
+                font-weight: 600;
+                letter-spacing: 1.5px;
+                color: Theme.text-tertiary;
+            }
+
+            Rectangle {
+                height: 16px;
+            }
+
+            // --- Bento grid ---
+            VerticalLayout {
+                spacing: 16px;
+
+                // Row 1: [hero 2x tall] [normal 1x]
+                HorizontalLayout {
+                    height: 280px;
+                    spacing: 16px;
+
+                    DiscoverCrewCard {
+                        horizontal-stretch: 2;
+                        hero: true;
+                        crew-id: crews.length > 0 ? crews[0].id : "";
+                        crew-name: crews.length > 0 ? crews[0].name : "";
+                        crew-description: crews.length > 0 ? crews[0].description : "";
+                        member-count: crews.length > 0 ? crews[0].member-count : 0;
+                        online-count: crews.length > 0 ? crews[0].online-count : 0;
+                        visible: crews.length > 0;
+                        join-clicked(id) => {
+                            root.join-crew(id);
+                        }
+                    }
+
+                    DiscoverCrewCard {
+                        horizontal-stretch: 1;
+                        crew-id: crews.length > 1 ? crews[1].id : "";
+                        crew-name: crews.length > 1 ? crews[1].name : "";
+                        crew-description: crews.length > 1 ? crews[1].description : "";
+                        member-count: crews.length > 1 ? crews[1].member-count : 0;
+                        online-count: crews.length > 1 ? crews[1].online-count : 0;
+                        visible: crews.length > 1;
+                        join-clicked(id) => {
+                            root.join-crew(id);
+                        }
+                    }
+                }
+
+                // Row 2: [normal 1x] [normal 1x] [normal 1x]
+                if crews.length > 2: HorizontalLayout {
+                    height: 220px;
+                    spacing: 16px;
+
+                    DiscoverCrewCard {
+                        horizontal-stretch: 1;
+                        crew-id: crews.length > 2 ? crews[2].id : "";
+                        crew-name: crews.length > 2 ? crews[2].name : "";
+                        crew-description: crews.length > 2 ? crews[2].description : "";
+                        member-count: crews.length > 2 ? crews[2].member-count : 0;
+                        online-count: crews.length > 2 ? crews[2].online-count : 0;
+                        join-clicked(id) => {
+                            root.join-crew(id);
+                        }
+                    }
+
+                    DiscoverCrewCard {
+                        horizontal-stretch: 1;
+                        crew-id: crews.length > 3 ? crews[3].id : "";
+                        crew-name: crews.length > 3 ? crews[3].name : "";
+                        crew-description: crews.length > 3 ? crews[3].description : "";
+                        member-count: crews.length > 3 ? crews[3].member-count : 0;
+                        online-count: crews.length > 3 ? crews[3].online-count : 0;
+                        visible: crews.length > 3;
+                        join-clicked(id) => {
+                            root.join-crew(id);
+                        }
+                    }
+
+                    DiscoverCrewCard {
+                        horizontal-stretch: 1;
+                        crew-id: crews.length > 4 ? crews[4].id : "";
+                        crew-name: crews.length > 4 ? crews[4].name : "";
+                        crew-description: crews.length > 4 ? crews[4].description : "";
+                        member-count: crews.length > 4 ? crews[4].member-count : 0;
+                        online-count: crews.length > 4 ? crews[4].online-count : 0;
+                        visible: crews.length > 4;
+                        join-clicked(id) => {
+                            root.join-crew(id);
+                        }
+                    }
+                }
+
+                // Row 3: [normal 1x] [hero 2x]
+                if crews.length > 5: HorizontalLayout {
+                    height: 280px;
+                    spacing: 16px;
+
+                    DiscoverCrewCard {
+                        horizontal-stretch: 1;
+                        crew-id: crews.length > 5 ? crews[5].id : "";
+                        crew-name: crews.length > 5 ? crews[5].name : "";
+                        crew-description: crews.length > 5 ? crews[5].description : "";
+                        member-count: crews.length > 5 ? crews[5].member-count : 0;
+                        online-count: crews.length > 5 ? crews[5].online-count : 0;
+                        join-clicked(id) => {
+                            root.join-crew(id);
+                        }
+                    }
+
+                    DiscoverCrewCard {
+                        horizontal-stretch: 2;
+                        hero: true;
+                        crew-id: crews.length > 6 ? crews[6].id : "";
+                        crew-name: crews.length > 6 ? crews[6].name : "";
+                        crew-description: crews.length > 6 ? crews[6].description : "";
+                        member-count: crews.length > 6 ? crews[6].member-count : 0;
+                        online-count: crews.length > 6 ? crews[6].online-count : 0;
+                        visible: crews.length > 6;
+                        join-clicked(id) => {
+                            root.join-crew(id);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

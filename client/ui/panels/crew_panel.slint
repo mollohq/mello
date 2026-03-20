@@ -199,53 +199,55 @@ export component CrewPanel inherits Rectangle {
 
     callback crew-selected(string);
     callback crew-create-requested(string);
+    callback browse-crews-requested();
 
     background: Theme.surface;
     border-width: 1px;
     border-color: Theme.graphic-light;
     border-radius: Theme.r-outer;
 
-    VerticalLayout {
-        padding: Theme.pad;
-        spacing: 0px;
+    property <length> header-h: 16px;
+    property <length> header-area: Theme.pad + header-h + 20px;
+    property <length> bottom-h: 97px;
+    property <length> bottom-area: bottom-h + Theme.pad;
 
-        // --- Header kicker ---
-        HorizontalLayout {
-            height: 16px;
-            spacing: 8px;
+    // --- Header ---
+    HorizontalLayout {
+        x: Theme.pad;
+        y: Theme.pad;
+        width: root.width - 2 * Theme.pad;
+        height: root.header-h;
+        spacing: 8px;
 
-            Text {
-                text: "YOUR CREWS";
-                font-size: Theme.font-sm;
-                font-weight: 600;
-                letter-spacing: 1.3px;
-                color: Theme.text-secondary;
-                vertical-alignment: center;
-            }
-
-            Rectangle {
-                horizontal-stretch: 1;
-            }
-
-            Rectangle {
-                width: 6px;
-                height: 6px;
-                border-radius: 3px;
-                background: Theme.accent;
-                y: (parent.height - self.height) / 2;
-            }
+        Text {
+            text: "YOUR CREWS";
+            font-size: Theme.font-sm;
+            font-weight: 600;
+            letter-spacing: 1.3px;
+            color: Theme.text-secondary;
+            vertical-alignment: center;
         }
+
+        Rectangle { horizontal-stretch: 1; }
 
         Rectangle {
-            height: 20px;
+            width: 6px;
+            height: 6px;
+            border-radius: 3px;
+            background: Theme.accent;
+            y: (parent.height - self.height) / 2;
         }
+    }
 
-        // --- Crew cards (scrollable) ---
-        Flickable {
-            vertical-stretch: 1;
+    // --- Crew cards (scrollable, fills middle) ---
+    Flickable {
+        x: Theme.pad;
+        y: root.header-area;
+        width: root.width - 2 * Theme.pad;
+        height: root.height - root.header-area - root.bottom-area;
 
-            VerticalLayout {
-                spacing: 0px;
+        VerticalLayout {
+            spacing: 0px;
 
                 // ===== ACTIVE NOW section =====
                 Text {
@@ -568,9 +570,53 @@ export component CrewPanel inherits Rectangle {
             }
         }
 
-        // --- Create crew input ---
+    // --- Bottom actions (absolute positioned at bottom) ---
+    VerticalLayout {
+        x: Theme.pad;
+        y: root.height - root.bottom-area;
+        width: root.width - 2 * Theme.pad;
+        height: root.bottom-h;
+        spacing: 8px;
+
         Rectangle {
-            height: Theme.gap;
+            height: 1px;
+            background: Theme.graphic-light;
+        }
+
+        Rectangle {
+            height: 40px;
+            border-radius: Theme.r-inner;
+            background: browse-touch.has-hover ? Theme.hover-overlay : transparent;
+
+            HorizontalLayout {
+                padding-left: 14px;
+                padding-right: 14px;
+                spacing: 10px;
+                alignment: start;
+
+                Image {
+                    source: @image-url("../icons/search.svg");
+                    width: 16px;
+                    height: 16px;
+                    colorize: browse-touch.has-hover ? Theme.text-primary : Theme.text-secondary;
+                    y: (parent.height - self.height) / 2;
+                }
+
+                Text {
+                    text: "Browse crews";
+                    font-family: Theme.font-mono;
+                    font-size: Theme.font-md;
+                    color: browse-touch.has-hover ? Theme.text-primary : Theme.text-secondary;
+                    vertical-alignment: center;
+                }
+            }
+
+            browse-touch := TouchArea {
+                mouse-cursor: pointer;
+                clicked => {
+                    browse-crews-requested();
+                }
+            }
         }
 
         Rectangle {
@@ -607,3 +653,4 @@ export component CrewPanel inherits Rectangle {
         }
     }
 }
+

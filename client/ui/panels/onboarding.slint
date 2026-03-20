@@ -386,6 +386,7 @@ export component Onboarding inherits Rectangle {
     in-out property <int> selected-avatar: 0;
 
     in property <string> device-user-name: "";
+    in property <string> device-user-initials: "";
     in property <bool> is-returning-user: false;
 
     // Email link form state (step 3)
@@ -473,7 +474,7 @@ export component Onboarding inherits Rectangle {
                             background: Theme.accent;
 
                             Text {
-                                text: device-user-name != "" ? device-user-name : "?";
+                                text: device-user-initials != "" ? device-user-initials : "?";
                                 font-family: Theme.font-mono;
                                 font-size: 13px;
                                 font-weight: 700;
@@ -1027,11 +1028,13 @@ export component Onboarding inherits Rectangle {
                                 Text {
                                     text: nickname != "" ? nickname : "?";
                                     font-family: Theme.font-mono;
-                                    font-size: 18px;
+                                    font-size: 14px;
+                                    font-weight: 600;
                                     color: Theme.text-primary;
                                     horizontal-alignment: center;
                                     vertical-alignment: center;
                                     overflow: elide;
+                                    max-width: 40px;
                                 }
                             }
 

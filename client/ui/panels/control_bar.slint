@@ -53,13 +53,14 @@ component MenuItem inherits Rectangle {
         padding-left: 12px;
         padding-right: 12px;
         spacing: 10px;
-        alignment: center;
+        alignment: start;
 
         if has-dot: Rectangle {
             width: 8px;
             height: 8px;
             border-radius: 4px;
             background: dot-color;
+            y: (parent.height - self.height) / 2;
         }
 
         Text {
@@ -91,6 +92,7 @@ component MenuSeparator inherits Rectangle {
 
 export component ControlBar inherits Rectangle {
     in property <string> user-name: "";
+    in property <string> user-initials: "";
     in property <string> user-tag: "";
     in-out property <bool> mic-muted: false;
     in-out property <bool> deafened: false;
@@ -135,20 +137,12 @@ export component ControlBar inherits Rectangle {
                     background: avatar-touch.has-hover ? Theme.graphic-light : Theme.bg-app;
 
                     Text {
-                        text: {
-                            if (user-name == "") {
-                                "?"
-                            } else {
-                                user-name
-                            }
-                        }
+                        text: user-initials != "" ? user-initials : "?";
                         font-weight: 600;
                         font-size: 14px;
                         color: Theme.text-secondary;
                         horizontal-alignment: center;
                         vertical-alignment: center;
-                        overflow: elide;
-                        max-width: 40px;
                     }
 
                     // Presence dot on avatar
