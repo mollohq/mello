@@ -19,8 +19,14 @@ use std::sync::Arc;
 /// Individual chunks are at most ~60KB + 6 byte header.
 const VIEWER_RECV_BUF_SIZE: usize = 64 * 1024;
 
+/// Shared single-slot buffer for decoded stream frames. The C++ callback
+/// overwrites the latest frame; the UI timer reads and takes it. This avoids
+/// unbounded queue buildup that occurs when sending ~11 MB frames through a
+/// channel at 30+ fps.
+pub type FrameSlot = Arc<std::sync::Mutex<Option<(u32, u32, Vec<u8>)>>>;
+
 struct FrameCallbackData {
-    tx: std::sync::mpsc::Sender<Event>,
+    frame_slot: FrameSlot,
 }
 
 /// Reassembles chunked DataChannel messages back into full StreamPackets.
@@ -156,11 +162,9 @@ unsafe extern "C" fn on_viewer_frame(
     let data = &*(user_data as *const FrameCallbackData);
     let pixel_count = (w * h) as usize;
     let buf = std::slice::from_raw_parts(rgba, pixel_count * 4).to_vec();
-    let _ = data.tx.send(Event::StreamFrame {
-        width: w,
-        height: h,
-        rgba: buf,
-    });
+    if let Ok(mut slot) = data.frame_slot.lock() {
+        *slot = Some((w, h, buf));
+    }
 }
 
 unsafe extern "C" fn stream_ice_callback(
@@ -222,6 +226,7 @@ pub struct Client {
     nakama: NakamaClient,
     voice: VoiceManager,
     event_tx: std::sync::mpsc::Sender<Event>,
+    frame_slot: FrameSlot,
     stream_session: Option<StreamSession>,
     stream_sink: Option<Arc<P2PFanoutSink>>,
     stream_host_peers: HashMap<String, StreamHostPeer>,
@@ -236,11 +241,17 @@ pub struct Client {
 }
 
 impl Client {
-    pub fn new(config: Config, event_tx: std::sync::mpsc::Sender<Event>, loopback: bool) -> Self {
+    pub fn new(
+        config: Config,
+        event_tx: std::sync::mpsc::Sender<Event>,
+        loopback: bool,
+        frame_slot: FrameSlot,
+    ) -> Self {
         Self {
             nakama: NakamaClient::new(config),
             voice: VoiceManager::new(event_tx.clone(), loopback),
             event_tx,
+            frame_slot,
             stream_session: None,
             stream_sink: None,
             stream_host_peers: HashMap::new(),
@@ -2247,7 +2258,7 @@ impl Client {
         // host's actual encode resolution (see handle_stream_signal_as_viewer).
         let config = crate::stream::StreamConfig::default();
         let frame_cb_data = Box::into_raw(Box::new(FrameCallbackData {
-            tx: self.event_tx.clone(),
+            frame_slot: self.frame_slot.clone(),
         }));
 
         let _ = self.event_tx.send(Event::StreamWatching {

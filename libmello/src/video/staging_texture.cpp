@@ -286,7 +286,7 @@ void StagingTexture::read_rgba(uint8_t* out) {
 
     auto t1 = std::chrono::steady_clock::now();
     auto stall_ms = std::chrono::duration<float, std::milli>(t1 - t0).count();
-    if (stall_ms > 2.0f) {
+    if (stall_ms > 50.0f) {
         MELLO_LOG_WARN(TAG, "Map() stall %.1fms -- possible GPU pipeline pressure", stall_ms);
     }
 

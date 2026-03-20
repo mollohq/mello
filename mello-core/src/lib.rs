@@ -14,7 +14,7 @@ pub mod session;
 pub mod stream;
 pub mod voice;
 
-pub use client::Client;
+pub use client::{Client, FrameSlot};
 pub use command::Command;
 pub use config::Config;
 pub use error::{Error, Result};

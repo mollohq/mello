@@ -173,8 +173,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         u.check_for_updates();
     }
 
+    let frame_slot: mello_core::FrameSlot =
+        std::sync::Arc::new(std::sync::Mutex::new(None));
+    let frame_slot_for_client = frame_slot.clone();
+
     rt.spawn(async move {
-        let mut client = Client::new(nakama_config(), event_tx, loopback);
+        let mut client = Client::new(nakama_config(), event_tx, loopback, frame_slot_for_client);
         client.run(cmd_rx).await;
     });
 
@@ -1032,6 +1036,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let saved_timer_ref = saved_timer.clone();
     let saved_app_weak = app.as_weak();
     let _updater_ref = updater.clone();
+    let frame_slot_ui = frame_slot.clone();
     let timer = slint::Timer::default();
     timer.start(
         slint::TimerMode::Repeated,
@@ -1119,6 +1124,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         &event_cmd_tx,
                         &active_voice_channel,
                     );
+                }
+            }
+
+            // --- Stream frame from shared slot (avoids unbounded queue) ---
+            if let Ok(mut slot) = frame_slot_ui.lock() {
+                if let Some((w, h, rgba)) = slot.take() {
+                    if let Some(app) = app_weak.upgrade() {
+                        let pixel_count = (w * h) as usize;
+                        if rgba.len() == pixel_count * 4 {
+                            let buf = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
+                                &rgba, w, h,
+                            );
+                            app.set_stream_frame(slint::Image::from_rgba8(buf));
+                        }
+                    }
                 }
             }
 
@@ -2374,14 +2394,8 @@ fn handle_event(
             app.set_streamer_name("".into());
             app.set_stream_label("".into());
         }
-        Event::StreamFrame { width, height, rgba } => {
-            let pixel_count = (width * height) as usize;
-            if rgba.len() == pixel_count * 4 {
-                let buf = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
-                    &rgba, width, height,
-                );
-                app.set_stream_frame(slint::Image::from_rgba8(buf));
-            }
+        Event::StreamFrame { .. } => {
+            // Frames are now delivered via shared FrameSlot, not the event channel.
         }
         Event::StreamError { message } => {
             log::error!("Stream error: {}", message);
