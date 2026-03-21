@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/mello-logo.png" alt="m3llo" width="120" />
+  <img src="client/assets/logo.png" alt="m3llo" width="120" />
 </p>
 
 <h1 align="center">m3llo</h1>
@@ -11,9 +11,9 @@
 <p align="center">
   <a href="https://m3llo.app">m3llo.app</a> &nbsp;·&nbsp;
   <a href="#quick-start">Quick Start</a> &nbsp;·&nbsp;
-  <a href="#self-hosting">Self-Hosting</a> &nbsp;·&nbsp;
   <a href="#architecture">Architecture</a> &nbsp;·&nbsp;
-  <a href="#contributing">Contributing</a>
+  <a href="#contributing">Contributing</a> &nbsp;·&nbsp;
+  <a href="#self-hosting">Self-Hosting</a>
 </p>
 
 <p align="center">
@@ -25,7 +25,7 @@
 
 ---
 
-m3llo is a free, open-source voice and game streaming app for small groups of friends. Voice chat, game streaming, and text chat. That's the whole list. We're not adding to it.
+m3llo is a free, open-source voice and game streaming app for small groups of friends. Voice chat, game streaming, and text chat. That's the whole list.
 
 Built in Rust and C++. Not because it's easy (we thought it would be easy, it wasn't), but because we don't want it affecting your FPS when in-game.
 
@@ -33,85 +33,78 @@ Built in Rust and C++. Not because it's easy (we thought it would be easy, it wa
 < 80MB install    < 80MB RAM in active voice    1080p60 stream    < 60ms WAN latency
 ```
 
+> **Official releases** are available on the [GitHub Releases](https://github.com/mollohq/mello/releases) page. Download the latest build for Windows or macOS there.
+
 ---
 
-## Features
+## Guiding principles
 
-### Voice
+- **Performance is the feature.** Your GPU handles the stream. Your CPU barely notices. The voice pipeline adds no perceptible latency.
+- **P2P by default.** Voice and streaming are direct peer-to-peer. No server in the middle unless your network forces a TURN relay as fallback.
+- **P2P connections are DTLS 1.2 encrypted.** Signaling over WSS. Text chat is server-backed via Nakama, encrypted in transit.
+- **Nothing extra.** No game store, no profile effects, no animated avatars. Scope is intentional and will stay that way.
+- **Self-hostable.** The full client and backend is Apache 2.0. Run your own instance with no dependency on our infrastructure.
 
-- Neural voice activity detection. The speaking ring lights up when you're actually talking, not when you sneeze or the dog barks
-- ML-powered noise suppression via RNNoise. Background noise gone without touching your voice
-- Echo cancellation, Opus codec at 48kHz
-- Peer-to-peer mesh topology. Your voice travels directly to each crew member, no server in the middle
-- End-to-end encrypted via DTLS 1.2
-- Under 50ms latency on most home connections
+---
 
-### Streaming
+## Voice
 
-- 1080p60, hardware-encoded on your GPU. NVENC, AMD AMF, or Intel QuickSync
-- Your CPU barely notices. Under 1% CPU usage during active streams
-- Sub-second latency over WAN. Under 20ms on LAN
-- Game audio always reaches your crew, even when you're deafened
-- Zero-copy GPU pipeline. Frames go GPU texture to network without touching system RAM
+- Peer-to-peer mesh topology, full mesh up to 6 participants per channel
+- Under 50ms latency on typical home connections
+- Opus codec at 48kHz, 20ms frames
+- RNNoise for ML-powered noise suppression
+- Silero VAD for voice activity detection, drives the speaking indicator in UI
+- Speex AEC for echo cancellation
+- DTLS 1.2 end-to-end encryption via libdatachannel
 
-### Everything else
+## Streaming
+
+- 1080p60, hardware-encoded via NVENC, AMD AMF, or Intel QuickSync
+- DXGI Desktop Duplication capture, zero-copy GPU pipeline (GPU texture to network, no system RAM touch)
+- Under 1% CPU usage during active streams
+- Under 20ms latency on LAN, under 60ms over WAN
+- H.264 low-latency profile (no B-frames, CBR, 1-second VBV buffer)
+- XOR FEC for loss recovery, quality degrades before stream lags
+- Game audio captured via WASAPI loopback, Opus 128kbps stereo
+- Game audio always flows to viewers regardless of host deafen state
+- Up to 6 concurrent viewers P2P. Unlimited viewers available via m3llo.app streaming infrastructure add-on (self-hosters welcome)
+
+## Everything else
 
 - Text chat with GIF support
-- Crew presence, see who's online and what they're playing
-- Login with Discord OAuth or email
-- Up to 6 live participants per channel (P2P limit, see [Self-Hosting](#self-hosting) for more)
+- Crew presence, see who is online and what they are playing
+- Social login via Steam, Twitch, Google, Discord, Apple and more
+- Multiple named voice channels per crew
+- Speaking indicator driven by actual VAD, not mic level
 
 ---
 
 ## Quick Start
 
+Building and running is supported on Windows and macOS. Contributions welcome for Linux and other platforms.
+
 **Prerequisites:**
 
 - Rust 1.75+
 - CMake 3.20+
-- Visual Studio 2022 (Windows) with C++ workload
+- Visual Studio 2022 (Windows) with C++ workload, or Xcode (macOS)
+- Docker (for backend)
 
 ```bash
 # Clone
 git clone https://github.com/mollohq/mello.git
 cd mello
 
-# Start backend (requires Docker)
+# Start backend
 cd backend && docker compose up -d
 
 # Run client
 cd .. && cargo run -p mello-client
 ```
 
-Nakama console available at `http://localhost:7351` (admin / admin)
+Nakama console at `http://localhost:7351` (admin / admin)
 
-Full setup instructions and troubleshooting in [/docs/getting-started.md](./docs/getting-started.md).
-
----
-
-## Self-Hosting
-
-m3llo is fully self-hostable. The entire client and backend is Apache 2.0.
-
-For those of you who never really got over losing Ventrilo. For the tinkerers who need another project for that dusty Raspberry Pi in the drawer. We're one of you ourselves.
-
-### What you get
-
-| | Self-hosted | m3llo.app |
-|---|---|---|
-| Voice chat | Up to 6 per channel | Up to 6 per channel |
-| Game streaming | Up to 6 viewers | Up to 6 viewers |
-| Text chat | Full history on your hardware | Full history |
-| Your data | Never leaves your server | Europe-based, GDPR |
-| Setup | Docker + config | Sign in and go |
-| Cost | Free | Free |
-| Extended limits | Optional add-on | Optional add-on |
-
-### Why 6 participants?
-
-Self-hosted instances use peer-to-peer connections. Your stream goes directly to each viewer, which means your upload bandwidth is the bottleneck. 6 is the practical ceiling before that becomes a problem.
-
-Planning on running a larger community? Extended limits are available as an optional add-on using our custom streaming infrastructure. No strings attached, no mandatory subscription. [Get in touch](https://m3llo.app) when you're ready.
+Full setup and platform-specific notes in [/docs/getting-started.md](./docs/getting-started.md).
 
 ---
 
@@ -169,7 +162,7 @@ Result: under 1% CPU, under 20ms LAN latency.
 
 | Component | Technology | Notes |
 |-----------|------------|-------|
-| UI | [Slint](https://slint.dev) | Rust-native, no Electron |
+| UI | [Slint](https://slint.dev) | Rust-native |
 | Client logic | Rust | mello-core |
 | Media layer | C++ | libmello |
 | P2P transport | [libdatachannel](https://github.com/paullouisageneau/libdatachannel) | WebRTC, ICE, DTLS |
@@ -201,9 +194,13 @@ mello/
 
 ## Contributing
 
-We build m3llo in public. Contributions welcome.
+Contributions are welcome.
 
-Read the relevant spec in `/specs` before opening a PR. Agents and contributors alike, specs are the source of truth.
+**AI-assisted contributions are welcome.** We use AI tooling ourselves. Just make sure the output follows CLAUDE.md, comes with a proper spec, and you've actually read and understood what you're submitting. We review the result, not the method.
+
+**Before opening a PR, read [CLAUDE.md](./CLAUDE.md).** It covers how the codebase is structured, what the agents expect, and how we work. Ignoring it wastes everyone's time.
+
+**Every new feature needs a spec.** Look at `/specs` to see the format. A spec doesn't have to be long, but it needs to cover what, why, and the key constraints. No spec, no merge.
 
 - Bugs: open an issue
 - Ideas: start a discussion
@@ -217,9 +214,36 @@ cargo clippy    # lint
 
 ---
 
+## Self-Hosting
+
+The full client and backend is Apache 2.0. For those of you who never really got over losing Ventrilo. For the tinkerers who need another project for that dusty Raspberry Pi in the drawer. We're one of you ourselves.
+
+Full setup instructions in [/docs/self-hosting.md](./docs/self-hosting.md).
+
+### Self-hosted vs m3llo.app
+
+| | Self-hosted | m3llo.app |
+|---|---|---|
+| Voice and streaming | Up to 6 per channel | Up to 6 per channel |
+| All other features | Identical | Identical |
+| Scale beyond 6 | Optional add-on | Optional add-on |
+| Your data | Stays on your hardware | Europe-based, GDPR |
+| Setup | Your own hardware | Our cloud infrastructure |
+| Cost | Free | Free |
+
+The only real difference is scale. Self-hosted uses direct P2P connections, which caps concurrent participants at 6 per channel. m3llo.app offers an optional streaming infrastructure add-on for larger audiences. No mandatory subscription, no features held back to push you toward paid.
+
+### Why 6 participants?
+
+P2P means your stream goes directly to each viewer. With 6 viewers you are uploading 6 copies. Your upload bandwidth becomes the bottleneck fast. The cap is honest about that.
+
+The add-on routes streams through our infrastructure, receiving once and relaying to all viewers. Same client, same quality, different plumbing.
+
+---
+
 ## Community
 
-We hang out on m3llo itself. Come find us.
+We hang out on m3llo itself.
 
 - **m3llo crew:** [m3llo.app/crew/m3llo](https://m3llo.app/crew/m3llo)
 - **Reddit:** [r/m3llo_app](https://reddit.com/r/m3llo_app)
@@ -231,7 +255,7 @@ We hang out on m3llo itself. Come find us.
 
 Apache 2.0. See [LICENSE](LICENSE).
 
-Extended limits for large-scale streaming on self-hosted instances require server infrastructure not included in this repo. Available as an optional add-on at [m3llo.app](https://m3llo.app).
+Extended streaming limits for self-hosted instances require infrastructure not included in this repo. Available as an optional add-on at [m3llo.app](https://m3llo.app).
 
 ---
 
