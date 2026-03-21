@@ -25,13 +25,14 @@
 
 ---
 
+> [!WARNING]
+> **m3llo is alpha software.** Many things are unfinished, broken, or missing entirely. Not recommended for anything you'd rely on. We're building in public and things will break. You've been warned, and we love you for being here anyway.
+
+---
+
 m3llo is a free, open-source voice and game streaming app for small groups of friends. Voice chat, game streaming, and text chat. That's the whole list.
 
 Built in Rust and C++. Not because it's easy (we thought it would be easy, it wasn't), but because we don't want it affecting your FPS when in-game.
-
-```
-< 80MB install    < 80MB RAM in active voice    1080p60 stream    < 60ms WAN latency
-```
 
 > **Official releases** are available on the [GitHub Releases](https://github.com/mollohq/mello/releases) page. Download the latest build for Windows or macOS there.
 
@@ -39,7 +40,7 @@ Built in Rust and C++. Not because it's easy (we thought it would be easy, it wa
 
 ## Guiding principles
 
-- **Performance is the feature.** Your GPU handles the stream. Your CPU barely notices. The voice pipeline adds no perceptible latency.
+- **Performance is the feature.** Your GPU handles the stream. Your CPU barely notices. The voice pipeline adds no perceptible latency. Targets: `< 100MB install` · `< 80MB RAM in active voice` · `1080p60 stream` · `< 60ms WAN latency`
 - **P2P by default.** Voice and streaming are direct peer-to-peer. No server in the middle unless your network forces a TURN relay as fallback.
 - **P2P connections are DTLS 1.2 encrypted.** Signaling over WSS. Text chat is server-backed via Nakama, encrypted in transit.
 - **Nothing extra.** No game store, no profile effects, no animated avatars. Scope is intentional and will stay that way.
