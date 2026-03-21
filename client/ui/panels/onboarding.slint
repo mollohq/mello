@@ -121,13 +121,17 @@ component CrewCard inherits Rectangle {
                 vertical-alignment: center;
             }
 
-            Text {
-                text: card-touch.has-hover ? "CONNECT →" : "JOIN";
-                font-family: Theme.font-mono;
-                font-size: 12px;
-                font-weight: 500;
-                color: card-touch.has-hover ? Theme.accent : Theme.text-tertiary;
-                vertical-alignment: center;
+            Rectangle {
+                width: 80px;
+                Text {
+                    text: card-touch.has-hover ? "CONNECT →" : "JOIN";
+                    font-family: Theme.font-mono;
+                    font-size: 12px;
+                    font-weight: 500;
+                    color: card-touch.has-hover ? Theme.accent : Theme.text-tertiary;
+                    vertical-alignment: center;
+                    horizontal-alignment: right;
+                }
             }
         }
     }
@@ -568,10 +572,9 @@ export component Onboarding inherits Rectangle {
             }
 
             VerticalLayout {
-                padding-top: 80px;
+                padding-top: 48px;
                 padding-left: 120px;
                 padding-right: 120px;
-                padding-bottom: 60px;
                 spacing: 0px;
 
                 // Header
@@ -714,6 +717,7 @@ export component Onboarding inherits Rectangle {
                 // Push nav to bottom
                 Rectangle {
                     vertical-stretch: 1;
+                    min-height: 40px;
                 }
 
                 // Bottom navigation
@@ -748,6 +752,11 @@ export component Onboarding inherits Rectangle {
                             root.continue-to-step(2);
                         }
                     }
+                }
+
+                // Bottom margin
+                Rectangle {
+                    height: 40px;
                 }
             }
         }

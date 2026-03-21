@@ -1600,7 +1600,7 @@ fn handle_event(
             // Onboarding model (only on first load, capped at 15)
             let step = app.get_onboarding_step();
             if step <= 3 && !is_append {
-                let onboard_count = crews.len().min(15);
+                let onboard_count = crews.len().min(5);
                 let model: Vec<CrewData> = crews[..onboard_count]
                     .iter()
                     .map(|c| CrewData {
