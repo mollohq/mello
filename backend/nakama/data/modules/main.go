@@ -118,6 +118,15 @@ func InitModule(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runti
 	if err := initializer.RegisterRpc("create_crew", CreateCrewRPC); err != nil {
 		return err
 	}
+	if err := initializer.RegisterRpc("search_users", SearchUsersRPC); err != nil {
+		return err
+	}
+	if err := initializer.RegisterRpc("join_by_invite_code", JoinByInviteCodeRPC); err != nil {
+		return err
+	}
+	if err := initializer.RegisterRpc("get_crew_avatar", GetCrewAvatarRPC); err != nil {
+		return err
+	}
 
 	// -----------------------------------------------------------------------
 	// RPCs — voice

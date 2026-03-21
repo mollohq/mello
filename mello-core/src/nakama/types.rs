@@ -102,10 +102,33 @@ pub struct CreateCrewPayload {
     pub invite_only: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub avatar: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub invite_user_ids: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct CreateCrewResult {
+    pub crew_id: String,
+    pub name: String,
+    pub invite_code: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SearchUsersResult {
+    #[serde(default)]
+    pub users: Vec<SearchUserEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SearchUserEntry {
+    pub id: String,
+    pub display_name: String,
+    #[serde(default)]
+    pub is_friend: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct JoinByInviteCodeResult {
     pub crew_id: String,
     pub name: String,
 }

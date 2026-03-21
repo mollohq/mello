@@ -205,8 +205,8 @@ impl Client {
                 log::info!("[auth] Discord link requested");
                 self.handle_link_discord().await;
             }
-            Command::DiscoverCrews => {
-                self.handle_discover_crews().await;
+            Command::DiscoverCrews { cursor } => {
+                self.handle_discover_crews(cursor.as_deref()).await;
             }
             Command::FinalizeOnboarding {
                 crew_id,
@@ -228,12 +228,25 @@ impl Client {
                 description,
                 open,
                 avatar,
+                invite_user_ids,
             } => {
-                self.handle_create_crew(&name, &description, open, avatar.as_deref())
-                    .await;
+                self.handle_create_crew(
+                    &name,
+                    &description,
+                    open,
+                    avatar.as_deref(),
+                    &invite_user_ids,
+                )
+                .await;
             }
             Command::FetchCrewAvatars { crew_ids } => {
                 self.handle_fetch_crew_avatars(&crew_ids).await;
+            }
+            Command::SearchUsers { query } => {
+                self.handle_search_users(&query).await;
+            }
+            Command::JoinByInviteCode { code } => {
+                self.handle_join_by_invite_code(&code).await;
             }
             Command::SelectCrew { crew_id } => {
                 self.handle_select_crew(&crew_id).await;
@@ -384,10 +397,18 @@ impl Client {
         }
     }
 
-    async fn handle_discover_crews(&self) {
-        match self.nakama.discover_crews_public(50).await {
-            Ok(crews) => {
-                let _ = self.event_tx.send(Event::DiscoverCrewsLoaded { crews });
+    async fn handle_discover_crews(&self, cursor: Option<&str>) {
+        match self.nakama.discover_crews_public(50, cursor).await {
+            Ok((crews, next_cursor)) => {
+                log::info!(
+                    "[discover] loaded {} crews, has_more={}",
+                    crews.len(),
+                    next_cursor.is_some()
+                );
+                let _ = self.event_tx.send(Event::DiscoverCrewsLoaded {
+                    crews,
+                    cursor: next_cursor,
+                });
             }
             Err(e) => {
                 log::error!("Failed to discover crews: {}", e);
@@ -458,10 +479,13 @@ impl Client {
             }
             Some(id)
         } else if let Some(name) = crew_name {
-            match self.nakama.create_crew(&name, "", true, None).await {
-                Ok(crew) => {
+            match self.nakama.create_crew(&name, "", true, None, &[]).await {
+                Ok((crew, _invite_code)) => {
                     let id = crew.id.clone();
-                    let _ = self.event_tx.send(Event::CrewCreated { crew });
+                    let _ = self.event_tx.send(Event::CrewCreated {
+                        crew,
+                        invite_code: None,
+                    });
                     Some(id)
                 }
                 Err(e) => {
@@ -929,20 +953,37 @@ impl Client {
         description: &str,
         open: bool,
         avatar: Option<&str>,
+        invite_user_ids: &[String],
     ) {
+        log::info!(
+            "[crew] creating crew name={:?} open={} has_avatar={} invite_count={}",
+            name,
+            open,
+            avatar.is_some(),
+            invite_user_ids.len()
+        );
+        if let Some(a) = avatar {
+            log::info!("[crew] avatar payload: {} bytes base64", a.len());
+        }
         match self
             .nakama
-            .create_crew(name, description, open, avatar)
+            .create_crew(name, description, open, avatar, invite_user_ids)
             .await
         {
-            Ok(crew) => {
+            Ok((crew, invite_code)) => {
+                log::info!(
+                    "[crew] created crew id={} name={:?} invite_code={:?}",
+                    crew.id,
+                    crew.name,
+                    invite_code
+                );
                 let crew_id = crew.id.clone();
-                let _ = self.event_tx.send(Event::CrewCreated { crew });
+                let _ = self.event_tx.send(Event::CrewCreated { crew, invite_code });
                 self.handle_select_crew(&crew_id).await;
                 self.load_crews().await;
             }
             Err(e) => {
-                log::error!("Failed to create crew: {}", e);
+                log::error!("[crew] failed to create crew: {}", e);
                 let _ = self.event_tx.send(Event::CrewCreateFailed {
                     reason: e.to_string(),
                 });
@@ -950,26 +991,75 @@ impl Client {
         }
     }
 
-    async fn handle_fetch_crew_avatars(&self, crew_ids: &[String]) {
-        for crew_id in crew_ids {
-            match self
-                .nakama
-                .read_storage(
-                    "crew_avatars",
+    async fn handle_search_users(&self, query: &str) {
+        log::debug!("[search] searching users query={:?}", query);
+        match self.nakama.search_users(query).await {
+            Ok(users) => {
+                log::debug!("[search] found {} users for query={:?}", users.len(), query);
+                let _ = self.event_tx.send(Event::UserSearchResults { users });
+            }
+            Err(e) => {
+                log::warn!("[search] user search failed for query={:?}: {}", query, e);
+                let _ = self
+                    .event_tx
+                    .send(Event::UserSearchResults { users: vec![] });
+            }
+        }
+    }
+
+    async fn handle_join_by_invite_code(&mut self, code: &str) {
+        log::info!("[invite] joining crew by invite code={:?}", code);
+        match self.nakama.join_by_invite_code(code).await {
+            Ok((crew_id, name)) => {
+                log::info!(
+                    "[invite] joined crew id={} name={:?} via invite code",
                     crew_id,
-                    "00000000-0000-0000-0000-000000000000",
-                )
-                .await
-            {
-                Ok(data) if !data.is_empty() => {
+                    name
+                );
+                let _ = self.event_tx.send(Event::CrewJoined {
+                    crew_id: crew_id.clone(),
+                });
+                self.handle_select_crew(&crew_id).await;
+                self.load_crews().await;
+            }
+            Err(e) => {
+                log::error!("[invite] failed to join by invite code: {}", e);
+                let _ = self.event_tx.send(Event::Error {
+                    message: format!("Invalid invite code: {}", e),
+                });
+            }
+        }
+    }
+
+    async fn handle_fetch_crew_avatars(&self, crew_ids: &[String]) {
+        log::info!("[avatar] fetching avatars for {} crews", crew_ids.len());
+        for crew_id in crew_ids {
+            match self.nakama.get_crew_avatar(crew_id).await {
+                Ok(raw) if !raw.is_empty() => {
+                    // RPC returns the storage value JSON: {"data":"base64..."}
+                    let data = serde_json::from_str::<serde_json::Value>(&raw)
+                        .ok()
+                        .and_then(|v| v.get("data")?.as_str().map(String::from))
+                        .unwrap_or(raw);
+                    log::info!(
+                        "[avatar] loaded avatar for crew {} ({} bytes)",
+                        crew_id,
+                        data.len()
+                    );
                     let _ = self.event_tx.send(Event::CrewAvatarLoaded {
                         crew_id: crew_id.clone(),
                         data,
                     });
                 }
-                Ok(_) => {}
+                Ok(_) => {
+                    log::debug!("[avatar] no avatar data for crew {}", crew_id);
+                }
                 Err(e) => {
-                    log::debug!("Failed to fetch avatar for crew {}: {}", crew_id, e);
+                    log::warn!(
+                        "[avatar] failed to fetch avatar for crew {}: {}",
+                        crew_id,
+                        e
+                    );
                 }
             }
         }

@@ -1,14 +1,25 @@
 import { Theme } from "../theme.slint";
+import { SearchUserData } from "../types.slint";
 
 export component NewCrewModal inherits Rectangle {
     in property <image> avatar-preview;
     in property <bool> has-avatar: false;
+    in property <[SearchUserData]> search-results: [];
+    in property <[SearchUserData]> invited-users: [];
+    in property <bool> created: false;
+    in property <string> invite-code: "";
 
     callback close-requested();
     callback avatar-pick-requested();
     callback create-requested(/* name */ string, /* description */ string, /* is-private */ bool);
+    callback search-users(/* query */ string);
+    callback invite-user(/* id */ string);
+    callback uninvite-user(/* id */ string);
+    callback copy-invite-code();
 
     property <bool> is-private: true;
+    property <string> crew-name-text: "";
+    property <string> crew-desc-text: "";
 
     background: #000000AA;
 
@@ -54,7 +65,7 @@ export component NewCrewModal inherits Rectangle {
                 }
 
                 Text {
-                    text: "INITIALIZE NEW CREW";
+                    text: created ? "CREW ESTABLISHED" : "INITIALIZE NEW CREW";
                     font-family: Theme.font-mono;
                     font-size: 13px;
                     font-weight: 500;
@@ -88,8 +99,83 @@ export component NewCrewModal inherits Rectangle {
                 }
             }
 
-            // ─── Body ────────────────────────────────────────────
-            VerticalLayout {
+            // ─── Success view (after creation) ───────────────────
+            if created: VerticalLayout {
+                padding: 32px;
+                spacing: 20px;
+
+                Text {
+                    text: "Your crew is ready. Share this invite code with others:";
+                    font-family: Theme.font-sans;
+                    font-size: 14px;
+                    color: Theme.text-secondary;
+                    wrap: word-wrap;
+                    horizontal-alignment: center;
+                }
+
+                Rectangle {
+                    height: 56px;
+                    background: Theme.bg-app;
+                    border-radius: Theme.r-inner;
+                    border-width: 1px;
+                    border-color: Theme.graphic-light;
+
+                    Text {
+                        text: invite-code;
+                        font-family: Theme.font-mono;
+                        font-size: 22px;
+                        font-weight: 600;
+                        letter-spacing: 4px;
+                        color: Theme.accent;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+
+                Rectangle {
+                    height: 40px;
+                    border-radius: Theme.r-inner;
+                    background: copy-touch.has-hover ? #FF1E56DD : Theme.accent;
+
+                    Text {
+                        text: "Copy Code";
+                        font-family: Theme.font-sans;
+                        font-size: 13px;
+                        font-weight: 600;
+                        color: #FFFFFF;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+
+                    copy-touch := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { copy-invite-code(); }
+                    }
+                }
+
+                Rectangle {
+                    height: 40px;
+                    border-radius: Theme.r-inner;
+                    background: done-touch.has-hover ? Theme.surface-hover : transparent;
+
+                    Text {
+                        text: "Done";
+                        font-family: Theme.font-sans;
+                        font-size: 13px;
+                        color: done-touch.has-hover ? Theme.text-primary : Theme.text-secondary;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+
+                    done-touch := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { close-requested(); }
+                    }
+                }
+            }
+
+            // ─── Body (creation form) ────────────────────────────
+            if !created: VerticalLayout {
                 padding: 24px;
                 spacing: 24px;
 
@@ -187,9 +273,10 @@ export component NewCrewModal inherits Rectangle {
                             font-size: 14px;
                             color: Theme.text-primary;
                             vertical-alignment: center;
+                            edited => { crew-name-text = self.text; }
                         }
 
-                        if name-input.text == "": Text {
+                        if crew-name-text == "": Text {
                             x: 16px;
                             color: Theme.text-tertiary;
                             font-family: Theme.font-sans;
@@ -229,15 +316,148 @@ export component NewCrewModal inherits Rectangle {
                             font-size: 14px;
                             color: Theme.text-primary;
                             wrap: word-wrap;
+                            edited => { crew-desc-text = self.text; }
                         }
 
-                        if desc-input.text == "": Text {
+                        if crew-desc-text == "": Text {
                             x: 16px;
                             y: 12px;
                             color: Theme.text-tertiary;
                             font-family: Theme.font-sans;
                             font-size: 14px;
                             text: "Define your crew's primary objective...";
+                        }
+                    }
+                }
+
+                // --- Invite members ---
+                VerticalLayout {
+                    spacing: 8px;
+
+                    Text {
+                        text: "INVITE MEMBERS";
+                        font-family: Theme.font-sans;
+                        font-size: 11px;
+                        font-weight: 600;
+                        letter-spacing: 1.3px;
+                        color: Theme.text-secondary;
+                    }
+
+                    // Invited user chips
+                    if invited-users.length > 0: HorizontalLayout {
+                        spacing: 6px;
+                        height: 28px;
+
+                        for user[idx] in invited-users: Rectangle {
+                            width: chip-name.preferred-width + 32px;
+                            height: 28px;
+                            border-radius: 14px;
+                            background: Theme.bg-app;
+                            border-width: 1px;
+                            border-color: Theme.graphic-light;
+
+                            chip-name := Text {
+                                text: user.display-name;
+                                font-family: Theme.font-sans;
+                                font-size: 12px;
+                                color: Theme.text-primary;
+                                x: 10px;
+                                vertical-alignment: center;
+                            }
+
+                            // Remove button
+                            Text {
+                                text: "×";
+                                font-family: Theme.font-sans;
+                                font-size: 14px;
+                                color: chip-remove.has-hover ? Theme.accent : Theme.text-tertiary;
+                                x: parent.width - 18px;
+                                vertical-alignment: center;
+                            }
+
+                            chip-remove := TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => { uninvite-user(user.id); }
+                            }
+                        }
+                    }
+
+                    // Search input
+                    Rectangle {
+                        height: 44px;
+                        background: Theme.bg-app;
+                        border-radius: Theme.r-inner;
+                        border-width: 1px;
+                        border-color: invite-input.has-focus ? Theme.accent : Theme.graphic-light;
+
+                        invite-input := TextInput {
+                            x: 16px;
+                            width: parent.width - 32px;
+                            height: parent.height;
+                            font-family: Theme.font-sans;
+                            font-size: 14px;
+                            color: Theme.text-primary;
+                            vertical-alignment: center;
+                            edited => {
+                                search-users(self.text);
+                            }
+                        }
+
+                        if invite-input.text == "": Text {
+                            x: 16px;
+                            color: Theme.text-tertiary;
+                            font-family: Theme.font-sans;
+                            font-size: 14px;
+                            vertical-alignment: center;
+                            text: "Search by display name...";
+                        }
+                    }
+
+                    // Search results dropdown
+                    if invite-input.text != "" && search-results.length > 0: Rectangle {
+                        height: min(search-results.length * 40px, 160px);
+                        background: Theme.bg-app;
+                        border-radius: Theme.r-inner;
+                        border-width: 1px;
+                        border-color: Theme.graphic-light;
+                        clip: true;
+
+                        VerticalLayout {
+                            for result[idx] in search-results: Rectangle {
+                                height: 40px;
+                                background: result-touch.has-hover ? Theme.surface-hover : transparent;
+
+                                HorizontalLayout {
+                                    padding-left: 16px;
+                                    padding-right: 16px;
+                                    spacing: 8px;
+
+                                    Text {
+                                        text: result.display-name;
+                                        font-family: Theme.font-sans;
+                                        font-size: 13px;
+                                        color: Theme.text-primary;
+                                        vertical-alignment: center;
+                                    }
+
+                                    if result.is-friend: Text {
+                                        text: "FRIEND";
+                                        font-family: Theme.font-mono;
+                                        font-size: 9px;
+                                        letter-spacing: 1px;
+                                        color: Theme.accent;
+                                        vertical-alignment: center;
+                                    }
+                                }
+
+                                result-touch := TouchArea {
+                                    mouse-cursor: pointer;
+                                    clicked => {
+                                        invite-user(result.id);
+                                        invite-input.text = "";
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -311,8 +531,8 @@ export component NewCrewModal inherits Rectangle {
                 }
             }
 
-            // ─── Footer ──────────────────────────────────────────
-            Rectangle {
+            // ─── Footer (form only) ─────────────────────────────
+            if !created: Rectangle {
                 height: 64px;
                 background: Theme.dark ? #00000019 : #0000000A;
 
@@ -357,23 +577,23 @@ export component NewCrewModal inherits Rectangle {
                         height: 38px;
                         border-radius: Theme.r-inner;
                         y: (parent.height - self.height) / 2;
-                        background: name-input.text != "" ? (create-touch.has-hover ? #FF1E56DD : Theme.accent) : Theme.graphic-light;
+                        background: crew-name-text != "" ? (create-touch.has-hover ? #FF1E56DD : Theme.accent) : Theme.graphic-light;
 
                         create-text := Text {
                             text: "Establish Crew";
                             font-family: Theme.font-sans;
                             font-size: 13px;
                             font-weight: 600;
-                            color: name-input.text != "" ? #FFFFFF : Theme.text-tertiary;
+                            color: crew-name-text != "" ? #FFFFFF : Theme.text-tertiary;
                             horizontal-alignment: center;
                             vertical-alignment: center;
                         }
 
                         create-touch := TouchArea {
-                            mouse-cursor: name-input.text != "" ? pointer : default;
+                            mouse-cursor: crew-name-text != "" ? pointer : default;
                             clicked => {
-                                if name-input.text != "" {
-                                    create-requested(name-input.text, desc-input.text, is-private);
+                                if crew-name-text != "" {
+                                    create-requested(crew-name-text, crew-desc-text, is-private);
                                 }
                             }
                         }

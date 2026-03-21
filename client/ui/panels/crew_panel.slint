@@ -534,8 +534,34 @@ export component CrewPanel inherits Rectangle {
                                 spacing: 0px;
 
                                 HorizontalLayout {
-                                    height: 18px;
+                                    height: 20px;
                                     spacing: 8px;
+
+                                    if crew.has-avatar: Rectangle {
+                                        width: 20px;
+                                        height: 20px;
+                                        border-radius: 4px;
+                                        clip: true;
+
+                                        Image {
+                                            source: crew.avatar;
+                                            width: parent.width;
+                                            height: parent.height;
+                                            image-fit: cover;
+                                        }
+                                    }
+
+                                    if !crew.has-avatar: VerticalLayout {
+                                        alignment: center;
+                                        width: 6px;
+
+                                        Rectangle {
+                                            width: 6px;
+                                            height: 6px;
+                                            border-radius: 3px;
+                                            background: Theme.accent;
+                                        }
+                                    }
 
                                     Text {
                                         text: crew.name;

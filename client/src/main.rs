@@ -23,6 +23,9 @@ use updater::{UpdateEvent, Updater};
 
 use single_instance::SingleInstance;
 
+/// (user_id, display_name, is_friend)
+type InvitedUserList = Vec<(String, String, bool)>;
+
 fn nakama_config() -> Config {
     #[cfg(feature = "production")]
     return Config::production();
@@ -42,6 +45,15 @@ fn make_initials(name: &str) -> String {
             format!("{}{}", first, last).to_uppercase()
         }
     }
+}
+
+fn bento_bases(count: usize, items_per_set: usize) -> Vec<i32> {
+    let num_sets = if count == 0 {
+        0
+    } else {
+        count.div_ceil(items_per_set)
+    };
+    (0..num_sets).map(|i| (i * items_per_set) as i32).collect()
 }
 
 const HISTORY_LEN: usize = 30;
@@ -194,6 +206,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let settings = Rc::new(RefCell::new(Settings::load()));
     let active_voice_channel: Rc<RefCell<String>> = Rc::new(RefCell::new(String::new()));
+    let discover_cursor: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
+    let discover_loading: Rc<RefCell<bool>> = Rc::new(RefCell::new(false));
 
     // --- Close → tray (respects close_to_tray setting) ---
     {
@@ -247,7 +261,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let _ = cmd_tx.try_send(Command::TryRestore);
         } else {
             log::info!("[auth] onboarding in progress — fetching crews (no auth)");
-            let _ = cmd_tx.try_send(Command::DiscoverCrews);
+            let _ = cmd_tx.try_send(Command::DiscoverCrews { cursor: None });
         }
         app.set_onboarding_step(s.onboarding_step as i32);
         let _ = cmd_tx.try_send(Command::CheckMicPermission);
@@ -315,7 +329,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     log::warn!("Failed to encode avatar as JPEG");
                     return;
                 }
-                let b64 = base64::engine::general_purpose::STANDARD.encode(jpeg_buf.into_inner());
+                let jpeg_bytes = jpeg_buf.into_inner();
+                log::info!(
+                    "[avatar] picked image {}x{} -> JPEG {} bytes -> base64 {} chars",
+                    w,
+                    h,
+                    jpeg_bytes.len(),
+                    base64::engine::general_purpose::STANDARD
+                        .encode(&jpeg_bytes)
+                        .len()
+                );
+                let b64 = base64::engine::general_purpose::STANDARD.encode(jpeg_bytes);
                 *avatar_b64.lock().unwrap() = Some(b64);
 
                 let rgba_bytes = rgba.into_raw();
@@ -334,17 +358,110 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             });
         });
     }
+    let invited_users: Rc<RefCell<InvitedUserList>> = Rc::new(RefCell::new(Vec::new()));
     {
         let cmd = cmd_tx.clone();
         let avatar_b64 = new_crew_avatar_b64.clone();
+        let invited = invited_users.clone();
         app.on_create_crew(move |name, description, is_private| {
             let avatar = avatar_b64.lock().unwrap().take();
+            let invite_user_ids: Vec<String> = invited
+                .borrow()
+                .iter()
+                .map(|(id, _, _)| id.clone())
+                .collect();
+            log::info!(
+                "[ui] create crew name={:?} has_avatar={} invites={}",
+                name.as_str(),
+                avatar.is_some(),
+                invite_user_ids.len()
+            );
             let _ = cmd.try_send(Command::CreateCrew {
                 name: name.to_string(),
                 description: description.to_string(),
                 open: !is_private,
                 avatar,
+                invite_user_ids,
             });
+        });
+    }
+    {
+        let cmd = cmd_tx.clone();
+        app.on_new_crew_search_users(move |query| {
+            if query.len() >= 2 {
+                let _ = cmd.try_send(Command::SearchUsers {
+                    query: query.to_string(),
+                });
+            }
+        });
+    }
+    {
+        let app_weak = app.as_weak();
+        let invited = invited_users.clone();
+        app.on_new_crew_invite_user(move |user_id| {
+            let Some(app) = app_weak.upgrade() else {
+                return;
+            };
+            let results_model = app.get_new_crew_search_results();
+            let mut found = None;
+            for i in 0..results_model.row_count() {
+                if let Some(r) = results_model.row_data(i) {
+                    if r.id == user_id {
+                        found = Some((r.id.to_string(), r.display_name.to_string(), r.is_friend));
+                        break;
+                    }
+                }
+            }
+            if let Some(entry) = found {
+                let mut list = invited.borrow_mut();
+                if !list.iter().any(|(id, _, _)| *id == entry.0) {
+                    list.push(entry);
+                }
+                let model: Vec<SearchUserData> = list
+                    .iter()
+                    .map(|(id, name, is_friend)| SearchUserData {
+                        id: id.into(),
+                        display_name: name.into(),
+                        is_friend: *is_friend,
+                    })
+                    .collect();
+                let rc_model = Rc::new(slint::VecModel::from(model));
+                app.set_new_crew_invited_users(slint::ModelRc::from(rc_model));
+            }
+        });
+    }
+    {
+        let app_weak = app.as_weak();
+        let invited = invited_users.clone();
+        app.on_new_crew_uninvite_user(move |user_id| {
+            let Some(app) = app_weak.upgrade() else {
+                return;
+            };
+            let mut list = invited.borrow_mut();
+            list.retain(|(id, _, _)| *id != user_id.as_str());
+            let model: Vec<SearchUserData> = list
+                .iter()
+                .map(|(id, name, is_friend)| SearchUserData {
+                    id: id.into(),
+                    display_name: name.into(),
+                    is_friend: *is_friend,
+                })
+                .collect();
+            let rc_model = Rc::new(slint::VecModel::from(model));
+            app.set_new_crew_invited_users(slint::ModelRc::from(rc_model));
+        });
+    }
+    {
+        let app_weak = app.as_weak();
+        app.on_new_crew_copy_invite_code(move || {
+            let Some(app) = app_weak.upgrade() else {
+                return;
+            };
+            let code = app.get_new_crew_invite_code().to_string();
+            if let Ok(mut ctx) = arboard::Clipboard::new() {
+                let _ = ctx.set_text(&code);
+                log::info!("Invite code copied to clipboard: {}", code);
+            }
         });
     }
 
@@ -938,7 +1055,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     {
         let cmd = cmd_tx.clone();
         app.on_discover_requested(move || {
-            let _ = cmd.try_send(Command::DiscoverCrews);
+            let _ = cmd.try_send(Command::DiscoverCrews { cursor: None });
         });
     }
     {
@@ -953,9 +1070,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let cmd = cmd_tx.clone();
         app.on_discover_join_invite(move |code| {
             log::info!("[discover] join-by-invite code={}", code);
-            let _ = cmd.try_send(Command::JoinCrew {
-                crew_id: code.to_string(),
+            let _ = cmd.try_send(Command::JoinByInviteCode {
+                code: code.to_string(),
             });
+        });
+    }
+    {
+        let cmd = cmd_tx.clone();
+        let cursor_ref = discover_cursor.clone();
+        let loading_ref = discover_loading.clone();
+        app.on_discover_load_more(move || {
+            let mut loading = loading_ref.borrow_mut();
+            if *loading {
+                return;
+            }
+            let cursor = cursor_ref.borrow().clone();
+            if cursor.is_none() {
+                return;
+            }
+            *loading = true;
+            log::info!("[discover] load-more triggered");
+            let _ = cmd.try_send(Command::DiscoverCrews { cursor });
         });
     }
     // --- Onboarding: link email ---
@@ -1132,6 +1267,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         &event_cmd_tx,
                         &active_voice_channel,
                         &new_crew_avatar_b64,
+                        &invited_users,
+                        &discover_cursor,
+                        &discover_loading,
                     );
                 }
             }
@@ -1409,6 +1547,7 @@ fn set_level_history(app: &MainWindow, hist: &DebugHistory) {
     );
 }
 
+#[allow(clippy::too_many_arguments)]
 fn handle_event(
     app: &MainWindow,
     event: Event,
@@ -1417,6 +1556,9 @@ fn handle_event(
     cmd_tx: &tokio::sync::mpsc::Sender<Command>,
     active_voice_channel: &Rc<RefCell<String>>,
     new_crew_avatar_b64: &std::sync::Arc<std::sync::Mutex<Option<String>>>,
+    invited_users: &Rc<RefCell<InvitedUserList>>,
+    discover_cursor: &Rc<RefCell<Option<String>>>,
+    discover_loading: &Rc<RefCell<bool>>,
 ) {
     match event {
         Event::Restoring => {
@@ -1437,11 +1579,29 @@ fn handle_event(
             app.set_user_tag(user.tag.into());
             app.set_is_returning_user(!created);
         }
-        Event::DiscoverCrewsLoaded { crews } => {
-            log::info!("[auth] discover-crews loaded  count={}", crews.len());
+        Event::DiscoverCrewsLoaded { crews, cursor } => {
+            let is_append = *discover_loading.borrow();
+            *discover_loading.borrow_mut() = false;
+            *discover_cursor.borrow_mut() = cursor;
+
+            log::info!(
+                "[discover] loaded {} crews, append={}, has_more={}",
+                crews.len(),
+                is_append,
+                discover_cursor.borrow().is_some()
+            );
+
+            let avatar_crew_ids: Vec<String> = crews
+                .iter()
+                .filter(|c| c.avatar_url.is_some())
+                .map(|c| c.id.clone())
+                .collect();
+
+            // Onboarding model (only on first load, capped at 15)
             let step = app.get_onboarding_step();
-            if (1..=3).contains(&step) {
-                let model: Vec<CrewData> = crews
+            if step <= 3 && !is_append {
+                let onboard_count = crews.len().min(15);
+                let model: Vec<CrewData> = crews[..onboard_count]
                     .iter()
                     .map(|c| CrewData {
                         id: c.id.clone().into(),
@@ -1452,24 +1612,62 @@ fn handle_event(
                         ..Default::default()
                     })
                     .collect();
+                let bases = bento_bases(onboard_count, 5);
                 let rc = Rc::new(slint::VecModel::from(model));
                 app.set_discover_crews(rc.into());
+                app.set_onboarding_bento_bases(Rc::new(slint::VecModel::from(bases)).into());
                 if step == 0 || step == 1 {
                     app.set_onboarding_step(1);
                 }
             }
-            let discover_model: Vec<DiscoverCrewData> = crews
-                .into_iter()
-                .map(|c| DiscoverCrewData {
-                    id: c.id.into(),
-                    name: c.name.into(),
-                    description: c.description.into(),
-                    member_count: c.member_count,
-                    online_count: 0,
-                    open: true,
-                })
-                .collect();
-            app.set_discover_crews_list(Rc::new(slint::VecModel::from(discover_model)).into());
+
+            // Discover panel model (append on load-more)
+            if is_append {
+                let existing = app.get_discover_crews_list();
+                let mut all: Vec<DiscoverCrewData> = (0..existing.row_count())
+                    .filter_map(|i| existing.row_data(i))
+                    .collect();
+                for c in &crews {
+                    all.push(DiscoverCrewData {
+                        id: c.id.clone().into(),
+                        name: c.name.clone().into(),
+                        description: c.description.clone().into(),
+                        member_count: c.member_count,
+                        online_count: 0,
+                        open: true,
+                        ..Default::default()
+                    });
+                }
+                let total = all.len();
+                app.set_discover_crews_list(Rc::new(slint::VecModel::from(all)).into());
+                app.set_discover_bento_bases(
+                    Rc::new(slint::VecModel::from(bento_bases(total, 7))).into(),
+                );
+            } else {
+                let discover_model: Vec<DiscoverCrewData> = crews
+                    .iter()
+                    .map(|c| DiscoverCrewData {
+                        id: c.id.clone().into(),
+                        name: c.name.clone().into(),
+                        description: c.description.clone().into(),
+                        member_count: c.member_count,
+                        online_count: 0,
+                        open: true,
+                        ..Default::default()
+                    })
+                    .collect();
+                let count = discover_model.len();
+                app.set_discover_crews_list(Rc::new(slint::VecModel::from(discover_model)).into());
+                app.set_discover_bento_bases(
+                    Rc::new(slint::VecModel::from(bento_bases(count, 7))).into(),
+                );
+            }
+
+            if !avatar_crew_ids.is_empty() {
+                let _ = cmd_tx.try_send(Command::FetchCrewAvatars {
+                    crew_ids: avatar_crew_ids,
+                });
+            }
         }
         Event::OnboardingReady { user } => {
             log::info!(
@@ -1563,12 +1761,25 @@ fn handle_event(
             }
         }
         Event::CrewsLoaded { crews } => {
+            log::info!("[crews] loaded {} crews", crews.len());
+            for c in &crews {
+                log::info!(
+                    "[crews]   id={} name={:?} avatar_url={:?}",
+                    c.id,
+                    c.name,
+                    c.avatar_url
+                );
+            }
             let crew_ids: Vec<String> = crews.iter().map(|c| c.id.clone()).collect();
             let avatar_crew_ids: Vec<String> = crews
                 .iter()
                 .filter(|c| c.avatar_url.is_some())
                 .map(|c| c.id.clone())
                 .collect();
+            log::info!(
+                "[crews] {} crews have avatar_url, fetching avatars",
+                avatar_crew_ids.len()
+            );
 
             // Merge: preserve any sidebar data that arrived before this event
             let current = app.get_crews();
@@ -1627,27 +1838,69 @@ fn handle_event(
                 }
             }
         }
-        Event::CrewCreated { crew } => {
-            log::info!("UI: crew created: {}", crew.name);
-            // Clear modal avatar state
+        Event::CrewCreated { crew, invite_code } => {
+            log::info!(
+                "UI: crew created: {} invite_code={:?}",
+                crew.name,
+                invite_code
+            );
             *new_crew_avatar_b64.lock().unwrap() = None;
+            invited_users.borrow_mut().clear();
+            if let Some(code) = invite_code {
+                app.set_new_crew_invite_code(code.into());
+                app.set_new_crew_created(true);
+            } else {
+                app.set_new_crew_open(false);
+                app.set_new_crew_has_avatar(false);
+            }
         }
         Event::CrewCreateFailed { reason } => {
             log::warn!("UI: crew creation failed: {}", reason);
         }
+        Event::UserSearchResults { users } => {
+            let model: Vec<SearchUserData> = users
+                .into_iter()
+                .map(|u| SearchUserData {
+                    id: u.id.into(),
+                    display_name: u.display_name.into(),
+                    is_friend: u.is_friend,
+                })
+                .collect();
+            let rc_model = Rc::new(slint::VecModel::from(model));
+            app.set_new_crew_search_results(slint::ModelRc::from(rc_model));
+        }
         Event::CrewAvatarLoaded { crew_id, data } => {
-            log::debug!("UI: avatar loaded for crew {}", crew_id);
+            log::info!(
+                "[avatar] UI: received avatar for crew {} ({} bytes base64)",
+                crew_id,
+                data.len()
+            );
             let decoded = match base64::engine::general_purpose::STANDARD.decode(&data) {
-                Ok(d) => d,
+                Ok(d) => {
+                    log::debug!(
+                        "[avatar] decoded {} raw bytes for crew {}",
+                        d.len(),
+                        crew_id
+                    );
+                    d
+                }
                 Err(e) => {
-                    log::warn!("Failed to decode avatar base64 for {}: {}", crew_id, e);
+                    log::error!(
+                        "[avatar] failed to decode base64 for crew {}: {}",
+                        crew_id,
+                        e
+                    );
                     return;
                 }
             };
             let img = match image::load_from_memory(&decoded) {
                 Ok(i) => i,
                 Err(e) => {
-                    log::warn!("Failed to decode avatar image for {}: {}", crew_id, e);
+                    log::error!(
+                        "[avatar] failed to decode image for crew {}: {}",
+                        crew_id,
+                        e
+                    );
                     return;
                 }
             };
@@ -1660,13 +1913,40 @@ fn handle_event(
             );
             let slint_img = slint::Image::from_rgba8(buf);
 
+            // Update user crews (sidebar)
             let crews = app.get_crews();
             for i in 0..crews.row_count() {
                 if let Some(mut c) = crews.row_data(i) {
                     if c.id == crew_id.as_str() {
-                        c.avatar = slint_img;
+                        c.avatar = slint_img.clone();
                         c.has_avatar = true;
                         crews.set_row_data(i, c);
+                        break;
+                    }
+                }
+            }
+
+            // Update discover crews list
+            let discover = app.get_discover_crews_list();
+            for i in 0..discover.row_count() {
+                if let Some(mut c) = discover.row_data(i) {
+                    if c.id == crew_id.as_str() {
+                        c.avatar = slint_img.clone();
+                        c.has_avatar = true;
+                        discover.set_row_data(i, c);
+                        break;
+                    }
+                }
+            }
+
+            // Update onboarding discover crews
+            let onboarding = app.get_discover_crews();
+            for i in 0..onboarding.row_count() {
+                if let Some(mut c) = onboarding.row_data(i) {
+                    if c.id == crew_id.as_str() {
+                        c.avatar = slint_img;
+                        c.has_avatar = true;
+                        onboarding.set_row_data(i, c);
                         break;
                     }
                 }

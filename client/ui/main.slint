@@ -1,5 +1,5 @@
 import { Theme } from "theme.slint";
-import { CrewData, MemberData, ChatMessageData, AudioDeviceData, VoiceChannelData, VoiceChannelMember, DiscoverCrewData } from "types.slint";
+import { CrewData, MemberData, ChatMessageData, AudioDeviceData, VoiceChannelData, VoiceChannelMember, DiscoverCrewData, SearchUserData } from "types.slint";
 import { CrewPanel } from "panels/crew_panel.slint";
 import { StreamView } from "panels/stream_view.slint";
 import { VoiceChannelView } from "panels/voice_channel_view.slint";
@@ -14,7 +14,7 @@ import { UpdateToast } from "panels/update_banner.slint";
 import { DiscoverPanel } from "panels/discover_panel.slint";
 
 
-export { CrewData, MemberData, ChatMessageData, AudioDeviceData, VoiceChannelData, VoiceChannelMember, DiscoverCrewData, Theme }
+export { CrewData, MemberData, ChatMessageData, AudioDeviceData, VoiceChannelData, VoiceChannelMember, DiscoverCrewData, SearchUserData, Theme }
 
 export component MainWindow inherits Window {
     title: "Mello";
@@ -33,6 +33,7 @@ export component MainWindow inherits Window {
     // --- Onboarding (0 = show onboarding, 1-3 = step, 4+ = done) ---
     in-out property <int> onboarding-step: 0;
     in property <[CrewData]> discover-crews: [];
+    in property <[int]> onboarding-bento-bases: [];
     in property <string> link-error: "";
     in property <bool> is-returning-user: false;
     out property <string> onboarding-nickname;
@@ -52,6 +53,8 @@ export component MainWindow inherits Window {
     // --- Discover crews ---
     in-out property <bool> show-discover: false;
     in property <[DiscoverCrewData]> discover-crews-list: [];
+    in property <[int]> discover-bento-bases: [];
+    callback discover-load-more();
 
     // --- Members / chat ---
     in property <[MemberData]> members: [];
@@ -97,6 +100,10 @@ export component MainWindow inherits Window {
     in-out property <bool> new-crew-open: false;
     in property <image> new-crew-avatar-preview;
     in-out property <bool> new-crew-has-avatar: false;
+    in property <[SearchUserData]> new-crew-search-results: [];
+    in property <[SearchUserData]> new-crew-invited-users: [];
+    in-out property <bool> new-crew-created: false;
+    in property <string> new-crew-invite-code: "";
 
     // --- Presence (0=online, 1=idle, 2=dnd, 3=invisible) ---
     in-out property <int> presence-status: 0;
@@ -140,6 +147,10 @@ export component MainWindow inherits Window {
     callback create-crew(/* name */ string, /* description */ string, /* is-private */ bool);
     callback select-crew(string);
     callback new-crew-avatar-pick();
+    callback new-crew-search-users(/* query */ string);
+    callback new-crew-invite-user(/* id */ string);
+    callback new-crew-uninvite-user(/* id */ string);
+    callback new-crew-copy-invite-code();
     callback send-message(string);
     callback mic-toggle();
     callback deafen-toggle();
@@ -205,6 +216,7 @@ export component MainWindow inherits Window {
     if onboarding-step >= 1 && onboarding-step <= 3 && !show-sign-in: Onboarding {
         step: root.onboarding-step;
         discover-crews: root.discover-crews;
+        bento-set-bases: root.onboarding-bento-bases;
         link-error: root.link-error;
         device-user-name: root.user-name;
         device-user-initials: root.user-initials;
@@ -265,6 +277,7 @@ export component MainWindow inherits Window {
                 }
                 crew-create-requested => {
                     root.new-crew-has-avatar = false;
+                    root.new-crew-created = false;
                     root.new-crew-open = true;
                 }
                 browse-crews-requested => {
@@ -320,9 +333,11 @@ export component MainWindow inherits Window {
             if root.show-discover: DiscoverPanel {
                 horizontal-stretch: 1;
                 crews: root.discover-crews-list;
+                bento-set-bases: root.discover-bento-bases;
                 join-crew(id) => { root.discover-join-crew(id); }
                 join-invite(code) => { root.discover-join-invite(code); }
                 back-requested => { root.show-discover = false; }
+                load-more => { root.discover-load-more(); }
             }
 
             // RIGHT: Chat panel
@@ -387,16 +402,32 @@ export component MainWindow inherits Window {
     if new-crew-open: NewCrewModal {
         avatar-preview: root.new-crew-avatar-preview;
         has-avatar: root.new-crew-has-avatar;
+        search-results: root.new-crew-search-results;
+        invited-users: root.new-crew-invited-users;
+        created: root.new-crew-created;
+        invite-code: root.new-crew-invite-code;
         close-requested => {
             root.new-crew-open = false;
             root.new-crew-has-avatar = false;
+            root.new-crew-created = false;
         }
         avatar-pick-requested => {
             root.new-crew-avatar-pick();
         }
         create-requested(name, desc, is-private) => {
-            root.new-crew-open = false;
             root.create-crew(name, desc, is-private);
+        }
+        search-users(query) => {
+            root.new-crew-search-users(query);
+        }
+        invite-user(id) => {
+            root.new-crew-invite-user(id);
+        }
+        uninvite-user(id) => {
+            root.new-crew-uninvite-user(id);
+        }
+        copy-invite-code => {
+            root.new-crew-copy-invite-code();
         }
     }
 

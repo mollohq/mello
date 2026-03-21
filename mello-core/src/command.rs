@@ -30,7 +30,10 @@ pub enum Command {
     LinkDiscord,
 
     // Onboarding
-    DiscoverCrews,
+    DiscoverCrews {
+        #[serde(default)]
+        cursor: Option<String>,
+    },
     FinalizeOnboarding {
         crew_id: Option<String>,
         crew_name: Option<String>,
@@ -49,9 +52,17 @@ pub enum Command {
         open: bool,
         #[serde(default)]
         avatar: Option<String>,
+        #[serde(default)]
+        invite_user_ids: Vec<String>,
     },
     FetchCrewAvatars {
         crew_ids: Vec<String>,
+    },
+    SearchUsers {
+        query: String,
+    },
+    JoinByInviteCode {
+        code: String,
     },
     SelectCrew {
         crew_id: String,

@@ -37,6 +37,7 @@ semver = "1"
 rfd = "0.15"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif"] }
 base64 = "0.22"
+arboard = "3"
 
 # Native platform integration
 open = "5"

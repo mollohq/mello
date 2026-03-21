@@ -8,6 +8,8 @@ component DiscoverCrewCard inherits Rectangle {
     in property <int> member-count;
     in property <int> online-count;
     in property <bool> hero: false;
+    in property <image> crew-avatar;
+    in property <bool> has-avatar: false;
     callback join-clicked(string);
 
     background: hero ? (card-touch.has-hover ? #1e1420 : #191119) : (card-touch.has-hover ? Theme.surface-hover : Theme.surface);
@@ -38,10 +40,18 @@ component DiscoverCrewCard inherits Rectangle {
                     height: hero ? 56px : 48px;
                     background: hero ? #FF1E561A : Theme.bg-app;
                     border-radius: hero ? 16px : 12px;
-                    border-width: 1px;
+                    border-width: has-avatar ? 0px : 1px;
                     border-color: hero ? #FF1E564D : Theme.graphic-light;
+                    clip: true;
 
-                    Text {
+                    if has-avatar: Image {
+                        source: crew-avatar;
+                        width: parent.width;
+                        height: parent.height;
+                        image-fit: cover;
+                    }
+
+                    if !has-avatar: Text {
                         text: crew-name;
                         font-family: Theme.font-mono;
                         font-weight: 700;
@@ -219,14 +229,21 @@ component DiscoverCrewCard inherits Rectangle {
 
 export component DiscoverPanel inherits Rectangle {
     in property <[DiscoverCrewData]> crews: [];
+    in property <[int]> bento-set-bases: [];
     callback join-crew(string);
     callback join-invite(string);
     callback back-requested();
+    callback load-more();
 
     background: transparent;
 
     Flickable {
         width: root.width;
+        flicked => {
+            if (-self.viewport-y + self.height) > (self.viewport-height - 400px) {
+                root.load-more();
+            }
+        }
 
         VerticalLayout {
             width: root.width;
@@ -372,115 +389,118 @@ export component DiscoverPanel inherits Rectangle {
                 height: 16px;
             }
 
-            // --- Bento grid ---
+            // --- Bento grid (repeating 7-item sets) ---
             VerticalLayout {
                 spacing: 16px;
 
-                // Row 1: [hero 2x tall] [normal 1x]
-                HorizontalLayout {
-                    height: 280px;
+                for base in root.bento-set-bases: VerticalLayout {
                     spacing: 16px;
 
-                    DiscoverCrewCard {
-                        horizontal-stretch: 2;
-                        hero: true;
-                        crew-id: crews.length > 0 ? crews[0].id : "";
-                        crew-name: crews.length > 0 ? crews[0].name : "";
-                        crew-description: crews.length > 0 ? crews[0].description : "";
-                        member-count: crews.length > 0 ? crews[0].member-count : 0;
-                        online-count: crews.length > 0 ? crews[0].online-count : 0;
-                        visible: crews.length > 0;
-                        join-clicked(id) => {
-                            root.join-crew(id);
+                    // Row A: [hero 2x] [normal 1x]
+                    if crews.length > base: HorizontalLayout {
+                        height: 280px;
+                        spacing: 16px;
+
+                        DiscoverCrewCard {
+                            horizontal-stretch: 2;
+                            hero: true;
+                            crew-id: crews.length > base ? crews[base].id : "";
+                            crew-name: crews.length > base ? crews[base].name : "";
+                            crew-description: crews.length > base ? crews[base].description : "";
+                            member-count: crews.length > base ? crews[base].member-count : 0;
+                            online-count: crews.length > base ? crews[base].online-count : 0;
+                            crew-avatar: crews.length > base ? crews[base].avatar : @image-url("");
+                            has-avatar: crews.length > base ? crews[base].has-avatar : false;
+                            join-clicked(id) => { root.join-crew(id); }
+                        }
+
+                        DiscoverCrewCard {
+                            horizontal-stretch: 1;
+                            crew-id: crews.length > base + 1 ? crews[base + 1].id : "";
+                            crew-name: crews.length > base + 1 ? crews[base + 1].name : "";
+                            crew-description: crews.length > base + 1 ? crews[base + 1].description : "";
+                            member-count: crews.length > base + 1 ? crews[base + 1].member-count : 0;
+                            online-count: crews.length > base + 1 ? crews[base + 1].online-count : 0;
+                            crew-avatar: crews.length > base + 1 ? crews[base + 1].avatar : @image-url("");
+                            has-avatar: crews.length > base + 1 ? crews[base + 1].has-avatar : false;
+                            visible: crews.length > base + 1;
+                            join-clicked(id) => { root.join-crew(id); }
                         }
                     }
 
-                    DiscoverCrewCard {
-                        horizontal-stretch: 1;
-                        crew-id: crews.length > 1 ? crews[1].id : "";
-                        crew-name: crews.length > 1 ? crews[1].name : "";
-                        crew-description: crews.length > 1 ? crews[1].description : "";
-                        member-count: crews.length > 1 ? crews[1].member-count : 0;
-                        online-count: crews.length > 1 ? crews[1].online-count : 0;
-                        visible: crews.length > 1;
-                        join-clicked(id) => {
-                            root.join-crew(id);
+                    // Row B: [normal 1x] [normal 1x] [normal 1x]
+                    if crews.length > base + 2: HorizontalLayout {
+                        height: 220px;
+                        spacing: 16px;
+
+                        DiscoverCrewCard {
+                            horizontal-stretch: 1;
+                            crew-id: crews[base + 2].id;
+                            crew-name: crews[base + 2].name;
+                            crew-description: crews[base + 2].description;
+                            member-count: crews[base + 2].member-count;
+                            online-count: crews[base + 2].online-count;
+                            crew-avatar: crews[base + 2].avatar;
+                            has-avatar: crews[base + 2].has-avatar;
+                            join-clicked(id) => { root.join-crew(id); }
                         }
-                    }
-                }
 
-                // Row 2: [normal 1x] [normal 1x] [normal 1x]
-                if crews.length > 2: HorizontalLayout {
-                    height: 220px;
-                    spacing: 16px;
-
-                    DiscoverCrewCard {
-                        horizontal-stretch: 1;
-                        crew-id: crews.length > 2 ? crews[2].id : "";
-                        crew-name: crews.length > 2 ? crews[2].name : "";
-                        crew-description: crews.length > 2 ? crews[2].description : "";
-                        member-count: crews.length > 2 ? crews[2].member-count : 0;
-                        online-count: crews.length > 2 ? crews[2].online-count : 0;
-                        join-clicked(id) => {
-                            root.join-crew(id);
+                        DiscoverCrewCard {
+                            horizontal-stretch: 1;
+                            crew-id: crews.length > base + 3 ? crews[base + 3].id : "";
+                            crew-name: crews.length > base + 3 ? crews[base + 3].name : "";
+                            crew-description: crews.length > base + 3 ? crews[base + 3].description : "";
+                            member-count: crews.length > base + 3 ? crews[base + 3].member-count : 0;
+                            online-count: crews.length > base + 3 ? crews[base + 3].online-count : 0;
+                            crew-avatar: crews.length > base + 3 ? crews[base + 3].avatar : @image-url("");
+                            has-avatar: crews.length > base + 3 ? crews[base + 3].has-avatar : false;
+                            visible: crews.length > base + 3;
+                            join-clicked(id) => { root.join-crew(id); }
                         }
-                    }
 
-                    DiscoverCrewCard {
-                        horizontal-stretch: 1;
-                        crew-id: crews.length > 3 ? crews[3].id : "";
-                        crew-name: crews.length > 3 ? crews[3].name : "";
-                        crew-description: crews.length > 3 ? crews[3].description : "";
-                        member-count: crews.length > 3 ? crews[3].member-count : 0;
-                        online-count: crews.length > 3 ? crews[3].online-count : 0;
-                        visible: crews.length > 3;
-                        join-clicked(id) => {
-                            root.join-crew(id);
-                        }
-                    }
-
-                    DiscoverCrewCard {
-                        horizontal-stretch: 1;
-                        crew-id: crews.length > 4 ? crews[4].id : "";
-                        crew-name: crews.length > 4 ? crews[4].name : "";
-                        crew-description: crews.length > 4 ? crews[4].description : "";
-                        member-count: crews.length > 4 ? crews[4].member-count : 0;
-                        online-count: crews.length > 4 ? crews[4].online-count : 0;
-                        visible: crews.length > 4;
-                        join-clicked(id) => {
-                            root.join-crew(id);
-                        }
-                    }
-                }
-
-                // Row 3: [normal 1x] [hero 2x]
-                if crews.length > 5: HorizontalLayout {
-                    height: 280px;
-                    spacing: 16px;
-
-                    DiscoverCrewCard {
-                        horizontal-stretch: 1;
-                        crew-id: crews.length > 5 ? crews[5].id : "";
-                        crew-name: crews.length > 5 ? crews[5].name : "";
-                        crew-description: crews.length > 5 ? crews[5].description : "";
-                        member-count: crews.length > 5 ? crews[5].member-count : 0;
-                        online-count: crews.length > 5 ? crews[5].online-count : 0;
-                        join-clicked(id) => {
-                            root.join-crew(id);
+                        DiscoverCrewCard {
+                            horizontal-stretch: 1;
+                            crew-id: crews.length > base + 4 ? crews[base + 4].id : "";
+                            crew-name: crews.length > base + 4 ? crews[base + 4].name : "";
+                            crew-description: crews.length > base + 4 ? crews[base + 4].description : "";
+                            member-count: crews.length > base + 4 ? crews[base + 4].member-count : 0;
+                            online-count: crews.length > base + 4 ? crews[base + 4].online-count : 0;
+                            crew-avatar: crews.length > base + 4 ? crews[base + 4].avatar : @image-url("");
+                            has-avatar: crews.length > base + 4 ? crews[base + 4].has-avatar : false;
+                            visible: crews.length > base + 4;
+                            join-clicked(id) => { root.join-crew(id); }
                         }
                     }
 
-                    DiscoverCrewCard {
-                        horizontal-stretch: 2;
-                        hero: true;
-                        crew-id: crews.length > 6 ? crews[6].id : "";
-                        crew-name: crews.length > 6 ? crews[6].name : "";
-                        crew-description: crews.length > 6 ? crews[6].description : "";
-                        member-count: crews.length > 6 ? crews[6].member-count : 0;
-                        online-count: crews.length > 6 ? crews[6].online-count : 0;
-                        visible: crews.length > 6;
-                        join-clicked(id) => {
-                            root.join-crew(id);
+                    // Row C: [normal 1x] [hero 2x]
+                    if crews.length > base + 5: HorizontalLayout {
+                        height: 280px;
+                        spacing: 16px;
+
+                        DiscoverCrewCard {
+                            horizontal-stretch: 1;
+                            crew-id: crews[base + 5].id;
+                            crew-name: crews[base + 5].name;
+                            crew-description: crews[base + 5].description;
+                            member-count: crews[base + 5].member-count;
+                            online-count: crews[base + 5].online-count;
+                            crew-avatar: crews[base + 5].avatar;
+                            has-avatar: crews[base + 5].has-avatar;
+                            join-clicked(id) => { root.join-crew(id); }
+                        }
+
+                        DiscoverCrewCard {
+                            horizontal-stretch: 2;
+                            hero: true;
+                            crew-id: crews.length > base + 6 ? crews[base + 6].id : "";
+                            crew-name: crews.length > base + 6 ? crews[base + 6].name : "";
+                            crew-description: crews.length > base + 6 ? crews[base + 6].description : "";
+                            member-count: crews.length > base + 6 ? crews[base + 6].member-count : 0;
+                            online-count: crews.length > base + 6 ? crews[base + 6].online-count : 0;
+                            crew-avatar: crews.length > base + 6 ? crews[base + 6].avatar : @image-url("");
+                            has-avatar: crews.length > base + 6 ? crews[base + 6].has-avatar : false;
+                            visible: crews.length > base + 6;
+                            join-clicked(id) => { root.join-crew(id); }
                         }
                     }
                 }
