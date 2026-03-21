@@ -211,11 +211,22 @@ impl Client {
             Command::FinalizeOnboarding {
                 crew_id,
                 crew_name,
+                crew_description,
+                crew_open,
+                crew_avatar,
                 display_name,
                 avatar,
             } => {
-                self.handle_finalize_onboarding(crew_id, crew_name, &display_name, avatar)
-                    .await;
+                self.handle_finalize_onboarding(
+                    crew_id,
+                    crew_name,
+                    crew_description,
+                    crew_open,
+                    crew_avatar,
+                    &display_name,
+                    avatar,
+                )
+                .await;
             }
             Command::LoadMyCrews => {
                 self.load_crews().await;
@@ -416,10 +427,14 @@ impl Client {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn handle_finalize_onboarding(
         &mut self,
         crew_id: Option<String>,
         crew_name: Option<String>,
+        crew_description: Option<String>,
+        crew_open: Option<bool>,
+        crew_avatar: Option<String>,
         display_name: &str,
         _avatar: u8,
     ) {
@@ -479,7 +494,17 @@ impl Client {
             }
             Some(id)
         } else if let Some(name) = crew_name {
-            match self.nakama.create_crew(&name, "", true, None, &[]).await {
+            match self
+                .nakama
+                .create_crew(
+                    &name,
+                    crew_description.as_deref().unwrap_or(""),
+                    crew_open.unwrap_or(true),
+                    crew_avatar.as_deref(),
+                    &[],
+                )
+                .await
+            {
                 Ok((crew, _invite_code)) => {
                     let id = crew.id.clone();
                     let _ = self.event_tx.send(Event::CrewCreated {

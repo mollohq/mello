@@ -406,6 +406,7 @@ export component MainWindow inherits Window {
         invited-users: root.new-crew-invited-users;
         created: root.new-crew-created;
         invite-code: root.new-crew-invite-code;
+        onboarding-mode: root.onboarding-step < 4;
         close-requested => {
             root.new-crew-open = false;
             root.new-crew-has-avatar = false;

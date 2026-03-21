@@ -363,7 +363,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let cmd = cmd_tx.clone();
         let avatar_b64 = new_crew_avatar_b64.clone();
         let invited = invited_users.clone();
+        let app_weak = app.as_weak();
+        let s = settings.clone();
         app.on_create_crew(move |name, description, is_private| {
+            let Some(app) = app_weak.upgrade() else {
+                return;
+            };
+
+            if app.get_onboarding_step() < 4 {
+                // Onboarding: defer creation, store details locally
+                let mut settings = s.borrow_mut();
+                settings.pending_crew_id = None;
+                settings.pending_crew_name = Some(name.to_string());
+                settings.pending_crew_description = Some(description.to_string());
+                settings.pending_crew_open = Some(!is_private);
+                settings.onboarding_step = 2;
+                settings.save();
+                app.set_new_crew_open(false);
+                app.set_onboarding_step(2);
+                log::info!(
+                    "[onboarding] crew details stored locally: name={:?} open={}",
+                    name.as_str(),
+                    !is_private,
+                );
+                return;
+            }
+
             let avatar = avatar_b64.lock().unwrap().take();
             let invite_user_ids: Vec<String> = invited
                 .borrow()
@@ -898,20 +923,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     {
         let cmd = cmd_tx.clone();
         let app_weak = app.as_weak();
-        let s = settings.clone();
-        app.on_onboarding_create_crew(move |name| {
+        app.on_onboarding_create_crew(move |_name| {
             let _ = cmd.try_send(Command::ListAudioDevices);
             if let Some(app) = app_weak.upgrade() {
-                app.set_onboarding_step(2);
-                let mut settings = s.borrow_mut();
-                settings.pending_crew_id = None;
-                settings.pending_crew_name = Some(name.to_string());
-                settings.onboarding_step = 2;
-                settings.save();
-                log::info!(
-                    "[onboarding] crew creation queued (stored locally): {}",
-                    name
-                );
+                app.set_new_crew_has_avatar(false);
+                app.set_new_crew_created(false);
+                app.set_new_crew_open(true);
+                log::info!("[onboarding] opening new-crew modal");
             }
         });
     }
@@ -920,6 +938,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let app_weak = app.as_weak();
         let s = settings.clone();
         let cmd = cmd_tx.clone();
+        let avatar_b64 = new_crew_avatar_b64.clone();
         app.on_onboarding_continue(move |step| {
             if let Some(app) = app_weak.upgrade() {
                 if step == 3 {
@@ -928,20 +947,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let settings = s.borrow();
                     let crew_id = settings.pending_crew_id.clone();
                     let crew_name = settings.pending_crew_name.clone();
+                    let crew_description = settings.pending_crew_description.clone();
+                    let crew_open = settings.pending_crew_open;
                     drop(settings);
+                    let crew_avatar = avatar_b64.lock().unwrap().take();
                     log::info!(
-                        "[onboarding] finalizing — nickname={} crew_id={:?} crew_name={:?}",
+                        "[onboarding] finalizing — nickname={} crew_id={:?} crew_name={:?} crew_desc={:?} crew_open={:?} has_avatar={}",
                         nickname,
                         crew_id,
-                        crew_name
+                        crew_name,
+                        crew_description,
+                        crew_open,
+                        crew_avatar.is_some(),
                     );
                     let _ = cmd.try_send(Command::FinalizeOnboarding {
                         crew_id,
                         crew_name,
+                        crew_description,
+                        crew_open,
+                        crew_avatar,
                         display_name: nickname,
                         avatar,
                     });
-                    // Don't advance step yet — wait for OnboardingReady event
                     return;
                 }
                 app.set_onboarding_step(step);

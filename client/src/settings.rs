@@ -13,6 +13,8 @@ pub struct Settings {
     pub last_crew_id: Option<String>,
     pub pending_crew_id: Option<String>,
     pub pending_crew_name: Option<String>,
+    pub pending_crew_description: Option<String>,
+    pub pending_crew_open: Option<bool>,
     pub start_on_boot: bool,
     pub ptt_key: Option<String>,
     // General tab
@@ -41,6 +43,8 @@ impl Default for Settings {
             last_crew_id: None,
             pending_crew_id: None,
             pending_crew_name: None,
+            pending_crew_description: None,
+            pending_crew_open: None,
             start_on_boot: false,
             ptt_key: None,
             start_minimized: false,

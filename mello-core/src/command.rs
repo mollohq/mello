@@ -37,6 +37,12 @@ pub enum Command {
     FinalizeOnboarding {
         crew_id: Option<String>,
         crew_name: Option<String>,
+        #[serde(default)]
+        crew_description: Option<String>,
+        #[serde(default)]
+        crew_open: Option<bool>,
+        #[serde(default)]
+        crew_avatar: Option<String>,
         display_name: String,
         avatar: u8,
     },
