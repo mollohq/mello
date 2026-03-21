@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 
 	"github.com/heroiclabs/nakama-common/api"
 	"github.com/heroiclabs/nakama-common/runtime"
@@ -14,10 +15,15 @@ const (
 	MaxCrewsPerUser = 100
 )
 
+const (
+	CrewAvatarCollection = "crew_avatars"
+)
+
 type CreateCrewRequest struct {
 	Name        string `json:"name"`
 	Description string `json:"description,omitempty"`
 	InviteOnly  bool   `json:"invite_only"`
+	Avatar      string `json:"avatar,omitempty"`
 }
 
 type CreateCrewResponse struct {
@@ -96,6 +102,28 @@ func CreateCrewRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk ru
 	if err != nil {
 		logger.Error("failed to create crew: %v", err)
 		return "", runtime.NewError("failed to create crew", 13)
+	}
+
+	// Store avatar in Nakama storage and set avatar_url on the group
+	if req.Avatar != "" {
+		_, err := nk.StorageWrite(ctx, []*runtime.StorageWrite{
+			{
+				Collection:      CrewAvatarCollection,
+				Key:             group.Id,
+				UserID:          SystemUserID,
+				Value:           req.Avatar,
+				PermissionRead:  2,
+				PermissionWrite: 0,
+			},
+		})
+		if err != nil {
+			logger.Warn("Failed to store avatar for crew %s: %v", group.Id, err)
+		} else {
+			avatarURL := fmt.Sprintf("/v2/storage/%s/%s/%s", CrewAvatarCollection, SystemUserID, group.Id)
+			if err := nk.GroupUpdate(ctx, group.Id, userID, "", "", "", "", avatarURL, nil, nil, 0); err != nil {
+				logger.Warn("Failed to set avatar_url for crew %s: %v", group.Id, err)
+			}
+		}
 	}
 
 	// Create the default voice channel for this crew

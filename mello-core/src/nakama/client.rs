@@ -488,6 +488,7 @@ impl NakamaClient {
                     member_count: g.edge_count.unwrap_or(0),
                     max_members: g.max_count.unwrap_or(6),
                     open: g.open.unwrap_or(false),
+                    avatar_url: g.avatar_url.filter(|s| !s.is_empty()),
                 })
             })
             .collect();
@@ -557,6 +558,7 @@ impl NakamaClient {
                 member_count: c.member_count,
                 max_members: c.max_members,
                 open: c.open,
+                avatar_url: None,
             })
             .collect();
 
@@ -590,6 +592,7 @@ impl NakamaClient {
                     member_count: g.edge_count.unwrap_or(0),
                     max_members: g.max_count.unwrap_or(6),
                     open: g.open.unwrap_or(false),
+                    avatar_url: g.avatar_url.filter(|s| !s.is_empty()),
                 })
             })
             .collect();
@@ -662,12 +665,25 @@ impl NakamaClient {
         Ok(())
     }
 
-    pub async fn create_crew(&self, name: &str) -> Result<Crew> {
+    pub async fn create_crew(
+        &self,
+        name: &str,
+        description: &str,
+        open: bool,
+        avatar: Option<&str>,
+    ) -> Result<Crew> {
         let token = self.bearer()?;
         let url = format!("{}/v2/rpc/create_crew", self.config.http_base());
 
         let payload = serde_json::to_string(&CreateCrewPayload {
             name: name.to_string(),
+            description: if description.is_empty() {
+                None
+            } else {
+                Some(description.to_string())
+            },
+            invite_only: Some(!open),
+            avatar: avatar.map(|s| s.to_string()),
         })?;
         let body = serde_json::Value::String(payload);
 
@@ -690,10 +706,11 @@ impl NakamaClient {
         Ok(Crew {
             id: result.crew_id,
             name: result.name,
-            description: String::new(),
+            description: description.to_string(),
             member_count: 1,
             max_members: 6,
-            open: true,
+            open,
+            avatar_url: None,
         })
     }
 
@@ -720,6 +737,35 @@ impl NakamaClient {
 
         let rpc_resp: ApiRpcResponse = resp.json().await?;
         Ok(rpc_resp.payload.unwrap_or_default())
+    }
+
+    // --- Storage ---
+
+    /// Read a single object from Nakama storage. Returns the value string.
+    pub async fn read_storage(&self, collection: &str, key: &str, user_id: &str) -> Result<String> {
+        let token = self.bearer()?;
+        let url = format!(
+            "{}/v2/storage/{}/{}/{}",
+            self.config.http_base(),
+            collection,
+            key,
+            user_id,
+        );
+
+        let resp = self.http.get(&url).bearer_auth(&token).send().await?;
+
+        if !resp.status().is_success() {
+            let err_text = resp.text().await.unwrap_or_default();
+            return Err(Error::Server(format!("storage read failed: {}", err_text)));
+        }
+
+        let objects: ApiStorageObjects = resp.json().await?;
+        let value = objects
+            .objects
+            .and_then(|mut v| v.pop())
+            .and_then(|o| o.value)
+            .unwrap_or_default();
+        Ok(value)
     }
 
     // --- Presence RPCs ---

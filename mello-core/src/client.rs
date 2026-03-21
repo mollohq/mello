@@ -223,8 +223,17 @@ impl Client {
             Command::JoinCrew { crew_id } => {
                 self.handle_join_crew(&crew_id).await;
             }
-            Command::CreateCrew { name } => {
-                self.handle_create_crew(&name).await;
+            Command::CreateCrew {
+                name,
+                description,
+                open,
+                avatar,
+            } => {
+                self.handle_create_crew(&name, &description, open, avatar.as_deref())
+                    .await;
+            }
+            Command::FetchCrewAvatars { crew_ids } => {
+                self.handle_fetch_crew_avatars(&crew_ids).await;
             }
             Command::SelectCrew { crew_id } => {
                 self.handle_select_crew(&crew_id).await;
@@ -449,7 +458,7 @@ impl Client {
             }
             Some(id)
         } else if let Some(name) = crew_name {
-            match self.nakama.create_crew(&name).await {
+            match self.nakama.create_crew(&name, "", true, None).await {
                 Ok(crew) => {
                     let id = crew.id.clone();
                     let _ = self.event_tx.send(Event::CrewCreated { crew });
@@ -914,8 +923,18 @@ impl Client {
         }
     }
 
-    async fn handle_create_crew(&mut self, name: &str) {
-        match self.nakama.create_crew(name).await {
+    async fn handle_create_crew(
+        &mut self,
+        name: &str,
+        description: &str,
+        open: bool,
+        avatar: Option<&str>,
+    ) {
+        match self
+            .nakama
+            .create_crew(name, description, open, avatar)
+            .await
+        {
             Ok(crew) => {
                 let crew_id = crew.id.clone();
                 let _ = self.event_tx.send(Event::CrewCreated { crew });
@@ -927,6 +946,31 @@ impl Client {
                 let _ = self.event_tx.send(Event::CrewCreateFailed {
                     reason: e.to_string(),
                 });
+            }
+        }
+    }
+
+    async fn handle_fetch_crew_avatars(&self, crew_ids: &[String]) {
+        for crew_id in crew_ids {
+            match self
+                .nakama
+                .read_storage(
+                    "crew_avatars",
+                    crew_id,
+                    "00000000-0000-0000-0000-000000000000",
+                )
+                .await
+            {
+                Ok(data) if !data.is_empty() => {
+                    let _ = self.event_tx.send(Event::CrewAvatarLoaded {
+                        crew_id: crew_id.clone(),
+                        data,
+                    });
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    log::debug!("Failed to fetch avatar for crew {}: {}", crew_id, e);
+                }
             }
         }
     }

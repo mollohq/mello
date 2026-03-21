@@ -60,6 +60,10 @@ pub enum Event {
     CrewCreateFailed {
         reason: String,
     },
+    CrewAvatarLoaded {
+        crew_id: String,
+        data: String,
+    },
     CrewsLoaded {
         crews: Vec<Crew>,
     },

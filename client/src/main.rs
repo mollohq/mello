@@ -11,6 +11,7 @@ pub const APP_NAME: &str = "Mello";
 
 slint::include_modules!();
 
+use base64::Engine as _;
 use mello_core::{Client, Command, Config, Event};
 use platform::{StatusItem, VoiceState};
 use settings::Settings;
@@ -277,11 +278,72 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             });
         });
     }
+    // --- New crew modal: avatar picker ---
+    let new_crew_avatar_b64: std::sync::Arc<std::sync::Mutex<Option<String>>> =
+        std::sync::Arc::new(std::sync::Mutex::new(None));
+    {
+        let app_weak = app.as_weak();
+        let avatar_b64 = new_crew_avatar_b64.clone();
+        let rt_handle = rt.handle().clone();
+        app.on_new_crew_avatar_pick(move || {
+            let app_weak = app_weak.clone();
+            let avatar_b64 = avatar_b64.clone();
+            rt_handle.spawn(async move {
+                let file = rfd::AsyncFileDialog::new()
+                    .add_filter("Images", &["jpg", "jpeg", "png", "gif"])
+                    .pick_file()
+                    .await;
+                let Some(file) = file else { return };
+                let bytes = file.read().await;
+                if bytes.len() > 20 * 1024 * 1024 {
+                    log::warn!("Avatar file too large: {} bytes", bytes.len());
+                    return;
+                }
+                let Ok(img) = image::load_from_memory(&bytes) else {
+                    log::warn!("Failed to decode avatar image");
+                    return;
+                };
+                let resized = img.resize(256, 256, image::imageops::FilterType::Lanczos3);
+                let rgba = resized.to_rgba8();
+                let (w, h) = (rgba.width(), rgba.height());
+
+                let mut jpeg_buf = std::io::Cursor::new(Vec::new());
+                if image::DynamicImage::ImageRgba8(rgba.clone())
+                    .write_to(&mut jpeg_buf, image::ImageFormat::Jpeg)
+                    .is_err()
+                {
+                    log::warn!("Failed to encode avatar as JPEG");
+                    return;
+                }
+                let b64 = base64::engine::general_purpose::STANDARD.encode(jpeg_buf.into_inner());
+                *avatar_b64.lock().unwrap() = Some(b64);
+
+                let rgba_bytes = rgba.into_raw();
+                let _ = slint::invoke_from_event_loop(move || {
+                    let Some(app) = app_weak.upgrade() else {
+                        return;
+                    };
+                    let buf = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
+                        &rgba_bytes,
+                        w,
+                        h,
+                    );
+                    app.set_new_crew_avatar_preview(slint::Image::from_rgba8(buf));
+                    app.set_new_crew_has_avatar(true);
+                });
+            });
+        });
+    }
     {
         let cmd = cmd_tx.clone();
-        app.on_create_crew(move |name| {
+        let avatar_b64 = new_crew_avatar_b64.clone();
+        app.on_create_crew(move |name, description, is_private| {
+            let avatar = avatar_b64.lock().unwrap().take();
             let _ = cmd.try_send(Command::CreateCrew {
                 name: name.to_string(),
+                description: description.to_string(),
+                open: !is_private,
+                avatar,
             });
         });
     }
@@ -1069,6 +1131,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         &dbg_hist,
                         &event_cmd_tx,
                         &active_voice_channel,
+                        &new_crew_avatar_b64,
                     );
                 }
             }
@@ -1353,6 +1416,7 @@ fn handle_event(
     dbg_hist: &Rc<RefCell<DebugHistory>>,
     cmd_tx: &tokio::sync::mpsc::Sender<Command>,
     active_voice_channel: &Rc<RefCell<String>>,
+    new_crew_avatar_b64: &std::sync::Arc<std::sync::Mutex<Option<String>>>,
 ) {
     match event {
         Event::Restoring => {
@@ -1500,6 +1564,11 @@ fn handle_event(
         }
         Event::CrewsLoaded { crews } => {
             let crew_ids: Vec<String> = crews.iter().map(|c| c.id.clone()).collect();
+            let avatar_crew_ids: Vec<String> = crews
+                .iter()
+                .filter(|c| c.avatar_url.is_some())
+                .map(|c| c.id.clone())
+                .collect();
 
             // Merge: preserve any sidebar data that arrived before this event
             let current = app.get_crews();
@@ -1532,6 +1601,14 @@ fn handle_event(
                 .collect();
             let rc = std::rc::Rc::new(slint::VecModel::from(model));
             app.set_crews(rc.into());
+
+            // Fetch avatars for crews that have them
+            if !avatar_crew_ids.is_empty() {
+                let _ = cmd_tx.try_send(Command::FetchCrewAvatars {
+                    crew_ids: avatar_crew_ids,
+                });
+            }
+
             // Auto-select last active crew (or first if not found)
             if app.get_active_crew_id().is_empty() {
                 let last = settings.borrow().last_crew_id.clone();
@@ -1552,9 +1629,48 @@ fn handle_event(
         }
         Event::CrewCreated { crew } => {
             log::info!("UI: crew created: {}", crew.name);
+            // Clear modal avatar state
+            *new_crew_avatar_b64.lock().unwrap() = None;
         }
         Event::CrewCreateFailed { reason } => {
             log::warn!("UI: crew creation failed: {}", reason);
+        }
+        Event::CrewAvatarLoaded { crew_id, data } => {
+            log::debug!("UI: avatar loaded for crew {}", crew_id);
+            let decoded = match base64::engine::general_purpose::STANDARD.decode(&data) {
+                Ok(d) => d,
+                Err(e) => {
+                    log::warn!("Failed to decode avatar base64 for {}: {}", crew_id, e);
+                    return;
+                }
+            };
+            let img = match image::load_from_memory(&decoded) {
+                Ok(i) => i,
+                Err(e) => {
+                    log::warn!("Failed to decode avatar image for {}: {}", crew_id, e);
+                    return;
+                }
+            };
+            let rgba = img.to_rgba8();
+            let (w, h) = (rgba.width(), rgba.height());
+            let buf = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
+                &rgba.into_raw(),
+                w,
+                h,
+            );
+            let slint_img = slint::Image::from_rgba8(buf);
+
+            let crews = app.get_crews();
+            for i in 0..crews.row_count() {
+                if let Some(mut c) = crews.row_data(i) {
+                    if c.id == crew_id.as_str() {
+                        c.avatar = slint_img;
+                        c.has_avatar = true;
+                        crews.set_row_data(i, c);
+                        break;
+                    }
+                }
+            }
         }
         Event::CrewJoined { crew_id } => {
             log::info!("UI: joined crew {}", crew_id);

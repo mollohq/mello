@@ -43,6 +43,15 @@ pub enum Command {
     },
     CreateCrew {
         name: String,
+        #[serde(default)]
+        description: String,
+        #[serde(default)]
+        open: bool,
+        #[serde(default)]
+        avatar: Option<String>,
+    },
+    FetchCrewAvatars {
+        crew_ids: Vec<String>,
     },
     SelectCrew {
         crew_id: String,

@@ -61,6 +61,11 @@ Do not repeat a corrected mistake in the same session.
   To vertically center an `Image` inside a layout or container, use:
   `y: (parent.height - self.height) / 2;`
   This is the established pattern throughout the codebase (see control_bar.slint, voice_channel_view.slint, settings_modal.slint).
+- When a design mockup (`designs/*.html`) contains inline SVGs, **do not** try to recreate them
+  with Slint rectangles or shapes. Instead, extract the SVG into `client/ui/icons/<name>.svg`
+  (stroke="black", no hardcoded colors) and reference it with `@image-url("../icons/<name>.svg")`
+  + `colorize:` for theming. Slint renders SVG icons cleanly; hand-drawn rectangle approximations
+  look broken.
 
 ## What Not To Do
 - Do not change existing public API signatures without flagging it first.

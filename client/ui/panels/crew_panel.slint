@@ -198,7 +198,7 @@ export component CrewPanel inherits Rectangle {
     in property <string> active-crew-id: "";
 
     callback crew-selected(string);
-    callback crew-create-requested(string);
+    callback crew-create-requested();
     callback browse-crews-requested();
 
     background: Theme.surface;
@@ -284,10 +284,24 @@ export component CrewPanel inherits Rectangle {
 
                                 // --- Card header ---
                                 HorizontalLayout {
-                                    height: crew.id == active-crew-id ? 20px : 18px;
+                                    height: crew.id == active-crew-id ? 24px : 20px;
                                     spacing: 8px;
 
-                                    VerticalLayout {
+                                    if crew.has-avatar: Rectangle {
+                                        width: crew.id == active-crew-id ? 24px : 20px;
+                                        height: self.width;
+                                        border-radius: 4px;
+                                        clip: true;
+
+                                        Image {
+                                            source: crew.avatar;
+                                            width: parent.width;
+                                            height: parent.height;
+                                            image-fit: cover;
+                                        }
+                                    }
+
+                                    if !crew.has-avatar: VerticalLayout {
                                         alignment: center;
                                         width: 6px;
 
@@ -621,34 +635,37 @@ export component CrewPanel inherits Rectangle {
 
         Rectangle {
             height: 40px;
-            background: Theme.bg-app;
             border-radius: Theme.r-inner;
-            border-width: 1px;
-            border-color: Theme.graphic-light;
+            background: new-crew-touch.has-hover ? Theme.hover-overlay : transparent;
 
-            crew-name-input := TextInput {
-                x: 14px;
-                width: parent.width - 28px;
-                height: parent.height;
-                font-family: Theme.font-mono;
-                font-size: Theme.font-md;
-                color: Theme.text-primary;
-                vertical-alignment: center;
-                accepted => {
-                    if crew-name-input.text != "" {
-                        crew-create-requested(crew-name-input.text);
-                        crew-name-input.text = "";
-                    }
+            HorizontalLayout {
+                padding-left: 14px;
+                padding-right: 14px;
+                spacing: 10px;
+                alignment: start;
+
+                Text {
+                    text: "+";
+                    font-family: Theme.font-mono;
+                    font-size: 16px;
+                    color: new-crew-touch.has-hover ? Theme.text-primary : Theme.text-secondary;
+                    vertical-alignment: center;
+                }
+
+                Text {
+                    text: "New crew";
+                    font-family: Theme.font-mono;
+                    font-size: Theme.font-md;
+                    color: new-crew-touch.has-hover ? Theme.text-primary : Theme.text-secondary;
+                    vertical-alignment: center;
                 }
             }
 
-            if crew-name-input.text == "": Text {
-                x: 14px;
-                color: Theme.text-tertiary;
-                font-family: Theme.font-mono;
-                font-size: Theme.font-md;
-                vertical-alignment: center;
-                text: "+ New crew";
+            new-crew-touch := TouchArea {
+                mouse-cursor: pointer;
+                clicked => {
+                    crew-create-requested();
+                }
             }
         }
     }
