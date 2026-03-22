@@ -8,7 +8,7 @@
 
 ## 1. Vision
 
-Mello is a lightweight crew-based social platform with Parsec-tier streaming capabilities. Think Discord's social features meets Parsec's streaming quality — in a <25MB, <100MB RAM package.
+Mello is a lightweight crew-based social platform with Parsec-tier streaming capabilities. Think Discord's social features meets Parsec's streaming quality — in a <100MB package, <100MB RAM usage.
 
 **Tagline:** *Hang out with your crew. Jump into anyone's stream.*
 
@@ -18,7 +18,7 @@ Mello is a lightweight crew-based social platform with Parsec-tier streaming cap
 
 | Goal | Target |
 |------|--------|
-| Client install size | <25MB |
+| Client install size | <100MB |
 | RAM (idle) | <50MB |
 | RAM (in crew, voice active) | <80MB |
 | RAM (watching stream) | <100MB |
@@ -250,12 +250,12 @@ Server mixes/forwards
 | Platform | Role | Status |
 |----------|------|--------|
 | Windows 10/11 | Host + View | Beta |
+| macOS | View | Beta |
 
 ### 7.2 Post-Beta
 
 | Platform | Role | Status |
 |----------|------|--------|
-| macOS | Host + View | Planned |
 | Linux | Host + View | Planned |
 | iOS | View + Voice only | Planned |
 | Android | View + Voice only | Planned |
@@ -332,17 +332,18 @@ Server mixes/forwards
 ### In Scope
 
 - Windows client
+- macOS client
 - Crews up to 6 people
 - Voice chat (P2P mesh, RNNoise, Silero VAD)
 - Text chat (Nakama)
 - Stream sharing (watch only)
 - Presence indicators
-- Login (Discord OAuth + email)
+- Login (social (steam, twitch, google, apple, discord) + email)
 
 ### Out of Scope (Post-Beta)
 
 - Stream control / input passthrough
-- macOS / Linux clients
+- Linux client
 - Mobile clients
 - SFU for large groups
 - Recording
