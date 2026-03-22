@@ -201,6 +201,8 @@ pub struct VoiceUpdate {
     pub channel_id: String,
     #[serde(default)]
     pub members: Vec<VoiceMember>,
+    #[serde(default)]
+    pub voice_channels: Vec<VoiceChannelState>,
 }
 
 // ---------------------------------------------------------------------------

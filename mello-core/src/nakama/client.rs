@@ -1604,6 +1604,12 @@ fn handle_notification(code: i32, content: &str, event_tx: &std::sync::mpsc::Sen
         // 114 = voice update
         114 => match serde_json::from_str::<crew_state::VoiceUpdate>(content) {
             Ok(update) => {
+                if !update.voice_channels.is_empty() {
+                    let _ = event_tx.send(Event::VoiceChannelsUpdated {
+                        crew_id: update.crew_id.clone(),
+                        channels: update.voice_channels,
+                    });
+                }
                 let _ = event_tx.send(Event::VoiceUpdated {
                     crew_id: update.crew_id,
                     channel_id: update.channel_id,

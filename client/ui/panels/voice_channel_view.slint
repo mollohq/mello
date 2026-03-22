@@ -89,8 +89,11 @@ component VoiceChannelRow inherits Rectangle {
 component VoiceChannelExpanded inherits Rectangle {
     in property <string> channel-name;
     in property <[VoiceChannelMember]> members: [];
+    in property <bool> show-join: false;
+    in property <bool> is-active: false;
 
     callback clicked();
+    callback join-clicked();
 
     background: Theme.bg-app;
 
@@ -247,8 +250,50 @@ component VoiceChannelExpanded inherits Rectangle {
                 }
             }
 
-            // Empty state when expanded with no members
-            if members.length == 0: Text {
+            // "+ Join" avatar tile
+            if show-join: VerticalLayout {
+                alignment: center;
+                spacing: 8px;
+
+                Rectangle {
+                    width: 48px;
+                    height: 48px;
+                    border-radius: Theme.r-inner;
+                    background: join-tile-touch.has-hover ? #28C84018 : #FFFFFF04;
+                    border-width: 1px;
+                    border-color: join-tile-touch.has-hover ? #28C84060 : Theme.graphic-light;
+
+                    Text {
+                        text: "+";
+                        font-size: 20px;
+                        font-family: Theme.font-mono;
+                        font-weight: 400;
+                        color: join-tile-touch.has-hover ? #28C840 : Theme.text-tertiary;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+
+                    join-tile-touch := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { root.join-clicked(); }
+                    }
+                }
+
+                // Spacer matching voice indicator height
+                Rectangle { height: 6px; }
+
+                Text {
+                    text: "Join";
+                    font-family: Theme.font-mono;
+                    font-size: 10px;
+                    font-weight: 500;
+                    color: join-tile-touch.has-hover ? #28C840 : Theme.text-tertiary;
+                    horizontal-alignment: center;
+                }
+            }
+
+            // Empty state when no members and already in channel
+            if members.length == 0 && !show-join: Text {
                 text: "No one here yet";
                 font-family: Theme.font-mono;
                 font-size: 11px;
@@ -286,7 +331,10 @@ export component VoiceChannelView inherits Rectangle {
             if channel.expanded: VoiceChannelExpanded {
                 channel-name: channel.name;
                 members: channel.members;
+                show-join: !channel.active && root.mic-permission-granted;
+                is-active: channel.active;
                 clicked => { root.toggle-channel(channel.id); }
+                join-clicked => { root.join-voice-channel(channel.id); }
             }
 
             if !channel.expanded: VoiceChannelRow {

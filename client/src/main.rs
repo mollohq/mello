@@ -2403,6 +2403,34 @@ fn handle_event(
         Event::VoiceStateChanged { in_call } => {
             app.set_in_voice(in_call);
             log::info!("UI: voice state changed, in_call={}", in_call);
+
+            if !in_call {
+                *active_voice_channel.borrow_mut() = String::new();
+
+                // Remove local user from voice channel UI and clear active flag
+                let my_id = app.get_user_id();
+                let current = app.get_voice_channels();
+                let updated: Vec<VoiceChannelData> = (0..current.row_count())
+                    .map(|i| {
+                        let mut ch = current.row_data(i).unwrap();
+                        ch.active = false;
+                        let members: Vec<VoiceChannelMember> = (0..ch.members.row_count())
+                            .filter_map(|j| {
+                                let m = ch.members.row_data(j).unwrap();
+                                if m.id == my_id {
+                                    None
+                                } else {
+                                    Some(m)
+                                }
+                            })
+                            .collect();
+                        ch.member_count = members.len() as i32;
+                        ch.members = Rc::new(slint::VecModel::from(members)).into();
+                        ch
+                    })
+                    .collect();
+                app.set_voice_channels(Rc::new(slint::VecModel::from(updated)).into());
+            }
         }
         Event::VoiceConnected { peer_id } => {
             log::info!("UI: voice connected to {}", peer_id);
