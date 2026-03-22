@@ -9,13 +9,14 @@ use super::config::StreamConfig;
 use super::error::StreamError;
 use super::manager::{AudioPacket, StreamManager, StreamSession, VideoPacket};
 use super::sink::PacketSink;
-use super::sink_p2p::P2PFanoutSink;
 
 #[derive(Debug, Serialize)]
 pub struct StartStreamRequest {
     pub crew_id: String,
     #[serde(default)]
     pub supports_av1: bool,
+    pub width: u32,
+    pub height: u32,
 }
 
 #[derive(Debug, Deserialize)]
@@ -52,10 +53,14 @@ pub async fn request_start_stream(
     nakama: &NakamaClient,
     crew_id: &str,
     supports_av1: bool,
+    width: u32,
+    height: u32,
 ) -> Result<StartStreamResponse, StreamError> {
     let req = StartStreamRequest {
         crew_id: crew_id.to_string(),
         supports_av1,
+        width,
+        height,
     };
     let payload = serde_json::to_value(&req).map_err(|e| StreamError::Backend(e.to_string()))?;
 
@@ -199,7 +204,8 @@ pub unsafe fn start_host(
     Ok((host, video_rx, audio_rx, resources))
 }
 
-/// Create the sink and manager based on the backend response, then spawn the run loop.
+/// Create the manager and spawn the run loop. The caller provides the sink.
+#[allow(clippy::too_many_arguments)]
 pub fn create_stream_session(
     ctx: *mut mello_sys::MelloContext,
     host: *mut mello_sys::MelloStreamHost,
@@ -208,17 +214,10 @@ pub fn create_stream_session(
     video_rx: mpsc::UnboundedReceiver<VideoPacket>,
     audio_rx: mpsc::UnboundedReceiver<AudioPacket>,
     _resources: HostResources,
+    sink: Arc<dyn PacketSink>,
 ) -> Result<StreamSession, StreamError> {
     let session_id = resp.session_id();
     let mode = resp.mode.clone();
-
-    let sink: Arc<dyn PacketSink> = match mode.as_str() {
-        "p2p" => Arc::new(P2PFanoutSink::new()),
-        "sfu" => {
-            return Err(StreamError::SfuNotImplemented);
-        }
-        other => return Err(StreamError::UnknownMode(other.to_string())),
-    };
 
     let manager = StreamManager::new(ctx, host, sink, config, video_rx, audio_rx);
 

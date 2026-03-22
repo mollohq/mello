@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::RwLock;
 
 use async_trait::async_trait;
@@ -8,6 +9,15 @@ use super::packet::StreamPacket;
 use super::sink::PacketSink;
 
 const MAX_P2P_VIEWERS: usize = 5;
+
+/// Max payload per DataChannel message. SCTP fragments anything larger into
+/// many chunks; losing a single fragment kills the entire message in unreliable
+/// mode. Matches the proven chunk size from stream-host tool.
+const CHUNK_MAX_PAYLOAD: usize = 60_000;
+
+/// Chunk header: [msg_id:2][chunk_idx:2][chunk_count:2] = 6 bytes.
+/// Prepended to every DataChannel message so the viewer can reassemble.
+pub const CHUNK_HEADER_SIZE: usize = 6;
 
 /// Raw peer handle from mello-sys. The actual pointer lifetime is managed by
 /// whoever creates the peer (the stream host orchestration code).
@@ -23,6 +33,7 @@ unsafe impl Sync for ViewerPeer {}
 /// the pipeline for other viewers.
 pub struct P2PFanoutSink {
     viewers: RwLock<HashMap<String, ViewerPeer>>,
+    msg_seq: AtomicU16,
 }
 
 impl Default for P2PFanoutSink {
@@ -35,6 +46,7 @@ impl P2PFanoutSink {
     pub fn new() -> Self {
         Self {
             viewers: RwLock::new(HashMap::new()),
+            msg_seq: AtomicU16::new(0),
         }
     }
 
@@ -62,17 +74,32 @@ impl P2PFanoutSink {
         self.viewers.read().unwrap().len()
     }
 
+    /// Send data, chunking if it exceeds CHUNK_MAX_PAYLOAD.
+    /// Small messages (<= CHUNK_MAX_PAYLOAD) are sent as a single chunk.
     fn broadcast(&self, data: &[u8]) {
+        let chunk_count = data.len().div_ceil(CHUNK_MAX_PAYLOAD).max(1) as u16;
+        let msg_id = self.msg_seq.fetch_add(1, Ordering::Relaxed);
+
         let viewers = self.viewers.read().unwrap();
         for vp in viewers.values() {
             let connected = unsafe { mello_sys::mello_peer_is_connected(vp.peer) };
-            if connected {
+            if !connected {
+                continue;
+            }
+
+            for chunk_idx in 0..chunk_count {
+                let start = chunk_idx as usize * CHUNK_MAX_PAYLOAD;
+                let end = (start + CHUNK_MAX_PAYLOAD).min(data.len());
+                let payload = &data[start..end];
+
+                let mut msg = Vec::with_capacity(CHUNK_HEADER_SIZE + payload.len());
+                msg.extend_from_slice(&msg_id.to_le_bytes());
+                msg.extend_from_slice(&chunk_idx.to_le_bytes());
+                msg.extend_from_slice(&chunk_count.to_le_bytes());
+                msg.extend_from_slice(payload);
+
                 unsafe {
-                    mello_sys::mello_peer_send_unreliable(
-                        vp.peer,
-                        data.as_ptr(),
-                        data.len() as i32,
-                    );
+                    mello_sys::mello_peer_send_unreliable(vp.peer, msg.as_ptr(), msg.len() as i32);
                 }
             }
         }

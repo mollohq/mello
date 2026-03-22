@@ -90,12 +90,11 @@ impl StreamManager {
         video_rx: mpsc::UnboundedReceiver<VideoPacket>,
         audio_rx: mpsc::UnboundedReceiver<AudioPacket>,
     ) -> Self {
-        let fec_n = config.fec_n;
         Self {
             ctx,
             host,
             sink,
-            fec_encoder: FecEncoder::new(fec_n),
+            fec_encoder: FecEncoder::new(0),
             video_seq: AtomicU16::new(0),
             audio_seq: AtomicU16::new(0),
             abr: AbrController::new(&config),
@@ -143,7 +142,8 @@ impl StreamManager {
             self.fec_encoder.reset();
         }
 
-        let fec_group_last = self.fec_encoder.pending_count() == self.fec_encoder.group_size() - 1;
+        let fec_group_last = self.fec_encoder.is_enabled()
+            && self.fec_encoder.pending_count() == self.fec_encoder.group_size() - 1;
 
         let packet = StreamPacket::video(pkt.data.clone(), seq, pkt.is_keyframe, fec_group_last);
         let _ = self.sink.send_video(&packet).await;
@@ -165,7 +165,7 @@ impl StreamManager {
         &mut self,
         viewer_id: &str,
         packet: &StreamPacket,
-    ) -> Option<super::abr::BitrateChange> {
+    ) -> Option<super::abr::AbrChange> {
         if packet.ptype != PacketType::Control || packet.payload.is_empty() {
             return None;
         }
@@ -190,8 +190,13 @@ impl StreamManager {
                     );
                     let change = self.abr.process_loss_report(viewer_id, &report);
                     if let Some(ref c) = change {
-                        unsafe {
-                            mello_sys::mello_stream_set_bitrate(self.host, c.new_bitrate_kbps);
+                        if let Some(new_br) = c.new_bitrate_kbps {
+                            unsafe {
+                                mello_sys::mello_stream_set_bitrate(self.host, new_br);
+                            }
+                        }
+                        if let Some(new_fec) = c.new_fec_n {
+                            self.fec_encoder.set_group_size(new_fec);
                         }
                     }
                     change

@@ -220,6 +220,17 @@ typedef struct MelloCaptureSource {
     uint32_t         pid;
 } MelloCaptureSource;
 
+typedef struct MelloMonitorInfo {
+    uint32_t index;
+    char     name[128];
+    uint32_t width;
+    uint32_t height;
+    bool     primary;
+} MelloMonitorInfo;
+
+/** List connected displays via DXGI. Returns count written. */
+MELLO_API int mello_enumerate_monitors(MelloContext* ctx, MelloMonitorInfo* out, int max_count);
+
 typedef struct MelloGameProcess {
     uint32_t pid;
     char     name[128];
@@ -233,11 +244,24 @@ MELLO_API int mello_enumerate_games(MelloContext* ctx, MelloGameProcess* out, in
 typedef struct MelloWindow {
     void*    hwnd;
     char     title[256];
+    char     exe[256];
     uint32_t pid;
 } MelloWindow;
 
 /** List visible top-level windows suitable for capture. Returns count written. */
 MELLO_API int mello_enumerate_windows(MelloContext* ctx, MelloWindow* out, int max_count);
+
+/**
+ * Capture a thumbnail of a window.
+ * Writes RGBA pixels to rgba_out (caller must allocate max_width*max_height*4 bytes).
+ * Actual dimensions written to out_width/out_height (may be smaller to preserve aspect ratio).
+ * Returns 0 on success, -1 on failure.
+ */
+MELLO_API int mello_capture_window_thumbnail(
+    void* hwnd,
+    uint32_t max_width, uint32_t max_height,
+    uint8_t* rgba_out, uint32_t* out_width, uint32_t* out_height
+);
 
 /* ---- Stream config ---- */
 

@@ -23,6 +23,16 @@ use updater::{UpdateEvent, Updater};
 
 use single_instance::SingleInstance;
 
+fn parse_capture_source_id(id: &str, mode: &str) -> (Option<u32>, Option<u64>, Option<u32>) {
+    let num_part = id.rsplit('-').next().unwrap_or("");
+    match mode {
+        "monitor" => (num_part.parse().ok(), None, None),
+        "window" => (None, num_part.parse().ok(), None),
+        "process" => (None, None, num_part.parse().ok()),
+        _ => (None, None, None),
+    }
+}
+
 /// (user_id, display_name, is_friend)
 type InvitedUserList = Vec<(String, String, bool)>;
 
@@ -122,9 +132,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     log::info!("Starting Mello...");
 
     // --- Single instance enforcement ---
-    // On macOS, single-instance uses flock() on a file at this path; must be absolute
-    // since the cwd when launched as a .app bundle is not writable.
-    let _instance = SingleInstance::new("/tmp/app.m3llo.lock")?;
+    let instance_suffix = std::env::args()
+        .position(|a| a == "--instance")
+        .and_then(|i| std::env::args().nth(i + 1))
+        .unwrap_or_default();
+    let instance_id = if instance_suffix.is_empty() {
+        "app.mello.desktop".to_string()
+    } else {
+        format!("app.mello.desktop.{}", instance_suffix)
+    };
+    let _instance = SingleInstance::new(&instance_id)?;
     if !_instance.is_single() {
         eprintln!("Mello is already running.");
         std::process::exit(0);
@@ -169,8 +186,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         u.check_for_updates();
     }
 
+    let frame_slot: mello_core::FrameSlot = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let frame_consumed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let frame_slot_for_client = frame_slot.clone();
+    let frame_consumed_for_client = frame_consumed.clone();
+
     rt.spawn(async move {
-        let mut client = Client::new(nakama_config(), event_tx, loopback);
+        let mut client = Client::new(
+            nakama_config(),
+            event_tx,
+            loopback,
+            frame_slot_for_client,
+            frame_consumed_for_client,
+        );
         client.run(cmd_rx).await;
     });
 
@@ -901,6 +929,79 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
+    // --- Streaming ---
+    {
+        let cmd = cmd_tx.clone();
+        app.on_list_capture_sources(move || {
+            let _ = cmd.try_send(Command::ListCaptureSources);
+            let _ = cmd.try_send(Command::StartThumbnailRefresh);
+        });
+    }
+    {
+        let cmd = cmd_tx.clone();
+        let app_weak = app.as_weak();
+        app.on_start_stream(move |source_id, source_mode, preset_idx| {
+            let crew_id = if let Some(app) = app_weak.upgrade() {
+                app.get_active_crew_id().to_string()
+            } else {
+                return;
+            };
+            if crew_id.is_empty() {
+                return;
+            }
+
+            let mode = source_mode.to_string();
+            let id = source_id.to_string();
+
+            let (monitor_index, hwnd, pid) = parse_capture_source_id(&id, &mode);
+
+            let _ = cmd.try_send(Command::StopThumbnailRefresh);
+            let _ = cmd.try_send(Command::StartStream {
+                crew_id,
+                title: String::new(),
+                capture_mode: mode,
+                monitor_index,
+                hwnd,
+                pid,
+                preset: preset_idx as u32,
+            });
+        });
+    }
+    {
+        let cmd = cmd_tx.clone();
+        app.on_stop_stream(move || {
+            let _ = cmd.try_send(Command::StopStream);
+        });
+    }
+    {
+        let cmd = cmd_tx.clone();
+        app.on_stop_thumbnail_refresh(move || {
+            let _ = cmd.try_send(Command::StopThumbnailRefresh);
+        });
+    }
+    {
+        let cmd = cmd_tx.clone();
+        app.on_stop_watching(move || {
+            let _ = cmd.try_send(Command::StopWatching);
+        });
+    }
+    {
+        let cmd = cmd_tx.clone();
+        app.on_watch_stream(move |host_id, width, height| {
+            log::info!(
+                "UI: watch stream from host {} ({}x{})",
+                host_id,
+                width,
+                height
+            );
+            let _ = cmd.try_send(Command::WatchStream {
+                host_id: host_id.to_string(),
+                width: width as u32,
+                height: height as u32,
+            });
+        });
+    }
+
     // --- Onboarding: crew selected ---
     {
         let cmd = cmd_tx.clone();
@@ -1459,6 +1560,36 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     );
                 }
             }
+        },
+    );
+
+    // Dedicated 16ms (~60fps) timer for stream frame display. Kept separate
+    // from the 50ms event timer so frame updates are not bottlenecked by
+    // event processing cadence.
+    let frame_app_weak = app.as_weak();
+    let frame_timer = slint::Timer::default();
+    frame_timer.start(
+        slint::TimerMode::Repeated,
+        Duration::from_millis(16),
+        move || {
+            if frame_consumed.load(std::sync::atomic::Ordering::Acquire) {
+                return; // No new frame since last read
+            }
+            if let Ok(slot) = frame_slot.lock() {
+                if let Some((w, h, rgba)) = slot.as_ref() {
+                    if let Some(app) = frame_app_weak.upgrade() {
+                        let pixel_count = (*w as usize) * (*h as usize);
+                        if rgba.len() == pixel_count * 4 {
+                            let buf =
+                                slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
+                                    rgba, *w, *h,
+                                );
+                            app.set_stream_frame(slint::Image::from_rgba8(buf));
+                        }
+                    }
+                }
+            }
+            frame_consumed.store(true, std::sync::atomic::Ordering::Release);
         },
     );
 
@@ -2303,6 +2434,38 @@ fn handle_event(
                 .collect();
             app.set_crews(Rc::new(slint::VecModel::from(updated)).into());
 
+            // Update active streamer info for the StreamView panel
+            if app.get_active_crew_id() == state.crew_id.as_str() {
+                if let Some(ref stream) = state.stream {
+                    if stream.active {
+                        let sid = stream.streamer_id.clone().unwrap_or_default();
+                        let sname = stream.streamer_username.clone().unwrap_or_default();
+                        let local_id = app.get_user_id().to_string();
+                        if sid != local_id {
+                            app.set_active_streamer_id(sid.into());
+                            app.set_active_streamer_name(sname.into());
+                            app.set_active_stream_width(stream.width as i32);
+                            app.set_active_stream_height(stream.height as i32);
+                        } else {
+                            app.set_active_streamer_id("".into());
+                            app.set_active_streamer_name("".into());
+                            app.set_active_stream_width(0);
+                            app.set_active_stream_height(0);
+                        }
+                    } else {
+                        app.set_active_streamer_id("".into());
+                        app.set_active_streamer_name("".into());
+                        app.set_active_stream_width(0);
+                        app.set_active_stream_height(0);
+                    }
+                } else {
+                    app.set_active_streamer_id("".into());
+                    app.set_active_streamer_name("".into());
+                    app.set_active_stream_width(0);
+                    app.set_active_stream_height(0);
+                }
+            }
+
             // Populate voice channels for the active crew
             if app.get_active_crew_id() == state.crew_id.as_str() {
                 // Determine active channel: use tracked one, or default to the crew's default channel
@@ -2373,6 +2536,25 @@ fn handle_event(
                 if let Some(ref stream) = sc.stream {
                     c.has_stream = stream.active;
                     c.stream_name = stream.title.clone().unwrap_or_default().into();
+                    // Update active streamer for StreamView if this is the active crew
+                    if c.id == app.get_active_crew_id() {
+                        if stream.active {
+                            let sid = stream.streamer_id.clone().unwrap_or_default();
+                            let sname = stream.streamer_username.clone().unwrap_or_default();
+                            let local_id = app.get_user_id().to_string();
+                            if sid != local_id {
+                                app.set_active_streamer_id(sid.into());
+                                app.set_active_streamer_name(sname.into());
+                                app.set_active_stream_width(stream.width as i32);
+                                app.set_active_stream_height(stream.height as i32);
+                            }
+                        } else {
+                            app.set_active_streamer_id("".into());
+                            app.set_active_streamer_name("".into());
+                            app.set_active_stream_width(0);
+                            app.set_active_stream_height(0);
+                        }
+                    }
                 }
                 // Recent messages
                 c.msg_count = sc.recent_messages.len().min(2) as i32;
@@ -2648,7 +2830,79 @@ fn handle_event(
             log::error!("UI: error: {}", message);
         }
 
-        // --- Streaming events (UI integration TBD) ---
+        // --- Streaming events ---
+        Event::CaptureSourcesListed {
+            monitors,
+            games,
+            windows,
+        } => {
+            log::info!(
+                "Capture sources: {} monitors, {} games, {} windows",
+                monitors.len(),
+                games.len(),
+                windows.len()
+            );
+            let mon: Vec<CaptureSourceData> = monitors
+                .into_iter()
+                .map(|s| CaptureSourceData {
+                    id: s.id.into(),
+                    name: s.name.into(),
+                    mode: s.mode.into(),
+                    pid: s.pid.unwrap_or(0) as i32,
+                    exe: s.exe.into(),
+                    is_fullscreen: s.is_fullscreen,
+                    resolution: s.resolution.into(),
+                    ..Default::default()
+                })
+                .collect();
+            let gam: Vec<CaptureSourceData> = games
+                .into_iter()
+                .map(|s| CaptureSourceData {
+                    id: s.id.into(),
+                    name: s.name.into(),
+                    mode: s.mode.into(),
+                    pid: s.pid.unwrap_or(0) as i32,
+                    exe: s.exe.into(),
+                    is_fullscreen: s.is_fullscreen,
+                    resolution: s.resolution.into(),
+                    ..Default::default()
+                })
+                .collect();
+            let win: Vec<CaptureSourceData> = windows
+                .into_iter()
+                .map(|s| CaptureSourceData {
+                    id: s.id.into(),
+                    name: s.name.into(),
+                    mode: s.mode.into(),
+                    pid: s.pid.unwrap_or(0) as i32,
+                    exe: s.exe.into(),
+                    is_fullscreen: s.is_fullscreen,
+                    resolution: s.resolution.into(),
+                    ..Default::default()
+                })
+                .collect();
+            app.set_stream_monitors(Rc::new(slint::VecModel::from(mon)).into());
+            app.set_stream_games(Rc::new(slint::VecModel::from(gam)).into());
+            app.set_stream_windows(Rc::new(slint::VecModel::from(win)).into());
+        }
+        Event::WindowThumbnailsUpdated { thumbnails } => {
+            let model = app.get_stream_windows();
+            for (id, rgba, w, h) in thumbnails {
+                for row in 0..model.row_count() {
+                    if let Some(mut entry) = model.row_data(row) {
+                        if entry.id == id.as_str() {
+                            let mut pixel_buf =
+                                slint::SharedPixelBuffer::<slint::Rgba8Pixel>::new(w, h);
+                            pixel_buf.make_mut_bytes().copy_from_slice(&rgba);
+                            entry.thumbnail = slint::Image::from_rgba8(pixel_buf);
+                            entry.has_thumbnail = true;
+                            model.set_row_data(row, entry);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
         Event::StreamStarted {
             crew_id,
             session_id,
@@ -2660,15 +2914,44 @@ fn handle_event(
                 session_id,
                 mode
             );
+            app.set_is_hosting(true);
+            app.set_streamer_name(app.get_user_name());
+            app.set_stream_label("STREAMING".into());
         }
         Event::StreamEnded { crew_id } => {
             log::info!("Stream ended: crew={}", crew_id);
+            app.set_is_hosting(false);
+            app.set_is_watching(false);
+            app.set_streamer_name("".into());
+            app.set_stream_label("".into());
+            app.set_active_streamer_id("".into());
+            app.set_active_streamer_name("".into());
+            app.set_active_stream_width(0);
+            app.set_active_stream_height(0);
         }
         Event::StreamViewerJoined { viewer_id } => {
             log::info!("Stream viewer joined: {}", viewer_id);
         }
         Event::StreamViewerLeft { viewer_id } => {
             log::info!("Stream viewer left: {}", viewer_id);
+        }
+        Event::StreamWatching {
+            host_id,
+            width,
+            height,
+        } => {
+            log::info!("Watching stream from {} ({}x{})", host_id, width, height);
+            app.set_is_watching(true);
+            app.set_streamer_name(host_id.into());
+        }
+        Event::StreamWatchingStopped => {
+            log::info!("Stopped watching stream");
+            app.set_is_watching(false);
+            app.set_streamer_name("".into());
+            app.set_stream_label("".into());
+        }
+        Event::StreamFrame { .. } => {
+            // Frames are now delivered via shared FrameSlot, not the event channel.
         }
         Event::StreamError { message } => {
             log::error!("Stream error: {}", message);

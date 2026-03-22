@@ -100,6 +100,9 @@ bool NvdecDecoder::initialize(const GraphicsDevice& device, const DecoderConfig&
         return false;
     }
 
+    cuCtxPush_ = reinterpret_cast<CuCtxPushCurrent_t>(GetProcAddress(cuda_dll_, "cuCtxPushCurrent_v2"));
+    cuCtxPop_  = reinterpret_cast<CuCtxPopCurrent_t>(GetProcAddress(cuda_dll_, "cuCtxPopCurrent_v2"));
+
     // Create video parser
     CUVIDPARSERPARAMS parser_params{};
     parser_params.CodecType           = (config.codec == VideoCodec::AV1) ? cudaVideoCodec_AV1 : cudaVideoCodec_H264;
@@ -224,6 +227,10 @@ bool NvdecDecoder::decode(const uint8_t* data, size_t size, bool is_keyframe) {
 
     frame_ready_ = false;
 
+    // CUDA context must be current on the calling thread for decode callbacks
+    // (cuvidCreateDecoder, cuvidDecodePicture, cuvidMapVideoFrame64).
+    if (cuCtxPush_ && cu_context_) cuCtxPush_(cu_context_);
+
     CUVIDSOURCEDATAPACKET packet{};
     packet.payload      = data;
     packet.payload_size = static_cast<unsigned long>(size);
@@ -232,9 +239,15 @@ bool NvdecDecoder::decode(const uint8_t* data, size_t size, bool is_keyframe) {
 
     auto cuvidParseVideoData_fn = reinterpret_cast<decltype(&cuvidParseVideoData)>(
         GetProcAddress(cuvid_dll_, "cuvidParseVideoData"));
-    if (!cuvidParseVideoData_fn) return false;
+    if (!cuvidParseVideoData_fn) {
+        if (cuCtxPop_ && cu_context_) { void* dummy = nullptr; cuCtxPop_(&dummy); }
+        return false;
+    }
 
     CUresult res = cuvidParseVideoData_fn(parser_, &packet);
+
+    if (cuCtxPop_ && cu_context_) { void* dummy = nullptr; cuCtxPop_(&dummy); }
+
     if (res != CUDA_SUCCESS) {
         MELLO_LOG_ERROR(TAG, "NVDEC: cuvidParseVideoData failed: %d", res);
         return false;
@@ -273,10 +286,16 @@ int CUDAAPI NvdecDecoder::handle_video_sequence(void* user, CUVIDEOFORMAT* fmt) 
     auto cuvidCreateDecoder_fn = reinterpret_cast<decltype(&cuvidCreateDecoder)>(
         GetProcAddress(self->cuvid_dll_, "cuvidCreateDecoder"));
     if (cuvidCreateDecoder_fn) {
-        cuvidCreateDecoder_fn(&self->decoder_, &create_info);
+        CUresult rc = cuvidCreateDecoder_fn(&self->decoder_, &create_info);
+        if (rc != CUDA_SUCCESS) {
+            MELLO_LOG_ERROR(TAG, "NVDEC: cuvidCreateDecoder failed: %d (coded=%ux%u)",
+                rc, fmt->coded_width, fmt->coded_height);
+            self->decoder_ = nullptr;
+            return 0;
+        }
     }
 
-    return 1; // Return number of decode surfaces
+    return 1;
 }
 
 int CUDAAPI NvdecDecoder::handle_picture_decode(void* user, CUVIDPICPARAMS* pic) {

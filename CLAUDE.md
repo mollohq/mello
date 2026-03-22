@@ -67,6 +67,11 @@ Do not repeat a corrected mistake in the same session.
   + `colorize:` for theming. Slint renders SVG icons cleanly; hand-drawn rectangle approximations
   look broken.
 
+## Fix It Right
+- Never apply band-aid / "simple" fixes. Always implement the proper, robust solution.
+- If a quick hack is tempting, stop and think about the real root cause first.
+- If unsure what the proper fix is, ask - don't ship a workaround.
+
 ## What Not To Do
 - Do not change existing public API signatures without flagging it first.
 - Do not add new Cargo/CMake/npm dependencies without asking.

@@ -19,6 +19,8 @@ type StartStreamRequest struct {
 	CrewID      string `json:"crew_id"`
 	Title       string `json:"title,omitempty"`
 	SupportsAV1 bool   `json:"supports_av1,omitempty"`
+	Width       uint32 `json:"width,omitempty"`
+	Height      uint32 `json:"height,omitempty"`
 }
 
 const MaxP2PViewers = 5
@@ -32,6 +34,8 @@ type ActiveStream struct {
 	HostName  string `json:"host_name"`
 	Title     string `json:"title"`
 	StartedAt int64  `json:"started_at"`
+	Width     uint32 `json:"width,omitempty"`
+	Height    uint32 `json:"height,omitempty"`
 }
 
 // StreamMeta is the extended metadata stored in stream_meta/{crew_id}.
@@ -45,6 +49,8 @@ type StreamMeta struct {
 	ThumbnailURL      string   `json:"thumbnail_url,omitempty"`
 	ThumbnailUpdatedAt string  `json:"thumbnail_updated_at,omitempty"`
 	ViewerIDs         []string `json:"viewer_ids,omitempty"`
+	Width             uint32   `json:"width,omitempty"`
+	Height            uint32   `json:"height,omitempty"`
 }
 
 const (
@@ -100,6 +106,8 @@ func StartStreamRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk r
 		HostName:  users[0].GetDisplayName(),
 		Title:     req.Title,
 		StartedAt: now.Unix(),
+		Width:     req.Width,
+		Height:    req.Height,
 	}
 	streamJSON, _ := json.Marshal(stream)
 
@@ -126,6 +134,8 @@ func StartStreamRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk r
 		StreamerUsername: users[0].GetDisplayName(),
 		Title:            req.Title,
 		StartedAt:        now.UTC().Format(time.RFC3339),
+		Width:            req.Width,
+		Height:           req.Height,
 	}
 	metaJSON, _ := json.Marshal(meta)
 	nk.StorageWrite(ctx, []*runtime.StorageWrite{

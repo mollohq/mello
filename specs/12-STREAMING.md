@@ -150,7 +150,12 @@ This header is 12 bytes. Parsing is done in mello-core (Rust), not libmello.
 
 FEC operates over groups of video packets. For every N data packets, one parity packet is sent. The parity is the XOR of all N payloads (after stripping the 12-byte header; the header of the parity packet carries its own sequence and the `type = 0x03` marker).
 
-**Default N = 5** (20% overhead). This recovers any single packet loss within a group silently, with zero added latency.
+FEC overhead is **adaptive** — the ABR controller adjusts `fec_n` dynamically based on viewer loss reports (see §7.2):
+- Loss < 1%: FEC disabled (0% overhead)
+- Loss 1–5%: N = 10 (10% overhead)
+- Loss > 5%: N = 5 (20% overhead)
+
+Streams start with FEC disabled. This recovers any single packet loss within a group silently, with zero added latency, and avoids wasting bandwidth on healthy connections.
 
 FEC group formation:
 
@@ -164,9 +169,45 @@ The FEC group boundary resets on every keyframe (IDR). This ensures a keyframe a
 
 FEC does **not** apply to audio packets. Opus has built-in PLC (Packet Loss Concealment) that handles audio loss gracefully.
 
-**N is configurable per quality preset** (see §7). Lower presets (worse network) use N=3 (33% overhead, higher protection).
+FEC group size is managed by the ABR controller at runtime. The `FecEncoder` supports `set_group_size(n)` for live adjustment — setting n < 2 disables FEC entirely.
 
-#### Rust implementation location
+### 5.4 DataChannel Message Chunking
+
+Unreliable DataChannels use SCTP under the hood. When a message exceeds the SCTP MTU (~1200 bytes), SCTP fragments it internally. In unreliable mode, losing **any single SCTP fragment** drops the **entire application-level message**. A single H.264 keyframe can be 200–400 KB — SCTP splits that into hundreds of fragments, making loss near-certain even on good networks.
+
+To mitigate this, the host performs **application-level chunking** before handing data to the DataChannel. Each serialized `StreamPacket` is split into chunks of at most **60,000 bytes** (well under the 64 KB SCTP message size limit). Each chunk carries a 6-byte header:
+
+```
+ 0       2       4       6
+├───────┼───────┼───────┤
+│msg_id │chunk_i│chunk_n│  payload (≤60,000 bytes)
+│ (u16) │ (u16) │ (u16) │
+└───────┴───────┴───────┘
+
+msg_id:   monotonically increasing message counter (wraps at u16::MAX)
+chunk_i:  0-based index of this chunk within the message
+chunk_n:  total number of chunks in this message
+```
+
+A single-chunk message (payload ≤ 60 KB) still carries the header with `chunk_i=0, chunk_n=1`.
+
+**Viewer reassembly:** The viewer maintains a `ChunkAssembler` that collects incoming chunks keyed by `msg_id`. When all `chunk_n` chunks for a `msg_id` arrive, the original `StreamPacket` payload is reconstructed and fed to `StreamViewer`. Incomplete assemblies are evicted after newer message IDs arrive (stale threshold: 256 msg_ids behind).
+
+This chunking layer sits **between** the StreamPacket serialization and the DataChannel send — it is transparent to FEC, ABR, and all higher-level logic.
+
+```
+Host:  StreamPacket → serialize → chunk (60KB) → DataChannel send
+Viewer: DataChannel recv → reassemble chunks → deserialize → StreamViewer
+```
+
+#### Rust implementation
+
+```
+mello-core/src/stream/sink_p2p.rs   — chunking (host side)
+mello-core/src/client.rs            — ChunkAssembler (viewer side)
+```
+
+#### Rust implementation location (FEC)
 
 ```
 mello-core/src/stream/fec.rs
@@ -228,15 +269,19 @@ There is no retransmission (ARQ/NACK). The round-trip cost at any non-trivial ne
 
 ### 7.1 Presets
 
-| Preset | Resolution | FPS | Bitrate (H.264) | Bitrate (AV1) | FEC N |
-|---|---|---|---|---|---|
-| **Ultra** | 1080p | 60 | 20 Mbps | 12 Mbps | 5 |
-| **High** | 1080p | 60 | 12 Mbps | 7 Mbps | 5 |
-| **Medium** | 1080p | 30 | 8 Mbps | 5 Mbps | 4 |
-| **Low** | 720p | 30 | 4 Mbps | 2.5 Mbps | 3 |
-| **Potato** | 720p | 30 | 2 Mbps | — | 3 |
+Bitrate targets are tuned for Discord-competitive bandwidth. The host encodes at the preset's target resolution, **not** the native capture resolution — the pipeline downscales via the GPU video preprocessor when capture exceeds the target (see 14-VIDEO-PIPELINE.md §5.5).
 
-The host selects an initial preset based on their detected upload bandwidth (measured on stream start). Preset selection is exposed as a UI control — the host can override it manually.
+| Preset | Resolution | FPS | Bitrate (H.264) | Bitrate (AV1) | Est. Total (+ FEC) |
+|---|---|---|---|---|---|
+| **Ultra** | 1080p | 60 | 8 Mbps | 5 Mbps | ~8–10 Mbps |
+| **High** | 1080p | 60 | 6 Mbps | 4 Mbps | ~6–7 Mbps |
+| **Medium** | 1080p | 30 | 4 Mbps | 2.5 Mbps | ~4–5 Mbps |
+| **Low** | 720p | 30 | 2.5 Mbps | 1.5 Mbps | ~2.5–3 Mbps |
+| **Potato** | 720p | 30 | 1.5 Mbps | — | ~1.5–2 Mbps |
+
+**Default preset:** Medium (1080p30 @ 4 Mbps H.264). Suitable for most internet connections. Power users can select High/Ultra from the stream source picker UI.
+
+Preset selection is exposed as a UI control — the host can override it manually before starting the stream.
 
 ### 7.2 Adaptive Bitrate (ABR)
 
@@ -246,7 +291,8 @@ ABR rules:
 - **Step down:** if a viewer reports >5% packet loss (after FEC), reduce bitrate by 25% within 1 second
 - **Step up:** if all viewers report <1% loss for 10 consecutive seconds, increase bitrate by 10%
 - **Minimum bitrate:** never go below the Potato preset values
-- **Bitrate changes** are applied via `mello_stream_set_bitrate()` (new API call; hot-reconfigures the encoder without restarting the session)
+- **Bitrate changes** are applied via `mello_stream_set_bitrate()` (hot-reconfigures the encoder without restarting the session)
+- **Adaptive FEC:** the ABR controller also adjusts `fec_n` based on loss ratio (see §5.3). FEC changes are applied to the `FecEncoder` via `set_group_size()` alongside bitrate changes.
 
 ABR operates **independently per viewer** when in P2P mode — the host can send different bitrates to different viewers. In SFU mode, the SFU handles per-viewer adaptation; the host sends a single stream at its chosen quality and the SFU is responsible for transcoding tiers (future spec).
 
@@ -423,7 +469,10 @@ The `start_stream` RPC response carries the topology descriptor:
 type StartStreamRequest struct {
     CrewID string `json:"crew_id"`
     // Codec negotiation hint from host
-    SupportsAV1 bool `json:"supports_av1"`
+    SupportsAV1 bool   `json:"supports_av1"`
+    // Actual encode resolution (from capture source, see §9.3)
+    Width       uint32 `json:"width"`
+    Height      uint32 `json:"height"`
 }
 
 type StartStreamResponse struct {
@@ -513,6 +562,37 @@ impl PacketSink for SfuSink {
 }
 ```
 
+### 9.3 Resolution Negotiation
+
+The host encodes at its **native capture resolution** (determined by the capture source — e.g. 2560x1440 for a monitor, or the game window size). This resolution is not known until after the capture pipeline starts, so it cannot be hardcoded or assumed by the viewer.
+
+The resolution is propagated through two paths:
+
+**Path 1 — Nakama storage (for stream discovery UI):**
+The host calls `mello_stream_get_host_resolution()` after `mello_stream_start_host()` returns, then includes the actual `width` and `height` in the `start_stream` RPC. The backend stores these in `StreamMeta` and returns them in `CrewState.stream.width/height`. The viewer UI uses these values to display stream info before watching.
+
+**Path 2 — WebRTC signaling (for decoder initialization):**
+When the host responds to a viewer's WebRTC Offer with an Answer, it includes `stream_width` and `stream_height` in the `SignalEnvelope`:
+
+```rust
+// mello-core/src/voice/mesh.rs
+
+pub struct SignalEnvelope {
+    pub purpose: SignalPurpose,
+    pub message: SignalMessage,
+    /// Host encode resolution — included in Stream Answer so the viewer
+    /// can initialize the decoder at the correct size.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stream_width: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stream_height: Option<u32>,
+}
+```
+
+**Viewer deferred initialization:** The viewer does **not** create its decoder pipeline (`mello_stream_start_viewer`) when it sends the Offer. It waits for the Answer, reads the resolution from the envelope, and only then initializes the decoder at the correct dimensions. The `ViewerState.viewer` handle is `Option<*mut MelloStreamView>` — `None` until the Answer arrives.
+
+This prevents the resolution mismatch that occurs when the viewer assumes 1920x1080 but the host encodes at a different resolution (causes green screen / CUDA errors on NVDEC).
+
 ---
 
 ## 10. Input Passthrough (Stub)
@@ -557,7 +637,7 @@ The `StreamManager` holds an `Arc<dyn InputPassthrough>` initialised to `InputPa
 | Stream latency (LAN) | <20ms | Capture → decode → render |
 | Stream latency (WAN, 30ms ping) | <60ms | |
 | Encoder latency contribution | <8ms | See 14-VIDEO-PIPELINE.md |
-| FEC overhead | ≤20% bandwidth | N=5 default |
+| FEC overhead | 0–20% bandwidth | Adaptive: 0% healthy, 10% moderate, 20% high loss |
 | IDR frequency (stable network) | ≤1 per 120s | Keyframe interval only |
 | IDR frequency (lossy network) | ≤1 per 2s | Rate-limited floor |
 | Host CPU overhead (encoding) | <5% | HW encode; SW encode higher |

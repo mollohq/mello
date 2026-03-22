@@ -10,15 +10,23 @@ using Microsoft::WRL::ComPtr;
 
 namespace mello::video {
 
-class ColorConverter {
+class VideoPreprocessor {
 public:
-    ColorConverter() = default;
-    ~ColorConverter();
+    VideoPreprocessor() = default;
+    ~VideoPreprocessor();
 
+    /// Initialize with same input and output resolution (no scaling).
     bool initialize(const GraphicsDevice& device, uint32_t width, uint32_t height);
 
-    /// Convert BGRA source texture to NV12.
-    /// Output texture is owned by ColorConverter and reused across calls.
+    /// Initialize with separate input (capture) and output (encode) resolution.
+    /// The video processor handles high-quality bilinear downscaling in the
+    /// same pass as the BGRA→NV12 color conversion.
+    bool initialize(const GraphicsDevice& device,
+                    uint32_t in_w, uint32_t in_h,
+                    uint32_t out_w, uint32_t out_h);
+
+    /// Convert BGRA source texture to NV12 (and downscale if resolutions differ).
+    /// Output texture is owned by VideoPreprocessor and reused across calls.
     ID3D11Texture2D* convert(ID3D11Texture2D* bgra_source);
 
     void shutdown();
@@ -35,8 +43,10 @@ private:
     ComPtr<ID3D11VideoProcessorOutputView>    output_view_;
     ComPtr<ID3D11Texture2D>                   nv12_texture_;
 
-    uint32_t width_  = 0;
-    uint32_t height_ = 0;
+    uint32_t in_w_  = 0;
+    uint32_t in_h_  = 0;
+    uint32_t width_  = 0;  // output width
+    uint32_t height_ = 0;  // output height
     uint64_t frame_count_ = 0;
 };
 

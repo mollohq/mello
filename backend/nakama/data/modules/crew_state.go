@@ -51,6 +51,8 @@ type CrewStreamState struct {
 	Title             string `json:"title,omitempty"`
 	ViewerCount       int    `json:"viewer_count,omitempty"`
 	ThumbnailURL      string `json:"thumbnail_url,omitempty"`
+	Width             uint32 `json:"width,omitempty"`
+	Height            uint32 `json:"height,omitempty"`
 	ThumbnailUpdatedAt string `json:"thumbnail_updated_at,omitempty"`
 }
 
@@ -272,6 +274,8 @@ func getActiveStreamForCrew(ctx context.Context, nk runtime.NakamaModule, crewID
 		ViewerCount:       len(meta.ViewerIDs),
 		ThumbnailURL:      meta.ThumbnailURL,
 		ThumbnailUpdatedAt: meta.ThumbnailUpdatedAt,
+		Width:             meta.Width,
+		Height:            meta.Height,
 	}
 }
 

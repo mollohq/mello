@@ -96,15 +96,22 @@ bool VideoPipeline::start_host(const CaptureSourceDesc& source,
 
 #ifdef _WIN32
     // NV12 requires even dimensions (chroma plane is half-res)
-    encode_w_ = capture_->width()  & ~1u;
-    encode_h_ = capture_->height() & ~1u;
+    uint32_t cap_w = capture_->width()  & ~1u;
+    uint32_t cap_h = capture_->height() & ~1u;
+
+    // If the config specifies a target resolution smaller than the capture,
+    // the color converter will downscale in the same GPU pass as BGRA→NV12.
+    uint32_t target_w = (config.width  > 0 && config.width  < cap_w) ? (config.width  & ~1u) : cap_w;
+    uint32_t target_h = (config.height > 0 && config.height < cap_h) ? (config.height & ~1u) : cap_h;
+    encode_w_ = target_w;
+    encode_h_ = target_h;
     uint32_t enc_w = encode_w_;
     uint32_t enc_h = encode_h_;
 
-    // 2. Color converter
-    converter_ = std::make_unique<ColorConverter>();
-    if (!converter_->initialize(device_, enc_w, enc_h)) {
-        MELLO_LOG_ERROR(TAG, "Failed to initialize color converter");
+    // 2. Video preprocessor: BGRA→NV12 color conversion + GPU downscale
+    preprocessor_ = std::make_unique<VideoPreprocessor>();
+    if (!preprocessor_->initialize(device_, cap_w, cap_h, enc_w, enc_h)) {
+        MELLO_LOG_ERROR(TAG, "Failed to initialize video preprocessor");
         return false;
     }
 
@@ -154,7 +161,7 @@ void VideoPipeline::stop_host() {
     if (capture_)   capture_->stop();
     if (encoder_)   encoder_->shutdown();
 #ifdef _WIN32
-    if (converter_) converter_->shutdown();
+    if (preprocessor_) preprocessor_->shutdown();
 #endif
 
     uint64_t uptime_s = (now_us() - host_start_time_) / 1'000'000;
@@ -167,7 +174,7 @@ void VideoPipeline::stop_host() {
     capture_.reset();
     encoder_.reset();
 #ifdef _WIN32
-    converter_.reset();
+    preprocessor_.reset();
 #endif
 }
 
@@ -216,8 +223,8 @@ void VideoPipeline::on_captured_frame(ID3D11Texture2D* texture, uint64_t timesta
             frames_encoded_, cap_desc.Format, cap_desc.Width, cap_desc.Height, cap_desc.BindFlags);
     }
 
-    // Capture → Color Convert → Encode → Packet callback
-    ID3D11Texture2D* nv12 = converter_->convert(texture);
+    // Capture → Preprocess (color convert + downscale) → Encode → Packet callback
+    ID3D11Texture2D* nv12 = preprocessor_->convert(texture);
     if (!nv12) {
         MELLO_LOG_WARN(TAG, "on_captured_frame: convert() returned null");
         return;

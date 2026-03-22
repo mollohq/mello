@@ -26,8 +26,8 @@ impl QualityPreset {
                 height: 1080,
                 fps: 60,
                 bitrate_kbps: match codec {
-                    Codec::H264 => 20_000,
-                    Codec::Av1 => 12_000,
+                    Codec::H264 => 8_000,
+                    Codec::Av1 => 5_000,
                 },
                 fec_n: 5,
             },
@@ -36,8 +36,8 @@ impl QualityPreset {
                 height: 1080,
                 fps: 60,
                 bitrate_kbps: match codec {
-                    Codec::H264 => 12_000,
-                    Codec::Av1 => 7_000,
+                    Codec::H264 => 6_000,
+                    Codec::Av1 => 4_000,
                 },
                 fec_n: 5,
             },
@@ -46,8 +46,8 @@ impl QualityPreset {
                 height: 1080,
                 fps: 30,
                 bitrate_kbps: match codec {
-                    Codec::H264 => 8_000,
-                    Codec::Av1 => 5_000,
+                    Codec::H264 => 4_000,
+                    Codec::Av1 => 2_500,
                 },
                 fec_n: 4,
             },
@@ -56,8 +56,8 @@ impl QualityPreset {
                 height: 720,
                 fps: 30,
                 bitrate_kbps: match codec {
-                    Codec::H264 => 4_000,
-                    Codec::Av1 => 2_500,
+                    Codec::H264 => 2_500,
+                    Codec::Av1 => 1_500,
                 },
                 fec_n: 3,
             },
@@ -65,7 +65,7 @@ impl QualityPreset {
                 width: 1280,
                 height: 720,
                 fps: 30,
-                bitrate_kbps: 2_000,
+                bitrate_kbps: 1_500,
                 fec_n: 3,
             },
         }
@@ -114,7 +114,7 @@ impl StreamConfig {
 
 impl Default for StreamConfig {
     fn default() -> Self {
-        Self::from_preset(QualityPreset::High, Codec::H264)
+        Self::from_preset(QualityPreset::Medium, Codec::H264)
     }
 }
 
@@ -125,12 +125,12 @@ mod tests {
     #[test]
     fn preset_params_match_spec() {
         let ultra = QualityPreset::Ultra.params(Codec::H264);
-        assert_eq!(ultra.bitrate_kbps, 20_000);
+        assert_eq!(ultra.bitrate_kbps, 8_000);
         assert_eq!(ultra.fps, 60);
         assert_eq!(ultra.fec_n, 5);
 
         let potato = QualityPreset::Potato.params(Codec::H264);
-        assert_eq!(potato.bitrate_kbps, 2_000);
+        assert_eq!(potato.bitrate_kbps, 1_500);
         assert_eq!(potato.fec_n, 3);
         assert_eq!(potato.width, 1280);
     }
@@ -143,9 +143,9 @@ mod tests {
     }
 
     #[test]
-    fn default_config_is_high_h264() {
+    fn default_config_is_medium_h264() {
         let cfg = StreamConfig::default();
-        assert_eq!(cfg.preset, QualityPreset::High);
+        assert_eq!(cfg.preset, QualityPreset::Medium);
         assert_eq!(cfg.codec, Codec::H264);
     }
 }

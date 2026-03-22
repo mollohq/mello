@@ -22,9 +22,15 @@ struct ViewerLossState {
     healthy_since: Option<Instant>,
 }
 
+/// FEC group sizes for different loss conditions.
+const FEC_N_HEALTHY: usize = 0; // no FEC when loss < 1%
+const FEC_N_MODERATE: usize = 10; // 10% overhead when 1-5% loss
+const FEC_N_HIGH: usize = 5; // 20% overhead when > 5% loss
+
 #[derive(Debug, Clone)]
-pub struct BitrateChange {
-    pub new_bitrate_kbps: u32,
+pub struct AbrChange {
+    pub new_bitrate_kbps: Option<u32>,
+    pub new_fec_n: Option<usize>,
     pub reason: BitrateChangeReason,
 }
 
@@ -32,6 +38,7 @@ pub struct BitrateChange {
 pub enum BitrateChangeReason {
     StepDown { viewer_id: String, loss_pct: f32 },
     StepUp,
+    FecOnly,
 }
 
 /// Adaptive Bitrate controller. Host-driven, monitors per-viewer loss reports.
@@ -39,6 +46,7 @@ pub struct AbrController {
     current_bitrate_kbps: u32,
     min_bitrate_kbps: u32,
     max_bitrate_kbps: u32,
+    current_fec_n: usize,
     viewers: HashMap<String, ViewerLossState>,
 }
 
@@ -48,12 +56,17 @@ impl AbrController {
             current_bitrate_kbps: config.bitrate_kbps,
             min_bitrate_kbps: StreamConfig::min_bitrate_kbps(config.codec),
             max_bitrate_kbps: config.bitrate_kbps,
+            current_fec_n: 0,
             viewers: HashMap::new(),
         }
     }
 
     pub fn current_bitrate_kbps(&self) -> u32 {
         self.current_bitrate_kbps
+    }
+
+    pub fn current_fec_n(&self) -> usize {
+        self.current_fec_n
     }
 
     pub fn on_viewer_joined(&mut self, viewer_id: &str) {
@@ -70,47 +83,101 @@ impl AbrController {
         self.viewers.remove(viewer_id);
     }
 
-    /// Process a loss report from a viewer. Returns a bitrate change if
-    /// the ABR rules trigger an adjustment.
+    /// Process a loss report from a viewer. Returns changes to apply if the
+    /// ABR rules trigger a bitrate or FEC adjustment.
     pub fn process_loss_report(
         &mut self,
         viewer_id: &str,
         report: &LossReport,
-    ) -> Option<BitrateChange> {
+    ) -> Option<AbrChange> {
         let now = Instant::now();
         let loss = report.loss_ratio();
 
-        let state = self
-            .viewers
-            .entry(viewer_id.to_string())
-            .or_insert(ViewerLossState {
-                last_report: now,
-                healthy_since: Some(now),
-            });
-        state.last_report = now;
+        // Adaptive FEC: adjust group size based on loss ratio (before borrowing viewers)
+        let fec_change = self.update_fec(loss);
+
+        // Update per-viewer state
+        {
+            let state = self
+                .viewers
+                .entry(viewer_id.to_string())
+                .or_insert(ViewerLossState {
+                    last_report: now,
+                    healthy_since: Some(now),
+                });
+            state.last_report = now;
+
+            if loss > LOSS_STEP_DOWN_THRESHOLD {
+                state.healthy_since = None;
+            } else if loss < LOSS_STEP_UP_THRESHOLD {
+                if state.healthy_since.is_none() {
+                    state.healthy_since = Some(now);
+                }
+            } else {
+                state.healthy_since = None;
+            }
+        }
 
         if loss > LOSS_STEP_DOWN_THRESHOLD {
-            state.healthy_since = None;
-            return self.step_down(viewer_id, loss);
-        }
-
-        if loss < LOSS_STEP_UP_THRESHOLD {
-            if state.healthy_since.is_none() {
-                state.healthy_since = Some(now);
+            let mut change = self.step_down(viewer_id, loss);
+            if let Some(ref mut c) = change {
+                if fec_change.is_some() {
+                    c.new_fec_n = fec_change;
+                }
+            } else if let Some(new_fec) = fec_change {
+                return Some(AbrChange {
+                    new_bitrate_kbps: None,
+                    new_fec_n: Some(new_fec),
+                    reason: BitrateChangeReason::FecOnly,
+                });
             }
-        } else {
-            state.healthy_since = None;
+            return change;
         }
 
-        self.try_step_up(now)
+        let bitrate_change = self.try_step_up(now);
+        if bitrate_change.is_some() || fec_change.is_some() {
+            let mut change = bitrate_change.unwrap_or(AbrChange {
+                new_bitrate_kbps: None,
+                new_fec_n: None,
+                reason: BitrateChangeReason::FecOnly,
+            });
+            if fec_change.is_some() {
+                change.new_fec_n = fec_change;
+            }
+            Some(change)
+        } else {
+            None
+        }
     }
 
-    fn step_down(&mut self, viewer_id: &str, loss_pct: f32) -> Option<BitrateChange> {
+    fn update_fec(&mut self, loss: f32) -> Option<usize> {
+        let target = if loss > LOSS_STEP_DOWN_THRESHOLD {
+            FEC_N_HIGH
+        } else if loss > LOSS_STEP_UP_THRESHOLD {
+            FEC_N_MODERATE
+        } else {
+            FEC_N_HEALTHY
+        };
+        if target != self.current_fec_n {
+            log::info!(
+                "ABR FEC: fec_n {} -> {} (loss={:.1}%)",
+                self.current_fec_n,
+                target,
+                loss * 100.0
+            );
+            self.current_fec_n = target;
+            Some(target)
+        } else {
+            None
+        }
+    }
+
+    fn step_down(&mut self, viewer_id: &str, loss_pct: f32) -> Option<AbrChange> {
         let new_bitrate = (self.current_bitrate_kbps as f32 * STEP_DOWN_FACTOR) as u32;
         let new_bitrate = new_bitrate.max(self.min_bitrate_kbps);
 
         if new_bitrate >= self.current_bitrate_kbps {
-            return None; // already at floor
+            return None;
         }
 
         log::warn!(
@@ -122,8 +189,9 @@ impl AbrController {
         );
 
         self.current_bitrate_kbps = new_bitrate;
-        Some(BitrateChange {
-            new_bitrate_kbps: new_bitrate,
+        Some(AbrChange {
+            new_bitrate_kbps: Some(new_bitrate),
+            new_fec_n: None,
             reason: BitrateChangeReason::StepDown {
                 viewer_id: viewer_id.to_string(),
                 loss_pct,
@@ -131,7 +199,7 @@ impl AbrController {
         })
     }
 
-    fn try_step_up(&mut self, now: Instant) -> Option<BitrateChange> {
+    fn try_step_up(&mut self, now: Instant) -> Option<AbrChange> {
         if self.current_bitrate_kbps >= self.max_bitrate_kbps {
             return None;
         }
@@ -161,13 +229,13 @@ impl AbrController {
 
         self.current_bitrate_kbps = new_bitrate;
 
-        // Reset healthy_since to require another full window before next step-up
         for state in self.viewers.values_mut() {
             state.healthy_since = Some(now);
         }
 
-        Some(BitrateChange {
-            new_bitrate_kbps: new_bitrate,
+        Some(AbrChange {
+            new_bitrate_kbps: Some(new_bitrate),
+            new_fec_n: None,
             reason: BitrateChangeReason::StepUp,
         })
     }
@@ -195,14 +263,15 @@ mod tests {
         let change = abr.process_loss_report("v1", &report);
         assert!(change.is_some());
         let c = change.unwrap();
-        assert!(c.new_bitrate_kbps < 12_000);
-        assert_eq!(c.new_bitrate_kbps, 9_000); // 12000 * 0.75
+        assert!(c.new_bitrate_kbps.unwrap() < 6_000);
+        assert_eq!(c.new_bitrate_kbps.unwrap(), 4_500); // 6000 * 0.75
+        assert_eq!(c.new_fec_n, Some(FEC_N_HIGH));
     }
 
     #[test]
     fn no_step_down_below_floor() {
         let mut abr = AbrController::new(&default_config());
-        abr.current_bitrate_kbps = 2_000; // already at potato floor
+        abr.current_bitrate_kbps = 1_500; // already at potato floor
         abr.on_viewer_joined("v1");
 
         let report = LossReport {
@@ -210,13 +279,16 @@ mod tests {
             packets_lost: 20,
         };
         let change = abr.process_loss_report("v1", &report);
-        assert!(change.is_none());
+        // Bitrate can't go lower, but FEC should still activate
+        assert!(change.is_some());
+        assert!(change.as_ref().unwrap().new_bitrate_kbps.is_none());
+        assert_eq!(change.unwrap().new_fec_n, Some(FEC_N_HIGH));
     }
 
     #[test]
     fn no_step_up_without_duration() {
         let mut abr = AbrController::new(&default_config());
-        abr.current_bitrate_kbps = 8_000; // below max
+        abr.current_bitrate_kbps = 4_000; // below max
         abr.on_viewer_joined("v1");
 
         let report = LossReport {
@@ -226,5 +298,20 @@ mod tests {
         // Immediately after joining — not enough healthy duration
         let change = abr.process_loss_report("v1", &report);
         assert!(change.is_none());
+    }
+
+    #[test]
+    fn fec_adapts_to_moderate_loss() {
+        let mut abr = AbrController::new(&default_config());
+        abr.on_viewer_joined("v1");
+
+        // 3% loss — between step-up (1%) and step-down (5%) thresholds
+        let report = LossReport {
+            packets_received: 97,
+            packets_lost: 3,
+        };
+        let change = abr.process_loss_report("v1", &report);
+        assert!(change.is_some());
+        assert_eq!(change.unwrap().new_fec_n, Some(FEC_N_MODERATE));
     }
 }

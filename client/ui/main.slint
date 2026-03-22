@@ -1,7 +1,8 @@
 import { Theme } from "theme.slint";
-import { CrewData, MemberData, ChatMessageData, AudioDeviceData, VoiceChannelData, VoiceChannelMember, DiscoverCrewData, SearchUserData } from "types.slint";
+import { CrewData, MemberData, ChatMessageData, AudioDeviceData, VoiceChannelData, VoiceChannelMember, CaptureSourceData, DiscoverCrewData, SearchUserData } from "types.slint";
 import { CrewPanel } from "panels/crew_panel.slint";
 import { StreamView } from "panels/stream_view.slint";
+import { StreamSourcePicker } from "panels/stream_source_picker.slint";
 import { VoiceChannelView } from "panels/voice_channel_view.slint";
 import { ChatPanel } from "panels/chat_panel.slint";
 import { ControlBar } from "panels/control_bar.slint";
@@ -14,7 +15,7 @@ import { UpdateToast } from "panels/update_banner.slint";
 import { DiscoverPanel } from "panels/discover_panel.slint";
 
 
-export { CrewData, MemberData, ChatMessageData, AudioDeviceData, VoiceChannelData, VoiceChannelMember, DiscoverCrewData, SearchUserData, Theme }
+export { CrewData, MemberData, ChatMessageData, AudioDeviceData, VoiceChannelData, VoiceChannelMember, CaptureSourceData, DiscoverCrewData, SearchUserData, Theme }
 
 export component MainWindow inherits Window {
     title: "Mello";
@@ -95,6 +96,21 @@ export component MainWindow inherits Window {
     in-out property <float> settings-vad-threshold: -40.0;
     in property <string> settings-build-version: "v0.1.0";
     in-out property <bool> settings-show-saved: false;
+
+    // --- Streaming ---
+    in-out property <bool> source-picker-open: false;
+    in property <[CaptureSourceData]> stream-monitors: [];
+    in property <[CaptureSourceData]> stream-games: [];
+    in property <[CaptureSourceData]> stream-windows: [];
+    in property <bool> is-hosting: false;
+    in property <bool> is-watching: false;
+    in property <string> stream-label: "";
+    in property <string> streamer-name: "";
+    in property <image> stream-frame;
+    in property <string> active-streamer-id: "";
+    in property <string> active-streamer-name: "";
+    in property <int> active-stream-width: 0;
+    in property <int> active-stream-height: 0;
 
     // --- New crew modal ---
     in-out property <bool> new-crew-open: false;
@@ -182,6 +198,14 @@ export component MainWindow inherits Window {
     callback setting-changed-vad-threshold(float);
     callback settings-ptt-key-captured(/* key_text */ string, /* ctrl */ bool, /* alt */ bool, /* shift */ bool, /* meta */ bool);
     callback settings-reset-defaults();
+
+    // --- Streaming callbacks ---
+    callback list-capture-sources();
+    callback start-stream(/* source_id */ string, /* source_mode */ string, /* preset */ int);
+    callback stop-stream();
+    callback stop-watching();
+    callback watch-stream(/* host_id */ string, /* width */ int, /* height */ int);
+    callback stop-thumbnail-refresh();
 
     // --- Onboarding callbacks ---
     callback onboarding-crew-selected(string);
@@ -316,6 +340,22 @@ export component MainWindow inherits Window {
                     StreamView {
                         vertical-stretch: 1;
                         members: root.members;
+                        is-hosting: root.is-hosting;
+                        is-watching: root.is-watching;
+                        stream-label: root.stream-label;
+                        streamer-name: root.streamer-name;
+                        stream-frame: root.stream-frame;
+                        active-streamer-id: root.active-streamer-id;
+                        active-streamer-name: root.active-streamer-name;
+                        stream-width: root.active-stream-width;
+                        stream-height: root.active-stream-height;
+                        start-stream-clicked => {
+                            root.list-capture-sources();
+                            root.source-picker-open = true;
+                        }
+                        stop-stream-clicked => { root.stop-stream(); }
+                        stop-watching-clicked => { root.stop-watching(); }
+                        watch-stream-clicked(host-id, w, h) => { root.watch-stream(host-id, w, h); }
                     }
 
                     VoiceChannelView {
@@ -509,5 +549,20 @@ export component MainWindow inherits Window {
         setting-changed-vad-threshold(v) => { root.settings-show-saved = true; root.setting-changed-vad-threshold(v); }
         ptt-key-captured(key, ctrl, alt, shift, meta) => { root.settings-show-saved = true; root.settings-ptt-key-captured(key, ctrl, alt, shift, meta); }
         reset-defaults => { root.settings-show-saved = true; root.settings-reset-defaults(); }
+    }
+
+    // ===================== STREAM SOURCE PICKER OVERLAY =====================
+    if source-picker-open: StreamSourcePicker {
+        monitors: root.stream-monitors;
+        games: root.stream-games;
+        windows: root.stream-windows;
+        close-requested => {
+            root.source-picker-open = false;
+            root.stop-thumbnail-refresh();
+        }
+        start-stream(id, mode, preset) => {
+            root.source-picker-open = false;
+            root.start-stream(id, mode, preset);
+        }
     }
 }

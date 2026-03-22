@@ -3,6 +3,14 @@ use std::collections::HashMap;
 use std::ffi::{CStr, CString};
 use std::sync::{Arc, Mutex};
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SignalPurpose {
+    #[default]
+    Voice,
+    Stream,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum SignalMessage {
     Offer {
@@ -16,6 +24,22 @@ pub enum SignalMessage {
         sdp_mid: String,
         sdp_mline_index: i32,
     },
+}
+
+/// Wire-format envelope that wraps SignalMessage with a purpose discriminator.
+/// Old clients that omit `purpose` will deserialize as Voice (backward compat).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SignalEnvelope {
+    #[serde(default)]
+    pub purpose: SignalPurpose,
+    #[serde(flatten)]
+    pub message: SignalMessage,
+    /// Host encode resolution, included in Stream Answer so the viewer
+    /// can initialize the decoder at the correct size.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stream_width: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stream_height: Option<u32>,
 }
 
 struct IceCallbackData {

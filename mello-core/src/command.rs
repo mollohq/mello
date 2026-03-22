@@ -2,6 +2,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::presence::{Activity, PresenceStatus};
 
+fn default_preset() -> u32 {
+    2
+} // Medium
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Command {
     TryRestore,
@@ -107,14 +111,32 @@ pub enum Command {
     },
 
     // --- Streaming ---
+    ListCaptureSources,
+    StartThumbnailRefresh,
+    StopThumbnailRefresh,
     StartStream {
         crew_id: String,
         #[serde(default)]
         title: String,
+        #[serde(default)]
+        capture_mode: String,
+        #[serde(default)]
+        monitor_index: Option<u32>,
+        #[serde(default)]
+        hwnd: Option<u64>,
+        #[serde(default)]
+        pid: Option<u32>,
+        /// Quality preset index: 0=Ultra, 1=High, 2=Medium, 3=Low, 4=Potato
+        #[serde(default = "default_preset")]
+        preset: u32,
     },
     StopStream,
     WatchStream {
         host_id: String,
+        #[serde(default)]
+        width: u32,
+        #[serde(default)]
+        height: u32,
     },
     StopWatching,
 

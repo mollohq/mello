@@ -59,6 +59,18 @@ export struct AudioDeviceData {
     is-default: bool,
 }
 
+export struct CaptureSourceData {
+    id: string,
+    name: string,
+    mode: string,
+    pid: int,
+    exe: string,
+    is-fullscreen: bool,
+    resolution: string,
+    thumbnail: image,
+    has-thumbnail: bool,
+}
+
 export struct DiscoverCrewData {
     id: string,
     name: string,

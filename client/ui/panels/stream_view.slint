@@ -3,9 +3,23 @@ import { MemberData } from "../types.slint";
 
 export component StreamView inherits Rectangle {
     in property <[MemberData]> members: [];
-    in property <string> streamer-name: "k0ji_tech";
-    in property <string> stream-label: "COUNTER-STRIKE 2";
-    in property <bool> stream-live: true;
+    in property <string> streamer-name: "";
+    in property <string> stream-label: "";
+    in property <bool> is-hosting: false;
+    in property <bool> is-watching: false;
+    in property <image> stream-frame;
+    in property <string> active-streamer-id: "";
+    in property <string> active-streamer-name: "";
+    in property <int> stream-width: 0;
+    in property <int> stream-height: 0;
+
+    callback start-stream-clicked();
+    callback stop-stream-clicked();
+    callback stop-watching-clicked();
+    callback watch-stream-clicked(/* host_id */ string, /* width */ int, /* height */ int);
+
+    property <bool> stream-active: is-hosting || is-watching;
+    property <bool> crew-has-stream: active-streamer-id != "";
 
     vertical-stretch: 1;
     background: Theme.surface;
@@ -27,7 +41,7 @@ export component StreamView inherits Rectangle {
                 alignment: start;
 
                 Text {
-                    text: "CREWMATE STREAM";
+                    text: is-hosting ? "YOUR STREAM" : (is-watching ? "CREWMATE STREAM" : "STREAM");
                     font-size: Theme.font-sm;
                     font-weight: 600;
                     letter-spacing: 1.3px;
@@ -37,24 +51,28 @@ export component StreamView inherits Rectangle {
                 Rectangle { height: 4px; }
 
                 Text {
-                    text: streamer-name != "" ? streamer-name : "No stream";
+                    text: stream-active && streamer-name != ""
+                        ? streamer-name
+                        : (crew-has-stream ? active-streamer-name + " is live" : "No active stream");
                     font-size: Theme.font-xl;
                     font-weight: 500;
                     color: Theme.text-primary;
                 }
             }
 
-            // Live badge
-            if stream-live: Rectangle {
-                width: 110px;
+            // Live badge (hosting or watching)
+            if stream-active: Rectangle {
+                width: live-row.preferred-width + 20px;
                 height: 28px;
                 background: Theme.bg-app;
                 border-radius: Theme.r-pill;
                 y: 0;
 
-                HorizontalLayout {
+                live-row := HorizontalLayout {
                     alignment: center;
                     spacing: 8px;
+                    padding-left: 10px;
+                    padding-right: 10px;
 
                     Rectangle {
                         width: 6px;
@@ -64,7 +82,7 @@ export component StreamView inherits Rectangle {
                     }
 
                     Text {
-                        text: "00:42:15";
+                        text: is-hosting ? "HOSTING" : "LIVE";
                         font-family: Theme.font-mono;
                         font-size: Theme.font-sm;
                         color: Theme.text-primary;
@@ -72,48 +90,170 @@ export component StreamView inherits Rectangle {
                     }
                 }
             }
+
+            // Stop button (visible when hosting or watching)
+            if stream-active: Rectangle {
+                width: stop-text.preferred-width + 24px;
+                height: 28px;
+                border-radius: Theme.r-pill;
+                background: stop-ta.has-hover ? Theme.accent : Theme.bg-app;
+                border-width: 1px;
+                border-color: stop-ta.has-hover ? Theme.accent : Theme.graphic-light;
+                y: 0;
+
+                stop-text := Text {
+                    text: is-hosting ? "STOP" : "LEAVE";
+                    font-family: Theme.font-mono;
+                    font-size: Theme.font-sm;
+                    font-weight: 500;
+                    color: stop-ta.has-hover ? #FFFFFF : Theme.text-secondary;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+
+                stop-ta := TouchArea {
+                    clicked => {
+                        if is-hosting { stop-stream-clicked(); }
+                        else { stop-watching-clicked(); }
+                    }
+                }
+            }
         }
 
         Rectangle { height: 16px; }
 
-        // --- Stream preview area ---
+        // --- Stream display area ---
         Rectangle {
             vertical-stretch: 1;
             background: Theme.bg-app;
             border-radius: Theme.r-inner;
             clip: true;
 
-            if stream-live: Image {
-                source: @image-url("../../../designs/example-images/Counter-Strike-2.jpg");
+            // Live frame (watching another member's stream)
+            if is-watching: Image {
+                source: stream-frame;
                 width: parent.width;
                 height: parent.height;
-                image-fit: cover;
+                image-fit: contain;
             }
 
-            // Placeholder art when no stream
-            if !stream-live: Rectangle {
-                width: parent.width * 60%;
-                height: 4px;
-                background: Theme.graphic-med;
-                border-radius: 2px;
-                x: (parent.width - self.width) / 2;
-                y: (parent.height - self.height) / 2;
+            // Hosting indicator (no self-preview)
+            if is-hosting: VerticalLayout {
+                alignment: center;
+                spacing: 12px;
+
+                Text {
+                    text: "STREAMING";
+                    font-family: Theme.font-mono;
+                    font-size: 14px;
+                    font-weight: 600;
+                    letter-spacing: 2px;
+                    color: Theme.accent;
+                    horizontal-alignment: center;
+                }
+
+                Text {
+                    text: "Your crew can see your screen";
+                    font-size: 13px;
+                    color: Theme.text-secondary;
+                    horizontal-alignment: center;
+                }
             }
-            if !stream-live: Rectangle {
-                width: 64px;
-                height: 4px;
-                background: Theme.graphic-dark;
-                border-radius: 2px;
-                x: parent.width * 28%;
-                y: parent.height / 2 - 32px;
+
+            // Idle state — someone is live, show WATCH button
+            if !stream-active && crew-has-stream: VerticalLayout {
+                alignment: center;
+                spacing: 16px;
+
+                Rectangle {
+                    width: watch-row.preferred-width + 32px;
+                    height: 40px;
+                    border-radius: 6px;
+                    background: watch-ta.has-hover ? Theme.accent : Theme.bg-app;
+                    border-width: 1px;
+                    border-color: watch-ta.has-hover ? Theme.accent : Theme.graphic-light;
+                    x: (parent.width - self.width) / 2;
+
+                    watch-row := HorizontalLayout {
+                        alignment: center;
+                        spacing: 8px;
+                        padding-left: 16px;
+                        padding-right: 16px;
+
+                        Text {
+                            text: "▶";
+                            font-size: 11px;
+                            color: watch-ta.has-hover ? #FFFFFF : Theme.text-secondary;
+                            vertical-alignment: center;
+                        }
+
+                        Text {
+                            text: "WATCH STREAM";
+                            font-family: Theme.font-mono;
+                            font-size: 13px;
+                            font-weight: 600;
+                            letter-spacing: 1px;
+                            color: watch-ta.has-hover ? #FFFFFF : Theme.text-secondary;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    watch-ta := TouchArea {
+                        clicked => { watch-stream-clicked(active-streamer-id, stream-width, stream-height); }
+                    }
+                }
             }
-            if !stream-live: Rectangle {
-                width: parent.width * 18%;
-                height: 4px;
-                background: Theme.graphic-light;
-                border-radius: 2px;
-                x: parent.width * 56%;
-                y: parent.height / 2 + 28px;
+
+            // Idle state — no stream at all
+            if !stream-active && !crew-has-stream: VerticalLayout {
+                alignment: center;
+                spacing: 16px;
+
+                Rectangle {
+                    width: parent.width * 60%;
+                    height: 4px;
+                    background: Theme.graphic-med;
+                    border-radius: 2px;
+                    x: (parent.width - self.width) / 2;
+                }
+
+                Rectangle {
+                    width: go-live-row.preferred-width + 32px;
+                    height: 40px;
+                    border-radius: 6px;
+                    background: go-live-ta.has-hover ? Theme.accent : Theme.bg-app;
+                    border-width: 1px;
+                    border-color: go-live-ta.has-hover ? Theme.accent : Theme.graphic-light;
+                    x: (parent.width - self.width) / 2;
+
+                    go-live-row := HorizontalLayout {
+                        alignment: center;
+                        spacing: 8px;
+                        padding-left: 16px;
+                        padding-right: 16px;
+
+                        Text {
+                            text: "▶";
+                            font-size: 11px;
+                            color: go-live-ta.has-hover ? #FFFFFF : Theme.text-secondary;
+                            vertical-alignment: center;
+                        }
+
+                        Text {
+                            text: "GO LIVE";
+                            font-family: Theme.font-mono;
+                            font-size: 13px;
+                            font-weight: 600;
+                            letter-spacing: 1px;
+                            color: go-live-ta.has-hover ? #FFFFFF : Theme.text-secondary;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    go-live-ta := TouchArea {
+                        clicked => { start-stream-clicked(); }
+                    }
+                }
             }
         }
 
@@ -132,22 +272,6 @@ export component StreamView inherits Rectangle {
                 color: Theme.text-secondary;
                 vertical-alignment: center;
                 horizontal-stretch: 1;
-            }
-
-            // Scrub bar
-            if stream-live: Rectangle {
-                width: 240px;
-                height: 6px;
-                background: Theme.bg-app;
-                border-radius: 3px;
-                y: (parent.height - self.height) / 2;
-
-                Rectangle {
-                    width: parent.width * 45%;
-                    height: parent.height;
-                    background: Theme.graphic-dark;
-                    border-radius: 3px;
-                }
             }
         }
     }

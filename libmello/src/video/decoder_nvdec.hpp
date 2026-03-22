@@ -26,10 +26,14 @@ private:
     typedef int (*CuDeviceGet_t)(int*, int);
     typedef int (*CuCtxCreate_t)(void**, unsigned int, int);
     typedef int (*CuCtxDestroy_t)(void*);
+    typedef int (*CuCtxPushCurrent_t)(void*);
+    typedef int (*CuCtxPopCurrent_t)(void**);
 
     HMODULE cuda_dll_   = nullptr;
     HMODULE cuvid_dll_  = nullptr;
     void*   cu_context_ = nullptr;
+    CuCtxPushCurrent_t cuCtxPush_ = nullptr;
+    CuCtxPopCurrent_t  cuCtxPop_  = nullptr;
 
     CUvideodecoder decoder_ = nullptr;
     CUvideoparser  parser_  = nullptr;
