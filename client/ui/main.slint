@@ -269,6 +269,7 @@ export component MainWindow inherits Window {
             // LEFT: Crew sidebar
             CrewPanel {
                 width: 280px;
+                horizontal-stretch: 0;
                 crews: root.crews;
                 active-crew-id: root.active-crew-id;
                 crew-selected(id) => {
@@ -286,67 +287,80 @@ export component MainWindow inherits Window {
                 }
             }
 
-            // CENTER: stage area + controls bar  OR  discover panel
-            if !root.show-discover: VerticalLayout {
+            // RIGHT: discover OR (center stage + chat)
+            // Uses a plain Rectangle with absolute positioning inside to
+            // avoid any Slint layout interference from conditional `if` slots.
+            Rectangle {
                 horizontal-stretch: 1;
-                spacing: Theme.gap;
 
-                StreamView {
-                    vertical-stretch: 1;
-                    members: root.members;
+                property <length> chat-w: 340px;
+
+                if root.show-discover: DiscoverPanel {
+                    width: parent.width;
+                    height: parent.height;
+                    crews: root.discover-crews-list;
+                    bento-set-bases: root.discover-bento-bases;
+                    join-crew(id) => { root.discover-join-crew(id); }
+                    join-invite(code) => { root.discover-join-invite(code); }
+                    back-requested => { root.show-discover = false; }
+                    load-more => { root.discover-load-more(); }
                 }
 
-                VoiceChannelView {
-                    voice-channels: root.voice-channels;
-                    mic-permission-granted: root.mic-permission-granted;
-                    join-voice-channel(id) => { root.join-voice-channel(id); }
-                    toggle-channel(id) => { root.toggle-voice-channel(id); }
-                }
+                if !root.show-discover: VerticalLayout {
+                    x: 0;
+                    y: 0;
+                    width: parent.width - parent.chat-w - Theme.gap;
+                    height: parent.height;
+                    spacing: Theme.gap;
 
-                ControlBar {
-                    height: 92px;
-                    user-name: root.user-name;
-                    user-initials: root.user-initials;
-                    user-tag: root.user-tag;
-                    mic-muted <=> root.mic-muted;
-                    deafened <=> root.deafened;
-                    in-voice: root.in-voice;
-                    mic-permission-granted: root.mic-permission-granted;
-                    mic-permission-denied: root.mic-permission-denied;
-                    presence-status <=> root.presence-status;
-                    mic-toggled => { root.mic-toggle(); }
-                    deafen-toggled => { root.deafen-toggle(); }
-                    voice-toggled => { root.voice-toggle(); }
-                    logout-clicked => { root.logout(); }
-                    presence-changed(status) => { root.presence-changed(status); }
-                    theme-toggled => { root.theme-toggled(); }
-                    settings-clicked => { root.settings-requested(); }
-                    request-mic-permission => { root.request-mic-permission(); }
-                    open-mic-settings => { root.open-mic-settings(); }
-                    debug-toggled => {
-                        root.debug-open = !root.debug-open;
-                        root.debug-toggled();
+                    StreamView {
+                        vertical-stretch: 1;
+                        members: root.members;
+                    }
+
+                    VoiceChannelView {
+                        voice-channels: root.voice-channels;
+                        mic-permission-granted: root.mic-permission-granted;
+                        join-voice-channel(id) => { root.join-voice-channel(id); }
+                        toggle-channel(id) => { root.toggle-voice-channel(id); }
+                    }
+
+                    ControlBar {
+                        height: 92px;
+                        user-name: root.user-name;
+                        user-initials: root.user-initials;
+                        user-tag: root.user-tag;
+                        mic-muted <=> root.mic-muted;
+                        deafened <=> root.deafened;
+                        in-voice: root.in-voice;
+                        mic-permission-granted: root.mic-permission-granted;
+                        mic-permission-denied: root.mic-permission-denied;
+                        presence-status <=> root.presence-status;
+                        mic-toggled => { root.mic-toggle(); }
+                        deafen-toggled => { root.deafen-toggle(); }
+                        voice-toggled => { root.voice-toggle(); }
+                        logout-clicked => { root.logout(); }
+                        presence-changed(status) => { root.presence-changed(status); }
+                        theme-toggled => { root.theme-toggled(); }
+                        settings-clicked => { root.settings-requested(); }
+                        request-mic-permission => { root.request-mic-permission(); }
+                        open-mic-settings => { root.open-mic-settings(); }
+                        debug-toggled => {
+                            root.debug-open = !root.debug-open;
+                            root.debug-toggled();
+                        }
                     }
                 }
-            }
 
-            if root.show-discover: DiscoverPanel {
-                horizontal-stretch: 1;
-                crews: root.discover-crews-list;
-                bento-set-bases: root.discover-bento-bases;
-                join-crew(id) => { root.discover-join-crew(id); }
-                join-invite(code) => { root.discover-join-invite(code); }
-                back-requested => { root.show-discover = false; }
-                load-more => { root.discover-load-more(); }
-            }
-
-            // RIGHT: Chat panel
-            if !root.show-discover: ChatPanel {
-                horizontal-stretch: 0;
-                width: 340px;
-                messages: root.messages;
-                user-name: root.user-name;
-                message-submitted(text) => { root.send-message(text); }
+                if !root.show-discover: ChatPanel {
+                    x: parent.width - parent.chat-w;
+                    y: 0;
+                    width: parent.chat-w;
+                    height: parent.height;
+                    messages: root.messages;
+                    user-name: root.user-name;
+                    message-submitted(text) => { root.send-message(text); }
+                }
             }
         }
     }

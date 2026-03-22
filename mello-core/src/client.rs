@@ -1141,6 +1141,14 @@ impl Client {
             }
         };
 
+        // Fetch members first so the display name cache is populated for chat messages
+        if let Ok(members) = self.nakama.list_group_users(crew_id).await {
+            let user_ids: Vec<String> = members.iter().map(|m| m.id.clone()).collect();
+            if let Err(e) = self.nakama.follow_users(&user_ids).await {
+                log::warn!("Failed to follow users: {}", e);
+            }
+        }
+
         // Wait for WS reader to set channel_id (up to 2s)
         let channel_id = self.wait_for_channel_id().await;
         if let Some(ch_id) = channel_id {
@@ -1153,16 +1161,9 @@ impl Client {
             }
         }
 
-        if let Ok(members) = self.nakama.list_group_users(crew_id).await {
-            let user_ids: Vec<String> = members.iter().map(|m| m.id.clone()).collect();
-            if let Err(e) = self.nakama.follow_users(&user_ids).await {
-                log::warn!("Failed to follow users: {}", e);
-            }
-
-            // Auto-join voice (last-used channel, or default if first time)
-            if let Some(ch_id) = &voice_channel_id {
-                self.handle_join_voice(ch_id).await;
-            }
+        // Auto-join voice (last-used channel, or default if first time)
+        if let Some(ch_id) = &voice_channel_id {
+            self.handle_join_voice(ch_id).await;
         }
     }
 
