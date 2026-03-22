@@ -1,4 +1,5 @@
 use futures::{SinkExt, StreamExt};
+use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock};
 use tokio_tungstenite::tungstenite::Message;
@@ -45,6 +46,8 @@ pub struct NakamaClient {
     signal_tx_template: Option<mpsc::Sender<InternalSignal>>,
     presence_rx: Option<mpsc::Receiver<InternalPresence>>,
     presence_tx_template: Option<mpsc::Sender<InternalPresence>>,
+    /// user_id -> display_name cache, shared with the WS reader task
+    member_names: Arc<RwLock<HashMap<String, String>>>,
 }
 
 impl NakamaClient {
@@ -63,6 +66,7 @@ impl NakamaClient {
             next_cid: 1,
             signal_rx: Some(sig_rx),
             signal_tx_template: Some(sig_tx),
+            member_names: Arc::new(RwLock::new(HashMap::new())),
             presence_rx: Some(pres_rx),
             presence_tx_template: Some(pres_tx),
         }
@@ -431,6 +435,7 @@ impl NakamaClient {
             shared,
             signal_tx,
             presence_tx,
+            self.member_names.clone(),
         ));
 
         log::info!("WebSocket connected");
@@ -1117,7 +1122,8 @@ impl NakamaClient {
         }
 
         let list: ApiChannelMessageList = resp.json().await?;
-        Ok(parse_channel_messages(list))
+        let names = self.member_names.read().await;
+        Ok(parse_channel_messages(list, &names))
     }
 
     // --- Crew members ---
@@ -1133,7 +1139,7 @@ impl NakamaClient {
         }
 
         let list: ApiGroupUserList = resp.json().await?;
-        let members = list
+        let members: Vec<Member> = list
             .group_users
             .unwrap_or_default()
             .into_iter()
@@ -1147,6 +1153,18 @@ impl NakamaClient {
                 })
             })
             .collect();
+
+        {
+            let mut names = self.member_names.write().await;
+            for m in &members {
+                let name = if m.display_name.is_empty() {
+                    &m.username
+                } else {
+                    &m.display_name
+                };
+                names.insert(m.id.clone(), name.clone());
+            }
+        }
 
         Ok(members)
     }
@@ -1207,7 +1225,10 @@ impl NakamaClient {
 
 // --- Message parsing (extracted for testability) ---
 
-pub(crate) fn parse_channel_messages(list: ApiChannelMessageList) -> Vec<ChatMessage> {
+pub(crate) fn parse_channel_messages(
+    list: ApiChannelMessageList,
+    member_names: &HashMap<String, String>,
+) -> Vec<ChatMessage> {
     list.messages
         .unwrap_or_default()
         .into_iter()
@@ -1220,13 +1241,18 @@ pub(crate) fn parse_channel_messages(list: ApiChannelMessageList) -> Vec<ChatMes
             }
             let text = serde_json::from_str::<ChatContent>(content_str)
                 .ok()
-                .and_then(|c| c.text)
-                .unwrap_or_else(|| content_str.to_string());
+                .and_then(|c| c.text)?;
+
+            let sender_id = m.sender_id.unwrap_or_default();
+            let sender_name = member_names
+                .get(&sender_id)
+                .cloned()
+                .unwrap_or_else(|| m.username.unwrap_or_default());
 
             Some(ChatMessage {
                 message_id: m.message_id.unwrap_or_default(),
-                sender_id: m.sender_id.unwrap_or_default(),
-                sender_name: m.username.unwrap_or_default(),
+                sender_id,
+                sender_name,
                 content: text,
                 timestamp: m.create_time.unwrap_or_default(),
             })
@@ -1263,11 +1289,20 @@ async fn ws_reader_task(
     shared: Arc<RwLock<WsShared>>,
     signal_tx: mpsc::Sender<InternalSignal>,
     presence_tx: mpsc::Sender<InternalPresence>,
+    member_names: Arc<RwLock<HashMap<String, String>>>,
 ) {
     while let Some(msg) = read.next().await {
         match msg {
             Ok(Message::Text(text)) => {
-                handle_ws_message(&text, &event_tx, &shared, &signal_tx, &presence_tx).await;
+                handle_ws_message(
+                    &text,
+                    &event_tx,
+                    &shared,
+                    &signal_tx,
+                    &presence_tx,
+                    &member_names,
+                )
+                .await;
             }
             Ok(Message::Close(_)) => {
                 log::info!("WebSocket closed by server");
@@ -1291,6 +1326,7 @@ async fn handle_ws_message(
     shared: &Arc<RwLock<WsShared>>,
     signal_tx: &mpsc::Sender<InternalSignal>,
     presence_tx: &mpsc::Sender<InternalPresence>,
+    member_names: &Arc<RwLock<HashMap<String, String>>>,
 ) {
     let envelope: WsEnvelope = match serde_json::from_str(text) {
         Ok(e) => e,
@@ -1349,16 +1385,28 @@ async fn handle_ws_message(
             }
         }
 
-        let text = serde_json::from_str::<ChatContent>(&content_str)
+        let text = match serde_json::from_str::<ChatContent>(&content_str)
             .ok()
             .and_then(|c| c.text)
-            .unwrap_or(content_str);
+        {
+            Some(t) => t,
+            None => return, // skip non-chat messages (empty JSON, system messages, etc.)
+        };
+
+        let sender_id = msg.sender_id.unwrap_or_default();
+        let sender_name = {
+            let names = member_names.read().await;
+            names
+                .get(&sender_id)
+                .cloned()
+                .unwrap_or_else(|| msg.username.unwrap_or_default())
+        };
 
         let _ = event_tx.send(Event::MessageReceived {
             message: ChatMessage {
                 message_id: msg.message_id.unwrap_or_default(),
-                sender_id: msg.sender_id.unwrap_or_default(),
-                sender_name: msg.username.unwrap_or_default(),
+                sender_id,
+                sender_name,
                 content: text,
                 timestamp: msg.create_time.unwrap_or_default(),
             },
@@ -1510,6 +1558,17 @@ mod tests {
         }
     }
 
+    fn empty_names() -> HashMap<String, String> {
+        HashMap::new()
+    }
+
+    fn names_with(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
     #[test]
     fn deserialize_channel_message_list() {
         let json = r#"{
@@ -1547,11 +1606,29 @@ mod tests {
             prev_cursor: None,
         };
 
-        let result = parse_channel_messages(list);
+        let result = parse_channel_messages(list, &empty_names());
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].content, "hello world");
         assert_eq!(result[0].sender_name, "alice");
         assert_eq!(result[0].sender_id, "u1");
+    }
+
+    #[test]
+    fn parse_resolves_display_name_from_cache() {
+        let list = ApiChannelMessageList {
+            messages: Some(vec![make_api_msg(
+                r#"{"text":"hello"}"#,
+                "u1",
+                "VObaZMuWUa",
+            )]),
+            next_cursor: None,
+            prev_cursor: None,
+        };
+
+        let names = names_with(&[("u1", "Bob")]);
+        let result = parse_channel_messages(list, &names);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].sender_name, "Bob");
     }
 
     #[test]
@@ -1570,10 +1647,28 @@ mod tests {
             prev_cursor: None,
         };
 
-        let result = parse_channel_messages(list);
+        let result = parse_channel_messages(list, &empty_names());
         assert_eq!(result.len(), 2);
         assert_eq!(result[0].content, "hi");
         assert_eq!(result[1].content, "bye");
+    }
+
+    #[test]
+    fn parse_filters_out_empty_json_messages() {
+        let list = ApiChannelMessageList {
+            messages: Some(vec![
+                make_api_msg(r#"{"text":"real msg"}"#, "u1", "alice"),
+                make_api_msg(r#"{}"#, "u2", "bob"),
+                make_api_msg(r#"{"text":"also real"}"#, "u3", "carol"),
+            ]),
+            next_cursor: None,
+            prev_cursor: None,
+        };
+
+        let result = parse_channel_messages(list, &empty_names());
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].content, "real msg");
+        assert_eq!(result[1].content, "also real");
     }
 
     #[test]
@@ -1583,18 +1678,18 @@ mod tests {
             next_cursor: None,
             prev_cursor: None,
         };
-        assert!(parse_channel_messages(list).is_empty());
+        assert!(parse_channel_messages(list, &empty_names()).is_empty());
 
         let list2 = ApiChannelMessageList {
             messages: Some(vec![]),
             next_cursor: None,
             prev_cursor: None,
         };
-        assert!(parse_channel_messages(list2).is_empty());
+        assert!(parse_channel_messages(list2, &empty_names()).is_empty());
     }
 
     #[test]
-    fn parse_handles_missing_fields_gracefully() {
+    fn parse_skips_messages_with_no_text_field() {
         let list = ApiChannelMessageList {
             messages: Some(vec![ApiChannelMessage {
                 channel_id: None,
@@ -1609,24 +1704,20 @@ mod tests {
             prev_cursor: None,
         };
 
-        let result = parse_channel_messages(list);
-        assert_eq!(result.len(), 1);
-        assert_eq!(result[0].content, "");
-        assert_eq!(result[0].sender_name, "");
-        assert_eq!(result[0].message_id, "");
+        let result = parse_channel_messages(list, &empty_names());
+        assert!(result.is_empty());
     }
 
     #[test]
-    fn parse_falls_back_to_raw_content_when_not_json() {
+    fn parse_skips_non_json_content() {
         let list = ApiChannelMessageList {
             messages: Some(vec![make_api_msg("plain text, not json", "u1", "alice")]),
             next_cursor: None,
             prev_cursor: None,
         };
 
-        let result = parse_channel_messages(list);
-        assert_eq!(result.len(), 1);
-        assert_eq!(result[0].content, "plain text, not json");
+        let result = parse_channel_messages(list, &empty_names());
+        assert!(result.is_empty());
     }
 
     #[test]
@@ -1641,7 +1732,7 @@ mod tests {
             prev_cursor: None,
         };
 
-        let result = parse_channel_messages(list);
+        let result = parse_channel_messages(list, &empty_names());
         assert_eq!(result.len(), 1);
     }
 
@@ -1691,7 +1782,7 @@ mod tests {
         }"#;
 
         let list: ApiChannelMessageList = serde_json::from_str(json).unwrap();
-        let result = parse_channel_messages(list);
+        let result = parse_channel_messages(list, &empty_names());
 
         assert_eq!(result.len(), 2, "signal messages should be filtered");
         assert_eq!(result[0].sender_name, "bob");
