@@ -248,7 +248,7 @@ We hang out on m3llo itself.
 
 - **m3llo crew:** [m3llo.app/crew/m3llo](https://m3llo.app/crew/m3llo)
 - **Reddit:** [r/m3llo_app](https://reddit.com/r/m3llo_app)
-- **Bluesky:** [@m3llo.app](https://bsky.app/profile/m3llo.app)
+- **Bluesky:** [@m3lloapp](https://bsky.app/profile/m3lloapp.bsky.social)
 
 ---
 
