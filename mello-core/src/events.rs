@@ -20,6 +20,9 @@ pub struct ChatMessage {
     pub sender_name: String,
     pub content: String,
     pub timestamp: String,
+    pub create_time: String,
+    pub update_time: String,
+    pub gif: Option<crate::chat::GifData>,
 }
 
 #[derive(Debug, Clone)]
@@ -117,6 +120,21 @@ pub enum Event {
     },
     MessagesLoaded {
         messages: Vec<ChatMessage>,
+    },
+    HistoryLoaded {
+        messages: Vec<ChatMessage>,
+        cursor: Option<String>,
+    },
+    ChatMessageEdited {
+        message_id: String,
+        new_content: String,
+        update_time: String,
+    },
+    ChatMessageDeleted {
+        message_id: String,
+    },
+    GifsLoaded {
+        gifs: Vec<crate::chat::GifData>,
     },
 
     VoiceStateChanged {

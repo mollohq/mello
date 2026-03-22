@@ -162,6 +162,7 @@ pub struct WsChannelMessage {
     pub username: Option<String>,
     pub content: Option<String>,
     pub create_time: Option<String>,
+    pub update_time: Option<String>,
     pub code: Option<i32>,
 }
 
@@ -237,6 +238,7 @@ pub struct ApiChannelMessage {
     pub username: Option<String>,
     pub content: Option<String>,
     pub create_time: Option<String>,
+    pub update_time: Option<String>,
     pub code: Option<i32>,
 }
 

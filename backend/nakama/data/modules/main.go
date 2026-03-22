@@ -59,8 +59,11 @@ func InitModule(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runti
 	}
 
 	// -----------------------------------------------------------------------
-	// Chat hooks (RegisterAfterRt for channel messages)
+	// Chat hooks
 	// -----------------------------------------------------------------------
+	if err := initializer.RegisterBeforeRt("ChannelMessageSend", BeforeChannelMessageSendHook); err != nil {
+		return err
+	}
 	if err := initializer.RegisterAfterRt("ChannelMessageSend", OnChatMessage); err != nil {
 		return err
 	}

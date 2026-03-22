@@ -1,5 +1,5 @@
 import { Theme } from "theme.slint";
-import { CrewData, MemberData, ChatMessageData, AudioDeviceData, VoiceChannelData, VoiceChannelMember, CaptureSourceData, DiscoverCrewData, SearchUserData } from "types.slint";
+import { CrewData, MemberData, ChatMessageData, GifItemData, AudioDeviceData, VoiceChannelData, VoiceChannelMember, CaptureSourceData, DiscoverCrewData, SearchUserData } from "types.slint";
 import { CrewPanel } from "panels/crew_panel.slint";
 import { StreamView } from "panels/stream_view.slint";
 import { StreamSourcePicker } from "panels/stream_source_picker.slint";
@@ -60,6 +60,8 @@ export component MainWindow inherits Window {
     // --- Members / chat ---
     in property <[MemberData]> members: [];
     in property <[ChatMessageData]> messages: [];
+    in property <[GifItemData]> gif-results: [];
+    in property <bool> loading-history: false;
 
     // --- Voice ---
     in-out property <bool> mic-muted: false;
@@ -168,6 +170,15 @@ export component MainWindow inherits Window {
     callback new-crew-uninvite-user(/* id */ string);
     callback new-crew-copy-invite-code();
     callback send-message(string);
+    callback send-message-with-reply(/* text */ string, /* reply_to */ string);
+    callback request-history();
+    callback edit-message(/* message_id */ string, /* new_body */ string);
+    callback delete-message(/* message_id */ string);
+    callback gif-pill-clicked();
+    callback gif-search(/* query */ string);
+    callback gif-selected(/* gif_id */ string, /* url */ string, /* preview_url */ string, /* width */ int, /* height */ int);
+    callback gif-hovered(/* preview_url */ string);
+    callback emoji-pill-clicked();
     callback mic-toggle();
     callback deafen-toggle();
     callback voice-toggle();
@@ -398,8 +409,20 @@ export component MainWindow inherits Window {
                     width: parent.chat-w;
                     height: parent.height;
                     messages: root.messages;
+                    gif-results: root.gif-results;
                     user-name: root.user-name;
+                    user-id: root.user-id;
+                    loading-history: root.loading-history;
                     message-submitted(text) => { root.send-message(text); }
+                    message-submitted-with-reply(text, reply-to) => { root.send-message-with-reply(text, reply-to); }
+                    request-history() => { root.request-history(); }
+                    edit-message(id, body) => { root.edit-message(id, body); }
+                    delete-message(id) => { root.delete-message(id); }
+                    gif-pill-clicked() => { root.gif-pill-clicked(); }
+                    gif-search(query) => { root.gif-search(query); }
+                    gif-selected(tid, url, purl, w, h) => { root.gif-selected(tid, url, purl, w, h); }
+                    gif-hovered(purl) => { root.gif-hovered(purl); }
+                    emoji-pill-clicked() => { root.emoji-pill-clicked(); }
                 }
             }
         }

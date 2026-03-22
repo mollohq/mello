@@ -1,10 +1,204 @@
 import { Theme } from "../theme.slint";
-import { ChatMessageData } from "../types.slint";
+import { ChatMessageData, GifItemData } from "../types.slint";
+
+component AvatarCircle inherits Rectangle {
+    in property <string> initials;
+    width: 28px;
+    height: 28px;
+    border-radius: 14px;
+    background: Theme.graphic-light;
+
+    Text {
+        text: initials;
+        font-size: 10px;
+        font-family: Theme.font-mono;
+        font-weight: 600;
+        color: Theme.text-secondary;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
+
+component PillButton inherits Rectangle {
+    in property <image> icon;
+    in property <string> label;
+    in property <bool> active: false;
+    callback clicked();
+
+    height: 28px;
+    width: pill-layout.preferred-width + 16px;
+    border-radius: Theme.radius-sm;
+    background: transparent;
+    border-width: touch.has-hover ? 1px : 0px;
+    border-color: Theme.accent;
+
+    touch := TouchArea {
+        clicked => { root.clicked(); }
+    }
+
+    pill-layout := HorizontalLayout {
+        spacing: 4px;
+        padding-left: 8px;
+        padding-right: 8px;
+        alignment: center;
+
+        Image {
+            source: icon;
+            width: 14px;
+            height: 14px;
+            colorize: active || touch.has-hover ? Theme.accent : Theme.text-tertiary;
+            y: (parent.height - self.height) / 2;
+        }
+
+        Text {
+            text: label;
+            font-size: Theme.font-xs;
+            font-weight: 500;
+            color: active || touch.has-hover ? Theme.accent : Theme.text-tertiary;
+            vertical-alignment: center;
+        }
+    }
+}
+
+component GifPopover inherits Rectangle {
+    in property <[GifItemData]> gifs: [];
+    in property <bool> show: false;
+    callback search(/* query */ string);
+    callback gif-selected(/* gif_id */ string, /* url */ string, /* preview_url */ string, /* width */ int, /* height */ int);
+    callback close();
+
+    visible: show;
+    height: 360px;
+    background: Theme.surface;
+    border-width: 1px;
+    border-color: Theme.graphic-light;
+    border-radius: Theme.r-inner;
+    clip: true;
+
+    VerticalLayout {
+        padding: 8px;
+        spacing: 8px;
+
+        Rectangle {
+            height: 32px;
+            background: Theme.bg-app;
+            border-radius: Theme.radius-sm;
+            border-width: 1px;
+            border-color: Theme.graphic-light;
+
+            gif-search := TextInput {
+                x: 10px;
+                width: parent.width - 20px;
+                height: parent.height;
+                font-size: Theme.font-md;
+                color: Theme.text-primary;
+                vertical-alignment: center;
+
+                edited => {
+                    root.search(gif-search.text);
+                }
+            }
+
+            if gif-search.text == "": Text {
+                x: 10px;
+                text: "Search GIFs";
+                font-size: Theme.font-md;
+                color: Theme.text-tertiary;
+                vertical-alignment: center;
+            }
+        }
+
+        Flickable {
+            vertical-stretch: 1;
+
+            VerticalLayout {
+                spacing: 4px;
+
+                for row-start[row-idx] in [0, 3, 6, 9, 12, 15, 18]: HorizontalLayout {
+                    spacing: 4px;
+
+                    for col in [0, 1, 2]: Rectangle {
+                        property <int> gif-index: row-start + col;
+                        property <bool> in-range: gif-index < gifs.length;
+                        visible: in-range;
+                        horizontal-stretch: 1;
+                        height: in-range ? self.width * 0.75 : 0;
+                        border-radius: Theme.radius-sm;
+                        clip: true;
+                        background: in-range && !gifs[gif-index].has-preview ? Theme.bg-app : transparent;
+
+                        if in-range && gifs[gif-index].has-preview: Image {
+                            source: gifs[gif-index].preview;
+                            width: parent.width;
+                            height: parent.height;
+                            image-fit: cover;
+                        }
+
+                        if in-range: Rectangle {
+                            background: gif-cell-touch.has-hover ? #FFFFFF1A : transparent;
+
+                            gif-cell-touch := TouchArea {
+                                clicked => {
+                                    if gif-index < gifs.length {
+                                        root.gif-selected(
+                                            gifs[gif-index].gif-id,
+                                            gifs[gif-index].url,
+                                            gifs[gif-index].preview-url,
+                                            gifs[gif-index].width,
+                                            gifs[gif-index].height,
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Text {
+            text: "Powered by GIPHY";
+            font-size: Theme.font-xs;
+            color: Theme.text-tertiary;
+            horizontal-alignment: center;
+            height: 16px;
+        }
+    }
+}
 
 export component ChatPanel inherits Rectangle {
     in property <[ChatMessageData]> messages: [];
     in property <string> user-name: "";
-    callback message-submitted(string);
+    in property <string> user-id: "";
+    in property <bool> loading-history: false;
+
+    // GIF popover
+    in property <[GifItemData]> gif-results: [];
+    in-out property <bool> gif-popover-open: false;
+
+    // Reply mode state
+    in-out property <bool> reply-mode: false;
+    in-out property <string> reply-to-id: "";
+    in-out property <string> reply-to-name: "";
+
+    // Edit mode state
+    in-out property <bool> edit-mode: false;
+    in-out property <string> edit-message-id: "";
+
+    // New messages pill state
+    in-out property <bool> has-new-messages: false;
+
+    callback message-submitted(/* text */ string);
+    callback message-submitted-with-reply(/* text */ string, /* reply_to */ string);
+    callback request-history();
+    callback gif-pill-clicked();
+    callback gif-search(/* query */ string);
+    callback gif-selected(/* gif_id */ string, /* url */ string, /* preview_url */ string, /* width */ int, /* height */ int);
+    callback gif-hovered(/* preview_url */ string);
+    callback emoji-pill-clicked();
+    callback edit-message(/* message_id */ string, /* new_body */ string);
+    callback delete-message(/* message_id */ string);
+    callback reply-to-message(/* message_id */ string, /* sender_name */ string);
 
     background: Theme.surface;
     border-width: 1px;
@@ -12,7 +206,10 @@ export component ChatPanel inherits Rectangle {
     border-radius: Theme.r-outer;
 
     VerticalLayout {
-        padding: Theme.pad;
+        padding-top: Theme.pad;
+        padding-bottom: Theme.pad;
+        padding-left: 12px;
+        padding-right: 12px;
         spacing: 0px;
 
         // --- Header kicker ---
@@ -25,16 +222,38 @@ export component ChatPanel inherits Rectangle {
             height: 16px;
         }
 
-        // --- Chat feed ---
-        Flickable {
+        // --- Chat feed container (for overlay pill) ---
+        Rectangle {
             vertical-stretch: 1;
 
+        feed := Flickable {
+            width: parent.width;
+            height: parent.height;
+
+            flicked => {
+                if feed.viewport-y >= 0px && !root.loading-history {
+                    root.request-history();
+                }
+            }
+
             VerticalLayout {
-                spacing: 20px;
+                width: feed.width;
+                spacing: 0px;
                 padding-top: 12px;
                 alignment: end;
 
-                if messages.length == 0: Rectangle {
+                if root.loading-history: Rectangle {
+                    height: 32px;
+                    Text {
+                        text: "Loading...";
+                        font-size: Theme.font-sm;
+                        color: Theme.text-tertiary;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+
+                if messages.length == 0 && !root.loading-history: Rectangle {
                     vertical-stretch: 1;
 
                     Text {
@@ -46,23 +265,47 @@ export component ChatPanel inherits Rectangle {
                     }
                 }
 
-                for msg in messages: VerticalLayout {
-                    spacing: 4px;
+                for msg[idx] in messages: VerticalLayout {
+                    padding-top: msg.is-group-start && idx > 0 ? 16px : 2px;
 
-                    // Meta row: sender + timestamp
-                    HorizontalLayout {
+                    // System message
+                    if msg.is-system: HorizontalLayout {
+                        padding-left: 36px;
+                        padding-right: 8px;
+                        padding-top: 4px;
+                        padding-bottom: 4px;
+
+                        Text {
+                            text: msg.text;
+                            font-size: Theme.font-sm;
+                            color: Theme.text-tertiary;
+                            font-italic: true;
+                            horizontal-alignment: center;
+                            wrap: word-wrap;
+                        }
+                    }
+
+                    // Group start: header row (not hoverable for actions)
+                    if !msg.is-system && msg.is-group-start: HorizontalLayout {
                         spacing: 8px;
+
+                        AvatarCircle {
+                            initials: msg.sender-initials;
+                            y: (parent.height - self.height) / 2;
+                        }
 
                         Text {
                             text: msg.sender-name;
                             font-size: Theme.font-md;
                             font-weight: 600;
                             color: msg.sender-name == root.user-name ? Theme.accent : Theme.text-primary;
-                            horizontal-stretch: 1;
+                            vertical-alignment: center;
                         }
 
+                        Rectangle { horizontal-stretch: 1; }
+
                         Text {
-                            text: msg.timestamp;
+                            text: msg.display-time;
                             font-family: Theme.font-mono;
                             font-size: Theme.font-xs;
                             color: Theme.text-tertiary;
@@ -70,16 +313,155 @@ export component ChatPanel inherits Rectangle {
                         }
                     }
 
-                    // Message body
-                    Text {
-                        text: msg.text;
-                        font-size: Theme.font-md;
-                        color: Theme.text-secondary;
-                        wrap: word-wrap;
+                    // Message body (hoverable — context actions appear here)
+                    if !msg.is-system: Rectangle {
+                        width: feed.width;
+                        property <bool> body-hovered: body-hover.has-hover;
+
+                        body-hover := TouchArea {
+                            width: parent.width;
+                            height: parent.height;
+                        }
+
+                        VerticalLayout {
+                            width: parent.width;
+                            padding-left: 36px;
+                            spacing: 4px;
+
+                            // Body text (shown for text messages, or GIF + text)
+                            if msg.text != "": Text {
+                                text: msg.text;
+                                font-size: Theme.font-md;
+                                color: Theme.text-secondary;
+                                wrap: word-wrap;
+                                horizontal-stretch: 1;
+                            }
+
+                            // GIF inline preview
+                            if msg.is-gif: Rectangle {
+                                property <float> aspect: msg.gif-height > 0 ? msg.gif-width / msg.gif-height : 1.33;
+                                property <length> max-w: 300px;
+                                width: max-w;
+                                height: max-w / aspect;
+                                border-radius: Theme.radius-sm;
+                                clip: true;
+                                background: msg.has-gif-image ? transparent : Theme.bg-app;
+
+                                if msg.has-gif-image: Image {
+                                    source: msg.gif-image;
+                                    width: parent.width;
+                                    height: parent.height;
+                                    image-fit: cover;
+                                }
+
+                                if !msg.has-gif-image: Text {
+                                    text: "Loading GIF…";
+                                    font-size: Theme.font-xs;
+                                    color: Theme.text-tertiary;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                }
+
+                                TouchArea {
+                                    mouse-cursor: pointer;
+                                    moved => {
+                                        root.gif-hovered(msg.gif-preview-url);
+                                    }
+                                }
+                            }
+                        }
+
+                        if body-hovered: HorizontalLayout {
+                            x: parent.width - self.width;
+                            y: 0;
+                            height: 24px;
+                            spacing: 2px;
+
+                            Rectangle {
+                                width: 24px;
+                                height: 24px;
+                                border-radius: 4px;
+                                background: reply-touch.has-hover ? Theme.bg-tertiary : Theme.surface;
+
+                                Image {
+                                    source: @image-url("../icons/reply.svg");
+                                    width: 14px;
+                                    height: 14px;
+                                    colorize: Theme.text-secondary;
+                                    x: (parent.width - self.width) / 2;
+                                    y: (parent.height - self.height) / 2;
+                                }
+
+                                reply-touch := TouchArea {
+                                    clicked => {
+                                        root.reply-mode = true;
+                                        root.reply-to-id = msg.message-id;
+                                        root.reply-to-name = msg.sender-name;
+                                    }
+                                }
+                            }
+
+                            Rectangle {
+                                width: 24px;
+                                height: 24px;
+                                border-radius: 4px;
+                                background: more-touch.has-hover ? Theme.bg-tertiary : Theme.surface;
+
+                                Image {
+                                    source: @image-url("../icons/more.svg");
+                                    width: 14px;
+                                    height: 14px;
+                                    colorize: Theme.text-secondary;
+                                    x: (parent.width - self.width) / 2;
+                                    y: (parent.height - self.height) / 2;
+                                }
+
+                                more-touch := TouchArea {
+                                    clicked => {
+                                        if msg.sender-id == root.user-id {
+                                            root.edit-mode = true;
+                                            root.edit-message-id = msg.message-id;
+                                            chat-input.text = msg.text;
+                                            chat-input.focus();
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
         }
+
+        // --- "New messages" floating pill ---
+        if root.has-new-messages: Rectangle {
+            x: (parent.width - self.width) / 2;
+            y: parent.height - self.height - 8px;
+            width: 140px;
+            height: 28px;
+            border-radius: Theme.r-pill;
+            background: Theme.accent;
+            drop-shadow-blur: 4px;
+            drop-shadow-color: #00000040;
+
+            new-msg-touch := TouchArea {
+                clicked => {
+                    root.has-new-messages = false;
+                    // Scroll to bottom by setting viewport to show latest
+                    feed.viewport-y = -(feed.viewport-height - feed.height);
+                }
+            }
+
+            Text {
+                text: "New messages ↓";
+                font-size: Theme.font-sm;
+                font-weight: 600;
+                color: #FFFFFF;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+        } // close feed container Rectangle
 
         // --- Separator ---
         Rectangle {
@@ -88,6 +470,125 @@ export component ChatPanel inherits Rectangle {
         }
 
         Rectangle { height: 4px; }
+
+        // --- Reply bar ---
+        if root.reply-mode: HorizontalLayout {
+            height: 28px;
+            spacing: 8px;
+            padding-left: 12px;
+            padding-right: 8px;
+
+            Text {
+                text: "Replying to " + root.reply-to-name;
+                font-size: Theme.font-sm;
+                color: Theme.accent;
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+            }
+
+            Rectangle {
+                width: 20px;
+                height: 20px;
+                border-radius: 4px;
+                background: close-reply-touch.has-hover ? Theme.bg-tertiary : transparent;
+                y: (parent.height - self.height) / 2;
+
+                Image {
+                    source: @image-url("../icons/x.svg");
+                    width: 12px;
+                    height: 12px;
+                    colorize: Theme.text-tertiary;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                }
+
+                close-reply-touch := TouchArea {
+                    clicked => {
+                        root.reply-mode = false;
+                        root.reply-to-id = "";
+                        root.reply-to-name = "";
+                    }
+                }
+            }
+        }
+
+        // --- Edit bar ---
+        if root.edit-mode: HorizontalLayout {
+            height: 28px;
+            spacing: 8px;
+            padding-left: 12px;
+            padding-right: 8px;
+
+            Text {
+                text: "Editing message";
+                font-size: Theme.font-sm;
+                color: Theme.accent;
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+            }
+
+            Rectangle {
+                width: 20px;
+                height: 20px;
+                border-radius: 4px;
+                background: close-edit-touch.has-hover ? Theme.bg-tertiary : transparent;
+                y: (parent.height - self.height) / 2;
+
+                Image {
+                    source: @image-url("../icons/x.svg");
+                    width: 12px;
+                    height: 12px;
+                    colorize: Theme.text-tertiary;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                }
+
+                close-edit-touch := TouchArea {
+                    clicked => {
+                        root.edit-mode = false;
+                        root.edit-message-id = "";
+                        chat-input.text = "";
+                    }
+                }
+            }
+        }
+
+        // --- GIF popover ---
+        if root.gif-popover-open: GifPopover {
+            show: root.gif-popover-open;
+            gifs: root.gif-results;
+            search(query) => { root.gif-search(query); }
+            gif-selected(gif-id, url, preview-url, w, h) => {
+                root.gif-selected(gif-id, url, preview-url, w, h);
+                root.gif-popover-open = false;
+            }
+            close => { root.gif-popover-open = false; }
+        }
+
+        // --- Action pills row ---
+        HorizontalLayout {
+            height: 28px;
+            spacing: 4px;
+            padding-left: 4px;
+
+            PillButton {
+                icon: @image-url("../icons/gif.svg");
+                label: "GIF";
+                active: root.gif-popover-open;
+                clicked => {
+                    root.gif-popover-open = !root.gif-popover-open;
+                    if root.gif-popover-open {
+                        root.gif-pill-clicked();
+                    }
+                }
+            }
+
+            PillButton {
+                icon: @image-url("../icons/smile.svg");
+                label: "Emoji";
+                clicked => { root.emoji-pill-clicked(); }
+            }
+        }
 
         // --- Chat input ---
         Rectangle {
@@ -106,12 +607,23 @@ export component ChatPanel inherits Rectangle {
                 vertical-alignment: center;
                 accepted => {
                     if chat-input.text != "" {
-                        message-submitted(chat-input.text);
+                        if root.edit-mode {
+                            root.edit-message(root.edit-message-id, chat-input.text);
+                            root.edit-mode = false;
+                            root.edit-message-id = "";
+                        } else if root.reply-mode {
+                            root.message-submitted-with-reply(chat-input.text, root.reply-to-id);
+                            root.reply-mode = false;
+                            root.reply-to-id = "";
+                            root.reply-to-name = "";
+                        } else {
+                            root.message-submitted(chat-input.text);
+                        }
                         chat-input.text = "";
                     }
                 }
             }
-            if chat-input.text == "": Text {
+            if chat-input.text == "" && !root.edit-mode: Text {
                 x: 18px;
                 color: Theme.text-tertiary;
                 font-size: Theme.font-md;
@@ -120,4 +632,50 @@ export component ChatPanel inherits Rectangle {
             }
         }
     }
+}
+
+// --- Slint Live Preview mock ---
+component Preview inherits ChatPanel {
+    width: 380px;
+    height: 720px;
+    user-name: "bobdev";
+    user-id: "u1";
+    messages: [
+        {
+            message-id: "1", sender-id: "u1", sender-name: "bobdev",
+            sender-initials: "B0", text: "jfjwejfwe\nwjepgojweg\nwegjwöelgkjwe",
+            timestamp: "", display-time: "Yesterday",
+            is-group-start: true, is-continuation: false, is-system: false
+        },
+        {
+            message-id: "2", sender-id: "u1", sender-name: "bobdev",
+            sender-initials: "B0", text: "glwkjegöweljg",
+            timestamp: "", display-time: "Yesterday",
+            is-group-start: false, is-continuation: true, is-system: false
+        },
+        {
+            message-id: "3", sender-id: "u2", sender-name: "oweboweob",
+            sender-initials: "OW", text: "*borat voice* VERY NICE!",
+            timestamp: "", display-time: "03:18",
+            is-group-start: true, is-continuation: false, is-system: false
+        },
+        {
+            message-id: "4", sender-id: "u2", sender-name: "oweboweob",
+            sender-initials: "OW", text: "yoooo\nwazaaa\nhehe",
+            timestamp: "", display-time: "1m ago",
+            is-group-start: true, is-continuation: false, is-system: false
+        },
+        {
+            message-id: "5", sender-id: "sys", sender-name: "",
+            sender-initials: "", text: "k0ji joined the crew",
+            timestamp: "", display-time: "",
+            is-group-start: false, is-continuation: false, is-system: true
+        },
+        {
+            message-id: "6", sender-id: "u3", sender-name: "k0ji",
+            sender-initials: "K0", text: "sup guys 👋",
+            timestamp: "", display-time: "just now",
+            is-group-start: true, is-continuation: false, is-system: false
+        },
+    ];
 }

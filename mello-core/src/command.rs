@@ -80,7 +80,28 @@ pub enum Command {
     LeaveCrew,
     SendMessage {
         content: String,
+        #[serde(default)]
+        reply_to: Option<String>,
     },
+    SendGif {
+        gif: crate::chat::GifData,
+        #[serde(default)]
+        body: String,
+    },
+    EditMessage {
+        message_id: String,
+        new_body: String,
+    },
+    DeleteMessage {
+        message_id: String,
+    },
+    LoadHistory {
+        cursor: Option<String>,
+    },
+    SearchGifs {
+        query: String,
+    },
+    LoadTrendingGifs,
     JoinVoice {
         channel_id: String,
     },

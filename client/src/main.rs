@@ -2,6 +2,8 @@
 
 mod autolaunch;
 mod deep_link;
+mod gif_animator;
+mod image_cache;
 mod notifications;
 mod platform;
 mod settings;
@@ -53,6 +55,54 @@ fn make_initials(name: &str) -> String {
             let first = parts[0].chars().next().unwrap_or('?');
             let last = parts[parts.len() - 1].chars().next().unwrap_or('?');
             format!("{}{}", first, last).to_uppercase()
+        }
+    }
+}
+
+fn chat_messages_to_slint(raw: &[mello_core::events::ChatMessage]) -> Vec<ChatMessageData> {
+    mello_core::chat::prepare_messages_for_display(raw)
+        .into_iter()
+        .map(|d| {
+            let is_gif = d.gif.is_some();
+            let (gif_preview_url, gif_width, gif_height) = match &d.gif {
+                Some(g) => (g.preview.clone(), g.width as i32, g.height as i32),
+                None => (String::new(), 0, 0),
+            };
+            ChatMessageData {
+                message_id: d.message_id.into(),
+                sender_id: d.sender_id.into(),
+                sender_name: d.sender_name.into(),
+                sender_initials: d.sender_initials.into(),
+                text: d.content.into(),
+                timestamp: d.timestamp.into(),
+                display_time: d.display_time.into(),
+                is_group_start: d.is_group_start,
+                is_continuation: d.is_continuation,
+                is_system: d.is_system,
+                is_gif,
+                gif_image: slint::Image::default(),
+                has_gif_image: false,
+                gif_preview_url: gif_preview_url.into(),
+                gif_width,
+                gif_height,
+            }
+        })
+        .collect()
+}
+
+/// Scan messages for GIFs and kick off animated frame fetches.
+fn fetch_gif_images_for_messages(
+    model: &Rc<slint::VecModel<ChatMessageData>>,
+    rt: &tokio::runtime::Handle,
+    chat_anim: &gif_animator::GifAnimator,
+) {
+    let inbox = chat_anim.inbox();
+    for i in 0..model.row_count() {
+        if let Some(item) = model.row_data(i) {
+            let url = item.gif_preview_url.to_string();
+            if item.is_gif && !url.is_empty() && !chat_anim.has_url(&url) {
+                image_cache::spawn_gif_fetch(url, rt, &inbox);
+            }
         }
     }
 }
@@ -236,6 +286,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let active_voice_channel: Rc<RefCell<String>> = Rc::new(RefCell::new(String::new()));
     let discover_cursor: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
     let discover_loading: Rc<RefCell<bool>> = Rc::new(RefCell::new(false));
+    let chat_messages: Rc<RefCell<Vec<mello_core::events::ChatMessage>>> =
+        Rc::new(RefCell::new(Vec::new()));
 
     // --- Close → tray (respects close_to_tray setting) ---
     {
@@ -518,13 +570,101 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
+    // --- GIF animators (created early so callbacks can reference them) ---
+    let gif_popover_anim = gif_animator::GifAnimator::new(50, None);
+    let gif_chat_anim = gif_animator::GifAnimator::new(50, Some(2));
+
     // --- Chat ---
     {
         let cmd = cmd_tx.clone();
         app.on_send_message(move |text| {
             let _ = cmd.try_send(Command::SendMessage {
                 content: text.to_string(),
+                reply_to: None,
             });
+        });
+    }
+    {
+        let cmd = cmd_tx.clone();
+        app.on_send_message_with_reply(move |text, reply_to| {
+            let _ = cmd.try_send(Command::SendMessage {
+                content: text.to_string(),
+                reply_to: Some(reply_to.to_string()),
+            });
+        });
+    }
+    {
+        let cmd = cmd_tx.clone();
+        let app_weak = app.as_weak();
+        app.on_request_history(move || {
+            if let Some(a) = app_weak.upgrade() {
+                a.set_loading_history(true);
+            }
+            let _ = cmd.try_send(Command::LoadHistory { cursor: None });
+        });
+    }
+    {
+        let cmd = cmd_tx.clone();
+        app.on_edit_message(move |message_id, new_body| {
+            let _ = cmd.try_send(Command::EditMessage {
+                message_id: message_id.to_string(),
+                new_body: new_body.to_string(),
+            });
+        });
+    }
+    {
+        let cmd = cmd_tx.clone();
+        app.on_delete_message(move |message_id| {
+            let _ = cmd.try_send(Command::DeleteMessage {
+                message_id: message_id.to_string(),
+            });
+        });
+    }
+    {
+        let cmd = cmd_tx.clone();
+        app.on_gif_pill_clicked(move || {
+            log::info!("[gif] pill clicked, loading trending");
+            let _ = cmd.try_send(Command::LoadTrendingGifs);
+        });
+    }
+    {
+        let cmd = cmd_tx.clone();
+        app.on_gif_search(move |query| {
+            let q = query.to_string();
+            if q.is_empty() {
+                let _ = cmd.try_send(Command::LoadTrendingGifs);
+            } else {
+                let _ = cmd.try_send(Command::SearchGifs { query: q });
+            }
+        });
+    }
+    {
+        let cmd = cmd_tx.clone();
+        app.on_gif_selected(move |gif_id, url, preview_url, _w, _h| {
+            log::info!("[gif] selected id={}", gif_id.as_str());
+            let gif = mello_core::chat::GifData {
+                id: gif_id.to_string(),
+                url: url.to_string(),
+                preview: preview_url.to_string(),
+                width: _w as u32,
+                height: _h as u32,
+                alt: String::new(),
+            };
+            let _ = cmd.try_send(Command::SendGif {
+                gif,
+                body: String::new(),
+            });
+        });
+    }
+    {
+        let anim = gif_chat_anim.clone();
+        app.on_gif_hovered(move |preview_url| {
+            anim.resume(preview_url.as_str());
+        });
+    }
+    {
+        app.on_emoji_pill_clicked(|| {
+            log::info!("Emoji pill clicked (popover TODO)");
         });
     }
 
@@ -1308,6 +1448,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let saved_timer_ref = saved_timer.clone();
     let saved_app_weak = app.as_weak();
     let _updater_ref = updater.clone();
+    let chat_msgs_ref = chat_messages.clone();
+
+    // Start the chat GIF animator — runs continuously, updates message model frames
+    {
+        let app_weak = app.as_weak();
+        gif_chat_anim.start(move |url, img| {
+            let Some(app) = app_weak.upgrade() else {
+                return;
+            };
+            let msgs = app.get_messages();
+            for i in 0..msgs.row_count() {
+                if let Some(mut m) = msgs.row_data(i) {
+                    if m.is_gif && m.gif_preview_url.as_str() == url {
+                        m.gif_image = img.clone();
+                        m.has_gif_image = true;
+                        msgs.set_row_data(i, m);
+                    }
+                }
+            }
+        });
+    }
+
     let timer = slint::Timer::default();
     timer.start(
         slint::TimerMode::Repeated,
@@ -1375,16 +1537,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 notifications::notify_member_joined(&member.display_name);
                             }
                         }
-                        Event::MessageReceived { message } => {
-                            if !app.window().is_visible() {
-                                let crew_name = app.get_active_crew_id().to_string();
-                                notifications::notify_message(
-                                    &crew_name,
-                                    &message.sender_name,
-                                    &message.content,
-                                );
-                            }
-                        }
                         _ => {}
                     }
                     handle_event(
@@ -1398,6 +1550,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         &invited_users,
                         &discover_cursor,
                         &discover_loading,
+                        &chat_msgs_ref,
+                        rt.handle(),
+                        &gif_popover_anim,
+                        &gif_chat_anim,
                     );
                 }
             }
@@ -1717,6 +1873,10 @@ fn handle_event(
     invited_users: &Rc<RefCell<InvitedUserList>>,
     discover_cursor: &Rc<RefCell<Option<String>>>,
     discover_loading: &Rc<RefCell<bool>>,
+    chat_msgs_ref: &Rc<RefCell<Vec<mello_core::events::ChatMessage>>>,
+    rt: &tokio::runtime::Handle,
+    gif_popover_anim: &gif_animator::GifAnimator,
+    gif_chat_anim: &gif_animator::GifAnimator,
 ) {
     match event {
         Event::Restoring => {
@@ -2142,6 +2302,7 @@ fn handle_event(
             // Clear voice channels and messages for the new crew (will be repopulated by CrewStateLoaded)
             let empty_channels: Vec<VoiceChannelData> = vec![];
             app.set_voice_channels(Rc::new(slint::VecModel::from(empty_channels)).into());
+            chat_msgs_ref.borrow_mut().clear();
             let empty: Vec<ChatMessageData> = vec![];
             let rc = std::rc::Rc::new(slint::VecModel::from(empty));
             app.set_messages(rc.into());
@@ -2168,30 +2329,32 @@ fn handle_event(
             app.set_active_crew_id("".into());
         }
         Event::MessagesLoaded { messages } => {
-            let msgs: Vec<ChatMessageData> = messages
-                .into_iter()
-                .map(|m| ChatMessageData {
-                    sender_name: m.sender_name.into(),
-                    text: m.content.into(),
-                    timestamp: m.timestamp.into(),
-                })
-                .collect();
-            let rc = std::rc::Rc::new(slint::VecModel::from(msgs));
-            app.set_messages(rc.into());
+            *chat_msgs_ref.borrow_mut() = messages;
+            let display = chat_messages_to_slint(&chat_msgs_ref.borrow());
+            let rc = std::rc::Rc::new(slint::VecModel::from(display));
+            app.set_messages(rc.clone().into());
+            fetch_gif_images_for_messages(&rc, rt, gif_chat_anim);
         }
         Event::MessageReceived { message } => {
-            let current = app.get_messages();
-            let new_msg = ChatMessageData {
-                sender_name: message.sender_name.into(),
-                text: message.content.into(),
-                timestamp: message.timestamp.into(),
-            };
-            let mut msgs: Vec<ChatMessageData> = (0..current.row_count())
-                .map(|i| current.row_data(i).unwrap())
-                .collect();
-            msgs.push(new_msg);
-            let rc = std::rc::Rc::new(slint::VecModel::from(msgs));
-            app.set_messages(rc.into());
+            if !app.window().is_visible() {
+                let crew_name = app.get_active_crew_id().to_string();
+                notifications::notify_message(&crew_name, &message.sender_name, &message.content);
+            }
+            chat_msgs_ref.borrow_mut().push(message);
+            let display = chat_messages_to_slint(&chat_msgs_ref.borrow());
+            let rc = std::rc::Rc::new(slint::VecModel::from(display));
+            app.set_messages(rc.clone().into());
+            fetch_gif_images_for_messages(&rc, rt, gif_chat_anim);
+        }
+        Event::HistoryLoaded { messages, .. } => {
+            let mut all = messages;
+            all.append(&mut chat_msgs_ref.borrow().clone());
+            *chat_msgs_ref.borrow_mut() = all;
+            let display = chat_messages_to_slint(&chat_msgs_ref.borrow());
+            let rc = std::rc::Rc::new(slint::VecModel::from(display));
+            app.set_messages(rc.clone().into());
+            app.set_loading_history(false);
+            fetch_gif_images_for_messages(&rc, rt, gif_chat_anim);
         }
         Event::MemberJoined { member, .. } => {
             let current = app.get_members();
@@ -2955,6 +3118,75 @@ fn handle_event(
         }
         Event::StreamError { message } => {
             log::error!("Stream error: {}", message);
+        }
+        Event::ChatMessageEdited {
+            message_id,
+            new_content,
+            update_time,
+        } => {
+            log::info!("Message edited: {} at {}", message_id, update_time);
+            let mut msgs = chat_msgs_ref.borrow_mut();
+            if let Some(m) = msgs.iter_mut().find(|m| m.message_id == message_id) {
+                m.content = new_content;
+                m.update_time = update_time;
+            }
+            let display = chat_messages_to_slint(&msgs);
+            let rc = std::rc::Rc::new(slint::VecModel::from(display));
+            app.set_messages(rc.into());
+        }
+        Event::GifsLoaded { gifs } => {
+            log::info!("[gif] loaded {} results", gifs.len());
+            gif_popover_anim.stop_and_clear();
+
+            let model: Vec<GifItemData> = gifs
+                .iter()
+                .map(|g| GifItemData {
+                    gif_id: g.id.clone().into(),
+                    url: g.url.clone().into(),
+                    preview_url: g.preview.clone().into(),
+                    width: g.width as i32,
+                    height: g.height as i32,
+                    preview: slint::Image::default(),
+                    has_preview: false,
+                })
+                .collect();
+            let vec_model = Rc::new(slint::VecModel::from(model));
+            app.set_gif_results(vec_model.clone().into());
+
+            // Start popover animator — updates model items when frames advance
+            let app_weak = app.as_weak();
+            gif_popover_anim.start(move |url, img| {
+                let Some(app) = app_weak.upgrade() else {
+                    return;
+                };
+                let model = app.get_gif_results();
+                for i in 0..model.row_count() {
+                    if let Some(mut item) = model.row_data(i) {
+                        if item.preview_url.as_str() == url {
+                            item.preview = img.clone();
+                            item.has_preview = true;
+                            model.set_row_data(i, item);
+                            break;
+                        }
+                    }
+                }
+            });
+
+            // Fetch animated frames for each GIF — results land in the inbox
+            let inbox = gif_popover_anim.inbox();
+            for g in &gifs {
+                image_cache::spawn_gif_fetch(g.preview.clone(), rt, &inbox);
+            }
+        }
+        Event::ChatMessageDeleted { message_id } => {
+            log::info!("Message deleted: {}", message_id);
+            let mut msgs = chat_msgs_ref.borrow_mut();
+            if let Some(m) = msgs.iter_mut().find(|m| m.message_id == message_id) {
+                m.content = "[message deleted]".to_string();
+            }
+            let display = chat_messages_to_slint(&msgs);
+            let rc = std::rc::Rc::new(slint::VecModel::from(display));
+            app.set_messages(rc.into());
         }
     }
 }

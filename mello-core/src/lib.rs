@@ -1,12 +1,15 @@
 pub mod auth_discord;
 pub mod auth_google;
+pub mod chat;
 pub mod client;
 pub mod command;
 pub mod config;
 pub mod crew;
 pub mod crew_state;
+pub mod emoji;
 pub mod error;
 pub mod events;
+pub mod giphy;
 pub mod nakama;
 pub mod oauth;
 pub mod presence;

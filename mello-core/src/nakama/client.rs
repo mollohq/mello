@@ -1086,6 +1086,13 @@ impl NakamaClient {
     // --- Chat ---
 
     pub async fn send_chat_message(&self, text: &str) -> Result<()> {
+        let envelope = crate::chat::MessageEnvelope::text(text, None);
+        let json = serde_json::to_string(&envelope).map_err(|e| Error::Server(e.to_string()))?;
+        self.send_raw_chat_message(&json).await
+    }
+
+    /// Send a pre-serialized JSON envelope as a channel message.
+    pub async fn send_raw_chat_message(&self, content_json: &str) -> Result<()> {
         let channel_id = self
             .ws_shared
             .read()
@@ -1094,12 +1101,53 @@ impl NakamaClient {
             .clone()
             .ok_or(Error::NotConnected)?;
 
-        let content = serde_json::json!({"text": text}).to_string();
-
         let msg = serde_json::json!({
             "channel_message_send": {
                 "channel_id": channel_id,
-                "content": content
+                "content": content_json
+            }
+        })
+        .to_string();
+
+        self.ws_send(msg).await
+    }
+
+    /// Update an existing channel message (edit).
+    pub async fn update_chat_message(&self, message_id: &str, content_json: &str) -> Result<()> {
+        let channel_id = self
+            .ws_shared
+            .read()
+            .await
+            .channel_id
+            .clone()
+            .ok_or(Error::NotConnected)?;
+
+        let msg = serde_json::json!({
+            "channel_message_update": {
+                "channel_id": channel_id,
+                "message_id": message_id,
+                "content": content_json
+            }
+        })
+        .to_string();
+
+        self.ws_send(msg).await
+    }
+
+    /// Remove a channel message (soft delete).
+    pub async fn remove_chat_message(&self, message_id: &str) -> Result<()> {
+        let channel_id = self
+            .ws_shared
+            .read()
+            .await
+            .channel_id
+            .clone()
+            .ok_or(Error::NotConnected)?;
+
+        let msg = serde_json::json!({
+            "channel_message_remove": {
+                "channel_id": channel_id,
+                "message_id": message_id
             }
         })
         .to_string();
@@ -1112,13 +1160,32 @@ impl NakamaClient {
         channel_id: &str,
         limit: u32,
     ) -> Result<Vec<ChatMessage>> {
+        let (msgs, _) = self
+            .list_channel_messages_with_cursor(channel_id, limit, None)
+            .await?;
+        Ok(msgs)
+    }
+
+    /// Fetch message history with optional pagination cursor.
+    /// Returns (messages, next_cursor).
+    pub async fn list_channel_messages_with_cursor(
+        &self,
+        channel_id: &str,
+        limit: u32,
+        cursor: Option<&str>,
+    ) -> Result<(Vec<ChatMessage>, Option<String>)> {
         let token = self.bearer()?;
-        let url = format!(
+        let mut url = format!(
             "{}/v2/channel/{}?limit={}&forward=false",
             self.config.http_base(),
             channel_id,
             limit
         );
+        if let Some(c) = cursor {
+            if !c.is_empty() {
+                url.push_str(&format!("&cursor={}", c));
+            }
+        }
 
         let resp = self.http.get(&url).bearer_auth(&token).send().await?;
 
@@ -1127,8 +1194,9 @@ impl NakamaClient {
         }
 
         let list: ApiChannelMessageList = resp.json().await?;
+        let next_cursor = list.next_cursor.clone().filter(|c| !c.is_empty());
         let names = self.member_names.read().await;
-        Ok(parse_channel_messages(list, &names))
+        Ok((parse_channel_messages(list, &names), next_cursor))
     }
 
     // --- Crew members ---
@@ -1239,14 +1307,18 @@ pub(crate) fn parse_channel_messages(
         .into_iter()
         .filter_map(|m| {
             let content_str = m.content.as_deref().unwrap_or("");
+
+            // Skip signaling messages
             if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(content_str) {
                 if parsed.get("signal").and_then(|v| v.as_bool()) == Some(true) {
                     return None;
                 }
             }
-            let text = serde_json::from_str::<ChatContent>(content_str)
-                .ok()
-                .and_then(|c| c.text)?;
+
+            // Parse with structured envelope, falling back to legacy format
+            let envelope = crate::chat::parse_content(content_str)?;
+            let text = envelope.body;
+            let gif = envelope.gif;
 
             let sender_id = m.sender_id.unwrap_or_default();
             let sender_name = member_names
@@ -1254,12 +1326,17 @@ pub(crate) fn parse_channel_messages(
                 .cloned()
                 .unwrap_or_else(|| m.username.unwrap_or_default());
 
+            let create_time = m.create_time.unwrap_or_default();
+            let update_time = m.update_time.unwrap_or_default();
             Some(ChatMessage {
                 message_id: m.message_id.unwrap_or_default(),
                 sender_id,
                 sender_name,
                 content: text,
-                timestamp: m.create_time.unwrap_or_default(),
+                timestamp: create_time.clone(),
+                create_time,
+                update_time,
+                gif,
             })
         })
         .collect()
@@ -1390,13 +1467,12 @@ async fn handle_ws_message(
             }
         }
 
-        let text = match serde_json::from_str::<ChatContent>(&content_str)
-            .ok()
-            .and_then(|c| c.text)
-        {
-            Some(t) => t,
-            None => return, // skip non-chat messages (empty JSON, system messages, etc.)
+        let envelope = match crate::chat::parse_content(&content_str) {
+            Some(e) => e,
+            None => return,
         };
+        let text = envelope.body;
+        let gif = envelope.gif;
 
         let sender_id = msg.sender_id.unwrap_or_default();
         let sender_name = {
@@ -1407,13 +1483,18 @@ async fn handle_ws_message(
                 .unwrap_or_else(|| msg.username.unwrap_or_default())
         };
 
+        let create_time = msg.create_time.unwrap_or_default();
+        let update_time = msg.update_time.unwrap_or_default();
         let _ = event_tx.send(Event::MessageReceived {
             message: ChatMessage {
                 message_id: msg.message_id.unwrap_or_default(),
                 sender_id,
                 sender_name,
                 content: text,
-                timestamp: msg.create_time.unwrap_or_default(),
+                timestamp: create_time.clone(),
+                create_time,
+                update_time,
+                gif,
             },
         });
     }
@@ -1559,6 +1640,7 @@ mod tests {
             username: Some(username.into()),
             content: Some(content.into()),
             create_time: Some("2026-03-08T12:00:00Z".into()),
+            update_time: Some("2026-03-08T12:00:00Z".into()),
             code: Some(0),
         }
     }
@@ -1703,6 +1785,7 @@ mod tests {
                 username: None,
                 content: None,
                 create_time: None,
+                update_time: None,
                 code: None,
             }]),
             next_cursor: None,

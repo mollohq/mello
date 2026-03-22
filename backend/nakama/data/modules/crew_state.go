@@ -385,6 +385,28 @@ func CrewStateGetSidebarRPC(ctx context.Context, logger runtime.Logger, db *sql.
 	return string(resp), nil
 }
 
+// extractPreview pulls display text from a message envelope for sidebar previews.
+func extractPreview(content string) string {
+	var raw map[string]interface{}
+	if err := json.Unmarshal([]byte(content), &raw); err != nil {
+		return content
+	}
+	// Structured envelope: use "body"
+	if body, ok := raw["body"].(string); ok {
+		if _, hasV := raw["v"]; hasV {
+			if msgType, _ := raw["type"].(string); msgType == "gif" && body == "" {
+				return "[GIF]"
+			}
+			return body
+		}
+	}
+	// Legacy format: use "text"
+	if text, ok := raw["text"].(string); ok {
+		return text
+	}
+	return content
+}
+
 // ---------------------------------------------------------------------------
 // Chat message hook
 // ---------------------------------------------------------------------------
@@ -409,7 +431,8 @@ func OnChatMessage(ctx context.Context, logger runtime.Logger, db *sql.DB, nk ru
 		return nil
 	}
 
-	preview := content
+	// Extract preview text from the message envelope
+	preview := extractPreview(content)
 	if len(preview) > 60 {
 		preview = preview[:57] + "..."
 	}

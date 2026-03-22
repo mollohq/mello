@@ -33,10 +33,11 @@ paste = "1"
 velopack = "0.0.1298"
 semver = "1"
 
-# Avatar upload
+# Avatar upload & image loading
 rfd = "0.15"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif"] }
 base64 = "0.22"
+reqwest = { workspace = true }
 arboard = "3"
 
 # Native platform integration

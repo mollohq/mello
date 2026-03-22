@@ -20,6 +20,9 @@ export struct CrewData {
     msg-count: int,
     m0-author: string, m0-text: string,
     m1-author: string, m1-text: string,
+
+    unread-count: int,
+    unread-mention: bool,
 }
 
 export struct MemberData {
@@ -31,9 +34,32 @@ export struct MemberData {
 }
 
 export struct ChatMessageData {
+    message-id: string,
+    sender-id: string,
     sender-name: string,
+    sender-initials: string,
     text: string,
     timestamp: string,
+    display-time: string,
+    is-group-start: bool,
+    is-continuation: bool,
+    is-system: bool,
+    is-gif: bool,
+    gif-image: image,
+    has-gif-image: bool,
+    gif-preview-url: string,
+    gif-width: int,
+    gif-height: int,
+}
+
+export struct GifItemData {
+    gif-id: string,
+    url: string,
+    preview-url: string,
+    width: int,
+    height: int,
+    preview: image,
+    has-preview: bool,
 }
 
 export struct VoiceChannelMember {

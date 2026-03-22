@@ -3,6 +3,7 @@ use tokio::sync::mpsc;
 use crate::command::Command;
 use crate::config::Config;
 use crate::events::Event;
+use crate::giphy::GiphyClient;
 use crate::nakama::NakamaClient;
 use crate::nakama::{InternalPresence, InternalSignal};
 use crate::presence::PresenceStatus;
@@ -297,6 +298,8 @@ pub struct Client {
     thumbnail_stop: Option<Arc<std::sync::atomic::AtomicBool>>,
     /// Cached list of windows for thumbnail refresh.
     cached_windows: Vec<(String, u64)>,
+    history_cursor: Option<String>,
+    giphy: GiphyClient,
 }
 
 impl Client {
@@ -324,6 +327,8 @@ impl Client {
             ice_servers: Vec::new(),
             thumbnail_stop: None,
             cached_windows: Vec::new(),
+            history_cursor: None,
+            giphy: GiphyClient::new(),
         }
     }
 
@@ -1061,8 +1066,30 @@ impl Client {
             Command::LeaveCrew => {
                 self.handle_leave_crew().await;
             }
-            Command::SendMessage { content } => {
-                self.handle_send_message(&content).await;
+            Command::SendMessage { content, reply_to } => {
+                self.handle_send_message(&content, reply_to.as_deref())
+                    .await;
+            }
+            Command::SendGif { gif, body } => {
+                self.handle_send_gif(gif, &body).await;
+            }
+            Command::EditMessage {
+                message_id,
+                new_body,
+            } => {
+                self.handle_edit_message(&message_id, &new_body).await;
+            }
+            Command::DeleteMessage { message_id } => {
+                self.handle_delete_message(&message_id).await;
+            }
+            Command::LoadHistory { cursor } => {
+                self.handle_load_history(cursor.as_deref()).await;
+            }
+            Command::SearchGifs { query } => {
+                self.handle_search_gifs(&query).await;
+            }
+            Command::LoadTrendingGifs => {
+                self.handle_trending_gifs().await;
             }
             Command::JoinVoice { channel_id } => {
                 self.handle_join_voice(&channel_id).await;
@@ -1976,9 +2003,14 @@ impl Client {
         // Wait for WS reader to set channel_id (up to 2s)
         let channel_id = self.wait_for_channel_id().await;
         if let Some(ch_id) = channel_id {
-            match self.nakama.list_channel_messages(&ch_id, 50).await {
-                Ok(mut messages) => {
+            match self
+                .nakama
+                .list_channel_messages_with_cursor(&ch_id, 50, None)
+                .await
+            {
+                Ok((mut messages, cursor)) => {
                     messages.reverse();
+                    self.history_cursor = cursor;
                     let _ = self.event_tx.send(Event::MessagesLoaded { messages });
                 }
                 Err(e) => log::error!("Failed to fetch message history: {}", e),
@@ -2218,9 +2250,100 @@ impl Client {
         }
     }
 
-    async fn handle_send_message(&self, content: &str) {
-        if let Err(e) = self.nakama.send_chat_message(content).await {
+    async fn handle_send_message(&self, content: &str, reply_to: Option<&str>) {
+        let envelope = crate::chat::MessageEnvelope::text(content, reply_to.map(String::from));
+        let json = match serde_json::to_string(&envelope) {
+            Ok(j) => j,
+            Err(e) => {
+                log::error!("Failed to serialize message envelope: {}", e);
+                return;
+            }
+        };
+        if let Err(e) = self.nakama.send_raw_chat_message(&json).await {
             log::error!("Failed to send message: {}", e);
+        }
+    }
+
+    async fn handle_send_gif(&self, gif: crate::chat::GifData, body: &str) {
+        let envelope = crate::chat::MessageEnvelope::gif(gif, body);
+        let json = match serde_json::to_string(&envelope) {
+            Ok(j) => j,
+            Err(e) => {
+                log::error!("Failed to serialize GIF envelope: {}", e);
+                return;
+            }
+        };
+        if let Err(e) = self.nakama.send_raw_chat_message(&json).await {
+            log::error!("Failed to send GIF message: {}", e);
+        }
+    }
+
+    async fn handle_edit_message(&self, message_id: &str, new_body: &str) {
+        let envelope = crate::chat::MessageEnvelope::text(new_body, None);
+        let json = match serde_json::to_string(&envelope) {
+            Ok(j) => j,
+            Err(e) => {
+                log::error!("Failed to serialize edit envelope: {}", e);
+                return;
+            }
+        };
+        if let Err(e) = self.nakama.update_chat_message(message_id, &json).await {
+            log::error!("Failed to edit message: {}", e);
+        }
+    }
+
+    async fn handle_delete_message(&self, message_id: &str) {
+        if let Err(e) = self.nakama.remove_chat_message(message_id).await {
+            log::error!("Failed to delete message: {}", e);
+        }
+    }
+
+    async fn handle_search_gifs(&self, query: &str) {
+        match self.giphy.search(query, 20).await {
+            Ok(results) => {
+                let gifs: Vec<_> = results.iter().filter_map(|r| r.to_gif_data()).collect();
+                let _ = self.event_tx.send(Event::GifsLoaded { gifs });
+            }
+            Err(e) => log::error!("GIF search failed: {}", e),
+        }
+    }
+
+    async fn handle_trending_gifs(&self) {
+        match self.giphy.trending(20).await {
+            Ok(results) => {
+                let gifs: Vec<_> = results.iter().filter_map(|r| r.to_gif_data()).collect();
+                let _ = self.event_tx.send(Event::GifsLoaded { gifs });
+            }
+            Err(e) => log::error!("Trending GIFs failed: {}", e),
+        }
+    }
+
+    async fn handle_load_history(&mut self, cursor: Option<&str>) {
+        let effective_cursor = cursor.or(self.history_cursor.as_deref());
+        if effective_cursor.is_none() {
+            log::debug!("No history cursor, nothing more to load");
+            return;
+        }
+
+        let channel_id = match self.nakama.channel_id().await {
+            Some(id) => id,
+            None => return,
+        };
+
+        match self
+            .nakama
+            .list_channel_messages_with_cursor(&channel_id, 50, effective_cursor)
+            .await
+        {
+            Ok((mut messages, next_cursor)) => {
+                messages.reverse();
+                self.history_cursor = next_cursor.clone();
+                let _ = self.event_tx.send(Event::HistoryLoaded {
+                    messages,
+                    cursor: next_cursor,
+                });
+            }
+            Err(e) => log::error!("Failed to load history: {}", e),
         }
     }
 
