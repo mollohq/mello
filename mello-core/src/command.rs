@@ -2,7 +2,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::presence::{Activity, PresenceStatus};
 
-fn default_preset() -> u32 { 2 } // Medium
+fn default_preset() -> u32 {
+    2
+} // Medium
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Command {
@@ -110,6 +112,8 @@ pub enum Command {
 
     // --- Streaming ---
     ListCaptureSources,
+    StartThumbnailRefresh,
+    StopThumbnailRefresh,
     StartStream {
         crew_id: String,
         #[serde(default)]

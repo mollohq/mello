@@ -186,6 +186,7 @@ fn main() {
                 "dxguid",
                 "d3dcompiler",
                 "windowsapp",
+                "gdi32",
             ] {
                 println!("cargo:rustc-link-lib=dylib={}", lib);
             }

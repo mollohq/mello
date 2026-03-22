@@ -186,10 +186,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         u.check_for_updates();
     }
 
-    let frame_slot: mello_core::FrameSlot =
-        std::sync::Arc::new(std::sync::Mutex::new(None));
-    let frame_consumed =
-        std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let frame_slot: mello_core::FrameSlot = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let frame_consumed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
     let frame_slot_for_client = frame_slot.clone();
     let frame_consumed_for_client = frame_consumed.clone();
 
@@ -936,6 +934,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let cmd = cmd_tx.clone();
         app.on_list_capture_sources(move || {
             let _ = cmd.try_send(Command::ListCaptureSources);
+            let _ = cmd.try_send(Command::StartThumbnailRefresh);
         });
     }
     {
@@ -947,13 +946,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             } else {
                 return;
             };
-            if crew_id.is_empty() { return; }
+            if crew_id.is_empty() {
+                return;
+            }
 
             let mode = source_mode.to_string();
             let id = source_id.to_string();
 
             let (monitor_index, hwnd, pid) = parse_capture_source_id(&id, &mode);
 
+            let _ = cmd.try_send(Command::StopThumbnailRefresh);
             let _ = cmd.try_send(Command::StartStream {
                 crew_id,
                 title: String::new(),
@@ -973,6 +975,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     {
         let cmd = cmd_tx.clone();
+        app.on_stop_thumbnail_refresh(move || {
+            let _ = cmd.try_send(Command::StopThumbnailRefresh);
+        });
+    }
+    {
+        let cmd = cmd_tx.clone();
         app.on_stop_watching(move || {
             let _ = cmd.try_send(Command::StopWatching);
         });
@@ -980,7 +988,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     {
         let cmd = cmd_tx.clone();
         app.on_watch_stream(move |host_id, width, height| {
-            log::info!("UI: watch stream from host {} ({}x{})", host_id, width, height);
+            log::info!(
+                "UI: watch stream from host {} ({}x{})",
+                host_id,
+                width,
+                height
+            );
             let _ = cmd.try_send(Command::WatchStream {
                 host_id: host_id.to_string(),
                 width: width as u32,
@@ -2818,42 +2831,89 @@ fn handle_event(
         }
 
         // --- Streaming events ---
-        Event::CaptureSourcesListed { monitors, games, windows } => {
-            log::info!("Capture sources: {} monitors, {} games, {} windows",
-                monitors.len(), games.len(), windows.len());
-            let mon: Vec<CaptureSourceData> = monitors.into_iter().map(|s| CaptureSourceData {
-                id: s.id.into(),
-                name: s.name.into(),
-                mode: s.mode.into(),
-                pid: s.pid.unwrap_or(0) as i32,
-                exe: s.exe.into(),
-                is_fullscreen: s.is_fullscreen,
-                resolution: s.resolution.into(),
-            }).collect();
-            let gam: Vec<CaptureSourceData> = games.into_iter().map(|s| CaptureSourceData {
-                id: s.id.into(),
-                name: s.name.into(),
-                mode: s.mode.into(),
-                pid: s.pid.unwrap_or(0) as i32,
-                exe: s.exe.into(),
-                is_fullscreen: s.is_fullscreen,
-                resolution: s.resolution.into(),
-            }).collect();
-            let win: Vec<CaptureSourceData> = windows.into_iter().map(|s| CaptureSourceData {
-                id: s.id.into(),
-                name: s.name.into(),
-                mode: s.mode.into(),
-                pid: s.pid.unwrap_or(0) as i32,
-                exe: s.exe.into(),
-                is_fullscreen: s.is_fullscreen,
-                resolution: s.resolution.into(),
-            }).collect();
+        Event::CaptureSourcesListed {
+            monitors,
+            games,
+            windows,
+        } => {
+            log::info!(
+                "Capture sources: {} monitors, {} games, {} windows",
+                monitors.len(),
+                games.len(),
+                windows.len()
+            );
+            let mon: Vec<CaptureSourceData> = monitors
+                .into_iter()
+                .map(|s| CaptureSourceData {
+                    id: s.id.into(),
+                    name: s.name.into(),
+                    mode: s.mode.into(),
+                    pid: s.pid.unwrap_or(0) as i32,
+                    exe: s.exe.into(),
+                    is_fullscreen: s.is_fullscreen,
+                    resolution: s.resolution.into(),
+                    ..Default::default()
+                })
+                .collect();
+            let gam: Vec<CaptureSourceData> = games
+                .into_iter()
+                .map(|s| CaptureSourceData {
+                    id: s.id.into(),
+                    name: s.name.into(),
+                    mode: s.mode.into(),
+                    pid: s.pid.unwrap_or(0) as i32,
+                    exe: s.exe.into(),
+                    is_fullscreen: s.is_fullscreen,
+                    resolution: s.resolution.into(),
+                    ..Default::default()
+                })
+                .collect();
+            let win: Vec<CaptureSourceData> = windows
+                .into_iter()
+                .map(|s| CaptureSourceData {
+                    id: s.id.into(),
+                    name: s.name.into(),
+                    mode: s.mode.into(),
+                    pid: s.pid.unwrap_or(0) as i32,
+                    exe: s.exe.into(),
+                    is_fullscreen: s.is_fullscreen,
+                    resolution: s.resolution.into(),
+                    ..Default::default()
+                })
+                .collect();
             app.set_stream_monitors(Rc::new(slint::VecModel::from(mon)).into());
             app.set_stream_games(Rc::new(slint::VecModel::from(gam)).into());
             app.set_stream_windows(Rc::new(slint::VecModel::from(win)).into());
         }
-        Event::StreamStarted { crew_id, session_id, mode } => {
-            log::info!("Stream started: crew={} session={} mode={}", crew_id, session_id, mode);
+        Event::WindowThumbnailsUpdated { thumbnails } => {
+            let model = app.get_stream_windows();
+            for (id, rgba, w, h) in thumbnails {
+                for row in 0..model.row_count() {
+                    if let Some(mut entry) = model.row_data(row) {
+                        if entry.id == id.as_str() {
+                            let mut pixel_buf =
+                                slint::SharedPixelBuffer::<slint::Rgba8Pixel>::new(w, h);
+                            pixel_buf.make_mut_bytes().copy_from_slice(&rgba);
+                            entry.thumbnail = slint::Image::from_rgba8(pixel_buf);
+                            entry.has_thumbnail = true;
+                            model.set_row_data(row, entry);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        Event::StreamStarted {
+            crew_id,
+            session_id,
+            mode,
+        } => {
+            log::info!(
+                "Stream started: crew={} session={} mode={}",
+                crew_id,
+                session_id,
+                mode
+            );
             app.set_is_hosting(true);
             app.set_streamer_name(app.get_user_name());
             app.set_stream_label("STREAMING".into());
@@ -2875,7 +2935,11 @@ fn handle_event(
         Event::StreamViewerLeft { viewer_id } => {
             log::info!("Stream viewer left: {}", viewer_id);
         }
-        Event::StreamWatching { host_id, width, height } => {
+        Event::StreamWatching {
+            host_id,
+            width,
+            height,
+        } => {
             log::info!("Watching stream from {} ({}x{})", host_id, width, height);
             app.set_is_watching(true);
             app.set_streamer_name(host_id.into());

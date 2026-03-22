@@ -169,6 +169,10 @@ pub enum Event {
         games: Vec<CaptureSource>,
         windows: Vec<CaptureSource>,
     },
+    WindowThumbnailsUpdated {
+        /// (window_id, rgba_pixels, width, height)
+        thumbnails: Vec<(String, Vec<u8>, u32, u32)>,
+    },
     StreamStarted {
         crew_id: String,
         session_id: String,

@@ -5,6 +5,7 @@
 #include "video/encoder_factory.hpp"
 #include "video/decoder_factory.hpp"
 #include "video/process_enum.hpp"
+#include "video/window_thumbnail.hpp"
 #include "util/log.hpp"
 #include <cstring>
 #include <cstdlib>
@@ -474,6 +475,24 @@ bool mello_encoder_available(MelloContext* ctx) {
     } catch (...) { return false; }
 }
 
+int mello_enumerate_monitors(MelloContext* ctx, MelloMonitorInfo* out, int max_count) {
+    if (!ctx || !out || max_count <= 0) return 0;
+    try {
+        auto monitors = mello::video::enumerate_monitors();
+        int count = static_cast<int>(monitors.size());
+        if (count > max_count) count = max_count;
+        for (int i = 0; i < count; ++i) {
+            out[i].index   = monitors[i].index;
+            out[i].width   = monitors[i].width;
+            out[i].height  = monitors[i].height;
+            out[i].primary = monitors[i].primary;
+            strncpy(out[i].name, monitors[i].name.c_str(), sizeof(out[i].name) - 1);
+            out[i].name[sizeof(out[i].name) - 1] = '\0';
+        }
+        return count;
+    } catch (...) { return 0; }
+}
+
 int mello_enumerate_games(MelloContext* ctx, MelloGameProcess* out, int max_count) {
     if (!ctx || !out || max_count <= 0) return 0;
     try {
@@ -508,6 +527,18 @@ int mello_enumerate_windows(MelloContext* ctx, MelloWindow* out, int max_count) 
         }
         return count;
     } catch (...) { return 0; }
+}
+
+int mello_capture_window_thumbnail(
+    void* hwnd,
+    uint32_t max_width, uint32_t max_height,
+    uint8_t* rgba_out, uint32_t* out_width, uint32_t* out_height)
+{
+    if (!hwnd || !rgba_out || !out_width || !out_height) return -1;
+    try {
+        return mello::video::capture_window_thumbnail(
+            hwnd, max_width, max_height, rgba_out, out_width, out_height);
+    } catch (...) { return -1; }
 }
 
 MelloStreamHost* mello_stream_start_host(

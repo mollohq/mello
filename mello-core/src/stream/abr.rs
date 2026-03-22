@@ -23,9 +23,9 @@ struct ViewerLossState {
 }
 
 /// FEC group sizes for different loss conditions.
-const FEC_N_HEALTHY: usize = 0;   // no FEC when loss < 1%
+const FEC_N_HEALTHY: usize = 0; // no FEC when loss < 1%
 const FEC_N_MODERATE: usize = 10; // 10% overhead when 1-5% loss
-const FEC_N_HIGH: usize = 5;      // 20% overhead when > 5% loss
+const FEC_N_HIGH: usize = 5; // 20% overhead when > 5% loss
 
 #[derive(Debug, Clone)]
 pub struct AbrChange {

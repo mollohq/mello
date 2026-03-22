@@ -46,7 +46,9 @@ struct ChunkAssembly {
 
 impl ChunkAssembler {
     fn new() -> Self {
-        Self { pending: HashMap::new() }
+        Self {
+            pending: HashMap::new(),
+        }
     }
 
     /// Feed a raw DataChannel message. Returns the reassembled payload if complete.
@@ -66,9 +68,7 @@ impl ChunkAssembler {
         }
 
         // Evict stale assemblies (keep only messages within a recent window)
-        self.pending.retain(|&id, _| {
-            msg_id.wrapping_sub(id) < 64
-        });
+        self.pending.retain(|&id, _| msg_id.wrapping_sub(id) < 64);
 
         let entry = self.pending.entry(msg_id).or_insert_with(|| ChunkAssembly {
             chunk_count,
@@ -84,7 +84,11 @@ impl ChunkAssembler {
 
         if entry.chunks_received == entry.chunk_count {
             let assembly = self.pending.remove(&msg_id).unwrap();
-            let total: usize = assembly.chunks.iter().map(|c| c.as_ref().map_or(0, |v| v.len())).sum();
+            let total: usize = assembly
+                .chunks
+                .iter()
+                .map(|c| c.as_ref().map_or(0, |v| v.len()))
+                .sum();
             let mut result = Vec::with_capacity(total);
             for data in assembly.chunks.into_iter().flatten() {
                 result.extend_from_slice(&data);
@@ -160,7 +164,9 @@ unsafe extern "C" fn on_viewer_frame(
     h: u32,
     _ts: u64,
 ) {
-    if user_data.is_null() || rgba.is_null() || w == 0 || h == 0 { return; }
+    if user_data.is_null() || rgba.is_null() || w == 0 || h == 0 {
+        return;
+    }
     let data = &*(user_data as *const FrameCallbackData);
     let expected_len = (w * h) as usize * 4;
     let src = std::slice::from_raw_parts(rgba, expected_len);
@@ -175,7 +181,8 @@ unsafe extern "C" fn on_viewer_frame(
                 *slot = Some((w, h, src.to_vec()));
             }
         }
-        data.frame_consumed.store(false, std::sync::atomic::Ordering::Release);
+        data.frame_consumed
+            .store(false, std::sync::atomic::Ordering::Release);
     }
 }
 
@@ -183,13 +190,19 @@ unsafe extern "C" fn stream_ice_callback(
     user_data: *mut std::ffi::c_void,
     candidate: *const mello_sys::MelloIceCandidate,
 ) {
-    if user_data.is_null() || candidate.is_null() { return; }
+    if user_data.is_null() || candidate.is_null() {
+        return;
+    }
     let data = &*(user_data as *const StreamIceCallbackData);
     let c = &*candidate;
     let cand = CStr::from_ptr(c.candidate).to_string_lossy().into_owned();
     let mid = CStr::from_ptr(c.sdp_mid).to_string_lossy().into_owned();
     let idx = c.sdp_mline_index;
-    log::debug!("Stream ICE candidate gathered for peer {}: {}", data.peer_id, cand);
+    log::debug!(
+        "Stream ICE candidate gathered for peer {}: {}",
+        data.peer_id,
+        cand
+    );
 
     let envelope = SignalEnvelope {
         purpose: SignalPurpose::Stream,
@@ -231,7 +244,9 @@ fn flush_ice_buffer(cb_data: &StreamIceCallbackData) {
             }
         }
     }
-    cb_data.flushed.store(true, std::sync::atomic::Ordering::Release);
+    cb_data
+        .flushed
+        .store(true, std::sync::atomic::Ordering::Release);
 }
 
 pub struct Client {
@@ -251,6 +266,10 @@ pub struct Client {
     /// Actual encode resolution (set after host pipeline starts).
     stream_encode_width: u32,
     stream_encode_height: u32,
+    /// Stop signal for the thumbnail refresh thread.
+    thumbnail_stop: Option<Arc<std::sync::atomic::AtomicBool>>,
+    /// Cached list of windows for thumbnail refresh.
+    cached_windows: Vec<(String, u64)>,
 }
 
 impl Client {
@@ -276,6 +295,8 @@ impl Client {
             stream_encode_height: 0,
             pending_remote_ice: HashMap::new(),
             ice_servers: Vec::new(),
+            thumbnail_stop: None,
+            cached_windows: Vec::new(),
         }
     }
 
@@ -353,18 +374,16 @@ impl Client {
 
     fn handle_signal(&mut self, signal: InternalSignal) {
         match serde_json::from_str::<SignalEnvelope>(&signal.payload) {
-            Ok(env) => {
-                match env.purpose {
-                    SignalPurpose::Voice => {
-                        log::info!("Voice signal from {}: {:?}", signal.from, env.message);
-                        self.voice.handle_signal(&signal.from, env.message);
-                    }
-                    SignalPurpose::Stream => {
-                        log::info!("Stream signal from {}: {:?}", signal.from, env.message);
-                        self.handle_stream_signal(&signal.from, env);
-                    }
+            Ok(env) => match env.purpose {
+                SignalPurpose::Voice => {
+                    log::info!("Voice signal from {}: {:?}", signal.from, env.message);
+                    self.voice.handle_signal(&signal.from, env.message);
                 }
-            }
+                SignalPurpose::Stream => {
+                    log::info!("Stream signal from {}: {:?}", signal.from, env.message);
+                    self.handle_stream_signal(&signal.from, env);
+                }
+            },
             Err(_) => {
                 // Backward compat: try parsing as bare SignalMessage (no envelope)
                 match serde_json::from_str::<SignalMessage>(&signal.payload) {
@@ -393,7 +412,10 @@ impl Client {
             return;
         }
 
-        log::warn!("Stream signal from {} but not hosting or viewing — ignoring", from);
+        log::warn!(
+            "Stream signal from {} but not hosting or viewing — ignoring",
+            from
+        );
     }
 
     fn handle_stream_signal_as_host(&mut self, from: &str, message: SignalMessage) {
@@ -430,7 +452,9 @@ impl Client {
                 }
 
                 // Configure ICE servers
-                let ice_cstrings: Vec<CString> = self.ice_servers.iter()
+                let ice_cstrings: Vec<CString> = self
+                    .ice_servers
+                    .iter()
                     .filter_map(|u| CString::new(u.as_str()).ok())
                     .collect();
                 if !ice_cstrings.is_empty() {
@@ -471,9 +495,8 @@ impl Client {
                         return;
                     }
                 };
-                let answer_ptr = unsafe {
-                    mello_sys::mello_peer_create_answer(peer, sdp_c.as_ptr())
-                };
+                let answer_ptr =
+                    unsafe { mello_sys::mello_peer_create_answer(peer, sdp_c.as_ptr()) };
                 if answer_ptr.is_null() {
                     log::error!("Failed to create stream answer for viewer {}", from);
                     unsafe {
@@ -500,7 +523,9 @@ impl Client {
                         },
                     ));
                 }
-                unsafe { flush_ice_buffer(&*ice_cb_data); }
+                unsafe {
+                    flush_ice_buffer(&*ice_cb_data);
+                }
 
                 // Add peer to P2PFanoutSink
                 if let Some(ref sink) = self.stream_sink {
@@ -514,16 +539,23 @@ impl Client {
                     }
                 }
 
-                self.stream_host_peers.insert(from.to_string(), StreamHostPeer {
-                    peer,
-                    ice_cb_data,
-                });
+                self.stream_host_peers
+                    .insert(from.to_string(), StreamHostPeer { peer, ice_cb_data });
 
                 // Apply any ICE candidates that arrived before this Offer
                 if let Some(early_ice) = self.pending_remote_ice.remove(from) {
-                    log::debug!("Applying {} buffered ICE candidates for viewer {}", early_ice.len(), from);
+                    log::debug!(
+                        "Applying {} buffered ICE candidates for viewer {}",
+                        early_ice.len(),
+                        from
+                    );
                     for msg in early_ice {
-                        if let SignalMessage::IceCandidate { candidate, sdp_mid, sdp_mline_index } = msg {
+                        if let SignalMessage::IceCandidate {
+                            candidate,
+                            sdp_mid,
+                            sdp_mline_index,
+                        } = msg
+                        {
                             let cand_c = match CString::new(candidate) {
                                 Ok(c) => c,
                                 Err(_) => continue,
@@ -537,7 +569,9 @@ impl Client {
                                 sdp_mid: mid_c.as_ptr(),
                                 sdp_mline_index,
                             };
-                            unsafe { mello_sys::mello_peer_add_ice_candidate(peer, &ice); }
+                            unsafe {
+                                mello_sys::mello_peer_add_ice_candidate(peer, &ice);
+                            }
                         }
                     }
                 }
@@ -546,7 +580,11 @@ impl Client {
                     viewer_id: from.to_string(),
                 });
             }
-            SignalMessage::IceCandidate { candidate, sdp_mid, sdp_mline_index } => {
+            SignalMessage::IceCandidate {
+                candidate,
+                sdp_mid,
+                sdp_mline_index,
+            } => {
                 if let Some(hp) = self.stream_host_peers.get(from) {
                     let cand_c = match CString::new(candidate.clone()) {
                         Ok(c) => c,
@@ -566,15 +604,25 @@ impl Client {
                     }
                     log::debug!("Added stream ICE candidate from viewer {}", from);
                 } else {
-                    log::debug!("Buffering early ICE candidate from viewer {} (offer not yet received)", from);
+                    log::debug!(
+                        "Buffering early ICE candidate from viewer {} (offer not yet received)",
+                        from
+                    );
                     self.pending_remote_ice
                         .entry(from.to_string())
                         .or_default()
-                        .push(SignalMessage::IceCandidate { candidate, sdp_mid, sdp_mline_index });
+                        .push(SignalMessage::IceCandidate {
+                            candidate,
+                            sdp_mid,
+                            sdp_mline_index,
+                        });
                 }
             }
             SignalMessage::Answer { .. } => {
-                log::warn!("Unexpected stream Answer from {} while hosting — ignoring", from);
+                log::warn!(
+                    "Unexpected stream Answer from {} while hosting — ignoring",
+                    from
+                );
             }
         }
     }
@@ -586,7 +634,11 @@ impl Client {
         };
 
         if from != vs.host_id {
-            log::warn!("Stream signal from {} but we're watching {} — ignoring", from, vs.host_id);
+            log::warn!(
+                "Stream signal from {} but we're watching {} — ignoring",
+                from,
+                vs.host_id
+            );
             return;
         }
 
@@ -611,7 +663,11 @@ impl Client {
                             (sw, sh)
                         }
                         _ => {
-                            log::warn!("No resolution in Answer, falling back to {}x{}", config.width, config.height);
+                            log::warn!(
+                                "No resolution in Answer, falling back to {}x{}",
+                                config.width,
+                                config.height
+                            );
                             (config.width, config.height)
                         }
                     };
@@ -624,7 +680,11 @@ impl Client {
                     };
 
                     let ctx = self.voice.mello_ctx();
-                    let frame_cb_data = self.viewer_state.as_ref().map(|v| v._frame_cb_data).unwrap();
+                    let frame_cb_data = self
+                        .viewer_state
+                        .as_ref()
+                        .map(|v| v._frame_cb_data)
+                        .unwrap();
                     let viewer = unsafe {
                         mello_sys::mello_stream_start_viewer(
                             ctx,
@@ -649,7 +709,11 @@ impl Client {
                     }
                 }
             }
-            SignalMessage::IceCandidate { candidate, sdp_mid, sdp_mline_index } => {
+            SignalMessage::IceCandidate {
+                candidate,
+                sdp_mid,
+                sdp_mline_index,
+            } => {
                 let cand_c = match CString::new(candidate) {
                     Ok(c) => c,
                     Err(_) => return,
@@ -669,7 +733,10 @@ impl Client {
                 log::debug!("Added stream ICE candidate from host {}", from);
             }
             SignalMessage::Offer { .. } => {
-                log::warn!("Unexpected stream Offer from {} while viewing — ignoring", from);
+                log::warn!(
+                    "Unexpected stream Offer from {} while viewing — ignoring",
+                    from
+                );
             }
         }
     }
@@ -758,7 +825,9 @@ impl Client {
             let size = unsafe {
                 mello_sys::mello_peer_recv(peer, vs.recv_buf.as_mut_ptr(), vs.recv_buf.len() as i32)
             };
-            if size <= 0 { break; }
+            if size <= 0 {
+                break;
+            }
 
             let raw = &vs.recv_buf[..size as usize];
             if let Some(full_msg) = vs.chunk_assembler.feed(raw) {
@@ -771,8 +840,14 @@ impl Client {
 
             for result in results {
                 match result {
-                    ViewerFeedResult::VideoPayload { data: payload, is_keyframe } |
-                    ViewerFeedResult::RecoveredVideoPayload { data: payload, is_keyframe } => {
+                    ViewerFeedResult::VideoPayload {
+                        data: payload,
+                        is_keyframe,
+                    }
+                    | ViewerFeedResult::RecoveredVideoPayload {
+                        data: payload,
+                        is_keyframe,
+                    } => {
                         if !vs.got_keyframe {
                             if is_keyframe {
                                 vs.got_keyframe = true;
@@ -794,15 +869,13 @@ impl Client {
                         }
                         fed_any = true;
                     }
-                    ViewerFeedResult::AudioPayload(payload) => {
-                        unsafe {
-                            mello_sys::mello_stream_feed_audio_packet(
-                                viewer,
-                                payload.as_ptr(),
-                                payload.len() as i32,
-                            );
-                        }
-                    }
+                    ViewerFeedResult::AudioPayload(payload) => unsafe {
+                        mello_sys::mello_stream_feed_audio_packet(
+                            viewer,
+                            payload.as_ptr(),
+                            payload.len() as i32,
+                        );
+                    },
                     ViewerFeedResult::Action(ViewerAction::SendControl(ctrl_data)) => {
                         let connected = unsafe { mello_sys::mello_peer_is_connected(peer) };
                         if connected {
@@ -1022,13 +1095,40 @@ impl Client {
             Command::ListCaptureSources => {
                 self.handle_list_capture_sources();
             }
-            Command::StartStream { crew_id, title, capture_mode, monitor_index, hwnd, pid, preset } => {
-                self.handle_start_stream(&crew_id, &title, &capture_mode, monitor_index, hwnd, pid, preset).await;
+            Command::StartThumbnailRefresh => {
+                self.start_thumbnail_refresh();
+            }
+            Command::StopThumbnailRefresh => {
+                self.stop_thumbnail_refresh();
+            }
+            Command::StartStream {
+                crew_id,
+                title,
+                capture_mode,
+                monitor_index,
+                hwnd,
+                pid,
+                preset,
+            } => {
+                self.handle_start_stream(
+                    &crew_id,
+                    &title,
+                    &capture_mode,
+                    monitor_index,
+                    hwnd,
+                    pid,
+                    preset,
+                )
+                .await;
             }
             Command::StopStream => {
                 self.handle_stop_stream().await;
             }
-            Command::WatchStream { host_id, width, height } => {
+            Command::WatchStream {
+                host_id,
+                width,
+                height,
+            } => {
                 self.handle_watch_stream(&host_id, width, height);
             }
             Command::StopWatching => {
@@ -2093,37 +2193,56 @@ impl Client {
 
     // --- Streaming ---
 
-    fn handle_list_capture_sources(&self) {
+    fn handle_list_capture_sources(&mut self) {
         let ctx = self.voice.mello_ctx();
         if ctx.is_null() {
             log::error!("Cannot enumerate capture sources: libmello not initialized");
             return;
         }
 
+        let mut mons_raw = vec![
+            mello_sys::MelloMonitorInfo {
+                index: 0,
+                name: [0i8; 128],
+                width: 0,
+                height: 0,
+                primary: false,
+            };
+            16
+        ];
+        let mon_count =
+            unsafe { mello_sys::mello_enumerate_monitors(ctx, mons_raw.as_mut_ptr(), 16) };
         let mut monitors = Vec::new();
-        for i in 0..4u32 {
+        for mon in mons_raw.iter().take(mon_count as usize) {
+            let display_name = if mon.primary {
+                format!("Display {} (Primary)", mon.index + 1)
+            } else {
+                format!("Display {}", mon.index + 1)
+            };
             monitors.push(crate::events::CaptureSource {
-                id: format!("monitor-{}", i),
-                name: format!("Display {}", i + 1),
+                id: format!("monitor-{}", mon.index),
+                name: display_name,
                 mode: "monitor".to_string(),
-                monitor_index: Some(i),
+                monitor_index: Some(mon.index),
                 hwnd: None,
                 pid: None,
                 exe: String::new(),
                 is_fullscreen: false,
-                resolution: String::new(),
+                resolution: format!("{}x{}", mon.width, mon.height),
             });
         }
 
-        let mut games_raw = vec![mello_sys::MelloGameProcess {
-            pid: 0,
-            name: [0i8; 128],
-            exe: [0i8; 260],
-            is_fullscreen: false,
-        }; 32];
-        let game_count = unsafe {
-            mello_sys::mello_enumerate_games(ctx, games_raw.as_mut_ptr(), 32)
-        };
+        let mut games_raw = vec![
+            mello_sys::MelloGameProcess {
+                pid: 0,
+                name: [0i8; 128],
+                exe: [0i8; 260],
+                is_fullscreen: false,
+            };
+            32
+        ];
+        let game_count =
+            unsafe { mello_sys::mello_enumerate_games(ctx, games_raw.as_mut_ptr(), 32) };
         let mut games = Vec::new();
         for game in games_raw.iter().take(game_count as usize) {
             let name = unsafe { std::ffi::CStr::from_ptr(game.name.as_ptr()) }
@@ -2145,15 +2264,17 @@ impl Client {
             });
         }
 
-        let mut windows_raw = vec![mello_sys::MelloWindow {
-            hwnd: std::ptr::null_mut(),
-            title: [0i8; 256],
-            exe: [0i8; 256],
-            pid: 0,
-        }; 64];
-        let win_count = unsafe {
-            mello_sys::mello_enumerate_windows(ctx, windows_raw.as_mut_ptr(), 64)
-        };
+        let mut windows_raw = vec![
+            mello_sys::MelloWindow {
+                hwnd: std::ptr::null_mut(),
+                title: [0i8; 256],
+                exe: [0i8; 256],
+                pid: 0,
+            };
+            64
+        ];
+        let win_count =
+            unsafe { mello_sys::mello_enumerate_windows(ctx, windows_raw.as_mut_ptr(), 64) };
         let mut windows = Vec::new();
         for win in windows_raw.iter().take(win_count as usize) {
             let title = unsafe { std::ffi::CStr::from_ptr(win.title.as_ptr()) }
@@ -2176,15 +2297,85 @@ impl Client {
             });
         }
 
+        // Cache windows for thumbnail refresh
+        self.cached_windows = windows
+            .iter()
+            .filter_map(|w| w.hwnd.map(|h| (w.id.clone(), h)))
+            .collect();
+
         log::info!(
             "Enumerated capture sources: {} monitors, {} games, {} windows",
-            monitors.len(), games.len(), windows.len()
+            monitors.len(),
+            games.len(),
+            windows.len()
         );
         let _ = self.event_tx.send(Event::CaptureSourcesListed {
             monitors,
             games,
             windows,
         });
+    }
+
+    fn start_thumbnail_refresh(&mut self) {
+        self.stop_thumbnail_refresh();
+
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        self.thumbnail_stop = Some(stop.clone());
+
+        let event_tx = self.event_tx.clone();
+        let windows = self.cached_windows.clone();
+
+        const THUMB_W: u32 = 192;
+        const THUMB_H: u32 = 128;
+        let buf_size = (THUMB_W * THUMB_H * 4) as usize;
+
+        std::thread::spawn(move || {
+            log::debug!(
+                "Thumbnail refresh thread started for {} windows",
+                windows.len()
+            );
+            while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                let mut thumbnails = Vec::new();
+                for (id, hwnd) in &windows {
+                    let mut rgba = vec![0u8; buf_size];
+                    let mut out_w: u32 = 0;
+                    let mut out_h: u32 = 0;
+                    let ret = unsafe {
+                        mello_sys::mello_capture_window_thumbnail(
+                            *hwnd as *mut std::ffi::c_void,
+                            THUMB_W,
+                            THUMB_H,
+                            rgba.as_mut_ptr(),
+                            &mut out_w,
+                            &mut out_h,
+                        )
+                    };
+                    if ret == 0 && out_w > 0 && out_h > 0 {
+                        rgba.truncate((out_w * out_h * 4) as usize);
+                        thumbnails.push((id.clone(), rgba, out_w, out_h));
+                    }
+                }
+
+                if !thumbnails.is_empty() {
+                    let _ = event_tx.send(Event::WindowThumbnailsUpdated { thumbnails });
+                }
+
+                // Sleep 3 seconds, checking stop flag every 100ms
+                for _ in 0..30 {
+                    if stop.load(std::sync::atomic::Ordering::Relaxed) {
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                }
+            }
+            log::debug!("Thumbnail refresh thread stopped");
+        });
+    }
+
+    fn stop_thumbnail_refresh(&mut self) {
+        if let Some(stop) = self.thumbnail_stop.take() {
+            stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -2215,7 +2406,10 @@ impl Client {
         log::info!("Starting stream with preset: {:?}", quality_preset);
 
         // Step 1: async RPC call (no raw pointers held across await)
-        let config = crate::stream::StreamConfig::from_preset(quality_preset, crate::stream::config::Codec::H264);
+        let config = crate::stream::StreamConfig::from_preset(
+            quality_preset,
+            crate::stream::config::Codec::H264,
+        );
         let resp = match crate::stream::host::request_start_stream(
             &self.nakama,
             crew_id,
@@ -2388,7 +2582,9 @@ impl Client {
         }
 
         // Configure ICE servers
-        let ice_cstrings: Vec<CString> = self.ice_servers.iter()
+        let ice_cstrings: Vec<CString> = self
+            .ice_servers
+            .iter()
             .filter_map(|u| CString::new(u.as_str()).ok())
             .collect();
         if !ice_cstrings.is_empty() {
@@ -2431,7 +2627,9 @@ impl Client {
             });
             return;
         }
-        let sdp = unsafe { CStr::from_ptr(sdp_ptr) }.to_string_lossy().into_owned();
+        let sdp = unsafe { CStr::from_ptr(sdp_ptr) }
+            .to_string_lossy()
+            .into_owned();
         log::info!("Created stream offer for host {}", host_id);
 
         // Queue offer first, then flush buffered ICE candidates after it
@@ -2446,7 +2644,9 @@ impl Client {
                 },
             ));
         }
-        unsafe { flush_ice_buffer(&*ice_cb_data); }
+        unsafe {
+            flush_ice_buffer(&*ice_cb_data);
+        }
 
         // Decoder pipeline will be created when the Answer arrives with the
         // host's actual encode resolution (see handle_stream_signal_as_viewer).
@@ -2475,7 +2675,10 @@ impl Client {
             chunk_assembler: ChunkAssembler::new(),
         });
 
-        log::info!("Stream viewer peer created, waiting for Answer from host {}", host_id);
+        log::info!(
+            "Stream viewer peer created, waiting for Answer from host {}",
+            host_id
+        );
     }
 
     fn handle_stop_watching(&mut self) {

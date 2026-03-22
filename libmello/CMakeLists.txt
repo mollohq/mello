@@ -196,6 +196,7 @@ if(WIN32)
         src/video/capture_wgc.cpp
         src/video/capture_process.cpp
         src/video/process_enum.cpp
+        src/video/window_thumbnail.cpp
         src/video/video_preprocessor.cpp
         src/video/staging_texture.cpp
         src/video/encoder_nvenc.cpp
@@ -213,6 +214,7 @@ else()
         src/video/graphics_device.cpp
         src/video/video_pipeline.cpp
         src/video/process_enum.cpp
+        src/video/window_thumbnail.cpp
     )
 endif()
 

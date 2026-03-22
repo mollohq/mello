@@ -99,11 +99,7 @@ impl P2PFanoutSink {
                 msg.extend_from_slice(payload);
 
                 unsafe {
-                    mello_sys::mello_peer_send_unreliable(
-                        vp.peer,
-                        msg.as_ptr(),
-                        msg.len() as i32,
-                    );
+                    mello_sys::mello_peer_send_unreliable(vp.peer, msg.as_ptr(), msg.len() as i32);
                 }
             }
         }

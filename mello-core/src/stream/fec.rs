@@ -16,7 +16,11 @@ impl FecEncoder {
     pub fn new(n: usize) -> Self {
         Self {
             n,
-            group: if n >= 2 { Vec::with_capacity(n) } else { Vec::new() },
+            group: if n >= 2 {
+                Vec::with_capacity(n)
+            } else {
+                Vec::new()
+            },
         }
     }
 

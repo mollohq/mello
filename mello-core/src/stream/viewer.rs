@@ -126,10 +126,16 @@ impl StreamViewer {
 
         // Feed to FEC decoder
         if let Some(recovered) = self.fec_decoder.feed_data(packet.sequence, &packet.payload) {
-            results.push(ViewerFeedResult::RecoveredVideoPayload { data: recovered, is_keyframe: false });
+            results.push(ViewerFeedResult::RecoveredVideoPayload {
+                data: recovered,
+                is_keyframe: false,
+            });
         }
 
-        results.push(ViewerFeedResult::VideoPayload { data: packet.payload.clone(), is_keyframe: is_kf });
+        results.push(ViewerFeedResult::VideoPayload {
+            data: packet.payload.clone(),
+            is_keyframe: is_kf,
+        });
 
         // If this is the last data packet in the FEC group, prepare for parity
         if packet.is_fec_group_last() {
@@ -140,7 +146,10 @@ impl StreamViewer {
     fn on_fec_packet(&mut self, packet: &StreamPacket, results: &mut Vec<ViewerFeedResult>) {
         if let Some(recovered) = self.fec_decoder.feed_parity(&packet.payload) {
             self.packets_lost = self.packets_lost.saturating_sub(1);
-            results.push(ViewerFeedResult::RecoveredVideoPayload { data: recovered, is_keyframe: false });
+            results.push(ViewerFeedResult::RecoveredVideoPayload {
+                data: recovered,
+                is_keyframe: false,
+            });
         }
 
         // FEC group is complete after parity — check if it was recoverable
@@ -227,7 +236,15 @@ mod tests {
         let mut viewer = StreamViewer::new(3);
         let pkt = StreamPacket::video(vec![1, 2, 3], 0, true, false);
         let results = viewer.feed_packet(&pkt.serialize());
-        let has_video = results.iter().any(|r| matches!(r, ViewerFeedResult::VideoPayload { is_keyframe: true, .. }));
+        let has_video = results.iter().any(|r| {
+            matches!(
+                r,
+                ViewerFeedResult::VideoPayload {
+                    is_keyframe: true,
+                    ..
+                }
+            )
+        });
         assert!(has_video);
     }
 

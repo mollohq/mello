@@ -5,10 +5,14 @@
 #include "capture_process.hpp"
 #include <Windows.h>
 #include <dwmapi.h>
+#include <dxgi1_2.h>
 #include <TlHelp32.h>
+#include <wrl/client.h>
 #include <algorithm>
 #include <cctype>
 #pragma comment(lib, "dwmapi.lib")
+#pragma comment(lib, "dxgi.lib")
+using Microsoft::WRL::ComPtr;
 #endif
 
 namespace mello::video {
@@ -16,6 +20,46 @@ namespace mello::video {
 static constexpr const char* TAG = "video/process";
 
 #ifdef _WIN32
+
+std::vector<MonitorInfo> enumerate_monitors() {
+    std::vector<MonitorInfo> result;
+
+    ComPtr<IDXGIFactory1> factory;
+    if (FAILED(CreateDXGIFactory1(__uuidof(IDXGIFactory1), &factory))) {
+        MELLO_LOG_ERROR(TAG, "CreateDXGIFactory1 failed");
+        return result;
+    }
+
+    ComPtr<IDXGIAdapter1> adapter;
+    for (UINT ai = 0; factory->EnumAdapters1(ai, &adapter) == S_OK; ++ai) {
+        ComPtr<IDXGIOutput> output;
+        for (UINT oi = 0; adapter->EnumOutputs(oi, &output) == S_OK; ++oi) {
+            DXGI_OUTPUT_DESC desc{};
+            if (SUCCEEDED(output->GetDesc(&desc))) {
+                uint32_t w = desc.DesktopCoordinates.right  - desc.DesktopCoordinates.left;
+                uint32_t h = desc.DesktopCoordinates.bottom - desc.DesktopCoordinates.top;
+
+                char name_utf8[128]{};
+                WideCharToMultiByte(CP_UTF8, 0, desc.DeviceName, -1,
+                                    name_utf8, sizeof(name_utf8), nullptr, nullptr);
+
+                MonitorInfo mi;
+                mi.index   = static_cast<uint32_t>(result.size());
+                mi.name    = name_utf8;
+                mi.width   = w;
+                mi.height  = h;
+                mi.primary = (desc.DesktopCoordinates.left == 0 &&
+                              desc.DesktopCoordinates.top  == 0);
+                result.push_back(std::move(mi));
+            }
+            output.Reset();
+        }
+        adapter.Reset();
+    }
+
+    MELLO_LOG_DEBUG(TAG, "Enumerated %zu monitors", result.size());
+    return result;
+}
 
 // Hardcoded known game list — will be replaced with a bundled JSON file
 // loaded at runtime once asset pipeline is in place.
@@ -143,6 +187,11 @@ std::vector<VisibleWindow> enumerate_visible_windows() {
 }
 
 #else
+
+std::vector<MonitorInfo> enumerate_monitors() {
+    MELLO_LOG_WARN(TAG, "Monitor enumeration not supported on this platform");
+    return {};
+}
 
 std::vector<GameProcess> enumerate_game_processes() {
     MELLO_LOG_WARN(TAG, "Game process enumeration not supported on this platform");
