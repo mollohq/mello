@@ -228,6 +228,33 @@ unsafe extern "C" fn stream_ice_callback(
     }
 }
 
+unsafe extern "C" fn stream_state_callback(user_data: *mut std::ffi::c_void, state: i32) {
+    if user_data.is_null() {
+        return;
+    }
+    let data = &*(user_data as *const StreamIceCallbackData);
+    let label = match state {
+        0 => "New",
+        1 => "Connecting",
+        2 => "Connected",
+        3 => "Disconnected",
+        4 => "Failed",
+        5 => "Closed",
+        _ => "Unknown",
+    };
+    if state == 4 {
+        log::error!(
+            "Stream peer {} ICE state: {} — NAT traversal failed",
+            data.peer_id,
+            label
+        );
+    } else if state == 2 {
+        log::info!("Stream peer {} ICE state: {}", data.peer_id, label);
+    } else {
+        log::debug!("Stream peer {} ICE state: {}", data.peer_id, label);
+    }
+}
+
 /// Flush buffered ICE candidates from a `StreamIceCallbackData` into the main
 /// send queue. Must be called *after* the offer/answer has been pushed to `send_queue`.
 /// Sets `flushed = true` so subsequent candidates go directly to the send queue.
@@ -480,6 +507,11 @@ impl Client {
                     mello_sys::mello_peer_set_ice_callback(
                         peer,
                         Some(stream_ice_callback),
+                        ice_cb_data as *mut std::ffi::c_void,
+                    );
+                    mello_sys::mello_peer_set_state_callback(
+                        peer,
+                        Some(stream_state_callback),
                         ice_cb_data as *mut std::ffi::c_void,
                     );
                 }
@@ -2611,6 +2643,11 @@ impl Client {
             mello_sys::mello_peer_set_ice_callback(
                 peer,
                 Some(stream_ice_callback),
+                ice_cb_data as *mut std::ffi::c_void,
+            );
+            mello_sys::mello_peer_set_state_callback(
+                peer,
+                Some(stream_state_callback),
                 ice_cb_data as *mut std::ffi::c_void,
             );
         }

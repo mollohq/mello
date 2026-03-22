@@ -952,18 +952,23 @@ impl NakamaClient {
         let mut urls = Vec::new();
         for server in parsed.ice_servers {
             if !server.username.is_empty() && !server.credential.is_empty() {
+                // Percent-encode `:` and `@` in credentials so libdatachannel's
+                // `user:pass@host` URL parser splits correctly.
+                let enc_user = server
+                    .username
+                    .replace('%', "%25")
+                    .replace(':', "%3A")
+                    .replace('@', "%40");
+                let enc_cred = server
+                    .credential
+                    .replace('%', "%25")
+                    .replace(':', "%3A")
+                    .replace('@', "%40");
                 for url in &server.urls {
                     if let Some(host) = url.strip_prefix("turn:") {
-                        // libdatachannel format: turn:user:pass@host:port
-                        urls.push(format!(
-                            "turn:{}:{}@{}",
-                            server.username, server.credential, host
-                        ));
+                        urls.push(format!("turn:{}:{}@{}", enc_user, enc_cred, host));
                     } else if let Some(host) = url.strip_prefix("turns:") {
-                        urls.push(format!(
-                            "turns:{}:{}@{}",
-                            server.username, server.credential, host
-                        ));
+                        urls.push(format!("turns:{}:{}@{}", enc_user, enc_cred, host));
                     } else {
                         urls.push(url.clone());
                     }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"strings"
 	"sync"
 	"time"
 
@@ -401,7 +402,14 @@ func OnChatMessage(ctx context.Context, logger runtime.Logger, db *sql.DB, nk ru
 		return nil
 	}
 
-	preview := send.GetContent()
+	content := send.GetContent()
+
+	// Skip P2P signaling messages — they are not real chat.
+	if strings.Contains(content, `"signal":true`) {
+		return nil
+	}
+
+	preview := content
 	if len(preview) > 60 {
 		preview = preview[:57] + "..."
 	}

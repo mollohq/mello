@@ -56,7 +56,9 @@ void PeerConnectionImpl::create_pc() {
             std::string mid_str = candidate.mid();
             mc.candidate = cand_str.c_str();
             mc.sdp_mid = mid_str.c_str();
-            mc.sdp_mline_index = 0;
+            // Derive mline index from mid (typically "0", "1", etc.)
+            try { mc.sdp_mline_index = std::stoi(mid_str); }
+            catch (...) { mc.sdp_mline_index = 0; }
             ice_cb_(ice_ud_, &mc);
         }
     });

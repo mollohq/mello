@@ -62,6 +62,8 @@ pub struct VoiceMesh {
     outgoing_signals: Vec<(String, SignalMessage)>,
     ice_signal_queue: Arc<Mutex<Vec<(String, SignalMessage)>>>,
     ice_servers: Vec<CString>,
+    /// ICE candidates received before the peer was created (race condition buffer).
+    pending_ice: HashMap<String, Vec<SignalMessage>>,
 }
 
 impl Default for VoiceMesh {
@@ -78,6 +80,7 @@ impl VoiceMesh {
             outgoing_signals: Vec::new(),
             ice_signal_queue: Arc::new(Mutex::new(Vec::new())),
             ice_servers: Vec::new(),
+            pending_ice: HashMap::new(),
         }
     }
 
@@ -92,6 +95,7 @@ impl VoiceMesh {
     pub fn init(&mut self, local_id: &str, _member_ids: &[String]) {
         self.local_id = local_id.to_string();
         self.destroy_all_peers();
+        self.pending_ice.clear();
     }
 
     fn make_peer(&self, ctx: *mut mello_sys::MelloContext, member_id: &str) -> Option<PeerState> {
@@ -148,6 +152,42 @@ impl VoiceMesh {
             mello_sys::mello_peer_set_ice_callback(
                 peer,
                 Some(ice_callback),
+                cb_data as *mut std::ffi::c_void,
+            );
+        }
+
+        // Log ICE connection state transitions for NAT traversal diagnostics
+        unsafe extern "C" fn state_callback(user_data: *mut std::ffi::c_void, state: i32) {
+            if user_data.is_null() {
+                return;
+            }
+            let data = &*(user_data as *const IceCallbackData);
+            let label = match state {
+                0 => "New",
+                1 => "Connecting",
+                2 => "Connected",
+                3 => "Disconnected",
+                4 => "Failed",
+                5 => "Closed",
+                _ => "Unknown",
+            };
+            if state == 4 {
+                log::error!(
+                    "Voice peer {} ICE state: {} — NAT traversal failed",
+                    data.peer_id,
+                    label
+                );
+            } else if state == 2 {
+                log::info!("Voice peer {} ICE state: {}", data.peer_id, label);
+            } else {
+                log::debug!("Voice peer {} ICE state: {}", data.peer_id, label);
+            }
+        }
+
+        unsafe {
+            mello_sys::mello_peer_set_state_callback(
+                peer,
+                Some(state_callback),
                 cb_data as *mut std::ffi::c_void,
             );
         }
@@ -224,6 +264,34 @@ impl VoiceMesh {
                     self.outgoing_signals
                         .push((from.to_string(), SignalMessage::Answer { sdp: answer }));
                 }
+
+                // Apply any ICE candidates that arrived before this Offer
+                if let Some(early_ice) = self.pending_ice.remove(from) {
+                    log::debug!(
+                        "Applying {} buffered ICE candidates for voice peer {}",
+                        early_ice.len(),
+                        from
+                    );
+                    for msg in early_ice {
+                        if let SignalMessage::IceCandidate {
+                            candidate,
+                            sdp_mid,
+                            sdp_mline_index,
+                        } = msg
+                        {
+                            let cand_c = CString::new(candidate).unwrap();
+                            let mid_c = CString::new(sdp_mid).unwrap();
+                            let ice = mello_sys::MelloIceCandidate {
+                                candidate: cand_c.as_ptr(),
+                                sdp_mid: mid_c.as_ptr(),
+                                sdp_mline_index,
+                            };
+                            unsafe {
+                                mello_sys::mello_peer_add_ice_candidate(state.peer, &ice);
+                            }
+                        }
+                    }
+                }
             }
             SignalMessage::Answer { sdp } => {
                 if let Some(state) = self.peers.get(from) {
@@ -255,6 +323,18 @@ impl VoiceMesh {
                         mello_sys::mello_peer_add_ice_candidate(state.peer, &ice);
                     }
                     log::debug!("Added remote ICE candidate from peer {}", from);
+                } else {
+                    log::debug!(
+                        "Buffering early ICE candidate from voice peer {} (peer not yet created)",
+                        from
+                    );
+                    self.pending_ice.entry(from.to_string()).or_default().push(
+                        SignalMessage::IceCandidate {
+                            candidate,
+                            sdp_mid,
+                            sdp_mline_index,
+                        },
+                    );
                 }
             }
         }
