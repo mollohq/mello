@@ -5,6 +5,9 @@ export struct CrewData {
     member-count: int,
     online-count: int,
 
+    avatar: image,
+    has-avatar: bool,
+
     has-stream: bool,
     stream-name: string,
 
@@ -64,4 +67,21 @@ export struct CaptureSourceData {
     exe: string,
     is-fullscreen: bool,
     resolution: string,
+}
+
+export struct DiscoverCrewData {
+    id: string,
+    name: string,
+    description: string,
+    member-count: int,
+    online-count: int,
+    open: bool,
+    avatar: image,
+    has-avatar: bool,
+}
+
+export struct SearchUserData {
+    id: string,
+    display-name: string,
+    is-friend: bool,
 }

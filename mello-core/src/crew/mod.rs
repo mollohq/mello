@@ -9,6 +9,7 @@ pub struct Crew {
     pub member_count: i32,
     pub max_members: i32,
     pub open: bool,
+    pub avatar_url: Option<String>,
 }
 
 #[derive(Debug, Clone)]

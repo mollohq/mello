@@ -1,0 +1,652 @@
+import { Theme } from "../theme.slint";
+import { SearchUserData } from "../types.slint";
+
+export component NewCrewModal inherits Rectangle {
+    in property <image> avatar-preview;
+    in property <bool> has-avatar: false;
+    in property <[SearchUserData]> search-results: [];
+    in property <[SearchUserData]> invited-users: [];
+    in property <bool> created: false;
+    in property <string> invite-code: "";
+    in property <bool> onboarding-mode: false;
+
+    callback close-requested();
+    callback avatar-pick-requested();
+    callback create-requested(/* name */ string, /* description */ string, /* is-private */ bool);
+    callback search-users(/* query */ string);
+    callback invite-user(/* id */ string);
+    callback uninvite-user(/* id */ string);
+    callback copy-invite-code();
+
+    property <bool> is-private: true;
+    property <string> crew-name-text: "";
+    property <string> crew-desc-text: "";
+
+    background: #000000AA;
+
+    TouchArea {
+        clicked => { close-requested(); }
+    }
+
+    Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: min(520px, parent.width - 64px);
+        height: self.preferred-height;
+        background: Theme.surface;
+        border-radius: 12px;
+        border-width: 1px;
+        border-color: Theme.graphic-light;
+        drop-shadow-blur: 64px;
+        drop-shadow-color: #000000E6;
+        drop-shadow-offset-y: 24px;
+
+        TouchArea {}
+
+        VerticalLayout {
+
+            // ─── Header ──────────────────────────────────────────
+            Rectangle {
+                height: 64px;
+                background: Theme.bg-app;
+
+                Rectangle {
+                    y: parent.height - 1px;
+                    height: 1px;
+                    background: Theme.graphic-light;
+                }
+
+                Image {
+                    source: @image-url("../icons/shield-plus.svg");
+                    width: 20px;
+                    height: 20px;
+                    colorize: Theme.accent;
+                    x: 24px;
+                    y: (parent.height - self.height) / 2;
+                }
+
+                Text {
+                    text: created ? "CREW ESTABLISHED" : "INITIALIZE NEW CREW";
+                    font-family: Theme.font-mono;
+                    font-size: 13px;
+                    font-weight: 500;
+                    letter-spacing: 2.4px;
+                    color: Theme.text-primary;
+                    x: 24px + 20px + 12px;
+                    y: (parent.height - self.preferred-height) / 2;
+                }
+
+                Rectangle {
+                    width: 32px;
+                    height: 32px;
+                    border-radius: 6px;
+                    x: parent.width - self.width - 16px;
+                    y: (parent.height - self.height) / 2;
+                    background: close-touch.has-hover ? Theme.surface-hover : transparent;
+
+                    Image {
+                        source: @image-url("../icons/x.svg");
+                        width: 18px;
+                        height: 18px;
+                        colorize: close-touch.has-hover ? Theme.text-primary : Theme.text-secondary;
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
+                    }
+
+                    close-touch := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { close-requested(); }
+                    }
+                }
+            }
+
+            // ─── Success view (after creation) ───────────────────
+            if created: VerticalLayout {
+                padding: 32px;
+                spacing: 20px;
+
+                Text {
+                    text: "Your crew is ready. Share this invite code with others:";
+                    font-family: Theme.font-sans;
+                    font-size: 14px;
+                    color: Theme.text-secondary;
+                    wrap: word-wrap;
+                    horizontal-alignment: center;
+                }
+
+                Rectangle {
+                    height: 56px;
+                    background: Theme.bg-app;
+                    border-radius: Theme.r-inner;
+                    border-width: 1px;
+                    border-color: Theme.graphic-light;
+
+                    Text {
+                        text: invite-code;
+                        font-family: Theme.font-mono;
+                        font-size: 22px;
+                        font-weight: 600;
+                        letter-spacing: 4px;
+                        color: Theme.accent;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+
+                Rectangle {
+                    height: 40px;
+                    border-radius: Theme.r-inner;
+                    background: copy-touch.has-hover ? #FF1E56DD : Theme.accent;
+
+                    Text {
+                        text: "Copy Code";
+                        font-family: Theme.font-sans;
+                        font-size: 13px;
+                        font-weight: 600;
+                        color: #FFFFFF;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+
+                    copy-touch := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { copy-invite-code(); }
+                    }
+                }
+
+                Rectangle {
+                    height: 40px;
+                    border-radius: Theme.r-inner;
+                    background: done-touch.has-hover ? Theme.surface-hover : transparent;
+
+                    Text {
+                        text: "Done";
+                        font-family: Theme.font-sans;
+                        font-size: 13px;
+                        color: done-touch.has-hover ? Theme.text-primary : Theme.text-secondary;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+
+                    done-touch := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { close-requested(); }
+                    }
+                }
+            }
+
+            // ─── Body (creation form) ────────────────────────────
+            if !created: VerticalLayout {
+                padding: 24px;
+                spacing: 24px;
+
+                // --- Avatar upload ---
+                HorizontalLayout {
+                    spacing: 20px;
+                    height: 80px;
+
+                    Rectangle {
+                        width: 80px;
+                        height: 80px;
+                        border-radius: 12px;
+                        background: Theme.bg-app;
+                        border-width: has-avatar ? 0px : 2px;
+                        border-color: avatar-touch.has-hover ? Theme.accent : Theme.graphic-med;
+
+                        if has-avatar: Image {
+                            source: avatar-preview;
+                            width: parent.width;
+                            height: parent.height;
+                            image-fit: cover;
+                        }
+
+                        if !has-avatar: Image {
+                            source: @image-url("../icons/upload.svg");
+                            width: 20px;
+                            height: 20px;
+                            colorize: Theme.text-tertiary;
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2 - 8px;
+                        }
+
+                        if !has-avatar: Text {
+                            text: "UPLOAD";
+                            font-family: Theme.font-mono;
+                            font-size: 9px;
+                            color: Theme.text-tertiary;
+                            horizontal-alignment: center;
+                            y: (parent.height - self.preferred-height) / 2 + 14px;
+                        }
+
+                        avatar-touch := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => { avatar-pick-requested(); }
+                        }
+                    }
+
+                    VerticalLayout {
+                        alignment: center;
+                        spacing: 6px;
+
+                        Text {
+                            text: "CREW IDENTIFIER";
+                            font-family: Theme.font-sans;
+                            font-size: 11px;
+                            font-weight: 600;
+                            letter-spacing: 1.3px;
+                            color: Theme.text-secondary;
+                        }
+
+                        Text {
+                            text: "JPG, PNG or GIF. Max 20MB.";
+                            font-family: Theme.font-mono;
+                            font-size: 12px;
+                            color: Theme.text-tertiary;
+                        }
+                    }
+                }
+
+                // --- Crew name ---
+                VerticalLayout {
+                    spacing: 8px;
+
+                    Text {
+                        text: "CREW NAME";
+                        font-family: Theme.font-sans;
+                        font-size: 11px;
+                        font-weight: 600;
+                        letter-spacing: 1.3px;
+                        color: Theme.text-secondary;
+                    }
+
+                    Rectangle {
+                        height: 44px;
+                        background: Theme.bg-app;
+                        border-radius: Theme.r-inner;
+                        border-width: 1px;
+                        border-color: name-input.has-focus ? Theme.accent : Theme.graphic-light;
+
+                        name-input := TextInput {
+                            x: 16px;
+                            width: parent.width - 32px;
+                            height: parent.height;
+                            font-family: Theme.font-sans;
+                            font-size: 14px;
+                            color: Theme.text-primary;
+                            vertical-alignment: center;
+                            edited => { crew-name-text = self.text; }
+                        }
+
+                        if crew-name-text == "": Text {
+                            x: 16px;
+                            color: Theme.text-tertiary;
+                            font-family: Theme.font-sans;
+                            font-size: 14px;
+                            vertical-alignment: center;
+                            text: "e.g. Shadow Syndicate";
+                        }
+                    }
+                }
+
+                // --- Description ---
+                VerticalLayout {
+                    spacing: 8px;
+
+                    Text {
+                        text: "DESCRIPTION";
+                        font-family: Theme.font-sans;
+                        font-size: 11px;
+                        font-weight: 600;
+                        letter-spacing: 1.3px;
+                        color: Theme.text-secondary;
+                    }
+
+                    Rectangle {
+                        height: 80px;
+                        background: Theme.bg-app;
+                        border-radius: Theme.r-inner;
+                        border-width: 1px;
+                        border-color: desc-input.has-focus ? Theme.accent : Theme.graphic-light;
+
+                        desc-input := TextInput {
+                            x: 16px;
+                            y: 12px;
+                            width: parent.width - 32px;
+                            height: parent.height - 24px;
+                            font-family: Theme.font-sans;
+                            font-size: 14px;
+                            color: Theme.text-primary;
+                            wrap: word-wrap;
+                            edited => { crew-desc-text = self.text; }
+                        }
+
+                        if crew-desc-text == "": Text {
+                            x: 16px;
+                            y: 12px;
+                            color: Theme.text-tertiary;
+                            font-family: Theme.font-sans;
+                            font-size: 14px;
+                            text: "Define your crew's primary objective...";
+                        }
+                    }
+                }
+
+                // --- Invite members (disabled during onboarding) ---
+                if onboarding-mode: VerticalLayout {
+                    spacing: 8px;
+
+                    Text {
+                        text: "INVITE MEMBERS";
+                        font-family: Theme.font-sans;
+                        font-size: 11px;
+                        font-weight: 600;
+                        letter-spacing: 1.3px;
+                        color: Theme.text-tertiary;
+                    }
+
+                    Rectangle {
+                        height: 44px;
+                        background: Theme.bg-app;
+                        border-radius: Theme.r-inner;
+                        border-width: 1px;
+                        border-color: Theme.graphic-light;
+
+                        Text {
+                            x: 16px;
+                            color: Theme.text-tertiary;
+                            font-family: Theme.font-sans;
+                            font-size: 14px;
+                            font-italic: true;
+                            vertical-alignment: center;
+                            text: "Available after setup";
+                        }
+                    }
+                }
+
+                // --- Invite members (active) ---
+                if !onboarding-mode: VerticalLayout {
+                    spacing: 8px;
+
+                    Text {
+                        text: "INVITE MEMBERS";
+                        font-family: Theme.font-sans;
+                        font-size: 11px;
+                        font-weight: 600;
+                        letter-spacing: 1.3px;
+                        color: Theme.text-secondary;
+                    }
+
+                    // Invited user chips
+                    if invited-users.length > 0: HorizontalLayout {
+                        spacing: 6px;
+                        height: 28px;
+
+                        for user[idx] in invited-users: Rectangle {
+                            width: chip-name.preferred-width + 32px;
+                            height: 28px;
+                            border-radius: 14px;
+                            background: Theme.bg-app;
+                            border-width: 1px;
+                            border-color: Theme.graphic-light;
+
+                            chip-name := Text {
+                                text: user.display-name;
+                                font-family: Theme.font-sans;
+                                font-size: 12px;
+                                color: Theme.text-primary;
+                                x: 10px;
+                                vertical-alignment: center;
+                            }
+
+                            Text {
+                                text: "×";
+                                font-family: Theme.font-sans;
+                                font-size: 14px;
+                                color: chip-remove.has-hover ? Theme.accent : Theme.text-tertiary;
+                                x: parent.width - 18px;
+                                vertical-alignment: center;
+                            }
+
+                            chip-remove := TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => { uninvite-user(user.id); }
+                            }
+                        }
+                    }
+
+                    Rectangle {
+                        height: 44px;
+                        background: Theme.bg-app;
+                        border-radius: Theme.r-inner;
+                        border-width: 1px;
+                        border-color: invite-input.has-focus ? Theme.accent : Theme.graphic-light;
+
+                        invite-input := TextInput {
+                            x: 16px;
+                            width: parent.width - 32px;
+                            height: parent.height;
+                            font-family: Theme.font-sans;
+                            font-size: 14px;
+                            color: Theme.text-primary;
+                            vertical-alignment: center;
+                            edited => {
+                                search-users(self.text);
+                            }
+                        }
+
+                        if invite-input.text == "": Text {
+                            x: 16px;
+                            color: Theme.text-tertiary;
+                            font-family: Theme.font-sans;
+                            font-size: 14px;
+                            vertical-alignment: center;
+                            text: "Search by display name...";
+                        }
+                    }
+
+                    if invite-input.text != "" && search-results.length > 0: Rectangle {
+                        height: min(search-results.length * 40px, 160px);
+                        background: Theme.bg-app;
+                        border-radius: Theme.r-inner;
+                        border-width: 1px;
+                        border-color: Theme.graphic-light;
+                        clip: true;
+
+                        VerticalLayout {
+                            for result[idx] in search-results: Rectangle {
+                                height: 40px;
+                                background: result-touch.has-hover ? Theme.surface-hover : transparent;
+
+                                HorizontalLayout {
+                                    padding-left: 16px;
+                                    padding-right: 16px;
+                                    spacing: 8px;
+
+                                    Text {
+                                        text: result.display-name;
+                                        font-family: Theme.font-sans;
+                                        font-size: 13px;
+                                        color: Theme.text-primary;
+                                        vertical-alignment: center;
+                                    }
+
+                                    if result.is-friend: Text {
+                                        text: "FRIEND";
+                                        font-family: Theme.font-mono;
+                                        font-size: 9px;
+                                        letter-spacing: 1px;
+                                        color: Theme.accent;
+                                        vertical-alignment: center;
+                                    }
+                                }
+
+                                result-touch := TouchArea {
+                                    mouse-cursor: pointer;
+                                    clicked => {
+                                        invite-user(result.id);
+                                        invite-input.text = "";
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // --- Visibility ---
+                VerticalLayout {
+                    spacing: 8px;
+
+                    Text {
+                        text: "VISIBILITY";
+                        font-family: Theme.font-sans;
+                        font-size: 11px;
+                        font-weight: 600;
+                        letter-spacing: 1.3px;
+                        color: Theme.text-secondary;
+                    }
+
+                    Rectangle {
+                        height: 40px;
+                        background: Theme.bg-app;
+                        border-radius: 8px;
+                        border-width: 1px;
+                        border-color: Theme.graphic-light;
+
+                        HorizontalLayout {
+                            padding: 4px;
+
+                            Rectangle {
+                                horizontal-stretch: 1;
+                                border-radius: 6px;
+                                background: is-private ? Theme.graphic-light : transparent;
+
+                                Text {
+                                    text: "Private";
+                                    font-family: Theme.font-sans;
+                                    font-size: 12px;
+                                    font-weight: 500;
+                                    color: is-private ? Theme.text-primary : Theme.text-secondary;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                }
+
+                                TouchArea {
+                                    mouse-cursor: pointer;
+                                    clicked => { is-private = true; }
+                                }
+                            }
+
+                            Rectangle {
+                                horizontal-stretch: 1;
+                                border-radius: 6px;
+                                background: !is-private ? Theme.graphic-light : transparent;
+
+                                Text {
+                                    text: "Public";
+                                    font-family: Theme.font-sans;
+                                    font-size: 12px;
+                                    font-weight: 500;
+                                    color: !is-private ? Theme.text-primary : Theme.text-secondary;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                }
+
+                                TouchArea {
+                                    mouse-cursor: pointer;
+                                    clicked => { is-private = false; }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // ─── Footer (form only) ─────────────────────────────
+            if !created: VerticalLayout {
+                spacing: 0px;
+
+                if onboarding-mode: Rectangle {
+                    height: 20px;
+                    background: transparent;
+
+                    Text {
+                        text: "Your crew will be created after account setup.";
+                        font-family: Theme.font-sans;
+                        font-size: 11px;
+                        color: Theme.text-tertiary;
+                        horizontal-alignment: right;
+                        x: parent.width - self.preferred-width - 24px;
+                        vertical-alignment: center;
+                    }
+                }
+
+                Rectangle {
+                    height: 64px;
+                    background: Theme.dark ? #00000019 : #0000000A;
+
+                    Rectangle {
+                        y: 0px;
+                        height: 1px;
+                        background: Theme.graphic-light;
+                    }
+
+                    HorizontalLayout {
+                        padding-left: 24px;
+                        padding-right: 24px;
+                        alignment: end;
+                        spacing: 12px;
+
+                        Rectangle {
+                            width: cancel-text.preferred-width + 40px;
+                            height: 38px;
+                            border-radius: Theme.r-inner;
+                            y: (parent.height - self.height) / 2;
+                            background: cancel-touch.has-hover ? Theme.hover-overlay : transparent;
+
+                            cancel-text := Text {
+                                text: "Cancel";
+                                font-family: Theme.font-sans;
+                                font-size: 13px;
+                                color: cancel-touch.has-hover ? Theme.text-primary : Theme.text-secondary;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+
+                            cancel-touch := TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => { close-requested(); }
+                            }
+                        }
+
+                        Rectangle {
+                            width: create-text.preferred-width + 48px;
+                            height: 38px;
+                            border-radius: Theme.r-inner;
+                            y: (parent.height - self.height) / 2;
+                            background: crew-name-text != "" ? (create-touch.has-hover ? #FF1E56DD : Theme.accent) : Theme.graphic-light;
+
+                            create-text := Text {
+                                text: onboarding-mode ? "Save & Continue" : "Establish Crew";
+                                font-family: Theme.font-sans;
+                                font-size: 13px;
+                                font-weight: 600;
+                                color: crew-name-text != "" ? #FFFFFF : Theme.text-tertiary;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+
+                            create-touch := TouchArea {
+                                mouse-cursor: crew-name-text != "" ? pointer : default;
+                                clicked => {
+                                    if crew-name-text != "" {
+                                        create-requested(crew-name-text, crew-desc-text, is-private);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

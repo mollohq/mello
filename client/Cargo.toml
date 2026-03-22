@@ -33,6 +33,12 @@ paste = "1"
 velopack = "0.0.1298"
 semver = "1"
 
+# Avatar upload
+rfd = "0.15"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif"] }
+base64 = "0.22"
+arboard = "3"
+
 # Native platform integration
 open = "5"
 tray-icon = "0.21"

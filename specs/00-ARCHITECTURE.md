@@ -8,7 +8,7 @@
 
 ## 1. Vision
 
-Mello is a lightweight crew-based social platform with Parsec-tier streaming capabilities. Think Discord's social features meets Parsec's streaming quality — in a <25MB, <100MB RAM package.
+Mello is a lightweight crew-based social platform with Parsec-tier streaming capabilities. Think Discord's social features meets Parsec's streaming quality — in a <100MB package, <100MB RAM usage.
 
 **Tagline:** *Hang out with your crew. Jump into anyone's stream.*
 
@@ -18,7 +18,7 @@ Mello is a lightweight crew-based social platform with Parsec-tier streaming cap
 
 | Goal | Target |
 |------|--------|
-| Client install size | <25MB |
+| Client install size | <100MB |
 | RAM (idle) | <50MB |
 | RAM (in crew, voice active) | <80MB |
 | RAM (watching stream) | <100MB |
@@ -250,12 +250,12 @@ Server mixes/forwards
 | Platform | Role | Status |
 |----------|------|--------|
 | Windows 10/11 | Host + View | Beta |
+| macOS | View | Beta |
 
 ### 7.2 Post-Beta
 
 | Platform | Role | Status |
 |----------|------|--------|
-| macOS | Host + View | Planned |
 | Linux | Host + View | Planned |
 | iOS | View + Voice only | Planned |
 | Android | View + Voice only | Planned |
@@ -331,22 +331,25 @@ Server mixes/forwards
 
 ### In Scope
 
-- Windows client
-- Crews up to 6 people
+- Windows client + macOS client (view-only streaming on macOS)
+- Crews up to 6 people with voice channels
 - Voice chat (P2P mesh, RNNoise, Silero VAD)
 - Text chat (Nakama)
-- Stream sharing (watch only)
-- Presence indicators
-- Login (Discord OAuth + email)
+- Stream sharing (watch only, ABR, FEC)
+- Presence indicators and crew state
+- Social login: Steam, Twitch, Google, Apple, Discord + email/device auth
+- Onboarding flow with crew discovery
+- Crew avatars, invite codes, user search
+- Settings persistence (audio devices, UI preferences)
 
 ### Out of Scope (Post-Beta)
 
 - Stream control / input passthrough
-- macOS / Linux clients
-- Mobile clients
-- SFU for large groups
+- Linux client
+- Mobile clients (iOS/Android)
+- SFU for large groups (>6)
 - Recording
-- Advanced permissions
+- Advanced permissions / roles
 
 ---
 
@@ -354,47 +357,79 @@ Server mixes/forwards
 
 ```
 mello/
-├── README.md
-├── ARCHITECTURE.md              # This document
-├── specs/
-│   ├── 01-CLIENT.md
-│   ├── 02-MELLO-CORE.md
-│   ├── 03-LIBMELLO.md
-│   └── 04-BACKEND.md
+├── CLAUDE.md                    # AI agent coding guidelines
+├── specs/                       # Technical specifications (this folder)
+├── designs/                     # HTML mockups for UI features
 │
 ├── client/                      # Slint UI (Rust)
 │   ├── Cargo.toml
-│   ├── src/
-│   └── ui/                      # .slint files
+│   ├── src/main.rs              # Entry point, Slint bindings, event loop
+│   └── ui/
+│       ├── main.slint           # Root layout, property wiring
+│       ├── theme.slint          # Design tokens (colors, fonts, radii)
+│       ├── types.slint          # Shared Slint structs
+│       ├── icons/               # SVG icons
+│       ├── fonts/               # Font files
+│       └── panels/              # All UI panels and modals
 │
 ├── mello-core/                  # Core logic (Rust)
 │   ├── Cargo.toml
 │   └── src/
+│       ├── client.rs            # Command handler, Nakama orchestration
+│       ├── command.rs           # Command enum (UI → core)
+│       ├── events.rs            # Event enum (core → UI)
+│       ├── nakama/              # Nakama HTTP + WebSocket client
+│       ├── voice/               # Voice mesh coordination
+│       ├── stream/              # Stream host/viewer, ABR, FEC
+│       ├── crew_state.rs        # Sidebar & crew state models
+│       └── presence.rs          # Presence types
 │
-├── mello-core-sys/              # FFI bindings (Rust)
-│   ├── Cargo.toml
-│   ├── build.rs
+├── mello-sys/                   # FFI bindings (Rust ↔ C++)
+│   ├── build.rs                 # bindgen from mello.h
 │   └── src/
 │
-├── libmello/                    # Low-level (C++)
+├── libmello/                    # Low-level (C++17)
 │   ├── CMakeLists.txt
-│   ├── include/
-│   │   └── mello.h
-│   └── src/
-│       ├── voice/
-│       ├── stream/
-│       └── transport/
+│   ├── include/mello.h          # Public C API (single header)
+│   └── src/                     # voice/, stream/, transport/, util/
 │
-└── backend/                     # Nakama config & server code
-    ├── docker-compose.yml
-    ├── nakama/
-    │   └── data/
-    └── modules/                 # Custom Nakama modules (Go/Lua/TS)
+├── backend/                     # Nakama backend
+│   ├── docker-compose.yml
+│   └── nakama/data/modules/     # Go runtime modules
+│       ├── main.go              # RPC + hook registration
+│       ├── crews.go             # Crew CRUD, discover, avatars
+│       ├── streaming.go         # Stream start/stop, thumbnails
+│       ├── search_users.go      # User search RPC
+│       ├── invite_codes.go      # Invite code generation & join
+│       ├── voice_channels.go    # Voice channel CRUD
+│       ├── crew_state.go        # Crew state streaming
+│       ├── presence.go          # Presence hooks
+│       └── signaling.go         # P2P signaling helpers
+│
+└── tools/                       # Standalone test binaries
+    ├── stream-host/
+    └── stream-viewer/
 ```
 
 ---
 
-## 13. Success Metrics (Beta)
+## 13. Onboarding Flow
+
+New users go through a 3-step onboarding before entering the main app:
+
+1. **Discover Crews (Step 1):** A mini-discover page shows public crews in a bento grid layout (fetched via `discover_crews` RPC using `http_key`, no auth required). Users can select an existing crew to join or click "Create Your Own Crew" which opens the new-crew modal. Crew details (name, description, avatar, visibility) are stored locally — actual creation is deferred until after auth.
+2. **Profile Setup (Step 2):** User picks a nickname and avatar.
+3. **Identity Linking (Step 3):** Optional social login (Steam, Google, Discord, etc.) or email linking. Clicking "Continue" triggers `FinalizeOnboarding` which performs device authentication, creates the user account, creates/joins the chosen crew, and transitions to the main app.
+
+---
+
+## 14. Crew Creation Flow
+
+Crew creation uses the `create_crew` RPC which: creates a Nakama group, optionally stores a base64 avatar in Nakama storage, generates an invite code, and sends Nakama notifications to any invited users. The crew avatar is stored as `{"data":"<base64>"}` in the `crew_avatars` storage collection (system-owned). Clients fetch avatars via the `get_crew_avatar` RPC.
+
+---
+
+## 15. Success Metrics (Beta)
 
 | Metric | Target |
 |--------|--------|
@@ -406,7 +441,7 @@ mello/
 
 ---
 
-## 14. References
+## 16. References
 
 - [Parsec Technology](https://parsec.app/technology)
 - [Nakama Documentation](https://heroiclabs.com/docs/nakama/)
@@ -417,7 +452,7 @@ mello/
 
 ---
 
-## 15. Logging
+## 17. Logging
 
 All layers have logging infrastructure -- **use it liberally**. This is a complex multi-threaded, multi-language, real-time application. When something breaks, logs are often the only way to diagnose it.
 

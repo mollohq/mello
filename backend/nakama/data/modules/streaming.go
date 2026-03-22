@@ -287,12 +287,13 @@ func StreamThumbnailUploadRPC(ctx context.Context, logger runtime.Logger, db *sq
 	// Store thumbnail in Nakama storage
 	now := time.Now().UTC()
 	thumbnailKey := fmt.Sprintf("%s/latest", req.StreamID)
+	thumbValue, _ := json.Marshal(map[string]string{"data": req.ThumbnailBase64})
 	_, err = nk.StorageWrite(ctx, []*runtime.StorageWrite{
 		{
 			Collection:      ThumbnailCollection,
 			Key:             thumbnailKey,
 			UserID:          SystemUserID,
-			Value:           req.ThumbnailBase64, // store as base64 in storage
+			Value:           string(thumbValue),
 			PermissionRead:  2,
 			PermissionWrite: 0,
 		},

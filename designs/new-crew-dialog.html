@@ -1,0 +1,405 @@
+<html lang="en" vid="0">
+
+<head vid="1">
+    <meta charset="UTF-8" vid="2">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" vid="3">
+    <title vid="4">Crew Companion - Create Crew</title>
+    <style vid="5">
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
+
+        :root {
+            --c-bg-app: #181818;
+            --c-surface: #202020;
+            --c-text-primary: #F5F5F5;
+            --c-text-secondary: #606060;
+            --c-text-tertiary: #404040;
+            --c-accent: #FF1E56;
+            --c-graphic-light: #2E2E2E;
+            --c-graphic-med: #404040;
+            --c-graphic-dark: #F5F5F5;
+
+            --f-sans: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            --f-mono: 'JetBrains Mono', monospace;
+
+            --r-outer: 10px;
+            --r-inner: 6px;
+            --r-pill: 999px;
+
+            --s-gap: 12px;
+            --s-pad: 24px;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            background-color: #111111;
+            color: var(--c-text-primary);
+            font-family: var(--f-sans);
+            height: 100vh;
+            width: 100vw;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        .os-chrome {
+            width: 1440px;
+            height: 900px;
+            display: flex;
+            flex-direction: column;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 24px 64px rgba(0, 0, 0, 0.8), 0 0 0 1px rgba(255, 255, 255, 0.05);
+            position: relative;
+        }
+
+        .titlebar {
+            height: 32px;
+            background: #161616;
+            display: flex;
+            align-items: center;
+            padding: 0 16px;
+            gap: 8px;
+            flex-shrink: 0;
+            border-bottom: 1px solid #2A2A2A;
+        }
+
+        .titlebar-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+        }
+
+        .app-content-blur {
+            filter: blur(8px) brightness(0.4);
+            pointer-events: none;
+            display: grid;
+            grid-template-columns: 280px 1fr 340px;
+            grid-template-rows: 1fr 92px;
+            gap: var(--s-gap);
+            padding: var(--s-gap);
+            flex: 1;
+        }
+
+
+        .modal-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 100;
+        }
+
+        .modal-card {
+            width: 520px;
+            background: var(--c-surface);
+            border-radius: var(--r-outer);
+            border: 1px solid var(--c-graphic-light);
+            box-shadow: 0 32px 64px rgba(0, 0, 0, 0.6);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .modal-header {
+            padding: var(--s-pad);
+            border-bottom: 1px solid var(--c-graphic-light);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .modal-body {
+            padding: var(--s-pad);
+            display: flex;
+            flex-direction: column;
+            gap: 24px;
+        }
+
+        .modal-footer {
+            padding: var(--s-pad);
+            background: rgba(0, 0, 0, 0.1);
+            border-top: 1px solid var(--c-graphic-light);
+            display: flex;
+            justify-content: flex-end;
+            gap: 12px;
+        }
+
+        .label-kicker {
+            font-family: var(--f-sans);
+            font-size: 11px;
+            font-weight: 600;
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
+            color: var(--c-text-secondary);
+            margin-bottom: 8px;
+        }
+
+
+        .avatar-upload-group {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+        }
+
+        .avatar-placeholder {
+            width: 80px;
+            height: 80px;
+            border-radius: 12px;
+            background: var(--c-bg-app);
+            border: 2px dashed var(--c-graphic-med);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .avatar-placeholder:hover {
+            border-color: var(--c-accent);
+            background: rgba(255, 30, 86, 0.05);
+        }
+
+        .avatar-placeholder svg {
+            color: var(--c-text-tertiary);
+            margin-bottom: 4px;
+        }
+
+        .avatar-placeholder span {
+            font-size: 9px;
+            font-family: var(--f-mono);
+            color: var(--c-text-tertiary);
+            text-transform: uppercase;
+        }
+
+        .input-field {
+            background: var(--c-bg-app);
+            border: 1px solid var(--c-graphic-light);
+            border-radius: var(--r-inner);
+            padding: 12px 16px;
+            font-family: var(--f-sans);
+            font-size: 14px;
+            color: var(--c-text-primary);
+            width: 100%;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+
+        .input-field:focus {
+            border-color: var(--c-accent);
+        }
+
+        .textarea-field {
+            min-height: 80px;
+            resize: none;
+        }
+
+
+        .segmented-control {
+            display: flex;
+            background: var(--c-bg-app);
+            padding: 4px;
+            border-radius: 8px;
+            border: 1px solid var(--c-graphic-light);
+        }
+
+        .segment {
+            flex: 1;
+            padding: 8px;
+            text-align: center;
+            font-size: 12px;
+            font-weight: 500;
+            color: var(--c-text-secondary);
+            cursor: pointer;
+            border-radius: 6px;
+            transition: all 0.15s;
+        }
+
+        .segment.active {
+            background: var(--c-graphic-light);
+            color: var(--c-text-primary);
+        }
+
+
+        .swatch-grid {
+            display: flex;
+            gap: 12px;
+        }
+
+        .swatch {
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            cursor: pointer;
+            position: relative;
+            border: 2px solid transparent;
+            transition: transform 0.15s;
+        }
+
+        .swatch:hover {
+            transform: scale(1.1);
+        }
+
+        .swatch.active::after {
+            content: '';
+            position: absolute;
+            top: -4px;
+            left: -4px;
+            right: -4px;
+            bottom: -4px;
+            border: 1.5px solid var(--c-text-primary);
+            border-radius: 50%;
+        }
+
+        .btn-primary {
+            background: var(--c-accent);
+            color: white;
+            padding: 10px 24px;
+            border-radius: var(--r-inner);
+            font-family: var(--f-sans);
+            font-weight: 600;
+            font-size: 13px;
+            border: none;
+            cursor: pointer;
+            transition: opacity 0.2s;
+        }
+
+        .btn-primary:hover {
+            opacity: 0.9;
+        }
+
+        .btn-ghost {
+            background: transparent;
+            color: var(--c-text-secondary);
+            padding: 10px 20px;
+            border-radius: var(--r-inner);
+            font-family: var(--f-sans);
+            font-size: 13px;
+            border: none;
+            cursor: pointer;
+        }
+
+        .btn-ghost:hover {
+            color: var(--c-text-primary);
+        }
+
+
+        .panel {
+            background: var(--c-surface);
+            border-radius: var(--r-outer);
+            border: 1px solid var(--c-graphic-light);
+            padding: var(--s-pad);
+        }
+    </style>
+</head>
+
+<body vid="6">
+
+    <div class="os-chrome" vid="7">
+        <div class="titlebar" vid="8">
+            <div class="titlebar-dot" style="background:#FF5F57" vid="9"></div>
+            <div class="titlebar-dot" style="background:#FFBD2E" vid="10"></div>
+            <div class="titlebar-dot" style="background:#28C840" vid="11"></div>
+        </div>
+
+        <div class="app-content-blur" vid="12">
+            <div class="panel" vid="13"></div>
+            <div class="panel" vid="14"></div>
+            <div class="panel" vid="15"></div>
+            <div class="panel" style="grid-column: 2; height: 92px;" vid="16"></div>
+        </div>
+
+
+        <div class="modal-overlay" vid="17">
+            <div class="modal-card" vid="18">
+                <div class="modal-header" vid="19">
+                    <div vid="20">
+                        <div class="label-kicker" style="margin-bottom: 2px;" vid="21">COMMISSION</div>
+                        <h2 style="font-size: 20px; font-weight: 500; letter-spacing: -0.01em;" vid="22">Initialize New
+                            Crew</h2>
+                    </div>
+                    <div style="color: var(--c-text-tertiary); cursor: pointer;" vid="23">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2" stroke-linecap="round" stroke-linejoin="round" vid="24">
+                            <line x1="18" y1="6" x2="6" y2="18" vid="25"></line>
+                            <line x1="6" y1="6" x2="18" y2="18" vid="26"></line>
+                        </svg>
+                    </div>
+                </div>
+
+                <div class="modal-body" vid="27">
+
+                    <div class="avatar-upload-group" vid="28">
+                        <div class="avatar-placeholder" vid="29">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                stroke-width="2" stroke-linecap="round" stroke-linejoin="round" vid="30">
+                                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" vid="31"></path>
+                                <polyline points="17 8 12 3 7 8" vid="32"></polyline>
+                                <line x1="12" y1="3" x2="12" y2="15" vid="33"></line>
+                            </svg>
+                            <span vid="34">Upload</span>
+                        </div>
+                        <div vid="35">
+                            <div class="label-kicker" vid="36">CREW IDENTIFIER</div>
+                            <div style="font-size: 12px; color: var(--c-text-tertiary); font-family: var(--f-mono);"
+                                vid="37">JPG, PNG or GIF. Max 2MB.</div>
+                        </div>
+                    </div>
+
+
+                    <div vid="38">
+                        <div class="label-kicker" vid="39">CREW NAME</div>
+                        <input type="text" class="input-field" placeholder="e.g. Shadow Syndicate" vid="40">
+                    </div>
+
+
+                    <div vid="41">
+                        <div class="label-kicker" vid="42">MISSION PROTOCOL (DESCRIPTION)</div>
+                        <textarea class="input-field textarea-field"
+                            placeholder="Define your crew's primary objective..." vid="43"></textarea>
+                    </div>
+
+
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;" vid="44">
+                        <div vid="45">
+                            <div class="label-kicker" vid="46">VISIBILITY</div>
+                            <div class="segmented-control" vid="47">
+                                <div class="segment active" vid="48">Private</div>
+                                <div class="segment" vid="49">Public</div>
+                            </div>
+                        </div>
+                        <div vid="50">
+                            <div class="label-kicker" vid="51">THEME COLOR</div>
+                            <div class="swatch-grid" vid="52">
+                                <div class="swatch active" style="background: #FF1E56;" vid="53"></div>
+                                <div class="swatch" style="background: #00E5FF;" vid="54"></div>
+                                <div class="swatch" style="background: #A855F7;" vid="55"></div>
+                                <div class="swatch" style="background: #22C55E;" vid="56"></div>
+                                <div class="swatch" style="background: #F59E0B;" vid="57"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="modal-footer" vid="58">
+                    <button class="btn-ghost" vid="59">Cancel</button>
+                    <button class="btn-primary" vid="60">Establish Crew</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+</body>
+
+</html>

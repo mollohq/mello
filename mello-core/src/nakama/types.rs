@@ -41,6 +41,7 @@ pub struct ApiGroup {
     pub id: Option<String>,
     pub name: Option<String>,
     pub description: Option<String>,
+    pub avatar_url: Option<String>,
     pub max_count: Option<i32>,
     pub metadata: Option<String>,
     pub open: Option<bool>,
@@ -95,10 +96,39 @@ pub struct HealthResponse {
 #[derive(Debug, Serialize)]
 pub struct CreateCrewPayload {
     pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub invite_only: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub avatar: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub invite_user_ids: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct CreateCrewResult {
+    pub crew_id: String,
+    pub name: String,
+    pub invite_code: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SearchUsersResult {
+    #[serde(default)]
+    pub users: Vec<SearchUserEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SearchUserEntry {
+    pub id: String,
+    pub display_name: String,
+    #[serde(default)]
+    pub is_friend: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct JoinByInviteCodeResult {
     pub crew_id: String,
     pub name: String,
 }
@@ -213,4 +243,19 @@ pub struct ApiChannelMessage {
 #[derive(Debug, Deserialize)]
 pub struct ChatContent {
     pub text: Option<String>,
+}
+
+// --- Nakama storage ---
+
+#[derive(Debug, Deserialize)]
+pub struct ApiStorageObjects {
+    pub objects: Option<Vec<ApiStorageObject>>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ApiStorageObject {
+    pub collection: Option<String>,
+    pub key: Option<String>,
+    pub user_id: Option<String>,
+    pub value: Option<String>,
 }

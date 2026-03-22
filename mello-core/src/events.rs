@@ -36,6 +36,13 @@ pub struct CaptureSource {
 }
 
 #[derive(Debug, Clone)]
+pub struct UserSearchResult {
+    pub id: String,
+    pub display_name: String,
+    pub is_friend: bool,
+}
+
+#[derive(Debug, Clone)]
 pub enum Event {
     Restoring,
     LoggedIn {
@@ -51,6 +58,7 @@ pub enum Event {
     },
     DiscoverCrewsLoaded {
         crews: Vec<Crew>,
+        cursor: Option<String>,
     },
     OnboardingReady {
         user: User,
@@ -69,9 +77,17 @@ pub enum Event {
 
     CrewCreated {
         crew: Crew,
+        invite_code: Option<String>,
     },
     CrewCreateFailed {
         reason: String,
+    },
+    CrewAvatarLoaded {
+        crew_id: String,
+        data: String,
+    },
+    UserSearchResults {
+        users: Vec<UserSearchResult>,
     },
     CrewsLoaded {
         crews: Vec<Crew>,

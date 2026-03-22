@@ -198,54 +198,56 @@ export component CrewPanel inherits Rectangle {
     in property <string> active-crew-id: "";
 
     callback crew-selected(string);
-    callback crew-create-requested(string);
+    callback crew-create-requested();
+    callback browse-crews-requested();
 
     background: Theme.surface;
     border-width: 1px;
     border-color: Theme.graphic-light;
     border-radius: Theme.r-outer;
 
-    VerticalLayout {
-        padding: Theme.pad;
-        spacing: 0px;
+    property <length> header-h: 16px;
+    property <length> header-area: Theme.pad + header-h + 20px;
+    property <length> bottom-h: 97px;
+    property <length> bottom-area: bottom-h + Theme.pad;
 
-        // --- Header kicker ---
-        HorizontalLayout {
-            height: 16px;
-            spacing: 8px;
+    // --- Header ---
+    HorizontalLayout {
+        x: Theme.pad;
+        y: Theme.pad;
+        width: root.width - 2 * Theme.pad;
+        height: root.header-h;
+        spacing: 8px;
 
-            Text {
-                text: "YOUR CREWS";
-                font-size: Theme.font-sm;
-                font-weight: 600;
-                letter-spacing: 1.3px;
-                color: Theme.text-secondary;
-                vertical-alignment: center;
-            }
-
-            Rectangle {
-                horizontal-stretch: 1;
-            }
-
-            Rectangle {
-                width: 6px;
-                height: 6px;
-                border-radius: 3px;
-                background: Theme.accent;
-                y: (parent.height - self.height) / 2;
-            }
+        Text {
+            text: "YOUR CREWS";
+            font-size: Theme.font-sm;
+            font-weight: 600;
+            letter-spacing: 1.3px;
+            color: Theme.text-secondary;
+            vertical-alignment: center;
         }
+
+        Rectangle { horizontal-stretch: 1; }
 
         Rectangle {
-            height: 20px;
+            width: 6px;
+            height: 6px;
+            border-radius: 3px;
+            background: Theme.accent;
+            y: (parent.height - self.height) / 2;
         }
+    }
 
-        // --- Crew cards (scrollable) ---
-        Flickable {
-            vertical-stretch: 1;
+    // --- Crew cards (scrollable, fills middle) ---
+    Flickable {
+        x: Theme.pad;
+        y: root.header-area;
+        width: root.width - 2 * Theme.pad;
+        height: root.height - root.header-area - root.bottom-area;
 
-            VerticalLayout {
-                spacing: 0px;
+        VerticalLayout {
+            spacing: 0px;
 
                 // ===== ACTIVE NOW section =====
                 Text {
@@ -282,10 +284,24 @@ export component CrewPanel inherits Rectangle {
 
                                 // --- Card header ---
                                 HorizontalLayout {
-                                    height: crew.id == active-crew-id ? 20px : 18px;
+                                    height: crew.id == active-crew-id ? 24px : 20px;
                                     spacing: 8px;
 
-                                    VerticalLayout {
+                                    if crew.has-avatar: Rectangle {
+                                        width: crew.id == active-crew-id ? 24px : 20px;
+                                        height: self.width;
+                                        border-radius: 4px;
+                                        clip: true;
+
+                                        Image {
+                                            source: crew.avatar;
+                                            width: parent.width;
+                                            height: parent.height;
+                                            image-fit: cover;
+                                        }
+                                    }
+
+                                    if !crew.has-avatar: VerticalLayout {
                                         alignment: center;
                                         width: 6px;
 
@@ -518,8 +534,34 @@ export component CrewPanel inherits Rectangle {
                                 spacing: 0px;
 
                                 HorizontalLayout {
-                                    height: 18px;
+                                    height: 20px;
                                     spacing: 8px;
+
+                                    if crew.has-avatar: Rectangle {
+                                        width: 20px;
+                                        height: 20px;
+                                        border-radius: 4px;
+                                        clip: true;
+
+                                        Image {
+                                            source: crew.avatar;
+                                            width: parent.width;
+                                            height: parent.height;
+                                            image-fit: cover;
+                                        }
+                                    }
+
+                                    if !crew.has-avatar: VerticalLayout {
+                                        alignment: center;
+                                        width: 6px;
+
+                                        Rectangle {
+                                            width: 6px;
+                                            height: 6px;
+                                            border-radius: 3px;
+                                            background: Theme.accent;
+                                        }
+                                    }
 
                                     Text {
                                         text: crew.name;
@@ -568,42 +610,90 @@ export component CrewPanel inherits Rectangle {
             }
         }
 
-        // --- Create crew input ---
+    // --- Bottom actions (absolute positioned at bottom) ---
+    VerticalLayout {
+        x: Theme.pad;
+        y: root.height - root.bottom-area;
+        width: root.width - 2 * Theme.pad;
+        height: root.bottom-h;
+        spacing: 8px;
+
         Rectangle {
-            height: Theme.gap;
+            height: 1px;
+            background: Theme.graphic-light;
         }
 
         Rectangle {
             height: 40px;
-            background: Theme.bg-app;
             border-radius: Theme.r-inner;
-            border-width: 1px;
-            border-color: Theme.graphic-light;
+            background: browse-touch.has-hover ? Theme.hover-overlay : transparent;
 
-            crew-name-input := TextInput {
-                x: 14px;
-                width: parent.width - 28px;
-                height: parent.height;
-                font-family: Theme.font-mono;
-                font-size: Theme.font-md;
-                color: Theme.text-primary;
-                vertical-alignment: center;
-                accepted => {
-                    if crew-name-input.text != "" {
-                        crew-create-requested(crew-name-input.text);
-                        crew-name-input.text = "";
-                    }
+            HorizontalLayout {
+                padding-left: 14px;
+                padding-right: 14px;
+                spacing: 10px;
+                alignment: start;
+
+                Image {
+                    source: @image-url("../icons/search.svg");
+                    width: 16px;
+                    height: 16px;
+                    colorize: browse-touch.has-hover ? Theme.text-primary : Theme.text-secondary;
+                    y: (parent.height - self.height) / 2;
+                }
+
+                Text {
+                    text: "Browse crews";
+                    font-family: Theme.font-mono;
+                    font-size: Theme.font-md;
+                    color: browse-touch.has-hover ? Theme.text-primary : Theme.text-secondary;
+                    vertical-alignment: center;
                 }
             }
 
-            if crew-name-input.text == "": Text {
-                x: 14px;
-                color: Theme.text-tertiary;
-                font-family: Theme.font-mono;
-                font-size: Theme.font-md;
-                vertical-alignment: center;
-                text: "+ New crew";
+            browse-touch := TouchArea {
+                mouse-cursor: pointer;
+                clicked => {
+                    browse-crews-requested();
+                }
+            }
+        }
+
+        Rectangle {
+            height: 40px;
+            border-radius: Theme.r-inner;
+            background: new-crew-touch.has-hover ? Theme.hover-overlay : transparent;
+
+            HorizontalLayout {
+                padding-left: 14px;
+                padding-right: 14px;
+                spacing: 10px;
+                alignment: start;
+
+                Text {
+                    text: "+";
+                    font-family: Theme.font-mono;
+                    font-size: 16px;
+                    color: new-crew-touch.has-hover ? Theme.text-primary : Theme.text-secondary;
+                    vertical-alignment: center;
+                }
+
+                Text {
+                    text: "New crew";
+                    font-family: Theme.font-mono;
+                    font-size: Theme.font-md;
+                    color: new-crew-touch.has-hover ? Theme.text-primary : Theme.text-secondary;
+                    vertical-alignment: center;
+                }
+            }
+
+            new-crew-touch := TouchArea {
+                mouse-cursor: pointer;
+                clicked => {
+                    crew-create-requested();
+                }
             }
         }
     }
 }
+

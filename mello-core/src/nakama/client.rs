@@ -488,6 +488,7 @@ impl NakamaClient {
                     member_count: g.edge_count.unwrap_or(0),
                     max_members: g.max_count.unwrap_or(6),
                     open: g.open.unwrap_or(false),
+                    avatar_url: g.avatar_url.filter(|s| !s.is_empty()),
                 })
             })
             .collect();
@@ -496,18 +497,29 @@ impl NakamaClient {
     }
 
     /// List open crews via the `discover_crews` RPC (no user session needed).
-    pub async fn discover_crews_public(&self, _limit: u32) -> Result<Vec<Crew>> {
+    /// Returns (crews, next_cursor). next_cursor is None when there are no more pages.
+    pub async fn discover_crews_public(
+        &self,
+        _limit: u32,
+        cursor: Option<&str>,
+    ) -> Result<(Vec<Crew>, Option<String>)> {
         let url = format!(
             "{}/v2/rpc/discover_crews?http_key={}",
             self.config.http_base(),
             self.config.nakama_http_key,
         );
 
+        let body = match cursor {
+            Some(c) => serde_json::json!({ "cursor": c }).to_string(),
+            None => String::new(),
+        };
+        let body = serde_json::Value::String(body);
+
         let resp = self
             .http
             .post(&url)
             .header("Content-Type", "application/json")
-            .body("\"\"")
+            .json(&body)
             .send()
             .await?;
 
@@ -528,6 +540,8 @@ impl NakamaClient {
         struct DiscoverPayload {
             #[serde(default)]
             crews: Vec<DiscoverCrew>,
+            #[serde(default)]
+            cursor: Option<String>,
         }
         #[derive(serde::Deserialize)]
         struct DiscoverCrew {
@@ -542,11 +556,14 @@ impl NakamaClient {
             max_members: i32,
             #[serde(default)]
             open: bool,
+            #[serde(default)]
+            avatar_url: Option<String>,
         }
 
         let rpc: RpcResponse = resp.json().await?;
         let payload: DiscoverPayload = serde_json::from_str(&rpc.payload)?;
 
+        let next_cursor = payload.cursor.filter(|c| !c.is_empty());
         let crews = payload
             .crews
             .into_iter()
@@ -557,10 +574,11 @@ impl NakamaClient {
                 member_count: c.member_count,
                 max_members: c.max_members,
                 open: c.open,
+                avatar_url: c.avatar_url.filter(|s| !s.is_empty()),
             })
             .collect();
 
-        Ok(crews)
+        Ok((crews, next_cursor))
     }
 
     pub async fn list_groups(&self, limit: u32) -> Result<Vec<Crew>> {
@@ -590,6 +608,7 @@ impl NakamaClient {
                     member_count: g.edge_count.unwrap_or(0),
                     max_members: g.max_count.unwrap_or(6),
                     open: g.open.unwrap_or(false),
+                    avatar_url: g.avatar_url.filter(|s| !s.is_empty()),
                 })
             })
             .collect();
@@ -662,12 +681,36 @@ impl NakamaClient {
         Ok(())
     }
 
-    pub async fn create_crew(&self, name: &str) -> Result<Crew> {
+    /// Returns (Crew, invite_code).
+    pub async fn create_crew(
+        &self,
+        name: &str,
+        description: &str,
+        open: bool,
+        avatar: Option<&str>,
+        invite_user_ids: &[String],
+    ) -> Result<(Crew, Option<String>)> {
         let token = self.bearer()?;
         let url = format!("{}/v2/rpc/create_crew", self.config.http_base());
 
+        let avatar_len = avatar.map(|a| a.len()).unwrap_or(0);
+        log::info!(
+            "[nakama] create_crew RPC name={:?} avatar_bytes={} invites={}",
+            name,
+            avatar_len,
+            invite_user_ids.len()
+        );
+
         let payload = serde_json::to_string(&CreateCrewPayload {
             name: name.to_string(),
+            description: if description.is_empty() {
+                None
+            } else {
+                Some(description.to_string())
+            },
+            invite_only: Some(!open),
+            avatar: avatar.map(|s| s.to_string()),
+            invite_user_ids: invite_user_ids.to_vec(),
         })?;
         let body = serde_json::Value::String(payload);
 
@@ -681,20 +724,73 @@ impl NakamaClient {
 
         if !resp.status().is_success() {
             let err_text = resp.text().await.unwrap_or_default();
+            log::error!("[nakama] create_crew RPC failed: {}", err_text);
             return Err(Error::Server(err_text));
         }
 
         let rpc_resp: ApiRpcResponse = resp.json().await?;
-        let result: CreateCrewResult = serde_json::from_str(&rpc_resp.payload.unwrap_or_default())?;
+        let raw = rpc_resp.payload.unwrap_or_default();
+        log::debug!("[nakama] create_crew RPC response: {}", raw);
+        let result: CreateCrewResult = serde_json::from_str(&raw)?;
 
-        Ok(Crew {
+        let crew = Crew {
             id: result.crew_id,
             name: result.name,
-            description: String::new(),
+            description: description.to_string(),
             member_count: 1,
             max_members: 6,
-            open: true,
-        })
+            open,
+            avatar_url: None,
+        };
+        Ok((crew, result.invite_code))
+    }
+
+    /// Fetch crew avatar via server-side RPC. Works both authed and pre-auth (http_key).
+    pub async fn get_crew_avatar(&self, crew_id: &str) -> Result<String> {
+        let payload = serde_json::json!({ "crew_id": crew_id });
+        let body = serde_json::Value::String(payload.to_string());
+
+        let req = if let Ok(token) = self.bearer() {
+            let url = format!("{}/v2/rpc/get_crew_avatar", self.config.http_base());
+            self.http.post(&url).bearer_auth(&token).json(&body)
+        } else {
+            let url = format!(
+                "{}/v2/rpc/get_crew_avatar?http_key={}",
+                self.config.http_base(),
+                self.config.nakama_http_key,
+            );
+            self.http.post(&url).json(&body)
+        };
+
+        let resp = req.send().await?;
+        if !resp.status().is_success() {
+            let err_text = resp.text().await.unwrap_or_default();
+            return Err(Error::Server(err_text));
+        }
+        let rpc_resp: ApiRpcResponse = resp.json().await?;
+        Ok(rpc_resp.payload.unwrap_or_default())
+    }
+
+    pub async fn search_users(&self, query: &str) -> Result<Vec<crate::events::UserSearchResult>> {
+        let payload = serde_json::json!({ "query": query });
+        let resp_str = self.rpc("search_users", &payload).await?;
+        let result: SearchUsersResult = serde_json::from_str(&resp_str)?;
+        Ok(result
+            .users
+            .into_iter()
+            .map(|u| crate::events::UserSearchResult {
+                id: u.id,
+                display_name: u.display_name,
+                is_friend: u.is_friend,
+            })
+            .collect())
+    }
+
+    pub async fn join_by_invite_code(&self, code: &str) -> Result<(String, String)> {
+        let payload = serde_json::json!({ "code": code });
+        let resp_str = self.rpc("join_by_invite_code", &payload).await?;
+        let result: JoinByInviteCodeResult = serde_json::from_str(&resp_str)?;
+        Ok((result.crew_id, result.name))
     }
 
     // --- Generic RPC ---
@@ -720,6 +816,56 @@ impl NakamaClient {
 
         let rpc_resp: ApiRpcResponse = resp.json().await?;
         Ok(rpc_resp.payload.unwrap_or_default())
+    }
+
+    // --- Storage ---
+
+    /// Read a single object from Nakama storage. Returns the value string.
+    pub async fn read_storage(&self, collection: &str, key: &str, user_id: &str) -> Result<String> {
+        let token = self.bearer()?;
+        let url = format!("{}/v2/storage", self.config.http_base());
+
+        let body = serde_json::json!({
+            "object_ids": [{
+                "collection": collection,
+                "key": key,
+                "user_id": user_id,
+            }]
+        });
+
+        log::debug!("[nakama] read_storage {}/{}/{}", collection, key, user_id);
+        let resp = self
+            .http
+            .post(&url)
+            .bearer_auth(&token)
+            .json(&body)
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            let err_text = resp.text().await.unwrap_or_default();
+            log::warn!(
+                "[nakama] storage read failed {}/{}: {}",
+                collection,
+                key,
+                err_text
+            );
+            return Err(Error::Server(format!("storage read failed: {}", err_text)));
+        }
+
+        let objects: ApiStorageObjects = resp.json().await?;
+        let value = objects
+            .objects
+            .and_then(|mut v| v.pop())
+            .and_then(|o| o.value)
+            .unwrap_or_default();
+        log::debug!(
+            "[nakama] read_storage {}/{} -> {} bytes",
+            collection,
+            key,
+            value.len()
+        );
+        Ok(value)
     }
 
     // --- Presence RPCs ---
