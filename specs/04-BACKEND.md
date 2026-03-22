@@ -12,12 +12,13 @@
 Mello's backend is built on Nakama, an open-source game server. Nakama handles authentication, presence, groups (crews), real-time chat, and P2P signaling. This keeps backend complexity minimal while providing battle-tested infrastructure.
 
 **Key Responsibilities:**
-- User authentication (email, Discord OAuth)
+- User authentication (device, email, Discord/Steam/Google/Apple/Twitch OAuth)
 - Presence tracking (online/idle/offline)
 - Groups (Crews) with membership management
 - Real-time chat (persistent, per-crew)
 - P2P signaling (ICE candidate exchange)
 - TURN relay configuration
+- Crew discovery, avatars, invite codes, user search
 
 ---
 
@@ -73,581 +74,100 @@ Mello's backend is built on Nakama, an open-source game server. Nakama handles a
 
 ---
 
-## 3. Project Structure
+## 3. Go Runtime Modules
 
-```
-backend/
-├── docker-compose.yml              # Local development
-├── docker-compose.prod.yml         # Production template
-├── .env.example                    # Environment variables template
-│
-├── nakama/
-│   ├── Dockerfile                  # Custom Nakama image (if needed)
-│   └── data/
-│       └── modules/                # Custom server code
-│           ├── main.go             # Entry point (Go runtime)
-│           ├── auth.go             # Custom auth hooks
-│           ├── crews.go            # Crew management logic
-│           ├── signaling.go        # P2P signaling helpers
-│           └── presence.go         # Presence customization
-│
-├── migrations/                     # Database migrations
-│   └── 001_initial.sql
-│
-├── config/
-│   ├── nakama.yml                  # Nakama configuration
-│   └── turn.conf                   # TURN server config
-│
-└── scripts/
-    ├── setup-dev.sh                # Development setup
-    ├── deploy.sh                   # Production deployment
-    └── backup.sh                   # Database backup
-```
+All custom server logic is written in Go and loaded as Nakama runtime modules. Modules are stateless — state lives in Nakama storage or PostgreSQL.
+
+| Module | Responsibilities |
+|--------|-----------------|
+| `main.go` | RPC and hook registration |
+| `auth.go` | Post-authentication hooks (create default metadata) |
+| `crews.go` | `CreateCrewRPC`, `DiscoverCrewsRPC`, `GetCrewAvatarRPC`, after-join/leave hooks |
+| `streaming.go` | `StartStreamRPC`, `StopStreamRPC`, `UploadThumbnailRPC` |
+| `search_users.go` | `SearchUsersRPC` — friends first, then other matches by display name |
+| `invite_codes.go` | `GenerateInviteCode`, `JoinByInviteCodeRPC` |
+| `signaling.go` | `GetIceServersRPC`, TURN credential generation (HMAC-SHA1, time-limited) |
+| `voice_channels.go` | Voice channel CRUD via RPCs |
+| `voice_state.go` | Voice state tracking via Nakama streams |
+| `crew_state.go` | Crew state streaming (sidebar, presence) |
+| `presence.go` | Presence hooks (status tracking) |
+| `push.go` | Push notification helpers |
+| `dev_seed.go` | Development seed data |
 
 ---
 
-## 4. Nakama Configuration
+## 4. Custom RPCs
 
-### 4.1 Development Config
+| RPC name | Auth | Description |
+|----------|------|-------------|
+| `create_crew` | Yes | Creates a Nakama group, stores avatar in storage, generates invite code, sends Nakama notifications to invited users. Returns crew ID + invite code. |
+| `discover_crews` | No (`http_key`) | Paginated list of public (open) crews. Accepts `cursor`, returns `crews` + `nextCursor`. Used during onboarding without auth. |
+| `get_crew_avatar` | No (`http_key`) | Reads crew avatar base64 from storage by crew ID. Returns `{"data":"<base64>"}`. Works without auth for onboarding. |
+| `search_users` | Yes | Searches users by display name prefix. Returns friends first (via `nk.FriendsList`), then non-friends matching the query (via SQL `LIKE` on `users` table). Limit 100 friends, 20 results. |
+| `join_by_invite_code` | Yes | Looks up invite code in storage, joins the associated crew. Returns crew ID + name. |
+| `get_ice_servers` | Yes | Returns STUN server URLs + TURN server URLs with time-limited HMAC credentials (24h TTL). |
+| `start_stream` | Yes | Announces stream start to crew members via crew state stream. |
+| `stop_stream` | Yes | Announces stream end. |
+| `upload_thumbnail` | Yes | Stores stream thumbnail (base64) in Nakama storage. |
 
-```yaml
-# config/nakama.yml
-
-name: mello-dev
-
-# Server
-socket:
-  server_key: "mello_dev_server_key_change_in_prod"
-  port: 7350
-  
-# Dashboard
-console:
-  port: 7351
-  username: "admin"
-  password: "mello_admin_dev"  # Change in production
-
-# Database
-database:
-  address:
-    - "postgres:5432"
-
-# Logging
-logger:
-  level: "DEBUG"
-  
-# Session
-session:
-  token_expiry_sec: 86400        # 24 hours
-  refresh_token_expiry_sec: 604800  # 7 days
-
-# Social
-social:
-  discord:
-    client_id: "${DISCORD_CLIENT_ID}"
-    client_secret: "${DISCORD_CLIENT_SECRET}"
-
-# Runtime
-runtime:
-  path: "/nakama/data/modules"
-  http_key: "${NAKAMA_HTTP_KEY}"
-```
-
-### 4.2 Docker Compose (Development)
-
-```yaml
-# docker-compose.yml
-
-version: '3.8'
-
-services:
-  postgres:
-    image: postgres:15
-    environment:
-      POSTGRES_DB: nakama
-      POSTGRES_USER: nakama
-      POSTGRES_PASSWORD: localdev
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
-    healthcheck:
-      test: ["CMD", "pg_isready", "-U", "nakama"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-
-  nakama:
-    image: heroiclabs/nakama:3.21.0
-    depends_on:
-      postgres:
-        condition: service_healthy
-    environment:
-      - DISCORD_CLIENT_ID=${DISCORD_CLIENT_ID}
-      - DISCORD_CLIENT_SECRET=${DISCORD_CLIENT_SECRET}
-      - NAKAMA_HTTP_KEY=${NAKAMA_HTTP_KEY:-mello_http_key_dev}
-    entrypoint:
-      - /bin/sh
-      - -c
-      - |
-        /nakama/nakama migrate up --database.address postgres:localdev@postgres:5432/nakama &&
-        exec /nakama/nakama --config /nakama/data/config.yml
-    volumes:
-      - ./nakama/data:/nakama/data
-      - ./config/nakama.yml:/nakama/data/config.yml:ro
-    ports:
-      - "7350:7350"   # gRPC API
-      - "7351:7351"   # Admin console
-      - "7352:7352"   # HTTP API
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:7350/"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  # Local TURN server for testing P2P relay
-  coturn:
-    image: coturn/coturn:4.6
-    network_mode: host
-    volumes:
-      - ./config/turn.conf:/etc/turnserver.conf:ro
-
-volumes:
-  postgres_data:
-```
+Every RPC validates its input and returns typed Nakama errors (`UNAUTHENTICATED`, `INVALID_ARGUMENT`, `NOT_FOUND`, `PERMISSION_DENIED`, `INTERNAL`).
 
 ---
 
 ## 5. Data Models
 
-### 5.1 User (Nakama built-in + metadata)
+### User (Nakama built-in + metadata)
 
-```go
-// User metadata stored in Nakama
-type UserMetadata struct {
-    Tag           string `json:"tag"`            // e.g., "#001"
-    AvatarURL     string `json:"avatar_url"`
-    DisplayName   string `json:"display_name"`
-    CreatedAt     int64  `json:"created_at"`
-}
+| Field | Source | Description |
+|-------|--------|-------------|
+| `id` | Nakama | UUID |
+| `username` | Nakama | Unique handle |
+| `display_name` | Nakama | Shown in UI |
+| `avatar_url` | Nakama | User avatar URL |
+| `metadata` | Nakama JSON | `{ tag, created_at }` |
+
+### Crew (Nakama Group + metadata)
+
+| Field | Source | Description |
+|-------|--------|-------------|
+| `id` | Nakama group | UUID |
+| `name` | Nakama group | Display name |
+| `description` | Nakama group | Crew description |
+| `open` | Nakama group | Joinable without invite |
+| `max_count` | Nakama group | Max members (default: 6) |
+| `metadata` | Nakama JSON | `{ max_members, invite_only, created_by, stream_enabled }` |
+
+### Presence Status (via Nakama presence)
+
+```json
+{ "status": "online|idle|dnd|offline", "streaming_to": "<crew_id>", "watching_id": "<host_user_id>" }
 ```
 
-### 5.2 Crew (Nakama Group + metadata)
+### Signaling Messages (via Nakama channel messages)
 
-```go
-// Crew = Nakama Group with custom metadata
-type CrewMetadata struct {
-    MaxMembers    int    `json:"max_members"`    // Default: 6
-    InviteOnly    bool   `json:"invite_only"`
-    CreatedBy     string `json:"created_by"`     // User ID
-    StreamEnabled bool   `json:"stream_enabled"` // Can members stream?
-}
-
-// Nakama Group fields used:
-// - id: Unique crew ID
-// - name: Crew display name
-// - description: Crew description
-// - open: Is crew joinable without invite
-// - max_count: Maximum members
-// - metadata: CrewMetadata JSON
-```
-
-### 5.3 Presence Status
-
-```go
-// Presence status sent via Nakama presence
-type PresenceStatus struct {
-    Status      string `json:"status"`       // "online", "idle", "dnd", "offline"
-    StreamingTo string `json:"streaming_to"` // Crew ID if streaming, empty otherwise
-    WatchingID  string `json:"watching_id"`  // Host user ID if watching, empty otherwise
-}
-```
-
-### 5.4 Signaling Messages
-
-```go
-// P2P signaling messages sent via Nakama channel messages
-type SignalMessage struct {
-    Type      string `json:"type"`       // "offer", "answer", "ice"
-    From      string `json:"from"`       // Sender user ID
-    To        string `json:"to"`         // Target user ID
-    SessionID string `json:"session_id"` // Unique session identifier
-    
-    // For offer/answer
-    SDP string `json:"sdp,omitempty"`
-    
-    // For ICE candidates
-    Candidate     string `json:"candidate,omitempty"`
-    SDPMid        string `json:"sdp_mid,omitempty"`
-    SDPMLineIndex int    `json:"sdp_mline_index,omitempty"`
-}
+```json
+{ "type": "offer|answer|ice", "from": "<user_id>", "to": "<user_id>", "session_id": "...", "sdp": "...", "candidate": "...", "sdp_mid": "...", "sdp_mline_index": 0 }
 ```
 
 ---
 
-## 6. Server Runtime (Go)
+## 6. Storage Patterns
 
-### 6.1 Main Entry Point
+Nakama's key-value storage is used for data that doesn't fit built-in models:
 
-```go
-// nakama/data/modules/main.go
+| Collection | Key | Owner | Value | Used by |
+|-----------|-----|-------|-------|---------|
+| `crew_avatars` | `{crew_id}` | System user (`""`) | `{"data":"<base64 JPEG>"}` | `create_crew`, `get_crew_avatar` |
+| `invite_codes` | `{code}` | System user (`""`) | `{"crew_id":"...","crew_name":"...","created_by":"..."}` | `GenerateInviteCode`, `join_by_invite_code` |
+| `stream_thumbnails` | `{crew_id}` | Streaming user | `{"data":"<base64 JPEG>"}` | `upload_thumbnail` |
 
-package main
-
-import (
-    "context"
-    "database/sql"
-    
-    "github.com/heroiclabs/nakama-common/runtime"
-)
-
-func InitModule(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, initializer runtime.Initializer) error {
-    logger.Info("Mello backend initializing...")
-    
-    // Register authentication hooks
-    if err := initializer.RegisterAfterAuthenticateEmail(AfterAuthenticateEmail); err != nil {
-        return err
-    }
-    if err := initializer.RegisterAfterAuthenticateCustom(AfterAuthenticateDiscord); err != nil {
-        return err
-    }
-    
-    // Register group (crew) hooks
-    if err := initializer.RegisterAfterJoinGroup(AfterJoinCrew); err != nil {
-        return err
-    }
-    if err := initializer.RegisterAfterLeaveGroup(AfterLeaveCrew); err != nil {
-        return err
-    }
-    
-    // Register RPC functions
-    if err := initializer.RegisterRpc("create_crew", CreateCrewRPC); err != nil {
-        return err
-    }
-    if err := initializer.RegisterRpc("get_ice_servers", GetIceServersRPC); err != nil {
-        return err
-    }
-    if err := initializer.RegisterRpc("start_stream", StartStreamRPC); err != nil {
-        return err
-    }
-    if err := initializer.RegisterRpc("stop_stream", StopStreamRPC); err != nil {
-        return err
-    }
-    
-    // Register match handler for signaling
-    if err := initializer.RegisterMatch("signaling", NewSignalingMatch); err != nil {
-        return err
-    }
-    
-    logger.Info("Mello backend initialized successfully")
-    return nil
-}
-```
-
-### 6.2 Crew Management
-
-```go
-// nakama/data/modules/crews.go
-
-package main
-
-import (
-    "context"
-    "database/sql"
-    "encoding/json"
-    
-    "github.com/heroiclabs/nakama-common/api"
-    "github.com/heroiclabs/nakama-common/runtime"
-)
-
-const (
-    MaxCrewMembers = 6
-    MaxCrewsPerUser = 10
-)
-
-type CreateCrewRequest struct {
-    Name        string `json:"name"`
-    Description string `json:"description,omitempty"`
-    InviteOnly  bool   `json:"invite_only"`
-}
-
-type CreateCrewResponse struct {
-    CrewID string `json:"crew_id"`
-}
-
-func CreateCrewRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, payload string) (string, error) {
-    userID, ok := ctx.Value(runtime.RUNTIME_CTX_USER_ID).(string)
-    if !ok {
-        return "", runtime.NewError("authentication required", 16) // UNAUTHENTICATED
-    }
-    
-    var req CreateCrewRequest
-    if err := json.Unmarshal([]byte(payload), &req); err != nil {
-        return "", runtime.NewError("invalid request", 3) // INVALID_ARGUMENT
-    }
-    
-    // Validate name
-    if len(req.Name) < 2 || len(req.Name) > 32 {
-        return "", runtime.NewError("name must be 2-32 characters", 3)
-    }
-    
-    // Check user's crew count
-    groups, _, err := nk.UserGroupsList(ctx, userID, 100, nil, "")
-    if err != nil {
-        return "", runtime.NewError("failed to check user groups", 13) // INTERNAL
-    }
-    if len(groups) >= MaxCrewsPerUser {
-        return "", runtime.NewError("maximum crews reached", 9) // FAILED_PRECONDITION
-    }
-    
-    // Create crew metadata
-    metadata := CrewMetadata{
-        MaxMembers:    MaxCrewMembers,
-        InviteOnly:    req.InviteOnly,
-        CreatedBy:     userID,
-        StreamEnabled: true,
-    }
-    metadataJSON, _ := json.Marshal(metadata)
-    
-    // Create Nakama group
-    group, err := nk.GroupCreate(ctx, 
-        userID,                    // Creator
-        req.Name,                  // Name
-        userID,                    // Creator ID as unique name suffix
-        "en",                      // Language
-        req.Description,           // Description
-        "",                        // Avatar URL
-        !req.InviteOnly,           // Open (opposite of invite only)
-        string(metadataJSON),      // Metadata
-        MaxCrewMembers,            // Max count
-    )
-    if err != nil {
-        return "", runtime.NewError("failed to create crew", 13)
-    }
-    
-    resp := CreateCrewResponse{CrewID: group.Id}
-    respJSON, _ := json.Marshal(resp)
-    return string(respJSON), nil
-}
-
-// Called after a user joins a crew
-func AfterJoinCrew(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, out *api.JoinGroup, in *api.JoinGroup) error {
-    userID := ctx.Value(runtime.RUNTIME_CTX_USER_ID).(string)
-    crewID := in.GroupId
-    
-    logger.Info("User %s joined crew %s", userID, crewID)
-    
-    // Broadcast presence update to crew channel
-    // ... (handled by client via Nakama's built-in presence)
-    
-    return nil
-}
-
-// Called after a user leaves a crew
-func AfterLeaveCrew(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, out *api.LeaveGroup, in *api.LeaveGroup) error {
-    userID := ctx.Value(runtime.RUNTIME_CTX_USER_ID).(string)
-    crewID := in.GroupId
-    
-    logger.Info("User %s left crew %s", userID, crewID)
-    
-    return nil
-}
-```
-
-### 6.3 ICE Server Configuration
-
-```go
-// nakama/data/modules/signaling.go
-
-package main
-
-import (
-    "context"
-    "database/sql"
-    "encoding/json"
-    "os"
-    "time"
-    
-    "github.com/heroiclabs/nakama-common/runtime"
-)
-
-type IceServer struct {
-    URLs       []string `json:"urls"`
-    Username   string   `json:"username,omitempty"`
-    Credential string   `json:"credential,omitempty"`
-}
-
-type GetIceServersResponse struct {
-    IceServers []IceServer `json:"ice_servers"`
-    TTL        int         `json:"ttl"` // Seconds until credentials expire
-}
-
-func GetIceServersRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, payload string) (string, error) {
-    userID, ok := ctx.Value(runtime.RUNTIME_CTX_USER_ID).(string)
-    if !ok {
-        return "", runtime.NewError("authentication required", 16)
-    }
-    
-    // STUN servers (free, no auth needed)
-    stunServers := IceServer{
-        URLs: []string{
-            "stun:stun.l.google.com:19302",
-            "stun:stun1.l.google.com:19302",
-        },
-    }
-    
-    // TURN servers (require time-limited credentials)
-    turnSecret := os.Getenv("TURN_SECRET")
-    turnHost := os.Getenv("TURN_HOST")
-    
-    // Generate time-limited TURN credentials
-    // Username format: timestamp:userID
-    // Credential: HMAC-SHA1(secret, username)
-    timestamp := time.Now().Add(24 * time.Hour).Unix()
-    username := fmt.Sprintf("%d:%s", timestamp, userID)
-    credential := generateTurnCredential(turnSecret, username)
-    
-    turnServer := IceServer{
-        URLs: []string{
-            fmt.Sprintf("turn:%s:3478?transport=udp", turnHost),
-            fmt.Sprintf("turn:%s:3478?transport=tcp", turnHost),
-            fmt.Sprintf("turns:%s:5349?transport=tcp", turnHost),
-        },
-        Username:   username,
-        Credential: credential,
-    }
-    
-    resp := GetIceServersResponse{
-        IceServers: []IceServer{stunServers, turnServer},
-        TTL:        86400, // 24 hours
-    }
-    
-    respJSON, _ := json.Marshal(resp)
-    return string(respJSON), nil
-}
-
-func generateTurnCredential(secret, username string) string {
-    mac := hmac.New(sha1.New, []byte(secret))
-    mac.Write([]byte(username))
-    return base64.StdEncoding.EncodeToString(mac.Sum(nil))
-}
-```
-
-### 6.4 Stream Announcements
-
-```go
-// nakama/data/modules/streaming.go
-
-package main
-
-import (
-    "context"
-    "database/sql"
-    "encoding/json"
-    
-    "github.com/heroiclabs/nakama-common/runtime"
-)
-
-type StartStreamRequest struct {
-    CrewID string `json:"crew_id"`
-    Title  string `json:"title,omitempty"`
-}
-
-type StreamAnnouncement struct {
-    Type     string `json:"type"` // "stream_start" or "stream_end"
-    HostID   string `json:"host_id"`
-    HostName string `json:"host_name"`
-    Title    string `json:"title"`
-}
-
-func StartStreamRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, payload string) (string, error) {
-    userID := ctx.Value(runtime.RUNTIME_CTX_USER_ID).(string)
-    
-    var req StartStreamRequest
-    if err := json.Unmarshal([]byte(payload), &req); err != nil {
-        return "", runtime.NewError("invalid request", 3)
-    }
-    
-    // Verify user is member of crew
-    membership, err := nk.GroupUsersList(ctx, req.CrewID, 100, nil, "")
-    if err != nil {
-        return "", runtime.NewError("crew not found", 5) // NOT_FOUND
-    }
-    
-    isMember := false
-    for _, m := range membership {
-        if m.User.Id == userID {
-            isMember = true
-            break
-        }
-    }
-    if !isMember {
-        return "", runtime.NewError("not a crew member", 7) // PERMISSION_DENIED
-    }
-    
-    // Get user info
-    users, err := nk.UsersGetId(ctx, []string{userID}, nil)
-    if err != nil || len(users) == 0 {
-        return "", runtime.NewError("user not found", 13)
-    }
-    user := users[0]
-    
-    // Broadcast stream start to crew channel
-    announcement := StreamAnnouncement{
-        Type:     "stream_start",
-        HostID:   userID,
-        HostName: user.DisplayName,
-        Title:    req.Title,
-    }
-    announcementJSON, _ := json.Marshal(announcement)
-    
-    // Send to crew channel
-    channelID := fmt.Sprintf("crew.%s", req.CrewID)
-    nk.ChannelMessageSend(ctx, 
-        channelID,
-        string(announcementJSON),
-        userID,
-        user.Username,
-        false, // Not persistent (real-time only)
-    )
-    
-    return "{}", nil
-}
-
-func StopStreamRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, payload string) (string, error) {
-    userID := ctx.Value(runtime.RUNTIME_CTX_USER_ID).(string)
-    
-    var req StartStreamRequest // Same structure
-    if err := json.Unmarshal([]byte(payload), &req); err != nil {
-        return "", runtime.NewError("invalid request", 3)
-    }
-    
-    // Get user info
-    users, err := nk.UsersGetId(ctx, []string{userID}, nil)
-    if err != nil || len(users) == 0 {
-        return "", runtime.NewError("user not found", 13)
-    }
-    user := users[0]
-    
-    // Broadcast stream end
-    announcement := StreamAnnouncement{
-        Type:     "stream_end",
-        HostID:   userID,
-        HostName: user.DisplayName,
-    }
-    announcementJSON, _ := json.Marshal(announcement)
-    
-    channelID := fmt.Sprintf("crew.%s", req.CrewID)
-    nk.ChannelMessageSend(ctx, channelID, string(announcementJSON), userID, user.Username, false)
-    
-    return "{}", nil
-}
-```
+Storage writes use `PermissionRead: 2` (public read) and `PermissionWrite: 0` (server-only write) for system-owned data. The owner for crew avatars and invite codes is the empty string (system user) so that any client can read them.
 
 ---
 
 ## 7. Client-Server Communication
 
-### 7.1 Authentication Flow
+### Authentication Flow (Discord OAuth example)
 
 ```
 ┌────────┐                    ┌────────┐                    ┌────────┐
@@ -682,7 +202,7 @@ func StopStreamRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk ru
     │                             │                             │
 ```
 
-### 7.2 Real-Time Communication
+### Real-Time Communication
 
 ```
 ┌────────┐                              ┌────────┐
@@ -715,7 +235,7 @@ func StopStreamRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk ru
     │                                       │
 ```
 
-### 7.3 P2P Signaling Flow
+### P2P Signaling Flow
 
 ```
 ┌─────────┐              ┌────────┐              ┌─────────┐
@@ -744,7 +264,6 @@ func StopStreamRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk ru
      │ 7. Exchange ICE candidates (both directions) │
      │◀─────────────────────▶│◀─────────────────────▶│
      │                       │                       │
-     │                       │                       │
      │═══════════════════════════════════════════════│
      │              P2P Connection Established       │
      │═══════════════════════════════════════════════│
@@ -753,97 +272,60 @@ func StopStreamRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk ru
 
 ---
 
-## 8. TURN Server Configuration
+## 8. Invite Code System
 
-### 8.1 Coturn Config
+Invite codes are 8-character alphanumeric strings (format: `XXXX-XXXX`), generated server-side when a crew is created. They're stored in Nakama storage with the system user as owner.
 
-```conf
-# config/turn.conf
-
-# Network
-listening-port=3478
-tls-listening-port=5349
-listening-ip=0.0.0.0
-external-ip=YOUR_PUBLIC_IP
-
-# Relay
-min-port=49152
-max-port=65535
-relay-ip=YOUR_PUBLIC_IP
-
-# Authentication
-lt-cred-mech
-use-auth-secret
-static-auth-secret=YOUR_TURN_SECRET
-
-# TLS (production)
-cert=/etc/ssl/certs/turn.pem
-pkey=/etc/ssl/private/turn.key
-
-# Logging
-log-file=/var/log/turnserver.log
-verbose
-
-# Security
-no-multicast-peers
-denied-peer-ip=10.0.0.0-10.255.255.255
-denied-peer-ip=192.168.0.0-192.168.255.255
-denied-peer-ip=172.16.0.0-172.31.255.255
-denied-peer-ip=127.0.0.0-127.255.255.255
-
-# Realm
-realm=mello.app
-
-# Quotas (per user)
-user-quota=12
-total-quota=1200
-```
+**Flow:**
+1. Creator creates crew → `create_crew` RPC generates code → returns code to client
+2. Creator shares code (copy-to-clipboard in the new-crew modal)
+3. Recipient enters code → `join_by_invite_code` RPC looks up code → joins the crew
+4. Invited users (selected during crew creation) receive Nakama notifications with crew details
 
 ---
 
 ## 9. Scaling Considerations
 
-### 9.1 Beta (Up to 10,000 users)
+### Beta (Up to 10,000 users)
 
 ```
-┌─────────────────────────────────────────┐
-│          SINGLE REGION SETUP            │
-│                                         │
-│  1x Nakama (4 vCPU, 8GB RAM)            │
-│  1x PostgreSQL (2 vCPU, 4GB RAM)        │
-│  1x TURN (2 vCPU, 4GB RAM, 1Gbps)       │
-│                                         │
-│  Estimated cost: ~$150-300/mo           │
-└─────────────────────────────────────────┘
+1x Nakama (4 vCPU, 8GB RAM)
+1x PostgreSQL (2 vCPU, 4GB RAM)
+1x TURN (2 vCPU, 4GB RAM, 1Gbps)
+
+Estimated cost: ~$150-300/mo
 ```
 
-### 9.2 Growth (100,000+ users)
+### Growth (100,000+ users)
 
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│                    MULTI-REGION SETUP                               │
-│                                                                     │
-│  ┌─────────────────────┐    ┌─────────────────────┐                │
-│  │     US-EAST         │    │     EU-WEST         │                │
-│  │                     │    │                     │                │
-│  │  3x Nakama (HA)     │    │  3x Nakama (HA)     │                │
-│  │  CockroachDB node   │◀──▶│  CockroachDB node   │                │
-│  │  2x TURN            │    │  2x TURN            │                │
-│  └─────────────────────┘    └─────────────────────┘                │
-│              │                        │                            │
-│              └────────┬───────────────┘                            │
-│                       │                                            │
-│               Global Load Balancer                                 │
-│                                                                    │
-│  Estimated cost: ~$2,000-5,000/mo                                  │
-└─────────────────────────────────────────────────────────────────────┘
+┌─────────────────────┐    ┌─────────────────────┐
+│     US-EAST         │    │     EU-WEST         │
+│  3x Nakama (HA)     │    │  3x Nakama (HA)     │
+│  CockroachDB node   │◀──▶│  CockroachDB node   │
+│  2x TURN            │    │  2x TURN            │
+└─────────────────────┘    └─────────────────────┘
+
+Estimated cost: ~$2,000-5,000/mo
 ```
 
 ---
 
-## 10. Monitoring & Observability
+## 10. Security
 
-### 10.1 Metrics to Track
+| Aspect | Implementation |
+|--------|----------------|
+| Transport | WSS (TLS 1.3) |
+| Authentication | Nakama JWT tokens |
+| Session | 24h expiry, refresh tokens (7-day) |
+| TURN credentials | Time-limited HMAC-SHA1 (24h TTL) |
+| Rate limiting | Nakama built-in + nginx |
+| DDoS protection | Cloudflare |
+| Storage permissions | System-owned data: public read, server-only write |
+
+---
+
+## 11. Monitoring
 
 | Metric | Source | Alert Threshold |
 |--------|--------|-----------------|
@@ -855,64 +337,30 @@ total-quota=1200
 | Database connections | PostgreSQL | >80% pool |
 | API latency (p99) | Nakama | >500ms |
 
-### 10.2 Logging
-
-```yaml
-# docker-compose.yml addition for logging
-
-  loki:
-    image: grafana/loki:2.9.0
-    ports:
-      - "3100:3100"
-    volumes:
-      - loki_data:/loki
-
-  grafana:
-    image: grafana/grafana:10.2.0
-    ports:
-      - "3000:3000"
-    volumes:
-      - grafana_data:/var/lib/grafana
-    environment:
-      - GF_SECURITY_ADMIN_PASSWORD=admin
-
-volumes:
-  loki_data:
-  grafana_data:
-```
-
 ---
 
-## 11. Security
-
-| Aspect | Implementation |
-|--------|----------------|
-| Transport | WSS (TLS 1.3) |
-| Authentication | Nakama JWT tokens |
-| Session | 24h expiry, refresh tokens |
-| TURN credentials | Time-limited HMAC |
-| Rate limiting | Nakama built-in + nginx |
-| DDoS protection | Cloudflare |
-
----
-
-## 12. API Reference Summary
+## 12. API Reference
 
 ### REST Endpoints (via Nakama)
 
-| Method | Path | Description |
-|--------|------|-------------|
-| POST | `/v2/account/authenticate/email` | Email login |
-| POST | `/v2/account/authenticate/custom` | Discord OAuth |
-| GET | `/v2/user` | Get current user |
-| GET | `/v2/group` | List user's crews |
-| POST | `/v2/group` | Create crew |
-| POST | `/v2/group/{id}/join` | Join crew |
-| POST | `/v2/group/{id}/leave` | Leave crew |
-| POST | `/v2/rpc/create_crew` | Create crew (custom) |
-| POST | `/v2/rpc/get_ice_servers` | Get TURN credentials |
-| POST | `/v2/rpc/start_stream` | Announce stream start |
-| POST | `/v2/rpc/stop_stream` | Announce stream end |
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| POST | `/v2/account/authenticate/device` | No | Device auth (onboarding) |
+| POST | `/v2/account/authenticate/email` | No | Email login |
+| POST | `/v2/account/authenticate/custom` | No | OAuth (Discord, Steam, etc.) |
+| GET | `/v2/account` | Yes | Get current user |
+| GET | `/v2/user/group` | Yes | List user's crews |
+| POST | `/v2/group/{id}/join` | Yes | Join crew |
+| POST | `/v2/group/{id}/leave` | Yes | Leave crew |
+| POST | `/v2/rpc/create_crew` | Yes | Create crew + avatar + invite code |
+| POST | `/v2/rpc/discover_crews` | No (`http_key`) | Paginated public crew list |
+| POST | `/v2/rpc/get_crew_avatar` | No (`http_key`) | Fetch crew avatar base64 |
+| POST | `/v2/rpc/search_users` | Yes | Search users by display name |
+| POST | `/v2/rpc/join_by_invite_code` | Yes | Join crew via invite code |
+| POST | `/v2/rpc/get_ice_servers` | Yes | Get STUN/TURN credentials |
+| POST | `/v2/rpc/start_stream` | Yes | Announce stream start |
+| POST | `/v2/rpc/stop_stream` | Yes | Announce stream end |
+| POST | `/v2/rpc/upload_thumbnail` | Yes | Upload stream thumbnail |
 
 ### WebSocket Messages
 
@@ -920,10 +368,11 @@ volumes:
 |------|-----------|-------------|
 | `channel_join` | Client→Server | Join crew channel |
 | `channel_leave` | Client→Server | Leave crew channel |
-| `channel_message_send` | Client→Server | Send chat/signal |
-| `channel_message` | Server→Client | Receive chat/signal |
-| `presence_event` | Server→Client | Member join/leave |
-| `status_update` | Client→Server | Update presence |
+| `channel_message_send` | Client→Server | Send chat/signal message |
+| `channel_message` | Server→Client | Receive chat/signal message |
+| `presence_event` | Server→Client | Member join/leave notification |
+| `status_update` | Client→Server | Update presence status |
+| `notifications` | Server→Client | Invite notifications, system alerts |
 
 ---
 
