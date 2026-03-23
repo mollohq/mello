@@ -1,43 +1,48 @@
+use std::sync::Arc;
+
 use async_trait::async_trait;
 
 use super::error::StreamError;
 use super::packet::StreamPacket;
 use super::sink::PacketSink;
+use crate::transport::SfuConnection;
 
-/// SFU sink stub — v0.2. Wire protocol is specified in a future 13-SFU.md.
-/// Construction always fails with `SfuNotImplemented`.
 pub struct SfuSink {
-    #[allow(dead_code)]
-    endpoint: String,
-    #[allow(dead_code)]
-    token: String,
+    connection: Arc<SfuConnection>,
 }
 
 impl SfuSink {
-    pub async fn new(endpoint: &str, token: &str) -> Result<Self, StreamError> {
-        log::warn!(
-            "SFU sink requested (endpoint={}) but not implemented yet",
-            endpoint
-        );
-        let _ = (endpoint, token);
-        Err(StreamError::SfuNotImplemented)
+    pub fn new(connection: Arc<SfuConnection>) -> Self {
+        Self { connection }
+    }
+
+    pub fn connection(&self) -> &Arc<SfuConnection> {
+        &self.connection
     }
 }
 
 #[async_trait]
 impl PacketSink for SfuSink {
-    async fn send_video(&self, _packet: &StreamPacket) -> Result<(), StreamError> {
-        Err(StreamError::SfuNotImplemented)
+    async fn send_video(&self, packet: &StreamPacket) -> Result<(), StreamError> {
+        let data = packet.serialize();
+        self.connection.send_media(&data)
     }
 
-    async fn send_audio(&self, _packet: &StreamPacket) -> Result<(), StreamError> {
-        Err(StreamError::SfuNotImplemented)
+    async fn send_audio(&self, packet: &StreamPacket) -> Result<(), StreamError> {
+        let data = packet.serialize();
+        self.connection.send_media(&data)
     }
 
-    async fn send_control(&self, _packet: &StreamPacket) -> Result<(), StreamError> {
-        Err(StreamError::SfuNotImplemented)
+    async fn send_control(&self, packet: &StreamPacket) -> Result<(), StreamError> {
+        let data = packet.serialize();
+        self.connection.send_control(&data)
     }
 
-    async fn on_viewer_joined(&self, _viewer_id: &str) {}
-    async fn on_viewer_left(&self, _viewer_id: &str) {}
+    async fn on_viewer_joined(&self, viewer_id: &str) {
+        log::debug!("SFU sink: viewer joined {}", viewer_id);
+    }
+
+    async fn on_viewer_left(&self, viewer_id: &str) {
+        log::debug!("SFU sink: viewer left {}", viewer_id);
+    }
 }

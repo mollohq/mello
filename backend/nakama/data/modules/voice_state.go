@@ -171,12 +171,19 @@ func VoiceJoinRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk run
 		return "", runtime.NewError("not a crew member", 7)
 	}
 
-	// Check capacity
+	// Determine voice mode based on crew entitlement
+	sfuMode := sfuAuthEnabled() && hasPremiumCrew(ctx, nk, req.CrewID)
+
+	// Check capacity (SFU: 50, P2P: 6)
+	maxMembers := MaxVoiceChannelMembers
+	if sfuMode {
+		maxMembers = MaxSFUVoiceChannelMembers
+	}
 	voiceRoomsMu.RLock()
 	room, exists := voiceRooms[req.ChannelID]
-	if exists && len(room.Members) >= MaxVoiceChannelMembers {
+	if exists && len(room.Members) >= maxMembers {
 		voiceRoomsMu.RUnlock()
-		return "", runtime.NewError(fmt.Sprintf("channel full (%d members max)", MaxVoiceChannelMembers), 9)
+		return "", runtime.NewError(fmt.Sprintf("channel full (%d members max)", maxMembers), 9)
 	}
 	voiceRoomsMu.RUnlock()
 
@@ -239,10 +246,44 @@ func VoiceJoinRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk run
 	PushVoiceUpdate(ctx, logger, nk, req.CrewID)
 
 	snap := GetVoiceChannelSnapshot(req.ChannelID)
+
+	if sfuMode {
+		region := selectSFURegion("")
+		endpoint := sfuEndpointForRegion(region)
+		voiceSessionKey := fmt.Sprintf("voice:%s:%s", req.CrewID, req.ChannelID)
+
+		token, err := signSFUToken(SFUTokenClaims{
+			UserID:    userID,
+			SessionID: voiceSessionKey,
+			Type:      "voice",
+			Role:      "member",
+			CrewID:    req.CrewID,
+			ChannelID: req.ChannelID,
+			Region:    region,
+		})
+		if err != nil {
+			logger.Error("Failed to sign SFU token for voice: %v", err)
+			// Fall through to P2P response
+		} else {
+			logger.Info("Voice join (SFU): user=%s crew=%s channel=%s region=%s", userID, req.CrewID, req.ChannelID, region)
+			resp, _ := json.Marshal(map[string]interface{}{
+				"success":      true,
+				"channel_id":   req.ChannelID,
+				"voice_state":  snap,
+				"mode":         "sfu",
+				"sfu_endpoint": endpoint,
+				"sfu_token":    token,
+			})
+			return string(resp), nil
+		}
+	}
+
+	logger.Info("Voice join (P2P): user=%s crew=%s channel=%s", userID, req.CrewID, req.ChannelID)
 	resp, _ := json.Marshal(map[string]interface{}{
 		"success":     true,
 		"channel_id":  req.ChannelID,
 		"voice_state": snap,
+		"mode":        "p2p",
 	})
 	return string(resp), nil
 }

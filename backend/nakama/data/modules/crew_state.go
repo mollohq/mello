@@ -83,6 +83,7 @@ type CrewState struct {
 	RecentMessages []*MessagePreview        `json:"recent_messages"`
 	UpdatedAt      string                   `json:"updated_at"`
 	MyRole         int                      `json:"my_role"` // 0=superadmin, 1=admin, 2=member; set per-request
+	SFUEnabled     bool                     `json:"sfu_enabled,omitempty"`
 }
 
 // CrewSidebarState is a lighter view for the sidebar.
@@ -95,6 +96,7 @@ type CrewSidebarState struct {
 	Stream         *CrewStreamState         `json:"stream"`
 	RecentMessages []*MessagePreview        `json:"recent_messages,omitempty"`
 	Idle           bool                     `json:"idle,omitempty"`
+	SFUEnabled     bool                     `json:"sfu_enabled,omitempty"`
 }
 
 // ---------------------------------------------------------------------------
@@ -243,6 +245,7 @@ func ComputeCrewState(ctx context.Context, logger runtime.Logger, nk runtime.Nak
 		RecentMessages: recentMsgs,
 		UpdatedAt:      time.Now().UTC().Format(time.RFC3339),
 		MyRole:         callerRole,
+		SFUEnabled:     hasPremiumCrew(ctx, nk, crewID),
 	}
 
 	// Cache it (without members to keep cache light)
@@ -296,6 +299,7 @@ func (cs *CrewState) ToSidebar() *CrewSidebarState {
 		Stream:         cs.Stream,
 		RecentMessages: cs.RecentMessages,
 		Idle:           cs.Counts.Online == 0,
+		SFUEnabled:     cs.SFUEnabled,
 	}
 	// Sidebar voice: strip speaking state
 	if cs.Voice != nil {

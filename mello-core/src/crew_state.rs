@@ -24,6 +24,8 @@ pub struct CrewState {
     pub updated_at: Option<String>,
     #[serde(default)]
     pub my_role: i32,
+    #[serde(default)]
+    pub sfu_enabled: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -71,6 +73,12 @@ pub struct VoiceMember {
 pub struct VoiceJoinResponse {
     pub channel_id: String,
     pub voice_state: VoiceSnapshot,
+    #[serde(default)]
+    pub mode: Option<String>,
+    #[serde(default)]
+    pub sfu_endpoint: Option<String>,
+    #[serde(default)]
+    pub sfu_token: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -160,6 +168,8 @@ pub struct CrewSidebarState {
     pub recent_messages: Vec<MessagePreview>,
     #[serde(default)]
     pub idle: bool,
+    #[serde(default)]
+    pub sfu_enabled: bool,
 }
 
 // ---------------------------------------------------------------------------

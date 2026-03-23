@@ -25,6 +25,15 @@ func InitModule(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runti
 	globalLogger = logger
 	globalDb = db
 
+	// SFU auth init (non-fatal — SFU features are just unavailable if not configured)
+	if err := initSFUAuth(); err != nil {
+		logger.Error("SFU auth init failed: %v", err)
+	} else if sfuAuthEnabled() {
+		logger.Info("SFU JWT signing enabled")
+	} else {
+		logger.Warn("SFU JWT signing disabled (SFU_JWT_PRIVATE_KEY not set)")
+	}
+
 	// -----------------------------------------------------------------------
 	// Auth hooks
 	// -----------------------------------------------------------------------
@@ -173,6 +182,9 @@ func InitModule(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runti
 		return err
 	}
 	if err := initializer.RegisterRpc("stream_thumbnail_upload", StreamThumbnailUploadRPC); err != nil {
+		return err
+	}
+	if err := initializer.RegisterRpc("watch_stream", WatchStreamRPC); err != nil {
 		return err
 	}
 

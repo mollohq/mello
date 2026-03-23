@@ -15,6 +15,7 @@ pub mod oauth;
 pub mod presence;
 pub mod session;
 pub mod stream;
+pub mod transport;
 pub mod voice;
 
 pub use client::{Client, FrameSlot};

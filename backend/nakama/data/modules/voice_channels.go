@@ -16,9 +16,10 @@ import (
 // ---------------------------------------------------------------------------
 
 const (
-	VoiceChannelCollection = "voice_channels"
-	MaxChannelsPerCrew     = 8
-	MaxVoiceChannelMembers = 6
+	VoiceChannelCollection    = "voice_channels"
+	MaxChannelsPerCrew        = 8
+	MaxVoiceChannelMembers    = 6
+	MaxSFUVoiceChannelMembers = 50
 )
 
 // ---------------------------------------------------------------------------

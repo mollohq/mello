@@ -2596,6 +2596,7 @@ fn handle_event(
                         }
                         c.member_count = state.counts.total as i32;
                         c.online_count = state.counts.online as i32;
+                        c.sfu_enabled = state.sfu_enabled;
                         let vlen = state.voice.members.len().min(4);
                         c.voice_count = vlen as i32;
                         // Populate voice chips from authoritative state
@@ -2721,6 +2722,7 @@ fn handle_event(
                 };
 
                 c.online_count = sc.counts.online as i32;
+                c.sfu_enabled = sc.sfu_enabled;
                 if let Some(ref voice) = sc.voice {
                     let vlen = voice.members.len().min(4);
                     c.voice_count = vlen as i32;

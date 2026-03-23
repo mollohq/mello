@@ -2,13 +2,22 @@ mod mesh;
 
 use std::ffi::CString;
 use std::sync::mpsc as std_mpsc;
+use std::sync::Arc;
 
 use crate::events::Event;
+use crate::transport::SfuConnection;
 
 pub use mesh::{SignalEnvelope, SignalMessage, SignalPurpose, VoiceMesh};
 
 const PACKET_BUF_SIZE: usize = 4000;
 const MAX_DEVICES: usize = 32;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VoiceMode {
+    Disconnected,
+    P2P,
+    SFU,
+}
 
 struct VadCallbackData {
     tx: std_mpsc::Sender<Event>,
@@ -32,6 +41,8 @@ pub struct VoiceManager {
     loopback: bool,
     debug_mode: bool,
     tick_counter: u32,
+    mode: VoiceMode,
+    sfu_connection: Option<Arc<SfuConnection>>,
 }
 
 // Safety: VoiceManager is only ever accessed from a single tokio task (the client run loop).
@@ -91,6 +102,8 @@ impl VoiceManager {
             loopback,
             debug_mode: false,
             tick_counter: 0,
+            mode: VoiceMode::Disconnected,
+            sfu_connection: None,
         }
     }
 
@@ -104,8 +117,76 @@ impl VoiceManager {
         }
 
         self.mesh.init(local_id, members);
+        self.setup_vad_callback(local_id);
 
-        // Set up VAD callback to send speaking events
+        let result = unsafe { mello_sys::mello_voice_start_capture(self.ctx) };
+        if result != mello_sys::MelloResult_MELLO_OK {
+            log::error!("Failed to start voice capture: {}", result);
+            return;
+        }
+
+        self.active = true;
+        self.mode = VoiceMode::P2P;
+        log::info!(
+            "Voice capture started (P2P), {} peers to connect",
+            members.len()
+        );
+
+        for member_id in members {
+            self.mesh.create_peer(self.ctx, local_id, member_id);
+        }
+    }
+
+    /// Join voice via SFU. Called from the client when mode is "sfu".
+    /// The SfuConnection is already established and joined.
+    pub fn join_voice_sfu(&mut self, local_id: &str, connection: Arc<SfuConnection>) {
+        if self.ctx.is_null() {
+            return;
+        }
+
+        self.setup_vad_callback(local_id);
+
+        let result = unsafe { mello_sys::mello_voice_start_capture(self.ctx) };
+        if result != mello_sys::MelloResult_MELLO_OK {
+            log::error!("Failed to start voice capture for SFU: {}", result);
+            return;
+        }
+
+        self.sfu_connection = Some(connection);
+        self.active = true;
+        self.mode = VoiceMode::SFU;
+        log::info!("Voice capture started (SFU)");
+    }
+
+    pub fn leave_voice(&mut self) {
+        if !self.active {
+            return;
+        }
+
+        unsafe {
+            mello_sys::mello_voice_stop_capture(self.ctx);
+        }
+
+        match self.mode {
+            VoiceMode::P2P => {
+                self.mesh.destroy_all_peers();
+            }
+            VoiceMode::SFU => {
+                self.sfu_connection = None;
+            }
+            VoiceMode::Disconnected => {}
+        }
+
+        self.active = false;
+        self.mode = VoiceMode::Disconnected;
+        log::info!("Voice stopped");
+    }
+
+    pub fn voice_mode(&self) -> VoiceMode {
+        self.mode
+    }
+
+    fn setup_vad_callback(&self, local_id: &str) {
         let event_tx = self.event_tx.clone();
         let local_id_owned = local_id.to_string();
         unsafe {
@@ -124,33 +205,6 @@ impl VoiceManager {
             let cb_ptr = Box::into_raw(cb_data) as *mut std::ffi::c_void;
             mello_sys::mello_voice_set_vad_callback(self.ctx, Some(vad_cb), cb_ptr);
         }
-
-        let result = unsafe { mello_sys::mello_voice_start_capture(self.ctx) };
-        if result != mello_sys::MelloResult_MELLO_OK {
-            log::error!("Failed to start voice capture: {}", result);
-            return;
-        }
-
-        self.active = true;
-        log::info!("Voice capture started, {} peers to connect", members.len());
-
-        // Create peer connections for each member and generate offers/answers
-        for member_id in members {
-            self.mesh.create_peer(self.ctx, local_id, member_id);
-        }
-    }
-
-    pub fn leave_voice(&mut self) {
-        if !self.active {
-            return;
-        }
-
-        unsafe {
-            mello_sys::mello_voice_stop_capture(self.ctx);
-        }
-        self.mesh.destroy_all_peers();
-        self.active = false;
-        log::info!("Voice stopped");
     }
 
     pub fn set_mute(&mut self, muted: bool) {
@@ -371,6 +425,7 @@ impl VoiceManager {
         let mut buf = [0u8; PACKET_BUF_SIZE];
         let loopback_id = std::ffi::CString::new("loopback").unwrap();
 
+        // Read outgoing audio packets from capture
         loop {
             let size = unsafe {
                 mello_sys::mello_voice_get_packet(
@@ -386,7 +441,19 @@ impl VoiceManager {
             let pkt = &buf[..size as usize];
 
             if self.active {
-                self.mesh.broadcast_audio(pkt);
+                match self.mode {
+                    VoiceMode::P2P => {
+                        self.mesh.broadcast_audio(pkt);
+                    }
+                    VoiceMode::SFU => {
+                        if let Some(ref conn) = self.sfu_connection {
+                            if let Err(e) = conn.send_media(pkt) {
+                                log::warn!("SFU voice send failed: {}", e);
+                            }
+                        }
+                    }
+                    VoiceMode::Disconnected => {}
+                }
             }
 
             if self.loopback {
@@ -401,8 +468,29 @@ impl VoiceManager {
             }
         }
 
+        // Read incoming audio from peers / SFU
         if self.active {
-            self.mesh.poll_incoming(self.ctx);
+            match self.mode {
+                VoiceMode::P2P => {
+                    self.mesh.poll_incoming(self.ctx);
+                }
+                VoiceMode::SFU => {
+                    if let Some(ref conn) = self.sfu_connection {
+                        let sfu_peer_id = CString::new("sfu").unwrap();
+                        for pkt in conn.poll_recv() {
+                            unsafe {
+                                mello_sys::mello_voice_feed_packet(
+                                    self.ctx,
+                                    sfu_peer_id.as_ptr(),
+                                    pkt.as_ptr(),
+                                    pkt.len() as i32,
+                                );
+                            }
+                        }
+                    }
+                }
+                VoiceMode::Disconnected => {}
+            }
         }
     }
 }

@@ -324,6 +324,24 @@ export component CrewPanel inherits Rectangle {
                                         vertical-alignment: center;
                                     }
 
+                                    if crew.sfu-enabled: Rectangle {
+                                        width: 30px;
+                                        height: 16px;
+                                        border-radius: 3px;
+                                        background: #7C3AED;
+                                        y: (parent.height - self.height) / 2;
+
+                                        Text {
+                                            text: "SFU";
+                                            font-size: 9px;
+                                            font-weight: 700;
+                                            letter-spacing: 0.5px;
+                                            color: white;
+                                            horizontal-alignment: center;
+                                            vertical-alignment: center;
+                                        }
+                                    }
+
                                     Text {
                                         text: crew.online-count + " / " + crew.member-count;
                                         font-family: Theme.font-mono;

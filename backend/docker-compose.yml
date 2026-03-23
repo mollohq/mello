@@ -20,6 +20,7 @@ services:
 
   nakama-build:
     image: heroiclabs/nakama-pluginbuilder:3.21.0
+    platform: linux/amd64
     container_name: mello-nakama-build
     volumes:
       - ./nakama/data/modules:/backend
@@ -32,6 +33,7 @@ services:
 
   nakama:
     image: heroiclabs/nakama:3.21.0
+    platform: linux/amd64
     container_name: mello-nakama
     depends_on:
       postgres:
@@ -50,6 +52,8 @@ services:
       - NAKAMA_HTTP_KEY=${NAKAMA_HTTP_KEY:-defaulthttpkey}
       - TURN_SECRET=${TURN_SECRET:-}
       - TURN_HOST=${TURN_HOST:-}
+      - SFU_JWT_PRIVATE_KEY=${SFU_JWT_PRIVATE_KEY:-}
+      - SFU_ENDPOINT_EU=${SFU_ENDPOINT_EU:-wss://sfu-eu.m3llo.app/ws}
     entrypoint:
       - /bin/sh
       - -c

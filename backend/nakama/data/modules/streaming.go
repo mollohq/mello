@@ -23,7 +23,11 @@ type StartStreamRequest struct {
 	Height      uint32 `json:"height,omitempty"`
 }
 
-const MaxP2PViewers = 5
+const (
+	MaxP2PViewers    = 5
+	MaxSFUViewers    = 100
+	StreamSessionCol = "stream_sessions"
+)
 
 type StopStreamRequest struct {
 	CrewID string `json:"crew_id"`
@@ -173,7 +177,51 @@ func StartStreamRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk r
 		"title":              req.Title,
 	})
 
-	logger.Info("User %s started stream %s in crew %s", userID, streamID, req.CrewID)
+	// SFU path: premium crews get server-relayed streaming
+	if sfuAuthEnabled() && hasPremiumCrew(ctx, nk, req.CrewID) {
+		region := selectSFURegion("")
+		endpoint := sfuEndpointForRegion(region)
+
+		token, err := signSFUToken(SFUTokenClaims{
+			UserID:    userID,
+			SessionID: streamID,
+			Type:      "stream",
+			Role:      "host",
+			CrewID:    req.CrewID,
+			Region:    region,
+		})
+		if err != nil {
+			logger.Error("Failed to sign SFU token: %v", err)
+			// Fall through to P2P below
+		} else {
+			storeStreamSession(ctx, nk, streamID, StreamSessionMeta{
+				CrewID:      req.CrewID,
+				HostUserID:  userID,
+				Mode:        "sfu",
+				SFURegion:   region,
+				SFUEndpoint: endpoint,
+			})
+
+			logger.Info("User %s started stream %s (SFU) in crew %s region=%s", userID, streamID, req.CrewID, region)
+			resp, _ := json.Marshal(map[string]interface{}{
+				"stream_id":    streamID,
+				"session_id":   streamID,
+				"mode":         "sfu",
+				"sfu_endpoint": endpoint,
+				"sfu_token":    token,
+			})
+			return string(resp), nil
+		}
+	}
+
+	// P2P path (free crews or SFU auth not configured)
+	storeStreamSession(ctx, nk, streamID, StreamSessionMeta{
+		CrewID:     req.CrewID,
+		HostUserID: userID,
+		Mode:       "p2p",
+	})
+
+	logger.Info("User %s started stream %s (P2P) in crew %s", userID, streamID, req.CrewID)
 	resp, _ := json.Marshal(map[string]interface{}{
 		"stream_id":   streamID,
 		"session_id":  streamID,
@@ -328,4 +376,105 @@ func StreamThumbnailUploadRPC(ctx context.Context, logger runtime.Logger, db *sq
 		"thumbnail_url": thumbnailURL,
 	})
 	return string(resp), nil
+}
+
+// ---------------------------------------------------------------------------
+// WatchStream RPC — viewer requests an SFU token for an existing stream
+// ---------------------------------------------------------------------------
+
+func WatchStreamRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, payload string) (string, error) {
+	userID, ok := ctx.Value(runtime.RUNTIME_CTX_USER_ID).(string)
+	if !ok {
+		return "", runtime.NewError("authentication required", 16)
+	}
+
+	var req struct {
+		SessionID string `json:"session_id"`
+	}
+	if err := json.Unmarshal([]byte(payload), &req); err != nil {
+		return "", runtime.NewError("invalid request", 3)
+	}
+	if req.SessionID == "" {
+		return "", runtime.NewError("session_id required", 3)
+	}
+
+	meta := loadStreamSession(ctx, nk, req.SessionID)
+	if meta == nil {
+		return "", runtime.NewError("stream not found", 5)
+	}
+
+	if !isCrewMember(ctx, nk, meta.CrewID, userID) {
+		return "", runtime.NewError("not a crew member", 7)
+	}
+
+	if meta.Mode == "sfu" {
+		token, err := signSFUToken(SFUTokenClaims{
+			UserID:    userID,
+			SessionID: req.SessionID,
+			Type:      "stream",
+			Role:      "viewer",
+			CrewID:    meta.CrewID,
+			Region:    meta.SFURegion,
+		})
+		if err != nil {
+			return "", runtime.NewError("token signing failed", 13)
+		}
+
+		resp, _ := json.Marshal(map[string]interface{}{
+			"mode":         "sfu",
+			"sfu_endpoint": meta.SFUEndpoint,
+			"sfu_token":    token,
+		})
+		return string(resp), nil
+	}
+
+	// P2P mode: viewer connects directly via signaling
+	resp, _ := json.Marshal(map[string]interface{}{
+		"mode": "p2p",
+	})
+	return string(resp), nil
+}
+
+// ---------------------------------------------------------------------------
+// Stream session storage — tracks SFU vs P2P mode for active streams
+// ---------------------------------------------------------------------------
+
+type StreamSessionMeta struct {
+	CrewID      string `json:"crew_id"`
+	HostUserID  string `json:"host_user_id"`
+	Mode        string `json:"mode"`
+	SFURegion   string `json:"sfu_region,omitempty"`
+	SFUEndpoint string `json:"sfu_endpoint,omitempty"`
+}
+
+func storeStreamSession(ctx context.Context, nk runtime.NakamaModule, sessionID string, meta StreamSessionMeta) {
+	data, _ := json.Marshal(meta)
+	nk.StorageWrite(ctx, []*runtime.StorageWrite{
+		{
+			Collection:      StreamSessionCol,
+			Key:             sessionID,
+			UserID:          SystemUserID,
+			Value:           string(data),
+			PermissionRead:  1,
+			PermissionWrite: 0,
+		},
+	})
+}
+
+func loadStreamSession(ctx context.Context, nk runtime.NakamaModule, sessionID string) *StreamSessionMeta {
+	records, err := nk.StorageRead(ctx, []*runtime.StorageRead{
+		{
+			Collection: StreamSessionCol,
+			Key:        sessionID,
+			UserID:     SystemUserID,
+		},
+	})
+	if err != nil || len(records) == 0 {
+		return nil
+	}
+	var meta StreamSessionMeta
+	if err := json.Unmarshal([]byte(records[0].Value), &meta); err != nil {
+		return nil
+	}
+	return &meta
 }

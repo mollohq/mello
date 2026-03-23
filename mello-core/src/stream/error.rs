@@ -5,8 +5,17 @@ pub enum StreamError {
     #[error("Viewer limit reached (max {max})")]
     ViewerLimitReached { max: usize },
 
-    #[error("SFU not implemented")]
-    SfuNotImplemented,
+    #[error("SFU connection failed: {0}")]
+    SfuConnectFailed(String),
+
+    #[error("SFU send failed: {0}")]
+    SfuSendFailed(String),
+
+    #[error("SFU join failed: {0}")]
+    SfuJoinFailed(String),
+
+    #[error("SFU protocol error: {0}")]
+    SfuProtocolError(String),
 
     #[error("Unknown stream mode: {0}")]
     UnknownMode(String),

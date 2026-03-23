@@ -158,6 +158,10 @@ struct StreamHostPeer {
 unsafe impl Send for StreamHostPeer {}
 unsafe impl Sync for StreamHostPeer {}
 
+/// Send-safe wrapper for MelloStreamHost pointer, used to pass across async boundaries.
+struct StreamHostHandle(*mut mello_sys::MelloStreamHost);
+unsafe impl Send for StreamHostHandle {}
+
 unsafe extern "C" fn on_viewer_frame(
     user_data: *mut std::ffi::c_void,
     rgba: *const u8,
@@ -2141,17 +2145,84 @@ impl Client {
             }
         };
 
-        // Rejoin local voice mesh with the members from the response
+        let mode = resp.mode.as_deref().unwrap_or("p2p");
+
         self.voice.leave_voice();
         if let Some(local_id) = self.nakama.current_user_id().map(String::from) {
-            let peer_ids: Vec<String> = resp
-                .voice_state
-                .members
-                .iter()
-                .filter(|m| m.user_id != local_id)
-                .map(|m| m.user_id.clone())
-                .collect();
-            self.voice.join_voice(&local_id, &peer_ids);
+            match mode {
+                "sfu" => {
+                    let endpoint = resp.sfu_endpoint.as_deref().unwrap_or_default();
+                    let token = resp.sfu_token.as_deref().unwrap_or_default();
+
+                    let fallback_to_p2p =
+                        |voice: &mut crate::voice::VoiceManager,
+                         local_id: &str,
+                         resp: &crate::crew_state::VoiceJoinResponse| {
+                            let peer_ids: Vec<String> = resp
+                                .voice_state
+                                .members
+                                .iter()
+                                .filter(|m| m.user_id != local_id)
+                                .map(|m| m.user_id.clone())
+                                .collect();
+                            voice.join_voice(local_id, &peer_ids);
+                        };
+
+                    match crate::transport::SfuConnection::connect(endpoint, token).await {
+                        Ok(mut conn) => {
+                            let peer_handle = {
+                                let ctx = self.voice.mello_ctx();
+                                unsafe { crate::transport::SfuConnection::create_peer(ctx) }
+                            };
+                            match peer_handle {
+                                Ok(ph) => match conn.join_voice(ph, &crew_id, channel_id).await {
+                                    Ok(_session) => {
+                                        if let Err(e) = conn.wait_for_datachannel_open().await {
+                                            log::error!(
+                                                "SFU DataChannel failed to open: {}, falling back to P2P",
+                                                e
+                                            );
+                                            fallback_to_p2p(&mut self.voice, &local_id, &resp);
+                                        } else {
+                                            let conn = std::sync::Arc::new(conn);
+                                            self.voice.join_voice_sfu(&local_id, conn);
+                                        }
+                                    }
+                                    Err(e) => {
+                                        log::error!(
+                                            "SFU voice join failed: {}, falling back to P2P",
+                                            e
+                                        );
+                                        fallback_to_p2p(&mut self.voice, &local_id, &resp);
+                                    }
+                                },
+                                Err(e) => {
+                                    log::error!(
+                                        "SFU peer creation failed: {}, falling back to P2P",
+                                        e
+                                    );
+                                    fallback_to_p2p(&mut self.voice, &local_id, &resp);
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            log::error!("SFU connect failed: {}, falling back to P2P", e);
+                            fallback_to_p2p(&mut self.voice, &local_id, &resp);
+                        }
+                    }
+                }
+                _ => {
+                    let peer_ids: Vec<String> = resp
+                        .voice_state
+                        .members
+                        .iter()
+                        .filter(|m| m.user_id != local_id)
+                        .map(|m| m.user_id.clone())
+                        .collect();
+                    self.voice.join_voice(&local_id, &peer_ids);
+                }
+            }
+
             let _ = self
                 .event_tx
                 .send(Event::VoiceStateChanged { in_call: true });
@@ -2585,75 +2656,132 @@ impl Client {
             }
         };
 
-        // Step 2: sync FFI calls + session creation (raw pointers, no await)
-        let ctx = self.voice.mello_ctx();
+        // Step 2: sync FFI calls (raw pointer ctx must NOT live across await)
+        // Scope ctx so it's dropped before any SFU .await calls.
+        let (host, video_rx, audio_rx, resources) = {
+            let ctx = self.voice.mello_ctx();
 
-        if !unsafe { crate::stream::encoder_available(ctx) } {
-            let msg = "Streaming requires a hardware encoder \
-                       (NVIDIA, AMD, or Intel). None was found on this machine.";
-            log::error!("{}", msg);
-            let _ = self.event_tx.send(Event::StreamError {
-                message: msg.to_string(),
-            });
-            return;
-        }
+            if !unsafe { crate::stream::encoder_available(ctx) } {
+                let msg = "Streaming requires a hardware encoder \
+                           (NVIDIA, AMD, or Intel). None was found on this machine.";
+                log::error!("{}", msg);
+                let _ = self.event_tx.send(Event::StreamError {
+                    message: msg.to_string(),
+                });
+                return;
+            }
 
-        let mello_config = mello_sys::MelloStreamConfig {
-            width: config.width,
-            height: config.height,
-            fps: config.fps,
-            bitrate_kbps: config.bitrate_kbps,
-        };
-
-        let source = match capture_mode {
-            "window" => mello_sys::MelloCaptureSource {
-                mode: mello_sys::MelloCaptureMode_MELLO_CAPTURE_WINDOW,
-                monitor_index: 0,
-                hwnd: hwnd.unwrap_or(0) as *mut std::ffi::c_void,
-                pid: 0,
-            },
-            "process" => mello_sys::MelloCaptureSource {
-                mode: mello_sys::MelloCaptureMode_MELLO_CAPTURE_PROCESS,
-                monitor_index: 0,
-                hwnd: std::ptr::null_mut(),
-                pid: pid.unwrap_or(0),
-            },
-            _ => mello_sys::MelloCaptureSource {
-                mode: mello_sys::MelloCaptureMode_MELLO_CAPTURE_MONITOR,
-                monitor_index: monitor_index.unwrap_or(0),
-                hwnd: std::ptr::null_mut(),
-                pid: 0,
-            },
-        };
-
-        let (host, video_rx, audio_rx, resources) =
-            match unsafe { crate::stream::host::start_host(ctx, &source, &mello_config) } {
-                Ok(v) => v,
-                Err(e) => {
-                    let _ = self.event_tx.send(Event::StreamError {
-                        message: e.to_string(),
-                    });
-                    return;
-                }
+            let mello_config = mello_sys::MelloStreamConfig {
+                width: config.width,
+                height: config.height,
+                fps: config.fps,
+                bitrate_kbps: config.bitrate_kbps,
             };
 
-        // Query actual encode resolution (capture source determines this, not config)
-        let (mut actual_w, mut actual_h) = (config.width, config.height);
-        unsafe {
-            mello_sys::mello_stream_get_host_resolution(host, &mut actual_w, &mut actual_h);
-        }
-        log::info!("Host encode resolution: {}x{}", actual_w, actual_h);
-        self.stream_encode_width = actual_w;
-        self.stream_encode_height = actual_h;
+            let source = match capture_mode {
+                "window" => mello_sys::MelloCaptureSource {
+                    mode: mello_sys::MelloCaptureMode_MELLO_CAPTURE_WINDOW,
+                    monitor_index: 0,
+                    hwnd: hwnd.unwrap_or(0) as *mut std::ffi::c_void,
+                    pid: 0,
+                },
+                "process" => mello_sys::MelloCaptureSource {
+                    mode: mello_sys::MelloCaptureMode_MELLO_CAPTURE_PROCESS,
+                    monitor_index: 0,
+                    hwnd: std::ptr::null_mut(),
+                    pid: pid.unwrap_or(0),
+                },
+                _ => mello_sys::MelloCaptureSource {
+                    mode: mello_sys::MelloCaptureMode_MELLO_CAPTURE_MONITOR,
+                    monitor_index: monitor_index.unwrap_or(0),
+                    hwnd: std::ptr::null_mut(),
+                    pid: 0,
+                },
+            };
 
-        // Start game-audio loopback capture (WASAPI)
-        unsafe {
-            mello_sys::mello_stream_start_audio(host);
-        }
+            let (host, video_rx, audio_rx, resources) =
+                match unsafe { crate::stream::host::start_host(ctx, &source, &mello_config) } {
+                    Ok(v) => v,
+                    Err(e) => {
+                        let _ = self.event_tx.send(Event::StreamError {
+                            message: e.to_string(),
+                        });
+                        return;
+                    }
+                };
 
-        let p2p_sink = Arc::new(P2PFanoutSink::new());
-        let sink: Arc<dyn crate::stream::sink::PacketSink> = Arc::clone(&p2p_sink) as _;
+            let (mut actual_w, mut actual_h) = (config.width, config.height);
+            unsafe {
+                mello_sys::mello_stream_get_host_resolution(host, &mut actual_w, &mut actual_h);
+            }
+            log::info!("Host encode resolution: {}x{}", actual_w, actual_h);
+            self.stream_encode_width = actual_w;
+            self.stream_encode_height = actual_h;
 
+            unsafe {
+                mello_sys::mello_stream_start_audio(host);
+            }
+
+            (StreamHostHandle(host), video_rx, audio_rx, resources)
+        }; // ctx and raw pointers drop here — safe to .await below
+
+        // Select sink based on mode: SFU for premium crews, P2P for free
+        let (sink, p2p_sink): (
+            Arc<dyn crate::stream::sink::PacketSink>,
+            Option<Arc<P2PFanoutSink>>,
+        ) = if resp.mode == "sfu" {
+            let endpoint = resp.sfu_endpoint.as_deref().unwrap_or_default();
+            let token = resp.sfu_token.as_deref().unwrap_or_default();
+            match crate::transport::SfuConnection::connect(endpoint, token).await {
+                Ok(mut conn) => {
+                    let peer_handle = {
+                        let ctx = self.voice.mello_ctx();
+                        unsafe { crate::transport::SfuConnection::create_peer(ctx) }
+                    };
+                    match peer_handle {
+                        Ok(ph) => match conn.join_stream(ph, &resp.session_id(), "host").await {
+                            Ok(_session) => {
+                                if let Err(e) = conn.wait_for_datachannel_open().await {
+                                    log::error!(
+                                        "SFU DataChannel failed to open: {}, falling back to P2P",
+                                        e
+                                    );
+                                    let p2p = Arc::new(P2PFanoutSink::new());
+                                    (Arc::clone(&p2p) as _, Some(p2p))
+                                } else {
+                                    let conn = Arc::new(conn);
+                                    let sfu_sink =
+                                        Arc::new(crate::stream::sink_sfu::SfuSink::new(conn));
+                                    (sfu_sink as _, None)
+                                }
+                            }
+                            Err(e) => {
+                                log::error!("SFU join_stream failed: {}, falling back to P2P", e);
+                                let p2p = Arc::new(P2PFanoutSink::new());
+                                (Arc::clone(&p2p) as _, Some(p2p))
+                            }
+                        },
+                        Err(e) => {
+                            log::error!("SFU peer creation failed: {}, falling back to P2P", e);
+                            let p2p = Arc::new(P2PFanoutSink::new());
+                            (Arc::clone(&p2p) as _, Some(p2p))
+                        }
+                    }
+                }
+                Err(e) => {
+                    log::error!("SFU connect failed: {}, falling back to P2P", e);
+                    let p2p = Arc::new(P2PFanoutSink::new());
+                    (Arc::clone(&p2p) as _, Some(p2p))
+                }
+            }
+        } else {
+            let p2p = Arc::new(P2PFanoutSink::new());
+            (Arc::clone(&p2p) as _, Some(p2p))
+        };
+
+        // Re-obtain ctx for session creation (sync, no more awaits)
+        let ctx = self.voice.mello_ctx();
+        let host = host.0;
         match crate::stream::host::create_stream_session(
             ctx, host, &resp, config, video_rx, audio_rx, resources, sink,
         ) {
@@ -2663,7 +2791,7 @@ impl Client {
                     session_id: session.session_id.clone(),
                     mode: session.mode.clone(),
                 });
-                self.stream_sink = Some(p2p_sink);
+                self.stream_sink = p2p_sink;
                 self.stream_session = Some(session);
             }
             Err(e) => {
