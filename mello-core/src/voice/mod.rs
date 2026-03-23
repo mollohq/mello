@@ -369,12 +369,19 @@ impl VoiceManager {
 
     /// Handle an incoming signal from Nakama
     pub fn handle_signal(&mut self, from: &str, signal: SignalMessage) {
+        if self.mode == VoiceMode::SFU {
+            log::debug!("Ignoring P2P voice signal in SFU mode from {}", from);
+            return;
+        }
         self.mesh.handle_signal(self.ctx, from, signal);
     }
 
     /// Called when a new member joins the crew while voice is active
     pub fn on_member_joined(&mut self, local_id: &str, member_id: &str) {
         if !self.active {
+            return;
+        }
+        if self.mode == VoiceMode::SFU {
             return;
         }
         self.mesh.create_peer(self.ctx, local_id, member_id);
