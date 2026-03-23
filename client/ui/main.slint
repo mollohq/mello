@@ -70,6 +70,7 @@ export component MainWindow inherits Window {
     in property <[VoiceChannelData]> voice-channels: [];
     in-out property <bool> mic-permission-granted: true;
     in-out property <bool> mic-permission-denied: false;
+    in property <bool> can-manage-channels: false;
 
     // --- Settings ---
     in-out property <bool> settings-open: false;
@@ -192,6 +193,7 @@ export component MainWindow inherits Window {
     // Voice channel callbacks
     callback join-voice-channel(string);
     callback toggle-voice-channel(string);
+    callback create-voice-channel(/* name */ string);
     callback request-mic-permission();
     callback open-mic-settings();
     // Settings change callbacks
@@ -372,8 +374,10 @@ export component MainWindow inherits Window {
                     VoiceChannelView {
                         voice-channels: root.voice-channels;
                         mic-permission-granted: root.mic-permission-granted;
+                        can-manage-channels: root.can-manage-channels;
                         join-voice-channel(id) => { root.join-voice-channel(id); }
                         toggle-channel(id) => { root.toggle-voice-channel(id); }
+                        create-channel(name) => { root.create-voice-channel(name); }
                     }
 
                     ControlBar {

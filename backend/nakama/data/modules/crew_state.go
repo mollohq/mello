@@ -82,6 +82,7 @@ type CrewState struct {
 	Stream         *CrewStreamState         `json:"stream"`
 	RecentMessages []*MessagePreview        `json:"recent_messages"`
 	UpdatedAt      string                   `json:"updated_at"`
+	MyRole         int                      `json:"my_role"` // 0=superadmin, 1=admin, 2=member; set per-request
 }
 
 // CrewSidebarState is a lighter view for the sidebar.
@@ -121,7 +122,8 @@ func InvalidateCrewState(crewID string) {
 // ---------------------------------------------------------------------------
 
 // ComputeCrewState builds the full aggregate state for a crew.
-func ComputeCrewState(ctx context.Context, logger runtime.Logger, nk runtime.NakamaModule, crewID string, includeMembers bool) (*CrewState, error) {
+// callerID is the requesting user's ID; when non-empty, MyRole is set on the result.
+func ComputeCrewState(ctx context.Context, logger runtime.Logger, nk runtime.NakamaModule, crewID string, includeMembers bool, callerID string) (*CrewState, error) {
 	// Check cache first (only for non-member requests, since member list is optional)
 	if !includeMembers {
 		crewStateCacheMu.RLock()
@@ -147,12 +149,16 @@ func ComputeCrewState(ctx context.Context, logger runtime.Logger, nk runtime.Nak
 
 	// Count online and build member list
 	onlineCount := 0
+	callerRole := 2 // default to member if not found
 	var memberInfos []*CrewMemberInfo
 	if includeMembers {
 		memberInfos = make([]*CrewMemberInfo, 0, len(members))
 	}
 	for _, m := range members {
 		u := m.GetUser()
+		if callerID != "" && u.GetId() == callerID {
+			callerRole = int(m.GetState().GetValue())
+		}
 		p, _ := ReadPresence(ctx, nk, u.GetId())
 		if p != nil && p.Status != StatusOffline {
 			onlineCount++
@@ -236,6 +242,7 @@ func ComputeCrewState(ctx context.Context, logger runtime.Logger, nk runtime.Nak
 		Stream:         streamState,
 		RecentMessages: recentMsgs,
 		UpdatedAt:      time.Now().UTC().Format(time.RFC3339),
+		MyRole:         callerRole,
 	}
 
 	// Cache it (without members to keep cache light)
@@ -347,7 +354,7 @@ func CrewStateGetRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk 
 		return "", runtime.NewError("not a crew member", 7)
 	}
 
-	state, err := ComputeCrewState(ctx, logger, nk, req.CrewID, true)
+	state, err := ComputeCrewState(ctx, logger, nk, req.CrewID, true, userID)
 	if err != nil {
 		return "", err
 	}
@@ -371,7 +378,7 @@ func CrewStateGetSidebarRPC(ctx context.Context, logger runtime.Logger, db *sql.
 
 	crews := make([]*CrewSidebarState, 0, len(req.CrewIDs))
 	for _, cid := range req.CrewIDs {
-		state, err := ComputeCrewState(ctx, logger, nk, cid, false)
+		state, err := ComputeCrewState(ctx, logger, nk, cid, false, "")
 		if err != nil {
 			logger.Warn("failed to compute crew state for %s: %v", cid, err)
 			continue

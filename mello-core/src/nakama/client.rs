@@ -1012,6 +1012,7 @@ impl NakamaClient {
     ) -> Result<crate::crew_state::VoiceChannelState> {
         let payload = serde_json::json!({ "crew_id": crew_id, "name": name });
         let resp = self.rpc("channel_create", &payload).await?;
+        log::debug!("[nakama] channel_create response: {}", resp);
         let channel: crate::crew_state::VoiceChannelState = serde_json::from_str(&resp)?;
         Ok(channel)
     }

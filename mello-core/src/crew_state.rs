@@ -22,6 +22,8 @@ pub struct CrewState {
     pub recent_messages: Vec<MessagePreview>,
     #[serde(default)]
     pub updated_at: Option<String>,
+    #[serde(default)]
+    pub my_role: i32,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

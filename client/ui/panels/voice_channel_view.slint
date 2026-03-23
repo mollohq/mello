@@ -308,9 +308,13 @@ component VoiceChannelExpanded inherits Rectangle {
 export component VoiceChannelView inherits Rectangle {
     in property <[VoiceChannelData]> voice-channels: [];
     in property <bool> mic-permission-granted: true;
+    in property <bool> can-manage-channels: false;
 
     callback join-voice-channel(/* channel_id */ string);
     callback toggle-channel(/* channel_id */ string);
+    callback create-channel(/* name */ string);
+
+    property <bool> creating: false;
 
     vertical-stretch: 0;
     background: Theme.surface;
@@ -350,16 +354,90 @@ export component VoiceChannelView inherits Rectangle {
             }
         }
 
-        // Empty state when no channels
-        if voice-channels.length == 0: Rectangle {
-            height: 48px;
-            Text {
-                text: "No voice channels";
-                font-family: Theme.font-mono;
-                font-size: Theme.font-md;
-                color: Theme.text-tertiary;
-                horizontal-alignment: center;
-                vertical-alignment: center;
+        if root.can-manage-channels: VerticalLayout {
+            spacing: 0px;
+
+            // Separator before create row
+            if voice-channels.length > 0: Rectangle { height: 1px; background: Theme.graphic-light; }
+
+            // Inline create channel
+            if !creating: Rectangle {
+                height: 36px;
+
+                add-touch := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { root.creating = true; }
+                }
+
+                HorizontalLayout {
+                    padding-left: 20px;
+                    padding-right: 20px;
+                    spacing: 8px;
+                    alignment: start;
+
+                    Text {
+                        text: "+";
+                        font-size: 14px;
+                        font-family: Theme.font-mono;
+                        color: add-touch.has-hover ? Theme.text-primary : Theme.text-tertiary;
+                        vertical-alignment: center;
+                    }
+                    Text {
+                        text: "New channel";
+                        font-family: Theme.font-mono;
+                        font-size: 11px;
+                        color: add-touch.has-hover ? Theme.text-primary : Theme.text-tertiary;
+                        vertical-alignment: center;
+                        horizontal-alignment: left;
+                    }
+                }
+            }
+
+            if creating: Rectangle {
+                height: 40px;
+
+                HorizontalLayout {
+                    padding-left: 20px;
+                    padding-right: 20px;
+                    padding-top: 6px;
+                    padding-bottom: 6px;
+                    spacing: 8px;
+
+                    Image {
+                        source: @image-url("../icons/mic.svg");
+                        width: 14px;
+                        height: 14px;
+                        colorize: Theme.text-secondary;
+                        y: (parent.height - self.height) / 2;
+                    }
+
+                    Rectangle {
+                        horizontal-stretch: 1;
+                        border-radius: Theme.radius-sm;
+                        background: Theme.bg-app;
+
+                        // Click anywhere on this row to focus the input
+                        TouchArea {
+                            clicked => { channel-input.focus(); }
+                        }
+
+                        channel-input := TextInput {
+                            font-family: Theme.font-mono;
+                            font-size: 12px;
+                            color: Theme.text-primary;
+                            horizontal-alignment: left;
+                            vertical-alignment: center;
+
+                            accepted => {
+                                if self.text != "" {
+                                    root.create-channel(self.text);
+                                }
+                                self.text = "";
+                                root.creating = false;
+                            }
+                        }
+                    }
+                }
             }
         }
     }

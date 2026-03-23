@@ -211,8 +211,10 @@ func ChannelCreateRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk
 	})
 
 	resp, _ := json.Marshal(map[string]interface{}{
-		"success":    true,
-		"channel_id": ch.ID,
+		"id":         ch.ID,
+		"name":       ch.Name,
+		"is_default": ch.IsDefault,
+		"members":    []interface{}{},
 	})
 	return string(resp), nil
 }

@@ -141,7 +141,7 @@ func SetActiveCrewRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk
 	addCrewSubscriber(req.CrewID, sessionID)
 
 	// Return full state immediately
-	state, err := ComputeCrewState(ctx, logger, nk, req.CrewID, true)
+	state, err := ComputeCrewState(ctx, logger, nk, req.CrewID, true, userID)
 	if err != nil {
 		return "", err
 	}
@@ -184,7 +184,7 @@ func SubscribeSidebarRPC(ctx context.Context, logger runtime.Logger, db *sql.DB,
 	// Return initial sidebar state
 	crews := make([]*CrewSidebarState, 0, len(req.CrewIDs))
 	for _, cid := range req.CrewIDs {
-		state, err := ComputeCrewState(ctx, logger, nk, cid, false)
+		state, err := ComputeCrewState(ctx, logger, nk, cid, false, "")
 		if err != nil {
 			logger.Warn("failed to compute sidebar state for %s: %v", cid, err)
 			continue
@@ -444,7 +444,7 @@ func FlushSidebarUpdates(ctx context.Context, logger runtime.Logger, nk runtime.
 			}
 			seen[cid] = true
 
-			state, err := ComputeCrewState(ctx, logger, nk, cid, false)
+			state, err := ComputeCrewState(ctx, logger, nk, cid, false, "")
 			if err != nil {
 				continue
 			}

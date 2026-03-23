@@ -784,6 +784,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         });
     }
+    {
+        let cmd = cmd_tx.clone();
+        let app_weak = app.as_weak();
+        app.on_create_voice_channel(move |name| {
+            let name = name.trim().to_string();
+            if name.is_empty() {
+                return;
+            }
+            log::info!("UI: create voice channel '{}'", name);
+            if let Some(app) = app_weak.upgrade() {
+                let crew_id = app.get_active_crew_id().to_string();
+                let _ = cmd.try_send(Command::CreateVoiceChannel { crew_id, name });
+            }
+        });
+    }
 
     // --- Mic permission ---
     {
@@ -2676,6 +2691,9 @@ fn handle_event(
                 };
                 let vc_data = channels_to_ui(&state.voice_channels, &avc_id);
                 app.set_voice_channels(Rc::new(slint::VecModel::from(vc_data)).into());
+
+                // 0=superadmin, 1=admin => can manage channels
+                app.set_can_manage_channels(state.my_role <= 1);
             }
         }
         Event::SidebarUpdated {
