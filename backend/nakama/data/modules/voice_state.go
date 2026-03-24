@@ -330,7 +330,7 @@ func VoiceSpeakingRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk
 		return `{"success":true}`, nil
 	}
 
-	logger.Info("voice_speaking: user=%s channel=%s speaking=%v", userID, channelID, req.Speaking)
+	logger.Debug("voice_speaking: user=%s channel=%s speaking=%v", userID, channelID, req.Speaking)
 
 	voiceRoomsMu.Lock()
 	room, ok := voiceRooms[channelID]

@@ -140,7 +140,7 @@ func SetActiveCrewRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk
 	crewSubscribersMu.RLock()
 	subCount := len(crewSubscribers[req.CrewID])
 	crewSubscribersMu.RUnlock()
-	logger.Info("SetActiveCrew: user=%s crew=%s subscribers=%d", userID, req.CrewID, subCount)
+	logger.Debug("SetActiveCrew: user=%s crew=%s subscribers=%d", userID, req.CrewID, subCount)
 
 	// Return full state immediately
 	state, err := ComputeCrewState(ctx, logger, nk, req.CrewID, true, userID)
@@ -329,14 +329,12 @@ func PushVoiceUpdate(ctx context.Context, logger runtime.Logger, nk runtime.Naka
 	}
 
 	subs := getActiveSubscribersForCrew(crewID)
-	logger.Info("PushVoiceUpdate: crew=%s subscribers=%d", crewID, len(subs))
 	seen := make(map[string]bool, len(subs))
 	for _, sub := range subs {
 		if seen[sub.UserID] {
 			continue
 		}
 		seen[sub.UserID] = true
-		logger.Info("PushVoiceUpdate: sending notification 114 to user=%s", sub.UserID)
 		pushNotification(ctx, nk, sub.UserID, NotifyVoiceUpdate, content)
 	}
 }

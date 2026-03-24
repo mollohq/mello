@@ -191,6 +191,48 @@ component VoiceChannelExpanded inherits Rectangle {
             spacing: 20px;
             alignment: start;
 
+            // "+ Join" avatar tile (first position)
+            if show-join: VerticalLayout {
+                alignment: center;
+                spacing: 8px;
+
+                Rectangle {
+                    width: 48px;
+                    height: 48px;
+                    border-radius: Theme.r-inner;
+                    background: join-tile-touch.has-hover ? #28C84018 : #FFFFFF04;
+                    border-width: 1px;
+                    border-color: join-tile-touch.has-hover ? #28C84060 : Theme.graphic-light;
+
+                    Text {
+                        text: "+";
+                        font-size: 20px;
+                        font-family: Theme.font-mono;
+                        font-weight: 400;
+                        color: join-tile-touch.has-hover ? #28C840 : Theme.text-tertiary;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+
+                    join-tile-touch := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { root.join-clicked(); }
+                    }
+                }
+
+                // Spacer matching voice indicator height
+                Rectangle { height: 6px; }
+
+                Text {
+                    text: "Join";
+                    font-family: Theme.font-mono;
+                    font-size: 10px;
+                    font-weight: 500;
+                    color: join-tile-touch.has-hover ? #28C840 : Theme.text-tertiary;
+                    horizontal-alignment: center;
+                }
+            }
+
             for member in members: VerticalLayout {
                 alignment: center;
                 spacing: 8px;
@@ -246,48 +288,6 @@ component VoiceChannelExpanded inherits Rectangle {
                     font-size: 10px;
                     font-weight: member.speaking ? 500 : 400;
                     color: member.speaking ? Theme.text-primary : Theme.text-secondary;
-                    horizontal-alignment: center;
-                }
-            }
-
-            // "+ Join" avatar tile
-            if show-join: VerticalLayout {
-                alignment: center;
-                spacing: 8px;
-
-                Rectangle {
-                    width: 48px;
-                    height: 48px;
-                    border-radius: Theme.r-inner;
-                    background: join-tile-touch.has-hover ? #28C84018 : #FFFFFF04;
-                    border-width: 1px;
-                    border-color: join-tile-touch.has-hover ? #28C84060 : Theme.graphic-light;
-
-                    Text {
-                        text: "+";
-                        font-size: 20px;
-                        font-family: Theme.font-mono;
-                        font-weight: 400;
-                        color: join-tile-touch.has-hover ? #28C840 : Theme.text-tertiary;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
-                    }
-
-                    join-tile-touch := TouchArea {
-                        mouse-cursor: pointer;
-                        clicked => { root.join-clicked(); }
-                    }
-                }
-
-                // Spacer matching voice indicator height
-                Rectangle { height: 6px; }
-
-                Text {
-                    text: "Join";
-                    font-family: Theme.font-mono;
-                    font-size: 10px;
-                    font-weight: 500;
-                    color: join-tile-touch.has-hover ? #28C840 : Theme.text-tertiary;
                     horizontal-alignment: center;
                 }
             }
