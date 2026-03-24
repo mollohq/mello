@@ -235,7 +235,7 @@ func getActiveSubscribersForCrew(crewID string) []*UserSubscription {
 
 // pushNotification sends a notification to a user.
 func pushNotification(ctx context.Context, nk runtime.NakamaModule, userID string, code int, content map[string]interface{}) {
-	if err := nk.NotificationSend(ctx, userID, "", content, code, "", false); err != nil {
+	if err := nk.NotificationSend(ctx, userID, "update", content, code, "", false); err != nil {
 		fmt.Printf("pushNotification FAILED: user=%s code=%d err=%v\n", userID, code, err)
 	}
 }
