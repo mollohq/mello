@@ -327,12 +327,14 @@ func PushVoiceUpdate(ctx context.Context, logger runtime.Logger, nk runtime.Naka
 	}
 
 	subs := getActiveSubscribersForCrew(crewID)
+	logger.Info("PushVoiceUpdate: crew=%s subscribers=%d", crewID, len(subs))
 	seen := make(map[string]bool, len(subs))
 	for _, sub := range subs {
 		if seen[sub.UserID] {
 			continue
 		}
 		seen[sub.UserID] = true
+		logger.Info("PushVoiceUpdate: sending notification 114 to user=%s", sub.UserID)
 		pushNotification(ctx, nk, sub.UserID, NotifyVoiceUpdate, content)
 	}
 }

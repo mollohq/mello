@@ -1103,9 +1103,12 @@ impl Client {
             }
             Command::VoiceSpeaking { speaking } => {
                 if let Some(crew_id) = self.nakama.active_crew_id().map(String::from) {
+                    log::info!("voice_speaking RPC: crew={} speaking={}", crew_id, speaking);
                     if let Err(e) = self.nakama.voice_speaking(&crew_id, speaking).await {
-                        log::debug!("voice_speaking RPC failed: {}", e);
+                        log::warn!("voice_speaking RPC failed: {}", e);
                     }
+                } else {
+                    log::debug!("voice_speaking: no active crew");
                 }
             }
             Command::SetMute { muted } => {

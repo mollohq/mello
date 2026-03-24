@@ -326,8 +326,11 @@ func VoiceSpeakingRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk
 	voiceUserChannelMu.RUnlock()
 
 	if channelID == "" {
+		logger.Warn("voice_speaking: user %s not in any voice channel (voiceUserChannel empty)", userID)
 		return `{"success":true}`, nil
 	}
+
+	logger.Info("voice_speaking: user=%s channel=%s speaking=%v", userID, channelID, req.Speaking)
 
 	voiceRoomsMu.Lock()
 	room, ok := voiceRooms[channelID]

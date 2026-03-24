@@ -1571,6 +1571,8 @@ async fn handle_ws_message(
 fn handle_notification(code: i32, content: &str, event_tx: &std::sync::mpsc::Sender<Event>) {
     use crate::crew_state;
 
+    log::info!("Nakama notification code={} len={}", code, content.len());
+
     match code {
         // 110 = full crew state
         110 => match serde_json::from_str::<crew_state::CrewState>(content) {

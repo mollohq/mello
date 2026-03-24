@@ -2886,7 +2886,7 @@ fn handle_event(
             channel_id,
             members: voice_members,
         } => {
-            log::debug!(
+            log::info!(
                 "UI: voice update crew={} channel={} members={}",
                 crew_id,
                 channel_id,
