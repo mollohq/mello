@@ -2147,6 +2147,15 @@ impl Client {
 
         let mode = resp.mode.as_deref().unwrap_or("p2p");
 
+        // Emit authoritative state immediately so the UI shows the initial member list.
+        // Must happen BEFORE the SFU connection (which can take seconds), otherwise
+        // VoiceChannelsUpdated notifications that arrive during connection get overwritten.
+        let _ = self.event_tx.send(Event::VoiceJoined {
+            crew_id: crew_id.clone(),
+            channel_id: resp.channel_id.clone(),
+            members: resp.voice_state.members.clone(),
+        });
+
         self.voice.leave_voice();
         if let Some(local_id) = self.nakama.current_user_id().map(String::from) {
             match mode {
@@ -2185,7 +2194,7 @@ impl Client {
                                             fallback_to_p2p(&mut self.voice, &local_id, &resp);
                                         } else {
                                             let conn = std::sync::Arc::new(conn);
-                                            self.voice.join_voice_sfu(&local_id, conn);
+                                            self.voice.join_voice_sfu(&local_id, &crew_id, conn);
                                         }
                                     }
                                     Err(e) => {
@@ -2228,12 +2237,8 @@ impl Client {
                 .send(Event::VoiceStateChanged { in_call: true });
         }
 
-        // Emit authoritative state so the UI can update members + active channel
-        let _ = self.event_tx.send(Event::VoiceJoined {
-            crew_id,
-            channel_id: resp.channel_id,
-            members: resp.voice_state.members,
-        });
+        // Note: VoiceJoined was already emitted above (before SFU/P2P connection)
+        // to prevent race conditions with VoiceChannelsUpdated notifications.
     }
 
     async fn handle_leave_voice(&mut self) {

@@ -249,6 +249,10 @@ pub enum Event {
         channel_id: String,
         members: Vec<VoiceMember>,
     },
+    /// SFU signaling reported a member joined or left; UI should refresh voice state.
+    VoiceMembershipChanged {
+        crew_id: String,
+    },
     /// Full voice channels state refreshed for the active crew.
     VoiceChannelsUpdated {
         crew_id: String,

@@ -253,6 +253,17 @@ impl SfuConnection {
         self.event_rx.lock().await.recv().await
     }
 
+    /// Non-blocking poll for SFU events. Returns all currently queued events.
+    pub fn poll_events(&self) -> Vec<SfuEvent> {
+        let mut events = Vec::new();
+        if let Ok(mut rx) = self.event_rx.try_lock() {
+            while let Ok(ev) = rx.try_recv() {
+                events.push(ev);
+            }
+        }
+        events
+    }
+
     /// Poll received packets from the DataChannel (non-blocking).
     /// Returns received media data, or empty vec if nothing pending.
     pub fn poll_recv(&self) -> Vec<Vec<u8>> {

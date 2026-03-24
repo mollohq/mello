@@ -2787,6 +2787,10 @@ fn handle_event(
                 crew_id: event.crew_id,
             });
         }
+        Event::VoiceMembershipChanged { crew_id } => {
+            log::info!("UI: SFU voice membership changed in crew {}", crew_id);
+            let _ = cmd_tx.try_send(Command::SetActiveCrew { crew_id });
+        }
         Event::PresenceChanged { change } => {
             log::debug!(
                 "UI: presence change user={} in crew={}",

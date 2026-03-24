@@ -5,7 +5,7 @@ use std::sync::mpsc as std_mpsc;
 use std::sync::Arc;
 
 use crate::events::Event;
-use crate::transport::SfuConnection;
+use crate::transport::{SfuConnection, SfuEvent};
 
 pub use mesh::{SignalEnvelope, SignalMessage, SignalPurpose, VoiceMesh};
 
@@ -43,6 +43,7 @@ pub struct VoiceManager {
     tick_counter: u32,
     mode: VoiceMode,
     sfu_connection: Option<Arc<SfuConnection>>,
+    sfu_crew_id: String,
 }
 
 // Safety: VoiceManager is only ever accessed from a single tokio task (the client run loop).
@@ -104,6 +105,7 @@ impl VoiceManager {
             tick_counter: 0,
             mode: VoiceMode::Disconnected,
             sfu_connection: None,
+            sfu_crew_id: String::new(),
         }
     }
 
@@ -139,7 +141,12 @@ impl VoiceManager {
 
     /// Join voice via SFU. Called from the client when mode is "sfu".
     /// The SfuConnection is already established and joined.
-    pub fn join_voice_sfu(&mut self, local_id: &str, connection: Arc<SfuConnection>) {
+    pub fn join_voice_sfu(
+        &mut self,
+        local_id: &str,
+        crew_id: &str,
+        connection: Arc<SfuConnection>,
+    ) {
         if self.ctx.is_null() {
             return;
         }
@@ -153,6 +160,7 @@ impl VoiceManager {
         }
 
         self.sfu_connection = Some(connection);
+        self.sfu_crew_id = crew_id.to_string();
         self.active = true;
         self.mode = VoiceMode::SFU;
         log::info!("Voice capture started (SFU)");
@@ -173,6 +181,7 @@ impl VoiceManager {
             }
             VoiceMode::SFU => {
                 self.sfu_connection = None;
+                self.sfu_crew_id.clear();
             }
             VoiceMode::Disconnected => {}
         }
@@ -497,6 +506,32 @@ impl VoiceManager {
                     }
                 }
                 VoiceMode::Disconnected => {}
+            }
+        }
+
+        // Process SFU signaling events (member joins/leaves)
+        if self.active && self.mode == VoiceMode::SFU {
+            if let Some(ref conn) = self.sfu_connection {
+                for event in conn.poll_events() {
+                    match event {
+                        SfuEvent::MemberJoined { user_id, .. } => {
+                            log::info!("SFU: member joined voice: {}", user_id);
+                            let _ = self.event_tx.send(Event::VoiceMembershipChanged {
+                                crew_id: self.sfu_crew_id.clone(),
+                            });
+                        }
+                        SfuEvent::MemberLeft { user_id, reason } => {
+                            log::info!("SFU: member left voice: {} ({})", user_id, reason);
+                            let _ = self.event_tx.send(Event::VoiceMembershipChanged {
+                                crew_id: self.sfu_crew_id.clone(),
+                            });
+                        }
+                        SfuEvent::Disconnected { reason } => {
+                            log::warn!("SFU: disconnected: {}", reason);
+                        }
+                        _ => {}
+                    }
+                }
             }
         }
     }
