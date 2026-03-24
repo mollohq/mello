@@ -195,6 +195,10 @@ impl VoiceManager {
         self.mode
     }
 
+    pub fn sfu_connection(&self) -> Option<&Arc<SfuConnection>> {
+        self.sfu_connection.as_ref()
+    }
+
     fn setup_vad_callback(&self, local_id: &str) {
         let event_tx = self.event_tx.clone();
         let local_id_owned = local_id.to_string();

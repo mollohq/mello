@@ -2457,6 +2457,9 @@ fn handle_event(
             member_id,
             speaking,
         } => {
+            // Notify backend so other clients see speaking state
+            let _ = cmd_tx.try_send(Command::VoiceSpeaking { speaking });
+
             // Update sidebar member list
             let current = app.get_members();
             let members: Vec<MemberData> = (0..current.row_count())

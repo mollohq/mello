@@ -1101,6 +1101,13 @@ impl Client {
             Command::LeaveVoice => {
                 self.handle_leave_voice().await;
             }
+            Command::VoiceSpeaking { speaking } => {
+                if let Some(crew_id) = self.nakama.active_crew_id().map(String::from) {
+                    if let Err(e) = self.nakama.voice_speaking(&crew_id, speaking).await {
+                        log::debug!("voice_speaking RPC failed: {}", e);
+                    }
+                }
+            }
             Command::SetMute { muted } => {
                 self.voice.set_mute(muted);
             }
@@ -1794,6 +1801,7 @@ impl Client {
         }
 
         // Leave voice (local + server-side)
+        self.sfu_leave_if_connected().await;
         if let Some(crew_id) = self.nakama.active_crew_id().map(String::from) {
             if let Err(e) = self.nakama.voice_leave(&crew_id).await {
                 log::warn!("Failed to voice_leave RPC on logout: {}", e);
@@ -1946,6 +1954,7 @@ impl Client {
     }
 
     async fn handle_select_crew(&mut self, crew_id: &str) {
+        self.sfu_leave_if_connected().await;
         self.voice.leave_voice();
         let _ = self
             .event_tx
@@ -2156,6 +2165,7 @@ impl Client {
             members: resp.voice_state.members.clone(),
         });
 
+        self.sfu_leave_if_connected().await;
         self.voice.leave_voice();
         if let Some(local_id) = self.nakama.current_user_id().map(String::from) {
             match mode {
@@ -2241,7 +2251,14 @@ impl Client {
         // to prevent race conditions with VoiceChannelsUpdated notifications.
     }
 
+    async fn sfu_leave_if_connected(&self) {
+        if let Some(conn) = self.voice.sfu_connection() {
+            conn.leave().await;
+        }
+    }
+
     async fn handle_leave_voice(&mut self) {
+        self.sfu_leave_if_connected().await;
         // Notify server
         if let Some(crew_id) = self.nakama.active_crew_id().map(String::from) {
             if let Err(e) = self.nakama.voice_leave(&crew_id).await {
@@ -2308,6 +2325,7 @@ impl Client {
 
     async fn handle_leave_crew(&mut self) {
         // Leave voice (local + server)
+        self.sfu_leave_if_connected().await;
         if let Some(crew_id) = self.nakama.active_crew_id().map(String::from) {
             if let Err(e) = self.nakama.voice_leave(&crew_id).await {
                 log::warn!("voice_leave RPC on crew leave: {}", e);

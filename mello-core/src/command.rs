@@ -106,6 +106,9 @@ pub enum Command {
         channel_id: String,
     },
     LeaveVoice,
+    VoiceSpeaking {
+        speaking: bool,
+    },
     SetMute {
         muted: bool,
     },
