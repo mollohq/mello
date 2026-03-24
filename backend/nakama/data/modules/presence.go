@@ -246,6 +246,9 @@ func OnSessionEnd(ctx context.Context, logger runtime.Logger, evt *api.Event) {
 	// Clean up any voice room the user was in
 	VoiceCleanupUser(ctx, logger, globalNk, userID)
 
+	// Clean up push subscriptions
+	CleanupUser(userID)
+
 	NotifyPresenceChanged(ctx, logger, globalNk, userID, p)
 	logger.Info("User %s session ended, presence set to offline", userID)
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"sync"
 	"time"
 
@@ -34,67 +35,65 @@ var PriorityEvents = map[string]bool{
 }
 
 // ---------------------------------------------------------------------------
-// Subscription state (per-session, in-memory)
+// Subscription state (per-user, in-memory)
 // ---------------------------------------------------------------------------
 
 type UserSubscription struct {
 	UserID       string
-	SessionID    string
 	ActiveCrew   string
 	SidebarCrews map[string]bool // set of crew IDs
 }
 
 var (
-	subscriptions   = make(map[string]*UserSubscription) // sessionID -> subscription
+	subscriptions   = make(map[string]*UserSubscription) // userID -> subscription
 	subscriptionsMu sync.RWMutex
 
-	// Reverse index: crewID -> set of sessionIDs subscribed (active or sidebar)
+	// Reverse index: crewID -> set of userIDs subscribed (active or sidebar)
 	crewSubscribers   = make(map[string]map[string]bool)
 	crewSubscribersMu sync.RWMutex
 )
 
-func getOrCreateSubscription(userID, sessionID string) *UserSubscription {
+func getOrCreateSubscription(userID string) *UserSubscription {
 	subscriptionsMu.Lock()
 	defer subscriptionsMu.Unlock()
 
-	sub, ok := subscriptions[sessionID]
+	sub, ok := subscriptions[userID]
 	if !ok {
 		sub = &UserSubscription{
 			UserID:       userID,
-			SessionID:    sessionID,
 			SidebarCrews: make(map[string]bool),
 		}
-		subscriptions[sessionID] = sub
+		subscriptions[userID] = sub
 	}
 	return sub
 }
 
-func addCrewSubscriber(crewID, sessionID string) {
+func addCrewSubscriber(crewID, userID string) {
 	crewSubscribersMu.Lock()
 	defer crewSubscribersMu.Unlock()
 	if crewSubscribers[crewID] == nil {
 		crewSubscribers[crewID] = make(map[string]bool)
 	}
-	crewSubscribers[crewID][sessionID] = true
+	crewSubscribers[crewID][userID] = true
 }
 
-func removeCrewSubscriber(crewID, sessionID string) {
+func removeCrewSubscriber(crewID, userID string) {
 	crewSubscribersMu.Lock()
 	defer crewSubscribersMu.Unlock()
 	if subs, ok := crewSubscribers[crewID]; ok {
-		delete(subs, sessionID)
+		delete(subs, userID)
 		if len(subs) == 0 {
 			delete(crewSubscribers, crewID)
 		}
 	}
 }
 
-// CleanupSession removes all subscription state for a session (called on disconnect).
-func CleanupSession(sessionID string) {
+// CleanupUser removes all subscription state for a user (called on disconnect).
+func CleanupUser(userID string) {
 	subscriptionsMu.Lock()
-	sub, ok := subscriptions[sessionID]
+	sub, ok := subscriptions[userID]
 	if ok {
-		delete(subscriptions, sessionID)
+		delete(subscriptions, userID)
 	}
 	subscriptionsMu.Unlock()
 
@@ -103,10 +102,10 @@ func CleanupSession(sessionID string) {
 	}
 
 	if sub.ActiveCrew != "" {
-		removeCrewSubscriber(sub.ActiveCrew, sessionID)
+		removeCrewSubscriber(sub.ActiveCrew, userID)
 	}
 	for crewID := range sub.SidebarCrews {
-		removeCrewSubscriber(crewID, sessionID)
+		removeCrewSubscriber(crewID, userID)
 	}
 }
 
@@ -119,7 +118,6 @@ func SetActiveCrewRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk
 	if !ok {
 		return "", runtime.NewError("authentication required", 16)
 	}
-	sessionID, _ := ctx.Value(runtime.RUNTIME_CTX_SESSION_ID).(string)
 
 	var req struct {
 		CrewID string `json:"crew_id"`
@@ -128,17 +126,21 @@ func SetActiveCrewRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk
 		return "", runtime.NewError("invalid request", 3)
 	}
 
-	sub := getOrCreateSubscription(userID, sessionID)
+	sub := getOrCreateSubscription(userID)
 
-	// Remove old active crew subscription
 	subscriptionsMu.Lock()
-	if sub.ActiveCrew != "" {
-		removeCrewSubscriber(sub.ActiveCrew, sessionID)
+	if sub.ActiveCrew != "" && sub.ActiveCrew != req.CrewID {
+		removeCrewSubscriber(sub.ActiveCrew, userID)
 	}
 	sub.ActiveCrew = req.CrewID
 	subscriptionsMu.Unlock()
 
-	addCrewSubscriber(req.CrewID, sessionID)
+	addCrewSubscriber(req.CrewID, userID)
+
+	crewSubscribersMu.RLock()
+	subCount := len(crewSubscribers[req.CrewID])
+	crewSubscribersMu.RUnlock()
+	logger.Info("SetActiveCrew: user=%s crew=%s subscribers=%d", userID, req.CrewID, subCount)
 
 	// Return full state immediately
 	state, err := ComputeCrewState(ctx, logger, nk, req.CrewID, true, userID)
@@ -158,7 +160,6 @@ func SubscribeSidebarRPC(ctx context.Context, logger runtime.Logger, db *sql.DB,
 	if !ok {
 		return "", runtime.NewError("authentication required", 16)
 	}
-	sessionID, _ := ctx.Value(runtime.RUNTIME_CTX_SESSION_ID).(string)
 
 	var req struct {
 		CrewIDs []string `json:"crew_ids"`
@@ -167,17 +168,16 @@ func SubscribeSidebarRPC(ctx context.Context, logger runtime.Logger, db *sql.DB,
 		return "", runtime.NewError("invalid request", 3)
 	}
 
-	sub := getOrCreateSubscription(userID, sessionID)
+	sub := getOrCreateSubscription(userID)
 
-	// Remove old sidebar subscriptions
 	subscriptionsMu.Lock()
 	for crewID := range sub.SidebarCrews {
-		removeCrewSubscriber(crewID, sessionID)
+		removeCrewSubscriber(crewID, userID)
 	}
 	sub.SidebarCrews = make(map[string]bool, len(req.CrewIDs))
 	for _, cid := range req.CrewIDs {
 		sub.SidebarCrews[cid] = true
-		addCrewSubscriber(cid, sessionID)
+		addCrewSubscriber(cid, userID)
 	}
 	subscriptionsMu.Unlock()
 
@@ -203,25 +203,25 @@ func SubscribeSidebarRPC(ctx context.Context, logger runtime.Logger, db *sql.DB,
 // Push helpers
 // ---------------------------------------------------------------------------
 
-// getSubscribersForCrew returns all sessions subscribed to a crew (active or sidebar).
+// getSubscribersForCrew returns all users subscribed to a crew (active or sidebar).
 func getSubscribersForCrew(crewID string) []*UserSubscription {
 	crewSubscribersMu.RLock()
-	sessionIDs := crewSubscribers[crewID]
+	userIDs := crewSubscribers[crewID]
 	crewSubscribersMu.RUnlock()
 
 	subscriptionsMu.RLock()
 	defer subscriptionsMu.RUnlock()
 
-	subs := make([]*UserSubscription, 0, len(sessionIDs))
-	for sid := range sessionIDs {
-		if sub, ok := subscriptions[sid]; ok {
+	subs := make([]*UserSubscription, 0, len(userIDs))
+	for uid := range userIDs {
+		if sub, ok := subscriptions[uid]; ok {
 			subs = append(subs, sub)
 		}
 	}
 	return subs
 }
 
-// getActiveSubscribersForCrew returns sessions where this crew is the active crew.
+// getActiveSubscribersForCrew returns users where this crew is the active crew.
 func getActiveSubscribersForCrew(crewID string) []*UserSubscription {
 	all := getSubscribersForCrew(crewID)
 	active := make([]*UserSubscription, 0)
@@ -235,7 +235,9 @@ func getActiveSubscribersForCrew(crewID string) []*UserSubscription {
 
 // pushNotification sends a notification to a user.
 func pushNotification(ctx context.Context, nk runtime.NakamaModule, userID string, code int, content map[string]interface{}) {
-	_ = nk.NotificationSend(ctx, userID, "", content, code, "", false)
+	if err := nk.NotificationSend(ctx, userID, "", content, code, "", false); err != nil {
+		fmt.Printf("pushNotification FAILED: user=%s code=%d err=%v\n", userID, code, err)
+	}
 }
 
 // PushCrewEvent sends a priority event to all crew subscribers immediately.
