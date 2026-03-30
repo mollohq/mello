@@ -183,17 +183,19 @@ typedef enum MelloCodec {
 } MelloCodec;
 
 typedef enum MelloEncoderBackend {
-    MELLO_ENCODER_NVENC = 0,
-    MELLO_ENCODER_AMF   = 1,
-    MELLO_ENCODER_QSV   = 2,
+    MELLO_ENCODER_NVENC        = 0,
+    MELLO_ENCODER_AMF          = 1,
+    MELLO_ENCODER_QSV          = 2,
+    MELLO_ENCODER_VIDEOTOOLBOX = 3, // macOS (Apple Silicon)
 } MelloEncoderBackend;
 
 typedef enum MelloDecoderBackend {
-    MELLO_DECODER_NVDEC    = 0,
-    MELLO_DECODER_AMF      = 1,
-    MELLO_DECODER_D3D11VA  = 2,
-    MELLO_DECODER_OPENH264 = 3,
-    MELLO_DECODER_DAV1D    = 4,
+    MELLO_DECODER_NVDEC        = 0,
+    MELLO_DECODER_AMF          = 1,
+    MELLO_DECODER_D3D11VA      = 2,
+    MELLO_DECODER_OPENH264     = 3,
+    MELLO_DECODER_DAV1D        = 4,
+    MELLO_DECODER_VIDEOTOOLBOX = 5, // macOS (Apple Silicon)
 } MelloDecoderBackend;
 
 /** Returns available encoder backends on this machine, in priority order. */

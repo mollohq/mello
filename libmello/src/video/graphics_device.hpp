@@ -19,8 +19,18 @@ struct GraphicsDevice {
 #ifdef _WIN32
     ::ID3D11Device* d3d11() const;
 #endif
+
+#ifdef __APPLE__
+    void* metal() const;  // Returns id<MTLDevice> as void*
+#endif
 };
 
+#ifdef _WIN32
 GraphicsDevice create_d3d11_device();
+#endif
+
+#ifdef __APPLE__
+GraphicsDevice create_metal_device();
+#endif
 
 } // namespace mello::video

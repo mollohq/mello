@@ -6,10 +6,14 @@
 #include <cstring>
 #include <cstdio>
 
+#ifdef __APPLE__
+#include <CoreVideo/CoreVideo.h>
+#include <Accelerate/Accelerate.h>
+#endif
+
 namespace mello::video {
 
-#ifndef _WIN32
-// Stub — no capture sources available outside Windows (yet)
+#if !defined(_WIN32) && !defined(__APPLE__)
 std::unique_ptr<CaptureSource> create_capture_source(const CaptureSourceDesc&) { return nullptr; }
 #endif
 
@@ -59,6 +63,8 @@ VideoPipeline::~VideoPipeline() {
     if (device_.handle) {
 #ifdef _WIN32
         device_.d3d11()->Release();
+#elif defined(__APPLE__)
+        CFRelease(device_.handle);
 #endif
         device_.handle = nullptr;
     }
@@ -66,7 +72,11 @@ VideoPipeline::~VideoPipeline() {
 
 bool VideoPipeline::init_device() {
     if (device_.handle) return true;
+#ifdef _WIN32
     device_ = create_d3d11_device();
+#elif defined(__APPLE__)
+    device_ = create_metal_device();
+#endif
     return device_.handle != nullptr;
 }
 
@@ -138,6 +148,36 @@ bool VideoPipeline::start_host(const CaptureSourceDesc& source,
         MELLO_LOG_ERROR(TAG, "Failed to start capture");
         return false;
     }
+#elif defined(__APPLE__)
+    // macOS: No preprocessor needed — VT accepts BGRA CVPixelBuffer directly
+    uint32_t cap_w = capture_->width()  & ~1u;
+    uint32_t cap_h = capture_->height() & ~1u;
+    uint32_t target_w = (config.width  > 0 && config.width  < cap_w) ? (config.width  & ~1u) : cap_w;
+    uint32_t target_h = (config.height > 0 && config.height < cap_h) ? (config.height & ~1u) : cap_h;
+    encode_w_ = target_w;
+    encode_h_ = target_h;
+
+    EncoderConfig enc_config{};
+    enc_config.width         = encode_w_;
+    enc_config.height        = encode_h_;
+    enc_config.fps           = config.fps;
+    enc_config.bitrate_kbps  = config.bitrate_kbps;
+    enc_config.keyframe_interval = 120;
+    enc_config.codec         = VideoCodec::H264;
+
+    encoder_ = create_best_encoder(device_, enc_config);
+    if (!encoder_) {
+        MELLO_LOG_ERROR(TAG, "No encoder available");
+        return false;
+    }
+
+    auto self = this;
+    if (!capture_->start(config.fps, [self](void* pixel_buffer, uint64_t ts) {
+        self->on_captured_frame(pixel_buffer, ts);
+    })) {
+        MELLO_LOG_ERROR(TAG, "Failed to start capture");
+        return false;
+    }
 #endif
 
     host_running_    = true;
@@ -178,6 +218,35 @@ void VideoPipeline::stop_host() {
 #endif
 }
 
+#ifdef __APPLE__
+void VideoPipeline::on_captured_frame(void* cv_pixel_buffer, uint64_t timestamp_us) {
+    if (!host_running_.load()) return;
+
+    EncodedPacket packet{};
+    if (encoder_->encode(cv_pixel_buffer, packet)) {
+        frames_encoded_++;
+
+        if (frames_encoded_ <= 3) {
+            MELLO_LOG_DEBUG(TAG, "on_captured_frame[%llu]: encoded %zu bytes keyframe=%d",
+                frames_encoded_, packet.data.size(), packet.is_keyframe);
+        }
+
+        if (frames_encoded_ % 300 == 0) {
+            uint64_t uptime_s = (now_us() - host_start_time_) / 1'000'000;
+            EncoderStats stats{};
+            encoder_->get_stats(stats);
+            MELLO_LOG_INFO(TAG, "host: uptime=%llus frames=%llu fps=%u bitrate=%ukbps keyframes=%u bytes=%.1fMB",
+                uptime_s, frames_encoded_, stats.fps_actual, stats.bitrate_kbps,
+                stats.keyframes_sent, static_cast<double>(stats.bytes_sent) / (1024 * 1024));
+        }
+
+        if (packet_cb_) {
+            packet_cb_(packet.data.data(), packet.data.size(), packet.is_keyframe, timestamp_us);
+        }
+    }
+}
+#endif
+
 void VideoPipeline::get_host_resolution(uint32_t& w, uint32_t& h) const {
     w = encode_w_;
     h = encode_h_;
@@ -208,8 +277,12 @@ bool VideoPipeline::encoder_available() const {
         auto* self = const_cast<VideoPipeline*>(this);
         if (!self->init_device()) return false;
     }
+#if defined(_WIN32) || defined(__APPLE__)
     auto encoders = enumerate_encoders(device_);
     return !encoders.empty();
+#else
+    return false;
+#endif
 }
 
 #ifdef _WIN32
@@ -290,6 +363,17 @@ bool VideoPipeline::start_viewer(const PipelineConfig& config, FrameCallback on_
         MELLO_LOG_ERROR(TAG, "Failed to initialize staging texture");
         return false;
     }
+#elif defined(__APPLE__)
+    DecoderConfig dec_config{};
+    dec_config.width  = config.width;
+    dec_config.height = config.height;
+    dec_config.codec  = VideoCodec::H264;
+
+    decoder_ = create_best_decoder(device_, dec_config);
+    if (!decoder_) {
+        MELLO_LOG_ERROR(TAG, "No decoder available");
+        return false;
+    }
 #endif
 
     rgba_buf_.resize(static_cast<size_t>(config.width) * config.height * 4);
@@ -323,6 +407,14 @@ void VideoPipeline::stop_viewer() {
 #ifdef _WIN32
     staging_.reset();
 #endif
+
+#ifdef __APPLE__
+    if (latest_decoded_) {
+        CVPixelBufferRelease((CVPixelBufferRef)latest_decoded_);
+        latest_decoded_ = nullptr;
+    }
+#endif
+
     rgba_buf_.clear();
 }
 
@@ -337,6 +429,27 @@ bool VideoPipeline::feed_packet(const uint8_t* data, size_t size, bool is_keyfra
 
     ID3D11Texture2D* decoded = decoder_->get_frame();
     if (decoded) latest_decoded_ = decoded;
+
+    frames_decoded_++;
+
+    if (frames_decoded_ % 300 == 0) {
+        uint64_t uptime_s = (now_us() - viewer_start_time_) / 1'000'000;
+        MELLO_LOG_INFO(TAG, "viewer: uptime=%llus decoded=%llu dropped=%llu dec=%s",
+            uptime_s, frames_decoded_, frames_dropped_, decoder_->name());
+    }
+#elif defined(__APPLE__)
+    if (!decoder_->decode(data, size, is_keyframe)) {
+        frames_dropped_++;
+        return false;
+    }
+
+    void* decoded = decoder_->get_frame_buffer();
+    if (decoded) {
+        // Retain the new buffer, release the old one
+        CVPixelBufferRetain((CVPixelBufferRef)decoded);
+        if (latest_decoded_) CVPixelBufferRelease((CVPixelBufferRef)latest_decoded_);
+        latest_decoded_ = decoded;
+    }
 
     frames_decoded_++;
 
@@ -369,6 +482,44 @@ bool VideoPipeline::present_frame() {
         frame_cb_(rgba_buf_.data(), config_.width, config_.height, now_us());
     }
 
+    latest_decoded_ = nullptr;
+    return true;
+#elif defined(__APPLE__)
+    if (!viewer_running_.load() || !latest_decoded_) return false;
+
+    CVPixelBufferRef pb = (CVPixelBufferRef)latest_decoded_;
+    CVPixelBufferLockBaseAddress(pb, kCVPixelBufferLock_ReadOnly);
+
+    uint32_t w = (uint32_t)CVPixelBufferGetWidth(pb);
+    uint32_t h = (uint32_t)CVPixelBufferGetHeight(pb);
+    size_t stride = CVPixelBufferGetBytesPerRow(pb);
+    uint8_t* base = (uint8_t*)CVPixelBufferGetBaseAddress(pb);
+
+    if (base && w > 0 && h > 0) {
+        size_t needed = static_cast<size_t>(w) * h * 4;
+        if (rgba_buf_.size() < needed) rgba_buf_.resize(needed);
+
+        // BGRA→RGBA swizzle via Accelerate vImage (SIMD-optimized on Apple Silicon)
+        vImage_Buffer src  = { base, h, w, stride };
+        vImage_Buffer dest = { rgba_buf_.data(), h, w, w * 4u };
+        // permuteMap: BGRA[0,1,2,3] → RGBA = channels [2,1,0,3]
+        const uint8_t permuteMap[4] = {2, 1, 0, 3};
+        vImagePermuteChannels_ARGB8888(&src, &dest, permuteMap, kvImageNoFlags);
+
+        if (frames_decoded_ <= 2 && getenv("MELLO_DUMP_FRAMES")) {
+            char path[256];
+            snprintf(path, sizeof(path), "mello_viewer_frame_%llu.bmp", frames_decoded_);
+            save_bmp_rgba(path, rgba_buf_.data(), w, h);
+        }
+
+        if (frame_cb_) {
+            frame_cb_(rgba_buf_.data(), w, h, now_us());
+        }
+    }
+
+    CVPixelBufferUnlockBaseAddress(pb, kCVPixelBufferLock_ReadOnly);
+
+    CVPixelBufferRelease(pb);
     latest_decoded_ = nullptr;
     return true;
 #else

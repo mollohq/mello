@@ -32,6 +32,10 @@ public:
 
     /// Macroblock-aligned height (UV plane offset in decoded NV12 surface). 0 = same as config height.
     virtual uint32_t coded_height() const { return 0; }
+#elif defined(__APPLE__)
+    /// Returns the latest decoded frame as a CVPixelBufferRef (BGRA). Caller must NOT release it.
+    /// Valid until the next call to decode().
+    virtual void* get_frame_buffer() = 0;
 #endif
 
     virtual bool        supports_codec(VideoCodec codec) const = 0;

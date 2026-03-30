@@ -1142,15 +1142,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     {
         let cmd = cmd_tx.clone();
-        app.on_watch_stream(move |host_id, width, height| {
+        app.on_watch_stream(move |host_id, session_id, width, height| {
             log::info!(
-                "UI: watch stream from host {} ({}x{})",
+                "UI: watch stream from host {} session={} ({}x{})",
                 host_id,
+                session_id,
                 width,
                 height
             );
             let _ = cmd.try_send(Command::WatchStream {
                 host_id: host_id.to_string(),
+                session_id: session_id.to_string(),
                 width: width as u32,
                 height: height as u32,
             });
@@ -2668,23 +2670,29 @@ fn handle_event(
                         if sid != local_id {
                             app.set_active_streamer_id(sid.into());
                             app.set_active_streamer_name(sname.into());
+                            app.set_active_stream_session_id(
+                                stream.stream_id.clone().unwrap_or_default().into(),
+                            );
                             app.set_active_stream_width(stream.width as i32);
                             app.set_active_stream_height(stream.height as i32);
                         } else {
                             app.set_active_streamer_id("".into());
                             app.set_active_streamer_name("".into());
+                            app.set_active_stream_session_id("".into());
                             app.set_active_stream_width(0);
                             app.set_active_stream_height(0);
                         }
                     } else {
                         app.set_active_streamer_id("".into());
                         app.set_active_streamer_name("".into());
+                        app.set_active_stream_session_id("".into());
                         app.set_active_stream_width(0);
                         app.set_active_stream_height(0);
                     }
                 } else {
                     app.set_active_streamer_id("".into());
                     app.set_active_streamer_name("".into());
+                    app.set_active_stream_session_id("".into());
                     app.set_active_stream_width(0);
                     app.set_active_stream_height(0);
                 }
@@ -2774,12 +2782,16 @@ fn handle_event(
                             if sid != local_id {
                                 app.set_active_streamer_id(sid.into());
                                 app.set_active_streamer_name(sname.into());
+                                app.set_active_stream_session_id(
+                                    stream.stream_id.clone().unwrap_or_default().into(),
+                                );
                                 app.set_active_stream_width(stream.width as i32);
                                 app.set_active_stream_height(stream.height as i32);
                             }
                         } else {
                             app.set_active_streamer_id("".into());
                             app.set_active_streamer_name("".into());
+                            app.set_active_stream_session_id("".into());
                             app.set_active_stream_width(0);
                             app.set_active_stream_height(0);
                         }
@@ -3148,6 +3160,7 @@ fn handle_event(
             app.set_stream_label("".into());
             app.set_active_streamer_id("".into());
             app.set_active_streamer_name("".into());
+            app.set_active_stream_session_id("".into());
             app.set_active_stream_width(0);
             app.set_active_stream_height(0);
         }

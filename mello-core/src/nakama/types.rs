@@ -91,6 +91,22 @@ pub struct HealthResponse {
     pub min_client_protocol: Option<u32>,
 }
 
+// --- Stream viewer ---
+
+#[derive(Debug, Deserialize)]
+pub struct WatchStreamResponse {
+    #[serde(default = "default_p2p")]
+    pub mode: String,
+    #[serde(default)]
+    pub sfu_endpoint: Option<String>,
+    #[serde(default)]
+    pub sfu_token: Option<String>,
+}
+
+fn default_p2p() -> String {
+    "p2p".to_string()
+}
+
 // --- RPC request/response types ---
 
 #[derive(Debug, Serialize)]

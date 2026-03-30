@@ -62,6 +62,8 @@ public:
 private:
 #ifdef _WIN32
     void on_captured_frame(ID3D11Texture2D* texture, uint64_t timestamp_us);
+#elif defined(__APPLE__)
+    void on_captured_frame(void* cv_pixel_buffer, uint64_t timestamp_us);
 #endif
 
     GraphicsDevice                       device_{};
@@ -97,6 +99,8 @@ private:
     std::vector<uint8_t> rgba_buf_;
 #ifdef _WIN32
     ID3D11Texture2D*     latest_decoded_ = nullptr;
+#elif defined(__APPLE__)
+    void*                latest_decoded_ = nullptr; // CVPixelBufferRef
 #endif
 };
 

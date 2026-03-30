@@ -10,13 +10,14 @@ export component StreamView inherits Rectangle {
     in property <image> stream-frame;
     in property <string> active-streamer-id: "";
     in property <string> active-streamer-name: "";
+    in property <string> active-stream-session-id: "";
     in property <int> stream-width: 0;
     in property <int> stream-height: 0;
 
     callback start-stream-clicked();
     callback stop-stream-clicked();
     callback stop-watching-clicked();
-    callback watch-stream-clicked(/* host_id */ string, /* width */ int, /* height */ int);
+    callback watch-stream-clicked(/* host_id */ string, /* session_id */ string, /* width */ int, /* height */ int);
 
     property <bool> stream-active: is-hosting || is-watching;
     property <bool> crew-has-stream: active-streamer-id != "";
@@ -199,7 +200,7 @@ export component StreamView inherits Rectangle {
                     }
 
                     watch-ta := TouchArea {
-                        clicked => { watch-stream-clicked(active-streamer-id, stream-width, stream-height); }
+                        clicked => { watch-stream-clicked(active-streamer-id, active-stream-session-id, stream-width, stream-height); }
                     }
                 }
             }

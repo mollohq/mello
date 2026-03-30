@@ -158,6 +158,8 @@ pub enum Command {
     WatchStream {
         host_id: String,
         #[serde(default)]
+        session_id: String,
+        #[serde(default)]
         width: u32,
         #[serde(default)]
         height: u32,
