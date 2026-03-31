@@ -1,8 +1,8 @@
-name: macOS Release
+name: Release
 
 on:
-  release:
-    types: [published]
+  push:
+    tags: ['v*']
 
   workflow_dispatch:
     inputs:
@@ -18,14 +18,100 @@ on:
 permissions:
   contents: write
 
-env:
-  RELEASE_CHANNEL: "osx-arm64-stable"
-  CODE_SIGNING_KEYCHAIN: "mello_code_signing"
-  NOTARY_PROFILE_NAME: "mello-signing-notary-profile"
-
 jobs:
+  build-windows:
+    runs-on: [self-hosted, Windows]
+    env:
+      RELEASE_CHANNEL: "win-x64-stable"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+          token: ${{ secrets.GH_PAT }}
+
+      - name: Set version
+        shell: pwsh
+        run: |
+          if ("${{ github.event_name }}" -eq "workflow_dispatch" -and "${{ inputs.version }}" -ne "") {
+            $version = "${{ inputs.version }}" -replace '^v',''
+          } elseif ("${{ github.ref_type }}" -eq "tag") {
+            $version = "${{ github.ref_name }}" -replace '^v',''
+          } else {
+            $version = "0.0.${{ github.run_number }}"
+          }
+          echo "RELEASE_VERSION=$version" >> $env:GITHUB_ENV
+
+      - name: Stamp version in Cargo.toml
+        shell: pwsh
+        run: |
+          $content = Get-Content Cargo.toml -Raw
+          $content = $content -replace '(?m)^(version\s*=\s*")[^"]+"', "`${1}$env:RELEASE_VERSION`""
+          Set-Content Cargo.toml -Value $content -NoNewline
+
+      - name: Build client
+        run: cargo build --release --features production
+        env:
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          DISCORD_CLIENT_ID: ${{ secrets.DISCORD_CLIENT_ID }}
+          NAKAMA_SERVER_KEY: ${{ secrets.NAKAMA_SERVER_KEY }}
+          NAKAMA_HTTP_KEY: ${{ secrets.NAKAMA_HTTP_KEY }}
+
+      - name: Run tests
+        run: cargo test --workspace
+
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Assemble dist
+        shell: pwsh
+        run: |
+          mkdir dist
+          cp target/release/mello.exe dist/
+          cp libmello/third_party/onnxruntime/onnxruntime-win-x64-*/lib/onnxruntime.dll dist/
+          cp libmello/third_party/onnxruntime/onnxruntime-win-x64-*/lib/onnxruntime_providers_shared.dll dist/
+          cp (Get-ChildItem target/release/build -Recurse -Filter silero_vad.onnx | Select -First 1).FullName dist/
+          del dist/*.lib -ErrorAction SilentlyContinue
+
+      - name: Login to Azure
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Verify Azure Login
+        run: az account show --output table
+
+      - name: Velopack Package
+        shell: cmd
+        run: |
+          mkdir vpk-out
+          vpk download github --repoUrl https://github.com/mollohq/mello --outputDir vpk-out --channel %RELEASE_CHANNEL% --token ${{ secrets.GH_PAT }}
+          vpk pack ^
+            --packId m3llo ^
+            --packVersion %RELEASE_VERSION% ^
+            --packDir dist ^
+            --mainExe mello.exe ^
+            --packTitle Mello ^
+            --channel %RELEASE_CHANNEL% ^
+            --outputDir vpk-out ^
+            --icon client/assets/icons/mello.ico ^
+            --azureTrustedSignFile client/windows/signing-metadata.json
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: mello-windows-x64
+          path: vpk-out/*
+
   build-macos:
     runs-on: [self-hosted, macOS]
+    env:
+      RELEASE_CHANNEL: "osx-arm64-stable"
+      CODE_SIGNING_KEYCHAIN: "mello_code_signing"
+      NOTARY_PROFILE_NAME: "mello-signing-notary-profile"
 
     steps:
       - name: Checkout repository
@@ -39,8 +125,8 @@ jobs:
         run: |
           if [ "${{ github.event_name }}" == "workflow_dispatch" ] && [ -n "${{ inputs.version }}" ]; then
             version="${{ inputs.version }}"
-          elif [ "${{ github.event_name }}" == "release" ]; then
-            version="${{ github.event.release.tag_name }}"
+          elif [ "${{ github.ref_type }}" == "tag" ]; then
+            version="${{ github.ref_name }}"
           else
             version="0.0.${{ github.run_number }}"
           fi
@@ -141,7 +227,6 @@ jobs:
         if: failure()
         run: |
           KEYCHAIN_PATH="$HOME/Library/Keychains/${{ env.CODE_SIGNING_KEYCHAIN }}.keychain-db"
-          # Get the most recent submission ID from notarytool history
           xcrun notarytool history \
             --keychain-profile "${{ env.NOTARY_PROFILE_NAME }}" \
             --keychain "$KEYCHAIN_PATH" 2>&1 | head -20
@@ -155,15 +240,6 @@ jobs:
               --keychain "$KEYCHAIN_PATH" 2>&1
           fi
 
-      - name: Upload to GitHub Release
-        if: github.event_name == 'release'
-        run: |
-          for f in vpk-out/*; do
-            gh release upload "${{ github.event.release.tag_name }}" "$f" --clobber
-          done
-        env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
-
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -174,3 +250,30 @@ jobs:
         if: always()
         run: |
           security delete-keychain ${{ env.CODE_SIGNING_KEYCHAIN }}.keychain-db || true
+
+  publish-release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build-windows, build-macos]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download Windows artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: mello-windows-x64
+          path: assets/
+
+      - name: Download macOS artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: mello-macos-arm64
+          path: assets/
+
+      - name: Create release and upload assets
+        run: |
+          gh release create "$GITHUB_REF_NAME" assets/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "${GITHUB_REF_NAME#v}" \
+            --generate-notes
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
