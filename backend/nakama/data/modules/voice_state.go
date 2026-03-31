@@ -218,6 +218,12 @@ func VoiceJoinRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk run
 	voiceChannelCrew[req.ChannelID] = req.CrewID
 	voiceChannelCrewMu.Unlock()
 
+	// Track voice session for event ledger
+	voiceSessionOnJoin(req.ChannelID, req.CrewID, channelName, userID, username)
+
+	// Update last-seen for event ledger catch-up
+	updateLastSeen(ctx, nk, userID, req.CrewID)
+
 	// Update user presence activity
 	now := time.Now().UTC().Format(time.RFC3339)
 	_ = WritePresence(ctx, nk, &UserPresence{
@@ -376,6 +382,7 @@ func voiceLeaveInternal(ctx context.Context, logger runtime.Logger, nk runtime.N
 	voiceChannelCrewMu.RUnlock()
 
 	username := ""
+	lastMemberLeft := false
 	voiceRoomsMu.Lock()
 	if room, ok := voiceRooms[channelID]; ok {
 		if m, exists := room.Members[userID]; exists {
@@ -383,6 +390,7 @@ func voiceLeaveInternal(ctx context.Context, logger runtime.Logger, nk runtime.N
 		}
 		delete(room.Members, userID)
 		if len(room.Members) == 0 {
+			lastMemberLeft = true
 			delete(voiceRooms, channelID)
 			voiceChannelCrewMu.Lock()
 			delete(voiceChannelCrew, channelID)
@@ -390,6 +398,41 @@ func voiceLeaveInternal(ctx context.Context, logger runtime.Logger, nk runtime.N
 		}
 	}
 	voiceRoomsMu.Unlock()
+
+	// Write voice_session event if this was the last member and session had 2+ participants
+	if lastMemberLeft {
+		if sess := voiceSessionOnLastLeave(channelID); sess != nil {
+			participantIDs := make([]string, 0, len(sess.participants))
+			participantNames := make([]string, 0, len(sess.participants))
+			for uid, uname := range sess.participants {
+				participantIDs = append(participantIDs, uid)
+				participantNames = append(participantNames, uname)
+			}
+			durationMin := int(time.Since(sess.startTime).Minutes())
+			if durationMin < 1 {
+				durationMin = 1
+			}
+			event := CrewEvent{
+				ID:        generateEventID(),
+				CrewID:    sess.crewID,
+				Type:      "voice_session",
+				ActorID:   "",
+				Timestamp: time.Now().UnixMilli(),
+				Score:     20,
+				Data: VoiceSessionData{
+					ChannelID:        channelID,
+					ChannelName:      sess.channelName,
+					ParticipantIDs:   participantIDs,
+					ParticipantNames: participantNames,
+					DurationMin:      durationMin,
+					PeakCount:        sess.peakCount,
+				},
+			}
+			if err := AppendCrewEvent(ctx, nk, sess.crewID, event); err != nil {
+				logger.Warn("Failed to write voice_session event for crew %s: %v", sess.crewID, err)
+			}
+		}
+	}
 
 	// Reset presence activity
 	now := time.Now().UTC().Format(time.RFC3339)

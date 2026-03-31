@@ -28,54 +28,6 @@ component VoiceBars inherits HorizontalLayout {
     }
 }
 
-component MemberChip inherits Rectangle {
-    in property <string> initials;
-    in property <string> name;
-    in property <bool> speaking: false;
-
-    height: 26px;
-    border-radius: 4px;
-    background: Theme.bg-app;
-
-    HorizontalLayout {
-        padding-left: 8px;
-        padding-right: 8px;
-        spacing: 5px;
-        alignment: center;
-
-        Rectangle {
-            width: 18px;
-            height: 18px;
-            border-radius: 3px;
-            background: speaking ? Theme.graphic-med : Theme.graphic-light;
-            border-width: speaking ? 1px : 0px;
-            border-color: Theme.graphic-dark;
-
-            Text {
-                text: initials;
-                font-family: Theme.font-mono;
-                font-size: 8px;
-                font-weight: 600;
-                color: speaking ? Theme.text-primary : Theme.text-secondary;
-                horizontal-alignment: center;
-                vertical-alignment: center;
-            }
-        }
-
-        Text {
-            text: name;
-            font-family: Theme.font-mono;
-            font-size: Theme.font-xs;
-            color: speaking ? Theme.text-primary : Theme.text-secondary;
-            vertical-alignment: center;
-        }
-
-        if speaking: VoiceBars {
-            speaking: true;
-        }
-    }
-}
-
 component VoiceMiniRow inherits Rectangle {
     in property <string> initials;
     in property <string> name;
@@ -190,6 +142,67 @@ component CrewMsg inherits HorizontalLayout {
         horizontal-stretch: 1;
         overflow: elide;
         vertical-alignment: center;
+    }
+}
+
+component GameRow inherits Rectangle {
+    in property <string> name;
+    in property <string> initial;
+    in property <int> count;
+    in property <int> slot-index: 0;
+
+    property <color> icon-color: slot-index == 0 ? #BD3944
+        : slot-index == 1 ? #00A6DA
+        : slot-index == 2 ? #FF6B00
+        : slot-index == 3 ? #9146FF
+        : #B39B00;
+
+    height: 30px;
+    border-radius: 4px;
+    background: #00000050;
+    border-width: 1px;
+    border-color: #FFFFFF08;
+
+    HorizontalLayout {
+        padding-left: 6px;
+        padding-right: 6px;
+        spacing: 8px;
+
+        Rectangle {
+            width: 22px;
+            height: 22px;
+            border-radius: 4px;
+            background: icon-color;
+            y: (parent.height - self.height) / 2;
+
+            Text {
+                text: initial;
+                font-size: 10px;
+                font-weight: 700;
+                color: white;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+
+        Text {
+            text: name;
+            font-size: 9px;
+            font-weight: 500;
+            color: Theme.text-primary;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+            overflow: elide;
+        }
+
+        Text {
+            text: count;
+            font-size: 8px;
+            font-weight: 600;
+            font-family: Theme.font-mono;
+            color: count >= 3 ? Theme.accent : Theme.text-secondary;
+            vertical-alignment: center;
+        }
     }
 }
 
@@ -353,77 +366,131 @@ export component CrewPanel inherits Rectangle {
 
                                 // ===== ACTIVE card body =====
                                 if crew.id == active-crew-id: VerticalLayout {
-                                    spacing: 0px;
+                                    spacing: 6px;
 
-                                    Rectangle {
-                                        height: 14px;
+                                    Rectangle { height: 4px; }
+
+                                    // --- Active games ---
+                                    if crew.game-count >= 1: GameRow {
+                                        name: crew.g0-name;
+                                        initial: crew.g0-initial;
+                                        count: crew.g0-count;
+                                        slot-index: 0;
+                                    }
+                                    if crew.game-count >= 2: GameRow {
+                                        name: crew.g1-name;
+                                        initial: crew.g1-initial;
+                                        count: crew.g1-count;
+                                        slot-index: 1;
+                                    }
+                                    if crew.game-count >= 3: GameRow {
+                                        name: crew.g2-name;
+                                        initial: crew.g2-initial;
+                                        count: crew.g2-count;
+                                        slot-index: 2;
+                                    }
+                                    if crew.game-count >= 4: GameRow {
+                                        name: crew.g3-name;
+                                        initial: crew.g3-initial;
+                                        count: crew.g3-count;
+                                        slot-index: 3;
+                                    }
+                                    if crew.game-count >= 5: GameRow {
+                                        name: crew.g4-name;
+                                        initial: crew.g4-initial;
+                                        count: crew.g4-count;
+                                        slot-index: 4;
                                     }
 
-                                    // Member chips (flow-wrapped via VerticalLayout of rows)
-                                    HorizontalLayout {
-                                        spacing: 6px;
+                                    // --- Catch-up card ---
+                                    if crew.has-catchup: Rectangle {
+                                        border-radius: 4px;
+                                        background: #00000040;
+                                        clip: true;
 
-                                        if crew.voice-count >= 1: MemberChip {
-                                            initials: crew.v0-initials;
-                                            name: crew.v0-name;
-                                            speaking: crew.v0-speaking;
-                                        }
-                                        if crew.voice-count >= 2: MemberChip {
-                                            initials: crew.v1-initials;
-                                            name: crew.v1-name;
-                                            speaking: crew.v1-speaking;
-                                        }
-                                    }
+                                        HorizontalLayout {
+                                            spacing: 0px;
 
-                                    if crew.voice-count >= 3: Rectangle {
-                                        height: 6px;
-                                    }
-
-                                    if crew.voice-count >= 3: HorizontalLayout {
-                                        spacing: 6px;
-
-                                        MemberChip {
-                                            initials: crew.v2-initials;
-                                            name: crew.v2-name;
-                                            speaking: crew.v2-speaking;
-                                        }
-
-                                        if crew.voice-count >= 4: MemberChip {
-                                            initials: crew.v3-initials;
-                                            name: crew.v3-name;
-                                            speaking: crew.v3-speaking;
-                                        }
-                                    }
-
-                                    // Stream preview (if streaming)
-                                    if crew.has-stream: Rectangle {
-                                        height: 10px;
-                                    }
-
-                                    if crew.has-stream: HorizontalLayout {
-                                        spacing: 6px;
-
-                                        StreamThumbnail {
-                                            small: true;
-                                        }
-
-                                        VerticalLayout {
-                                            alignment: center;
-                                            spacing: 2px;
-
-                                            Text {
-                                                text: "LIVE STREAM";
-                                                font-family: Theme.font-mono;
-                                                font-size: 9px;
-                                                color: Theme.text-tertiary;
-                                                letter-spacing: 0.7px;
+                                            Rectangle {
+                                                width: 2px;
+                                                background: Theme.accent;
                                             }
 
+                                            VerticalLayout {
+                                                padding: 7px;
+                                                padding-left: 10px;
+                                                spacing: 3px;
+
+                                                Text {
+                                                    text: "CATCH-UP";
+                                                    font-size: 8px;
+                                                    font-weight: 600;
+                                                    color: Theme.accent;
+                                                    letter-spacing: 0.8px;
+                                                }
+
+                                                Text {
+                                                    text: crew.catchup-text;
+                                                    font-size: 10px;
+                                                    color: Theme.text-primary;
+                                                    wrap: word-wrap;
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    // --- Action buttons ---
+                                    HorizontalLayout {
+                                        spacing: 6px;
+                                        height: 24px;
+
+                                        Rectangle {
+                                            horizontal-stretch: 1;
+                                            border-radius: 3px;
+                                            border-width: 1px;
+                                            border-color: invite-hover.has-hover ? Theme.text-secondary : Theme.graphic-med;
+
+                                            HorizontalLayout {
+                                                alignment: center;
+                                                spacing: 4px;
+
+                                                Text {
+                                                    text: "+";
+                                                    font-size: 11px;
+                                                    color: invite-hover.has-hover ? Theme.text-primary : Theme.text-secondary;
+                                                    vertical-alignment: center;
+                                                }
+
+                                                Text {
+                                                    text: "Invite";
+                                                    font-size: 9px;
+                                                    font-weight: 500;
+                                                    color: invite-hover.has-hover ? Theme.text-primary : Theme.text-secondary;
+                                                    vertical-alignment: center;
+                                                }
+                                            }
+
+                                            invite-hover := TouchArea {
+                                                mouse-cursor: pointer;
+                                            }
+                                        }
+
+                                        Rectangle {
+                                            width: 24px;
+                                            border-radius: 3px;
+                                            border-width: 1px;
+                                            border-color: more-hover.has-hover ? Theme.text-secondary : Theme.graphic-med;
+
                                             Text {
-                                                text: crew.stream-name;
-                                                font-family: Theme.font-mono;
-                                                font-size: Theme.font-sm;
-                                                color: Theme.text-primary;
+                                                text: "...";
+                                                font-size: 10px;
+                                                color: more-hover.has-hover ? Theme.text-primary : Theme.text-secondary;
+                                                horizontal-alignment: center;
+                                                vertical-alignment: center;
+                                            }
+
+                                            more-hover := TouchArea {
+                                                mouse-cursor: pointer;
                                             }
                                         }
                                     }

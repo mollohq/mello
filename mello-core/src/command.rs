@@ -193,4 +193,25 @@ pub enum Command {
     SubscribeSidebar {
         crew_ids: Vec<String>,
     },
+
+    // --- Crew events (event ledger) ---
+    CrewCatchup {
+        crew_id: String,
+        #[serde(default)]
+        last_seen: i64,
+    },
+    PostMoment {
+        crew_id: String,
+        sentiment: String,
+        #[serde(default)]
+        text: String,
+        #[serde(default)]
+        game_name: String,
+    },
+    GameSessionEnd {
+        crew_id: String,
+        game_name: String,
+        #[serde(default)]
+        duration_min: u32,
+    },
 }

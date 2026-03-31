@@ -474,5 +474,11 @@ func OnChatMessage(ctx context.Context, logger runtime.Logger, db *sql.DB, nk ru
 	// Queue message preview for sidebar throttle
 	QueueMessagePreview(ctx, logger, nk, crewID, msg)
 
+	// Track chat activity for event ledger aggregation
+	incrementChatCounter(crewID, userID)
+
+	// Update last-seen (user is actively chatting in this crew)
+	updateLastSeen(ctx, nk, userID, crewID)
+
 	return nil
 }

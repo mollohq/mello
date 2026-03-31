@@ -1867,6 +1867,24 @@ fn update_active_crew_card(app: &MainWindow) {
                     c.v3_name = m.name.clone();
                     c.v3_speaking = m.speaking;
                 }
+
+                // Mock active games data (temporary until game detection is implemented)
+                c.game_count = 5;
+                c.g0_name = "Valorant".into();
+                c.g0_initial = "V".into();
+                c.g0_count = 3;
+                c.g1_name = "League of Legends".into();
+                c.g1_initial = "L".into();
+                c.g1_count = 1;
+                c.g2_name = "Apex Legends".into();
+                c.g2_initial = "A".into();
+                c.g2_count = 2;
+                c.g3_name = "Rocket League".into();
+                c.g3_initial = "R".into();
+                c.g3_count = 1;
+                c.g4_name = "CS2".into();
+                c.g4_initial = "C".into();
+                c.g4_count = 2;
             }
             c
         })
@@ -2338,6 +2356,11 @@ fn handle_event(
             let rc = std::rc::Rc::new(slint::VecModel::from(empty));
             app.set_messages(rc.into());
             update_active_crew_card(app);
+            // Fetch catch-up for the newly joined crew
+            let _ = cmd_tx.try_send(Command::CrewCatchup {
+                crew_id: crew_id.clone(),
+                last_seen: 0,
+            });
             // Persist last active crew
             let mut s = settings.borrow_mut();
             s.last_crew_id = Some(crew_id);
@@ -2721,6 +2744,12 @@ fn handle_event(
 
                 // 0=superadmin, 1=admin => can manage channels
                 app.set_can_manage_channels(state.my_role <= 1);
+
+                // Fetch catch-up data for the active crew
+                let _ = cmd_tx.try_send(Command::CrewCatchup {
+                    crew_id: state.crew_id.clone(),
+                    last_seen: 0,
+                });
             }
         }
         Event::SidebarUpdated {
@@ -3259,6 +3288,33 @@ fn handle_event(
             let display = chat_messages_to_slint(&msgs);
             let rc = std::rc::Rc::new(slint::VecModel::from(display));
             app.set_messages(rc.into());
+        }
+
+        // --- Crew event ledger ---
+        Event::CatchupLoaded { response } => {
+            log::info!(
+                "UI: catchup loaded for crew {} ({} events)",
+                response.crew_id,
+                response.event_count
+            );
+            let crews = app.get_crews();
+            let updated: Vec<CrewData> = (0..crews.row_count())
+                .map(|i| {
+                    let mut c = crews.row_data(i).unwrap();
+                    if c.id == response.crew_id.as_str() {
+                        c.has_catchup = response.has_events;
+                        c.catchup_text = response.catchup_text.clone().into();
+                    }
+                    c
+                })
+                .collect();
+            app.set_crews(Rc::new(slint::VecModel::from(updated)).into());
+        }
+        Event::MomentPosted { event_id } => {
+            log::info!("UI: moment posted, event_id={}", event_id);
+        }
+        Event::MomentPostFailed { reason } => {
+            log::warn!("UI: moment post failed: {}", reason);
         }
     }
 }

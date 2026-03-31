@@ -942,6 +942,38 @@ impl NakamaClient {
         Ok(())
     }
 
+    // --- Crew events RPCs ---
+
+    pub async fn crew_catchup(
+        &self,
+        crew_id: &str,
+        last_seen: i64,
+    ) -> Result<crate::crew_events::CatchupResponse> {
+        let payload = serde_json::json!({ "crew_id": crew_id, "last_seen": last_seen });
+        let resp = self.rpc("crew_catchup", &payload).await?;
+        let parsed: crate::crew_events::CatchupResponse = serde_json::from_str(&resp)?;
+        Ok(parsed)
+    }
+
+    pub async fn post_moment(
+        &self,
+        req: &crate::crew_events::PostMomentRequest,
+    ) -> Result<crate::crew_events::PostMomentResponse> {
+        let payload = serde_json::to_value(req)?;
+        let resp = self.rpc("post_moment", &payload).await?;
+        let parsed: crate::crew_events::PostMomentResponse = serde_json::from_str(&resp)?;
+        Ok(parsed)
+    }
+
+    pub async fn game_session_end(
+        &self,
+        req: &crate::crew_events::GameSessionEndRequest,
+    ) -> Result<()> {
+        let payload = serde_json::to_value(req)?;
+        let _ = self.rpc("game_session_end", &payload).await?;
+        Ok(())
+    }
+
     // --- Health / version RPCs ---
 
     pub async fn health_check(&self) -> Result<HealthResponse> {

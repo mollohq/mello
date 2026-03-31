@@ -280,6 +280,20 @@ pub enum Event {
         messages: Vec<MessagePreview>,
     },
 
+    // --- Crew events (event ledger) ---
+    /// Catch-up data loaded for a crew.
+    CatchupLoaded {
+        response: crate::crew_events::CatchupResponse,
+    },
+    /// Moment posted successfully.
+    MomentPosted {
+        event_id: String,
+    },
+    /// Moment post failed.
+    MomentPostFailed {
+        reason: String,
+    },
+
     /// Client-server protocol version mismatch.
     ProtocolMismatch {
         message: String,

@@ -192,6 +192,19 @@ func InitModule(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runti
 	}
 
 	// -----------------------------------------------------------------------
+	// RPCs — crew events (event ledger, catch-up, moments)
+	// -----------------------------------------------------------------------
+	if err := initializer.RegisterRpc("crew_catchup", CrewCatchupRPC); err != nil {
+		return err
+	}
+	if err := initializer.RegisterRpc("post_moment", PostMomentRPC); err != nil {
+		return err
+	}
+	if err := initializer.RegisterRpc("game_session_end", GameSessionEndRPC); err != nil {
+		return err
+	}
+
+	// -----------------------------------------------------------------------
 	// RPCs — dev tools
 	// -----------------------------------------------------------------------
 	if err := initializer.RegisterRpc("dev_seed_state", DevSeedStateRPC); err != nil {
@@ -203,6 +216,7 @@ func InitModule(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runti
 	// -----------------------------------------------------------------------
 	go StartSidebarBatchLoop(nk, logger, 30*time.Second)
 	go StartMessageThrottleLoop(nk, logger, 10*time.Second)
+	go startChatActivityTicker(ctx, nk, logger, 30*time.Minute)
 
 	logger.Info("Mello backend initialized successfully")
 	return nil

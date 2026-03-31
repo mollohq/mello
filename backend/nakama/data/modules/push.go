@@ -137,6 +137,9 @@ func SetActiveCrewRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk
 
 	addCrewSubscriber(req.CrewID, userID)
 
+	// Update last-seen for event ledger catch-up
+	updateLastSeen(ctx, nk, userID, req.CrewID)
+
 	crewSubscribersMu.RLock()
 	subCount := len(crewSubscribers[req.CrewID])
 	crewSubscribersMu.RUnlock()

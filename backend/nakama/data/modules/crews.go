@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/heroiclabs/nakama-common/api"
 	"github.com/heroiclabs/nakama-common/runtime"
@@ -209,12 +210,50 @@ func GetCrewAvatarRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk
 
 func AfterJoinCrew(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, in *api.JoinGroupRequest) error {
 	userID, _ := ctx.Value(runtime.RUNTIME_CTX_USER_ID).(string)
-	logger.Info("User %s joined crew %s", userID, in.GetGroupId())
+	crewID := in.GetGroupId()
+	logger.Info("User %s joined crew %s", userID, crewID)
+
+	displayName := resolveUsername(ctx, nk, userID)
+	event := CrewEvent{
+		ID:        generateEventID(),
+		CrewID:    crewID,
+		Type:      "member_joined",
+		ActorID:   userID,
+		Timestamp: time.Now().UnixMilli(),
+		Score:     15,
+		Data: MemberJoinedData{
+			Username:    displayName,
+			DisplayName: displayName,
+		},
+	}
+	if err := AppendCrewEvent(ctx, nk, crewID, event); err != nil {
+		logger.Warn("Failed to write member_joined event for crew %s: %v", crewID, err)
+	}
+
 	return nil
 }
 
 func AfterLeaveCrew(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, in *api.LeaveGroupRequest) error {
 	userID, _ := ctx.Value(runtime.RUNTIME_CTX_USER_ID).(string)
-	logger.Info("User %s left crew %s", userID, in.GetGroupId())
+	crewID := in.GetGroupId()
+	logger.Info("User %s left crew %s", userID, crewID)
+
+	displayName := resolveUsername(ctx, nk, userID)
+	event := CrewEvent{
+		ID:        generateEventID(),
+		CrewID:    crewID,
+		Type:      "member_left",
+		ActorID:   userID,
+		Timestamp: time.Now().UnixMilli(),
+		Score:     5,
+		Data: MemberLeftData{
+			Username:    displayName,
+			DisplayName: displayName,
+		},
+	}
+	if err := AppendCrewEvent(ctx, nk, crewID, event); err != nil {
+		logger.Warn("Failed to write member_left event for crew %s: %v", crewID, err)
+	}
+
 	return nil
 }

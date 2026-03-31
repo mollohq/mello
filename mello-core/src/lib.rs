@@ -5,6 +5,7 @@ pub mod client;
 pub mod command;
 pub mod config;
 pub mod crew;
+pub mod crew_events;
 pub mod crew_state;
 pub mod emoji;
 pub mod error;

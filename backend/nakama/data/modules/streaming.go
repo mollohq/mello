@@ -242,6 +242,18 @@ func StopStreamRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk ru
 		return "", runtime.NewError("invalid request", 3)
 	}
 
+	// Read stream metadata before deleting (for event ledger)
+	var streamMeta *StreamMeta
+	metaObjects, err := nk.StorageRead(ctx, []*runtime.StorageRead{
+		{Collection: StreamMetaCollection, Key: req.CrewID, UserID: SystemUserID},
+	})
+	if err == nil && len(metaObjects) > 0 {
+		var m StreamMeta
+		if json.Unmarshal([]byte(metaObjects[0].GetValue()), &m) == nil {
+			streamMeta = &m
+		}
+	}
+
 	// Delete active stream record
 	if err := nk.StorageDelete(ctx, []*runtime.StorageDelete{
 		{
@@ -261,6 +273,36 @@ func StopStreamRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk ru
 			UserID:     SystemUserID,
 		},
 	})
+
+	// Write stream_session event to the crew event ledger
+	if streamMeta != nil {
+		durationMin := 0
+		if startedAt, parseErr := time.Parse(time.RFC3339, streamMeta.StartedAt); parseErr == nil {
+			durationMin = int(time.Since(startedAt).Minutes())
+			if durationMin < 1 {
+				durationMin = 1
+			}
+		}
+		event := CrewEvent{
+			ID:        generateEventID(),
+			CrewID:    req.CrewID,
+			Type:      "stream_session",
+			ActorID:   userID,
+			Timestamp: time.Now().UnixMilli(),
+			Score:     30,
+			Data: StreamSessionData{
+				StreamerID:   streamMeta.StreamerID,
+				StreamerName: streamMeta.StreamerUsername,
+				Title:        streamMeta.Title,
+				DurationMin:  durationMin,
+				PeakViewers:  len(streamMeta.ViewerIDs),
+				ViewerIDs:    streamMeta.ViewerIDs,
+			},
+		}
+		if appendErr := AppendCrewEvent(ctx, nk, req.CrewID, event); appendErr != nil {
+			logger.Warn("Failed to write stream_session event for crew %s: %v", req.CrewID, appendErr)
+		}
+	}
 
 	// Reset user presence
 	now := time.Now().UTC().Format(time.RFC3339)
