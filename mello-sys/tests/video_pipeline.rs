@@ -65,6 +65,11 @@ fn encoder_available() {
 
 #[test]
 fn host_to_viewer_loopback() {
+    if cfg!(target_os = "macos") && std::env::var("CI").is_ok() {
+        eprintln!("SKIP: Loopback test disabled on macOS CI (ScreenCaptureKit blocks without TCC screen recording permission)");
+        return;
+    }
+
     // Reset globals
     PACKETS.lock().unwrap().clear();
     FRAMES_DECODED.store(0, Ordering::Relaxed);
