@@ -5,6 +5,10 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+if(APPLE AND NOT CMAKE_OSX_DEPLOYMENT_TARGET)
+    set(CMAKE_OSX_DEPLOYMENT_TARGET "15.0" CACHE STRING "Minimum macOS version")
+endif()
+
 # Dependencies via vcpkg
 find_package(Opus CONFIG REQUIRED)
 find_package(LibDataChannel CONFIG REQUIRED)
@@ -187,7 +191,7 @@ else()
     )
 endif()
 
-# Platform-specific video sources (Windows only for now)
+# Platform-specific video sources
 if(WIN32)
     list(APPEND MELLO_SOURCES
         src/video/graphics_device.cpp
@@ -209,12 +213,33 @@ if(WIN32)
         src/video/decoder_dav1d.cpp
         src/video/openh264_dynload.cpp
     )
+elseif(APPLE)
+    list(APPEND MELLO_SOURCES
+        src/video/graphics_device_metal.mm
+        src/video/video_pipeline.cpp
+        src/video/capture_screencapturekit.mm
+        src/video/encoder_videotoolbox.mm
+        src/video/decoder_videotoolbox.mm
+        src/video/process_enum_macos.mm
+        src/video/window_thumbnail_macos.mm
+    )
 else()
     list(APPEND MELLO_SOURCES
         src/video/graphics_device.cpp
         src/video/video_pipeline.cpp
         src/video/process_enum.cpp
         src/video/window_thumbnail.cpp
+    )
+endif()
+
+# Enable ARC + modules for all ObjC++ sources.
+# The code uses ARC constructs (__bridge_retained, no manual retain/release).
+# Without -fobjc-arc, block-captured ObjC pointers aren't retained → dangling ptrs.
+# -fmodules avoids SDK 26.2 header class-reference issues on older macOS.
+if(APPLE)
+    file(GLOB_RECURSE MELLO_MM_FILES "src/*.mm")
+    set_source_files_properties(${MELLO_MM_FILES}
+        PROPERTIES COMPILE_FLAGS "-fobjc-arc -fmodules"
     )
 endif()
 
@@ -273,6 +298,14 @@ elseif(APPLE)
         "-framework CoreAudio"
         "-framework CoreFoundation"
         "-framework AVFoundation"
+        "-framework Metal"
+        "-framework VideoToolbox"
+        "-framework CoreMedia"
+        "-framework CoreVideo"
+        "-framework CoreGraphics"
+        "-framework ScreenCaptureKit"
+        "-framework AppKit"
+        "-framework Accelerate"
     )
 endif()
 

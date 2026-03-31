@@ -99,13 +99,6 @@ GraphicsDevice create_d3d11_device() {
     return {GraphicsBackend::D3D11, device.Get()};
 }
 
-#else
-
-GraphicsDevice create_d3d11_device() {
-    MELLO_LOG_ERROR(TAG, "D3D11 not available on this platform");
-    return {GraphicsBackend::D3D11, nullptr};
-}
-
 #endif
 
 } // namespace mello::video

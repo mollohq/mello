@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use async_trait::async_trait;
 
 use super::error::StreamError;
@@ -16,4 +18,43 @@ pub trait PacketSink: Send + Sync {
 
     /// Called when a viewer leaves.
     async fn on_viewer_left(&self, viewer_id: &str);
+}
+
+/// Sends packets through both an SFU relay and direct P2P fanout.
+/// The SFU path is fire-and-forget; P2P errors are also ignored so one
+/// failing path doesn't stall the other.
+pub struct DualSink {
+    pub primary: Arc<dyn PacketSink>,
+    pub secondary: Arc<dyn PacketSink>,
+}
+
+#[async_trait]
+impl PacketSink for DualSink {
+    async fn send_video(&self, packet: &StreamPacket) -> Result<(), StreamError> {
+        let _ = self.primary.send_video(packet).await;
+        let _ = self.secondary.send_video(packet).await;
+        Ok(())
+    }
+
+    async fn send_audio(&self, packet: &StreamPacket) -> Result<(), StreamError> {
+        let _ = self.primary.send_audio(packet).await;
+        let _ = self.secondary.send_audio(packet).await;
+        Ok(())
+    }
+
+    async fn send_control(&self, packet: &StreamPacket) -> Result<(), StreamError> {
+        let _ = self.primary.send_control(packet).await;
+        let _ = self.secondary.send_control(packet).await;
+        Ok(())
+    }
+
+    async fn on_viewer_joined(&self, viewer_id: &str) {
+        self.primary.on_viewer_joined(viewer_id).await;
+        self.secondary.on_viewer_joined(viewer_id).await;
+    }
+
+    async fn on_viewer_left(&self, viewer_id: &str) {
+        self.primary.on_viewer_left(viewer_id).await;
+        self.secondary.on_viewer_left(viewer_id).await;
+    }
 }

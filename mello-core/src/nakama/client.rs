@@ -922,6 +922,26 @@ impl NakamaClient {
         Ok(parsed.crews)
     }
 
+    // --- Stream viewer RPC ---
+
+    pub async fn watch_stream(&self, session_id: &str) -> Result<WatchStreamResponse> {
+        let payload = serde_json::json!({ "session_id": session_id });
+        let resp = self.rpc("watch_stream", &payload).await?;
+        let parsed: WatchStreamResponse = serde_json::from_str(&resp)?;
+        Ok(parsed)
+    }
+
+    pub async fn update_stream_resolution(
+        &self,
+        crew_id: &str,
+        width: u32,
+        height: u32,
+    ) -> Result<()> {
+        let payload = serde_json::json!({ "crew_id": crew_id, "width": width, "height": height });
+        let _ = self.rpc("update_stream_resolution", &payload).await?;
+        Ok(())
+    }
+
     // --- Health / version RPCs ---
 
     pub async fn health_check(&self) -> Result<HealthResponse> {

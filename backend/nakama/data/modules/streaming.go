@@ -407,6 +407,23 @@ func WatchStreamRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk r
 		return "", runtime.NewError("not a crew member", 7)
 	}
 
+	// Load StreamMeta for encode resolution
+	var streamWidth, streamHeight uint32
+	smObjs, smErr := nk.StorageRead(ctx, []*runtime.StorageRead{
+		{
+			Collection: StreamMetaCollection,
+			Key:        meta.CrewID,
+			UserID:     SystemUserID,
+		},
+	})
+	if smErr == nil && len(smObjs) > 0 {
+		var sm StreamMeta
+		if err := json.Unmarshal([]byte(smObjs[0].Value), &sm); err == nil {
+			streamWidth = sm.Width
+			streamHeight = sm.Height
+		}
+	}
+
 	if meta.Mode == "sfu" {
 		token, err := signSFUToken(SFUTokenClaims{
 			UserID:    userID,
@@ -424,14 +441,104 @@ func WatchStreamRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk r
 			"mode":         "sfu",
 			"sfu_endpoint": meta.SFUEndpoint,
 			"sfu_token":    token,
+			"width":        streamWidth,
+			"height":       streamHeight,
 		})
 		return string(resp), nil
 	}
 
 	// P2P mode: viewer connects directly via signaling
 	resp, _ := json.Marshal(map[string]interface{}{
-		"mode": "p2p",
+		"mode":   "p2p",
+		"width":  streamWidth,
+		"height": streamHeight,
 	})
+	return string(resp), nil
+}
+
+// ---------------------------------------------------------------------------
+// UpdateStreamResolution — host updates actual encode resolution after encoder init
+// ---------------------------------------------------------------------------
+
+func UpdateStreamResolutionRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, payload string) (string, error) {
+	userID, ok := ctx.Value(runtime.RUNTIME_CTX_USER_ID).(string)
+	if !ok {
+		return "", runtime.NewError("authentication required", 16)
+	}
+
+	var req struct {
+		CrewID string `json:"crew_id"`
+		Width  uint32 `json:"width"`
+		Height uint32 `json:"height"`
+	}
+	if err := json.Unmarshal([]byte(payload), &req); err != nil {
+		return "", runtime.NewError("invalid request", 3)
+	}
+
+	objects, err := nk.StorageRead(ctx, []*runtime.StorageRead{
+		{
+			Collection: StreamMetaCollection,
+			Key:        req.CrewID,
+			UserID:     SystemUserID,
+		},
+	})
+	if err != nil || len(objects) == 0 {
+		return "", runtime.NewError("stream not found", 5)
+	}
+
+	var meta StreamMeta
+	if err := json.Unmarshal([]byte(objects[0].Value), &meta); err != nil {
+		return "", runtime.NewError("invalid stream metadata", 13)
+	}
+	if meta.StreamerID != userID {
+		return "", runtime.NewError("unauthorized: not the streamer", 7)
+	}
+
+	meta.Width = req.Width
+	meta.Height = req.Height
+
+	metaJSON, _ := json.Marshal(meta)
+	nk.StorageWrite(ctx, []*runtime.StorageWrite{
+		{
+			Collection:      StreamMetaCollection,
+			Key:             req.CrewID,
+			UserID:          SystemUserID,
+			Value:           string(metaJSON),
+			PermissionRead:  2,
+			PermissionWrite: 0,
+		},
+	})
+
+	// Also update the active_streams entry
+	streamObjs, err := nk.StorageRead(ctx, []*runtime.StorageRead{
+		{
+			Collection: StreamCollection,
+			Key:        req.CrewID,
+			UserID:     userID,
+		},
+	})
+	if err == nil && len(streamObjs) > 0 {
+		var stream ActiveStream
+		if err := json.Unmarshal([]byte(streamObjs[0].Value), &stream); err == nil {
+			stream.Width = req.Width
+			stream.Height = req.Height
+			streamJSON, _ := json.Marshal(stream)
+			nk.StorageWrite(ctx, []*runtime.StorageWrite{
+				{
+					Collection:      StreamCollection,
+					Key:             req.CrewID,
+					UserID:          userID,
+					Value:           string(streamJSON),
+					PermissionRead:  2,
+					PermissionWrite: 0,
+				},
+			})
+		}
+	}
+
+	InvalidateCrewState(req.CrewID)
+
+	resp, _ := json.Marshal(map[string]interface{}{"ok": true})
 	return string(resp), nil
 }
 

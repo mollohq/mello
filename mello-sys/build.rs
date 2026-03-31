@@ -40,10 +40,18 @@ fn main() {
         .define("VCPKG_TARGET_TRIPLET", triplet)
         .profile("Release");
 
-    // On macOS arm64, explicitly set architecture to avoid cross-compilation issues
-    if target_os == "macos" && target_arch == "aarch64" {
-        cmake_cfg.define("CMAKE_OSX_ARCHITECTURES", "arm64");
-        cmake_cfg.define("VCPKG_HOST_TRIPLET", "arm64-osx");
+    if target_os == "macos" {
+        if target_arch == "aarch64" {
+            cmake_cfg.define("CMAKE_OSX_ARCHITECTURES", "arm64");
+            cmake_cfg.define("VCPKG_HOST_TRIPLET", "arm64-osx");
+        }
+        // The Rust `cmake` crate reads MACOSX_DEPLOYMENT_TARGET to set
+        // -mmacosx-version-min in CMAKE_C_FLAGS/CMAKE_CXX_FLAGS.
+        // Without this, it defaults to the SDK version (e.g. 26.2),
+        // causing ObjC code to emit runtime features unavailable on
+        // the actual OS (e.g. macOS 15).
+        env::set_var("MACOSX_DEPLOYMENT_TARGET", "15.0");
+        cmake_cfg.define("CMAKE_OSX_DEPLOYMENT_TARGET", "15.0");
     }
 
     let dst = cmake_cfg.build();
@@ -194,10 +202,21 @@ fn main() {
         "macos" => {
             println!("cargo:rustc-link-lib=static=ssl");
             println!("cargo:rustc-link-lib=static=crypto");
+            // Audio
             println!("cargo:rustc-link-lib=framework=AudioToolbox");
             println!("cargo:rustc-link-lib=framework=CoreAudio");
-            println!("cargo:rustc-link-lib=framework=CoreFoundation");
             println!("cargo:rustc-link-lib=framework=AVFoundation");
+            // Video / Streaming
+            println!("cargo:rustc-link-lib=framework=Metal");
+            println!("cargo:rustc-link-lib=framework=VideoToolbox");
+            println!("cargo:rustc-link-lib=framework=CoreMedia");
+            println!("cargo:rustc-link-lib=framework=CoreVideo");
+            println!("cargo:rustc-link-lib=framework=CoreGraphics");
+            println!("cargo:rustc-link-lib=framework=ScreenCaptureKit");
+            println!("cargo:rustc-link-lib=framework=AppKit");
+            println!("cargo:rustc-link-lib=framework=Accelerate");
+            // System
+            println!("cargo:rustc-link-lib=framework=CoreFoundation");
             println!("cargo:rustc-link-lib=framework=Security");
             // C++ standard library
             println!("cargo:rustc-link-lib=dylib=c++");

@@ -187,6 +187,9 @@ func InitModule(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runti
 	if err := initializer.RegisterRpc("watch_stream", WatchStreamRPC); err != nil {
 		return err
 	}
+	if err := initializer.RegisterRpc("update_stream_resolution", UpdateStreamResolutionRPC); err != nil {
+		return err
+	}
 
 	// -----------------------------------------------------------------------
 	// RPCs — dev tools

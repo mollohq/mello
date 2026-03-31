@@ -42,6 +42,9 @@ public:
 
 #ifdef _WIN32
     virtual bool        encode(ID3D11Texture2D* nv12_texture, EncodedPacket& out) = 0;
+#elif defined(__APPLE__)
+    /// Encode one frame from a CVPixelBufferRef (passed as void*). BGRA input accepted.
+    virtual bool        encode(void* cv_pixel_buffer, EncodedPacket& out) = 0;
 #endif
 
     virtual void        request_keyframe() = 0;

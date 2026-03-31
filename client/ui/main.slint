@@ -112,6 +112,7 @@ export component MainWindow inherits Window {
     in property <image> stream-frame;
     in property <string> active-streamer-id: "";
     in property <string> active-streamer-name: "";
+    in property <string> active-stream-session-id: "";
     in property <int> active-stream-width: 0;
     in property <int> active-stream-height: 0;
 
@@ -217,7 +218,7 @@ export component MainWindow inherits Window {
     callback start-stream(/* source_id */ string, /* source_mode */ string, /* preset */ int);
     callback stop-stream();
     callback stop-watching();
-    callback watch-stream(/* host_id */ string, /* width */ int, /* height */ int);
+    callback watch-stream(/* host_id */ string, /* session_id */ string, /* width */ int, /* height */ int);
     callback stop-thumbnail-refresh();
 
     // --- Onboarding callbacks ---
@@ -360,6 +361,7 @@ export component MainWindow inherits Window {
                         stream-frame: root.stream-frame;
                         active-streamer-id: root.active-streamer-id;
                         active-streamer-name: root.active-streamer-name;
+                        active-stream-session-id: root.active-stream-session-id;
                         stream-width: root.active-stream-width;
                         stream-height: root.active-stream-height;
                         start-stream-clicked => {
@@ -368,7 +370,7 @@ export component MainWindow inherits Window {
                         }
                         stop-stream-clicked => { root.stop-stream(); }
                         stop-watching-clicked => { root.stop-watching(); }
-                        watch-stream-clicked(host-id, w, h) => { root.watch-stream(host-id, w, h); }
+                        watch-stream-clicked(host-id, session-id, w, h) => { root.watch-stream(host-id, session-id, w, h); }
                     }
 
                     VoiceChannelView {
