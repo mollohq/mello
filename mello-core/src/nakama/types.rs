@@ -101,6 +101,10 @@ pub struct WatchStreamResponse {
     pub sfu_endpoint: Option<String>,
     #[serde(default)]
     pub sfu_token: Option<String>,
+    #[serde(default)]
+    pub width: u32,
+    #[serde(default)]
+    pub height: u32,
 }
 
 fn default_p2p() -> String {

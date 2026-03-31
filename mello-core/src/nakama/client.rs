@@ -931,6 +931,17 @@ impl NakamaClient {
         Ok(parsed)
     }
 
+    pub async fn update_stream_resolution(
+        &self,
+        crew_id: &str,
+        width: u32,
+        height: u32,
+    ) -> Result<()> {
+        let payload = serde_json::json!({ "crew_id": crew_id, "width": width, "height": height });
+        let _ = self.rpc("update_stream_resolution", &payload).await?;
+        Ok(())
+    }
+
     // --- Health / version RPCs ---
 
     pub async fn health_check(&self) -> Result<HealthResponse> {

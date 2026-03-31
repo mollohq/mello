@@ -2779,6 +2779,15 @@ impl Client {
             (StreamHostHandle(host), video_rx, audio_rx, resources)
         }; // ctx and raw pointers drop here — safe to .await below
 
+        // Update backend with actual encode resolution (may differ from preset)
+        if let Err(e) = self
+            .nakama
+            .update_stream_resolution(crew_id, self.stream_encode_width, self.stream_encode_height)
+            .await
+        {
+            log::warn!("update_stream_resolution RPC failed: {}", e);
+        }
+
         // Select sink based on mode: SFU for premium crews, P2P for free
         let (sink, p2p_sink): (
             Arc<dyn crate::stream::sink::PacketSink>,
@@ -2999,11 +3008,29 @@ impl Client {
         log::info!("SFU viewer connected to session {}", session_id);
         let conn = Arc::new(conn);
 
-        // Initialize decoder immediately — we know the resolution from the UI
-        let (w, h) = if stream_width > 0 && stream_height > 0 {
+        // Prefer actual encode resolution from watch_stream response (set by host
+        // via update_stream_resolution RPC), fall back to crew-state UI values.
+        let (w, h) = if resp.width > 0 && resp.height > 0 {
+            log::info!(
+                "SFU viewer using encode resolution from backend: {}x{}",
+                resp.width,
+                resp.height
+            );
+            (resp.width, resp.height)
+        } else if stream_width > 0 && stream_height > 0 {
+            log::warn!(
+                "SFU viewer: no resolution from backend, using UI values: {}x{}",
+                stream_width,
+                stream_height
+            );
             (stream_width, stream_height)
         } else {
             let config = crate::stream::StreamConfig::default();
+            log::warn!(
+                "SFU viewer: no resolution info, using default: {}x{}",
+                config.width,
+                config.height
+            );
             (config.width, config.height)
         };
 
