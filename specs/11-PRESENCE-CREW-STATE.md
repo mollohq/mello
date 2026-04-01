@@ -211,6 +211,7 @@ type VoiceMemberState struct {
     Speaking bool   `json:"speaking"`
     Muted    bool   `json:"muted"`
     Deafened bool   `json:"deafened"`
+    JoinedAt int64  `json:"joined_at"` // Unix millis — set on voice_join
 }
 
 type VoiceRoom struct {
@@ -228,6 +229,8 @@ type VoiceRoom struct {
 | `voiceChannelCrew` | `map[channelID → crewID]` | Which crew a channel belongs to (resolve crew on leave) |
 
 Each map has its own `sync.RWMutex` for concurrent access.
+
+**Voice room GC:** A background goroutine (`StartVoiceRoomGC`) runs every 30 seconds. It iterates all users in `voiceRooms`, reads their stored Nakama presence via `ReadPresence`, and removes anyone whose status is `StatusOffline`. This catches ghost members that weren't cleaned up by `OnSessionEnd` (crashes, network drops, missed events).
 
 ### 2.5 Stream Thumbnail
 
@@ -831,8 +834,8 @@ backward compatibility.
       "name": "General",
       "is_default": true,
       "members": [
-        { "user_id": "user_a", "username": "vex_r", "speaking": true },
-        { "user_id": "user_b", "username": "lune", "speaking": false }
+        { "user_id": "user_a", "username": "vex_r", "speaking": true, "joined_at": 1711900000000 },
+        { "user_id": "user_b", "username": "lune", "speaking": false, "joined_at": 1711900030000 }
       ]
     },
     {
@@ -843,8 +846,8 @@ backward compatibility.
     }
   ],
   "members": [
-    { "user_id": "user_a", "username": "vex_r", "speaking": true },
-    { "user_id": "user_b", "username": "lune", "speaking": false }
+    { "user_id": "user_a", "username": "vex_r", "speaking": true, "joined_at": 1711900000000 },
+    { "user_id": "user_b", "username": "lune", "speaking": false, "joined_at": 1711900030000 }
   ]
 }
 ```
@@ -1134,7 +1137,7 @@ pub struct CrewMember {
 }
 
 pub struct VoiceState { pub active: bool, pub members: Vec<VoiceMember> }
-pub struct VoiceMember { pub user_id: String, pub username: String, pub speaking: Option<bool> }
+pub struct VoiceMember { pub user_id: String, pub username: String, pub speaking: Option<bool>, pub joined_at: Option<i64> }
 
 pub struct VoiceChannelState {
     pub id: String,
@@ -1201,6 +1204,7 @@ Event::CrewEventReceived { event: CrewEvent }
 Event::PresenceChanged { change: PresenceChange }
 Event::VoiceUpdated { crew_id, channel_id, members: Vec<VoiceMember> }
 Event::VoiceChannelsUpdated { crew_id, channels: Vec<VoiceChannelState> }
+Event::VoiceSfuDisconnected { crew_id, reason }  // SFU voice connection lost; triggers auto-reconnect
 Event::VoiceChannelCreated { crew_id, channel: VoiceChannelState }
 Event::VoiceChannelRenamed { crew_id, channel_id, name }
 Event::VoiceChannelDeleted { crew_id, channel_id }

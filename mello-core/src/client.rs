@@ -310,6 +310,10 @@ pub struct Client {
     cached_windows: Vec<(String, u64)>,
     history_cursor: Option<String>,
     giphy: GiphyClient,
+    /// Pending SFU voice reconnect: (when, channel_id, attempt)
+    sfu_voice_reconnect: Option<(tokio::time::Instant, String, u32)>,
+    /// Last voice channel we joined (for reconnection)
+    last_voice_channel: Option<String>,
 }
 
 impl Client {
@@ -339,6 +343,8 @@ impl Client {
             cached_windows: Vec::new(),
             history_cursor: None,
             giphy: GiphyClient::new(),
+            sfu_voice_reconnect: None,
+            last_voice_channel: None,
         }
     }
 
@@ -809,6 +815,46 @@ impl Client {
     async fn voice_tick(&mut self) {
         self.voice.tick();
 
+        // SFU voice reconnect: if voice mode went Disconnected but we still have a
+        // last_voice_channel, schedule a reconnect with exponential backoff.
+        if self.last_voice_channel.is_some()
+            && self.voice.voice_mode() == crate::voice::VoiceMode::Disconnected
+            && self.sfu_voice_reconnect.is_none()
+        {
+            let channel = self.last_voice_channel.clone().unwrap();
+            let delay = tokio::time::Duration::from_secs(2);
+            log::info!("SFU voice dropped, scheduling reconnect in {:?}", delay);
+            self.sfu_voice_reconnect = Some((tokio::time::Instant::now() + delay, channel, 0));
+        }
+
+        if let Some((at, ref channel, attempt)) = self.sfu_voice_reconnect.clone() {
+            if tokio::time::Instant::now() >= at {
+                const MAX_RECONNECT_ATTEMPTS: u32 = 5;
+                if attempt >= MAX_RECONNECT_ATTEMPTS {
+                    log::warn!("SFU voice reconnect: giving up after {} attempts", attempt);
+                    self.sfu_voice_reconnect = None;
+                    self.last_voice_channel = None;
+                    let _ = self
+                        .event_tx
+                        .send(Event::VoiceStateChanged { in_call: false });
+                } else {
+                    log::info!(
+                        "SFU voice reconnect attempt {} for channel {}",
+                        attempt + 1,
+                        channel
+                    );
+                    let ch = channel.clone();
+                    self.handle_join_voice(&ch).await;
+                    // If still disconnected after rejoin, bump the attempt with backoff
+                    if self.voice.voice_mode() == crate::voice::VoiceMode::Disconnected {
+                        let backoff = tokio::time::Duration::from_secs(2u64.pow(attempt + 1));
+                        self.sfu_voice_reconnect =
+                            Some((tokio::time::Instant::now() + backoff, ch, attempt + 1));
+                    }
+                }
+            }
+        }
+
         // Send any pending signaling messages through Nakama
         let signals = self.voice.drain_signals();
         for (to, signal) in signals {
@@ -973,6 +1019,18 @@ impl Client {
                 vs.frames_presented += 1;
                 if vs.frames_presented <= 3 || vs.frames_presented.is_multiple_of(300) {
                     log::info!("Stream frame presented #{}", vs.frames_presented);
+                }
+            }
+        }
+
+        // Poll SFU events to detect session_ended / host disconnect
+        if let Some(ref conn) = vs.sfu_connection {
+            for event in conn.poll_events() {
+                if let crate::transport::SfuEvent::Disconnected { reason } = event {
+                    log::info!("Stream SFU disconnected: {}", reason);
+                    let _ = self.event_tx.send(Event::StreamWatchingStopped);
+                    self.viewer_state.take();
+                    return;
                 }
             }
         }
@@ -2259,6 +2317,9 @@ impl Client {
 
         let mode = resp.mode.as_deref().unwrap_or("p2p");
 
+        self.last_voice_channel = Some(resp.channel_id.clone());
+        self.sfu_voice_reconnect = None;
+
         // Emit authoritative state immediately so the UI shows the initial member list.
         // Must happen BEFORE the SFU connection (which can take seconds), otherwise
         // VoiceChannelsUpdated notifications that arrive during connection get overwritten.
@@ -2362,6 +2423,8 @@ impl Client {
 
     async fn handle_leave_voice(&mut self) {
         self.sfu_leave_if_connected().await;
+        self.last_voice_channel = None;
+        self.sfu_voice_reconnect = None;
         // Notify server
         if let Some(crew_id) = self.nakama.active_crew_id().map(String::from) {
             if let Err(e) = self.nakama.voice_leave(&crew_id).await {

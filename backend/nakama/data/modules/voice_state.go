@@ -21,6 +21,7 @@ type VoiceMemberState struct {
 	Speaking bool   `json:"speaking"`
 	Muted    bool   `json:"muted"`
 	Deafened bool   `json:"deafened"`
+	JoinedAt int64  `json:"joined_at"` // Unix millis
 }
 
 type VoiceRoom struct {
@@ -207,6 +208,7 @@ func VoiceJoinRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk run
 	room.Members[userID] = &VoiceMemberState{
 		UserID:   userID,
 		Username: username,
+		JoinedAt: time.Now().UnixMilli(),
 	}
 	voiceRoomsMu.Unlock()
 
@@ -481,6 +483,48 @@ func VoiceEvictChannel(ctx context.Context, logger runtime.Logger, nk runtime.Na
 // VoiceCleanupUser removes a user from any voice room (called on disconnect).
 func VoiceCleanupUser(ctx context.Context, logger runtime.Logger, nk runtime.NakamaModule, userID string) {
 	voiceLeaveInternal(ctx, logger, nk, userID)
+}
+
+// StartVoiceRoomGC runs a background loop that prunes voice room members whose
+// Nakama sessions are no longer active. This catches users that weren't cleaned
+// up by OnSessionEnd (crashes, network drops, missed events).
+func StartVoiceRoomGC(ctx context.Context, nk runtime.NakamaModule, logger runtime.Logger, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for range ticker.C {
+		voiceRoomGC(ctx, logger, nk)
+	}
+}
+
+func voiceRoomGC(ctx context.Context, logger runtime.Logger, nk runtime.NakamaModule) {
+	voiceRoomsMu.RLock()
+	var userIDs []string
+	for _, room := range voiceRooms {
+		for uid := range room.Members {
+			userIDs = append(userIDs, uid)
+		}
+	}
+	voiceRoomsMu.RUnlock()
+
+	if len(userIDs) == 0 {
+		return
+	}
+
+	removed := 0
+	for _, uid := range userIDs {
+		p, err := ReadPresence(ctx, nk, uid)
+		if err != nil {
+			continue
+		}
+		if p.Status == StatusOffline {
+			logger.Info("Voice GC: removing stale member %s", uid)
+			voiceLeaveInternal(ctx, logger, nk, uid)
+			removed++
+		}
+	}
+	if removed > 0 {
+		logger.Info("Voice GC: cleaned up %d stale members", removed)
+	}
 }
 
 // ---------------------------------------------------------------------------

@@ -1002,7 +1002,10 @@ pub async fn join_channel(&mut self, nakama: &NakamaClient, crew_id: &str, chann
             ).await?;
             conn.join_voice(crew_id, channel_id).await?;
 
-            // Spawn voice receive loop: SFU sends us other members' audio
+            // Voice receive: SFU forwards other members' audio with a sender-id prefix.
+            // Wire format per packet: [1-byte len][sender_id][opus_payload]
+            // The client strips the prefix and uses sender_id as peer_id so
+            // libmello routes to per-sender jitter buffers and Opus decoders.
             let conn = Arc::new(conn);
             let conn_clone = conn.clone();
             let libmello = self.libmello;
@@ -1010,12 +1013,25 @@ pub async fn join_channel(&mut self, nakama: &NakamaClient, crew_id: &str, chann
                 loop {
                     match conn_clone.recv_event().await {
                         Some(SfuEvent::MediaPacket { data }) => {
-                            // Feed audio packet to libmello for decode + playback
-                            // Same Opus packet format as P2P
-                            unsafe { mello_voice_feed_packet(libmello, data.as_ptr(), data.len() as i32); }
+                            if data.len() < 2 { continue; }
+                            let id_len = data[0] as usize;
+                            if data.len() < 1 + id_len + 1 { continue; }
+                            let sender_id = &data[1..1 + id_len]; // UTF-8 user_id
+                            let media = &data[1 + id_len..];
+                            let peer_id = CString::new(sender_id).unwrap_or_default();
+                            unsafe {
+                                mello_voice_feed_packet(
+                                    libmello,
+                                    peer_id.as_ptr(),
+                                    media.as_ptr(),
+                                    media.len() as i32,
+                                );
+                            }
                         }
                         Some(SfuEvent::Disconnected { reason }) => {
                             log::warn!("Voice SFU disconnected: {}", reason);
+                            // Emits VoiceSfuDisconnected event; client auto-reconnects
+                            // with exponential backoff (2s base, max 5 attempts).
                             break;
                         }
                         _ => {}

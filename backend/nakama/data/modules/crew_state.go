@@ -34,6 +34,7 @@ type VoiceMemberInfo struct {
 	Username string `json:"username"`
 	Avatar   string `json:"avatar,omitempty"`
 	Speaking *bool  `json:"speaking,omitempty"` // nil for sidebar (not included)
+	JoinedAt int64  `json:"joined_at,omitempty"`
 }
 
 // VoiceChannelStateView is a per-channel voice state returned in CrewState.
@@ -189,6 +190,7 @@ func ComputeCrewState(ctx context.Context, logger runtime.Logger, nk runtime.Nak
 				UserID:   vm.UserID,
 				Username: vm.Username,
 				Speaking: &speaking,
+				JoinedAt: vm.JoinedAt,
 			})
 		}
 	}
@@ -212,6 +214,7 @@ func ComputeCrewState(ctx context.Context, logger runtime.Logger, nk runtime.Nak
 					UserID:   vm.UserID,
 					Username: vm.Username,
 					Speaking: &speaking,
+					JoinedAt: vm.JoinedAt,
 				})
 			}
 			voiceChannels = append(voiceChannels, chView)
@@ -311,6 +314,7 @@ func (cs *CrewState) ToSidebar() *CrewSidebarState {
 			sidebarVoice.Members[i] = &VoiceMemberInfo{
 				UserID:   m.UserID,
 				Username: m.Username,
+				JoinedAt: m.JoinedAt,
 			}
 		}
 		sidebar.Voice = sidebarVoice
@@ -329,6 +333,7 @@ func (cs *CrewState) ToSidebar() *CrewSidebarState {
 				sidebarCh.Members[j] = &VoiceMemberInfo{
 					UserID:   m.UserID,
 					Username: m.Username,
+					JoinedAt: m.JoinedAt,
 				}
 			}
 			sidebar.VoiceChannels[i] = sidebarCh

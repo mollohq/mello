@@ -299,9 +299,10 @@ func PushVoiceUpdate(ctx context.Context, logger runtime.Logger, nk runtime.Naka
 			members := make([]map[string]interface{}, 0, len(snap.Members))
 			for _, m := range snap.Members {
 				members = append(members, map[string]interface{}{
-					"user_id":  m.UserID,
-					"username": m.Username,
-					"speaking": m.Speaking,
+					"user_id":   m.UserID,
+					"username":  m.Username,
+					"speaking":  m.Speaking,
+					"joined_at": m.JoinedAt,
 				})
 			}
 			channels = append(channels, map[string]interface{}{
@@ -318,9 +319,10 @@ func PushVoiceUpdate(ctx context.Context, logger runtime.Logger, nk runtime.Naka
 	legacyMembers := make([]map[string]interface{}, 0, len(legacySnap.Members))
 	for _, m := range legacySnap.Members {
 		legacyMembers = append(legacyMembers, map[string]interface{}{
-			"user_id":  m.UserID,
-			"username": m.Username,
-			"speaking": m.Speaking,
+			"user_id":   m.UserID,
+			"username":  m.Username,
+			"speaking":  m.Speaking,
+			"joined_at": m.JoinedAt,
 		})
 	}
 

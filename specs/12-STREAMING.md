@@ -534,33 +534,27 @@ pub async fn start_stream(
 }
 ```
 
-`SfuSink` is a thin stub in v0.2 — it connects to the endpoint and holds the token, but its wire protocol is specified in a future `13-SFU.md`.
+`SfuSink` wraps an `SfuConnection` (see EXTERNAL-SFU.md) and forwards `StreamPacket` data via the SFU's media DataChannel.
 
 ```rust
-// mello-core/src/stream/sink_sfu.rs  (v0.2 stub)
+// mello-core/src/stream/sink_sfu.rs
 
 pub struct SfuSink {
-    endpoint: String,
-    token: String,
-    // ws: WebSocket connection (TODO: 13-SFU.md)
+    conn: Arc<SfuConnection>,
 }
 
 impl SfuSink {
-    pub async fn new(endpoint: &str, token: &str) -> Result<Self, StreamError> {
-        // TODO: establish WebSocket to endpoint, authenticate with token
-        // Placeholder — returns Err for now
-        Err(StreamError::SfuNotImplemented)
-    }
+    pub fn new(conn: Arc<SfuConnection>) -> Self { Self { conn } }
 }
 
-#[async_trait]
 impl PacketSink for SfuSink {
-    async fn send_video(&self, _packet: &StreamPacket) -> Result<(), StreamError> {
-        Err(StreamError::SfuNotImplemented)
+    fn send_video(&self, packet: &[u8]) -> Result<(), StreamError> {
+        self.conn.send_media(packet)
     }
-    // ...
 }
 ```
+
+**Viewer SFU lifecycle:** When a viewer connects via SFU, the `stream_tick` polls both media packets and SFU signaling events. If the SFU sends `session_ended` (host disconnected) or the WebSocket drops, the viewer automatically tears down: emits `StreamWatchingStopped`, drops the `ViewerState`, and clears the last video frame (`set_stream_frame(Image::default())`). The `StreamEnded` event (host-side) also clears the frame.
 
 ### 9.3 Resolution Negotiation
 

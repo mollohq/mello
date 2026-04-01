@@ -433,21 +433,37 @@ func (s *StreamSession) onViewerControlPacket(viewerID string, data []byte) {
 
 ### 5.3 Packet Forwarding (Voice Session)
 
+Voice packets are prefixed with a sender-id header before forwarding so receivers can demux into per-sender jitter buffers and Opus decoders. The wire format for each forwarded packet is:
+
+```
+[1 byte: sender_id length N][N bytes: sender_id (UTF-8 user ID)][remaining: original Opus payload]
+```
+
+The SFU builds this prefix once per peer on connection and prepends it to every forwarded packet:
+
 ```go
-// Pseudocode — voice session forwarding loop
-func (s *VoiceSession) onMemberMediaPacket(senderID string, data []byte) {
-    // Forward to all OTHER members (not back to sender)
-    members := s.members.Snapshot()
-    for _, member := range members {
-        if member.userID == senderID {
-            continue
-        }
-        member.mediaChannel.SendNonBlocking(data)
-    }
+func (s *VoiceSession) WireDataChannels(peer *Peer) {
+    senderID := peer.UserID
+    senderBytes := []byte(senderID)
+    prefix := make([]byte, 1+len(senderBytes))
+    prefix[0] = byte(len(senderBytes))
+    copy(prefix[1:], senderBytes)
+
+    peer.MediaChannel.OnMessage(func(msg webrtc.DataChannelMessage) {
+        framed := make([]byte, len(prefix)+len(msg.Data))
+        copy(framed, prefix)
+        copy(framed[len(prefix):], msg.Data)
+
+        s.members.ForEach(func(other *Peer) {
+            if other.UserID != senderID {
+                other.SendMedia(framed)
+            }
+        })
+    })
 }
 ```
 
-Voice packets are audio-only (type 0x02). The SFU treats them identically to stream packets — opaque forwarding, skip the sender.
+The receiving client strips the prefix and uses the sender_id as the `peer_id` argument to `mello_voice_feed_packet`, which routes audio to per-sender decoders and jitter buffers in libmello. This is critical for 3+ user voice — without per-sender demux, interleaved sequence numbers from different senders cause the jitter buffer to drop packets.
 
 ### 5.4 Bandwidth and Buffer Management
 
@@ -1817,6 +1833,8 @@ Query the in-memory log ring buffer:
 | `event` | Filter by event type | (all) |
 | `limit` | Max entries to return | 100 |
 | `before` | Entries before this ISO timestamp | (latest) |
+| `after` | Entries at or after this ISO timestamp | (earliest) |
+| `days` | Shorthand for `after` — entries from the last N days (converted to `after` server-side) | (all) |
 
 #### `GET /admin/api/peers`
 
@@ -2023,8 +2041,9 @@ The dashboard has three tabs:
 **Tab 3: Logs**
 - Level filter (debug/info/warn/error toggle buttons)
 - Session ID and user ID filter inputs
+- Export buttons: "Export 1d", "Export 3d", "Export 7d" — fetches logs for that window at debug level (limit 10,000) and downloads as a `.tsv` file
 - Auto-scrolling log stream (polls `/admin/api/logs` every 2 seconds)
-- Each log entry is a row with timestamp, level badge, event, and expandable data
+- Each log entry shows full local date+time (e.g. `2026-03-22 14:20:51`), user_id extracted from `data.user` (shown inline before session ID), level badge, event, and data
 
 **Aggregate Banner (top of page)**
 - Polls `/admin/api/peers` every 30 seconds
@@ -2181,6 +2200,7 @@ SFU_LOG_LEVEL=info                               # debug, info, warn, error
 - [ ] Client WebSocket drops → client reconnects with new token → rejoins session
 - [ ] Brief network interruption (<30s) → session persists in Draining state → client reconnects
 - [ ] SFU restart → all clients detect disconnect → reconnect flow
+- [ ] Voice SFU auto-reconnect: exponential backoff (2s, 4s, 8s, 16s, 32s), max 5 attempts, gives up and emits `VoiceStateChanged { in_call: false }` on failure
 
 ### Admin Dashboard & Observability
 - [ ] `/health` returns valid JSON with session/peer counts, no auth required

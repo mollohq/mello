@@ -88,7 +88,7 @@ All custom server logic is written in Go and loaded as Nakama runtime modules. M
 | `invite_codes.go` | `GenerateInviteCode`, `JoinByInviteCodeRPC` |
 | `signaling.go` | `GetIceServersRPC`, TURN credential generation (HMAC-SHA1, time-limited) |
 | `voice_channels.go` | Voice channel CRUD via RPCs |
-| `voice_state.go` | Voice state tracking via Nakama streams |
+| `voice_state.go` | Voice state tracking (in-memory `voiceRooms`), join/leave/speaking RPCs, periodic GC via `StartVoiceRoomGC` (30s, prunes members whose presence is offline) |
 | `crew_state.go` | Crew state streaming (sidebar, presence) |
 | `presence.go` | Presence hooks (status tracking) |
 | `push.go` | Push notification helpers |

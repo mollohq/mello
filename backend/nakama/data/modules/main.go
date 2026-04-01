@@ -217,6 +217,7 @@ func InitModule(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runti
 	go StartSidebarBatchLoop(nk, logger, 30*time.Second)
 	go StartMessageThrottleLoop(nk, logger, 10*time.Second)
 	go startChatActivityTicker(ctx, nk, logger, 30*time.Minute)
+	go StartVoiceRoomGC(ctx, nk, logger, 30*time.Second)
 
 	logger.Info("Mello backend initialized successfully")
 	return nil

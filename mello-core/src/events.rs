@@ -253,6 +253,11 @@ pub enum Event {
     VoiceMembershipChanged {
         crew_id: String,
     },
+    /// SFU voice connection was lost; client should attempt to re-join.
+    VoiceSfuDisconnected {
+        crew_id: String,
+        reason: String,
+    },
     /// Full voice channels state refreshed for the active crew.
     VoiceChannelsUpdated {
         crew_id: String,

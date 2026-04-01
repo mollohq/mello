@@ -63,6 +63,8 @@ pub struct VoiceMember {
     pub username: String,
     #[serde(default)]
     pub speaking: Option<bool>,
+    #[serde(default)]
+    pub joined_at: Option<i64>,
 }
 
 // ---------------------------------------------------------------------------

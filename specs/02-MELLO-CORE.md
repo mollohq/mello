@@ -98,7 +98,7 @@ app.set_crews(...)
 | Crews | `CrewsLoaded`, `CrewCreated`, `CrewJoined`, `DiscoverCrewsLoaded` |
 | Social | `UserSearchResults`, `CrewAvatarLoaded` |
 | Chat | `ChatHistory`, `ChatMessage` |
-| Voice | `VoiceConnected`, `VoiceMemberJoined`, `VoiceActivity` |
+| Voice | `VoiceConnected`, `VoiceMemberJoined`, `VoiceActivity`, `VoiceSfuDisconnected` |
 | Streaming | `StreamStarted`, `StreamFrame`, `StreamEnded` |
 | State | `CrewStateUpdate`, `SidebarUpdate`, `VoiceChannelsUpdated` |
 | Errors | `Error { message }`, `CrewCreateFailed` |
@@ -166,10 +166,12 @@ DiscoverCrews ──▶ browse public crews (paginated, bento grid)
 
 Voice is managed by `VoiceManager` which wraps libmello's C FFI:
 
-- **Mesh topology:** Full mesh for ≤6 users. Each pair exchanges SDP offers/answers via Nakama channel messages. Lower user ID initiates the offer (deterministic).
+- **Mesh topology (P2P):** Full mesh for ≤6 users. Each pair exchanges SDP offers/answers via Nakama channel messages. Lower user ID initiates the offer (deterministic).
+- **SFU topology:** For crews with SFU enabled, voice goes through the SFU server. The SFU prefixes each forwarded packet with `[1-byte len][sender_id]` so the client demuxes into per-sender jitter buffers and Opus decoders (see EXTERNAL-SFU.md §5.3). Without this, interleaved sequence numbers from different senders cause the jitter buffer to drop packets in 3+ user calls.
 - **Audio pipeline:** Mic → WASAPI capture → RNNoise denoise → Silero VAD → Opus encode → send to each peer via libdatachannel (unreliable channel).
 - **Mute/Deafen:** `SetMute` stops sending audio (capture continues for local VAD). `SetDeafen` stops playback.
 - **VAD callbacks:** libmello fires speaking state changes via C callback; mello-core forwards these as `VoiceActivity` events to the UI.
+- **SFU reconnect:** On `SfuEvent::Disconnected`, the voice manager resets to `Disconnected` mode and emits `VoiceSfuDisconnected`. The client's `voice_tick` detects this and auto-reconnects with exponential backoff (2s base, max 5 attempts). On failure, it emits `VoiceStateChanged { in_call: false }`.
 
 ---
 

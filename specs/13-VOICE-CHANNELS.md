@@ -77,6 +77,12 @@ The current flat "crew members bar" is replaced by a vertically stacked accordio
 | Other channels with members | Collapsed, shows mini avatars inline + member count |
 | Empty channels | Collapsed, shows "0 MEMBERS" |
 
+**Member ordering:** Avatars within an expanded channel are sorted by:
+1. Local user always first (leftmost position, or the join button if user expanded the channel)
+2. Remaining members sorted ascending by `joined_at` (earliest joiner = leftmost)
+
+This prevents avatars from "jumping" positions on voice state updates (Go map iteration order is non-deterministic).
+
 Clicking a collapsed channel header **joins** that channel (leaves current, connects to new). There is no separate "join" button — the accordion header *is* the join action.
 
 ### 2.2 Channel Management
@@ -510,6 +516,7 @@ pub struct VoiceMember {
     pub speaking: bool,
     pub muted: bool,
     pub deafened: bool,
+    pub joined_at: Option<i64>, // Unix millis — set by backend on voice_join
 }
 ```
 

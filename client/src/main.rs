@@ -1777,19 +1777,29 @@ fn voice_members_to_ui(
     members: &[mello_core::crew_state::VoiceMember],
     local_user_id: &str,
 ) -> Vec<VoiceChannelMember> {
+    // Convert millis to seconds relative to 2024-01-01 so it fits in Slint i32.
+    const EPOCH_2024: i64 = 1_704_067_200;
     let mut out: Vec<VoiceChannelMember> = members
         .iter()
-        .map(|m| VoiceChannelMember {
-            id: m.user_id.clone().into(),
-            name: m.username.clone().into(),
-            initials: make_initials(&m.username).into(),
-            speaking: m.speaking.unwrap_or(false),
+        .map(|m| {
+            let secs = m.joined_at.unwrap_or(0) / 1000 - EPOCH_2024;
+            VoiceChannelMember {
+                id: m.user_id.clone().into(),
+                name: m.username.clone().into(),
+                initials: make_initials(&m.username).into(),
+                speaking: m.speaking.unwrap_or(false),
+                joined_at: secs as i32,
+            }
         })
         .collect();
+    // Local user always first, then ordered by join time (earliest first).
     out.sort_by(|a, b| {
         let a_local = a.id == local_user_id;
         let b_local = b.id == local_user_id;
-        b_local.cmp(&a_local)
+        match b_local.cmp(&a_local) {
+            std::cmp::Ordering::Equal => a.joined_at.cmp(&b.joined_at),
+            other => other,
+        }
     });
     out
 }
@@ -3187,6 +3197,7 @@ fn handle_event(
             app.set_is_watching(false);
             app.set_streamer_name("".into());
             app.set_stream_label("".into());
+            app.set_stream_frame(slint::Image::default());
             app.set_active_streamer_id("".into());
             app.set_active_streamer_name("".into());
             app.set_active_stream_session_id("".into());
@@ -3213,6 +3224,7 @@ fn handle_event(
             app.set_is_watching(false);
             app.set_streamer_name("".into());
             app.set_stream_label("".into());
+            app.set_stream_frame(slint::Image::default());
         }
         Event::StreamFrame { .. } => {
             // Frames are now delivered via shared FrameSlot, not the event channel.
