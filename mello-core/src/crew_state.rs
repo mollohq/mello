@@ -611,6 +611,7 @@ mod tests {
                 user_id: "u1".to_string(),
                 username: "alice".to_string(),
                 speaking: Some(true),
+                joined_at: Some(1_700_000_000_000),
             }],
         };
 
