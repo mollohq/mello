@@ -3328,6 +3328,9 @@ fn handle_event(
         Event::MomentPostFailed { reason } => {
             log::warn!("UI: moment post failed: {}", reason);
         }
+        Event::VoiceSfuDisconnected { crew_id, reason } => {
+            log::warn!("SFU voice disconnected: crew={} reason={}", crew_id, reason);
+        }
     }
 }
 
