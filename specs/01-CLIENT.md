@@ -40,7 +40,7 @@ The client uses a `Command`/`Event` IPC pattern to communicate with `mello-core`
 
 - **Commands** are sent from Slint callbacks (button clicks, input changes) into the core's async run loop. Examples: `CreateCrew`, `JoinVoice`, `SendMessage`, `SearchUsers`.
 - **Events** are received on the UI thread via polling and update Slint properties. Examples: `CrewCreated`, `MessageReceived`, `VoiceActivity`, `StreamFrame`, `VoiceSfuDisconnected`.
-- Slint `on_*` callbacks in `main.rs` capture `cmd_tx.clone()` and send commands. A timer-driven event loop in `main.rs` drains the event receiver and updates the app's Slint properties.
+- Slint `on_*` callbacks are organized in `callbacks/` submodules (auth, crew, voice, chat, settings, streaming, onboarding) and wired at startup. A timer-driven event loop in `poll_loop.rs` drains the event receiver and dispatches to `handlers/` submodules which update Slint properties. Shared state lives in an `AppContext` struct (`app_context.rs`) threaded through all modules.
 
 ### State ownership
 

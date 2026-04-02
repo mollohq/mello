@@ -25,7 +25,16 @@ mello-core is the Rust crate that contains all application logic. It sits betwee
 ```
 mello-core/src/
 ├── lib.rs                  # Public exports
-├── client.rs               # Main Client struct, async command loop
+├── client/                 # Client struct & async command loop (directory module)
+│   ├── mod.rs              # Client struct, new(), run(), handle_command() dispatcher
+│   ├── auth.rs             # Auth, social login, account linking, onboarding
+│   ├── crew.rs             # Crew CRUD, discovery, avatars, user search
+│   ├── chat.rs             # Send/edit/delete messages, GIF search, history
+│   ├── voice.rs            # Voice join/leave, channel CRUD, reconnection
+│   ├── streaming.rs        # Stream host/viewer orchestration, thumbnails
+│   ├── stream_ffi.rs       # FFI structs & unsafe C callbacks for streaming
+│   ├── presence.rs         # Profile updates, catchup, moments, game sessions
+│   └── connection.rs       # Session connect, protocol version check, token refresh
 ├── command.rs              # Command enum (UI → core)
 ├── events.rs               # Event enum (core → UI)
 ├── config.rs               # Nakama URL, http_key config
