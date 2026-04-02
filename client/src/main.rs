@@ -887,11 +887,88 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
+    // --- Profile avatar grid state (for settings > profile) ---
+    let profile_avatar_state: std::sync::Arc<std::sync::Mutex<avatar::AvatarGridState>> =
+        std::sync::Arc::new(std::sync::Mutex::new(avatar::AvatarGridState::new()));
+
+    fn load_profile_avatar_grid(
+        app_weak: slint::Weak<MainWindow>,
+        state: &std::sync::Arc<std::sync::Mutex<avatar::AvatarGridState>>,
+        rt: &tokio::runtime::Handle,
+    ) {
+        log::info!("[profile] loading avatar grid for settings");
+        let http = reqwest::Client::new();
+        for i in 0..7usize {
+            let style = avatar::AvatarGridState::pick_random_style().to_string();
+            let seed = state.lock().unwrap().make_seed(i);
+            {
+                let mut s = state.lock().unwrap();
+                s.slots[i].style = style.clone();
+                s.slots[i].seed = seed.clone();
+            }
+            let app_weak = app_weak.clone();
+            let http = http.clone();
+            let state_clone = state.clone();
+            rt.spawn(async move {
+                match avatar::fetch_and_rasterize(&http, &style, &seed).await {
+                    Some((svg_data, rgba)) => {
+                        state_clone.lock().unwrap().slots[i].svg_data = Some(svg_data);
+                        let _ = slint::invoke_from_event_loop(move || {
+                            let image = avatar::rgba_to_image(
+                                &rgba,
+                                avatar::RENDER_SIZE,
+                                avatar::RENDER_SIZE,
+                            );
+                            let Some(app) = app_weak.upgrade() else {
+                                return;
+                            };
+                            match i {
+                                0 => {
+                                    app.set_profile_avatar_0(image.clone());
+                                    app.set_profile_avatar_loaded_0(true);
+                                }
+                                1 => {
+                                    app.set_profile_avatar_1(image.clone());
+                                    app.set_profile_avatar_loaded_1(true);
+                                }
+                                2 => {
+                                    app.set_profile_avatar_2(image.clone());
+                                    app.set_profile_avatar_loaded_2(true);
+                                }
+                                3 => {
+                                    app.set_profile_avatar_3(image.clone());
+                                    app.set_profile_avatar_loaded_3(true);
+                                }
+                                4 => {
+                                    app.set_profile_avatar_4(image.clone());
+                                    app.set_profile_avatar_loaded_4(true);
+                                }
+                                5 => {
+                                    app.set_profile_avatar_5(image.clone());
+                                    app.set_profile_avatar_loaded_5(true);
+                                }
+                                6 => {
+                                    app.set_profile_avatar_6(image.clone());
+                                    app.set_profile_avatar_loaded_6(true);
+                                }
+                                _ => {}
+                            }
+                        });
+                    }
+                    None => {
+                        log::warn!("[profile] avatar slot {} fetch failed", i);
+                    }
+                }
+            });
+        }
+    }
+
     // --- Settings ---
     {
         let cmd = cmd_tx.clone();
         let app_weak = app.as_weak();
         let s = settings.clone();
+        let prof_st = profile_avatar_state.clone();
         app.on_settings_requested(move || {
             let _ = cmd.try_send(Command::ListAudioDevices);
             if let Some(app) = app_weak.upgrade() {
@@ -909,7 +986,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 app.set_settings_echo_cancellation(settings.echo_cancellation);
                 app.set_settings_ptt_mode(settings.input_mode == "push_to_talk");
                 app.set_settings_vad_threshold(settings.vad_threshold);
-                // Show PTT key label from saved settings
                 let ptt_label: slint::SharedString = if let Some(ref key_str) = settings.ptt_key {
                     platform::hotkeys::parse_hotkey_string(key_str)
                         .map(|(_, label)| label)
@@ -919,6 +995,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 .into();
                 app.set_settings_ptt_key_label(ptt_label);
+                // Reset profile state (grid loads lazily on expand)
+                *prof_st.lock().unwrap() = avatar::AvatarGridState::new();
+                app.set_profile_selected_avatar(-1);
+                app.set_profile_grid_expanded(false);
+                app.set_profile_nickname_value(app.get_user_name());
                 app.set_settings_open(true);
             }
         });
@@ -1117,6 +1198,199 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             if let Err(e) = autolaunch::set_start_on_boot(false) {
                 log::warn!("Failed to reset auto-launch: {}", e);
+            }
+        });
+    }
+
+    // --- Profile settings callbacks ---
+
+    // Helper: collect avatar data from the profile state for a given slot
+    fn collect_avatar_data(
+        st: &avatar::AvatarGridState,
+        slot: i32,
+    ) -> (
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+    ) {
+        if slot >= 0 && slot <= 6 {
+            let idx = slot as usize;
+            if let Some(ref svg) = st.slots[idx].svg_data {
+                (
+                    Some(svg.clone()),
+                    Some("svg".to_string()),
+                    Some(st.slots[idx].style.clone()),
+                    Some(st.slots[idx].seed.clone()),
+                )
+            } else {
+                (None, None, None, None)
+            }
+        } else if slot == 7 {
+            if let Some(ref raw) = st.upload_data {
+                use base64::Engine;
+                let mut png_buf = Vec::new();
+                let encoder = image::codecs::png::PngEncoder::new(&mut png_buf);
+                image::ImageEncoder::write_image(
+                    encoder,
+                    raw,
+                    256,
+                    256,
+                    image::ExtendedColorType::Rgba8,
+                )
+                .ok();
+                let b64 = base64::engine::general_purpose::STANDARD.encode(&png_buf);
+                (Some(b64), Some("png".to_string()), None, None)
+            } else {
+                (None, None, None, None)
+            }
+        } else {
+            (None, None, None, None)
+        }
+    }
+
+    {
+        let prof_st = profile_avatar_state.clone();
+        let app_weak = app.as_weak();
+        app.on_profile_avatar_clicked(move |idx| {
+            let idx_usize = idx as usize;
+            let already_selected = prof_st.lock().unwrap().selected_slot == Some(idx_usize);
+
+            if already_selected {
+                prof_st.lock().unwrap().selected_slot = None;
+                if let Some(app) = app_weak.upgrade() {
+                    app.set_profile_selected_avatar(-1);
+                }
+            } else {
+                prof_st.lock().unwrap().selected_slot = Some(idx_usize);
+                if let Some(app) = app_weak.upgrade() {
+                    app.set_profile_selected_avatar(idx);
+                }
+            }
+        });
+    }
+    {
+        let prof_st = profile_avatar_state.clone();
+        let app_weak = app.as_weak();
+        let cmd = cmd_tx.clone();
+        app.on_profile_use_avatar(move |slot| {
+            let st = prof_st.lock().unwrap();
+            let (avatar_data, avatar_format, avatar_style, avatar_seed) =
+                collect_avatar_data(&st, slot);
+            drop(st);
+
+            if let Some(app) = app_weak.upgrade() {
+                let nickname = app.get_profile_nickname_value().to_string();
+                let _ = cmd.try_send(Command::UpdateProfile {
+                    display_name: nickname,
+                    avatar_data,
+                    avatar_format,
+                    avatar_style,
+                    avatar_seed,
+                });
+            }
+        });
+    }
+    {
+        let prof_st = profile_avatar_state.clone();
+        let app_weak = app.as_weak();
+        let rt_h = rt.handle().clone();
+        app.on_profile_reroll(move || {
+            {
+                let mut st = prof_st.lock().unwrap();
+                st.roll_counter += 1;
+                st.selected_slot = None;
+                for i in 0..7 {
+                    st.slots[i].svg_data = None;
+                }
+            }
+            if let Some(app) = app_weak.upgrade() {
+                app.set_profile_selected_avatar(-1);
+                for i in 0..7 {
+                    match i {
+                        0 => app.set_profile_avatar_loaded_0(false),
+                        1 => app.set_profile_avatar_loaded_1(false),
+                        2 => app.set_profile_avatar_loaded_2(false),
+                        3 => app.set_profile_avatar_loaded_3(false),
+                        4 => app.set_profile_avatar_loaded_4(false),
+                        5 => app.set_profile_avatar_loaded_5(false),
+                        6 => app.set_profile_avatar_loaded_6(false),
+                        _ => {}
+                    }
+                }
+                load_profile_avatar_grid(app.as_weak(), &prof_st, &rt_h);
+            }
+        });
+    }
+    {
+        let prof_st = profile_avatar_state.clone();
+        let app_weak = app.as_weak();
+        app.on_profile_upload_clicked(move || {
+            let dialog = rfd::FileDialog::new()
+                .add_filter("Images", &["png", "jpg", "jpeg", "webp"])
+                .pick_file();
+            if let Some(path) = dialog {
+                match image::open(&path) {
+                    Ok(img) => {
+                        let resized =
+                            img.resize_to_fill(256, 256, image::imageops::FilterType::CatmullRom);
+                        let rgba = resized.to_rgba8();
+                        let (w, h) = (rgba.width(), rgba.height());
+                        let raw = rgba.into_raw();
+                        {
+                            let mut st = prof_st.lock().unwrap();
+                            st.upload_data = Some(raw.clone());
+                            st.selected_slot = Some(7);
+                        }
+                        let buf = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
+                            &raw, w, h,
+                        );
+                        let slint_img = slint::Image::from_rgba8(buf);
+                        if let Some(app) = app_weak.upgrade() {
+                            app.set_profile_upload_preview(slint_img);
+                            app.set_profile_has_upload(true);
+                            app.set_profile_selected_avatar(7);
+                        }
+                    }
+                    Err(e) => {
+                        log::error!("[profile] failed to open image: {}", e);
+                    }
+                }
+            }
+        });
+    }
+    {
+        let cmd = cmd_tx.clone();
+        let app_weak = app.as_weak();
+        app.on_profile_nickname_accepted(move |name| {
+            let nickname = name.to_string();
+            if nickname.is_empty() {
+                return;
+            }
+            let _ = cmd.try_send(Command::UpdateProfile {
+                display_name: nickname,
+                avatar_data: None,
+                avatar_format: None,
+                avatar_style: None,
+                avatar_seed: None,
+            });
+            if let Some(app) = app_weak.upgrade() {
+                app.set_settings_show_saved(true);
+            }
+        });
+    }
+    {
+        let prof_st = profile_avatar_state.clone();
+        let app_weak = app.as_weak();
+        let rt_h = rt.handle().clone();
+        app.on_profile_expand_grid(move || {
+            let st = prof_st.lock().unwrap();
+            let already_loaded = st.slots[0].svg_data.is_some();
+            drop(st);
+            if !already_loaded {
+                if let Some(app) = app_weak.upgrade() {
+                    load_profile_avatar_grid(app.as_weak(), &prof_st, &rt_h);
+                }
             }
         });
     }
@@ -3670,6 +3944,57 @@ fn handle_event(
         }
         Event::SignalReceived { .. } => {
             // Handled internally by the client, not the UI
+        }
+        Event::ProfileUpdated {
+            display_name,
+            avatar_data,
+        } => {
+            log::info!("[profile] UI: profile updated, name={}", display_name);
+            app.set_user_name(display_name.clone().into());
+            app.set_user_initials(make_initials(&display_name).into());
+            if let Some(data) = avatar_data {
+                // Decode and set avatar — same logic as UserAvatarLoaded
+                let slint_img = if let Ok(decoded) =
+                    base64::engine::general_purpose::STANDARD.decode(&data)
+                {
+                    if let Ok(dyn_img) = image::load_from_memory(&decoded) {
+                        let rgba = dyn_img.to_rgba8();
+                        let (w, h) = (rgba.width(), rgba.height());
+                        let buf = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
+                            &rgba.into_raw(),
+                            w,
+                            h,
+                        );
+                        Some(slint::Image::from_rgba8(buf))
+                    } else if let Some(rgba) =
+                        avatar::rasterize_svg(&String::from_utf8_lossy(&decoded))
+                    {
+                        Some(avatar::rgba_to_image(
+                            &rgba,
+                            avatar::RENDER_SIZE,
+                            avatar::RENDER_SIZE,
+                        ))
+                    } else {
+                        None
+                    }
+                } else if let Some(rgba) = avatar::rasterize_svg(&data) {
+                    Some(avatar::rgba_to_image(
+                        &rgba,
+                        avatar::RENDER_SIZE,
+                        avatar::RENDER_SIZE,
+                    ))
+                } else {
+                    None
+                };
+                if let Some(img) = slint_img {
+                    app.set_user_avatar(img.clone());
+                    app.set_has_user_avatar(true);
+                    let uid = app.get_user_id().to_string();
+                    avatar_cache.borrow_mut().insert(uid, img);
+                }
+            }
+            app.set_profile_nickname_value(display_name.clone().into());
+            app.set_profile_selected_avatar(-1);
         }
 
         // --- Presence & crew state events ---

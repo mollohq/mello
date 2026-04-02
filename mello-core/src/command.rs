@@ -145,6 +145,10 @@ pub enum Command {
     },
     UpdateProfile {
         display_name: String,
+        avatar_data: Option<String>,
+        avatar_format: Option<String>,
+        avatar_style: Option<String>,
+        avatar_seed: Option<String>,
     },
 
     // --- Streaming ---

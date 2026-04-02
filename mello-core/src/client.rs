@@ -1257,8 +1257,21 @@ impl Client {
             Command::SetDebugMode { enabled } => {
                 self.voice.set_debug_mode(enabled);
             }
-            Command::UpdateProfile { display_name } => {
-                self.handle_update_profile(&display_name).await;
+            Command::UpdateProfile {
+                display_name,
+                avatar_data,
+                avatar_format,
+                avatar_style,
+                avatar_seed,
+            } => {
+                self.handle_update_profile(
+                    &display_name,
+                    avatar_data.as_deref(),
+                    avatar_format.as_deref(),
+                    avatar_style.as_deref(),
+                    avatar_seed.as_deref(),
+                )
+                .await;
             }
             // --- Streaming ---
             Command::ListCaptureSources => {
@@ -1946,13 +1959,60 @@ impl Client {
         }
     }
 
-    async fn handle_update_profile(&self, display_name: &str) {
-        match self.nakama.update_account(display_name).await {
+    async fn handle_update_profile(
+        &self,
+        display_name: &str,
+        avatar_data: Option<&str>,
+        avatar_format: Option<&str>,
+        avatar_style: Option<&str>,
+        avatar_seed: Option<&str>,
+    ) {
+        let user_id = self.nakama.current_user_id().unwrap_or_default();
+        let has_avatar = avatar_data.is_some();
+
+        if let Some(data) = avatar_data {
+            let mut obj = serde_json::json!({
+                "format": avatar_format.unwrap_or("svg"),
+                "data": data,
+            });
+            if let Some(style) = avatar_style {
+                obj["style"] = serde_json::Value::String(style.to_string());
+            }
+            if let Some(seed) = avatar_seed {
+                obj["seed"] = serde_json::Value::String(seed.to_string());
+            }
+            let value_str = obj.to_string();
+            if let Err(e) = self
+                .nakama
+                .write_storage("avatars", "current", &value_str, 2, 1)
+                .await
+            {
+                log::error!("[profile] failed to write avatar: {}", e);
+                return;
+            }
+            log::info!("[profile] avatar saved to storage");
+        }
+
+        let avatar_url = if has_avatar {
+            Some(format!("/v2/storage/avatars/current/{}", user_id))
+        } else {
+            None
+        };
+
+        match self
+            .nakama
+            .update_account_fields(Some(display_name), avatar_url.as_deref())
+            .await
+        {
             Ok(()) => {
-                log::info!("Profile updated: display_name={}", display_name);
+                log::info!("[profile] updated: display_name={}", display_name);
+                let _ = self.event_tx.send(Event::ProfileUpdated {
+                    display_name: display_name.to_string(),
+                    avatar_data: avatar_data.map(|s| s.to_string()),
+                });
             }
             Err(e) => {
-                log::error!("Failed to update profile: {}", e);
+                log::error!("[profile] failed to update account: {}", e);
             }
         }
     }
