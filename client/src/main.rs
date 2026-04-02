@@ -65,6 +65,7 @@ fn chat_messages_to_slint(
     user_id: &str,
     user_avatar: &slint::Image,
     has_user_avatar: bool,
+    cache: &std::collections::HashMap<String, slint::Image>,
 ) -> Vec<ChatMessageData> {
     mello_core::chat::prepare_messages_for_display(raw)
         .into_iter()
@@ -75,17 +76,20 @@ fn chat_messages_to_slint(
                 None => (String::new(), 0, 0),
             };
             let is_self = d.sender_id == user_id;
+            let (sender_av, has_sender_av) = if is_self && has_user_avatar {
+                (user_avatar.clone(), true)
+            } else if let Some(img) = cache.get(&d.sender_id) {
+                (img.clone(), true)
+            } else {
+                (slint::Image::default(), false)
+            };
             ChatMessageData {
                 message_id: d.message_id.into(),
                 sender_id: d.sender_id.into(),
                 sender_name: d.sender_name.into(),
                 sender_initials: d.sender_initials.into(),
-                sender_avatar: if is_self && has_user_avatar {
-                    user_avatar.clone()
-                } else {
-                    slint::Image::default()
-                },
-                has_sender_avatar: is_self && has_user_avatar,
+                sender_avatar: sender_av,
+                has_sender_avatar: has_sender_av,
                 text: d.content.into(),
                 timestamp: d.timestamp.into(),
                 display_time: d.display_time.into(),
@@ -301,6 +305,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let discover_loading: Rc<RefCell<bool>> = Rc::new(RefCell::new(false));
     let chat_messages: Rc<RefCell<Vec<mello_core::events::ChatMessage>>> =
         Rc::new(RefCell::new(Vec::new()));
+    let avatar_cache: Rc<RefCell<std::collections::HashMap<String, slint::Image>>> =
+        Rc::new(RefCell::new(std::collections::HashMap::new()));
 
     // --- Close → tray (respects close_to_tray setting) ---
     {
@@ -715,7 +721,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let cmd = cmd_tx.clone();
         let app_weak = app.as_weak();
         let settings_ref = settings.clone();
+        let avatar_cache_ref = avatar_cache.clone();
         app.on_logout(move || {
+            avatar_cache_ref.borrow_mut().clear();
             let _ = cmd.try_send(Command::Logout);
             if let Some(app) = app_weak.upgrade() {
                 app.set_logged_in(false);
@@ -2408,6 +2416,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         rt.handle(),
                         &gif_popover_anim,
                         &gif_chat_anim,
+                        &avatar_cache,
                     );
                 }
             }
@@ -2615,6 +2624,7 @@ fn voice_members_to_ui(
     local_user_id: &str,
     user_avatar: &slint::Image,
     has_user_avatar: bool,
+    cache: &std::collections::HashMap<String, slint::Image>,
 ) -> Vec<VoiceChannelMember> {
     // Convert millis to seconds relative to 2024-01-01 so it fits in Slint i32.
     const EPOCH_2024: i64 = 1_704_067_200;
@@ -2623,16 +2633,19 @@ fn voice_members_to_ui(
         .map(|m| {
             let secs = m.joined_at.unwrap_or(0) / 1000 - EPOCH_2024;
             let is_self = m.user_id == local_user_id;
+            let (av, has_av) = if is_self && has_user_avatar {
+                (user_avatar.clone(), true)
+            } else if let Some(img) = cache.get(&m.user_id) {
+                (img.clone(), true)
+            } else {
+                (slint::Image::default(), false)
+            };
             VoiceChannelMember {
                 id: m.user_id.clone().into(),
                 name: m.username.clone().into(),
                 initials: make_initials(&m.username).into(),
-                avatar: if is_self && has_user_avatar {
-                    user_avatar.clone()
-                } else {
-                    slint::Image::default()
-                },
-                has_avatar: is_self && has_user_avatar,
+                avatar: av,
+                has_avatar: has_av,
                 speaking: m.speaking.unwrap_or(false),
                 joined_at: secs as i32,
             }
@@ -2656,8 +2669,15 @@ fn channel_to_ui(
     local_user_id: &str,
     user_avatar: &slint::Image,
     has_user_avatar: bool,
+    cache: &std::collections::HashMap<String, slint::Image>,
 ) -> VoiceChannelData {
-    let members = voice_members_to_ui(&ch.members, local_user_id, user_avatar, has_user_avatar);
+    let members = voice_members_to_ui(
+        &ch.members,
+        local_user_id,
+        user_avatar,
+        has_user_avatar,
+        cache,
+    );
     let member_count = members.len() as i32;
     let is_active = ch.id == active_channel_id;
     VoiceChannelData {
@@ -2677,6 +2697,7 @@ fn channels_to_ui(
     local_user_id: &str,
     user_avatar: &slint::Image,
     has_user_avatar: bool,
+    cache: &std::collections::HashMap<String, slint::Image>,
 ) -> Vec<VoiceChannelData> {
     channels
         .iter()
@@ -2687,6 +2708,7 @@ fn channels_to_ui(
                 local_user_id,
                 user_avatar,
                 has_user_avatar,
+                cache,
             )
         })
         .collect()
@@ -2794,6 +2816,7 @@ fn handle_event(
     rt: &tokio::runtime::Handle,
     gif_popover_anim: &gif_animator::GifAnimator,
     gif_chat_anim: &gif_animator::GifAnimator,
+    avatar_cache: &Rc<RefCell<std::collections::HashMap<String, slint::Image>>>,
 ) {
     match event {
         Event::Restoring => {
@@ -3191,41 +3214,104 @@ fn handle_event(
         }
         Event::UserAvatarLoaded { user_id, data } => {
             log::info!(
-                "[avatar] UI: received avatar for user {} ({} bytes base64)",
+                "[avatar] UI: received avatar for user {} ({} bytes)",
                 user_id,
                 data.len()
             );
-            let decoded = match base64::engine::general_purpose::STANDARD.decode(&data) {
-                Ok(d) => d,
-                Err(e) => {
-                    log::error!(
-                        "[avatar] failed to decode base64 for user {}: {}",
-                        user_id,
-                        e
+            let slint_img = if let Ok(decoded) =
+                base64::engine::general_purpose::STANDARD.decode(&data)
+            {
+                if let Ok(dyn_img) = image::load_from_memory(&decoded) {
+                    let rgba = dyn_img.to_rgba8();
+                    let (w, h) = (rgba.width(), rgba.height());
+                    let buf = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
+                        &rgba.into_raw(),
+                        w,
+                        h,
                     );
+                    slint::Image::from_rgba8(buf)
+                } else if let Some(rgba) = avatar::rasterize_svg(&String::from_utf8_lossy(&decoded))
+                {
+                    avatar::rgba_to_image(&rgba, avatar::RENDER_SIZE, avatar::RENDER_SIZE)
+                } else {
+                    log::error!("[avatar] failed to decode avatar for user {}", user_id);
                     return;
                 }
-            };
-            let slint_img = if let Ok(dyn_img) = image::load_from_memory(&decoded) {
-                let rgba = dyn_img.to_rgba8();
-                let (w, h) = (rgba.width(), rgba.height());
-                let buf = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
-                    &rgba.into_raw(),
-                    w,
-                    h,
-                );
-                slint::Image::from_rgba8(buf)
-            } else if let Some(rgba) = avatar::rasterize_svg(&String::from_utf8_lossy(&decoded)) {
+            } else if let Some(rgba) = avatar::rasterize_svg(&data) {
+                // Data is raw SVG text, not base64-encoded
                 avatar::rgba_to_image(&rgba, avatar::RENDER_SIZE, avatar::RENDER_SIZE)
             } else {
-                log::error!(
-                    "[avatar] failed to decode avatar image for user {}",
-                    user_id
-                );
+                log::error!("[avatar] failed to decode avatar for user {}", user_id);
                 return;
             };
-            app.set_user_avatar(slint_img);
-            app.set_has_user_avatar(true);
+            let is_local = user_id == app.get_user_id().as_str();
+            if is_local {
+                app.set_user_avatar(slint_img.clone());
+                app.set_has_user_avatar(true);
+            }
+
+            // Insert into avatar cache
+            avatar_cache
+                .borrow_mut()
+                .insert(user_id.clone(), slint_img.clone());
+
+            // Refresh messages with the new avatar
+            {
+                let uid = app.get_user_id().to_string();
+                let uav = app.get_user_avatar();
+                let huav = app.get_has_user_avatar();
+                let display = chat_messages_to_slint(
+                    &chat_msgs_ref.borrow(),
+                    &uid,
+                    &uav,
+                    huav,
+                    &avatar_cache.borrow(),
+                );
+                let rc = std::rc::Rc::new(slint::VecModel::from(display));
+                app.set_messages(rc.into());
+            }
+
+            // Refresh member list
+            {
+                let members_model = app.get_members();
+                for i in 0..members_model.row_count() {
+                    if let Some(mut m) = members_model.row_data(i) {
+                        if m.id == user_id.as_str() {
+                            m.avatar = slint_img.clone();
+                            m.has_avatar = true;
+                            members_model.set_row_data(i, m);
+                            break;
+                        }
+                    }
+                }
+            }
+
+            // Refresh voice channel members
+            {
+                let vc = app.get_voice_channels();
+                for i in 0..vc.row_count() {
+                    if let Some(ch) = vc.row_data(i) {
+                        let members = ch.members;
+                        let mut changed = false;
+                        for j in 0..members.row_count() {
+                            if let Some(mut m) = members.row_data(j) {
+                                if m.id == user_id.as_str() {
+                                    m.avatar = slint_img.clone();
+                                    m.has_avatar = true;
+                                    members.set_row_data(j, m);
+                                    changed = true;
+                                    break;
+                                }
+                            }
+                        }
+                        if changed {
+                            let mut ch_copy = vc.row_data(i).unwrap();
+                            ch_copy.members = members.into();
+                            vc.set_row_data(i, ch_copy);
+                        }
+                    }
+                }
+            }
         }
         Event::CrewJoined { crew_id } => {
             log::info!("UI: joined crew {}", crew_id);
@@ -3291,11 +3377,31 @@ fn handle_event(
             app.set_active_crew_id("".into());
         }
         Event::MessagesLoaded { messages } => {
-            *chat_msgs_ref.borrow_mut() = messages;
             let uid = app.get_user_id().to_string();
+            // Collect uncached sender IDs for batch fetch
+            let uncached: Vec<String> = {
+                let cache = avatar_cache.borrow();
+                messages
+                    .iter()
+                    .map(|m| m.sender_id.clone())
+                    .filter(|sid| *sid != uid && !cache.contains_key(sid))
+                    .collect::<std::collections::HashSet<_>>()
+                    .into_iter()
+                    .collect()
+            };
+            if !uncached.is_empty() {
+                let _ = cmd_tx.try_send(Command::FetchUserAvatars { user_ids: uncached });
+            }
+            *chat_msgs_ref.borrow_mut() = messages;
             let uav = app.get_user_avatar();
             let huav = app.get_has_user_avatar();
-            let display = chat_messages_to_slint(&chat_msgs_ref.borrow(), &uid, &uav, huav);
+            let display = chat_messages_to_slint(
+                &chat_msgs_ref.borrow(),
+                &uid,
+                &uav,
+                huav,
+                &avatar_cache.borrow(),
+            );
             let rc = std::rc::Rc::new(slint::VecModel::from(display));
             app.set_messages(rc.clone().into());
             fetch_gif_images_for_messages(&rc, rt, gif_chat_anim);
@@ -3305,14 +3411,24 @@ fn handle_event(
                 let crew_name = app.get_active_crew_id().to_string();
                 notifications::notify_message(&crew_name, &message.sender_name, &message.content);
             }
+            let sender_id = message.sender_id.clone();
             chat_msgs_ref.borrow_mut().push(message);
             let uid = app.get_user_id().to_string();
             let uav = app.get_user_avatar();
             let huav = app.get_has_user_avatar();
-            let display = chat_messages_to_slint(&chat_msgs_ref.borrow(), &uid, &uav, huav);
+            let display = chat_messages_to_slint(
+                &chat_msgs_ref.borrow(),
+                &uid,
+                &uav,
+                huav,
+                &avatar_cache.borrow(),
+            );
             let rc = std::rc::Rc::new(slint::VecModel::from(display));
             app.set_messages(rc.clone().into());
             fetch_gif_images_for_messages(&rc, rt, gif_chat_anim);
+            if sender_id != uid && !avatar_cache.borrow().contains_key(&sender_id) {
+                let _ = cmd_tx.try_send(Command::FetchUserAvatar { user_id: sender_id });
+            }
         }
         Event::HistoryLoaded { messages, .. } => {
             let mut all = messages;
@@ -3321,7 +3437,13 @@ fn handle_event(
             let uid = app.get_user_id().to_string();
             let uav = app.get_user_avatar();
             let huav = app.get_has_user_avatar();
-            let display = chat_messages_to_slint(&chat_msgs_ref.borrow(), &uid, &uav, huav);
+            let display = chat_messages_to_slint(
+                &chat_msgs_ref.borrow(),
+                &uid,
+                &uav,
+                huav,
+                &avatar_cache.borrow(),
+            );
             let rc = std::rc::Rc::new(slint::VecModel::from(display));
             app.set_messages(rc.clone().into());
             app.set_loading_history(false);
@@ -3331,16 +3453,23 @@ fn handle_event(
             let current = app.get_members();
             let initials = make_initials(&member.display_name);
             let is_self = member.id == app.get_user_id().as_str();
+            let cache = avatar_cache.borrow();
+            let cached = cache.get(&member.id);
+            let (av, has_av) = if is_self && app.get_has_user_avatar() {
+                (app.get_user_avatar(), true)
+            } else if let Some(img) = cached {
+                (img.clone(), true)
+            } else {
+                (slint::Image::default(), false)
+            };
+            let member_id = member.id.clone();
+            drop(cache);
             let new_member = MemberData {
                 id: member.id.into(),
                 name: member.display_name.into(),
                 initials: initials.into(),
-                avatar: if is_self {
-                    app.get_user_avatar()
-                } else {
-                    slint::Image::default()
-                },
-                has_avatar: is_self && app.get_has_user_avatar(),
+                avatar: av,
+                has_avatar: has_av,
                 online: true,
                 speaking: false,
             };
@@ -3351,6 +3480,9 @@ fn handle_event(
                 members.push(new_member);
             }
             let rc = std::rc::Rc::new(slint::VecModel::from(members));
+            if !is_self && !has_av && !avatar_cache.borrow().contains_key(&member_id) {
+                let _ = cmd_tx.try_send(Command::FetchUserAvatar { user_id: member_id });
+            }
             app.set_members(rc.into());
             update_active_crew_card(app);
         }
@@ -3665,7 +3797,14 @@ fn handle_event(
                 let local_id = app.get_user_id();
                 let uav = app.get_user_avatar();
                 let huav = app.get_has_user_avatar();
-                let vc_data = channels_to_ui(&state.voice_channels, &avc_id, &local_id, &uav, huav);
+                let vc_data = channels_to_ui(
+                    &state.voice_channels,
+                    &avc_id,
+                    &local_id,
+                    &uav,
+                    huav,
+                    &avatar_cache.borrow(),
+                );
                 app.set_voice_channels(Rc::new(slint::VecModel::from(vc_data)).into());
 
                 // 0=superadmin, 1=admin => can manage channels
@@ -3676,6 +3815,77 @@ fn handle_event(
                     crew_id: state.crew_id.clone(),
                     last_seen: 0,
                 });
+            }
+
+            // Process member avatars from crew state
+            let local_uid = app.get_user_id().to_string();
+            if let Some(ref members) = state.members {
+                let mut need_fetch: Vec<String> = Vec::new();
+                for cm in members {
+                    if cm.user_id == local_uid {
+                        continue;
+                    }
+                    if avatar_cache.borrow().contains_key(&cm.user_id) {
+                        continue;
+                    }
+                    if let Some(ref avatar_str) = cm.avatar {
+                        if !avatar_str.is_empty() {
+                            let parsed: Option<String> =
+                                serde_json::from_str::<serde_json::Value>(avatar_str)
+                                    .ok()
+                                    .and_then(|v| v.get("data")?.as_str().map(String::from));
+                            if let Some(data) = parsed {
+                                let img = if let Ok(decoded) =
+                                    base64::engine::general_purpose::STANDARD.decode(&data)
+                                {
+                                    if let Ok(dyn_img) = image::load_from_memory(&decoded) {
+                                        let rgba = dyn_img.to_rgba8();
+                                        let (w, h) = (rgba.width(), rgba.height());
+                                        let buf = slint::SharedPixelBuffer::<
+                                            slint::Rgba8Pixel,
+                                        >::clone_from_slice(
+                                            &rgba.into_raw(), w, h
+                                        );
+                                        Some(slint::Image::from_rgba8(buf))
+                                    } else if let Some(rgba) =
+                                        avatar::rasterize_svg(&String::from_utf8_lossy(&decoded))
+                                    {
+                                        Some(avatar::rgba_to_image(
+                                            &rgba,
+                                            avatar::RENDER_SIZE,
+                                            avatar::RENDER_SIZE,
+                                        ))
+                                    } else {
+                                        None
+                                    }
+                                } else if let Some(rgba) = avatar::rasterize_svg(&data) {
+                                    // Raw SVG text, not base64-encoded
+                                    Some(avatar::rgba_to_image(
+                                        &rgba,
+                                        avatar::RENDER_SIZE,
+                                        avatar::RENDER_SIZE,
+                                    ))
+                                } else {
+                                    None
+                                };
+                                if let Some(img) = img {
+                                    avatar_cache.borrow_mut().insert(cm.user_id.clone(), img);
+                                    continue;
+                                }
+                            }
+                        }
+                    }
+                    need_fetch.push(cm.user_id.clone());
+                }
+                if !need_fetch.is_empty() {
+                    log::info!(
+                        "[avatar] fetching avatars for {} users not in crew state",
+                        need_fetch.len()
+                    );
+                    let _ = cmd_tx.try_send(Command::FetchUserAvatars {
+                        user_ids: need_fetch,
+                    });
+                }
             }
         }
         Event::SidebarUpdated {
@@ -3828,8 +4038,13 @@ fn handle_event(
                             ch.expanded = true;
                             let uav = app.get_user_avatar();
                             let huav = app.get_has_user_avatar();
-                            let ch_members =
-                                voice_members_to_ui(&voice_members, &my_id, &uav, huav);
+                            let ch_members = voice_members_to_ui(
+                                &voice_members,
+                                &my_id,
+                                &uav,
+                                huav,
+                                &avatar_cache.borrow(),
+                            );
                             ch.member_count = ch_members.len() as i32;
                             ch.members = Rc::new(slint::VecModel::from(ch_members)).into();
                         } else {
@@ -3894,8 +4109,13 @@ fn handle_event(
                         if ch.id == channel_id.as_str() {
                             let uav = app.get_user_avatar();
                             let huav = app.get_has_user_avatar();
-                            let ch_members =
-                                voice_members_to_ui(&voice_members, &local_id, &uav, huav);
+                            let ch_members = voice_members_to_ui(
+                                &voice_members,
+                                &local_id,
+                                &uav,
+                                huav,
+                                &avatar_cache.borrow(),
+                            );
                             ch.member_count = ch_members.len() as i32;
                             ch.members = Rc::new(slint::VecModel::from(ch_members)).into();
                         }
@@ -3917,7 +4137,14 @@ fn handle_event(
                 let local_id = app.get_user_id();
                 let uav = app.get_user_avatar();
                 let huav = app.get_has_user_avatar();
-                let vc_data = channels_to_ui(&channels, &avc_id, &local_id, &uav, huav);
+                let vc_data = channels_to_ui(
+                    &channels,
+                    &avc_id,
+                    &local_id,
+                    &uav,
+                    huav,
+                    &avatar_cache.borrow(),
+                );
                 app.set_voice_channels(Rc::new(slint::VecModel::from(vc_data)).into());
             }
         }
@@ -3942,6 +4169,7 @@ fn handle_event(
                     &local_id,
                     &uav,
                     huav,
+                    &avatar_cache.borrow(),
                 ));
                 app.set_voice_channels(Rc::new(slint::VecModel::from(channels)).into());
             }
@@ -4174,7 +4402,7 @@ fn handle_event(
             let uid = app.get_user_id().to_string();
             let uav = app.get_user_avatar();
             let huav = app.get_has_user_avatar();
-            let display = chat_messages_to_slint(&msgs, &uid, &uav, huav);
+            let display = chat_messages_to_slint(&msgs, &uid, &uav, huav, &avatar_cache.borrow());
             let rc = std::rc::Rc::new(slint::VecModel::from(display));
             app.set_messages(rc.into());
         }
@@ -4231,7 +4459,7 @@ fn handle_event(
             let uid = app.get_user_id().to_string();
             let uav = app.get_user_avatar();
             let huav = app.get_has_user_avatar();
-            let display = chat_messages_to_slint(&msgs, &uid, &uav, huav);
+            let display = chat_messages_to_slint(&msgs, &uid, &uav, huav, &avatar_cache.borrow());
             let rc = std::rc::Rc::new(slint::VecModel::from(display));
             app.set_messages(rc.into());
         }

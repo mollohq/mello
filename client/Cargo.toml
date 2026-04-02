@@ -27,6 +27,7 @@ directories = "5"
 confy = "2.0.0"
 uuid = { version = "1", features = ["v4"] }
 serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
 paste = "1"
 
 # Auto-updater

@@ -893,6 +893,77 @@ impl NakamaClient {
         Ok(value)
     }
 
+    /// Read multiple objects from Nakama storage in a single HTTP call.
+    /// Returns `(user_id, value)` pairs for objects that exist.
+    pub async fn read_storage_batch(
+        &self,
+        collection: &str,
+        key: &str,
+        user_ids: &[String],
+    ) -> Result<Vec<(String, String)>> {
+        if user_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let token = self.bearer()?;
+        let url = format!("{}/v2/storage", self.config.http_base());
+
+        let object_ids: Vec<serde_json::Value> = user_ids
+            .iter()
+            .map(|uid| {
+                serde_json::json!({
+                    "collection": collection,
+                    "key": key,
+                    "user_id": uid,
+                })
+            })
+            .collect();
+
+        let body = serde_json::json!({ "object_ids": object_ids });
+
+        log::debug!(
+            "[nakama] read_storage_batch {}/{} for {} users",
+            collection,
+            key,
+            user_ids.len()
+        );
+        let resp = self
+            .http
+            .post(&url)
+            .bearer_auth(&token)
+            .json(&body)
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            let err_text = resp.text().await.unwrap_or_default();
+            log::warn!("[nakama] storage batch read failed: {}", err_text);
+            return Err(Error::Server(format!(
+                "storage batch read failed: {}",
+                err_text
+            )));
+        }
+
+        let objects: ApiStorageObjects = resp.json().await?;
+        let results: Vec<(String, String)> = objects
+            .objects
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|o| {
+                let uid = o.user_id?;
+                let val = o.value.filter(|v| !v.is_empty())?;
+                Some((uid, val))
+            })
+            .collect();
+
+        log::debug!(
+            "[nakama] read_storage_batch {}/{} -> {} results",
+            collection,
+            key,
+            results.len()
+        );
+        Ok(results)
+    }
+
     /// Write a single object to Nakama storage.
     pub async fn write_storage(
         &self,

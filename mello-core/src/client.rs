@@ -1151,6 +1151,9 @@ impl Client {
             Command::FetchUserAvatar { user_id } => {
                 self.handle_fetch_user_avatar(&user_id).await;
             }
+            Command::FetchUserAvatars { user_ids } => {
+                self.handle_fetch_user_avatars(&user_ids).await;
+            }
             Command::SearchUsers { query } => {
                 self.handle_search_users(&query).await;
             }
@@ -2160,6 +2163,51 @@ impl Client {
                     user_id,
                     e
                 );
+            }
+        }
+    }
+
+    async fn handle_fetch_user_avatars(&self, user_ids: &[String]) {
+        if user_ids.is_empty() {
+            return;
+        }
+        log::info!(
+            "[avatar] batch-fetching avatars for {} users",
+            user_ids.len()
+        );
+        match self
+            .nakama
+            .read_storage_batch("avatars", "current", user_ids)
+            .await
+        {
+            Ok(results) => {
+                for (uid, raw) in results {
+                    let parsed: serde_json::Value = match serde_json::from_str(&raw) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            log::warn!("[avatar] failed to parse avatar JSON for {}: {}", uid, e);
+                            continue;
+                        }
+                    };
+                    let data = parsed
+                        .get("data")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default()
+                        .to_string();
+                    if !data.is_empty() {
+                        log::debug!(
+                            "[avatar] loaded avatar for user {} ({} bytes)",
+                            uid,
+                            data.len()
+                        );
+                        let _ = self
+                            .event_tx
+                            .send(Event::UserAvatarLoaded { user_id: uid, data });
+                    }
+                }
+            }
+            Err(e) => {
+                log::warn!("[avatar] batch fetch failed: {}", e);
             }
         }
     }

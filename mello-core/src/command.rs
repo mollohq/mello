@@ -78,6 +78,9 @@ pub enum Command {
     FetchUserAvatar {
         user_id: String,
     },
+    FetchUserAvatars {
+        user_ids: Vec<String>,
+    },
     SearchUsers {
         query: String,
     },
