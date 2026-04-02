@@ -1,8 +1,8 @@
 mod mesh;
 
 use std::ffi::CString;
-use std::sync::Arc;
 use std::sync::mpsc as std_mpsc;
+use std::sync::Arc;
 
 use crate::events::Event;
 use crate::transport::{SfuConnection, SfuEvent};

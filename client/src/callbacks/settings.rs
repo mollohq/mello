@@ -1,9 +1,9 @@
 use mello_core::Command;
 use slint::ComponentHandle;
 
-use crate::Settings;
 use crate::app_context::AppContext;
 use crate::platform;
+use crate::Settings;
 
 pub fn wire(ctx: &AppContext) {
     // --- Settings modal open ---

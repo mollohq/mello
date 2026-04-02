@@ -3,8 +3,8 @@ use std::rc::Rc;
 use mello_core::Event;
 use slint::Model;
 
-use crate::CaptureSourceData;
 use crate::app_context::AppContext;
+use crate::CaptureSourceData;
 
 pub fn handle(ctx: &AppContext, event: Event) {
     match event {

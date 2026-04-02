@@ -3,8 +3,8 @@ use std::rc::Rc;
 use mello_core::Command;
 use slint::{ComponentHandle, Model};
 
-use crate::VoiceChannelData;
 use crate::app_context::AppContext;
+use crate::VoiceChannelData;
 
 pub fn wire(ctx: &AppContext) {
     // --- Voice toggle (leave) ---

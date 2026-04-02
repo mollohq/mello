@@ -3,8 +3,8 @@
 //! Skips automatically if no hardware encoder is available.
 
 use std::ffi::c_void;
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Mutex;
 use std::time::Duration;
 
 struct Packet {

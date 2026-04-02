@@ -5,7 +5,7 @@ use slint::{ComponentHandle, Model};
 
 use crate::app_context::AppContext;
 use crate::converters::{chat_messages_to_slint, fetch_gif_images_for_messages};
-use crate::{CrewData, GifItemData, image_cache, notifications};
+use crate::{image_cache, notifications, CrewData, GifItemData};
 
 pub fn handle(ctx: &AppContext, event: Event) {
     match event {

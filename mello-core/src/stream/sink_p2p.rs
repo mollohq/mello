@@ -1,6 +1,6 @@
 use std::collections::HashMap;
-use std::sync::RwLock;
 use std::sync::atomic::{AtomicU16, Ordering};
+use std::sync::RwLock;
 
 use async_trait::async_trait;
 

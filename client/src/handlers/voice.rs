@@ -27,7 +27,11 @@ pub fn handle(ctx: &AppContext, event: Event) {
                         let members: Vec<VoiceChannelMember> = (0..ch.members.row_count())
                             .filter_map(|j| {
                                 let m = ch.members.row_data(j).unwrap();
-                                if m.id == my_id { None } else { Some(m) }
+                                if m.id == my_id {
+                                    None
+                                } else {
+                                    Some(m)
+                                }
                             })
                             .collect();
                         ch.member_count = members.len() as i32;
@@ -205,7 +209,11 @@ pub fn handle(ctx: &AppContext, event: Event) {
                             let members: Vec<VoiceChannelMember> = (0..ch.members.row_count())
                                 .filter_map(|j| {
                                     let m = ch.members.row_data(j).unwrap();
-                                    if m.id == my_id { None } else { Some(m) }
+                                    if m.id == my_id {
+                                        None
+                                    } else {
+                                        Some(m)
+                                    }
                                 })
                                 .collect();
                             ch.member_count = members.len() as i32;

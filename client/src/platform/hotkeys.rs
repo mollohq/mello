@@ -1,4 +1,4 @@
-use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, hotkey::HotKey};
+use global_hotkey::{hotkey::HotKey, GlobalHotKeyEvent, GlobalHotKeyManager};
 
 pub struct HotkeyManager {
     manager: GlobalHotKeyManager,

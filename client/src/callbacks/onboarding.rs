@@ -9,7 +9,7 @@ use base64::Engine as _;
 use mello_core::Command;
 
 use crate::app_context::AppContext;
-use crate::{MainWindow, avatar};
+use crate::{avatar, MainWindow};
 
 pub fn wire(ctx: &AppContext) {
     // --- Onboarding: crew selected ---

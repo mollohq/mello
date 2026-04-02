@@ -5,7 +5,7 @@ use slint::{ComponentHandle, Model};
 
 use crate::app_context::AppContext;
 use crate::callbacks::onboarding::{load_avatar_grid, start_ambient_shuffle};
-use crate::{SearchUserData, avatar};
+use crate::{avatar, SearchUserData};
 
 pub fn wire(ctx: &AppContext) {
     // --- Crew selection ---

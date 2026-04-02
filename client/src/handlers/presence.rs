@@ -8,7 +8,7 @@ use crate::app_context::AppContext;
 use crate::converters::{
     channels_to_ui, chat_messages_to_slint, make_initials, update_active_crew_card,
 };
-use crate::{CrewData, MemberData, avatar};
+use crate::{avatar, CrewData, MemberData};
 
 pub fn handle(ctx: &AppContext, event: Event) {
     match event {
