@@ -93,6 +93,10 @@ pub enum Event {
         user_id: String,
         data: String,
     },
+    ProfileUpdated {
+        display_name: String,
+        avatar_data: Option<String>,
+    },
     UserSearchResults {
         users: Vec<UserSearchResult>,
     },

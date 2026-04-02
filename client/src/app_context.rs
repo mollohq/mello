@@ -27,6 +27,7 @@ pub struct AppContext {
     pub discover_loading: Rc<RefCell<bool>>,
     pub chat_messages: Rc<RefCell<Vec<mello_core::events::ChatMessage>>>,
     pub avatar_state: Arc<Mutex<crate::avatar::AvatarGridState>>,
+    pub profile_avatar_state: Arc<Mutex<crate::avatar::AvatarGridState>>,
     pub avatar_shuffle_timer: Rc<RefCell<Option<slint::Timer>>>,
     pub muted_before_deafen: Rc<Cell<bool>>,
     pub updater: Rc<RefCell<Option<Updater>>>,

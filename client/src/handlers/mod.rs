@@ -83,7 +83,8 @@ pub fn handle_event(ctx: &AppContext, event: Event) {
         | Event::CatchupLoaded { .. }
         | Event::MomentPosted { .. }
         | Event::MomentPostFailed { .. }
-        | Event::UserAvatarLoaded { .. } => presence::handle(ctx, event),
+        | Event::UserAvatarLoaded { .. }
+        | Event::ProfileUpdated { .. } => presence::handle(ctx, event),
 
         // Misc
         Event::SignalReceived { .. } => {}

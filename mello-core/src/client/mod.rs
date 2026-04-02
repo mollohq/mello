@@ -414,8 +414,21 @@ impl Client {
             Command::SetDebugMode { enabled } => {
                 self.voice.set_debug_mode(enabled);
             }
-            Command::UpdateProfile { display_name } => {
-                self.handle_update_profile(&display_name).await;
+            Command::UpdateProfile {
+                display_name,
+                avatar_data,
+                avatar_format,
+                avatar_style,
+                avatar_seed,
+            } => {
+                self.handle_update_profile(
+                    &display_name,
+                    avatar_data.as_deref(),
+                    avatar_format.as_deref(),
+                    avatar_style.as_deref(),
+                    avatar_seed.as_deref(),
+                )
+                .await;
             }
             // --- Streaming ---
             Command::ListCaptureSources => {

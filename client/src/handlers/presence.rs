@@ -518,6 +518,48 @@ pub fn handle(ctx: &AppContext, event: Event) {
         Event::MomentPostFailed { reason } => {
             log::warn!("UI: moment post failed: {}", reason);
         }
+        Event::ProfileUpdated {
+            display_name,
+            avatar_data,
+        } => {
+            log::info!("[profile] UI: profile updated, name={}", display_name);
+            ctx.app.set_user_name(display_name.clone().into());
+            ctx.app
+                .set_user_initials(make_initials(&display_name).into());
+            if let Some(data) = avatar_data {
+                let slint_img = if let Ok(decoded) =
+                    base64::engine::general_purpose::STANDARD.decode(&data)
+                {
+                    if let Ok(dyn_img) = image::load_from_memory(&decoded) {
+                        let rgba = dyn_img.to_rgba8();
+                        let (w, h) = (rgba.width(), rgba.height());
+                        let buf = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
+                            &rgba.into_raw(),
+                            w,
+                            h,
+                        );
+                        Some(slint::Image::from_rgba8(buf))
+                    } else {
+                        avatar::rasterize_svg(&String::from_utf8_lossy(&decoded)).map(|rgba| {
+                            avatar::rgba_to_image(&rgba, avatar::RENDER_SIZE, avatar::RENDER_SIZE)
+                        })
+                    }
+                } else {
+                    avatar::rasterize_svg(&data).map(|rgba| {
+                        avatar::rgba_to_image(&rgba, avatar::RENDER_SIZE, avatar::RENDER_SIZE)
+                    })
+                };
+                if let Some(img) = slint_img {
+                    ctx.app.set_user_avatar(img.clone());
+                    ctx.app.set_has_user_avatar(true);
+                    let uid = ctx.app.get_user_id().to_string();
+                    ctx.avatar_cache.borrow_mut().insert(uid, img);
+                }
+            }
+            ctx.app
+                .set_profile_nickname_value(display_name.clone().into());
+            ctx.app.set_profile_selected_avatar(-1);
+        }
         _ => {}
     }
 }

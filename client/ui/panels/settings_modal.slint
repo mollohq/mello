@@ -1,5 +1,6 @@
 import { Theme } from "../theme.slint";
 import { AudioDeviceData } from "../types.slint";
+import { AvatarCard } from "../components/avatar_card.slint";
 
 // ─── Reusable: Device Dropdown ─────────────────────────────────────────────
 export component DeviceDropdown inherits Rectangle {
@@ -1097,6 +1098,425 @@ component AudioTab inherits VerticalLayout {
     }
 }
 
+// ─── Profile Avatar Slot (card + "Use" overlay) ─────────────────────────
+component ProfileAvatarSlot inherits Rectangle {
+    in property <image> front-image;
+    in property <image> back-image;
+    in property <bool> has-image: false;
+    in property <bool> selected: false;
+    in-out property <bool> flipped: false;
+    callback clicked();
+    callback use-clicked();
+
+    horizontal-stretch: 1;
+
+    AvatarCard {
+        width: parent.width;
+        height: parent.height;
+        front-image: root.front-image;
+        back-image: root.back-image;
+        has-image: root.has-image;
+        selected: root.selected;
+        deal-visible: true;
+        flipped: root.flipped;
+        clicked => { root.clicked(); }
+        pointer-down => {}
+        pointer-up => {}
+    }
+
+    if selected && has-image: Rectangle {
+        width: parent.width;
+        height: parent.height;
+        border-radius: Theme.r-inner;
+        background: #00000088;
+
+        use-ta := TouchArea {
+            clicked => { root.use-clicked(); }
+        }
+
+        Rectangle {
+            width: 52px;
+            height: 26px;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            border-radius: 6px;
+            background: use-ta.has-hover ? #c4173d : Theme.accent;
+
+            Text {
+                text: "Use";
+                font-family: Theme.font-mono;
+                font-size: 11px;
+                font-weight: 700;
+                letter-spacing: 0.5px;
+                color: #FFFFFF;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+    }
+}
+
+// ─── Profile Tab ──────────────────────────────────────────────────────────
+component ProfileTab inherits VerticalLayout {
+    padding: 40px;
+    padding-bottom: 40px;
+    spacing: 24px;
+
+    in property <string> current-nickname: "";
+    in property <image> current-avatar;
+    in property <bool> has-current-avatar: false;
+    in property <string> current-initials: "";
+
+    // Avatar grid slots
+    in property <image> profile-avatar-0;
+    in property <image> profile-avatar-1;
+    in property <image> profile-avatar-2;
+    in property <image> profile-avatar-3;
+    in property <image> profile-avatar-4;
+    in property <image> profile-avatar-5;
+    in property <image> profile-avatar-6;
+    in property <image> profile-avatar-back-0;
+    in property <image> profile-avatar-back-1;
+    in property <image> profile-avatar-back-2;
+    in property <image> profile-avatar-back-3;
+    in property <image> profile-avatar-back-4;
+    in property <image> profile-avatar-back-5;
+    in property <image> profile-avatar-back-6;
+    in property <bool> profile-avatar-loaded-0: false;
+    in property <bool> profile-avatar-loaded-1: false;
+    in property <bool> profile-avatar-loaded-2: false;
+    in property <bool> profile-avatar-loaded-3: false;
+    in property <bool> profile-avatar-loaded-4: false;
+    in property <bool> profile-avatar-loaded-5: false;
+    in property <bool> profile-avatar-loaded-6: false;
+    in-out property <bool> profile-avatar-flip-0: false;
+    in-out property <bool> profile-avatar-flip-1: false;
+    in-out property <bool> profile-avatar-flip-2: false;
+    in-out property <bool> profile-avatar-flip-3: false;
+    in-out property <bool> profile-avatar-flip-4: false;
+    in-out property <bool> profile-avatar-flip-5: false;
+    in-out property <bool> profile-avatar-flip-6: false;
+
+    in-out property <int> profile-selected-avatar: -1;
+    in property <image> profile-upload-preview;
+    in property <bool> profile-has-upload: false;
+
+    in-out property <string> profile-nickname-value: current-nickname;
+    in-out property <bool> avatar-grid-expanded: false;
+
+    callback profile-avatar-clicked(int);
+    callback profile-reroll();
+    callback profile-upload-clicked();
+    callback profile-nickname-accepted(string);
+    callback profile-expand-grid();
+    callback profile-use-avatar(int);
+
+    // ── PROFILE HEADER ──
+    HorizontalLayout {
+        spacing: 28px;
+
+        // Avatar + "Change avatar" stacked
+        VerticalLayout {
+            spacing: 10px;
+            horizontal-stretch: 0;
+
+            Rectangle {
+                width: 96px;
+                height: 96px;
+                border-radius: 16px;
+                background: Theme.surface;
+                border-width: 1px;
+                border-color: Theme.graphic-light;
+                clip: true;
+
+                if has-current-avatar: Image {
+                    source: current-avatar;
+                    width: parent.width;
+                    height: parent.height;
+                    image-fit: contain;
+                }
+
+                if !has-current-avatar: Text {
+                    text: current-initials;
+                    font-family: Theme.font-mono;
+                    font-size: 26px;
+                    font-weight: 600;
+                    color: Theme.text-secondary;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+
+            Rectangle {
+                width: 96px;
+                height: 28px;
+                border-radius: 6px;
+                background: change-ta.has-hover ? Theme.surface-hover : transparent;
+
+                change-ta := TouchArea {
+                    clicked => {
+                        avatar-grid-expanded = !avatar-grid-expanded;
+                        if avatar-grid-expanded {
+                            profile-expand-grid();
+                        }
+                    }
+                }
+
+                Text {
+                    text: avatar-grid-expanded ? "Hide" : "Change";
+                    font-family: Theme.font-mono;
+                    font-size: 11px;
+                    letter-spacing: 0.5px;
+                    color: Theme.accent;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+        }
+
+        // Name section
+        VerticalLayout {
+            alignment: center;
+            spacing: 8px;
+            horizontal-stretch: 1;
+
+            SectionHeader { title: "DISPLAY NAME"; }
+
+            Rectangle {
+                height: 44px;
+                background: Theme.bg-app;
+                border-radius: 8px;
+                border-width: 1px;
+                border-color: nick-input.has-focus ? Theme.accent : Theme.graphic-light;
+
+                nick-input := TextInput {
+                    text <=> profile-nickname-value;
+                    font-size: 14px;
+                    color: Theme.text-primary;
+                    x: 14px;
+                    y: (parent.height - self.preferred-height) / 2;
+                    width: parent.width - 28px;
+                    single-line: true;
+                    accepted => {
+                        profile-nickname-accepted(profile-nickname-value);
+                    }
+                }
+            }
+
+            Text {
+                text: "Press Enter to save";
+                font-family: Theme.font-mono;
+                font-size: 10px;
+                color: Theme.text-tertiary;
+                letter-spacing: 0.4px;
+            }
+        }
+    }
+
+    // ── AVATAR GRID (expandable) ──
+    if avatar-grid-expanded: VerticalLayout {
+        spacing: 10px;
+
+        Rectangle { height: 4px; }
+
+        HorizontalLayout {
+            spacing: 10px;
+            height: 80px;
+
+            ProfileAvatarSlot {
+                front-image: profile-avatar-0;
+                back-image: profile-avatar-back-0;
+                has-image: profile-avatar-loaded-0;
+                selected: profile-selected-avatar == 0;
+                flipped: profile-avatar-flip-0;
+                clicked => { profile-avatar-clicked(0); }
+                use-clicked => { profile-use-avatar(0); }
+            }
+            ProfileAvatarSlot {
+                front-image: profile-avatar-1;
+                back-image: profile-avatar-back-1;
+                has-image: profile-avatar-loaded-1;
+                selected: profile-selected-avatar == 1;
+                flipped: profile-avatar-flip-1;
+                clicked => { profile-avatar-clicked(1); }
+                use-clicked => { profile-use-avatar(1); }
+            }
+            ProfileAvatarSlot {
+                front-image: profile-avatar-2;
+                back-image: profile-avatar-back-2;
+                has-image: profile-avatar-loaded-2;
+                selected: profile-selected-avatar == 2;
+                flipped: profile-avatar-flip-2;
+                clicked => { profile-avatar-clicked(2); }
+                use-clicked => { profile-use-avatar(2); }
+            }
+            ProfileAvatarSlot {
+                front-image: profile-avatar-3;
+                back-image: profile-avatar-back-3;
+                has-image: profile-avatar-loaded-3;
+                selected: profile-selected-avatar == 3;
+                flipped: profile-avatar-flip-3;
+                clicked => { profile-avatar-clicked(3); }
+                use-clicked => { profile-use-avatar(3); }
+            }
+        }
+
+        HorizontalLayout {
+            spacing: 10px;
+            height: 80px;
+
+            ProfileAvatarSlot {
+                front-image: profile-avatar-4;
+                back-image: profile-avatar-back-4;
+                has-image: profile-avatar-loaded-4;
+                selected: profile-selected-avatar == 4;
+                flipped: profile-avatar-flip-4;
+                clicked => { profile-avatar-clicked(4); }
+                use-clicked => { profile-use-avatar(4); }
+            }
+            ProfileAvatarSlot {
+                front-image: profile-avatar-5;
+                back-image: profile-avatar-back-5;
+                has-image: profile-avatar-loaded-5;
+                selected: profile-selected-avatar == 5;
+                flipped: profile-avatar-flip-5;
+                clicked => { profile-avatar-clicked(5); }
+                use-clicked => { profile-use-avatar(5); }
+            }
+            ProfileAvatarSlot {
+                front-image: profile-avatar-6;
+                back-image: profile-avatar-back-6;
+                has-image: profile-avatar-loaded-6;
+                selected: profile-selected-avatar == 6;
+                flipped: profile-avatar-flip-6;
+                clicked => { profile-avatar-clicked(6); }
+                use-clicked => { profile-use-avatar(6); }
+            }
+
+            // Upload slot
+            Rectangle {
+                horizontal-stretch: 1;
+                border-radius: Theme.r-inner;
+                background: Theme.surface;
+                border-width: 1.5px;
+                border-color: profile-selected-avatar == 7 ? Theme.accent : (upload-ta.has-hover ? #404045 : Theme.graphic-light);
+
+                upload-ta := TouchArea {
+                    clicked => { profile-upload-clicked(); }
+                }
+
+                if profile-has-upload: Image {
+                    source: profile-upload-preview;
+                    width: parent.width * 0.70;
+                    height: parent.height * 0.70;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    image-fit: contain;
+                }
+
+                if !profile-has-upload: VerticalLayout {
+                    alignment: center;
+                    spacing: 4px;
+                    HorizontalLayout {
+                        alignment: center;
+                        Text {
+                            text: "+";
+                            font-size: 22px;
+                            font-weight: 300;
+                            color: Theme.text-tertiary;
+                        }
+                    }
+                    HorizontalLayout {
+                        alignment: center;
+                        Text {
+                            text: "Upload";
+                            font-family: Theme.font-mono;
+                            font-size: 10px;
+                            letter-spacing: 0.8px;
+                            color: Theme.text-tertiary;
+                        }
+                    }
+                }
+
+                // "Use" overlay for upload slot
+                if profile-selected-avatar == 7 && profile-has-upload: Rectangle {
+                    width: parent.width;
+                    height: parent.height;
+                    border-radius: Theme.r-inner;
+                    background: #00000088;
+
+                    upload-use-ta := TouchArea {
+                        clicked => { profile-use-avatar(7); }
+                    }
+
+                    Rectangle {
+                        width: 52px;
+                        height: 26px;
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
+                        border-radius: 6px;
+                        background: upload-use-ta.has-hover ? #c4173d : Theme.accent;
+
+                        Text {
+                            text: "Use";
+                            font-family: Theme.font-mono;
+                            font-size: 11px;
+                            font-weight: 700;
+                            letter-spacing: 0.5px;
+                            color: #FFFFFF;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Reroll button
+        HorizontalLayout {
+            alignment: center;
+            height: 32px;
+
+            Rectangle {
+                width: reroll-content.preferred-width + 24px;
+                height: 32px;
+                border-radius: 6px;
+                background: reroll-ta.has-hover ? Theme.surface-hover : transparent;
+
+                reroll-ta := TouchArea {
+                    clicked => { profile-reroll(); }
+                }
+
+                reroll-content := HorizontalLayout {
+                    alignment: center;
+                    spacing: 8px;
+                    width: parent.width;
+                    height: parent.height;
+
+                    VerticalLayout {
+                        alignment: center;
+                        Image {
+                            source: @image-url("../icons/dice.svg");
+                            width: 14px;
+                            height: 14px;
+                            colorize: Theme.text-secondary;
+                        }
+                    }
+                    VerticalLayout {
+                        alignment: center;
+                        Text {
+                            text: "Reroll all";
+                            font-family: Theme.font-mono;
+                            font-size: 12px;
+                            color: Theme.text-secondary;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // ─── Settings Modal (main export) ──────────────────────────────────────────
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1131,14 +1551,60 @@ export component SettingsModal inherits Rectangle {
     // Version
     in property <string> build-version: "v0.1.0";
 
+    // Profile
+    in property <string> profile-nickname: "";
+    in property <image> profile-current-avatar;
+    in property <bool> profile-has-avatar: false;
+    in property <string> profile-initials: "";
+    in property <image> profile-avatar-0;
+    in property <image> profile-avatar-1;
+    in property <image> profile-avatar-2;
+    in property <image> profile-avatar-3;
+    in property <image> profile-avatar-4;
+    in property <image> profile-avatar-5;
+    in property <image> profile-avatar-6;
+    in property <image> profile-avatar-back-0;
+    in property <image> profile-avatar-back-1;
+    in property <image> profile-avatar-back-2;
+    in property <image> profile-avatar-back-3;
+    in property <image> profile-avatar-back-4;
+    in property <image> profile-avatar-back-5;
+    in property <image> profile-avatar-back-6;
+    in property <bool> profile-avatar-loaded-0: false;
+    in property <bool> profile-avatar-loaded-1: false;
+    in property <bool> profile-avatar-loaded-2: false;
+    in property <bool> profile-avatar-loaded-3: false;
+    in property <bool> profile-avatar-loaded-4: false;
+    in property <bool> profile-avatar-loaded-5: false;
+    in property <bool> profile-avatar-loaded-6: false;
+    in-out property <bool> profile-avatar-flip-0: false;
+    in-out property <bool> profile-avatar-flip-1: false;
+    in-out property <bool> profile-avatar-flip-2: false;
+    in-out property <bool> profile-avatar-flip-3: false;
+    in-out property <bool> profile-avatar-flip-4: false;
+    in-out property <bool> profile-avatar-flip-5: false;
+    in-out property <bool> profile-avatar-flip-6: false;
+    in-out property <int> profile-selected-avatar: -1;
+    in property <image> profile-upload-preview;
+    in property <bool> profile-has-upload: false;
+
     // Saved indicator
     in-out property <bool> show-saved: false;
 
-    // Tab state: 0 = General, 1 = Audio & Video
+    // Tab state: 0 = Profile, 1 = General, 2 = Audio & Video
     in-out property <int> active-tab: 0;
+
+    in-out property <string> profile-nickname-value;
+    in-out property <bool> profile-grid-expanded: false;
 
     // Callbacks
     callback close-requested();
+    callback profile-avatar-clicked(int);
+    callback profile-reroll();
+    callback profile-upload-clicked();
+    callback profile-nickname-accepted(string);
+    callback profile-expand-grid();
+    callback profile-use-avatar(int);
     callback capture-device-selected(string);
     callback playback-device-selected(string);
     callback mic-test-toggled();
@@ -1272,19 +1738,53 @@ export component SettingsModal inherits Rectangle {
                         VerticalLayout {
                             spacing: 6px;
 
+                            // Profile
+                            Rectangle {
+                                height: 40px;
+                                border-radius: 6px;
+                                background: active-tab == 0 ? Theme.surface : (profile-ta.has-hover ? Theme.surface-hover : transparent);
+                                border-width: active-tab == 0 ? 1px : 0px;
+                                border-color: active-tab == 0 ? Theme.graphic-light : transparent;
+
+                                Image {
+                                    source: @image-url("../icons/user.svg");
+                                    width: 16px;
+                                    height: 16px;
+                                    colorize: active-tab == 0 ? Theme.text-primary : Theme.text-secondary;
+                                    x: 12px;
+                                    y: (parent.height - self.height) / 2;
+                                    opacity: 0.8;
+                                }
+
+                                Text {
+                                    text: "PROFILE";
+                                    font-family: Theme.font-mono;
+                                    font-size: 12px;
+                                    font-weight: 500;
+                                    letter-spacing: 0.6px;
+                                    color: active-tab == 0 ? Theme.text-primary : Theme.text-secondary;
+                                    x: 12px + 16px + 12px;
+                                    y: (parent.height - self.preferred-height) / 2;
+                                }
+
+                                profile-ta := TouchArea {
+                                    clicked => { active-tab = 0; }
+                                }
+                            }
+
                             // General
                             Rectangle {
                                 height: 40px;
                                 border-radius: 6px;
-                                background: active-tab == 0 ? Theme.surface : (general-ta.has-hover ? Theme.surface-hover : transparent);
-                                border-width: active-tab == 0 ? 1px : 0px;
-                                border-color: active-tab == 0 ? Theme.graphic-light : transparent;
+                                background: active-tab == 1 ? Theme.surface : (general-ta.has-hover ? Theme.surface-hover : transparent);
+                                border-width: active-tab == 1 ? 1px : 0px;
+                                border-color: active-tab == 1 ? Theme.graphic-light : transparent;
 
                                 Image {
                                     source: @image-url("../icons/monitor.svg");
                                     width: 16px;
                                     height: 16px;
-                                    colorize: active-tab == 0 ? Theme.text-primary : Theme.text-secondary;
+                                    colorize: active-tab == 1 ? Theme.text-primary : Theme.text-secondary;
                                     x: 12px;
                                     y: (parent.height - self.height) / 2;
                                     opacity: 0.8;
@@ -1296,13 +1796,13 @@ export component SettingsModal inherits Rectangle {
                                     font-size: 12px;
                                     font-weight: 500;
                                     letter-spacing: 0.6px;
-                                    color: active-tab == 0 ? Theme.text-primary : Theme.text-secondary;
+                                    color: active-tab == 1 ? Theme.text-primary : Theme.text-secondary;
                                     x: 12px + 16px + 12px;
                                     y: (parent.height - self.preferred-height) / 2;
                                 }
 
                                 general-ta := TouchArea {
-                                    clicked => { active-tab = 0; }
+                                    clicked => { active-tab = 1; }
                                 }
                             }
 
@@ -1310,15 +1810,15 @@ export component SettingsModal inherits Rectangle {
                             Rectangle {
                                 height: 40px;
                                 border-radius: 6px;
-                                background: active-tab == 1 ? Theme.surface : (audio-ta.has-hover ? Theme.surface-hover : transparent);
-                                border-width: active-tab == 1 ? 1px : 0px;
-                                border-color: active-tab == 1 ? Theme.graphic-light : transparent;
+                                background: active-tab == 2 ? Theme.surface : (audio-ta.has-hover ? Theme.surface-hover : transparent);
+                                border-width: active-tab == 2 ? 1px : 0px;
+                                border-color: active-tab == 2 ? Theme.graphic-light : transparent;
 
                                 Image {
                                     source: @image-url("../icons/mic.svg");
                                     width: 16px;
                                     height: 16px;
-                                    colorize: active-tab == 1 ? Theme.text-primary : Theme.text-secondary;
+                                    colorize: active-tab == 2 ? Theme.text-primary : Theme.text-secondary;
                                     x: 12px;
                                     y: (parent.height - self.height) / 2;
                                     opacity: 0.8;
@@ -1330,13 +1830,13 @@ export component SettingsModal inherits Rectangle {
                                     font-size: 12px;
                                     font-weight: 500;
                                     letter-spacing: 0.6px;
-                                    color: active-tab == 1 ? Theme.text-primary : Theme.text-secondary;
+                                    color: active-tab == 2 ? Theme.text-primary : Theme.text-secondary;
                                     x: 12px + 16px + 12px;
                                     y: (parent.height - self.preferred-height) / 2;
                                 }
 
                                 audio-ta := TouchArea {
-                                    clicked => { active-tab = 1; }
+                                    clicked => { active-tab = 2; }
                                 }
                             }
 
@@ -1436,10 +1936,58 @@ export component SettingsModal inherits Rectangle {
                     clip: true;
 
                     Flickable {
-                        viewport-height: active-tab == 0 ? general-tab.preferred-height : audio-tab.preferred-height;
+                        viewport-height: active-tab == 0 ? profile-tab.preferred-height : (active-tab == 1 ? general-tab.preferred-height : audio-tab.preferred-height);
+
+                        profile-tab := ProfileTab {
+                            visible: active-tab == 0;
+                            width: parent.width;
+                            current-nickname: root.profile-nickname;
+                            current-avatar: root.profile-current-avatar;
+                            has-current-avatar: root.profile-has-avatar;
+                            current-initials: root.profile-initials;
+                            profile-avatar-0: root.profile-avatar-0;
+                            profile-avatar-1: root.profile-avatar-1;
+                            profile-avatar-2: root.profile-avatar-2;
+                            profile-avatar-3: root.profile-avatar-3;
+                            profile-avatar-4: root.profile-avatar-4;
+                            profile-avatar-5: root.profile-avatar-5;
+                            profile-avatar-6: root.profile-avatar-6;
+                            profile-avatar-back-0: root.profile-avatar-back-0;
+                            profile-avatar-back-1: root.profile-avatar-back-1;
+                            profile-avatar-back-2: root.profile-avatar-back-2;
+                            profile-avatar-back-3: root.profile-avatar-back-3;
+                            profile-avatar-back-4: root.profile-avatar-back-4;
+                            profile-avatar-back-5: root.profile-avatar-back-5;
+                            profile-avatar-back-6: root.profile-avatar-back-6;
+                            profile-avatar-loaded-0: root.profile-avatar-loaded-0;
+                            profile-avatar-loaded-1: root.profile-avatar-loaded-1;
+                            profile-avatar-loaded-2: root.profile-avatar-loaded-2;
+                            profile-avatar-loaded-3: root.profile-avatar-loaded-3;
+                            profile-avatar-loaded-4: root.profile-avatar-loaded-4;
+                            profile-avatar-loaded-5: root.profile-avatar-loaded-5;
+                            profile-avatar-loaded-6: root.profile-avatar-loaded-6;
+                            profile-avatar-flip-0 <=> root.profile-avatar-flip-0;
+                            profile-avatar-flip-1 <=> root.profile-avatar-flip-1;
+                            profile-avatar-flip-2 <=> root.profile-avatar-flip-2;
+                            profile-avatar-flip-3 <=> root.profile-avatar-flip-3;
+                            profile-avatar-flip-4 <=> root.profile-avatar-flip-4;
+                            profile-avatar-flip-5 <=> root.profile-avatar-flip-5;
+                            profile-avatar-flip-6 <=> root.profile-avatar-flip-6;
+                            profile-selected-avatar <=> root.profile-selected-avatar;
+                            profile-upload-preview: root.profile-upload-preview;
+                            profile-has-upload: root.profile-has-upload;
+                            profile-nickname-value <=> root.profile-nickname-value;
+                            avatar-grid-expanded <=> root.profile-grid-expanded;
+                            profile-avatar-clicked(idx) => { root.profile-avatar-clicked(idx); }
+                            profile-reroll => { root.profile-reroll(); }
+                            profile-upload-clicked => { root.profile-upload-clicked(); }
+                            profile-nickname-accepted(name) => { root.profile-nickname-accepted(name); }
+                            profile-expand-grid => { root.profile-expand-grid(); }
+                            profile-use-avatar(idx) => { root.profile-use-avatar(idx); }
+                        }
 
                         general-tab := GeneralTab {
-                            visible: active-tab == 0;
+                            visible: active-tab == 1;
                             width: parent.width;
                             start-on-boot <=> root.start-on-boot;
                             start-minimized <=> root.start-minimized;
@@ -1456,7 +2004,7 @@ export component SettingsModal inherits Rectangle {
                         }
 
                         audio-tab := AudioTab {
-                            visible: active-tab == 1;
+                            visible: active-tab == 2;
                             width: parent.width;
                             capture-devices: root.capture-devices;
                             playback-devices: root.playback-devices;

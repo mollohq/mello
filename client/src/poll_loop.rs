@@ -26,6 +26,7 @@ pub fn start(
         discover_loading: ctx.discover_loading.clone(),
         chat_messages: ctx.chat_messages.clone(),
         avatar_state: ctx.avatar_state.clone(),
+        profile_avatar_state: ctx.profile_avatar_state.clone(),
         avatar_shuffle_timer: ctx.avatar_shuffle_timer.clone(),
         muted_before_deafen: ctx.muted_before_deafen.clone(),
         updater: ctx.updater.clone(),

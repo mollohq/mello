@@ -152,6 +152,46 @@ export component MainWindow inherits Window {
     in-out property <float> settings-vad-threshold: -40.0;
     in property <string> settings-build-version: "v0.1.0";
     in-out property <bool> settings-show-saved: false;
+    // Profile settings
+    in property <image> profile-avatar-0;
+    in property <image> profile-avatar-1;
+    in property <image> profile-avatar-2;
+    in property <image> profile-avatar-3;
+    in property <image> profile-avatar-4;
+    in property <image> profile-avatar-5;
+    in property <image> profile-avatar-6;
+    in property <image> profile-avatar-back-0;
+    in property <image> profile-avatar-back-1;
+    in property <image> profile-avatar-back-2;
+    in property <image> profile-avatar-back-3;
+    in property <image> profile-avatar-back-4;
+    in property <image> profile-avatar-back-5;
+    in property <image> profile-avatar-back-6;
+    in property <bool> profile-avatar-loaded-0: false;
+    in property <bool> profile-avatar-loaded-1: false;
+    in property <bool> profile-avatar-loaded-2: false;
+    in property <bool> profile-avatar-loaded-3: false;
+    in property <bool> profile-avatar-loaded-4: false;
+    in property <bool> profile-avatar-loaded-5: false;
+    in property <bool> profile-avatar-loaded-6: false;
+    in-out property <bool> profile-avatar-flip-0: false;
+    in-out property <bool> profile-avatar-flip-1: false;
+    in-out property <bool> profile-avatar-flip-2: false;
+    in-out property <bool> profile-avatar-flip-3: false;
+    in-out property <bool> profile-avatar-flip-4: false;
+    in-out property <bool> profile-avatar-flip-5: false;
+    in-out property <bool> profile-avatar-flip-6: false;
+    in-out property <int> profile-selected-avatar: -1;
+    in property <image> profile-upload-preview;
+    in property <bool> profile-has-upload: false;
+    in-out property <string> profile-nickname-value;
+    in-out property <bool> profile-grid-expanded: false;
+    callback profile-avatar-clicked(int);
+    callback profile-reroll();
+    callback profile-upload-clicked();
+    callback profile-nickname-accepted(string);
+    callback profile-expand-grid();
+    callback profile-use-avatar(int);
 
     // --- Streaming ---
     in-out property <bool> source-picker-open: false;
@@ -621,6 +661,50 @@ export component MainWindow inherits Window {
 
     // ===================== SETTINGS OVERLAY =====================
     if settings-open: SettingsModal {
+        // Profile
+        profile-nickname: root.user-name;
+        profile-current-avatar: root.user-avatar;
+        profile-has-avatar: root.has-user-avatar;
+        profile-initials: root.user-initials;
+        profile-avatar-0: root.profile-avatar-0;
+        profile-avatar-1: root.profile-avatar-1;
+        profile-avatar-2: root.profile-avatar-2;
+        profile-avatar-3: root.profile-avatar-3;
+        profile-avatar-4: root.profile-avatar-4;
+        profile-avatar-5: root.profile-avatar-5;
+        profile-avatar-6: root.profile-avatar-6;
+        profile-avatar-back-0: root.profile-avatar-back-0;
+        profile-avatar-back-1: root.profile-avatar-back-1;
+        profile-avatar-back-2: root.profile-avatar-back-2;
+        profile-avatar-back-3: root.profile-avatar-back-3;
+        profile-avatar-back-4: root.profile-avatar-back-4;
+        profile-avatar-back-5: root.profile-avatar-back-5;
+        profile-avatar-back-6: root.profile-avatar-back-6;
+        profile-avatar-loaded-0: root.profile-avatar-loaded-0;
+        profile-avatar-loaded-1: root.profile-avatar-loaded-1;
+        profile-avatar-loaded-2: root.profile-avatar-loaded-2;
+        profile-avatar-loaded-3: root.profile-avatar-loaded-3;
+        profile-avatar-loaded-4: root.profile-avatar-loaded-4;
+        profile-avatar-loaded-5: root.profile-avatar-loaded-5;
+        profile-avatar-loaded-6: root.profile-avatar-loaded-6;
+        profile-avatar-flip-0 <=> root.profile-avatar-flip-0;
+        profile-avatar-flip-1 <=> root.profile-avatar-flip-1;
+        profile-avatar-flip-2 <=> root.profile-avatar-flip-2;
+        profile-avatar-flip-3 <=> root.profile-avatar-flip-3;
+        profile-avatar-flip-4 <=> root.profile-avatar-flip-4;
+        profile-avatar-flip-5 <=> root.profile-avatar-flip-5;
+        profile-avatar-flip-6 <=> root.profile-avatar-flip-6;
+        profile-selected-avatar <=> root.profile-selected-avatar;
+        profile-upload-preview: root.profile-upload-preview;
+        profile-has-upload: root.profile-has-upload;
+        profile-nickname-value <=> root.profile-nickname-value;
+        profile-grid-expanded <=> root.profile-grid-expanded;
+        profile-avatar-clicked(idx) => { root.profile-avatar-clicked(idx); }
+        profile-reroll => { root.profile-reroll(); }
+        profile-upload-clicked => { root.profile-upload-clicked(); }
+        profile-nickname-accepted(name) => { root.profile-nickname-accepted(name); }
+        profile-expand-grid => { root.profile-expand-grid(); }
+        profile-use-avatar(idx) => { root.settings-show-saved = true; root.profile-use-avatar(idx); }
         // Audio devices
         capture-devices: root.capture-devices;
         playback-devices: root.playback-devices;

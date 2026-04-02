@@ -139,7 +139,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let updater: Rc<RefCell<Option<Updater>>> =
         Rc::new(RefCell::new(match Updater::new(update_event_tx) {
             Ok(u) => {
-                log::info!("Updater ready — v{}", u.current_version());
+                log::info!("Updater ready ÔÇö v{}", u.current_version());
                 Some(u)
             }
             Err(e) => {
@@ -200,7 +200,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let settings = Rc::new(RefCell::new(Settings::load()));
 
-    // --- Close → tray ---
+    // --- Close ÔåÆ tray ---
     {
         let window_ref = app.as_weak();
         let s = settings.clone();
@@ -248,10 +248,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let s = settings.borrow();
         log::info!("[auth] startup  onboarding_step={}", s.onboarding_step);
         if s.onboarding_step > 3 {
-            log::info!("[auth] onboarding done — attempting session restore");
+            log::info!("[auth] onboarding done ÔÇö attempting session restore");
             let _ = cmd_tx.try_send(Command::TryRestore);
         } else {
-            log::info!("[auth] onboarding in progress — fetching crews (no auth)");
+            log::info!("[auth] onboarding in progress ÔÇö fetching crews (no auth)");
             let _ = cmd_tx.try_send(Command::DiscoverCrews { cursor: None });
         }
         app.set_onboarding_step(s.onboarding_step as i32);
@@ -275,6 +275,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         discover_loading: Rc::new(RefCell::new(false)),
         chat_messages: Rc::new(RefCell::new(Vec::new())),
         avatar_state: std::sync::Arc::new(std::sync::Mutex::new(avatar::AvatarGridState::new())),
+        profile_avatar_state: std::sync::Arc::new(std::sync::Mutex::new(
+            avatar::AvatarGridState::new(),
+        )),
         avatar_shuffle_timer: Rc::new(RefCell::new(None)),
         muted_before_deafen: Rc::new(Cell::new(false)),
         updater,
@@ -404,11 +407,11 @@ mod tests {
         assert!(!app.get_mic_muted(), "should start unmuted");
 
         app.invoke_mic_toggle();
-        assert_eq!(sent.get(), Some(true), "first toggle → muted=true");
+        assert_eq!(sent.get(), Some(true), "first toggle ÔåÆ muted=true");
         assert!(app.get_mic_muted());
 
         app.invoke_mic_toggle();
-        assert_eq!(sent.get(), Some(false), "second toggle → muted=false");
+        assert_eq!(sent.get(), Some(false), "second toggle ÔåÆ muted=false");
         assert!(!app.get_mic_muted());
     }
 
