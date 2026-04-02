@@ -29,7 +29,9 @@ pub enum StreamError {
     #[error("Send failed: {0}")]
     SendFailed(String),
 
-    #[error("Streaming requires a hardware encoder (NVIDIA, AMD, or Intel). None was found on this machine.")]
+    #[error(
+        "Streaming requires a hardware encoder (NVIDIA, AMD, or Intel). None was found on this machine."
+    )]
     NoHardwareEncoder,
 
     #[error("Already streaming")]

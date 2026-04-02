@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use rand::Rng;
 use sha2::{Digest, Sha256};
 use tiny_http::{Header, Response, Server};

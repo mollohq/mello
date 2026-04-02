@@ -3,8 +3,8 @@
 //! Skips automatically if no hardware encoder is available.
 
 use std::ffi::c_void;
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
 struct Packet {
@@ -66,7 +66,9 @@ fn encoder_available() {
 #[test]
 fn host_to_viewer_loopback() {
     if cfg!(target_os = "macos") && std::env::var("CI").is_ok() {
-        eprintln!("SKIP: Loopback test disabled on macOS CI (ScreenCaptureKit blocks without TCC screen recording permission)");
+        eprintln!(
+            "SKIP: Loopback test disabled on macOS CI (ScreenCaptureKit blocks without TCC screen recording permission)"
+        );
         return;
     }
 

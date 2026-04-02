@@ -1428,7 +1428,7 @@ impl Client {
     ) {
         let device_id = {
             use rand::Rng;
-            let bytes: [u8; 16] = rand::thread_rng().gen();
+            let bytes: [u8; 16] = rand::thread_rng().r#gen();
             bytes
                 .iter()
                 .map(|b| format!("{:02x}", b))
@@ -2333,7 +2333,8 @@ impl Client {
                     if crate::PROTOCOL_VERSION < min_client {
                         let msg = format!(
                             "Server requires protocol {} but client speaks {}. Please update Mello.",
-                            min_client, crate::PROTOCOL_VERSION,
+                            min_client,
+                            crate::PROTOCOL_VERSION,
                         );
                         log::warn!("{}", msg);
                         let _ = self.event_tx.send(Event::ProtocolMismatch {
@@ -2347,7 +2348,8 @@ impl Client {
                     if server_proto < crate::MIN_SERVER_PROTOCOL {
                         let msg = format!(
                             "Client requires server protocol {} but server speaks {}. Server needs updating.",
-                            crate::MIN_SERVER_PROTOCOL, server_proto,
+                            crate::MIN_SERVER_PROTOCOL,
+                            server_proto,
                         );
                         log::warn!("{}", msg);
                         let _ = self.event_tx.send(Event::ProtocolMismatch {
