@@ -1,26 +1,40 @@
 #!/bin/sh
-# Pre-push: run clippy + tests (matches pr-checks.yml).
-# Prevents pushing code that would fail CI.
+# Pre-push: clippy + tests (matches pr-checks.yml).
 # Install: git config core.hooksPath .githooks
 
 if ! command -v cargo >/dev/null 2>&1; then
     exit 0
 fi
 
-echo "Running clippy..."
+# Skip hardware-dependent tests (screen capture, etc.) that also skip on CI
+export CI=true
+
+echo "━━━ pre-push checks ━━━"
+echo ""
+
+# ── 1. Clippy ──
+STEP_START=$(date +%s)
+echo "▸ [1/2] clippy..."
 cargo clippy --all-targets -- -D warnings 2>&1
-if [ $? -ne 0 ]; then
-    echo ""
-    echo "Push rejected: clippy failed. Fix the warnings above."
+CLIPPY_EXIT=$?
+ELAPSED=$(( $(date +%s) - STEP_START ))
+if [ $CLIPPY_EXIT -ne 0 ]; then
+    echo "✗ clippy failed (${ELAPSED}s). Push rejected."
     exit 1
 fi
+echo "✓ clippy passed (${ELAPSED}s)"
+echo ""
 
-echo "Running tests..."
+# ── 2. Tests ──
+STEP_START=$(date +%s)
+echo "▸ [2/2] tests..."
 cargo test --workspace 2>&1
-if [ $? -ne 0 ]; then
-    echo ""
-    echo "Push rejected: tests failed. Fix before pushing."
+TEST_EXIT=$?
+ELAPSED=$(( $(date +%s) - STEP_START ))
+if [ $TEST_EXIT -ne 0 ]; then
+    echo "✗ tests failed (${ELAPSED}s). Push rejected."
     exit 1
 fi
-
-echo "All checks passed."
+echo "✓ tests passed (${ELAPSED}s)"
+echo ""
+echo "━━━ all checks passed ━━━"
