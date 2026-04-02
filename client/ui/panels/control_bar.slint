@@ -93,6 +93,8 @@ component MenuSeparator inherits Rectangle {
 export component ControlBar inherits Rectangle {
     in property <string> user-name: "";
     in property <string> user-initials: "";
+    in property <image> user-avatar;
+    in property <bool> has-user-avatar: false;
     in property <string> user-tag: "";
     in-out property <bool> mic-muted: false;
     in-out property <bool> deafened: false;
@@ -135,8 +137,16 @@ export component ControlBar inherits Rectangle {
                     height: 44px;
                     border-radius: 8px;
                     background: avatar-touch.has-hover ? Theme.graphic-light : Theme.bg-app;
+                    clip: true;
 
-                    Text {
+                    if has-user-avatar: Image {
+                        source: user-avatar;
+                        width: parent.width;
+                        height: parent.height;
+                        image-fit: contain;
+                    }
+
+                    if !has-user-avatar: Text {
                         text: user-initials != "" ? user-initials : "?";
                         font-weight: 600;
                         font-size: 14px;

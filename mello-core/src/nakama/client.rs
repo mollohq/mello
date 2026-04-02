@@ -636,16 +636,36 @@ impl NakamaClient {
     }
 
     pub async fn update_account(&self, display_name: &str) -> Result<()> {
+        self.update_account_fields(Some(display_name), None).await
+    }
+
+    pub async fn update_account_fields(
+        &self,
+        display_name: Option<&str>,
+        avatar_url: Option<&str>,
+    ) -> Result<()> {
         let token = self.bearer()?;
         let url = format!("{}/v2/account", self.config.http_base());
+
+        let mut body = serde_json::Map::new();
+        if let Some(dn) = display_name {
+            body.insert(
+                "display_name".into(),
+                serde_json::Value::String(dn.to_string()),
+            );
+        }
+        if let Some(au) = avatar_url {
+            body.insert(
+                "avatar_url".into(),
+                serde_json::Value::String(au.to_string()),
+            );
+        }
 
         let resp = self
             .http
             .put(&url)
             .bearer_auth(&token)
-            .json(&serde_json::json!({
-                "display_name": display_name
-            }))
+            .json(&serde_json::Value::Object(body))
             .send()
             .await?;
 
@@ -871,6 +891,56 @@ impl NakamaClient {
             value.len()
         );
         Ok(value)
+    }
+
+    /// Write a single object to Nakama storage.
+    pub async fn write_storage(
+        &self,
+        collection: &str,
+        key: &str,
+        value: &str,
+        permission_read: i32,
+        permission_write: i32,
+    ) -> Result<()> {
+        let token = self.bearer()?;
+        let url = format!("{}/v2/storage", self.config.http_base());
+
+        let body = serde_json::json!({
+            "objects": [{
+                "collection": collection,
+                "key": key,
+                "value": value,
+                "permission_read": permission_read,
+                "permission_write": permission_write,
+            }]
+        });
+
+        log::debug!(
+            "[nakama] write_storage {}/{} ({} bytes)",
+            collection,
+            key,
+            value.len()
+        );
+        let resp = self
+            .http
+            .put(&url)
+            .bearer_auth(&token)
+            .json(&body)
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            let err_text = resp.text().await.unwrap_or_default();
+            log::warn!(
+                "[nakama] storage write failed {}/{}: {}",
+                collection,
+                key,
+                err_text
+            );
+            return Err(Error::Server(format!("storage write failed: {}", err_text)));
+        }
+
+        Ok(())
     }
 
     // --- Presence RPCs ---

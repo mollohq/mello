@@ -38,14 +38,67 @@ export component MainWindow inherits Window {
     in property <string> link-error: "";
     in property <bool> is-returning-user: false;
     out property <string> onboarding-nickname;
-    out property <int> selected-avatar;
+    in-out property <int> selected-avatar: -1;
     in-out property <bool> show-sign-in: false;
+
+    // Avatar grid (Step 2)
+    in property <image> avatar-img-0;
+    in property <image> avatar-img-1;
+    in property <image> avatar-img-2;
+    in property <image> avatar-img-3;
+    in property <image> avatar-img-4;
+    in property <image> avatar-img-5;
+    in property <image> avatar-img-6;
+    in property <image> avatar-back-0;
+    in property <image> avatar-back-1;
+    in property <image> avatar-back-2;
+    in property <image> avatar-back-3;
+    in property <image> avatar-back-4;
+    in property <image> avatar-back-5;
+    in property <image> avatar-back-6;
+    in property <bool> avatar-loaded-0: false;
+    in property <bool> avatar-loaded-1: false;
+    in property <bool> avatar-loaded-2: false;
+    in property <bool> avatar-loaded-3: false;
+    in property <bool> avatar-loaded-4: false;
+    in property <bool> avatar-loaded-5: false;
+    in property <bool> avatar-loaded-6: false;
+    in property <bool> avatar-deal-0: false;
+    in property <bool> avatar-deal-1: false;
+    in property <bool> avatar-deal-2: false;
+    in property <bool> avatar-deal-3: false;
+    in property <bool> avatar-deal-4: false;
+    in property <bool> avatar-deal-5: false;
+    in property <bool> avatar-deal-6: false;
+    in property <bool> avatar-deal-upload: false;
+    in-out property <bool> avatar-flip-0: false;
+    in-out property <bool> avatar-flip-1: false;
+    in-out property <bool> avatar-flip-2: false;
+    in-out property <bool> avatar-flip-3: false;
+    in-out property <bool> avatar-flip-4: false;
+    in-out property <bool> avatar-flip-5: false;
+    in-out property <bool> avatar-flip-6: false;
+    in property <image> upload-preview;
+    in property <bool> has-upload: false;
+    in-out property <int> spinning-slot: -1;
+    in-out property <float> spin-angle: 0;
+    in-out property <string> spin-text-front: "";
+    in-out property <string> spin-text-back: "";
+    in-out property <bool> spin-heart-front: false;
+    in-out property <bool> spin-heart-back: false;
+    callback avatar-slot-clicked(int);
+    callback avatar-pointer-down(int);
+    callback avatar-pointer-up(int);
+    callback avatar-reroll-clicked();
+    callback avatar-upload-clicked();
 
     // --- User ---
     in property <string> user-id: "";
     in property <string> user-name: "";
     in property <string> user-initials: "";
     in property <string> user-tag: "";
+    in property <image> user-avatar;
+    in property <bool> has-user-avatar: false;
 
     // --- Crews ---
     in property <[CrewData]> crews: [];
@@ -267,6 +320,55 @@ export component MainWindow inherits Window {
         selected-playback-name <=> root.selected-playback-name;
         nickname <=> root.onboarding-nickname;
         selected-avatar <=> root.selected-avatar;
+        avatar-img-0: root.avatar-img-0;
+        avatar-img-1: root.avatar-img-1;
+        avatar-img-2: root.avatar-img-2;
+        avatar-img-3: root.avatar-img-3;
+        avatar-img-4: root.avatar-img-4;
+        avatar-img-5: root.avatar-img-5;
+        avatar-img-6: root.avatar-img-6;
+        avatar-back-0: root.avatar-back-0;
+        avatar-back-1: root.avatar-back-1;
+        avatar-back-2: root.avatar-back-2;
+        avatar-back-3: root.avatar-back-3;
+        avatar-back-4: root.avatar-back-4;
+        avatar-back-5: root.avatar-back-5;
+        avatar-back-6: root.avatar-back-6;
+        avatar-loaded-0: root.avatar-loaded-0;
+        avatar-loaded-1: root.avatar-loaded-1;
+        avatar-loaded-2: root.avatar-loaded-2;
+        avatar-loaded-3: root.avatar-loaded-3;
+        avatar-loaded-4: root.avatar-loaded-4;
+        avatar-loaded-5: root.avatar-loaded-5;
+        avatar-loaded-6: root.avatar-loaded-6;
+        avatar-deal-0: root.avatar-deal-0;
+        avatar-deal-1: root.avatar-deal-1;
+        avatar-deal-2: root.avatar-deal-2;
+        avatar-deal-3: root.avatar-deal-3;
+        avatar-deal-4: root.avatar-deal-4;
+        avatar-deal-5: root.avatar-deal-5;
+        avatar-deal-6: root.avatar-deal-6;
+        avatar-deal-upload: root.avatar-deal-upload;
+        avatar-flip-0 <=> root.avatar-flip-0;
+        avatar-flip-1 <=> root.avatar-flip-1;
+        avatar-flip-2 <=> root.avatar-flip-2;
+        avatar-flip-3 <=> root.avatar-flip-3;
+        avatar-flip-4 <=> root.avatar-flip-4;
+        avatar-flip-5 <=> root.avatar-flip-5;
+        avatar-flip-6 <=> root.avatar-flip-6;
+        upload-preview: root.upload-preview;
+        has-upload: root.has-upload;
+        spinning-slot: root.spinning-slot;
+        spin-angle: root.spin-angle;
+        spin-text-front: root.spin-text-front;
+        spin-text-back: root.spin-text-back;
+        spin-heart-front: root.spin-heart-front;
+        spin-heart-back: root.spin-heart-back;
+        avatar-slot-clicked(i) => { root.avatar-slot-clicked(i); }
+        avatar-pointer-down(i) => { root.avatar-pointer-down(i); }
+        avatar-pointer-up(i) => { root.avatar-pointer-up(i); }
+        reroll-clicked => { root.avatar-reroll-clicked(); }
+        upload-clicked => { root.avatar-upload-clicked(); }
         crew-selected(id) => { root.onboarding-crew-selected(id); }
         create-crew-requested(name) => { root.onboarding-create-crew(name); }
         continue-to-step(s) => { root.onboarding-continue(s); }
@@ -386,6 +488,8 @@ export component MainWindow inherits Window {
                         height: 92px;
                         user-name: root.user-name;
                         user-initials: root.user-initials;
+                        user-avatar: root.user-avatar;
+                        has-user-avatar: root.has-user-avatar;
                         user-tag: root.user-tag;
                         mic-muted <=> root.mic-muted;
                         deafened <=> root.deafened;

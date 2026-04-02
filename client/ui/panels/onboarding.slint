@@ -186,28 +186,165 @@ component CreateCrewCard inherits Rectangle {
     }
 }
 
-component AvatarOption inherits Rectangle {
-    in property <string> label;
+component AvatarCard inherits Rectangle {
+    in property <image> front-image;
+    in property <image> back-image;
+    in property <bool> has-image: false;
     in property <bool> selected: false;
+    in property <bool> deal-visible: false;
+    in-out property <bool> flipped: false;
     callback clicked();
+    callback pointer-down();
+    callback pointer-up();
+
+    // Easter egg spin mode (shared — only one card spins at a time)
+    in property <bool> spinning: false;
+    in property <float> spin-angle: 0;
+    in property <string> spin-text-front: "";
+    in property <string> spin-text-back: "";
+    in property <bool> spin-heart-front: false;
+    in property <bool> spin-heart-back: false;
 
     horizontal-stretch: 1;
-    border-radius: Theme.r-inner;
-    background: selected ? #FF1E561A : Theme.surface;
-    border-width: selected ? 2px : 1px;
-    border-color: selected ? Theme.accent : (av-touch.has-hover ? Theme.graphic-med : Theme.graphic-light);
+
+    property <float> deal-scale: deal-visible ? 1.0 : 0.5;
+    property <float> deal-opacity: deal-visible ? 1.0 : 0.0;
+    property <float> deal-y: deal-visible ? 0.0 : 12.0;
+
+    animate deal-scale { duration: 350ms; easing: cubic-bezier(0.34, 1.56, 0.64, 1); }
+    animate deal-opacity { duration: 350ms; easing: cubic-bezier(0.34, 1.56, 0.64, 1); }
+    animate deal-y { duration: 350ms; easing: cubic-bezier(0.34, 1.56, 0.64, 1); }
+
+    property <float> flip-progress: flipped ? 1.0 : 0.0;
+    animate flip-progress { duration: 1040ms; easing: cubic-bezier(0.4, 0.0, 0.2, 1); }
+
+    property <float> normal-scale-x: Math.abs(Math.cos(flip-progress * 3.14159265rad));
+    property <bool> normal-show-front: flip-progress < 0.5;
+
+    property <float> spin-norm: Math.mod(spin-angle, 360.0);
+    property <float> spin-scale-x: Math.abs(Math.cos(spin-angle / 180.0 * 3.14159265rad));
+    property <bool> spin-show-front: spin-norm < 90.0 || spin-norm >= 270.0;
+
+    property <float> scale-x-factor: spinning ? spin-scale-x : normal-scale-x;
+    property <bool> show-front: spinning ? spin-show-front : normal-show-front;
+
+    opacity: deal-opacity;
 
     av-touch := TouchArea {
         clicked => {
-            root.clicked();
+            if !root.spinning { root.clicked(); }
+        }
+        pointer-event(e) => {
+            if (e.kind == PointerEventKind.down) { root.pointer-down(); }
+            if (e.kind == PointerEventKind.up || e.kind == PointerEventKind.cancel) { root.pointer-up(); }
         }
     }
 
+    // Outer glow for selected state
+    Rectangle {
+        x: -1px;
+        y: Math.round(deal-y) * 1px - 1px;
+        width: parent.width + 2px;
+        height: parent.height + 2px;
+        border-radius: Theme.r-inner + 1px;
+        border-width: selected ? 1px : 0px;
+        border-color: Theme.accent;
+        background: transparent;
+    }
+
+    // Card container with scale
+    Rectangle {
+        x: parent.width * (1.0 - deal-scale * scale-x-factor) / 2.0;
+        y: Math.round(deal-y) * 1px;
+        width: parent.width * deal-scale * scale-x-factor;
+        height: parent.height * deal-scale;
+        border-radius: Theme.r-inner;
+        clip: true;
+        background: spinning ? Theme.surface-hover : (selected ? #FF1E560A : Theme.surface);
+        border-width: selected ? 1.5px : 1.5px;
+        border-color: spinning ? Theme.accent : (selected ? Theme.accent : (av-touch.has-hover ? #404045 : Theme.graphic-light));
+
+        // Front face — avatar image (normal mode)
+        if show-front && has-image && !spinning: Image {
+            source: front-image;
+            width: parent.width * 0.70;
+            height: parent.height * 0.70;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            image-fit: contain;
+        }
+
+        // Front face — word (spin mode)
+        if show-front && spinning: Text {
+            text: spin-text-front;
+            font-family: "Oxanium";
+            font-weight: 600;
+            font-size: spin-heart-front ? 28px : 16px;
+            color: Theme.accent;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+            width: parent.width;
+            height: parent.height;
+        }
+
+        // Back face — avatar image (normal mode)
+        if !show-front && has-image && !spinning: Image {
+            source: back-image;
+            width: parent.width * 0.70;
+            height: parent.height * 0.70;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            image-fit: contain;
+        }
+
+        // Back face — word (spin mode)
+        if !show-front && spinning: Text {
+            text: spin-text-back;
+            font-family: "Oxanium";
+            font-weight: 600;
+            font-size: spin-heart-back ? 28px : 16px;
+            color: Theme.accent;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+            width: parent.width;
+            height: parent.height;
+        }
+
+        // Loading placeholder when no image
+        if !has-image && !spinning: Rectangle {
+            background: Theme.graphic-light;
+            border-radius: 4px;
+            width: 32px;
+            height: 32px;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            opacity: 0.4;
+        }
+    }
+}
+
+component AvatarFallback inherits Rectangle {
+    in property <string> nickname: "";
+    in property <int> color-index: 0;
+    in property <length> size: 80px;
+
+    width: size;
+    height: size;
+    border-radius: size > 60px ? 12px : 6px;
+
+    property <[color]> palette: [
+        #EB4D5F, #7C5CFC, #06B6D4, #F472B6,
+        #10B981, #F59E0B, #8B5CF6, #EC4899,
+    ];
+
+    background: palette[Math.clamp(color-index, 0, 7)];
+
     Text {
-        text: label;
+        text: nickname;
         font-family: Theme.font-mono;
-        font-size: 18px;
-        color: selected ? Theme.text-primary : Theme.text-tertiary;
+        font-size: parent.size * 0.32;
+        font-weight: 500;
+        color: #FFFFFF;
         horizontal-alignment: center;
         vertical-alignment: center;
     }
@@ -415,7 +552,74 @@ export component Onboarding inherits Rectangle {
     min-height: 800px;
     min-width: 1024px;
     in-out property <string> nickname: "";
-    in-out property <int> selected-avatar: 0;
+    in-out property <int> selected-avatar: -1;
+
+    property <image> chosen-avatar-img:
+        selected-avatar == 0 ? avatar-img-0 :
+        selected-avatar == 1 ? avatar-img-1 :
+        selected-avatar == 2 ? avatar-img-2 :
+        selected-avatar == 3 ? avatar-img-3 :
+        selected-avatar == 4 ? avatar-img-4 :
+        selected-avatar == 5 ? avatar-img-5 :
+        selected-avatar == 6 ? avatar-img-6 :
+        upload-preview;
+    property <bool> has-chosen-avatar: selected-avatar >= 0;
+
+    // Avatar grid images (set from Rust)
+    in property <image> avatar-img-0;
+    in property <image> avatar-img-1;
+    in property <image> avatar-img-2;
+    in property <image> avatar-img-3;
+    in property <image> avatar-img-4;
+    in property <image> avatar-img-5;
+    in property <image> avatar-img-6;
+    in property <image> avatar-back-0;
+    in property <image> avatar-back-1;
+    in property <image> avatar-back-2;
+    in property <image> avatar-back-3;
+    in property <image> avatar-back-4;
+    in property <image> avatar-back-5;
+    in property <image> avatar-back-6;
+    in property <bool> avatar-loaded-0: false;
+    in property <bool> avatar-loaded-1: false;
+    in property <bool> avatar-loaded-2: false;
+    in property <bool> avatar-loaded-3: false;
+    in property <bool> avatar-loaded-4: false;
+    in property <bool> avatar-loaded-5: false;
+    in property <bool> avatar-loaded-6: false;
+    in property <bool> avatar-deal-0: false;
+    in property <bool> avatar-deal-1: false;
+    in property <bool> avatar-deal-2: false;
+    in property <bool> avatar-deal-3: false;
+    in property <bool> avatar-deal-4: false;
+    in property <bool> avatar-deal-5: false;
+    in property <bool> avatar-deal-6: false;
+    in property <bool> avatar-deal-upload: false;
+    in-out property <bool> avatar-flip-0: false;
+    in-out property <bool> avatar-flip-1: false;
+    in-out property <bool> avatar-flip-2: false;
+    in-out property <bool> avatar-flip-3: false;
+    in-out property <bool> avatar-flip-4: false;
+    in-out property <bool> avatar-flip-5: false;
+    in-out property <bool> avatar-flip-6: false;
+
+    // Upload
+    in property <image> upload-preview;
+    in property <bool> has-upload: false;
+
+    // Easter egg spin state (shared across all cards)
+    in property <int> spinning-slot: -1;
+    in property <float> spin-angle: 0;
+    in property <string> spin-text-front: "";
+    in property <string> spin-text-back: "";
+    in property <bool> spin-heart-front: false;
+    in property <bool> spin-heart-back: false;
+
+    callback avatar-slot-clicked(int);
+    callback avatar-pointer-down(int);
+    callback avatar-pointer-up(int);
+    callback reroll-clicked();
+    callback upload-clicked();
 
     in property <string> device-user-name: "";
     in property <string> device-user-initials: "";
@@ -720,40 +924,6 @@ export component Onboarding inherits Rectangle {
                     min-height: 40px;
                 }
 
-                // Bottom navigation
-                HorizontalLayout {
-                    alignment: end;
-                    spacing: 32px;
-                    height: 48px;
-
-                    Rectangle {
-                        width: skip-step1-text.preferred-width + 16px;
-
-                        skip-step1-text := Text {
-                            text: "Skip exploration";
-                            font-family: Theme.font-mono;
-                            font-size: 13px;
-                            color: skip-step1-touch.has-hover ? Theme.text-secondary : Theme.text-tertiary;
-                            vertical-alignment: center;
-                            horizontal-alignment: center;
-                        }
-
-                        skip-step1-touch := TouchArea {
-                            clicked => {
-                                root.continue-to-step(2);
-                            }
-                        }
-                    }
-
-                    AccentButton {
-                        width: 160px;
-                        label: "CONTINUE";
-                        clicked => {
-                            root.continue-to-step(2);
-                        }
-                    }
-                }
-
                 // Bottom margin
                 Rectangle {
                     height: 40px;
@@ -809,105 +979,265 @@ export component Onboarding inherits Rectangle {
 
                     Text {
                         text: "CHOOSE IDENTITY";
-                        font-size: 11px;
+                        font-family: Theme.font-mono;
+                        font-size: 10px;
                         font-weight: 500;
                         color: Theme.text-secondary;
-                        letter-spacing: 1.5px;
+                        letter-spacing: 1.4px;
+                    }
+
+                    Rectangle {
+                        height: 16px;
+                    }
+
+                    // Avatar grid 4x2
+                    VerticalLayout {
+                        spacing: 10px;
+
+                        HorizontalLayout {
+                            spacing: 10px;
+                            height: 96px;
+
+                            AvatarCard {
+                                front-image: root.avatar-img-0;
+                                back-image: root.avatar-back-0;
+                                has-image: root.avatar-loaded-0;
+                                selected: root.selected-avatar == 0;
+                                deal-visible: root.avatar-deal-0;
+                                flipped: root.avatar-flip-0;
+                                spinning: root.spinning-slot == 0;
+                                spin-angle: root.spin-angle;
+                                spin-text-front: root.spin-text-front;
+                                spin-text-back: root.spin-text-back;
+                                spin-heart-front: root.spin-heart-front;
+                                spin-heart-back: root.spin-heart-back;
+                                clicked => { root.avatar-slot-clicked(0); }
+                                pointer-down => { root.avatar-pointer-down(0); }
+                                pointer-up => { root.avatar-pointer-up(0); }
+                            }
+
+                            AvatarCard {
+                                front-image: root.avatar-img-1;
+                                back-image: root.avatar-back-1;
+                                has-image: root.avatar-loaded-1;
+                                selected: root.selected-avatar == 1;
+                                deal-visible: root.avatar-deal-1;
+                                flipped: root.avatar-flip-1;
+                                spinning: root.spinning-slot == 1;
+                                spin-angle: root.spin-angle;
+                                spin-text-front: root.spin-text-front;
+                                spin-text-back: root.spin-text-back;
+                                spin-heart-front: root.spin-heart-front;
+                                spin-heart-back: root.spin-heart-back;
+                                clicked => { root.avatar-slot-clicked(1); }
+                                pointer-down => { root.avatar-pointer-down(1); }
+                                pointer-up => { root.avatar-pointer-up(1); }
+                            }
+
+                            AvatarCard {
+                                front-image: root.avatar-img-2;
+                                back-image: root.avatar-back-2;
+                                has-image: root.avatar-loaded-2;
+                                selected: root.selected-avatar == 2;
+                                deal-visible: root.avatar-deal-2;
+                                flipped: root.avatar-flip-2;
+                                spinning: root.spinning-slot == 2;
+                                spin-angle: root.spin-angle;
+                                spin-text-front: root.spin-text-front;
+                                spin-text-back: root.spin-text-back;
+                                spin-heart-front: root.spin-heart-front;
+                                spin-heart-back: root.spin-heart-back;
+                                clicked => { root.avatar-slot-clicked(2); }
+                                pointer-down => { root.avatar-pointer-down(2); }
+                                pointer-up => { root.avatar-pointer-up(2); }
+                            }
+
+                            AvatarCard {
+                                front-image: root.avatar-img-3;
+                                back-image: root.avatar-back-3;
+                                has-image: root.avatar-loaded-3;
+                                selected: root.selected-avatar == 3;
+                                deal-visible: root.avatar-deal-3;
+                                flipped: root.avatar-flip-3;
+                                spinning: root.spinning-slot == 3;
+                                spin-angle: root.spin-angle;
+                                spin-text-front: root.spin-text-front;
+                                spin-text-back: root.spin-text-back;
+                                spin-heart-front: root.spin-heart-front;
+                                spin-heart-back: root.spin-heart-back;
+                                clicked => { root.avatar-slot-clicked(3); }
+                                pointer-down => { root.avatar-pointer-down(3); }
+                                pointer-up => { root.avatar-pointer-up(3); }
+                            }
+                        }
+
+                        HorizontalLayout {
+                            spacing: 10px;
+                            height: 96px;
+
+                            AvatarCard {
+                                front-image: root.avatar-img-4;
+                                back-image: root.avatar-back-4;
+                                has-image: root.avatar-loaded-4;
+                                selected: root.selected-avatar == 4;
+                                deal-visible: root.avatar-deal-4;
+                                flipped: root.avatar-flip-4;
+                                spinning: root.spinning-slot == 4;
+                                spin-angle: root.spin-angle;
+                                spin-text-front: root.spin-text-front;
+                                spin-text-back: root.spin-text-back;
+                                spin-heart-front: root.spin-heart-front;
+                                spin-heart-back: root.spin-heart-back;
+                                clicked => { root.avatar-slot-clicked(4); }
+                                pointer-down => { root.avatar-pointer-down(4); }
+                                pointer-up => { root.avatar-pointer-up(4); }
+                            }
+
+                            AvatarCard {
+                                front-image: root.avatar-img-5;
+                                back-image: root.avatar-back-5;
+                                has-image: root.avatar-loaded-5;
+                                selected: root.selected-avatar == 5;
+                                deal-visible: root.avatar-deal-5;
+                                flipped: root.avatar-flip-5;
+                                spinning: root.spinning-slot == 5;
+                                spin-angle: root.spin-angle;
+                                spin-text-front: root.spin-text-front;
+                                spin-text-back: root.spin-text-back;
+                                spin-heart-front: root.spin-heart-front;
+                                spin-heart-back: root.spin-heart-back;
+                                clicked => { root.avatar-slot-clicked(5); }
+                                pointer-down => { root.avatar-pointer-down(5); }
+                                pointer-up => { root.avatar-pointer-up(5); }
+                            }
+
+                            AvatarCard {
+                                front-image: root.avatar-img-6;
+                                back-image: root.avatar-back-6;
+                                has-image: root.avatar-loaded-6;
+                                selected: root.selected-avatar == 6;
+                                deal-visible: root.avatar-deal-6;
+                                flipped: root.avatar-flip-6;
+                                spinning: root.spinning-slot == 6;
+                                spin-angle: root.spin-angle;
+                                spin-text-front: root.spin-text-front;
+                                spin-text-back: root.spin-text-back;
+                                spin-heart-front: root.spin-heart-front;
+                                spin-heart-back: root.spin-heart-back;
+                                clicked => { root.avatar-slot-clicked(6); }
+                                pointer-down => { root.avatar-pointer-down(6); }
+                                pointer-up => { root.avatar-pointer-up(6); }
+                            }
+
+                            // Upload slot (8th position)
+                            Rectangle {
+                                horizontal-stretch: 1;
+                                border-radius: Theme.r-inner;
+                                background: Theme.surface;
+                                border-width: 1.5px;
+                                border-color: root.selected-avatar == 7 ? Theme.accent : (upload-touch.has-hover ? #404045 : Theme.graphic-light);
+
+                                property <float> up-opacity: root.avatar-deal-upload ? 1.0 : 0.0;
+                                opacity: up-opacity;
+                                animate up-opacity { duration: 350ms; easing: cubic-bezier(0.34, 1.56, 0.64, 1); }
+
+                                upload-touch := TouchArea {
+                                    clicked => { root.upload-clicked(); }
+                                }
+
+                                if root.has-upload: Image {
+                                    source: root.upload-preview;
+                                    width: parent.width * 0.70;
+                                    height: parent.height * 0.70;
+                                    x: (parent.width - self.width) / 2;
+                                    y: (parent.height - self.height) / 2;
+                                    image-fit: contain;
+                                }
+
+                                if !root.has-upload: VerticalLayout {
+                                    alignment: center;
+                                    spacing: 4px;
+
+                                    HorizontalLayout {
+                                        alignment: center;
+                                        Text {
+                                            text: "+";
+                                            font-size: 22px;
+                                            font-weight: 300;
+                                            color: Theme.text-tertiary;
+                                        }
+                                    }
+                                    HorizontalLayout {
+                                        alignment: center;
+                                        Text {
+                                            text: "UPLOAD";
+                                            font-family: Theme.font-mono;
+                                            font-size: 9px;
+                                            color: Theme.text-tertiary;
+                                            letter-spacing: 0.8px;
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
 
                     Rectangle {
                         height: 20px;
                     }
 
-                    // Avatar grid 4x2
-                    VerticalLayout {
-                        spacing: 12px;
+                    // Reroll button
+                    HorizontalLayout {
+                        alignment: start;
 
-                        HorizontalLayout {
-                            spacing: 12px;
-                            height: 96px;
+                        Rectangle {
+                            width: reroll-layout.preferred-width + 32px;
+                            height: 40px;
+                            background: Theme.surface;
+                            border-radius: Theme.r-inner;
+                            border-width: 1.5px;
+                            border-color: reroll-touch.has-hover ? Theme.accent : Theme.graphic-light;
 
-                            AvatarOption {
-                                label: "ME";
-                                selected: selected-avatar == 0;
-                                clicked => {
-                                    selected-avatar = 0;
-                                }
+                            reroll-touch := TouchArea {
+                                clicked => { root.reroll-clicked(); }
                             }
 
-                            AvatarOption {
-                                label: "A1";
-                                selected: selected-avatar == 1;
-                                clicked => {
-                                    selected-avatar = 1;
+                            reroll-layout := HorizontalLayout {
+                                alignment: center;
+                                spacing: 8px;
+
+                                Image {
+                                    source: @image-url("../icons/dice.svg");
+                                    width: 16px;
+                                    height: 16px;
+                                    colorize: Theme.text-secondary;
+                                    y: (parent.height - self.height) / 2;
                                 }
-                            }
 
-                            AvatarOption {
-                                label: "A2";
-                                selected: selected-avatar == 2;
-                                clicked => {
-                                    selected-avatar = 2;
-                                }
-                            }
-
-                            AvatarOption {
-                                label: "A3";
-                                selected: selected-avatar == 3;
-                                clicked => {
-                                    selected-avatar = 3;
-                                }
-                            }
-                        }
-
-                        HorizontalLayout {
-                            spacing: 12px;
-                            height: 96px;
-
-                            AvatarOption {
-                                label: "A4";
-                                selected: selected-avatar == 4;
-                                clicked => {
-                                    selected-avatar = 4;
-                                }
-                            }
-
-                            AvatarOption {
-                                label: "A5";
-                                selected: selected-avatar == 5;
-                                clicked => {
-                                    selected-avatar = 5;
-                                }
-                            }
-
-                            AvatarOption {
-                                label: "A6";
-                                selected: selected-avatar == 6;
-                                clicked => {
-                                    selected-avatar = 6;
-                                }
-                            }
-
-                            AvatarOption {
-                                label: "A7";
-                                selected: selected-avatar == 7;
-                                clicked => {
-                                    selected-avatar = 7;
+                                Text {
+                                    text: "REROLL ALL";
+                                    font-family: Theme.font-mono;
+                                    font-size: 11px;
+                                    font-weight: 500;
+                                    letter-spacing: 0.8px;
+                                    color: Theme.text-secondary;
+                                    vertical-alignment: center;
                                 }
                             }
                         }
                     }
 
                     Rectangle {
-                        height: 48px;
+                        height: 36px;
                     }
 
                     Text {
-                        text: "YOUR NICKNAME";
-                        font-size: 11px;
+                        text: "CREW NICKNAME";
+                        font-family: Theme.font-mono;
+                        font-size: 10px;
                         font-weight: 500;
                         color: Theme.text-secondary;
-                        letter-spacing: 1.5px;
+                        letter-spacing: 1.4px;
                     }
 
                     Rectangle {
@@ -986,7 +1316,7 @@ export component Onboarding inherits Rectangle {
                 AccentButton {
                     width: 200px;
                     label: "Continue";
-                    enabled: nickname != "";
+                    enabled: nickname != "" && root.selected-avatar >= 0;
                     clicked => {
                         root.continue-to-step(3);
                     }
@@ -1071,8 +1401,16 @@ export component Onboarding inherits Rectangle {
                                 border-radius: 4px;
                                 border-width: 1px;
                                 border-color: Theme.accent;
+                                clip: true;
 
-                                Text {
+                                if has-chosen-avatar: Image {
+                                    source: chosen-avatar-img;
+                                    width: parent.width;
+                                    height: parent.height;
+                                    image-fit: contain;
+                                }
+
+                                if !has-chosen-avatar: Text {
                                     text: nickname != "" ? nickname : "?";
                                     font-family: Theme.font-mono;
                                     font-size: 14px;

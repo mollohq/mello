@@ -244,8 +244,16 @@ component VoiceChannelExpanded inherits Rectangle {
                     background: Theme.surface;
                     border-width: 1px;
                     border-color: member.speaking ? Theme.accent : Theme.graphic-light;
+                    clip: true;
 
-                    Text {
+                    if member.has-avatar: Image {
+                        source: member.avatar;
+                        width: parent.width;
+                        height: parent.height;
+                        image-fit: contain;
+                    }
+
+                    if !member.has-avatar: Text {
                         text: member.initials;
                         font-size: 14px;
                         font-family: Theme.font-mono;

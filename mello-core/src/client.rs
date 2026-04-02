@@ -1104,7 +1104,10 @@ impl Client {
                 crew_open,
                 crew_avatar,
                 display_name,
-                avatar,
+                avatar_data,
+                avatar_format,
+                avatar_style,
+                avatar_seed,
             } => {
                 self.handle_finalize_onboarding(
                     crew_id,
@@ -1113,7 +1116,10 @@ impl Client {
                     crew_open,
                     crew_avatar,
                     &display_name,
-                    avatar,
+                    avatar_data,
+                    avatar_format,
+                    avatar_style,
+                    avatar_seed,
                 )
                 .await;
             }
@@ -1141,6 +1147,9 @@ impl Client {
             }
             Command::FetchCrewAvatars { crew_ids } => {
                 self.handle_fetch_crew_avatars(&crew_ids).await;
+            }
+            Command::FetchUserAvatar { user_id } => {
+                self.handle_fetch_user_avatar(&user_id).await;
             }
             Command::SearchUsers { query } => {
                 self.handle_search_users(&query).await;
@@ -1409,7 +1418,10 @@ impl Client {
         crew_open: Option<bool>,
         crew_avatar: Option<String>,
         display_name: &str,
-        _avatar: u8,
+        avatar_data: Option<String>,
+        avatar_format: Option<String>,
+        avatar_style: Option<String>,
+        avatar_seed: Option<String>,
     ) {
         let device_id = {
             use rand::Rng;
@@ -1449,13 +1461,54 @@ impl Client {
 
         self.on_connected().await;
 
-        if !display_name.is_empty() {
-            if let Err(e) = self.nakama.update_account(display_name).await {
-                log::warn!("[onboarding] failed to set display name: {}", e);
+        if !display_name.is_empty() || avatar_data.is_some() {
+            let avatar_url_value = if avatar_data.is_some() {
+                Some(format!("/v2/storage/avatars/current/{}", user.id))
+            } else {
+                None
+            };
+            if let Err(e) = self
+                .nakama
+                .update_account_fields(
+                    if display_name.is_empty() {
+                        None
+                    } else {
+                        Some(display_name)
+                    },
+                    avatar_url_value.as_deref(),
+                )
+                .await
+            {
+                log::warn!("[onboarding] failed to update account: {}", e);
             }
         }
 
-        // TODO: persist avatar in user metadata once supported
+        if let Some(ref data) = avatar_data {
+            let fmt = avatar_format.as_deref().unwrap_or("svg");
+            let mut value = serde_json::json!({
+                "format": fmt,
+                "data": data,
+            });
+            if let Some(ref style) = avatar_style {
+                value["style"] = serde_json::Value::String(style.clone());
+            }
+            if let Some(ref seed) = avatar_seed {
+                value["seed"] = serde_json::Value::String(seed.clone());
+            }
+            let value_str = value.to_string();
+            log::info!(
+                "[onboarding] writing avatar to storage ({} format, {} bytes)",
+                fmt,
+                value_str.len()
+            );
+            if let Err(e) = self
+                .nakama
+                .write_storage("avatars", "current", &value_str, 2, 1)
+                .await
+            {
+                log::warn!("[onboarding] failed to write avatar: {}", e);
+            }
+        }
 
         let final_crew_id = if let Some(id) = crew_id {
             if let Err(e) = self.nakama.join_group(&id).await {
@@ -2060,6 +2113,53 @@ impl Client {
                         e
                     );
                 }
+            }
+        }
+    }
+
+    async fn handle_fetch_user_avatar(&self, user_id: &str) {
+        log::info!("[avatar] fetching avatar for user {}", user_id);
+        match self
+            .nakama
+            .read_storage("avatars", "current", user_id)
+            .await
+        {
+            Ok(raw) if !raw.is_empty() => {
+                let parsed: serde_json::Value = match serde_json::from_str(&raw) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        log::warn!("[avatar] failed to parse user avatar JSON: {}", e);
+                        return;
+                    }
+                };
+                let data = parsed
+                    .get("data")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string();
+                if !data.is_empty() {
+                    log::info!(
+                        "[avatar] loaded avatar for user {} ({} bytes)",
+                        user_id,
+                        data.len()
+                    );
+                    let _ = self.event_tx.send(Event::UserAvatarLoaded {
+                        user_id: user_id.to_string(),
+                        data,
+                    });
+                } else {
+                    log::debug!("[avatar] no avatar data in storage for user {}", user_id);
+                }
+            }
+            Ok(_) => {
+                log::debug!("[avatar] no avatar stored for user {}", user_id);
+            }
+            Err(e) => {
+                log::warn!(
+                    "[avatar] failed to fetch avatar for user {}: {}",
+                    user_id,
+                    e
+                );
             }
         }
     }

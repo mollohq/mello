@@ -89,6 +89,10 @@ pub enum Event {
         crew_id: String,
         data: String,
     },
+    UserAvatarLoaded {
+        user_id: String,
+        data: String,
+    },
     UserSearchResults {
         users: Vec<UserSearchResult>,
     },

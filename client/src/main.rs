@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod autolaunch;
+mod avatar;
 mod deep_link;
 mod gif_animator;
 mod image_cache;
@@ -59,7 +60,12 @@ fn make_initials(name: &str) -> String {
     }
 }
 
-fn chat_messages_to_slint(raw: &[mello_core::events::ChatMessage]) -> Vec<ChatMessageData> {
+fn chat_messages_to_slint(
+    raw: &[mello_core::events::ChatMessage],
+    user_id: &str,
+    user_avatar: &slint::Image,
+    has_user_avatar: bool,
+) -> Vec<ChatMessageData> {
     mello_core::chat::prepare_messages_for_display(raw)
         .into_iter()
         .map(|d| {
@@ -68,11 +74,18 @@ fn chat_messages_to_slint(raw: &[mello_core::events::ChatMessage]) -> Vec<ChatMe
                 Some(g) => (g.preview.clone(), g.width as i32, g.height as i32),
                 None => (String::new(), 0, 0),
             };
+            let is_self = d.sender_id == user_id;
             ChatMessageData {
                 message_id: d.message_id.into(),
                 sender_id: d.sender_id.into(),
                 sender_name: d.sender_name.into(),
                 sender_initials: d.sender_initials.into(),
+                sender_avatar: if is_self && has_user_avatar {
+                    user_avatar.clone()
+                } else {
+                    slint::Image::default()
+                },
+                has_sender_avatar: is_self && has_user_avatar,
                 text: d.content.into(),
                 timestamp: d.timestamp.into(),
                 display_time: d.display_time.into(),
@@ -438,6 +451,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             });
         });
     }
+    // --- Avatar grid state (early init so all onboarding paths can trigger loading) ---
+    let avatar_state: std::sync::Arc<std::sync::Mutex<avatar::AvatarGridState>> =
+        std::sync::Arc::new(std::sync::Mutex::new(avatar::AvatarGridState::new()));
+    let avatar_shuffle_timer: Rc<RefCell<Option<slint::Timer>>> = Rc::new(RefCell::new(None));
+
     let invited_users: Rc<RefCell<InvitedUserList>> = Rc::new(RefCell::new(Vec::new()));
     {
         let cmd = cmd_tx.clone();
@@ -445,13 +463,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let invited = invited_users.clone();
         let app_weak = app.as_weak();
         let s = settings.clone();
+        let avatar_st = avatar_state.clone();
+        let shuffle_timer = avatar_shuffle_timer.clone();
+        let rt_handle = rt.handle().clone();
         app.on_create_crew(move |name, description, is_private| {
             let Some(app) = app_weak.upgrade() else {
                 return;
             };
 
             if app.get_onboarding_step() < 4 {
-                // Onboarding: defer creation, store details locally
                 let mut settings = s.borrow_mut();
                 settings.pending_crew_id = None;
                 settings.pending_crew_name = Some(name.to_string());
@@ -459,13 +479,35 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 settings.pending_crew_open = Some(!is_private);
                 settings.onboarding_step = 2;
                 settings.save();
+                drop(settings);
                 app.set_new_crew_open(false);
                 app.set_onboarding_step(2);
                 log::info!(
-                    "[onboarding] crew details stored locally: name={:?} open={}",
+                    "[onboarding] crew created locally: name={:?} open={} — loading avatars",
                     name.as_str(),
                     !is_private,
                 );
+
+                *avatar_st.lock().unwrap() = avatar::AvatarGridState::new();
+                load_avatar_grid(app.as_weak(), &avatar_st, &rt_handle);
+                let shuffle_timer2 = shuffle_timer.clone();
+                let avatar_st2 = avatar_st.clone();
+                let app_weak2 = app.as_weak();
+                let rt_h = rt_handle.clone();
+                let delay_timer = slint::Timer::default();
+                delay_timer.start(
+                    slint::TimerMode::SingleShot,
+                    Duration::from_millis(7 * 60 + 500),
+                    move || {
+                        start_ambient_shuffle(
+                            app_weak2.clone(),
+                            &avatar_st2,
+                            &shuffle_timer2,
+                            &rt_h,
+                        );
+                    },
+                );
+                std::mem::forget(delay_timer);
                 return;
             }
 
@@ -680,6 +722,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 app.set_user_name("".into());
                 app.set_user_initials("".into());
                 app.set_user_tag("".into());
+                app.set_user_avatar(slint::Image::default());
+                app.set_has_user_avatar(false);
                 app.set_active_crew_id("".into());
                 app.set_onboarding_step(1);
             }
@@ -1164,6 +1208,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let cmd = cmd_tx.clone();
         let app_weak = app.as_weak();
         let s = settings.clone();
+        let avatar_st = avatar_state.clone();
+        let shuffle_timer = avatar_shuffle_timer.clone();
+        let rt_handle = rt.handle().clone();
         app.on_onboarding_crew_selected(move |crew_id| {
             let _ = cmd.try_send(Command::ListAudioDevices);
             if let Some(app) = app_weak.upgrade() {
@@ -1173,7 +1220,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 settings.pending_crew_name = None;
                 settings.onboarding_step = 2;
                 settings.save();
-                log::info!("[onboarding] crew selected (stored locally): {}", crew_id);
+                drop(settings);
+                log::info!(
+                    "[onboarding] crew selected (stored locally): {} — loading avatars",
+                    crew_id
+                );
+
+                *avatar_st.lock().unwrap() = avatar::AvatarGridState::new();
+                load_avatar_grid(app.as_weak(), &avatar_st, &rt_handle);
+                let shuffle_timer2 = shuffle_timer.clone();
+                let avatar_st2 = avatar_st.clone();
+                let app_weak2 = app.as_weak();
+                let rt_h = rt_handle.clone();
+                let delay_timer = slint::Timer::default();
+                delay_timer.start(
+                    slint::TimerMode::SingleShot,
+                    Duration::from_millis(7 * 60 + 500),
+                    move || {
+                        start_ambient_shuffle(
+                            app_weak2.clone(),
+                            &avatar_st2,
+                            &shuffle_timer2,
+                            &rt_h,
+                        );
+                    },
+                );
+                std::mem::forget(delay_timer);
             }
         });
     }
@@ -1191,17 +1263,752 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         });
     }
+
+    fn load_avatar_grid(
+        app_weak: slint::Weak<MainWindow>,
+        state: &std::sync::Arc<std::sync::Mutex<avatar::AvatarGridState>>,
+        rt: &tokio::runtime::Handle,
+    ) {
+        log::info!("[avatar] load_avatar_grid: spawning 7 fetch tasks");
+        let http = reqwest::Client::new();
+        for i in 0..7usize {
+            let style = avatar::AvatarGridState::pick_random_style().to_string();
+            let seed = state.lock().unwrap().make_seed(i);
+            {
+                let mut s = state.lock().unwrap();
+                s.slots[i].style = style.clone();
+                s.slots[i].seed = seed.clone();
+            }
+            let app_weak = app_weak.clone();
+            let http = http.clone();
+            let state_clone = state.clone();
+            rt.spawn(async move {
+                log::debug!("[avatar] slot {} fetching style={} seed={}", i, style, seed);
+                match avatar::fetch_and_rasterize(&http, &style, &seed).await {
+                    Some((svg_data, rgba)) => {
+                        log::debug!("[avatar] slot {} fetch OK, rgba len={}", i, rgba.len());
+                        state_clone.lock().unwrap().slots[i].svg_data = Some(svg_data);
+                        let _ = slint::invoke_from_event_loop(move || {
+                            log::debug!("[avatar] slot {} pushing image to UI", i);
+                            let image = avatar::rgba_to_image(
+                                &rgba,
+                                avatar::RENDER_SIZE,
+                                avatar::RENDER_SIZE,
+                            );
+                            let Some(app) = app_weak.upgrade() else {
+                                log::warn!("[avatar] slot {} app_weak gone", i);
+                                return;
+                            };
+                            match i {
+                                0 => {
+                                    app.set_avatar_img_0(image.clone());
+                                    app.set_avatar_loaded_0(true);
+                                }
+                                1 => {
+                                    app.set_avatar_img_1(image.clone());
+                                    app.set_avatar_loaded_1(true);
+                                }
+                                2 => {
+                                    app.set_avatar_img_2(image.clone());
+                                    app.set_avatar_loaded_2(true);
+                                }
+                                3 => {
+                                    app.set_avatar_img_3(image.clone());
+                                    app.set_avatar_loaded_3(true);
+                                }
+                                4 => {
+                                    app.set_avatar_img_4(image.clone());
+                                    app.set_avatar_loaded_4(true);
+                                }
+                                5 => {
+                                    app.set_avatar_img_5(image.clone());
+                                    app.set_avatar_loaded_5(true);
+                                }
+                                6 => {
+                                    app.set_avatar_img_6(image.clone());
+                                    app.set_avatar_loaded_6(true);
+                                }
+                                _ => {}
+                            }
+                        });
+                    }
+                    None => {
+                        log::warn!("[avatar] slot {} fetch_and_rasterize returned None", i);
+                    }
+                }
+            });
+        }
+        // Stagger deal-in animations
+        for i in 0..7usize {
+            let app_weak = app_weak.clone();
+            let delay = Duration::from_millis(i as u64 * 60);
+            let timer = slint::Timer::default();
+            timer.start(slint::TimerMode::SingleShot, delay, move || {
+                let Some(app) = app_weak.upgrade() else {
+                    return;
+                };
+                match i {
+                    0 => app.set_avatar_deal_0(true),
+                    1 => app.set_avatar_deal_1(true),
+                    2 => app.set_avatar_deal_2(true),
+                    3 => app.set_avatar_deal_3(true),
+                    4 => app.set_avatar_deal_4(true),
+                    5 => app.set_avatar_deal_5(true),
+                    6 => app.set_avatar_deal_6(true),
+                    _ => {}
+                }
+            });
+            std::mem::forget(timer);
+        }
+        // Upload slot deal-in (last, after all 7)
+        {
+            let app_weak = app_weak.clone();
+            let delay = Duration::from_millis(7 * 60);
+            let timer = slint::Timer::default();
+            timer.start(slint::TimerMode::SingleShot, delay, move || {
+                let Some(app) = app_weak.upgrade() else {
+                    return;
+                };
+                app.set_avatar_deal_upload(true);
+            });
+            std::mem::forget(timer);
+        }
+    }
+
+    // Helper: start ambient shuffle timer
+    fn start_ambient_shuffle(
+        app_weak: slint::Weak<MainWindow>,
+        state: &std::sync::Arc<std::sync::Mutex<avatar::AvatarGridState>>,
+        timer_holder: &Rc<RefCell<Option<slint::Timer>>>,
+        rt: &tokio::runtime::Handle,
+    ) {
+        stop_ambient_shuffle(timer_holder);
+        let timer = slint::Timer::default();
+        let app_weak = app_weak.clone();
+        let state = state.clone();
+        let rt = rt.clone();
+        timer.start(
+            slint::TimerMode::Repeated,
+            Duration::from_secs(3),
+            move || {
+                let Some(slot_idx) = state.lock().unwrap().pick_unselected_non_flipping_slot()
+                else {
+                    return;
+                };
+                let style = avatar::AvatarGridState::pick_random_style().to_string();
+                let seed = state.lock().unwrap().make_shuffle_seed(slot_idx);
+                {
+                    let mut s = state.lock().unwrap();
+                    s.flipping[slot_idx] = true;
+                    s.slots[slot_idx].style = style.clone();
+                    s.slots[slot_idx].seed = seed.clone();
+                }
+
+                let http = reqwest::Client::new();
+                let app_weak2 = app_weak.clone();
+                let state2 = state.clone();
+                rt.spawn(async move {
+                    if let Some((svg_data, rgba)) =
+                        avatar::fetch_and_rasterize(&http, &style, &seed).await
+                    {
+                        state2.lock().unwrap().slots[slot_idx].svg_data = Some(svg_data);
+                        let _ = slint::invoke_from_event_loop(move || {
+                            let image = avatar::rgba_to_image(
+                                &rgba,
+                                avatar::RENDER_SIZE,
+                                avatar::RENDER_SIZE,
+                            );
+                            let Some(app) = app_weak2.upgrade() else {
+                                return;
+                            };
+                            match slot_idx {
+                                0 => {
+                                    app.set_avatar_back_0(image.clone());
+                                    let v = app.get_avatar_flip_0();
+                                    app.set_avatar_flip_0(!v);
+                                }
+                                1 => {
+                                    app.set_avatar_back_1(image.clone());
+                                    let v = app.get_avatar_flip_1();
+                                    app.set_avatar_flip_1(!v);
+                                }
+                                2 => {
+                                    app.set_avatar_back_2(image.clone());
+                                    let v = app.get_avatar_flip_2();
+                                    app.set_avatar_flip_2(!v);
+                                }
+                                3 => {
+                                    app.set_avatar_back_3(image.clone());
+                                    let v = app.get_avatar_flip_3();
+                                    app.set_avatar_flip_3(!v);
+                                }
+                                4 => {
+                                    app.set_avatar_back_4(image.clone());
+                                    let v = app.get_avatar_flip_4();
+                                    app.set_avatar_flip_4(!v);
+                                }
+                                5 => {
+                                    app.set_avatar_back_5(image.clone());
+                                    let v = app.get_avatar_flip_5();
+                                    app.set_avatar_flip_5(!v);
+                                }
+                                6 => {
+                                    app.set_avatar_back_6(image.clone());
+                                    let v = app.get_avatar_flip_6();
+                                    app.set_avatar_flip_6(!v);
+                                }
+                                _ => {}
+                            }
+                            // After flip, swap front = back
+                            let app_weak3 = app.as_weak();
+                            let state3 = state2.clone();
+                            let timer = slint::Timer::default();
+                            timer.start(
+                                slint::TimerMode::SingleShot,
+                                Duration::from_millis(1100),
+                                move || {
+                                    state3.lock().unwrap().flipping[slot_idx] = false;
+                                    let Some(app) = app_weak3.upgrade() else {
+                                        return;
+                                    };
+                                    match slot_idx {
+                                        0 => app.set_avatar_img_0(app.get_avatar_back_0()),
+                                        1 => app.set_avatar_img_1(app.get_avatar_back_1()),
+                                        2 => app.set_avatar_img_2(app.get_avatar_back_2()),
+                                        3 => app.set_avatar_img_3(app.get_avatar_back_3()),
+                                        4 => app.set_avatar_img_4(app.get_avatar_back_4()),
+                                        5 => app.set_avatar_img_5(app.get_avatar_back_5()),
+                                        6 => app.set_avatar_img_6(app.get_avatar_back_6()),
+                                        _ => {}
+                                    }
+                                },
+                            );
+                            std::mem::forget(timer);
+                        });
+                    } else {
+                        state2.lock().unwrap().flipping[slot_idx] = false;
+                    }
+                });
+            },
+        );
+        *timer_holder.borrow_mut() = Some(timer);
+    }
+
+    fn stop_ambient_shuffle(timer_holder: &Rc<RefCell<Option<slint::Timer>>>) {
+        if let Some(timer) = timer_holder.borrow_mut().take() {
+            timer.stop();
+        }
+    }
+
+    // --- Easter egg: hold-to-spin ---
+    struct EasterEggState {
+        slot_index: usize,
+        angle: f32,
+        speed: f32,
+        word_index: usize,
+        last_swap_half: i32,
+        decelerating: bool,
+    }
+
+    let easter_egg: Rc<RefCell<Option<EasterEggState>>> = Rc::new(RefCell::new(None));
+    let hold_timer: Rc<RefCell<Option<slint::Timer>>> = Rc::new(RefCell::new(None));
+    let spin_timer: Rc<RefCell<Option<slint::Timer>>> = Rc::new(RefCell::new(None));
+
+    {
+        let app_weak = app.as_weak();
+        let easter_egg = easter_egg.clone();
+        let hold_timer_ref = hold_timer.clone();
+        let spin_timer_ref = spin_timer.clone();
+        let shuffle_timer = avatar_shuffle_timer.clone();
+        let avatar_st = avatar_state.clone();
+        let rt_handle = rt.handle().clone();
+
+        app.on_avatar_pointer_down(move |index| {
+            let idx = index as usize;
+            if idx >= 7 {
+                return;
+            }
+            if easter_egg.borrow().is_some() {
+                return;
+            }
+
+            let app_weak2 = app_weak.clone();
+            let easter_egg2 = easter_egg.clone();
+            let spin_timer_ref2 = spin_timer_ref.clone();
+            let shuffle_timer2 = shuffle_timer.clone();
+            let avatar_st2 = avatar_st.clone();
+            let rt_handle2 = rt_handle.clone();
+
+            let timer = slint::Timer::default();
+            timer.start(
+                slint::TimerMode::SingleShot,
+                Duration::from_secs(3),
+                move || {
+                    log::debug!("[easter] hold triggered on slot {}", idx);
+                    stop_ambient_shuffle(&shuffle_timer2);
+
+                    let front_word = avatar::EASTER_WORDS[0];
+                    let back_word = avatar::EASTER_WORDS[1];
+
+                    *easter_egg2.borrow_mut() = Some(EasterEggState {
+                        slot_index: idx,
+                        angle: 0.0,
+                        speed: 2.8,
+                        word_index: 0,
+                        last_swap_half: 0,
+                        decelerating: false,
+                    });
+
+                    if let Some(app) = app_weak2.upgrade() {
+                        app.set_spinning_slot(idx as i32);
+                        app.set_spin_angle(0.0);
+                        app.set_spin_text_front(front_word.into());
+                        app.set_spin_text_back(back_word.into());
+                        app.set_spin_heart_front(avatar::is_heart(front_word));
+                        app.set_spin_heart_back(avatar::is_heart(back_word));
+                    }
+
+                    let app_weak3 = app_weak2.clone();
+                    let easter_egg3 = easter_egg2.clone();
+                    let spin_timer_ref3 = spin_timer_ref2.clone();
+                    let shuffle_timer3 = shuffle_timer2.clone();
+                    let avatar_st3 = avatar_st2.clone();
+                    let rt_h = rt_handle2.clone();
+
+                    let stimer = slint::Timer::default();
+                    stimer.start(
+                        slint::TimerMode::Repeated,
+                        Duration::from_millis(16),
+                        move || {
+                            let mut egg_opt = easter_egg3.borrow_mut();
+                            let Some(egg) = egg_opt.as_mut() else { return };
+
+                            if egg.decelerating {
+                                egg.speed *= 0.96;
+                                if egg.speed < 0.5 {
+                                    let slot = egg.slot_index;
+                                    drop(egg_opt);
+
+                                    if let Some(t) = spin_timer_ref3.borrow_mut().take() {
+                                        t.stop();
+                                    }
+                                    *easter_egg3.borrow_mut() = None;
+
+                                    if let Some(app) = app_weak3.upgrade() {
+                                        app.set_spinning_slot(-1);
+                                        app.set_spin_angle(0.0);
+                                    }
+
+                                    let style =
+                                        avatar::AvatarGridState::pick_random_style().to_string();
+                                    let seed = avatar_st3.lock().unwrap().make_shuffle_seed(slot);
+                                    {
+                                        let mut s = avatar_st3.lock().unwrap();
+                                        s.slots[slot].style = style.clone();
+                                        s.slots[slot].seed = seed.clone();
+                                    }
+                                    let http = reqwest::Client::new();
+                                    let app_w = app_weak3.clone();
+                                    let state_c = avatar_st3.clone();
+                                    rt_h.spawn(async move {
+                                        if let Some((svg_data, rgba)) =
+                                            avatar::fetch_and_rasterize(&http, &style, &seed).await
+                                        {
+                                            state_c.lock().unwrap().slots[slot].svg_data =
+                                                Some(svg_data);
+                                            let _ = slint::invoke_from_event_loop(move || {
+                                                let image = avatar::rgba_to_image(
+                                                    &rgba,
+                                                    avatar::RENDER_SIZE,
+                                                    avatar::RENDER_SIZE,
+                                                );
+                                                if let Some(app) = app_w.upgrade() {
+                                                    match slot {
+                                                        0 => {
+                                                            app.set_avatar_img_0(image);
+                                                            app.set_avatar_loaded_0(true);
+                                                        }
+                                                        1 => {
+                                                            app.set_avatar_img_1(image);
+                                                            app.set_avatar_loaded_1(true);
+                                                        }
+                                                        2 => {
+                                                            app.set_avatar_img_2(image);
+                                                            app.set_avatar_loaded_2(true);
+                                                        }
+                                                        3 => {
+                                                            app.set_avatar_img_3(image);
+                                                            app.set_avatar_loaded_3(true);
+                                                        }
+                                                        4 => {
+                                                            app.set_avatar_img_4(image);
+                                                            app.set_avatar_loaded_4(true);
+                                                        }
+                                                        5 => {
+                                                            app.set_avatar_img_5(image);
+                                                            app.set_avatar_loaded_5(true);
+                                                        }
+                                                        6 => {
+                                                            app.set_avatar_img_6(image);
+                                                            app.set_avatar_loaded_6(true);
+                                                        }
+                                                        _ => {}
+                                                    }
+                                                }
+                                            });
+                                        }
+                                    });
+
+                                    if avatar_st3.lock().unwrap().selected_slot.is_none() {
+                                        start_ambient_shuffle(
+                                            app_weak3.clone(),
+                                            &avatar_st3,
+                                            &shuffle_timer3,
+                                            &rt_h,
+                                        );
+                                    }
+                                    log::debug!("[easter] spin ended on slot {}", slot);
+                                    return;
+                                }
+                            } else if egg.speed < 8.4 {
+                                egg.speed += 0.15;
+                            }
+
+                            egg.angle = (egg.angle + egg.speed) % 360.0;
+                            let cur_half = (egg.angle / 180.0) as i32;
+
+                            if cur_half != egg.last_swap_half {
+                                egg.last_swap_half = cur_half;
+                                egg.word_index = (egg.word_index + 1) % avatar::EASTER_WORDS.len();
+                                let next_word = avatar::EASTER_WORDS
+                                    [(egg.word_index + 1) % avatar::EASTER_WORDS.len()];
+
+                                if let Some(app) = app_weak3.upgrade() {
+                                    if cur_half == 1 {
+                                        app.set_spin_text_front(next_word.into());
+                                        app.set_spin_heart_front(avatar::is_heart(next_word));
+                                    } else {
+                                        app.set_spin_text_back(next_word.into());
+                                        app.set_spin_heart_back(avatar::is_heart(next_word));
+                                    }
+                                }
+                            }
+
+                            if let Some(app) = app_weak3.upgrade() {
+                                app.set_spin_angle(egg.angle);
+                            }
+                        },
+                    );
+                    *spin_timer_ref2.borrow_mut() = Some(stimer);
+                },
+            );
+            *hold_timer_ref.borrow_mut() = Some(timer);
+        });
+    }
+
+    {
+        let easter_egg = easter_egg.clone();
+        let hold_timer_ref = hold_timer.clone();
+
+        app.on_avatar_pointer_up(move |index| {
+            let idx = index as usize;
+
+            if let Some(t) = hold_timer_ref.borrow_mut().take() {
+                t.stop();
+            }
+
+            let mut egg_opt = easter_egg.borrow_mut();
+            if let Some(egg) = egg_opt.as_mut() {
+                if egg.slot_index == idx {
+                    egg.decelerating = true;
+                    log::debug!("[easter] release — decelerating slot {}", idx);
+                }
+            }
+        });
+    }
+
+    // --- Avatar: slot clicked ---
+    {
+        let app_weak = app.as_weak();
+        let state = avatar_state.clone();
+        let timer_holder = avatar_shuffle_timer.clone();
+        let rt_handle = rt.handle().clone();
+        app.on_avatar_slot_clicked(move |index| {
+            let idx = index as usize;
+            let Some(app) = app_weak.upgrade() else {
+                return;
+            };
+            let current = state.lock().unwrap().selected_slot;
+            if current == Some(idx) {
+                state.lock().unwrap().selected_slot = None;
+                app.set_selected_avatar(-1);
+                start_ambient_shuffle(app.as_weak(), &state, &timer_holder, &rt_handle);
+            } else {
+                state.lock().unwrap().selected_slot = Some(idx);
+                app.set_selected_avatar(idx as i32);
+                stop_ambient_shuffle(&timer_holder);
+            }
+        });
+    }
+
+    // --- Avatar: reroll ---
+    {
+        let app_weak = app.as_weak();
+        let state = avatar_state.clone();
+        let timer_holder = avatar_shuffle_timer.clone();
+        let rt_handle = rt.handle().clone();
+        app.on_avatar_reroll_clicked(move || {
+            let Some(app) = app_weak.upgrade() else {
+                return;
+            };
+            state.lock().unwrap().selected_slot = None;
+            app.set_selected_avatar(-1);
+            stop_ambient_shuffle(&timer_holder);
+            state.lock().unwrap().roll_counter += 1;
+
+            let http = reqwest::Client::new();
+            for i in 0..7usize {
+                let style = avatar::AvatarGridState::pick_random_style().to_string();
+                let seed = state.lock().unwrap().make_seed(i);
+                {
+                    let mut s = state.lock().unwrap();
+                    s.slots[i].style = style.clone();
+                    s.slots[i].seed = seed.clone();
+                    s.flipping[i] = true;
+                }
+                let http = http.clone();
+                let app_weak2 = app.as_weak();
+                let state2 = state.clone();
+                let delay = i as u64 * 100;
+                rt_handle.spawn(async move {
+                    if delay > 0 {
+                        tokio::time::sleep(Duration::from_millis(delay)).await;
+                    }
+                    if let Some((svg_data, rgba)) =
+                        avatar::fetch_and_rasterize(&http, &style, &seed).await
+                    {
+                        state2.lock().unwrap().slots[i].svg_data = Some(svg_data);
+                        let _ = slint::invoke_from_event_loop(move || {
+                            let image = avatar::rgba_to_image(
+                                &rgba,
+                                avatar::RENDER_SIZE,
+                                avatar::RENDER_SIZE,
+                            );
+                            let Some(app) = app_weak2.upgrade() else {
+                                return;
+                            };
+                            match i {
+                                0 => {
+                                    app.set_avatar_back_0(image.clone());
+                                    let v = app.get_avatar_flip_0();
+                                    app.set_avatar_flip_0(!v);
+                                }
+                                1 => {
+                                    app.set_avatar_back_1(image.clone());
+                                    let v = app.get_avatar_flip_1();
+                                    app.set_avatar_flip_1(!v);
+                                }
+                                2 => {
+                                    app.set_avatar_back_2(image.clone());
+                                    let v = app.get_avatar_flip_2();
+                                    app.set_avatar_flip_2(!v);
+                                }
+                                3 => {
+                                    app.set_avatar_back_3(image.clone());
+                                    let v = app.get_avatar_flip_3();
+                                    app.set_avatar_flip_3(!v);
+                                }
+                                4 => {
+                                    app.set_avatar_back_4(image.clone());
+                                    let v = app.get_avatar_flip_4();
+                                    app.set_avatar_flip_4(!v);
+                                }
+                                5 => {
+                                    app.set_avatar_back_5(image.clone());
+                                    let v = app.get_avatar_flip_5();
+                                    app.set_avatar_flip_5(!v);
+                                }
+                                6 => {
+                                    app.set_avatar_back_6(image.clone());
+                                    let v = app.get_avatar_flip_6();
+                                    app.set_avatar_flip_6(!v);
+                                }
+                                _ => {}
+                            }
+                            let app_weak3 = app.as_weak();
+                            let state3 = state2.clone();
+                            let timer = slint::Timer::default();
+                            timer.start(
+                                slint::TimerMode::SingleShot,
+                                Duration::from_millis(1100),
+                                move || {
+                                    state3.lock().unwrap().flipping[i] = false;
+                                    let Some(app) = app_weak3.upgrade() else {
+                                        return;
+                                    };
+                                    match i {
+                                        0 => app.set_avatar_img_0(app.get_avatar_back_0()),
+                                        1 => app.set_avatar_img_1(app.get_avatar_back_1()),
+                                        2 => app.set_avatar_img_2(app.get_avatar_back_2()),
+                                        3 => app.set_avatar_img_3(app.get_avatar_back_3()),
+                                        4 => app.set_avatar_img_4(app.get_avatar_back_4()),
+                                        5 => app.set_avatar_img_5(app.get_avatar_back_5()),
+                                        6 => app.set_avatar_img_6(app.get_avatar_back_6()),
+                                        _ => {}
+                                    }
+                                },
+                            );
+                            std::mem::forget(timer);
+                        });
+                    } else {
+                        state2.lock().unwrap().flipping[i] = false;
+                    }
+                });
+            }
+
+            let timer_holder2 = timer_holder.clone();
+            let state3 = state.clone();
+            let app_weak3 = app.as_weak();
+            let rt_h = rt_handle.clone();
+            let restart_timer = slint::Timer::default();
+            restart_timer.start(
+                slint::TimerMode::SingleShot,
+                Duration::from_millis(7 * 100 + 1200),
+                move || {
+                    start_ambient_shuffle(app_weak3.clone(), &state3, &timer_holder2, &rt_h);
+                },
+            );
+            std::mem::forget(restart_timer);
+        });
+    }
+
+    // --- Avatar: upload ---
+    {
+        let app_weak = app.as_weak();
+        let state = avatar_state.clone();
+        let timer_holder = avatar_shuffle_timer.clone();
+        let rt_handle = rt.handle().clone();
+        app.on_avatar_upload_clicked(move || {
+            stop_ambient_shuffle(&timer_holder);
+            let app_weak = app_weak.clone();
+            let state = state.clone();
+            rt_handle.spawn(async move {
+                let file = rfd::AsyncFileDialog::new()
+                    .add_filter("Images", &["png", "jpg", "jpeg", "webp"])
+                    .pick_file()
+                    .await;
+                let Some(file) = file else { return };
+                let data = file.read().await;
+                let Ok(img) = image::load_from_memory(&data) else {
+                    log::warn!("[avatar] failed to decode uploaded image");
+                    return;
+                };
+                let (w, h) = (img.width(), img.height());
+                let side = w.min(h);
+                let x = (w - side) / 2;
+                let y = (h - side) / 2;
+                let cropped = img.crop_imm(x, y, side, side);
+                let resized = cropped.resize_exact(256, 256, image::imageops::CatmullRom);
+                let rgba = resized.to_rgba8();
+
+                let mut png_bytes = Vec::new();
+                {
+                    let encoder = image::codecs::png::PngEncoder::new(&mut png_bytes);
+                    use image::ImageEncoder;
+                    let _ = encoder.write_image(
+                        rgba.as_raw(),
+                        256,
+                        256,
+                        image::ExtendedColorType::Rgba8,
+                    );
+                }
+
+                let rgba_bytes = rgba.into_raw();
+
+                let _ = slint::invoke_from_event_loop(move || {
+                    let slint_img = avatar::rgba_to_image(&rgba_bytes, 256, 256);
+                    let Some(app) = app_weak.upgrade() else {
+                        return;
+                    };
+                    app.set_upload_preview(slint_img);
+                    app.set_has_upload(true);
+                    {
+                        let mut s = state.lock().unwrap();
+                        s.selected_slot = Some(7);
+                        s.upload_data = Some(png_bytes);
+                    }
+                    app.set_selected_avatar(7);
+                });
+            });
+        });
+    }
+
     // --- Onboarding: continue to step ---
     {
         let app_weak = app.as_weak();
         let s = settings.clone();
         let cmd = cmd_tx.clone();
         let avatar_b64 = new_crew_avatar_b64.clone();
+        let avatar_st = avatar_state.clone();
+        let shuffle_timer = avatar_shuffle_timer.clone();
+        let rt_handle = rt.handle().clone();
         app.on_onboarding_continue(move |step| {
             if let Some(app) = app_weak.upgrade() {
+                // When entering step 2, trigger avatar loading
+                if step == 2 {
+                    log::info!("[avatar] entering step 2 — resetting grid and loading avatars");
+                    app.set_onboarding_step(step);
+                    let mut settings = s.borrow_mut();
+                    settings.onboarding_step = step as u8;
+                    settings.save();
+                    drop(settings);
+                    *avatar_st.lock().unwrap() = avatar::AvatarGridState::new();
+                    load_avatar_grid(app.as_weak(), &avatar_st, &rt_handle);
+                    // Start ambient shuffle after initial load settles
+                    let shuffle_timer2 = shuffle_timer.clone();
+                    let avatar_st2 = avatar_st.clone();
+                    let app_weak2 = app.as_weak();
+                    let rt_h = rt_handle.clone();
+                    let delay_timer = slint::Timer::default();
+                    delay_timer.start(slint::TimerMode::SingleShot, Duration::from_millis(7 * 60 + 500), move || {
+                        start_ambient_shuffle(app_weak2.clone(), &avatar_st2, &shuffle_timer2, &rt_h);
+                    });
+                    std::mem::forget(delay_timer);
+                    return;
+                }
                 if step == 3 {
+                    // Stop shuffle
+                    stop_ambient_shuffle(&shuffle_timer);
+
+                    // Set user avatar on main window
+                    {
+                        let state = avatar_st.lock().unwrap();
+                        if let Some(sel) = state.selected_slot {
+                            let img = if sel == 7 {
+                                state.upload_data.as_ref().and_then(|png| {
+                                    image::load_from_memory(png).ok().map(|dyn_img| {
+                                        let rgba = dyn_img.to_rgba8();
+                                        let (w, h) = rgba.dimensions();
+                                        avatar::rgba_to_image(rgba.as_raw(), w, h)
+                                    })
+                                })
+                            } else if sel < 7 {
+                                state.slots[sel].svg_data.as_ref().and_then(|svg| {
+                                    avatar::rasterize_svg(svg).map(|rgba| {
+                                        avatar::rgba_to_image(&rgba, avatar::RENDER_SIZE, avatar::RENDER_SIZE)
+                                    })
+                                })
+                            } else {
+                                None
+                            };
+                            if let Some(img) = img {
+                                app.set_user_avatar(img);
+                                app.set_has_user_avatar(true);
+                            }
+                        }
+                    }
+
                     let nickname = app.get_onboarding_nickname().to_string();
-                    let avatar = app.get_selected_avatar() as u8;
                     let settings = s.borrow();
                     let crew_id = settings.pending_crew_id.clone();
                     let crew_name = settings.pending_crew_name.clone();
@@ -1209,14 +2016,41 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let crew_open = settings.pending_crew_open;
                     drop(settings);
                     let crew_avatar = avatar_b64.lock().unwrap().take();
+
+                    // Extract avatar data from grid state
+                    let (avatar_data, avatar_format, avatar_style, avatar_seed) = {
+                        let state = avatar_st.lock().unwrap();
+                        if let Some(sel) = state.selected_slot {
+                            if sel == 7 {
+                                if let Some(ref png_bytes) = state.upload_data {
+                                    let b64 = base64::engine::general_purpose::STANDARD
+                                        .encode(png_bytes);
+                                    (Some(b64), Some("png".to_string()), None, None)
+                                } else {
+                                    (None, None, None, None)
+                                }
+                            } else if sel < 7 {
+                                let slot = &state.slots[sel];
+                                (
+                                    slot.svg_data.clone(),
+                                    Some("svg".to_string()),
+                                    Some(slot.style.clone()),
+                                    Some(slot.seed.clone()),
+                                )
+                            } else {
+                                (None, None, None, None)
+                            }
+                        } else {
+                            (None, None, None, None)
+                        }
+                    };
+
                     log::info!(
-                        "[onboarding] finalizing — nickname={} crew_id={:?} crew_name={:?} crew_desc={:?} crew_open={:?} has_avatar={}",
+                        "[onboarding] finalizing — nickname={} crew_id={:?} crew_name={:?} has_avatar={}",
                         nickname,
                         crew_id,
                         crew_name,
-                        crew_description,
-                        crew_open,
-                        crew_avatar.is_some(),
+                        avatar_data.is_some(),
                     );
                     let _ = cmd.try_send(Command::FinalizeOnboarding {
                         crew_id,
@@ -1225,7 +2059,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         crew_open,
                         crew_avatar,
                         display_name: nickname,
-                        avatar,
+                        avatar_data,
+                        avatar_format,
+                        avatar_style,
+                        avatar_seed,
                     });
                     return;
                 }
@@ -1776,6 +2613,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 fn voice_members_to_ui(
     members: &[mello_core::crew_state::VoiceMember],
     local_user_id: &str,
+    user_avatar: &slint::Image,
+    has_user_avatar: bool,
 ) -> Vec<VoiceChannelMember> {
     // Convert millis to seconds relative to 2024-01-01 so it fits in Slint i32.
     const EPOCH_2024: i64 = 1_704_067_200;
@@ -1783,10 +2622,17 @@ fn voice_members_to_ui(
         .iter()
         .map(|m| {
             let secs = m.joined_at.unwrap_or(0) / 1000 - EPOCH_2024;
+            let is_self = m.user_id == local_user_id;
             VoiceChannelMember {
                 id: m.user_id.clone().into(),
                 name: m.username.clone().into(),
                 initials: make_initials(&m.username).into(),
+                avatar: if is_self && has_user_avatar {
+                    user_avatar.clone()
+                } else {
+                    slint::Image::default()
+                },
+                has_avatar: is_self && has_user_avatar,
                 speaking: m.speaking.unwrap_or(false),
                 joined_at: secs as i32,
             }
@@ -1808,8 +2654,10 @@ fn channel_to_ui(
     ch: &mello_core::crew_state::VoiceChannelState,
     active_channel_id: &str,
     local_user_id: &str,
+    user_avatar: &slint::Image,
+    has_user_avatar: bool,
 ) -> VoiceChannelData {
-    let members = voice_members_to_ui(&ch.members, local_user_id);
+    let members = voice_members_to_ui(&ch.members, local_user_id, user_avatar, has_user_avatar);
     let member_count = members.len() as i32;
     let is_active = ch.id == active_channel_id;
     VoiceChannelData {
@@ -1827,10 +2675,20 @@ fn channels_to_ui(
     channels: &[mello_core::crew_state::VoiceChannelState],
     active_channel_id: &str,
     local_user_id: &str,
+    user_avatar: &slint::Image,
+    has_user_avatar: bool,
 ) -> Vec<VoiceChannelData> {
     channels
         .iter()
-        .map(|ch| channel_to_ui(ch, active_channel_id, local_user_id))
+        .map(|ch| {
+            channel_to_ui(
+                ch,
+                active_channel_id,
+                local_user_id,
+                user_avatar,
+                has_user_avatar,
+            )
+        })
         .collect()
 }
 
@@ -2105,6 +2963,7 @@ fn handle_event(
             app.set_logged_in(true);
             app.set_login_loading(false);
             app.set_show_sign_in(false);
+            let uid = user.id.clone();
             app.set_user_id(user.id.into());
             app.set_user_initials(make_initials(&user.display_name).into());
             app.set_user_name(user.display_name.into());
@@ -2115,6 +2974,7 @@ fn handle_event(
                 s.onboarding_step = 4;
                 s.save();
             }
+            let _ = cmd_tx.try_send(Command::FetchUserAvatar { user_id: uid });
         }
         Event::LoginFailed { reason } => {
             log::warn!("[auth] login-failed  reason={}", reason);
@@ -2329,6 +3189,44 @@ fn handle_event(
                 }
             }
         }
+        Event::UserAvatarLoaded { user_id, data } => {
+            log::info!(
+                "[avatar] UI: received avatar for user {} ({} bytes base64)",
+                user_id,
+                data.len()
+            );
+            let decoded = match base64::engine::general_purpose::STANDARD.decode(&data) {
+                Ok(d) => d,
+                Err(e) => {
+                    log::error!(
+                        "[avatar] failed to decode base64 for user {}: {}",
+                        user_id,
+                        e
+                    );
+                    return;
+                }
+            };
+            let slint_img = if let Ok(dyn_img) = image::load_from_memory(&decoded) {
+                let rgba = dyn_img.to_rgba8();
+                let (w, h) = (rgba.width(), rgba.height());
+                let buf = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
+                    &rgba.into_raw(),
+                    w,
+                    h,
+                );
+                slint::Image::from_rgba8(buf)
+            } else if let Some(rgba) = avatar::rasterize_svg(&String::from_utf8_lossy(&decoded)) {
+                avatar::rgba_to_image(&rgba, avatar::RENDER_SIZE, avatar::RENDER_SIZE)
+            } else {
+                log::error!(
+                    "[avatar] failed to decode avatar image for user {}",
+                    user_id
+                );
+                return;
+            };
+            app.set_user_avatar(slint_img);
+            app.set_has_user_avatar(true);
+        }
         Event::CrewJoined { crew_id } => {
             log::info!("UI: joined crew {}", crew_id);
             app.set_show_discover(false);
@@ -2394,7 +3292,10 @@ fn handle_event(
         }
         Event::MessagesLoaded { messages } => {
             *chat_msgs_ref.borrow_mut() = messages;
-            let display = chat_messages_to_slint(&chat_msgs_ref.borrow());
+            let uid = app.get_user_id().to_string();
+            let uav = app.get_user_avatar();
+            let huav = app.get_has_user_avatar();
+            let display = chat_messages_to_slint(&chat_msgs_ref.borrow(), &uid, &uav, huav);
             let rc = std::rc::Rc::new(slint::VecModel::from(display));
             app.set_messages(rc.clone().into());
             fetch_gif_images_for_messages(&rc, rt, gif_chat_anim);
@@ -2405,7 +3306,10 @@ fn handle_event(
                 notifications::notify_message(&crew_name, &message.sender_name, &message.content);
             }
             chat_msgs_ref.borrow_mut().push(message);
-            let display = chat_messages_to_slint(&chat_msgs_ref.borrow());
+            let uid = app.get_user_id().to_string();
+            let uav = app.get_user_avatar();
+            let huav = app.get_has_user_avatar();
+            let display = chat_messages_to_slint(&chat_msgs_ref.borrow(), &uid, &uav, huav);
             let rc = std::rc::Rc::new(slint::VecModel::from(display));
             app.set_messages(rc.clone().into());
             fetch_gif_images_for_messages(&rc, rt, gif_chat_anim);
@@ -2414,7 +3318,10 @@ fn handle_event(
             let mut all = messages;
             all.append(&mut chat_msgs_ref.borrow().clone());
             *chat_msgs_ref.borrow_mut() = all;
-            let display = chat_messages_to_slint(&chat_msgs_ref.borrow());
+            let uid = app.get_user_id().to_string();
+            let uav = app.get_user_avatar();
+            let huav = app.get_has_user_avatar();
+            let display = chat_messages_to_slint(&chat_msgs_ref.borrow(), &uid, &uav, huav);
             let rc = std::rc::Rc::new(slint::VecModel::from(display));
             app.set_messages(rc.clone().into());
             app.set_loading_history(false);
@@ -2423,10 +3330,17 @@ fn handle_event(
         Event::MemberJoined { member, .. } => {
             let current = app.get_members();
             let initials = make_initials(&member.display_name);
+            let is_self = member.id == app.get_user_id().as_str();
             let new_member = MemberData {
                 id: member.id.into(),
                 name: member.display_name.into(),
                 initials: initials.into(),
+                avatar: if is_self {
+                    app.get_user_avatar()
+                } else {
+                    slint::Image::default()
+                },
+                has_avatar: is_self && app.get_has_user_avatar(),
                 online: true,
                 speaking: false,
             };
@@ -2749,7 +3663,9 @@ fn handle_event(
                     current_avc
                 };
                 let local_id = app.get_user_id();
-                let vc_data = channels_to_ui(&state.voice_channels, &avc_id, &local_id);
+                let uav = app.get_user_avatar();
+                let huav = app.get_has_user_avatar();
+                let vc_data = channels_to_ui(&state.voice_channels, &avc_id, &local_id, &uav, huav);
                 app.set_voice_channels(Rc::new(slint::VecModel::from(vc_data)).into());
 
                 // 0=superadmin, 1=admin => can manage channels
@@ -2910,7 +3826,10 @@ fn handle_event(
                         ch.active = is_joined;
                         if is_joined {
                             ch.expanded = true;
-                            let ch_members = voice_members_to_ui(&voice_members, &my_id);
+                            let uav = app.get_user_avatar();
+                            let huav = app.get_has_user_avatar();
+                            let ch_members =
+                                voice_members_to_ui(&voice_members, &my_id, &uav, huav);
                             ch.member_count = ch_members.len() as i32;
                             ch.members = Rc::new(slint::VecModel::from(ch_members)).into();
                         } else {
@@ -2973,7 +3892,10 @@ fn handle_event(
                     .map(|i| {
                         let mut ch = current_channels.row_data(i).unwrap();
                         if ch.id == channel_id.as_str() {
-                            let ch_members = voice_members_to_ui(&voice_members, &local_id);
+                            let uav = app.get_user_avatar();
+                            let huav = app.get_has_user_avatar();
+                            let ch_members =
+                                voice_members_to_ui(&voice_members, &local_id, &uav, huav);
                             ch.member_count = ch_members.len() as i32;
                             ch.members = Rc::new(slint::VecModel::from(ch_members)).into();
                         }
@@ -2993,7 +3915,9 @@ fn handle_event(
             if active_id == crew_id.as_str() {
                 let avc_id = active_voice_channel.borrow().clone();
                 let local_id = app.get_user_id();
-                let vc_data = channels_to_ui(&channels, &avc_id, &local_id);
+                let uav = app.get_user_avatar();
+                let huav = app.get_has_user_avatar();
+                let vc_data = channels_to_ui(&channels, &avc_id, &local_id, &uav, huav);
                 app.set_voice_channels(Rc::new(slint::VecModel::from(vc_data)).into());
             }
         }
@@ -3010,10 +3934,14 @@ fn handle_event(
                     .map(|i| current.row_data(i).unwrap())
                     .collect();
                 let local_id = app.get_user_id();
+                let uav = app.get_user_avatar();
+                let huav = app.get_has_user_avatar();
                 channels.push(channel_to_ui(
                     &channel,
                     &active_voice_channel.borrow(),
                     &local_id,
+                    &uav,
+                    huav,
                 ));
                 app.set_voice_channels(Rc::new(slint::VecModel::from(channels)).into());
             }
@@ -3243,7 +4171,10 @@ fn handle_event(
                 m.content = new_content;
                 m.update_time = update_time;
             }
-            let display = chat_messages_to_slint(&msgs);
+            let uid = app.get_user_id().to_string();
+            let uav = app.get_user_avatar();
+            let huav = app.get_has_user_avatar();
+            let display = chat_messages_to_slint(&msgs, &uid, &uav, huav);
             let rc = std::rc::Rc::new(slint::VecModel::from(display));
             app.set_messages(rc.into());
         }
@@ -3297,7 +4228,10 @@ fn handle_event(
             if let Some(m) = msgs.iter_mut().find(|m| m.message_id == message_id) {
                 m.content = "[message deleted]".to_string();
             }
-            let display = chat_messages_to_slint(&msgs);
+            let uid = app.get_user_id().to_string();
+            let uav = app.get_user_avatar();
+            let huav = app.get_has_user_avatar();
+            let display = chat_messages_to_slint(&msgs, &uid, &uav, huav);
             let rc = std::rc::Rc::new(slint::VecModel::from(display));
             app.set_messages(rc.into());
         }

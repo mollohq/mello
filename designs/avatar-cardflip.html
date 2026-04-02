@@ -1,0 +1,802 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>m3llo - Avatar UX V1 Card Flip</title>
+<link href="https://fonts.googleapis.com/css2?family=Oxanium:wght@400;500;600;700&family=Barlow:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root {
+  --c-bg: #0D0D0F;
+  --c-surface: #1A1A1F;
+  --c-surface-el: #24242B;
+  --c-text: #F5F5F5;
+  --c-text-2: #707075;
+  --c-text-3: #45454A;
+  --c-accent: #EB4D5F;
+  --c-accent-dim: rgba(235,77,95,0.08);
+  --c-border: #2A2A30;
+  --f-display: 'Oxanium', sans-serif;
+  --f-body: 'Barlow', sans-serif;
+  --f-mono: 'JetBrains Mono', monospace;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  background: #000;
+  color: var(--c-text);
+  font-family: var(--f-body);
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  -webkit-font-smoothing: antialiased;
+}
+
+.os-chrome {
+  width: 1200px;
+  height: 760px;
+  display: flex;
+  flex-direction: column;
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--c-bg);
+  margin: 30px auto;
+  border: 1px solid #1F1F23;
+}
+
+.titlebar {
+  height: 32px;
+  background: #121214;
+  display: flex;
+  align-items: center;
+  padding: 0 16px;
+  gap: 8px;
+  flex-shrink: 0;
+  border-bottom: 1px solid #1F1F23;
+}
+
+.tdot { width: 12px; height: 12px; border-radius: 50%; }
+
+.onboard {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  padding: 56px 100px;
+  position: relative;
+}
+
+.step-ind {
+  font-family: var(--f-mono);
+  font-size: 12px;
+  color: var(--c-accent);
+  letter-spacing: 0.15em;
+  font-weight: 500;
+  text-transform: uppercase;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 10px;
+}
+
+.pdots { display: flex; gap: 6px; }
+.pdot { width: 28px; height: 2px; background: var(--c-border); }
+.pdot.on { background: var(--c-accent); }
+
+.otitle {
+  font-family: var(--f-display);
+  font-size: 30px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  margin-bottom: 48px;
+}
+
+.layout {
+  display: grid;
+  grid-template-columns: 400px 1fr;
+  gap: 80px;
+  flex: 1;
+}
+
+.kicker {
+  font-family: var(--f-mono);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--c-text-2);
+  margin-bottom: 16px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* ---- AVATAR GRID ---- */
+.avatar-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+  margin-bottom: 20px;
+  perspective: 800px;
+}
+
+/* Card flip container */
+.av-flipper {
+  aspect-ratio: 1;
+  position: relative;
+  cursor: pointer;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.av-card {
+  width: 100%;
+  height: 100%;
+  position: relative;
+  transform-style: preserve-3d;
+  transition: transform 1.04s cubic-bezier(0.4, 0.0, 0.2, 1);
+}
+
+.av-card.no-transition {
+  transition: none !important;
+}
+
+.av-card.flipping {
+  transform: rotateY(180deg);
+}
+
+.av-face {
+  position: absolute;
+  inset: 0;
+  backface-visibility: hidden;
+  background: var(--c-surface);
+  border-radius: 8px;
+  border: 1.5px solid var(--c-border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: border-color 0.2s, background 0.2s, box-shadow 0.2s;
+}
+
+.av-face.back {
+  transform: rotateY(180deg);
+}
+
+.av-face.word-frame {
+  background: var(--c-bg);
+  border-color: var(--c-accent);
+}
+
+.av-face .word-text {
+  font-family: var(--f-display);
+  font-weight: 600;
+  font-size: 16px;
+  color: var(--c-accent);
+  text-align: center;
+  padding: 8px;
+  line-height: 1.2;
+}
+
+.av-face .word-text.heart {
+  font-size: 28px;
+}
+
+.av-flipper:hover .av-face:not(.back) {
+  border-color: #404045;
+}
+
+.av-flipper.selected .av-face {
+  border-color: var(--c-accent);
+  background: var(--c-accent-dim);
+  box-shadow: 0 0 0 1px var(--c-accent);
+}
+
+.av-svg { width: 70%; height: 70%; }
+
+/* Upload slot */
+.av-slot-upload {
+  aspect-ratio: 1;
+  background: var(--c-surface);
+  border-radius: 8px;
+  border: 1.5px dashed var(--c-border);
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  transition: border-color 0.2s;
+}
+
+.av-slot-upload:hover { border-color: #404045; }
+
+.av-slot-upload span {
+  font-family: var(--f-mono);
+  font-size: 9px;
+  color: var(--c-text-3);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+/* Reroll */
+.reroll-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 36px;
+}
+
+.reroll-btn {
+  background: var(--c-surface-el);
+  border: 1.5px solid var(--c-border);
+  border-radius: 8px;
+  color: var(--c-text-2);
+  font-family: var(--f-mono);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 10px 16px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  transition: all 0.15s;
+}
+
+.reroll-btn:hover { border-color: var(--c-accent); color: var(--c-text); }
+.reroll-btn:active { transform: scale(0.97); }
+
+.reroll-btn svg {
+  transition: transform 0.5s cubic-bezier(0.34,1.56,0.64,1);
+}
+.reroll-btn.spinning svg { transform: rotate(360deg); }
+
+/* ---- INPUT ---- */
+.input-row { display: flex; flex-direction: column; gap: 8px; }
+
+.tinput {
+  background: var(--c-surface);
+  border: 1.5px solid var(--c-border);
+  border-radius: 8px;
+  padding: 14px 16px;
+  font-family: var(--f-mono);
+  font-size: 14px;
+  color: var(--c-text);
+  outline: none;
+  transition: border-color 0.2s;
+  width: 100%;
+}
+
+.tinput:focus { border-color: #404045; }
+
+/* ---- RIGHT COL ---- */
+.right-col { max-width: 420px; }
+.dev-group { margin-bottom: 32px; }
+
+.dev-card {
+  background: var(--c-surface);
+  border: 1.5px solid var(--c-border);
+  border-radius: 8px;
+  padding: 18px;
+}
+
+.dev-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 14px;
+}
+
+.dev-label { font-family: var(--f-mono); font-size: 13px; }
+
+.meter { display: flex; gap: 2px; height: 5px; }
+.mbar { flex: 1; background: var(--c-bg); border-radius: 1px; }
+.mbar.on { background: var(--c-accent); }
+.mbar.dim { background: #2D141B; }
+
+.chevron-down {
+  width: 14px; height: 14px;
+  stroke: var(--c-text-3);
+  fill: none;
+  stroke-width: 2;
+}
+
+.btn-continue {
+  background: var(--c-accent);
+  color: #FFF;
+  padding: 14px 32px;
+  border-radius: 8px;
+  font-family: var(--f-mono);
+  font-size: 14px;
+  font-weight: 500;
+  border: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  position: absolute;
+  bottom: 56px;
+  right: 100px;
+  transition: transform 0.1s;
+}
+.btn-continue:active { transform: scale(0.97); }
+
+/* ---- Initial deal ---- */
+@keyframes dealIn {
+  0% { opacity: 0; transform: scale(0.5) translateY(12px); }
+  60% { transform: scale(1.06) translateY(-2px); }
+  100% { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+.deal-enter {
+  opacity: 0;
+  animation: dealIn 0.35s cubic-bezier(0.34,1.56,0.64,1) forwards;
+}
+</style>
+</head>
+<body>
+
+<div class="os-chrome">
+  <div class="titlebar">
+    <div class="tdot" style="background:#FF5F57"></div>
+    <div class="tdot" style="background:#FFBD2E"></div>
+    <div class="tdot" style="background:#28C840"></div>
+  </div>
+  <div class="onboard">
+    <div class="step-ind">STEP 02 / 03 <div class="pdots"><div class="pdot on"></div><div class="pdot on"></div><div class="pdot"></div></div></div>
+    <h1 class="otitle">Profile &amp; Device Setup</h1>
+    <div class="layout">
+      <div class="left-col">
+        <div class="kicker">Choose identity</div>
+        <div class="avatar-grid" id="agrid"></div>
+        <div class="reroll-row">
+          <button class="reroll-btn" id="rerollBtn" onclick="rerollAll()">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8.5" cy="8.5" r="1.2" fill="currentColor" stroke="none"/><circle cx="15.5" cy="8.5" r="1.2" fill="currentColor" stroke="none"/><circle cx="8.5" cy="15.5" r="1.2" fill="currentColor" stroke="none"/><circle cx="15.5" cy="15.5" r="1.2" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.2" fill="currentColor" stroke="none"/></svg>
+            Reroll all
+          </button>
+        </div>
+
+        <div class="input-row">
+          <div class="kicker">Crew nickname</div>
+          <input type="text" class="tinput" value="b0bben" id="nickInput">
+        </div>
+      </div>
+
+      <div class="right-col">
+        <div class="dev-group">
+          <div class="kicker">Microphone input</div>
+          <div class="dev-card">
+            <div class="dev-row">
+              <span class="dev-label">XLR-Interface (Bridge 01)</span>
+              <svg class="chevron-down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg>
+            </div>
+            <div class="meter"><div class="mbar on"></div><div class="mbar on"></div><div class="mbar on"></div><div class="mbar on"></div><div class="mbar on"></div><div class="mbar on"></div><div class="mbar on"></div><div class="mbar"></div><div class="mbar"></div><div class="mbar"></div><div class="mbar"></div><div class="mbar"></div><div class="mbar"></div><div class="mbar"></div><div class="mbar"></div></div>
+          </div>
+        </div>
+        <div class="dev-group">
+          <div class="kicker">Speaker output</div>
+          <div class="dev-card">
+            <div class="dev-row">
+              <span class="dev-label">System Default (Studio Monitors)</span>
+              <svg class="chevron-down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg>
+            </div>
+            <div class="meter"><div class="mbar dim"></div><div class="mbar dim"></div><div class="mbar"></div><div class="mbar"></div><div class="mbar"></div><div class="mbar"></div><div class="mbar"></div><div class="mbar"></div><div class="mbar"></div><div class="mbar"></div><div class="mbar"></div><div class="mbar"></div><div class="mbar"></div><div class="mbar"></div><div class="mbar"></div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <button class="btn-continue">Continue <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg></button>
+  </div>
+</div>
+
+<script>
+function hash(s) {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = ((h << 5) - h + s.charCodeAt(i)) | 0;
+  return Math.abs(h);
+}
+
+function rng(seed) {
+  let s = seed || 1;
+  return () => { s = (s * 16807) % 2147483647; return (s - 1) / 2147483646; };
+}
+
+const PALETTES = [
+  ['#EB4D5F','#FF7B54','#FFB26B'],
+  ['#7C5CFC','#A78BFA','#C4B5FD'],
+  ['#06B6D4','#22D3EE','#67E8F9'],
+  ['#F472B6','#FB7185','#FDA4AF'],
+  ['#10B981','#34D399','#6EE7B7'],
+  ['#F59E0B','#FBBF24','#FCD34D'],
+  ['#8B5CF6','#A855F7','#C084FC'],
+  ['#EC4899','#F472B6','#F9A8D4'],
+];
+
+function makeAvatar(seed) {
+  const r = rng(seed);
+  const pal = PALETTES[Math.floor(r() * PALETTES.length)];
+  const c1 = pal[0], c2 = pal[1], c3 = pal[2];
+  const headShape = Math.floor(r() * 3);
+  const eyeStyle = Math.floor(r() * 4);
+  const mouthStyle = Math.floor(r() * 4);
+  const accessory = Math.floor(r() * 5);
+  const bgHue = Math.floor(r() * 360);
+
+  let s = `<svg viewBox="0 0 100 100" class="av-svg" xmlns="http://www.w3.org/2000/svg">`;
+  s += `<rect width="100" height="100" rx="12" fill="hsl(${bgHue},15%,13%)"/>`;
+  const hY = 28;
+  if (headShape === 0) s += `<circle cx="50" cy="${hY+22}" r="24" fill="${c1}"/>`;
+  else if (headShape === 1) s += `<rect x="26" y="${hY}" width="48" height="44" rx="10" fill="${c1}"/>`;
+  else s += `<rect x="26" y="${hY}" width="48" height="44" rx="22" fill="${c1}"/>`;
+  const eY = hY + 18;
+  if (eyeStyle === 0) {
+    s += `<circle cx="40" cy="${eY}" r="4" fill="#0D0D0F"/><circle cx="60" cy="${eY}" r="4" fill="#0D0D0F"/>`;
+    s += `<circle cx="41.5" cy="${eY-1}" r="1.5" fill="#fff"/><circle cx="61.5" cy="${eY-1}" r="1.5" fill="#fff"/>`;
+  } else if (eyeStyle === 1) {
+    s += `<rect x="35" y="${eY-3}" width="10" height="6" rx="1" fill="#0D0D0F"/><rect x="55" y="${eY-3}" width="10" height="6" rx="1" fill="#0D0D0F"/>`;
+    s += `<rect x="37" y="${eY-2}" width="4" height="3" rx="1" fill="${c3}"/><rect x="57" y="${eY-2}" width="4" height="3" rx="1" fill="${c3}"/>`;
+  } else if (eyeStyle === 2) {
+    s += `<line x1="35" y1="${eY}" x2="45" y2="${eY}" stroke="#0D0D0F" stroke-width="3" stroke-linecap="round"/>`;
+    s += `<line x1="55" y1="${eY}" x2="65" y2="${eY}" stroke="#0D0D0F" stroke-width="3" stroke-linecap="round"/>`;
+  } else {
+    s += `<ellipse cx="40" cy="${eY}" rx="5" ry="6" fill="#0D0D0F"/><ellipse cx="60" cy="${eY}" rx="5" ry="6" fill="#0D0D0F"/>`;
+    s += `<circle cx="42" cy="${eY-1.5}" r="2" fill="#fff"/><circle cx="62" cy="${eY-1.5}" r="2" fill="#fff"/>`;
+  }
+  const mY = hY + 32;
+  if (mouthStyle === 0) s += `<path d="M42 ${mY} Q50 ${mY+8} 58 ${mY}" fill="none" stroke="#0D0D0F" stroke-width="2.5" stroke-linecap="round"/>`;
+  else if (mouthStyle === 1) s += `<rect x="44" y="${mY}" width="12" height="6" rx="3" fill="#0D0D0F"/>`;
+  else if (mouthStyle === 2) s += `<circle cx="50" cy="${mY+2}" r="4" fill="#0D0D0F"/>`;
+  else s += `<line x1="43" y1="${mY+2}" x2="57" y2="${mY+2}" stroke="#0D0D0F" stroke-width="2.5" stroke-linecap="round"/>`;
+  if (accessory === 0) {
+    s += `<line x1="50" y1="${hY-2}" x2="50" y2="${hY-12}" stroke="${c2}" stroke-width="2" stroke-linecap="round"/>`;
+    s += `<circle cx="50" cy="${hY-14}" r="3" fill="${c2}"/>`;
+  } else if (accessory === 1) {
+    s += `<circle cx="26" cy="${hY+16}" r="6" fill="${c2}"/><circle cx="74" cy="${hY+16}" r="6" fill="${c2}"/>`;
+  } else if (accessory === 2) {
+    s += `<rect x="30" y="${hY-6}" width="40" height="10" rx="5" fill="${c2}"/>`;
+  } else if (accessory === 3) {
+    s += `<path d="M32 ${hY+4} L26 ${hY-10}" stroke="${c2}" stroke-width="3" stroke-linecap="round"/>`;
+    s += `<path d="M68 ${hY+4} L74 ${hY-10}" stroke="${c2}" stroke-width="3" stroke-linecap="round"/>`;
+  }
+  s += `<rect x="32" y="74" width="36" height="20" rx="8" fill="${c2}" opacity="0.7"/>`;
+  s += `</svg>`;
+  return s;
+}
+
+// ---- STATE ----
+const SLOT_COUNT = 7;
+let globalRoll = 0;
+let slotSeeds = [];
+let selectedSlot = -1;
+let shuffleCounter = 0;
+let flippingSlots = new Set();
+let shuffleId = null;
+
+// ---- EASTER EGG: hold-to-spin ----
+const EASTER_WORDS = [
+  'hey','hey','hey',
+  'there,','there,','there,',
+  'we','we','we',
+  'love','love','love',
+  'you','you','you',
+  'for','for','for',
+  'being','being','being',
+  'here','here','here',
+  '\u2764','\u2764','\u2764','\u2764'
+];
+let holdTimer = null;
+let spinState = null; // { slotIndex, angle, wordIndex, rafId, speed }
+
+// ---- BUILD GRID ----
+function initGrid() {
+  const grid = document.getElementById('agrid');
+  grid.innerHTML = '';
+  const nick = document.getElementById('nickInput').value || 'mello';
+
+  for (let i = 0; i < SLOT_COUNT; i++) {
+    slotSeeds[i] = hash(nick + '_r' + globalRoll + '_' + i);
+
+    const flipper = document.createElement('div');
+    flipper.className = 'av-flipper deal-enter';
+    flipper.style.animationDelay = (i * 60) + 'ms';
+    flipper.dataset.index = i;
+    flipper.onclick = () => { if (!spinState) selectSlot(i); };
+    flipper.onmousedown = (e) => { e.preventDefault(); startHold(i); };
+    flipper.onmouseup = () => endHold(i);
+    flipper.onmouseleave = () => endHold(i);
+
+    const card = document.createElement('div');
+    card.className = 'av-card';
+
+    const front = document.createElement('div');
+    front.className = 'av-face front';
+    front.innerHTML = makeAvatar(slotSeeds[i]);
+
+    const back = document.createElement('div');
+    back.className = 'av-face back';
+
+    card.appendChild(front);
+    card.appendChild(back);
+    flipper.appendChild(card);
+    grid.appendChild(flipper);
+  }
+
+  // Upload slot
+  const upload = document.createElement('div');
+  upload.className = 'av-slot-upload deal-enter';
+  upload.style.animationDelay = (SLOT_COUNT * 60) + 'ms';
+  upload.innerHTML = `<svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="var(--c-text-3)" stroke-width="1.5" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg><span>Upload</span>`;
+  grid.appendChild(upload);
+}
+
+function selectSlot(i) {
+  if (selectedSlot === i) {
+    // Deselect
+    selectedSlot = -1;
+    document.querySelectorAll('.av-flipper').forEach(el => el.classList.remove('selected'));
+    startAmbientShuffle();
+  } else {
+    selectedSlot = i;
+    stopAmbientShuffle();
+    document.querySelectorAll('.av-flipper').forEach((el, idx) => {
+      el.classList.toggle('selected', idx === i);
+    });
+  }
+}
+
+// ---- CARD FLIP REPLACEMENT ----
+function flipSlot(slotIndex) {
+  if (slotIndex === selectedSlot) return;
+  if (flippingSlots.has(slotIndex)) return;
+  if (spinState && spinState.slotIndex === slotIndex) return;
+
+  const grid = document.getElementById('agrid');
+  const flipper = grid.children[slotIndex];
+  if (!flipper || !flipper.classList.contains('av-flipper')) return;
+
+  const card = flipper.querySelector('.av-card');
+  const front = card.querySelector('.front');
+  const back = card.querySelector('.back');
+
+  flippingSlots.add(slotIndex);
+
+  // Generate new avatar for the back face
+  const nick = document.getElementById('nickInput').value || 'mello';
+  shuffleCounter++;
+  const newSeed = hash(nick + '_s' + shuffleCounter + '_' + slotIndex);
+
+  // Determine which face is currently showing
+  const isFlipped = card.classList.contains('flipping');
+
+  if (isFlipped) {
+    // Back is showing, put new avatar on front, unflip
+    front.innerHTML = makeAvatar(newSeed);
+    card.classList.remove('flipping');
+  } else {
+    // Front is showing, put new avatar on back, flip
+    back.innerHTML = makeAvatar(newSeed);
+    card.classList.add('flipping');
+  }
+
+  slotSeeds[slotIndex] = newSeed;
+
+  // Carry over selected styling to whichever face is now visible
+  setTimeout(() => {
+    flippingSlots.delete(slotIndex);
+  }, 1100);
+}
+
+// ---- HOLD-TO-SPIN EASTER EGG ----
+function startHold(slotIndex) {
+  if (spinState) return;
+  clearTimeout(holdTimer);
+  holdTimer = setTimeout(() => {
+    beginSpin(slotIndex);
+  }, 3000);
+}
+
+function endHold(slotIndex) {
+  clearTimeout(holdTimer);
+  holdTimer = null;
+  if (spinState && spinState.slotIndex === slotIndex) {
+    windDownSpin();
+  }
+}
+
+function makeWordFace(word) {
+  const isHeart = word === '\u2764';
+  return `<span class="word-text${isHeart ? ' heart' : ''}">${word}</span>`;
+}
+
+function beginSpin(slotIndex) {
+  stopAmbientShuffle();
+
+  const grid = document.getElementById('agrid');
+  const flipper = grid.children[slotIndex];
+  if (!flipper) return;
+  const card = flipper.querySelector('.av-card');
+  const front = card.querySelector('.front');
+  const back = card.querySelector('.back');
+
+  // Disable CSS transition, take over with JS
+  card.classList.add('no-transition');
+  card.classList.remove('flipping');
+
+  // Set both faces to word frames
+  front.classList.add('word-frame');
+  back.classList.add('word-frame');
+  front.innerHTML = makeWordFace(EASTER_WORDS[0]);
+  back.innerHTML = makeWordFace(EASTER_WORDS[1]);
+
+  spinState = {
+    slotIndex,
+    angle: 0,
+    wordIndex: 0,
+    rafId: null,
+    speed: 2.8, // degrees per frame, ramps up
+    maxSpeed: 8.4,
+    lastSwap: 0,
+    card, front, back
+  };
+
+  spinState.rafId = requestAnimationFrame(spinLoop);
+}
+
+function spinLoop(ts) {
+  if (!spinState) return;
+  const st = spinState;
+
+  // Ramp up speed
+  if (st.speed < st.maxSpeed) st.speed += 0.15;
+
+  st.angle = (st.angle + st.speed) % 360;
+  st.card.style.transform = `rotateY(${st.angle}deg)`;
+
+  // Detect when a face becomes hidden (crosses 90 or 270)
+  // Swap content at those moments
+  const prevHalf = st.lastSwap;
+  const curHalf = Math.floor(st.angle / 180);
+
+  if (curHalf !== prevHalf) {
+    st.lastSwap = curHalf;
+    st.wordIndex = (st.wordIndex + 1) % EASTER_WORDS.length;
+    const nextWord = EASTER_WORDS[(st.wordIndex + 1) % EASTER_WORDS.length];
+
+    // The face that just became hidden gets the next word
+    if (curHalf === 1) {
+      // Front just went behind, update front for when it comes back
+      st.front.innerHTML = makeWordFace(nextWord);
+    } else {
+      // Back just went behind, update back
+      st.back.innerHTML = makeWordFace(nextWord);
+    }
+  }
+
+  st.rafId = requestAnimationFrame(spinLoop);
+}
+
+function windDownSpin() {
+  if (!spinState) return;
+  const st = spinState;
+
+  cancelAnimationFrame(st.rafId);
+
+  // Decelerate to a stop, land on a new avatar
+  const nick = document.getElementById('nickInput').value || 'mello';
+  shuffleCounter++;
+  const newSeed = hash(nick + '_egg_' + shuffleCounter);
+  slotSeeds[st.slotIndex] = newSeed;
+
+  // Put avatar on whichever face will be visible at landing
+  // We'll animate to the nearest flat position (0 or 180)
+  const nearestFlat = st.angle <= 180 ? 0 : 360;
+
+  // Put new avatar on the front face (will be visible at 0/360)
+  st.front.classList.remove('word-frame');
+  st.back.classList.remove('word-frame');
+  st.front.innerHTML = makeAvatar(newSeed);
+  st.back.innerHTML = makeAvatar(hash(nick + '_egg_back_' + shuffleCounter));
+
+  // Deceleration animation
+  let currentAngle = st.angle;
+  let currentSpeed = st.speed;
+  const targetAngle = nearestFlat === 0 ? (st.angle > 180 ? 360 : 0) : 0;
+  // Always spin forward to 360 (= 0) for a clean landing
+  const totalRemaining = ((360 - currentAngle) % 360) + 360; // at least one more full spin
+  let traveled = 0;
+
+  function decelLoop() {
+    currentSpeed *= 0.96;
+    if (currentSpeed < 0.5) {
+      // Snap to 0
+      st.card.style.transform = `rotateY(0deg)`;
+      st.card.classList.remove('no-transition');
+      st.card.classList.remove('flipping');
+      spinState = null;
+      // Restart ambient shuffle if nothing selected
+      if (selectedSlot === -1) startAmbientShuffle();
+      return;
+    }
+
+    currentAngle = (currentAngle + currentSpeed) % 360;
+    st.card.style.transform = `rotateY(${currentAngle}deg)`;
+    traveled += currentSpeed;
+
+    requestAnimationFrame(decelLoop);
+  }
+
+  requestAnimationFrame(decelLoop);
+}
+
+// ---- AMBIENT SHUFFLE (always running until selection) ----
+function startAmbientShuffle() {
+  if (shuffleId) return;
+  shuffleId = setInterval(() => {
+    const available = [];
+    for (let i = 0; i < SLOT_COUNT; i++) {
+      if (i !== selectedSlot && !flippingSlots.has(i)) available.push(i);
+    }
+    if (available.length === 0) return;
+
+    const pick = available[Math.floor(Math.random() * available.length)];
+    flipSlot(pick);
+  }, 3000);
+}
+
+function stopAmbientShuffle() {
+  if (shuffleId) {
+    clearInterval(shuffleId);
+    shuffleId = null;
+  }
+}
+
+// ---- REROLL ALL ----
+function rerollAll() {
+  globalRoll++;
+  selectedSlot = -1;
+  document.querySelectorAll('.av-flipper').forEach(el => el.classList.remove('selected'));
+
+  const btn = document.getElementById('rerollBtn');
+  btn.classList.add('spinning');
+  setTimeout(() => btn.classList.remove('spinning'), 500);
+
+  const nick = document.getElementById('nickInput').value || 'mello';
+
+  for (let i = 0; i < SLOT_COUNT; i++) {
+    const newSeed = hash(nick + '_r' + globalRoll + '_' + i);
+    setTimeout(() => {
+      slotSeeds[i] = newSeed;
+
+      const grid = document.getElementById('agrid');
+      const flipper = grid.children[i];
+      if (!flipper || !flipper.classList.contains('av-flipper')) return;
+
+      const card = flipper.querySelector('.av-card');
+      const front = card.querySelector('.front');
+      const back = card.querySelector('.back');
+      const isFlipped = card.classList.contains('flipping');
+
+      if (isFlipped) {
+        front.innerHTML = makeAvatar(newSeed);
+        card.classList.remove('flipping');
+      } else {
+        back.innerHTML = makeAvatar(newSeed);
+        card.classList.add('flipping');
+      }
+    }, i * 100);
+  }
+
+  // Restart ambient shuffle after all cards land
+  stopAmbientShuffle();
+  setTimeout(() => startAmbientShuffle(), SLOT_COUNT * 100 + 1200);
+}
+
+// ---- INIT ----
+initGrid();
+startAmbientShuffle();
+</script>
+</body>
+</html>

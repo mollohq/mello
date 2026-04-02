@@ -4,3 +4,4 @@
 [submodule "libmello/third_party/rnnoise"]
 	path = libmello/third_party/rnnoise
 	url = https://github.com/xiph/rnnoise.git
+	ignore = dirty

@@ -33,12 +33,14 @@ paste = "1"
 velopack = "0.0.1298"
 semver = "1"
 
-# Avatar upload & image loading
+# Avatar upload, image loading & SVG rasterization
 rfd = "0.15"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif"] }
+resvg = "0.47"
 base64 = "0.22"
 reqwest = { workspace = true }
 arboard = "3"
+rand = "0.8"
 
 # Native platform integration
 open = "5"

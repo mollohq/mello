@@ -41,6 +41,8 @@ export struct MemberData {
     id: string,
     name: string,
     initials: string,
+    avatar: image,
+    has-avatar: bool,
     online: bool,
     speaking: bool,
 }
@@ -50,6 +52,8 @@ export struct ChatMessageData {
     sender-id: string,
     sender-name: string,
     sender-initials: string,
+    sender-avatar: image,
+    has-sender-avatar: bool,
     text: string,
     timestamp: string,
     display-time: string,
@@ -78,6 +82,8 @@ export struct VoiceChannelMember {
     id: string,
     name: string,
     initials: string,
+    avatar: image,
+    has-avatar: bool,
     speaking: bool,
     joined_at: int,
 }

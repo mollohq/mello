@@ -48,7 +48,14 @@ pub enum Command {
         #[serde(default)]
         crew_avatar: Option<String>,
         display_name: String,
-        avatar: u8,
+        #[serde(default)]
+        avatar_data: Option<String>,
+        #[serde(default)]
+        avatar_format: Option<String>,
+        #[serde(default)]
+        avatar_style: Option<String>,
+        #[serde(default)]
+        avatar_seed: Option<String>,
     },
     LoadMyCrews,
     JoinCrew {
@@ -67,6 +74,9 @@ pub enum Command {
     },
     FetchCrewAvatars {
         crew_ids: Vec<String>,
+    },
+    FetchUserAvatar {
+        user_id: String,
     },
     SearchUsers {
         query: String,

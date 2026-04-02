@@ -3,12 +3,22 @@ import { ChatMessageData, GifItemData } from "../types.slint";
 
 component AvatarCircle inherits Rectangle {
     in property <string> initials;
+    in property <image> avatar;
+    in property <bool> has-avatar: false;
     width: 28px;
     height: 28px;
     border-radius: 14px;
     background: Theme.graphic-light;
+    clip: true;
 
-    Text {
+    if has-avatar: Image {
+        source: avatar;
+        width: parent.width;
+        height: parent.height;
+        image-fit: contain;
+    }
+
+    if !has-avatar: Text {
         text: initials;
         font-size: 10px;
         font-family: Theme.font-mono;
@@ -291,6 +301,8 @@ export component ChatPanel inherits Rectangle {
 
                         AvatarCircle {
                             initials: msg.sender-initials;
+                            avatar: msg.sender-avatar;
+                            has-avatar: msg.has-sender-avatar;
                             y: (parent.height - self.height) / 2;
                         }
 
