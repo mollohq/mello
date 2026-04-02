@@ -305,12 +305,12 @@ impl SfuConnection {
                 4 => {
                     return Err(StreamError::SfuConnectFailed(
                         "ICE connection failed".into(),
-                    ))
+                    ));
                 }
                 5 => {
                     return Err(StreamError::SfuConnectFailed(
                         "ICE connection closed".into(),
-                    ))
+                    ));
                 }
                 _ => {}
             }

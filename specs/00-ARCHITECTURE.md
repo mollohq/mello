@@ -363,7 +363,14 @@ mello/
 │
 ├── client/                      # Slint UI (Rust)
 │   ├── Cargo.toml
-│   ├── src/main.rs              # Entry point, Slint bindings, event loop
+│   ├── src/
+│   │   ├── main.rs              # Entry point, AppContext init, GIF animators
+│   │   ├── app_context.rs       # Shared state struct threaded through modules
+│   │   ├── callbacks/           # Slint on_* callback wiring (auth, crew, voice, settings, …)
+│   │   ├── handlers/            # Event→UI dispatchers (auth, crew, voice, chat, presence, …)
+│   │   ├── poll_loop.rs         # Timer-driven event drain loop
+│   │   ├── converters.rs        # Data → Slint model helpers
+│   │   └── …                    # avatar, settings, updater, platform, etc.
 │   └── ui/
 │       ├── main.slint           # Root layout, property wiring
 │       ├── theme.slint          # Design tokens (colors, fonts, radii)
@@ -375,7 +382,16 @@ mello/
 ├── mello-core/                  # Core logic (Rust)
 │   ├── Cargo.toml
 │   └── src/
-│       ├── client.rs            # Command handler, Nakama orchestration
+│       ├── client/              # Client struct & async command loop
+│       │   ├── mod.rs           # Client struct, new(), run(), handle_command() dispatcher
+│       │   ├── auth.rs          # Auth, social login, onboarding
+│       │   ├── crew.rs          # Crew CRUD, discovery, avatars
+│       │   ├── chat.rs          # Messages, GIF search
+│       │   ├── voice.rs         # Voice join/leave, channel management
+│       │   ├── streaming.rs     # Stream host/viewer orchestration
+│       │   ├── stream_ffi.rs    # FFI structs & unsafe C callbacks
+│       │   ├── presence.rs      # Profile updates, catchup, moments
+│       │   └── connection.rs    # Session connect, protocol check, token refresh
 │       ├── command.rs           # Command enum (UI → core)
 │       ├── events.rs            # Event enum (core → UI)
 │       ├── nakama/              # Nakama HTTP + WebSocket client
