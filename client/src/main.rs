@@ -1214,7 +1214,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Option<String>,
         Option<String>,
     ) {
-        if slot >= 0 && slot <= 6 {
+        if (0..=6).contains(&slot) {
             let idx = slot as usize;
             if let Some(ref svg) = st.slots[idx].svg_data {
                 (
@@ -3580,7 +3580,7 @@ fn handle_event(
                         }
                         if changed {
                             let mut ch_copy = vc.row_data(i).unwrap();
-                            ch_copy.members = members.into();
+                            ch_copy.members = members;
                             vc.set_row_data(i, ch_copy);
                         }
                     }
@@ -3953,7 +3953,6 @@ fn handle_event(
             app.set_user_name(display_name.clone().into());
             app.set_user_initials(make_initials(&display_name).into());
             if let Some(data) = avatar_data {
-                // Decode and set avatar — same logic as UserAvatarLoaded
                 let slint_img = if let Ok(decoded) =
                     base64::engine::general_purpose::STANDARD.decode(&data)
                 {
@@ -3966,25 +3965,15 @@ fn handle_event(
                             h,
                         );
                         Some(slint::Image::from_rgba8(buf))
-                    } else if let Some(rgba) =
-                        avatar::rasterize_svg(&String::from_utf8_lossy(&decoded))
-                    {
-                        Some(avatar::rgba_to_image(
-                            &rgba,
-                            avatar::RENDER_SIZE,
-                            avatar::RENDER_SIZE,
-                        ))
                     } else {
-                        None
+                        avatar::rasterize_svg(&String::from_utf8_lossy(&decoded)).map(|rgba| {
+                            avatar::rgba_to_image(&rgba, avatar::RENDER_SIZE, avatar::RENDER_SIZE)
+                        })
                     }
-                } else if let Some(rgba) = avatar::rasterize_svg(&data) {
-                    Some(avatar::rgba_to_image(
-                        &rgba,
-                        avatar::RENDER_SIZE,
-                        avatar::RENDER_SIZE,
-                    ))
                 } else {
-                    None
+                    avatar::rasterize_svg(&data).map(|rgba| {
+                        avatar::rgba_to_image(&rgba, avatar::RENDER_SIZE, avatar::RENDER_SIZE)
+                    })
                 };
                 if let Some(img) = slint_img {
                     app.set_user_avatar(img.clone());
@@ -4172,26 +4161,24 @@ fn handle_event(
                                             &rgba.into_raw(), w, h
                                         );
                                         Some(slint::Image::from_rgba8(buf))
-                                    } else if let Some(rgba) =
+                                    } else {
                                         avatar::rasterize_svg(&String::from_utf8_lossy(&decoded))
-                                    {
-                                        Some(avatar::rgba_to_image(
+                                            .map(|rgba| {
+                                                avatar::rgba_to_image(
+                                                    &rgba,
+                                                    avatar::RENDER_SIZE,
+                                                    avatar::RENDER_SIZE,
+                                                )
+                                            })
+                                    }
+                                } else {
+                                    avatar::rasterize_svg(&data).map(|rgba| {
+                                        avatar::rgba_to_image(
                                             &rgba,
                                             avatar::RENDER_SIZE,
                                             avatar::RENDER_SIZE,
-                                        ))
-                                    } else {
-                                        None
-                                    }
-                                } else if let Some(rgba) = avatar::rasterize_svg(&data) {
-                                    // Raw SVG text, not base64-encoded
-                                    Some(avatar::rgba_to_image(
-                                        &rgba,
-                                        avatar::RENDER_SIZE,
-                                        avatar::RENDER_SIZE,
-                                    ))
-                                } else {
-                                    None
+                                        )
+                                    })
                                 };
                                 if let Some(img) = img {
                                     avatar_cache.borrow_mut().insert(cm.user_id.clone(), img);

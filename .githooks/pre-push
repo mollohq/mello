@@ -1,0 +1,26 @@
+#!/bin/sh
+# Pre-push: run clippy + tests (matches pr-checks.yml).
+# Prevents pushing code that would fail CI.
+# Install: git config core.hooksPath .githooks
+
+if ! command -v cargo >/dev/null 2>&1; then
+    exit 0
+fi
+
+echo "Running clippy..."
+cargo clippy --all-targets -- -D warnings 2>&1
+if [ $? -ne 0 ]; then
+    echo ""
+    echo "Push rejected: clippy failed. Fix the warnings above."
+    exit 1
+fi
+
+echo "Running tests..."
+cargo test --workspace 2>&1
+if [ $? -ne 0 ]; then
+    echo ""
+    echo "Push rejected: tests failed. Fix before pushing."
+    exit 1
+fi
+
+echo "All checks passed."
