@@ -242,6 +242,35 @@ pub fn handle(ctx: &AppContext, event: Event) {
                             c.has_stream = stream.active;
                             c.stream_name = stream.title.clone().unwrap_or_default().into();
                         }
+                        // Active games
+                        let glen = state.active_games.len().min(5);
+                        c.game_count = glen as i32;
+                        if let Some(g) = state.active_games.first() {
+                            c.g0_name = g.game_name.clone().into();
+                            c.g0_initial = g.short_name.clone().into();
+                            c.g0_count = g.players.len() as i32;
+                        }
+                        if let Some(g) = state.active_games.get(1) {
+                            c.g1_name = g.game_name.clone().into();
+                            c.g1_initial = g.short_name.clone().into();
+                            c.g1_count = g.players.len() as i32;
+                        }
+                        if let Some(g) = state.active_games.get(2) {
+                            c.g2_name = g.game_name.clone().into();
+                            c.g2_initial = g.short_name.clone().into();
+                            c.g2_count = g.players.len() as i32;
+                        }
+                        if let Some(g) = state.active_games.get(3) {
+                            c.g3_name = g.game_name.clone().into();
+                            c.g3_initial = g.short_name.clone().into();
+                            c.g3_count = g.players.len() as i32;
+                        }
+                        if let Some(g) = state.active_games.get(4) {
+                            c.g4_name = g.game_name.clone().into();
+                            c.g4_initial = g.short_name.clone().into();
+                            c.g4_count = g.players.len() as i32;
+                        }
+
                         c.msg_count = state.recent_messages.len().min(2) as i32;
                         if let Some(m) = state.recent_messages.first() {
                             c.m0_author = m.username.clone().into();

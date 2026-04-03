@@ -1,0 +1,19 @@
+export component GameBadge inherits Rectangle {
+    in property <string> short-name;
+    in property <color> bg-color: #2a2a30;
+    in property <length> size: 32px;
+
+    width: size;
+    height: size;
+    border-radius: 8px;
+    background: bg-color;
+
+    Text {
+        text: short-name;
+        font-size: size > 36px ? 12px : 11px;
+        font-weight: 700;
+        color: white;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}

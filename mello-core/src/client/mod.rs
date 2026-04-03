@@ -12,6 +12,9 @@ use tokio::sync::mpsc;
 use crate::command::Command;
 use crate::config::Config;
 use crate::events::Event;
+use crate::game_db::GameDatabase;
+use crate::game_sensing::GameSensor;
+use crate::game_state::GameStateManager;
 use crate::giphy::GiphyClient;
 use crate::nakama::NakamaClient;
 use crate::nakama::{InternalPresence, InternalSignal};
@@ -60,6 +63,9 @@ pub struct Client {
     sfu_voice_reconnect: Option<(tokio::time::Instant, String, u32)>,
     /// Last voice channel we joined (for reconnection)
     last_voice_channel: Option<String>,
+    game_state: GameStateManager,
+    #[allow(dead_code)]
+    game_sensor: Option<GameSensor>,
 }
 
 impl Client {
@@ -91,11 +97,20 @@ impl Client {
             giphy: GiphyClient::new(),
             sfu_voice_reconnect: None,
             last_voice_channel: None,
+            game_state: GameStateManager::new(),
+            game_sensor: None,
         }
     }
 
     pub async fn run(&mut self, mut cmd_rx: mpsc::Receiver<Command>) {
         log::info!("Mello client started, waiting for commands...");
+
+        // --- Game sensing ---
+        let game_db = GameDatabase::load_bundled();
+        let mello_ctx = self.voice.mello_ctx();
+        let (sensor, game_event_rx) = GameSensor::start(mello_ctx, game_db);
+        self.game_sensor = Some(sensor);
+        log::info!("Game sensor started");
 
         let mut signal_rx = self.nakama.take_signal_rx().unwrap();
         let mut presence_rx = self.nakama.take_presence_rx().unwrap();
@@ -105,6 +120,20 @@ impl Client {
         refresh_tick.tick().await; // consume the immediate first tick
 
         loop {
+            // Drain game events (non-blocking) before entering select!
+            while let Ok(game_event) = game_event_rx.try_recv() {
+                let (ui_events, session_end) = self.game_state.handle_event(game_event);
+                for ev in ui_events {
+                    let _ = self.event_tx.send(ev);
+                }
+                if let Some(info) = session_end {
+                    if let Some(crew_id) = self.nakama.active_crew_id().map(String::from) {
+                        self.handle_game_session_end(&crew_id, &info.game_name, info.duration_min)
+                            .await;
+                    }
+                }
+            }
+
             tokio::select! {
                 cmd = cmd_rx.recv() => {
                     match cmd {

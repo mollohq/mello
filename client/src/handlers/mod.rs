@@ -1,6 +1,7 @@
 mod auth;
 mod chat;
 mod crew;
+mod game;
 mod presence;
 mod streaming;
 mod voice;
@@ -85,6 +86,11 @@ pub fn handle_event(ctx: &AppContext, event: Event) {
         | Event::MomentPostFailed { .. }
         | Event::UserAvatarLoaded { .. }
         | Event::ProfileUpdated { .. } => presence::handle(ctx, event),
+
+        // Game sensing
+        Event::GameDetected { .. } | Event::GameEnded { .. } | Event::PostGameTimeout => {
+            game::handle(ctx, event)
+        }
 
         // Misc
         Event::SignalReceived { .. } => {}

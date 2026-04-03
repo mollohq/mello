@@ -73,6 +73,19 @@ type CrewMemberInfo struct {
 	Presence *UserPresence `json:"presence,omitempty"`
 }
 
+type ActiveGameEntry struct {
+	GameID    string        `json:"game_id"`
+	GameName  string        `json:"game_name"`
+	ShortName string        `json:"short_name"`
+	Color     string        `json:"color"`
+	Players   []PlayerInfo  `json:"players"`
+}
+
+type PlayerInfo struct {
+	UserID   string `json:"user_id"`
+	Username string `json:"username"`
+}
+
 type CrewState struct {
 	CrewID         string                   `json:"crew_id"`
 	Name           string                   `json:"name"`
@@ -81,6 +94,7 @@ type CrewState struct {
 	Voice          *CrewVoiceState          `json:"voice"`
 	VoiceChannels  []*VoiceChannelStateView `json:"voice_channels"`
 	Stream         *CrewStreamState         `json:"stream"`
+	ActiveGames    []*ActiveGameEntry       `json:"active_games"`
 	RecentMessages []*MessagePreview        `json:"recent_messages"`
 	UpdatedAt      string                   `json:"updated_at"`
 	MyRole         int                      `json:"my_role"` // 0=superadmin, 1=admin, 2=member; set per-request
@@ -234,6 +248,33 @@ func ComputeCrewState(ctx context.Context, logger runtime.Logger, nk runtime.Nak
 		recentMsgs = []*MessagePreview{}
 	}
 
+	// Active games: aggregate from member presences
+	gameMap := make(map[string]*ActiveGameEntry)
+	for _, m := range members {
+		u := m.GetUser()
+		p, _ := ReadPresence(ctx, nk, u.GetId())
+		if p == nil || p.Game == nil || p.Game.GameID == "" {
+			continue
+		}
+		g, ok := gameMap[p.Game.GameID]
+		if !ok {
+			g = &ActiveGameEntry{
+				GameID:   p.Game.GameID,
+				GameName: p.Game.GameName,
+				Players:  []PlayerInfo{},
+			}
+			gameMap[p.Game.GameID] = g
+		}
+		g.Players = append(g.Players, PlayerInfo{
+			UserID:   u.GetId(),
+			Username: u.GetDisplayName(),
+		})
+	}
+	activeGames := make([]*ActiveGameEntry, 0, len(gameMap))
+	for _, g := range gameMap {
+		activeGames = append(activeGames, g)
+	}
+
 	state := &CrewState{
 		CrewID: crewID,
 		Name:   group.GetName(),
@@ -245,6 +286,7 @@ func ComputeCrewState(ctx context.Context, logger runtime.Logger, nk runtime.Nak
 		Voice:          voiceState,
 		VoiceChannels:  voiceChannels,
 		Stream:         streamState,
+		ActiveGames:    activeGames,
 		RecentMessages: recentMsgs,
 		UpdatedAt:      time.Now().UTC().Format(time.RFC3339),
 		MyRole:         callerRole,

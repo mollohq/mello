@@ -24,17 +24,26 @@ const (
 	ActivityInVoice   = "in_voice"
 	ActivityStreaming  = "streaming"
 	ActivityWatching  = "watching"
+	ActivityPlaying   = "playing"
 )
 
 const PresenceCollection = "presence"
 
+// GamePresence is an orthogonal signal — can coexist with any activity type.
+type GamePresence struct {
+	GameName  string `json:"game_name"`
+	GameID    string `json:"game_id"`
+	StartedAt string `json:"started_at"`
+}
+
 // UserPresence stored in Nakama storage: presence/{user_id}
 type UserPresence struct {
-	UserID    string    `json:"user_id"`
-	Status    string    `json:"status"`
-	LastSeen  string    `json:"last_seen"`
-	Activity  *Activity `json:"activity,omitempty"`
-	UpdatedAt string    `json:"updated_at"`
+	UserID    string        `json:"user_id"`
+	Status    string        `json:"status"`
+	LastSeen  string        `json:"last_seen"`
+	Activity  *Activity     `json:"activity,omitempty"`
+	Game      *GamePresence `json:"game,omitempty"`
+	UpdatedAt string        `json:"updated_at"`
 }
 
 // Activity describes what a user is currently doing.
@@ -58,7 +67,7 @@ func IsValidStatus(status string) bool {
 
 func IsValidActivityType(t string) bool {
 	switch t {
-	case ActivityNone, ActivityInVoice, ActivityStreaming, ActivityWatching:
+	case ActivityNone, ActivityInVoice, ActivityStreaming, ActivityWatching, ActivityPlaying:
 		return true
 	}
 	return false
@@ -119,8 +128,11 @@ func PresenceUpdateRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, n
 	}
 
 	var req struct {
-		Status   string    `json:"status"`
-		Activity *Activity `json:"activity,omitempty"`
+		Status   string        `json:"status"`
+		Activity *Activity     `json:"activity,omitempty"`
+		Game     *GamePresence `json:"game,omitempty"`
+		// When true, clear the game field (explicit null handling).
+		ClearGame bool `json:"clear_game,omitempty"`
 	}
 	if err := json.Unmarshal([]byte(payload), &req); err != nil {
 		return "", runtime.NewError("invalid request", 3)
@@ -152,6 +164,11 @@ func PresenceUpdateRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, n
 	}
 	if p.Activity == nil {
 		p.Activity = &Activity{Type: ActivityNone}
+	}
+	if req.Game != nil {
+		p.Game = req.Game
+	} else if !req.ClearGame && existing != nil {
+		p.Game = existing.Game
 	}
 
 	if err := WritePresence(ctx, nk, p); err != nil {

@@ -307,6 +307,24 @@ pub enum Event {
         reason: String,
     },
 
+    // --- Game sensing ---
+    /// A game process was detected.
+    GameDetected {
+        game_id: String,
+        game_name: String,
+        short_name: String,
+        color: String,
+    },
+    /// A game process exited.
+    GameEnded {
+        game_id: String,
+        game_name: String,
+        short_name: String,
+        duration_min: u32,
+    },
+    /// Post-game prompt timed out without interaction.
+    PostGameTimeout,
+
     /// Client-server protocol version mismatch.
     ProtocolMismatch {
         message: String,

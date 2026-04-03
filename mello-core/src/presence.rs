@@ -35,6 +35,25 @@ pub enum Activity {
         #[serde(default)]
         streamer_id: String,
     },
+    Playing {
+        #[serde(default)]
+        game_name: String,
+        #[serde(default)]
+        game_id: String,
+        #[serde(default)]
+        started_at: String,
+    },
+}
+
+/// Orthogonal game presence — can coexist with any activity type.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct GamePresence {
+    #[serde(default)]
+    pub game_name: String,
+    #[serde(default)]
+    pub game_id: String,
+    #[serde(default)]
+    pub started_at: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -45,6 +64,8 @@ pub struct UserPresence {
     pub last_seen: Option<String>,
     #[serde(default)]
     pub activity: Option<Activity>,
+    #[serde(default)]
+    pub game: Option<GamePresence>,
     #[serde(default)]
     pub updated_at: Option<String>,
 }
