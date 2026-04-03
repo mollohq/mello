@@ -125,6 +125,19 @@ export component MainWindow inherits Window {
     in-out property <bool> mic-permission-denied: false;
     in property <bool> can-manage-channels: false;
 
+    // --- Game sensing ---
+    in property <bool> game-active: false;
+    in property <string> game-name: "";
+    in property <string> game-short-name: "";
+    in property <color> game-color: #2a2a30;
+    in property <bool> can-stream: false;
+    in-out property <int> bar-state: 0;
+
+    callback stream-requested();
+    callback reaction-tapped(string);
+    callback moment-submitted(string);
+    callback moment-dismissed();
+
     // --- Settings ---
     in-out property <bool> settings-open: false;
     in property <[AudioDeviceData]> capture-devices: [];
@@ -537,6 +550,12 @@ export component MainWindow inherits Window {
                         mic-permission-granted: root.mic-permission-granted;
                         mic-permission-denied: root.mic-permission-denied;
                         presence-status <=> root.presence-status;
+                        game-active: root.game-active;
+                        game-name: root.game-name;
+                        game-short-name: root.game-short-name;
+                        game-color: root.game-color;
+                        can-stream: root.can-stream;
+                        bar-state <=> root.bar-state;
                         mic-toggled => { root.mic-toggle(); }
                         deafen-toggled => { root.deafen-toggle(); }
                         voice-toggled => { root.voice-toggle(); }
@@ -550,6 +569,10 @@ export component MainWindow inherits Window {
                             root.debug-open = !root.debug-open;
                             root.debug-toggled();
                         }
+                        stream-requested => { root.stream-requested(); }
+                        reaction-tapped(sentiment) => { root.reaction-tapped(sentiment); }
+                        moment-submitted(text) => { root.moment-submitted(text); }
+                        moment-dismissed => { root.moment-dismissed(); }
                     }
                 }
 

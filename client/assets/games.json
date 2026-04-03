@@ -1,0 +1,237 @@
+{
+    "version": 1,
+    "updated_at": "2026-04-03T00:00:00Z",
+    "games": [
+        {
+            "id": "counter-strike-2",
+            "igdb_id": 242408,
+            "name": "Counter-Strike 2",
+            "short_name": "CS2",
+            "exe": ["cs2.exe"],
+            "icon_url": "https://images.igdb.com/igdb/image/upload/t_logo_med/co6ygl.png",
+            "cover_url": "https://images.igdb.com/igdb/image/upload/t_cover_big/co6ygl.png",
+            "color": "#DE9B35",
+            "category": "fps"
+        },
+        {
+            "id": "valorant",
+            "igdb_id": 126459,
+            "name": "Valorant",
+            "short_name": "Valorant",
+            "exe": ["VALORANT-Win64-Shipping.exe"],
+            "icon_url": "https://images.igdb.com/igdb/image/upload/t_logo_med/co2mvj.png",
+            "cover_url": "https://images.igdb.com/igdb/image/upload/t_cover_big/co2mvj.png",
+            "color": "#FF4655",
+            "category": "fps"
+        },
+        {
+            "id": "league-of-legends",
+            "igdb_id": 115,
+            "name": "League of Legends",
+            "short_name": "LoL",
+            "exe": ["League of Legends.exe"],
+            "icon_url": "https://images.igdb.com/igdb/image/upload/t_logo_med/co49wj.png",
+            "cover_url": "https://images.igdb.com/igdb/image/upload/t_cover_big/co49wj.png",
+            "color": "#C8AA6E",
+            "category": "moba"
+        },
+        {
+            "id": "fortnite",
+            "igdb_id": 1905,
+            "name": "Fortnite",
+            "short_name": "Fortnite",
+            "exe": ["FortniteClient-Win64-Shipping.exe"],
+            "icon_url": "https://images.igdb.com/igdb/image/upload/t_logo_med/co2ekt.png",
+            "cover_url": "https://images.igdb.com/igdb/image/upload/t_cover_big/co2ekt.png",
+            "color": "#00D4FF",
+            "category": "br"
+        },
+        {
+            "id": "apex-legends",
+            "igdb_id": 114795,
+            "name": "Apex Legends",
+            "short_name": "Apex",
+            "exe": ["r5apex.exe"],
+            "icon_url": "https://images.igdb.com/igdb/image/upload/t_logo_med/co1wfp.png",
+            "cover_url": "https://images.igdb.com/igdb/image/upload/t_cover_big/co1wfp.png",
+            "color": "#DA292A",
+            "category": "br"
+        },
+        {
+            "id": "overwatch-2",
+            "igdb_id": 152244,
+            "name": "Overwatch 2",
+            "short_name": "OW2",
+            "exe": ["Overwatch.exe"],
+            "icon_url": "https://images.igdb.com/igdb/image/upload/t_logo_med/co5tik.png",
+            "cover_url": "https://images.igdb.com/igdb/image/upload/t_cover_big/co5tik.png",
+            "color": "#FA9C1E",
+            "category": "fps"
+        },
+        {
+            "id": "rocket-league",
+            "igdb_id": 7346,
+            "name": "Rocket League",
+            "short_name": "Rocket",
+            "exe": ["RocketLeague.exe"],
+            "icon_url": "https://images.igdb.com/igdb/image/upload/t_logo_med/co5w0o.png",
+            "cover_url": "https://images.igdb.com/igdb/image/upload/t_cover_big/co5w0o.png",
+            "color": "#0076FF",
+            "category": "sports"
+        },
+        {
+            "id": "dota-2",
+            "igdb_id": 2963,
+            "name": "Dota 2",
+            "short_name": "Dota 2",
+            "exe": ["dota2.exe"],
+            "icon_url": "https://images.igdb.com/igdb/image/upload/t_logo_med/co1wyy.png",
+            "cover_url": "https://images.igdb.com/igdb/image/upload/t_cover_big/co1wyy.png",
+            "color": "#A22A20",
+            "category": "moba"
+        },
+        {
+            "id": "rainbow-six-siege",
+            "igdb_id": 7360,
+            "name": "Tom Clancy's Rainbow Six Siege",
+            "short_name": "R6",
+            "exe": ["RainbowSix.exe"],
+            "icon_url": "https://images.igdb.com/igdb/image/upload/t_logo_med/co2t89.png",
+            "cover_url": "https://images.igdb.com/igdb/image/upload/t_cover_big/co2t89.png",
+            "color": "#A3A3A3",
+            "category": "fps"
+        },
+        {
+            "id": "minecraft",
+            "igdb_id": 121,
+            "name": "Minecraft",
+            "short_name": "MC",
+            "exe": ["javaw.exe", "Minecraft.Windows.exe"],
+            "icon_url": "https://images.igdb.com/igdb/image/upload/t_logo_med/co49x5.png",
+            "cover_url": "https://images.igdb.com/igdb/image/upload/t_cover_big/co49x5.png",
+            "color": "#5D8731",
+            "category": "sandbox"
+        },
+        {
+            "id": "call-of-duty-warzone",
+            "igdb_id": 136634,
+            "name": "Call of Duty: Warzone",
+            "short_name": "Warzone",
+            "exe": ["cod.exe"],
+            "icon_url": "https://images.igdb.com/igdb/image/upload/t_logo_med/co2pv5.png",
+            "cover_url": "https://images.igdb.com/igdb/image/upload/t_cover_big/co2pv5.png",
+            "color": "#4CAF50",
+            "category": "br"
+        },
+        {
+            "id": "grand-theft-auto-v",
+            "igdb_id": 1020,
+            "name": "Grand Theft Auto V",
+            "short_name": "GTA V",
+            "exe": ["GTA5.exe", "PlayGTAV.exe"],
+            "icon_url": "https://images.igdb.com/igdb/image/upload/t_logo_med/co2lbd.png",
+            "cover_url": "https://images.igdb.com/igdb/image/upload/t_cover_big/co2lbd.png",
+            "color": "#81D742",
+            "category": "sandbox"
+        },
+        {
+            "id": "destiny-2",
+            "igdb_id": 25657,
+            "name": "Destiny 2",
+            "short_name": "Destiny",
+            "exe": ["destiny2.exe"],
+            "icon_url": "https://images.igdb.com/igdb/image/upload/t_logo_med/co1vcz.png",
+            "cover_url": "https://images.igdb.com/igdb/image/upload/t_cover_big/co1vcz.png",
+            "color": "#E8E8E8",
+            "category": "fps"
+        },
+        {
+            "id": "dead-by-daylight",
+            "igdb_id": 11163,
+            "name": "Dead by Daylight",
+            "short_name": "DBD",
+            "exe": ["DeadByDaylight-Win64-Shipping.exe"],
+            "icon_url": "https://images.igdb.com/igdb/image/upload/t_logo_med/co3wk7.png",
+            "cover_url": "https://images.igdb.com/igdb/image/upload/t_cover_big/co3wk7.png",
+            "color": "#FF2D2D",
+            "category": "other"
+        },
+        {
+            "id": "elden-ring",
+            "igdb_id": 119133,
+            "name": "Elden Ring",
+            "short_name": "Elden",
+            "exe": ["eldenring.exe"],
+            "icon_url": "https://images.igdb.com/igdb/image/upload/t_logo_med/co4jni.png",
+            "cover_url": "https://images.igdb.com/igdb/image/upload/t_cover_big/co4jni.png",
+            "color": "#C4A44A",
+            "category": "rpg"
+        },
+        {
+            "id": "the-finals",
+            "igdb_id": 198837,
+            "name": "THE FINALS",
+            "short_name": "Finals",
+            "exe": ["Discovery.exe"],
+            "icon_url": "https://images.igdb.com/igdb/image/upload/t_logo_med/co74y1.png",
+            "cover_url": "https://images.igdb.com/igdb/image/upload/t_cover_big/co74y1.png",
+            "color": "#FF4040",
+            "category": "fps"
+        },
+        {
+            "id": "path-of-exile",
+            "igdb_id": 473,
+            "name": "Path of Exile",
+            "short_name": "PoE",
+            "exe": ["PathOfExile.exe", "PathOfExileSteam.exe"],
+            "icon_url": "https://images.igdb.com/igdb/image/upload/t_logo_med/co1rs4.png",
+            "cover_url": "https://images.igdb.com/igdb/image/upload/t_cover_big/co1rs4.png",
+            "color": "#B49256",
+            "category": "rpg"
+        },
+        {
+            "id": "helldivers-2",
+            "igdb_id": 138718,
+            "name": "Helldivers 2",
+            "short_name": "HD2",
+            "exe": ["helldivers2.exe"],
+            "icon_url": "https://images.igdb.com/igdb/image/upload/t_logo_med/co7dlv.png",
+            "cover_url": "https://images.igdb.com/igdb/image/upload/t_cover_big/co7dlv.png",
+            "color": "#FFE74C",
+            "category": "fps"
+        },
+        {
+            "id": "escape-from-tarkov",
+            "igdb_id": 15536,
+            "name": "Escape from Tarkov",
+            "short_name": "Tarkov",
+            "exe": ["EscapeFromTarkov.exe"],
+            "icon_url": "https://images.igdb.com/igdb/image/upload/t_logo_med/co1ycr.png",
+            "cover_url": "https://images.igdb.com/igdb/image/upload/t_cover_big/co1ycr.png",
+            "color": "#2C2C2C",
+            "category": "fps"
+        },
+        {
+            "id": "marvel-rivals",
+            "igdb_id": 294041,
+            "name": "Marvel Rivals",
+            "short_name": "Rivals",
+            "exe": ["MarvelRivals-Win64-Shipping.exe"],
+            "icon_url": "https://images.igdb.com/igdb/image/upload/t_logo_med/co8ypz.png",
+            "cover_url": "https://images.igdb.com/igdb/image/upload/t_cover_big/co8ypz.png",
+            "color": "#E62429",
+            "category": "fps"
+        },
+        {
+            "id": "hearthstone",
+            "igdb_id": 1279,
+            "name": "Hearthstone",
+            "short_name": "HS",
+            "exe": ["Hearthstone.exe"],
+            "icon_url": "https://images.igdb.com/igdb/image/upload/t_logo_med/co1k24.png",
+            "cover_url": "https://images.igdb.com/igdb/image/upload/t_cover_big/co1k24.png",
+            "color": "#CD8B36",
+            "category": "other"
+        }
+    ]
+}

@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::presence::{Activity, PresenceStatus, UserPresence};
+use crate::presence::{Activity, GamePresence, PresenceStatus, UserPresence};
 
 // ---------------------------------------------------------------------------
 // Full crew state (returned by crew_state_get for the active crew)
@@ -18,6 +18,8 @@ pub struct CrewState {
     pub voice_channels: Vec<VoiceChannelState>,
     #[serde(default)]
     pub stream: Option<StreamState>,
+    #[serde(default)]
+    pub active_games: Vec<ActiveGameInfo>,
     #[serde(default)]
     pub recent_messages: Vec<MessagePreview>,
     #[serde(default)]
@@ -187,6 +189,28 @@ pub struct CrewEvent {
 }
 
 // ---------------------------------------------------------------------------
+// Active games (computed from member presences)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ActiveGameInfo {
+    pub game_id: String,
+    pub game_name: String,
+    #[serde(default)]
+    pub short_name: String,
+    #[serde(default)]
+    pub color: String,
+    #[serde(default)]
+    pub players: Vec<PlayerInfo>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PlayerInfo {
+    pub user_id: String,
+    pub username: String,
+}
+
+// ---------------------------------------------------------------------------
 // Presence change push
 // ---------------------------------------------------------------------------
 
@@ -202,6 +226,8 @@ pub struct PresenceInfo {
     pub status: PresenceStatus,
     #[serde(default)]
     pub activity: Option<Activity>,
+    #[serde(default)]
+    pub game: Option<GamePresence>,
 }
 
 // ---------------------------------------------------------------------------
