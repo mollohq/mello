@@ -93,10 +93,22 @@ fn init_logging() {
     registry.init();
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() {
     Updater::run_lifecycle_hooks();
 
     init_logging();
+
+    std::panic::set_hook(Box::new(|info| {
+        log::error!("PANIC: {}", info);
+    }));
+
+    if let Err(e) = run_app() {
+        log::error!("Fatal: {}", e);
+        std::process::exit(1);
+    }
+}
+
+fn run_app() -> Result<(), Box<dyn std::error::Error>> {
     log::info!("Starting Mello...");
 
     // --- Single instance enforcement ---
@@ -303,6 +315,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // --- Wire all callbacks ---
     callbacks::wire_all(&ctx);
+    log::info!("[startup] callbacks wired");
 
     // --- Start chat GIF animator ---
     {
@@ -326,6 +339,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // --- Start poll loop ---
     let _poll_timer = poll_loop::start(&ctx, event_rx, update_event_rx);
+    log::info!("[startup] poll loop started");
 
     // --- 16ms frame timer for stream display ---
     let frame_app_weak = ctx.app.as_weak();
@@ -356,6 +370,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     ctx.app.show()?;
+    log::info!("[startup] window shown");
     slint::run_event_loop_until_quit()?;
     Ok(())
 }
