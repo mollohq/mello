@@ -1,4 +1,6 @@
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
+use std::sync::Arc;
 use velopack::sources::{FileSource, HttpSource};
 use velopack::{UpdateCheck, UpdateInfo, UpdateManager, VelopackApp};
 
@@ -10,6 +12,8 @@ pub struct Updater {
     manager: UpdateManager,
     event_tx: mpsc::Sender<UpdateEvent>,
     cached_update: Option<UpdateInfo>,
+    /// Prevents overlapping Velopack download/apply (exclusive lock); cleared on error.
+    update_job_active: Arc<AtomicBool>,
 }
 
 impl Updater {
@@ -41,6 +45,7 @@ impl Updater {
             manager,
             event_tx,
             cached_update: None,
+            update_job_active: Arc::new(AtomicBool::new(false)),
         })
     }
 
@@ -91,30 +96,54 @@ impl Updater {
         }
     }
 
-    /// Download the pending update and immediately restart the app.
-    /// This replaces the current process on success — does not return.
+    /// Starts download and apply/restart on a background thread so the UI thread stays responsive.
+    /// On success the process is replaced and this never completes on that path.
     pub fn update_and_restart(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         let info = self
             .cached_update
             .as_ref()
             .ok_or("No update available — call check_for_updates first")?;
 
-        let (progress_tx, progress_rx) = std::sync::mpsc::channel::<i16>();
+        if self
+            .update_job_active
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
+            log::warn!("Update already in progress");
+            return Err("Update already in progress".into());
+        }
 
+        let manager = self.manager.clone();
+        let info = info.clone();
         let event_tx = self.event_tx.clone();
+        let guard = Arc::clone(&self.update_job_active);
+
         std::thread::spawn(move || {
-            while let Ok(pct) = progress_rx.recv() {
-                let progress = pct as f32 / 100.0;
-                event_tx
-                    .send(UpdateEvent::DownloadProgress { progress })
-                    .ok();
+            let (progress_tx, progress_rx) = mpsc::channel::<i16>();
+            let event_tx_progress = event_tx.clone();
+            std::thread::spawn(move || {
+                while let Ok(pct) = progress_rx.recv() {
+                    let progress = pct as f32 / 100.0;
+                    event_tx_progress
+                        .send(UpdateEvent::DownloadProgress { progress })
+                        .ok();
+                }
+            });
+
+            if let Err(e) = manager.download_updates(&info, Some(progress_tx)) {
+                log::warn!("Update download failed: {}", e);
+                let _ = event_tx.send(UpdateEvent::Error(format!("Update download failed: {}", e)));
+                guard.store(false, Ordering::SeqCst);
+                return;
+            }
+
+            log::info!("Download complete, applying update and restarting...");
+            if let Err(e) = manager.apply_updates_and_restart(&info) {
+                log::warn!("Apply update / restart failed: {}", e);
+                let _ = event_tx.send(UpdateEvent::Error(format!("Apply update failed: {}", e)));
+                guard.store(false, Ordering::SeqCst);
             }
         });
-
-        self.manager.download_updates(info, Some(progress_tx))?;
-
-        log::info!("Download complete, applying update and restarting...");
-        self.manager.apply_updates_and_restart(info)?;
 
         Ok(())
     }
