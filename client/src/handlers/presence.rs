@@ -296,19 +296,23 @@ pub fn handle(ctx: &AppContext, event: Event) {
             }
 
             if ctx.app.get_active_crew_id() == state.crew_id.as_str() {
-                let current_avc = ctx.active_voice_channel.borrow().clone();
-                let avc_id = if current_avc.is_empty() {
-                    let default_id = state
-                        .voice_channels
-                        .iter()
-                        .find(|ch| ch.is_default)
-                        .or_else(|| state.voice_channels.first())
-                        .map(|ch| ch.id.clone())
-                        .unwrap_or_default();
-                    *ctx.active_voice_channel.borrow_mut() = default_id.clone();
-                    default_id
+                let avc_id = if ctx.app.get_in_voice() {
+                    let current_avc = ctx.active_voice_channel.borrow().clone();
+                    if current_avc.is_empty() {
+                        let default_id = state
+                            .voice_channels
+                            .iter()
+                            .find(|ch| ch.is_default)
+                            .or_else(|| state.voice_channels.first())
+                            .map(|ch| ch.id.clone())
+                            .unwrap_or_default();
+                        *ctx.active_voice_channel.borrow_mut() = default_id.clone();
+                        default_id
+                    } else {
+                        current_avc
+                    }
                 } else {
-                    current_avc
+                    String::new()
                 };
                 let local_id = ctx.app.get_user_id();
                 let uav = ctx.app.get_user_avatar();
