@@ -197,9 +197,18 @@ func PresenceGetRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk r
 // Session lifecycle hooks
 // ---------------------------------------------------------------------------
 
+func sessionUserID(ctx context.Context, evt *api.Event) string {
+	if uid, ok := ctx.Value(runtime.RUNTIME_CTX_USER_ID).(string); ok && uid != "" {
+		return uid
+	}
+	if props := evt.GetProperties(); props != nil {
+		return props["user_id"]
+	}
+	return ""
+}
+
 func OnSessionStart(ctx context.Context, logger runtime.Logger, evt *api.Event) {
-	props := evt.GetProperties()
-	userID := props["user_id"]
+	userID := sessionUserID(ctx, evt)
 	if userID == "" {
 		return
 	}
@@ -223,9 +232,9 @@ func OnSessionStart(ctx context.Context, logger runtime.Logger, evt *api.Event) 
 }
 
 func OnSessionEnd(ctx context.Context, logger runtime.Logger, evt *api.Event) {
-	props := evt.GetProperties()
-	userID := props["user_id"]
+	userID := sessionUserID(ctx, evt)
 	if userID == "" {
+		logger.Warn("OnSessionEnd: could not resolve user_id from context or event properties")
 		return
 	}
 
@@ -240,13 +249,14 @@ func OnSessionEnd(ctx context.Context, logger runtime.Logger, evt *api.Event) {
 
 	if err := WritePresence(ctx, globalNk, p); err != nil {
 		logger.Error("failed to set presence on session end for %s: %v", userID, err)
-		return
 	}
 
-	// Clean up any voice room the user was in
+	// All cleanup below runs regardless of whether the presence write succeeded.
+
 	VoiceCleanupUser(ctx, logger, globalNk, userID)
 
-	// Clean up push subscriptions
+	StreamCleanupUser(ctx, logger, globalNk, userID)
+
 	CleanupUser(userID)
 
 	NotifyPresenceChanged(ctx, logger, globalNk, userID, p)

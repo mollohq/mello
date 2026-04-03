@@ -368,7 +368,20 @@ func VoiceSpeakingRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-func voiceLeaveInternal(ctx context.Context, logger runtime.Logger, nk runtime.NakamaModule, userID string) {
+// voiceLeaveInternalOpts controls optional behaviour of voiceLeaveInternal.
+type voiceLeaveInternalOpts struct {
+	// When true, skip the presence write back to StatusOnline. Used when the
+	// caller (OnSessionEnd) has already written StatusOffline and we must not
+	// overwrite it.
+	skipPresenceWrite bool
+}
+
+func voiceLeaveInternal(ctx context.Context, logger runtime.Logger, nk runtime.NakamaModule, userID string, opts ...voiceLeaveInternalOpts) {
+	var opt voiceLeaveInternalOpts
+	if len(opts) > 0 {
+		opt = opts[0]
+	}
+
 	voiceUserChannelMu.Lock()
 	channelID, wasInVoice := voiceUserChannel[userID]
 	delete(voiceUserChannel, userID)
@@ -436,20 +449,20 @@ func voiceLeaveInternal(ctx context.Context, logger runtime.Logger, nk runtime.N
 		}
 	}
 
-	// Reset presence activity
-	now := time.Now().UTC().Format(time.RFC3339)
-	_ = WritePresence(ctx, nk, &UserPresence{
-		UserID:    userID,
-		Status:    StatusOnline,
-		LastSeen:  now,
-		Activity:  &Activity{Type: ActivityNone},
-		UpdatedAt: now,
-	})
+	if !opt.skipPresenceWrite {
+		now := time.Now().UTC().Format(time.RFC3339)
+		_ = WritePresence(ctx, nk, &UserPresence{
+			UserID:    userID,
+			Status:    StatusOnline,
+			LastSeen:  now,
+			Activity:  &Activity{Type: ActivityNone},
+			UpdatedAt: now,
+		})
+	}
 
 	if crewID != "" {
 		InvalidateCrewState(crewID)
 
-		// Resolve channel name for the event
 		channelName := resolveChannelName(ctx, nk, crewID, channelID)
 		PushCrewEvent(ctx, logger, nk, crewID, "voice_left", map[string]interface{}{
 			"user_id":      userID,
@@ -481,8 +494,9 @@ func VoiceEvictChannel(ctx context.Context, logger runtime.Logger, nk runtime.Na
 }
 
 // VoiceCleanupUser removes a user from any voice room (called on disconnect).
+// Skips the presence write since OnSessionEnd already set StatusOffline.
 func VoiceCleanupUser(ctx context.Context, logger runtime.Logger, nk runtime.NakamaModule, userID string) {
-	voiceLeaveInternal(ctx, logger, nk, userID)
+	voiceLeaveInternal(ctx, logger, nk, userID, voiceLeaveInternalOpts{skipPresenceWrite: true})
 }
 
 // StartVoiceRoomGC runs a background loop that prunes voice room members whose
@@ -495,6 +509,8 @@ func StartVoiceRoomGC(ctx context.Context, nk runtime.NakamaModule, logger runti
 		voiceRoomGC(ctx, logger, nk)
 	}
 }
+
+const voiceGCStalenessThreshold = 2 * time.Hour
 
 func voiceRoomGC(ctx context.Context, logger runtime.Logger, nk runtime.NakamaModule) {
 	voiceRoomsMu.RLock()
@@ -516,9 +532,35 @@ func voiceRoomGC(ctx context.Context, logger runtime.Logger, nk runtime.NakamaMo
 		if err != nil {
 			continue
 		}
+
+		stale := false
 		if p.Status == StatusOffline {
-			logger.Info("Voice GC: removing stale member %s", uid)
-			voiceLeaveInternal(ctx, logger, nk, uid)
+			stale = true
+		} else if p.UpdatedAt != "" {
+			// Catch ghost "online" presences that were never flipped to offline
+			// (e.g. OnSessionEnd failed or never fired).
+			if updatedAt, parseErr := time.Parse(time.RFC3339, p.UpdatedAt); parseErr == nil {
+				if time.Since(updatedAt) > voiceGCStalenessThreshold {
+					stale = true
+				}
+			}
+		}
+
+		if stale {
+			logger.Info("Voice GC: removing stale member %s (status=%s, updated_at=%s)", uid, p.Status, p.UpdatedAt)
+			voiceLeaveInternal(ctx, logger, nk, uid, voiceLeaveInternalOpts{skipPresenceWrite: true})
+
+			// Also fix the stored presence if it's not already offline.
+			if p.Status != StatusOffline {
+				now := time.Now().UTC().Format(time.RFC3339)
+				_ = WritePresence(ctx, nk, &UserPresence{
+					UserID:    uid,
+					Status:    StatusOffline,
+					LastSeen:  now,
+					Activity:  &Activity{Type: ActivityNone},
+					UpdatedAt: now,
+				})
+			}
 			removed++
 		}
 	}

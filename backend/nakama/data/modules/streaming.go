@@ -274,6 +274,13 @@ func StopStreamRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk ru
 		},
 	})
 
+	// Delete stream session record
+	if streamMeta != nil {
+		nk.StorageDelete(ctx, []*runtime.StorageDelete{
+			{Collection: StreamSessionCol, Key: streamMeta.StreamID, UserID: SystemUserID},
+		})
+	}
+
 	// Write stream_session event to the crew event ledger
 	if streamMeta != nil {
 		durationMin := 0
@@ -626,4 +633,148 @@ func loadStreamSession(ctx context.Context, nk runtime.NakamaModule, sessionID s
 		return nil
 	}
 	return &meta
+}
+
+// ---------------------------------------------------------------------------
+// Session-end and GC cleanup
+// ---------------------------------------------------------------------------
+
+// StreamCleanupUser cleans up any active stream hosted by the given user.
+// Called from OnSessionEnd when a user disconnects without calling stop_stream.
+func StreamCleanupUser(ctx context.Context, logger runtime.Logger, nk runtime.NakamaModule, userID string) {
+	groups, _, err := nk.UserGroupsList(ctx, userID, 100, nil, "")
+	if err != nil {
+		logger.Warn("StreamCleanupUser: failed to list groups for %s: %v", userID, err)
+		return
+	}
+
+	for _, g := range groups {
+		crewID := g.GetGroup().GetId()
+		cleanupStreamIfHost(ctx, logger, nk, crewID, userID)
+	}
+}
+
+// cleanupStreamIfHost checks stream_meta for a crew and, if the given user is
+// the host, deletes all stream storage and pushes stream_ended.
+func cleanupStreamIfHost(ctx context.Context, logger runtime.Logger, nk runtime.NakamaModule, crewID, userID string) {
+	objects, err := nk.StorageRead(ctx, []*runtime.StorageRead{
+		{Collection: StreamMetaCollection, Key: crewID, UserID: SystemUserID},
+	})
+	if err != nil || len(objects) == 0 {
+		return
+	}
+
+	var meta StreamMeta
+	if err := json.Unmarshal([]byte(objects[0].Value), &meta); err != nil {
+		return
+	}
+	if meta.StreamerID != userID {
+		return
+	}
+
+	logger.Info("StreamCleanupUser: cleaning orphaned stream %s for host %s in crew %s", meta.StreamID, userID, crewID)
+
+	// Delete active_streams (owned by host user)
+	if err := nk.StorageDelete(ctx, []*runtime.StorageDelete{
+		{Collection: StreamCollection, Key: crewID, UserID: userID},
+	}); err != nil {
+		logger.Warn("StreamCleanupUser: failed to delete active_streams for crew %s: %v", crewID, err)
+	}
+
+	// Delete stream_meta (owned by system user)
+	nk.StorageDelete(ctx, []*runtime.StorageDelete{
+		{Collection: StreamMetaCollection, Key: crewID, UserID: SystemUserID},
+	})
+
+	// Delete stream_sessions
+	nk.StorageDelete(ctx, []*runtime.StorageDelete{
+		{Collection: StreamSessionCol, Key: meta.StreamID, UserID: SystemUserID},
+	})
+
+	// Write stream_session event to the crew event ledger
+	durationMin := 0
+	if startedAt, parseErr := time.Parse(time.RFC3339, meta.StartedAt); parseErr == nil {
+		durationMin = int(time.Since(startedAt).Minutes())
+		if durationMin < 1 {
+			durationMin = 1
+		}
+	}
+	event := CrewEvent{
+		ID:        generateEventID(),
+		CrewID:    crewID,
+		Type:      "stream_session",
+		ActorID:   userID,
+		Timestamp: time.Now().UnixMilli(),
+		Score:     30,
+		Data: StreamSessionData{
+			StreamerID:   meta.StreamerID,
+			StreamerName: meta.StreamerUsername,
+			Title:        meta.Title,
+			DurationMin:  durationMin,
+			PeakViewers:  len(meta.ViewerIDs),
+			ViewerIDs:    meta.ViewerIDs,
+		},
+	}
+	if appendErr := AppendCrewEvent(ctx, nk, crewID, event); appendErr != nil {
+		logger.Warn("StreamCleanupUser: failed to write stream_session event for crew %s: %v", crewID, appendErr)
+	}
+
+	InvalidateCrewState(crewID)
+
+	PushCrewEvent(ctx, logger, nk, crewID, "stream_ended", map[string]interface{}{
+		"crew_id": crewID,
+		"host_id": userID,
+	})
+}
+
+// StartStreamGC runs a background loop that cleans up orphaned stream records
+// whose host is offline. Safety net for cases where OnSessionEnd didn't fire
+// or failed to clean up.
+func StartStreamGC(ctx context.Context, nk runtime.NakamaModule, logger runtime.Logger, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for range ticker.C {
+		streamGC(ctx, logger, nk)
+	}
+}
+
+const streamGCStalenessThreshold = 2 * time.Hour
+
+func streamGC(ctx context.Context, logger runtime.Logger, nk runtime.NakamaModule) {
+	cursor := ""
+	for {
+		objects, nextCursor, err := nk.StorageList(ctx, "", SystemUserID, StreamMetaCollection, 100, cursor)
+		if err != nil {
+			logger.Warn("StreamGC: failed to list stream_meta: %v", err)
+			return
+		}
+		for _, obj := range objects {
+			var meta StreamMeta
+			if err := json.Unmarshal([]byte(obj.Value), &meta); err != nil {
+				continue
+			}
+			p, err := ReadPresence(ctx, nk, meta.StreamerID)
+			if err != nil {
+				continue
+			}
+			stale := false
+			if p.Status == StatusOffline {
+				stale = true
+			} else if p.UpdatedAt != "" {
+				if updatedAt, parseErr := time.Parse(time.RFC3339, p.UpdatedAt); parseErr == nil {
+					if time.Since(updatedAt) > streamGCStalenessThreshold {
+						stale = true
+					}
+				}
+			}
+			if stale {
+				logger.Info("StreamGC: removing orphaned stream %s (host %s, crew %s)", meta.StreamID, meta.StreamerID, meta.CrewID)
+				cleanupStreamIfHost(ctx, logger, nk, meta.CrewID, meta.StreamerID)
+			}
+		}
+		if nextCursor == "" {
+			break
+		}
+		cursor = nextCursor
+	}
 }
