@@ -10,10 +10,14 @@
 
 namespace mello::audio {
 
+class AudioSessionWin;
+
 class WasapiPlayback : public AudioPlayback {
 public:
     WasapiPlayback();
     ~WasapiPlayback() override;
+
+    void set_session(AudioSessionWin* session) { session_win_ = session; }
 
     bool initialize(const char* device_id = nullptr) override;
     bool start() override;
@@ -25,6 +29,8 @@ public:
 
 private:
     void playback_thread();
+
+    AudioSessionWin* session_win_ = nullptr;
 
     IMMDevice* device_ = nullptr;
     IAudioClient* audio_client_ = nullptr;

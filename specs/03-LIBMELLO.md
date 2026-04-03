@@ -33,6 +33,7 @@ libmello/
 │   │
 │   ├── audio/
 │   │   ├── audio_pipeline.hpp/cpp
+│   │   ├── audio_session_win.hpp/cpp # Windows ducking prevention
 │   │   ├── capture_wasapi.hpp/cpp  # Windows audio capture
 │   │   ├── playback_wasapi.hpp/cpp # Windows audio playback
 │   │   ├── processing.hpp/cpp      # RNNoise + Silero VAD wrapper
@@ -144,6 +145,44 @@ All functions return `MelloResult` enum. On failure, `mello_get_error()` returns
 - **Silero VAD:** ONNX-based neural VAD with hysteresis (3 speech frames to activate, 15 silence frames to deactivate). More accurate than RNNoise's built-in VAD for detecting speech vs. keyboard/ambient noise.
 - **Opus at 64kbps stereo:** Good quality for voice, well within P2P bandwidth budget. Frame size is 20ms (960 samples at 48kHz).
 - **Jitter buffer:** Adaptive, compensates for P2P network jitter. Uses PLC (packet loss concealment) via Opus decoder when packets are late.
+
+
+### 4.1 Ducking Prevention (Windows)
+
+Windows automatically reduces ("ducks") the volume of all other applications when it detects a communications audio session. For a gaming voice app this is a dealbreaker — it quiets or mutes the game the user is playing.
+
+#### How Windows decides to duck
+
+When an application opens a WASAPI stream on the `eCommunications` endpoint, the OS classifies the session as communications activity and consults Sound Settings → Communications tab. The default is "Reduce the volume of other sounds by 80%." Some users have it set to "Mute all other sounds." This applies system-wide to every other audio source.
+
+#### Primary defense: `eConsole` endpoint role
+
+Both `WasapiCapture` and `WasapiPlayback` use `GetDefaultAudioEndpoint` with `eConsole` instead of `eCommunications`. This prevents Windows from classifying mello's sessions as communications activity, so ducking is never triggered. This is the same approach Discord uses.
+
+When the user selects a specific device in settings, the `GetDevice()` path is used instead, bypassing the endpoint role entirely.
+
+#### Secondary defense: `AudioSessionWin`
+
+`AudioSessionWin` (`audio_session_win.hpp/cpp`) provides two additional layers of protection, both Windows-only:
+
+1. **`SetDuckingPreference(TRUE)`** on the playback session — tells Windows not to duck mello's own audio if another communications app (Skype, Teams, etc.) triggers ducking. Called after `IAudioClient::Initialize()` but before `Start()`. Only applies to render endpoints; capture endpoints do not support this API.
+
+2. **`IAudioVolumeDuckNotification`** — registers a duck notification handler on the default multimedia endpoint's session manager. Both `OnVolumeDuckNotification` and `OnVolumeUnduckNotification` are no-ops.
+
+`AudioSessionWin` is owned by `AudioPipeline` and wired to `WasapiPlayback` via a non-owning pointer. All integration is behind `#ifdef _WIN32` guards. macOS CoreAudio does not have equivalent ducking behavior.
+
+#### Lifecycle
+
+| Phase | What happens |
+|-------|-------------|
+| `AudioPipeline::initialize()` | Creates `AudioSessionWin`, initializes COM (STA), registers duck notification handler, then passes it to `WasapiPlayback` before playback init |
+| `WasapiPlayback::initialize()` | After `IAudioClient::Initialize()` succeeds, calls `disable_ducking_for_client` to set the ducking preference |
+| `AudioPipeline::set_playback_device()` | Re-wires `AudioSessionWin` to the new playback instance before init |
+| `AudioPipeline::shutdown()` | Unregisters the duck notification handler |
+
+#### COM threading
+
+All WASAPI threads use `CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED)`. Using `COINIT_MULTITHREADED` causes `SetDuckingPreference` and `RegisterDuckNotification` to silently succeed but not actually register with the audio engine's notification pump.
 
 ---
 
