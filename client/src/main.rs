@@ -111,10 +111,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         format!("app.mello.desktop.{}", instance_suffix)
     };
+    // macOS: single-instance uses the name as a cwd-relative file path,
+    // so we must give it an absolute path in a writable location.
+    // Windows/Linux: name is used as a mutex/socket name, no path needed.
+    #[cfg(target_os = "macos")]
     let instance_id = std::env::temp_dir()
-        .join(lock_name)
+        .join(&lock_name)
         .to_string_lossy()
         .to_string();
+    #[cfg(not(target_os = "macos"))]
+    let instance_id = lock_name;
     let _instance = SingleInstance::new(&instance_id)?;
     if !_instance.is_single() {
         eprintln!("Mello is already running.");
