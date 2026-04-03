@@ -100,15 +100,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     log::info!("Starting Mello...");
 
     // --- Single instance enforcement ---
+    // single-instance on macOS uses the name as a file path (cwd-relative),
+    // so we place the lock file in a stable writable location.
     let instance_suffix = std::env::args()
         .position(|a| a == "--instance")
         .and_then(|i| std::env::args().nth(i + 1))
         .unwrap_or_default();
-    let instance_id = if instance_suffix.is_empty() {
+    let lock_name = if instance_suffix.is_empty() {
         "app.mello.desktop".to_string()
     } else {
         format!("app.mello.desktop.{}", instance_suffix)
     };
+    let instance_id = std::env::temp_dir()
+        .join(lock_name)
+        .to_string_lossy()
+        .to_string();
     let _instance = SingleInstance::new(&instance_id)?;
     if !_instance.is_single() {
         eprintln!("Mello is already running.");
