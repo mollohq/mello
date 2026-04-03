@@ -59,6 +59,7 @@ typedef void (*MelloMicPermissionCallback)(void* user_data, bool granted);
 typedef void (*MelloIceCandidateCallback)(void* user_data, const MelloIceCandidate* candidate);
 typedef void (*MelloPeerStateCallback)(void* user_data, int state);
 typedef void (*MelloPeerDataCallback)(void* user_data, const uint8_t* data, int size, bool reliable);
+typedef void (*MelloAudioTrackCallback)(void* user_data, const char* sender_id, const uint8_t* data, int size);
 
 /* ============================================================================
  * Context
@@ -153,6 +154,12 @@ MELLO_API void mello_peer_set_data_callback(
     void* user_data
 );
 
+MELLO_API void mello_peer_set_audio_track_callback(
+    MelloPeerConnection* peer,
+    MelloAudioTrackCallback callback,
+    void* user_data
+);
+
 MELLO_API MelloResult mello_peer_send_unreliable(
     MelloPeerConnection* peer,
     const uint8_t* data,
@@ -166,6 +173,12 @@ MELLO_API MelloResult mello_peer_send_reliable(
 );
 
 MELLO_API bool mello_peer_is_connected(MelloPeerConnection* peer);
+
+/** Send raw Opus frame via the RTP audio track. Packetization is automatic. */
+MELLO_API MelloResult mello_peer_send_audio(MelloPeerConnection* peer, const uint8_t* data, int size);
+
+/** Handle a server-initiated SDP renegotiation offer. Returns answer SDP. */
+MELLO_API const char* mello_peer_handle_remote_offer(MelloPeerConnection* peer, const char* offer_sdp);
 
 /** Poll next received unreliable packet. Returns bytes copied, 0 if empty. */
 MELLO_API int mello_peer_recv(MelloPeerConnection* peer, uint8_t* buffer, int buffer_size);

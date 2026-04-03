@@ -75,6 +75,7 @@ fn main() {
     println!("cargo:rustc-link-lib=static=opus");
     println!("cargo:rustc-link-lib=static=datachannel");
     println!("cargo:rustc-link-lib=static=juice");
+    println!("cargo:rustc-link-lib=static=srtp2");
     println!("cargo:rustc-link-lib=static=usrsctp");
 
     // dav1d AV1 decoder (statically linked via vcpkg)

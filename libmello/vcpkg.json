@@ -6,7 +6,7 @@
     "openssl",
     {
       "name": "libdatachannel",
-      "features": ["ws"]
+      "features": ["ws", "srtp"]
     },
     "gtest",
     {

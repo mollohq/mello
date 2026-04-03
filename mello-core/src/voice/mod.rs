@@ -467,7 +467,9 @@ impl VoiceManager {
                     }
                     VoiceMode::SFU => {
                         if let Some(ref conn) = self.sfu_connection {
-                            if let Err(e) = conn.send_media(pkt) {
+                            // Strip the 4-byte LE sequence header; RTP handles sequencing
+                            let opus_payload = if pkt.len() > 4 { &pkt[4..] } else { pkt };
+                            if let Err(e) = conn.send_audio(opus_payload) {
                                 log::warn!("SFU voice send failed: {}", e);
                             }
                         }
@@ -495,67 +497,52 @@ impl VoiceManager {
                     self.mesh.poll_incoming(self.ctx);
                 }
                 VoiceMode::SFU => {
+                    // Audio arrives via AudioTrackData events (RTP track callback),
+                    // signaling events (member join/leave/disconnect) also come here.
                     if let Some(ref conn) = self.sfu_connection {
-                        for pkt in conn.poll_recv() {
-                            // SFU prefixes each forwarded packet with [1-byte len][sender_id]
-                            if pkt.len() < 2 {
-                                continue;
-                            }
-                            let id_len = pkt[0] as usize;
-                            if pkt.len() < 1 + id_len + 1 {
-                                continue;
-                            }
-                            let sender_id = match std::str::from_utf8(&pkt[1..1 + id_len]) {
-                                Ok(s) => s,
-                                Err(_) => continue,
-                            };
-                            let media = &pkt[1 + id_len..];
-                            let peer_id = CString::new(sender_id).unwrap_or_default();
-                            unsafe {
-                                mello_sys::mello_voice_feed_packet(
-                                    self.ctx,
-                                    peer_id.as_ptr(),
-                                    media.as_ptr(),
-                                    media.len() as i32,
-                                );
+                        for event in conn.poll_events() {
+                            match event {
+                                SfuEvent::AudioTrackData { sender_id, data } => {
+                                    let peer_id =
+                                        CString::new(sender_id.as_str()).unwrap_or_default();
+                                    unsafe {
+                                        mello_sys::mello_voice_feed_packet(
+                                            self.ctx,
+                                            peer_id.as_ptr(),
+                                            data.as_ptr(),
+                                            data.len() as i32,
+                                        );
+                                    }
+                                }
+                                SfuEvent::MemberJoined { user_id, .. } => {
+                                    log::info!("SFU: member joined voice: {}", user_id);
+                                    let _ = self.event_tx.send(Event::VoiceMembershipChanged {
+                                        crew_id: self.sfu_crew_id.clone(),
+                                    });
+                                }
+                                SfuEvent::MemberLeft { user_id, reason } => {
+                                    log::info!("SFU: member left voice: {} ({})", user_id, reason);
+                                    let _ = self.event_tx.send(Event::VoiceMembershipChanged {
+                                        crew_id: self.sfu_crew_id.clone(),
+                                    });
+                                }
+                                SfuEvent::Disconnected { reason } => {
+                                    log::warn!("SFU voice disconnected: {}", reason);
+                                    let crew_id = self.sfu_crew_id.clone();
+                                    self.sfu_connection = None;
+                                    self.active = false;
+                                    self.mode = VoiceMode::Disconnected;
+                                    let _ = self
+                                        .event_tx
+                                        .send(Event::VoiceSfuDisconnected { crew_id, reason });
+                                    return;
+                                }
+                                _ => {}
                             }
                         }
                     }
                 }
                 VoiceMode::Disconnected => {}
-            }
-        }
-
-        // Process SFU signaling events (member joins/leaves)
-        if self.active && self.mode == VoiceMode::SFU {
-            if let Some(ref conn) = self.sfu_connection {
-                for event in conn.poll_events() {
-                    match event {
-                        SfuEvent::MemberJoined { user_id, .. } => {
-                            log::info!("SFU: member joined voice: {}", user_id);
-                            let _ = self.event_tx.send(Event::VoiceMembershipChanged {
-                                crew_id: self.sfu_crew_id.clone(),
-                            });
-                        }
-                        SfuEvent::MemberLeft { user_id, reason } => {
-                            log::info!("SFU: member left voice: {} ({})", user_id, reason);
-                            let _ = self.event_tx.send(Event::VoiceMembershipChanged {
-                                crew_id: self.sfu_crew_id.clone(),
-                            });
-                        }
-                        SfuEvent::Disconnected { reason } => {
-                            log::warn!("SFU voice disconnected: {}", reason);
-                            let crew_id = self.sfu_crew_id.clone();
-                            self.sfu_connection = None;
-                            self.active = false;
-                            self.mode = VoiceMode::Disconnected;
-                            let _ = self
-                                .event_tx
-                                .send(Event::VoiceSfuDisconnected { crew_id, reason });
-                        }
-                        _ => {}
-                    }
-                }
             }
         }
     }

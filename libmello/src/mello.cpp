@@ -297,6 +297,14 @@ void mello_peer_set_data_callback(MelloPeerConnection* peer, MelloPeerDataCallba
     } catch (...) {}
 }
 
+void mello_peer_set_audio_track_callback(MelloPeerConnection* peer, MelloAudioTrackCallback callback, void* user_data) {
+    if (!peer) return;
+    try {
+        auto* pc = reinterpret_cast<mello::transport::PeerConnectionImpl*>(peer);
+        pc->set_audio_track_callback(callback, user_data);
+    } catch (...) {}
+}
+
 MelloResult mello_peer_send_unreliable(MelloPeerConnection* peer, const uint8_t* data, int size) {
     if (!peer || !data || size <= 0) return MELLO_ERROR_INVALID_PARAM;
     try {
@@ -314,6 +322,26 @@ MelloResult mello_peer_send_reliable(MelloPeerConnection* peer, const uint8_t* d
         return pc->send_reliable(data, size) ? MELLO_OK : MELLO_ERROR_TRANSPORT_FAILED;
     } catch (...) {
         return MELLO_ERROR_TRANSPORT_FAILED;
+    }
+}
+
+MelloResult mello_peer_send_audio(MelloPeerConnection* peer, const uint8_t* data, int size) {
+    if (!peer || !data || size <= 0) return MELLO_ERROR_INVALID_PARAM;
+    try {
+        auto* pc = reinterpret_cast<mello::transport::PeerConnectionImpl*>(peer);
+        return pc->send_audio(data, size) ? MELLO_OK : MELLO_ERROR_TRANSPORT_FAILED;
+    } catch (...) {
+        return MELLO_ERROR_TRANSPORT_FAILED;
+    }
+}
+
+const char* mello_peer_handle_remote_offer(MelloPeerConnection* peer, const char* offer_sdp) {
+    if (!peer || !offer_sdp) return nullptr;
+    try {
+        auto* pc = reinterpret_cast<mello::transport::PeerConnectionImpl*>(peer);
+        return pc->handle_remote_offer(offer_sdp);
+    } catch (...) {
+        return nullptr;
     }
 }
 

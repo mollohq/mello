@@ -21,6 +21,7 @@ pub enum SfuEvent {
     MemberLeft { user_id: String, reason: String },
     MediaPacket { data: Vec<u8> },
     ControlPacket { data: Vec<u8> },
+    AudioTrackData { sender_id: String, data: Vec<u8> },
     Disconnected { reason: String },
 }
 
@@ -31,6 +32,7 @@ pub struct SfuConnection {
     peer: *mut mello_sys::MelloPeerConnection,
     _peer_id_c: Option<CString>,
     ice_cb_data: *mut IceCallbackData,
+    audio_cb_data: *mut AudioTrackCallbackData,
     ws_tx: Arc<tokio::sync::Mutex<futures::stream::SplitSink<WsStream, Message>>>,
     ws_rx: Option<futures::stream::SplitStream<WsStream>>,
     event_rx: tokio::sync::Mutex<mpsc::Receiver<SfuEvent>>,
@@ -82,6 +84,10 @@ struct IceCallbackData {
     rt_handle: tokio::runtime::Handle,
     ice_queue: Arc<Mutex<Vec<serde_json::Value>>>,
     ice_state: Arc<AtomicI32>,
+}
+
+struct AudioTrackCallbackData {
+    event_tx: mpsc::Sender<SfuEvent>,
 }
 
 // ---------------------------------------------------------------------------
@@ -170,6 +176,7 @@ impl SfuConnection {
             peer: std::ptr::null_mut(),
             _peer_id_c: None,
             ice_cb_data: std::ptr::null_mut(),
+            audio_cb_data: std::ptr::null_mut(),
             ws_tx,
             ws_rx: Some(ws_rx),
             event_rx: tokio::sync::Mutex::new(event_rx),
@@ -223,6 +230,17 @@ impl SfuConnection {
         };
         if result != mello_sys::MelloResult_MELLO_OK {
             return Err(StreamError::SfuSendFailed("unreliable send failed".into()));
+        }
+        Ok(())
+    }
+
+    /// Send raw Opus frame via the RTP audio track (for voice over SFU).
+    pub fn send_audio(&self, data: &[u8]) -> Result<(), StreamError> {
+        let result = unsafe {
+            mello_sys::mello_peer_send_audio(self.peer, data.as_ptr(), data.len() as i32)
+        };
+        if result != mello_sys::MelloResult_MELLO_OK {
+            return Err(StreamError::SfuSendFailed("audio track send failed".into()));
         }
         Ok(())
     }
@@ -397,7 +415,7 @@ impl SfuConnection {
         // Steps 3-6: Create PeerConnection, set callbacks, generate SDP offer
         // All raw pointer work in this sync block — peer_handle is Send across awaits
         let ice_queue: Arc<Mutex<Vec<serde_json::Value>>> = Arc::new(Mutex::new(Vec::new()));
-        let (offer_sdp, cb_data_wrapped) = {
+        let (offer_sdp, cb_data_wrapped, audio_cb_wrapped) = {
             let peer = peer_handle.peer;
 
             let cb_data = Box::into_raw(Box::new(IceCallbackData {
@@ -474,6 +492,36 @@ impl SfuConnection {
                 );
             }
 
+            // Audio track callback: fires from C++ when incoming RTP audio is received
+            unsafe extern "C" fn audio_track_callback(
+                user_data: *mut std::ffi::c_void,
+                sender_id: *const std::ffi::c_char,
+                data: *const u8,
+                size: i32,
+            ) {
+                if user_data.is_null() || sender_id.is_null() || data.is_null() || size <= 0 {
+                    return;
+                }
+                let cb_data = &*(user_data as *const AudioTrackCallbackData);
+                let sid = CStr::from_ptr(sender_id).to_string_lossy().into_owned();
+                let pkt = std::slice::from_raw_parts(data, size as usize).to_vec();
+                let _ = cb_data.event_tx.try_send(SfuEvent::AudioTrackData {
+                    sender_id: sid,
+                    data: pkt,
+                });
+            }
+
+            let audio_cb = Box::into_raw(Box::new(AudioTrackCallbackData {
+                event_tx: self.event_tx.clone(),
+            }));
+            unsafe {
+                mello_sys::mello_peer_set_audio_track_callback(
+                    peer,
+                    Some(audio_track_callback),
+                    audio_cb as *mut std::ffi::c_void,
+                );
+            }
+
             let offer_ptr = unsafe { mello_sys::mello_peer_create_offer(peer) };
             if offer_ptr.is_null() {
                 unsafe { mello_sys::mello_peer_destroy(peer) };
@@ -485,7 +533,7 @@ impl SfuConnection {
                 .to_string_lossy()
                 .into_owned();
 
-            (offer_sdp, SendPtr(cb_data))
+            (offer_sdp, SendPtr(cb_data), SendPtr(audio_cb))
         };
 
         // Step 7: Send SDP offer
@@ -560,10 +608,12 @@ impl SfuConnection {
         self.peer = peer_handle.peer;
         self._peer_id_c = Some(peer_handle.peer_id_c);
         self.ice_cb_data = cb_data_wrapped.0;
+        self.audio_cb_data = audio_cb_wrapped.0;
 
         // Step 12: Spawn background signaling listener
         let event_tx_clone = self.event_tx.clone();
         let peer_for_task = SendPtr(self.peer);
+        let ws_tx_for_task = Arc::clone(&self.ws_tx);
         tokio::spawn(async move {
             while let Some(msg_result) = ws_rx.next().await {
                 match msg_result {
@@ -633,6 +683,41 @@ impl SfuConnection {
                                         log::debug!("SFU: applied server ICE candidate");
                                     }
                                 }
+                                "offer" => {
+                                    // Server-initiated renegotiation (new tracks added)
+                                    if let Some(sdp) = sig.data.get("sdp").and_then(|v| v.as_str())
+                                    {
+                                        if let Ok(sdp_c) = CString::new(sdp) {
+                                            let answer_ptr = unsafe {
+                                                mello_sys::mello_peer_handle_remote_offer(
+                                                    peer_for_task.0,
+                                                    sdp_c.as_ptr(),
+                                                )
+                                            };
+                                            if !answer_ptr.is_null() {
+                                                let answer_sdp = unsafe {
+                                                    CStr::from_ptr(answer_ptr)
+                                                        .to_string_lossy()
+                                                        .into_owned()
+                                                };
+                                                let answer_msg = serde_json::json!({
+                                                    "type": "answer",
+                                                    "seq": 0,
+                                                    "data": { "sdp": answer_sdp }
+                                                });
+                                                let mut ws = ws_tx_for_task.lock().await;
+                                                let _ = ws
+                                                    .send(Message::Text(answer_msg.to_string()))
+                                                    .await;
+                                                log::info!("SFU: renegotiation answer sent");
+                                            } else {
+                                                log::error!(
+                                                    "SFU: failed to handle renegotiation offer"
+                                                );
+                                            }
+                                        }
+                                    }
+                                }
                                 "error" => {
                                     let error_msg = sig
                                         .data
@@ -697,6 +782,11 @@ impl Drop for SfuConnection {
         if !self.ice_cb_data.is_null() {
             unsafe {
                 let _ = Box::from_raw(self.ice_cb_data);
+            }
+        }
+        if !self.audio_cb_data.is_null() {
+            unsafe {
+                let _ = Box::from_raw(self.audio_cb_data);
             }
         }
         log::info!("SFU: connection dropped (server_id={})", self.server_id);
