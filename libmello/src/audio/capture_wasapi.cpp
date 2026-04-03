@@ -24,13 +24,12 @@ WasapiCapture::~WasapiCapture() {
 }
 
 bool WasapiCapture::init_com() {
-    HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    HRESULT hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     if (SUCCEEDED(hr) || hr == S_FALSE) {
         com_initialized_ = true;
         return true;
     }
     if (hr == RPC_E_CHANGED_MODE) {
-        // Already initialized in STA -- that's fine for our purposes
         return true;
     }
     return false;
@@ -59,7 +58,7 @@ bool WasapiCapture::initialize(const char* device_id) {
         MultiByteToWideChar(CP_UTF8, 0, device_id, -1, wid.data(), len);
         hr = enumerator->GetDevice(wid.data(), &device_);
     } else {
-        hr = enumerator->GetDefaultAudioEndpoint(eCapture, eCommunications, &device_);
+        hr = enumerator->GetDefaultAudioEndpoint(eCapture, eConsole, &device_);
     }
     enumerator->Release();
     if (FAILED(hr)) {
@@ -164,7 +163,7 @@ void WasapiCapture::stop() {
 }
 
 void WasapiCapture::capture_thread() {
-    CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     // Resampling buffer: we convert from device format to mono 16-bit
     std::vector<int16_t> mono_buf;
 

@@ -1,5 +1,6 @@
 #ifdef _WIN32
 #include "playback_wasapi.hpp"
+#include "audio_session_win.hpp"
 #include "../util/log.hpp"
 #include <combaseapi.h>
 #include <vector>
@@ -24,7 +25,7 @@ WasapiPlayback::~WasapiPlayback() {
 bool WasapiPlayback::initialize(const char* device_id) {
     MELLO_LOG_INFO("playback", "initializing (device=%s)", device_id ? device_id : "default");
 
-    HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    HRESULT hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     if (FAILED(hr) && hr != S_FALSE && hr != RPC_E_CHANGED_MODE) {
         MELLO_LOG_ERROR("playback", "COM init failed hr=0x%08lx", hr);
         return false;
@@ -42,7 +43,7 @@ bool WasapiPlayback::initialize(const char* device_id) {
         MultiByteToWideChar(CP_UTF8, 0, device_id, -1, wid.data(), len);
         hr = enumerator->GetDevice(wid.data(), &device_);
     } else {
-        hr = enumerator->GetDefaultAudioEndpoint(eRender, eCommunications, &device_);
+        hr = enumerator->GetDefaultAudioEndpoint(eRender, eConsole, &device_);
     }
     enumerator->Release();
     if (FAILED(hr)) return false;
@@ -68,6 +69,10 @@ bool WasapiPlayback::initialize(const char* device_id) {
         duration, 0, mix_fmt, nullptr);
     CoTaskMemFree(mix_fmt);
     if (FAILED(hr)) return false;
+
+    if (session_win_) {
+        session_win_->disable_ducking_for_client(audio_client_);
+    }
 
     hr = audio_client_->SetEventHandle(event_);
     if (FAILED(hr)) return false;
@@ -117,7 +122,7 @@ size_t WasapiPlayback::feed(const int16_t* samples, size_t count) {
 }
 
 void WasapiPlayback::playback_thread() {
-    CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     std::vector<int16_t> mono_buf;
 
     while (running_) {

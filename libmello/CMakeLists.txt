@@ -172,6 +172,7 @@ if(WIN32)
         src/audio/capture_wasapi.cpp
         src/audio/playback_wasapi.cpp
         src/audio/audio_backend_wasapi.cpp
+        src/audio/audio_session_win.cpp
         src/audio/device_enumerator_wasapi.cpp
         src/audio/mic_permission_stub.cpp
     )

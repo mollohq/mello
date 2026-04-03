@@ -7,6 +7,7 @@
 
 #ifdef _WIN32
 #include <windows.h>
+#include "playback_wasapi.hpp"
 #elif defined(__APPLE__)
 #include <mach-o/dyld.h>
 #include <libgen.h>
@@ -85,6 +86,11 @@ bool AudioPipeline::initialize() {
 
     device_enum_ = create_device_enumerator();
 
+#ifdef _WIN32
+    session_win_ = std::make_unique<AudioSessionWin>();
+    session_win_->initialize();
+#endif
+
     capture_ = create_audio_capture();
     if (!capture_->initialize()) {
         MELLO_LOG_ERROR("pipeline", "capture init failed");
@@ -92,6 +98,9 @@ bool AudioPipeline::initialize() {
     }
 
     playback_ = create_audio_playback();
+#ifdef _WIN32
+    apply_session(playback_.get());
+#endif
     if (!playback_->initialize()) {
         MELLO_LOG_ERROR("pipeline", "playback init failed");
         return false;
@@ -132,6 +141,11 @@ void AudioPipeline::shutdown() {
     vad_.shutdown();
     capture_.reset();
     playback_.reset();
+#ifdef _WIN32
+    if (session_win_) {
+        session_win_->shutdown();
+    }
+#endif
     initialized_ = false;
 }
 
@@ -322,6 +336,9 @@ bool AudioPipeline::set_playback_device(const char* device_id) {
     if (playback_) playback_->stop();
 
     playback_ = create_audio_playback();
+#ifdef _WIN32
+    apply_session(playback_.get());
+#endif
     if (!playback_->initialize(device_id)) {
         MELLO_LOG_ERROR("pipeline", "playback device switch failed");
         return false;
@@ -330,5 +347,12 @@ bool AudioPipeline::set_playback_device(const char* device_id) {
     MELLO_LOG_INFO("pipeline", "playback restarted on new device: %s", ok ? "ok" : "FAILED");
     return ok;
 }
+
+#ifdef _WIN32
+void AudioPipeline::apply_session(AudioPlayback* pb) {
+    if (!session_win_ || !pb) return;
+    static_cast<WasapiPlayback*>(pb)->set_session(session_win_.get());
+}
+#endif
 
 } // namespace mello::audio

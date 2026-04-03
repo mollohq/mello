@@ -7,6 +7,9 @@
 #include "device_enumerator.hpp"
 #include "vad.hpp"
 #include "../util/ring_buffer.hpp"
+#ifdef _WIN32
+#include "audio_session_win.hpp"
+#endif
 #include <mutex>
 #include <vector>
 #include <queue>
@@ -59,9 +62,15 @@ public:
 
 private:
     void on_captured_audio(const int16_t* samples, size_t count);
+#ifdef _WIN32
+    void apply_session(AudioPlayback* pb);
+#endif
 
     std::unique_ptr<AudioCapture> capture_;
     std::unique_ptr<AudioPlayback> playback_;
+#ifdef _WIN32
+    std::unique_ptr<AudioSessionWin> session_win_;
+#endif
     OpusEnc encoder_;
     NoiseSuppressor noise_suppressor_;
     VoiceActivityDetector vad_;
