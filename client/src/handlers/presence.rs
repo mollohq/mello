@@ -325,11 +325,8 @@ pub fn handle(ctx: &AppContext, event: Event) {
                     .set_voice_channels(Rc::new(slint::VecModel::from(vc_data)).into());
 
                 ctx.app.set_can_manage_channels(state.my_role <= 1);
-
-                let _ = ctx.cmd_tx.try_send(Command::CrewCatchup {
-                    crew_id: state.crew_id.clone(),
-                    last_seen: 0,
-                });
+                // Catch-up is now fetched in mello-core handle_select_crew
+                // (before set_active_crew) to avoid the last_seen race.
             }
 
             let local_uid = ctx.app.get_user_id().to_string();

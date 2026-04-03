@@ -1,0 +1,312 @@
+<html lang="en" vid="0"><head vid="1">
+    <meta charset="UTF-8" vid="2">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" vid="3">
+    <title vid="4">Crew Companion - Mission Control</title>
+    <style vid="5">
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
+
+        :root {
+            --c-bg-app: #181818;
+            --c-surface: #202020;
+            --c-text-primary: #F5F5F5;
+            --c-text-secondary: #606060;
+            --c-text-tertiary: #404040;
+            --c-accent: #FF1E56;
+            --c-graphic-light: #2E2E2E;
+            --c-graphic-med: #404040;
+            --c-graphic-dark: #F5F5F5;
+            
+            --f-sans: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            --f-mono: 'JetBrains Mono', monospace;
+            
+            --r-outer: 10px;
+            --r-inner: 6px;
+            --r-pill: 999px;
+            
+            --s-gap: 12px;
+            --s-pad: 24px;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            background-color: #111111;
+            color: var(--c-text-primary);
+            font-family: var(--f-sans);
+            height: 100vh;
+            width: 100vw;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        .os-chrome {
+            width: 1440px;
+            height: 900px;
+            display: flex;
+            flex-direction: column;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 24px 64px rgba(0,0,0,0.8), 0 0 0 1px rgba(255,255,255,0.05);
+            position: relative;
+        }
+
+        .titlebar {
+            height: 32px;
+            background: #161616;
+            display: flex;
+            align-items: center;
+            padding: 0 16px;
+            gap: 8px;
+            flex-shrink: 0;
+            position: relative;
+            border-bottom: 1px solid #2A2A2A;
+        }
+
+        .titlebar-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+        }
+
+        .titlebar-title {
+            position: absolute;
+            left: 50%;
+            transform: translateX(-50%);
+            font-size: 11px;
+            font-weight: 500;
+            color: rgba(255,255,255,0.2);
+            font-family: var(--f-mono);
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+        }
+
+        .app-container {
+            width: 1440px;
+            height: 868px;
+            display: grid;
+            grid-template-columns: 280px 1fr 340px;
+            grid-template-rows: 1fr 92px;
+            gap: var(--s-gap);
+            padding: var(--s-gap);
+        }
+
+        .panel {
+            background: var(--c-surface);
+            border-radius: var(--r-outer);
+            padding: var(--s-pad);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            position: relative;
+            border: 1px solid var(--c-graphic-light);
+        }
+
+        .label-kicker {
+            font-family: var(--f-sans);
+            font-size: 11px;
+            font-weight: 600;
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
+            color: var(--c-text-secondary);
+            margin-bottom: 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .sidebar-crews {
+            grid-column: 1;
+            grid-row: 1 / -1;
+        }
+
+        .crew-card.mission-control {
+            background: var(--c-bg-app);
+            border: 1px solid var(--c-accent);
+            background: linear-gradient(180deg, rgba(255, 30, 86, 0.08) 0%, rgba(255, 30, 86, 0.02) 100%);
+            padding: 16px;
+            border-radius: var(--r-inner);
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+
+        .mc-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+        }
+
+        .mc-title {
+            font-family: var(--f-mono);
+            font-size: 12px;
+            color: var(--c-accent);
+            letter-spacing: 0.05em;
+            font-weight: 600;
+        }
+
+        .status-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--c-accent); }
+
+        .stage-area { grid-column: 2; grid-row: 1; display: flex; flex-direction: column; gap: var(--s-gap); }
+        .stream-view { background: var(--c-surface); border-radius: var(--r-outer); flex: 1; padding: var(--s-pad); display: flex; flex-direction: column; border: 1px solid var(--c-graphic-light); }
+        .stream-preview { flex: 1; background-color: var(--c-bg-app); border-radius: var(--r-inner); display: flex; align-items: center; justify-content: center; position: relative; }
+        .placeholder-art { width: 60%; height: 4px; background: var(--c-graphic-med); border-radius: 2px; }
+        
+        .voice-section { background: var(--c-surface); border-radius: var(--r-outer); padding: 16px var(--s-pad); border: 1px solid var(--c-graphic-light); }
+        .voice-channel.active { background: var(--c-bg-app); border: 1px solid var(--c-graphic-light); border-radius: var(--r-inner); padding: 10px; }
+        
+        .controls-bar { grid-column: 2; grid-row: 2; background: var(--c-surface); border-radius: var(--r-outer); display: flex; align-items: center; justify-content: space-between; padding: 0 var(--s-pad); border: 1px solid var(--c-graphic-light); }
+        .sidebar-chat { grid-column: 3; grid-row: 1 / -1; }
+        .btn-action { width: 44px; height: 44px; border-radius: var(--r-inner); background: var(--c-bg-app); display: flex; align-items: center; justify-content: center; color: var(--c-text-primary); cursor: pointer; }
+
+        .crew-card {
+            background: var(--c-bg-app);
+            border-radius: var(--r-inner);
+            padding: 12px;
+            margin-bottom: 8px;
+            border: 1px solid transparent;
+        }
+        .crew-card-name {
+            font-family: var(--f-mono);
+            font-size: 11px;
+            color: var(--c-text-secondary);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+    </style>
+</head>
+<body vid="6">
+    <div class="os-chrome" vid="7">
+        <div class="titlebar" vid="8">
+            <div class="titlebar-dot" style="background:#FF5F57" vid="9"></div>
+            <div class="titlebar-dot" style="background:#FFBD2E" vid="10"></div>
+            <div class="titlebar-dot" style="background:#28C840" vid="11"></div>
+            <div class="titlebar-title" vid="12">Mission Control v2.4.1</div>
+        </div>
+
+        <div class="app-container" vid="13">
+            <div class="panel sidebar-crews" vid="14">
+                <div class="label-kicker" vid="15">
+                    YOUR CREWS
+                    <div style="width: 6px; height: 6px; border-radius: 50%; background: var(--c-accent);" vid="16"></div>
+                </div>
+
+                <div class="crew-group" vid="17">
+                    <div class="label-kicker" style="margin-bottom: 12px; font-size: 10px;" vid="18">MISSION CONTROL</div>
+                    
+                    <div class="crew-card mission-control" vid="19">
+                        <div class="mc-header" vid="20">
+                            <div style="display: flex; align-items: center; gap: 10px;" vid="21">
+                                <div style="width: 32px; height: 32px; border-radius: 6px; background: linear-gradient(135deg, #FF1E56 0%, #8B1538 100%); display: flex; align-items: center; justify-content: center; font-size: 14px; font-weight: 700; color: white;" vid="22">V</div>
+                                <div vid="23">
+                                    <div class="mc-title" vid="24">THE VANGUARD</div>
+                                    <div class="mc-stat-label" style="font-size: 9px; margin-top: 2px; color: var(--c-text-secondary);" vid="25">12 members online</div>
+                                </div>
+                            </div>
+                            <div class="status-dot" style="box-shadow: 0 0 8px var(--c-accent);" vid="26"></div>
+                        </div>
+
+                        <div style="display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 24px 12px;" vid="27">
+                            <div style="width: 48px; height: 48px; border-radius: 50%; background: var(--c-graphic-light); display: flex; align-items: center; justify-content: center;" vid="28">
+                                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--c-text-tertiary)" stroke-width="2" vid="29">
+                                    <path d="M2 12a10 10 0 1 0 20 0 10 10 0 0 0-20 0Z" vid="30"></path>
+                                    <path d="M8 12h8" vid="31"></path>
+                                </svg>
+                            </div>
+                            <div style="text-align: center;" vid="32">
+                                <div style="font-size: 11px; color: var(--c-text-secondary); font-weight: 500;" vid="33">No one is playing</div>
+                                <div style="font-size: 9px; color: var(--c-text-tertiary); margin-top: 4px;" vid="34">12 members online</div>
+                            </div>
+                        </div>
+
+                        <div style="background: rgba(0,0,0,0.15); border-radius: 6px; padding: 10px 12px; border-left: 2px solid var(--c-graphic-med);" vid="35">
+                            <div style="font-size: 9px; color: var(--c-text-secondary); font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 6px; display: flex; align-items: center; gap: 6px;" vid="36">
+                                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" vid="37">
+                                    <path d="M2 12a10 10 0 1 0 20 0 10 10 0 0 0-20 0Z" vid="38"></path>
+                                    <path d="M8 12h8" vid="39"></path>
+                                </svg>
+                                Catch-up
+                            </div>
+                            <div style="font-size: 11px; color: var(--c-text-secondary); line-height: 1.5;" vid="40">All quiet — crew's been chilling. Nothing new since you left.</div>
+                        </div>
+
+                        <div style="display: flex; gap: 8px; padding-top: 4px;" vid="41">
+                            <button style="flex: 1; height: 28px; background: transparent; border: 1px solid var(--c-graphic-med); border-radius: 4px; color: var(--c-text-secondary); font-size: 10px; font-weight: 500; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 4px; transition: all 0.15s;" vid="42">
+                                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" vid="43"><path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" vid="44"></path><circle cx="8.5" cy="7" r="4" vid="45"></circle><line x1="20" y1="8" x2="20" y2="14" vid="46"></line><line x1="17" y1="11" x2="23" y2="11" vid="47"></line></svg>
+                                Invite
+                            </button>
+                            <button style="width: 28px; height: 28px; background: transparent; border: 1px solid var(--c-graphic-med); border-radius: 4px; color: var(--c-text-secondary); display: flex; align-items: center; justify-content: center; cursor: pointer;" vid="48">
+                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" vid="49"><circle cx="12" cy="12" r="1" vid="50"></circle><circle cx="19" cy="12" r="1" vid="51"></circle><circle cx="5" cy="12" r="1" vid="52"></circle></svg>
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="label-kicker" style="margin: 24px 0 12px; font-size: 10px;" vid="53">OTHER CREWS</div>
+                    <div class="crew-card" vid="54">
+                        <div class="crew-card-name" vid="55">Neon Syndicate <span style="font-size: 9px; opacity: 0.5;" vid="56">4/20</span></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="stage-area" vid="57">
+                <div class="stream-view" vid="58">
+                    <div class="label-kicker" vid="59">LIVE_FEED :: K0JI_TECH</div>
+                    <div class="stream-preview" vid="60">
+                        <div class="placeholder-art" vid="61"></div>
+                    </div>
+                </div>
+
+                <div class="voice-section" vid="62">
+                    <div class="voice-channel active" vid="63">
+                        <div class="label-kicker" style="margin-bottom: 8px; color: var(--c-text-primary);" vid="64">GENERAL (3)</div>
+                        <div style="display: flex; gap: 12px;" vid="65">
+                            <div style="width: 32px; height: 32px; background: var(--c-graphic-med); border-radius: 4px;" vid="66"></div>
+                            <div style="width: 32px; height: 32px; background: var(--c-graphic-light); border-radius: 4px;" vid="67"></div>
+                            <div style="width: 32px; height: 32px; background: var(--c-graphic-light); border-radius: 4px;" vid="68"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="controls-bar" vid="69">
+                <div style="display: flex; gap: 12px; align-items: center;" vid="70">
+                    <div style="width: 36px; height: 36px; background: var(--c-graphic-med); border-radius: 4px;" vid="71"></div>
+                    <div vid="72">
+                        <div style="font-size: 12px; font-weight: 600;" vid="73">Navigator</div>
+                        <div style="font-size: 9px; color: var(--c-text-tertiary); font-family: var(--f-mono);" vid="74">ID: #001</div>
+                    </div>
+                </div>
+                <div style="display: flex; gap: 12px;" vid="75">
+                    <div class="btn-action" style="background: rgba(255, 30, 86, 0.1); color: var(--c-accent);" vid="76">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" vid="77"><path d="M10.68 13.31a16 16 0 0 0 3.41 2.6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92v3a2 2 0 0 1-2.29 2A19 19 0 0 1 2 5.29 2 2 0 0 1 4 3h3a2 2 0 0 1 2 1.72c.12.96.35 1.9.7 2.81a2 2 0 0 1-.45 2.11L7.09 10.68" vid="78"></path></svg>
+                    </div>
+                    <div class="btn-action" style="background: var(--c-text-primary); color: var(--c-bg-app);" vid="79">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" vid="80"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" vid="81"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2" vid="82"></path></svg>
+                    </div>
+                </div>
+            </div>
+
+            <div class="panel sidebar-chat" vid="83">
+                <div class="label-kicker" vid="84">CREW_COMMS</div>
+                <div style="flex: 1; display: flex; flex-direction: column; justify-content: flex-end; gap: 12px;" vid="85">
+                    <div style="font-size: 12px;" vid="86">
+                        <span style="font-weight: 600; color: var(--c-text-secondary);" vid="87">ash_22:</span>
+                        <span style="color: var(--c-text-secondary);" vid="88"> status check?</span>
+                    </div>
+                    <div style="height: 36px; border: 1px solid var(--c-graphic-light); border-radius: 4px; padding: 0 12px; display: flex; align-items: center; color: var(--c-text-tertiary); font-size: 12px;" vid="89">
+                        Message crew...
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+
+</body></html>

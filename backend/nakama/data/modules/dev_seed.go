@@ -351,13 +351,104 @@ func DevSeedStateRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk 
 		InvalidateCrewState(cid)
 	}
 
+	// ── 7. crew event ledger + stale last_seen ─────────────────────
+	// Populate the event ledger for Gamers and Devs so catch-up cards
+	// are visible during local development.  Set last_seen for all
+	// users to 24h ago so the 4h catch-up threshold is exceeded.
+	nowMs := time.Now().UnixMilli()
+	staleLastSeen := nowMs - 24*60*60*1000 // 24 hours ago
+
+	seedEvents := map[string][]CrewEvent{
+		"Gamers": {
+			{
+				ID: generateEventID(), CrewID: crewIDs["Gamers"],
+				Type: "voice_session", ActorID: "",
+				Timestamp: nowMs - 6*60*60*1000, Score: 20,
+				Data: VoiceSessionData{
+					ChannelName:      "General",
+					ParticipantIDs:   []string{users["bob"].id, users["diana"].id},
+					ParticipantNames: []string{users["bob"].displayName, users["diana"].displayName},
+					DurationMin:      47, PeakCount: 2,
+				},
+			},
+			{
+				ID: generateEventID(), CrewID: crewIDs["Gamers"],
+				Type: "moment", ActorID: users["bob"].id,
+				Timestamp: nowMs - 3*60*60*1000, Score: 40,
+				Data: MomentData{
+					Text: "40-bomb on Dust2", Sentiment: "highlight",
+					GameName: "Counter-Strike 2",
+				},
+			},
+		},
+		"Devs": {
+			{
+				ID: generateEventID(), CrewID: crewIDs["Devs"],
+				Type: "stream_session", ActorID: users["charlie"].id,
+				Timestamp: nowMs - 5*60*60*1000, Score: 30,
+				Data: StreamSessionData{
+					StreamerID: users["charlie"].id, StreamerName: users["charlie"].displayName,
+					Title: "Counter-Strike 2", DurationMin: 120, PeakViewers: 3,
+					ViewerIDs: []string{users["alice"].id, users["bob"].id},
+				},
+			},
+			{
+				ID: generateEventID(), CrewID: crewIDs["Devs"],
+				Type: "member_joined", ActorID: users["diana"].id,
+				Timestamp: nowMs - 8*60*60*1000, Score: 15,
+				Data: MemberJoinedData{
+					Username: users["diana"].displayName, DisplayName: users["diana"].displayName,
+				},
+			},
+		},
+	}
+
+	eventsWritten := 0
+	for crewName, events := range seedEvents {
+		cid, ok := crewIDs[crewName]
+		if !ok {
+			continue
+		}
+		for _, ev := range events {
+			if err := AppendCrewEvent(ctx, nk, cid, ev); err != nil {
+				logger.Warn("dev_seed: append event failed for %s: %v", crewName, err)
+			} else {
+				eventsWritten++
+			}
+		}
+	}
+	logger.Info("dev_seed: %d crew events written", eventsWritten)
+
+	// Set stale last_seen for all users in Gamers + Devs so catch-up triggers
+	lastSeenCrews := []string{"Gamers", "Devs"}
+	for _, crewName := range lastSeenCrews {
+		cid, ok := crewIDs[crewName]
+		if !ok {
+			continue
+		}
+		for _, u := range users {
+			ls := crewLastSeen{CrewID: cid, LastSeen: staleLastSeen}
+			data, _ := json.Marshal(ls)
+			nk.StorageWrite(ctx, []*runtime.StorageWrite{{
+				Collection:      CrewLastSeenCollection,
+				Key:             cid,
+				UserID:          u.id,
+				Value:           string(data),
+				PermissionRead:  1,
+				PermissionWrite: 1,
+			}})
+		}
+	}
+	logger.Info("dev_seed: stale last_seen set for %d users in %d crews", len(users), len(lastSeenCrews))
+
 	resp, _ := json.Marshal(map[string]interface{}{
 		"success":        true,
 		"users":          len(users),
 		"crews":          len(crewIDs),
 		"voice_rooms":    3,
-		"voice_channels": 5 + (len(crewIDs) - 2), // 3 Gamers + 2 Devs + 1 default per remaining crew
+		"voice_channels": 5 + (len(crewIDs) - 2),
 		"streams":        1,
+		"crew_events":    eventsWritten,
 	})
 	return string(resp), nil
 }

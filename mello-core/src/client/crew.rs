@@ -278,6 +278,11 @@ impl super::Client {
             crew_id: crew_id.to_string(),
         });
 
+        // Fetch catch-up BEFORE set_active_crew, because set_active_crew
+        // updates last_seen to now (which would make catch-up think we
+        // were just here and skip the event ledger).
+        self.handle_crew_catchup(crew_id, 0).await;
+
         // Tell the server this is our active crew (registers subscription + returns state)
         let local_user_id = self
             .nakama

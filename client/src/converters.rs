@@ -240,22 +240,8 @@ pub fn update_active_crew_card(app: &MainWindow) {
                     c.v3_speaking = m.speaking;
                 }
 
-                c.game_count = 5;
-                c.g0_name = "Valorant".into();
-                c.g0_initial = "V".into();
-                c.g0_count = 3;
-                c.g1_name = "League of Legends".into();
-                c.g1_initial = "L".into();
-                c.g1_count = 1;
-                c.g2_name = "Apex Legends".into();
-                c.g2_initial = "A".into();
-                c.g2_count = 2;
-                c.g3_name = "Rocket League".into();
-                c.g3_initial = "R".into();
-                c.g3_count = 1;
-                c.g4_name = "CS2".into();
-                c.g4_initial = "C".into();
-                c.g4_count = 2;
+                // game_count populated by game detection (future);
+                // 0 shows the "quiet" sidebar state.
             }
             c
         })

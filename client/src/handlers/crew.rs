@@ -319,10 +319,8 @@ pub fn handle(ctx: &AppContext, event: Event) {
             let rc = Rc::new(slint::VecModel::from(empty));
             ctx.app.set_messages(rc.into());
             update_active_crew_card(&ctx.app);
-            let _ = ctx.cmd_tx.try_send(Command::CrewCatchup {
-                crew_id: crew_id.clone(),
-                last_seen: 0,
-            });
+            // Catch-up is now fetched in mello-core handle_select_crew
+            // (before set_active_crew) to avoid the last_seen race.
             let mut s = ctx.settings.borrow_mut();
             s.last_crew_id = Some(crew_id);
             s.save();
