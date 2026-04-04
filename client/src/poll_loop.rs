@@ -153,6 +153,7 @@ pub fn start(
                         let _ = poll_ctx.cmd_tx.try_send(Command::LeaveVoice);
                     }
                     "tray_quit" => {
+                        log::info!("[quit] tray quit");
                         slint::quit_event_loop().ok();
                     }
                     _ =>

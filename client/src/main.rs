@@ -192,6 +192,11 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
         client.run(cmd_rx).await;
     });
 
+    if std::env::args().any(|a| a == "--software-rendering") {
+        log::info!("[startup] forcing software rendering backend");
+        std::env::set_var("SLINT_BACKEND", "winit-software");
+    }
+
     // --- macOS: disable Slint's default menu bar ---
     #[cfg(target_os = "macos")]
     {
@@ -235,6 +240,7 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 slint::CloseRequestResponse::KeepWindowShown
             } else {
+                log::info!("[quit] close requested (close_to_tray=false)");
                 slint::quit_event_loop().ok();
                 slint::CloseRequestResponse::KeepWindowShown
             }
@@ -372,6 +378,7 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
     ctx.app.show()?;
     log::info!("[startup] window shown");
     slint::run_event_loop_until_quit()?;
+    log::info!("[exit] event loop ended");
     Ok(())
 }
 

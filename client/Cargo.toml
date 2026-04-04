@@ -17,7 +17,7 @@ path = "src/main.rs"
 
 [dependencies]
 mello-core = { path = "../mello-core" }
-slint = { version = "1.5", features = ["renderer-winit-skia"] }
+slint = { version = "1.5", features = ["renderer-winit-skia", "renderer-winit-software"] }
 tokio = { workspace = true }
 log = { workspace = true }
 tracing = "0.1"
