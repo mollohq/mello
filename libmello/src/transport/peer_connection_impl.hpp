@@ -75,7 +75,13 @@ private:
     std::atomic<bool> connected_{false};
     std::atomic<int> send_audio_count_{0};
     std::atomic<int> recv_track_count_{0};
+    std::atomic<float> rtt_ms_{0.0f};
     std::mutex mutex_;
+
+public:
+    void send_ping();
+    float rtt_ms() const { return rtt_ms_.load(std::memory_order_relaxed); }
+private:
 
     // Thread-safe receive queue for incoming unreliable audio packets
     std::mutex recv_mutex_;

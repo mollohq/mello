@@ -11,7 +11,7 @@
 
 ## 1. Overview
 
-The SFU (Selective Forwarding Unit) is Mello's server-side media relay. It receives media packets from a single sender and forwards them to multiple receivers without transcoding, mixing, or inspecting packet contents. The SFU is an opaque packet router — it speaks the same custom-framed DataChannel protocol defined in [12-STREAMING.md §5](./12-STREAMING.md) and treats all payloads as binary blobs.
+The SFU (Selective Forwarding Unit) is Mello's server-side media relay. It receives media packets from senders and forwards them to receivers without transcoding, mixing, or inspecting contents. For **streaming**, the SFU forwards packets over DataChannels using the custom-framed protocol from [12-STREAMING.md §5](./12-STREAMING.md). For **voice**, the SFU forwards Opus audio via RTP tracks (see §5.3).
 
 ### 1.1 What the SFU Enables
 
@@ -111,7 +111,7 @@ This eliminates ICE negotiation latency on the server side. The client's libdata
 
 ## 3. Session Types
 
-The SFU handles two distinct session types. Both use the same transport layer (WebRTC DataChannels with the spec 12 packet format) but differ in routing topology.
+The SFU handles two distinct session types with different transport models. Stream sessions use DataChannels (spec 12 packet format). Voice sessions use RTP audio tracks (§5.3).
 
 ### 3.1 Stream Session (1-to-Many)
 
@@ -130,16 +130,17 @@ Host ──DataChannel──▶ SFU ──DataChannel──▶ Viewer A
 ### 3.2 Voice Session (Many-to-Many)
 
 ```
-Member A ──DataChannel──▶ SFU ──DataChannel──▶ Member B, C, D
-Member B ──DataChannel──▶ SFU ──DataChannel──▶ Member A, C, D
-Member C ──DataChannel──▶ SFU ──DataChannel──▶ Member A, B, D
-Member D ──DataChannel──▶ SFU ──DataChannel──▶ Member A, B, C
+Member A ──RTP Track──▶ SFU ──RTP Track──▶ Member B, C, D
+Member B ──RTP Track──▶ SFU ──RTP Track──▶ Member A, C, D
+Member C ──RTP Track──▶ SFU ──RTP Track──▶ Member A, B, D
+Member D ──RTP Track──▶ SFU ──RTP Track──▶ Member A, B, C
+         (+ reliable DataChannel for control/signaling per member)
 ```
 
-- Each member publishes their voice audio packets
-- SFU forwards each member's audio to all other members in the session
+- Each member publishes Opus audio via an RTP track (PT 111, Opus/48000/2)
+- SFU creates per-sender `sendonly` outgoing tracks and renegotiates SDP when members join/leave
+- No mixing — each member receives N-1 separate RTP streams and the client mixes locally
 - Muted members: client stops sending packets (SFU does not need to know about mute state)
-- No mixing — each member receives N-1 separate audio streams and the client mixes locally
 
 ### 3.3 Session Lifecycle
 
@@ -431,39 +432,39 @@ func (s *StreamSession) onViewerControlPacket(viewerID string, data []byte) {
 - No packet inspection: the SFU does not parse the 12-byte header. It does not know whether a packet is a keyframe, FEC parity, or audio. It forwards everything.
 - Exception: the SFU *does* inspect the `type` byte (offset 0) to route between `media` and `control` DataChannels. This is the only byte the SFU reads.
 
-### 5.3 Packet Forwarding (Voice Session)
+### 5.3 Voice Transport (RTP Tracks)
 
-Voice packets are prefixed with a sender-id header before forwarding so receivers can demux into per-sender jitter buffers and Opus decoders. The wire format for each forwarded packet is:
+Voice audio uses **RTP audio tracks** instead of DataChannels. Each member's Opus audio is sent as a standard RTP stream (PT 111, Opus/48000/2) over the same DTLS/ICE transport as DataChannels.
 
-```
-[1 byte: sender_id length N][N bytes: sender_id (UTF-8 user ID)][remaining: original Opus payload]
-```
-
-The SFU builds this prefix once per peer on connection and prepends it to every forwarded packet:
+**Per-sender track model:** When member B joins a session that already has member A, the SFU:
+1. Creates a `TrackLocalStaticRTP` for A's audio (SSRC = random, `msid` = A's user_id).
+2. Adds the track to B's PeerConnection via `AddTransceiverFromTrack` with `sendonly` direction.
+3. Sends a renegotiation offer to B.
+4. Does the same for B's audio → A.
+5. Wires A's incoming `TrackRemote` to forward RTP packets to B's outgoing track (and vice versa).
 
 ```go
-func (s *VoiceSession) WireDataChannels(peer *Peer) {
+func (s *VoiceSession) WireAudioTrack(peer *Peer, track *webrtc.TrackRemote) {
     senderID := peer.UserID
-    senderBytes := []byte(senderID)
-    prefix := make([]byte, 1+len(senderBytes))
-    prefix[0] = byte(len(senderBytes))
-    copy(prefix[1:], senderBytes)
-
-    peer.MediaChannel.OnMessage(func(msg webrtc.DataChannelMessage) {
-        framed := make([]byte, len(prefix)+len(msg.Data))
-        copy(framed, prefix)
-        copy(framed[len(prefix):], msg.Data)
-
-        s.members.ForEach(func(other *Peer) {
-            if other.UserID != senderID {
-                other.SendMedia(framed)
-            }
-        })
-    })
+    go func() {
+        for {
+            pkt, _, err := track.ReadRTP()
+            if err != nil { return }
+            s.members.ForEach(func(other *Peer) {
+                if other.UserID != senderID {
+                    other.SendRTP(senderID, pkt) // rewrites SSRC per-track
+                }
+            })
+        }
+    }()
 }
 ```
 
-The receiving client strips the prefix and uses the sender_id as the `peer_id` argument to `mello_voice_feed_packet`, which routes audio to per-sender decoders and jitter buffers in libmello. This is critical for 3+ user voice — without per-sender demux, interleaved sequence numbers from different senders cause the jitter buffer to drop packets.
+The client identifies each incoming track's sender via the `msid` SDP attribute (set to the sender's user_id). This eliminates the need for application-layer sender-id framing.
+
+**Phantom transceiver handling:** Pion's `SetHandleUndeclaredSSRCWithoutAnswer(true)` (needed because libdatachannel doesn't send `mid` RTP header extensions) can create implicit `sendrecv` transceivers that accumulate across renegotiations. `StopPhantomTransceivers()` runs before each `CreateOffer()` to stop any audio transceiver that is not an explicit outgoing track or the initial recvonly transceiver.
+
+**RTT measurement:** The reliable DataChannel carries ping/pong messages (`{"type":"ping","ts":...}` / `{"type":"pong","ts":...}`) for voice latency estimation. The SFU echoes pings immediately; the client sends one every ~2 seconds and computes smoothed RTT.
 
 ### 5.4 Bandwidth and Buffer Management
 

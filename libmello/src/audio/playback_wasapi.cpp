@@ -139,9 +139,14 @@ void WasapiPlayback::playback_thread() {
         HRESULT hr = render_client_->GetBuffer(available, &data);
         if (FAILED(hr)) continue;
 
-        // Read mono samples from ring buffer
+        // Read mono samples from ring buffer (or render source if set)
         mono_buf.resize(available);
-        size_t got = ring_.read(mono_buf.data(), available);
+        size_t got = 0;
+        if (render_source_) {
+            got = render_source_(mono_buf.data(), available);
+        } else {
+            got = ring_.read(mono_buf.data(), available);
+        }
 
         // Zero-fill if we don't have enough samples (underrun)
         if (got < available) {

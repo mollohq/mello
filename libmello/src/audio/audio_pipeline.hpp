@@ -52,6 +52,10 @@ public:
     float rnnoise_probability() const { return noise_suppressor_.speech_probability(); }
     float input_level() const { return input_level_.load(std::memory_order_relaxed); }
     uint32_t packets_encoded() const { return sequence_; }
+    int active_streams() const { return active_streams_.load(std::memory_order_relaxed); }
+    int underrun_count() const { return underrun_count_.load(std::memory_order_relaxed); }
+    int rtp_recv_total() const { return rtp_recv_total_.load(std::memory_order_relaxed); }
+    float pipeline_delay_ms() const;
 
     using VadCallback = std::function<void(bool speaking)>;
     void set_vad_callback(VadCallback cb) { vad_.set_callback(std::move(cb)); }
@@ -66,6 +70,8 @@ private:
     void apply_session(AudioPlayback* pb);
 #endif
 
+    size_t mix_output(int16_t* out, size_t count);
+
     std::unique_ptr<AudioCapture> capture_;
     std::unique_ptr<AudioPlayback> playback_;
 #ifdef _WIN32
@@ -77,6 +83,13 @@ private:
     std::unordered_map<std::string, OpusDec> decoders_;
     std::unordered_map<std::string, JitterBuffer> jitter_buffers_;
     std::unique_ptr<AudioDeviceEnumerator> device_enum_;
+
+    // Per-peer playback ring buffers for mixing
+    std::unordered_map<std::string, std::unique_ptr<util::RingBuffer<int16_t>>> peer_buffers_;
+    mutable std::mutex peer_buffers_mutex_;
+    std::atomic<int> active_streams_{0};
+    std::atomic<int> underrun_count_{0};
+    std::atomic<int> rtp_recv_total_{0};
 
     std::vector<int16_t> capture_accum_;
     std::mutex accum_mutex_;

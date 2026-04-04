@@ -78,6 +78,9 @@ bool JitterBuffer::pop(std::vector<uint8_t>& out_data) {
         }
     }
 
+    int64_t hold = now_ms() - it->second.arrival_time_ms;
+    avg_hold_ms_ = avg_hold_ms_ * 0.9f + static_cast<float>(hold) * 0.1f;
+
     out_data = std::move(it->second.data);
     packets_.erase(it);
     next_seq_++;

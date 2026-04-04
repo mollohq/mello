@@ -355,6 +355,24 @@ bool mello_peer_is_connected(MelloPeerConnection* peer) {
     }
 }
 
+void mello_peer_send_ping(MelloPeerConnection* peer) {
+    if (!peer) return;
+    try {
+        auto* pc = reinterpret_cast<mello::transport::PeerConnectionImpl*>(peer);
+        pc->send_ping();
+    } catch (...) {}
+}
+
+float mello_peer_rtt_ms(MelloPeerConnection* peer) {
+    if (!peer) return 0.0f;
+    try {
+        auto* pc = reinterpret_cast<mello::transport::PeerConnectionImpl*>(peer);
+        return pc->rtt_ms();
+    } catch (...) {
+        return 0.0f;
+    }
+}
+
 int mello_peer_recv(MelloPeerConnection* peer, uint8_t* buffer, int buffer_size) {
     if (!peer || !buffer || buffer_size <= 0) return 0;
     try {
@@ -381,6 +399,10 @@ void mello_get_debug_stats(MelloContext* ctx, MelloDebugStats* out) {
         out->is_muted        = audio.is_muted();
         out->is_deafened     = audio.is_deafened();
         out->packets_encoded = audio.packets_encoded();
+        out->incoming_streams = audio.active_streams();
+        out->underrun_count  = audio.underrun_count();
+        out->rtp_recv_total  = audio.rtp_recv_total();
+        out->pipeline_delay_ms = audio.pipeline_delay_ms();
     } catch (...) {
         memset(out, 0, sizeof(MelloDebugStats));
     }

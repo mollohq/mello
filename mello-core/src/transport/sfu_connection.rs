@@ -304,6 +304,19 @@ impl SfuConnection {
         unsafe { mello_sys::mello_peer_is_connected(self.peer) }
     }
 
+    pub fn send_ping(&self) {
+        if !self.peer.is_null() {
+            unsafe { mello_sys::mello_peer_send_ping(self.peer) }
+        }
+    }
+
+    pub fn rtt_ms(&self) -> f32 {
+        if self.peer.is_null() {
+            return 0.0;
+        }
+        unsafe { mello_sys::mello_peer_rtt_ms(self.peer) }
+    }
+
     pub fn server_id(&self) -> &str {
         &self.server_id
     }
@@ -507,7 +520,7 @@ impl SfuConnection {
                 let n = CB_COUNT.fetch_add(1, AtOrd::Relaxed) + 1;
                 let cb_data = &*(user_data as *const AudioTrackCallbackData);
                 let sid = CStr::from_ptr(sender_id).to_string_lossy().into_owned();
-                if n <= 5 || n % 500 == 0 {
+                if n <= 5 || n.is_multiple_of(500) {
                     log::debug!("SFU audio_track_cb #{}: sender={} size={}", n, sid, size);
                 }
                 let pkt = std::slice::from_raw_parts(data, size as usize).to_vec();

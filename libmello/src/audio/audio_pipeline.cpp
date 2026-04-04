@@ -121,6 +121,10 @@ bool AudioPipeline::initialize() {
         return false;
     }
 
+    playback_->set_render_source([this](int16_t* out, size_t count) -> size_t {
+        return mix_output(out, count);
+    });
+
     if (!playback_->start()) {
         MELLO_LOG_ERROR("pipeline", "playback start failed");
         return false;
@@ -240,12 +244,11 @@ int AudioPipeline::get_packet(uint8_t* buffer, int buffer_size) {
 }
 
 void AudioPipeline::feed_packet(const char* peer_id, const uint8_t* data, int size) {
-    if (deafened_ || !initialized_ || !playback_) {
-        MELLO_LOG_DEBUG("pipeline", "feed_packet(%s) dropped: deaf=%d init=%d pb=%d",
-                        peer_id, (int)deafened_.load(), initialized_, playback_ ? 1 : 0);
+    if (deafened_ || !initialized_) {
         return;
     }
 
+    rtp_recv_total_.fetch_add(1, std::memory_order_relaxed);
     std::string pid(peer_id);
 
     if (decoders_.find(pid) == decoders_.end()) {
@@ -258,6 +261,17 @@ void AudioPipeline::feed_packet(const char* peer_id, const uint8_t* data, int si
         }
     }
 
+    // Ensure per-peer ring buffer exists
+    {
+        std::lock_guard<std::mutex> lock(peer_buffers_mutex_);
+        if (peer_buffers_.find(pid) == peer_buffers_.end()) {
+            peer_buffers_[pid] = std::make_unique<util::RingBuffer<int16_t>>(48000);
+            active_streams_.store(static_cast<int>(peer_buffers_.size()), std::memory_order_relaxed);
+            MELLO_LOG_INFO("pipeline", "created playback buffer for peer '%s' (streams=%d)",
+                           peer_id, (int)peer_buffers_.size());
+        }
+    }
+
     auto& jb = jitter_buffers_[pid];
     uint32_t seq = 0;
     if (size >= 4) {
@@ -267,11 +281,6 @@ void AudioPipeline::feed_packet(const char* peer_id, const uint8_t* data, int si
               (static_cast<uint32_t>(data[3]) << 24);
         jb.push(seq, data + 4, size - 4);
     } else {
-        MELLO_LOG_WARN("pipeline", "feed_packet(%s): short packet (%d bytes), decoding directly", peer_id, size);
-        auto& dec = decoders_[pid];
-        int16_t pcm[FRAME_SIZE];
-        int samples = dec.decode(data, size, pcm, FRAME_SIZE);
-        if (samples > 0) playback_->feed(pcm, static_cast<size_t>(samples));
         return;
     }
 
@@ -283,7 +292,11 @@ void AudioPipeline::feed_packet(const char* peer_id, const uint8_t* data, int si
         int samples = dec.decode(pkt_data.data(), static_cast<int>(pkt_data.size()),
                                  pcm, FRAME_SIZE);
         if (samples > 0) {
-            playback_->feed(pcm, static_cast<size_t>(samples));
+            std::lock_guard<std::mutex> lock(peer_buffers_mutex_);
+            auto it = peer_buffers_.find(pid);
+            if (it != peer_buffers_.end()) {
+                it->second->write(pcm, static_cast<size_t>(samples));
+            }
             decoded_count++;
         } else {
             MELLO_LOG_WARN("pipeline", "opus decode error for '%s': %d (pkt_size=%zu)",
@@ -295,6 +308,63 @@ void AudioPipeline::feed_packet(const char* peer_id, const uint8_t* data, int si
         MELLO_LOG_DEBUG("pipeline", "feed(%s): seq=%u decoded=%d jitter_buf=%d",
                         peer_id, seq, decoded_count, jb.buffered_count());
     }
+}
+
+size_t AudioPipeline::mix_output(int16_t* out, size_t count) {
+    std::lock_guard<std::mutex> lock(peer_buffers_mutex_);
+
+    if (peer_buffers_.empty()) {
+        return 0;
+    }
+
+    // Read from each peer buffer into temp, sum into output
+    std::memset(out, 0, count * sizeof(int16_t));
+    std::vector<int16_t> temp(count);
+    bool any_data = false;
+
+    for (auto& [pid, buf] : peer_buffers_) {
+        size_t got = buf->read(temp.data(), count);
+        if (got > 0) {
+            any_data = true;
+            for (size_t i = 0; i < got; ++i) {
+                int32_t mixed = static_cast<int32_t>(out[i]) + static_cast<int32_t>(temp[i]);
+                if (mixed > 32767) mixed = 32767;
+                if (mixed < -32768) mixed = -32768;
+                out[i] = static_cast<int16_t>(mixed);
+            }
+        }
+    }
+
+    if (!any_data) {
+        underrun_count_.fetch_add(1, std::memory_order_relaxed);
+        return 0;
+    }
+
+    return count;
+}
+
+float AudioPipeline::pipeline_delay_ms() const {
+    // Jitter buffer hold time (avg across all peers)
+    float jb_ms = 0.0f;
+    int count = 0;
+    for (auto& [pid, jb] : jitter_buffers_) {
+        jb_ms += jb.avg_hold_ms();
+        count++;
+    }
+    if (count > 0) jb_ms /= static_cast<float>(count);
+
+    // Playback ring buffer depth (avg across all peer buffers)
+    float pb_ms = 0.0f;
+    {
+        std::lock_guard<std::mutex> lock(peer_buffers_mutex_);
+        for (auto& [pid, buf] : peer_buffers_) {
+            pb_ms += static_cast<float>(buf->available()) / 48.0f; // 48 samples/ms
+        }
+        if (!peer_buffers_.empty())
+            pb_ms /= static_cast<float>(peer_buffers_.size());
+    }
+
+    return jb_ms + pb_ms;
 }
 
 AudioDeviceEnumerator& AudioPipeline::device_enumerator() {
