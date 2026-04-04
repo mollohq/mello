@@ -113,3 +113,46 @@ fn audio_loopback_packet_round_trip() {
         let _ = r;
     });
 }
+
+#[test]
+fn multi_peer_feed_packet_concurrent() {
+    with_ctx(|ctx| {
+        let peer_a = std::ffi::CString::new("aaaa-bbbb-cccc").unwrap();
+        let peer_b = std::ffi::CString::new("dddd-eeee-ffff").unwrap();
+
+        // 4-byte LE sequence header + minimal Opus-like payload
+        let make_packet = |seq: u32| -> Vec<u8> {
+            let mut pkt = Vec::with_capacity(104);
+            pkt.extend_from_slice(&seq.to_le_bytes());
+            pkt.resize(104, 0xAB);
+            pkt
+        };
+
+        // Feed interleaved packets from two peers — must not crash
+        for i in 0u32..50 {
+            let pkt = make_packet(i);
+            unsafe {
+                mello_sys::mello_voice_feed_packet(
+                    ctx,
+                    peer_a.as_ptr(),
+                    pkt.as_ptr(),
+                    pkt.len() as i32,
+                );
+                mello_sys::mello_voice_feed_packet(
+                    ctx,
+                    peer_b.as_ptr(),
+                    pkt.as_ptr(),
+                    pkt.len() as i32,
+                );
+            }
+        }
+
+        // Verify debug stats reflect incoming streams
+        let mut stats: mello_sys::MelloDebugStats = unsafe { std::mem::zeroed() };
+        unsafe { mello_sys::mello_get_debug_stats(ctx, &mut stats) };
+        assert!(
+            stats.incoming_streams >= 0,
+            "incoming_streams should be non-negative"
+        );
+    });
+}

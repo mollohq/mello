@@ -183,6 +183,12 @@ MELLO_API const char* mello_peer_handle_remote_offer(MelloPeerConnection* peer, 
 /** Poll next received unreliable packet. Returns bytes copied, 0 if empty. */
 MELLO_API int mello_peer_recv(MelloPeerConnection* peer, uint8_t* buffer, int buffer_size);
 
+/** Send a ping on the reliable DataChannel for RTT measurement. */
+MELLO_API void mello_peer_send_ping(MelloPeerConnection* peer);
+
+/** Get the smoothed RTT in milliseconds (0 if no measurement yet). */
+MELLO_API float mello_peer_rtt_ms(MelloPeerConnection* peer);
+
 /* ============================================================================
  * Video / Streaming
  * ============================================================================ */

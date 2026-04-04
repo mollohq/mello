@@ -139,59 +139,20 @@ void PeerConnectionImpl::setup_incoming_track(std::shared_ptr<rtc::Track> track)
         fflush(stderr);
     });
 
-    auto pkt_count = std::make_shared<std::atomic<int>>(0);
-    auto last_seq = std::make_shared<int>(-1);
-    auto gap_count = std::make_shared<int>(0);
-    auto last_rate_log = std::make_shared<std::chrono::steady_clock::time_point>(
-        std::chrono::steady_clock::now());
-    auto rate_counter = std::make_shared<int>(0);
-    track->onMessage([this, sender_id, pkt_count, last_seq, gap_count,
-                      last_rate_log, rate_counter](rtc::message_variant data) {
+    track->onMessage([this, sender_id](rtc::message_variant data) {
         auto* bin = std::get_if<rtc::binary>(&data);
         if (!bin || bin->size() < 12) return;
-
-        int n = pkt_count->fetch_add(1) + 1;
-        (*rate_counter)++;
-
-        auto now = std::chrono::steady_clock::now();
-        auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
-            now - *last_rate_log).count();
-        if (elapsed >= 5) {
-            fprintf(stderr, "[mello-rtp] rate: sender=%s %d pkt/5s (%d pkt/s) gaps=%d total=%d\n",
-                    sender_id.c_str(), *rate_counter, *rate_counter / (int)elapsed,
-                    *gap_count, n);
-            fflush(stderr);
-            *rate_counter = 0;
-            *gap_count = 0;
-            *last_rate_log = now;
-        }
 
         auto* bytes = reinterpret_cast<const uint8_t*>(bin->data());
         int total = static_cast<int>(bin->size());
 
         // Filter RTCP packets that libdatachannel delivers to onMessage.
-        // RTP payload type is in bytes[1] & 0x7F. Opus = 111.
-        // RTCP types (SR=200, RR=201, etc.) show up as PT >= 194.
         uint8_t pt = bytes[1] & 0x7F;
         if (pt != 111) return;
 
         // Parse RTP header to extract sequence number and payload
         uint16_t seq = (static_cast<uint16_t>(bytes[2]) << 8)
                      | static_cast<uint16_t>(bytes[3]);
-
-        if (*last_seq >= 0) {
-            int expected = ((*last_seq) + 1) & 0xFFFF;
-            if (seq != expected) {
-                int gap = ((int)seq - *last_seq + 65536) % 65536;
-                (*gap_count)++;
-                if (*gap_count <= 10) {
-                    fprintf(stderr, "[mello-rtp] seq-gap: sender=%s expected=%d got=%d gap=%d\n",
-                            sender_id.c_str(), expected, seq, gap);
-                    fflush(stderr);
-                }
-            }
-        }
-        *last_seq = seq;
 
         int cc = bytes[0] & 0x0F;
         int header_len = 12 + cc * 4;
@@ -228,6 +189,25 @@ void PeerConnectionImpl::setup_incoming_track(std::shared_ptr<rtc::Track> track)
 
 void PeerConnectionImpl::setup_dc_handlers(std::shared_ptr<rtc::DataChannel> dc, bool reliable) {
     dc->onMessage([this, reliable](auto data) {
+        if (auto* str = std::get_if<std::string>(&data)) {
+            if (reliable && str->size() > 14 && str->substr(0, 14) == R"({"type":"pong")") {
+                // Extract "ts": value from pong JSON
+                auto pos = str->find("\"ts\":");
+                if (pos != std::string::npos) {
+                    int64_t sent_ts = std::strtoll(str->c_str() + pos + 5, nullptr, 10);
+                    auto now = std::chrono::steady_clock::now();
+                    int64_t now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        now.time_since_epoch()).count();
+                    float rtt = static_cast<float>(now_ms - sent_ts);
+                    if (rtt >= 0 && rtt < 10000) {
+                        float prev = rtt_ms_.load(std::memory_order_relaxed);
+                        float smoothed = (prev < 0.1f) ? rtt : prev * 0.7f + rtt * 0.3f;
+                        rtt_ms_.store(smoothed, std::memory_order_relaxed);
+                    }
+                }
+            }
+            return;
+        }
         if (auto* bin = std::get_if<rtc::binary>(&data)) {
             auto* bytes = reinterpret_cast<const uint8_t*>(bin->data());
             auto size = static_cast<int>(bin->size());
@@ -243,6 +223,17 @@ void PeerConnectionImpl::setup_dc_handlers(std::shared_ptr<rtc::DataChannel> dc,
             }
         }
     });
+}
+
+void PeerConnectionImpl::send_ping() {
+    if (!reliable_dc_ || !reliable_dc_->isOpen()) return;
+    auto now = std::chrono::steady_clock::now();
+    int64_t ts = std::chrono::duration_cast<std::chrono::milliseconds>(
+        now.time_since_epoch()).count();
+    std::string msg = R"({"type":"ping","ts":)" + std::to_string(ts) + "}";
+    try {
+        reliable_dc_->send(msg);
+    } catch (...) {}
 }
 
 void PeerConnectionImpl::setup_channels() {
@@ -400,12 +391,7 @@ bool PeerConnectionImpl::send_reliable(const uint8_t* data, int size) {
 }
 
 bool PeerConnectionImpl::send_audio(const uint8_t* data, int size) {
-    int n = send_audio_count_.fetch_add(1) + 1;
     bool open = audio_track_ && audio_track_->isOpen();
-    if (n <= 3 || n % 500 == 0) {
-        fprintf(stderr, "[mello-rtp] send: count=%d open=%d size=%d\n", n, open ? 1 : 0, size);
-        fflush(stderr);
-    }
     if (!open) return false;
     try {
         audio_track_->send(reinterpret_cast<const std::byte*>(data), static_cast<size_t>(size));

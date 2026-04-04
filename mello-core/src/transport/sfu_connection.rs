@@ -304,6 +304,19 @@ impl SfuConnection {
         unsafe { mello_sys::mello_peer_is_connected(self.peer) }
     }
 
+    pub fn send_ping(&self) {
+        if !self.peer.is_null() {
+            unsafe { mello_sys::mello_peer_send_ping(self.peer) }
+        }
+    }
+
+    pub fn rtt_ms(&self) -> f32 {
+        if self.peer.is_null() {
+            return 0.0;
+        }
+        unsafe { mello_sys::mello_peer_rtt_ms(self.peer) }
+    }
+
     pub fn server_id(&self) -> &str {
         &self.server_id
     }

@@ -425,11 +425,19 @@ impl VoiceManager {
             let _ = self.event_tx.send(Event::MicLevel { level });
         }
 
+        // Send a DC ping every ~2 seconds (200 ticks at 100Hz)
+        if self.tick_counter.is_multiple_of(200) {
+            if let Some(conn) = &self.sfu_connection {
+                conn.send_ping();
+            }
+        }
+
         if self.debug_mode && self.tick_counter.is_multiple_of(3) {
             let mut stats: mello_sys::MelloDebugStats = unsafe { std::mem::zeroed() };
             unsafe {
                 mello_sys::mello_get_debug_stats(self.ctx, &mut stats);
             }
+            let rtt = self.sfu_connection.as_ref().map_or(0.0, |c| c.rtt_ms());
             let _ = self.event_tx.send(Event::AudioDebugStats {
                 input_level: stats.input_level,
                 silero_vad_prob: stats.silero_vad_prob,
@@ -443,6 +451,7 @@ impl VoiceManager {
                 underrun_count: stats.underrun_count,
                 rtp_recv_total: stats.rtp_recv_total,
                 pipeline_delay_ms: stats.pipeline_delay_ms,
+                rtt_ms: rtt,
             });
         }
 
@@ -474,15 +483,7 @@ impl VoiceManager {
                             // Strip the 4-byte LE sequence header; RTP handles sequencing
                             let opus_payload = if pkt.len() > 4 { &pkt[4..] } else { pkt };
                             match conn.send_audio(opus_payload) {
-                                Ok(()) => {
-                                    if self.tick_counter % 500 == 1 {
-                                        log::debug!(
-                                            "SFU: audio send ok (tick={} payload={}B)",
-                                            self.tick_counter,
-                                            opus_payload.len()
-                                        );
-                                    }
-                                }
+                                Ok(()) => {}
                                 Err(e) => {
                                     log::warn!("SFU voice send failed: {}", e);
                                 }
@@ -518,14 +519,6 @@ impl VoiceManager {
                         for event in conn.poll_events() {
                             match event {
                                 SfuEvent::AudioTrackData { sender_id, data } => {
-                                    if self.tick_counter % 500 == 1 {
-                                        log::debug!(
-                                            "SFU: feeding audio from {} ({}B) tick={}",
-                                            sender_id,
-                                            data.len(),
-                                            self.tick_counter
-                                        );
-                                    }
                                     let peer_id =
                                         CString::new(sender_id.as_str()).unwrap_or_default();
                                     unsafe {

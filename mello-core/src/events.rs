@@ -186,6 +186,7 @@ pub enum Event {
         underrun_count: i32,
         rtp_recv_total: i32,
         pipeline_delay_ms: f32,
+        rtt_ms: f32,
     },
 
     SignalReceived {

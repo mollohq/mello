@@ -203,6 +203,7 @@ export component DebugPanel inherits Rectangle {
     in property <int> underruns: 0;
     in property <int> rtp-recv: 0;
     in property <float> delay-ms: 0.0;
+    in property <float> rtt-ms: 0.0;
 
     // Level history ring buffer (set from Rust)
     in property <float> lh0;  in property <float> lh1;  in property <float> lh2;  in property <float> lh3;  in property <float> lh4;
@@ -370,10 +371,17 @@ export component DebugPanel inherits Rectangle {
             VerticalLayout {
                 spacing: 4px;
                 Text {
-                    text: "Delay: \{Math.round(root.delay-ms)}ms";
+                    text: "Latency: \{Math.round(root.rtt-ms / 2 + root.delay-ms)}ms";
                     font-family: Theme.font-mono;
                     font-size: 10px;
-                    color: root.delay-ms > 150 ? #FF4444 : root.delay-ms > 80 ? #E0A020 : Theme.accent-green;
+                    color: (root.rtt-ms / 2 + root.delay-ms) > 150 ? #FF4444 :
+                           (root.rtt-ms / 2 + root.delay-ms) > 80 ? #E0A020 : Theme.accent-green;
+                }
+                Text {
+                    text: "RTT: \{Math.round(root.rtt-ms)}ms";
+                    font-family: Theme.font-mono;
+                    font-size: 10px;
+                    color: root.rtt-ms > 200 ? #FF4444 : root.rtt-ms > 100 ? #E0A020 : Theme.text-secondary;
                 }
                 Text {
                     text: "Underruns: \{root.underruns}";

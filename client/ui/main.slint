@@ -248,6 +248,7 @@ export component MainWindow inherits Window {
     in property <int> dbg-underruns: 0;
     in property <int> dbg-rtp-recv: 0;
     in property <float> dbg-delay-ms: 0.0;
+    in property <float> dbg-rtt-ms: 0.0;
     // Level history (ring buffer, 30 entries)
     in property <float> lh0;  in property <float> lh1;  in property <float> lh2;  in property <float> lh3;  in property <float> lh4;
     in property <float> lh5;  in property <float> lh6;  in property <float> lh7;  in property <float> lh8;  in property <float> lh9;
@@ -637,6 +638,7 @@ export component MainWindow inherits Window {
             underruns: root.dbg-underruns;
             rtp-recv: root.dbg-rtp-recv;
             delay-ms: root.dbg-delay-ms;
+            rtt-ms: root.dbg-rtt-ms;
             lh0:  root.lh0;  lh1:  root.lh1;  lh2:  root.lh2;  lh3:  root.lh3;  lh4:  root.lh4;
             lh5:  root.lh5;  lh6:  root.lh6;  lh7:  root.lh7;  lh8:  root.lh8;  lh9:  root.lh9;
             lh10: root.lh10; lh11: root.lh11; lh12: root.lh12; lh13: root.lh13; lh14: root.lh14;

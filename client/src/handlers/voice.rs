@@ -123,6 +123,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
             underrun_count,
             rtp_recv_total,
             pipeline_delay_ms,
+            rtt_ms,
         } => {
             ctx.app.set_dbg_input_level(input_level);
             ctx.app.set_dbg_silero_prob(silero_vad_prob);
@@ -136,6 +137,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
             ctx.app.set_dbg_underruns(underrun_count);
             ctx.app.set_dbg_rtp_recv(rtp_recv_total);
             ctx.app.set_dbg_delay_ms(pipeline_delay_ms);
+            ctx.app.set_dbg_rtt_ms(rtt_ms);
 
             let mut hist = ctx.dbg_hist.borrow_mut();
             hist.push(input_level, is_speaking);
