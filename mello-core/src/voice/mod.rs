@@ -469,8 +469,19 @@ impl VoiceManager {
                         if let Some(ref conn) = self.sfu_connection {
                             // Strip the 4-byte LE sequence header; RTP handles sequencing
                             let opus_payload = if pkt.len() > 4 { &pkt[4..] } else { pkt };
-                            if let Err(e) = conn.send_audio(opus_payload) {
-                                log::warn!("SFU voice send failed: {}", e);
+                            match conn.send_audio(opus_payload) {
+                                Ok(()) => {
+                                    if self.tick_counter % 500 == 1 {
+                                        log::debug!(
+                                            "SFU: audio send ok (tick={} payload={}B)",
+                                            self.tick_counter,
+                                            opus_payload.len()
+                                        );
+                                    }
+                                }
+                                Err(e) => {
+                                    log::warn!("SFU voice send failed: {}", e);
+                                }
                             }
                         }
                     }
@@ -503,6 +514,14 @@ impl VoiceManager {
                         for event in conn.poll_events() {
                             match event {
                                 SfuEvent::AudioTrackData { sender_id, data } => {
+                                    if self.tick_counter % 500 == 1 {
+                                        log::debug!(
+                                            "SFU: feeding audio from {} ({}B) tick={}",
+                                            sender_id,
+                                            data.len(),
+                                            self.tick_counter
+                                        );
+                                    }
                                     let peer_id =
                                         CString::new(sender_id.as_str()).unwrap_or_default();
                                     unsafe {

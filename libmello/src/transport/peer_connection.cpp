@@ -116,9 +116,37 @@ void PeerConnectionImpl::setup_incoming_track(std::shared_ptr<rtc::Track> track)
 
     track_sender_map_[mid] = sender_id;
 
-    track->onMessage([this, sender_id](rtc::message_variant data) {
+    // Dump all track description attributes for debugging
+    fprintf(stderr, "[mello-rtp] onTrack: mid=%s sender=%s open=%d\n",
+            mid.c_str(), sender_id.c_str(), track->isOpen() ? 1 : 0);
+    for (const auto& a : desc.attributes()) {
+        fprintf(stderr, "[mello-rtp]   attr: %s\n", a.c_str());
+    }
+    fflush(stderr);
+
+    track->onOpen([mid]() {
+        fprintf(stderr, "[mello-rtp] track OPEN: mid=%s\n", mid.c_str());
+        fflush(stderr);
+    });
+    track->onClosed([mid]() {
+        fprintf(stderr, "[mello-rtp] track CLOSED: mid=%s\n", mid.c_str());
+        fflush(stderr);
+    });
+    track->onError([mid](std::string err) {
+        fprintf(stderr, "[mello-rtp] track ERROR: mid=%s err=%s\n", mid.c_str(), err.c_str());
+        fflush(stderr);
+    });
+
+    auto pkt_count = std::make_shared<std::atomic<int>>(0);
+    track->onMessage([this, sender_id, pkt_count](rtc::message_variant data) {
+        int n = pkt_count->fetch_add(1) + 1;
         auto* bin = std::get_if<rtc::binary>(&data);
         if (!bin) return;
+        if (n <= 3 || n % 500 == 0) {
+            fprintf(stderr, "[mello-rtp] recv: sender=%s pkt#%d size=%d\n",
+                    sender_id.c_str(), n, (int)bin->size());
+            fflush(stderr);
+        }
         auto* bytes = reinterpret_cast<const uint8_t*>(bin->data());
         auto size = static_cast<int>(bin->size());
 
@@ -203,6 +231,13 @@ void PeerConnectionImpl::setup_channels() {
     audio_track_->setMediaHandler(packetizer);
 #endif
 
+    // Unreliable DataChannel for P2P mesh voice / stream media
+    rtc::DataChannelInit dcInit;
+    dcInit.reliability.unordered = true;
+    dcInit.reliability.maxRetransmits = 0;
+    unreliable_dc_ = pc_->createDataChannel("audio", dcInit);
+    setup_dc_handlers(unreliable_dc_, false);
+
     // Control DataChannel (reliable, ordered) -- kept for signaling
     reliable_dc_ = pc_->createDataChannel("control");
     setup_dc_handlers(reliable_dc_, true);
@@ -255,6 +290,10 @@ const char* PeerConnectionImpl::handle_remote_offer(const char* sdp) {
     std::lock_guard<std::mutex> lock(mutex_);
     if (!pc_) return "";
 
+    fprintf(stderr, "[mello-rtp] handle_remote_offer: sdp_len=%zu pc_state=%d\n",
+            strlen(sdp), static_cast<int>(pc_->state()));
+    fflush(stderr);
+
     sdp_ready_ = false;
 
     rtc::Description offer(sdp, rtc::Description::Type::Offer);
@@ -264,6 +303,9 @@ const char* PeerConnectionImpl::handle_remote_offer(const char* sdp) {
         std::unique_lock<std::mutex> lk(sdp_mutex_);
         sdp_cv_.wait_for(lk, std::chrono::seconds(5), [this] { return sdp_ready_; });
     }
+
+    fprintf(stderr, "[mello-rtp] handle_remote_offer: answer ready=%d\n", sdp_ready_ ? 1 : 0);
+    fflush(stderr);
 
     return local_sdp_.c_str();
 }
@@ -329,7 +371,13 @@ bool PeerConnectionImpl::send_reliable(const uint8_t* data, int size) {
 }
 
 bool PeerConnectionImpl::send_audio(const uint8_t* data, int size) {
-    if (!audio_track_ || !audio_track_->isOpen()) return false;
+    int n = send_audio_count_.fetch_add(1) + 1;
+    bool open = audio_track_ && audio_track_->isOpen();
+    if (n <= 3 || n % 500 == 0) {
+        fprintf(stderr, "[mello-rtp] send: count=%d open=%d size=%d\n", n, open ? 1 : 0, size);
+        fflush(stderr);
+    }
+    if (!open) return false;
     try {
         audio_track_->send(reinterpret_cast<const std::byte*>(data), static_cast<size_t>(size));
         return true;

@@ -74,6 +74,8 @@ private:
     void* audio_track_ud_ = nullptr;
 
     std::atomic<bool> connected_{false};
+    std::atomic<int> send_audio_count_{0};
+    std::atomic<int> recv_track_count_{0};
     std::mutex mutex_;
 
     // Thread-safe receive queue for incoming unreliable audio packets
