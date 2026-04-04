@@ -23,6 +23,7 @@ PeerConnectionImpl::PeerConnectionImpl(const std::string& peer_id)
 {
     config_.iceServers.emplace_back("stun:stun.l.google.com:19302");
     config_.iceServers.emplace_back("stun:stun1.l.google.com:19302");
+    config_.forceMediaTransport = true;
 }
 
 PeerConnectionImpl::~PeerConnectionImpl() {
@@ -35,6 +36,10 @@ PeerConnectionImpl::~PeerConnectionImpl() {
             pc_->onTrack(nullptr);
             pc_->close();
         }
+        for (auto& t : incoming_tracks_) {
+            t->onMessage(nullptr);
+        }
+        incoming_tracks_.clear();
         if (audio_track_) {
             audio_track_->onMessage(nullptr);
             audio_track_.reset();
@@ -96,27 +101,18 @@ void PeerConnectionImpl::create_pc() {
 
 void PeerConnectionImpl::setup_incoming_track(std::shared_ptr<rtc::Track> track) {
     auto mid = track->mid();
-
-    // Extract sender user_id from the SDP msid attribute (stream ID).
-    // Pion sets streamID = senderUserID when creating TrackLocalStaticRTP.
-    std::string sender_id;
     auto desc = track->description();
-    for (const auto& attr : desc.attributes()) {
-        // msid attribute format: "msid:<stream_id> <track_id>"
-        if (attr.rfind("msid:", 0) == 0) {
-            auto space = attr.find(' ', 5);
-            sender_id = attr.substr(5, space != std::string::npos ? space - 5 : std::string::npos);
+
+    // Extract sender user_id from the SDP msid attribute: "msid:<streamID> <trackID>"
+    std::string sender_id = "unknown";
+    for (const auto& a : desc.attributes()) {
+        if (a.rfind("msid:", 0) == 0) {
+            auto space = a.find(' ', 5);
+            sender_id = (space != std::string::npos) ? a.substr(5, space - 5) : a.substr(5);
             break;
         }
     }
 
-    if (sender_id.empty()) {
-        sender_id = mid;
-    }
-
-    track_sender_map_[mid] = sender_id;
-
-    // Dump all track description attributes for debugging
     fprintf(stderr, "[mello-rtp] onTrack: mid=%s sender=%s open=%d\n",
             mid.c_str(), sender_id.c_str(), track->isOpen() ? 1 : 0);
     for (const auto& a : desc.attributes()) {
@@ -139,78 +135,69 @@ void PeerConnectionImpl::setup_incoming_track(std::shared_ptr<rtc::Track> track)
 
     auto pkt_count = std::make_shared<std::atomic<int>>(0);
     track->onMessage([this, sender_id, pkt_count](rtc::message_variant data) {
-        int n = pkt_count->fetch_add(1) + 1;
         auto* bin = std::get_if<rtc::binary>(&data);
-        if (!bin) return;
+        if (!bin || bin->size() < 12) return;
+
+        int n = pkt_count->fetch_add(1) + 1;
         if (n <= 3 || n % 500 == 0) {
             fprintf(stderr, "[mello-rtp] recv: sender=%s pkt#%d size=%d\n",
                     sender_id.c_str(), n, (int)bin->size());
             fflush(stderr);
         }
+
         auto* bytes = reinterpret_cast<const uint8_t*>(bin->data());
-        auto size = static_cast<int>(bin->size());
+        int total = static_cast<int>(bin->size());
 
-        if (size < 12) return; // minimum RTP header
-
-        // Parse RTP header to extract 16-bit sequence number and payload
-        // Byte 0: V(2) P(1) X(1) CC(4)
-        // Byte 1: M(1) PT(7)
-        // Bytes 2-3: sequence number (big-endian)
-        // Bytes 4-7: timestamp
-        // Bytes 8-11: SSRC
-        // Bytes 12+: CSRC list (4 bytes each), then payload
-        uint8_t cc = bytes[0] & 0x0F;
-        bool has_extension = (bytes[0] >> 4) & 0x01;
+        // Parse RTP header to extract sequence number and payload
+        uint16_t seq = (static_cast<uint16_t>(bytes[2]) << 8)
+                     | static_cast<uint16_t>(bytes[3]);
+        int cc = bytes[0] & 0x0F;
         int header_len = 12 + cc * 4;
 
-        if (header_len > size) return;
-
-        // Skip RTP header extensions if present
-        if (has_extension && header_len + 4 <= size) {
+        // Handle RTP header extension
+        bool has_ext = (bytes[0] & 0x10) != 0;
+        if (has_ext && header_len + 4 <= total) {
             uint16_t ext_len = (static_cast<uint16_t>(bytes[header_len + 2]) << 8)
                              | static_cast<uint16_t>(bytes[header_len + 3]);
             header_len += 4 + ext_len * 4;
         }
 
-        if (header_len >= size) return;
+        if (header_len >= total) return;
 
-        uint16_t rtp_seq = (static_cast<uint16_t>(bytes[2]) << 8)
-                         | static_cast<uint16_t>(bytes[3]);
+        const uint8_t* opus = bytes + header_len;
+        int opus_len = total - header_len;
 
-        const uint8_t* payload = bytes + header_len;
-        int payload_size = size - header_len;
+        // Reconstruct [4B LE seq][Opus payload] for the AudioPipeline
+        std::vector<uint8_t> pkt(4 + opus_len);
+        pkt[0] = static_cast<uint8_t>(seq);
+        pkt[1] = static_cast<uint8_t>(seq >> 8);
+        pkt[2] = 0;
+        pkt[3] = 0;
+        std::memcpy(pkt.data() + 4, opus, opus_len);
 
         if (audio_track_cb_) {
-            // Reconstruct [4B seq LE][Opus payload] for the audio pipeline
-            std::vector<uint8_t> pkt(4 + payload_size);
-            uint32_t seq32 = static_cast<uint32_t>(rtp_seq);
-            pkt[0] = static_cast<uint8_t>(seq32);
-            pkt[1] = static_cast<uint8_t>(seq32 >> 8);
-            pkt[2] = 0;
-            pkt[3] = 0;
-            std::memcpy(pkt.data() + 4, payload, payload_size);
-
             audio_track_cb_(audio_track_ud_, sender_id.c_str(),
                            pkt.data(), static_cast<int>(pkt.size()));
         }
     });
+
+    incoming_tracks_.push_back(track);
 }
 
 void PeerConnectionImpl::setup_dc_handlers(std::shared_ptr<rtc::DataChannel> dc, bool reliable) {
     dc->onMessage([this, reliable](auto data) {
         if (auto* bin = std::get_if<rtc::binary>(&data)) {
+            auto* bytes = reinterpret_cast<const uint8_t*>(bin->data());
+            auto size = static_cast<int>(bin->size());
+
             if (!reliable) {
                 std::lock_guard<std::mutex> lock(recv_mutex_);
                 if (recv_queue_.size() < MAX_RECV_QUEUE) {
-                    recv_queue_.emplace(
-                        reinterpret_cast<const uint8_t*>(bin->data()),
-                        reinterpret_cast<const uint8_t*>(bin->data()) + bin->size()
-                    );
+                    recv_queue_.emplace(bytes, bytes + size);
                 }
             }
             if (data_cb_) {
-                data_cb_(data_ud_, reinterpret_cast<const uint8_t*>(bin->data()),
-                         static_cast<int>(bin->size()), reliable);
+                data_cb_(data_ud_, bytes, size, reliable);
             }
         }
     });

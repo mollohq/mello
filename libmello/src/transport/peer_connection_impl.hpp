@@ -3,7 +3,6 @@
 #include <string>
 #include <vector>
 #include <queue>
-#include <map>
 #include <mutex>
 #include <atomic>
 #include <condition_variable>
@@ -56,8 +55,8 @@ private:
     // Outgoing audio track (RTP, for SFU voice)
     std::shared_ptr<rtc::Track> audio_track_;
 
-    // Incoming track sender mapping: mid -> sender user_id (from SDP msid)
-    std::map<std::string, std::string> track_sender_map_;
+    // Incoming tracks kept alive for their lifecycle
+    std::vector<std::shared_ptr<rtc::Track>> incoming_tracks_;
 
     std::string local_sdp_;
     std::mutex sdp_mutex_;
