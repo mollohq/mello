@@ -39,7 +39,7 @@ unsafe extern "C" fn on_state(user_data: *mut c_void, state: i32) {
 unsafe extern "C" fn on_audio_track(
     user_data: *mut c_void,
     sender_id: *const i8,
-    data: *const u8,
+    _data: *const u8,
     size: i32,
 ) {
     let state = &*(user_data as *const CallbackState);
@@ -52,7 +52,7 @@ unsafe extern "C" fn on_audio_track(
     let count = state.audio_packets.fetch_add(1, Ordering::Relaxed);
     state.audio_bytes.fetch_add(size as u64, Ordering::Relaxed);
 
-    if count < 5 || count % 50 == 0 {
+    if count < 5 || count.is_multiple_of(50) {
         eprintln!(
             "[client] Audio track data: sender={} size={} total_pkts={}",
             sender,
@@ -157,7 +157,7 @@ fn main() {
 
     // Wait for connection + send some test audio
     eprintln!("\n[step 2] Waiting for connection, sending test audio...");
-    let audio_data = vec![0u8; 80]; // silence opus frame
+    let audio_data = [0u8; 80]; // silence opus frame
     for i in 0..50 {
         unsafe {
             mello_sys::mello_peer_send_audio(peer, audio_data.as_ptr(), audio_data.len() as i32);
