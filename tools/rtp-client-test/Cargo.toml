@@ -1,0 +1,17 @@
+[package]
+name = "rtp-client-test"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[[bin]]
+name = "rtp-client-test"
+path = "src/main.rs"
+
+[dependencies]
+mello-sys = { path = "../../mello-sys" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+log = { workspace = true }
+env_logger = "0.11"

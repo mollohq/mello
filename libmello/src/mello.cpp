@@ -381,6 +381,10 @@ void mello_get_debug_stats(MelloContext* ctx, MelloDebugStats* out) {
         out->is_muted        = audio.is_muted();
         out->is_deafened     = audio.is_deafened();
         out->packets_encoded = audio.packets_encoded();
+        out->incoming_streams = audio.active_streams();
+        out->underrun_count  = audio.underrun_count();
+        out->rtp_recv_total  = audio.rtp_recv_total();
+        out->pipeline_delay_ms = audio.pipeline_delay_ms();
     } catch (...) {
         memset(out, 0, sizeof(MelloDebugStats));
     }

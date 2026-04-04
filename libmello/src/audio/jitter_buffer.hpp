@@ -34,6 +34,7 @@ public:
     // Get stats
     int buffered_count() const;
     int target_delay_ms() const { return target_delay_ms_; }
+    float avg_hold_ms() const { return avg_hold_ms_; }
 
 private:
     int64_t now_ms() const;
@@ -50,6 +51,7 @@ private:
     // For adaptive delay estimation
     int64_t last_arrival_ = 0;
     float jitter_estimate_ = 0.0f;
+    float avg_hold_ms_ = 0.0f;
 };
 
 } // namespace mello::audio

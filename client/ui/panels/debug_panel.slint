@@ -199,6 +199,10 @@ export component DebugPanel inherits Rectangle {
     in property <bool> is-muted: false;
     in property <bool> is-deafened: false;
     in property <int> packets-encoded: 0;
+    in property <int> incoming-streams: 0;
+    in property <int> underruns: 0;
+    in property <int> rtp-recv: 0;
+    in property <float> delay-ms: 0.0;
 
     // Level history ring buffer (set from Rust)
     in property <float> lh0;  in property <float> lh1;  in property <float> lh2;  in property <float> lh3;  in property <float> lh4;
@@ -327,12 +331,57 @@ export component DebugPanel inherits Rectangle {
 
         Rectangle { height: 2px; }
 
-        // Packet counter
+        // Packet counters
         Text {
-            text: "Packets: \{root.packets-encoded}";
+            text: "Encoded: \{root.packets-encoded}";
             font-family: Theme.font-mono;
             font-size: 10px;
             color: Theme.text-secondary;
+        }
+
+        Rectangle { height: 1px; background: Theme.graphic-light; }
+
+        Text {
+            text: "RTP Receive";
+            font-family: Theme.font-mono;
+            font-size: 9px;
+            font-weight: 600;
+            color: Theme.text-tertiary;
+        }
+
+        HorizontalLayout {
+            spacing: 16px;
+
+            VerticalLayout {
+                spacing: 4px;
+                Text {
+                    text: "Streams: \{root.incoming-streams}";
+                    font-family: Theme.font-mono;
+                    font-size: 10px;
+                    color: root.incoming-streams > 0 ? Theme.accent-green : Theme.text-secondary;
+                }
+                Text {
+                    text: "Recv: \{root.rtp-recv}";
+                    font-family: Theme.font-mono;
+                    font-size: 10px;
+                    color: Theme.text-secondary;
+                }
+            }
+            VerticalLayout {
+                spacing: 4px;
+                Text {
+                    text: "Delay: \{Math.round(root.delay-ms)}ms";
+                    font-family: Theme.font-mono;
+                    font-size: 10px;
+                    color: root.delay-ms > 150 ? #FF4444 : root.delay-ms > 80 ? #E0A020 : Theme.accent-green;
+                }
+                Text {
+                    text: "Underruns: \{root.underruns}";
+                    font-family: Theme.font-mono;
+                    font-size: 10px;
+                    color: root.underruns > 0 ? #FF4444 : Theme.text-secondary;
+                }
+            }
         }
     }
 }

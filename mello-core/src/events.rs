@@ -182,6 +182,10 @@ pub enum Event {
         is_muted: bool,
         is_deafened: bool,
         packets_encoded: u32,
+        incoming_streams: i32,
+        underrun_count: i32,
+        rtp_recv_total: i32,
+        pipeline_delay_ms: f32,
     },
 
     SignalReceived {

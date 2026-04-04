@@ -439,6 +439,10 @@ impl VoiceManager {
                 is_muted: stats.is_muted,
                 is_deafened: stats.is_deafened,
                 packets_encoded: stats.packets_encoded,
+                incoming_streams: stats.incoming_streams,
+                underrun_count: stats.underrun_count,
+                rtp_recv_total: stats.rtp_recv_total,
+                pipeline_delay_ms: stats.pipeline_delay_ms,
             });
         }
 

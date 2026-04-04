@@ -113,12 +113,18 @@ void PeerConnectionImpl::setup_incoming_track(std::shared_ptr<rtc::Track> track)
         }
     }
 
-    fprintf(stderr, "[mello-rtp] onTrack: mid=%s sender=%s open=%d\n",
-            mid.c_str(), sender_id.c_str(), track->isOpen() ? 1 : 0);
-    for (const auto& a : desc.attributes()) {
-        fprintf(stderr, "[mello-rtp]   attr: %s\n", a.c_str());
-    }
+    // Reject phantom tracks created by Pion's undeclared-SSRC handler.
+    // Real sender IDs are UUIDs (36 chars, contain dashes). Phantoms have
+    // random 16-char cnames with no dashes.
+    bool is_phantom = (sender_id.find('-') == std::string::npos);
+
+    fprintf(stderr, "[mello-rtp] onTrack: mid=%s sender=%s open=%d phantom=%d\n",
+            mid.c_str(), sender_id.c_str(), track->isOpen() ? 1 : 0, is_phantom ? 1 : 0);
     fflush(stderr);
+
+    if (is_phantom) {
+        return;
+    }
 
     track->onOpen([mid]() {
         fprintf(stderr, "[mello-rtp] track OPEN: mid=%s\n", mid.c_str());
@@ -134,23 +140,59 @@ void PeerConnectionImpl::setup_incoming_track(std::shared_ptr<rtc::Track> track)
     });
 
     auto pkt_count = std::make_shared<std::atomic<int>>(0);
-    track->onMessage([this, sender_id, pkt_count](rtc::message_variant data) {
+    auto last_seq = std::make_shared<int>(-1);
+    auto gap_count = std::make_shared<int>(0);
+    auto last_rate_log = std::make_shared<std::chrono::steady_clock::time_point>(
+        std::chrono::steady_clock::now());
+    auto rate_counter = std::make_shared<int>(0);
+    track->onMessage([this, sender_id, pkt_count, last_seq, gap_count,
+                      last_rate_log, rate_counter](rtc::message_variant data) {
         auto* bin = std::get_if<rtc::binary>(&data);
         if (!bin || bin->size() < 12) return;
 
         int n = pkt_count->fetch_add(1) + 1;
-        if (n <= 3 || n % 500 == 0) {
-            fprintf(stderr, "[mello-rtp] recv: sender=%s pkt#%d size=%d\n",
-                    sender_id.c_str(), n, (int)bin->size());
+        (*rate_counter)++;
+
+        auto now = std::chrono::steady_clock::now();
+        auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
+            now - *last_rate_log).count();
+        if (elapsed >= 5) {
+            fprintf(stderr, "[mello-rtp] rate: sender=%s %d pkt/5s (%d pkt/s) gaps=%d total=%d\n",
+                    sender_id.c_str(), *rate_counter, *rate_counter / (int)elapsed,
+                    *gap_count, n);
             fflush(stderr);
+            *rate_counter = 0;
+            *gap_count = 0;
+            *last_rate_log = now;
         }
 
         auto* bytes = reinterpret_cast<const uint8_t*>(bin->data());
         int total = static_cast<int>(bin->size());
 
+        // Filter RTCP packets that libdatachannel delivers to onMessage.
+        // RTP payload type is in bytes[1] & 0x7F. Opus = 111.
+        // RTCP types (SR=200, RR=201, etc.) show up as PT >= 194.
+        uint8_t pt = bytes[1] & 0x7F;
+        if (pt != 111) return;
+
         // Parse RTP header to extract sequence number and payload
         uint16_t seq = (static_cast<uint16_t>(bytes[2]) << 8)
                      | static_cast<uint16_t>(bytes[3]);
+
+        if (*last_seq >= 0) {
+            int expected = ((*last_seq) + 1) & 0xFFFF;
+            if (seq != expected) {
+                int gap = ((int)seq - *last_seq + 65536) % 65536;
+                (*gap_count)++;
+                if (*gap_count <= 10) {
+                    fprintf(stderr, "[mello-rtp] seq-gap: sender=%s expected=%d got=%d gap=%d\n",
+                            sender_id.c_str(), expected, seq, gap);
+                    fflush(stderr);
+                }
+            }
+        }
+        *last_seq = seq;
+
         int cc = bytes[0] & 0x0F;
         int header_len = 12 + cc * 4;
 

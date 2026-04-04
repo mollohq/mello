@@ -400,6 +400,10 @@ typedef struct MelloDebugStats {
     bool  is_muted;
     bool  is_deafened;
     uint32_t packets_encoded;
+    int32_t  incoming_streams;
+    int32_t  underrun_count;
+    int32_t  rtp_recv_total;
+    float    pipeline_delay_ms;
 } MelloDebugStats;
 
 MELLO_API void mello_get_debug_stats(MelloContext* ctx, MelloDebugStats* out);

@@ -164,12 +164,15 @@ OSStatus CoreAudioPlayback::render_callback(
     AudioBufferList* ioData)
 {
     auto* self = static_cast<CoreAudioPlayback*>(inRefCon);
-
-    // We set the input format to mono int16, so ioData should have 1 buffer of int16
     int16_t* out = static_cast<int16_t*>(ioData->mBuffers[0].mData);
-    size_t got = self->ring_.read(out, inNumberFrames);
 
-    // Silence-fill remainder on underrun
+    size_t got = 0;
+    if (self->render_source_) {
+        got = self->render_source_(out, inNumberFrames);
+    } else {
+        got = self->ring_.read(out, inNumberFrames);
+    }
+
     if (got < inNumberFrames) {
         std::memset(out + got, 0, (inNumberFrames - got) * sizeof(int16_t));
     }
