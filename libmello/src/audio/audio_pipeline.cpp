@@ -206,22 +206,24 @@ void AudioPipeline::on_captured_audio(const int16_t* samples, size_t count) {
             vad_.feed(capture_accum_.data(), FRAME_SIZE);
             noise_suppressor_.process(capture_accum_.data(), FRAME_SIZE);
 
-            uint8_t packet[MAX_PACKET_SIZE];
-            int encoded = encoder_.encode(capture_accum_.data(), FRAME_SIZE,
-                                          packet, MAX_PACKET_SIZE);
-            if (encoded > 0) {
-                std::lock_guard<std::mutex> olock(outgoing_mutex_);
-                EncodedPacket pkt;
-                pkt.data.assign(packet, packet + encoded);
-                pkt.sequence = sequence_++;
-                outgoing_.push(std::move(pkt));
+            if (vad_.is_speaking()) {
+                uint8_t packet[MAX_PACKET_SIZE];
+                int encoded = encoder_.encode(capture_accum_.data(), FRAME_SIZE,
+                                              packet, MAX_PACKET_SIZE);
+                if (encoded > 0) {
+                    std::lock_guard<std::mutex> olock(outgoing_mutex_);
+                    EncodedPacket pkt;
+                    pkt.data.assign(packet, packet + encoded);
+                    pkt.sequence = sequence_++;
+                    outgoing_.push(std::move(pkt));
 
-                if ((pkt.sequence % 250) == 0) {
-                    MELLO_LOG_DEBUG("pipeline", "encode: seq=%u size=%d bytes, vad=%.2f, queue=%zu",
-                                    pkt.sequence, encoded, vad_.probability(), outgoing_.size());
+                    if ((pkt.sequence % 250) == 0) {
+                        MELLO_LOG_DEBUG("pipeline", "encode: seq=%u size=%d bytes, vad=%.2f, queue=%zu",
+                                        pkt.sequence, encoded, vad_.probability(), outgoing_.size());
+                    }
+                } else if (encoded < 0) {
+                    MELLO_LOG_WARN("pipeline", "opus encode error: %d", encoded);
                 }
-            } else if (encoded < 0) {
-                MELLO_LOG_WARN("pipeline", "opus encode error: %d", encoded);
             }
         }
         capture_accum_.erase(capture_accum_.begin(),

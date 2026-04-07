@@ -415,6 +415,8 @@ typedef struct MelloDebugStats {
     bool  agc_enabled;
     bool  noise_suppression_enabled;
     uint32_t packets_encoded;
+    uint32_t aec_capture_frames;
+    uint32_t aec_render_frames;
     int32_t  incoming_streams;
     int32_t  underrun_count;
     int32_t  rtp_recv_total;

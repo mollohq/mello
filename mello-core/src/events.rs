@@ -185,6 +185,8 @@ pub enum Event {
         agc_enabled: bool,
         noise_suppression_enabled: bool,
         packets_encoded: u32,
+        aec_capture_frames: u32,
+        aec_render_frames: u32,
         incoming_streams: i32,
         underrun_count: i32,
         rtp_recv_total: i32,

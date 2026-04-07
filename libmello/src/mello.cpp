@@ -414,6 +414,8 @@ void mello_get_debug_stats(MelloContext* ctx, MelloDebugStats* out) {
         out->agc_enabled     = audio.agc_enabled();
         out->noise_suppression_enabled = audio.noise_suppression_enabled();
         out->packets_encoded = audio.packets_encoded();
+        out->aec_capture_frames = audio.aec_capture_frames();
+        out->aec_render_frames  = audio.aec_render_frames();
         out->incoming_streams = audio.active_streams();
         out->underrun_count  = audio.underrun_count();
         out->rtp_recv_total  = audio.rtp_recv_total();

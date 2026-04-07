@@ -466,6 +466,8 @@ impl VoiceManager {
                 agc_enabled: stats.agc_enabled,
                 noise_suppression_enabled: stats.noise_suppression_enabled,
                 packets_encoded: stats.packets_encoded,
+                aec_capture_frames: stats.aec_capture_frames,
+                aec_render_frames: stats.aec_render_frames,
                 incoming_streams: stats.incoming_streams,
                 underrun_count: stats.underrun_count,
                 rtp_recv_total: stats.rtp_recv_total,

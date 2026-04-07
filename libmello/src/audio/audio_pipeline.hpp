@@ -46,6 +46,8 @@ public:
     bool echo_cancellation_enabled() const { return echo_canceller_.aec_enabled(); }
     bool agc_enabled() const { return echo_canceller_.agc_enabled(); }
     bool noise_suppression_enabled() const { return noise_suppressor_.is_enabled(); }
+    uint32_t aec_capture_frames() const { return echo_canceller_.capture_frames(); }
+    uint32_t aec_render_frames() const { return echo_canceller_.render_frames(); }
     bool is_muted() const { return muted_; }
     bool is_deafened() const { return deafened_; }
 

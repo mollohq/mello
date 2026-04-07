@@ -246,6 +246,8 @@ export component MainWindow inherits Window {
     in property <bool> dbg-aec-enabled: false;
     in property <bool> dbg-agc-enabled: false;
     in property <bool> dbg-ns-enabled: false;
+    in property <int> dbg-aec-capture: 0;
+    in property <int> dbg-aec-render: 0;
     in property <int> dbg-packets: 0;
     in property <int> dbg-incoming-streams: 0;
     in property <int> dbg-underruns: 0;
@@ -639,6 +641,8 @@ export component MainWindow inherits Window {
             aec-enabled: root.dbg-aec-enabled;
             agc-enabled: root.dbg-agc-enabled;
             ns-enabled: root.dbg-ns-enabled;
+            aec-capture: root.dbg-aec-capture;
+            aec-render: root.dbg-aec-render;
             packets-encoded: root.dbg-packets;
             incoming-streams: root.dbg-incoming-streams;
             underruns: root.dbg-underruns;

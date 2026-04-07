@@ -82,6 +82,7 @@ void EchoCanceller::process_capture(int16_t* samples, int count) {
         if (err != 0) {
             MELLO_LOG_WARN("aec", "ProcessStream error %d", err);
         }
+        capture_frames_.fetch_add(1, std::memory_order_relaxed);
     }
 }
 
@@ -99,6 +100,7 @@ void EchoCanceller::process_render(const int16_t* samples, int count) {
         if (err != 0) {
             MELLO_LOG_WARN("aec", "ProcessReverseStream error %d", err);
         }
+        render_frames_.fetch_add(1, std::memory_order_relaxed);
     }
 }
 

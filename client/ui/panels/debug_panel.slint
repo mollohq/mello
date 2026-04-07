@@ -201,6 +201,8 @@ export component DebugPanel inherits Rectangle {
     in property <bool> aec-enabled: false;
     in property <bool> agc-enabled: false;
     in property <bool> ns-enabled: false;
+    in property <int> aec-capture: 0;
+    in property <int> aec-render: 0;
     in property <int> packets-encoded: 0;
     in property <int> incoming-streams: 0;
     in property <int> underruns: 0;
@@ -335,7 +337,7 @@ export component DebugPanel inherits Rectangle {
 
         Rectangle { height: 2px; }
 
-        // Audio processing pipeline status
+        // ── Audio Processing ──
         Rectangle { height: 1px; background: Theme.graphic-light; }
 
         Text {
@@ -347,71 +349,126 @@ export component DebugPanel inherits Rectangle {
         }
 
         HorizontalLayout {
-            spacing: 16px;
+            spacing: 12px;
 
-            StatusDot { label: root.aec-enabled ? "AEC ON" : "AEC OFF"; active: root.aec-enabled; }
-            StatusDot { label: root.agc-enabled ? "AGC ON" : "AGC OFF"; active: root.agc-enabled; }
-            StatusDot { label: root.ns-enabled ? "NS ON" : "NS OFF"; active: root.ns-enabled; }
+            StatusDot { label: root.aec-enabled ? "AEC" : "AEC"; active: root.aec-enabled; }
+            StatusDot { label: root.agc-enabled ? "AGC" : "AGC"; active: root.agc-enabled; }
+            StatusDot { label: root.ns-enabled ? "NS" : "NS"; active: root.ns-enabled; }
         }
 
-        Rectangle { height: 2px; }
+        HorizontalLayout {
+            spacing: 12px;
 
-        // Packet counters
-        Text {
-            text: "Encoded: \{root.packets-encoded}";
-            font-family: Theme.font-mono;
-            font-size: 10px;
-            color: Theme.text-secondary;
+            Text {
+                text: "Cap: \{root.aec-capture}";
+                font-family: Theme.font-mono;
+                font-size: 10px;
+                color: root.aec-capture > 0 ? Theme.text-primary : Theme.text-secondary;
+            }
+            Text {
+                text: "Ref: \{root.aec-render}";
+                font-family: Theme.font-mono;
+                font-size: 10px;
+                color: root.aec-render > 0 ? Theme.accent-green : #FF4444;
+            }
+            Text {
+                text: "Enc: \{root.packets-encoded}";
+                font-family: Theme.font-mono;
+                font-size: 10px;
+                color: Theme.text-secondary;
+            }
         }
 
+        // ── Network ──
         Rectangle { height: 1px; background: Theme.graphic-light; }
 
         Text {
-            text: "RTP Receive";
+            text: "Network";
             font-family: Theme.font-mono;
             font-size: 9px;
             font-weight: 600;
             color: Theme.text-tertiary;
         }
 
-        HorizontalLayout {
-            spacing: 16px;
+        GridLayout {
+            spacing: 4px;
+            padding: 0;
 
-            VerticalLayout {
-                spacing: 4px;
+            Row {
                 Text {
-                    text: "Streams: \{root.incoming-streams}";
-                    font-family: Theme.font-mono;
-                    font-size: 10px;
-                    color: root.incoming-streams > 0 ? Theme.accent-green : Theme.text-secondary;
-                }
-                Text {
-                    text: "Recv: \{root.rtp-recv}";
                     font-family: Theme.font-mono;
                     font-size: 10px;
                     color: Theme.text-secondary;
+                    text: "Streams";
+                    col: 0;
                 }
-            }
-            VerticalLayout {
-                spacing: 4px;
                 Text {
-                    text: "Latency: \{Math.round(root.rtt-ms / 2 + root.delay-ms)}ms";
+                    font-family: Theme.font-mono;
+                    font-size: 10px;
+                    color: root.incoming-streams > 0 ? Theme.accent-green : Theme.text-secondary;
+                    text: "\{root.incoming-streams}";
+                    col: 1;
+                }
+                Text {
+                    font-family: Theme.font-mono;
+                    font-size: 10px;
+                    color: Theme.text-secondary;
+                    text: "Latency";
+                    col: 2;
+                }
+                Text {
                     font-family: Theme.font-mono;
                     font-size: 10px;
                     color: (root.rtt-ms / 2 + root.delay-ms) > 150 ? #FF4444 :
-                           (root.rtt-ms / 2 + root.delay-ms) > 80 ? #E0A020 : Theme.accent-green;
+                           (root.rtt-ms / 2 + root.delay-ms) > 80  ? #E0A020 : Theme.accent-green;
+                    text: "\{Math.round(root.rtt-ms / 2 + root.delay-ms)}ms";
+                    col: 3;
+                }
+            }
+            Row {
+                Text {
+                    font-family: Theme.font-mono;
+                    font-size: 10px;
+                    color: Theme.text-secondary;
+                    text: "RTP Recv";
+                    col: 0;
                 }
                 Text {
-                    text: "RTT: \{Math.round(root.rtt-ms)}ms";
+                    font-family: Theme.font-mono;
+                    font-size: 10px;
+                    color: Theme.text-secondary;
+                    text: "\{root.rtp-recv}";
+                    col: 1;
+                }
+                Text {
+                    font-family: Theme.font-mono;
+                    font-size: 10px;
+                    color: Theme.text-secondary;
+                    text: "RTT";
+                    col: 2;
+                }
+                Text {
                     font-family: Theme.font-mono;
                     font-size: 10px;
                     color: root.rtt-ms > 200 ? #FF4444 : root.rtt-ms > 100 ? #E0A020 : Theme.text-secondary;
+                    text: "\{Math.round(root.rtt-ms)}ms";
+                    col: 3;
                 }
+            }
+            Row {
                 Text {
-                    text: "Underruns: \{root.underruns}";
                     font-family: Theme.font-mono;
                     font-size: 10px;
                     color: root.underruns > 0 ? #FF4444 : Theme.text-secondary;
+                    text: "Underruns";
+                    col: 0;
+                }
+                Text {
+                    font-family: Theme.font-mono;
+                    font-size: 10px;
+                    color: root.underruns > 0 ? #FF4444 : Theme.text-secondary;
+                    text: "\{root.underruns}";
+                    col: 1;
                 }
             }
         }

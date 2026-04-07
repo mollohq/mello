@@ -35,6 +35,8 @@ public:
     void set_agc_enabled(bool enabled);
     bool aec_enabled() const { return aec_enabled_.load(std::memory_order_relaxed); }
     bool agc_enabled() const { return agc_enabled_.load(std::memory_order_relaxed); }
+    uint32_t capture_frames() const { return capture_frames_.load(std::memory_order_relaxed); }
+    uint32_t render_frames() const { return render_frames_.load(std::memory_order_relaxed); }
 
 private:
     void apply_config();
@@ -44,6 +46,8 @@ private:
     int channels_ = 0;
     std::atomic<bool> aec_enabled_{true};
     std::atomic<bool> agc_enabled_{true};
+    std::atomic<uint32_t> capture_frames_{0};
+    std::atomic<uint32_t> render_frames_{0};
 };
 
 } // namespace mello::audio
