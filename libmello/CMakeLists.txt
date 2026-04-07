@@ -151,8 +151,8 @@ if(MSVC)
     target_compile_options(rnnoise PRIVATE /wd4244 /wd4305 /wd4267)
 endif()
 
-# WebRTC audio processing (AEC3 + AGC2) — vendored source, custom CMake build
-add_subdirectory(third_party/webrtc-audio-processing)
+# WebRTC audio processing (AEC3 + AGC2) — CMake overlay for vendored submodule
+add_subdirectory(cmake/webrtc-audio-processing)
 
 # Platform-agnostic sources
 set(MELLO_SOURCES
