@@ -249,7 +249,7 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
 
     app.global::<Theme>().set_dark(settings.borrow().dark_theme);
 
-    // Apply saved audio device selections
+    // Apply saved audio device and processing settings
     {
         let s = settings.borrow();
         if let Some(ref id) = s.capture_device_id {
@@ -258,6 +258,18 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
         if let Some(ref id) = s.playback_device_id {
             let _ = cmd_tx.try_send(Command::SetPlaybackDevice { id: id.clone() });
         }
+        let _ = cmd_tx.try_send(Command::SetEchoCancellation {
+            enabled: s.echo_cancellation,
+        });
+        let _ = cmd_tx.try_send(Command::SetNoiseSuppression {
+            enabled: s.noise_suppression,
+        });
+        let _ = cmd_tx.try_send(Command::SetInputVolume {
+            volume: s.input_volume,
+        });
+        let _ = cmd_tx.try_send(Command::SetOutputVolume {
+            volume: s.output_volume,
+        });
     }
 
     // Restore saved PTT hotkey

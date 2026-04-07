@@ -95,6 +95,18 @@ MELLO_API void mello_voice_set_vad_callback(
     void* user_data
 );
 
+/** Enable/disable echo cancellation (AEC3). Enabled by default. */
+MELLO_API void mello_voice_set_echo_cancellation(MelloContext* ctx, bool enabled);
+
+/** Enable/disable automatic gain control (AGC2). Enabled by default. */
+MELLO_API void mello_voice_set_agc(MelloContext* ctx, bool enabled);
+
+/** Set input (microphone) volume. 0.0 = silent, 1.0 = unity gain. */
+MELLO_API void mello_voice_set_input_volume(MelloContext* ctx, float volume);
+
+/** Set output (speaker) volume. 0.0 = silent, 1.0 = unity gain. */
+MELLO_API void mello_voice_set_output_volume(MelloContext* ctx, float volume);
+
 /** Get current input audio level (0.0 = silence, 1.0 = peak). Updated per frame. */
 MELLO_API float mello_voice_get_input_level(MelloContext* ctx);
 
@@ -405,7 +417,12 @@ typedef struct MelloDebugStats {
     bool  is_capturing;
     bool  is_muted;
     bool  is_deafened;
+    bool  echo_cancellation_enabled;
+    bool  agc_enabled;
+    bool  noise_suppression_enabled;
     uint32_t packets_encoded;
+    uint32_t aec_capture_frames;
+    uint32_t aec_render_frames;
     int32_t  incoming_streams;
     int32_t  underrun_count;
     int32_t  rtp_recv_total;

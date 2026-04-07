@@ -56,11 +56,12 @@ fn main() {
 
     let dst = cmake_cfg.build();
 
-    // Link libmello + rnnoise (built by cmake)
+    // Link libmello + rnnoise + webrtc_audio_processing (built by cmake)
     let lib_dir = dst.join("lib");
     println!("cargo:rustc-link-search=native={}", lib_dir.display());
     println!("cargo:rustc-link-lib=static=mello");
     println!("cargo:rustc-link-lib=static=rnnoise");
+    println!("cargo:rustc-link-lib=static=webrtc_audio_processing");
 
     // In manifest mode, vcpkg installs into the cmake build dir
     let out_dir = env::var("OUT_DIR").unwrap();
@@ -77,6 +78,19 @@ fn main() {
     println!("cargo:rustc-link-lib=static=juice");
     println!("cargo:rustc-link-lib=static=srtp2");
     println!("cargo:rustc-link-lib=static=usrsctp");
+
+    // Abseil (transitive dependency of webrtc_audio_processing, installed by vcpkg)
+    if let Ok(entries) = std::fs::read_dir(&vcpkg_installed) {
+        let suffix = if target_os == "windows" { ".lib" } else { ".a" };
+        for entry in entries.filter_map(|e| e.ok()) {
+            let name = entry.file_name();
+            let name_str = name.to_string_lossy();
+            if name_str.starts_with("absl_") && name_str.ends_with(suffix) {
+                let lib_name = name_str.strip_suffix(suffix).unwrap();
+                println!("cargo:rustc-link-lib=static={}", lib_name);
+            }
+        }
+    }
 
     // dav1d AV1 decoder (statically linked via vcpkg)
     if vcpkg_installed.join("dav1d.lib").exists() || vcpkg_installed.join("libdav1d.a").exists() {

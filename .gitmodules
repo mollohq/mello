@@ -5,3 +5,6 @@
 	path = libmello/third_party/rnnoise
 	url = https://github.com/xiph/rnnoise.git
 	ignore = dirty
+[submodule "libmello/third_party/webrtc-audio-processing"]
+	path = libmello/third_party/webrtc-audio-processing
+	url = https://github.com/helloooideeeeea/webrtc-audio-processing.git

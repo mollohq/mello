@@ -12,7 +12,7 @@ static constexpr int VAD_SAMPLE_RATE = 16000;
 static constexpr int VAD_CHUNK_SIZE = 512;
 static constexpr int VAD_CONTEXT_SIZE = 64;
 static constexpr int VAD_STATE_SIZE = 2 * 1 * 128;  // [2, 1, 128]
-static constexpr float VAD_THRESHOLD = 0.5f;
+static constexpr float VAD_THRESHOLD = 0.35f;
 
 class VoiceActivityDetector {
 public:

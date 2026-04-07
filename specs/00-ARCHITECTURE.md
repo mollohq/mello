@@ -150,7 +150,7 @@ Mello is a lightweight crew-based social platform with Parsec-tier streaming cap
 Mic ──▶ WASAPI Capture
             │
             ▼
-        Echo Cancel (Speex AEC)
+        Echo Cancel + AGC (WebRTC APM)
             │
             ▼
         Noise Suppress (RNNoise)
@@ -308,7 +308,8 @@ Server mixes/forwards
 | Audio Codec | Opus | BSD |
 | Noise Suppression | RNNoise | BSD |
 | Voice Activity | Silero VAD | MIT |
-| Echo Cancellation | Speex AEC | BSD |
+| Echo cancellation | WebRTC AEC3 | BSD |
+| Gain control | WebRTC AGC2 | BSD |
 | Video Capture | DXGI Desktop Duplication | Windows |
 | Video Encode | NVENC / AMF / QSV | Vendor SDK |
 | Video Decode | DXVA2 / NVDEC | Vendor SDK |

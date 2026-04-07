@@ -19,6 +19,7 @@ bool OpusEnc::initialize(int sample_rate, int channels, int bitrate) {
     opus_encoder_ctl(encoder_, OPUS_SET_SIGNAL(OPUS_SIGNAL_VOICE));
     opus_encoder_ctl(encoder_, OPUS_SET_INBAND_FEC(1));
     opus_encoder_ctl(encoder_, OPUS_SET_PACKET_LOSS_PERC(5));
+    opus_encoder_ctl(encoder_, OPUS_SET_DTX(1));
     return true;
 }
 

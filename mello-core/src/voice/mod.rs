@@ -238,6 +238,38 @@ impl VoiceManager {
         }
     }
 
+    pub fn set_echo_cancellation(&mut self, enabled: bool) {
+        if !self.ctx.is_null() {
+            unsafe {
+                mello_sys::mello_voice_set_echo_cancellation(self.ctx, enabled);
+            }
+        }
+    }
+
+    pub fn set_agc(&mut self, enabled: bool) {
+        if !self.ctx.is_null() {
+            unsafe {
+                mello_sys::mello_voice_set_agc(self.ctx, enabled);
+            }
+        }
+    }
+
+    pub fn set_input_volume(&mut self, volume: f32) {
+        if !self.ctx.is_null() {
+            unsafe {
+                mello_sys::mello_voice_set_input_volume(self.ctx, volume);
+            }
+        }
+    }
+
+    pub fn set_output_volume(&mut self, volume: f32) {
+        if !self.ctx.is_null() {
+            unsafe {
+                mello_sys::mello_voice_set_output_volume(self.ctx, volume);
+            }
+        }
+    }
+
     pub fn set_loopback(&mut self, enabled: bool) {
         if self.ctx.is_null() {
             return;
@@ -446,7 +478,12 @@ impl VoiceManager {
                 is_capturing: stats.is_capturing,
                 is_muted: stats.is_muted,
                 is_deafened: stats.is_deafened,
+                echo_cancellation_enabled: stats.echo_cancellation_enabled,
+                agc_enabled: stats.agc_enabled,
+                noise_suppression_enabled: stats.noise_suppression_enabled,
                 packets_encoded: stats.packets_encoded,
+                aec_capture_frames: stats.aec_capture_frames,
+                aec_render_frames: stats.aec_render_frames,
                 incoming_streams: stats.incoming_streams,
                 underrun_count: stats.underrun_count,
                 rtp_recv_total: stats.rtp_recv_total,

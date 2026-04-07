@@ -135,34 +135,42 @@ pub fn wire(ctx: &AppContext) {
     }
     {
         let s = ctx.settings.clone();
+        let cmd = ctx.cmd_tx.clone();
         ctx.app.on_setting_changed_input_volume(move |v| {
             let mut settings = s.borrow_mut();
             settings.input_volume = v;
             settings.save();
+            let _ = cmd.try_send(Command::SetInputVolume { volume: v });
         });
     }
     {
         let s = ctx.settings.clone();
+        let cmd = ctx.cmd_tx.clone();
         ctx.app.on_setting_changed_output_volume(move |v| {
             let mut settings = s.borrow_mut();
             settings.output_volume = v;
             settings.save();
+            let _ = cmd.try_send(Command::SetOutputVolume { volume: v });
         });
     }
     {
         let s = ctx.settings.clone();
+        let cmd = ctx.cmd_tx.clone();
         ctx.app.on_setting_changed_noise_suppression(move |v| {
             let mut settings = s.borrow_mut();
             settings.noise_suppression = v;
             settings.save();
+            let _ = cmd.try_send(Command::SetNoiseSuppression { enabled: v });
         });
     }
     {
         let s = ctx.settings.clone();
+        let cmd = ctx.cmd_tx.clone();
         ctx.app.on_setting_changed_echo_cancellation(move |v| {
             let mut settings = s.borrow_mut();
             settings.echo_cancellation = v;
             settings.save();
+            let _ = cmd.try_send(Command::SetEchoCancellation { enabled: v });
         });
     }
     {

@@ -3,6 +3,7 @@
 #include "audio_playback.hpp"
 #include "opus_codec.hpp"
 #include "noise_suppressor.hpp"
+#include "echo_canceller.hpp"
 #include "jitter_buffer.hpp"
 #include "device_enumerator.hpp"
 #include "vad.hpp"
@@ -40,6 +41,17 @@ public:
 
     void set_mute(bool muted);
     void set_deafen(bool deafened);
+    void set_input_volume(float vol) { input_gain_.store(vol, std::memory_order_relaxed); }
+    void set_output_volume(float vol) { output_gain_.store(vol, std::memory_order_relaxed); }
+    float input_volume() const { return input_gain_.load(std::memory_order_relaxed); }
+    float output_volume() const { return output_gain_.load(std::memory_order_relaxed); }
+    void set_echo_cancellation(bool enabled) { echo_canceller_.set_aec_enabled(enabled); }
+    void set_agc(bool enabled) { echo_canceller_.set_agc_enabled(enabled); }
+    bool echo_cancellation_enabled() const { return echo_canceller_.aec_enabled(); }
+    bool agc_enabled() const { return echo_canceller_.agc_enabled(); }
+    bool noise_suppression_enabled() const { return noise_suppressor_.is_enabled(); }
+    uint32_t aec_capture_frames() const { return echo_canceller_.capture_frames(); }
+    uint32_t aec_render_frames() const { return echo_canceller_.render_frames(); }
     bool is_muted() const { return muted_; }
     bool is_deafened() const { return deafened_; }
 
@@ -79,6 +91,7 @@ private:
 #endif
     OpusEnc encoder_;
     NoiseSuppressor noise_suppressor_;
+    EchoCanceller echo_canceller_;
     VoiceActivityDetector vad_;
     std::unordered_map<std::string, OpusDec> decoders_;
     std::unordered_map<std::string, JitterBuffer> jitter_buffers_;
@@ -102,6 +115,11 @@ private:
     std::atomic<bool> deafened_{false};
     std::atomic<bool> capturing_{false};
     std::atomic<float> input_level_{0.0f};
+    std::atomic<float> input_gain_{1.0f};
+    std::atomic<float> output_gain_{1.0f};
+
+    uint32_t get_pkt_ctr_ = 0;
+
     bool initialized_ = false;
 };
 

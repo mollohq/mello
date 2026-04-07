@@ -151,6 +151,9 @@ if(MSVC)
     target_compile_options(rnnoise PRIVATE /wd4244 /wd4305 /wd4267)
 endif()
 
+# WebRTC audio processing (AEC3 + AGC2) — CMake overlay for vendored submodule
+add_subdirectory(cmake/webrtc-audio-processing)
+
 # Platform-agnostic sources
 set(MELLO_SOURCES
     src/mello.cpp
@@ -158,6 +161,7 @@ set(MELLO_SOURCES
     src/audio/audio_pipeline.cpp
     src/audio/opus_codec.cpp
     src/audio/noise_suppressor.cpp
+    src/audio/echo_canceller.cpp
     src/audio/jitter_buffer.cpp
     src/audio/vad.cpp
     src/transport/peer_connection.cpp
@@ -275,6 +279,7 @@ target_link_libraries(mello
         Opus::opus
         LibDataChannel::LibDataChannel
         rnnoise
+        webrtc_audio_processing
         onnxruntime
 )
 
@@ -336,7 +341,7 @@ if(NOT EXISTS "${SILERO_VAD_MODEL}")
     message(STATUS "[mello] Silero VAD model downloaded")
 endif()
 
-install(TARGETS mello rnnoise
+install(TARGETS mello rnnoise webrtc_audio_processing
     ARCHIVE DESTINATION lib
     LIBRARY DESTINATION lib
     RUNTIME DESTINATION bin

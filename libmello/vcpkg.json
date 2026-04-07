@@ -13,6 +13,7 @@
       "name": "cppwinrt",
       "platform": "windows"
     },
-    "dav1d"
+    "dav1d",
+    "abseil"
   ]
 }

@@ -118,7 +118,12 @@ pub fn handle(ctx: &AppContext, event: Event) {
             is_capturing,
             is_muted,
             is_deafened,
+            echo_cancellation_enabled,
+            agc_enabled,
+            noise_suppression_enabled,
             packets_encoded,
+            aec_capture_frames,
+            aec_render_frames,
             incoming_streams,
             underrun_count,
             rtp_recv_total,
@@ -132,7 +137,12 @@ pub fn handle(ctx: &AppContext, event: Event) {
             ctx.app.set_dbg_capturing(is_capturing);
             ctx.app.set_dbg_muted(is_muted);
             ctx.app.set_dbg_deafened(is_deafened);
+            ctx.app.set_dbg_aec_enabled(echo_cancellation_enabled);
+            ctx.app.set_dbg_agc_enabled(agc_enabled);
+            ctx.app.set_dbg_ns_enabled(noise_suppression_enabled);
             ctx.app.set_dbg_packets(packets_encoded as i32);
+            ctx.app.set_dbg_aec_capture(aec_capture_frames as i32);
+            ctx.app.set_dbg_aec_render(aec_render_frames as i32);
             ctx.app.set_dbg_incoming_streams(incoming_streams);
             ctx.app.set_dbg_underruns(underrun_count);
             ctx.app.set_dbg_rtp_recv(rtp_recv_total);
