@@ -4,7 +4,6 @@ members = [
     "client",
     "mello-core",
     "mello-sys",
-    "tools/rtp-client-test",
 ]
 
 [workspace.package]
