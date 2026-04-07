@@ -118,10 +118,6 @@ private:
     std::atomic<float> input_gain_{1.0f};
     std::atomic<float> output_gain_{1.0f};
 
-    static constexpr int PRE_ROLL_FRAMES = 3;
-    std::vector<uint8_t> pre_roll_encoded_[3];
-    int pre_roll_idx_ = 0;
-    bool was_speaking_ = false;
     uint32_t get_pkt_ctr_ = 0;
 
     bool initialized_ = false;
