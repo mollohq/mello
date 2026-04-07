@@ -1,6 +1,7 @@
 #include "echo_canceller.hpp"
 #include "../util/log.hpp"
 #include "modules/audio_processing/include/audio_processing.h"
+#include <cmath>
 
 namespace mello::audio {
 
@@ -38,6 +39,8 @@ bool EchoCanceller::initialize(int sample_rate, int channels) {
         return false;
     }
 
+    render_scratch_.resize(APM_FRAME_SIZE);
+
     MELLO_LOG_INFO("aec", "initialized (rate=%d, ch=%d, aec=%d, agc=%d)",
                    sample_rate, channels, aec_enabled_.load(), agc_enabled_.load());
     return true;
@@ -68,10 +71,27 @@ void EchoCanceller::apply_config() {
     apm_->ApplyConfig(cfg);
 }
 
+static float rms_i16(const int16_t* buf, int n) {
+    double sum = 0.0;
+    for (int i = 0; i < n; ++i) {
+        double s = buf[i] / 32768.0;
+        sum += s * s;
+    }
+    return static_cast<float>(std::sqrt(sum / n));
+}
+
 void EchoCanceller::process_capture(int16_t* samples, int count) {
     if (!apm_ || (!aec_enabled_.load(std::memory_order_relaxed) &&
                   !agc_enabled_.load(std::memory_order_relaxed))) {
         return;
+    }
+
+    uint32_t frame_num = capture_frames_.load(std::memory_order_relaxed);
+    bool should_log = (frame_num % 500) == 0;
+
+    float pre_rms = 0.0f;
+    if (should_log) {
+        pre_rms = rms_i16(samples, count);
     }
 
     webrtc::StreamConfig stream_cfg(sample_rate_, channels_);
@@ -84,6 +104,14 @@ void EchoCanceller::process_capture(int16_t* samples, int count) {
         }
         capture_frames_.fetch_add(1, std::memory_order_relaxed);
     }
+
+    if (should_log) {
+        float post_rms = rms_i16(samples, count);
+        MELLO_LOG_DEBUG("aec", "capture: pre_rms=%.4f post_rms=%.4f ratio=%.2f frames=%u",
+                        pre_rms, post_rms,
+                        pre_rms > 0.0001f ? post_rms / pre_rms : 0.0f,
+                        capture_frames_.load(std::memory_order_relaxed));
+    }
 }
 
 void EchoCanceller::process_render(const int16_t* samples, int count) {
@@ -91,12 +119,21 @@ void EchoCanceller::process_render(const int16_t* samples, int count) {
         return;
     }
 
+    uint32_t frame_num = render_frames_.load(std::memory_order_relaxed);
+    bool should_log = (frame_num % 500) == 0;
+
+    if (should_log) {
+        float rms = rms_i16(samples, count);
+        MELLO_LOG_DEBUG("aec", "render: rms=%.4f count=%d frames=%u",
+                        rms, count, frame_num);
+    }
+
     webrtc::StreamConfig stream_cfg(sample_rate_, channels_);
 
     for (int offset = 0; offset + APM_FRAME_SIZE <= count; offset += APM_FRAME_SIZE) {
         int err = apm_->ProcessReverseStream(
             samples + offset, stream_cfg, stream_cfg,
-            const_cast<int16_t*>(samples + offset));
+            render_scratch_.data());
         if (err != 0) {
             MELLO_LOG_WARN("aec", "ProcessReverseStream error %d", err);
         }

@@ -264,6 +264,12 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
         let _ = cmd_tx.try_send(Command::SetNoiseSuppression {
             enabled: s.noise_suppression,
         });
+        let _ = cmd_tx.try_send(Command::SetInputVolume {
+            volume: s.input_volume,
+        });
+        let _ = cmd_tx.try_send(Command::SetOutputVolume {
+            volume: s.output_volume,
+        });
     }
 
     // Restore saved PTT hotkey

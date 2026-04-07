@@ -450,6 +450,12 @@ impl Client {
                     if enabled { "enabled" } else { "disabled" }
                 );
             }
+            Command::SetInputVolume { volume } => {
+                self.voice.set_input_volume(volume);
+            }
+            Command::SetOutputVolume { volume } => {
+                self.voice.set_output_volume(volume);
+            }
             Command::SetLoopback { enabled } => {
                 self.voice.set_loopback(enabled);
             }

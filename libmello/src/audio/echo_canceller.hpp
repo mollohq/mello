@@ -2,6 +2,7 @@
 #include <cstdint>
 #include <atomic>
 #include <memory>
+#include <vector>
 
 namespace webrtc {
 class AudioProcessing;
@@ -48,6 +49,7 @@ private:
     std::atomic<bool> agc_enabled_{true};
     std::atomic<uint32_t> capture_frames_{0};
     std::atomic<uint32_t> render_frames_{0};
+    std::vector<int16_t> render_scratch_;
 };
 
 } // namespace mello::audio

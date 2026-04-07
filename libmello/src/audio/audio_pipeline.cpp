@@ -202,6 +202,16 @@ void AudioPipeline::on_captured_audio(const int16_t* samples, size_t count) {
         }
 
         if (!muted_) {
+            float ig = input_gain_.load(std::memory_order_relaxed);
+            if (ig != 1.0f) {
+                for (int i = 0; i < FRAME_SIZE; ++i) {
+                    int32_t s = static_cast<int32_t>(capture_accum_[i] * ig);
+                    if (s > 32767) s = 32767;
+                    if (s < -32768) s = -32768;
+                    capture_accum_[i] = static_cast<int16_t>(s);
+                }
+            }
+
             echo_canceller_.process_capture(capture_accum_.data(), FRAME_SIZE);
             vad_.feed(capture_accum_.data(), FRAME_SIZE);
             noise_suppressor_.process(capture_accum_.data(), FRAME_SIZE);
@@ -348,7 +358,31 @@ size_t AudioPipeline::mix_output(int16_t* out, size_t count) {
         return 0;
     }
 
-    // Feed the mixed playback signal to AEC as the far-end reference
+    static uint32_t mix_log_ctr = 0;
+    bool should_log = (mix_log_ctr++ % 500) == 0;
+
+    if (should_log) {
+        double sum = 0.0;
+        for (size_t i = 0; i < count; ++i) {
+            double s = out[i] / 32768.0;
+            sum += s * s;
+        }
+        float rms = static_cast<float>(std::sqrt(sum / count));
+        MELLO_LOG_DEBUG("pipeline", "mix_output: pre_rms=%.4f count=%zu peers=%zu",
+                        rms, count, peer_buffers_.size());
+    }
+
+    float og = output_gain_.load(std::memory_order_relaxed);
+    if (og != 1.0f) {
+        for (size_t i = 0; i < count; ++i) {
+            int32_t s = static_cast<int32_t>(out[i] * og);
+            if (s > 32767) s = 32767;
+            if (s < -32768) s = -32768;
+            out[i] = static_cast<int16_t>(s);
+        }
+    }
+
+    // Feed the mixed (and volume-scaled) playback signal to AEC as far-end reference
     echo_canceller_.process_render(out, static_cast<int>(count));
 
     return count;

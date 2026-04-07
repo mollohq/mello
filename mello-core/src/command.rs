@@ -146,6 +146,12 @@ pub enum Command {
     SetNoiseSuppression {
         enabled: bool,
     },
+    SetInputVolume {
+        volume: f32,
+    },
+    SetOutputVolume {
+        volume: f32,
+    },
     SetLoopback {
         enabled: bool,
     },

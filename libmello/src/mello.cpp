@@ -172,6 +172,18 @@ void mello_voice_set_agc(MelloContext* ctx, bool enabled) {
     } catch (...) {}
 }
 
+void mello_voice_set_input_volume(MelloContext* ctx, float volume) {
+    try {
+        if (ctx) ctx_cast(ctx)->audio().set_input_volume(volume);
+    } catch (...) {}
+}
+
+void mello_voice_set_output_volume(MelloContext* ctx, float volume) {
+    try {
+        if (ctx) ctx_cast(ctx)->audio().set_output_volume(volume);
+    } catch (...) {}
+}
+
 float mello_voice_get_input_level(MelloContext* ctx) {
     if (!ctx) return 0.0f;
     try {

@@ -254,6 +254,22 @@ impl VoiceManager {
         }
     }
 
+    pub fn set_input_volume(&mut self, volume: f32) {
+        if !self.ctx.is_null() {
+            unsafe {
+                mello_sys::mello_voice_set_input_volume(self.ctx, volume);
+            }
+        }
+    }
+
+    pub fn set_output_volume(&mut self, volume: f32) {
+        if !self.ctx.is_null() {
+            unsafe {
+                mello_sys::mello_voice_set_output_volume(self.ctx, volume);
+            }
+        }
+    }
+
     pub fn set_loopback(&mut self, enabled: bool) {
         if self.ctx.is_null() {
             return;

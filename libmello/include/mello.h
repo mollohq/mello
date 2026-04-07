@@ -101,6 +101,12 @@ MELLO_API void mello_voice_set_echo_cancellation(MelloContext* ctx, bool enabled
 /** Enable/disable automatic gain control (AGC2). Enabled by default. */
 MELLO_API void mello_voice_set_agc(MelloContext* ctx, bool enabled);
 
+/** Set input (microphone) volume. 0.0 = silent, 1.0 = unity gain. */
+MELLO_API void mello_voice_set_input_volume(MelloContext* ctx, float volume);
+
+/** Set output (speaker) volume. 0.0 = silent, 1.0 = unity gain. */
+MELLO_API void mello_voice_set_output_volume(MelloContext* ctx, float volume);
+
 /** Get current input audio level (0.0 = silence, 1.0 = peak). Updated per frame. */
 MELLO_API float mello_voice_get_input_level(MelloContext* ctx);
 

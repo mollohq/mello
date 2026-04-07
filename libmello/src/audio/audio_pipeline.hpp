@@ -41,6 +41,10 @@ public:
 
     void set_mute(bool muted);
     void set_deafen(bool deafened);
+    void set_input_volume(float vol) { input_gain_.store(vol, std::memory_order_relaxed); }
+    void set_output_volume(float vol) { output_gain_.store(vol, std::memory_order_relaxed); }
+    float input_volume() const { return input_gain_.load(std::memory_order_relaxed); }
+    float output_volume() const { return output_gain_.load(std::memory_order_relaxed); }
     void set_echo_cancellation(bool enabled) { echo_canceller_.set_aec_enabled(enabled); }
     void set_agc(bool enabled) { echo_canceller_.set_agc_enabled(enabled); }
     bool echo_cancellation_enabled() const { return echo_canceller_.aec_enabled(); }
@@ -111,6 +115,8 @@ private:
     std::atomic<bool> deafened_{false};
     std::atomic<bool> capturing_{false};
     std::atomic<float> input_level_{0.0f};
+    std::atomic<float> input_gain_{1.0f};
+    std::atomic<float> output_gain_{1.0f};
     bool initialized_ = false;
 };
 
