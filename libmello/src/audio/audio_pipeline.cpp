@@ -216,24 +216,23 @@ void AudioPipeline::on_captured_audio(const int16_t* samples, size_t count) {
             vad_.feed(capture_accum_.data(), FRAME_SIZE);
             noise_suppressor_.process(capture_accum_.data(), FRAME_SIZE);
 
-            if (vad_.is_speaking()) {
-                uint8_t packet[MAX_PACKET_SIZE];
-                int encoded = encoder_.encode(capture_accum_.data(), FRAME_SIZE,
-                                              packet, MAX_PACKET_SIZE);
-                if (encoded > 0) {
-                    std::lock_guard<std::mutex> olock(outgoing_mutex_);
-                    EncodedPacket pkt;
-                    pkt.data.assign(packet, packet + encoded);
-                    pkt.sequence = sequence_++;
-                    outgoing_.push(std::move(pkt));
+            uint8_t raw_pkt[MAX_PACKET_SIZE];
+            int encoded = encoder_.encode(capture_accum_.data(), FRAME_SIZE,
+                                          raw_pkt, MAX_PACKET_SIZE);
 
-                    if ((pkt.sequence % 250) == 0) {
-                        MELLO_LOG_DEBUG("pipeline", "encode: seq=%u size=%d bytes, vad=%.2f, queue=%zu",
-                                        pkt.sequence, encoded, vad_.probability(), outgoing_.size());
-                    }
-                } else if (encoded < 0) {
-                    MELLO_LOG_WARN("pipeline", "opus encode error: %d", encoded);
+            if (encoded > 0 && vad_.is_speaking()) {
+                std::lock_guard<std::mutex> olock(outgoing_mutex_);
+                EncodedPacket pkt;
+                pkt.data.assign(raw_pkt, raw_pkt + encoded);
+                pkt.sequence = sequence_++;
+                outgoing_.push(std::move(pkt));
+
+                if ((pkt.sequence % 250) == 0 || pkt.sequence < 5) {
+                    MELLO_LOG_DEBUG("pipeline", "encode: seq=%u size=%d bytes, vad=%.2f, queue=%zu",
+                                    pkt.sequence, encoded, vad_.probability(), outgoing_.size());
                 }
+            } else if (encoded < 0) {
+                MELLO_LOG_WARN("pipeline", "opus encode error: %d", encoded);
             }
         }
         capture_accum_.erase(capture_accum_.begin(),
@@ -249,15 +248,24 @@ int AudioPipeline::get_packet(uint8_t* buffer, int buffer_size) {
     int payload_size = static_cast<int>(pkt.data.size());
     int total_size = payload_size + 4;
     if (total_size > buffer_size) {
+        MELLO_LOG_WARN("pipeline", "get_packet DROP: seq=%u pkt=%d > buf=%d",
+                       pkt.sequence, total_size, buffer_size);
         outgoing_.pop();
         return 0;
     }
-    buffer[0] = static_cast<uint8_t>(pkt.sequence);
-    buffer[1] = static_cast<uint8_t>(pkt.sequence >> 8);
-    buffer[2] = static_cast<uint8_t>(pkt.sequence >> 16);
-    buffer[3] = static_cast<uint8_t>(pkt.sequence >> 24);
+    uint32_t seq = pkt.sequence;
+    buffer[0] = static_cast<uint8_t>(seq);
+    buffer[1] = static_cast<uint8_t>(seq >> 8);
+    buffer[2] = static_cast<uint8_t>(seq >> 16);
+    buffer[3] = static_cast<uint8_t>(seq >> 24);
     std::memcpy(buffer + 4, pkt.data.data(), payload_size);
     outgoing_.pop();
+
+    get_pkt_ctr_++;
+    if (get_pkt_ctr_ <= 20 || (get_pkt_ctr_ % 500) == 0) {
+        MELLO_LOG_DEBUG("pipeline", "get_packet: #%u seq=%u size=%d queue_left=%zu",
+                        get_pkt_ctr_, seq, total_size, outgoing_.size());
+    }
     return total_size;
 }
 
