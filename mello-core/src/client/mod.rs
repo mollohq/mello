@@ -437,6 +437,19 @@ impl Client {
             Command::SetPlaybackDevice { id } => {
                 self.voice.set_playback_device(&id);
             }
+            Command::SetEchoCancellation { enabled } => {
+                self.voice.set_echo_cancellation(enabled);
+            }
+            Command::SetAgc { enabled } => {
+                self.voice.set_agc(enabled);
+            }
+            Command::SetNoiseSuppression { enabled } => {
+                // TODO: Wire noise_suppression toggle to libmello when C API is added
+                log::info!(
+                    "Noise suppression {}",
+                    if enabled { "enabled" } else { "disabled" }
+                );
+            }
             Command::SetLoopback { enabled } => {
                 self.voice.set_loopback(enabled);
             }

@@ -198,6 +198,9 @@ export component DebugPanel inherits Rectangle {
     in property <bool> is-capturing: false;
     in property <bool> is-muted: false;
     in property <bool> is-deafened: false;
+    in property <bool> aec-enabled: false;
+    in property <bool> agc-enabled: false;
+    in property <bool> ns-enabled: false;
     in property <int> packets-encoded: 0;
     in property <int> incoming-streams: 0;
     in property <int> underruns: 0;
@@ -328,6 +331,27 @@ export component DebugPanel inherits Rectangle {
                 StatusDot { label: root.is-muted ? "Muted ✓" : "Unmuted"; active: !root.is-muted; }
                 StatusDot { label: root.is-deafened ? "Deaf ✓" : "Listening"; active: !root.is-deafened; }
             }
+        }
+
+        Rectangle { height: 2px; }
+
+        // Audio processing pipeline status
+        Rectangle { height: 1px; background: Theme.graphic-light; }
+
+        Text {
+            text: "Audio Processing";
+            font-family: Theme.font-mono;
+            font-size: 9px;
+            font-weight: 600;
+            color: Theme.text-tertiary;
+        }
+
+        HorizontalLayout {
+            spacing: 16px;
+
+            StatusDot { label: root.aec-enabled ? "AEC ON" : "AEC OFF"; active: root.aec-enabled; }
+            StatusDot { label: root.agc-enabled ? "AGC ON" : "AGC OFF"; active: root.agc-enabled; }
+            StatusDot { label: root.ns-enabled ? "NS ON" : "NS OFF"; active: root.ns-enabled; }
         }
 
         Rectangle { height: 2px; }

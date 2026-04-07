@@ -137,6 +137,15 @@ pub enum Command {
     SetPlaybackDevice {
         id: String,
     },
+    SetEchoCancellation {
+        enabled: bool,
+    },
+    SetAgc {
+        enabled: bool,
+    },
+    SetNoiseSuppression {
+        enabled: bool,
+    },
     SetLoopback {
         enabled: bool,
     },

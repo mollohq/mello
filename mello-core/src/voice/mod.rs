@@ -238,6 +238,22 @@ impl VoiceManager {
         }
     }
 
+    pub fn set_echo_cancellation(&mut self, enabled: bool) {
+        if !self.ctx.is_null() {
+            unsafe {
+                mello_sys::mello_voice_set_echo_cancellation(self.ctx, enabled);
+            }
+        }
+    }
+
+    pub fn set_agc(&mut self, enabled: bool) {
+        if !self.ctx.is_null() {
+            unsafe {
+                mello_sys::mello_voice_set_agc(self.ctx, enabled);
+            }
+        }
+    }
+
     pub fn set_loopback(&mut self, enabled: bool) {
         if self.ctx.is_null() {
             return;
@@ -446,6 +462,9 @@ impl VoiceManager {
                 is_capturing: stats.is_capturing,
                 is_muted: stats.is_muted,
                 is_deafened: stats.is_deafened,
+                echo_cancellation_enabled: stats.echo_cancellation_enabled,
+                agc_enabled: stats.agc_enabled,
+                noise_suppression_enabled: stats.noise_suppression_enabled,
                 packets_encoded: stats.packets_encoded,
                 incoming_streams: stats.incoming_streams,
                 underrun_count: stats.underrun_count,

@@ -12,7 +12,7 @@
 libmello is the C++ library that handles all low-level audio/video capture, encoding, decoding, and P2P transport. It exposes a pure C API for FFI compatibility with Rust and future mobile platforms.
 
 **Key Responsibilities:**
-- Audio capture (WASAPI), processing (RNNoise, Silero VAD), and encoding (Opus)
+- Audio capture (WASAPI), processing (WebRTC AEC3 + AGC2, RNNoise, Silero VAD), and encoding (Opus)
 - Video capture (DXGI), encoding (NVENC/AMF/QSV), and decoding
 - P2P transport (libdatachannel)
 - ICE/STUN/TURN connectivity
@@ -35,6 +35,7 @@ libmello/
 │   │   ├── audio_pipeline.hpp/cpp
 │   │   ├── audio_session_win.hpp/cpp # Windows ducking prevention
 │   │   ├── capture_wasapi.hpp/cpp  # Windows audio capture
+│   │   ├── echo_canceller.hpp/cpp  # WebRTC AEC3 + AGC2 (APM)
 │   │   ├── playback_wasapi.hpp/cpp # Windows audio playback
 │   │   ├── processing.hpp/cpp      # RNNoise + Silero VAD wrapper
 │   │   ├── opus_encoder.hpp/cpp
@@ -65,6 +66,7 @@ libmello/
 │   ├── libdatachannel/
 │   ├── opus/
 │   ├── rnnoise/
+│   ├── webrtc-audio-processing/    # Submodule: github.com/helloooideeeeea/webrtc-audio-processing (WebRTC APM)
 │   └── silero-vad/                 # ONNX model + runtime
 │
 ├── models/                         # ML model files (Silero VAD .onnx)
@@ -123,8 +125,8 @@ All functions return `MelloResult` enum. On failure, `mello_get_error()` returns
 │                                                                         │
 │  CAPTURE PATH:                                                          │
 │  ┌─────────┐   ┌─────────┐   ┌─────────┐   ┌─────────┐   ┌─────────┐   │
-│  │ WASAPI  │──▶│  Echo   │──▶│ RNNoise │──▶│ Silero  │──▶│  Opus   │   │
-│  │ Capture │   │ Cancel  │   │ Denoise │   │   VAD   │   │ Encode  │   │
+│  │ WASAPI  │──▶│AEC3+AGC2│──▶│ RNNoise │──▶│ Silero  │──▶│  Opus   │   │
+│  │ Capture │   │  (APM)  │   │ Denoise │   │   VAD   │   │ Encode  │   │
 │  └─────────┘   └─────────┘   └─────────┘   └─────────┘   └─────────┘   │
 │                                                │              │         │
 │                                                ▼              ▼         │
@@ -141,6 +143,7 @@ All functions return `MelloResult` enum. On failure, `mello_get_error()` returns
 
 ### Key design decisions
 
+- **WebRTC APM (AEC3 + AGC2):** Runs first on the raw mic after WASAPI capture (AEC needs the speaker reference from mixed playback). Then RNNoise → Silero VAD → Opus.
 - **RNNoise over alternatives:** Real-time, small model (<100KB), no GPU needed, well-tested in voice comms. Runs at 48kHz which matches Opus.
 - **Silero VAD:** ONNX-based neural VAD with hysteresis (3 speech frames to activate, 15 silence frames to deactivate). More accurate than RNNoise's built-in VAD for detecting speech vs. keyboard/ambient noise.
 - **Opus at 64kbps stereo:** Good quality for voice, well within P2P bandwidth budget. Frame size is 20ms (960 samples at 48kHz).

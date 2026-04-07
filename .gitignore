@@ -45,7 +45,9 @@ logs/
 
 # Temp files
 temp/
+build-test/
 build_test/
+libmello/build-test/
 vpk-out/
 dist/
 

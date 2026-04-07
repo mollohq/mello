@@ -114,6 +114,10 @@ bool AudioPipeline::initialize() {
         MELLO_LOG_ERROR("pipeline", "noise suppressor init failed");
         return false;
     }
+    if (!echo_canceller_.initialize(SAMPLE_RATE, CHANNELS)) {
+        MELLO_LOG_ERROR("pipeline", "echo canceller init failed");
+        return false;
+    }
 
     std::string model_path = find_model_path();
     if (model_path.empty() || !vad_.initialize(model_path)) {
@@ -141,6 +145,7 @@ void AudioPipeline::shutdown() {
     MELLO_LOG_INFO("pipeline", "shutting down");
     stop_capture();
     if (playback_) playback_->stop();
+    echo_canceller_.shutdown();
     noise_suppressor_.shutdown();
     vad_.shutdown();
     capture_.reset();
@@ -197,6 +202,7 @@ void AudioPipeline::on_captured_audio(const int16_t* samples, size_t count) {
         }
 
         if (!muted_) {
+            echo_canceller_.process_capture(capture_accum_.data(), FRAME_SIZE);
             vad_.feed(capture_accum_.data(), FRAME_SIZE);
             noise_suppressor_.process(capture_accum_.data(), FRAME_SIZE);
 
@@ -339,6 +345,9 @@ size_t AudioPipeline::mix_output(int16_t* out, size_t count) {
         underrun_count_.fetch_add(1, std::memory_order_relaxed);
         return 0;
     }
+
+    // Feed the mixed playback signal to AEC as the far-end reference
+    echo_canceller_.process_render(out, static_cast<int>(count));
 
     return count;
 }

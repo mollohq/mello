@@ -160,6 +160,18 @@ void mello_voice_set_vad_callback(
     } catch (...) {}
 }
 
+void mello_voice_set_echo_cancellation(MelloContext* ctx, bool enabled) {
+    try {
+        if (ctx) ctx_cast(ctx)->audio().set_echo_cancellation(enabled);
+    } catch (...) {}
+}
+
+void mello_voice_set_agc(MelloContext* ctx, bool enabled) {
+    try {
+        if (ctx) ctx_cast(ctx)->audio().set_agc(enabled);
+    } catch (...) {}
+}
+
 float mello_voice_get_input_level(MelloContext* ctx) {
     if (!ctx) return 0.0f;
     try {
@@ -398,6 +410,9 @@ void mello_get_debug_stats(MelloContext* ctx, MelloDebugStats* out) {
         out->is_capturing    = audio.is_capturing();
         out->is_muted        = audio.is_muted();
         out->is_deafened     = audio.is_deafened();
+        out->echo_cancellation_enabled = audio.echo_cancellation_enabled();
+        out->agc_enabled     = audio.agc_enabled();
+        out->noise_suppression_enabled = audio.noise_suppression_enabled();
         out->packets_encoded = audio.packets_encoded();
         out->incoming_streams = audio.active_streams();
         out->underrun_count  = audio.underrun_count();
