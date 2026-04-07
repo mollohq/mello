@@ -214,25 +214,28 @@ void AudioPipeline::on_captured_audio(const int16_t* samples, size_t count) {
 
             echo_canceller_.process_capture(capture_accum_.data(), FRAME_SIZE);
             vad_.feed(capture_accum_.data(), FRAME_SIZE);
-            noise_suppressor_.process(capture_accum_.data(), FRAME_SIZE);
 
-            uint8_t raw_pkt[MAX_PACKET_SIZE];
-            int encoded = encoder_.encode(capture_accum_.data(), FRAME_SIZE,
-                                          raw_pkt, MAX_PACKET_SIZE);
+            if (vad_.is_speaking()) {
+                noise_suppressor_.process(capture_accum_.data(), FRAME_SIZE);
 
-            if (encoded > 0 && vad_.is_speaking()) {
-                std::lock_guard<std::mutex> olock(outgoing_mutex_);
-                EncodedPacket pkt;
-                pkt.data.assign(raw_pkt, raw_pkt + encoded);
-                pkt.sequence = sequence_++;
-                outgoing_.push(std::move(pkt));
+                uint8_t raw_pkt[MAX_PACKET_SIZE];
+                int encoded = encoder_.encode(capture_accum_.data(), FRAME_SIZE,
+                                              raw_pkt, MAX_PACKET_SIZE);
 
-                if ((pkt.sequence % 250) == 0 || pkt.sequence < 5) {
-                    MELLO_LOG_DEBUG("pipeline", "encode: seq=%u size=%d bytes, vad=%.2f, queue=%zu",
-                                    pkt.sequence, encoded, vad_.probability(), outgoing_.size());
+                if (encoded > 0) {
+                    std::lock_guard<std::mutex> olock(outgoing_mutex_);
+                    EncodedPacket pkt;
+                    pkt.data.assign(raw_pkt, raw_pkt + encoded);
+                    pkt.sequence = sequence_++;
+                    outgoing_.push(std::move(pkt));
+
+                    if ((pkt.sequence % 250) == 0 || pkt.sequence < 5) {
+                        MELLO_LOG_DEBUG("pipeline", "encode: seq=%u size=%d bytes, vad=%.2f, queue=%zu",
+                                        pkt.sequence, encoded, vad_.probability(), outgoing_.size());
+                    }
+                } else if (encoded < 0) {
+                    MELLO_LOG_WARN("pipeline", "opus encode error: %d", encoded);
                 }
-            } else if (encoded < 0) {
-                MELLO_LOG_WARN("pipeline", "opus encode error: %d", encoded);
             }
         }
         capture_accum_.erase(capture_accum_.begin(),
