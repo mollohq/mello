@@ -1,7 +1,108 @@
 import { Theme } from "../theme.slint";
 import { FeedCardData } from "../types.slint";
 
-// Hero clip card (2x wide, 2x tall)
+component WaveformBars inherits Rectangle {
+    in property <bool> large: false;
+    in property <bool> overlay: false;
+
+    preferred-height: large ? 72px : 48px;
+    background: overlay ? transparent : #1a1a22;
+    border-radius: overlay ? 0px : 4px;
+
+    HorizontalLayout {
+        alignment: center;
+        spacing: large ? 3px : 2px;
+        padding-left: large ? 20px : 12px;
+        padding-right: large ? 20px : 12px;
+
+        for h in [0.35, 0.7, 1.0, 0.5, 0.9, 0.4, 0.8, 0.25, 0.65, 1.0, 0.45, 0.75, 0.3, 0.85, 0.55, 0.95, 0.35, 0.7, 0.2, 0.6]: Rectangle {
+            width: large ? 3px : 2px;
+
+            Rectangle {
+                width: parent.width;
+                height: (large ? 50px : 30px) * h;
+                y: (parent.height - self.height) / 2;
+                border-radius: large ? 2px : 1px;
+                background: Theme.accent;
+                opacity: 0.5 + h * 0.5;
+            }
+        }
+    }
+}
+
+component AvatarDot inherits Rectangle {
+    in property <string> initials;
+    in property <int> color-index: 0;
+
+    width: 18px;
+    height: 18px;
+    border-radius: 4px;
+    border-width: 2px;
+    border-color: #222226;
+    background: color-index == 0 ? #EB4D5F :
+                color-index == 1 ? #4a9eff :
+                color-index == 2 ? #4ade80 :
+                color-index == 3 ? #a78bfa : #f59e0b;
+
+    Text {
+        text: initials;
+        font-size: 7px;
+        font-weight: 600;
+        color: white;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
+
+component ClipBadge inherits Rectangle {
+    in property <bool> small: false;
+
+    width: small ? 42px : 52px;
+    height: small ? 20px : 22px;
+    border-radius: small ? 4px : 5px;
+    background: Theme.accent;
+
+    HorizontalLayout {
+        alignment: center;
+        spacing: 3px;
+
+        Image {
+            source: @image-url("../icons/scissors.svg");
+            colorize: white;
+            width: small ? 9px : 10px;
+            height: small ? 9px : 10px;
+            y: (parent.height - self.height) / 2;
+        }
+
+        Text {
+            text: "CLIP";
+            font-size: small ? 9px : 10px;
+            font-weight: 700;
+            color: white;
+            letter-spacing: 0.5px;
+            vertical-alignment: center;
+        }
+    }
+}
+
+component PlayButton inherits Rectangle {
+    in property <bool> small: false;
+
+    width: small ? 32px : 52px;
+    height: small ? 32px : 52px;
+    border-radius: small ? 16px : 26px;
+    background: #00000055;
+
+    Text {
+        text: "▶";
+        font-size: small ? 12px : 18px;
+        color: white;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
+
+// Hero clip card (2x wide)
 component HeroClipCard inherits Rectangle {
     in property <FeedCardData> card;
     callback play-clicked(string);
@@ -15,65 +116,48 @@ component HeroClipCard inherits Rectangle {
     VerticalLayout {
         // Thumbnail area
         Rectangle {
-            height: 300px;
+            vertical-stretch: 3;
+            min-height: 180px;
             background: @linear-gradient(135deg, #0d1a0d 0%, #0a1520 40%, #151525 100%);
 
-            // Clip badge
-            Rectangle {
+            // Game watermark
+            Text {
+                text: card.game-name != "" ? card.game-name : "";
+                font-size: 48px;
+                font-weight: 800;
+                color: #ffffff06;
+                letter-spacing: 6px;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+
+            WaveformBars {
+                large: true;
+                overlay: true;
+                y: parent.height - self.height - 4px;
+                width: parent.width;
+                opacity: 0.6;
+            }
+
+            ClipBadge {
                 x: 12px;
                 y: 12px;
-                width: 48px;
-                height: 22px;
-                border-radius: 5px;
-                background: Theme.accent;
-
-                Text {
-                    text: "✂ CLIP";
-                    font-size: 10px;
-                    font-weight: 700;
-                    color: white;
-                    letter-spacing: 0.5px;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
-                }
             }
 
-            // Play button
-            Rectangle {
+            PlayButton {
                 x: (parent.width - self.width) / 2;
                 y: (parent.height - self.height) / 2;
-                width: 52px;
-                height: 52px;
-                border-radius: 26px;
-                background: #00000055;
-
-                // Play triangle
-                Rectangle {
-                    x: (parent.width - self.width) / 2 + 2px;
-                    y: (parent.height - self.height) / 2;
-                    width: 0px;
-                    height: 0px;
-                    // Simple play indicator
-                    Text {
-                        text: "▶";
-                        font-size: 20px;
-                        color: white;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
-                    }
-                }
             }
 
-            // Duration badge
             Rectangle {
                 x: parent.width - self.width - 10px;
                 y: parent.height - self.height - 10px;
-                width: 50px;
+                width: dur-text.preferred-width + 16px;
                 height: 22px;
                 border-radius: 4px;
                 background: #000000aa;
 
-                Text {
+                dur-text := Text {
                     text: card.duration;
                     font-size: 11px;
                     color: white;
@@ -89,9 +173,10 @@ component HeroClipCard inherits Rectangle {
             padding-left: 14px;
             padding-right: 14px;
             spacing: 6px;
+            vertical-stretch: 0;
 
             Text {
-                text: card.actor-name + " clipped that";
+                text: card.title != "" ? card.title : card.actor-name + " clipped that";
                 font-size: 14px;
                 font-weight: 500;
                 color: Theme.text-primary;
@@ -99,38 +184,33 @@ component HeroClipCard inherits Rectangle {
 
             HorizontalLayout {
                 spacing: 8px;
-                height: 16px;
+                height: 20px;
 
-                Text {
-                    text: card.game-name != "" ? card.game-name : "Voice";
-                    font-size: 11px;
-                    color: #888888;
-                    vertical-alignment: center;
-                }
+                if card.participant-count > 0: HorizontalLayout {
+                    spacing: -7px;
+                    width: self.preferred-width;
 
-                Text {
-                    text: "·";
-                    font-size: 11px;
-                    color: #888888;
-                    vertical-alignment: center;
-                }
-
-                Text {
-                    text: card.duration;
-                    font-size: 11px;
-                    color: #888888;
-                    vertical-alignment: center;
-                }
-
-                Text {
-                    text: "·";
-                    font-size: 11px;
-                    color: #888888;
-                    vertical-alignment: center;
+                    AvatarDot { initials: card.actor-initials; color-index: 0; }
+                    if card.participant-count > 1: AvatarDot { initials: ""; color-index: 1; }
+                    if card.participant-count > 2: AvatarDot { initials: ""; color-index: 2; }
                 }
 
                 Text {
                     text: card.timestamp;
+                    font-size: 11px;
+                    color: #888888;
+                    vertical-alignment: center;
+                }
+
+                if card.game-name != "": Text {
+                    text: "·";
+                    font-size: 11px;
+                    color: #555555;
+                    vertical-alignment: center;
+                }
+
+                if card.game-name != "": Text {
+                    text: card.game-name;
                     font-size: 11px;
                     color: #888888;
                     vertical-alignment: center;
@@ -158,61 +238,55 @@ component ClipCard inherits Rectangle {
 
     VerticalLayout {
         // Waveform area
-        Rectangle {
-            height: 110px;
-            background: @linear-gradient(135deg, #0d1a0d 0%, #151525 100%);
+        WaveformBars {
+            large: false;
+            vertical-stretch: 1;
+            min-height: 60px;
 
-            Rectangle {
+            ClipBadge {
+                small: true;
                 x: 8px;
                 y: 8px;
-                width: 42px;
-                height: 20px;
-                border-radius: 4px;
-                background: Theme.accent;
-
-                Text {
-                    text: "✂ CLIP";
-                    font-size: 9px;
-                    font-weight: 700;
-                    color: white;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
-                }
             }
 
-            Rectangle {
+            PlayButton {
+                small: true;
                 x: (parent.width - self.width) / 2;
                 y: (parent.height - self.height) / 2;
-                width: 32px;
-                height: 32px;
-                border-radius: 16px;
-                background: #00000055;
-
-                Text {
-                    text: "▶";
-                    font-size: 14px;
-                    color: white;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
-                }
             }
         }
 
+        // Card body
         VerticalLayout {
             padding: 10px;
             padding-left: 12px;
             padding-right: 12px;
             spacing: 4px;
+            vertical-stretch: 0;
 
-            Text {
-                text: "✂ VOICE CLIP";
-                font-size: 10px;
-                font-weight: 700;
-                color: Theme.accent;
+            HorizontalLayout {
+                spacing: 4px;
+                height: 14px;
+
+                Image {
+                    source: @image-url("../icons/scissors.svg");
+                    colorize: Theme.accent;
+                    width: 10px;
+                    height: 10px;
+                    y: (parent.height - self.height) / 2;
+                }
+
+                Text {
+                    text: "VOICE CLIP · " + card.duration;
+                    font-size: 10px;
+                    font-weight: 700;
+                    color: Theme.accent;
+                    vertical-alignment: center;
+                }
             }
 
             Text {
-                text: card.actor-name + " clipped that";
+                text: card.title != "" ? card.title : card.actor-name + " clipped that";
                 font-size: 13px;
                 font-weight: 500;
                 color: Theme.text-primary;
@@ -220,7 +294,7 @@ component ClipCard inherits Rectangle {
             }
 
             Text {
-                text: card.duration + " · " + card.timestamp;
+                text: card.timestamp + (card.game-name != "" ? " · " + card.game-name : "");
                 font-size: 11px;
                 color: #888888;
             }
@@ -265,7 +339,7 @@ component RecapCard inherits Rectangle {
         }
 
         Text {
-            text: card.subtitle;
+            text: "Total crew time";
             font-size: 12px;
             color: #888888;
         }
@@ -279,10 +353,29 @@ component RecapCard inherits Rectangle {
 
         Rectangle { height: 10px; }
 
-        Text {
-            text: card.timestamp;
-            font-size: 12px;
-            color: #666666;
+        VerticalLayout {
+            spacing: 6px;
+            vertical-stretch: 1;
+
+            if card.game-name != "": HorizontalLayout {
+                Text { text: "Top game"; font-size: 12px; color: #666666; horizontal-stretch: 1; }
+                Text { text: card.game-name; font-size: 12px; color: #cccccc; }
+            }
+
+            if card.duration != "": HorizontalLayout {
+                Text { text: "Longest sesh"; font-size: 12px; color: #666666; horizontal-stretch: 1; }
+                Text { text: card.duration; font-size: 12px; color: #cccccc; }
+            }
+
+            if card.subtitle != "": HorizontalLayout {
+                Text { text: "Clips"; font-size: 12px; color: #666666; horizontal-stretch: 1; }
+                Text { text: card.subtitle; font-size: 12px; color: #cccccc; }
+            }
+
+            if card.actor-name != "": HorizontalLayout {
+                Text { text: "MVP"; font-size: 12px; color: #666666; horizontal-stretch: 1; }
+                Text { text: card.actor-name; font-size: 12px; color: #cccccc; }
+            }
         }
     }
 }
@@ -298,7 +391,7 @@ component SessionCard inherits Rectangle {
 
     VerticalLayout {
         padding: 14px;
-        spacing: 6px;
+        spacing: 8px;
 
         Text {
             text: "SESSION";
@@ -309,17 +402,22 @@ component SessionCard inherits Rectangle {
         }
 
         HorizontalLayout {
-            spacing: 10px;
-            height: 32px;
+            spacing: 8px;
+            height: 36px;
 
             Rectangle {
                 width: 32px;
                 height: 32px;
                 border-radius: 8px;
-                background: Theme.accent;
+                background: card.game-name == "Valorant" ? #ff4655 :
+                            card.game-name == "Counter-Strike 2" ? #de9b35 :
+                            Theme.accent;
+                y: (parent.height - self.height) / 2;
 
                 Text {
-                    text: card.game-name != "" ? card.game-name : "VC";
+                    text: card.game-name == "Valorant" ? "VAL" :
+                          card.game-name == "Counter-Strike 2" ? "CS2" :
+                          card.game-name != "" ? card.game-name : "VC";
                     font-size: 10px;
                     font-weight: 800;
                     color: white;
@@ -333,19 +431,36 @@ component SessionCard inherits Rectangle {
                 spacing: 2px;
 
                 Text {
-                    text: card.title;
+                    text: card.game-name != "" ? card.game-name : card.title;
                     font-size: 13px;
                     font-weight: 500;
                     color: Theme.text-primary;
                     overflow: elide;
                 }
 
-                Text {
-                    text: card.subtitle;
+                if card.duration != "": Text {
+                    text: card.duration;
                     font-size: 11px;
                     color: #888888;
                 }
             }
+        }
+
+        if card.participant-count > 0: HorizontalLayout {
+            spacing: -7px;
+            height: 20px;
+
+            AvatarDot { initials: card.actor-initials; color-index: 0; }
+            if card.participant-count > 1: AvatarDot { initials: ""; color-index: 1; }
+            if card.participant-count > 2: AvatarDot { initials: ""; color-index: 2; }
+        }
+
+        Rectangle { vertical-stretch: 1; }
+
+        Text {
+            text: card.timestamp + (card.subtitle != "" ? " · " + card.subtitle : "");
+            font-size: 11px;
+            color: #555555;
         }
     }
 }
@@ -376,6 +491,7 @@ component CatchupCard inherits Rectangle {
             font-size: 13px;
             color: #cccccc;
             wrap: word-wrap;
+            vertical-stretch: 1;
         }
 
         Text {
@@ -402,8 +518,17 @@ component SkeletonCard inherits Rectangle {
         padding-left: 16px;
         padding-right: 16px;
 
+        Image {
+            source: @image-url("../icons/scissors.svg");
+            colorize: #555555;
+            width: 28px;
+            height: 28px;
+            opacity: 0.3;
+            x: (parent.width - self.width) / 2;
+        }
+
         Text {
-            text: card.title;
+            text: card.title != "" ? card.title : "Your crew's clips show up here";
             font-size: 13px;
             font-weight: 500;
             color: #555555;
@@ -411,7 +536,7 @@ component SkeletonCard inherits Rectangle {
         }
 
         Text {
-            text: card.subtitle;
+            text: card.subtitle != "" ? card.subtitle : "Tap the scissors during a voice call to save the last 30 seconds";
             font-size: 11px;
             color: #444444;
             horizontal-alignment: center;
@@ -461,6 +586,7 @@ export component CrewFeed inherits Rectangle {
     in property <[FeedCardData]> cards: [];
     in property <bool> is-cold-start: true;
     in property <string> crew-name: "";
+    in property <int> clip-count: 0;
 
     callback go-live-clicked();
     callback card-clicked(string);
@@ -471,7 +597,7 @@ export component CrewFeed inherits Rectangle {
     VerticalLayout {
         spacing: 0px;
 
-        // Feed header
+        // Header
         Rectangle {
             height: 48px;
             background: transparent;
@@ -494,15 +620,15 @@ export component CrewFeed inherits Rectangle {
                         vertical-alignment: center;
                     }
 
-                    if cards.length > 0: Rectangle {
-                        width: label-text.preferred-width + 20px;
+                    if clip-count > 0: Rectangle {
+                        width: badge-text.preferred-width + 20px;
                         height: 22px;
                         border-radius: 11px;
                         background: #2a2a2e;
                         y: (parent.height - self.height) / 2;
 
-                        label-text := Text {
-                            text: cards.length;
+                        badge-text := Text {
+                            text: clip-count + " clips this week";
                             font-size: 11px;
                             color: #888888;
                             horizontal-alignment: center;
@@ -564,7 +690,7 @@ export component CrewFeed inherits Rectangle {
                 padding-right: 20px;
                 spacing: 12px;
 
-                // Row 1: Hero (2x) + Standard (1x)
+                // Row 1: Hero (2x) + card (1x)
                 if cards.length > 0: HorizontalLayout {
                     height: 420px;
                     spacing: 12px;
@@ -585,32 +711,17 @@ export component CrewFeed inherits Rectangle {
                         horizontal-stretch: 1;
                         spacing: 12px;
 
-                        if cards[1].card-type == "recap": RecapCard {
-                            card: cards[1];
-                        }
-
-                        if cards[1].card-type == "clip": ClipCard {
-                            card: cards[1];
-                            play-clicked(id) => { root.card-clicked(id); }
-                        }
-
-                        if cards[1].card-type == "session": SessionCard {
-                            card: cards[1];
-                        }
-
-                        if cards[1].card-type == "catchup": CatchupCard {
-                            card: cards[1];
-                        }
-
-                        if cards[1].card-type == "skeleton": SkeletonCard {
-                            card: cards[1];
-                        }
+                        if cards[1].card-type == "recap": RecapCard { vertical-stretch: 1; card: cards[1]; }
+                        if cards[1].card-type == "clip": ClipCard { vertical-stretch: 1; card: cards[1]; play-clicked(id) => { root.card-clicked(id); } }
+                        if cards[1].card-type == "session": SessionCard { vertical-stretch: 1; card: cards[1]; }
+                        if cards[1].card-type == "catchup": CatchupCard { vertical-stretch: 1; card: cards[1]; }
+                        if cards[1].card-type == "skeleton": SkeletonCard { vertical-stretch: 1; card: cards[1]; }
                     }
                 }
 
                 // Row 2: Three 1x cards
                 if cards.length > 2: HorizontalLayout {
-                    height: 180px;
+                    height: 210px;
                     spacing: 12px;
 
                     for idx in [2, 3, 4]: Rectangle {
@@ -618,96 +729,135 @@ export component CrewFeed inherits Rectangle {
                         horizontal-stretch: 1;
 
                         if cards.length > idx && cards[idx].card-type == "clip": ClipCard {
-                            card: cards[idx];
-                            width: parent.width;
-                            height: parent.height;
+                            card: cards[idx]; width: parent.width; height: parent.height;
                             play-clicked(id) => { root.card-clicked(id); }
                         }
-
                         if cards.length > idx && cards[idx].card-type == "session": SessionCard {
-                            card: cards[idx];
-                            width: parent.width;
-                            height: parent.height;
+                            card: cards[idx]; width: parent.width; height: parent.height;
                         }
-
                         if cards.length > idx && cards[idx].card-type == "catchup": CatchupCard {
-                            card: cards[idx];
-                            width: parent.width;
-                            height: parent.height;
+                            card: cards[idx]; width: parent.width; height: parent.height;
                         }
-
                         if cards.length > idx && cards[idx].card-type == "recap": RecapCard {
-                            card: cards[idx];
-                            width: parent.width;
-                            height: parent.height;
+                            card: cards[idx]; width: parent.width; height: parent.height;
                         }
-
                         if cards.length > idx && cards[idx].card-type == "skeleton": SkeletonCard {
-                            card: cards[idx];
-                            width: parent.width;
-                            height: parent.height;
+                            card: cards[idx]; width: parent.width; height: parent.height;
                         }
                     }
                 }
 
-                // Row 3: Standard (1x) + Hero (2x)
+                // Row 3: card (1x) + wide card (2x)
                 if cards.length > 5: HorizontalLayout {
-                    height: 240px;
+                    height: 210px;
                     spacing: 12px;
 
                     if cards.length > 5 && cards[5].card-type == "clip": ClipCard {
-                        horizontal-stretch: 1;
-                        card: cards[5];
+                        horizontal-stretch: 1; card: cards[5];
                         play-clicked(id) => { root.card-clicked(id); }
                     }
-
-                    if cards.length > 5 && cards[5].card-type == "session": SessionCard {
-                        horizontal-stretch: 1;
-                        card: cards[5];
-                    }
-
-                    if cards.length > 5 && cards[5].card-type == "catchup": CatchupCard {
-                        horizontal-stretch: 1;
-                        card: cards[5];
-                    }
-
-                    if cards.length > 5 && cards[5].card-type == "skeleton": SkeletonCard {
-                        horizontal-stretch: 1;
-                        card: cards[5];
-                    }
+                    if cards.length > 5 && cards[5].card-type == "session": SessionCard { horizontal-stretch: 1; card: cards[5]; }
+                    if cards.length > 5 && cards[5].card-type == "catchup": CatchupCard { horizontal-stretch: 1; card: cards[5]; }
+                    if cards.length > 5 && cards[5].card-type == "skeleton": SkeletonCard { horizontal-stretch: 1; card: cards[5]; }
 
                     if cards.length > 6: Rectangle {
                         horizontal-stretch: 2;
 
                         if cards[6].card-type == "clip": ClipCard {
-                            card: cards[6];
-                            width: parent.width;
-                            height: parent.height;
+                            card: cards[6]; width: parent.width; height: parent.height;
                             play-clicked(id) => { root.card-clicked(id); }
                         }
-
-                        if cards[6].card-type == "session": SessionCard {
-                            card: cards[6];
-                            width: parent.width;
-                            height: parent.height;
-                        }
-
-                        if cards[6].card-type == "skeleton": SkeletonCard {
-                            card: cards[6];
-                            width: parent.width;
-                            height: parent.height;
-                        }
+                        if cards[6].card-type == "session": SessionCard { card: cards[6]; width: parent.width; height: parent.height; }
+                        if cards[6].card-type == "catchup": CatchupCard { card: cards[6]; width: parent.width; height: parent.height; }
+                        if cards[6].card-type == "skeleton": SkeletonCard { card: cards[6]; width: parent.width; height: parent.height; }
                     }
                 }
 
-                // Invite card for cold start
                 if is-cold-start: InviteCard {
                     invite-clicked => { root.invite-clicked(); }
                 }
 
-                // Bottom padding
                 Rectangle { height: 20px; }
             }
         }
+    }
+}
+
+// Preview for Slint live preview / IDE extension
+export component Preview inherits Rectangle {
+    width: 760px;
+    height: 920px;
+    background: #1a1a1e;
+
+    CrewFeed {
+        width: parent.width;
+        height: parent.height;
+        clip-count: 12;
+        is-cold-start: false;
+        cards: [
+            {
+                id: "1", card-type: "clip", is-hero: true, is-skeleton: false,
+                title: "ostkatt clutch ace on Dust II",
+                subtitle: "",
+                actor-name: "ostkatt", actor-initials: "os",
+                game-name: "Counter-Strike 2",
+                duration: "0:30", timestamp: "2 hours ago",
+                participant-count: 3, clip-path: "",
+            },
+            {
+                id: "2", card-type: "recap", is-hero: false, is-skeleton: false,
+                title: "14.5h",
+                subtitle: "12",
+                actor-name: "FaiL", actor-initials: "Fa",
+                game-name: "Valorant",
+                duration: "5h 12m",
+                timestamp: "This week",
+                participant-count: 0, clip-path: "",
+            },
+            {
+                id: "3", card-type: "clip", is-hero: false, is-skeleton: false,
+                title: "FaiL raging at ranked matchmaking",
+                subtitle: "",
+                actor-name: "FaiL", actor-initials: "Fa",
+                game-name: "Valorant",
+                duration: "0:30", timestamp: "yesterday",
+                participant-count: 2, clip-path: "",
+            },
+            {
+                id: "4", card-type: "session", is-hero: false, is-skeleton: false,
+                title: "Valorant",
+                subtitle: "Saturday night · 2 clips",
+                actor-name: "ostkatt", actor-initials: "os",
+                game-name: "Valorant",
+                duration: "3h 12m", timestamp: "Saturday",
+                participant-count: 3, clip-path: "",
+            },
+            {
+                id: "5", card-type: "catchup", is-hero: false, is-skeleton: false,
+                title: "ostkatt and FaiL hung out in General for 45m while you were away",
+                subtitle: "",
+                actor-name: "ostkatt", actor-initials: "os",
+                game-name: "",
+                duration: "", timestamp: "6 hours ago",
+                participant-count: 0, clip-path: "",
+            },
+            {
+                id: "6", card-type: "clip", is-hero: false, is-skeleton: false,
+                title: "b0bben 1v3 retake on Ascent",
+                subtitle: "",
+                actor-name: "b0bben", actor-initials: "b0",
+                game-name: "Valorant",
+                duration: "0:30", timestamp: "3 days ago",
+                participant-count: 1, clip-path: "",
+            },
+            {
+                id: "7", card-type: "skeleton", is-hero: false, is-skeleton: true,
+                title: "", subtitle: "",
+                actor-name: "", actor-initials: "",
+                game-name: "",
+                duration: "", timestamp: "",
+                participant-count: 0, clip-path: "",
+            },
+        ];
     }
 }

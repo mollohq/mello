@@ -276,16 +276,17 @@ func ClipUploadURLRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk
 // ---------------------------------------------------------------------------
 
 type WeeklyRecapData struct {
-	CrewID          string  `json:"crew_id"`
-	WeekStart       int64   `json:"week_start"`
-	WeekEnd         int64   `json:"week_end"`
-	TotalHangoutMin int     `json:"total_hangout_min"`
-	TopGame         string  `json:"top_game"`
-	LongestSession  string  `json:"longest_session"`
-	ClipCount       int     `json:"clip_count"`
-	MostActive      string  `json:"most_active"`
-	MostClipped     string  `json:"most_clipped"`
-	GeneratedAt     int64   `json:"generated_at"`
+	CrewID            string `json:"crew_id"`
+	WeekStart         int64  `json:"week_start"`
+	WeekEnd           int64  `json:"week_end"`
+	TotalHangoutMin   int    `json:"total_hangout_min"`
+	TopGame           string `json:"top_game"`
+	LongestSession    string `json:"longest_session"`
+	LongestSessionMin int    `json:"longest_session_min"`
+	ClipCount         int    `json:"clip_count"`
+	MostActive        string `json:"most_active"`
+	MostClipped       string `json:"most_clipped"`
+	GeneratedAt       int64  `json:"generated_at"`
 }
 
 func generateWeeklyRecap(ctx context.Context, nk runtime.NakamaModule, logger runtime.Logger, crewID string) {
@@ -352,16 +353,17 @@ func generateWeeklyRecap(ctx context.Context, nk runtime.NakamaModule, logger ru
 	mostClipped := topActor(actorClips, ctx, nk)
 
 	recap := WeeklyRecapData{
-		CrewID:          crewID,
-		WeekStart:       startMs,
-		WeekEnd:         weekEnd.UnixMilli(),
-		TotalHangoutMin: totalHangoutMin,
-		TopGame:         topGame,
-		LongestSession:  longestSessionDesc,
-		ClipCount:       clipCount,
-		MostActive:      mostActive,
-		MostClipped:     mostClipped,
-		GeneratedAt:     time.Now().UnixMilli(),
+		CrewID:            crewID,
+		WeekStart:         startMs,
+		WeekEnd:           weekEnd.UnixMilli(),
+		TotalHangoutMin:   totalHangoutMin,
+		TopGame:           topGame,
+		LongestSession:    longestSessionDesc,
+		LongestSessionMin: longestSessionMin,
+		ClipCount:         clipCount,
+		MostActive:        mostActive,
+		MostClipped:       mostClipped,
+		GeneratedAt:       time.Now().UnixMilli(),
 	}
 
 	// Store as a crew event

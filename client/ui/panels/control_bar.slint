@@ -555,12 +555,13 @@ export component ControlBar inherits Rectangle {
                 border-width: 1px;
                 border-color: #EB4D5F44;
 
-                Text {
-                    text: "✂";
-                    font-size: 16px;
-                    color: Theme.accent;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
+                Image {
+                    source: @image-url("../icons/scissors.svg");
+                    colorize: Theme.accent;
+                    width: 18px;
+                    height: 18px;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
                 }
 
                 clip-hover := TouchArea {

@@ -235,6 +235,7 @@ export component MainWindow inherits Window {
     // --- Crew feed ---
     in property <[FeedCardData]> feed-cards: [];
     in property <bool> feed-cold-start: true;
+    in property <int> feed-clip-count: 0;
 
     // --- Presence (0=online, 1=idle, 2=dnd, 3=invisible) ---
     in-out property <int> presence-status: 0;
@@ -519,18 +520,19 @@ export component MainWindow inherits Window {
                     load-more => { root.discover-load-more(); }
                 }
 
-                if !root.show-discover: VerticalLayout {
+                if !root.show-discover: Rectangle {
                     x: 0;
                     y: 0;
                     width: parent.width - parent.chat-w - Theme.gap;
                     height: parent.height;
-                    spacing: Theme.gap;
 
                     property <bool> stream-active: root.is-hosting || root.is-watching || root.active-streamer-id != "";
 
                     // Stream view (shown when streaming)
                     if stream-active: StreamView {
-                        vertical-stretch: 1;
+                        y: 0;
+                        width: parent.width;
+                        height: parent.height - 92px - Theme.gap;
                         members: root.members;
                         is-hosting: root.is-hosting;
                         is-watching: root.is-watching;
@@ -553,9 +555,12 @@ export component MainWindow inherits Window {
 
                     // Crew feed (shown when no active stream)
                     if !stream-active: CrewFeed {
-                        vertical-stretch: 1;
+                        y: 0;
+                        width: parent.width;
+                        height: parent.height - 92px - Theme.gap;
                         cards: root.feed-cards;
                         is-cold-start: root.feed-cold-start;
+                        clip-count: root.feed-clip-count;
                         go-live-clicked => {
                             root.list-capture-sources();
                             root.source-picker-open = true;
@@ -565,6 +570,8 @@ export component MainWindow inherits Window {
                     }
 
                     ControlBar {
+                        y: parent.height - 92px;
+                        width: parent.width;
                         height: 92px;
                         user-name: root.user-name;
                         user-initials: root.user-initials;

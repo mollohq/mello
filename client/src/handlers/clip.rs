@@ -1,10 +1,156 @@
 use std::rc::Rc;
 
 use mello_core::{Command, Event};
+use slint::Model;
 
 use crate::app_context::AppContext;
 use crate::converters::make_initials;
 use crate::FeedCardData;
+
+fn map_card_type(backend_type: &str) -> &str {
+    match backend_type {
+        "clip" => "clip",
+        "weekly_recap" => "recap",
+        "voice_session" | "stream_session" | "game_session" => "session",
+        "moment" | "member_joined" | "member_left" | "chat_activity" => "catchup",
+        _ => "catchup",
+    }
+}
+
+fn extract_actor(data: &serde_json::Value, backend_type: &str) -> String {
+    match backend_type {
+        "stream_session" => data
+            .get("streamer_name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("someone")
+            .to_string(),
+        "weekly_recap" => data
+            .get("most_active")
+            .or_else(|| data.get("mvp"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
+        "moment" | "member_joined" | "member_left" => data
+            .get("display_name")
+            .or_else(|| data.get("username"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
+        _ => data
+            .get("participant_names")
+            .and_then(|v| v.as_array())
+            .and_then(|a| a.first())
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
+    }
+}
+
+fn extract_title(data: &serde_json::Value, backend_type: &str, actor: &str) -> String {
+    match backend_type {
+        "clip" => format!(
+            "{} clipped that",
+            if actor.is_empty() { "someone" } else { actor }
+        ),
+        "voice_session" => {
+            let ch = data
+                .get("channel_name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("voice");
+            let names = data
+                .get("participant_names")
+                .and_then(|v| v.as_array())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|v| v.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                })
+                .unwrap_or_default();
+            if names.is_empty() {
+                format!("Voice session in {}", ch)
+            } else {
+                format!("{} in {}", names, ch)
+            }
+        }
+        "stream_session" => {
+            let title = data
+                .get("title")
+                .and_then(|v| v.as_str())
+                .unwrap_or("a stream");
+            format!("{} streamed {}", actor, title)
+        }
+        "game_session" => {
+            let game = data
+                .get("game_name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("a game");
+            let names = data
+                .get("player_names")
+                .and_then(|v| v.as_array())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|v| v.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                })
+                .unwrap_or_default();
+            if names.is_empty() {
+                format!("Played {}", game)
+            } else {
+                format!("{} played {}", names, game)
+            }
+        }
+        "weekly_recap" => {
+            let hangout = data
+                .get("total_hangout_min")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(0.0);
+            let hours = hangout / 60.0;
+            if hours >= 1.0 {
+                format!("{:.1}h", hours)
+            } else {
+                format!("{}m", hangout as i64)
+            }
+        }
+        "moment" => {
+            let text = data.get("text").and_then(|v| v.as_str()).unwrap_or("");
+            if text.is_empty() {
+                let sentiment = data
+                    .get("sentiment")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("moment");
+                format!("{} had a {}", actor, sentiment)
+            } else {
+                text.to_string()
+            }
+        }
+        "member_joined" => format!("{} joined the crew", actor),
+        _ => String::new(),
+    }
+}
+
+fn extract_subtitle(data: &serde_json::Value, backend_type: &str) -> String {
+    match backend_type {
+        "weekly_recap" => {
+            let clips = data.get("clip_count").and_then(|v| v.as_i64()).unwrap_or(0);
+            format!("{}", clips)
+        }
+        "clip" => {
+            let clip_type = data
+                .get("clip_type")
+                .and_then(|v| v.as_str())
+                .unwrap_or("voice");
+            let game = data.get("game").and_then(|v| v.as_str()).unwrap_or("");
+            if game.is_empty() {
+                clip_type.to_string()
+            } else {
+                format!("{} · {}", clip_type, game)
+            }
+        }
+        _ => String::new(),
+    }
+}
 
 pub fn handle(ctx: &AppContext, event: Event) {
     match event {
@@ -26,7 +172,6 @@ pub fn handle(ctx: &AppContext, event: Event) {
                 duration_seconds
             );
 
-            // Auto-post clip metadata to backend
             let crew_id = ctx.app.get_active_crew_id().to_string();
             if !crew_id.is_empty() {
                 let _ = ctx.cmd_tx.try_send(Command::PostClip {
@@ -43,7 +188,6 @@ pub fn handle(ctx: &AppContext, event: Event) {
         Event::ClipPosted { clip_id, event_id } => {
             log::info!("clip posted: clip_id={} event_id={}", clip_id, event_id);
 
-            // Reload the timeline to show the new clip
             let crew_id = ctx.app.get_active_crew_id().to_string();
             if !crew_id.is_empty() {
                 let _ = ctx.cmd_tx.try_send(Command::LoadCrewTimeline {
@@ -63,26 +207,11 @@ pub fn handle(ctx: &AppContext, event: Event) {
                 .entries
                 .iter()
                 .enumerate()
-                .map(|(i, entry)| {
-                    let actor_name = entry
-                        .data
-                        .get("participant_names")
-                        .and_then(|v| v.as_array())
-                        .and_then(|a| a.first())
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string();
-
-                    let actor_display = if actor_name.is_empty() {
-                        entry
-                            .data
-                            .get("streamer_name")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("someone")
-                            .to_string()
-                    } else {
-                        actor_name
-                    };
+                .map(|(_i, entry)| {
+                    let card_type = map_card_type(&entry.entry_type);
+                    let actor = extract_actor(&entry.data, &entry.entry_type);
+                    let title = extract_title(&entry.data, &entry.entry_type, &actor);
+                    let subtitle = extract_subtitle(&entry.data, &entry.entry_type);
 
                     let duration_secs = entry
                         .data
@@ -95,9 +224,20 @@ pub fn handle(ctx: &AppContext, event: Event) {
                                 .and_then(|v| v.as_f64())
                                 .map(|m| m * 60.0)
                         })
+                        .or_else(|| {
+                            entry
+                                .data
+                                .get("longest_session_min")
+                                .and_then(|v| v.as_f64())
+                                .map(|m| m * 60.0)
+                        })
                         .unwrap_or(0.0);
 
-                    let duration_str = if duration_secs > 0.0 {
+                    let duration_str = if duration_secs >= 3600.0 {
+                        let h = (duration_secs / 3600.0) as u32;
+                        let m = ((duration_secs % 3600.0) / 60.0) as u32;
+                        format!("{}h {}m", h, m)
+                    } else if duration_secs > 0.0 {
                         let secs = duration_secs as u32;
                         format!("{}:{:02}", secs / 60, secs % 60)
                     } else {
@@ -108,13 +248,8 @@ pub fn handle(ctx: &AppContext, event: Event) {
                         .data
                         .get("game")
                         .or_else(|| entry.data.get("game_name"))
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string();
-
-                    let title = entry
-                        .data
-                        .get("title")
+                        .or_else(|| entry.data.get("top_game"))
+                        .or_else(|| entry.data.get("title"))
                         .and_then(|v| v.as_str())
                         .unwrap_or("")
                         .to_string();
@@ -129,12 +264,15 @@ pub fn handle(ctx: &AppContext, event: Event) {
                     let participant_count = entry
                         .data
                         .get("participants")
+                        .or_else(|| entry.data.get("participant_ids"))
+                        .or_else(|| entry.data.get("player_ids"))
                         .and_then(|v| v.as_array())
                         .map(|a| a.len() as i32)
                         .or_else(|| {
                             entry
                                 .data
-                                .get("participant_count")
+                                .get("peak_count")
+                                .or_else(|| entry.data.get("peak_viewers"))
                                 .and_then(|v| v.as_i64())
                                 .map(|n| n as i32)
                         })
@@ -150,34 +288,145 @@ pub fn handle(ctx: &AppContext, event: Event) {
                         "just now".to_string()
                     } else if ago < 3600 {
                         format!("{}m ago", ago / 60)
-                    } else if ago < 86400 {
+                    } else if ago < 43200 {
                         format!("{}h ago", ago / 3600)
+                    } else if ago < 86400 {
+                        "yesterday".to_string()
+                    } else if ago < 172800 {
+                        "2 days ago".to_string()
+                    } else if ago < 604800 {
+                        let days = ago / 86400;
+                        let weekday = match days % 7 {
+                            0 => "today",
+                            1 => "yesterday",
+                            _ => match (ts_secs / 86400 + 4) % 7 {
+                                0 => "Sunday",
+                                1 => "Monday",
+                                2 => "Tuesday",
+                                3 => "Wednesday",
+                                4 => "Thursday",
+                                5 => "Friday",
+                                _ => "Saturday",
+                            },
+                        };
+                        weekday.to_string()
                     } else {
                         format!("{}d ago", ago / 86400)
                     };
 
                     FeedCardData {
                         id: entry.id.clone().into(),
-                        card_type: entry.entry_type.clone().into(),
+                        card_type: card_type.into(),
                         title: title.into(),
-                        subtitle: Default::default(),
+                        subtitle: subtitle.into(),
                         timestamp: timestamp.into(),
                         duration: duration_str.into(),
-                        actor_name: actor_display.clone().into(),
-                        actor_initials: make_initials(&actor_display).into(),
+                        actor_name: actor.clone().into(),
+                        actor_initials: make_initials(&actor).into(),
                         game_name: game.into(),
                         participant_count,
                         clip_path: clip_path.into(),
-                        is_hero: i == 0 && entry.entry_type == "clip",
+                        is_hero: false,
                         is_skeleton: false,
                     }
                 })
                 .collect();
 
+            // Layout: [0] hero clip, [1] recap (pinned top-right),
+            //         [2-5] 1x cards, [6] 2x card.
+            // Catchups only go into small 1x slots [2-5], never hero/2x.
+            let mut used = vec![false; cards.len()];
+            let mut ordered: Vec<FeedCardData> = Vec::with_capacity(cards.len());
+
+            // Slot 0: best clip as hero
+            if let Some(hi) = cards.iter().position(|c| c.card_type == "clip") {
+                let mut hero = cards[hi].clone();
+                hero.is_hero = true;
+                ordered.push(hero);
+                used[hi] = true;
+            }
+
+            // Slot 1: weekly recap (always pinned top-right)
+            if let Some(ri) = cards.iter().position(|c| c.card_type == "recap") {
+                ordered.push(cards[ri].clone());
+                used[ri] = true;
+            }
+
+            // Remaining cards split into non-catchups and catchups
+            let mut non_catchups: Vec<FeedCardData> = Vec::new();
+            let mut catchups: Vec<FeedCardData> = Vec::new();
+            for (i, card) in cards.iter().enumerate() {
+                if used[i] {
+                    continue;
+                }
+                if card.card_type == "catchup" {
+                    catchups.push(card.clone());
+                } else {
+                    non_catchups.push(card.clone());
+                }
+            }
+
+            // Slots 2-5: mix non-catchups first, then fill with catchups
+            // Slot 6 (2x wide): must be a non-catchup
+            let small_slots = 4; // positions 2..5
+            let mut small_fill = 0;
+            // Fill small slots with non-catchups first
+            let mut nc_iter = non_catchups.into_iter();
+            while small_fill < small_slots {
+                if let Some(c) = nc_iter.next() {
+                    ordered.push(c);
+                    small_fill += 1;
+                } else {
+                    break;
+                }
+            }
+            // Remaining non-catchups: first one goes to slot 6 (2x wide)
+            let wide_card = nc_iter.next();
+
+            // Fill remaining small slots with catchups
+            let mut cu_iter = catchups.into_iter();
+            while small_fill < small_slots {
+                if let Some(c) = cu_iter.next() {
+                    ordered.push(c);
+                    small_fill += 1;
+                } else {
+                    break;
+                }
+            }
+
+            // Slot 6: wide card (non-catchup preferred, fallback to catchup)
+            if let Some(wc) = wide_card {
+                ordered.push(wc);
+            } else if let Some(c) = cu_iter.next() {
+                ordered.push(c);
+            }
+
+            let cards = ordered;
+
+            let clip_count = response
+                .entries
+                .iter()
+                .filter(|e| e.entry_type == "clip")
+                .count() as i32;
             let is_empty = cards.is_empty();
             ctx.app
                 .set_feed_cards(Rc::new(slint::VecModel::from(cards)).into());
             ctx.app.set_feed_cold_start(is_empty);
+            ctx.app.set_feed_clip_count(clip_count);
+
+            // Update clip-count on the active crew's sidebar card
+            let active_crew_id = ctx.app.get_active_crew_id().to_string();
+            if !active_crew_id.is_empty() {
+                let crews = ctx.app.get_crews();
+                for i in 0..crews.row_count() {
+                    let mut crew = crews.row_data(i).unwrap();
+                    if crew.id == active_crew_id.as_str() {
+                        crew.clip_count = clip_count;
+                        crews.set_row_data(i, crew);
+                        break;
+                    }
+                }
+            }
         }
         _ => {}
     }

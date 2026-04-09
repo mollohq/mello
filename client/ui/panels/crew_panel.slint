@@ -402,8 +402,8 @@ export component CrewPanel inherits Rectangle {
                                     width: 22px;
                                     height: 22px;
                                     border-radius: 5px;
-                                    background: Theme.accent;
-                                    opacity: 0.6;
+                                    background: #2a2a2e;
+                                    opacity: crew.voice-count > 0 || crew.has-stream ? 0.8 : 0.6;
 
                                     Text {
                                         text: crew.name;
@@ -438,11 +438,12 @@ export component CrewPanel inherits Rectangle {
                                         alignment: center;
                                         spacing: 3px;
 
-                                        Text {
-                                            text: "✂";
-                                            font-size: 8px;
-                                            color: #EB4D5F88;
-                                            vertical-alignment: center;
+                                        Image {
+                                            source: @image-url("../icons/scissors.svg");
+                                            colorize: #EB4D5F88;
+                                            width: 10px;
+                                            height: 10px;
+                                            y: (parent.height - self.height) / 2;
                                         }
 
                                         Text {
@@ -472,10 +473,11 @@ export component CrewPanel inherits Rectangle {
                                 }
 
                                 Text {
-                                    text: crew.stream-name + " streaming";
+                                    text: crew.stream-name;
                                     font-size: 10px;
                                     color: #555555;
                                     overflow: elide;
+                                    horizontal-stretch: 1;
                                     vertical-alignment: center;
                                 }
                             }

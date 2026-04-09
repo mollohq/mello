@@ -72,6 +72,9 @@ pub fn chat_messages_to_slint(
                 gif_preview_url: gif_preview_url.into(),
                 gif_width,
                 gif_height,
+                is_clip: false,
+                clip_duration: slint::SharedString::default(),
+                clip_id: slint::SharedString::default(),
             }
         })
         .collect()
