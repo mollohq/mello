@@ -205,6 +205,19 @@ func InitModule(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runti
 	}
 
 	// -----------------------------------------------------------------------
+	// RPCs — clips
+	// -----------------------------------------------------------------------
+	if err := initializer.RegisterRpc("post_clip", PostClipRPC); err != nil {
+		return err
+	}
+	if err := initializer.RegisterRpc("crew_timeline", CrewTimelineRPC); err != nil {
+		return err
+	}
+	if err := initializer.RegisterRpc("clip_upload_url", ClipUploadURLRPC); err != nil {
+		return err
+	}
+
+	// -----------------------------------------------------------------------
 	// RPCs — dev tools
 	// -----------------------------------------------------------------------
 	if err := initializer.RegisterRpc("dev_seed_state", DevSeedStateRPC); err != nil {
@@ -219,6 +232,7 @@ func InitModule(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runti
 	go startChatActivityTicker(ctx, nk, logger, 30*time.Minute)
 	go StartVoiceRoomGC(ctx, nk, logger, 30*time.Second)
 	go StartStreamGC(ctx, nk, logger, 60*time.Second)
+	go StartWeeklyRecapJob(ctx, nk, logger)
 
 	logger.Info("Mello backend initialized successfully")
 	return nil

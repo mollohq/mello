@@ -223,6 +223,45 @@ MelloResult mello_voice_feed_packet(
 }
 
 /* ============================================================================
+ * Clip Buffer
+ * ============================================================================ */
+
+MelloResult mello_clip_buffer_start(MelloContext* ctx) {
+    if (!ctx) return MELLO_ERROR_INVALID_PARAM;
+    try {
+        ctx_cast(ctx)->audio().start_clip_buffer();
+        return MELLO_OK;
+    } catch (...) {
+        return MELLO_ERROR_FAILED;
+    }
+}
+
+MelloResult mello_clip_buffer_stop(MelloContext* ctx) {
+    if (!ctx) return MELLO_ERROR_INVALID_PARAM;
+    try {
+        ctx_cast(ctx)->audio().stop_clip_buffer();
+        return MELLO_OK;
+    } catch (...) {
+        return MELLO_ERROR_FAILED;
+    }
+}
+
+bool mello_clip_buffer_active(MelloContext* ctx) {
+    if (!ctx) return false;
+    return ctx_cast(ctx)->audio().clip_buffer_active();
+}
+
+MelloResult mello_clip_capture(MelloContext* ctx, float seconds, const char* output_path) {
+    if (!ctx || seconds <= 0.0f || !output_path) return MELLO_ERROR_INVALID_PARAM;
+    try {
+        bool ok = ctx_cast(ctx)->audio().clip_capture(seconds, std::string(output_path));
+        return ok ? MELLO_OK : MELLO_ERROR_FAILED;
+    } catch (...) {
+        return MELLO_ERROR_FAILED;
+    }
+}
+
+/* ============================================================================
  * P2P Transport
  * ============================================================================ */
 

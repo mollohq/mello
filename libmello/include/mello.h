@@ -122,6 +122,22 @@ MELLO_API MelloResult mello_voice_feed_packet(
 );
 
 /* ============================================================================
+ * Clip Buffer
+ * ============================================================================ */
+
+/** Start the rolling voice clip buffer. Call when joining a voice channel. */
+MELLO_API MelloResult mello_clip_buffer_start(MelloContext* ctx);
+
+/** Stop and discard the clip buffer. Call when leaving voice. */
+MELLO_API MelloResult mello_clip_buffer_stop(MelloContext* ctx);
+
+/** Returns true if the clip buffer is actively recording. */
+MELLO_API bool mello_clip_buffer_active(MelloContext* ctx);
+
+/** Capture the last `seconds` of audio and write as WAV to `output_path`. */
+MELLO_API MelloResult mello_clip_capture(MelloContext* ctx, float seconds, const char* output_path);
+
+/* ============================================================================
  * P2P Transport
  * ============================================================================ */
 

@@ -283,6 +283,9 @@ impl super::Client {
         // were just here and skip the event ledger).
         self.handle_crew_catchup(crew_id, 0).await;
 
+        // Load the crew feed timeline
+        self.handle_load_crew_timeline(crew_id, None).await;
+
         // Tell the server this is our active crew (registers subscription + returns state)
         let local_user_id = self
             .nakama

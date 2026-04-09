@@ -159,6 +159,7 @@ set(MELLO_SOURCES
     src/mello.cpp
     src/context.cpp
     src/audio/audio_pipeline.cpp
+    src/audio/clip_buffer.cpp
     src/audio/opus_codec.cpp
     src/audio/noise_suppressor.cpp
     src/audio/echo_canceller.cpp

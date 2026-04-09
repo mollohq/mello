@@ -6,6 +6,7 @@
 #include "echo_canceller.hpp"
 #include "jitter_buffer.hpp"
 #include "device_enumerator.hpp"
+#include "clip_buffer.hpp"
 #include "vad.hpp"
 #include "../util/ring_buffer.hpp"
 #ifdef _WIN32
@@ -76,6 +77,11 @@ public:
     bool set_capture_device(const char* device_id);
     bool set_playback_device(const char* device_id);
 
+    void start_clip_buffer();
+    void stop_clip_buffer();
+    bool clip_buffer_active() const;
+    bool clip_capture(float seconds, const std::string& output_path);
+
 private:
     void on_captured_audio(const int16_t* samples, size_t count);
 #ifdef _WIN32
@@ -121,6 +127,8 @@ private:
     uint32_t get_pkt_ctr_ = 0;
 
     bool initialized_ = false;
+
+    std::unique_ptr<ClipBuffer> clip_buffer_;
 };
 
 } // namespace mello::audio

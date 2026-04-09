@@ -1,11 +1,12 @@
 import { Theme } from "theme.slint";
-import { CrewData, MemberData, ChatMessageData, GifItemData, AudioDeviceData, VoiceChannelData, VoiceChannelMember, CaptureSourceData, DiscoverCrewData, SearchUserData } from "types.slint";
+import { CrewData, MemberData, ChatMessageData, GifItemData, AudioDeviceData, VoiceChannelData, VoiceChannelMember, CaptureSourceData, DiscoverCrewData, SearchUserData, FeedCardData } from "types.slint";
 import { CrewPanel } from "panels/crew_panel.slint";
 import { StreamView } from "panels/stream_view.slint";
 import { StreamSourcePicker } from "panels/stream_source_picker.slint";
 import { VoiceChannelView } from "panels/voice_channel_view.slint";
 import { ChatPanel } from "panels/chat_panel.slint";
 import { ControlBar } from "panels/control_bar.slint";
+import { CrewFeed } from "panels/crew_feed.slint";
 import { SettingsModal } from "panels/settings_modal.slint";
 import { NewCrewModal } from "panels/new_crew_modal.slint";
 import { DebugPanel } from "panels/debug_panel.slint";
@@ -15,7 +16,7 @@ import { UpdateToast } from "panels/update_banner.slint";
 import { DiscoverPanel } from "panels/discover_panel.slint";
 
 
-export { CrewData, MemberData, ChatMessageData, AudioDeviceData, VoiceChannelData, VoiceChannelMember, CaptureSourceData, DiscoverCrewData, SearchUserData, Theme }
+export { CrewData, MemberData, ChatMessageData, AudioDeviceData, VoiceChannelData, VoiceChannelMember, CaptureSourceData, DiscoverCrewData, SearchUserData, FeedCardData, Theme }
 
 export component MainWindow inherits Window {
     title: "Mello";
@@ -231,6 +232,10 @@ export component MainWindow inherits Window {
     in-out property <bool> new-crew-created: false;
     in property <string> new-crew-invite-code: "";
 
+    // --- Crew feed ---
+    in property <[FeedCardData]> feed-cards: [];
+    in property <bool> feed-cold-start: true;
+
     // --- Presence (0=online, 1=idle, 2=dnd, 3=invisible) ---
     in-out property <int> presence-status: 0;
 
@@ -336,6 +341,9 @@ export component MainWindow inherits Window {
     callback stop-watching();
     callback watch-stream(/* host_id */ string, /* session_id */ string, /* width */ int, /* height */ int);
     callback stop-thumbnail-refresh();
+
+    // --- Clip callbacks ---
+    callback clip-captured();
 
     // --- Onboarding callbacks ---
     callback onboarding-crew-selected(string);
@@ -471,10 +479,11 @@ export component MainWindow inherits Window {
 
             // LEFT: Crew sidebar
             CrewPanel {
-                width: 280px;
+                width: 240px;
                 horizontal-stretch: 0;
                 crews: root.crews;
                 active-crew-id: root.active-crew-id;
+                voice-channels: root.voice-channels;
                 crew-selected(id) => {
                     root.show-discover = false;
                     root.select-crew(id);
@@ -488,6 +497,7 @@ export component MainWindow inherits Window {
                     root.show-discover = true;
                     root.discover-requested();
                 }
+                join-voice-channel(id) => { root.join-voice-channel(id); }
             }
 
             // RIGHT: discover OR (center stage + chat)
@@ -516,7 +526,10 @@ export component MainWindow inherits Window {
                     height: parent.height;
                     spacing: Theme.gap;
 
-                    StreamView {
+                    property <bool> stream-active: root.is-hosting || root.is-watching || root.active-streamer-id != "";
+
+                    // Stream view (shown when streaming)
+                    if stream-active: StreamView {
                         vertical-stretch: 1;
                         members: root.members;
                         is-hosting: root.is-hosting;
@@ -538,13 +551,17 @@ export component MainWindow inherits Window {
                         watch-stream-clicked(host-id, session-id, w, h) => { root.watch-stream(host-id, session-id, w, h); }
                     }
 
-                    VoiceChannelView {
-                        voice-channels: root.voice-channels;
-                        mic-permission-granted: root.mic-permission-granted;
-                        can-manage-channels: root.can-manage-channels;
-                        join-voice-channel(id) => { root.join-voice-channel(id); }
-                        toggle-channel(id) => { root.toggle-voice-channel(id); }
-                        create-channel(name) => { root.create-voice-channel(name); }
+                    // Crew feed (shown when no active stream)
+                    if !stream-active: CrewFeed {
+                        vertical-stretch: 1;
+                        cards: root.feed-cards;
+                        is-cold-start: root.feed-cold-start;
+                        go-live-clicked => {
+                            root.list-capture-sources();
+                            root.source-picker-open = true;
+                        }
+                        card-clicked(id) => { }
+                        invite-clicked => { }
                     }
 
                     ControlBar {
@@ -583,6 +600,7 @@ export component MainWindow inherits Window {
                         reaction-tapped(sentiment) => { root.reaction-tapped(sentiment); }
                         moment-submitted(text) => { root.moment-submitted(text); }
                         moment-dismissed => { root.moment-dismissed(); }
+                        clip-captured => { root.clip-captured(); }
                     }
                 }
 

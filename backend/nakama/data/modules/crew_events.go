@@ -442,6 +442,18 @@ func renderEventFragment(e CrewEvent, ctx context.Context, nk runtime.NakamaModu
 		var d ChatActivityData
 		json.Unmarshal(dataBytes, &d)
 		return fmt.Sprintf("%d messages from %d people in chat", d.MessageCount, d.ActiveUserCount)
+
+	case "clip":
+		var d ClipData
+		json.Unmarshal(dataBytes, &d)
+		name := resolveUsername(ctx, nk, e.ActorID)
+		if name == "" {
+			name = "someone"
+		}
+		return fmt.Sprintf("%s clipped that (%.0fs %s)", name, d.DurationSeconds, d.ClipType)
+
+	case "weekly_recap":
+		return "weekly recap is ready"
 	}
 
 	return ""

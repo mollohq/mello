@@ -1,5 +1,6 @@
 mod auth;
 mod chat;
+mod clip;
 mod connection;
 mod crew;
 mod presence;
@@ -559,6 +560,30 @@ impl Client {
             }
             Command::SubscribeSidebar { crew_ids } => {
                 self.handle_subscribe_sidebar(&crew_ids).await;
+            }
+
+            // --- Clips ---
+            Command::StartClipBuffer => {
+                self.handle_start_clip_buffer();
+            }
+            Command::StopClipBuffer => {
+                self.handle_stop_clip_buffer();
+            }
+            Command::CaptureClip { seconds } => {
+                self.handle_capture_clip(seconds);
+            }
+            Command::PostClip {
+                crew_id,
+                clip_id,
+                duration_seconds,
+                local_path,
+            } => {
+                self.handle_post_clip(&crew_id, &clip_id, duration_seconds, &local_path)
+                    .await;
+            }
+            Command::LoadCrewTimeline { crew_id, cursor } => {
+                self.handle_load_crew_timeline(&crew_id, cursor.as_deref())
+                    .await;
             }
 
             // --- Crew events ---

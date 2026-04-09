@@ -1,5 +1,5 @@
 import { Theme } from "../theme.slint";
-import { CrewData } from "../types.slint";
+import { CrewData, VoiceChannelData, VoiceChannelMember } from "../types.slint";
 
 component VoiceBars inherits HorizontalLayout {
     in property <bool> speaking: false;
@@ -28,31 +28,40 @@ component VoiceBars inherits HorizontalLayout {
     }
 }
 
-component VoiceMiniRow inherits Rectangle {
-    in property <string> initials;
+component VcMemberRow inherits Rectangle {
     in property <string> name;
+    in property <string> initials;
     in property <bool> speaking: false;
+    in property <image> avatar;
+    in property <bool> has-avatar: false;
 
-    height: 18px;
+    height: 22px;
 
     HorizontalLayout {
-        spacing: 6px;
-        alignment: center;
+        spacing: 7px;
+        padding-left: 31px;
 
         Rectangle {
             width: 18px;
             height: 18px;
-            border-radius: 3px;
+            border-radius: 4px;
             background: speaking ? Theme.graphic-med : Theme.graphic-light;
-            border-width: speaking ? 1px : 0px;
-            border-color: speaking ? Theme.graphic-dark : transparent;
+            clip: true;
+            y: (parent.height - self.height) / 2;
 
-            Text {
+            if has-avatar: Image {
+                source: avatar;
+                width: parent.width;
+                height: parent.height;
+                image-fit: cover;
+            }
+
+            if !has-avatar: Text {
                 text: initials;
                 font-family: Theme.font-mono;
-                font-size: 8px;
+                font-size: 7px;
                 font-weight: 600;
-                color: speaking ? Theme.text-primary : Theme.text-secondary;
+                color: white;
                 horizontal-alignment: center;
                 vertical-alignment: center;
             }
@@ -60,60 +69,15 @@ component VoiceMiniRow inherits Rectangle {
 
         Text {
             text: name;
-            font-family: Theme.font-mono;
-            font-size: Theme.font-xs;
-            color: Theme.text-secondary;
+            font-size: 11px;
+            color: #aaaaaa;
             horizontal-stretch: 1;
             overflow: elide;
             vertical-alignment: center;
         }
 
-        VoiceBars {
-            speaking: speaking;
-        }
-    }
-}
-
-component StreamThumbnail inherits Rectangle {
-    in property <bool> small: false;
-
-    width: small ? 56px : 72px;
-    height: small ? 36px : 44px;
-    border-radius: 4px;
-    background: Theme.dark ? #111111 : Theme.surface;
-    border-width: 1px;
-    border-color: Theme.graphic-light;
-
-    // Live dot
-    Rectangle {
-        x: 3px;
-        y: 3px;
-        width: 4px;
-        height: 4px;
-        border-radius: 2px;
-        background: Theme.accent;
-    }
-
-    // Placeholder lines
-    VerticalLayout {
-        alignment: center;
-        spacing: 3px;
-        padding-left: (parent.width - 32px) / 2;
-        padding-right: (parent.width - 32px) / 2;
-
-        Rectangle {
-            height: 2px;
-            border-radius: 1px;
-            background: Theme.graphic-dark;
-            opacity: 0.4;
-        }
-
-        Rectangle {
-            height: 2px;
-            width: 22px;
-            border-radius: 1px;
-            background: Theme.graphic-dark;
-            opacity: 0.4;
+        if speaking: VoiceBars {
+            speaking: true;
         }
     }
 }
@@ -128,861 +92,476 @@ component CrewMsg inherits HorizontalLayout {
     Text {
         text: author;
         font-family: Theme.font-mono;
-        font-size: 9px;
+        font-size: 10px;
         font-weight: 600;
-        color: Theme.text-secondary;
+        color: #555555;
         vertical-alignment: center;
     }
 
     Text {
         text: body;
         font-family: Theme.font-mono;
-        font-size: 9px;
-        color: Theme.text-tertiary;
+        font-size: 10px;
+        color: #444444;
         horizontal-stretch: 1;
         overflow: elide;
         vertical-alignment: center;
     }
 }
 
-component GameRow inherits Rectangle {
-    in property <string> name;
-    in property <string> initial;
-    in property <int> count;
-    in property <int> slot-index: 0;
-
-    property <color> icon-color: slot-index == 0 ? #BD3944
-        : slot-index == 1 ? #00A6DA
-        : slot-index == 2 ? #FF6B00
-        : slot-index == 3 ? #9146FF
-        : #B39B00;
-
-    height: 30px;
-    border-radius: 4px;
-    background: #00000050;
-    border-width: 1px;
-    border-color: #FFFFFF08;
-
-    HorizontalLayout {
-        padding-left: 6px;
-        padding-right: 6px;
-        spacing: 8px;
-
-        Rectangle {
-            width: 22px;
-            height: 22px;
-            border-radius: 4px;
-            background: icon-color;
-            y: (parent.height - self.height) / 2;
-
-            Text {
-                text: initial;
-                font-size: 10px;
-                font-weight: 700;
-                color: white;
-                horizontal-alignment: center;
-                vertical-alignment: center;
-            }
-        }
-
-        Text {
-            text: name;
-            font-size: 9px;
-            font-weight: 500;
-            color: Theme.text-primary;
-            vertical-alignment: center;
-            horizontal-stretch: 1;
-            overflow: elide;
-        }
-
-        Text {
-            text: count;
-            font-size: 8px;
-            font-weight: 600;
-            font-family: Theme.font-mono;
-            color: count >= 3 ? Theme.accent : Theme.text-secondary;
-            vertical-alignment: center;
-        }
-    }
-}
-
 export component CrewPanel inherits Rectangle {
     in property <[CrewData]> crews: [];
     in property <string> active-crew-id: "";
+    in property <[VoiceChannelData]> voice-channels: [];
 
     callback crew-selected(string);
     callback crew-create-requested();
     callback browse-crews-requested();
+    callback join-voice-channel(string);
 
     background: Theme.surface;
     border-width: 1px;
     border-color: Theme.graphic-light;
     border-radius: Theme.r-outer;
 
-    property <length> header-h: 16px;
-    property <length> header-area: Theme.pad + header-h + 20px;
     property <length> bottom-h: 97px;
-    property <length> bottom-area: bottom-h + Theme.pad;
 
-    // --- Header ---
-    HorizontalLayout {
-        x: Theme.pad;
-        y: Theme.pad;
-        width: root.width - 2 * Theme.pad;
-        height: root.header-h;
-        spacing: 8px;
+    VerticalLayout {
+        padding: 14px;
+        spacing: 0px;
 
+        // ===== Section label =====
         Text {
-            text: "YOUR CREWS";
-            font-size: Theme.font-sm;
+            text: "Your crews";
+            font-size: 10px;
             font-weight: 600;
-            letter-spacing: 1.3px;
-            color: Theme.text-secondary;
-            vertical-alignment: center;
+            letter-spacing: 1.2px;
+            color: #555555;
+            height: 20px;
         }
 
-        Rectangle { horizontal-stretch: 1; }
+        // ===== ACTIVE CREW CARD =====
+        for crew[i] in crews: Rectangle {
+            visible: crew.id == active-crew-id;
+            height: self.visible ? Math.min(self.preferred-height, root.height * 0.5) : 0px;
 
-        Rectangle {
-            width: 6px;
-            height: 6px;
-            border-radius: 3px;
-            background: Theme.accent;
-            y: (parent.height - self.height) / 2;
-        }
-    }
-
-    // --- Crew cards (scrollable, fills middle) ---
-    Flickable {
-        x: Theme.pad;
-        y: root.header-area;
-        width: root.width - 2 * Theme.pad;
-        height: root.height - root.header-area - root.bottom-area;
-
-        VerticalLayout {
-            spacing: 0px;
-
-                // ===== ACTIVE NOW section =====
-                Text {
-                    text: "ACTIVE NOW";
-                    font-size: Theme.font-xs;
-                    font-weight: 600;
-                    letter-spacing: 1.3px;
-                    color: Theme.text-secondary;
-                    height: 16px;
-                }
+            VerticalLayout {
+                spacing: 0px;
 
                 Rectangle {
-                    height: 12px;
-                }
+                    border-radius: 10px;
+                    background: #222226;
+                    border-width: 1px;
+                    border-color: #EB4D5F33;
+                    clip: true;
 
-                for crew[i] in crews: Rectangle {
-                    visible: crew.online-count > 0 || crew.id == active-crew-id;
-                    height: self.visible ? self.preferred-height : 0px;
-
-                    // Card wrapper
                     VerticalLayout {
                         spacing: 0px;
 
+                        // --- Header ---
                         Rectangle {
-                            border-radius: Theme.r-inner;
-                            background: crew.id == active-crew-id ? (Theme.dark ? #FF1E5612 : #FF1E560D) : Theme.bg-app;
-                            border-width: 1px;
-                            border-color: crew.id == active-crew-id ? Theme.accent : (card-hover.has-hover ? Theme.graphic-med : transparent);
-                            clip: true;
+                            height: 54px;
+                            border-width: 0px;
 
-                            VerticalLayout {
+                            HorizontalLayout {
                                 padding: 12px;
-                                spacing: 0px;
+                                padding-left: 14px;
+                                padding-right: 14px;
+                                spacing: 10px;
 
-                                // --- Card header ---
-                                HorizontalLayout {
-                                    height: crew.id == active-crew-id ? 24px : 20px;
-                                    spacing: 8px;
+                                if crew.has-avatar: Rectangle {
+                                    width: 30px;
+                                    height: 30px;
+                                    border-radius: 7px;
+                                    clip: true;
+                                    y: (parent.height - self.height) / 2;
 
-                                    if crew.has-avatar: Rectangle {
-                                        width: crew.id == active-crew-id ? 24px : 20px;
-                                        height: self.width;
-                                        border-radius: 4px;
-                                        clip: true;
-
-                                        Image {
-                                            source: crew.avatar;
-                                            width: parent.width;
-                                            height: parent.height;
-                                            image-fit: cover;
-                                        }
+                                    Image {
+                                        source: crew.avatar;
+                                        width: parent.width;
+                                        height: parent.height;
+                                        image-fit: cover;
                                     }
+                                }
 
-                                    if !crew.has-avatar: VerticalLayout {
-                                        alignment: center;
-                                        width: 6px;
-
-                                        Rectangle {
-                                            width: 6px;
-                                            height: 6px;
-                                            border-radius: 3px;
-                                            background: Theme.accent;
-                                        }
-                                    }
+                                if !crew.has-avatar: Rectangle {
+                                    width: 30px;
+                                    height: 30px;
+                                    border-radius: 7px;
+                                    background: Theme.accent;
+                                    y: (parent.height - self.height) / 2;
 
                                     Text {
                                         text: crew.name;
-                                        font-family: Theme.font-mono;
-                                        font-size: crew.id == active-crew-id ? 14px : 12px;
-                                        font-weight: 500;
-                                        color: Theme.text-primary;
-                                        horizontal-stretch: 1;
-                                        overflow: elide;
+                                        font-size: 10px;
+                                        font-weight: 700;
+                                        color: white;
+                                        horizontal-alignment: center;
                                         vertical-alignment: center;
                                     }
+                                }
 
-                                    if crew.sfu-enabled: Rectangle {
-                                        width: 30px;
-                                        height: 16px;
-                                        border-radius: 3px;
-                                        background: #7C3AED;
-                                        y: (parent.height - self.height) / 2;
-
-                                        Text {
-                                            text: "SFU";
-                                            font-size: 9px;
-                                            font-weight: 700;
-                                            letter-spacing: 0.5px;
-                                            color: white;
-                                            horizontal-alignment: center;
-                                            vertical-alignment: center;
-                                        }
-                                    }
+                                VerticalLayout {
+                                    alignment: center;
+                                    horizontal-stretch: 1;
+                                    spacing: 2px;
 
                                     Text {
-                                        text: crew.online-count + " / " + crew.member-count;
-                                        font-family: Theme.font-mono;
-                                        font-size: crew.id == active-crew-id ? Theme.font-sm : Theme.font-xs;
-                                        color: crew.id == active-crew-id ? Theme.text-primary : Theme.text-secondary;
-                                        vertical-alignment: center;
-                                    }
-                                }
-
-                                // ===== EMPTY state (crew with only the owner) =====
-                                if crew.id == active-crew-id && crew.member-count <= 1: VerticalLayout {
-                                    spacing: 10px;
-
-                                    Rectangle { height: 2px; }
-
-                                    Rectangle {
-                                        border-radius: 4px;
-                                        border-width: 1px;
-                                        border-color: Theme.graphic-med;
-                                        background: #0000001A;
-
-                                        VerticalLayout {
-                                            padding-top: 16px;
-                                            padding-bottom: 16px;
-                                            padding-left: 8px;
-                                            padding-right: 8px;
-                                            spacing: 8px;
-                                            alignment: center;
-
-                                            Image {
-                                                source: @image-url("../icons/user-plus.svg");
-                                                width: 24px;
-                                                height: 24px;
-                                                colorize: Theme.text-tertiary;
-                                                horizontal-alignment: center;
-                                            }
-
-                                            Text {
-                                                text: "It's quiet in here.\nInvite your first member to start.";
-                                                font-size: 10px;
-                                                color: Theme.text-secondary;
-                                                horizontal-alignment: center;
-                                                wrap: word-wrap;
-                                            }
-                                        }
+                                        text: crew.name;
+                                        font-size: 13px;
+                                        font-weight: 600;
+                                        color: Theme.text-primary;
+                                        overflow: elide;
                                     }
 
-                                    Rectangle {
-                                        height: 28px;
-                                        border-radius: 3px;
-                                        background: Theme.accent;
-
-                                        HorizontalLayout {
-                                            alignment: center;
-                                            spacing: 6px;
-
-                                            Image {
-                                                source: @image-url("../icons/user-plus.svg");
-                                                width: 12px;
-                                                height: 12px;
-                                                colorize: white;
-                                                y: (parent.height - self.height) / 2;
-                                            }
-
-                                            Text {
-                                                text: "Invite your first member";
-                                                font-size: 10px;
-                                                font-weight: 600;
-                                                color: white;
-                                                vertical-alignment: center;
-                                            }
-                                        }
-
-                                        empty-invite-hover := TouchArea {
-                                            mouse-cursor: pointer;
-                                        }
-                                    }
-                                }
-
-                                // ===== QUIET state (members exist, no games) =====
-                                if crew.id == active-crew-id && crew.member-count > 1 && crew.game-count == 0: VerticalLayout {
-                                    spacing: 6px;
-
-                                    Rectangle { height: 4px; }
-
-                                    VerticalLayout {
-                                        padding-top: 24px;
-                                        padding-bottom: 24px;
-                                        padding-left: 12px;
-                                        padding-right: 12px;
-                                        spacing: 12px;
-                                        alignment: center;
-
-                                        HorizontalLayout {
-                                            alignment: center;
-                                            height: 48px;
-
-                                            Rectangle {
-                                                width: 48px;
-                                                height: 48px;
-                                                border-radius: 24px;
-                                                background: Theme.graphic-light;
-
-                                                Image {
-                                                    source: @image-url("../icons/circle-minus.svg");
-                                                    width: 24px;
-                                                    height: 24px;
-                                                    colorize: Theme.text-tertiary;
-                                                    x: (parent.width - self.width) / 2;
-                                                    y: (parent.height - self.height) / 2;
-                                                }
-                                            }
-                                        }
-
-                                        VerticalLayout {
-                                            spacing: 4px;
-                                            alignment: center;
-
-                                            Text {
-                                                text: "No one is playing";
-                                                font-size: 11px;
-                                                font-weight: 500;
-                                                color: Theme.text-secondary;
-                                                horizontal-alignment: center;
-                                            }
-
-                                            Text {
-                                                text: crew.online-count + " members online";
-                                                font-size: 9px;
-                                                color: Theme.text-tertiary;
-                                                horizontal-alignment: center;
-                                            }
-                                        }
-                                    }
-
-                                    // Catch-up card (muted variant)
-                                    if crew.catchup-text != "": Rectangle {
-                                        border-radius: 6px;
-                                        background: #00000026;
-                                        clip: true;
-
-                                        HorizontalLayout {
-                                            spacing: 0px;
-
-                                            Rectangle {
-                                                width: 2px;
-                                                background: crew.has-catchup ? Theme.accent : Theme.graphic-med;
-                                            }
-
-                                            VerticalLayout {
-                                                padding: 10px;
-                                                padding-left: 12px;
-                                                spacing: 6px;
-
-                                                HorizontalLayout {
-                                                    spacing: 6px;
-                                                    height: 12px;
-
-                                                    Image {
-                                                        source: crew.has-catchup
-                                                            ? @image-url("../icons/mic.svg")
-                                                            : @image-url("../icons/circle-minus.svg");
-                                                        width: 10px;
-                                                        height: 10px;
-                                                        colorize: crew.has-catchup ? Theme.accent : Theme.text-secondary;
-                                                        y: (parent.height - self.height) / 2;
-                                                    }
-
-                                                    Text {
-                                                        text: "CATCH-UP";
-                                                        font-size: 9px;
-                                                        font-weight: 600;
-                                                        color: crew.has-catchup ? Theme.accent : Theme.text-secondary;
-                                                        letter-spacing: 0.8px;
-                                                        vertical-alignment: center;
-                                                    }
-                                                }
-
-                                                Text {
-                                                    text: crew.catchup-text;
-                                                    font-size: 11px;
-                                                    color: crew.has-catchup ? Theme.text-primary : Theme.text-secondary;
-                                                    wrap: word-wrap;
-                                                    horizontal-alignment: left;
-                                                }
-                                            }
-                                        }
-                                    }
-
-                                    // Invite + more buttons
-                                    HorizontalLayout {
-                                        spacing: 8px;
-                                        height: 28px;
-
-                                        Rectangle {
-                                            horizontal-stretch: 1;
-                                            border-radius: 4px;
-                                            border-width: 1px;
-                                            border-color: quiet-invite-hover.has-hover ? Theme.text-secondary : Theme.graphic-med;
-
-                                            HorizontalLayout {
-                                                alignment: center;
-                                                spacing: 4px;
-
-                                                Image {
-                                                    source: @image-url("../icons/user-plus.svg");
-                                                    width: 10px;
-                                                    height: 10px;
-                                                    colorize: quiet-invite-hover.has-hover ? Theme.text-primary : Theme.text-secondary;
-                                                    y: (parent.height - self.height) / 2;
-                                                }
-
-                                                Text {
-                                                    text: "Invite";
-                                                    font-size: 10px;
-                                                    font-weight: 500;
-                                                    color: quiet-invite-hover.has-hover ? Theme.text-primary : Theme.text-secondary;
-                                                    vertical-alignment: center;
-                                                }
-                                            }
-
-                                            quiet-invite-hover := TouchArea {
-                                                mouse-cursor: pointer;
-                                            }
-                                        }
-
-                                        Rectangle {
-                                            width: 28px;
-                                            border-radius: 4px;
-                                            border-width: 1px;
-                                            border-color: quiet-more-hover.has-hover ? Theme.text-secondary : Theme.graphic-med;
-
-                                            Text {
-                                                text: "...";
-                                                font-size: 10px;
-                                                color: quiet-more-hover.has-hover ? Theme.text-primary : Theme.text-secondary;
-                                                horizontal-alignment: center;
-                                                vertical-alignment: center;
-                                            }
-
-                                            quiet-more-hover := TouchArea {
-                                                mouse-cursor: pointer;
-                                            }
-                                        }
-                                    }
-                                }
-
-                                // ===== ACTIVE state (games happening) =====
-                                if crew.id == active-crew-id && crew.game-count > 0: VerticalLayout {
-                                    spacing: 6px;
-
-                                    Rectangle { height: 4px; }
-
-                                    if crew.game-count >= 1: GameRow {
-                                        name: crew.g0-name;
-                                        initial: crew.g0-initial;
-                                        count: crew.g0-count;
-                                        slot-index: 0;
-                                    }
-                                    if crew.game-count >= 2: GameRow {
-                                        name: crew.g1-name;
-                                        initial: crew.g1-initial;
-                                        count: crew.g1-count;
-                                        slot-index: 1;
-                                    }
-                                    if crew.game-count >= 3: GameRow {
-                                        name: crew.g2-name;
-                                        initial: crew.g2-initial;
-                                        count: crew.g2-count;
-                                        slot-index: 2;
-                                    }
-                                    if crew.game-count >= 4: GameRow {
-                                        name: crew.g3-name;
-                                        initial: crew.g3-initial;
-                                        count: crew.g3-count;
-                                        slot-index: 3;
-                                    }
-                                    if crew.game-count >= 5: GameRow {
-                                        name: crew.g4-name;
-                                        initial: crew.g4-initial;
-                                        count: crew.g4-count;
-                                        slot-index: 4;
-                                    }
-
-                                    // Catch-up card (accent variant)
-                                    if crew.catchup-text != "": Rectangle {
-                                        border-radius: 4px;
-                                        background: #00000040;
-                                        clip: true;
-
-                                        HorizontalLayout {
-                                            spacing: 0px;
-
-                                            Rectangle {
-                                                width: 2px;
-                                                background: Theme.accent;
-                                            }
-
-                                            VerticalLayout {
-                                                padding: 7px;
-                                                padding-left: 10px;
-                                                spacing: 3px;
-
-                                                HorizontalLayout {
-                                                    spacing: 4px;
-                                                    height: 10px;
-
-                                                    Image {
-                                                        source: @image-url("../icons/mic.svg");
-                                                        width: 8px;
-                                                        height: 8px;
-                                                        colorize: Theme.accent;
-                                                        y: (parent.height - self.height) / 2;
-                                                    }
-
-                                                    Text {
-                                                        text: "CATCH-UP";
-                                                        font-size: 8px;
-                                                        font-weight: 600;
-                                                        color: Theme.accent;
-                                                        letter-spacing: 0.8px;
-                                                        vertical-alignment: center;
-                                                    }
-                                                }
-
-                                                Text {
-                                                    text: crew.catchup-text;
-                                                    font-size: 10px;
-                                                    color: Theme.text-primary;
-                                                    wrap: word-wrap;
-                                                }
-                                            }
-                                        }
-                                    }
-
-                                    // Invite + more buttons
                                     HorizontalLayout {
                                         spacing: 6px;
-                                        height: 24px;
 
-                                        Rectangle {
-                                            horizontal-stretch: 1;
+                                        if crew.sfu-enabled: Rectangle {
+                                            width: 30px;
+                                            height: 14px;
                                             border-radius: 3px;
-                                            border-width: 1px;
-                                            border-color: active-invite-hover.has-hover ? Theme.text-secondary : Theme.graphic-med;
-
-                                            HorizontalLayout {
-                                                alignment: center;
-                                                spacing: 4px;
-
-                                                Text {
-                                                    text: "+";
-                                                    font-size: 11px;
-                                                    color: active-invite-hover.has-hover ? Theme.text-primary : Theme.text-secondary;
-                                                    vertical-alignment: center;
-                                                }
-
-                                                Text {
-                                                    text: "Invite";
-                                                    font-size: 9px;
-                                                    font-weight: 500;
-                                                    color: active-invite-hover.has-hover ? Theme.text-primary : Theme.text-secondary;
-                                                    vertical-alignment: center;
-                                                }
-                                            }
-
-                                            active-invite-hover := TouchArea {
-                                                mouse-cursor: pointer;
-                                            }
-                                        }
-
-                                        Rectangle {
-                                            width: 24px;
-                                            border-radius: 3px;
-                                            border-width: 1px;
-                                            border-color: active-more-hover.has-hover ? Theme.text-secondary : Theme.graphic-med;
+                                            background: #4ade8022;
 
                                             Text {
-                                                text: "...";
-                                                font-size: 10px;
-                                                color: active-more-hover.has-hover ? Theme.text-primary : Theme.text-secondary;
+                                                text: "SFU";
+                                                font-size: 8px;
+                                                font-weight: 700;
+                                                letter-spacing: 0.5px;
+                                                color: #4ade80;
                                                 horizontal-alignment: center;
                                                 vertical-alignment: center;
                                             }
-
-                                            active-more-hover := TouchArea {
-                                                mouse-cursor: pointer;
-                                            }
-                                        }
-                                    }
-                                }
-
-                                // ===== INACTIVE card body =====
-                                if crew.id != active-crew-id && (crew.voice-count > 0 || crew.has-stream): VerticalLayout {
-                                    spacing: 0px;
-
-                                    Rectangle {
-                                        height: 10px;
-                                    }
-
-                                    // Preview: stream thumbnail + voice rows
-                                    HorizontalLayout {
-                                        spacing: 8px;
-
-                                        if crew.has-stream: StreamThumbnail {
-                                            small: false;
                                         }
 
-                                        if crew.voice-count > 0: VerticalLayout {
-                                            spacing: 6px;
-                                            vertical-stretch: 1;
-
-                                            if crew.voice-count >= 1: VoiceMiniRow {
-                                                initials: crew.v0-initials;
-                                                name: crew.v0-name;
-                                                speaking: crew.v0-speaking;
-                                            }
-                                            if crew.voice-count >= 2: VoiceMiniRow {
-                                                initials: crew.v1-initials;
-                                                name: crew.v1-name;
-                                                speaking: crew.v1-speaking;
-                                            }
-                                            if crew.voice-count >= 3: VoiceMiniRow {
-                                                initials: crew.v2-initials;
-                                                name: crew.v2-name;
-                                                speaking: crew.v2-speaking;
-                                            }
+                                        Text {
+                                            text: crew.online-count + " / " + crew.member-count;
+                                            font-size: 11px;
+                                            color: #666666;
+                                            vertical-alignment: center;
                                         }
-                                    }
-                                }
-
-                                // Messages (shown for any non-active crew with messages)
-                                if crew.id != active-crew-id && crew.msg-count > 0: VerticalLayout {
-                                    spacing: 0px;
-
-                                    Rectangle {
-                                        height: 10px;
-                                    }
-
-                                    Rectangle {
-                                        height: 1px;
-                                        background: Theme.graphic-light;
-                                    }
-
-                                    Rectangle {
-                                        height: 10px;
-                                    }
-
-                                    CrewMsg {
-                                        author: crew.m0-author;
-                                        body: crew.m0-text;
-                                    }
-
-                                    if crew.msg-count >= 2: Rectangle {
-                                        height: 5px;
-                                    }
-
-                                    if crew.msg-count >= 2: CrewMsg {
-                                        author: crew.m1-author;
-                                        body: crew.m1-text;
-                                    }
-                                }
-                            }
-
-                            card-hover := TouchArea {
-                                clicked => {
-                                    crew-selected(crew.id);
-                                }
-                            }
-                        }
-
-                        // Spacing between cards
-                        Rectangle {
-                            height: 8px;
-                        }
-                    }
-                }
-
-                // ===== IDLE section =====
-                Rectangle {
-                    height: 20px;
-                }
-
-                Text {
-                    text: "IDLE";
-                    font-size: Theme.font-xs;
-                    font-weight: 600;
-                    letter-spacing: 1.3px;
-                    color: Theme.text-secondary;
-                    height: 16px;
-                }
-
-                Rectangle {
-                    height: 12px;
-                }
-
-                for crew[i] in crews: Rectangle {
-                    visible: crew.online-count <= 0 && crew.id != active-crew-id;
-                    height: self.visible ? self.preferred-height : 0px;
-                    opacity: 0.5;
-
-                    VerticalLayout {
-                        spacing: 0px;
-
-                        Rectangle {
-                            border-radius: Theme.r-inner;
-                            background: Theme.bg-app;
-                            border-width: 1px;
-                            border-color: idle-hover.has-hover ? Theme.graphic-med : transparent;
-
-                            VerticalLayout {
-                                padding: 12px;
-                                spacing: 0px;
-
-                                HorizontalLayout {
-                                    height: 20px;
-                                    spacing: 8px;
-
-                                    if crew.has-avatar: Rectangle {
-                                        width: 20px;
-                                        height: 20px;
-                                        border-radius: 4px;
-                                        clip: true;
-
-                                        Image {
-                                            source: crew.avatar;
-                                            width: parent.width;
-                                            height: parent.height;
-                                            image-fit: cover;
-                                        }
-                                    }
-
-                                    if !crew.has-avatar: VerticalLayout {
-                                        alignment: center;
-                                        width: 6px;
-
-                                        Rectangle {
-                                            width: 6px;
-                                            height: 6px;
-                                            border-radius: 3px;
-                                            background: Theme.accent;
-                                        }
-                                    }
-
-                                    Text {
-                                        text: crew.name;
-                                        font-family: Theme.font-mono;
-                                        font-size: 12px;
-                                        font-weight: 500;
-                                        color: Theme.text-secondary;
-                                        horizontal-stretch: 1;
-                                        overflow: elide;
-                                        vertical-alignment: center;
-                                    }
-
-                                    Text {
-                                        text: "0";
-                                        font-family: Theme.font-mono;
-                                        font-size: Theme.font-xs;
-                                        color: Theme.text-secondary;
-                                        vertical-alignment: center;
                                     }
                                 }
 
                                 Rectangle {
-                                    height: 4px;
-                                }
-
-                                Text {
-                                    text: "No members online";
-                                    font-family: Theme.font-mono;
-                                    font-size: Theme.font-xs;
-                                    color: Theme.text-tertiary;
+                                    width: 8px;
+                                    height: 8px;
+                                    border-radius: 4px;
+                                    background: Theme.accent;
+                                    y: (parent.height - self.height) / 2;
                                 }
                             }
 
-                            idle-hover := TouchArea {
-                                clicked => {
-                                    crew-selected(crew.id);
+                            // Bottom border
+                            Rectangle {
+                                y: parent.height - 1px;
+                                height: 1px;
+                                background: #2a2a2e;
+                            }
+                        }
+
+                        // --- Voice channels ---
+                        Flickable {
+                            VerticalLayout {
+                                padding-top: 8px;
+                                padding-bottom: 8px;
+                                padding-left: 10px;
+                                padding-right: 10px;
+                                spacing: 2px;
+
+                                for ch in voice-channels: VerticalLayout {
+                                    spacing: 4px;
+
+                                    // Channel row
+                                    Rectangle {
+                                        height: 30px;
+                                        border-radius: 6px;
+                                        background: ch.active ? #2a2a2e : (ch-hover.has-hover ? #2a2a2e : transparent);
+
+                                        HorizontalLayout {
+                                            padding-left: 8px;
+                                            padding-right: 8px;
+                                            spacing: 7px;
+
+                                            Image {
+                                                source: @image-url("../icons/mic.svg");
+                                                width: 14px;
+                                                height: 14px;
+                                                colorize: ch.active ? #aaaaaa : #666666;
+                                                y: (parent.height - self.height) / 2;
+                                            }
+
+                                            Text {
+                                                text: ch.name;
+                                                font-size: 12px;
+                                                color: ch.active ? Theme.text-primary : #888888;
+                                                horizontal-stretch: 1;
+                                                overflow: elide;
+                                                vertical-alignment: center;
+                                            }
+
+                                            Text {
+                                                text: ch.member-count;
+                                                font-size: 11px;
+                                                font-weight: 500;
+                                                color: ch.member-count > 0 ? #4ade80 : #444444;
+                                                vertical-alignment: center;
+                                                min-width: 14px;
+                                                horizontal-alignment: right;
+                                            }
+                                        }
+
+                                        ch-hover := TouchArea {
+                                            mouse-cursor: pointer;
+                                            clicked => {
+                                                join-voice-channel(ch.id);
+                                            }
+                                        }
+                                    }
+
+                                    // Members under channel
+                                    if ch.member-count > 0: VerticalLayout {
+                                        spacing: 4px;
+
+                                        for member in ch.members: VcMemberRow {
+                                            name: member.name;
+                                            initials: member.initials;
+                                            speaking: member.speaking;
+                                            avatar: member.avatar;
+                                            has-avatar: member.has-avatar;
+                                        }
+                                    }
+
+                                    Rectangle { height: 2px; }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Rectangle { height: 12px; }
+            }
+        }
+
+        // ===== Other crews section label =====
+        Text {
+            text: "Other crews";
+            font-size: 10px;
+            font-weight: 600;
+            letter-spacing: 1.2px;
+            color: #555555;
+            height: 20px;
+        }
+
+        Rectangle { height: 4px; }
+
+        // ===== NON-ACTIVE CREW CARDS =====
+        Flickable {
+            vertical-stretch: 1;
+
+            VerticalLayout {
+                spacing: 6px;
+
+                for crew[i] in crews: Rectangle {
+                    visible: crew.id != active-crew-id;
+                    height: self.visible ? self.preferred-height : 0px;
+
+                    Rectangle {
+                        border-radius: 8px;
+                        background: other-hover.has-hover ? #232328 : #1e1e22;
+                        border-width: 1px;
+                        border-color: other-hover.has-hover ? #363636 : #2a2a2e;
+
+                        VerticalLayout {
+                            padding: 10px;
+                            padding-left: 12px;
+                            padding-right: 12px;
+                            spacing: 6px;
+
+                            // --- Header row ---
+                            HorizontalLayout {
+                                spacing: 7px;
+                                height: 22px;
+
+                                if crew.has-avatar: Rectangle {
+                                    width: 22px;
+                                    height: 22px;
+                                    border-radius: 5px;
+                                    clip: true;
+                                    opacity: crew.voice-count > 0 || crew.has-stream ? 0.8 : 0.6;
+
+                                    Image {
+                                        source: crew.avatar;
+                                        width: parent.width;
+                                        height: parent.height;
+                                        image-fit: cover;
+                                    }
+                                }
+
+                                if !crew.has-avatar: Rectangle {
+                                    width: 22px;
+                                    height: 22px;
+                                    border-radius: 5px;
+                                    background: Theme.accent;
+                                    opacity: 0.6;
+
+                                    Text {
+                                        text: crew.name;
+                                        font-size: 8px;
+                                        font-weight: 700;
+                                        color: #666666;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                    }
+                                }
+
+                                Text {
+                                    text: crew.name;
+                                    font-size: 12px;
+                                    font-weight: 500;
+                                    color: other-hover.has-hover ? #aaaaaa : #777777;
+                                    horizontal-stretch: 1;
+                                    overflow: elide;
+                                    vertical-alignment: center;
+                                }
+
+                                // Clips FOMO badge
+                                if crew.clip-count > 0: Rectangle {
+                                    width: 38px;
+                                    height: 18px;
+                                    border-radius: 4px;
+                                    background: #EB4D5F18;
+                                    border-width: 1px;
+                                    border-color: #EB4D5F22;
+
+                                    HorizontalLayout {
+                                        alignment: center;
+                                        spacing: 3px;
+
+                                        Text {
+                                            text: "✂";
+                                            font-size: 8px;
+                                            color: #EB4D5F88;
+                                            vertical-alignment: center;
+                                        }
+
+                                        Text {
+                                            text: crew.clip-count;
+                                            font-size: 9px;
+                                            font-weight: 700;
+                                            color: #EB4D5F88;
+                                            vertical-alignment: center;
+                                        }
+                                    }
+                                }
+                            }
+
+                            // --- Activity line ---
+                            if crew.has-stream: HorizontalLayout {
+                                spacing: 5px;
+                                height: 14px;
+                                padding-left: 29px;
+
+                                Rectangle {
+                                    width: 4px;
+                                    height: 4px;
+                                    border-radius: 2px;
+                                    background: Theme.accent;
+                                    opacity: 0.6;
+                                    y: (parent.height - self.height) / 2;
+                                }
+
+                                Text {
+                                    text: crew.stream-name + " streaming";
+                                    font-size: 10px;
+                                    color: #555555;
+                                    overflow: elide;
+                                    vertical-alignment: center;
+                                }
+                            }
+
+                            if !crew.has-stream && crew.voice-count > 0: HorizontalLayout {
+                                spacing: 5px;
+                                height: 14px;
+                                padding-left: 29px;
+
+                                Rectangle {
+                                    width: 4px;
+                                    height: 4px;
+                                    border-radius: 2px;
+                                    background: #4ade80;
+                                    opacity: 0.6;
+                                    y: (parent.height - self.height) / 2;
+                                }
+
+                                Text {
+                                    text: crew.voice-count + " in voice";
+                                    font-size: 10px;
+                                    color: #555555;
+                                    vertical-alignment: center;
+                                }
+                            }
+
+                            // --- Chat preview ---
+                            if crew.msg-count > 0: VerticalLayout {
+                                spacing: 3px;
+                                padding-left: 29px;
+
+                                CrewMsg {
+                                    author: crew.m0-author;
+                                    body: crew.m0-text;
+                                }
+
+                                if crew.msg-count >= 2: CrewMsg {
+                                    author: crew.m1-author;
+                                    body: crew.m1-text;
                                 }
                             }
                         }
 
-                        Rectangle {
-                            height: 8px;
+                        other-hover := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => {
+                                crew-selected(crew.id);
+                            }
                         }
                     }
                 }
             }
         }
 
-    // --- Bottom actions (absolute positioned at bottom) ---
-    VerticalLayout {
-        x: Theme.pad;
-        y: root.height - root.bottom-area;
-        width: root.width - 2 * Theme.pad;
-        height: root.bottom-h;
-        spacing: 8px;
+        Rectangle { height: 8px; }
 
+        // ===== Bottom actions =====
         Rectangle {
             height: 1px;
-            background: Theme.graphic-light;
+            background: #2a2a2e;
         }
 
+        Rectangle { height: 10px; }
+
         Rectangle {
-            height: 40px;
-            border-radius: Theme.r-inner;
-            background: browse-touch.has-hover ? Theme.hover-overlay : transparent;
+            height: 34px;
+            border-radius: 6px;
+            background: browse-touch.has-hover ? #222226 : transparent;
 
             HorizontalLayout {
-                padding-left: 14px;
-                padding-right: 14px;
-                spacing: 10px;
+                padding-left: 10px;
+                spacing: 8px;
                 alignment: start;
 
                 Image {
                     source: @image-url("../icons/search.svg");
-                    width: 16px;
-                    height: 16px;
-                    colorize: browse-touch.has-hover ? Theme.text-primary : Theme.text-secondary;
+                    width: 14px;
+                    height: 14px;
+                    colorize: browse-touch.has-hover ? #888888 : #555555;
                     y: (parent.height - self.height) / 2;
                 }
 
                 Text {
                     text: "Browse crews";
-                    font-family: Theme.font-mono;
-                    font-size: Theme.font-md;
-                    color: browse-touch.has-hover ? Theme.text-primary : Theme.text-secondary;
+                    font-size: 12px;
+                    color: browse-touch.has-hover ? #888888 : #555555;
                     vertical-alignment: center;
                 }
             }
@@ -996,29 +575,26 @@ export component CrewPanel inherits Rectangle {
         }
 
         Rectangle {
-            height: 40px;
-            border-radius: Theme.r-inner;
-            background: new-crew-touch.has-hover ? Theme.hover-overlay : transparent;
+            height: 34px;
+            border-radius: 6px;
+            background: new-crew-touch.has-hover ? #222226 : transparent;
 
             HorizontalLayout {
-                padding-left: 14px;
-                padding-right: 14px;
-                spacing: 10px;
+                padding-left: 10px;
+                spacing: 8px;
                 alignment: start;
 
                 Text {
                     text: "+";
-                    font-family: Theme.font-mono;
                     font-size: 16px;
-                    color: new-crew-touch.has-hover ? Theme.text-primary : Theme.text-secondary;
+                    color: new-crew-touch.has-hover ? #888888 : #555555;
                     vertical-alignment: center;
                 }
 
                 Text {
                     text: "New crew";
-                    font-family: Theme.font-mono;
-                    font-size: Theme.font-md;
-                    color: new-crew-touch.has-hover ? Theme.text-primary : Theme.text-secondary;
+                    font-size: 12px;
+                    color: new-crew-touch.has-hover ? #888888 : #555555;
                     vertical-alignment: center;
                 }
             }
@@ -1032,4 +608,3 @@ export component CrewPanel inherits Rectangle {
         }
     }
 }
-

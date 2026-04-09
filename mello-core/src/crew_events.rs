@@ -49,3 +49,58 @@ pub struct GameSessionEndRequest {
     #[serde(default)]
     pub duration_min: u32,
 }
+
+// --- Timeline (crew feed) ---
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TimelineEntry {
+    pub id: String,
+    #[serde(rename = "type")]
+    pub entry_type: String,
+    #[serde(default)]
+    pub actor_id: String,
+    #[serde(default)]
+    pub ts: i64,
+    #[serde(default)]
+    pub score: i32,
+    #[serde(default)]
+    pub data: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TimelineResponse {
+    pub crew_id: String,
+    #[serde(default)]
+    pub entries: Vec<TimelineEntry>,
+    #[serde(default)]
+    pub cursor: Option<String>,
+    #[serde(default)]
+    pub has_more: bool,
+}
+
+// --- PostClip ---
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PostClipRequest {
+    pub crew_id: String,
+    pub clip_id: String,
+    #[serde(default)]
+    pub clip_type: String,
+    pub duration_seconds: f64,
+    #[serde(default)]
+    pub participants: Vec<String>,
+    #[serde(default)]
+    pub game: String,
+    #[serde(default)]
+    pub local_path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PostClipResponse {
+    #[serde(default)]
+    pub success: bool,
+    #[serde(default)]
+    pub event_id: String,
+    #[serde(default)]
+    pub clip_id: String,
+}

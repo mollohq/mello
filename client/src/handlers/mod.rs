@@ -1,5 +1,6 @@
 mod auth;
 mod chat;
+mod clip;
 mod crew;
 mod game;
 mod presence;
@@ -86,6 +87,14 @@ pub fn handle_event(ctx: &AppContext, event: Event) {
         | Event::MomentPostFailed { .. }
         | Event::UserAvatarLoaded { .. }
         | Event::ProfileUpdated { .. } => presence::handle(ctx, event),
+
+        // Clips
+        Event::ClipBufferStarted
+        | Event::ClipBufferStopped
+        | Event::ClipCaptured { .. }
+        | Event::ClipCaptureFailed { .. }
+        | Event::ClipPosted { .. }
+        | Event::TimelineLoaded { .. } => clip::handle(ctx, event),
 
         // Game sensing
         Event::GameDetected { .. } | Event::GameEnded { .. } | Event::PostGameTimeout => {

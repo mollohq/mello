@@ -391,8 +391,17 @@ bool PeerConnectionImpl::send_reliable(const uint8_t* data, int size) {
 }
 
 bool PeerConnectionImpl::send_audio(const uint8_t* data, int size) {
-    bool open = audio_track_ && audio_track_->isOpen();
-    if (!open) return false;
+    bool has_track = (audio_track_ != nullptr);
+    bool open = has_track && audio_track_->isOpen();
+    if (!open) {
+        auto count = send_audio_count_.fetch_add(1, std::memory_order_relaxed);
+        if (count < 10 || (count % 500) == 0) {
+            fprintf(stderr, "[mello-rtp] send_audio SKIP #%d: has_track=%d open=%d\n",
+                    count + 1, has_track ? 1 : 0, open ? 1 : 0);
+            fflush(stderr);
+        }
+        return false;
+    }
     try {
         audio_track_->send(reinterpret_cast<const std::byte*>(data), static_cast<size_t>(size));
         return true;

@@ -145,6 +145,9 @@ export component ControlBar inherits Rectangle {
     callback reaction-tapped(string);
     callback moment-submitted(string);
     callback moment-dismissed();
+
+    // Clip
+    callback clip-captured();
     background: Theme.surface;
     border-width: 1px;
     border-color: Theme.graphic-light;
@@ -543,6 +546,31 @@ export component ControlBar inherits Rectangle {
             horizontal-stretch: 0;
             spacing: 6px;
             alignment: center;
+            // Clip button (only when in voice)
+            if in-voice: Rectangle {
+                width: 40px;
+                height: 40px;
+                border-radius: 8px;
+                background: clip-hover.has-hover ? #EB4D5F33 : #EB4D5F22;
+                border-width: 1px;
+                border-color: #EB4D5F44;
+
+                Text {
+                    text: "✂";
+                    font-size: 16px;
+                    color: Theme.accent;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+
+                clip-hover := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        clip-captured();
+                    }
+                }
+            }
+
             ActionButton {
                 icon: @image-url("../icons/phone.svg");
                 alert: in-voice;

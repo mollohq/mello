@@ -6,6 +6,10 @@ fn default_preset() -> u32 {
     2
 } // Medium
 
+fn default_clip_seconds() -> f32 {
+    30.0
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Command {
     TryRestore,
@@ -224,6 +228,26 @@ pub enum Command {
     },
     SubscribeSidebar {
         crew_ids: Vec<String>,
+    },
+
+    // --- Clips ---
+    StartClipBuffer,
+    StopClipBuffer,
+    CaptureClip {
+        #[serde(default = "default_clip_seconds")]
+        seconds: f32,
+    },
+    PostClip {
+        crew_id: String,
+        clip_id: String,
+        duration_seconds: f64,
+        #[serde(default)]
+        local_path: String,
+    },
+    LoadCrewTimeline {
+        crew_id: String,
+        #[serde(default)]
+        cursor: Option<String>,
     },
 
     // --- Crew events (event ledger) ---

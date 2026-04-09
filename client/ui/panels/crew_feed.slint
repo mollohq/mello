@@ -1,0 +1,713 @@
+import { Theme } from "../theme.slint";
+import { FeedCardData } from "../types.slint";
+
+// Hero clip card (2x wide, 2x tall)
+component HeroClipCard inherits Rectangle {
+    in property <FeedCardData> card;
+    callback play-clicked(string);
+
+    background: card-hover.has-hover ? #2a2a2e : #222226;
+    border-radius: 10px;
+    border-width: 1px;
+    border-color: card-hover.has-hover ? #3a3a3e : #2a2a2e;
+    clip: true;
+
+    VerticalLayout {
+        // Thumbnail area
+        Rectangle {
+            height: 300px;
+            background: @linear-gradient(135deg, #0d1a0d 0%, #0a1520 40%, #151525 100%);
+
+            // Clip badge
+            Rectangle {
+                x: 12px;
+                y: 12px;
+                width: 48px;
+                height: 22px;
+                border-radius: 5px;
+                background: Theme.accent;
+
+                Text {
+                    text: "✂ CLIP";
+                    font-size: 10px;
+                    font-weight: 700;
+                    color: white;
+                    letter-spacing: 0.5px;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+
+            // Play button
+            Rectangle {
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                width: 52px;
+                height: 52px;
+                border-radius: 26px;
+                background: #00000055;
+
+                // Play triangle
+                Rectangle {
+                    x: (parent.width - self.width) / 2 + 2px;
+                    y: (parent.height - self.height) / 2;
+                    width: 0px;
+                    height: 0px;
+                    // Simple play indicator
+                    Text {
+                        text: "▶";
+                        font-size: 20px;
+                        color: white;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+
+            // Duration badge
+            Rectangle {
+                x: parent.width - self.width - 10px;
+                y: parent.height - self.height - 10px;
+                width: 50px;
+                height: 22px;
+                border-radius: 4px;
+                background: #000000aa;
+
+                Text {
+                    text: card.duration;
+                    font-size: 11px;
+                    color: white;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+        }
+
+        // Card body
+        VerticalLayout {
+            padding: 12px;
+            padding-left: 14px;
+            padding-right: 14px;
+            spacing: 6px;
+
+            Text {
+                text: card.actor-name + " clipped that";
+                font-size: 14px;
+                font-weight: 500;
+                color: Theme.text-primary;
+            }
+
+            HorizontalLayout {
+                spacing: 8px;
+                height: 16px;
+
+                Text {
+                    text: card.game-name != "" ? card.game-name : "Voice";
+                    font-size: 11px;
+                    color: #888888;
+                    vertical-alignment: center;
+                }
+
+                Text {
+                    text: "·";
+                    font-size: 11px;
+                    color: #888888;
+                    vertical-alignment: center;
+                }
+
+                Text {
+                    text: card.duration;
+                    font-size: 11px;
+                    color: #888888;
+                    vertical-alignment: center;
+                }
+
+                Text {
+                    text: "·";
+                    font-size: 11px;
+                    color: #888888;
+                    vertical-alignment: center;
+                }
+
+                Text {
+                    text: card.timestamp;
+                    font-size: 11px;
+                    color: #888888;
+                    vertical-alignment: center;
+                }
+            }
+        }
+    }
+
+    card-hover := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { play-clicked(card.id); }
+    }
+}
+
+// Standard clip card (1x)
+component ClipCard inherits Rectangle {
+    in property <FeedCardData> card;
+    callback play-clicked(string);
+
+    background: clip-hover.has-hover ? #2a2a2e : #222226;
+    border-radius: 10px;
+    border-width: 1px;
+    border-color: clip-hover.has-hover ? #3a3a3e : #2a2a2e;
+    clip: true;
+
+    VerticalLayout {
+        // Waveform area
+        Rectangle {
+            height: 110px;
+            background: @linear-gradient(135deg, #0d1a0d 0%, #151525 100%);
+
+            Rectangle {
+                x: 8px;
+                y: 8px;
+                width: 42px;
+                height: 20px;
+                border-radius: 4px;
+                background: Theme.accent;
+
+                Text {
+                    text: "✂ CLIP";
+                    font-size: 9px;
+                    font-weight: 700;
+                    color: white;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+
+            Rectangle {
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                width: 32px;
+                height: 32px;
+                border-radius: 16px;
+                background: #00000055;
+
+                Text {
+                    text: "▶";
+                    font-size: 14px;
+                    color: white;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+        }
+
+        VerticalLayout {
+            padding: 10px;
+            padding-left: 12px;
+            padding-right: 12px;
+            spacing: 4px;
+
+            Text {
+                text: "✂ VOICE CLIP";
+                font-size: 10px;
+                font-weight: 700;
+                color: Theme.accent;
+            }
+
+            Text {
+                text: card.actor-name + " clipped that";
+                font-size: 13px;
+                font-weight: 500;
+                color: Theme.text-primary;
+                overflow: elide;
+            }
+
+            Text {
+                text: card.duration + " · " + card.timestamp;
+                font-size: 11px;
+                color: #888888;
+            }
+        }
+    }
+
+    clip-hover := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { play-clicked(card.id); }
+    }
+}
+
+// Weekly recap card
+component RecapCard inherits Rectangle {
+    in property <FeedCardData> card;
+
+    background: #222226;
+    border-radius: 10px;
+    border-width: 1px;
+    border-color: #2a2a2e;
+
+    VerticalLayout {
+        padding: 16px;
+        spacing: 0px;
+
+        Text {
+            text: "WEEKLY RECAP";
+            font-size: 10px;
+            font-weight: 700;
+            color: Theme.accent;
+            letter-spacing: 1.2px;
+            height: 20px;
+        }
+
+        Rectangle { height: 12px; }
+
+        Text {
+            text: card.title;
+            font-size: 28px;
+            font-weight: 700;
+            color: Theme.text-primary;
+        }
+
+        Text {
+            text: card.subtitle;
+            font-size: 12px;
+            color: #888888;
+        }
+
+        Rectangle { height: 14px; }
+
+        Rectangle {
+            height: 1px;
+            background: #2a2a2e;
+        }
+
+        Rectangle { height: 10px; }
+
+        Text {
+            text: card.timestamp;
+            font-size: 12px;
+            color: #666666;
+        }
+    }
+}
+
+// Session card
+component SessionCard inherits Rectangle {
+    in property <FeedCardData> card;
+
+    background: #222226;
+    border-radius: 10px;
+    border-width: 1px;
+    border-color: #2a2a2e;
+
+    VerticalLayout {
+        padding: 14px;
+        spacing: 6px;
+
+        Text {
+            text: "SESSION";
+            font-size: 10px;
+            font-weight: 600;
+            color: #666666;
+            letter-spacing: 0.8px;
+        }
+
+        HorizontalLayout {
+            spacing: 10px;
+            height: 32px;
+
+            Rectangle {
+                width: 32px;
+                height: 32px;
+                border-radius: 8px;
+                background: Theme.accent;
+
+                Text {
+                    text: card.game-name != "" ? card.game-name : "VC";
+                    font-size: 10px;
+                    font-weight: 800;
+                    color: white;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+
+            VerticalLayout {
+                alignment: center;
+                spacing: 2px;
+
+                Text {
+                    text: card.title;
+                    font-size: 13px;
+                    font-weight: 500;
+                    color: Theme.text-primary;
+                    overflow: elide;
+                }
+
+                Text {
+                    text: card.subtitle;
+                    font-size: 11px;
+                    color: #888888;
+                }
+            }
+        }
+    }
+}
+
+// Catch-up card
+component CatchupCard inherits Rectangle {
+    in property <FeedCardData> card;
+
+    background: #222226;
+    border-radius: 10px;
+    border-width: 1px;
+    border-color: #2a2a2e;
+
+    VerticalLayout {
+        padding: 14px;
+        spacing: 8px;
+
+        Text {
+            text: "CATCH-UP";
+            font-size: 10px;
+            font-weight: 700;
+            color: #4ade80;
+            letter-spacing: 1px;
+        }
+
+        Text {
+            text: card.title;
+            font-size: 13px;
+            color: #cccccc;
+            wrap: word-wrap;
+        }
+
+        Text {
+            text: card.timestamp;
+            font-size: 11px;
+            color: #555555;
+        }
+    }
+}
+
+// Skeleton card (cold-start placeholder)
+component SkeletonCard inherits Rectangle {
+    in property <FeedCardData> card;
+
+    background: #1e1e22;
+    border-radius: 10px;
+    border-width: 1px;
+    border-color: #333333;
+
+    VerticalLayout {
+        alignment: center;
+        spacing: 10px;
+        padding: 24px;
+        padding-left: 16px;
+        padding-right: 16px;
+
+        Text {
+            text: card.title;
+            font-size: 13px;
+            font-weight: 500;
+            color: #555555;
+            horizontal-alignment: center;
+        }
+
+        Text {
+            text: card.subtitle;
+            font-size: 11px;
+            color: #444444;
+            horizontal-alignment: center;
+            wrap: word-wrap;
+        }
+    }
+}
+
+// Invite CTA card
+component InviteCard inherits Rectangle {
+    callback invite-clicked();
+
+    background: #EB4D5F14;
+    border-radius: 10px;
+    border-width: 1px;
+    border-color: #EB4D5F33;
+
+    VerticalLayout {
+        alignment: center;
+        spacing: 8px;
+        padding: 20px;
+
+        Text {
+            text: "Invite your crew";
+            font-size: 14px;
+            font-weight: 600;
+            color: Theme.accent;
+            horizontal-alignment: center;
+        }
+
+        Text {
+            text: "Everything here comes alive when your friends join. Get them in here.";
+            font-size: 11px;
+            color: #888888;
+            horizontal-alignment: center;
+            wrap: word-wrap;
+        }
+    }
+
+    invite-touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { invite-clicked(); }
+    }
+}
+
+export component CrewFeed inherits Rectangle {
+    in property <[FeedCardData]> cards: [];
+    in property <bool> is-cold-start: true;
+    in property <string> crew-name: "";
+
+    callback go-live-clicked();
+    callback card-clicked(string);
+    callback invite-clicked();
+
+    background: transparent;
+
+    VerticalLayout {
+        spacing: 0px;
+
+        // Feed header
+        Rectangle {
+            height: 48px;
+            background: transparent;
+
+            HorizontalLayout {
+                padding-left: 20px;
+                padding-right: 20px;
+                spacing: 10px;
+
+                HorizontalLayout {
+                    spacing: 10px;
+                    horizontal-stretch: 1;
+                    alignment: start;
+
+                    Text {
+                        text: "Crew feed";
+                        font-size: 15px;
+                        font-weight: 500;
+                        color: Theme.text-primary;
+                        vertical-alignment: center;
+                    }
+
+                    if cards.length > 0: Rectangle {
+                        width: label-text.preferred-width + 20px;
+                        height: 22px;
+                        border-radius: 11px;
+                        background: #2a2a2e;
+                        y: (parent.height - self.height) / 2;
+
+                        label-text := Text {
+                            text: cards.length;
+                            font-size: 11px;
+                            color: #888888;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+
+                Rectangle {
+                    width: go-live-text.preferred-width + 36px;
+                    height: 32px;
+                    border-radius: 8px;
+                    background: live-hover.has-hover ? #EB4D5F28 : #EB4D5F14;
+                    border-width: 1px;
+                    border-color: #EB4D5F33;
+                    y: (parent.height - self.height) / 2;
+
+                    HorizontalLayout {
+                        alignment: center;
+                        spacing: 6px;
+
+                        Rectangle {
+                            width: 6px;
+                            height: 6px;
+                            border-radius: 3px;
+                            background: Theme.accent;
+                            y: (parent.height - self.height) / 2;
+                        }
+
+                        go-live-text := Text {
+                            text: "GO LIVE";
+                            font-size: 12px;
+                            font-weight: 600;
+                            color: Theme.accent;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    live-hover := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { go-live-clicked(); }
+                    }
+                }
+            }
+        }
+
+        Rectangle {
+            height: 1px;
+            background: #2a2a2e;
+        }
+
+        // Scrollable feed area
+        Flickable {
+            vertical-stretch: 1;
+
+            VerticalLayout {
+                padding: 16px;
+                padding-left: 20px;
+                padding-right: 20px;
+                spacing: 12px;
+
+                // Row 1: Hero (2x) + Standard (1x)
+                if cards.length > 0: HorizontalLayout {
+                    height: 420px;
+                    spacing: 12px;
+
+                    if cards.length > 0 && cards[0].is-hero: HeroClipCard {
+                        horizontal-stretch: 2;
+                        card: cards[0];
+                        play-clicked(id) => { root.card-clicked(id); }
+                    }
+
+                    if cards.length > 0 && !cards[0].is-hero: ClipCard {
+                        horizontal-stretch: 2;
+                        card: cards[0];
+                        play-clicked(id) => { root.card-clicked(id); }
+                    }
+
+                    if cards.length > 1: VerticalLayout {
+                        horizontal-stretch: 1;
+                        spacing: 12px;
+
+                        if cards[1].card-type == "recap": RecapCard {
+                            card: cards[1];
+                        }
+
+                        if cards[1].card-type == "clip": ClipCard {
+                            card: cards[1];
+                            play-clicked(id) => { root.card-clicked(id); }
+                        }
+
+                        if cards[1].card-type == "session": SessionCard {
+                            card: cards[1];
+                        }
+
+                        if cards[1].card-type == "catchup": CatchupCard {
+                            card: cards[1];
+                        }
+
+                        if cards[1].card-type == "skeleton": SkeletonCard {
+                            card: cards[1];
+                        }
+                    }
+                }
+
+                // Row 2: Three 1x cards
+                if cards.length > 2: HorizontalLayout {
+                    height: 180px;
+                    spacing: 12px;
+
+                    for idx in [2, 3, 4]: Rectangle {
+                        visible: cards.length > idx;
+                        horizontal-stretch: 1;
+
+                        if cards.length > idx && cards[idx].card-type == "clip": ClipCard {
+                            card: cards[idx];
+                            width: parent.width;
+                            height: parent.height;
+                            play-clicked(id) => { root.card-clicked(id); }
+                        }
+
+                        if cards.length > idx && cards[idx].card-type == "session": SessionCard {
+                            card: cards[idx];
+                            width: parent.width;
+                            height: parent.height;
+                        }
+
+                        if cards.length > idx && cards[idx].card-type == "catchup": CatchupCard {
+                            card: cards[idx];
+                            width: parent.width;
+                            height: parent.height;
+                        }
+
+                        if cards.length > idx && cards[idx].card-type == "recap": RecapCard {
+                            card: cards[idx];
+                            width: parent.width;
+                            height: parent.height;
+                        }
+
+                        if cards.length > idx && cards[idx].card-type == "skeleton": SkeletonCard {
+                            card: cards[idx];
+                            width: parent.width;
+                            height: parent.height;
+                        }
+                    }
+                }
+
+                // Row 3: Standard (1x) + Hero (2x)
+                if cards.length > 5: HorizontalLayout {
+                    height: 240px;
+                    spacing: 12px;
+
+                    if cards.length > 5 && cards[5].card-type == "clip": ClipCard {
+                        horizontal-stretch: 1;
+                        card: cards[5];
+                        play-clicked(id) => { root.card-clicked(id); }
+                    }
+
+                    if cards.length > 5 && cards[5].card-type == "session": SessionCard {
+                        horizontal-stretch: 1;
+                        card: cards[5];
+                    }
+
+                    if cards.length > 5 && cards[5].card-type == "catchup": CatchupCard {
+                        horizontal-stretch: 1;
+                        card: cards[5];
+                    }
+
+                    if cards.length > 5 && cards[5].card-type == "skeleton": SkeletonCard {
+                        horizontal-stretch: 1;
+                        card: cards[5];
+                    }
+
+                    if cards.length > 6: Rectangle {
+                        horizontal-stretch: 2;
+
+                        if cards[6].card-type == "clip": ClipCard {
+                            card: cards[6];
+                            width: parent.width;
+                            height: parent.height;
+                            play-clicked(id) => { root.card-clicked(id); }
+                        }
+
+                        if cards[6].card-type == "session": SessionCard {
+                            card: cards[6];
+                            width: parent.width;
+                            height: parent.height;
+                        }
+
+                        if cards[6].card-type == "skeleton": SkeletonCard {
+                            card: cards[6];
+                            width: parent.width;
+                            height: parent.height;
+                        }
+                    }
+                }
+
+                // Invite card for cold start
+                if is-cold-start: InviteCard {
+                    invite-clicked => { root.invite-clicked(); }
+                }
+
+                // Bottom padding
+                Rectangle { height: 20px; }
+            }
+        }
+    }
+}

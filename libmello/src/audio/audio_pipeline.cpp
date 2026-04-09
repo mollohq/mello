@@ -393,6 +393,11 @@ size_t AudioPipeline::mix_output(int16_t* out, size_t count) {
         }
     }
 
+    // Tap post-gain mixed audio into clip buffer
+    if (clip_buffer_ && clip_buffer_->is_active()) {
+        clip_buffer_->write(out, count);
+    }
+
     // Feed the mixed (and volume-scaled) playback signal to AEC as far-end reference
     echo_canceller_.process_render(out, static_cast<int>(count));
 
@@ -472,6 +477,26 @@ bool AudioPipeline::set_playback_device(const char* device_id) {
     bool ok = playback_->start();
     MELLO_LOG_INFO("pipeline", "playback restarted on new device: %s", ok ? "ok" : "FAILED");
     return ok;
+}
+
+void AudioPipeline::start_clip_buffer() {
+    if (!clip_buffer_) {
+        clip_buffer_ = std::make_unique<ClipBuffer>(SAMPLE_RATE, 60);
+    }
+    clip_buffer_->start();
+}
+
+void AudioPipeline::stop_clip_buffer() {
+    if (clip_buffer_) clip_buffer_->stop();
+}
+
+bool AudioPipeline::clip_buffer_active() const {
+    return clip_buffer_ && clip_buffer_->is_active();
+}
+
+bool AudioPipeline::clip_capture(float seconds, const std::string& output_path) {
+    if (!clip_buffer_) return false;
+    return clip_buffer_->capture(seconds, output_path);
 }
 
 #ifdef _WIN32

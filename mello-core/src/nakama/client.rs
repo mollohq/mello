@@ -1115,6 +1115,32 @@ impl NakamaClient {
         Ok(())
     }
 
+    // --- Clips RPCs ---
+
+    pub async fn post_clip(
+        &self,
+        req: &crate::crew_events::PostClipRequest,
+    ) -> Result<crate::crew_events::PostClipResponse> {
+        let payload = serde_json::to_value(req)?;
+        let resp = self.rpc("post_clip", &payload).await?;
+        let parsed: crate::crew_events::PostClipResponse = serde_json::from_str(&resp)?;
+        Ok(parsed)
+    }
+
+    pub async fn crew_timeline(
+        &self,
+        crew_id: &str,
+        cursor: Option<&str>,
+    ) -> Result<crate::crew_events::TimelineResponse> {
+        let mut payload = serde_json::json!({ "crew_id": crew_id });
+        if let Some(c) = cursor {
+            payload["cursor"] = serde_json::json!(c);
+        }
+        let resp = self.rpc("crew_timeline", &payload).await?;
+        let parsed: crate::crew_events::TimelineResponse = serde_json::from_str(&resp)?;
+        Ok(parsed)
+    }
+
     // --- Health / version RPCs ---
 
     pub async fn health_check(&self) -> Result<HealthResponse> {

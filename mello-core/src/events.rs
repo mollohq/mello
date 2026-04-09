@@ -303,6 +303,31 @@ pub enum Event {
         messages: Vec<MessagePreview>,
     },
 
+    // --- Clips ---
+    /// Clip buffer started (recording mixed audio).
+    ClipBufferStarted,
+    /// Clip buffer stopped.
+    ClipBufferStopped,
+    /// Clip captured and saved to local disk.
+    ClipCaptured {
+        clip_id: String,
+        path: String,
+        duration_seconds: f32,
+    },
+    /// Clip capture failed.
+    ClipCaptureFailed {
+        reason: String,
+    },
+    /// Clip metadata posted to backend.
+    ClipPosted {
+        clip_id: String,
+        event_id: String,
+    },
+    /// Crew feed timeline loaded.
+    TimelineLoaded {
+        response: crate::crew_events::TimelineResponse,
+    },
+
     // --- Crew events (event ledger) ---
     /// Catch-up data loaded for a crew.
     CatchupLoaded {

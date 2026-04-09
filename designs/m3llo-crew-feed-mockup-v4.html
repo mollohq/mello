@@ -1,0 +1,1232 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>m3llo — Crew Feed Mockup v4</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  background: #111114;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  color: #e8e6e3;
+  height: 100vh;
+  overflow: hidden;
+}
+
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background: #1a1a1e;
+}
+
+.app-header {
+  height: 36px;
+  background: #141416;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  font-weight: 500;
+  color: #888;
+  border-bottom: 1px solid #2a2a2e;
+  flex-shrink: 0;
+}
+
+.app-body {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+}
+
+/* ===== LEFT SIDEBAR ===== */
+.sidebar-left {
+  width: 240px;
+  border-right: 1px solid #2a2a2e;
+  padding: 14px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.section-label {
+  color: #555;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 1.2px;
+  margin-bottom: 8px;
+  font-weight: 600;
+}
+
+/* Active crew card */
+.active-crew {
+  background: #222226;
+  border-radius: 10px;
+  border: 1px solid #EB4D5F33;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  max-height: 50%;
+  margin-bottom: 12px;
+}
+
+.active-crew-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border-bottom: 1px solid #2a2a2e;
+  flex-shrink: 0;
+}
+
+.crew-icon {
+  width: 30px;
+  height: 30px;
+  border-radius: 7px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 700;
+  color: #fff;
+  flex-shrink: 0;
+}
+
+.crew-icon.red { background: #EB4D5F; }
+.crew-icon.blue { background: #4a9eff; }
+.crew-icon.purple { background: #a78bfa; }
+.crew-icon.teal { background: #2dd4bf; }
+
+.crew-name {
+  font-weight: 600;
+  font-size: 13px;
+  letter-spacing: 0.3px;
+}
+
+.crew-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+.sfu-badge {
+  font-size: 8px;
+  background: #4ade8022;
+  color: #4ade80;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+}
+
+.crew-count {
+  font-size: 11px;
+  color: #666;
+}
+
+.notification-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #EB4D5F;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+/* VC list - scrollable area */
+.vc-list {
+  overflow-y: auto;
+  padding: 8px 10px;
+  flex: 1;
+  min-height: 0;
+}
+
+.vc-list::-webkit-scrollbar {
+  width: 4px;
+}
+
+.vc-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.vc-list::-webkit-scrollbar-thumb {
+  background: #333;
+  border-radius: 2px;
+}
+
+.vc-item {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  font-size: 12px;
+  color: #888;
+  cursor: pointer;
+  margin-bottom: 2px;
+}
+
+.vc-item:hover { background: #2a2a2e; }
+.vc-item.active { background: #2a2a2e; color: #e8e6e3; }
+
+.vc-icon {
+  width: 16px;
+  height: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.vc-icon svg {
+  width: 14px;
+  height: 14px;
+  stroke: #666;
+  fill: none;
+  stroke-width: 2;
+}
+
+.vc-item.active .vc-icon svg { stroke: #aaa; }
+
+.vc-name { flex: 1; }
+
+.vc-count-badge {
+  font-size: 11px;
+  color: #4ade80;
+  font-weight: 500;
+  min-width: 14px;
+  text-align: right;
+}
+
+.vc-count-badge.empty { color: #444; }
+
+/* Members under a VC */
+.vc-members {
+  padding: 4px 0 6px 31px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.vc-member {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11px;
+  color: #aaa;
+}
+
+.avatar-tiny {
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 7px;
+  font-weight: 600;
+  color: #fff;
+  flex-shrink: 0;
+}
+
+.av-red { background: #EB4D5F; }
+.av-blue { background: #4a9eff; }
+.av-green { background: #4ade80; color: #1a1a1e; }
+.av-purple { background: #a78bfa; }
+.av-amber { background: #f59e0b; color: #1a1a1e; }
+.av-teal { background: #2dd4bf; color: #1a1a1e; }
+.av-pink { background: #f472b6; }
+
+.speaking-indicator {
+  margin-left: auto;
+  display: flex;
+  gap: 1.5px;
+  align-items: flex-end;
+  height: 12px;
+}
+
+.speaking-bar {
+  width: 2.5px;
+  border-radius: 1px;
+  background: #EB4D5F;
+}
+
+/* ===== NON-ACTIVE CREWS ===== */
+.other-crews {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 0;
+  padding-top: 4px;
+}
+
+.other-crews::-webkit-scrollbar { width: 4px; }
+.other-crews::-webkit-scrollbar-track { background: transparent; }
+.other-crews::-webkit-scrollbar-thumb { background: #333; border-radius: 2px; }
+
+.other-crew-card {
+  background: #1e1e22;
+  border-radius: 8px;
+  border: 1px solid #2a2a2e;
+  padding: 10px 12px;
+  cursor: pointer;
+  transition: border-color 0.12s, background 0.12s;
+  flex-shrink: 0;
+}
+
+.other-crew-card:hover {
+  background: #232328;
+  border-color: #363636;
+}
+
+.other-crew-header {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 6px;
+}
+
+.other-crew-icon {
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 8px;
+  font-weight: 700;
+  color: #666;
+  flex-shrink: 0;
+  opacity: 0.6;
+}
+
+.other-crew-icon.has-activity { opacity: 0.8; }
+
+.other-crew-name {
+  font-size: 12px;
+  font-weight: 500;
+  color: #777;
+  flex: 1;
+}
+
+.other-crew-card:hover .other-crew-name { color: #aaa; }
+
+.other-crew-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.clips-fomo-badge {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  background: #EB4D5F18;
+  border: 1px solid #EB4D5F22;
+  border-radius: 4px;
+  padding: 2px 6px;
+  font-size: 9px;
+  font-weight: 700;
+  color: #EB4D5F88;
+}
+
+.clips-fomo-icon {
+  font-size: 8px;
+}
+
+/* Activity line */
+.other-crew-activity-line {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10px;
+  color: #555;
+  margin-bottom: 6px;
+  padding-left: 29px;
+}
+
+.activity-dot {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  opacity: 0.6;
+}
+
+.activity-dot.stream { background: #EB4D5F; }
+.activity-dot.voice { background: #4ade80; }
+
+.voice-avatars-inline {
+  display: flex;
+  margin-left: 4px;
+}
+
+.voice-avatars-inline .avatar-tiny {
+  width: 14px;
+  height: 14px;
+  font-size: 5px;
+  border: 1.5px solid #1e1e22;
+  opacity: 0.6;
+}
+
+.voice-avatars-inline .avatar-tiny + .avatar-tiny {
+  margin-left: -4px;
+}
+
+.other-crew-card:hover .voice-avatars-inline .avatar-tiny { opacity: 0.8; }
+
+/* Chat preview */
+.other-crew-chat {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding-left: 29px;
+}
+
+.chat-preview-line {
+  font-size: 10px;
+  color: #444;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1.4;
+}
+
+.chat-preview-line .chat-author {
+  font-weight: 600;
+  color: #555;
+}
+
+.other-crew-card:hover .chat-preview-line { color: #555; }
+.other-crew-card:hover .chat-preview-line .chat-author { color: #777; }
+
+/* Sidebar bottom */
+.sidebar-bottom {
+  padding-top: 10px;
+  border-top: 1px solid #2a2a2e;
+  margin-top: 8px;
+  flex-shrink: 0;
+}
+
+.sidebar-action {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  font-size: 12px;
+  color: #555;
+  cursor: pointer;
+  border-radius: 6px;
+}
+
+.sidebar-action:hover { background: #222226; color: #888; }
+
+/* ===== CENTER PANEL ===== */
+.center-wrapper {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-width: 0;
+}
+
+.feed-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 20px;
+  border-bottom: 1px solid #2a2a2e;
+  flex-shrink: 0;
+}
+
+.feed-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.feed-title h2 { font-size: 15px; font-weight: 500; }
+
+.feed-badge {
+  font-size: 11px;
+  color: #888;
+  background: #2a2a2e;
+  padding: 3px 10px;
+  border-radius: 12px;
+}
+
+.go-live-btn {
+  font-size: 12px;
+  font-weight: 600;
+  color: #EB4D5F;
+  background: #EB4D5F14;
+  padding: 7px 18px;
+  border-radius: 8px;
+  border: 1px solid #EB4D5F33;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.go-live-btn:hover { background: #EB4D5F28; }
+
+.feed-scroll {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px 20px;
+}
+
+/* Bento grid */
+.bento-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+}
+
+.bento-card {
+  background: #222226;
+  border-radius: 10px;
+  border: 1px solid #2a2a2e;
+  overflow: hidden;
+  transition: border-color 0.15s;
+}
+
+.bento-card:hover { border-color: #3a3a3e; }
+.bento-card.clickable { cursor: pointer; }
+.bento-card.hero { grid-column: span 2; grid-row: span 2; }
+
+.hero-thumbnail {
+  width: 100%;
+  height: 300px;
+  background: linear-gradient(135deg, #0d1a0d 0%, #0a1520 40%, #151525 100%);
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.hero-game-watermark {
+  font-size: 56px;
+  font-weight: 800;
+  color: #ffffff06;
+  letter-spacing: 6px;
+  user-select: none;
+}
+
+.play-btn {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  background: #00000055;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.play-arrow {
+  width: 0;
+  height: 0;
+  border-left: 16px solid #fff;
+  border-top: 10px solid transparent;
+  border-bottom: 10px solid transparent;
+  margin-left: 4px;
+}
+
+.clip-badge {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  background: #EB4D5F;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 4px 10px;
+  border-radius: 5px;
+  letter-spacing: 0.5px;
+}
+
+.clip-badge-small {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  background: #EB4D5F;
+  color: #fff;
+  font-size: 9px;
+  font-weight: 700;
+  padding: 3px 7px;
+  border-radius: 4px;
+}
+
+.duration-badge {
+  position: absolute;
+  bottom: 10px;
+  right: 10px;
+  background: #000000aa;
+  color: #fff;
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 4px;
+}
+
+.card-body { padding: 12px 14px; }
+
+.card-title { font-size: 14px; font-weight: 500; margin-bottom: 6px; }
+
+.card-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: #888;
+}
+
+.avatar-stack { display: flex; }
+.avatar-stack .avatar-tiny { border: 2px solid #222226; }
+.avatar-stack .avatar-tiny + .avatar-tiny { margin-left: -7px; }
+
+/* Card type styles */
+.recap-label { font-size: 10px; font-weight: 700; color: #EB4D5F; text-transform: uppercase; letter-spacing: 1.2px; margin-bottom: 12px; }
+.recap-big-number { font-size: 28px; font-weight: 700; margin-bottom: 2px; }
+.recap-sublabel { font-size: 12px; color: #888; margin-bottom: 14px; }
+.recap-stats { border-top: 1px solid #2a2a2e; padding-top: 10px; display: flex; flex-direction: column; gap: 6px; }
+.recap-row { display: flex; justify-content: space-between; font-size: 12px; }
+.recap-row .label { color: #666; }
+.recap-row .value { color: #ccc; }
+
+.game-icon { width: 32px; height: 32px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 800; color: #fff; flex-shrink: 0; }
+.game-icon.val { background: #ff4655; }
+.game-icon.cs { background: #de9b35; }
+.game-icon-sm { width: 26px; height: 26px; border-radius: 6px; display: flex; align-items: center; justify-content: center; font-size: 8px; font-weight: 800; color: #fff; flex-shrink: 0; }
+
+.waveform-container { height: 72px; background: #1a1a22; display: flex; align-items: center; justify-content: center; gap: 3px; padding: 0 20px; position: relative; }
+.wave-bar { width: 3px; border-radius: 2px; background: #EB4D5F; }
+
+.voice-clip-badge { font-size: 10px; color: #EB4D5F; font-weight: 700; margin-bottom: 4px; }
+.session-label { font-size: 10px; color: #666; text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 10px; font-weight: 600; }
+.catchup-label { font-size: 10px; color: #4ade80; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px; }
+.catchup-text { font-size: 13px; color: #ccc; line-height: 1.5; }
+.catchup-time { font-size: 11px; color: #555; margin-top: 8px; }
+
+.skeleton-card { border: 1px dashed #333 !important; background: #1e1e22 !important; }
+.skeleton-body { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 24px 16px; text-align: center; min-height: 120px; }
+.skeleton-icon { font-size: 28px; margin-bottom: 10px; opacity: 0.3; }
+.skeleton-title { font-size: 13px; color: #555; font-weight: 500; margin-bottom: 4px; }
+.skeleton-hint { font-size: 11px; color: #444; line-height: 1.4; }
+
+.clip-thumb-small { width: 100%; height: 110px; position: relative; display: flex; align-items: center; justify-content: center; }
+.clip-thumb-small .game-watermark { font-size: 24px; font-weight: 800; color: #ffffff06; }
+.clip-thumb-small .play-btn { width: 32px; height: 32px; }
+.clip-thumb-small .play-arrow { border-left: 12px solid #fff; border-top: 7px solid transparent; border-bottom: 7px solid transparent; margin-left: 3px; }
+
+/* ===== BOTTOM BAR ===== */
+.bottom-bar {
+  height: 60px;
+  border-top: 1px solid #2a2a2e;
+  display: flex;
+  align-items: center;
+  padding: 0 16px;
+  flex-shrink: 0;
+  background: #1e1e22;
+  gap: 16px;
+}
+
+.bar-user { display: flex; align-items: center; gap: 10px; min-width: 120px; }
+
+.bar-avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  background: #4ade80;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  font-weight: 700;
+  color: #1a1a1e;
+  position: relative;
+  flex-shrink: 0;
+}
+
+.bar-avatar .status {
+  position: absolute;
+  bottom: -1px;
+  right: -1px;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: #4ade80;
+  border: 2.5px solid #1e1e22;
+}
+
+.bar-username { font-size: 14px; font-weight: 500; }
+.bar-tag { font-size: 11px; color: #555; }
+
+.now-playing-pill {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: #2a2a2e;
+  border-radius: 10px;
+  padding: 6px 8px 6px 6px;
+  flex-shrink: 0;
+}
+
+.np-game-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  background: #de9b35;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 800;
+  color: #fff;
+}
+
+.np-label { font-size: 10px; color: #888; text-transform: uppercase; letter-spacing: 0.8px; font-weight: 600; }
+.np-game-name { font-size: 14px; font-weight: 500; }
+
+.stream-btn {
+  background: #EB4D5F;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 8px 16px;
+  border-radius: 6px;
+  border: none;
+  cursor: pointer;
+  letter-spacing: 0.5px;
+  margin-left: 4px;
+}
+
+.bar-controls { display: flex; align-items: center; gap: 6px; margin-left: auto; }
+
+.bar-btn {
+  width: 40px;
+  height: 40px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  border: none;
+  background: #2a2a2e;
+  flex-shrink: 0;
+}
+
+.bar-btn:hover { background: #333; }
+.bar-btn svg { width: 18px; height: 18px; }
+.bar-btn.hangup { background: #6b2028; }
+.bar-btn.hangup svg { stroke: #ff6b7a; }
+.bar-btn.active-btn { background: #e8e6e3; }
+.bar-btn.active-btn svg { stroke: #1a1a1e; }
+.bar-btn.clip-btn { background: #EB4D5F22; border: 1px solid #EB4D5F44; }
+.bar-btn.clip-btn svg { stroke: #EB4D5F; }
+.bar-btn.settings-btn svg { stroke: #888; }
+
+/* ===== RIGHT SIDEBAR: CHAT ===== */
+.sidebar-right {
+  width: 280px;
+  border-left: 1px solid #2a2a2e;
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+}
+
+.chat-header {
+  padding: 14px 16px;
+  border-bottom: 1px solid #2a2a2e;
+  font-size: 11px;
+  color: #666;
+  text-transform: uppercase;
+  letter-spacing: 1.2px;
+  font-weight: 600;
+}
+
+.chat-messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.chat-msg-header { display: flex; align-items: center; gap: 6px; margin-bottom: 3px; }
+.chat-msg-name { font-size: 12px; font-weight: 600; }
+.chat-msg-time { font-size: 10px; color: #555; }
+.chat-msg-body { font-size: 13px; color: #ccc; padding-left: 26px; line-height: 1.4; }
+
+.chat-clip-card { background: #2a2a2e; border-radius: 8px; padding: 10px; margin-left: 26px; border: 1px solid #333338; }
+.chat-clip-label { font-size: 10px; color: #EB4D5F; font-weight: 700; margin-bottom: 6px; }
+.chat-clip-waveform { height: 40px; background: #1a1a22; border-radius: 4px; display: flex; align-items: center; justify-content: center; gap: 2px; margin-bottom: 6px; }
+.chat-wave-bar { width: 2px; border-radius: 1px; background: #EB4D5F; }
+.chat-clip-meta { font-size: 10px; color: #666; }
+
+.chat-input-area { padding: 10px 16px; border-top: 1px solid #2a2a2e; }
+.chat-actions { display: flex; gap: 12px; padding-bottom: 6px; font-size: 12px; color: #555; }
+.chat-input { background: #2a2a2e; border-radius: 8px; padding: 10px 14px; font-size: 13px; color: #666; width: 100%; border: none; outline: none; }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <div class="app-header">m3llo</div>
+
+  <div class="app-body">
+
+    <!-- ===== LEFT SIDEBAR ===== -->
+    <div class="sidebar-left">
+
+      <!-- ACTIVE CREW (max 50% height, scrollable VCs) -->
+      <div class="active-crew">
+        <div class="active-crew-header">
+          <div class="crew-icon red">m3</div>
+          <div>
+            <div class="crew-name">M3LLO CREW</div>
+            <div class="crew-meta">
+              <span class="sfu-badge">SFU</span>
+              <span class="crew-count">5 / 10</span>
+            </div>
+          </div>
+          <div class="notification-dot"></div>
+        </div>
+
+        <div class="vc-list">
+          <!-- General: 3 members, expanded -->
+          <div class="vc-item active">
+            <div class="vc-icon"><svg viewBox="0 0 24 24"><rect x="9" y="1" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0"/><line x1="12" y1="17" x2="12" y2="21"/></svg></div>
+            <span class="vc-name">General</span>
+            <span class="vc-count-badge">3</span>
+          </div>
+          <div class="vc-members">
+            <div class="vc-member">
+              <div class="avatar-tiny av-red">os</div>
+              <span>ostkatt</span>
+              <div class="speaking-indicator">
+                <div class="speaking-bar" style="height: 4px; opacity: 0.5;"></div>
+                <div class="speaking-bar" style="height: 10px; opacity: 0.8;"></div>
+                <div class="speaking-bar" style="height: 6px; opacity: 0.6;"></div>
+              </div>
+            </div>
+            <div class="vc-member">
+              <div class="avatar-tiny av-blue">Fa</div>
+              <span>FaiL</span>
+            </div>
+            <div class="vc-member">
+              <div class="avatar-tiny av-green">b0</div>
+              <span>b0bben</span>
+            </div>
+          </div>
+
+          <!-- Ranked grind: 2 members, expanded -->
+          <div class="vc-item">
+            <div class="vc-icon"><svg viewBox="0 0 24 24"><rect x="9" y="1" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0"/><line x1="12" y1="17" x2="12" y2="21"/></svg></div>
+            <span class="vc-name">Ranked grind</span>
+            <span class="vc-count-badge">2</span>
+          </div>
+          <div class="vc-members">
+            <div class="vc-member">
+              <div class="avatar-tiny av-purple">w1</div>
+              <span>win_dev_1</span>
+              <div class="speaking-indicator">
+                <div class="speaking-bar" style="height: 6px; opacity: 0.6;"></div>
+                <div class="speaking-bar" style="height: 12px; opacity: 1;"></div>
+                <div class="speaking-bar" style="height: 8px; opacity: 0.7;"></div>
+              </div>
+            </div>
+            <div class="vc-member">
+              <div class="avatar-tiny av-amber">tt</div>
+              <span>titovicka</span>
+            </div>
+          </div>
+
+          <!-- Chill: empty, collapsed -->
+          <div class="vc-item">
+            <div class="vc-icon"><svg viewBox="0 0 24 24"><rect x="9" y="1" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0"/><line x1="12" y1="17" x2="12" y2="21"/></svg></div>
+            <span class="vc-name">Chill</span>
+            <span class="vc-count-badge empty">0</span>
+          </div>
+
+          <!-- Movie night: empty, collapsed -->
+          <div class="vc-item">
+            <div class="vc-icon"><svg viewBox="0 0 24 24"><rect x="9" y="1" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0"/><line x1="12" y1="17" x2="12" y2="21"/></svg></div>
+            <span class="vc-name">Movie night</span>
+            <span class="vc-count-badge empty">0</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- NON-ACTIVE CREWS -->
+      <div class="section-label" style="margin-top: 4px;">Other crews</div>
+      <div class="other-crews">
+
+        <!-- Neon Syndicate: streaming -->
+        <div class="other-crew-card">
+          <div class="other-crew-header">
+            <div class="other-crew-icon has-activity" style="background: #4a9eff33;">NS</div>
+            <span class="other-crew-name">Neon Syndicate</span>
+            <div class="other-crew-right">
+              <div class="clips-fomo-badge"><span class="clips-fomo-icon">✂</span> 4</div>
+            </div>
+          </div>
+          <div class="other-crew-activity-line">
+            <div class="activity-dot stream"></div>
+            vex_r streaming Valorant
+          </div>
+          <div class="other-crew-chat">
+            <div class="chat-preview-line"><span class="chat-author">vex_r</span> yo who has the stash coordinat...</div>
+            <div class="chat-preview-line"><span class="chat-author">lune</span> check the drop box, i pinned it</div>
+          </div>
+        </div>
+
+        <!-- Deep Space: voice -->
+        <div class="other-crew-card">
+          <div class="other-crew-header">
+            <div class="other-crew-icon has-activity" style="background: #a78bfa33;">DS</div>
+            <span class="other-crew-name">Deep Space</span>
+            <div class="other-crew-right">
+              <div class="clips-fomo-badge"><span class="clips-fomo-icon">✂</span> 2</div>
+            </div>
+          </div>
+          <div class="other-crew-activity-line">
+            <div class="activity-dot voice"></div>
+            3 in voice
+            <div class="voice-avatars-inline">
+              <div class="avatar-tiny av-blue">zr</div>
+              <div class="avatar-tiny av-green">nv</div>
+              <div class="avatar-tiny av-red">ax</div>
+            </div>
+          </div>
+          <div class="other-crew-chat">
+            <div class="chat-preview-line"><span class="chat-author">nova_9</span> anyone else lagging on sector...</div>
+            <div class="chat-preview-line"><span class="chat-author">zeroX</span> yeah something's off, checking...</div>
+          </div>
+        </div>
+
+        <!-- Ghost Recon: idle -->
+        <div class="other-crew-card">
+          <div class="other-crew-header">
+            <div class="other-crew-icon" style="background: #2a2a2e;">GR</div>
+            <span class="other-crew-name">Ghost Recon</span>
+          </div>
+          <div class="other-crew-chat">
+            <div class="chat-preview-line"><span class="chat-author">markus</span> gg everyone, same time friday?</div>
+            <div class="chat-preview-line"><span class="chat-author">jenny</span> im in, ill bring snacks</div>
+          </div>
+        </div>
+
+        <!-- Null Sector: idle -->
+        <div class="other-crew-card">
+          <div class="other-crew-header">
+            <div class="other-crew-icon" style="background: #2a2a2e;">NL</div>
+            <span class="other-crew-name">Null Sector</span>
+          </div>
+          <div class="other-crew-chat">
+            <div class="chat-preview-line"><span class="chat-author">hex</span> patch notes look insane</div>
+            <div class="chat-preview-line"><span class="chat-author">drift</span> nerf incoming lol</div>
+          </div>
+        </div>
+
+        <!-- Raid Party: 1 online -->
+        <div class="other-crew-card">
+          <div class="other-crew-header">
+            <div class="other-crew-icon has-activity" style="background: #f59e0b33;">RP</div>
+            <span class="other-crew-name">Raid Party</span>
+          </div>
+          <div class="other-crew-chat">
+            <div class="chat-preview-line"><span class="chat-author">mikko</span> anyone down for mythic+ tonight</div>
+            <div class="chat-preview-line"><span class="chat-author">ash</span> maybe, depends on reset</div>
+          </div>
+        </div>
+
+      </div>
+
+      <div class="sidebar-bottom">
+        <div class="sidebar-action">🔍 Browse crews</div>
+        <div class="sidebar-action">+ New crew</div>
+      </div>
+    </div>
+
+    <!-- ===== CENTER + BOTTOM BAR ===== -->
+    <div class="center-wrapper">
+
+      <div class="feed-header">
+        <div class="feed-title">
+          <h2>Crew feed</h2>
+          <span class="feed-badge">12 clips this week</span>
+        </div>
+        <div class="go-live-btn"><span>▶</span> GO LIVE</div>
+      </div>
+
+      <div class="feed-scroll">
+        <div class="bento-grid">
+
+          <!-- HERO STREAM CLIP -->
+          <div class="bento-card hero clickable">
+            <div class="hero-thumbnail">
+              <div class="hero-game-watermark">COUNTER-STRIKE 2</div>
+              <div class="play-btn"><div class="play-arrow"></div></div>
+              <div class="clip-badge">✂ CLIP</div>
+              <div class="duration-badge">0:30</div>
+            </div>
+            <div class="card-body">
+              <div class="card-title">ostkatt clutch ace on Dust II</div>
+              <div class="card-meta">
+                <div class="avatar-stack">
+                  <div class="avatar-tiny av-red">os</div>
+                  <div class="avatar-tiny av-blue">Fa</div>
+                  <div class="avatar-tiny av-green">b0</div>
+                </div>
+                <span>2 hours ago</span>
+                <span style="color:#555;">·</span>
+                <span>CS2</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- WEEKLY RECAP -->
+          <div class="bento-card">
+            <div class="card-body">
+              <div class="recap-label">Weekly recap</div>
+              <div class="recap-big-number">14.5h</div>
+              <div class="recap-sublabel">Total crew time</div>
+              <div class="recap-stats">
+                <div class="recap-row"><span class="label">Top game</span><span class="value">Valorant</span></div>
+                <div class="recap-row"><span class="label">Longest sesh</span><span class="value">5h 12m</span></div>
+                <div class="recap-row"><span class="label">Clips</span><span class="value">12</span></div>
+                <div class="recap-row"><span class="label">MVP</span><span class="value">FaiL</span></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- NOW PLAYING -->
+          <div class="bento-card">
+            <div class="card-body">
+              <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 8px;">
+                <div class="game-icon val">VAL</div>
+                <div>
+                  <div style="font-size: 13px; font-weight: 500;">Now playing</div>
+                  <div style="font-size: 11px; color: #888;">ostkatt + FaiL</div>
+                </div>
+              </div>
+              <div style="font-size: 11px; color: #555;">Started 23 min ago</div>
+            </div>
+          </div>
+
+          <!-- VOICE CLIP -->
+          <div class="bento-card clickable">
+            <div class="waveform-container">
+              <div class="wave-bar" style="height:14px;opacity:0.4"></div>
+              <div class="wave-bar" style="height:28px;opacity:0.6"></div>
+              <div class="wave-bar" style="height:40px;opacity:0.8"></div>
+              <div class="wave-bar" style="height:20px;opacity:0.5"></div>
+              <div class="wave-bar" style="height:36px;opacity:0.9"></div>
+              <div class="wave-bar" style="height:16px;opacity:0.4"></div>
+              <div class="wave-bar" style="height:32px;opacity:0.7"></div>
+              <div class="wave-bar" style="height:10px;opacity:0.3"></div>
+              <div class="wave-bar" style="height:26px;opacity:0.6"></div>
+              <div class="wave-bar" style="height:42px;opacity:1"></div>
+              <div class="wave-bar" style="height:18px;opacity:0.5"></div>
+              <div class="wave-bar" style="height:30px;opacity:0.7"></div>
+              <div class="wave-bar" style="height:12px;opacity:0.3"></div>
+              <div class="wave-bar" style="height:34px;opacity:0.8"></div>
+              <div class="wave-bar" style="height:22px;opacity:0.6"></div>
+              <div class="wave-bar" style="height:38px;opacity:0.9"></div>
+              <div class="wave-bar" style="height:14px;opacity:0.4"></div>
+              <div class="wave-bar" style="height:28px;opacity:0.6"></div>
+              <div class="wave-bar" style="height:8px;opacity:0.3"></div>
+              <div class="wave-bar" style="height:24px;opacity:0.5"></div>
+              <div class="play-btn"><div class="play-arrow"></div></div>
+            </div>
+            <div class="card-body">
+              <div class="voice-clip-badge">✂ VOICE CLIP · 0:30</div>
+              <div style="font-size:13px;font-weight:500;margin-bottom:3px;">FaiL raging at ranked matchmaking</div>
+              <div style="font-size:11px;color:#888;">yesterday · General</div>
+            </div>
+          </div>
+
+          <!-- SESSION -->
+          <div class="bento-card">
+            <div class="card-body">
+              <div class="session-label">Session</div>
+              <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+                <div class="game-icon-sm val">VAL</div>
+                <div>
+                  <div style="font-size:13px;font-weight:500;">Valorant</div>
+                  <div style="font-size:11px;color:#888;">3h 12m</div>
+                </div>
+              </div>
+              <div class="avatar-stack" style="margin-bottom:8px;">
+                <div class="avatar-tiny av-red">os</div>
+                <div class="avatar-tiny av-blue">Fa</div>
+                <div class="avatar-tiny av-green">b0</div>
+              </div>
+              <div style="font-size:11px;color:#555;">Saturday night · 2 clips</div>
+            </div>
+          </div>
+
+          <!-- CATCH-UP -->
+          <div class="bento-card">
+            <div class="card-body">
+              <div class="catchup-label">Catch-up</div>
+              <div class="catchup-text">ostkatt and FaiL hung out in General for 45m while you were away</div>
+              <div class="catchup-time">6 hours ago</div>
+            </div>
+          </div>
+
+          <!-- SMALL CLIP -->
+          <div class="bento-card clickable">
+            <div class="clip-thumb-small" style="background:linear-gradient(135deg,#1a1a2a,#2a1a2a);">
+              <div class="game-watermark">VALORANT</div>
+              <div class="clip-badge-small">✂ CLIP</div>
+              <div class="duration-badge" style="font-size:10px;padding:2px 6px;">0:30</div>
+              <div class="play-btn"><div class="play-arrow"></div></div>
+            </div>
+            <div class="card-body" style="padding:10px 12px;">
+              <div style="font-size:12px;font-weight:500;margin-bottom:3px;">b0bben 1v3 retake on Ascent</div>
+              <div style="font-size:11px;color:#888;">3 days ago</div>
+            </div>
+          </div>
+
+          <!-- RECENT GAMES -->
+          <div class="bento-card">
+            <div class="card-body">
+              <div class="session-label">Recent games</div>
+              <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
+                <div class="game-icon-sm cs">CS2</div>
+                <div><div style="font-size:12px;font-weight:500;">Counter-Strike 2</div><div style="font-size:11px;color:#666;">ostkatt · 2h today</div></div>
+              </div>
+              <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
+                <div class="game-icon-sm val">VAL</div>
+                <div><div style="font-size:12px;font-weight:500;">Valorant</div><div style="font-size:11px;color:#666;">FaiL · 4h yesterday</div></div>
+              </div>
+              <div style="display:flex;align-items:center;gap:8px;">
+                <div class="game-icon-sm" style="background:#1a78ae;">LoL</div>
+                <div><div style="font-size:12px;font-weight:500;">League of Legends</div><div style="font-size:11px;color:#666;">b0bben · 1h 2 days ago</div></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- SKELETON -->
+          <div class="bento-card skeleton-card">
+            <div class="skeleton-body">
+              <div class="skeleton-icon">✂</div>
+              <div class="skeleton-title">Your crew's clips show up here</div>
+              <div class="skeleton-hint">Tap ✂ during a voice call or stream to save the last 30 seconds</div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- BOTTOM BAR -->
+      <div class="bottom-bar">
+        <div class="bar-user">
+          <div class="bar-avatar">b0<div class="status"></div></div>
+          <div><div class="bar-username">b0bben</div><div class="bar-tag">#7412</div></div>
+        </div>
+        <div class="now-playing-pill">
+          <div class="np-game-icon">CS2</div>
+          <div class="np-text"><div class="np-label">Now playing</div><div class="np-game-name">Counter-Strike 2</div></div>
+          <button class="stream-btn">STREAM</button>
+        </div>
+        <div class="bar-controls">
+          <button class="bar-btn clip-btn"><svg viewBox="0 0 24 24" fill="none" stroke-width="2"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><line x1="20" y1="4" x2="8.12" y2="15.88"/><line x1="14.47" y1="14.48" x2="20" y2="20"/><line x1="8.12" y1="8.12" x2="12" y2="12"/></svg></button>
+          <button class="bar-btn hangup"><svg viewBox="0 0 24 24" fill="none" stroke-width="2"><path d="M10.68 13.31a16 16 0 0 1-2.47-2.47l1.34-1.34a2 2 0 0 0 .4-2.28L8.78 4.5a2 2 0 0 0-2.18-1.1l-2.48.5A2 2 0 0 0 2.5 5.87 16 16 0 0 0 18.13 21.5a2 2 0 0 0 1.97-1.62l.5-2.48a2 2 0 0 0-1.1-2.18l-2.72-1.17a2 2 0 0 0-2.28.4l-1.34 1.34z" transform="rotate(135 12 12)"/></svg></button>
+          <button class="bar-btn active-btn"><svg viewBox="0 0 24 24" fill="none" stroke-width="2"><rect x="9" y="1" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0"/><line x1="12" y1="17" x2="12" y2="21"/></svg></button>
+          <button class="bar-btn active-btn"><svg viewBox="0 0 24 24" fill="none" stroke-width="2"><path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/></svg></button>
+          <button class="bar-btn settings-btn"><svg viewBox="0 0 24 24" fill="none" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ===== RIGHT: CHAT ===== -->
+    <div class="sidebar-right">
+      <div class="chat-header">Crew chat</div>
+      <div class="chat-messages">
+        <div>
+          <div class="chat-msg-header">
+            <div class="avatar-tiny av-purple" style="width:20px;height:20px;font-size:8px;border:none;">w1</div>
+            <span class="chat-msg-name">win_dev_1</span>
+            <span class="chat-msg-time">Apr 1</span>
+          </div>
+          <div class="chat-msg-body">
+            <div style="background:#2a2a2e;border-radius:8px;overflow:hidden;max-width:200px;">
+              <div style="height:100px;background:linear-gradient(135deg,#2a2a22,#222228);display:flex;align-items:center;justify-content:center;color:#444;font-size:11px;">[ GIF ]</div>
+            </div>
+          </div>
+        </div>
+        <div>
+          <div class="chat-msg-header">
+            <div class="avatar-tiny av-red" style="width:20px;height:20px;font-size:8px;border:none;">os</div>
+            <span class="chat-msg-name">ostkatt</span>
+            <span class="chat-msg-time">2m ago</span>
+          </div>
+          <div class="chat-msg-body">yo did you see that clip lmao</div>
+        </div>
+        <div>
+          <div class="chat-msg-header">
+            <div class="avatar-tiny av-blue" style="width:20px;height:20px;font-size:8px;border:none;">Fa</div>
+            <span class="chat-msg-name">FaiL</span>
+            <span class="chat-msg-time">1m ago</span>
+          </div>
+          <div class="chat-msg-body">bro i was NOT raging</div>
+        </div>
+        <div>
+          <div class="chat-msg-header">
+            <div class="avatar-tiny av-red" style="width:20px;height:20px;font-size:8px;border:none;">os</div>
+            <span class="chat-msg-name">ostkatt</span>
+            <span class="chat-msg-time">1m ago</span>
+          </div>
+          <div class="chat-clip-card">
+            <div class="chat-clip-label">✂ ostkatt clipped that</div>
+            <div class="chat-clip-waveform">
+              <div class="chat-wave-bar" style="height:8px;opacity:0.4"></div>
+              <div class="chat-wave-bar" style="height:18px;opacity:0.7"></div>
+              <div class="chat-wave-bar" style="height:28px;opacity:0.9"></div>
+              <div class="chat-wave-bar" style="height:14px;opacity:0.5"></div>
+              <div class="chat-wave-bar" style="height:22px;opacity:0.8"></div>
+              <div class="chat-wave-bar" style="height:10px;opacity:0.4"></div>
+              <div class="chat-wave-bar" style="height:30px;opacity:1"></div>
+              <div class="chat-wave-bar" style="height:16px;opacity:0.6"></div>
+              <div class="chat-wave-bar" style="height:24px;opacity:0.7"></div>
+              <div class="chat-wave-bar" style="height:12px;opacity:0.4"></div>
+              <div class="chat-wave-bar" style="height:20px;opacity:0.6"></div>
+              <div class="chat-wave-bar" style="height:8px;opacity:0.3"></div>
+            </div>
+            <div class="chat-clip-meta">Voice · 0:30 · ▶ Play</div>
+          </div>
+        </div>
+        <div>
+          <div class="chat-msg-header">
+            <div class="avatar-tiny av-green" style="width:20px;height:20px;font-size:8px;border:none;">b0</div>
+            <span class="chat-msg-name">b0bben</span>
+            <span class="chat-msg-time">just now</span>
+          </div>
+          <div class="chat-msg-body">hahahaha post it</div>
+        </div>
+      </div>
+      <div class="chat-input-area">
+        <div class="chat-actions"><span>📎</span><span>GIF</span><span>😊</span></div>
+        <input class="chat-input" placeholder="Message crewmates..." readonly>
+      </div>
+    </div>
+
+  </div>
+</div>
+</body>
+</html>
