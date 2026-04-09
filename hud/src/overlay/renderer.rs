@@ -18,6 +18,7 @@ const CHANNEL_ROW_HEIGHT: f32 = 20.0;
 const SEPARATOR_HEIGHT: f32 = 1.0;
 const GAP: f32 = 6.0;
 const AVATAR_SIZE: f32 = 24.0;
+const FONT_SIZE_MD: f32 = 15.0;
 const FONT_SIZE_SM: f32 = 13.0;
 const FONT_SIZE_XS: f32 = 11.0;
 const FONT_SIZE_XXS: f32 = 10.0;
@@ -53,6 +54,7 @@ pub struct D2DRenderer {
     rt: ID2D1RenderTarget,
     tf_label: IDWriteTextFormat,
     tf_name: IDWriteTextFormat,
+    tf_name_bold: IDWriteTextFormat,
     tf_channel: IDWriteTextFormat,
     tf_mono_xs: IDWriteTextFormat,
     tf_mono_xxs: IDWriteTextFormat,
@@ -99,7 +101,17 @@ impl D2DRenderer {
                 DWRITE_FONT_WEIGHT_MEDIUM,
                 DWRITE_FONT_STYLE_NORMAL,
                 DWRITE_FONT_STRETCH_NORMAL,
-                FONT_SIZE_SM,
+                FONT_SIZE_MD,
+                w!("en-US"),
+            )?;
+
+            let tf_name_bold = dwrite.CreateTextFormat(
+                w!("Inter"),
+                None,
+                DWRITE_FONT_WEIGHT_SEMI_BOLD,
+                DWRITE_FONT_STYLE_NORMAL,
+                DWRITE_FONT_STRETCH_NORMAL,
+                FONT_SIZE_MD,
                 w!("en-US"),
             )?;
 
@@ -156,6 +168,7 @@ impl D2DRenderer {
                 rt,
                 tf_label,
                 tf_name,
+                tf_name_bold,
                 tf_channel,
                 tf_mono_xs,
                 tf_mono_xxs,
@@ -439,7 +452,7 @@ impl D2DRenderer {
         };
         let name_brush = self.brush(name_color)?;
         let name_tf = if member.speaking {
-            &self.tf_label
+            &self.tf_name_bold
         } else {
             &self.tf_name
         };

@@ -325,7 +325,10 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
             overlay_enabled: s.hud_show_overlay_in_game,
         });
     }
-    let fg_monitor = Rc::new(RefCell::new(foreground_monitor::ForegroundMonitor::new()));
+    let fg_monitor = Rc::new(RefCell::new(foreground_monitor::ForegroundMonitor::new(
+        hud_enabled,
+        settings.borrow().hud_show_overlay_in_game,
+    )));
 
     // --- GIF animators ---
     let gif_popover_anim = gif_animator::GifAnimator::new(50, None);

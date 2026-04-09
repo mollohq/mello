@@ -141,10 +141,12 @@ pub fn wire(ctx: &AppContext) {
     {
         let s = ctx.settings.clone();
         let hud = ctx.hud_manager.clone();
+        let fg = ctx.fg_monitor.clone();
         ctx.app.on_setting_changed_hud_enabled(move |v| {
             let mut settings = s.borrow_mut();
             settings.hud_enabled = v;
             settings.save();
+            fg.borrow_mut().set_hud_enabled(v);
             if !v {
                 hud.shutdown();
             }
@@ -154,10 +156,12 @@ pub fn wire(ctx: &AppContext) {
     {
         let s = ctx.settings.clone();
         let hud = ctx.hud_manager.clone();
+        let fg = ctx.fg_monitor.clone();
         ctx.app.on_setting_changed_hud_overlay_in_game(move |v| {
             let mut settings = s.borrow_mut();
             settings.hud_show_overlay_in_game = v;
             settings.save();
+            fg.borrow_mut().set_overlay_enabled(v);
             hud.push_settings(crate::hud_manager::HudSettings {
                 overlay_opacity: settings.hud_overlay_opacity,
                 show_clip_toasts: settings.hud_show_clip_toasts,
