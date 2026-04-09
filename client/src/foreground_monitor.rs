@@ -64,38 +64,27 @@ impl ForegroundMonitor {
 }
 
 /// Check whether the main m3llo window is the foreground window.
-/// On non-Windows, we just check visibility as an approximation.
-fn is_main_window_focused(main_window_visible: bool) -> bool {
-    // When the main window is visible and focused, HUD hides.
-    // The Slint event loop on the main thread means we're focused when visible.
-    // A more precise check can use GetForegroundWindow + compare HWNDs,
-    // but for now visibility is a good proxy since the mini-player/overlay
-    // use WS_EX_NOACTIVATE and never take focus.
+/// Compares the foreground HWND directly against the known "Mello" window
+/// to avoid false positives from other windows in our process.
+fn is_main_window_focused(_main_window_visible: bool) -> bool {
     #[cfg(target_os = "windows")]
     {
-        use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
+        use windows::core::w;
+        use windows::Win32::UI::WindowsAndMessaging::{FindWindowW, GetForegroundWindow};
         unsafe {
             let fg = GetForegroundWindow();
             if fg.0.is_null() {
                 return false;
             }
-            // We can't easily compare HWNDs with Slint's window here.
-            // Use the main_window_visible flag as primary signal, plus check
-            // if the foreground window belongs to our process.
-            if !main_window_visible {
-                return false;
+            match FindWindowW(None, w!("Mello")) {
+                Ok(main_hwnd) => fg == main_hwnd,
+                Err(_) => false,
             }
-            let mut fg_pid: u32 = 0;
-            windows::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId(
-                fg,
-                Some(&mut fg_pid),
-            );
-            fg_pid == std::process::id()
         }
     }
 
     #[cfg(not(target_os = "windows"))]
     {
-        main_window_visible
+        _main_window_visible
     }
 }

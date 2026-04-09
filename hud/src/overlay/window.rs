@@ -23,7 +23,7 @@ impl Win32OverlayWindow {
         use windows::Win32::UI::WindowsAndMessaging::*;
 
         let renderer = D2DRenderer::new()?;
-        let width = 220u32;
+        let width = 300u32;
         let height = 200u32;
 
         unsafe {
@@ -75,6 +75,17 @@ impl Win32OverlayWindow {
         log::info!("[overlay] show hwnd={:?}", self.hwnd);
         unsafe {
             let _ = ShowWindow(self.hwnd, SW_SHOWNOACTIVATE);
+            let _ = SetWindowPos(
+                self.hwnd,
+                Some(HWND_TOPMOST),
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW,
+            );
+            let visible = windows::Win32::UI::WindowsAndMessaging::IsWindowVisible(self.hwnd);
+            log::info!("[overlay] after show: visible={}", visible.as_bool());
         }
     }
 
@@ -109,6 +120,23 @@ impl Win32OverlayWindow {
         }
     }
 
+    /// Re-assert TOPMOST positioning. Called on each tick while overlay is visible
+    /// to stay above game windows that continuously reclaim the top z-order.
+    pub fn ensure_topmost(&self) {
+        use windows::Win32::UI::WindowsAndMessaging::*;
+        unsafe {
+            let _ = SetWindowPos(
+                self.hwnd,
+                Some(HWND_TOPMOST),
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+            );
+        }
+    }
+
     pub fn render(&mut self) {
         if !self.needs_render {
             return;
@@ -116,7 +144,12 @@ impl Win32OverlayWindow {
         self.needs_render = false;
 
         match self.render_to_layered_window() {
-            Ok(()) => {}
+            Ok(()) => {
+                log::debug!(
+                    "[overlay] rendered {}x{} at hwnd={:?}",
+                    self.width, self.height, self.hwnd
+                );
+            }
             Err(e) => {
                 log::warn!("[overlay] render failed: {}, recreating D2D resources", e);
                 match D2DRenderer::new() {
@@ -141,7 +174,7 @@ impl Win32OverlayWindow {
         let h = self.height as i32;
 
         unsafe {
-            let screen_dc = GetDC(Some(self.hwnd));
+            let screen_dc = GetDC(None);
             let mem_dc = CreateCompatibleDC(Some(screen_dc));
 
             // Create a 32-bit DIB section for per-pixel alpha
@@ -194,7 +227,7 @@ impl Win32OverlayWindow {
                 AlphaFormat: AC_SRC_ALPHA as u8,
             };
 
-            let _ = UpdateLayeredWindow(
+            let ulw_result = UpdateLayeredWindow(
                 self.hwnd,
                 Some(screen_dc),
                 None,
@@ -205,11 +238,14 @@ impl Win32OverlayWindow {
                 Some(&blend as *const _),
                 ULW_ALPHA,
             );
+            if let Err(ref e) = ulw_result {
+                log::error!("[overlay] UpdateLayeredWindow failed: {}", e);
+            }
 
             SelectObject(mem_dc, old);
             let _ = DeleteObject(dib.into());
             let _ = DeleteDC(mem_dc);
-            ReleaseDC(Some(self.hwnd), screen_dc);
+            ReleaseDC(None, screen_dc);
         }
 
         Ok(())

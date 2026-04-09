@@ -42,4 +42,9 @@ impl OverlayWindow {
         #[cfg(target_os = "windows")]
         self.inner.render();
     }
+
+    pub fn ensure_topmost(&self) {
+        #[cfg(target_os = "windows")]
+        self.inner.ensure_topmost();
+    }
 }

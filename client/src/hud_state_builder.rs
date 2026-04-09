@@ -15,11 +15,7 @@ pub fn build_hud_state(ctx: &AppContext, mode: HudMode) -> HudState {
     } else {
         None
     };
-    let stream_card = if mode == HudMode::MiniPlayer {
-        build_stream_card(ctx)
-    } else {
-        None
-    };
+    let stream_card = build_stream_card(ctx);
 
     HudState {
         mode,

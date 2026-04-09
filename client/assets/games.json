@@ -232,6 +232,22 @@
             "cover_url": "https://images.igdb.com/igdb/image/upload/t_cover_big/co1k24.png",
             "color": "#CD8B36",
             "category": "other"
+        },
+        {
+            "id": "planet-craft",
+            "name": "Planet Craft",
+            "short_name": "PC",
+            "exe": ["Planet Craft.exe"],
+            "color": "#4A90D9",
+            "category": "sandbox"
+        },
+        {
+            "id": "octogeddon",
+            "name": "Octogeddon",
+            "short_name": "OG",
+            "exe": ["octogeddon.exe"],
+            "color": "#E85D3A",
+            "category": "action"
         }
     ]
 }

@@ -125,10 +125,14 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             }
 
             mini_player.tick();
+
+            if mode_mgr.borrow().current() == HudMode::Overlay {
+                overlay_win.borrow().ensure_topmost();
+            }
         }
     });
 
-    slint::run_event_loop()?;
+    slint::run_event_loop_until_quit()?;
     Ok(())
 }
 
