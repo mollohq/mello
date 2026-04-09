@@ -147,7 +147,9 @@ impl Win32OverlayWindow {
             Ok(()) => {
                 log::debug!(
                     "[overlay] rendered {}x{} at hwnd={:?}",
-                    self.width, self.height, self.hwnd
+                    self.width,
+                    self.height,
+                    self.hwnd
                 );
             }
             Err(e) => {

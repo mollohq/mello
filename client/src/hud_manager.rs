@@ -194,10 +194,7 @@ fn server_loop(state_rx: mpsc::Receiver<HudMessage>, action_tx: mpsc::Sender<Hud
 }
 
 #[cfg(target_os = "windows")]
-fn server_loop_inner(
-    state_rx: &mpsc::Receiver<HudMessage>,
-    action_tx: &mpsc::Sender<HudAction>,
-) {
+fn server_loop_inner(state_rx: &mpsc::Receiver<HudMessage>, action_tx: &mpsc::Sender<HudAction>) {
     let mut spawn_failures = 0u32;
 
     loop {

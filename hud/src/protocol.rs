@@ -129,3 +129,107 @@ pub enum HudActionKind {
 
 pub const STATE_PIPE_NAME: &str = r"\\.\pipe\m3llo-hud-state";
 pub const ACTION_PIPE_NAME: &str = r"\\.\pipe\m3llo-hud-action";
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn state_message_round_trip() {
+        let msg = HudMessage::State(Box::new(HudState {
+            mode: HudMode::Overlay,
+            crew: Some(HudCrew {
+                name: "TestCrew".into(),
+                initials: "TC".into(),
+                online_count: 3,
+            }),
+            voice: Some(HudVoice {
+                channel_name: "General".into(),
+                members: vec![HudVoiceMember {
+                    id: "u1".into(),
+                    display_name: "alice".into(),
+                    initials: "AL".into(),
+                    avatar_rgba: None,
+                    speaking: true,
+                    muted: false,
+                    is_self: true,
+                }],
+                self_muted: false,
+            }),
+            recent_messages: None,
+            stream_card: Some(HudStreamCard {
+                streamer: "bob".into(),
+                title: "Ranked grind".into(),
+            }),
+            clip_toast: None,
+        }));
+
+        let json = serde_json::to_string(&msg).unwrap();
+        let parsed: HudMessage = serde_json::from_str(&json).unwrap();
+
+        match parsed {
+            HudMessage::State(s) => {
+                assert_eq!(s.mode, HudMode::Overlay);
+                assert_eq!(s.crew.as_ref().unwrap().name, "TestCrew");
+                assert_eq!(s.voice.as_ref().unwrap().members.len(), 1);
+                assert!(s.voice.as_ref().unwrap().members[0].speaking);
+                assert!(s.stream_card.is_some());
+                assert!(s.clip_toast.is_none());
+            }
+            _ => panic!("expected State"),
+        }
+    }
+
+    #[test]
+    fn settings_defaults_on_missing_fields() {
+        let json = r#"{"type":"settings"}"#;
+        let msg: HudMessage = serde_json::from_str(json).unwrap();
+        match msg {
+            HudMessage::Settings(s) => {
+                assert!((s.overlay_opacity - 0.8).abs() < f32::EPSILON);
+                assert!(s.show_clip_toasts);
+                assert!(s.overlay_enabled);
+            }
+            _ => panic!("expected Settings"),
+        }
+    }
+
+    #[test]
+    fn action_round_trip() {
+        let actions = [
+            HudActionKind::MuteToggle,
+            HudActionKind::DeafenToggle,
+            HudActionKind::LeaveVoice,
+            HudActionKind::OpenCrew,
+            HudActionKind::OpenStream,
+            HudActionKind::OpenSettings,
+        ];
+        for kind in actions {
+            let msg = HudAction::Action { action: kind };
+            let json = serde_json::to_string(&msg).unwrap();
+            let parsed: HudAction = serde_json::from_str(&json).unwrap();
+            match parsed {
+                HudAction::Action { action } => assert_eq!(action, kind),
+            }
+        }
+    }
+
+    #[test]
+    fn shutdown_message() {
+        let json = r#"{"type":"shutdown"}"#;
+        let msg: HudMessage = serde_json::from_str(json).unwrap();
+        assert!(matches!(msg, HudMessage::Shutdown));
+    }
+
+    #[test]
+    fn optional_fields_omitted_when_none() {
+        let state = HudState {
+            mode: HudMode::Hidden,
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&state).unwrap();
+        assert!(!json.contains("crew"));
+        assert!(!json.contains("voice"));
+        assert!(!json.contains("stream_card"));
+    }
+}

@@ -48,24 +48,22 @@ fn state_pipe_loop(state_tx: mpsc::Sender<HudMessage>) {
     let reader = BufReader::new(file);
     for line in reader.lines() {
         match line {
-            Ok(text) if !text.is_empty() => {
-                match serde_json::from_str::<HudMessage>(&text) {
-                    Ok(msg) => {
-                        log::info!("[ipc] received: {:?}", std::mem::discriminant(&msg));
-                        if state_tx.send(msg).is_err() {
-                            log::info!("[ipc] state receiver dropped, exiting");
-                            break;
-                        }
-                    }
-                    Err(e) => {
-                        log::warn!(
-                            "[ipc] bad message: {} — {:?}",
-                            e,
-                            &text[..text.len().min(200)]
-                        );
+            Ok(text) if !text.is_empty() => match serde_json::from_str::<HudMessage>(&text) {
+                Ok(msg) => {
+                    log::info!("[ipc] received: {:?}", std::mem::discriminant(&msg));
+                    if state_tx.send(msg).is_err() {
+                        log::info!("[ipc] state receiver dropped, exiting");
+                        break;
                     }
                 }
-            }
+                Err(e) => {
+                    log::warn!(
+                        "[ipc] bad message: {} — {:?}",
+                        e,
+                        &text[..text.len().min(200)]
+                    );
+                }
+            },
             Err(e) => {
                 log::warn!("[ipc] state pipe read error: {}", e);
                 break;

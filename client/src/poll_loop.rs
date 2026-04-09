@@ -109,10 +109,16 @@ pub fn start(
                         }
                     }
                     Event::GameDetected { pid, .. } => {
-                        poll_ctx.fg_monitor.borrow_mut().set_game_active(true, Some(*pid));
+                        poll_ctx
+                            .fg_monitor
+                            .borrow_mut()
+                            .set_game_active(true, Some(*pid));
                     }
                     Event::GameEnded { .. } => {
-                        poll_ctx.fg_monitor.borrow_mut().set_game_active(false, None);
+                        poll_ctx
+                            .fg_monitor
+                            .borrow_mut()
+                            .set_game_active(false, None);
                     }
                     Event::MemberJoined { member, .. } => {
                         if !poll_ctx.app.window().is_visible() {

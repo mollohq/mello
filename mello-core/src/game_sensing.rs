@@ -132,9 +132,8 @@ fn enumerate_game_processes(ctx: *mut mello_sys::MelloContext) -> Vec<RawGamePro
         MAX_PROCESSES
     ];
 
-    let count = unsafe {
-        mello_sys::mello_enumerate_games(ctx, buf.as_mut_ptr(), MAX_PROCESSES as i32)
-    };
+    let count =
+        unsafe { mello_sys::mello_enumerate_games(ctx, buf.as_mut_ptr(), MAX_PROCESSES as i32) };
 
     let mut out = Vec::new();
     for gp in buf.iter().take(count.max(0) as usize) {

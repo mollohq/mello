@@ -136,7 +136,6 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-
 fn apply_mode(
     mode_mgr: &ModeManager,
     mini_player: &mini_player::MiniPlayer,

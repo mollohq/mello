@@ -118,8 +118,7 @@ impl MiniPlayer {
         );
         if let Some(ref crew) = state.crew {
             self.window.set_crew_name(crew.name.as_str().into());
-            self.window
-                .set_crew_initials(crew.initials.as_str().into());
+            self.window.set_crew_initials(crew.initials.as_str().into());
             self.window.set_online_count(crew.online_count as i32);
         }
 
@@ -134,8 +133,7 @@ impl MiniPlayer {
                 .map(|m| {
                     if m.is_self {
                         self.window.set_self_name(m.display_name.as_str().into());
-                        self.window
-                            .set_self_initials(m.initials.as_str().into());
+                        self.window.set_self_initials(m.initials.as_str().into());
                     }
                     VoiceMemberData {
                         id: m.id.as_str().into(),
@@ -244,10 +242,7 @@ impl MiniPlayer {
                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_FRAMECHANGED,
             );
 
-            log::info!(
-                "[mini_player] Win32 styles applied to hwnd={:?}",
-                hwnd
-            );
+            log::info!("[mini_player] Win32 styles applied to hwnd={:?}", hwnd);
         }
     }
 }

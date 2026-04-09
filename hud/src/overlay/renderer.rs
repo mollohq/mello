@@ -357,12 +357,7 @@ impl D2DRenderer {
         Ok(())
     }
 
-    unsafe fn draw_channel_name(
-        &self,
-        channel_name: &str,
-        y: &mut f32,
-        width: f32,
-    ) -> Result<()> {
+    unsafe fn draw_channel_name(&self, channel_name: &str, y: &mut f32, width: f32) -> Result<()> {
         let x = PANEL_PADDING;
         let muted = self.brush(color(0.631, 0.631, 0.667, 0.8))?;
 
