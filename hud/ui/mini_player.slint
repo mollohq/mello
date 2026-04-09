@@ -1,0 +1,599 @@
+import "../../client/ui/fonts/Inter-Regular.ttf";
+import "../../client/ui/fonts/Inter-Medium.ttf";
+import "../../client/ui/fonts/Inter-SemiBold.ttf";
+import "../../client/ui/fonts/Inter-Bold.ttf";
+import "../../client/ui/fonts/JetBrainsMono-Regular.ttf";
+import "../../client/ui/fonts/JetBrainsMono-Medium.ttf";
+
+// ── Data types ──────────────────────────────────────────────────────────────
+
+export struct VoiceMemberData {
+    id: string,
+    display-name: string,
+    initials: string,
+    speaking: bool,
+    muted: bool,
+    is-self: bool,
+}
+
+export struct ChatPreviewData {
+    display-name: string,
+    text: string,
+    sender-color: color,
+}
+
+export struct StreamCardData {
+    streamer: string,
+    title: string,
+}
+
+// ── Speaking EQ bars ────────────────────────────────────────────────────────
+
+component SpeakingBars inherits HorizontalLayout {
+    in property <bool> active: false;
+
+    spacing: 2px;
+    alignment: center;
+
+    property <duration> t1: 700ms;
+    property <duration> t2: 500ms;
+    property <duration> t3: 600ms;
+
+    // Bars animate via height between min/max when active
+    Rectangle {
+        width: 3px;
+        height: active ? 16px : 4px;
+        border-radius: 1.5px;
+        background: #10B981;
+        animate height { duration: t1; easing: ease-in-out; }
+    }
+    Rectangle {
+        width: 3px;
+        height: active ? 12px : 6px;
+        border-radius: 1.5px;
+        background: #10B981;
+        animate height { duration: t2; easing: ease-in-out; }
+    }
+    Rectangle {
+        width: 3px;
+        height: active ? 16px : 4px;
+        border-radius: 1.5px;
+        background: #10B981;
+        animate height { duration: t3; easing: ease-in-out; }
+    }
+}
+
+// ── Member row ──────────────────────────────────────────────────────────────
+
+component MemberRow inherits Rectangle {
+    in property <string> display-name;
+    in property <string> initials;
+    in property <bool> speaking;
+    in property <bool> muted;
+
+    height: 32px;
+    border-radius: 8px;
+    background: transparent;
+
+    HorizontalLayout {
+        padding-left: 4px;
+        padding-right: 4px;
+        spacing: 8px;
+        alignment: start;
+
+        // Avatar square
+        Rectangle {
+            width: 24px;
+            height: 24px;
+            y: (parent.height - self.height) / 2;
+            border-radius: 4px;
+            background: speaking ? #10B98133 : (muted ? #1A1A1A : #242424);
+            border-width: speaking ? 2px : 1px;
+            border-color: speaking ? #10B981 : (muted ? #2A2A2A : #333333);
+
+            Text {
+                text: initials;
+                font-family: "JetBrains Mono";
+                font-size: 10px;
+                font-weight: 700;
+                color: speaking ? white : (muted ? #555555 : #8A8A8A);
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+
+        // Name
+        Text {
+            text: display-name;
+            font-family: "Inter";
+            font-size: 13px;
+            font-weight: speaking ? 600 : 500;
+            color: speaking ? white : (muted ? #8A8A8A : #D4D4D4);
+            vertical-alignment: center;
+            overflow: elide;
+        }
+
+        // State indicator
+        if speaking: SpeakingBars {
+            width: 16px;
+            active: true;
+            y: (parent.height - self.height) / 2;
+        }
+        if muted && !speaking: Image {
+            width: 12px;
+            height: 12px;
+            y: (parent.height - self.height) / 2;
+            source: @image-url("../../client/ui/icons/mic-off.svg");
+            colorize: #E02020;
+        }
+    }
+}
+
+// ── Main window ─────────────────────────────────────────────────────────────
+
+export component MiniPlayerWindow inherits Window {
+    title: "m3llo HUD";
+    no-frame: true;
+    background: transparent;
+    default-font-family: "Inter";
+    width: 280px;
+    height: self.preferred-height < 360px ? 360px : self.preferred-height;
+
+    // ── Properties ──
+    in property <string> crew-name: "";
+    in property <string> crew-initials: "";
+    in property <int> online-count: 0;
+    in property <[VoiceMemberData]> members: [];
+    in property <string> channel-name: "";
+    in property <bool> self-muted: false;
+    in property <string> self-name: "";
+    in property <string> self-initials: "";
+    in property <[ChatPreviewData]> chat-messages: [];
+    in property <StreamCardData> stream-card: { streamer: "", title: "" };
+    in property <bool> has-stream: false;
+
+    in property <bool> self-deafened: false;
+
+    // ── Callbacks ──
+    callback mute-toggle();
+    callback deafen-toggle();
+    callback leave-voice();
+    callback open-crew();
+    callback open-stream();
+    callback open-settings();
+    callback start-drag();
+
+    // Outer shell with border + rounded corners
+    Rectangle {
+        border-radius: 16px;
+        background: #1C1C1C;
+        border-width: 1px;
+        border-color: #333333;
+        clip: true;
+
+        VerticalLayout {
+            padding: 0;
+            spacing: 0;
+
+            // ── Drag handle ──
+            Rectangle {
+                height: 28px;
+                background: #161616;
+
+                Rectangle {
+                    width: 48px;
+                    height: 4px;
+                    border-radius: 2px;
+                    background: #404040;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                }
+
+                // Bottom border
+                Rectangle {
+                    y: parent.height - 1px;
+                    height: 1px;
+                    background: #2A2A2A;
+                }
+
+                drag-area := TouchArea {
+                    pointer-event(event) => {
+                        if (event.kind == PointerEventKind.down) {
+                            start-drag();
+                        }
+                    }
+                }
+            }
+
+            // ── Header ──
+            Rectangle {
+                height: 56px;
+                background: #1C1C1C;
+
+                // Bottom border
+                Rectangle {
+                    y: parent.height - 1px;
+                    height: 1px;
+                    background: #2A2A2A;
+                }
+
+                HorizontalLayout {
+                    padding-left: 16px;
+                    padding-right: 12px;
+                    spacing: 12px;
+                    alignment: start;
+
+                    // Crew monogram
+                    Rectangle {
+                        width: 36px;
+                        height: 36px;
+                        y: (parent.height - self.height) / 2;
+                        border-radius: 8px;
+                        background: #242424;
+                        border-width: 1px;
+                        border-color: #333333;
+
+                        Text {
+                            text: crew-initials;
+                            font-family: "JetBrains Mono";
+                            font-size: 12px;
+                            font-weight: 700;
+                            color: #FF1E56;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    // Name + online
+                    VerticalLayout {
+                        horizontal-stretch: 1;
+                        alignment: center;
+                        spacing: 2px;
+
+                        Text {
+                            text: crew-name;
+                            font-size: 15px;
+                            font-weight: 600;
+                            color: white;
+                        }
+                        HorizontalLayout {
+                            spacing: 6px;
+                            alignment: start;
+
+                            Rectangle {
+                                width: 6px;
+                                height: 6px;
+                                y: (parent.height - self.height) / 2;
+                                border-radius: 3px;
+                                background: #10B981;
+                            }
+                            Text {
+                                text: online-count + " online";
+                                font-family: "JetBrains Mono";
+                                font-size: 10px;
+                                color: #8A8A8A;
+                                vertical-alignment: center;
+                            }
+                        }
+                    }
+
+                    // Open main app
+                    Rectangle {
+                        width: 32px;
+                        height: 32px;
+                        y: (parent.height - self.height) / 2;
+                        border-radius: 6px;
+                        background: maximize-hover.has-hover ? #2A2A2A : #242424;
+                        border-width: 1px;
+                        border-color: maximize-hover.has-hover ? #444444 : #333333;
+
+                        Image {
+                            width: 14px;
+                            height: 14px;
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                            source: @image-url("../../client/ui/icons/maximize.svg");
+                            colorize: maximize-hover.has-hover ? white : #8A8A8A;
+                        }
+
+                        maximize-hover := TouchArea {
+                            clicked => { open-crew(); }
+                        }
+                    }
+                }
+            }
+
+            // ── Voice members ──
+            VerticalLayout {
+                padding: 10px;
+                padding-top: 8px;
+                padding-bottom: 8px;
+                spacing: 2px;
+
+                for member in members: MemberRow {
+                    display-name: member.display-name;
+                    initials: member.initials;
+                    speaking: member.speaking;
+                    muted: member.muted;
+                }
+            }
+
+            // ── Stream + Chat section ──
+            VerticalLayout {
+                padding-left: 16px;
+                padding-right: 16px;
+                padding-bottom: 8px;
+                spacing: 8px;
+
+                // ── Stream card ──
+                if has-stream: Rectangle {
+                    height: 52px;
+                    border-radius: 12px;
+                    background: #242424;
+                    border-width: 1px;
+                    border-color: stream-hover.has-hover ? #444444 : #333333;
+
+                    HorizontalLayout {
+                        padding: 10px;
+                        spacing: 10px;
+
+                        // Thumbnail
+                        Rectangle {
+                            horizontal-stretch: 0;
+                            width: 48px;
+                            height: 28px;
+                            y: (parent.height - self.height) / 2;
+                            border-radius: 4px;
+                            background: black;
+                            border-width: 1px;
+                            border-color: #444444;
+
+                            Rectangle {
+                                x: 4px;
+                                y: 4px;
+                                width: 6px;
+                                height: 6px;
+                                border-radius: 3px;
+                                background: #FF1E56;
+                            }
+                        }
+
+                        // Stream info — stretches to fill
+                        VerticalLayout {
+                            horizontal-stretch: 1;
+                            alignment: center;
+                            spacing: 2px;
+
+                            Text {
+                                text: stream-card.streamer + " is streaming";
+                                font-family: "JetBrains Mono";
+                                font-size: 9px;
+                                color: #8A8A8A;
+                                letter-spacing: 0.5px;
+                            }
+                            Text {
+                                text: stream-card.title;
+                                font-size: 13px;
+                                font-weight: 600;
+                                color: white;
+                            }
+                        }
+
+                        // Open link — fixed, pushed right
+                        Rectangle {
+                            horizontal-stretch: 0;
+                            width: 24px;
+                            height: 24px;
+                            y: (parent.height - self.height) / 2;
+                            border-radius: 4px;
+                            background: #333333;
+
+                            Image {
+                                width: 12px;
+                                height: 12px;
+                                x: (parent.width - self.width) / 2;
+                                y: (parent.height - self.height) / 2;
+                                source: @image-url("../../client/ui/icons/external-link.svg");
+                                colorize: #F5F5F5;
+                            }
+
+                            stream-hover := TouchArea {
+                                clicked => { open-stream(); }
+                            }
+                        }
+                    }
+                }
+
+                // ── Chat preview ──
+                if chat-messages.length > 0: Rectangle {
+                    border-radius: 12px;
+                    background: #242424;
+                    border-width: 1px;
+                    border-color: chat-hover.has-hover ? #444444 : #333333;
+                    height: chat-inner.preferred-height;
+
+                    chat-inner := VerticalLayout {
+                        padding: 8px;
+                        padding-left: 10px;
+                        padding-right: 10px;
+                        spacing: 4px;
+
+                        for msg in chat-messages: HorizontalLayout {
+                            spacing: 6px;
+                            alignment: start;
+
+                            Text {
+                                text: msg.display-name + ":";
+                                font-family: "JetBrains Mono";
+                                font-size: 10px;
+                                color: msg.sender-color;
+                            }
+                            Text {
+                                text: msg.text;
+                                font-size: 10px;
+                                color: #D4D4D4;
+                                overflow: elide;
+                            }
+                        }
+                    }
+
+                    chat-hover := TouchArea {
+                        clicked => { open-crew(); }
+                    }
+                }
+            }
+
+            // ── Footer ──
+            Rectangle {
+                background: #141414;
+                height: footer-layout.preferred-height;
+
+                // Top border
+                Rectangle {
+                    height: 1px;
+                    background: #2A2A2A;
+                }
+
+                footer-layout := VerticalLayout {
+                    padding-left: 16px;
+                    padding-right: 16px;
+                    padding-top: 16px;
+                    padding-bottom: 16px;
+                    spacing: 16px;
+
+                    // Self info row
+                    HorizontalLayout {
+                        spacing: 12px;
+                        alignment: start;
+
+                        Rectangle {
+                            width: 36px;
+                            height: 36px;
+                            y: (parent.height - self.height) / 2;
+                            border-radius: 8px;
+                            background: #333333;
+                            border-width: 1px;
+                            border-color: #444444;
+
+                            Text {
+                                text: self-initials;
+                                font-family: "JetBrains Mono";
+                                font-size: 12px;
+                                font-weight: 700;
+                                color: white;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+                        }
+
+                        VerticalLayout {
+                            alignment: center;
+                            spacing: 2px;
+
+                            Text {
+                                text: self-name;
+                                font-size: 13px;
+                                font-weight: 600;
+                                color: white;
+                            }
+                            Text {
+                                text: "Connected";
+                                font-family: "JetBrains Mono";
+                                font-size: 10px;
+                                color: #8A8A8A;
+                            }
+                        }
+                    }
+
+                    // Control buttons
+                    HorizontalLayout {
+                        spacing: 8px;
+
+                        // Mute toggle
+                        Rectangle {
+                            height: 40px;
+                            border-radius: 8px;
+                            background: mute-hover.has-hover ? #2A2A2A : #242424;
+                            border-width: 1px;
+                            border-color: mute-hover.has-hover ? #444444 : #333333;
+
+                            Image {
+                                width: 18px;
+                                height: 18px;
+                                x: (parent.width - self.width) / 2;
+                                y: (parent.height - self.height) / 2;
+                                source: self-muted
+                                    ? @image-url("../../client/ui/icons/mic-off.svg")
+                                    : @image-url("../../client/ui/icons/mic.svg");
+                                colorize: self-muted ? #E02020 : #F5F5F5;
+                            }
+
+                            if !self-muted: Rectangle {
+                                x: parent.width - 10px;
+                                y: 8px;
+                                width: 6px;
+                                height: 6px;
+                                border-radius: 3px;
+                                background: #28C840;
+                            }
+
+                            mute-hover := TouchArea {
+                                clicked => { mute-toggle(); }
+                            }
+                        }
+
+                        // Deafen toggle
+                        Rectangle {
+                            height: 40px;
+                            border-radius: 8px;
+                            background: deafen-hover.has-hover ? #2A2A2A : #242424;
+                            border-width: 1px;
+                            border-color: deafen-hover.has-hover ? #444444 : #333333;
+
+                            Image {
+                                width: 18px;
+                                height: 18px;
+                                x: (parent.width - self.width) / 2;
+                                y: (parent.height - self.height) / 2;
+                                source: @image-url("../../client/ui/icons/headphones.svg");
+                                colorize: self-deafened ? #E02020 : #F5F5F5;
+                            }
+
+                            deafen-hover := TouchArea {
+                                clicked => { deafen-toggle(); }
+                            }
+                        }
+
+                        // Spacer pushes leave button to far right
+                        Rectangle {
+                            horizontal-stretch: 1;
+                        }
+
+                        // Leave voice
+                        Rectangle {
+                            width: 56px;
+                            height: 40px;
+                            border-radius: 8px;
+                            background: leave-hover.has-hover ? #E02020 : #E0202019;
+                            border-width: 1px;
+                            border-color: #E0202050;
+
+                            Image {
+                                width: 18px;
+                                height: 18px;
+                                x: (parent.width - self.width) / 2;
+                                y: (parent.height - self.height) / 2;
+                                source: @image-url("../../client/ui/icons/phone-off.svg");
+                                colorize: leave-hover.has-hover ? white : #E02020;
+                            }
+
+                            leave-hover := TouchArea {
+                                clicked => { leave-voice(); }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

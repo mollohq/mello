@@ -31,7 +31,7 @@ Do not repeat a corrected mistake in the same session.
 
 ## Rust Standards (mello-core, client)
 - `cargo fmt --all` must pass before committing. Check with `cargo fmt --all -- --check`.
-- `clippy` must pass: `cargo clippy --all-targets -- -D warnings`
+- `clippy` must pass before comitting: `cargo clippy --all-targets -- -D warnings`
 - No `unwrap()` in non-test code — use `?`, `expect("reason")`, or proper error handling.
 - Keep `async` minimal — prefer structured concurrency over spawning loose tasks.
 - Log at every state transition using `log::info!/debug!/warn!/error!` — see Architecture §15.
@@ -66,6 +66,18 @@ Do not repeat a corrected mistake in the same session.
   (stroke="black", no hardcoded colors) and reference it with `@image-url("../icons/<name>.svg")`
   + `colorize:` for theming. Slint renders SVG icons cleanly; hand-drawn rectangle approximations
   look broken.
+
+## Running the Client
+- Always use `.\client-prod.ps1` to start the client — there is no local backend.
+- When building the HUD separately, remember `cargo run -p mello-client` does NOT build `mello-hud`.
+  Build it explicitly with `cargo build -p mello-hud` before running the client.
+
+## Troubleshooting
+- Be systematic. Never throw changes at the wall to see what sticks.
+- Start from the simplest working state (e.g. a plain window, a basic request).
+- Add one thing at a time, verifying each step before adding the next.
+- Form a hypothesis, test it, confirm or reject, then move on. Don't guess.
+- If something doesn't work, isolate the variable — don't change multiple things at once.
 
 ## Fix It Right
 - Never apply band-aid / "simple" fixes. Always implement the proper, robust solution.

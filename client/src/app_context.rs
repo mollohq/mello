@@ -6,7 +6,9 @@ use tokio::sync::mpsc::Sender;
 
 use mello_core::Command;
 
+use crate::foreground_monitor::ForegroundMonitor;
 use crate::gif_animator::GifAnimator;
+use crate::hud_manager::HudManager;
 use crate::updater::Updater;
 use crate::{MainWindow, Settings};
 
@@ -37,4 +39,6 @@ pub struct AppContext {
     pub gif_chat_anim: GifAnimator,
     pub dbg_hist: Rc<RefCell<crate::DebugHistory>>,
     pub avatar_cache: Rc<RefCell<HashMap<String, slint::Image>>>,
+    pub hud_manager: Rc<HudManager>,
+    pub fg_monitor: Rc<RefCell<ForegroundMonitor>>,
 }

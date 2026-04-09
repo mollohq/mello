@@ -5,6 +5,7 @@
 #include <string>
 #include <atomic>
 #include <functional>
+#include <memory>
 
 namespace mello::audio {
 
@@ -34,7 +35,7 @@ private:
     void run_inference();
     void downsample_48_to_16(const int16_t* in, int count);
 
-    Ort::Env env_;
+    std::unique_ptr<Ort::Env> env_;
     Ort::Session* session_ = nullptr;
     Ort::SessionOptions session_options_;
 

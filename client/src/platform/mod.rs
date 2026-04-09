@@ -1,3 +1,5 @@
+#[cfg(target_os = "windows")]
+pub mod crash_handler;
 pub mod hotkeys;
 #[cfg(target_os = "macos")]
 pub mod macos;
@@ -121,5 +123,23 @@ impl StatusItem {
         }
 
         Icon::from_rgba(rgba, size as u32, size as u32).expect("icon render failed")
+    }
+}
+
+/// Bring the main Mello window to the foreground on Windows.
+/// On other platforms, this is a no-op (Slint's show() is sufficient).
+pub fn bring_main_window_to_front() {
+    #[cfg(target_os = "windows")]
+    {
+        use windows::core::w;
+        use windows::Win32::UI::WindowsAndMessaging::{
+            FindWindowW, SetForegroundWindow, ShowWindow, SW_RESTORE,
+        };
+        unsafe {
+            if let Ok(hwnd) = FindWindowW(None, w!("Mello")) {
+                let _ = ShowWindow(hwnd, SW_RESTORE);
+                let _ = SetForegroundWindow(hwnd);
+            }
+        }
     }
 }

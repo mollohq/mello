@@ -1,0 +1,161 @@
+<html lang="en" vid="0"><head vid="1">
+    <meta charset="UTF-8" vid="2">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" vid="3">
+    <title vid="4">Game Overlay HUD</title>
+    <script src="https://cdn.tailwindcss.com/3.4.17" vid="5"></script>
+    <style vid="6">
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap');
+
+        :root {
+            --f-sans: 'Inter', -apple-system, sans-serif;
+            --f-mono: 'JetBrains Mono', monospace;
+        }
+
+        body {
+            font-family: var(--f-sans);
+            
+            background: radial-gradient(circle at top right, #1e293b 0%, #020617 100%);
+            margin: 0;
+            overflow: hidden;
+            display: flex;
+            align-items: flex-start;
+            justify-content: flex-start;
+            height: 100vh;
+            width: 100vw;
+            padding: 16px;
+        }
+
+        .font-mono {
+            font-family: var(--f-mono);
+        }
+        
+        
+        @keyframes eq-bounce-sm {
+            0%, 100% { height: 3px; }
+            50% { height: 12px; }
+        }
+        
+        @keyframes eq-bounce-sm-alt {
+            0%, 100% { height: 4px; }
+            50% { height: 9px; }
+        }
+
+        .speaking-bar-1 { animation: eq-bounce-sm 0.7s ease-in-out infinite; }
+        .speaking-bar-2 { animation: eq-bounce-sm-alt 0.5s ease-in-out infinite 0.1s; }
+        .speaking-bar-3 { animation: eq-bounce-sm 0.6s ease-in-out infinite 0.2s; }
+
+        
+        .glass-panel {
+            background: rgba(0, 0, 0, 0.45);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+        }
+
+        
+        .text-shadow-sm {
+            text-shadow: 0 1px 2px rgba(0,0,0,0.8);
+        }
+    </style>
+</head>
+<body vid="7">
+
+    
+    <div class="glass-panel w-[220px] rounded-xl flex flex-col p-2.5 gap-2 select-none pointer-events-none" vid="8">
+        
+        
+        <div class="flex items-center justify-between px-1" vid="9">
+            <div class="flex items-center gap-1.5" vid="10">
+                <span class="font-mono font-bold text-[10px] text-[#FF1E56] tracking-wider text-shadow-sm" vid="11">TV</span>
+                <span class="text-xs font-bold text-white text-shadow-sm tracking-tight" vid="12">The Vanguard</span>
+            </div>
+            <div class="flex items-center gap-1 bg-black/40 px-1.5 py-0.5 rounded-full border border-white/5" vid="13">
+                <div class="w-1.5 h-1.5 rounded-full bg-[#10B981] shadow-[0_0_4px_#10B981]" vid="14"></div>
+                <span class="text-[9px] font-mono text-[#A1A1AA]" vid="15">5</span>
+            </div>
+        </div>
+
+        
+        <div class="h-[1px] w-full bg-gradient-to-r from-transparent via-white/10 to-transparent" vid="16"></div>
+
+        
+        <div class="flex flex-col gap-1" vid="17">
+            
+            
+            <div class="flex items-center gap-2 px-1 rounded-md bg-white/[0.03]" vid="18">
+                <div class="w-[18px] h-[18px] rounded flex items-center justify-center font-mono font-bold text-[8px] text-white bg-[#10B981]/20 border border-[#10B981]/50 shadow-[0_0_8px_rgba(16,185,129,0.3)] shrink-0" vid="19">
+                    KT
+                </div>
+                <div class="flex-1 min-w-0" vid="20">
+                    <div class="text-[11px] font-semibold text-white truncate text-shadow-sm" vid="21">k0ji_tech</div>
+                </div>
+                <div class="flex items-center gap-[2px] h-3 w-3 shrink-0 justify-center" vid="22">
+                    <div class="w-[2px] bg-[#10B981] rounded-full speaking-bar-1" vid="23"></div>
+                    <div class="w-[2px] bg-[#10B981] rounded-full speaking-bar-2" vid="24"></div>
+                    <div class="w-[2px] bg-[#10B981] rounded-full speaking-bar-3" vid="25"></div>
+                </div>
+            </div>
+
+            
+            <div class="flex items-center gap-2 px-1 rounded-md bg-white/[0.03]" vid="26">
+                <div class="w-[18px] h-[18px] rounded flex items-center justify-center font-mono font-bold text-[8px] text-white bg-[#10B981]/20 border border-[#10B981]/50 shadow-[0_0_8px_rgba(16,185,129,0.3)] shrink-0" vid="27">
+                    NV
+                </div>
+                <div class="flex-1 min-w-0" vid="28">
+                    <div class="text-[11px] font-semibold text-white truncate text-shadow-sm" vid="29">nova_9</div>
+                </div>
+                <div class="flex items-center gap-[2px] h-3 w-3 shrink-0 justify-center" vid="30">
+                    <div class="w-[2px] bg-[#10B981] rounded-full speaking-bar-3" vid="31"></div>
+                    <div class="w-[2px] bg-[#10B981] rounded-full speaking-bar-1" vid="32"></div>
+                    <div class="w-[2px] bg-[#10B981] rounded-full speaking-bar-2" vid="33"></div>
+                </div>
+            </div>
+
+            
+            <div class="flex items-center gap-2 px-1 opacity-75" vid="34">
+                <div class="w-[18px] h-[18px] rounded flex items-center justify-center font-mono font-semibold text-[8px] text-[#A1A1AA] bg-black/50 border border-white/10 shrink-0" vid="35">
+                    AS
+                </div>
+                <div class="flex-1 min-w-0" vid="36">
+                    <div class="text-[11px] font-medium text-[#D4D4D8] truncate text-shadow-sm" vid="37">ash_22</div>
+                </div>
+                <div class="w-3 shrink-0" vid="38"></div> 
+            </div>
+
+            
+            <div class="flex items-center gap-2 px-1 opacity-50" vid="39">
+                <div class="w-[18px] h-[18px] rounded flex items-center justify-center font-mono font-semibold text-[8px] text-[#71717A] bg-black/40 border border-white/5 shrink-0 relative" vid="40">
+                    MR
+                </div>
+                <div class="flex-1 min-w-0" vid="41">
+                    <div class="text-[11px] font-medium text-[#A1A1AA] truncate text-shadow-sm" vid="42">m1ra</div>
+                </div>
+                <div class="w-3 flex justify-center shrink-0" vid="43">
+                    
+                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#FF1E56" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" vid="44">
+                        <line x1="1" y1="1" x2="23" y2="23" vid="45"></line>
+                        <path d="M9 9v3a3 3 0 0 0 5.12 2.12M15 9.34V4a3 3 0 0 0-5.94-.6" vid="46"></path>
+                        <path d="M17 16.95A7 7 0 0 1 5 12v-2m14 0v2a7 7 0 0 1-.11 1.23" vid="47"></path>
+                        <line x1="12" y1="19" x2="12" y2="23" vid="48"></line>
+                        <line x1="8" y1="23" x2="16" y2="23" vid="49"></line>
+                    </svg>
+                </div>
+            </div>
+
+            
+            <div class="flex items-center gap-2 px-1 opacity-75" vid="50">
+                <div class="w-[18px] h-[18px] rounded flex items-center justify-center font-mono font-semibold text-[8px] text-[#A1A1AA] bg-black/50 border border-white/10 shrink-0" vid="51">
+                    LN
+                </div>
+                <div class="flex-1 min-w-0" vid="52">
+                    <div class="text-[11px] font-medium text-[#D4D4D8] truncate text-shadow-sm" vid="53">lune</div>
+                </div>
+                <div class="w-3 shrink-0" vid="54"></div> 
+            </div>
+
+        </div>
+    </div>
+
+
+</body></html>

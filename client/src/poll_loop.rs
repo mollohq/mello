@@ -36,6 +36,8 @@ pub fn start(
         gif_chat_anim: ctx.gif_chat_anim.clone(),
         dbg_hist: ctx.dbg_hist.clone(),
         avatar_cache: ctx.avatar_cache.clone(),
+        hud_manager: ctx.hud_manager.clone(),
+        fg_monitor: ctx.fg_monitor.clone(),
     };
 
     let saved_timer = Rc::new(slint::Timer::default());
@@ -86,6 +88,7 @@ pub fn start(
                             VoiceState::Inactive
                         };
                         poll_ctx.status_item.borrow_mut().set_voice_state(state);
+                        poll_ctx.fg_monitor.borrow_mut().set_in_voice(*in_call);
                     }
                     Event::VoiceActivity { speaking, .. } => {
                         if poll_ctx.app.get_mic_muted() {
@@ -105,6 +108,12 @@ pub fn start(
                                 .set_voice_state(VoiceState::Connected);
                         }
                     }
+                    Event::GameDetected { .. } => {
+                        poll_ctx.fg_monitor.borrow_mut().set_game_active(true);
+                    }
+                    Event::GameEnded { .. } => {
+                        poll_ctx.fg_monitor.borrow_mut().set_game_active(false);
+                    }
                     Event::MemberJoined { member, .. } => {
                         if !poll_ctx.app.window().is_visible() {
                             notifications::notify_member_joined(&member.display_name);
@@ -112,7 +121,26 @@ pub fn start(
                     }
                     _ => {}
                 }
+                // Push HUD state on voice-related events
+                let should_push_hud = matches!(
+                    &event,
+                    Event::VoiceStateChanged { .. }
+                        | Event::VoiceActivity { .. }
+                        | Event::VoiceJoined { .. }
+                        | Event::VoiceUpdated { .. }
+                        | Event::GameDetected { .. }
+                        | Event::GameEnded { .. }
+                        | Event::MessageReceived { .. }
+                        | Event::CrewStateLoaded { .. }
+                );
+
                 crate::handlers::handle_event(&poll_ctx, event);
+
+                if should_push_hud && poll_ctx.hud_manager.is_enabled() {
+                    let mode = poll_ctx.fg_monitor.borrow().current_mode();
+                    let state = crate::hud_state_builder::build_hud_state(&poll_ctx, mode);
+                    poll_ctx.hud_manager.push_state(state);
+                }
             }
 
             // --- Tray icon left-click: toggle window visibility ---
@@ -272,6 +300,59 @@ pub fn start(
                             .cmd_tx
                             .try_send(Command::SetMute { muted: !pressed });
                     }
+                }
+            }
+
+            // --- HUD foreground monitor + state push ---
+            if poll_ctx.hud_manager.is_enabled() {
+                // Update foreground monitor with current voice state
+                {
+                    let mut fg = poll_ctx.fg_monitor.borrow_mut();
+                    fg.set_in_voice(poll_ctx.app.get_in_voice());
+                }
+
+                let main_visible = poll_ctx.app.window().is_visible();
+                let mode_changed = poll_ctx.fg_monitor.borrow_mut().evaluate(main_visible);
+                if let Some(new_mode) = mode_changed {
+                    let state = crate::hud_state_builder::build_hud_state(&poll_ctx, new_mode);
+                    poll_ctx.hud_manager.push_state(state);
+                }
+            }
+
+            // --- HUD actions ---
+            while let Some(action) = poll_ctx.hud_manager.poll_action() {
+                match action {
+                    crate::hud_manager::HudAction::Action { action } => match action {
+                        crate::hud_manager::HudActionKind::MuteToggle => {
+                            let new_muted = !poll_ctx.app.get_mic_muted();
+                            poll_ctx.app.set_mic_muted(new_muted);
+                            let _ = poll_ctx
+                                .cmd_tx
+                                .try_send(Command::SetMute { muted: new_muted });
+                            poll_ctx
+                                .status_item
+                                .borrow_mut()
+                                .set_mute_checked(new_muted);
+                        }
+                        crate::hud_manager::HudActionKind::LeaveVoice => {
+                            let _ = poll_ctx.cmd_tx.try_send(Command::LeaveVoice);
+                        }
+                        crate::hud_manager::HudActionKind::OpenCrew => {
+                            poll_ctx.app.show().ok();
+                            platform::bring_main_window_to_front();
+                        }
+                        crate::hud_manager::HudActionKind::OpenStream => {
+                            poll_ctx.app.show().ok();
+                            platform::bring_main_window_to_front();
+                        }
+                        crate::hud_manager::HudActionKind::DeafenToggle => {
+                            log::info!("[hud] deafen toggle requested (not yet wired)");
+                        }
+                        crate::hud_manager::HudActionKind::OpenSettings => {
+                            poll_ctx.app.show().ok();
+                            platform::bring_main_window_to_front();
+                        }
+                    },
                 }
             }
 

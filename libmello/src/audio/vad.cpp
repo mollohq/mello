@@ -6,10 +6,7 @@
 
 namespace mello::audio {
 
-VoiceActivityDetector::VoiceActivityDetector()
-    : env_(ORT_LOGGING_LEVEL_WARNING, "mello_vad")
-{
-}
+VoiceActivityDetector::VoiceActivityDetector() = default;
 
 VoiceActivityDetector::~VoiceActivityDetector() {
     shutdown();
@@ -17,14 +14,16 @@ VoiceActivityDetector::~VoiceActivityDetector() {
 
 bool VoiceActivityDetector::initialize(const std::string& model_path) {
     try {
+        env_ = std::make_unique<Ort::Env>(ORT_LOGGING_LEVEL_WARNING, "mello_vad");
+
         session_options_.SetIntraOpNumThreads(1);
         session_options_.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
 
 #ifdef _WIN32
         std::wstring wpath(model_path.begin(), model_path.end());
-        session_ = new Ort::Session(env_, wpath.c_str(), session_options_);
+        session_ = new Ort::Session(*env_, wpath.c_str(), session_options_);
 #else
-        session_ = new Ort::Session(env_, model_path.c_str(), session_options_);
+        session_ = new Ort::Session(*env_, model_path.c_str(), session_options_);
 #endif
 
         Ort::AllocatorWithDefaultOptions allocator;

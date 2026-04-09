@@ -71,6 +71,7 @@ jobs:
         run: |
           mkdir dist
           cp target/release/mello.exe dist/
+          cp target/release/m3llo-hud.exe dist/
           cp libmello/third_party/onnxruntime/onnxruntime-win-x64-*/lib/onnxruntime.dll dist/
           cp libmello/third_party/onnxruntime/onnxruntime-win-x64-*/lib/onnxruntime_providers_shared.dll dist/
           cp (Get-ChildItem target/release/build -Recurse -Filter silero_vad.onnx | Select -First 1).FullName dist/
