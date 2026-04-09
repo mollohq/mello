@@ -223,9 +223,16 @@ impl MiniPlayer {
             };
 
             let ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
-            let new_ex =
-                ex_style | WS_EX_TOPMOST.0 | WS_EX_NOACTIVATE.0 | WS_EX_TOOLWINDOW.0;
+            // Clear WS_EX_APPWINDOW (forces taskbar entry) and add TOOLWINDOW (hides it)
+            let new_ex = (ex_style & !WS_EX_APPWINDOW.0)
+                | WS_EX_TOPMOST.0
+                | WS_EX_NOACTIVATE.0
+                | WS_EX_TOOLWINDOW.0;
             SetWindowLongW(hwnd, GWL_EXSTYLE, new_ex as i32);
+
+            // Hide + re-show so the shell picks up the style change
+            let _ = ShowWindow(hwnd, SW_HIDE);
+            let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
 
             let _ = SetWindowPos(
                 hwnd,
@@ -234,7 +241,7 @@ impl MiniPlayer {
                 0,
                 0,
                 0,
-                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_FRAMECHANGED,
             );
 
             log::info!(

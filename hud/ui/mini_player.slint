@@ -221,10 +221,10 @@ export component MiniPlayerWindow inherits Window {
                     padding-left: 16px;
                     padding-right: 12px;
                     spacing: 12px;
-                    alignment: start;
 
                     // Crew monogram
                     Rectangle {
+                        horizontal-stretch: 0;
                         width: 36px;
                         height: 36px;
                         y: (parent.height - self.height) / 2;
@@ -279,6 +279,7 @@ export component MiniPlayerWindow inherits Window {
 
                     // Open main app
                     Rectangle {
+                        horizontal-stretch: 0;
                         width: 32px;
                         height: 32px;
                         y: (parent.height - self.height) / 2;
@@ -318,10 +319,17 @@ export component MiniPlayerWindow inherits Window {
                 }
             }
 
+            // ── Spacer absorbs extra height from min-height ──
+            Rectangle {
+                vertical-stretch: 1;
+            }
+
             // ── Stream + Chat section ──
             VerticalLayout {
+                vertical-stretch: 0;
                 padding-left: 16px;
                 padding-right: 16px;
+                padding-top: 8px;
                 padding-bottom: 8px;
                 spacing: 8px;
 

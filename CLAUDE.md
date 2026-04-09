@@ -66,6 +66,10 @@ Do not repeat a corrected mistake in the same session.
   (stroke="black", no hardcoded colors) and reference it with `@image-url("../icons/<name>.svg")`
   + `colorize:` for theming. Slint renders SVG icons cleanly; hand-drawn rectangle approximations
   look broken.
+- To push an element to the far right in a `HorizontalLayout`, do NOT use `alignment: start` —
+  it overrides stretch. Instead, remove `alignment`, set `horizontal-stretch: 1` on the element
+  that should fill the middle, and `horizontal-stretch: 0` on fixed items. See control_bar.slint
+  for the canonical pattern. Same applies vertically with `vertical-stretch`.
 
 ## Running the Client
 - Always use `.\client-prod.ps1` to start the client — there is no local backend.
