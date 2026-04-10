@@ -30,6 +30,15 @@ pub struct Settings {
     pub echo_cancellation: bool,
     pub input_mode: String, // "voice_activity" or "push_to_talk"
     pub vad_threshold: f32,
+    // HUD tab
+    pub hud_enabled: bool,
+    pub hud_show_overlay_in_game: bool,
+    pub hud_overlay_opacity: f32,
+    pub hud_show_clip_toasts: bool,
+    pub hud_overlay_x: Option<i32>,
+    pub hud_overlay_y: Option<i32>,
+    pub hud_miniplayer_x: Option<i32>,
+    pub hud_miniplayer_y: Option<i32>,
 }
 
 impl Default for Settings {
@@ -58,6 +67,14 @@ impl Default for Settings {
             echo_cancellation: true,
             input_mode: "voice_activity".into(),
             vad_threshold: -40.0,
+            hud_enabled: true,
+            hud_show_overlay_in_game: true,
+            hud_overlay_opacity: 0.8,
+            hud_show_clip_toasts: true,
+            hud_overlay_x: None,
+            hud_overlay_y: None,
+            hud_miniplayer_x: None,
+            hud_miniplayer_y: None,
         }
     }
 }

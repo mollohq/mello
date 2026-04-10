@@ -324,6 +324,7 @@ pub enum Event {
         game_name: String,
         short_name: String,
         color: String,
+        pid: u32,
     },
     /// A game process exited.
     GameEnded {

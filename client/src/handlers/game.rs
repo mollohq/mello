@@ -7,10 +7,10 @@ const POST_GAME_MIN_DURATION: u32 = 5;
 pub fn handle(ctx: &AppContext, event: Event) {
     match event {
         Event::GameDetected {
-            game_id: _,
             game_name,
             short_name,
             color,
+            ..
         } => {
             log::info!("[ui] game detected: {}", game_name);
             ctx.app.set_game_active(true);
