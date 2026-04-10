@@ -1,5 +1,6 @@
 mod auth;
 mod chat;
+mod clip;
 mod connection;
 mod crew;
 mod presence;
@@ -66,6 +67,8 @@ pub struct Client {
     game_state: GameStateManager,
     #[allow(dead_code)]
     game_sensor: Option<GameSensor>,
+    clip_was_playing: bool,
+    clip_tick_counter: u8,
 }
 
 impl Client {
@@ -99,6 +102,8 @@ impl Client {
             last_voice_channel: None,
             game_state: GameStateManager::new(),
             game_sensor: None,
+            clip_was_playing: false,
+            clip_tick_counter: 0,
         }
     }
 
@@ -154,6 +159,7 @@ impl Client {
                 _ = voice_tick.tick() => {
                     self.voice_tick().await;
                     self.stream_tick().await;
+                    self.clip_playback_tick();
                 }
                 _ = refresh_tick.tick() => {
                     self.refresh_token().await;
@@ -559,6 +565,52 @@ impl Client {
             }
             Command::SubscribeSidebar { crew_ids } => {
                 self.handle_subscribe_sidebar(&crew_ids).await;
+            }
+
+            // --- Clips ---
+            Command::StartClipBuffer => {
+                self.handle_start_clip_buffer();
+            }
+            Command::StopClipBuffer => {
+                self.handle_stop_clip_buffer();
+            }
+            Command::CaptureClip { seconds } => {
+                self.handle_capture_clip(seconds);
+            }
+            Command::PostClip {
+                crew_id,
+                clip_id,
+                duration_seconds,
+                local_path,
+            } => {
+                self.handle_post_clip(&crew_id, &clip_id, duration_seconds, &local_path)
+                    .await;
+            }
+            Command::UploadClip {
+                crew_id,
+                clip_id,
+                wav_path,
+            } => {
+                self.handle_upload_clip(&crew_id, &clip_id, &wav_path).await;
+            }
+            Command::PlayClip { path } => {
+                self.handle_play_clip(&path).await;
+            }
+            Command::PauseClip => {
+                self.handle_pause_clip();
+            }
+            Command::ResumeClip => {
+                self.handle_resume_clip();
+            }
+            Command::SeekClip { position_ms } => {
+                self.handle_seek_clip(position_ms);
+            }
+            Command::StopClipPlayback => {
+                self.handle_stop_clip_playback();
+            }
+            Command::LoadCrewTimeline { crew_id, cursor } => {
+                self.handle_load_crew_timeline(&crew_id, cursor.as_deref())
+                    .await;
             }
 
             // --- Crew events ---

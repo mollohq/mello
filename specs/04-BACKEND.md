@@ -92,6 +92,8 @@ All custom server logic is written in Go and loaded as Nakama runtime modules. M
 | `crew_state.go` | Crew state streaming (sidebar, presence) |
 | `presence.go` | Presence hooks (status tracking) |
 | `push.go` | Push notification helpers |
+| `clips.go` | `PostClipRPC`, `CrewTimelineRPC`, `ClipUploadURLRPC`, `ClipUploadCompleteRPC`, `WeeklyRecapJob` |
+| `s3.go` | S3/R2 presign client singleton, `GeneratePresignedPUT`, `S3PublicURL` helpers |
 | `dev_seed.go` | Development seed data |
 
 ---
@@ -109,6 +111,10 @@ All custom server logic is written in Go and loaded as Nakama runtime modules. M
 | `start_stream` | Yes | Announces stream start to crew members via crew state stream. |
 | `stop_stream` | Yes | Announces stream end. |
 | `upload_thumbnail` | Yes | Stores stream thumbnail (base64) in Nakama storage. |
+| `post_clip` | Yes | Stores clip metadata as a `clip` event in the crew event ledger. Pushes notification to crew. |
+| `crew_timeline` | Yes | Returns paginated crew feed data (clips, sessions, recaps, catch-ups). Cursor-based. |
+| `clip_upload_url` | Yes | Returns a presigned PUT URL for direct S3/R2 upload and the public `media_url`. |
+| `clip_upload_complete` | Yes | Updates the clip event's `media_url` in the ledger after successful upload. |
 
 Every RPC validates its input and returns typed Nakama errors (`UNAUTHENTICATED`, `INVALID_ARGUMENT`, `NOT_FOUND`, `PERMISSION_DENIED`, `INTERNAL`).
 
@@ -160,6 +166,9 @@ Nakama's key-value storage is used for data that doesn't fit built-in models:
 | `crew_avatars` | `{crew_id}` | System user (`""`) | `{"data":"<base64 JPEG>"}` | `create_crew`, `get_crew_avatar` |
 | `invite_codes` | `{code}` | System user (`""`) | `{"crew_id":"...","crew_name":"...","created_by":"..."}` | `GenerateInviteCode`, `join_by_invite_code` |
 | `stream_thumbnails` | `{crew_id}` | Streaming user | `{"data":"<base64 JPEG>"}` | `upload_thumbnail` |
+| `crew_events` | `{crew_id}` | System user (`""`) | JSON event ledger (clips, sessions, recaps) | `post_clip`, `crew_timeline`, `clip_upload_complete` |
+
+**Cloud object storage (S3/R2):** Clip media files (MP4/AAC) are stored in an S3-compatible bucket (`mello-clips`). Clients upload directly via presigned PUT URLs — no data passes through Nakama. See [CLIPS.md §6](./features/CLIPS.md) for the full flow.
 
 Storage writes use `PermissionRead: 2` (public read) and `PermissionWrite: 0` (server-only write) for system-owned data. The owner for crew avatars and invite codes is the empty string (system user) so that any client can read them.
 
@@ -361,6 +370,10 @@ Estimated cost: ~$2,000-5,000/mo
 | POST | `/v2/rpc/start_stream` | Yes | Announce stream start |
 | POST | `/v2/rpc/stop_stream` | Yes | Announce stream end |
 | POST | `/v2/rpc/upload_thumbnail` | Yes | Upload stream thumbnail |
+| POST | `/v2/rpc/post_clip` | Yes | Store clip metadata in event ledger |
+| POST | `/v2/rpc/crew_timeline` | Yes | Paginated crew feed (clips, sessions, recaps) |
+| POST | `/v2/rpc/clip_upload_url` | Yes | Get presigned PUT URL for S3/R2 upload |
+| POST | `/v2/rpc/clip_upload_complete` | Yes | Confirm upload, set media_url |
 
 ### WebSocket Messages
 

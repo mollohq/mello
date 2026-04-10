@@ -1115,6 +1115,52 @@ impl NakamaClient {
         Ok(())
     }
 
+    // --- Clips RPCs ---
+
+    pub async fn post_clip(
+        &self,
+        req: &crate::crew_events::PostClipRequest,
+    ) -> Result<crate::crew_events::PostClipResponse> {
+        let payload = serde_json::to_value(req)?;
+        let resp = self.rpc("post_clip", &payload).await?;
+        let parsed: crate::crew_events::PostClipResponse = serde_json::from_str(&resp)?;
+        Ok(parsed)
+    }
+
+    pub async fn crew_timeline(
+        &self,
+        crew_id: &str,
+        cursor: Option<&str>,
+    ) -> Result<crate::crew_events::TimelineResponse> {
+        let mut payload = serde_json::json!({ "crew_id": crew_id });
+        if let Some(c) = cursor {
+            payload["cursor"] = serde_json::json!(c);
+        }
+        let resp = self.rpc("crew_timeline", &payload).await?;
+        let parsed: crate::crew_events::TimelineResponse = serde_json::from_str(&resp)?;
+        Ok(parsed)
+    }
+
+    pub async fn clip_upload_url(
+        &self,
+        req: &crate::crew_events::ClipUploadURLRequest,
+    ) -> Result<crate::crew_events::ClipUploadURLResponse> {
+        let payload = serde_json::to_value(req)?;
+        let resp = self.rpc("clip_upload_url", &payload).await?;
+        let parsed: crate::crew_events::ClipUploadURLResponse = serde_json::from_str(&resp)?;
+        Ok(parsed)
+    }
+
+    pub async fn clip_upload_complete(
+        &self,
+        req: &crate::crew_events::ClipUploadCompleteRequest,
+    ) -> Result<crate::crew_events::ClipUploadCompleteResponse> {
+        let payload = serde_json::to_value(req)?;
+        let resp = self.rpc("clip_upload_complete", &payload).await?;
+        let parsed: crate::crew_events::ClipUploadCompleteResponse = serde_json::from_str(&resp)?;
+        Ok(parsed)
+    }
+
     // --- Health / version RPCs ---
 
     pub async fn health_check(&self) -> Result<HealthResponse> {

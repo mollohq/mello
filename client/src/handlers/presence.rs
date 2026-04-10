@@ -240,7 +240,18 @@ pub fn handle(ctx: &AppContext, event: Event) {
                         }
                         if let Some(ref stream) = state.stream {
                             c.has_stream = stream.active;
-                            c.stream_name = stream.title.clone().unwrap_or_default().into();
+                            let streamer = stream.streamer_username.clone().unwrap_or_default();
+                            let title = stream.title.clone().unwrap_or_default();
+                            c.stream_name = if !streamer.is_empty() && !title.is_empty() {
+                                format!("{streamer} streaming {title}")
+                            } else if !streamer.is_empty() {
+                                format!("{streamer} streaming")
+                            } else if !title.is_empty() {
+                                format!("streaming {title}")
+                            } else {
+                                "streaming".to_string()
+                            }
+                            .into();
                         }
                         // Active games
                         let glen = state.active_games.len().min(5);
@@ -479,7 +490,18 @@ pub fn handle(ctx: &AppContext, event: Event) {
                 }
                 if let Some(ref stream) = sc.stream {
                     c.has_stream = stream.active;
-                    c.stream_name = stream.title.clone().unwrap_or_default().into();
+                    let streamer = stream.streamer_username.clone().unwrap_or_default();
+                    let title = stream.title.clone().unwrap_or_default();
+                    c.stream_name = if !streamer.is_empty() && !title.is_empty() {
+                        format!("{streamer} streaming {title}")
+                    } else if !streamer.is_empty() {
+                        format!("{streamer} streaming")
+                    } else if !title.is_empty() {
+                        format!("streaming {title}")
+                    } else {
+                        "streaming".to_string()
+                    }
+                    .into();
                     if c.id == ctx.app.get_active_crew_id() {
                         if stream.active {
                             let sid = stream.streamer_id.clone().unwrap_or_default();

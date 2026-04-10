@@ -1,0 +1,789 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>m3llo — Crew Feed Fully Cold Start</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  background: #111114;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  color: #e8e6e3;
+  height: 100vh;
+  overflow: hidden;
+}
+
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background: #1a1a1e;
+}
+
+.app-header {
+  height: 36px;
+  background: #141416;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  font-weight: 500;
+  color: #888;
+  border-bottom: 1px solid #2a2a2e;
+  flex-shrink: 0;
+}
+
+.app-body {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+}
+
+/* Sidebar */
+.sidebar-left {
+  width: 240px;
+  border-right: 1px solid #2a2a2e;
+  padding: 14px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.section-label {
+  color: #555;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 1.2px;
+  margin-bottom: 8px;
+  font-weight: 600;
+}
+
+.active-crew {
+  background: #222226;
+  border-radius: 10px;
+  border: 1px solid #EB4D5F33;
+  padding: 14px;
+  margin-bottom: 12px;
+}
+
+.crew-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.crew-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: #EB4D5F;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 700;
+  color: #fff;
+}
+
+.crew-name { font-weight: 600; font-size: 14px; }
+.crew-meta { display: flex; align-items: center; gap: 6px; margin-top: 2px; }
+.sfu-badge { font-size: 8px; background: #4ade8022; color: #4ade80; padding: 1px 5px; border-radius: 3px; font-weight: 700; }
+.crew-count { font-size: 11px; color: #666; }
+
+.vc-item {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  font-size: 12px;
+  color: #888;
+  margin-bottom: 2px;
+}
+
+.vc-item.active { background: #2a2a2e; color: #e8e6e3; }
+
+.vc-members {
+  padding: 4px 0 6px 31px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.vc-member {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11px;
+  color: #aaa;
+}
+
+.avatar-tiny {
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 7px;
+  font-weight: 600;
+  color: #fff;
+}
+
+.av-green { background: #4ade80; color: #1a1a1e; }
+
+.sidebar-bottom {
+  margin-top: auto;
+  padding-top: 12px;
+  border-top: 1px solid #2a2a2e;
+}
+
+.sidebar-action {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  font-size: 12px;
+  color: #555;
+  cursor: pointer;
+  border-radius: 6px;
+}
+
+.sidebar-action:hover { background: #222226; color: #888; }
+
+/* ===== CENTER ===== */
+.center-wrapper {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-width: 0;
+}
+
+.feed-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 20px;
+  border-bottom: 1px solid #2a2a2e;
+  flex-shrink: 0;
+}
+
+.feed-title h2 { font-size: 15px; font-weight: 500; }
+
+.go-live-btn {
+  font-size: 12px;
+  font-weight: 600;
+  color: #EB4D5F;
+  background: #EB4D5F14;
+  padding: 7px 18px;
+  border-radius: 8px;
+  border: 1px solid #EB4D5F33;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.feed-scroll {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px 20px;
+}
+
+.bento-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+}
+
+.bento-card {
+  background: #222226;
+  border-radius: 10px;
+  border: 1px solid #2a2a2e;
+  overflow: hidden;
+}
+
+.bento-card.hero {
+  grid-column: span 2;
+  grid-row: span 2;
+}
+
+.card-body { padding: 12px 14px; }
+
+/* ===== SKELETON CARDS ===== */
+.skeleton {
+  border: 1px dashed #262629 !important;
+  background: #1b1b1f !important;
+}
+
+.skeleton-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  height: 100%;
+  min-height: 140px;
+  padding: 24px 20px;
+}
+
+.skeleton-icon-wrap {
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+  background: #20202466;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 14px;
+}
+
+.skeleton-icon-wrap.small {
+  width: 36px;
+  height: 36px;
+  border-radius: 9px;
+  margin-bottom: 10px;
+}
+
+.skeleton-icon {
+  font-size: 20px;
+  opacity: 0.15;
+}
+
+.skeleton-icon-wrap.small .skeleton-icon {
+  font-size: 15px;
+}
+
+.skeleton-title {
+  font-size: 13px;
+  color: #444;
+  font-weight: 500;
+  margin-bottom: 5px;
+  line-height: 1.3;
+}
+
+.skeleton-hint {
+  font-size: 11px;
+  color: #333;
+  line-height: 1.5;
+  max-width: 220px;
+}
+
+/* Hero clip skeleton */
+.skeleton-thumbnail {
+  width: 100%;
+  height: 220px;
+  background: #19191d;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  position: relative;
+}
+
+.skeleton-play {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  border: 1.5px dashed #2a2a2e;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.skeleton-play-arrow {
+  width: 0;
+  height: 0;
+  border-left: 14px solid #2a2a2e;
+  border-top: 9px solid transparent;
+  border-bottom: 9px solid transparent;
+  margin-left: 3px;
+}
+
+.skeleton-clip-badge {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  border: 1px dashed #2a2a2e;
+  color: #2a2a2e;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 4px 10px;
+  border-radius: 5px;
+  letter-spacing: 0.5px;
+}
+
+.skeleton-duration {
+  position: absolute;
+  bottom: 10px;
+  right: 10px;
+  border: 1px dashed #2a2a2e;
+  color: #2a2a2e;
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 4px;
+}
+
+/* Voice clip waveform skeleton */
+.skeleton-waveform-container {
+  height: 72px;
+  background: #19191d;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  padding: 0 20px;
+}
+
+.skeleton-wave-bar {
+  width: 3px;
+  border-radius: 2px;
+  background: #EB4D5F;
+  opacity: 0.06;
+}
+
+/* Recap skeleton rows */
+.skeleton-recap-rows {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin-top: 12px;
+}
+
+.skeleton-recap-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.skeleton-bar {
+  height: 7px;
+  border-radius: 3px;
+  background: #232328;
+}
+
+/* Session skeleton */
+.skeleton-session-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.skeleton-game-icon {
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  background: #232328;
+}
+
+.skeleton-avatar-row {
+  display: flex;
+  gap: 0;
+  margin-top: 8px;
+}
+
+.skeleton-avatar {
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  background: #232328;
+  border: 2px solid #1b1b1f;
+}
+
+.skeleton-avatar + .skeleton-avatar {
+  margin-left: -7px;
+}
+
+/* Invite CTA */
+.invite-card {
+  background: #EB4D5F08 !important;
+  border-color: #EB4D5F18 !important;
+  cursor: pointer;
+}
+
+.invite-card:hover {
+  border-color: #EB4D5F33 !important;
+  background: #EB4D5F10 !important;
+}
+
+.invite-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 24px 16px;
+  min-height: 140px;
+}
+
+.invite-icon-wrap {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  background: #EB4D5F14;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 12px;
+}
+
+.invite-icon { font-size: 18px; opacity: 0.4; }
+.invite-title { font-size: 13px; color: #EB4D5F77; font-weight: 500; margin-bottom: 4px; }
+.invite-hint { font-size: 11px; color: #EB4D5F33; line-height: 1.4; }
+
+/* ===== BOTTOM BAR ===== */
+.bottom-bar {
+  height: 60px;
+  border-top: 1px solid #2a2a2e;
+  display: flex;
+  align-items: center;
+  padding: 0 16px;
+  flex-shrink: 0;
+  background: #1e1e22;
+  gap: 16px;
+}
+
+.bar-user { display: flex; align-items: center; gap: 10px; }
+
+.bar-avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  background: #4ade80;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  font-weight: 700;
+  color: #1a1a1e;
+  position: relative;
+}
+
+.bar-avatar .status {
+  position: absolute;
+  bottom: -1px;
+  right: -1px;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: #4ade80;
+  border: 2.5px solid #1e1e22;
+}
+
+.bar-username { font-size: 14px; font-weight: 500; }
+.bar-tag { font-size: 11px; color: #555; }
+
+.bar-controls { display: flex; align-items: center; gap: 6px; margin-left: auto; }
+
+.bar-btn {
+  width: 40px;
+  height: 40px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  border: none;
+  background: #2a2a2e;
+}
+
+.bar-btn svg { width: 18px; height: 18px; }
+.bar-btn.active-btn { background: #e8e6e3; }
+.bar-btn.active-btn svg { stroke: #1a1a1e; }
+.bar-btn.hangup { background: #6b2028; }
+.bar-btn.hangup svg { stroke: #ff6b7a; }
+.bar-btn.clip-btn { background: #EB4D5F22; border: 1px solid #EB4D5F44; }
+.bar-btn.clip-btn svg { stroke: #EB4D5F; }
+.bar-btn.settings-btn svg { stroke: #888; }
+
+/* Right sidebar */
+.sidebar-right {
+  width: 280px;
+  border-left: 1px solid #2a2a2e;
+  display: flex;
+  flex-direction: column;
+}
+
+.chat-header {
+  padding: 14px 16px;
+  border-bottom: 1px solid #2a2a2e;
+  font-size: 11px;
+  color: #666;
+  text-transform: uppercase;
+  letter-spacing: 1.2px;
+  font-weight: 600;
+}
+
+.chat-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  text-align: center;
+}
+
+.chat-empty-icon { font-size: 28px; opacity: 0.1; margin-bottom: 12px; }
+.chat-empty-text { font-size: 12px; color: #333; line-height: 1.5; }
+
+.chat-input-area { padding: 10px 16px; border-top: 1px solid #2a2a2e; }
+.chat-actions { display: flex; gap: 12px; padding-bottom: 6px; font-size: 12px; color: #555; }
+.chat-input { background: #2a2a2e; border-radius: 8px; padding: 10px 14px; font-size: 13px; color: #666; width: 100%; border: none; outline: none; }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <div class="app-header">m3llo</div>
+
+  <div class="app-body">
+
+    <!-- Sidebar -->
+    <div class="sidebar-left">
+      <div class="section-label">Your crews</div>
+      <div class="active-crew">
+        <div class="crew-header">
+          <div class="crew-icon">m3</div>
+          <div>
+            <div class="crew-name">M3LLO CREW</div>
+            <div class="crew-meta">
+              <span class="sfu-badge">SFU</span>
+              <span class="crew-count">1 / 10</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="vc-item active">
+          <span>🎙</span>
+          <span>General</span>
+          <span style="font-size:11px;color:#4ade80;margin-left:auto;">1</span>
+        </div>
+        <div class="vc-members">
+          <div class="vc-member">
+            <div class="avatar-tiny av-green">b0</div>
+            <span>b0bben</span>
+          </div>
+        </div>
+        <div class="vc-item">
+          <span>🎙</span>
+          <span style="color:#555;">Ranked grind</span>
+          <span style="font-size:11px;color:#444;margin-left:auto;">0</span>
+        </div>
+      </div>
+
+      <div class="sidebar-bottom">
+        <div class="sidebar-action">🔍 Browse crews</div>
+        <div class="sidebar-action">+ New crew</div>
+      </div>
+    </div>
+
+    <!-- Center -->
+    <div class="center-wrapper">
+      <div class="feed-header">
+        <div class="feed-title">
+          <h2>Crew feed</h2>
+        </div>
+        <div class="go-live-btn"><span>▶</span> GO LIVE</div>
+      </div>
+
+      <div class="feed-scroll">
+        <div class="bento-grid">
+
+          <!-- HERO: Skeleton clip -->
+          <div class="bento-card hero skeleton">
+            <div class="skeleton-thumbnail">
+              <div class="skeleton-clip-badge">✂ CLIP</div>
+              <div class="skeleton-play"><div class="skeleton-play-arrow"></div></div>
+              <div class="skeleton-duration">0:30</div>
+            </div>
+            <div class="card-body">
+              <div class="skeleton-title" style="text-align:left;">Your first clip goes here</div>
+              <div class="skeleton-hint" style="text-align:left;max-width:100%;">Tap ✂ during a voice call to save the last 30 seconds. Your crew's best clips show up right here.</div>
+            </div>
+          </div>
+
+          <!-- WEEKLY RECAP: Skeleton -->
+          <div class="bento-card skeleton">
+            <div class="skeleton-inner" style="min-height:auto;padding:16px;">
+              <div class="skeleton-icon-wrap small">
+                <div class="skeleton-icon">📊</div>
+              </div>
+              <div class="skeleton-title">Weekly recap</div>
+              <div class="skeleton-hint">Your crew's stats will appear here after your first week together</div>
+              <div class="skeleton-recap-rows">
+                <div class="skeleton-recap-row">
+                  <div class="skeleton-bar" style="width:55px;"></div>
+                  <div class="skeleton-bar" style="width:30px;"></div>
+                </div>
+                <div class="skeleton-recap-row">
+                  <div class="skeleton-bar" style="width:70px;"></div>
+                  <div class="skeleton-bar" style="width:40px;"></div>
+                </div>
+                <div class="skeleton-recap-row">
+                  <div class="skeleton-bar" style="width:40px;"></div>
+                  <div class="skeleton-bar" style="width:20px;"></div>
+                </div>
+                <div class="skeleton-recap-row">
+                  <div class="skeleton-bar" style="width:60px;"></div>
+                  <div class="skeleton-bar" style="width:35px;"></div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- NOW PLAYING: Skeleton -->
+          <div class="bento-card skeleton">
+            <div class="skeleton-inner" style="min-height:auto;padding:16px;">
+              <div class="skeleton-icon-wrap small">
+                <div class="skeleton-icon">🎮</div>
+              </div>
+              <div class="skeleton-title">Now playing</div>
+              <div class="skeleton-hint">Games your crew is playing show up here automatically</div>
+            </div>
+          </div>
+
+          <!-- VOICE CLIP: Skeleton -->
+          <div class="bento-card skeleton">
+            <div class="skeleton-waveform-container">
+              <div class="skeleton-wave-bar" style="height:14px;"></div>
+              <div class="skeleton-wave-bar" style="height:28px;"></div>
+              <div class="skeleton-wave-bar" style="height:40px;"></div>
+              <div class="skeleton-wave-bar" style="height:20px;"></div>
+              <div class="skeleton-wave-bar" style="height:36px;"></div>
+              <div class="skeleton-wave-bar" style="height:16px;"></div>
+              <div class="skeleton-wave-bar" style="height:32px;"></div>
+              <div class="skeleton-wave-bar" style="height:10px;"></div>
+              <div class="skeleton-wave-bar" style="height:26px;"></div>
+              <div class="skeleton-wave-bar" style="height:42px;"></div>
+              <div class="skeleton-wave-bar" style="height:18px;"></div>
+              <div class="skeleton-wave-bar" style="height:30px;"></div>
+              <div class="skeleton-wave-bar" style="height:12px;"></div>
+              <div class="skeleton-wave-bar" style="height:34px;"></div>
+              <div class="skeleton-wave-bar" style="height:22px;"></div>
+              <div class="skeleton-wave-bar" style="height:38px;"></div>
+              <div class="skeleton-wave-bar" style="height:14px;"></div>
+              <div class="skeleton-wave-bar" style="height:28px;"></div>
+            </div>
+            <div class="card-body">
+              <div style="font-size:10px;color:#2a2a2e;font-weight:700;margin-bottom:4px;">✂ VOICE CLIP · 0:30</div>
+              <div class="skeleton-title" style="text-align:left;font-size:12px;">Voice clips land here</div>
+              <div style="font-size:11px;color:#2a2a2e;">Funny moment in voice? Clip it.</div>
+            </div>
+          </div>
+
+          <!-- SESSION: Skeleton -->
+          <div class="bento-card skeleton">
+            <div class="skeleton-inner" style="min-height:auto;padding:16px;align-items:flex-start;text-align:left;">
+              <div style="font-size:10px;color:#2a2a2e;text-transform:uppercase;letter-spacing:0.8px;margin-bottom:12px;font-weight:600;">Session</div>
+              <div class="skeleton-session-row">
+                <div class="skeleton-game-icon"></div>
+                <div>
+                  <div class="skeleton-bar" style="width:80px;height:9px;margin-bottom:5px;"></div>
+                  <div class="skeleton-bar" style="width:40px;height:7px;"></div>
+                </div>
+              </div>
+              <div class="skeleton-avatar-row">
+                <div class="skeleton-avatar"></div>
+                <div class="skeleton-avatar"></div>
+                <div class="skeleton-avatar"></div>
+              </div>
+              <div class="skeleton-bar" style="width:100px;height:6px;margin-top:10px;"></div>
+            </div>
+          </div>
+
+          <!-- CATCH-UP: Skeleton -->
+          <div class="bento-card skeleton">
+            <div class="skeleton-inner" style="min-height:auto;padding:16px;align-items:flex-start;text-align:left;">
+              <div style="font-size:10px;color:#4ade8033;text-transform:uppercase;letter-spacing:1px;margin-bottom:10px;font-weight:700;">Catch-up</div>
+              <div class="skeleton-bar" style="width:100%;height:8px;margin-bottom:6px;"></div>
+              <div class="skeleton-bar" style="width:75%;height:8px;margin-bottom:10px;"></div>
+              <div class="skeleton-bar" style="width:60px;height:6px;"></div>
+            </div>
+          </div>
+
+          <!-- RECENT GAMES: Skeleton -->
+          <div class="bento-card skeleton">
+            <div class="skeleton-inner" style="min-height:auto;padding:16px;align-items:flex-start;text-align:left;">
+              <div style="font-size:10px;color:#2a2a2e;text-transform:uppercase;letter-spacing:0.8px;margin-bottom:12px;font-weight:600;">Recent games</div>
+              <div class="skeleton-session-row">
+                <div class="skeleton-game-icon"></div>
+                <div>
+                  <div class="skeleton-bar" style="width:90px;height:8px;margin-bottom:5px;"></div>
+                  <div class="skeleton-bar" style="width:55px;height:6px;"></div>
+                </div>
+              </div>
+              <div class="skeleton-session-row" style="margin-bottom:0;">
+                <div class="skeleton-game-icon"></div>
+                <div>
+                  <div class="skeleton-bar" style="width:70px;height:8px;margin-bottom:5px;"></div>
+                  <div class="skeleton-bar" style="width:45px;height:6px;"></div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- STREAM CLIPS: Skeleton teaser -->
+          <div class="bento-card skeleton">
+            <div class="skeleton-inner" style="min-height:120px;">
+              <div class="skeleton-icon-wrap small">
+                <div class="skeleton-icon">🎬</div>
+              </div>
+              <div class="skeleton-title" style="font-size:12px;">Stream clips</div>
+              <div class="skeleton-hint" style="font-size:10px;">Clip highlights while watching a crewmate's stream</div>
+            </div>
+          </div>
+
+          <!-- INVITE CTA -->
+          <div class="bento-card invite-card">
+            <div class="invite-inner">
+              <div class="invite-icon-wrap">
+                <span class="invite-icon">👥</span>
+              </div>
+              <div class="invite-title">Invite your crew</div>
+              <div class="invite-hint">Everything here comes alive when your friends join. Get them in here.</div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- Bottom bar -->
+      <div class="bottom-bar">
+        <div class="bar-user">
+          <div class="bar-avatar">b0<div class="status"></div></div>
+          <div><div class="bar-username">b0bben</div><div class="bar-tag">#7412</div></div>
+        </div>
+        <div class="bar-controls">
+          <button class="bar-btn clip-btn"><svg viewBox="0 0 24 24" fill="none" stroke-width="2"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><line x1="20" y1="4" x2="8.12" y2="15.88"/><line x1="14.47" y1="14.48" x2="20" y2="20"/><line x1="8.12" y1="8.12" x2="12" y2="12"/></svg></button>
+          <button class="bar-btn hangup"><svg viewBox="0 0 24 24" fill="none" stroke-width="2"><path d="M10.68 13.31a16 16 0 0 1-2.47-2.47l1.34-1.34a2 2 0 0 0 .4-2.28L8.78 4.5a2 2 0 0 0-2.18-1.1l-2.48.5A2 2 0 0 0 2.5 5.87 16 16 0 0 0 18.13 21.5a2 2 0 0 0 1.97-1.62l.5-2.48a2 2 0 0 0-1.1-2.18l-2.72-1.17a2 2 0 0 0-2.28.4l-1.34 1.34z" transform="rotate(135 12 12)"/></svg></button>
+          <button class="bar-btn active-btn"><svg viewBox="0 0 24 24" fill="none" stroke-width="2"><rect x="9" y="1" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0"/><line x1="12" y1="17" x2="12" y2="21"/></svg></button>
+          <button class="bar-btn active-btn"><svg viewBox="0 0 24 24" fill="none" stroke-width="2"><path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/></svg></button>
+          <button class="bar-btn settings-btn"><svg viewBox="0 0 24 24" fill="none" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Chat -->
+    <div class="sidebar-right">
+      <div class="chat-header">Crew chat</div>
+      <div class="chat-empty">
+        <div class="chat-empty-icon">💬</div>
+        <div class="chat-empty-text">No messages yet.<br>Say hi to your crew!</div>
+      </div>
+      <div class="chat-input-area">
+        <div class="chat-actions"><span>📎</span><span>GIF</span><span>😊</span></div>
+        <input class="chat-input" placeholder="Message crewmates..." readonly>
+      </div>
+    </div>
+
+  </div>
+</div>
+</body>
+</html>

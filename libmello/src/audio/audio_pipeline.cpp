@@ -233,6 +233,11 @@ void AudioPipeline::on_captured_audio(const int16_t* samples, size_t count) {
             }
 
             echo_canceller_.process_capture(capture_accum_.data(), FRAME_SIZE);
+
+            if (local_clip_ring_ && clip_buffer_ && clip_buffer_->is_active()) {
+                local_clip_ring_->write(capture_accum_.data(), FRAME_SIZE);
+            }
+
             vad_.feed(capture_accum_.data(), FRAME_SIZE);
 
             if (vad_.is_speaking()) {
@@ -362,61 +367,100 @@ void AudioPipeline::feed_packet(const char* peer_id, const uint8_t* data, int si
 size_t AudioPipeline::mix_output(int16_t* out, size_t count) {
     std::lock_guard<std::mutex> lock(peer_buffers_mutex_);
 
-    if (peer_buffers_.empty()) {
-        return 0;
-    }
-
-    // Read from each peer buffer into temp, sum into output
     std::memset(out, 0, count * sizeof(int16_t));
-    std::vector<int16_t> temp(count);
-    bool any_data = false;
+    bool any_remote = false;
 
-    for (auto& [pid, buf] : peer_buffers_) {
-        size_t got = buf->read(temp.data(), count);
-        if (got > 0) {
-            any_data = true;
-            for (size_t i = 0; i < got; ++i) {
-                int32_t mixed = static_cast<int32_t>(out[i]) + static_cast<int32_t>(temp[i]);
-                if (mixed > 32767) mixed = 32767;
-                if (mixed < -32768) mixed = -32768;
-                out[i] = static_cast<int16_t>(mixed);
+    if (!peer_buffers_.empty()) {
+        std::vector<int16_t> temp(count);
+        for (auto& [pid, buf] : peer_buffers_) {
+            size_t got = buf->read(temp.data(), count);
+            if (got > 0) {
+                any_remote = true;
+                for (size_t i = 0; i < got; ++i) {
+                    int32_t mixed = static_cast<int32_t>(out[i]) + static_cast<int32_t>(temp[i]);
+                    if (mixed > 32767) mixed = 32767;
+                    if (mixed < -32768) mixed = -32768;
+                    out[i] = static_cast<int16_t>(mixed);
+                }
             }
         }
     }
 
-    if (!any_data) {
+    if (any_remote) {
+        static uint32_t mix_log_ctr = 0;
+        if ((mix_log_ctr++ % 500) == 0) {
+            double sum = 0.0;
+            for (size_t i = 0; i < count; ++i) {
+                double s = out[i] / 32768.0;
+                sum += s * s;
+            }
+            float rms = static_cast<float>(std::sqrt(sum / count));
+            MELLO_LOG_DEBUG("pipeline", "mix_output: pre_rms=%.4f count=%zu peers=%zu",
+                            rms, count, peer_buffers_.size());
+        }
+
+        float og = output_gain_.load(std::memory_order_relaxed);
+        if (og != 1.0f) {
+            for (size_t i = 0; i < count; ++i) {
+                int32_t s = static_cast<int32_t>(out[i] * og);
+                if (s > 32767) s = 32767;
+                if (s < -32768) s = -32768;
+                out[i] = static_cast<int16_t>(s);
+            }
+        }
+    } else {
         underrun_count_.fetch_add(1, std::memory_order_relaxed);
-        return 0;
     }
 
-    static uint32_t mix_log_ctr = 0;
-    bool should_log = (mix_log_ctr++ % 500) == 0;
-
-    if (should_log) {
-        double sum = 0.0;
-        for (size_t i = 0; i < count; ++i) {
-            double s = out[i] / 32768.0;
-            sum += s * s;
-        }
-        float rms = static_cast<float>(std::sqrt(sum / count));
-        MELLO_LOG_DEBUG("pipeline", "mix_output: pre_rms=%.4f count=%zu peers=%zu",
-                        rms, count, peer_buffers_.size());
-    }
-
-    float og = output_gain_.load(std::memory_order_relaxed);
-    if (og != 1.0f) {
-        for (size_t i = 0; i < count; ++i) {
-            int32_t s = static_cast<int32_t>(out[i] * og);
-            if (s > 32767) s = 32767;
-            if (s < -32768) s = -32768;
-            out[i] = static_cast<int16_t>(s);
+    // Clip buffer: mix remote playback + local mic for "all participants" recording
+    if (clip_buffer_ && clip_buffer_->is_active()) {
+        if (local_clip_ring_ && local_clip_ring_->available() >= count) {
+            std::vector<int16_t> local(count);
+            local_clip_ring_->read(local.data(), count);
+            std::vector<int16_t> clip_mix(count);
+            for (size_t i = 0; i < count; ++i) {
+                int32_t mixed = static_cast<int32_t>(out[i]) + static_cast<int32_t>(local[i]);
+                if (mixed > 32767) mixed = 32767;
+                if (mixed < -32768) mixed = -32768;
+                clip_mix[i] = static_cast<int16_t>(mixed);
+            }
+            clip_buffer_->write(clip_mix.data(), count);
+        } else {
+            clip_buffer_->write(out, count);
         }
     }
 
-    // Feed the mixed (and volume-scaled) playback signal to AEC as far-end reference
-    echo_canceller_.process_render(out, static_cast<int>(count));
+    // Mix clip playback into speaker output (read directly from retained PCM vector)
+    bool has_clip_audio = false;
+    if (clip_playing_.load(std::memory_order_relaxed) &&
+        !clip_paused_.load(std::memory_order_relaxed)) {
+        size_t pos = clip_playback_pos_.load(std::memory_order_relaxed);
+        size_t total = clip_playback_total_;
+        size_t avail = (pos < total) ? (total - pos) : 0;
+        size_t to_read = (std::min)(count, avail);
+        if (to_read > 0) {
+            has_clip_audio = true;
+            for (size_t i = 0; i < to_read; ++i) {
+                int32_t mixed = static_cast<int32_t>(out[i]) +
+                                static_cast<int32_t>(clip_playback_pcm_[pos + i]);
+                if (mixed > 32767) mixed = 32767;
+                if (mixed < -32768) mixed = -32768;
+                out[i] = static_cast<int16_t>(mixed);
+            }
+            clip_playback_pos_.store(pos + to_read, std::memory_order_relaxed);
+        }
+        if (pos + to_read >= total) {
+            clip_playing_.store(false, std::memory_order_relaxed);
+            MELLO_LOG_INFO("pipeline", "clip playback finished");
+        }
+    }
 
-    return count;
+    // Feed remote playback to AEC as far-end reference
+    if (any_remote || has_clip_audio) {
+        echo_canceller_.process_render(out, static_cast<int>(count));
+    }
+
+    return (any_remote || has_clip_audio) ? count : 0;
 }
 
 float AudioPipeline::pipeline_delay_ms() const {
@@ -492,6 +536,128 @@ bool AudioPipeline::set_playback_device(const char* device_id) {
     bool ok = playback_->start();
     MELLO_LOG_INFO("pipeline", "playback restarted on new device: %s", ok ? "ok" : "FAILED");
     return ok;
+}
+
+void AudioPipeline::start_clip_buffer() {
+    if (!clip_buffer_) {
+        clip_buffer_ = std::make_unique<ClipBuffer>(SAMPLE_RATE, 60);
+    }
+    if (!local_clip_ring_) {
+        local_clip_ring_ = std::make_unique<util::RingBuffer<int16_t>>(SAMPLE_RATE);
+    }
+    local_clip_ring_->clear();
+    clip_buffer_->start();
+}
+
+void AudioPipeline::stop_clip_buffer() {
+    if (clip_buffer_) clip_buffer_->stop();
+}
+
+bool AudioPipeline::clip_buffer_active() const {
+    return clip_buffer_ && clip_buffer_->is_active();
+}
+
+bool AudioPipeline::clip_capture(float seconds, const std::string& output_path) {
+    if (!clip_buffer_) return false;
+    return clip_buffer_->capture(seconds, output_path);
+}
+
+bool AudioPipeline::play_clip(const std::string& wav_path) {
+    std::ifstream file(wav_path, std::ios::binary);
+    if (!file) {
+        MELLO_LOG_ERROR("pipeline", "play_clip: cannot open %s", wav_path.c_str());
+        return false;
+    }
+
+    char header[44];
+    file.read(header, 44);
+    if (!file || std::string(header, 4) != "RIFF" || std::string(header + 8, 4) != "WAVE") {
+        MELLO_LOG_ERROR("pipeline", "play_clip: not a valid WAV file");
+        return false;
+    }
+
+    uint16_t channels = *reinterpret_cast<uint16_t*>(header + 22);
+    uint32_t sr = *reinterpret_cast<uint32_t*>(header + 24);
+    uint16_t bps = *reinterpret_cast<uint16_t*>(header + 34);
+    uint32_t data_size = *reinterpret_cast<uint32_t*>(header + 40);
+
+    if (bps != 16 || channels != 1 || sr != static_cast<uint32_t>(SAMPLE_RATE)) {
+        MELLO_LOG_ERROR("pipeline", "play_clip: unsupported format (ch=%d sr=%u bps=%d, need mono %dHz 16-bit)",
+                        channels, sr, bps, SAMPLE_RATE);
+        return false;
+    }
+
+    size_t sample_count = data_size / sizeof(int16_t);
+    clip_playback_pcm_.resize(sample_count);
+    file.read(reinterpret_cast<char*>(clip_playback_pcm_.data()), data_size);
+    clip_playback_total_ = sample_count;
+    clip_playback_pos_.store(0, std::memory_order_release);
+    clip_paused_.store(false, std::memory_order_release);
+    clip_playing_.store(true, std::memory_order_release);
+
+    MELLO_LOG_INFO("pipeline", "play_clip: loaded %zu samples (%.1fs) from %s",
+                   sample_count, static_cast<float>(sample_count) / SAMPLE_RATE, wav_path.c_str());
+    return true;
+}
+
+bool AudioPipeline::play_mp4(const std::string& mp4_path) {
+    auto pcm = decode_mp4_to_pcm(mp4_path);
+    if (pcm.empty()) {
+        MELLO_LOG_ERROR("pipeline", "play_mp4: decode failed for %s", mp4_path.c_str());
+        return false;
+    }
+
+    clip_playback_pcm_ = std::move(pcm);
+    clip_playback_total_ = clip_playback_pcm_.size();
+    clip_playback_pos_.store(0, std::memory_order_release);
+    clip_paused_.store(false, std::memory_order_release);
+    clip_playing_.store(true, std::memory_order_release);
+
+    MELLO_LOG_INFO("pipeline", "play_mp4: loaded %zu samples (%.1fs) from %s",
+                   clip_playback_pcm_.size(),
+                   static_cast<float>(clip_playback_pcm_.size()) / SAMPLE_RATE,
+                   mp4_path.c_str());
+    return true;
+}
+
+void AudioPipeline::stop_clip_playback() {
+    clip_playing_.store(false, std::memory_order_release);
+    clip_paused_.store(false, std::memory_order_release);
+    clip_playback_pos_.store(0, std::memory_order_relaxed);
+    clip_playback_pcm_.clear();
+    clip_playback_total_ = 0;
+    MELLO_LOG_INFO("pipeline", "clip playback stopped");
+}
+
+bool AudioPipeline::clip_is_playing() const {
+    return clip_playing_.load(std::memory_order_relaxed);
+}
+
+void AudioPipeline::clip_playback_progress(uint64_t& position_samples,
+                                           uint64_t& total_samples,
+                                           uint32_t& sample_rate) const {
+    position_samples = clip_playback_pos_.load(std::memory_order_relaxed);
+    total_samples = clip_playback_total_;
+    sample_rate = SAMPLE_RATE;
+}
+
+void AudioPipeline::clip_pause() {
+    clip_paused_.store(true, std::memory_order_release);
+    MELLO_LOG_INFO("pipeline", "clip playback paused");
+}
+
+void AudioPipeline::clip_resume() {
+    clip_paused_.store(false, std::memory_order_release);
+    MELLO_LOG_INFO("pipeline", "clip playback resumed");
+}
+
+void AudioPipeline::clip_seek(uint64_t position_samples) {
+    if (position_samples > clip_playback_total_) {
+        position_samples = clip_playback_total_;
+    }
+    clip_playback_pos_.store(static_cast<size_t>(position_samples), std::memory_order_release);
+    MELLO_LOG_INFO("pipeline", "clip playback seek to sample %llu / %zu",
+                   (unsigned long long)position_samples, clip_playback_total_);
 }
 
 #ifdef _WIN32

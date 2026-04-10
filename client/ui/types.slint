@@ -35,6 +35,29 @@ export struct CrewData {
     g2-name: string, g2-initial: string, g2-count: int,
     g3-name: string, g3-initial: string, g3-count: int,
     g4-name: string, g4-initial: string, g4-count: int,
+
+    clip-count: int,
+}
+
+export struct FeedCardData {
+    id: string,
+    card-type: string,
+    title: string,
+    subtitle: string,
+    timestamp: string,
+    duration: string,
+    actor-name: string,
+    actor-initials: string,
+    game-name: string,
+    participant-count: int,
+    clip-path: string,
+    is-hero: bool,
+    is-skeleton: bool,
+    mvp-count: int,
+    mvp0-name: string, mvp0-initials: string, mvp0-stat: string,
+    mvp1-name: string, mvp1-initials: string, mvp1-stat: string,
+    mvp2-name: string, mvp2-initials: string, mvp2-stat: string,
+    is-new: bool,
 }
 
 export struct MemberData {
@@ -66,6 +89,9 @@ export struct ChatMessageData {
     gif-preview-url: string,
     gif-width: int,
     gif-height: int,
+    is-clip: bool,
+    clip-duration: string,
+    clip-id: string,
 }
 
 export struct GifItemData {

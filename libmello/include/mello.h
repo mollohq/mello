@@ -122,6 +122,50 @@ MELLO_API MelloResult mello_voice_feed_packet(
 );
 
 /* ============================================================================
+ * Clip Buffer
+ * ============================================================================ */
+
+/** Start the rolling voice clip buffer. Call when joining a voice channel. */
+MELLO_API MelloResult mello_clip_buffer_start(MelloContext* ctx);
+
+/** Stop and discard the clip buffer. Call when leaving voice. */
+MELLO_API MelloResult mello_clip_buffer_stop(MelloContext* ctx);
+
+/** Returns true if the clip buffer is actively recording. */
+MELLO_API bool mello_clip_buffer_active(MelloContext* ctx);
+
+/** Capture the last `seconds` of audio and write as WAV to `output_path`. */
+MELLO_API MelloResult mello_clip_capture(MelloContext* ctx, float seconds, const char* output_path);
+
+/** Play a WAV clip through the audio output. */
+MELLO_API MelloResult mello_clip_play(MelloContext* ctx, const char* wav_path);
+
+/** Play an MP4/AAC clip through the audio output (decodes to PCM first). */
+MELLO_API MelloResult mello_clip_play_mp4(MelloContext* ctx, const char* mp4_path);
+
+/** Stop clip playback. */
+MELLO_API MelloResult mello_clip_stop_playback(MelloContext* ctx);
+
+/** Returns true if a clip is currently playing (or paused mid-playback). */
+MELLO_API bool mello_clip_is_playing(MelloContext* ctx);
+
+/** Get playback progress. All out-params are optional (may be NULL). */
+MELLO_API void mello_clip_playback_progress(MelloContext* ctx,
+    uint64_t* position_samples, uint64_t* total_samples, uint32_t* sample_rate);
+
+/** Pause clip playback. */
+MELLO_API MelloResult mello_clip_pause(MelloContext* ctx);
+
+/** Resume clip playback after pause. */
+MELLO_API MelloResult mello_clip_resume(MelloContext* ctx);
+
+/** Seek clip playback to an absolute sample position. */
+MELLO_API MelloResult mello_clip_seek(MelloContext* ctx, uint64_t position_samples);
+
+/** Encode a WAV file to MP4/AAC-LC. Standalone (no MelloContext needed). */
+MELLO_API MelloResult mello_clip_encode(const char* wav_path, const char* mp4_path, int bitrate);
+
+/* ============================================================================
  * P2P Transport
  * ============================================================================ */
 

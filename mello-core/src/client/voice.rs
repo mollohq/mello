@@ -187,6 +187,9 @@ impl super::Client {
             let _ = self
                 .event_tx
                 .send(Event::VoiceStateChanged { in_call: true });
+
+            // Auto-start clip buffer for voice clip capture
+            self.handle_start_clip_buffer();
         }
 
         // Note: VoiceJoined was already emitted above (before SFU/P2P connection)
@@ -200,6 +203,9 @@ impl super::Client {
     }
 
     pub(super) async fn handle_leave_voice(&mut self) {
+        // Stop clip buffer before tearing down voice
+        self.handle_stop_clip_buffer();
+
         self.sfu_leave_if_connected().await;
         self.last_voice_channel = None;
         self.sfu_voice_reconnect = None;

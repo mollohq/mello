@@ -352,18 +352,98 @@ func DevSeedStateRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk 
 	}
 
 	// ── 7. crew event ledger + stale last_seen ─────────────────────
-	// Populate the event ledger for Gamers and Devs so catch-up cards
-	// are visible during local development.  Set last_seen for all
-	// users to 24h ago so the 4h catch-up threshold is exceeded.
+	// Populate the event ledger for Gamers and Devs with a rich set of
+	// events covering every card type the crew feed can display:
+	// clips, sessions, recaps, moments, game sessions, and member joins.
 	nowMs := time.Now().UnixMilli()
 	staleLastSeen := nowMs - 24*60*60*1000 // 24 hours ago
 
+	hour := int64(60 * 60 * 1000)
+	min := int64(60 * 1000)
+
+	weekStart := time.Now().Add(-7 * 24 * time.Hour).UnixMilli()
+
 	seedEvents := map[string][]CrewEvent{
 		"Gamers": {
+			// ── CLIPS ─────────────────────────────────────────
+			// Hero clip: newest, bob clipped a clutch (30min ago)
+			{
+				ID: generateEventID(), CrewID: crewIDs["Gamers"],
+				Type: "clip", ActorID: users["bob"].id,
+				Timestamp: nowMs - 30*min, Score: 50,
+				Data: ClipData{
+					ClipID:           "clip_seed_hero",
+					ClipType:         "voice",
+					ClipperName:      users["bob"].displayName,
+					DurationSeconds:  28.5,
+					Participants:     []string{users["bob"].id, users["alice"].id, users["diana"].id},
+					ParticipantNames: []string{users["bob"].displayName, users["alice"].displayName, users["diana"].displayName},
+					Game:             "Counter-Strike 2",
+					MediaURL:         fmt.Sprintf("http://localhost:9000/mello-clips/crews/%s/clip_seed_hero.mp4", crewIDs["Gamers"]),
+				},
+			},
+			// Standard clip: alice caught a funny moment (2h ago)
+			{
+				ID: generateEventID(), CrewID: crewIDs["Gamers"],
+				Type: "clip", ActorID: users["alice"].id,
+				Timestamp: nowMs - 2*hour, Score: 50,
+				Data: ClipData{
+					ClipID:           "clip_seed_alice_1",
+					ClipType:         "voice",
+					ClipperName:      users["alice"].displayName,
+					DurationSeconds:  15.0,
+					Participants:     []string{users["alice"].id, users["bob"].id},
+					ParticipantNames: []string{users["alice"].displayName, users["bob"].displayName},
+					MediaURL:         fmt.Sprintf("http://localhost:9000/mello-clips/crews/%s/clip_seed_alice_1.mp4", crewIDs["Gamers"]),
+				},
+			},
+			// Older clip: diana in a game session (6h ago)
+			{
+				ID: generateEventID(), CrewID: crewIDs["Gamers"],
+				Type: "clip", ActorID: users["diana"].id,
+				Timestamp: nowMs - 6*hour, Score: 50,
+				Data: ClipData{
+					ClipID:           "clip_seed_diana_1",
+					ClipType:         "voice",
+					ClipperName:      users["diana"].displayName,
+					DurationSeconds:  30.0,
+					Participants:     []string{users["diana"].id},
+					ParticipantNames: []string{users["diana"].displayName},
+					Game:             "Valorant",
+					MediaURL:         fmt.Sprintf("http://localhost:9000/mello-clips/crews/%s/clip_seed_diana_1.mp4", crewIDs["Gamers"]),
+				},
+			},
+
+			// ── SESSIONS ──────────────────────────────────────
+			// Voice session (1h ago) — alice, bob, diana hung out
 			{
 				ID: generateEventID(), CrewID: crewIDs["Gamers"],
 				Type: "voice_session", ActorID: "",
-				Timestamp: nowMs - 6*60*60*1000, Score: 20,
+				Timestamp: nowMs - 1*hour, Score: 20,
+				Data: VoiceSessionData{
+					ChannelName:      "General",
+					ParticipantIDs:   []string{users["alice"].id, users["bob"].id, users["diana"].id},
+					ParticipantNames: []string{users["alice"].displayName, users["bob"].displayName, users["diana"].displayName},
+					DurationMin:      93, PeakCount: 3,
+				},
+			},
+			// Game session (4h ago) — bob + diana played Valorant
+			{
+				ID: generateEventID(), CrewID: crewIDs["Gamers"],
+				Type: "game_session", ActorID: users["bob"].id,
+				Timestamp: nowMs - 4*hour, Score: 15,
+				Data: GameSessionData{
+					GameName:    "Valorant",
+					PlayerIDs:   []string{users["bob"].id, users["diana"].id},
+					PlayerNames: []string{users["bob"].displayName, users["diana"].displayName},
+					DurationMin: 65,
+				},
+			},
+			// Older voice session (8h ago) — bob + diana
+			{
+				ID: generateEventID(), CrewID: crewIDs["Gamers"],
+				Type: "voice_session", ActorID: "",
+				Timestamp: nowMs - 8*hour, Score: 20,
 				Data: VoiceSessionData{
 					ChannelName:      "General",
 					ParticipantIDs:   []string{users["bob"].id, users["diana"].id},
@@ -371,39 +451,156 @@ func DevSeedStateRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk 
 					DurationMin:      47, PeakCount: 2,
 				},
 			},
+
+			// ── MOMENTS (show as catchup cards) ───────────────
 			{
 				ID: generateEventID(), CrewID: crewIDs["Gamers"],
 				Type: "moment", ActorID: users["bob"].id,
-				Timestamp: nowMs - 3*60*60*1000, Score: 40,
+				Timestamp: nowMs - 3*hour, Score: 40,
 				Data: MomentData{
-					Text: "40-bomb on Dust2", Sentiment: "highlight",
+					Text: "40-bomb on Dust2 lets goooo", Sentiment: "highlight",
 					GameName: "Counter-Strike 2",
 				},
 			},
+			{
+				ID: generateEventID(), CrewID: crewIDs["Gamers"],
+				Type: "moment", ActorID: users["diana"].id,
+				Timestamp: nowMs - 5*hour, Score: 35,
+				Data: MomentData{
+					Text: "first ace ever in ranked", Sentiment: "highlight",
+					GameName: "Valorant",
+				},
+			},
+
+			// ── WEEKLY RECAP ──────────────────────────────────
+			{
+				ID: generateEventID(), CrewID: crewIDs["Gamers"],
+				Type: "weekly_recap", ActorID: "",
+				Timestamp: nowMs - 12*hour, Score: 30,
+			Data: WeeklyRecapData{
+				CrewID:            crewIDs["Gamers"],
+				WeekStart:         weekStart,
+				WeekEnd:           nowMs,
+				TotalHangoutMin:   420,
+				TopGame:           "Counter-Strike 2",
+				LongestSession:    "bob, diana in General (93m)",
+				LongestSessionMin: 93,
+				ClipCount:         7,
+				MostActive:        users["bob"].displayName,
+				MostClipped:       users["alice"].displayName,
+				TopMembers: []RecapMember{
+					{DisplayName: users["bob"].displayName, HangoutMin: 185},
+					{DisplayName: users["alice"].displayName, HangoutMin: 142},
+					{DisplayName: users["diana"].displayName, HangoutMin: 93},
+				},
+				GeneratedAt: nowMs - 12*hour,
+			},
+			},
 		},
 		"Devs": {
+			// ── CLIPS ─────────────────────────────────────────
+			// charlie clipped a stream highlight (1h ago)
+			{
+				ID: generateEventID(), CrewID: crewIDs["Devs"],
+				Type: "clip", ActorID: users["charlie"].id,
+				Timestamp: nowMs - 1*hour, Score: 50,
+				Data: ClipData{
+					ClipID:           "clip_seed_charlie_1",
+					ClipType:         "voice",
+					ClipperName:      users["charlie"].displayName,
+					DurationSeconds:  22.0,
+					Participants:     []string{users["charlie"].id, users["alice"].id},
+					ParticipantNames: []string{users["charlie"].displayName, users["alice"].displayName},
+					Game:             "Counter-Strike 2",
+					MediaURL:         fmt.Sprintf("http://localhost:9000/mello-clips/crews/%s/clip_seed_charlie_1.mp4", crewIDs["Devs"]),
+				},
+			},
+			// alice clipped a code review discussion (4h ago)
+			{
+				ID: generateEventID(), CrewID: crewIDs["Devs"],
+				Type: "clip", ActorID: users["alice"].id,
+				Timestamp: nowMs - 4*hour, Score: 50,
+				Data: ClipData{
+					ClipID:           "clip_seed_alice_dev",
+					ClipType:         "voice",
+					ClipperName:      users["alice"].displayName,
+					DurationSeconds:  18.5,
+					Participants:     []string{users["alice"].id, users["bob"].id, users["charlie"].id},
+					ParticipantNames: []string{users["alice"].displayName, users["bob"].displayName, users["charlie"].displayName},
+					MediaURL:         fmt.Sprintf("http://localhost:9000/mello-clips/crews/%s/clip_seed_alice_dev.mp4", crewIDs["Devs"]),
+				},
+			},
+
+			// ── SESSIONS ──────────────────────────────────────
+			// Stream session (5h ago) — charlie streamed CS2
 			{
 				ID: generateEventID(), CrewID: crewIDs["Devs"],
 				Type: "stream_session", ActorID: users["charlie"].id,
-				Timestamp: nowMs - 5*60*60*1000, Score: 30,
+				Timestamp: nowMs - 5*hour, Score: 30,
 				Data: StreamSessionData{
 					StreamerID: users["charlie"].id, StreamerName: users["charlie"].displayName,
 					Title: "Counter-Strike 2", DurationMin: 120, PeakViewers: 3,
 					ViewerIDs: []string{users["alice"].id, users["bob"].id},
 				},
 			},
+			// Voice session (3h ago) — alice + bob code review
+			{
+				ID: generateEventID(), CrewID: crewIDs["Devs"],
+				Type: "voice_session", ActorID: "",
+				Timestamp: nowMs - 3*hour, Score: 20,
+				Data: VoiceSessionData{
+					ChannelName:      "Code Review",
+					ParticipantIDs:   []string{users["alice"].id, users["bob"].id},
+					ParticipantNames: []string{users["alice"].displayName, users["bob"].displayName},
+					DurationMin:      35, PeakCount: 2,
+				},
+			},
+
+			// ── MEMBER JOINED ─────────────────────────────────
 			{
 				ID: generateEventID(), CrewID: crewIDs["Devs"],
 				Type: "member_joined", ActorID: users["diana"].id,
-				Timestamp: nowMs - 8*60*60*1000, Score: 15,
+				Timestamp: nowMs - 10*hour, Score: 15,
 				Data: MemberJoinedData{
 					Username: users["diana"].displayName, DisplayName: users["diana"].displayName,
+				},
+			},
+		},
+		// Music crew gets a couple clips so the sidebar shows FOMO badges
+		"Music": {
+			{
+				ID: generateEventID(), CrewID: crewIDs["Music"],
+				Type: "clip", ActorID: users["charlie"].id,
+				Timestamp: nowMs - 2*hour, Score: 50,
+				Data: ClipData{
+					ClipID:           "clip_seed_music_1",
+					ClipType:         "voice",
+					ClipperName:      users["charlie"].displayName,
+					DurationSeconds:  25.0,
+					Participants:     []string{users["charlie"].id, users["diana"].id},
+					ParticipantNames: []string{users["charlie"].displayName, users["diana"].displayName},
+					MediaURL:         fmt.Sprintf("http://localhost:9000/mello-clips/crews/%s/clip_seed_music_1.mp4", crewIDs["Music"]),
+				},
+			},
+			{
+				ID: generateEventID(), CrewID: crewIDs["Music"],
+				Type: "clip", ActorID: users["diana"].id,
+				Timestamp: nowMs - 7*hour, Score: 50,
+				Data: ClipData{
+					ClipID:           "clip_seed_music_2",
+					ClipType:         "voice",
+					ClipperName:      users["diana"].displayName,
+					DurationSeconds:  12.0,
+					Participants:     []string{users["diana"].id},
+					ParticipantNames: []string{users["diana"].displayName},
+					MediaURL:         fmt.Sprintf("http://localhost:9000/mello-clips/crews/%s/clip_seed_music_2.mp4", crewIDs["Music"]),
 				},
 			},
 		},
 	}
 
 	eventsWritten := 0
+	clipCount := make(map[string]int)
 	for crewName, events := range seedEvents {
 		cid, ok := crewIDs[crewName]
 		if !ok {
@@ -414,13 +611,17 @@ func DevSeedStateRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk 
 				logger.Warn("dev_seed: append event failed for %s: %v", crewName, err)
 			} else {
 				eventsWritten++
+				if ev.Type == "clip" {
+					clipCount[crewName]++
+				}
 			}
 		}
 	}
-	logger.Info("dev_seed: %d crew events written", eventsWritten)
+	logger.Info("dev_seed: %d crew events written (clips: Gamers=%d, Devs=%d, Music=%d)",
+		eventsWritten, clipCount["Gamers"], clipCount["Devs"], clipCount["Music"])
 
-	// Set stale last_seen for all users in Gamers + Devs so catch-up triggers
-	lastSeenCrews := []string{"Gamers", "Devs"}
+	// Set stale last_seen for all users in seeded crews so catch-up triggers
+	lastSeenCrews := []string{"Gamers", "Devs", "Music"}
 	for _, crewName := range lastSeenCrews {
 		cid, ok := crewIDs[crewName]
 		if !ok {
@@ -449,6 +650,7 @@ func DevSeedStateRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk 
 		"voice_channels": 5 + (len(crewIDs) - 2),
 		"streams":        1,
 		"crew_events":    eventsWritten,
+		"clips_seeded":   clipCount["Gamers"] + clipCount["Devs"] + clipCount["Music"],
 	})
 	return string(resp), nil
 }

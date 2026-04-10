@@ -61,6 +61,23 @@ Do not repeat a corrected mistake in the same session.
   To vertically center an `Image` inside a layout or container, use:
   `y: (parent.height - self.height) / 2;`
   This is the established pattern throughout the codebase (see control_bar.slint, voice_channel_view.slint, settings_modal.slint).
+- **HorizontalLayout forces `y: 0` on direct children.** Setting `y:` on a direct child of
+  `HorizontalLayout` is silently overridden — the element sticks to the top. To vertically center
+  a fixed-size element (e.g. a 40px button) inside a HorizontalLayout whose height is driven by a
+  taller sibling (e.g. a 44px avatar), wrap it:
+  ```
+  // WRONG — y is ignored, button sits at top
+  HorizontalLayout {
+      Rectangle { width: 40px; height: 40px; y: (parent.height - self.height) / 2; }
+  }
+  // RIGHT — outer rect stretches, inner rect centers inside it
+  HorizontalLayout {
+      Rectangle {
+          width: 40px;
+          Rectangle { width: 40px; height: 40px; y: (parent.height - self.height) / 2; }
+      }
+  }
+  ```
 - When a design mockup (`designs/*.html`) contains inline SVGs, **do not** try to recreate them
   with Slint rectangles or shapes. Instead, extract the SVG into `client/ui/icons/<name>.svg`
   (stroke="black", no hardcoded colors) and reference it with `@image-url("../icons/<name>.svg")`

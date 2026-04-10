@@ -46,6 +46,7 @@ EXE_MAP = {
     "escape-from-tarkov": ["EscapeFromTarkov.exe"],
     "marvel-rivals": ["MarvelRivals-Win64-Shipping.exe"],
     "hearthstone": ["Hearthstone.exe"],
+    "bloons-td-battles-2": ["btdb2_game.exe"],
 }
 
 # short display names for tight UI spaces
@@ -71,6 +72,7 @@ SHORT_NAMES = {
     "escape-from-tarkov": "Tarkov",
     "marvel-rivals": "Rivals",
     "hearthstone": "HS",
+    "bloons-td-battles-2": "BTD2",
 }
 
 # brand colors per game
@@ -96,6 +98,7 @@ COLORS = {
     "escape-from-tarkov": "#2C2C2C",
     "marvel-rivals": "#E62429",
     "hearthstone": "#CD8B36",
+    "bloons-td-battles-2": "#FFE74C",
 }
 
 CATEGORY_MAP = {
@@ -120,6 +123,7 @@ CATEGORY_MAP = {
     "escape-from-tarkov": "fps",
     "marvel-rivals": "fps",
     "hearthstone": "other",
+    "bloons-td-battles-2": "strategy",
 }
 
 

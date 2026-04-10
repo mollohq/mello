@@ -1,5 +1,6 @@
 mod auth;
 mod chat;
+mod clip;
 mod crew;
 mod game;
 mod onboarding;
@@ -14,6 +15,7 @@ pub fn wire_all(ctx: &AppContext) {
     crew::wire(ctx);
     voice::wire(ctx);
     chat::wire(ctx);
+    clip::wire(ctx);
     streaming::wire(ctx);
     settings::wire(ctx);
     onboarding::wire(ctx);

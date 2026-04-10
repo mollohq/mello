@@ -31,6 +31,39 @@ services:
       - |
         go mod tidy && go build -buildmode=plugin -trimpath -o ./backend.so .
 
+  minio:
+    image: minio/minio
+    container_name: mello-minio
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  minio-init:
+    image: minio/mc
+    container_name: mello-minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        mc alias set local http://minio:9000 minioadmin minioadmin &&
+        mc mb --ignore-existing local/mello-clips &&
+        mc anonymous set download local/mello-clips &&
+        echo "Bucket mello-clips ready"
+
   nakama:
     image: heroiclabs/nakama:3.21.0
     platform: linux/amd64
@@ -39,6 +72,8 @@ services:
       postgres:
         condition: service_healthy
       nakama-build:
+        condition: service_completed_successfully
+      minio-init:
         condition: service_completed_successfully
     environment:
       - STEAM_PUBLISHER_KEY=${STEAM_PUBLISHER_KEY:-}
@@ -54,6 +89,12 @@ services:
       - TURN_HOST=${TURN_HOST:-}
       - SFU_JWT_PRIVATE_KEY=${SFU_JWT_PRIVATE_KEY:-}
       - SFU_ENDPOINT_EU=${SFU_ENDPOINT_EU:-wss://sfu-eu.m3llo.app/ws}
+      - S3_ENDPOINT=http://minio:9000
+      - S3_PRESIGN_ENDPOINT=http://localhost:9000
+      - S3_BUCKET=mello-clips
+      - S3_ACCESS_KEY=minioadmin
+      - S3_SECRET_KEY=minioadmin
+      - S3_PUBLIC_URL=http://localhost:9000/mello-clips
     entrypoint:
       - /bin/sh
       - -c
@@ -74,3 +115,4 @@ services:
 
 volumes:
   postgres_data:
+  minio_data:

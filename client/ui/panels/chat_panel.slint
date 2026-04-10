@@ -70,6 +70,101 @@ component PillButton inherits Rectangle {
     }
 }
 
+component ChatClipCard inherits Rectangle {
+    in property <string> sender-name;
+    in property <string> clip-duration: "0:30";
+    callback play-clicked();
+
+    height: 72px;
+    background: clip-touch.has-hover ? Theme.card-bg-hover : Theme.card-bg;
+    border-radius: 8px;
+    border-width: 1px;
+    border-color: Theme.card-border;
+
+    HorizontalLayout {
+        spacing: 10px;
+        padding: 10px;
+
+        Rectangle {
+            width: 52px;
+            height: 52px;
+            border-radius: 6px;
+            background: Theme.dark
+                ? @linear-gradient(135deg, #1a1a2a 0%, #2a1a2a 100%)
+                : @linear-gradient(135deg, #e8e8f0 0%, #f0e8f0 100%);
+
+            HorizontalLayout {
+                alignment: center;
+                spacing: 1px;
+                padding-left: 8px;
+                padding-right: 8px;
+
+                for h in [0.4, 0.8, 0.5, 0.9, 0.3, 0.7, 0.6, 0.9, 0.4]: Rectangle {
+                    width: 2px;
+                    height: 24px * h;
+                    border-radius: 1px;
+                    background: Theme.clip-amber;
+                    opacity: 0.6 + h * 0.4;
+                }
+            }
+
+            Rectangle {
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                width: 22px;
+                height: 22px;
+                border-radius: 11px;
+                background: #00000066;
+
+                Text {
+                    text: "▶";
+                    font-size: 10px;
+                    color: white;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+        }
+
+        VerticalLayout {
+            alignment: center;
+            spacing: 3px;
+            horizontal-stretch: 1;
+
+            HorizontalLayout {
+                spacing: 4px;
+
+                Image {
+                    source: @image-url("../icons/scissors.svg");
+                    colorize: Theme.clip-amber;
+                    width: 12px;
+                    height: 12px;
+                    y: (parent.height - self.height) / 2;
+                }
+
+                Text {
+                    text: sender-name + " clipped that";
+                    font-size: 12px;
+                    font-weight: 500;
+                    color: Theme.text-primary;
+                    overflow: elide;
+                }
+            }
+
+            Text {
+                text: "Voice · " + clip-duration + " · Play";
+                font-size: 11px;
+                color: #888888;
+            }
+        }
+    }
+
+    clip-touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { play-clicked(); }
+    }
+}
+
 component GifPopover inherits Rectangle {
     in property <[GifItemData]> gifs: [];
     in property <bool> show: false;
@@ -347,6 +442,13 @@ export component ChatPanel inherits Rectangle {
                                 color: Theme.text-secondary;
                                 wrap: word-wrap;
                                 horizontal-stretch: 1;
+                            }
+
+                            // Clip inline card
+                            if msg.is-clip: ChatClipCard {
+                                sender-name: msg.sender-name;
+                                clip-duration: msg.clip-duration;
+                                width: 280px;
                             }
 
                             // GIF inline preview
@@ -688,6 +790,13 @@ component Preview inherits ChatPanel {
             sender-initials: "K0", text: "sup guys 👋",
             timestamp: "", display-time: "just now",
             is-group-start: true, is-continuation: false, is-system: false
+        },
+        {
+            message-id: "7", sender-id: "u1", sender-name: "bobdev",
+            sender-initials: "B0", text: "",
+            timestamp: "", display-time: "just now",
+            is-group-start: true, is-continuation: false, is-system: false,
+            is-clip: true, clip-duration: "0:28", clip-id: "clip-001"
         },
     ];
 }

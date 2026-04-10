@@ -17,6 +17,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
 
             if !in_call {
                 *ctx.active_voice_channel.borrow_mut() = String::new();
+                ctx.app.set_voice_channel_name(slint::SharedString::new());
 
                 let my_id = ctx.app.get_user_id();
                 let current = ctx.app.get_voice_channels();
@@ -204,6 +205,14 @@ pub fn handle(ctx: &AppContext, event: Event) {
             *ctx.active_voice_channel.borrow_mut() = channel_id.clone();
             let active_id = ctx.app.get_active_crew_id();
             if active_id == crew_id.as_str() {
+                let current_channels = ctx.app.get_voice_channels();
+                for i in 0..current_channels.row_count() {
+                    let ch = current_channels.row_data(i).unwrap();
+                    if ch.id == channel_id.as_str() {
+                        ctx.app.set_voice_channel_name(ch.name.clone());
+                        break;
+                    }
+                }
                 let my_id = ctx.app.get_user_id();
                 let current_channels = ctx.app.get_voice_channels();
                 let updated_channels: Vec<VoiceChannelData> = (0..current_channels.row_count())
@@ -366,6 +375,9 @@ pub fn handle(ctx: &AppContext, event: Event) {
             );
             let active_id = ctx.app.get_active_crew_id();
             if active_id == crew_id.as_str() {
+                if *ctx.active_voice_channel.borrow() == channel_id {
+                    ctx.app.set_voice_channel_name(name.as_str().into());
+                }
                 let current = ctx.app.get_voice_channels();
                 let updated: Vec<VoiceChannelData> = (0..current.row_count())
                     .map(|i| {
