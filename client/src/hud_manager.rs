@@ -1,9 +1,13 @@
-use std::io::{BufRead, BufReader, Write};
-use std::process::{Child, Command as StdCommand};
 use std::sync::mpsc;
-use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
+
+#[cfg(target_os = "windows")]
+use std::io::{BufRead, BufReader, Write};
+#[cfg(target_os = "windows")]
+use std::process::{Child, Command as StdCommand};
+#[cfg(target_os = "windows")]
+use std::time::Duration;
 
 // ── IPC protocol types (mirrored from hud/src/protocol.rs) ────────────────
 
@@ -401,6 +405,7 @@ fn kill_zombie_hud_processes() {
 }
 
 /// Resolve the path to m3llo-hud.exe, adjacent to the main binary.
+#[cfg(target_os = "windows")]
 fn hud_exe_path() -> std::path::PathBuf {
     let mut path = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("."));
     path.pop(); // remove mello.exe filename
