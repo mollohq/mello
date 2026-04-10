@@ -328,6 +328,18 @@ pub enum Event {
         clip_id: String,
         media_url: String,
     },
+    /// Clip playback started.
+    ClipPlaybackStarted {
+        clip_path: String,
+        duration_ms: u32,
+    },
+    /// Clip playback progress (polled from client).
+    ClipPlaybackProgress {
+        position_ms: u32,
+        duration_ms: u32,
+    },
+    /// Clip playback finished (reached end or stopped).
+    ClipPlaybackFinished,
     /// Crew feed timeline loaded.
     TimelineLoaded {
         response: crate::crew_events::TimelineResponse,

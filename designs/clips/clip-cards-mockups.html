@@ -1,0 +1,411 @@
+<html lang="en" vid="0"><head vid="1">
+    <meta charset="UTF-8" vid="2">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" vid="3">
+    <title vid="4">Voice Clip Card Components</title>
+    <script src="https://cdn.tailwindcss.com/3.4.17" vid="5"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet" vid="6">
+    <script src="https://unpkg.com/@phosphor-icons/web" vid="7"></script>
+    <script vid="8">
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                        mono: ['JetBrains Mono', 'monospace'],
+                    },
+                    colors: {
+                        bgMain: '#1C1C1C',
+                        bgCard: '#242424',
+                        borderMain: '#2A2A2A',
+                        textPrimary: '#F3F4F6',
+                        textMuted: '#9CA3AF',
+                        textDark: '#6B7280',
+                        accentAmber: '#F59E0B',
+                    }
+                }
+            }
+        }
+    </script>
+    <style vid="9">
+        body {
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+        }
+        
+        @keyframes wave {
+            0%, 100% { transform: scaleY(0.2); }
+            50% { transform: scaleY(1); }
+        }
+
+        .playing-bar {
+            transform-origin: bottom;
+        }
+
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #374151;
+            border-radius: 4px;
+        }
+    </style>
+</head>
+<body class="bg-bgMain text-textPrimary font-sans w-full min-h-screen overflow-y-auto selection:bg-accentAmber/30" vid="10">
+
+    <div class="w-full max-w-[1200px] mx-auto p-8 md:p-12 lg:p-16" vid="11">
+        
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-16 items-start" vid="12">
+            
+            <div class="flex flex-col gap-8 w-full max-w-[340px] mx-auto" vid="13">
+                
+                <div class="mb-4" vid="14">
+                    <h2 class="text-sm font-bold text-textDark uppercase tracking-widest mb-1" vid="15">Small Format</h2>
+                    <p class="text-xs text-textMuted" vid="16">Compact cards for feeds and sidebars</p>
+                </div>
+
+                <div class="bg-bgCard rounded-xl border border-borderMain p-4 flex flex-col w-full shadow-lg group" vid="17">
+                    <div class="flex items-center justify-between mb-4" vid="18">
+                        <div class="flex items-center gap-2.5" vid="19">
+                            <div class="w-7 h-7 rounded bg-pink-500 flex items-center justify-center text-[10px] font-bold text-white shadow-sm" vid="20">
+                                os
+                            </div>
+                            <span class="text-sm font-semibold text-gray-200" vid="21">ostkatt</span>
+                        </div>
+                        <span class="text-textMuted text-[10px] font-bold flex items-center gap-1.5 uppercase tracking-wider" vid="22">
+                            <i class="ph-bold ph-scissors" vid="23"></i> CLIP
+                        </span>
+                    </div>
+
+                    <div class="relative flex items-end justify-center gap-1 h-12 w-full my-2" vid="24">
+                        <div class="w-1.5 bg-textMuted/20 rounded-full h-[20%]" vid="25"></div>
+                        <div class="w-1.5 bg-textMuted/20 rounded-full h-[35%]" vid="26"></div>
+                        <div class="w-1.5 bg-textMuted/30 rounded-full h-[60%]" vid="27"></div>
+                        <div class="w-1.5 bg-textMuted/40 rounded-full h-[85%]" vid="28"></div>
+                        <div class="w-1.5 bg-textMuted/50 rounded-full h-[100%]" vid="29"></div>
+                        <div class="w-1.5 bg-textMuted/40 rounded-full h-[75%]" vid="30"></div>
+                        <div class="w-1.5 bg-textMuted/30 rounded-full h-[45%]" vid="31"></div>
+                        <div class="w-1.5 bg-textMuted/20 rounded-full h-[25%]" vid="32"></div>
+                        <div class="w-1.5 bg-textMuted/30 rounded-full h-[50%]" vid="33"></div>
+                        <div class="w-1.5 bg-textMuted/40 rounded-full h-[80%]" vid="34"></div>
+                        <div class="w-1.5 bg-textMuted/50 rounded-full h-[95%]" vid="35"></div>
+                        <div class="w-1.5 bg-textMuted/30 rounded-full h-[65%]" vid="36"></div>
+                        <div class="w-1.5 bg-textMuted/20 rounded-full h-[30%]" vid="37"></div>
+
+                        <button class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-9 h-9 rounded-full bg-bgMain border border-borderMain flex items-center justify-center text-textPrimary hover:bg-gray-800 transition-colors shadow-md z-10 group-hover:text-accentAmber group-hover:border-accentAmber/30" vid="38">
+                            <i class="ph-fill ph-play ml-0.5 text-sm" vid="39"></i>
+                        </button>
+                    </div>
+
+                    <div class="mt-4 flex items-center justify-between" vid="40">
+                        <div class="text-xs text-textMuted flex items-center gap-1.5" vid="41">
+                            <span vid="42">2 hours ago</span>
+                            <span class="w-1 h-1 rounded-full bg-borderMain" vid="43"></span>
+                            <span vid="44">General</span>
+                        </div>
+                        <span class="text-xs font-mono text-textDark" vid="45">0:30</span>
+                    </div>
+                </div>
+
+                <div class="bg-bgCard rounded-xl border border-accentAmber/40 p-4 flex flex-col w-full shadow-[0_0_15px_rgba(245,158,11,0.1)] relative overflow-hidden" vid="46">
+                    
+                    <div class="absolute inset-0 bg-gradient-to-t from-accentAmber/5 to-transparent pointer-events-none" vid="47"></div>
+
+                    <div class="flex items-center justify-between mb-4 relative z-10" vid="48">
+                        <div class="flex items-center gap-2.5" vid="49">
+                            <div class="w-7 h-7 rounded bg-pink-500 flex items-center justify-center text-[10px] font-bold text-white shadow-[0_0_10px_rgba(236,72,153,0.3)]" vid="50">
+                                os
+                            </div>
+                            <span class="text-sm font-semibold text-white" vid="51">ostkatt</span>
+                        </div>
+                        <span class="text-accentAmber text-[10px] font-bold flex items-center gap-1.5 uppercase tracking-wider animate-pulse" vid="52">
+                            <i class="ph-fill ph-speaker-high" vid="53"></i> PLAYING
+                        </span>
+                    </div>
+
+                    <div class="relative flex items-end justify-center gap-1 h-12 w-full my-2 z-10" vid="54">
+                        <div class="w-1.5 bg-accentAmber/40 rounded-full h-[20%] playing-bar" style="animation: wave 0.8s ease-in-out infinite 0.1s" vid="55"></div>
+                        <div class="w-1.5 bg-accentAmber/60 rounded-full h-[40%] playing-bar" style="animation: wave 0.6s ease-in-out infinite 0.3s" vid="56"></div>
+                        <div class="w-1.5 bg-accentAmber/80 rounded-full h-[70%] playing-bar" style="animation: wave 0.9s ease-in-out infinite 0.2s" vid="57"></div>
+                        <div class="w-1.5 bg-accentAmber rounded-full h-[90%] shadow-[0_0_8px_rgba(245,158,11,0.5)] playing-bar" style="animation: wave 0.5s ease-in-out infinite 0.0s" vid="58"></div>
+                        <div class="w-1.5 bg-accentAmber rounded-full h-[100%] shadow-[0_0_10px_rgba(245,158,11,0.6)] playing-bar" style="animation: wave 0.7s ease-in-out infinite 0.4s" vid="59"></div>
+                        <div class="w-1.5 bg-accentAmber/90 rounded-full h-[80%] playing-bar" style="animation: wave 0.6s ease-in-out infinite 0.1s" vid="60"></div>
+                        <div class="w-1.5 bg-accentAmber/60 rounded-full h-[50%] playing-bar" style="animation: wave 0.8s ease-in-out infinite 0.5s" vid="61"></div>
+                        <div class="w-1.5 bg-accentAmber/40 rounded-full h-[30%] playing-bar" style="animation: wave 0.5s ease-in-out infinite 0.2s" vid="62"></div>
+                        <div class="w-1.5 bg-accentAmber/70 rounded-full h-[60%] playing-bar" style="animation: wave 0.7s ease-in-out infinite 0.3s" vid="63"></div>
+                        <div class="w-1.5 bg-accentAmber rounded-full h-[85%] shadow-[0_0_8px_rgba(245,158,11,0.5)] playing-bar" style="animation: wave 0.6s ease-in-out infinite 0.1s" vid="64"></div>
+                        <div class="w-1.5 bg-accentAmber rounded-full h-[95%] shadow-[0_0_10px_rgba(245,158,11,0.6)] playing-bar" style="animation: wave 0.8s ease-in-out infinite 0.4s" vid="65"></div>
+                        <div class="w-1.5 bg-accentAmber/80 rounded-full h-[75%] playing-bar" style="animation: wave 0.5s ease-in-out infinite 0.2s" vid="66"></div>
+                        <div class="w-1.5 bg-accentAmber/50 rounded-full h-[40%] playing-bar" style="animation: wave 0.9s ease-in-out infinite 0.0s" vid="67"></div>
+
+                        <button class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-9 h-9 rounded-full bg-accentAmber text-black flex items-center justify-center shadow-[0_0_15px_rgba(245,158,11,0.4)] hover:scale-105 transition-transform z-10" vid="68">
+                            <i class="ph-fill ph-pause text-sm" vid="69"></i>
+                        </button>
+                    </div>
+
+                    <div class="mt-4 flex items-center justify-between relative z-10" vid="70">
+                        <div class="text-xs text-textPrimary flex items-center gap-1.5" vid="71">
+                            <span class="text-accentAmber font-medium" vid="72">Playing...</span>
+                        </div>
+                        <span class="text-xs font-mono text-accentAmber" vid="73">0:14 / 0:30</span>
+                    </div>
+                </div>
+
+                <div class="bg-bgCard rounded-xl border border-borderMain p-4 flex flex-col w-full shadow-lg" vid="74">
+                    <div class="flex items-center justify-between mb-4" vid="75">
+                        <div class="flex items-center gap-2.5 opacity-80" vid="76">
+                            <div class="w-7 h-7 rounded bg-pink-500 flex items-center justify-center text-[10px] font-bold text-white" vid="77">
+                                os
+                            </div>
+                            <span class="text-sm font-semibold text-gray-200" vid="78">ostkatt</span>
+                        </div>
+                        <span class="text-textMuted text-[10px] font-bold flex items-center gap-1.5 uppercase tracking-wider" vid="79">
+                            <i class="ph-bold ph-pause" vid="80"></i> PAUSED
+                        </span>
+                    </div>
+
+                    <div class="relative flex items-end justify-center gap-1 h-12 w-full my-2" vid="81">
+                        
+                        <div class="w-1.5 bg-accentAmber/60 rounded-full h-[30%]" vid="82"></div>
+                        <div class="w-1.5 bg-accentAmber/70 rounded-full h-[55%]" vid="83"></div>
+                        <div class="w-1.5 bg-accentAmber/90 rounded-full h-[80%]" vid="84"></div>
+                        <div class="w-1.5 bg-accentAmber rounded-full h-[95%]" vid="85"></div>
+                        <div class="w-1.5 bg-accentAmber rounded-full h-[60%]" vid="86"></div>
+                        <div class="w-1.5 bg-accentAmber/80 rounded-full h-[40%]" vid="87"></div>
+                        <div class="w-1.5 bg-accentAmber/50 rounded-full h-[25%]" vid="88"></div>
+                        
+                        <div class="w-1.5 bg-textMuted/30 rounded-full h-[45%]" vid="89"></div>
+                        <div class="w-1.5 bg-textMuted/40 rounded-full h-[70%]" vid="90"></div>
+                        <div class="w-1.5 bg-textMuted/30 rounded-full h-[50%]" vid="91"></div>
+                        <div class="w-1.5 bg-textMuted/20 rounded-full h-[35%]" vid="92"></div>
+                        <div class="w-1.5 bg-textMuted/10 rounded-full h-[20%]" vid="93"></div>
+                        <div class="w-1.5 bg-textMuted/20 rounded-full h-[40%]" vid="94"></div>
+
+                        <button class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-9 h-9 rounded-full bg-accentAmber/10 border border-accentAmber/30 backdrop-blur text-accentAmber flex items-center justify-center shadow-lg hover:bg-accentAmber/20 transition-colors z-10" vid="95">
+                            <i class="ph-fill ph-play ml-0.5 text-sm" vid="96"></i>
+                        </button>
+                    </div>
+
+                    <div class="mt-4 flex items-center justify-between" vid="97">
+                        <div class="text-xs text-textMuted flex items-center gap-1.5" vid="98">
+                            <span vid="99">2 hours ago</span>
+                            <span class="w-1 h-1 rounded-full bg-borderMain" vid="100"></span>
+                            <span vid="101">General</span>
+                        </div>
+                        <span class="text-xs font-mono text-gray-300" vid="102">0:14 / 0:30</span>
+                    </div>
+                </div>
+
+            </div>
+
+            <div class="flex flex-col gap-8 w-full max-w-[500px] mx-auto" vid="103">
+                
+                <div class="mb-4" vid="104">
+                    <h2 class="text-sm font-bold text-textDark uppercase tracking-widest mb-1" vid="105">Large Format</h2>
+                    <p class="text-xs text-textMuted" vid="106">Featured cards for main content areas</p>
+                </div>
+
+                <div class="bg-bgCard rounded-xl border border-borderMain p-5 relative overflow-hidden shadow-lg group" vid="107">
+                    <div class="flex items-center justify-between mb-5" vid="108">
+                        <div class="flex items-center gap-3" vid="109">
+                            <div class="w-8 h-8 rounded bg-pink-500 flex items-center justify-center text-xs font-bold text-white shadow-sm" vid="110">os</div>
+                            <div class="flex flex-col" vid="111">
+                                <span class="text-sm font-bold text-gray-200 group-hover:text-white transition-colors" vid="112">ostkatt</span>
+                                <span class="text-[10px] text-textMuted" vid="113">Voice Clip</span>
+                            </div>
+                        </div>
+                        <span class="bg-accentAmber/10 border border-accentAmber/30 text-accentAmber px-2.5 py-1 rounded text-[10px] font-bold uppercase tracking-wider flex items-center gap-1.5" vid="114">
+                            <i class="ph-bold ph-sparkle" vid="115"></i> NEW
+                        </span>
+                    </div>
+                    
+                    <div class="bg-bgMain rounded-lg border border-borderMain p-4 mb-4" vid="116">
+                        <div class="flex items-end justify-center gap-1.5 h-12 w-full" vid="117">
+                            <div class="w-2 bg-textMuted/20 rounded-full h-[15%]" vid="118"></div>
+                            <div class="w-2 bg-textMuted/20 rounded-full h-[30%]" vid="119"></div>
+                            <div class="w-2 bg-textMuted/30 rounded-full h-[45%]" vid="120"></div>
+                            <div class="w-2 bg-textMuted/40 rounded-full h-[70%]" vid="121"></div>
+                            <div class="w-2 bg-textMuted/50 rounded-full h-[85%]" vid="122"></div>
+                            <div class="w-2 bg-textMuted/40 rounded-full h-[100%]" vid="123"></div>
+                            <div class="w-2 bg-textMuted/30 rounded-full h-[60%]" vid="124"></div>
+                            <div class="w-2 bg-textMuted/20 rounded-full h-[40%]" vid="125"></div>
+                            <div class="w-2 bg-textMuted/30 rounded-full h-[55%]" vid="126"></div>
+                            <div class="w-2 bg-textMuted/40 rounded-full h-[80%]" vid="127"></div>
+                            <div class="w-2 bg-textMuted/60 rounded-full h-[95%]" vid="128"></div>
+                            <div class="w-2 bg-textMuted/50 rounded-full h-[75%]" vid="129"></div>
+                            <div class="w-2 bg-textMuted/30 rounded-full h-[45%]" vid="130"></div>
+                            <div class="w-2 bg-textMuted/20 rounded-full h-[25%]" vid="131"></div>
+                            <div class="w-2 bg-textMuted/30 rounded-full h-[40%]" vid="132"></div>
+                            <div class="w-2 bg-textMuted/40 rounded-full h-[65%]" vid="133"></div>
+                            <div class="w-2 bg-textMuted/50 rounded-full h-[90%]" vid="134"></div>
+                            <div class="w-2 bg-textMuted/40 rounded-full h-[70%]" vid="135"></div>
+                            <div class="w-2 bg-textMuted/20 rounded-full h-[35%]" vid="136"></div>
+                            <div class="w-2 bg-textMuted/20 rounded-full h-[20%]" vid="137"></div>
+                        </div>
+                    </div>
+                    
+                    <div class="w-full h-1.5 bg-bgMain rounded-full overflow-hidden mb-5 border border-borderMain" vid="138">
+                        <div class="h-full bg-textMuted rounded-full" style="width: 0%" vid="139"></div>
+                    </div>
+                    
+                    <div class="flex items-center justify-between bg-bgMain/50 p-3 rounded-lg border border-borderMain/50" vid="140">
+                        <div class="flex items-center gap-2" vid="141">
+                            <i class="ph-bold ph-waveform text-textMuted group-hover:text-accentAmber transition-colors" vid="142"></i>
+                            <span class="text-sm text-textMuted group-hover:text-gray-300 transition-colors" vid="143">Voice Clip</span>
+                        </div>
+                        <button class="w-10 h-10 rounded-full bg-white/5 border border-white/10 hover:bg-white/10 text-white flex items-center justify-center transition-all group-hover:border-accentAmber/30 group-hover:text-accentAmber shrink-0" vid="144">
+                            <i class="ph-fill ph-play ml-0.5 text-lg" vid="145"></i>
+                        </button>
+                    </div>
+
+                    <div class="flex items-center justify-between text-xs text-textDark" vid="146">
+                        <div class="flex items-center gap-2" vid="147">
+                            <span vid="148">2 hours ago</span>
+                            <span class="w-1 h-1 rounded-full bg-borderMain" vid="149"></span>
+                            <span class="px-1.5 py-0.5 bg-bgMain rounded border border-borderMain" vid="150">General</span>
+                        </div>
+                        <span class="font-mono" vid="151">0:00 / 0:30</span>
+                    </div>
+                </div>
+
+                <div class="bg-bgCard rounded-xl border border-accentAmber/50 p-5 relative overflow-hidden shadow-[0_0_25px_rgba(245,158,11,0.15)] group" vid="152">
+                    
+                    <div class="absolute -top-20 -right-20 w-40 h-40 bg-accentAmber/10 rounded-full blur-[40px] pointer-events-none" vid="153"></div>
+
+                    <div class="flex items-center justify-between mb-5 relative z-10" vid="154">
+                        <div class="flex items-center gap-3" vid="155">
+                            <div class="w-8 h-8 rounded bg-pink-500 flex items-center justify-center text-xs font-bold text-white shadow-[0_0_15px_rgba(236,72,153,0.4)]" vid="156">os</div>
+                            <div class="flex flex-col" vid="157">
+                                <span class="text-sm font-bold text-white" vid="158">ostkatt</span>
+                                <span class="text-[10px] text-accentAmber font-medium" vid="159">Voice Clip</span>
+                            </div>
+                        </div>
+                        <span class="bg-accentAmber/10 border border-accentAmber/30 text-accentAmber px-2.5 py-1 rounded text-[10px] font-bold uppercase tracking-wider flex items-center gap-1.5 shadow-[0_0_10px_rgba(245,158,11,0.2)]" vid="160">
+                            <i class="ph-bold ph-speaker-high animate-pulse" vid="161"></i> PLAYING
+                        </span>
+                    </div>
+                    
+                    <div class="bg-[#181818] rounded-lg border border-accentAmber/20 p-4 mb-4 relative z-10" vid="162">
+                        <div class="flex items-end justify-center gap-1.5 h-12 w-full" vid="163">
+                            <div class="w-2 bg-accentAmber/40 rounded-full h-[20%] playing-bar" style="animation: wave 0.7s ease-in-out infinite 0.1s" vid="164"></div>
+                            <div class="w-2 bg-accentAmber/60 rounded-full h-[35%] playing-bar" style="animation: wave 0.5s ease-in-out infinite 0.3s" vid="165"></div>
+                            <div class="w-2 bg-accentAmber/80 rounded-full h-[60%] playing-bar" style="animation: wave 0.8s ease-in-out infinite 0.2s" vid="166"></div>
+                            <div class="w-2 bg-accentAmber rounded-full h-[85%] shadow-[0_0_8px_rgba(245,158,11,0.5)] playing-bar" style="animation: wave 0.6s ease-in-out infinite 0.0s" vid="167"></div>
+                            <div class="w-2 bg-accentAmber rounded-full h-[100%] shadow-[0_0_12px_rgba(245,158,11,0.7)] playing-bar" style="animation: wave 0.7s ease-in-out infinite 0.4s" vid="168"></div>
+                            <div class="w-2 bg-accentAmber/90 rounded-full h-[75%] playing-bar" style="animation: wave 0.5s ease-in-out infinite 0.1s" vid="169"></div>
+                            <div class="w-2 bg-accentAmber/70 rounded-full h-[45%] playing-bar" style="animation: wave 0.9s ease-in-out infinite 0.5s" vid="170"></div>
+                            <div class="w-2 bg-accentAmber/50 rounded-full h-[25%] playing-bar" style="animation: wave 0.6s ease-in-out infinite 0.2s" vid="171"></div>
+                            <div class="w-2 bg-accentAmber/70 rounded-full h-[65%] playing-bar" style="animation: wave 0.8s ease-in-out infinite 0.3s" vid="172"></div>
+                            <div class="w-2 bg-accentAmber rounded-full h-[90%] shadow-[0_0_10px_rgba(245,158,11,0.6)] playing-bar" style="animation: wave 0.5s ease-in-out infinite 0.1s" vid="173"></div>
+                            <div class="w-2 bg-accentAmber rounded-full h-[100%] shadow-[0_0_12px_rgba(245,158,11,0.7)] playing-bar" style="animation: wave 0.7s ease-in-out infinite 0.4s" vid="174"></div>
+                            <div class="w-2 bg-accentAmber/80 rounded-full h-[80%] playing-bar" style="animation: wave 0.6s ease-in-out infinite 0.2s" vid="175"></div>
+                            <div class="w-2 bg-accentAmber/60 rounded-full h-[50%] playing-bar" style="animation: wave 0.8s ease-in-out infinite 0.0s" vid="176"></div>
+                            <div class="w-2 bg-accentAmber/40 rounded-full h-[30%] playing-bar" style="animation: wave 0.5s ease-in-out infinite 0.3s" vid="177"></div>
+                            <div class="w-2 bg-textMuted/30 rounded-full h-[40%]" vid="178"></div>
+                            <div class="w-2 bg-textMuted/40 rounded-full h-[65%]" vid="179"></div>
+                            <div class="w-2 bg-textMuted/50 rounded-full h-[90%]" vid="180"></div>
+                            <div class="w-2 bg-textMuted/40 rounded-full h-[70%]" vid="181"></div>
+                            <div class="w-2 bg-textMuted/20 rounded-full h-[35%]" vid="182"></div>
+                            <div class="w-2 bg-textMuted/20 rounded-full h-[20%]" vid="183"></div>
+                        </div>
+                    </div>
+                    
+                    <div class="w-full h-1.5 bg-[#181818] rounded-full overflow-hidden mb-5 border border-borderMain/50 relative z-10" vid="184">
+                        <div class="h-full bg-accentAmber rounded-full shadow-[0_0_10px_rgba(245,158,11,0.8)] relative" style="width: 47%" vid="185">
+                            <div class="absolute right-0 top-1/2 -translate-y-1/2 w-2 h-2 bg-white rounded-full shadow-md" vid="186"></div>
+                        </div>
+                    </div>
+                    
+                    <div class="flex items-center justify-between bg-accentAmber/5 p-3 rounded-lg border border-accentAmber/10 relative z-10" vid="187">
+                        <div class="flex items-center gap-2" vid="188">
+                            <i class="ph-bold ph-waveform text-accentAmber animate-pulse" vid="189"></i>
+                            <span class="text-sm text-gray-200 font-medium" vid="190">Playing voice clip...</span>
+                        </div>
+                        <button class="w-10 h-10 rounded-full bg-accentAmber text-black hover:bg-amber-400 flex items-center justify-center transition-colors shadow-[0_0_15px_rgba(245,158,11,0.4)] shrink-0" vid="191">
+                            <i class="ph-fill ph-pause text-lg" vid="192"></i>
+                        </button>
+                    </div>
+
+                    <div class="flex items-center justify-between text-xs text-textMuted relative z-10" vid="193">
+                        <div class="flex items-center gap-2" vid="194">
+                            <span class="text-gray-300" vid="195">2 hours ago</span>
+                            <span class="w-1 h-1 rounded-full bg-borderMain" vid="196"></span>
+                            <span class="px-1.5 py-0.5 bg-bgMain rounded border border-borderMain text-gray-300" vid="197">General</span>
+                        </div>
+                        <span class="font-mono text-accentAmber font-medium" vid="198">0:14 / 0:30</span>
+                    </div>
+                </div>
+
+                <div class="bg-bgCard rounded-xl border border-borderMain p-5 relative overflow-hidden shadow-sm group" vid="199">
+                    <div class="flex items-center justify-between mb-5 opacity-80" vid="200">
+                        <div class="flex items-center gap-3" vid="201">
+                            <div class="w-8 h-8 rounded bg-pink-500 flex items-center justify-center text-xs font-bold text-white grayscale-[30%]" vid="202">os</div>
+                            <div class="flex flex-col" vid="203">
+                                <span class="text-sm font-bold text-gray-300" vid="204">ostkatt</span>
+                                <span class="text-[10px] text-textMuted" vid="205">Voice Clip</span>
+                            </div>
+                        </div>
+                        <span class="bg-bgMain border border-borderMain text-textMuted px-2.5 py-1 rounded text-[10px] font-bold uppercase tracking-wider flex items-center gap-1.5" vid="206">
+                            <i class="ph-bold ph-check" vid="207"></i> PLAYED
+                        </span>
+                    </div>
+                    
+                    <div class="bg-bgMain rounded-lg border border-borderMain p-4 mb-4 opacity-60" vid="208">
+                        <div class="flex items-end justify-center gap-1.5 h-12 w-full" vid="209">
+                            <div class="w-2 bg-accentAmber/30 rounded-full h-[15%]" vid="210"></div>
+                            <div class="w-2 bg-accentAmber/40 rounded-full h-[30%]" vid="211"></div>
+                            <div class="w-2 bg-accentAmber/50 rounded-full h-[45%]" vid="212"></div>
+                            <div class="w-2 bg-accentAmber/60 rounded-full h-[70%]" vid="213"></div>
+                            <div class="w-2 bg-accentAmber/70 rounded-full h-[85%]" vid="214"></div>
+                            <div class="w-2 bg-accentAmber/60 rounded-full h-[100%]" vid="215"></div>
+                            <div class="w-2 bg-accentAmber/50 rounded-full h-[60%]" vid="216"></div>
+                            <div class="w-2 bg-accentAmber/40 rounded-full h-[40%]" vid="217"></div>
+                            <div class="w-2 bg-accentAmber/50 rounded-full h-[55%]" vid="218"></div>
+                            <div class="w-2 bg-accentAmber/60 rounded-full h-[80%]" vid="219"></div>
+                            <div class="w-2 bg-accentAmber/80 rounded-full h-[95%]" vid="220"></div>
+                            <div class="w-2 bg-accentAmber/70 rounded-full h-[75%]" vid="221"></div>
+                            <div class="w-2 bg-accentAmber/50 rounded-full h-[45%]" vid="222"></div>
+                            <div class="w-2 bg-accentAmber/40 rounded-full h-[25%]" vid="223"></div>
+                            <div class="w-2 bg-accentAmber/50 rounded-full h-[40%]" vid="224"></div>
+                            <div class="w-2 bg-accentAmber/60 rounded-full h-[65%]" vid="225"></div>
+                            <div class="w-2 bg-accentAmber/70 rounded-full h-[90%]" vid="226"></div>
+                            <div class="w-2 bg-accentAmber/60 rounded-full h-[70%]" vid="227"></div>
+                            <div class="w-2 bg-accentAmber/40 rounded-full h-[35%]" vid="228"></div>
+                            <div class="w-2 bg-accentAmber/30 rounded-full h-[20%]" vid="229"></div>
+                        </div>
+                    </div>
+                    
+                    <div class="w-full h-1.5 bg-bgMain rounded-full overflow-hidden mb-5 border border-borderMain" vid="230">
+                        <div class="h-full bg-accentAmber/60 rounded-full" style="width: 100%" vid="231"></div>
+                    </div>
+                    
+                    <div class="flex items-center justify-between bg-bgMain/30 p-3 rounded-lg border border-borderMain/30" vid="232">
+                        <div class="flex items-center gap-2 opacity-60" vid="233">
+                            <i class="ph-bold ph-check-circle text-textMuted" vid="234"></i>
+                            <span class="text-sm text-textMuted" vid="235">Clip played</span>
+                        </div>
+                        <button class="w-10 h-10 rounded-full bg-bgMain border border-borderMain hover:bg-gray-800 text-textPrimary flex items-center justify-center transition-all group-hover:border-gray-600 shrink-0" vid="236">
+                            <i class="ph-bold ph-arrow-counter-clockwise text-lg" vid="237"></i>
+                        </button>
+                    </div>
+
+                    <div class="flex items-center justify-between text-xs text-textDark" vid="238">
+                        <div class="flex items-center gap-2" vid="239">
+                            <span vid="240">2 hours ago</span>
+                            <span class="w-1 h-1 rounded-full bg-borderMain" vid="241"></span>
+                            <span class="px-1.5 py-0.5 bg-bgMain rounded border border-borderMain" vid="242">General</span>
+                        </div>
+                        <span class="font-mono" vid="243">0:30 / 0:30</span>
+                    </div>
+                </div>
+
+            </div>
+
+        </div>
+    </div>
+
+
+</body></html>

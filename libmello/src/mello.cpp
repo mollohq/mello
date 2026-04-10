@@ -292,6 +292,52 @@ MelloResult mello_clip_stop_playback(MelloContext* ctx) {
     }
 }
 
+bool mello_clip_is_playing(MelloContext* ctx) {
+    if (!ctx) return false;
+    return ctx_cast(ctx)->audio().clip_is_playing();
+}
+
+void mello_clip_playback_progress(MelloContext* ctx,
+    uint64_t* position_samples, uint64_t* total_samples, uint32_t* sample_rate) {
+    if (!ctx) return;
+    uint64_t pos = 0, total = 0;
+    uint32_t sr = 0;
+    ctx_cast(ctx)->audio().clip_playback_progress(pos, total, sr);
+    if (position_samples) *position_samples = pos;
+    if (total_samples) *total_samples = total;
+    if (sample_rate) *sample_rate = sr;
+}
+
+MelloResult mello_clip_pause(MelloContext* ctx) {
+    if (!ctx) return MELLO_ERROR_INVALID_PARAM;
+    try {
+        ctx_cast(ctx)->audio().clip_pause();
+        return MELLO_OK;
+    } catch (...) {
+        return MELLO_ERROR_FAILED;
+    }
+}
+
+MelloResult mello_clip_resume(MelloContext* ctx) {
+    if (!ctx) return MELLO_ERROR_INVALID_PARAM;
+    try {
+        ctx_cast(ctx)->audio().clip_resume();
+        return MELLO_OK;
+    } catch (...) {
+        return MELLO_ERROR_FAILED;
+    }
+}
+
+MelloResult mello_clip_seek(MelloContext* ctx, uint64_t position_samples) {
+    if (!ctx) return MELLO_ERROR_INVALID_PARAM;
+    try {
+        ctx_cast(ctx)->audio().clip_seek(position_samples);
+        return MELLO_OK;
+    } catch (...) {
+        return MELLO_ERROR_FAILED;
+    }
+}
+
 MelloResult mello_clip_encode(const char* wav_path, const char* mp4_path, int bitrate) {
     if (!wav_path || !mp4_path) return MELLO_ERROR_INVALID_PARAM;
     try {

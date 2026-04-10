@@ -67,6 +67,8 @@ pub struct Client {
     game_state: GameStateManager,
     #[allow(dead_code)]
     game_sensor: Option<GameSensor>,
+    clip_was_playing: bool,
+    clip_tick_counter: u8,
 }
 
 impl Client {
@@ -100,6 +102,8 @@ impl Client {
             last_voice_channel: None,
             game_state: GameStateManager::new(),
             game_sensor: None,
+            clip_was_playing: false,
+            clip_tick_counter: 0,
         }
     }
 
@@ -155,6 +159,7 @@ impl Client {
                 _ = voice_tick.tick() => {
                     self.voice_tick().await;
                     self.stream_tick().await;
+                    self.clip_playback_tick();
                 }
                 _ = refresh_tick.tick() => {
                     self.refresh_token().await;
@@ -590,6 +595,15 @@ impl Client {
             }
             Command::PlayClip { path } => {
                 self.handle_play_clip(&path).await;
+            }
+            Command::PauseClip => {
+                self.handle_pause_clip();
+            }
+            Command::ResumeClip => {
+                self.handle_resume_clip();
+            }
+            Command::SeekClip { position_ms } => {
+                self.handle_seek_clip(position_ms);
             }
             Command::StopClipPlayback => {
                 self.handle_stop_clip_playback();

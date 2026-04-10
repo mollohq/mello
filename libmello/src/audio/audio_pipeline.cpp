@@ -410,21 +410,26 @@ size_t AudioPipeline::mix_output(int16_t* out, size_t count) {
         }
     }
 
-    // Mix clip playback into speaker output
+    // Mix clip playback into speaker output (read directly from retained PCM vector)
     bool has_clip_audio = false;
-    if (clip_playing_.load(std::memory_order_relaxed) && clip_playback_ring_) {
-        std::vector<int16_t> clip_pcm(count, 0);
-        size_t got = clip_playback_ring_->read(clip_pcm.data(), count);
-        if (got > 0) {
+    if (clip_playing_.load(std::memory_order_relaxed) &&
+        !clip_paused_.load(std::memory_order_relaxed)) {
+        size_t pos = clip_playback_pos_.load(std::memory_order_relaxed);
+        size_t total = clip_playback_total_;
+        size_t avail = (pos < total) ? (total - pos) : 0;
+        size_t to_read = (std::min)(count, avail);
+        if (to_read > 0) {
             has_clip_audio = true;
-            for (size_t i = 0; i < got; ++i) {
-                int32_t mixed = static_cast<int32_t>(out[i]) + static_cast<int32_t>(clip_pcm[i]);
+            for (size_t i = 0; i < to_read; ++i) {
+                int32_t mixed = static_cast<int32_t>(out[i]) +
+                                static_cast<int32_t>(clip_playback_pcm_[pos + i]);
                 if (mixed > 32767) mixed = 32767;
                 if (mixed < -32768) mixed = -32768;
                 out[i] = static_cast<int16_t>(mixed);
             }
+            clip_playback_pos_.store(pos + to_read, std::memory_order_relaxed);
         }
-        if (clip_playback_ring_->available() == 0) {
+        if (pos + to_read >= total) {
             clip_playing_.store(false, std::memory_order_relaxed);
             MELLO_LOG_INFO("pipeline", "clip playback finished");
         }
@@ -563,12 +568,11 @@ bool AudioPipeline::play_clip(const std::string& wav_path) {
     }
 
     size_t sample_count = data_size / sizeof(int16_t);
-    std::vector<int16_t> pcm(sample_count);
-    file.read(reinterpret_cast<char*>(pcm.data()), data_size);
-
-    size_t ring_capacity = sample_count + SAMPLE_RATE; // extra 1s headroom
-    clip_playback_ring_ = std::make_unique<util::RingBuffer<int16_t>>(ring_capacity);
-    clip_playback_ring_->write(pcm.data(), sample_count);
+    clip_playback_pcm_.resize(sample_count);
+    file.read(reinterpret_cast<char*>(clip_playback_pcm_.data()), data_size);
+    clip_playback_total_ = sample_count;
+    clip_playback_pos_.store(0, std::memory_order_release);
+    clip_paused_.store(false, std::memory_order_release);
     clip_playing_.store(true, std::memory_order_release);
 
     MELLO_LOG_INFO("pipeline", "play_clip: loaded %zu samples (%.1fs) from %s",
@@ -583,20 +587,57 @@ bool AudioPipeline::play_mp4(const std::string& mp4_path) {
         return false;
     }
 
-    size_t ring_capacity = pcm.size() + SAMPLE_RATE;
-    clip_playback_ring_ = std::make_unique<util::RingBuffer<int16_t>>(ring_capacity);
-    clip_playback_ring_->write(pcm.data(), pcm.size());
+    clip_playback_pcm_ = std::move(pcm);
+    clip_playback_total_ = clip_playback_pcm_.size();
+    clip_playback_pos_.store(0, std::memory_order_release);
+    clip_paused_.store(false, std::memory_order_release);
     clip_playing_.store(true, std::memory_order_release);
 
     MELLO_LOG_INFO("pipeline", "play_mp4: loaded %zu samples (%.1fs) from %s",
-                   pcm.size(), static_cast<float>(pcm.size()) / SAMPLE_RATE, mp4_path.c_str());
+                   clip_playback_pcm_.size(),
+                   static_cast<float>(clip_playback_pcm_.size()) / SAMPLE_RATE,
+                   mp4_path.c_str());
     return true;
 }
 
 void AudioPipeline::stop_clip_playback() {
     clip_playing_.store(false, std::memory_order_release);
-    if (clip_playback_ring_) clip_playback_ring_->clear();
+    clip_paused_.store(false, std::memory_order_release);
+    clip_playback_pos_.store(0, std::memory_order_relaxed);
+    clip_playback_pcm_.clear();
+    clip_playback_total_ = 0;
     MELLO_LOG_INFO("pipeline", "clip playback stopped");
+}
+
+bool AudioPipeline::clip_is_playing() const {
+    return clip_playing_.load(std::memory_order_relaxed);
+}
+
+void AudioPipeline::clip_playback_progress(uint64_t& position_samples,
+                                           uint64_t& total_samples,
+                                           uint32_t& sample_rate) const {
+    position_samples = clip_playback_pos_.load(std::memory_order_relaxed);
+    total_samples = clip_playback_total_;
+    sample_rate = SAMPLE_RATE;
+}
+
+void AudioPipeline::clip_pause() {
+    clip_paused_.store(true, std::memory_order_release);
+    MELLO_LOG_INFO("pipeline", "clip playback paused");
+}
+
+void AudioPipeline::clip_resume() {
+    clip_paused_.store(false, std::memory_order_release);
+    MELLO_LOG_INFO("pipeline", "clip playback resumed");
+}
+
+void AudioPipeline::clip_seek(uint64_t position_samples) {
+    if (position_samples > clip_playback_total_) {
+        position_samples = clip_playback_total_;
+    }
+    clip_playback_pos_.store(static_cast<size_t>(position_samples), std::memory_order_release);
+    MELLO_LOG_INFO("pipeline", "clip playback seek to sample %llu / %zu",
+                   (unsigned long long)position_samples, clip_playback_total_);
 }
 
 #ifdef _WIN32

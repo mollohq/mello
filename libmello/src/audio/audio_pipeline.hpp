@@ -85,6 +85,11 @@ public:
     bool play_clip(const std::string& wav_path);
     bool play_mp4(const std::string& mp4_path);
     void stop_clip_playback();
+    bool clip_is_playing() const;
+    void clip_playback_progress(uint64_t& position_samples, uint64_t& total_samples, uint32_t& sample_rate) const;
+    void clip_pause();
+    void clip_resume();
+    void clip_seek(uint64_t position_samples);
 
 private:
     void on_captured_audio(const int16_t* samples, size_t count);
@@ -134,8 +139,13 @@ private:
 
     std::unique_ptr<ClipBuffer> clip_buffer_;
     std::unique_ptr<util::RingBuffer<int16_t>> local_clip_ring_;
-    std::unique_ptr<util::RingBuffer<int16_t>> clip_playback_ring_;
+
+    // Clip playback: retained PCM with atomic position for lock-free read from audio thread
+    std::vector<int16_t> clip_playback_pcm_;
+    std::atomic<size_t> clip_playback_pos_{0};
+    size_t clip_playback_total_{0};
     std::atomic<bool> clip_playing_{false};
+    std::atomic<bool> clip_paused_{false};
 };
 
 } // namespace mello::audio

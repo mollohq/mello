@@ -252,6 +252,11 @@ pub enum Command {
     PlayClip {
         path: String,
     },
+    PauseClip,
+    ResumeClip,
+    SeekClip {
+        position_ms: u32,
+    },
     StopClipPlayback,
     LoadCrewTimeline {
         crew_id: String,

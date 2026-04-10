@@ -204,6 +204,24 @@ impl super::Client {
         } else {
             self.play_local_wav(path);
         }
+        self.emit_playback_started(path);
+    }
+
+    fn emit_playback_started(&self, path: &str) {
+        let ctx = self.voice.mello_ctx();
+        let mut total: u64 = 0;
+        let mut sr: u32 = 0;
+        unsafe {
+            mello_sys::mello_clip_playback_progress(ctx, std::ptr::null_mut(), &mut total, &mut sr);
+        }
+        if sr == 0 || total == 0 {
+            return;
+        }
+        let duration_ms = (total as u64 * 1000 / sr as u64) as u32;
+        let _ = self.event_tx.send(crate::Event::ClipPlaybackStarted {
+            clip_path: path.to_string(),
+            duration_ms,
+        });
     }
 
     fn play_local_wav(&self, path: &str) {
@@ -275,6 +293,31 @@ impl super::Client {
         }
     }
 
+    pub(super) fn handle_pause_clip(&self) {
+        unsafe { mello_sys::mello_clip_pause(self.voice.mello_ctx()) };
+    }
+
+    pub(super) fn handle_resume_clip(&self) {
+        unsafe { mello_sys::mello_clip_resume(self.voice.mello_ctx()) };
+    }
+
+    pub(super) fn handle_seek_clip(&self, position_ms: u32) {
+        let mut sr: u32 = 0;
+        unsafe {
+            mello_sys::mello_clip_playback_progress(
+                self.voice.mello_ctx(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                &mut sr,
+            );
+        }
+        if sr == 0 {
+            return;
+        }
+        let position_samples = (position_ms as u64 * sr as u64) / 1000;
+        unsafe { mello_sys::mello_clip_seek(self.voice.mello_ctx(), position_samples) };
+    }
+
     pub(super) async fn handle_load_crew_timeline(&self, crew_id: &str, cursor: Option<&str>) {
         match self.nakama.crew_timeline(crew_id, cursor).await {
             Ok(response) => {
@@ -289,5 +332,47 @@ impl super::Client {
                 log::warn!("crew_timeline failed: {}", e);
             }
         }
+    }
+
+    /// Polled from voice_tick (~20ms). Sends progress events every 3rd tick (~60ms).
+    pub(super) fn clip_playback_tick(&mut self) {
+        let ctx = self.voice.mello_ctx();
+        let playing = unsafe { mello_sys::mello_clip_is_playing(ctx) };
+
+        if !playing && self.clip_was_playing {
+            self.clip_was_playing = false;
+            let _ = self.event_tx.send(Event::ClipPlaybackFinished);
+            return;
+        }
+
+        if !playing {
+            return;
+        }
+
+        self.clip_was_playing = true;
+
+        // Throttle: emit progress every 3rd tick (~60ms)
+        self.clip_tick_counter = self.clip_tick_counter.wrapping_add(1);
+        if self.clip_tick_counter % 3 != 0 {
+            return;
+        }
+
+        let mut pos: u64 = 0;
+        let mut total: u64 = 0;
+        let mut sr: u32 = 0;
+        unsafe {
+            mello_sys::mello_clip_playback_progress(ctx, &mut pos, &mut total, &mut sr);
+        }
+        if sr == 0 || total == 0 {
+            return;
+        }
+
+        let position_ms = (pos * 1000 / sr as u64) as u32;
+        let duration_ms = (total * 1000 / sr as u64) as u32;
+
+        let _ = self.event_tx.send(Event::ClipPlaybackProgress {
+            position_ms,
+            duration_ms,
+        });
     }
 }

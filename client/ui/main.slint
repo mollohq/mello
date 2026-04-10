@@ -121,6 +121,7 @@ export component MainWindow inherits Window {
     in-out property <bool> mic-muted: false;
     in-out property <bool> deafened: false;
     in-out property <bool> in-voice: false;
+    in property <string> voice-channel-name: "";
     in property <[VoiceChannelData]> voice-channels: [];
     in-out property <bool> mic-permission-granted: true;
     in-out property <bool> mic-permission-denied: false;
@@ -237,6 +238,14 @@ export component MainWindow inherits Window {
     in property <bool> feed-cold-start: true;
     in property <int> feed-clip-count: 0;
 
+    // --- Clip playback state ---
+    in property <string> clip-playing-path: "";
+    in property <float> clip-progress: 0.0;
+    in property <bool> clip-paused: false;
+    in property <float> clip-anim-tick: 0.0;
+    in property <string> clip-position-text: "";
+    in property <string> clip-duration-text: "";
+
     // --- Presence (0=online, 1=idle, 2=dnd, 3=invisible) ---
     in-out property <int> presence-status: 0;
 
@@ -346,6 +355,9 @@ export component MainWindow inherits Window {
     // --- Clip callbacks ---
     callback clip-captured();
     callback play-clip(string);
+    callback pause-clip();
+    callback resume-clip();
+    callback seek-clip(float);
 
     // --- Onboarding callbacks ---
     callback onboarding-crew-selected(string);
@@ -533,7 +545,7 @@ export component MainWindow inherits Window {
                     if stream-active: StreamView {
                         y: 0;
                         width: parent.width;
-                        height: parent.height - 92px - Theme.gap;
+                        height: parent.height - 84px - Theme.gap;
                         members: root.members;
                         is-hosting: root.is-hosting;
                         is-watching: root.is-watching;
@@ -558,26 +570,41 @@ export component MainWindow inherits Window {
                     if !stream-active: CrewFeed {
                         y: 0;
                         width: parent.width;
-                        height: parent.height - 92px - Theme.gap;
+                        height: parent.height - 84px - Theme.gap;
                         cards: root.feed-cards;
                         is-cold-start: root.feed-cold-start;
                         clip-count: root.feed-clip-count;
+                        clip-playing-path: root.clip-playing-path;
+                        clip-progress: root.clip-progress;
+                        clip-paused: root.clip-paused;
+                        clip-anim-tick: root.clip-anim-tick;
+                        clip-position-text: root.clip-position-text;
+                        clip-duration-text: root.clip-duration-text;
                         go-live-clicked => {
                             root.list-capture-sources();
                             root.source-picker-open = true;
                         }
                         card-clicked(clip-path) => {
                             if clip-path != "" {
-                                root.play-clip(clip-path);
+                                if clip-path == root.clip-playing-path {
+                                    if root.clip-paused {
+                                        root.resume-clip();
+                                    } else {
+                                        root.pause-clip();
+                                    }
+                                } else {
+                                    root.play-clip(clip-path);
+                                }
                             }
                         }
+                        seek-clip(v) => { root.seek-clip(v); }
                         invite-clicked => { }
                     }
 
                     ControlBar {
-                        y: parent.height - 92px;
+                        y: parent.height - 84px;
                         width: parent.width;
-                        height: 92px;
+                        height: 84px;
                         user-name: root.user-name;
                         user-initials: root.user-initials;
                         user-avatar: root.user-avatar;
@@ -586,6 +613,7 @@ export component MainWindow inherits Window {
                         mic-muted <=> root.mic-muted;
                         deafened <=> root.deafened;
                         in-voice: root.in-voice;
+                        voice-channel-name: root.voice-channel-name;
                         mic-permission-granted: root.mic-permission-granted;
                         mic-permission-denied: root.mic-permission-denied;
                         presence-status <=> root.presence-status;

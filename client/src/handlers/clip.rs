@@ -188,6 +188,7 @@ fn skeleton_card(card_type: &str) -> FeedCardData {
         mvp2_name: Default::default(),
         mvp2_initials: Default::default(),
         mvp2_stat: Default::default(),
+        is_new: false,
     }
 }
 
@@ -243,6 +244,47 @@ pub fn handle(ctx: &AppContext, event: Event) {
                 path,
                 duration_seconds
             );
+
+            // Insert an optimistic "NEW" clip card into the feed immediately
+            let secs = duration_seconds as u32;
+            let dur_str = format!("{}:{:02}", secs / 60, secs % 60);
+            let new_card = FeedCardData {
+                id: clip_id.clone().into(),
+                card_type: "clip".into(),
+                title: "".into(),
+                subtitle: "".into(),
+                timestamp: "just now".into(),
+                duration: dur_str.into(),
+                actor_name: "You".into(),
+                actor_initials: "Y".into(),
+                game_name: "".into(),
+                participant_count: 1,
+                clip_path: path.clone().into(),
+                is_hero: false,
+                is_skeleton: false,
+                is_new: true,
+                ..Default::default()
+            };
+
+            let existing = ctx.app.get_feed_cards();
+            let mut cards: Vec<FeedCardData> = (0..existing.row_count())
+                .filter_map(|i| existing.row_data(i))
+                .collect();
+
+            // Insert after hero (index 0) if there's a hero, otherwise at start
+            let insert_pos = if !cards.is_empty() && cards[0].is_hero {
+                // After hero but before recap (recap at index 1)
+                if cards.len() > 1 && cards[1].card_type == "recap" {
+                    2
+                } else {
+                    1
+                }
+            } else {
+                0
+            };
+            cards.insert(insert_pos.min(cards.len()), new_card);
+            ctx.app
+                .set_feed_cards(Rc::new(slint::VecModel::from(cards)).into());
 
             let crew_id = ctx.app.get_active_crew_id().to_string();
             if !crew_id.is_empty() {
@@ -413,6 +455,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
                         clip_path: clip_path.into(),
                         is_hero: false,
                         is_skeleton: false,
+                        is_new: false,
                         mvp_count,
                         mvp0_name: mvp0.0.into(),
                         mvp0_initials: mvp0.1.into(),
@@ -560,6 +603,49 @@ pub fn handle(ctx: &AppContext, event: Event) {
                     }
                 }
             }
+        }
+        Event::ClipPlaybackStarted {
+            clip_path,
+            duration_ms,
+        } => {
+            log::info!(
+                "clip playback started: path={} duration={}ms",
+                clip_path,
+                duration_ms
+            );
+            ctx.app.set_clip_playing_path(clip_path.as_str().into());
+            ctx.app.set_clip_progress(0.0);
+            ctx.app.set_clip_paused(false);
+            ctx.app.set_clip_anim_tick(0.0);
+            ctx.app.set_clip_position_text("0:00".into());
+            let dur_text = format!("{}:{:02}", duration_ms / 60000, (duration_ms / 1000) % 60);
+            ctx.app.set_clip_duration_text(dur_text.as_str().into());
+        }
+        Event::ClipPlaybackProgress {
+            position_ms,
+            duration_ms,
+        } => {
+            let progress = if duration_ms > 0 {
+                position_ms as f32 / duration_ms as f32
+            } else {
+                0.0
+            };
+            ctx.app.set_clip_progress(progress);
+            let pos_text = format!("{}:{:02}", position_ms / 60000, (position_ms / 1000) % 60);
+            ctx.app.set_clip_position_text(pos_text.as_str().into());
+
+            // Drive animation tick (increment by ~0.15 per ~60ms progress event)
+            let current = ctx.app.get_clip_anim_tick();
+            ctx.app.set_clip_anim_tick(current + 0.15);
+        }
+        Event::ClipPlaybackFinished => {
+            log::info!("clip playback finished");
+            ctx.app.set_clip_playing_path("".into());
+            ctx.app.set_clip_progress(0.0);
+            ctx.app.set_clip_paused(false);
+            ctx.app.set_clip_anim_tick(0.0);
+            ctx.app.set_clip_position_text("".into());
+            ctx.app.set_clip_duration_text("".into());
         }
         _ => {}
     }

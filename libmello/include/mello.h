@@ -146,6 +146,22 @@ MELLO_API MelloResult mello_clip_play_mp4(MelloContext* ctx, const char* mp4_pat
 /** Stop clip playback. */
 MELLO_API MelloResult mello_clip_stop_playback(MelloContext* ctx);
 
+/** Returns true if a clip is currently playing (or paused mid-playback). */
+MELLO_API bool mello_clip_is_playing(MelloContext* ctx);
+
+/** Get playback progress. All out-params are optional (may be NULL). */
+MELLO_API void mello_clip_playback_progress(MelloContext* ctx,
+    uint64_t* position_samples, uint64_t* total_samples, uint32_t* sample_rate);
+
+/** Pause clip playback. */
+MELLO_API MelloResult mello_clip_pause(MelloContext* ctx);
+
+/** Resume clip playback after pause. */
+MELLO_API MelloResult mello_clip_resume(MelloContext* ctx);
+
+/** Seek clip playback to an absolute sample position. */
+MELLO_API MelloResult mello_clip_seek(MelloContext* ctx, uint64_t position_samples);
+
 /** Encode a WAV file to MP4/AAC-LC. Standalone (no MelloContext needed). */
 MELLO_API MelloResult mello_clip_encode(const char* wav_path, const char* mp4_path, int bitrate);
 
