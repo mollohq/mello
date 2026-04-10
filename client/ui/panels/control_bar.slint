@@ -6,16 +6,20 @@ component ActionButton inherits Rectangle {
     in property <bool> alert: false;
     callback clicked();
     width: 40px;
-    height: 40px;
-    border-radius: 8px;
-    background: alert ? Theme.accent-bg : (btn-hover.has-hover ? (Theme.dark ? #FFFFFF1A : #0000000D) : transparent);
-    Image {
-        source: icon;
-        width: 20px;
-        height: 20px;
-        colorize: alert ? Theme.accent : (btn-hover.has-hover ? Theme.text-primary : Theme.text-secondary);
-        x: (parent.width - self.width) / 2;
+    Rectangle {
+        width: 40px;
+        height: 40px;
+        border-radius: 8px;
+        background: alert ? Theme.accent-bg : (btn-hover.has-hover ? (Theme.dark ? #FFFFFF1A : #0000000D) : transparent);
         y: (parent.height - self.height) / 2;
+        Image {
+            source: icon;
+            width: 20px;
+            height: 20px;
+            colorize: alert ? Theme.accent : (btn-hover.has-hover ? Theme.text-primary : Theme.text-secondary);
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+        }
     }
 
     btn-hover := TouchArea {
@@ -369,19 +373,22 @@ export component ControlBar inherits Rectangle {
                 // Disconnect button (voice card only)
                 if in-voice: Rectangle {
                     width: 40px;
-                    height: 40px;
-                    border-radius: 8px;
-                    background: hangup-hover.has-hover ? (Theme.dark ? #FF1E5633 : #FF1E5628) : Theme.accent-bg;
-                    border-width: 1px;
-                    border-color: Theme.dark ? #FF1E5633 : #FF1E5620;
-                    y: (parent.height - self.height) / 2;
-                    Image {
-                        source: @image-url("../icons/phone-off.svg");
-                        width: 20px;
-                        height: 20px;
-                        colorize: Theme.accent;
-                        x: (parent.width - self.width) / 2;
+                    Rectangle {
+                        width: 40px;
+                        height: 40px;
+                        border-radius: 8px;
+                        background: hangup-hover.has-hover ? (Theme.dark ? #FF1E5633 : #FF1E5628) : Theme.accent-bg;
+                        border-width: 1px;
+                        border-color: Theme.dark ? #FF1E5633 : #FF1E5620;
                         y: (parent.height - self.height) / 2;
+                        Image {
+                            source: @image-url("../icons/phone-off.svg");
+                            width: 20px;
+                            height: 20px;
+                            colorize: Theme.accent;
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                        }
                     }
 
                     hangup-hover := TouchArea {
@@ -407,11 +414,11 @@ export component ControlBar inherits Rectangle {
             alignment: center;
             Rectangle {
                 background: Theme.bg-app;
-                border-radius: Theme.r-outer;
+                border-radius: 12px;
                 border-width: 1px;
                 border-color: Theme.dark ? #FFFFFF0D : #0000000D;
-                height: 44px;
                 HorizontalLayout {
+                    padding: 12px;
                     padding-left: 12px;
                     padding-right: 12px;
                     spacing: 12px;
@@ -638,16 +645,20 @@ export component ControlBar inherits Rectangle {
                 // Clip button (only when in voice)
                 if in-voice: Rectangle {
                     width: 40px;
-                    height: 40px;
-                    border-radius: 8px;
-                    background: clip-hover.has-hover ? (Theme.dark ? #F59E0B33 : #F59E0B28) : transparent;
-                    Image {
-                        source: @image-url("../icons/scissors-line-dashed.svg");
-                        colorize: Theme.clip-amber;
-                        width: 20px;
-                        height: 20px;
-                        x: (parent.width - self.width) / 2;
+                    Rectangle {
+                        width: 40px;
+                        height: 40px;
+                        border-radius: 8px;
+                        background: clip-hover.has-hover ? (Theme.dark ? #F59E0B33 : #F59E0B28) : transparent;
                         y: (parent.height - self.height) / 2;
+                        Image {
+                            source: @image-url("../icons/scissors-line-dashed.svg");
+                            colorize: Theme.clip-amber;
+                            width: 20px;
+                            height: 20px;
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                        }
                     }
 
                     clip-hover := TouchArea {
