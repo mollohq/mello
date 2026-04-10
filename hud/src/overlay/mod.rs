@@ -33,9 +33,9 @@ impl OverlayWindow {
         self.inner.hide();
     }
 
-    pub fn update_state(&mut self, state: &HudState) {
+    pub fn update_state(&mut self, _state: &HudState) {
         #[cfg(target_os = "windows")]
-        self.inner.update_state(state);
+        self.inner.update_state(_state);
     }
 
     pub fn render(&mut self) {

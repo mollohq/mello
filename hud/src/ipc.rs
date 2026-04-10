@@ -1,8 +1,7 @@
-use std::io::{BufRead, BufReader, Write};
 use std::sync::mpsc;
 use std::time::Duration;
 
-use crate::protocol::{HudAction, HudMessage, ACTION_PIPE_NAME, STATE_PIPE_NAME};
+use crate::protocol::{HudAction, HudMessage};
 
 /// Manages the named pipe connection to the main m3llo client.
 pub struct IpcClient;
@@ -30,7 +29,9 @@ impl IpcClient {
 
 #[cfg(target_os = "windows")]
 fn state_pipe_loop(state_tx: mpsc::Sender<HudMessage>) {
+    use crate::protocol::STATE_PIPE_NAME;
     use std::fs::OpenOptions;
+    use std::io::{BufRead, BufReader};
 
     log::info!("[ipc] connecting to state pipe {}", STATE_PIPE_NAME);
 
@@ -78,7 +79,9 @@ fn state_pipe_loop(state_tx: mpsc::Sender<HudMessage>) {
 
 #[cfg(target_os = "windows")]
 fn action_pipe_loop(action_rx: mpsc::Receiver<HudAction>) {
+    use crate::protocol::ACTION_PIPE_NAME;
     use std::fs::OpenOptions;
+    use std::io::Write;
 
     log::info!("[ipc] connecting to action pipe {}", ACTION_PIPE_NAME);
 
