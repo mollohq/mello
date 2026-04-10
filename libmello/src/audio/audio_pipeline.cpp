@@ -85,8 +85,8 @@ bool AudioPipeline::initialize() {
     MELLO_LOG_INFO("pipeline", "initializing audio pipeline");
 
 #ifdef _WIN32
-    HRESULT com_hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
-    MELLO_LOG_INFO("pipeline", "CoInitializeEx(MTA) hr=0x%08lx", com_hr);
+    HRESULT com_hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+    MELLO_LOG_INFO("pipeline", "CoInitializeEx(STA) hr=0x%08lx", com_hr);
     if (FAILED(com_hr) && com_hr != RPC_E_CHANGED_MODE) {
         MELLO_LOG_ERROR("pipeline", "COM init failed hr=0x%08lx", com_hr);
         return false;
@@ -533,6 +533,9 @@ bool AudioPipeline::set_playback_device(const char* device_id) {
         MELLO_LOG_ERROR("pipeline", "playback device switch failed");
         return false;
     }
+    playback_->set_render_source([this](int16_t* out, size_t count) -> size_t {
+        return mix_output(out, count);
+    });
     bool ok = playback_->start();
     MELLO_LOG_INFO("pipeline", "playback restarted on new device: %s", ok ? "ok" : "FAILED");
     return ok;

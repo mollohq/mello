@@ -87,6 +87,14 @@ bool WasapiPlayback::initialize(const char* device_id) {
         return false;
     }
 
+    WAVEFORMATEX* log_fmt = nullptr;
+    if (SUCCEEDED(audio_client_->GetMixFormat(&log_fmt))) {
+        MELLO_LOG_INFO("playback", "mix_fmt: rate=%u ch=%u bits=%u tag=0x%04x",
+                       log_fmt->nSamplesPerSec, log_fmt->nChannels,
+                       log_fmt->wBitsPerSample, log_fmt->wFormatTag);
+        CoTaskMemFree(log_fmt);
+    }
+
     MELLO_LOG_INFO("playback", "initialized: rate=%u ch=%u buf=%u frames",
                    sample_rate_, device_channels_, buffer_frames_);
     return true;
@@ -124,6 +132,7 @@ size_t WasapiPlayback::feed(const int16_t* samples, size_t count) {
 void WasapiPlayback::playback_thread() {
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     std::vector<int16_t> mono_buf;
+    uint32_t pb_log_ctr = 0;
 
     while (running_) {
         DWORD wait = WaitForSingleObject(event_, 100);
@@ -139,7 +148,6 @@ void WasapiPlayback::playback_thread() {
         HRESULT hr = render_client_->GetBuffer(available, &data);
         if (FAILED(hr)) continue;
 
-        // Read mono samples from ring buffer (or render source if set)
         mono_buf.resize(available);
         size_t got = 0;
         if (render_source_) {
@@ -147,6 +155,13 @@ void WasapiPlayback::playback_thread() {
         } else {
             got = ring_.read(mono_buf.data(), available);
         }
+
+        if (pb_log_ctr < 20 || (pb_log_ctr % 2000) == 0) {
+            MELLO_LOG_DEBUG("playback", "render: got=%zu avail=%u ch=%u src=%s",
+                            got, available, device_channels_,
+                            render_source_ ? "mix" : "ring");
+        }
+        pb_log_ctr++;
 
         // Zero-fill if we don't have enough samples (underrun)
         if (got < available) {
