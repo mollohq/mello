@@ -328,8 +328,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
             let cards: Vec<FeedCardData> = response
                 .entries
                 .iter()
-                .enumerate()
-                .map(|(_i, entry)| {
+                .map(|entry| {
                     let card_type = map_card_type(&entry.entry_type);
                     let actor = extract_actor(&entry.data, &entry.entry_type);
                     let title = extract_title(&entry.data, &entry.entry_type, &actor);

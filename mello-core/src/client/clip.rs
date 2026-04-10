@@ -217,7 +217,7 @@ impl super::Client {
         if sr == 0 || total == 0 {
             return;
         }
-        let duration_ms = (total as u64 * 1000 / sr as u64) as u32;
+        let duration_ms = (total * 1000 / sr as u64) as u32;
         let _ = self.event_tx.send(crate::Event::ClipPlaybackStarted {
             clip_path: path.to_string(),
             duration_ms,
@@ -353,7 +353,7 @@ impl super::Client {
 
         // Throttle: emit progress every 3rd tick (~60ms)
         self.clip_tick_counter = self.clip_tick_counter.wrapping_add(1);
-        if self.clip_tick_counter % 3 != 0 {
+        if !self.clip_tick_counter.is_multiple_of(3) {
             return;
         }
 
