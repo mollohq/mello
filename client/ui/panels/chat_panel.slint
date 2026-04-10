@@ -76,10 +76,10 @@ component ChatClipCard inherits Rectangle {
     callback play-clicked();
 
     height: 72px;
-    background: clip-touch.has-hover ? #2a2a2e : #222226;
+    background: clip-touch.has-hover ? Theme.card-bg-hover : Theme.card-bg;
     border-radius: 8px;
     border-width: 1px;
-    border-color: #2a2a2e;
+    border-color: Theme.card-border;
 
     HorizontalLayout {
         spacing: 10px;
@@ -89,7 +89,9 @@ component ChatClipCard inherits Rectangle {
             width: 52px;
             height: 52px;
             border-radius: 6px;
-            background: @linear-gradient(135deg, #1a1a2a 0%, #2a1a2a 100%);
+            background: Theme.dark
+                ? @linear-gradient(135deg, #1a1a2a 0%, #2a1a2a 100%)
+                : @linear-gradient(135deg, #e8e8f0 0%, #f0e8f0 100%);
 
             HorizontalLayout {
                 alignment: center;
@@ -101,7 +103,7 @@ component ChatClipCard inherits Rectangle {
                     width: 2px;
                     height: 24px * h;
                     border-radius: 1px;
-                    background: Theme.accent;
+                    background: Theme.clip-amber;
                     opacity: 0.6 + h * 0.4;
                 }
             }
@@ -134,7 +136,7 @@ component ChatClipCard inherits Rectangle {
 
                 Image {
                     source: @image-url("../icons/scissors.svg");
-                    colorize: Theme.accent;
+                    colorize: Theme.clip-amber;
                     width: 12px;
                     height: 12px;
                     y: (parent.height - self.height) / 2;

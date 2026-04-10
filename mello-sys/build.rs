@@ -197,6 +197,7 @@ fn main() {
                 "winmm",
                 "ksuser",
                 "mfplat",
+                "mfreadwrite",
                 "mfuuid",
                 "avrt",
                 "ws2_32",

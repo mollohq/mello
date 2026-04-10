@@ -46,6 +46,16 @@ services:
         sync: false
       - key: APPLE_KEY_ID
         sync: false
+      - key: S3_ENDPOINT
+        sync: false
+      - key: S3_BUCKET
+        value: mello-clips
+      - key: S3_ACCESS_KEY
+        sync: false
+      - key: S3_SECRET_KEY
+        sync: false
+      - key: S3_PUBLIC_URL
+        sync: false
 
   - type: web
     name: mello-console

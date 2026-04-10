@@ -1141,6 +1141,26 @@ impl NakamaClient {
         Ok(parsed)
     }
 
+    pub async fn clip_upload_url(
+        &self,
+        req: &crate::crew_events::ClipUploadURLRequest,
+    ) -> Result<crate::crew_events::ClipUploadURLResponse> {
+        let payload = serde_json::to_value(req)?;
+        let resp = self.rpc("clip_upload_url", &payload).await?;
+        let parsed: crate::crew_events::ClipUploadURLResponse = serde_json::from_str(&resp)?;
+        Ok(parsed)
+    }
+
+    pub async fn clip_upload_complete(
+        &self,
+        req: &crate::crew_events::ClipUploadCompleteRequest,
+    ) -> Result<crate::crew_events::ClipUploadCompleteResponse> {
+        let payload = serde_json::to_value(req)?;
+        let resp = self.rpc("clip_upload_complete", &payload).await?;
+        let parsed: crate::crew_events::ClipUploadCompleteResponse = serde_json::from_str(&resp)?;
+        Ok(parsed)
+    }
+
     // --- Health / version RPCs ---
 
     pub async fn health_check(&self) -> Result<HealthResponse> {

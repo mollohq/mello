@@ -6,6 +6,7 @@
 #include "video/decoder_factory.hpp"
 #include "video/process_enum.hpp"
 #include "video/window_thumbnail.hpp"
+#include "audio/clip_encoder.hpp"
 #include "util/log.hpp"
 #include <cstring>
 #include <cstdlib>
@@ -255,6 +256,47 @@ MelloResult mello_clip_capture(MelloContext* ctx, float seconds, const char* out
     if (!ctx || seconds <= 0.0f || !output_path) return MELLO_ERROR_INVALID_PARAM;
     try {
         bool ok = ctx_cast(ctx)->audio().clip_capture(seconds, std::string(output_path));
+        return ok ? MELLO_OK : MELLO_ERROR_FAILED;
+    } catch (...) {
+        return MELLO_ERROR_FAILED;
+    }
+}
+
+MelloResult mello_clip_play(MelloContext* ctx, const char* wav_path) {
+    if (!ctx || !wav_path) return MELLO_ERROR_INVALID_PARAM;
+    try {
+        bool ok = ctx_cast(ctx)->audio().play_clip(std::string(wav_path));
+        return ok ? MELLO_OK : MELLO_ERROR_FAILED;
+    } catch (...) {
+        return MELLO_ERROR_FAILED;
+    }
+}
+
+MelloResult mello_clip_play_mp4(MelloContext* ctx, const char* mp4_path) {
+    if (!ctx || !mp4_path) return MELLO_ERROR_INVALID_PARAM;
+    try {
+        bool ok = ctx_cast(ctx)->audio().play_mp4(std::string(mp4_path));
+        return ok ? MELLO_OK : MELLO_ERROR_FAILED;
+    } catch (...) {
+        return MELLO_ERROR_FAILED;
+    }
+}
+
+MelloResult mello_clip_stop_playback(MelloContext* ctx) {
+    if (!ctx) return MELLO_ERROR_INVALID_PARAM;
+    try {
+        ctx_cast(ctx)->audio().stop_clip_playback();
+        return MELLO_OK;
+    } catch (...) {
+        return MELLO_ERROR_FAILED;
+    }
+}
+
+MelloResult mello_clip_encode(const char* wav_path, const char* mp4_path, int bitrate) {
+    if (!wav_path || !mp4_path) return MELLO_ERROR_INVALID_PARAM;
+    try {
+        bool ok = mello::audio::encode_wav_to_mp4(
+            std::string(wav_path), std::string(mp4_path), bitrate);
         return ok ? MELLO_OK : MELLO_ERROR_FAILED;
     } catch (...) {
         return MELLO_ERROR_FAILED;

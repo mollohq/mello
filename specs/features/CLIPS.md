@@ -150,7 +150,7 @@ Upload complete → backend updates clip record with storage URL
 Clip is now playable by all crew members, not just the clipper
 ```
 
-The clip button sits in the bottom bar alongside mic, deafen, and settings. Scissors icon in brand red (#EB4D5F) with a tinted background. Always visible when in a voice session. Not visible when not in voice.
+The clip button sits in the bottom bar alongside mic, deafen, and settings. Scissors icon in clip amber (#F59E0B) with a tinted background. Always visible when in a voice session. Not visible when not in voice. All clip-related UI uses amber/gold (#F59E0B) to visually differentiate clips from the rest of the app's accent color.
 
 ---
 
@@ -160,17 +160,64 @@ The clip button sits in the bottom bar alongside mic, deafen, and settings. Scis
 
 Every clip is saved to disk immediately on the clipper's machine. Always free, always permanent. The local file is the source of truth until upload completes.
 
-### 6.2 Cloud (S3)
+The capture pipeline writes a 16-bit PCM WAV to the OS temp directory, then encodes it to MP4/AAC-LC (64 kbps) in the background before upload. Platform encoders:
 
-Clips upload in the background to S3. Once uploaded, any crew member can play the clip.
+- **Windows:** Media Foundation (`IMFSinkWriter` / `IMFSourceReader`)
+- **macOS:** AudioToolbox (`ExtAudioFile` API)
 
-**Free tier:** Clips available for 7 days. After 7 days, cloud copy deleted. Clipper still has local copy.
+A 30-second voice clip encodes to ~240 KB MP4. Encoding takes <200 ms on any modern CPU.
+
+### 6.2 Cloud (S3-Compatible — Cloudflare R2)
+
+Production uses **Cloudflare R2** (S3-compatible, zero egress fees). Local dev uses **MinIO** in Docker.
+
+Upload flow:
+
+```
+Client captures WAV → encodes to MP4/AAC locally
+    │
+    ▼
+Client calls `clip_upload_url` RPC (clip_id, crew_id)
+    │
+    ▼
+Backend generates presigned PUT URL (15 min TTL) via AWS SDK
+Object key: crews/{crew_id}/{clip_id}.mp4
+    │
+    ▼
+Client HTTP PUTs MP4 directly to R2/MinIO (no backend proxy)
+    │
+    ▼
+Client calls `clip_upload_complete` RPC
+Backend updates clip event's media_url in the ledger
+    │
+    ▼
+Clip is now playable by all crew members via public media_url
+```
+
+The R2 bucket (`mello-clips`) has public read access. `media_url` points directly to the public endpoint — no signed download URLs needed.
+
+**Free tier:** Clips available for 7 days. After 7 days, cloud copy deleted (lifecycle rule). Clipper still has local copy.
 
 **m3llo+ (future):** Clips stored permanently.
 
 ### 6.3 Storage Costs
 
-A 30-second voice-only clip ≈ 0.5MB. Per active crew per month (assuming ~20 voice clips): ~10MB. Negligible at early scale. Stream clips will increase this significantly when they ship.
+A 30-second voice-only MP4/AAC clip ≈ 240 KB. Per active crew per month (~20 clips): ~5 MB. Negligible at any scale. R2 has zero egress fees, so playback costs nothing regardless of how often clips are replayed. Stream clips (future) will be larger but R2's pricing remains favorable.
+
+### 6.4 Environment Variables
+
+| Variable | Local Dev | Production | Purpose |
+|----------|-----------|------------|---------|
+| `S3_ENDPOINT` | `http://minio:9000` | `https://<account>.r2.cloudflarestorage.com` | S3 API endpoint (internal) |
+| `S3_PRESIGN_ENDPOINT` | `http://localhost:9000` | *(not set, falls back to S3_ENDPOINT)* | Endpoint used in presigned URLs (client-reachable) |
+| `S3_BUCKET` | `mello-clips` | `mello-clips` | Bucket name |
+| `S3_ACCESS_KEY` | `minioadmin` | R2 API token access key | S3 credentials |
+| `S3_SECRET_KEY` | `minioadmin` | R2 API token secret key | S3 credentials |
+| `S3_PUBLIC_URL` | `http://localhost:9000/mello-clips` | `https://clips.m3llo.app` | Public base URL for media_url construction |
+
+`S3_PRESIGN_ENDPOINT` exists because in Docker, Nakama reaches MinIO via `minio:9000` (internal DNS), but presigned URLs must be reachable by the client on the host. In production (R2), the endpoint is the same for both, so this var is omitted.
+
+See [05-GETTING-STARTED.md](../05-GETTING-STARTED.md) for R2 setup instructions.
 
 ---
 
@@ -349,7 +396,7 @@ New `crew_timeline` RPC returns paginated timeline data with cursor-based pagina
 
 **Client:**
 - Rolling disk buffer for voice audio in libmello
-- Clip button (scissors, brand red) in bottom bar during voice sessions
+- Clip button (scissors, amber #F59E0B) in bottom bar during voice sessions
 - Quick clip: single tap grabs last 30 seconds, no trim UI
 - Mux voice audio to MP4, save locally
 - Background upload to S3

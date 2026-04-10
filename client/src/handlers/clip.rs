@@ -36,6 +36,17 @@ fn extract_actor(data: &serde_json::Value, backend_type: &str) -> String {
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string(),
+        "clip" => data
+            .get("clipper_name")
+            .and_then(|v| v.as_str())
+            .or_else(|| {
+                data.get("participant_names")
+                    .and_then(|v| v.as_array())
+                    .and_then(|a| a.first())
+                    .and_then(|v| v.as_str())
+            })
+            .unwrap_or("")
+            .to_string(),
         _ => data
             .get("participant_names")
             .and_then(|v| v.as_array())
@@ -152,6 +163,67 @@ fn extract_subtitle(data: &serde_json::Value, backend_type: &str) -> String {
     }
 }
 
+fn skeleton_card(card_type: &str) -> FeedCardData {
+    FeedCardData {
+        id: Default::default(),
+        card_type: card_type.into(),
+        title: Default::default(),
+        subtitle: Default::default(),
+        timestamp: Default::default(),
+        duration: Default::default(),
+        actor_name: Default::default(),
+        actor_initials: Default::default(),
+        game_name: Default::default(),
+        participant_count: 0,
+        clip_path: Default::default(),
+        is_hero: false,
+        is_skeleton: true,
+        mvp_count: 0,
+        mvp0_name: Default::default(),
+        mvp0_initials: Default::default(),
+        mvp0_stat: Default::default(),
+        mvp1_name: Default::default(),
+        mvp1_initials: Default::default(),
+        mvp1_stat: Default::default(),
+        mvp2_name: Default::default(),
+        mvp2_initials: Default::default(),
+        mvp2_stat: Default::default(),
+    }
+}
+
+type MvpSlot = (String, String, String); // (name, initials, stat)
+
+fn extract_mvps(data: &serde_json::Value, backend_type: &str) -> (i32, MvpSlot, MvpSlot, MvpSlot) {
+    let empty = || ("".to_string(), "".to_string(), "".to_string());
+    if backend_type != "weekly_recap" {
+        return (0, empty(), empty(), empty());
+    }
+    let members = match data.get("top_members").and_then(|v| v.as_array()) {
+        Some(arr) => arr,
+        None => return (0, empty(), empty(), empty()),
+    };
+    let to_slot = |v: &serde_json::Value| -> MvpSlot {
+        let name = v
+            .get("display_name")
+            .and_then(|n| n.as_str())
+            .unwrap_or("")
+            .to_string();
+        let initials = make_initials(&name);
+        let mins = v.get("hangout_min").and_then(|n| n.as_i64()).unwrap_or(0);
+        let stat = if mins >= 60 {
+            format!("{:.1}h", mins as f64 / 60.0)
+        } else {
+            format!("{}m", mins)
+        };
+        (name, initials, stat)
+    };
+    let count = members.len().min(3) as i32;
+    let s0 = members.first().map(to_slot).unwrap_or_else(empty);
+    let s1 = members.get(1).map(to_slot).unwrap_or_else(empty);
+    let s2 = members.get(2).map(to_slot).unwrap_or_else(empty);
+    (count, s0, s1, s2)
+}
+
 pub fn handle(ctx: &AppContext, event: Event) {
     match event {
         Event::ClipBufferStarted => {
@@ -175,10 +247,15 @@ pub fn handle(ctx: &AppContext, event: Event) {
             let crew_id = ctx.app.get_active_crew_id().to_string();
             if !crew_id.is_empty() {
                 let _ = ctx.cmd_tx.try_send(Command::PostClip {
+                    crew_id: crew_id.clone(),
+                    clip_id: clip_id.clone(),
+                    duration_seconds: duration_seconds as f64,
+                    local_path: path.clone(),
+                });
+                let _ = ctx.cmd_tx.try_send(Command::UploadClip {
                     crew_id,
                     clip_id,
-                    duration_seconds: duration_seconds as f64,
-                    local_path: path,
+                    wav_path: path,
                 });
             }
         }
@@ -195,6 +272,9 @@ pub fn handle(ctx: &AppContext, event: Event) {
                     cursor: None,
                 });
             }
+        }
+        Event::ClipUploaded { clip_id, media_url } => {
+            log::info!("clip uploaded: clip_id={} media_url={}", clip_id, media_url);
         }
         Event::TimelineLoaded { response } => {
             log::info!(
@@ -256,8 +336,10 @@ pub fn handle(ctx: &AppContext, event: Event) {
 
                     let clip_path = entry
                         .data
-                        .get("local_path")
+                        .get("media_url")
                         .and_then(|v| v.as_str())
+                        .filter(|s| !s.is_empty())
+                        .or_else(|| entry.data.get("local_path").and_then(|v| v.as_str()))
                         .unwrap_or("")
                         .to_string();
 
@@ -314,6 +396,9 @@ pub fn handle(ctx: &AppContext, event: Event) {
                         format!("{}d ago", ago / 86400)
                     };
 
+                    let (mvp_count, mvp0, mvp1, mvp2) =
+                        extract_mvps(&entry.data, &entry.entry_type);
+
                     FeedCardData {
                         id: entry.id.clone().into(),
                         card_type: card_type.into(),
@@ -328,6 +413,16 @@ pub fn handle(ctx: &AppContext, event: Event) {
                         clip_path: clip_path.into(),
                         is_hero: false,
                         is_skeleton: false,
+                        mvp_count,
+                        mvp0_name: mvp0.0.into(),
+                        mvp0_initials: mvp0.1.into(),
+                        mvp0_stat: mvp0.2.into(),
+                        mvp1_name: mvp1.0.into(),
+                        mvp1_initials: mvp1.1.into(),
+                        mvp1_stat: mvp1.2.into(),
+                        mvp2_name: mvp2.0.into(),
+                        mvp2_initials: mvp2.1.into(),
+                        mvp2_stat: mvp2.2.into(),
                     }
                 })
                 .collect();
@@ -401,17 +496,55 @@ pub fn handle(ctx: &AppContext, event: Event) {
                 ordered.push(c);
             }
 
+            // Fill remaining grid slots with skeleton cards for cold start / semi-cold start.
+            let has_clip = ordered.iter().any(|c| c.card_type == "clip");
+            let has_recap = ordered.iter().any(|c| c.card_type == "recap");
+            let has_session = ordered.iter().any(|c| c.card_type == "session");
+
+            // Slot 0: if no hero clip, insert skeleton-hero
+            if !has_clip {
+                ordered.insert(0, skeleton_card("skeleton-hero"));
+            }
+            // Slot 1: if no recap, insert skeleton-recap at position 1
+            if !has_recap {
+                let pos = 1.min(ordered.len());
+                ordered.insert(pos, skeleton_card("skeleton-recap"));
+            }
+
+            // Build filler list based on what's missing
+            let mut fillers: Vec<&str> = Vec::new();
+            if !has_session {
+                fillers.push("skeleton-session");
+            }
+            fillers.extend_from_slice(&[
+                "skeleton-clip",
+                "skeleton-catchup",
+                "skeleton-now-playing",
+                "skeleton-stream-clips",
+                "skeleton-recent-games",
+            ]);
+
+            let target_slots = 9;
+            let mut filler_iter = fillers.into_iter();
+            while ordered.len() < target_slots {
+                if let Some(skel_type) = filler_iter.next() {
+                    ordered.push(skeleton_card(skel_type));
+                } else {
+                    break;
+                }
+            }
+
             let cards = ordered;
+            let is_cold = cards.iter().all(|c| c.card_type.starts_with("skeleton"));
 
             let clip_count = response
                 .entries
                 .iter()
                 .filter(|e| e.entry_type == "clip")
                 .count() as i32;
-            let is_empty = cards.is_empty();
             ctx.app
                 .set_feed_cards(Rc::new(slint::VecModel::from(cards)).into());
-            ctx.app.set_feed_cold_start(is_empty);
+            ctx.app.set_feed_cold_start(is_cold);
             ctx.app.set_feed_clip_count(clip_count);
 
             // Update clip-count on the active crew's sidebar card

@@ -160,6 +160,7 @@ set(MELLO_SOURCES
     src/context.cpp
     src/audio/audio_pipeline.cpp
     src/audio/clip_buffer.cpp
+    src/audio/clip_encoder.cpp
     src/audio/opus_codec.cpp
     src/audio/noise_suppressor.cpp
     src/audio/echo_canceller.cpp
@@ -179,6 +180,7 @@ if(WIN32)
         src/audio/audio_backend_wasapi.cpp
         src/audio/audio_session_win.cpp
         src/audio/device_enumerator_wasapi.cpp
+        src/audio/clip_encoder_wmf.cpp
         src/audio/mic_permission_stub.cpp
     )
 elseif(APPLE)
@@ -187,6 +189,7 @@ elseif(APPLE)
         src/audio/playback_coreaudio.cpp
         src/audio/audio_backend_coreaudio.cpp
         src/audio/device_enumerator_coreaudio.cpp
+        src/audio/clip_encoder_audiotoolbox.cpp
         src/audio/mic_permission_macos.mm
     )
 else()
@@ -290,6 +293,7 @@ if(WIN32)
         winmm
         ksuser
         mfplat
+        mfreadwrite
         mfuuid
         avrt
         d3d11

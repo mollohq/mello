@@ -374,10 +374,12 @@ func DevSeedStateRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk 
 				Data: ClipData{
 					ClipID:           "clip_seed_hero",
 					ClipType:         "voice",
+					ClipperName:      users["bob"].displayName,
 					DurationSeconds:  28.5,
 					Participants:     []string{users["bob"].id, users["alice"].id, users["diana"].id},
 					ParticipantNames: []string{users["bob"].displayName, users["alice"].displayName, users["diana"].displayName},
 					Game:             "Counter-Strike 2",
+					MediaURL:         fmt.Sprintf("http://localhost:9000/mello-clips/crews/%s/clip_seed_hero.mp4", crewIDs["Gamers"]),
 				},
 			},
 			// Standard clip: alice caught a funny moment (2h ago)
@@ -388,9 +390,11 @@ func DevSeedStateRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk 
 				Data: ClipData{
 					ClipID:           "clip_seed_alice_1",
 					ClipType:         "voice",
+					ClipperName:      users["alice"].displayName,
 					DurationSeconds:  15.0,
 					Participants:     []string{users["alice"].id, users["bob"].id},
 					ParticipantNames: []string{users["alice"].displayName, users["bob"].displayName},
+					MediaURL:         fmt.Sprintf("http://localhost:9000/mello-clips/crews/%s/clip_seed_alice_1.mp4", crewIDs["Gamers"]),
 				},
 			},
 			// Older clip: diana in a game session (6h ago)
@@ -401,10 +405,12 @@ func DevSeedStateRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk 
 				Data: ClipData{
 					ClipID:           "clip_seed_diana_1",
 					ClipType:         "voice",
+					ClipperName:      users["diana"].displayName,
 					DurationSeconds:  30.0,
 					Participants:     []string{users["diana"].id},
 					ParticipantNames: []string{users["diana"].displayName},
 					Game:             "Valorant",
+					MediaURL:         fmt.Sprintf("http://localhost:9000/mello-clips/crews/%s/clip_seed_diana_1.mp4", crewIDs["Gamers"]),
 				},
 			},
 
@@ -471,19 +477,24 @@ func DevSeedStateRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk 
 				ID: generateEventID(), CrewID: crewIDs["Gamers"],
 				Type: "weekly_recap", ActorID: "",
 				Timestamp: nowMs - 12*hour, Score: 30,
-				Data: WeeklyRecapData{
-					CrewID:            crewIDs["Gamers"],
-					WeekStart:         weekStart,
-					WeekEnd:           nowMs,
-					TotalHangoutMin:   420,
-					TopGame:           "Counter-Strike 2",
-					LongestSession:    "bob, diana in General (93m)",
-					LongestSessionMin: 93,
-					ClipCount:         7,
-					MostActive:        users["bob"].displayName,
-					MostClipped:       users["alice"].displayName,
-					GeneratedAt:       nowMs - 12*hour,
+			Data: WeeklyRecapData{
+				CrewID:            crewIDs["Gamers"],
+				WeekStart:         weekStart,
+				WeekEnd:           nowMs,
+				TotalHangoutMin:   420,
+				TopGame:           "Counter-Strike 2",
+				LongestSession:    "bob, diana in General (93m)",
+				LongestSessionMin: 93,
+				ClipCount:         7,
+				MostActive:        users["bob"].displayName,
+				MostClipped:       users["alice"].displayName,
+				TopMembers: []RecapMember{
+					{DisplayName: users["bob"].displayName, HangoutMin: 185},
+					{DisplayName: users["alice"].displayName, HangoutMin: 142},
+					{DisplayName: users["diana"].displayName, HangoutMin: 93},
 				},
+				GeneratedAt: nowMs - 12*hour,
+			},
 			},
 		},
 		"Devs": {
@@ -496,10 +507,12 @@ func DevSeedStateRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk 
 				Data: ClipData{
 					ClipID:           "clip_seed_charlie_1",
 					ClipType:         "voice",
+					ClipperName:      users["charlie"].displayName,
 					DurationSeconds:  22.0,
 					Participants:     []string{users["charlie"].id, users["alice"].id},
 					ParticipantNames: []string{users["charlie"].displayName, users["alice"].displayName},
 					Game:             "Counter-Strike 2",
+					MediaURL:         fmt.Sprintf("http://localhost:9000/mello-clips/crews/%s/clip_seed_charlie_1.mp4", crewIDs["Devs"]),
 				},
 			},
 			// alice clipped a code review discussion (4h ago)
@@ -510,9 +523,11 @@ func DevSeedStateRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk 
 				Data: ClipData{
 					ClipID:           "clip_seed_alice_dev",
 					ClipType:         "voice",
+					ClipperName:      users["alice"].displayName,
 					DurationSeconds:  18.5,
 					Participants:     []string{users["alice"].id, users["bob"].id, users["charlie"].id},
 					ParticipantNames: []string{users["alice"].displayName, users["bob"].displayName, users["charlie"].displayName},
+					MediaURL:         fmt.Sprintf("http://localhost:9000/mello-clips/crews/%s/clip_seed_alice_dev.mp4", crewIDs["Devs"]),
 				},
 			},
 
@@ -560,9 +575,11 @@ func DevSeedStateRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk 
 				Data: ClipData{
 					ClipID:           "clip_seed_music_1",
 					ClipType:         "voice",
+					ClipperName:      users["charlie"].displayName,
 					DurationSeconds:  25.0,
 					Participants:     []string{users["charlie"].id, users["diana"].id},
 					ParticipantNames: []string{users["charlie"].displayName, users["diana"].displayName},
+					MediaURL:         fmt.Sprintf("http://localhost:9000/mello-clips/crews/%s/clip_seed_music_1.mp4", crewIDs["Music"]),
 				},
 			},
 			{
@@ -572,9 +589,11 @@ func DevSeedStateRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk 
 				Data: ClipData{
 					ClipID:           "clip_seed_music_2",
 					ClipType:         "voice",
+					ClipperName:      users["diana"].displayName,
 					DurationSeconds:  12.0,
 					Participants:     []string{users["diana"].id},
 					ParticipantNames: []string{users["diana"].displayName},
+					MediaURL:         fmt.Sprintf("http://localhost:9000/mello-clips/crews/%s/clip_seed_music_2.mp4", crewIDs["Music"]),
 				},
 			},
 		},

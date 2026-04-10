@@ -29,6 +29,7 @@ const (
 type ClipData struct {
 	ClipID           string   `json:"clip_id"`
 	ClipType         string   `json:"clip_type"`
+	ClipperName      string   `json:"clipper_name"`
 	DurationSeconds  float64  `json:"duration_seconds"`
 	Participants     []string `json:"participants,omitempty"`
 	ParticipantNames []string `json:"participant_names,omitempty"`
@@ -106,6 +107,7 @@ func PostClipRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runt
 		Data: ClipData{
 			ClipID:           req.ClipID,
 			ClipType:         req.ClipType,
+			ClipperName:      username,
 			DurationSeconds:  req.DurationSeconds,
 			Participants:     req.Participants,
 			ParticipantNames: participantNames,
@@ -234,12 +236,12 @@ func CrewTimelineRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk 
 }
 
 // ---------------------------------------------------------------------------
-// ClipUploadURL RPC — return a presigned upload URL (stub for v1)
+// ClipUploadURL RPC — return a presigned PUT URL for direct R2/S3 upload
 // ---------------------------------------------------------------------------
 
 type ClipUploadURLRequest struct {
-	ClipID   string `json:"clip_id"`
-	MimeType string `json:"mime_type,omitempty"`
+	ClipID string `json:"clip_id"`
+	CrewID string `json:"crew_id"`
 }
 
 type ClipUploadURLResponse struct {
@@ -257,36 +259,120 @@ func ClipUploadURLRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk
 	if err := json.Unmarshal([]byte(payload), &req); err != nil {
 		return "", runtime.NewError("invalid request", 3)
 	}
-	if req.ClipID == "" {
-		return "", runtime.NewError("clip_id required", 3)
+	if req.ClipID == "" || req.CrewID == "" {
+		return "", runtime.NewError("clip_id and crew_id required", 3)
 	}
 
-	// v1 stub: S3 integration not yet configured.
-	// Return empty URLs; clips play from local path for now.
+	if !S3IsConfigured() {
+		logger.Warn("clip_upload_url: S3 not configured, returning empty URLs")
+		resp := ClipUploadURLResponse{}
+		data, _ := json.Marshal(resp)
+		return string(data), nil
+	}
+
+	key := fmt.Sprintf("crews/%s/%s.mp4", req.CrewID, req.ClipID)
+	uploadURL, err := GeneratePresignedPUT(key, "audio/mp4", 15*time.Minute)
+	if err != nil {
+		logger.Error("clip_upload_url: presign failed: %v", err)
+		return "", runtime.NewError("failed to generate upload URL", 13)
+	}
+
+	mediaURL := S3PublicURL(key)
+
 	resp := ClipUploadURLResponse{
-		UploadURL: "",
-		MediaURL:  "",
+		UploadURL: uploadURL,
+		MediaURL:  mediaURL,
 	}
 	data, _ := json.Marshal(resp)
 	return string(data), nil
 }
 
 // ---------------------------------------------------------------------------
+// ClipUploadComplete RPC — set media_url on clip event after successful upload
+// ---------------------------------------------------------------------------
+
+type ClipUploadCompleteRequest struct {
+	ClipID string `json:"clip_id"`
+	CrewID string `json:"crew_id"`
+}
+
+func ClipUploadCompleteRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, payload string) (string, error) {
+	userID, ok := ctx.Value(runtime.RUNTIME_CTX_USER_ID).(string)
+	if !ok {
+		return "", runtime.NewError("authentication required", 16)
+	}
+
+	var req ClipUploadCompleteRequest
+	if err := json.Unmarshal([]byte(payload), &req); err != nil {
+		return "", runtime.NewError("invalid request", 3)
+	}
+	if req.ClipID == "" || req.CrewID == "" {
+		return "", runtime.NewError("clip_id and crew_id required", 3)
+	}
+
+	if !isCrewMember(ctx, nk, req.CrewID, userID) {
+		return "", runtime.NewError("not a crew member", 7)
+	}
+
+	key := fmt.Sprintf("crews/%s/%s.mp4", req.CrewID, req.ClipID)
+	mediaURL := S3PublicURL(key)
+
+	ledger, version := readLedger(ctx, nk, req.CrewID)
+
+	found := false
+	for i, e := range ledger.Events {
+		if e.Type != "clip" {
+			continue
+		}
+		dataBytes, _ := json.Marshal(e.Data)
+		var cd ClipData
+		if json.Unmarshal(dataBytes, &cd) == nil && cd.ClipID == req.ClipID {
+			cd.MediaURL = mediaURL
+			ledger.Events[i].Data = cd
+			found = true
+			break
+		}
+	}
+
+	if !found {
+		return "", runtime.NewError("clip not found in ledger", 5)
+	}
+
+	if err := writeLedger(ctx, nk, req.CrewID, ledger, version); err != nil {
+		logger.Error("clip_upload_complete: writeLedger failed: %v", err)
+		return "", runtime.NewError("failed to update ledger", 13)
+	}
+
+	logger.Info("Clip upload complete: crew=%s clip=%s media_url=%s", req.CrewID, req.ClipID, mediaURL)
+	resp, _ := json.Marshal(map[string]interface{}{
+		"success":   true,
+		"media_url": mediaURL,
+	})
+	return string(resp), nil
+}
+
+// ---------------------------------------------------------------------------
 // Weekly recap job (runs Monday 00:00 UTC)
 // ---------------------------------------------------------------------------
 
+type RecapMember struct {
+	DisplayName string `json:"display_name"`
+	HangoutMin  int    `json:"hangout_min"`
+}
+
 type WeeklyRecapData struct {
-	CrewID            string `json:"crew_id"`
-	WeekStart         int64  `json:"week_start"`
-	WeekEnd           int64  `json:"week_end"`
-	TotalHangoutMin   int    `json:"total_hangout_min"`
-	TopGame           string `json:"top_game"`
-	LongestSession    string `json:"longest_session"`
-	LongestSessionMin int    `json:"longest_session_min"`
-	ClipCount         int    `json:"clip_count"`
-	MostActive        string `json:"most_active"`
-	MostClipped       string `json:"most_clipped"`
-	GeneratedAt       int64  `json:"generated_at"`
+	CrewID            string        `json:"crew_id"`
+	WeekStart         int64         `json:"week_start"`
+	WeekEnd           int64         `json:"week_end"`
+	TotalHangoutMin   int           `json:"total_hangout_min"`
+	TopGame           string        `json:"top_game"`
+	LongestSession    string        `json:"longest_session"`
+	LongestSessionMin int           `json:"longest_session_min"`
+	ClipCount         int           `json:"clip_count"`
+	MostActive        string        `json:"most_active"`
+	MostClipped       string        `json:"most_clipped"`
+	TopMembers        []RecapMember `json:"top_members"`
+	GeneratedAt       int64         `json:"generated_at"`
 }
 
 func generateWeeklyRecap(ctx context.Context, nk runtime.NakamaModule, logger runtime.Logger, crewID string) {
@@ -351,6 +437,7 @@ func generateWeeklyRecap(ctx context.Context, nk runtime.NakamaModule, logger ru
 
 	mostActive := topActor(actorActivity, ctx, nk)
 	mostClipped := topActor(actorClips, ctx, nk)
+	topMembers := topActors(actorActivity, 3, ctx, nk)
 
 	recap := WeeklyRecapData{
 		CrewID:            crewID,
@@ -363,6 +450,7 @@ func generateWeeklyRecap(ctx context.Context, nk runtime.NakamaModule, logger ru
 		ClipCount:         clipCount,
 		MostActive:        mostActive,
 		MostClipped:       mostClipped,
+		TopMembers:        topMembers,
 		GeneratedAt:       time.Now().UnixMilli(),
 	}
 
@@ -382,6 +470,39 @@ func generateWeeklyRecap(ctx context.Context, nk runtime.NakamaModule, logger ru
 		logger.Info("Weekly recap generated for crew %s: hangout=%dm clips=%d top_game=%s",
 			crewID, totalHangoutMin, clipCount, topGame)
 	}
+}
+
+func topActors(counts map[string]int, limit int, ctx context.Context, nk runtime.NakamaModule) []RecapMember {
+	type kv struct {
+		id    string
+		count int
+	}
+	sorted := make([]kv, 0, len(counts))
+	for id, c := range counts {
+		sorted = append(sorted, kv{id, c})
+	}
+	for i := 0; i < len(sorted); i++ {
+		for j := i + 1; j < len(sorted); j++ {
+			if sorted[j].count > sorted[i].count {
+				sorted[i], sorted[j] = sorted[j], sorted[i]
+			}
+		}
+	}
+	if len(sorted) > limit {
+		sorted = sorted[:limit]
+	}
+	members := make([]RecapMember, 0, len(sorted))
+	for _, s := range sorted {
+		name := resolveUsername(ctx, nk, s.id)
+		if name == "" {
+			name = s.id
+		}
+		members = append(members, RecapMember{
+			DisplayName: name,
+			HangoutMin:  s.count,
+		})
+	}
+	return members
 }
 
 func topActor(counts map[string]int, ctx context.Context, nk runtime.NakamaModule) string {

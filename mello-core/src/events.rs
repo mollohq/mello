@@ -323,6 +323,11 @@ pub enum Event {
         clip_id: String,
         event_id: String,
     },
+    /// Clip MP4 uploaded to cloud storage.
+    ClipUploaded {
+        clip_id: String,
+        media_url: String,
+    },
     /// Crew feed timeline loaded.
     TimelineLoaded {
         response: crate::crew_events::TimelineResponse,

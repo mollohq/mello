@@ -94,6 +94,7 @@ pub fn handle_event(ctx: &AppContext, event: Event) {
         | Event::ClipCaptured { .. }
         | Event::ClipCaptureFailed { .. }
         | Event::ClipPosted { .. }
+        | Event::ClipUploaded { .. }
         | Event::TimelineLoaded { .. } => clip::handle(ctx, event),
 
         // Game sensing

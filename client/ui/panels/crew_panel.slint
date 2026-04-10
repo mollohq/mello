@@ -70,7 +70,7 @@ component VcMemberRow inherits Rectangle {
         Text {
             text: name;
             font-size: 11px;
-            color: #aaaaaa;
+            color: Theme.text-sub;
             horizontal-stretch: 1;
             overflow: elide;
             vertical-alignment: center;
@@ -94,7 +94,7 @@ component CrewMsg inherits HorizontalLayout {
         font-family: Theme.font-mono;
         font-size: 10px;
         font-weight: 600;
-        color: #555555;
+        color: Theme.skel-text;
         vertical-alignment: center;
     }
 
@@ -102,7 +102,7 @@ component CrewMsg inherits HorizontalLayout {
         text: body;
         font-family: Theme.font-mono;
         font-size: 10px;
-        color: #444444;
+        color: Theme.text-tertiary;
         horizontal-stretch: 1;
         overflow: elide;
         vertical-alignment: center;
@@ -136,7 +136,7 @@ export component CrewPanel inherits Rectangle {
             font-size: 10px;
             font-weight: 600;
             letter-spacing: 1.2px;
-            color: #555555;
+            color: Theme.skel-text;
             height: 20px;
         }
 
@@ -150,9 +150,9 @@ export component CrewPanel inherits Rectangle {
 
                 Rectangle {
                     border-radius: 10px;
-                    background: #222226;
+                    background: Theme.card-bg;
                     border-width: 1px;
-                    border-color: #EB4D5F33;
+                    border-color: Theme.dark ? #EB4D5F33 : #FF1E5622;
                     clip: true;
 
                     VerticalLayout {
@@ -221,14 +221,14 @@ export component CrewPanel inherits Rectangle {
                                             width: 30px;
                                             height: 14px;
                                             border-radius: 3px;
-                                            background: #4ade8022;
+                                            background: Theme.dark ? #4ade8022 : #28C84018;
 
                                             Text {
                                                 text: "SFU";
                                                 font-size: 8px;
                                                 font-weight: 700;
                                                 letter-spacing: 0.5px;
-                                                color: #4ade80;
+                                                color: Theme.accent-green;
                                                 horizontal-alignment: center;
                                                 vertical-alignment: center;
                                             }
@@ -237,7 +237,7 @@ export component CrewPanel inherits Rectangle {
                                         Text {
                                             text: crew.online-count + " / " + crew.member-count;
                                             font-size: 11px;
-                                            color: #666666;
+                                            color: Theme.text-dim;
                                             vertical-alignment: center;
                                         }
                                     }
@@ -256,7 +256,7 @@ export component CrewPanel inherits Rectangle {
                             Rectangle {
                                 y: parent.height - 1px;
                                 height: 1px;
-                                background: #2a2a2e;
+                                background: Theme.card-border;
                             }
                         }
 
@@ -276,7 +276,7 @@ export component CrewPanel inherits Rectangle {
                                     Rectangle {
                                         height: 30px;
                                         border-radius: 6px;
-                                        background: ch.active ? #2a2a2e : (ch-hover.has-hover ? #2a2a2e : transparent);
+                                        background: ch.active ? Theme.card-border : (ch-hover.has-hover ? Theme.card-border : transparent);
 
                                         HorizontalLayout {
                                             padding-left: 8px;
@@ -287,14 +287,14 @@ export component CrewPanel inherits Rectangle {
                                                 source: @image-url("../icons/mic.svg");
                                                 width: 14px;
                                                 height: 14px;
-                                                colorize: ch.active ? #aaaaaa : #666666;
+                                                colorize: ch.active ? Theme.text-sub : Theme.text-dim;
                                                 y: (parent.height - self.height) / 2;
                                             }
 
                                             Text {
                                                 text: ch.name;
                                                 font-size: 12px;
-                                                color: ch.active ? Theme.text-primary : #888888;
+                                                color: ch.active ? Theme.text-primary : Theme.text-sub;
                                                 horizontal-stretch: 1;
                                                 overflow: elide;
                                                 vertical-alignment: center;
@@ -304,7 +304,7 @@ export component CrewPanel inherits Rectangle {
                                                 text: ch.member-count;
                                                 font-size: 11px;
                                                 font-weight: 500;
-                                                color: ch.member-count > 0 ? #4ade80 : #444444;
+                                                color: ch.member-count > 0 ? Theme.accent-green : Theme.text-tertiary;
                                                 vertical-alignment: center;
                                                 min-width: 14px;
                                                 horizontal-alignment: right;
@@ -349,7 +349,7 @@ export component CrewPanel inherits Rectangle {
             font-size: 10px;
             font-weight: 600;
             letter-spacing: 1.2px;
-            color: #555555;
+            color: Theme.skel-text;
             height: 20px;
         }
 
@@ -368,9 +368,9 @@ export component CrewPanel inherits Rectangle {
 
                     Rectangle {
                         border-radius: 8px;
-                        background: other-hover.has-hover ? #232328 : #1e1e22;
+                        background: other-hover.has-hover ? Theme.card-bg : Theme.card-bg-skel;
                         border-width: 1px;
-                        border-color: other-hover.has-hover ? #363636 : #2a2a2e;
+                        border-color: other-hover.has-hover ? Theme.graphic-med : Theme.card-border;
 
                         VerticalLayout {
                             padding: 10px;
@@ -402,14 +402,14 @@ export component CrewPanel inherits Rectangle {
                                     width: 22px;
                                     height: 22px;
                                     border-radius: 5px;
-                                    background: #2a2a2e;
+                                    background: Theme.card-border;
                                     opacity: crew.voice-count > 0 || crew.has-stream ? 0.8 : 0.6;
 
                                     Text {
                                         text: crew.name;
                                         font-size: 8px;
                                         font-weight: 700;
-                                        color: #666666;
+                                        color: Theme.text-dim;
                                         horizontal-alignment: center;
                                         vertical-alignment: center;
                                     }
@@ -419,7 +419,7 @@ export component CrewPanel inherits Rectangle {
                                     text: crew.name;
                                     font-size: 12px;
                                     font-weight: 500;
-                                    color: other-hover.has-hover ? #aaaaaa : #777777;
+                                    color: other-hover.has-hover ? Theme.text-value : Theme.text-sub;
                                     horizontal-stretch: 1;
                                     overflow: elide;
                                     vertical-alignment: center;
@@ -430,9 +430,9 @@ export component CrewPanel inherits Rectangle {
                                     width: 38px;
                                     height: 18px;
                                     border-radius: 4px;
-                                    background: #EB4D5F18;
+                                    background: Theme.clip-amber-bg;
                                     border-width: 1px;
-                                    border-color: #EB4D5F22;
+                                    border-color: Theme.dark ? #F59E0B22 : #F59E0B33;
 
                                     HorizontalLayout {
                                         alignment: center;
@@ -440,7 +440,7 @@ export component CrewPanel inherits Rectangle {
 
                                         Image {
                                             source: @image-url("../icons/scissors.svg");
-                                            colorize: #EB4D5F88;
+                                            colorize: #F59E0B88;
                                             width: 10px;
                                             height: 10px;
                                             y: (parent.height - self.height) / 2;
@@ -450,7 +450,7 @@ export component CrewPanel inherits Rectangle {
                                             text: crew.clip-count;
                                             font-size: 9px;
                                             font-weight: 700;
-                                            color: #EB4D5F88;
+                                            color: #F59E0B88;
                                             vertical-alignment: center;
                                         }
                                     }
@@ -475,7 +475,7 @@ export component CrewPanel inherits Rectangle {
                                 Text {
                                     text: crew.stream-name;
                                     font-size: 10px;
-                                    color: #555555;
+                                    color: Theme.skel-text;
                                     overflow: elide;
                                     horizontal-stretch: 1;
                                     vertical-alignment: center;
@@ -491,7 +491,7 @@ export component CrewPanel inherits Rectangle {
                                     width: 4px;
                                     height: 4px;
                                     border-radius: 2px;
-                                    background: #4ade80;
+                                    background: Theme.accent-green;
                                     opacity: 0.6;
                                     y: (parent.height - self.height) / 2;
                                 }
@@ -499,7 +499,7 @@ export component CrewPanel inherits Rectangle {
                                 Text {
                                     text: crew.voice-count + " in voice";
                                     font-size: 10px;
-                                    color: #555555;
+                                    color: Theme.skel-text;
                                     vertical-alignment: center;
                                 }
                             }
@@ -537,7 +537,7 @@ export component CrewPanel inherits Rectangle {
         // ===== Bottom actions =====
         Rectangle {
             height: 1px;
-            background: #2a2a2e;
+            background: Theme.card-border;
         }
 
         Rectangle { height: 10px; }
@@ -545,7 +545,7 @@ export component CrewPanel inherits Rectangle {
         Rectangle {
             height: 34px;
             border-radius: 6px;
-            background: browse-touch.has-hover ? #222226 : transparent;
+            background: browse-touch.has-hover ? Theme.surface-hover : transparent;
 
             HorizontalLayout {
                 padding-left: 10px;
@@ -556,14 +556,14 @@ export component CrewPanel inherits Rectangle {
                     source: @image-url("../icons/search.svg");
                     width: 14px;
                     height: 14px;
-                    colorize: browse-touch.has-hover ? #888888 : #555555;
+                    colorize: browse-touch.has-hover ? Theme.text-sub : Theme.skel-text;
                     y: (parent.height - self.height) / 2;
                 }
 
                 Text {
                     text: "Browse crews";
                     font-size: 12px;
-                    color: browse-touch.has-hover ? #888888 : #555555;
+                    color: browse-touch.has-hover ? Theme.text-sub : Theme.skel-text;
                     vertical-alignment: center;
                 }
             }
@@ -579,7 +579,7 @@ export component CrewPanel inherits Rectangle {
         Rectangle {
             height: 34px;
             border-radius: 6px;
-            background: new-crew-touch.has-hover ? #222226 : transparent;
+            background: new-crew-touch.has-hover ? Theme.surface-hover : transparent;
 
             HorizontalLayout {
                 padding-left: 10px;
@@ -589,14 +589,14 @@ export component CrewPanel inherits Rectangle {
                 Text {
                     text: "+";
                     font-size: 16px;
-                    color: new-crew-touch.has-hover ? #888888 : #555555;
+                    color: new-crew-touch.has-hover ? Theme.text-sub : Theme.skel-text;
                     vertical-alignment: center;
                 }
 
                 Text {
                     text: "New crew";
                     font-size: 12px;
-                    color: new-crew-touch.has-hover ? #888888 : #555555;
+                    color: new-crew-touch.has-hover ? Theme.text-sub : Theme.skel-text;
                     vertical-alignment: center;
                 }
             }

@@ -581,6 +581,19 @@ impl Client {
                 self.handle_post_clip(&crew_id, &clip_id, duration_seconds, &local_path)
                     .await;
             }
+            Command::UploadClip {
+                crew_id,
+                clip_id,
+                wav_path,
+            } => {
+                self.handle_upload_clip(&crew_id, &clip_id, &wav_path).await;
+            }
+            Command::PlayClip { path } => {
+                self.handle_play_clip(&path).await;
+            }
+            Command::StopClipPlayback => {
+                self.handle_stop_clip_playback();
+            }
             Command::LoadCrewTimeline { crew_id, cursor } => {
                 self.handle_load_crew_timeline(&crew_id, cursor.as_deref())
                     .await;

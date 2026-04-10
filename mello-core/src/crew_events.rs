@@ -104,3 +104,33 @@ pub struct PostClipResponse {
     #[serde(default)]
     pub clip_id: String,
 }
+
+// --- Clip upload ---
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClipUploadURLRequest {
+    pub clip_id: String,
+    pub crew_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClipUploadURLResponse {
+    #[serde(default)]
+    pub upload_url: String,
+    #[serde(default)]
+    pub media_url: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClipUploadCompleteRequest {
+    pub clip_id: String,
+    pub crew_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClipUploadCompleteResponse {
+    #[serde(default)]
+    pub success: bool,
+    #[serde(default)]
+    pub media_url: String,
+}

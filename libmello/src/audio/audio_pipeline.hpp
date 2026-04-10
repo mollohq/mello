@@ -7,6 +7,7 @@
 #include "jitter_buffer.hpp"
 #include "device_enumerator.hpp"
 #include "clip_buffer.hpp"
+#include "clip_encoder.hpp"
 #include "vad.hpp"
 #include "../util/ring_buffer.hpp"
 #ifdef _WIN32
@@ -81,6 +82,9 @@ public:
     void stop_clip_buffer();
     bool clip_buffer_active() const;
     bool clip_capture(float seconds, const std::string& output_path);
+    bool play_clip(const std::string& wav_path);
+    bool play_mp4(const std::string& mp4_path);
+    void stop_clip_playback();
 
 private:
     void on_captured_audio(const int16_t* samples, size_t count);
@@ -129,6 +133,9 @@ private:
     bool initialized_ = false;
 
     std::unique_ptr<ClipBuffer> clip_buffer_;
+    std::unique_ptr<util::RingBuffer<int16_t>> local_clip_ring_;
+    std::unique_ptr<util::RingBuffer<int16_t>> clip_playback_ring_;
+    std::atomic<bool> clip_playing_{false};
 };
 
 } // namespace mello::audio

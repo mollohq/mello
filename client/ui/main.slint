@@ -345,6 +345,7 @@ export component MainWindow inherits Window {
 
     // --- Clip callbacks ---
     callback clip-captured();
+    callback play-clip(string);
 
     // --- Onboarding callbacks ---
     callback onboarding-crew-selected(string);
@@ -565,7 +566,11 @@ export component MainWindow inherits Window {
                             root.list-capture-sources();
                             root.source-picker-open = true;
                         }
-                        card-clicked(id) => { }
+                        card-clicked(clip-path) => {
+                            if clip-path != "" {
+                                root.play-clip(clip-path);
+                            }
+                        }
                         invite-clicked => { }
                     }
 

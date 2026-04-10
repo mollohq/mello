@@ -244,6 +244,15 @@ pub enum Command {
         #[serde(default)]
         local_path: String,
     },
+    UploadClip {
+        crew_id: String,
+        clip_id: String,
+        wav_path: String,
+    },
+    PlayClip {
+        path: String,
+    },
+    StopClipPlayback,
     LoadCrewTimeline {
         crew_id: String,
         #[serde(default)]

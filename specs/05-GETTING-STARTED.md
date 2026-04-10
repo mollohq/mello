@@ -53,10 +53,11 @@ cd backend
 cp .env.example .env
 # Edit .env if needed (defaults work for local dev)
 
-# Start Nakama + PostgreSQL
+# Start Nakama + PostgreSQL + MinIO (local S3)
 docker compose up -d
 
 # Verify: open http://localhost:7351 (admin / mello_admin_dev)
+# MinIO console: http://localhost:9001 (minioadmin / minioadmin)
 ```
 
 ### Common backend commands
@@ -130,6 +131,19 @@ Only transport and Opus codec build on macOS. Audio capture/playback and video c
 | `LIBCLANG_PATH` | For bindgen | Both | LLVM lib path |
 | `RUST_LOG` | No | Both | Log level (`debug`, `mello_core=debug`) |
 | `NVENC_SDK_PATH` | For NVENC | Windows | NVIDIA Video Codec SDK path |
+
+**S3/R2 variables** (set automatically by docker-compose for local dev):
+
+| Variable | Local Dev Value | Purpose |
+|----------|----------------|---------|
+| `S3_ENDPOINT` | `http://minio:9000` | S3 API (Docker-internal) |
+| `S3_PRESIGN_ENDPOINT` | `http://localhost:9000` | Presigned URL base (client-reachable) |
+| `S3_BUCKET` | `mello-clips` | Bucket name |
+| `S3_ACCESS_KEY` | `minioadmin` | S3 credentials |
+| `S3_SECRET_KEY` | `minioadmin` | S3 credentials |
+| `S3_PUBLIC_URL` | `http://localhost:9000/mello-clips` | Public download base URL |
+
+These are pre-configured in `docker-compose.yml`. No manual setup needed for local dev.
 
 macOS LLVM path: `export LIBCLANG_PATH="$(brew --prefix llvm)/lib"`
 
@@ -212,6 +226,76 @@ chore: bump slint to 1.9
 | Nakama Console | http://localhost:7351 |
 | Nakama REST API | http://localhost:7350 |
 | PostgreSQL | localhost:5432 |
+| MinIO Console | http://localhost:9001 (minioadmin / minioadmin) |
+| MinIO S3 API | http://localhost:9000 |
+
+---
+
+## 10. Cloudflare R2 Setup (Production)
+
+Clips upload to Cloudflare R2 in production. R2 is S3-compatible with zero egress fees.
+
+### 10.1 Create the bucket
+
+1. Go to **Cloudflare Dashboard → R2 Object Storage**
+2. Create bucket: `mello-clips`
+3. Region: **Automatic** (EEUR recommended for EU-first)
+
+### 10.2 Enable public access
+
+1. In the bucket settings, go to **Settings → Public Access**
+2. Enable **R2.dev subdomain** (gives you a `https://<random>.r2.dev` URL) — or —
+3. **Connect a custom domain:** `clips.m3llo.app` (recommended). Add a CNAME record pointing to the R2 bucket. Cloudflare handles TLS automatically.
+
+The public URL is what `S3_PUBLIC_URL` points to. All clip downloads go through this — no signed URLs needed for reads.
+
+### 10.3 Create API token
+
+1. Go to **R2 → Manage R2 API Tokens → Create API Token**
+2. Permissions: **Object Read & Write**
+3. Scope: Bucket `mello-clips` only
+4. Copy the **Access Key ID** and **Secret Access Key**
+
+### 10.4 Set environment variables
+
+In your hosting provider (Render, etc.), set:
+
+```
+S3_ENDPOINT=https://<account-id>.r2.cloudflarestorage.com
+S3_BUCKET=mello-clips
+S3_ACCESS_KEY=<access-key-id>
+S3_SECRET_KEY=<secret-access-key>
+S3_PUBLIC_URL=https://clips.m3llo.app
+```
+
+`S3_PRESIGN_ENDPOINT` is **not needed** in production — the R2 endpoint is directly reachable by clients (unlike Docker where MinIO has an internal hostname).
+
+### 10.5 Retention lifecycle (future)
+
+For free-tier 7-day clip expiry, create an R2 lifecycle rule:
+
+1. Bucket → **Settings → Object lifecycle**
+2. Add rule: Delete objects after **7 days**
+3. Prefix filter: `crews/` (applies to all crew clips)
+
+m3llo+ subscribers will need clips exempted from this rule (separate prefix or bucket). Not needed for beta.
+
+### 10.6 CORS (if needed)
+
+R2 respects CORS headers. If the desktop client needs to PUT directly:
+
+```json
+[
+  {
+    "AllowedOrigins": ["*"],
+    "AllowedMethods": ["PUT"],
+    "AllowedHeaders": ["Content-Type"],
+    "MaxAgeSeconds": 3600
+  }
+]
+```
+
+Current client uses `reqwest` (not a browser), so CORS is typically not required. Add this if/when a web client ships.
 
 ---
 

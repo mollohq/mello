@@ -551,13 +551,15 @@ export component ControlBar inherits Rectangle {
                 width: 40px;
                 height: 40px;
                 border-radius: 8px;
-                background: clip-hover.has-hover ? #EB4D5F33 : #EB4D5F22;
+                background: clip-hover.has-hover
+                    ? (Theme.dark ? #F59E0B33 : #F59E0B28)
+                    : Theme.clip-amber-bg;
                 border-width: 1px;
-                border-color: #EB4D5F44;
+                border-color: Theme.dark ? #F59E0B44 : #F59E0B55;
 
                 Image {
                     source: @image-url("../icons/scissors.svg");
-                    colorize: Theme.accent;
+                    colorize: Theme.clip-amber;
                     width: 18px;
                     height: 18px;
                     x: (parent.width - self.width) / 2;

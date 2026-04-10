@@ -137,6 +137,18 @@ MELLO_API bool mello_clip_buffer_active(MelloContext* ctx);
 /** Capture the last `seconds` of audio and write as WAV to `output_path`. */
 MELLO_API MelloResult mello_clip_capture(MelloContext* ctx, float seconds, const char* output_path);
 
+/** Play a WAV clip through the audio output. */
+MELLO_API MelloResult mello_clip_play(MelloContext* ctx, const char* wav_path);
+
+/** Play an MP4/AAC clip through the audio output (decodes to PCM first). */
+MELLO_API MelloResult mello_clip_play_mp4(MelloContext* ctx, const char* mp4_path);
+
+/** Stop clip playback. */
+MELLO_API MelloResult mello_clip_stop_playback(MelloContext* ctx);
+
+/** Encode a WAV file to MP4/AAC-LC. Standalone (no MelloContext needed). */
+MELLO_API MelloResult mello_clip_encode(const char* wav_path, const char* mp4_path, int bitrate);
+
 /* ============================================================================
  * P2P Transport
  * ============================================================================ */
