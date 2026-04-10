@@ -1,0 +1,318 @@
+<html lang="en" vid="0"><head vid="1">
+    <meta charset="UTF-8" vid="2">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" vid="3">
+    <title vid="4">Crew Companion - Voice Dock</title>
+    <script src="https://cdn.tailwindcss.com/3.4.17" vid="5"></script>
+    <style vid="6">
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+        :root {
+            --c-bg-app: #111111;
+            --c-surface: #1C1C1C;
+            --c-panel: #242424;
+            --c-text-primary: #F5F5F5;
+            --c-text-secondary: #8A8A8A;
+            --c-text-tertiary: #555555;
+            --c-accent: #FF1E56;
+            --c-border: #333333;
+            --f-sans: 'Inter', -apple-system, sans-serif;
+            --f-mono: 'JetBrains Mono', monospace;
+        }
+
+        body {
+            font-family: var(--f-sans);
+            background-color: var(--c-bg-app);
+            color: var(--c-text-primary);
+            margin: 0;
+            overflow: hidden;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            width: 100vw;
+            
+            background-image: radial-gradient(circle at 2px 2px, rgba(255,255,255,0.03) 1px, transparent 0);
+            background-size: 32px 32px;
+        }
+
+        .font-mono {
+            font-family: var(--f-mono);
+        }
+
+        
+        .scroll-area::-webkit-scrollbar {
+            width: 4px;
+        }
+        .scroll-area::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        .scroll-area::-webkit-scrollbar-thumb {
+            background: var(--c-border);
+            border-radius: 4px;
+        }
+
+        
+        @keyframes eq-bounce {
+            0%, 100% { height: 4px; }
+            50% { height: 16px; }
+        }
+        
+        @keyframes eq-bounce-alt {
+            0%, 100% { height: 6px; }
+            50% { height: 12px; }
+        }
+
+        @keyframes pulse-glow {
+            0%, 100% { box-shadow: 0 0 0 1px rgba(255, 30, 86, 0.4), 0 0 12px rgba(255, 30, 86, 0.2); }
+            50% { box-shadow: 0 0 0 2px rgba(255, 30, 86, 0.6), 0 0 20px rgba(255, 30, 86, 0.4); }
+        }
+
+        .speaking-bar-1 { animation: eq-bounce 0.7s ease-in-out infinite; }
+        .speaking-bar-2 { animation: eq-bounce-alt 0.5s ease-in-out infinite 0.1s; }
+        .speaking-bar-3 { animation: eq-bounce 0.6s ease-in-out infinite 0.2s; }
+
+        .avatar-glow {
+            animation: pulse-glow 2s ease-in-out infinite;
+        }
+
+        
+        .widget-container {
+            background: var(--c-surface);
+            border: 1px solid var(--c-border);
+            box-shadow: 0 24px 64px rgba(0,0,0,0.8), 0 0 0 1px rgba(255,255,255,0.05);
+        }
+
+        .user-card {
+            transition: background-color 0.15s ease;
+        }
+        
+        .user-card:hover {
+            background-color: rgba(255, 255, 255, 0.03);
+        }
+    </style>
+</head>
+<body vid="7">
+
+    
+    <div class="widget-container w-[340px] h-[640px] rounded-[16px] flex flex-col relative overflow-hidden" vid="8">
+        
+        
+        <div class="h-8 w-full flex justify-center items-center cursor-move border-b border-[#2A2A2A] bg-[#161616] shrink-0" vid="9">
+            <div class="w-12 h-1 rounded-full bg-[#404040]" vid="10"></div>
+            
+            
+            <div class="absolute left-4 flex gap-2" vid="11">
+                <div class="w-3 h-3 rounded-full bg-[#FF5F57] border border-[#E0443E]" vid="12"></div>
+                <div class="w-3 h-3 rounded-full bg-[#FFBD2E] border border-[#DEA123]" vid="13"></div>
+                <div class="w-3 h-3 rounded-full bg-[#28C840] border border-[#1AAB29]" vid="14"></div>
+            </div>
+        </div>
+
+        
+        <div class="px-4 py-3 shrink-0 flex items-center justify-between border-b border-[#2A2A2A]" vid="15">
+            <div class="flex items-center gap-3" vid="16">
+                <div class="w-9 h-9 rounded-lg bg-[#242424] border border-[#333] flex items-center justify-center shrink-0" vid="17">
+                    <span class="font-mono font-bold text-xs text-[#FF1E56]" vid="18">TV</span>
+                </div>
+                <div vid="19">
+                    <h1 class="text-base font-semibold text-white tracking-tight" vid="20">The Vanguard</h1>
+                    <div class="flex items-center gap-1.5 mt-0.5" vid="21">
+                        <div class="w-1.5 h-1.5 rounded-full bg-[#10B981]" vid="22"></div>
+                        <span class="text-[10px] font-mono text-[#8A8A8A]" vid="23">5 online</span>
+                    </div>
+                </div>
+            </div>
+            <button class="w-8 h-8 rounded-md bg-[#242424] border border-[#333] flex items-center justify-center text-[#8A8A8A] hover:text-white hover:border-[#444] transition-colors" vid="24">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" vid="25">
+                    <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3" vid="26"></path>
+                </svg>
+            </button>
+        </div>
+
+        
+        <div class="flex-1 overflow-y-auto scroll-area px-2.5 py-2 flex flex-col gap-1" vid="27">
+            
+            
+            <div class="user-card p-1 rounded-lg border border-transparent flex items-center gap-2" vid="28">
+                <div class="w-6 h-6 rounded bg-[#2A2A2A] flex items-center justify-center font-mono font-bold text-[10px] text-white ring-2 ring-[#10B981] shadow-[0_0_8px_rgba(16,185,129,0.4)] shrink-0" vid="29">
+                    KT
+                </div>
+                
+                <div class="flex-1 min-w-0" vid="30">
+                    <div class="text-[13px] font-semibold text-white truncate" vid="31">k0ji_tech</div>
+                </div>
+
+                <div class="flex items-center gap-[2px] h-4 w-4 shrink-0 justify-center" vid="32">
+                    <div class="w-[3px] bg-[#10B981] rounded-full speaking-bar-1" vid="33"></div>
+                    <div class="w-[3px] bg-[#10B981] rounded-full speaking-bar-2" vid="34"></div>
+                    <div class="w-[3px] bg-[#10B981] rounded-full speaking-bar-3" vid="35"></div>
+                </div>
+            </div>
+
+            
+            <div class="user-card p-1 rounded-lg border border-transparent flex items-center gap-2" vid="36">
+                <div class="w-6 h-6 rounded bg-[#2A2A2A] flex items-center justify-center font-mono font-bold text-[10px] text-white ring-2 ring-[#10B981] shadow-[0_0_8px_rgba(16,185,129,0.4)] shrink-0" vid="37">
+                    NV
+                </div>
+                
+                <div class="flex-1 min-w-0" vid="38">
+                    <div class="text-[13px] font-semibold text-white truncate" vid="39">nova_9</div>
+                </div>
+
+                <div class="flex items-center gap-[2px] h-4 w-4 shrink-0 justify-center" vid="40">
+                    <div class="w-[3px] bg-[#10B981] rounded-full speaking-bar-3" vid="41"></div>
+                    <div class="w-[3px] bg-[#10B981] rounded-full speaking-bar-1" vid="42"></div>
+                    <div class="w-[3px] bg-[#10B981] rounded-full speaking-bar-2" vid="43"></div>
+                </div>
+            </div>
+
+            
+            <div class="user-card p-1 rounded-lg border border-transparent flex items-center gap-2" vid="44">
+                <div class="w-6 h-6 rounded bg-[#242424] border border-[#333] flex items-center justify-center font-mono font-semibold text-[10px] text-[#8A8A8A]" vid="45">
+                    AS
+                </div>
+                
+                <div class="flex-1 min-w-0" vid="46">
+                    <div class="text-[13px] font-medium text-[#D4D4D4] truncate" vid="47">ash_22</div>
+                </div>
+
+                <div class="flex items-center gap-[2px] h-4 w-4 shrink-0 justify-center opacity-30" vid="48">
+                    <div class="w-[3px] h-1 bg-[#8A8A8A] rounded-full" vid="49"></div>
+                    <div class="w-[3px] h-1 bg-[#8A8A8A] rounded-full" vid="50"></div>
+                    <div class="w-[3px] h-1 bg-[#8A8A8A] rounded-full" vid="51"></div>
+                </div>
+            </div>
+
+            
+            <div class="user-card p-1 rounded-lg border border-transparent flex items-center gap-2 opacity-60" vid="52">
+                <div class="w-6 h-6 rounded bg-[#1A1A1A] border border-[#2A2A2A] flex items-center justify-center font-mono font-semibold text-[10px] text-[#555555] relative" vid="53">
+                    MR
+                    
+                    <div class="absolute -bottom-0.5 -right-0.5 bg-[#1C1C1C] rounded-full p-0.5" vid="54">
+                        <div class="bg-[#E02020] w-2.5 h-2.5 rounded-full flex items-center justify-center" vid="55">
+                            <svg width="6" height="6" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" vid="56"><line x1="1" y1="1" x2="23" y2="23" vid="57"></line><path d="M9 9v3a3 3 0 0 0 5.12 2.12M15 9.34V4a3 3 0 0 0-5.94-.6" vid="58"></path><path d="M17 16.95A7 7 0 0 1 5 12v-2m14 0v2a7 7 0 0 1-.11 1.23" vid="59"></path><line x1="12" y1="19" x2="12" y2="23" vid="60"></line><line x1="8" y1="23" x2="16" y2="23" vid="61"></line></svg>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="flex-1 min-w-0" vid="62">
+                    <div class="text-[13px] font-medium text-[#8A8A8A] truncate" vid="63">m1ra</div>
+                </div>
+
+                <div class="w-4 flex justify-center shrink-0" vid="64">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#E02020" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" vid="65"><line x1="1" y1="1" x2="23" y2="23" vid="66"></line><path d="M9 9v3a3 3 0 0 0 5.12 2.12M15 9.34V4a3 3 0 0 0-5.94-.6" vid="67"></path><path d="M17 16.95A7 7 0 0 1 5 12v-2m14 0v2a7 7 0 0 1-.11 1.23" vid="68"></path><line x1="12" y1="19" x2="12" y2="23" vid="69"></line><line x1="8" y1="23" x2="16" y2="23" vid="70"></line></svg>
+                </div>
+            </div>
+
+            
+            <div class="user-card p-1 rounded-lg border border-transparent flex items-center gap-2" vid="71">
+                <div class="w-6 h-6 rounded bg-[#242424] border border-[#333] flex items-center justify-center font-mono font-semibold text-[10px] text-[#8A8A8A]" vid="72">
+                    LN
+                </div>
+                
+                <div class="flex-1 min-w-0" vid="73">
+                    <div class="text-[13px] font-medium text-[#D4D4D4] truncate" vid="74">lune</div>
+                </div>
+
+                <div class="flex items-center gap-[2px] h-4 w-4 shrink-0 justify-center opacity-30" vid="75">
+                    <div class="w-[3px] h-1 bg-[#8A8A8A] rounded-full" vid="76"></div>
+                    <div class="w-[3px] h-1 bg-[#8A8A8A] rounded-full" vid="77"></div>
+                    <div class="w-[3px] h-1 bg-[#8A8A8A] rounded-full" vid="78"></div>
+                </div>
+            </div>
+            
+        </div>
+
+        
+        <div class="shrink-0 px-4 pb-2" vid="79">
+            <div class="bg-[#242424] rounded-xl border border-[#333] p-2.5 flex items-center justify-between cursor-pointer hover:border-[#444] transition-colors group" vid="80">
+                <div class="flex items-center gap-3" vid="81">
+                    <div class="w-12 h-7 bg-black rounded shrink-0 relative overflow-hidden border border-[#444]" vid="82">
+                        <div class="absolute top-1 left-1 w-1.5 h-1.5 bg-[#FF1E56] rounded-full animate-pulse" vid="83"></div>
+                        <div class="absolute inset-0 flex flex-col justify-center gap-0.5 opacity-40 px-1.5" vid="84">
+                            <div class="h-[1px] w-full bg-[#8A8A8A]" vid="85"></div>
+                            <div class="h-[1px] w-2/3 bg-[#8A8A8A]" vid="86"></div>
+                        </div>
+                    </div>
+                    <div vid="87">
+                        <div class="text-[9px] font-mono text-[#8A8A8A] uppercase tracking-wider" vid="88">k0ji_tech is streaming</div>
+                        <div class="text-[13px] font-semibold text-white leading-none" vid="89">PROJECT AVALON</div>
+                    </div>
+                </div>
+                <button class="w-6 h-6 rounded bg-[#333] flex items-center justify-center text-[#F5F5F5] group-hover:bg-[#404040] transition-colors shrink-0" vid="90">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" vid="91"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" vid="92"></path><polyline points="15 3 21 3 21 9" vid="93"></polyline><line x1="10" y1="14" x2="21" y2="3" vid="94"></line></svg>
+                </button>
+            </div>
+        </div>
+
+        <div class="shrink-0 px-4 pb-3" vid="95">
+            <div class="bg-[#242424] rounded-xl border border-[#333] p-2 flex flex-col gap-1.5" vid="96">
+                <div class="flex flex-col gap-1" vid="97">
+                    <div class="flex gap-1.5 px-1" vid="98">
+                        <span class="text-[10px] font-mono text-[#FF1E56] shrink-0" vid="99">k0ji:</span>
+                        <span class="text-[10px] text-[#D4D4D4] truncate" vid="100">Anyone up for ranked later?</span>
+                    </div>
+                    <div class="flex gap-1.5 px-1" vid="101">
+                        <span class="text-[10px] font-mono text-[#00D4AA] shrink-0" vid="102">nova:</span>
+                        <span class="text-[10px] text-[#D4D4D4] truncate" vid="103">Yeah im down, give me 10</span>
+                    </div>
+                </div>
+                
+                <div class="flex gap-1.5" vid="104">
+                    <input type="text" placeholder="Message..." class="flex-1 bg-[#1A1A1A] border border-[#333] rounded px-1.5 py-1 text-[10px] text-white placeholder-[#555] focus:outline-none focus:border-[#555]" vid="105">
+                    <button class="w-6 h-6 rounded bg-[#333] flex items-center justify-center text-[#F5F5F5] hover:bg-[#404040] transition-colors shrink-0" vid="106">
+                        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" vid="107">
+                            <line x1="22" y1="2" x2="11" y2="13" vid="108"></line>
+                            <polygon points="22 2 15 22 11 13 2 9 22 2" vid="109"></polygon>
+                        </svg>
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        
+        <div class="shrink-0 bg-[#141414] border-t border-[#2A2A2A] p-4 flex flex-col gap-4" vid="110">
+            
+            
+            <div class="flex justify-between items-center" vid="111">
+                <div class="flex items-center gap-3" vid="112">
+                    <div class="w-9 h-9 rounded-lg bg-[#333] flex items-center justify-center font-mono font-bold text-white shadow-inner border border-[#444]" vid="113">
+                        ME
+                    </div>
+                    <div vid="114">
+                        <div class="text-[13px] font-semibold text-white leading-tight" vid="115">Navigator</div>
+                        <div class="text-[10px] font-mono text-[#8A8A8A]" vid="116">Connected • 45ms</div>
+                    </div>
+                </div>
+            </div>
+
+            
+            <div class="flex gap-2 w-full" vid="117">
+                
+                <button class="flex-1 h-10 rounded-lg bg-[#242424] border border-[#333] flex items-center justify-center text-[#F5F5F5] hover:bg-[#2A2A2A] hover:border-[#444] transition-all relative group" vid="118">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" vid="119"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" vid="120"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2" vid="121"></path><line x1="12" y1="19" x2="12" y2="23" vid="122"></line><line x1="8" y1="23" x2="16" y2="23" vid="123"></line></svg>
+                    
+                    <div class="absolute top-2 right-2 w-1.5 h-1.5 rounded-full bg-[#28C840]" vid="124"></div>
+                </button>
+
+                
+                <button class="flex-1 h-10 rounded-lg bg-[#242424] border border-[#333] flex items-center justify-center text-[#F5F5F5] hover:bg-[#2A2A2A] hover:border-[#444] transition-all" vid="125">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" vid="126"><path d="M3 18v-6a9 9 0 0 1 18 0v6" vid="127"></path><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z" vid="128"></path></svg>
+                </button>
+
+                
+                <button class="flex-1 h-10 rounded-lg bg-[#242424] border border-[#333] flex items-center justify-center text-[#F5F5F5] hover:bg-[#2A2A2A] hover:border-[#444] transition-all" vid="129">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" vid="130"><circle cx="12" cy="12" r="3" vid="131"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" vid="132"></path></svg>
+                </button>
+
+                
+                <button class="w-14 shrink-0 h-10 rounded-lg bg-[#E02020]/10 border border-[#E02020]/30 flex items-center justify-center text-[#E02020] hover:bg-[#E02020] hover:text-white transition-all" vid="133">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" vid="134"><path d="M10.68 13.31a16 16 0 0 0 3.41 2.6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92v3a2 2 0 0 1-2.29 2A19 19 0 0 1 2 5.29 2 2 0 0 1 4 3h3a2 2 0 0 1 2 1.72c.12.96.35 1.9.7 2.81a2 2 0 0 1-.45 2.11L7.09 10.68" vid="135"></path></svg>
+                </button>
+            </div>
+        </div>
+
+    </div>
+
+
+</body></html>

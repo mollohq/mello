@@ -20,6 +20,8 @@ public:
     void set_error(const std::string& error);
     const char* get_error() const;
 
+    bool initialize_inner();
+
 private:
     audio::AudioPipeline audio_;
     video::VideoPipeline video_;

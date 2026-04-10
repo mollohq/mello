@@ -37,6 +37,7 @@ impl GameStateManager {
                     game_name: game.game_name,
                     short_name: game.short_name,
                     color: game.color,
+                    pid: game.pid,
                 });
             }
             GameEvent::Stopped(game) => {

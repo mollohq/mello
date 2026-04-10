@@ -84,19 +84,32 @@ bool AudioPipeline::initialize() {
     if (initialized_) return true;
     MELLO_LOG_INFO("pipeline", "initializing audio pipeline");
 
+#ifdef _WIN32
+    HRESULT com_hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    MELLO_LOG_INFO("pipeline", "CoInitializeEx(MTA) hr=0x%08lx", com_hr);
+    if (FAILED(com_hr) && com_hr != RPC_E_CHANGED_MODE) {
+        MELLO_LOG_ERROR("pipeline", "COM init failed hr=0x%08lx", com_hr);
+        return false;
+    }
+#endif
+
+    MELLO_LOG_INFO("pipeline", "step 1/9: create device enumerator");
     device_enum_ = create_device_enumerator();
 
 #ifdef _WIN32
+    MELLO_LOG_INFO("pipeline", "step 2/9: audio session init");
     session_win_ = std::make_unique<AudioSessionWin>();
     session_win_->initialize();
 #endif
 
+    MELLO_LOG_INFO("pipeline", "step 3/9: capture init");
     capture_ = create_audio_capture();
     if (!capture_->initialize()) {
         MELLO_LOG_ERROR("pipeline", "capture init failed");
         return false;
     }
 
+    MELLO_LOG_INFO("pipeline", "step 4/9: playback init");
     playback_ = create_audio_playback();
 #ifdef _WIN32
     apply_session(playback_.get());
@@ -106,25 +119,32 @@ bool AudioPipeline::initialize() {
         return false;
     }
 
+    MELLO_LOG_INFO("pipeline", "step 5/9: opus encoder");
     if (!encoder_.initialize()) {
         MELLO_LOG_ERROR("pipeline", "opus encoder init failed");
         return false;
     }
+
+    MELLO_LOG_INFO("pipeline", "step 6/9: noise suppressor");
     if (!noise_suppressor_.initialize()) {
         MELLO_LOG_ERROR("pipeline", "noise suppressor init failed");
         return false;
     }
+
+    MELLO_LOG_INFO("pipeline", "step 7/9: echo canceller");
     if (!echo_canceller_.initialize(SAMPLE_RATE, CHANNELS)) {
         MELLO_LOG_ERROR("pipeline", "echo canceller init failed");
         return false;
     }
 
+    MELLO_LOG_INFO("pipeline", "step 8/9: Silero VAD");
     std::string model_path = find_model_path();
     if (model_path.empty() || !vad_.initialize(model_path)) {
         MELLO_LOG_ERROR("pipeline", "Silero VAD init failed (model_path=%s)", model_path.c_str());
         return false;
     }
 
+    MELLO_LOG_INFO("pipeline", "step 9/9: playback start + wiring");
     playback_->set_render_source([this](int16_t* out, size_t count) -> size_t {
         return mix_output(out, count);
     });

@@ -42,7 +42,11 @@ private:
         std::vector<AudioDeviceInfo> result;
 
         HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
-        bool did_init = SUCCEEDED(hr);
+        bool did_init = (SUCCEEDED(hr) || hr == S_FALSE);
+        if (FAILED(hr) && hr != RPC_E_CHANGED_MODE) {
+            MELLO_LOG_ERROR("devices", "COM init failed hr=0x%08lx", hr);
+            return result;
+        }
 
         IMMDeviceEnumerator* enumerator = nullptr;
         hr = CoCreateInstance(

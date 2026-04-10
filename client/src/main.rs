@@ -6,8 +6,11 @@ mod avatar;
 mod callbacks;
 mod converters;
 mod deep_link;
+mod foreground_monitor;
 mod gif_animator;
 mod handlers;
+pub mod hud_manager;
+mod hud_state_builder;
 mod image_cache;
 mod notifications;
 mod platform;
@@ -66,7 +69,7 @@ fn nakama_config() -> Config {
     Config::development()
 }
 
-fn init_logging() {
+fn init_logging() -> Option<std::path::PathBuf> {
     use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
@@ -86,21 +89,32 @@ fn init_logging() {
                 .with_ansi(false)
                 .with_writer(file_appender);
             registry.with(file_layer).init();
-            return;
+            return Some(log_dir);
         }
     }
 
     registry.init();
+    None
 }
 
 fn main() {
     Updater::run_lifecycle_hooks();
 
-    init_logging();
+    let log_dir = init_logging();
 
     std::panic::set_hook(Box::new(|info| {
         log::error!("PANIC: {}", info);
     }));
+
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(ref dir) = log_dir {
+            platform::crash_handler::set_log_dir(dir.clone());
+        }
+        platform::crash_handler::install();
+    }
+
+    let _ = log_dir;
 
     if let Err(e) = run_app() {
         log::error!("Fatal: {}", e);
@@ -300,6 +314,22 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
         let _ = cmd_tx.try_send(Command::CheckMicPermission);
     }
 
+    // --- HUD manager ---
+    let hud_enabled = settings.borrow().hud_enabled;
+    let hud_mgr = Rc::new(hud_manager::HudManager::start(hud_enabled));
+    if hud_enabled {
+        let s = settings.borrow();
+        hud_mgr.push_settings(hud_manager::HudSettings {
+            overlay_opacity: s.hud_overlay_opacity,
+            show_clip_toasts: s.hud_show_clip_toasts,
+            overlay_enabled: s.hud_show_overlay_in_game,
+        });
+    }
+    let fg_monitor = Rc::new(RefCell::new(foreground_monitor::ForegroundMonitor::new(
+        hud_enabled,
+        settings.borrow().hud_show_overlay_in_game,
+    )));
+
     // --- GIF animators ---
     let gif_popover_anim = gif_animator::GifAnimator::new(50, None);
     let gif_chat_anim = gif_animator::GifAnimator::new(50, Some(2));
@@ -329,6 +359,8 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
         gif_chat_anim,
         dbg_hist: Rc::new(RefCell::new(DebugHistory::new())),
         avatar_cache: Rc::new(RefCell::new(std::collections::HashMap::new())),
+        hud_manager: hud_mgr,
+        fg_monitor,
     };
 
     // --- Wire all callbacks ---
@@ -391,6 +423,8 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
     log::info!("[startup] window shown");
     slint::run_event_loop_until_quit()?;
     log::info!("[exit] event loop ended");
+
+    ctx.hud_manager.shutdown();
     Ok(())
 }
 
