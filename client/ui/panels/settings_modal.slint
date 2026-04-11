@@ -257,11 +257,11 @@ component ToggleRow inherits Rectangle {
         padding-left: 20px;
         padding-right: 20px;
         spacing: 32px;
-        alignment: center;
 
         VerticalLayout {
             horizontal-stretch: 1;
             spacing: 6px;
+            alignment: center;
 
             Text {
                 text: title;
@@ -279,9 +279,12 @@ component ToggleRow inherits Rectangle {
             }
         }
 
-        SettingsToggle {
-            checked <=> root.checked;
-            toggled(v) => { root.toggled(v); }
+        VerticalLayout {
+            alignment: center;
+            SettingsToggle {
+                checked <=> root.checked;
+                toggled(v) => { root.toggled(v); }
+            }
         }
     }
 }
@@ -298,8 +301,8 @@ component VolumeSlider inherits VerticalLayout {
     spacing: 12px;
 
     HorizontalLayout {
-        padding-left: 4px;
-        padding-right: 4px;
+        padding-left: 20px;
+        padding-right: 20px;
 
         Text {
             text: label;
@@ -716,12 +719,23 @@ component GeneralTab inherits VerticalLayout {
             }
         }
 
-        VolumeSlider {
-            label: "Overlay Opacity";
-            icon-source: @image-url("../icons/monitor.svg");
-            value <=> root.hud-overlay-opacity;
-            changed(v) => { setting-changed-hud-overlay-opacity(v); }
+        Rectangle {
+            border-radius: 12px;
+            background: Theme.bg-app;
+            border-width: 1px;
+            border-color: Theme.graphic-light;
             opacity: root.hud-enabled ? 1.0 : 0.4;
+
+            VerticalLayout {
+                padding: 24px;
+
+                VolumeSlider {
+                    label: "Overlay Opacity";
+                    icon-source: @image-url("../icons/monitor.svg");
+                    value <=> root.hud-overlay-opacity;
+                    changed(v) => { setting-changed-hud-overlay-opacity(v); }
+                }
+            }
         }
     }
 }
