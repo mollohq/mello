@@ -187,6 +187,21 @@ When the user selects a specific device in settings, the `GetDevice()` path is u
 
 All WASAPI threads use `CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED)`. Using `COINIT_MULTITHREADED` causes `SetDuckingPreference` and `RegisterDuckNotification` to silently succeed but not actually register with the audio engine's notification pump.
 
+### 4.2 Device Switching Invariants
+
+When `set_playback_device()` or `set_capture_device()` replaces the `AudioPlayback` / `AudioCapture` instance, the new object starts with **no callback**. The old object's callback does not transfer. The switching function **must** re-wire the callback before calling `start()`:
+
+| Function | Must re-wire | Same wiring as |
+|----------|-------------|----------------|
+| `set_playback_device()` | `playback_->set_render_source(...)` with the `mix_output` lambda | `initialize()` step 9/9 |
+| `set_capture_device()` | `capture_->start(...)` with the `on_captured_audio` lambda | `start_capture()` |
+
+Without this, the WASAPI playback thread falls through to `ring_.read()` (always empty in SFU/clip mode), producing permanent silence. The capture side drops all mic data.
+
+**Why this matters at startup:** Settings restoration calls `set_playback_device()` / `set_capture_device()` ~100ms after `AudioPipeline::initialize()` completes. If the user has a saved device preference, the freshly-wired callback is immediately destroyed and replaced with `nullptr`.
+
+> **Incident reference (April 2026):** `set_playback_device()` created a new `AudioPlayback` without re-setting `render_source_`, causing total silence on every Windows machine that had a saved output device preference. macOS was unaffected only because no tester had set an explicit output device. See `mello/logs/windows_device_no_sound.log`.
+
 ---
 
 ## 5. Video Pipeline

@@ -38,6 +38,7 @@ Do not repeat a corrected mistake in the same session.
 - Public API must have doc comments. Internal functions: comment the *why*, not the *what*.
 
 ## C++ Standards (libmello)
+- **Before touching any file in `libmello/src/audio/` or `libmello/src/video/`, read `specs/03-LIBMELLO.md` in full.** These pipelines have threading, COM, and callback invariants that are not obvious from the code alone. Violating them causes silent failures on Windows (no crash, no error, just no audio/video).
 - C++17. No raw owning pointers — use `std::unique_ptr` / `std::shared_ptr`.
 - Thread safety: document which threads call each function. Use `MELLO_LOG_*` macros freely.
 - RAII everywhere. No manual `new`/`delete`.
