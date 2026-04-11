@@ -364,6 +364,8 @@ pub fn handle(ctx: &AppContext, event: Event) {
                     &uav,
                     huav,
                     &ctx.avatar_cache.borrow(),
+                    ctx.app.get_mic_muted(),
+                    ctx.app.get_deafened(),
                 );
                 ctx.app
                     .set_voice_channels(Rc::new(slint::VecModel::from(vc_data)).into());

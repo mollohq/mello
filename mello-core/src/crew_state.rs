@@ -66,6 +66,10 @@ pub struct VoiceMember {
     #[serde(default)]
     pub speaking: Option<bool>,
     #[serde(default)]
+    pub muted: Option<bool>,
+    #[serde(default)]
+    pub deafened: Option<bool>,
+    #[serde(default)]
     pub joined_at: Option<i64>,
 }
 

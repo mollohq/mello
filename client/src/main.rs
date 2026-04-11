@@ -286,16 +286,19 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
-    // Restore saved PTT hotkey
+    // Restore saved PTT binding and activate listener if PTT mode is on
     {
         let s = settings.borrow();
         if let Some(ref key_str) = s.ptt_key {
-            if let Some((hotkey, label)) = platform::hotkeys::parse_hotkey_string(key_str) {
-                match hotkey_mgr.borrow_mut().register_ptt(hotkey) {
-                    Ok(_) => log::info!("Restored PTT key: {}", label),
-                    Err(e) => log::warn!("Failed to restore PTT key: {}", e),
-                }
+            if let Some((binding, label)) = platform::hotkeys::parse_ptt_string(key_str) {
+                log::info!("Restored PTT key: {}", label);
+                hotkey_mgr.borrow().register_ptt(binding);
             }
+        }
+        let ptt_active = s.input_mode == "push_to_talk";
+        hotkey_mgr.borrow().set_active(ptt_active);
+        if ptt_active {
+            let _ = cmd_tx.try_send(Command::SetMute { muted: true });
         }
     }
 

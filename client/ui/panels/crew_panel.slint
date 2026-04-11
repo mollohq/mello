@@ -1,51 +1,57 @@
 import { Theme } from "../theme.slint";
 import { CrewData, VoiceChannelData, VoiceChannelMember } from "../types.slint";
 
-component VoiceBars inherits HorizontalLayout {
-    in property <bool> speaking: false;
-    spacing: 2px;
-    alignment: center;
-
-    Rectangle {
-        width: 2px;
-        height: speaking ? 8px : 4px;
-        border-radius: 1px;
-        background: speaking ? Theme.accent : Theme.graphic-med;
-    }
-
-    Rectangle {
-        width: 2px;
-        height: speaking ? 12px : 4px;
-        border-radius: 1px;
-        background: speaking ? Theme.accent : Theme.graphic-med;
-    }
-
-    Rectangle {
-        width: 2px;
-        height: speaking ? 8px : 4px;
-        border-radius: 1px;
-        background: speaking ? Theme.accent : Theme.graphic-med;
-    }
-}
-
 component VcMemberRow inherits Rectangle {
     in property <string> name;
     in property <string> initials;
     in property <bool> speaking: false;
+    in property <bool> muted: false;
+    in property <bool> deafened: false;
     in property <image> avatar;
     in property <bool> has-avatar: false;
 
-    height: 22px;
+    height: 24px;
+    border-radius: 4px;
+    background: speaking ? Theme.voice-active-bg : transparent;
+    border-width: speaking ? 1px : 0px;
+    border-color: speaking ? Theme.voice-active-bg : transparent;
 
     HorizontalLayout {
-        spacing: 7px;
-        padding-left: 31px;
+        spacing: 5px;
+        padding-left: 6px;
+
+        Rectangle {
+            width: 10px;
+            height: self.width;
+            y: (parent.height - self.height) / 2;
+
+            if speaking && !muted && !deafened: Image {
+                source: @image-url("../icons/volume.svg");
+                width: 10px;
+                height: 10px;
+                colorize: Theme.voice-active;
+            }
+
+            if deafened: Image {
+                source: @image-url("../icons/headphone-off.svg");
+                width: 10px;
+                height: 10px;
+                colorize: Theme.graphic-med;
+            }
+
+            if muted && !deafened: Image {
+                source: @image-url("../icons/mic-off.svg");
+                width: 10px;
+                height: 10px;
+                colorize: Theme.graphic-med;
+            }
+        }
 
         Rectangle {
             width: 18px;
             height: 18px;
             border-radius: 4px;
-            background: speaking ? Theme.graphic-med : Theme.graphic-light;
+            background: Theme.graphic-light;
             clip: true;
             y: (parent.height - self.height) / 2;
 
@@ -70,14 +76,11 @@ component VcMemberRow inherits Rectangle {
         Text {
             text: name;
             font-size: 11px;
-            color: Theme.text-sub;
+            color: speaking ? Theme.voice-active : Theme.text-sub;
+            font-weight: speaking ? 500 : 400;
             horizontal-stretch: 1;
             overflow: elide;
             vertical-alignment: center;
-        }
-
-        if speaking: VoiceBars {
-            speaking: true;
         }
     }
 }
@@ -327,6 +330,8 @@ export component CrewPanel inherits Rectangle {
                                             name: member.name;
                                             initials: member.initials;
                                             speaking: member.speaking;
+                                            muted: member.muted;
+                                            deafened: member.deafened;
                                             avatar: member.avatar;
                                             has-avatar: member.has-avatar;
                                         }

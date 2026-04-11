@@ -112,6 +112,8 @@ pub fn voice_members_to_ui(
     user_avatar: &slint::Image,
     has_user_avatar: bool,
     cache: &std::collections::HashMap<String, slint::Image>,
+    local_muted: bool,
+    local_deafened: bool,
 ) -> Vec<VoiceChannelMember> {
     const EPOCH_2024: i64 = 1_704_067_200;
     let mut out: Vec<VoiceChannelMember> = members
@@ -133,6 +135,16 @@ pub fn voice_members_to_ui(
                 avatar: av,
                 has_avatar: has_av,
                 speaking: m.speaking.unwrap_or(false),
+                muted: if is_self {
+                    local_muted
+                } else {
+                    m.muted.unwrap_or(false)
+                },
+                deafened: if is_self {
+                    local_deafened
+                } else {
+                    m.deafened.unwrap_or(false)
+                },
                 joined_at: secs as i32,
             }
         })
@@ -155,6 +167,8 @@ pub fn channel_to_ui(
     user_avatar: &slint::Image,
     has_user_avatar: bool,
     cache: &std::collections::HashMap<String, slint::Image>,
+    local_muted: bool,
+    local_deafened: bool,
 ) -> VoiceChannelData {
     let members = voice_members_to_ui(
         &ch.members,
@@ -162,6 +176,8 @@ pub fn channel_to_ui(
         user_avatar,
         has_user_avatar,
         cache,
+        local_muted,
+        local_deafened,
     );
     let member_count = members.len() as i32;
     let is_active = ch.id == active_channel_id;
@@ -183,6 +199,8 @@ pub fn channels_to_ui(
     user_avatar: &slint::Image,
     has_user_avatar: bool,
     cache: &std::collections::HashMap<String, slint::Image>,
+    local_muted: bool,
+    local_deafened: bool,
 ) -> Vec<VoiceChannelData> {
     channels
         .iter()
@@ -194,6 +212,8 @@ pub fn channels_to_ui(
                 user_avatar,
                 has_user_avatar,
                 cache,
+                local_muted,
+                local_deafened,
             )
         })
         .collect()

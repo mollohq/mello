@@ -231,6 +231,8 @@ pub fn handle(ctx: &AppContext, event: Event) {
                                 &uav,
                                 huav,
                                 &ctx.avatar_cache.borrow(),
+                                ctx.app.get_mic_muted(),
+                                ctx.app.get_deafened(),
                             );
                             ch.member_count = ch_members.len() as i32;
                             ch.members = Rc::new(slint::VecModel::from(ch_members)).into();
@@ -300,6 +302,8 @@ pub fn handle(ctx: &AppContext, event: Event) {
                                 &uav,
                                 huav,
                                 &ctx.avatar_cache.borrow(),
+                                ctx.app.get_mic_muted(),
+                                ctx.app.get_deafened(),
                             );
                             ch.member_count = ch_members.len() as i32;
                             ch.members = Rc::new(slint::VecModel::from(ch_members)).into();
@@ -330,6 +334,8 @@ pub fn handle(ctx: &AppContext, event: Event) {
                     &uav,
                     huav,
                     &ctx.avatar_cache.borrow(),
+                    ctx.app.get_mic_muted(),
+                    ctx.app.get_deafened(),
                 );
                 ctx.app
                     .set_voice_channels(Rc::new(slint::VecModel::from(vc_data)).into());
@@ -357,6 +363,8 @@ pub fn handle(ctx: &AppContext, event: Event) {
                     &uav,
                     huav,
                     &ctx.avatar_cache.borrow(),
+                    ctx.app.get_mic_muted(),
+                    ctx.app.get_deafened(),
                 ));
                 ctx.app
                     .set_voice_channels(Rc::new(slint::VecModel::from(channels)).into());

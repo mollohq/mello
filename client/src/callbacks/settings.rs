@@ -34,7 +34,7 @@ pub fn wire(ctx: &AppContext) {
                 app.set_settings_hud_overlay_opacity(settings.hud_overlay_opacity);
                 app.set_settings_hud_clip_toasts(settings.hud_show_clip_toasts);
                 let ptt_label: slint::SharedString = if let Some(ref key_str) = settings.ptt_key {
-                    platform::hotkeys::parse_hotkey_string(key_str)
+                    platform::hotkeys::parse_ptt_string(key_str)
                         .map(|(_, label)| label)
                         .unwrap_or_else(|| "Unassigned".into())
                 } else {
@@ -239,6 +239,8 @@ pub fn wire(ctx: &AppContext) {
     }
     {
         let s = ctx.settings.clone();
+        let hk = ctx.hotkey_mgr.clone();
+        let cmd = ctx.cmd_tx.clone();
         ctx.app.on_setting_changed_input_mode(move |is_ptt| {
             let mut settings = s.borrow_mut();
             settings.input_mode = if is_ptt {
@@ -247,6 +249,9 @@ pub fn wire(ctx: &AppContext) {
                 "voice_activity".into()
             };
             settings.save();
+            hk.borrow().set_active(is_ptt);
+            // Mute when entering PTT (unmute on key press), unmute when leaving PTT
+            let _ = cmd.try_send(Command::SetMute { muted: is_ptt });
         });
     }
     {
@@ -263,27 +268,17 @@ pub fn wire(ctx: &AppContext) {
         let hk = ctx.hotkey_mgr.clone();
         ctx.app
             .on_settings_ptt_key_captured(move |key_text, ctrl, alt, shift, meta| {
-                if let Some((hotkey, label, raw_str)) = platform::hotkeys::slint_key_to_hotkey(
-                    key_text.as_str(),
-                    ctrl,
-                    alt,
-                    shift,
-                    meta,
-                ) {
-                    match hk.borrow_mut().register_ptt(hotkey) {
-                        Ok(_) => {
-                            log::info!("PTT key registered: {} ({})", label, raw_str);
-                            let mut settings = s.borrow_mut();
-                            settings.ptt_key = Some(raw_str);
-                            settings.save();
-                            if let Some(app) = app_weak.upgrade() {
-                                app.set_settings_ptt_key_label(label.into());
-                                app.set_settings_ptt_binding(false);
-                            }
-                        }
-                        Err(e) => {
-                            log::warn!("Failed to register PTT key: {}", e);
-                        }
+                if let Some((binding, label, raw_str)) =
+                    platform::hotkeys::slint_key_to_ptt(key_text.as_str(), ctrl, alt, shift, meta)
+                {
+                    log::info!("PTT key registered: {} ({})", label, raw_str);
+                    hk.borrow().register_ptt(binding);
+                    let mut settings = s.borrow_mut();
+                    settings.ptt_key = Some(raw_str);
+                    settings.save();
+                    if let Some(app) = app_weak.upgrade() {
+                        app.set_settings_ptt_key_label(label.into());
+                        app.set_settings_ptt_binding(false);
                     }
                 } else {
                     log::debug!(
@@ -301,7 +296,7 @@ pub fn wire(ctx: &AppContext) {
             let defaults = Settings::default();
             *s.borrow_mut() = defaults.clone();
             s.borrow().save();
-            hk.borrow_mut().unregister_ptt();
+            hk.borrow().unregister_ptt();
             if let Some(app) = app_weak.upgrade() {
                 app.set_settings_start_on_boot(defaults.start_on_boot);
                 app.set_settings_start_minimized(defaults.start_minimized);

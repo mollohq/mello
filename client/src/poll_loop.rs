@@ -2,12 +2,14 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use mello_core::{Command, Event};
-use slint::ComponentHandle;
+use slint::{ComponentHandle, Model};
 
 use crate::app_context::AppContext;
+use crate::converters::update_active_crew_card;
 use crate::notifications;
 use crate::platform::{self, StatusItem, VoiceState};
 use crate::updater::UpdateEvent;
+use crate::VoiceChannelMember;
 
 pub fn start(
     ctx: &AppContext,
@@ -235,7 +237,7 @@ pub fn start(
                                     .set_settings_vad_threshold(settings.vad_threshold);
                                 let ptt_label: slint::SharedString =
                                     if let Some(ref key_str) = settings.ptt_key {
-                                        platform::hotkeys::parse_hotkey_string(key_str)
+                                        platform::hotkeys::parse_ptt_string(key_str)
                                             .map(|(_, label)| label)
                                             .unwrap_or_else(|| "Unassigned".into())
                                     } else {
@@ -296,17 +298,53 @@ pub fn start(
                 }
             }
 
-            // --- Global hotkey events (PTT) ---
-            while let Some(event) = platform::hotkeys::HotkeyManager::poll() {
-                let mgr = poll_ctx.hotkey_mgr.borrow();
-                if let Some(ptt_id) = mgr.ptt_id() {
-                    if event.id == ptt_id {
-                        let pressed = event.state == global_hotkey::HotKeyState::Pressed;
-                        let _ = poll_ctx
-                            .cmd_tx
-                            .try_send(Command::SetMute { muted: !pressed });
-                    }
-                }
+            // --- PTT hotkey events ---
+            while let Some(event) = poll_ctx.hotkey_mgr.borrow().poll() {
+                let pressed = event == platform::hotkeys::PttEvent::Pressed;
+                let _ = poll_ctx
+                    .cmd_tx
+                    .try_send(Command::SetMute { muted: !pressed });
+                let _ = poll_ctx
+                    .cmd_tx
+                    .try_send(Command::VoiceSpeaking { speaking: pressed });
+
+                // Update local UI speaking state
+                let my_id = poll_ctx.app.get_user_id();
+                let current = poll_ctx.app.get_members();
+                let members: Vec<crate::MemberData> = (0..current.row_count())
+                    .map(|i| {
+                        let mut m = current.row_data(i).unwrap();
+                        if m.id == my_id.as_str() {
+                            m.speaking = pressed;
+                        }
+                        m
+                    })
+                    .collect();
+                poll_ctx
+                    .app
+                    .set_members(Rc::new(slint::VecModel::from(members)).into());
+
+                let channels = poll_ctx.app.get_voice_channels();
+                let updated: Vec<crate::VoiceChannelData> = (0..channels.row_count())
+                    .map(|i| {
+                        let mut ch = channels.row_data(i).unwrap();
+                        let ch_members: Vec<VoiceChannelMember> = (0..ch.members.row_count())
+                            .map(|j| {
+                                let mut m = ch.members.row_data(j).unwrap();
+                                if m.id == my_id.as_str() {
+                                    m.speaking = pressed;
+                                }
+                                m
+                            })
+                            .collect();
+                        ch.members = Rc::new(slint::VecModel::from(ch_members)).into();
+                        ch
+                    })
+                    .collect();
+                poll_ctx
+                    .app
+                    .set_voice_channels(Rc::new(slint::VecModel::from(updated)).into());
+                update_active_crew_card(&poll_ctx.app);
             }
 
             // --- HUD foreground monitor + state push ---

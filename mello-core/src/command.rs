@@ -132,6 +132,10 @@ pub enum Command {
     SetDeafen {
         deafened: bool,
     },
+    BroadcastMuteState {
+        muted: bool,
+        deafened: bool,
+    },
     CheckMicPermission,
     RequestMicPermission,
     ListAudioDevices,

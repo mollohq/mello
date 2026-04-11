@@ -405,6 +405,17 @@ impl Client {
             Command::SetDeafen { deafened } => {
                 self.voice.set_deafen(deafened);
             }
+            Command::BroadcastMuteState { muted, deafened } => {
+                if let Some(crew_id) = self.nakama.active_crew_id().map(String::from) {
+                    if let Err(e) = self
+                        .nakama
+                        .voice_mute_state(&crew_id, muted, deafened)
+                        .await
+                    {
+                        log::debug!("voice_mute_state RPC failed: {}", e);
+                    }
+                }
+            }
             Command::CheckMicPermission => {
                 let status = unsafe { mello_sys::mello_mic_permission_status() };
                 let granted = status == mello_sys::MelloMicPermission_MELLO_MIC_GRANTED;

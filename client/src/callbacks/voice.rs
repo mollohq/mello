@@ -4,7 +4,32 @@ use mello_core::Command;
 use slint::{ComponentHandle, Model};
 
 use crate::app_context::AppContext;
-use crate::VoiceChannelData;
+use crate::{MainWindow, VoiceChannelData, VoiceChannelMember};
+
+fn update_local_vc_mute_state(app: &MainWindow) {
+    let my_id = app.get_user_id();
+    let muted = app.get_mic_muted();
+    let deafened = app.get_deafened();
+    let channels = app.get_voice_channels();
+    let updated: Vec<VoiceChannelData> = (0..channels.row_count())
+        .map(|i| {
+            let mut ch = channels.row_data(i).unwrap();
+            let members: Vec<VoiceChannelMember> = (0..ch.members.row_count())
+                .map(|j| {
+                    let mut m = ch.members.row_data(j).unwrap();
+                    if m.id == my_id.as_str() {
+                        m.muted = muted;
+                        m.deafened = deafened;
+                    }
+                    m
+                })
+                .collect();
+            ch.members = Rc::new(slint::VecModel::from(members)).into();
+            ch
+        })
+        .collect();
+    app.set_voice_channels(Rc::new(slint::VecModel::from(updated)).into());
+}
 
 pub fn wire(ctx: &AppContext) {
     // --- Voice toggle (leave) ---
@@ -24,6 +49,11 @@ pub fn wire(ctx: &AppContext) {
                 let new_muted = !app.get_mic_muted();
                 app.set_mic_muted(new_muted);
                 let _ = cmd.try_send(Command::SetMute { muted: new_muted });
+                let _ = cmd.try_send(Command::BroadcastMuteState {
+                    muted: new_muted,
+                    deafened: app.get_deafened(),
+                });
+                update_local_vc_mute_state(&app);
             }
         });
     }
@@ -53,6 +83,11 @@ pub fn wire(ctx: &AppContext) {
                         let _ = cmd.try_send(Command::SetMute { muted: false });
                     }
                 }
+                let _ = cmd.try_send(Command::BroadcastMuteState {
+                    muted: app.get_mic_muted(),
+                    deafened: new_deafened,
+                });
+                update_local_vc_mute_state(&app);
             }
         });
     }

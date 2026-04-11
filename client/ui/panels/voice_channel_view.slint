@@ -243,7 +243,7 @@ component VoiceChannelExpanded inherits Rectangle {
                     border-radius: Theme.r-inner;
                     background: Theme.surface;
                     border-width: 1px;
-                    border-color: member.speaking ? Theme.accent : Theme.graphic-light;
+                    border-color: member.speaking ? Theme.voice-active : Theme.graphic-light;
                     clip: true;
 
                     if member.has-avatar: Image {
@@ -274,19 +274,19 @@ component VoiceChannelExpanded inherits Rectangle {
                         width: 3px;
                         height: 3px;
                         border-radius: 1.5px;
-                        background: member.speaking ? Theme.graphic-dark : Theme.graphic-light;
+                        background: member.speaking ? Theme.voice-active : Theme.graphic-light;
                     }
                     Rectangle {
                         width: member.speaking ? 20px : 10px;
                         height: 3px;
                         border-radius: 1.5px;
-                        background: member.speaking ? Theme.accent : Theme.graphic-light;
+                        background: member.speaking ? Theme.voice-active : Theme.graphic-light;
                     }
                     Rectangle {
                         width: 3px;
                         height: 3px;
                         border-radius: 1.5px;
-                        background: member.speaking ? Theme.graphic-dark : Theme.graphic-light;
+                        background: member.speaking ? Theme.voice-active : Theme.graphic-light;
                     }
                 }
 
@@ -295,7 +295,7 @@ component VoiceChannelExpanded inherits Rectangle {
                     font-family: Theme.font-mono;
                     font-size: 10px;
                     font-weight: member.speaking ? 500 : 400;
-                    color: member.speaking ? Theme.text-primary : Theme.text-secondary;
+                    color: member.speaking ? Theme.voice-active : Theme.text-secondary;
                     horizontal-alignment: center;
                 }
             }

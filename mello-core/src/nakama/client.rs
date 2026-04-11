@@ -1242,6 +1242,13 @@ impl NakamaClient {
         Ok(())
     }
 
+    pub async fn voice_mute_state(&self, crew_id: &str, muted: bool, deafened: bool) -> Result<()> {
+        let payload =
+            serde_json::json!({ "crew_id": crew_id, "muted": muted, "deafened": deafened });
+        self.rpc("voice_mute_state", &payload).await?;
+        Ok(())
+    }
+
     // --- Voice channel CRUD ---
 
     pub async fn channel_create(
