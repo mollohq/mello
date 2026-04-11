@@ -79,6 +79,10 @@ Do not repeat a corrected mistake in the same session.
       }
   }
   ```
+- **Progress/fill bars must set `x: 0;`** on the fill `Rectangle`. A child `Rectangle` with
+  `width` smaller than its parent defaults to **horizontally centered** in Slint, so omitting
+  `x: 0` makes the bar grow from the center outward. See `debug_panel.slint` `StatBar` for
+  the canonical pattern (`x: 0`, `clip: true` on the track).
 - When a design mockup (`designs/*.html`) contains inline SVGs, **do not** try to recreate them
   with Slint rectangles or shapes. Instead, extract the SVG into `client/ui/icons/<name>.svg`
   (stroke="black", no hardcoded colors) and reference it with `@image-url("../icons/<name>.svg")`

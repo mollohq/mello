@@ -62,6 +62,7 @@ export component UpdateToast inherits Rectangle {
                 border-radius: 2px;
 
                 Rectangle {
+                    x: 0;
                     width: parent.width * clamp(download-progress, 0, 1);
                     height: parent.height;
                     background: Theme.accent;
