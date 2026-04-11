@@ -106,24 +106,28 @@ pub fn bento_bases(count: usize, items_per_set: usize) -> Vec<i32> {
     (0..num_sets).map(|i| (i * items_per_set) as i32).collect()
 }
 
+pub struct VoiceUiCtx<'a> {
+    pub local_user_id: &'a str,
+    pub user_avatar: &'a slint::Image,
+    pub has_user_avatar: bool,
+    pub cache: &'a std::collections::HashMap<String, slint::Image>,
+    pub local_muted: bool,
+    pub local_deafened: bool,
+}
+
 pub fn voice_members_to_ui(
     members: &[mello_core::crew_state::VoiceMember],
-    local_user_id: &str,
-    user_avatar: &slint::Image,
-    has_user_avatar: bool,
-    cache: &std::collections::HashMap<String, slint::Image>,
-    local_muted: bool,
-    local_deafened: bool,
+    ctx: &VoiceUiCtx<'_>,
 ) -> Vec<VoiceChannelMember> {
     const EPOCH_2024: i64 = 1_704_067_200;
     let mut out: Vec<VoiceChannelMember> = members
         .iter()
         .map(|m| {
             let secs = m.joined_at.unwrap_or(0) / 1000 - EPOCH_2024;
-            let is_self = m.user_id == local_user_id;
-            let (av, has_av) = if is_self && has_user_avatar {
-                (user_avatar.clone(), true)
-            } else if let Some(img) = cache.get(&m.user_id) {
+            let is_self = m.user_id == ctx.local_user_id;
+            let (av, has_av) = if is_self && ctx.has_user_avatar {
+                (ctx.user_avatar.clone(), true)
+            } else if let Some(img) = ctx.cache.get(&m.user_id) {
                 (img.clone(), true)
             } else {
                 (slint::Image::default(), false)
@@ -136,12 +140,12 @@ pub fn voice_members_to_ui(
                 has_avatar: has_av,
                 speaking: m.speaking.unwrap_or(false),
                 muted: if is_self {
-                    local_muted
+                    ctx.local_muted
                 } else {
                     m.muted.unwrap_or(false)
                 },
                 deafened: if is_self {
-                    local_deafened
+                    ctx.local_deafened
                 } else {
                     m.deafened.unwrap_or(false)
                 },
@@ -150,8 +154,8 @@ pub fn voice_members_to_ui(
         })
         .collect();
     out.sort_by(|a, b| {
-        let a_local = a.id == local_user_id;
-        let b_local = b.id == local_user_id;
+        let a_local = a.id == ctx.local_user_id;
+        let b_local = b.id == ctx.local_user_id;
         match b_local.cmp(&a_local) {
             std::cmp::Ordering::Equal => a.joined_at.cmp(&b.joined_at),
             other => other,
@@ -163,22 +167,9 @@ pub fn voice_members_to_ui(
 pub fn channel_to_ui(
     ch: &mello_core::crew_state::VoiceChannelState,
     active_channel_id: &str,
-    local_user_id: &str,
-    user_avatar: &slint::Image,
-    has_user_avatar: bool,
-    cache: &std::collections::HashMap<String, slint::Image>,
-    local_muted: bool,
-    local_deafened: bool,
+    ctx: &VoiceUiCtx<'_>,
 ) -> VoiceChannelData {
-    let members = voice_members_to_ui(
-        &ch.members,
-        local_user_id,
-        user_avatar,
-        has_user_avatar,
-        cache,
-        local_muted,
-        local_deafened,
-    );
+    let members = voice_members_to_ui(&ch.members, ctx);
     let member_count = members.len() as i32;
     let is_active = ch.id == active_channel_id;
     VoiceChannelData {
@@ -195,27 +186,11 @@ pub fn channel_to_ui(
 pub fn channels_to_ui(
     channels: &[mello_core::crew_state::VoiceChannelState],
     active_channel_id: &str,
-    local_user_id: &str,
-    user_avatar: &slint::Image,
-    has_user_avatar: bool,
-    cache: &std::collections::HashMap<String, slint::Image>,
-    local_muted: bool,
-    local_deafened: bool,
+    ctx: &VoiceUiCtx<'_>,
 ) -> Vec<VoiceChannelData> {
     channels
         .iter()
-        .map(|ch| {
-            channel_to_ui(
-                ch,
-                active_channel_id,
-                local_user_id,
-                user_avatar,
-                has_user_avatar,
-                cache,
-                local_muted,
-                local_deafened,
-            )
-        })
+        .map(|ch| channel_to_ui(ch, active_channel_id, ctx))
         .collect()
 }
 

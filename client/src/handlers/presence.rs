@@ -6,7 +6,7 @@ use slint::Model;
 
 use crate::app_context::AppContext;
 use crate::converters::{
-    channels_to_ui, chat_messages_to_slint, make_initials, update_active_crew_card,
+    channels_to_ui, chat_messages_to_slint, make_initials, update_active_crew_card, VoiceUiCtx,
 };
 use crate::{avatar, CrewData, MemberData};
 
@@ -356,17 +356,15 @@ pub fn handle(ctx: &AppContext, event: Event) {
                 };
                 let local_id = ctx.app.get_user_id();
                 let uav = ctx.app.get_user_avatar();
-                let huav = ctx.app.get_has_user_avatar();
-                let vc_data = channels_to_ui(
-                    &state.voice_channels,
-                    &avc_id,
-                    &local_id,
-                    &uav,
-                    huav,
-                    &ctx.avatar_cache.borrow(),
-                    ctx.app.get_mic_muted(),
-                    ctx.app.get_deafened(),
-                );
+                let vctx = VoiceUiCtx {
+                    local_user_id: &local_id,
+                    user_avatar: &uav,
+                    has_user_avatar: ctx.app.get_has_user_avatar(),
+                    cache: &ctx.avatar_cache.borrow(),
+                    local_muted: ctx.app.get_mic_muted(),
+                    local_deafened: ctx.app.get_deafened(),
+                };
+                let vc_data = channels_to_ui(&state.voice_channels, &avc_id, &vctx);
                 ctx.app
                     .set_voice_channels(Rc::new(slint::VecModel::from(vc_data)).into());
 
