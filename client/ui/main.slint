@@ -1,5 +1,17 @@
 import { Theme } from "theme.slint";
-import { CrewData, MemberData, ChatMessageData, GifItemData, AudioDeviceData, VoiceChannelData, VoiceChannelMember, CaptureSourceData, DiscoverCrewData, SearchUserData, FeedCardData } from "types.slint";
+import {
+    CrewData,
+    MemberData,
+    ChatMessageData,
+    GifItemData,
+    AudioDeviceData,
+    VoiceChannelData,
+    VoiceChannelMember,
+    CaptureSourceData,
+    DiscoverCrewData,
+    SearchUserData,
+    FeedCardData,
+} from "types.slint";
 import { CrewPanel } from "panels/crew_panel.slint";
 import { StreamView } from "panels/stream_view.slint";
 import { StreamSourcePicker } from "panels/stream_source_picker.slint";
@@ -276,19 +288,67 @@ export component MainWindow inherits Window {
     in property <float> dbg-delay-ms: 0.0;
     in property <float> dbg-rtt-ms: 0.0;
     // Level history (ring buffer, 30 entries)
-    in property <float> lh0;  in property <float> lh1;  in property <float> lh2;  in property <float> lh3;  in property <float> lh4;
-    in property <float> lh5;  in property <float> lh6;  in property <float> lh7;  in property <float> lh8;  in property <float> lh9;
-    in property <float> lh10; in property <float> lh11; in property <float> lh12; in property <float> lh13; in property <float> lh14;
-    in property <float> lh15; in property <float> lh16; in property <float> lh17; in property <float> lh18; in property <float> lh19;
-    in property <float> lh20; in property <float> lh21; in property <float> lh22; in property <float> lh23; in property <float> lh24;
-    in property <float> lh25; in property <float> lh26; in property <float> lh27; in property <float> lh28; in property <float> lh29;
+    in property <float> lh0;
+    in property <float> lh1;
+    in property <float> lh2;
+    in property <float> lh3;
+    in property <float> lh4;
+    in property <float> lh5;
+    in property <float> lh6;
+    in property <float> lh7;
+    in property <float> lh8;
+    in property <float> lh9;
+    in property <float> lh10;
+    in property <float> lh11;
+    in property <float> lh12;
+    in property <float> lh13;
+    in property <float> lh14;
+    in property <float> lh15;
+    in property <float> lh16;
+    in property <float> lh17;
+    in property <float> lh18;
+    in property <float> lh19;
+    in property <float> lh20;
+    in property <float> lh21;
+    in property <float> lh22;
+    in property <float> lh23;
+    in property <float> lh24;
+    in property <float> lh25;
+    in property <float> lh26;
+    in property <float> lh27;
+    in property <float> lh28;
+    in property <float> lh29;
     // Speaking state per bar
-    in property <bool> sh0;  in property <bool> sh1;  in property <bool> sh2;  in property <bool> sh3;  in property <bool> sh4;
-    in property <bool> sh5;  in property <bool> sh6;  in property <bool> sh7;  in property <bool> sh8;  in property <bool> sh9;
-    in property <bool> sh10; in property <bool> sh11; in property <bool> sh12; in property <bool> sh13; in property <bool> sh14;
-    in property <bool> sh15; in property <bool> sh16; in property <bool> sh17; in property <bool> sh18; in property <bool> sh19;
-    in property <bool> sh20; in property <bool> sh21; in property <bool> sh22; in property <bool> sh23; in property <bool> sh24;
-    in property <bool> sh25; in property <bool> sh26; in property <bool> sh27; in property <bool> sh28; in property <bool> sh29;
+    in property <bool> sh0;
+    in property <bool> sh1;
+    in property <bool> sh2;
+    in property <bool> sh3;
+    in property <bool> sh4;
+    in property <bool> sh5;
+    in property <bool> sh6;
+    in property <bool> sh7;
+    in property <bool> sh8;
+    in property <bool> sh9;
+    in property <bool> sh10;
+    in property <bool> sh11;
+    in property <bool> sh12;
+    in property <bool> sh13;
+    in property <bool> sh14;
+    in property <bool> sh15;
+    in property <bool> sh16;
+    in property <bool> sh17;
+    in property <bool> sh18;
+    in property <bool> sh19;
+    in property <bool> sh20;
+    in property <bool> sh21;
+    in property <bool> sh22;
+    in property <bool> sh23;
+    in property <bool> sh24;
+    in property <bool> sh25;
+    in property <bool> sh26;
+    in property <bool> sh27;
+    in property <bool> sh28;
+    in property <bool> sh29;
 
     // --- Update toast ---
     in property <bool> update-available: false;
@@ -460,38 +520,90 @@ export component MainWindow inherits Window {
         spin-text-back: root.spin-text-back;
         spin-heart-front: root.spin-heart-front;
         spin-heart-back: root.spin-heart-back;
-        avatar-slot-clicked(i) => { root.avatar-slot-clicked(i); }
-        avatar-pointer-down(i) => { root.avatar-pointer-down(i); }
-        avatar-pointer-up(i) => { root.avatar-pointer-up(i); }
-        reroll-clicked => { root.avatar-reroll-clicked(); }
-        upload-clicked => { root.avatar-upload-clicked(); }
-        crew-selected(id) => { root.onboarding-crew-selected(id); }
-        create-crew-requested(name) => { root.onboarding-create-crew(name); }
-        continue-to-step(s) => { root.onboarding-continue(s); }
-        login-requested => { root.onboarding-login-requested(); }
-        open-sign-in => { root.show-sign-in = true; }
-        link-email(email, pw) => { root.onboarding-link-email(email, pw); }
-        skip-identity => { root.onboarding-skip-identity(); }
-        capture-device-selected(id) => { root.onboarding-capture-device-selected(id); }
-        playback-device-selected(id) => { root.onboarding-playback-device-selected(id); }
-        auth-steam => { root.onboarding-auth-steam(); }
-        auth-google => { root.onboarding-auth-google(); }
-        auth-twitch => { root.onboarding-auth-twitch(); }
-        auth-discord => { root.onboarding-auth-discord(); }
-        auth-apple => { root.onboarding-auth-apple(); }
+        avatar-slot-clicked(i) => {
+            root.avatar-slot-clicked(i);
+        }
+        avatar-pointer-down(i) => {
+            root.avatar-pointer-down(i);
+        }
+        avatar-pointer-up(i) => {
+            root.avatar-pointer-up(i);
+        }
+        reroll-clicked => {
+            root.avatar-reroll-clicked();
+        }
+        upload-clicked => {
+            root.avatar-upload-clicked();
+        }
+        crew-selected(id) => {
+            root.onboarding-crew-selected(id);
+        }
+        create-crew-requested(name) => {
+            root.onboarding-create-crew(name);
+        }
+        continue-to-step(s) => {
+            root.onboarding-continue(s);
+        }
+        login-requested => {
+            root.onboarding-login-requested();
+        }
+        open-sign-in => {
+            root.show-sign-in = true;
+        }
+        link-email(email, pw) => {
+            root.onboarding-link-email(email, pw);
+        }
+        skip-identity => {
+            root.onboarding-skip-identity();
+        }
+        capture-device-selected(id) => {
+            root.onboarding-capture-device-selected(id);
+        }
+        playback-device-selected(id) => {
+            root.onboarding-playback-device-selected(id);
+        }
+        auth-steam => {
+            root.onboarding-auth-steam();
+        }
+        auth-google => {
+            root.onboarding-auth-google();
+        }
+        auth-twitch => {
+            root.onboarding-auth-twitch();
+        }
+        auth-discord => {
+            root.onboarding-auth-discord();
+        }
+        auth-apple => {
+            root.onboarding-auth-apple();
+        }
     }
 
     // ===================== SIGN-IN PANEL (from onboarding "Sign in" link) =====================
     if show-sign-in && !logged-in: SignInPanel {
         error: root.login-error;
         loading: root.login-loading;
-        back => { root.show-sign-in = false; }
-        signin-steam => { root.signin-steam(); }
-        signin-google => { root.signin-google(); }
-        signin-twitch => { root.signin-twitch(); }
-        signin-discord => { root.signin-discord(); }
-        signin-apple => { root.signin-apple(); }
-        signin-email(email, pw) => { root.login(email, pw); }
+        back => {
+            root.show-sign-in = false;
+        }
+        signin-steam => {
+            root.signin-steam();
+        }
+        signin-google => {
+            root.signin-google();
+        }
+        signin-twitch => {
+            root.signin-twitch();
+        }
+        signin-discord => {
+            root.signin-discord();
+        }
+        signin-apple => {
+            root.signin-apple();
+        }
+        signin-email(email, pw) => {
+            root.login(email, pw);
+        }
     }
 
     // ===================== MAIN APP =====================
@@ -522,7 +634,9 @@ export component MainWindow inherits Window {
                     root.show-discover = true;
                     root.discover-requested();
                 }
-                join-voice-channel(id) => { root.join-voice-channel(id); }
+                join-voice-channel(id) => {
+                    root.join-voice-channel(id);
+                }
             }
 
             // RIGHT: discover OR (center stage + chat)
@@ -538,10 +652,18 @@ export component MainWindow inherits Window {
                     height: parent.height;
                     crews: root.discover-crews-list;
                     bento-set-bases: root.discover-bento-bases;
-                    join-crew(id) => { root.discover-join-crew(id); }
-                    join-invite(code) => { root.discover-join-invite(code); }
-                    back-requested => { root.show-discover = false; }
-                    load-more => { root.discover-load-more(); }
+                    join-crew(id) => {
+                        root.discover-join-crew(id);
+                    }
+                    join-invite(code) => {
+                        root.discover-join-invite(code);
+                    }
+                    back-requested => {
+                        root.show-discover = false;
+                    }
+                    load-more => {
+                        root.discover-load-more();
+                    }
                 }
 
                 if !root.show-discover: Rectangle {
@@ -572,9 +694,15 @@ export component MainWindow inherits Window {
                             root.list-capture-sources();
                             root.source-picker-open = true;
                         }
-                        stop-stream-clicked => { root.stop-stream(); }
-                        stop-watching-clicked => { root.stop-watching(); }
-                        watch-stream-clicked(host-id, session-id, w, h) => { root.watch-stream(host-id, session-id, w, h); }
+                        stop-stream-clicked => {
+                            root.stop-stream();
+                        }
+                        stop-watching-clicked => {
+                            root.stop-watching();
+                        }
+                        watch-stream-clicked(host-id, session-id, w, h) => {
+                            root.watch-stream(host-id, session-id, w, h);
+                        }
                     }
 
                     // Crew feed (shown when no active stream)
@@ -608,8 +736,11 @@ export component MainWindow inherits Window {
                                 }
                             }
                         }
-                        seek-clip(v) => { root.seek-clip(v); }
-                        invite-clicked => { }
+                        seek-clip(v) => {
+                            root.seek-clip(v);
+                        }
+                        invite-clicked => {
+                        }
                     }
 
                     ControlBar {
@@ -634,24 +765,52 @@ export component MainWindow inherits Window {
                         game-color: root.game-color;
                         can-stream: root.can-stream;
                         bar-state <=> root.bar-state;
-                        mic-toggled => { root.mic-toggle(); }
-                        deafen-toggled => { root.deafen-toggle(); }
-                        voice-toggled => { root.voice-toggle(); }
-                        logout-clicked => { root.logout(); }
-                        presence-changed(status) => { root.presence-changed(status); }
-                        theme-toggled => { root.theme-toggled(); }
-                        settings-clicked => { root.settings-requested(); }
-                        request-mic-permission => { root.request-mic-permission(); }
-                        open-mic-settings => { root.open-mic-settings(); }
+                        mic-toggled => {
+                            root.mic-toggle();
+                        }
+                        deafen-toggled => {
+                            root.deafen-toggle();
+                        }
+                        voice-toggled => {
+                            root.voice-toggle();
+                        }
+                        logout-clicked => {
+                            root.logout();
+                        }
+                        presence-changed(status) => {
+                            root.presence-changed(status);
+                        }
+                        theme-toggled => {
+                            root.theme-toggled();
+                        }
+                        settings-clicked => {
+                            root.settings-requested();
+                        }
+                        request-mic-permission => {
+                            root.request-mic-permission();
+                        }
+                        open-mic-settings => {
+                            root.open-mic-settings();
+                        }
                         debug-toggled => {
                             root.debug-open = !root.debug-open;
                             root.debug-toggled();
                         }
-                        stream-requested => { root.stream-requested(); }
-                        reaction-tapped(sentiment) => { root.reaction-tapped(sentiment); }
-                        moment-submitted(text) => { root.moment-submitted(text); }
-                        moment-dismissed => { root.moment-dismissed(); }
-                        clip-captured => { root.clip-captured(); }
+                        stream-requested => {
+                            root.stream-requested();
+                        }
+                        reaction-tapped(sentiment) => {
+                            root.reaction-tapped(sentiment);
+                        }
+                        moment-submitted(text) => {
+                            root.moment-submitted(text);
+                        }
+                        moment-dismissed => {
+                            root.moment-dismissed();
+                        }
+                        clip-captured => {
+                            root.clip-captured();
+                        }
                     }
                 }
 
@@ -665,16 +824,36 @@ export component MainWindow inherits Window {
                     user-name: root.user-name;
                     user-id: root.user-id;
                     loading-history: root.loading-history;
-                    message-submitted(text) => { root.send-message(text); }
-                    message-submitted-with-reply(text, reply-to) => { root.send-message-with-reply(text, reply-to); }
-                    request-history() => { root.request-history(); }
-                    edit-message(id, body) => { root.edit-message(id, body); }
-                    delete-message(id) => { root.delete-message(id); }
-                    gif-pill-clicked() => { root.gif-pill-clicked(); }
-                    gif-search(query) => { root.gif-search(query); }
-                    gif-selected(tid, url, purl, w, h) => { root.gif-selected(tid, url, purl, w, h); }
-                    gif-hovered(purl) => { root.gif-hovered(purl); }
-                    emoji-pill-clicked() => { root.emoji-pill-clicked(); }
+                    message-submitted(text) => {
+                        root.send-message(text);
+                    }
+                    message-submitted-with-reply(text, reply-to) => {
+                        root.send-message-with-reply(text, reply-to);
+                    }
+                    request-history() => {
+                        root.request-history();
+                    }
+                    edit-message(id, body) => {
+                        root.edit-message(id, body);
+                    }
+                    delete-message(id) => {
+                        root.delete-message(id);
+                    }
+                    gif-pill-clicked() => {
+                        root.gif-pill-clicked();
+                    }
+                    gif-search(query) => {
+                        root.gif-search(query);
+                    }
+                    gif-selected(tid, url, purl, w, h) => {
+                        root.gif-selected(tid, url, purl, w, h);
+                    }
+                    gif-hovered(purl) => {
+                        root.gif-hovered(purl);
+                    }
+                    emoji-pill-clicked() => {
+                        root.emoji-pill-clicked();
+                    }
                 }
             }
         }
@@ -682,14 +861,19 @@ export component MainWindow inherits Window {
 
     // ===================== UPDATE TOAST =====================
     if logged-in && (onboarding-step == 0 || onboarding-step > 3): UpdateToast {
+        width: min(420px, root.width - 32px);
         x: (root.width - self.width) / 2;
-        y: 5px;
+        y: 6px;
         update-available: root.update-available;
         version: root.update-version;
         download-progress: root.update-download-progress;
         protocol-warning: root.protocol-warning;
-        update-clicked => { root.update-now-clicked(); }
-        dismiss-clicked => { root.update-dismiss-clicked(); }
+        update-clicked => {
+            root.update-now-clicked();
+        }
+        dismiss-clicked => {
+            root.update-dismiss-clicked();
+        }
     }
 
     // ===================== DEBUG OVERLAY =====================
@@ -718,18 +902,66 @@ export component MainWindow inherits Window {
             rtp-recv: root.dbg-rtp-recv;
             delay-ms: root.dbg-delay-ms;
             rtt-ms: root.dbg-rtt-ms;
-            lh0:  root.lh0;  lh1:  root.lh1;  lh2:  root.lh2;  lh3:  root.lh3;  lh4:  root.lh4;
-            lh5:  root.lh5;  lh6:  root.lh6;  lh7:  root.lh7;  lh8:  root.lh8;  lh9:  root.lh9;
-            lh10: root.lh10; lh11: root.lh11; lh12: root.lh12; lh13: root.lh13; lh14: root.lh14;
-            lh15: root.lh15; lh16: root.lh16; lh17: root.lh17; lh18: root.lh18; lh19: root.lh19;
-            lh20: root.lh20; lh21: root.lh21; lh22: root.lh22; lh23: root.lh23; lh24: root.lh24;
-            lh25: root.lh25; lh26: root.lh26; lh27: root.lh27; lh28: root.lh28; lh29: root.lh29;
-            sh0:  root.sh0;  sh1:  root.sh1;  sh2:  root.sh2;  sh3:  root.sh3;  sh4:  root.sh4;
-            sh5:  root.sh5;  sh6:  root.sh6;  sh7:  root.sh7;  sh8:  root.sh8;  sh9:  root.sh9;
-            sh10: root.sh10; sh11: root.sh11; sh12: root.sh12; sh13: root.sh13; sh14: root.sh14;
-            sh15: root.sh15; sh16: root.sh16; sh17: root.sh17; sh18: root.sh18; sh19: root.sh19;
-            sh20: root.sh20; sh21: root.sh21; sh22: root.sh22; sh23: root.sh23; sh24: root.sh24;
-            sh25: root.sh25; sh26: root.sh26; sh27: root.sh27; sh28: root.sh28; sh29: root.sh29;
+            lh0: root.lh0;
+            lh1: root.lh1;
+            lh2: root.lh2;
+            lh3: root.lh3;
+            lh4: root.lh4;
+            lh5: root.lh5;
+            lh6: root.lh6;
+            lh7: root.lh7;
+            lh8: root.lh8;
+            lh9: root.lh9;
+            lh10: root.lh10;
+            lh11: root.lh11;
+            lh12: root.lh12;
+            lh13: root.lh13;
+            lh14: root.lh14;
+            lh15: root.lh15;
+            lh16: root.lh16;
+            lh17: root.lh17;
+            lh18: root.lh18;
+            lh19: root.lh19;
+            lh20: root.lh20;
+            lh21: root.lh21;
+            lh22: root.lh22;
+            lh23: root.lh23;
+            lh24: root.lh24;
+            lh25: root.lh25;
+            lh26: root.lh26;
+            lh27: root.lh27;
+            lh28: root.lh28;
+            lh29: root.lh29;
+            sh0: root.sh0;
+            sh1: root.sh1;
+            sh2: root.sh2;
+            sh3: root.sh3;
+            sh4: root.sh4;
+            sh5: root.sh5;
+            sh6: root.sh6;
+            sh7: root.sh7;
+            sh8: root.sh8;
+            sh9: root.sh9;
+            sh10: root.sh10;
+            sh11: root.sh11;
+            sh12: root.sh12;
+            sh13: root.sh13;
+            sh14: root.sh14;
+            sh15: root.sh15;
+            sh16: root.sh16;
+            sh17: root.sh17;
+            sh18: root.sh18;
+            sh19: root.sh19;
+            sh20: root.sh20;
+            sh21: root.sh21;
+            sh22: root.sh22;
+            sh23: root.sh23;
+            sh24: root.sh24;
+            sh25: root.sh25;
+            sh26: root.sh26;
+            sh27: root.sh27;
+            sh28: root.sh28;
+            sh29: root.sh29;
             close-requested => {
                 root.debug-open = false;
                 root.debug-toggled();
@@ -811,12 +1043,25 @@ export component MainWindow inherits Window {
         profile-has-upload: root.profile-has-upload;
         profile-nickname-value <=> root.profile-nickname-value;
         profile-grid-expanded <=> root.profile-grid-expanded;
-        profile-avatar-clicked(idx) => { root.profile-avatar-clicked(idx); }
-        profile-reroll => { root.profile-reroll(); }
-        profile-upload-clicked => { root.profile-upload-clicked(); }
-        profile-nickname-accepted(name) => { root.profile-nickname-accepted(name); }
-        profile-expand-grid => { root.profile-expand-grid(); }
-        profile-use-avatar(idx) => { root.settings-show-saved = true; root.profile-use-avatar(idx); }
+        profile-avatar-clicked(idx) => {
+            root.profile-avatar-clicked(idx);
+        }
+        profile-reroll => {
+            root.profile-reroll();
+        }
+        profile-upload-clicked => {
+            root.profile-upload-clicked();
+        }
+        profile-nickname-accepted(name) => {
+            root.profile-nickname-accepted(name);
+        }
+        profile-expand-grid => {
+            root.profile-expand-grid();
+        }
+        profile-use-avatar(idx) => {
+            root.settings-show-saved = true;
+            root.profile-use-avatar(idx);
+        }
         // Audio devices
         capture-devices: root.capture-devices;
         playback-devices: root.playback-devices;
@@ -870,24 +1115,78 @@ export component MainWindow inherits Window {
             root.mic-test-toggled();
         }
         // Settings change callbacks — flash "Saved ✓" on each
-        setting-changed-start-on-boot(v) => { root.settings-show-saved = true; root.setting-changed-start-on-boot(v); }
-        setting-changed-start-minimized(v) => { root.settings-show-saved = true; root.setting-changed-start-minimized(v); }
-        setting-changed-close-to-tray(v) => { root.settings-show-saved = true; root.setting-changed-close-to-tray(v); }
-        setting-changed-auto-connect(v) => { root.settings-show-saved = true; root.setting-changed-auto-connect(v); }
-        setting-changed-minimize-on-join(v) => { root.settings-show-saved = true; root.setting-changed-minimize-on-join(v); }
-        setting-changed-hw-acceleration(v) => { root.settings-show-saved = true; root.setting-changed-hw-acceleration(v); }
-        setting-changed-input-volume(v) => { root.settings-show-saved = true; root.setting-changed-input-volume(v); }
-        setting-changed-output-volume(v) => { root.settings-show-saved = true; root.setting-changed-output-volume(v); }
-        setting-changed-noise-suppression(v) => { root.settings-show-saved = true; root.setting-changed-noise-suppression(v); }
-        setting-changed-echo-cancellation(v) => { root.settings-show-saved = true; root.setting-changed-echo-cancellation(v); }
-        setting-changed-input-mode(v) => { root.settings-show-saved = true; root.setting-changed-input-mode(v); }
-        setting-changed-vad-threshold(v) => { root.settings-show-saved = true; root.setting-changed-vad-threshold(v); }
-        ptt-key-captured(key, ctrl, alt, shift, meta) => { root.settings-show-saved = true; root.settings-ptt-key-captured(key, ctrl, alt, shift, meta); }
-        reset-defaults => { root.settings-show-saved = true; root.settings-reset-defaults(); }
-        setting-changed-hud-enabled(v) => { root.settings-show-saved = true; root.setting-changed-hud-enabled(v); }
-        setting-changed-hud-overlay-in-game(v) => { root.settings-show-saved = true; root.setting-changed-hud-overlay-in-game(v); }
-        setting-changed-hud-overlay-opacity(v) => { root.settings-show-saved = true; root.setting-changed-hud-overlay-opacity(v); }
-        setting-changed-hud-clip-toasts(v) => { root.settings-show-saved = true; root.setting-changed-hud-clip-toasts(v); }
+        setting-changed-start-on-boot(v) => {
+            root.settings-show-saved = true;
+            root.setting-changed-start-on-boot(v);
+        }
+        setting-changed-start-minimized(v) => {
+            root.settings-show-saved = true;
+            root.setting-changed-start-minimized(v);
+        }
+        setting-changed-close-to-tray(v) => {
+            root.settings-show-saved = true;
+            root.setting-changed-close-to-tray(v);
+        }
+        setting-changed-auto-connect(v) => {
+            root.settings-show-saved = true;
+            root.setting-changed-auto-connect(v);
+        }
+        setting-changed-minimize-on-join(v) => {
+            root.settings-show-saved = true;
+            root.setting-changed-minimize-on-join(v);
+        }
+        setting-changed-hw-acceleration(v) => {
+            root.settings-show-saved = true;
+            root.setting-changed-hw-acceleration(v);
+        }
+        setting-changed-input-volume(v) => {
+            root.settings-show-saved = true;
+            root.setting-changed-input-volume(v);
+        }
+        setting-changed-output-volume(v) => {
+            root.settings-show-saved = true;
+            root.setting-changed-output-volume(v);
+        }
+        setting-changed-noise-suppression(v) => {
+            root.settings-show-saved = true;
+            root.setting-changed-noise-suppression(v);
+        }
+        setting-changed-echo-cancellation(v) => {
+            root.settings-show-saved = true;
+            root.setting-changed-echo-cancellation(v);
+        }
+        setting-changed-input-mode(v) => {
+            root.settings-show-saved = true;
+            root.setting-changed-input-mode(v);
+        }
+        setting-changed-vad-threshold(v) => {
+            root.settings-show-saved = true;
+            root.setting-changed-vad-threshold(v);
+        }
+        ptt-key-captured(key, ctrl, alt, shift, meta) => {
+            root.settings-show-saved = true;
+            root.settings-ptt-key-captured(key, ctrl, alt, shift, meta);
+        }
+        reset-defaults => {
+            root.settings-show-saved = true;
+            root.settings-reset-defaults();
+        }
+        setting-changed-hud-enabled(v) => {
+            root.settings-show-saved = true;
+            root.setting-changed-hud-enabled(v);
+        }
+        setting-changed-hud-overlay-in-game(v) => {
+            root.settings-show-saved = true;
+            root.setting-changed-hud-overlay-in-game(v);
+        }
+        setting-changed-hud-overlay-opacity(v) => {
+            root.settings-show-saved = true;
+            root.setting-changed-hud-overlay-opacity(v);
+        }
+        setting-changed-hud-clip-toasts(v) => {
+            root.settings-show-saved = true;
+            root.setting-changed-hud-clip-toasts(v);
+        }
     }
 
     // ===================== STREAM SOURCE PICKER OVERLAY =====================
