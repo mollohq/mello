@@ -263,22 +263,22 @@ pub fn wire(ctx: &AppContext) {
         let hk = ctx.hotkey_mgr.clone();
         ctx.app
             .on_settings_ptt_key_captured(move |key_text, ctrl, alt, shift, meta| {
-                if let Some((hotkey, label)) = platform::hotkeys::slint_key_to_hotkey(
+                if let Some((hotkey, label, raw_str)) = platform::hotkeys::slint_key_to_hotkey(
                     key_text.as_str(),
                     ctrl,
                     alt,
                     shift,
                     meta,
                 ) {
-                    let hotkey_str = hotkey.into_string();
                     match hk.borrow_mut().register_ptt(hotkey) {
                         Ok(_) => {
-                            log::info!("PTT key registered: {} ({})", label, hotkey_str);
+                            log::info!("PTT key registered: {} ({})", label, raw_str);
                             let mut settings = s.borrow_mut();
-                            settings.ptt_key = Some(hotkey_str);
+                            settings.ptt_key = Some(raw_str);
                             settings.save();
                             if let Some(app) = app_weak.upgrade() {
                                 app.set_settings_ptt_key_label(label.into());
+                                app.set_settings_ptt_binding(false);
                             }
                         }
                         Err(e) => {
@@ -286,7 +286,10 @@ pub fn wire(ctx: &AppContext) {
                         }
                     }
                 } else {
-                    log::warn!("Could not map key to hotkey: {:?}", key_text.as_str());
+                    log::debug!(
+                        "Unmappable key, staying in binding mode: {:?}",
+                        key_text.as_str()
+                    );
                 }
             });
     }

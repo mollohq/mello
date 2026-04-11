@@ -164,6 +164,7 @@ export component MainWindow inherits Window {
     in-out property <bool> settings-echo-cancellation: true;
     in-out property <bool> settings-ptt-mode: false;
     in property <string> settings-ptt-key-label: "Unassigned";
+    in-out property <bool> settings-ptt-binding: false;
     in-out property <float> settings-vad-threshold: -40.0;
     in property <string> settings-build-version: "v0.1.0";
     in-out property <bool> settings-show-saved: false;
@@ -839,6 +840,7 @@ export component MainWindow inherits Window {
         echo-cancellation <=> root.settings-echo-cancellation;
         ptt-mode <=> root.settings-ptt-mode;
         ptt-key-label: root.settings-ptt-key-label;
+        ptt-binding <=> root.settings-ptt-binding;
         vad-threshold <=> root.settings-vad-threshold;
         build-version: root.settings-build-version;
         show-saved <=> root.settings-show-saved;

@@ -43,13 +43,16 @@ impl HotkeyManager {
 /// `global_hotkey::hotkey::HotKey` and a human-readable display label.
 ///
 /// Returns `None` for modifier-only keys or unmappable keys.
+/// Returns (HotKey, display_label, raw_hotkey_string).
+/// The raw string should be stored in settings (not `HotKey::into_string()`)
+/// to preserve correct modifier mapping across platforms.
 pub fn slint_key_to_hotkey(
     key_text: &str,
     ctrl: bool,
     alt: bool,
     shift: bool,
     meta: bool,
-) -> Option<(HotKey, String)> {
+) -> Option<(HotKey, String, String)> {
     let c = key_text.chars().next()?;
 
     // Skip modifier-only keys
@@ -63,6 +66,12 @@ pub fn slint_key_to_hotkey(
     }
 
     let code_str = slint_char_to_code_str(c)?;
+
+    // On macOS, Slint reports the physical Control (^) key as `meta` and
+    // Option/Alt produces Unicode dead characters instead of modifier flags.
+    // Swap ctrl/meta so the display and registration match the physical keys.
+    #[cfg(target_os = "macos")]
+    let (ctrl, meta) = (meta, ctrl);
 
     // Build the global-hotkey format string: "Ctrl+Shift+KeyA"
     let mut hotkey_str = String::new();
@@ -83,10 +92,11 @@ pub fn slint_key_to_hotkey(
     // Parse into HotKey
     let hotkey: HotKey = hotkey_str.parse().ok()?;
 
-    // Build display label
+    // Build display label from our constructed string, not from HotKey::into_string()
+    // which can normalize modifiers differently per platform
     let label = hotkey_display_label(&hotkey_str);
 
-    Some((hotkey, label))
+    Some((hotkey, label, hotkey_str))
 }
 
 /// Convert a global-hotkey format string (e.g. from settings) back into

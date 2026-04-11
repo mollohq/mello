@@ -951,7 +951,7 @@ component AudioTab inherits VerticalLayout {
                                     horizontal-stretch: 1;
                                     border-radius: 6px;
                                     background: !root.ptt-mode ? Theme.bg-app : transparent;
-                                    border-width: !root.ptt-mode ? 1px : 0px;
+                                    border-width: 1px;
                                     border-color: !root.ptt-mode ? Theme.graphic-light : transparent;
 
                                     Text {
@@ -978,7 +978,7 @@ component AudioTab inherits VerticalLayout {
                                     horizontal-stretch: 1;
                                     border-radius: 6px;
                                     background: root.ptt-mode ? Theme.bg-app : transparent;
-                                    border-width: root.ptt-mode ? 1px : 0px;
+                                    border-width: 1px;
                                     border-color: root.ptt-mode ? Theme.graphic-light : transparent;
 
                                     Text {
@@ -1009,30 +1009,18 @@ component AudioTab inherits VerticalLayout {
                         spacing: 12px;
                         opacity: root.ptt-mode ? 1.0 : 0.5;
 
-                        HorizontalLayout {
-                            Text {
-                                text: "Push-to-talk Key";
-                                font-size: 13px;
-                                font-weight: 500;
-                                color: Theme.text-primary;
-                                horizontal-stretch: 1;
-                                vertical-alignment: center;
-                            }
-                            Text {
-                                text: root.ptt-key-label;
-                                font-family: Theme.font-mono;
-                                font-size: 11px;
-                                color: Theme.text-secondary;
-                                letter-spacing: 0.5px;
-                                vertical-alignment: center;
-                            }
+                        Text {
+                            text: "Push-to-talk Key";
+                            font-size: 13px;
+                            font-weight: 500;
+                            color: Theme.text-primary;
                         }
 
                         Rectangle {
                             height: 40px;
                             border-radius: 8px;
                             background: root.ptt-binding ? Theme.bg-app : Theme.surface;
-                            border-width: root.ptt-binding ? 2px : 1px;
+                            border-width: 2px;
                             border-color: root.ptt-binding ? Theme.accent
                                 : ptt-bind-hover.has-hover && root.ptt-mode ? Theme.text-tertiary
                                 : Theme.graphic-light;
@@ -1042,10 +1030,14 @@ component AudioTab inherits VerticalLayout {
                                 padding-right: 16px;
 
                                 Text {
-                                    text: root.ptt-binding ? "Press any key…" : "Click to bind...";
+                                    text: root.ptt-binding ? "Press any key…"
+                                        : root.ptt-key-label != "" && root.ptt-key-label != "Unassigned" ? root.ptt-key-label
+                                        : "Click to bind...";
                                     font-family: Theme.font-mono;
                                     font-size: 14px;
-                                    color: root.ptt-binding ? Theme.accent : Theme.text-tertiary;
+                                    color: root.ptt-binding ? Theme.accent
+                                        : root.ptt-key-label != "" && root.ptt-key-label != "Unassigned" ? Theme.text-primary
+                                        : Theme.text-tertiary;
                                     horizontal-stretch: 1;
                                     vertical-alignment: center;
                                 }
@@ -1068,10 +1060,8 @@ component AudioTab inherits VerticalLayout {
                                             && event.text != Key.Meta && event.text != Key.MetaR
                                             && event.text != Key.CapsLock {
                                             if event.text == Key.Escape {
-                                                // Cancel binding
                                                 root.ptt-binding = false;
                                             } else {
-                                                root.ptt-binding = false;
                                                 root.ptt-key-captured(
                                                     event.text,
                                                     event.modifiers.control,
@@ -1612,6 +1602,7 @@ export component SettingsModal inherits Rectangle {
     in-out property <bool> echo-cancellation: true;
     in-out property <bool> ptt-mode: false;
     in property <string> ptt-key-label: "Unassigned";
+    in-out property <bool> ptt-binding: false;
     in-out property <float> vad-threshold: -40.0;
 
     // Version
@@ -2103,6 +2094,7 @@ export component SettingsModal inherits Rectangle {
                             echo-cancellation <=> root.echo-cancellation;
                             ptt-mode <=> root.ptt-mode;
                             ptt-key-label: root.ptt-key-label;
+                            ptt-binding <=> root.ptt-binding;
                             vad-threshold <=> root.vad-threshold;
                             mic-testing <=> root.mic-testing;
                             mic-level: root.mic-level;
