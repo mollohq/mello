@@ -128,6 +128,7 @@ impl HudManager {
     /// Start the HUD manager. Spawns the named pipe server thread and the HUD
     /// child process. Returns the manager handle.
     pub fn start(enabled: bool) -> Self {
+        let enabled = enabled && cfg!(target_os = "windows");
         let (state_tx, state_internal_rx) = mpsc::channel::<HudMessage>();
         let (action_internal_tx, action_rx) = mpsc::channel::<HudAction>();
 
