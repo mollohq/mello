@@ -10,51 +10,59 @@ export component DeviceDropdown inherits Rectangle {
     in-out property <string> selected-name: "System Default";
     callback device-selected(string);
 
-    property <bool> expanded: false;
+    height: 48px;
 
-    VerticalLayout {
-        spacing: 0px;
+    Rectangle {
+        background: dropdown-hover.has-hover ? Theme.surface-hover : Theme.bg-app;
+        border-radius: 8px;
+        border-width: 1px;
+        border-color: dropdown-hover.has-hover ? Theme.text-tertiary : Theme.graphic-light;
 
-        Rectangle {
-            height: 48px;
-            background: dropdown-hover.has-hover ? Theme.surface-hover : Theme.bg-app;
-            border-radius: 8px;
-            border-width: 1px;
-            border-color: dropdown-hover.has-hover ? Theme.text-tertiary : Theme.graphic-light;
+        HorizontalLayout {
+            padding-left: 16px;
+            padding-right: 16px;
+            spacing: 8px;
+            alignment: center;
 
-            HorizontalLayout {
-                padding-left: 16px;
-                padding-right: 16px;
-                spacing: 8px;
-                alignment: center;
-
-                Text {
-                    text: selected-name;
-                    font-size: 14px;
-                    color: Theme.text-primary;
-                    horizontal-stretch: 1;
-                    vertical-alignment: center;
-                    overflow: elide;
-                }
-
-                Text {
-                    text: expanded ? "▲" : "▼";
-                    font-size: 10px;
-                    color: Theme.text-secondary;
-                    vertical-alignment: center;
-                }
+            Text {
+                text: selected-name;
+                font-size: 14px;
+                color: Theme.text-primary;
+                horizontal-stretch: 1;
+                vertical-alignment: center;
+                overflow: elide;
             }
 
-            dropdown-hover := TouchArea {
-                clicked => { expanded = !expanded; }
+            Rectangle {
+                width: 14px;
+                Image {
+                    source: @image-url("../icons/chevron-down.svg");
+                    width: 14px;
+                    height: 14px;
+                    colorize: Theme.text-secondary;
+                    y: (parent.height - self.height) / 2;
+                }
             }
         }
 
-        if expanded: Rectangle {
+        dropdown-hover := TouchArea {
+            clicked => { dropdown-popup.show(); }
+        }
+    }
+
+    dropdown-popup := PopupWindow {
+        x: 0;
+        y: 52px;
+        width: root.width;
+
+        Rectangle {
             background: Theme.surface;
             border-radius: Theme.r-inner;
             border-width: 1px;
             border-color: Theme.graphic-light;
+            drop-shadow-blur: 12px;
+            drop-shadow-color: Theme.dark ? #00000060 : #00000018;
+            drop-shadow-offset-y: 4px;
 
             VerticalLayout {
                 padding: 4px;
@@ -99,7 +107,6 @@ export component DeviceDropdown inherits Rectangle {
                         clicked => {
                             selected-name = dev.name;
                             device-selected(dev.id);
-                            expanded = false;
                         }
                     }
                 }
