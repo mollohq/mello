@@ -297,13 +297,15 @@ func PushVoiceUpdate(ctx context.Context, logger runtime.Logger, nk runtime.Naka
 		for _, ch := range channelDefs.Channels {
 			snap := GetVoiceChannelSnapshot(ch.ID)
 			members := make([]map[string]interface{}, 0, len(snap.Members))
-			for _, m := range snap.Members {
-				members = append(members, map[string]interface{}{
-					"user_id":   m.UserID,
-					"username":  m.Username,
-					"speaking":  m.Speaking,
-					"joined_at": m.JoinedAt,
-				})
+		for _, m := range snap.Members {
+			members = append(members, map[string]interface{}{
+				"user_id":   m.UserID,
+				"username":  m.Username,
+				"speaking":  m.Speaking,
+				"muted":     m.Muted,
+				"deafened":  m.Deafened,
+				"joined_at": m.JoinedAt,
+			})
 			}
 			channels = append(channels, map[string]interface{}{
 				"id":         ch.ID,
@@ -322,6 +324,8 @@ func PushVoiceUpdate(ctx context.Context, logger runtime.Logger, nk runtime.Naka
 			"user_id":   m.UserID,
 			"username":  m.Username,
 			"speaking":  m.Speaking,
+			"muted":     m.Muted,
+			"deafened":  m.Deafened,
 			"joined_at": m.JoinedAt,
 		})
 	}
