@@ -23,6 +23,7 @@ type SFUTokenClaims struct {
 
 	// Custom claims
 	UserID    string `json:"uid"`
+	Username  string `json:"username,omitempty"` // display name
 	SessionID string `json:"sid"`
 	Type      string `json:"type"`            // "stream" or "voice"
 	Role      string `json:"role"`            // "host", "viewer", "member"

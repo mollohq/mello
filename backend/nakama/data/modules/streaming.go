@@ -184,6 +184,7 @@ func StartStreamRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk r
 
 		token, err := signSFUToken(SFUTokenClaims{
 			UserID:    userID,
+			Username:  users[0].GetDisplayName(),
 			SessionID: streamID,
 			Type:      "stream",
 			Role:      "host",
@@ -476,6 +477,7 @@ func WatchStreamRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk r
 	if meta.Mode == "sfu" {
 		token, err := signSFUToken(SFUTokenClaims{
 			UserID:    userID,
+			Username:  resolveUsername(ctx, nk, userID),
 			SessionID: req.SessionID,
 			Type:      "stream",
 			Role:      "viewer",

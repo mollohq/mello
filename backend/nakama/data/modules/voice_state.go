@@ -262,6 +262,7 @@ func VoiceJoinRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk run
 
 		token, err := signSFUToken(SFUTokenClaims{
 			UserID:    userID,
+			Username:  username,
 			SessionID: voiceSessionKey,
 			Type:      "voice",
 			Role:      "member",
