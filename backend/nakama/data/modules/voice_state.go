@@ -365,6 +365,53 @@ func VoiceSpeakingRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk
 	return `{"success":true}`, nil
 }
 
+func VoiceMuteStateRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, payload string) (string, error) {
+	userID, ok := ctx.Value(runtime.RUNTIME_CTX_USER_ID).(string)
+	if !ok {
+		return "", runtime.NewError("authentication required", 16)
+	}
+
+	var req struct {
+		CrewID   string `json:"crew_id"`
+		Muted    bool   `json:"muted"`
+		Deafened bool   `json:"deafened"`
+	}
+	if err := json.Unmarshal([]byte(payload), &req); err != nil {
+		return "", runtime.NewError("invalid request", 3)
+	}
+
+	voiceUserChannelMu.RLock()
+	channelID := voiceUserChannel[userID]
+	voiceUserChannelMu.RUnlock()
+
+	if channelID == "" {
+		return `{"success":true}`, nil
+	}
+
+	voiceRoomsMu.Lock()
+	room, ok := voiceRooms[channelID]
+	if ok {
+		if m, exists := room.Members[userID]; exists {
+			m.Muted = req.Muted
+			m.Deafened = req.Deafened
+		}
+	}
+	voiceRoomsMu.Unlock()
+
+	crewID := req.CrewID
+	if crewID == "" {
+		voiceChannelCrewMu.RLock()
+		crewID = voiceChannelCrew[channelID]
+		voiceChannelCrewMu.RUnlock()
+	}
+
+	if crewID != "" {
+		PushVoiceUpdate(ctx, logger, nk, crewID)
+	}
+
+	return `{"success":true}`, nil
+}
+
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------

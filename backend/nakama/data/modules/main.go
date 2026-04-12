@@ -152,6 +152,9 @@ func InitModule(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runti
 	if err := initializer.RegisterRpc("voice_speaking", VoiceSpeakingRPC); err != nil {
 		return err
 	}
+	if err := initializer.RegisterRpc("voice_mute_state", VoiceMuteStateRPC); err != nil {
+		return err
+	}
 
 	// -----------------------------------------------------------------------
 	// RPCs — voice channels
