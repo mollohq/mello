@@ -107,6 +107,10 @@ jobs:
           name: mello-windows-x64
           path: vpk-out/*
 
+      - name: Cleanup build artifacts
+        if: always()
+        run: cargo clean
+
   build-macos:
     runs-on: [self-hosted, macOS]
     env:
@@ -247,10 +251,11 @@ jobs:
           name: mello-macos-arm64
           path: vpk-out/*
 
-      - name: Cleanup keychain
+      - name: Cleanup keychain and build artifacts
         if: always()
         run: |
           security delete-keychain ${{ env.CODE_SIGNING_KEYCHAIN }}.keychain-db || true
+          cargo clean
 
   publish-release:
     if: startsWith(github.ref, 'refs/tags/v')
