@@ -139,12 +139,20 @@ void PeerConnectionImpl::setup_incoming_track(std::shared_ptr<rtc::Track> track)
         fflush(stderr);
     });
 
-    track->onMessage([this, sender_id](rtc::message_variant data) {
+    auto msg_count = std::make_shared<std::atomic<int>>(0);
+    track->onMessage([this, sender_id, msg_count](rtc::message_variant data) {
         auto* bin = std::get_if<rtc::binary>(&data);
         if (!bin || bin->size() < 12) return;
 
         auto* bytes = reinterpret_cast<const uint8_t*>(bin->data());
         int total = static_cast<int>(bin->size());
+
+        int n = msg_count->fetch_add(1, std::memory_order_relaxed) + 1;
+        if (n <= 3 || n == 50 || n == 500) {
+            fprintf(stderr, "[mello-rtp] onMessage #%d: sender=%s size=%d\n",
+                    n, sender_id.c_str(), total);
+            fflush(stderr);
+        }
 
         // Filter RTCP packets that libdatachannel delivers to onMessage.
         uint8_t pt = bytes[1] & 0x7F;
@@ -404,6 +412,11 @@ bool PeerConnectionImpl::send_audio(const uint8_t* data, int size) {
     }
     try {
         audio_track_->send(reinterpret_cast<const std::byte*>(data), static_cast<size_t>(size));
+        int prev_skips = send_audio_count_.exchange(0, std::memory_order_relaxed);
+        if (prev_skips > 0) {
+            fprintf(stderr, "[mello-rtp] send_audio RECOVERED after %d skips\n", prev_skips);
+            fflush(stderr);
+        }
         return true;
     } catch (...) {
         return false;
