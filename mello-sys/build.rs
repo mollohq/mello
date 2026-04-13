@@ -122,6 +122,15 @@ fn main() {
     println!("cargo:rustc-link-search=native={}", ort_lib.display());
     println!("cargo:rustc-link-lib=dylib=onnxruntime");
 
+    // Windows: delay-load onnxruntime.dll so it isn't pulled in at process startup.
+    // Windows ships its own older copy in WinSxS (Copilot, Studio Effects) which
+    // shadows ours. With delay-load, the DLL isn't loaded until the first ORT API
+    // call, giving vad.cpp a chance to LoadLibraryW our copy by absolute path first.
+    if target_os == "windows" {
+        println!("cargo:rustc-link-arg=delayimp.lib");
+        println!("cargo:rustc-link-arg=/DELAYLOAD:onnxruntime.dll");
+    }
+
     // Copy shared libraries next to the output binary so cargo run works
     let target_dir = Path::new(&out_dir)
         .ancestors()
