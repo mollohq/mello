@@ -9,11 +9,17 @@ JitterBuffer::JitterBuffer() = default;
 
 void JitterBuffer::reset() {
     std::lock_guard<std::mutex> lock(mutex_);
+    reset_locked();
+}
+
+void JitterBuffer::reset_locked() {
     packets_.clear();
     next_seq_ = 0;
     first_packet_ = true;
+    prebuffering_ = true;
     target_delay_ms_ = JITTER_TARGET_MS;
     last_pop_time_ = 0;
+    stream_start_ms_ = 0;
     last_arrival_ = 0;
     jitter_estimate_ = 0.0f;
 }
@@ -32,25 +38,37 @@ void JitterBuffer::push(uint32_t sequence, const uint8_t* data, int size) {
     if (first_packet_) {
         next_seq_ = sequence;
         first_packet_ = false;
+        prebuffering_ = true;
+        stream_start_ms_ = arrival;
         last_arrival_ = arrival;
     }
 
-    // Estimate jitter from inter-arrival variance
-    if (last_arrival_ > 0) {
+    // Detect sequence discontinuity (track re-wire) and reset
+    if (!first_packet_ && packets_.empty()) {
+        uint32_t gap = (sequence > next_seq_)
+            ? sequence - next_seq_
+            : next_seq_ - sequence;
+        if (gap > SEQ_DISCONTINUITY_THRESHOLD) {
+            reset_locked();
+            next_seq_ = sequence;
+            first_packet_ = false;
+            prebuffering_ = true;
+            stream_start_ms_ = arrival;
+            last_arrival_ = arrival;
+        }
+    }
+
+    if (last_arrival_ > 0 && arrival > last_arrival_) {
         float delta = static_cast<float>(arrival - last_arrival_);
-        // Expected inter-arrival is 20ms (one Opus frame)
         float deviation = std::abs(delta - 20.0f);
-        // Exponential moving average
         jitter_estimate_ = jitter_estimate_ * 0.95f + deviation * 0.05f;
     }
     last_arrival_ = arrival;
 
-    // Drop very old packets
     if (packets_.size() >= JITTER_MAX_PACKETS) {
         packets_.erase(packets_.begin());
     }
 
-    // Don't accept packets that are older than what we've already played
     if (!packets_.empty() && sequence < next_seq_) {
         return;
     }
@@ -67,18 +85,39 @@ void JitterBuffer::push(uint32_t sequence, const uint8_t* data, int size) {
 bool JitterBuffer::pop(std::vector<uint8_t>& out_data) {
     std::lock_guard<std::mutex> lock(mutex_);
 
+    if (packets_.empty()) {
+        return false;
+    }
+
+    // Pre-buffering: wait until we've accumulated enough packets before
+    // first playout, giving the buffer a head start against jitter.
+    if (prebuffering_) {
+        int64_t elapsed = now_ms() - stream_start_ms_;
+        int needed = std::max(2, target_delay_ms_ / 20);
+        if (static_cast<int>(packets_.size()) < needed && elapsed < target_delay_ms_) {
+            return false;
+        }
+        prebuffering_ = false;
+    }
+
     auto it = packets_.find(next_seq_);
     if (it == packets_.end()) {
-        // Packet loss -- skip ahead if we have later packets
         if (!packets_.empty() && packets_.begin()->first > next_seq_ + 3) {
             next_seq_ = packets_.begin()->first;
             it = packets_.begin();
         } else {
+            underruns_++;
             return false;
         }
     }
 
+    // Enforce playout delay: don't release a packet until it has been
+    // held in the buffer for at least target_delay_ms_.
     int64_t hold = now_ms() - it->second.arrival_time_ms;
+    if (hold < target_delay_ms_ && static_cast<int>(packets_.size()) < JITTER_MAX_PACKETS / 2) {
+        return false;
+    }
+
     avg_hold_ms_ = avg_hold_ms_ * 0.9f + static_cast<float>(hold) * 0.1f;
 
     out_data = std::move(it->second.data);
@@ -94,12 +133,8 @@ int JitterBuffer::buffered_count() const {
 }
 
 void JitterBuffer::adapt_target() {
-    // Adapt target delay based on observed jitter
-    // Target = 2 * jitter_estimate, clamped to [MIN, MAX]
     int new_target = static_cast<int>(jitter_estimate_ * 2.0f + 20.0f);
     new_target = std::max(JITTER_MIN_MS, std::min(JITTER_MAX_MS, new_target));
-
-    // Smooth transition
     target_delay_ms_ = (target_delay_ms_ * 7 + new_target) / 8;
 }
 

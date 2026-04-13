@@ -7,9 +7,10 @@
 namespace mello::audio {
 
 static constexpr int JITTER_MAX_PACKETS = 50;
-static constexpr int JITTER_TARGET_MS = 60;   // Target buffering delay
+static constexpr int JITTER_TARGET_MS = 60;
 static constexpr int JITTER_MIN_MS = 20;
 static constexpr int JITTER_MAX_MS = 200;
+static constexpr uint32_t SEQ_DISCONTINUITY_THRESHOLD = 1000;
 
 struct JitterPacket {
     std::vector<uint8_t> data;
@@ -24,34 +25,36 @@ public:
 
     void reset();
 
-    // Push a received packet into the buffer
     void push(uint32_t sequence, const uint8_t* data, int size);
 
-    // Get the next packet to decode. Returns false if none available.
-    // Packet is removed from the buffer.
+    // Returns the next packet if the playout delay has been met.
+    // Called from the audio device thread (mix_output).
     bool pop(std::vector<uint8_t>& out_data);
 
-    // Get stats
     int buffered_count() const;
     int target_delay_ms() const { return target_delay_ms_; }
     float avg_hold_ms() const { return avg_hold_ms_; }
+    uint32_t underruns() const { return underruns_; }
 
 private:
     int64_t now_ms() const;
     void adapt_target();
+    void reset_locked();
 
     std::map<uint32_t, JitterPacket> packets_;
     mutable std::mutex mutex_;
 
     uint32_t next_seq_ = 0;
     bool first_packet_ = true;
+    bool prebuffering_ = true;
     int target_delay_ms_ = JITTER_TARGET_MS;
     int64_t last_pop_time_ = 0;
+    int64_t stream_start_ms_ = 0;
 
-    // For adaptive delay estimation
     int64_t last_arrival_ = 0;
     float jitter_estimate_ = 0.0f;
     float avg_hold_ms_ = 0.0f;
+    uint32_t underruns_ = 0;
 };
 
 } // namespace mello::audio

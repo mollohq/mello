@@ -298,74 +298,73 @@ int AudioPipeline::get_packet(uint8_t* buffer, int buffer_size) {
 }
 
 void AudioPipeline::feed_packet(const char* peer_id, const uint8_t* data, int size) {
-    if (deafened_ || !initialized_) {
+    if (deafened_ || !initialized_ || size < 4) {
         return;
     }
 
     rtp_recv_total_.fetch_add(1, std::memory_order_relaxed);
     std::string pid(peer_id);
 
-    if (decoders_.find(pid) == decoders_.end()) {
-        MELLO_LOG_INFO("pipeline", "creating decoder for peer '%s'", peer_id);
-        auto& dec = decoders_[pid];
-        if (!dec.initialize()) {
-            MELLO_LOG_ERROR("pipeline", "opus decoder init failed for '%s'", peer_id);
-            decoders_.erase(pid);
-            return;
-        }
-    }
+    uint32_t seq = static_cast<uint32_t>(data[0]) |
+                   (static_cast<uint32_t>(data[1]) << 8) |
+                   (static_cast<uint32_t>(data[2]) << 16) |
+                   (static_cast<uint32_t>(data[3]) << 24);
 
-    // Ensure per-peer ring buffer exists
+    // Ensure per-peer decoder, jitter buffer, and ring buffer exist.
+    // All three maps are guarded by peer_buffers_mutex_ since mix_output()
+    // on the audio device thread also iterates them.
     {
         std::lock_guard<std::mutex> lock(peer_buffers_mutex_);
+        if (decoders_.find(pid) == decoders_.end()) {
+            MELLO_LOG_INFO("pipeline", "creating decoder for peer '%s'", peer_id);
+            auto& dec = decoders_[pid];
+            if (!dec.initialize()) {
+                MELLO_LOG_ERROR("pipeline", "opus decoder init failed for '%s'", peer_id);
+                decoders_.erase(pid);
+                return;
+            }
+        }
         if (peer_buffers_.find(pid) == peer_buffers_.end()) {
             peer_buffers_[pid] = std::make_unique<util::RingBuffer<int16_t>>(48000);
             active_streams_.store(static_cast<int>(peer_buffers_.size()), std::memory_order_relaxed);
             MELLO_LOG_INFO("pipeline", "created playback buffer for peer '%s' (streams=%d)",
                            peer_id, (int)peer_buffers_.size());
         }
+        // Push into jitter buffer — device thread drives the pop.
+        jitter_buffers_[pid].push(seq, data + 4, size - 4);
     }
 
-    auto& jb = jitter_buffers_[pid];
-    uint32_t seq = 0;
-    if (size >= 4) {
-        seq = static_cast<uint32_t>(data[0]) |
-              (static_cast<uint32_t>(data[1]) << 8) |
-              (static_cast<uint32_t>(data[2]) << 16) |
-              (static_cast<uint32_t>(data[3]) << 24);
-        jb.push(seq, data + 4, size - 4);
-    } else {
-        return;
-    }
-
-    int decoded_count = 0;
-    std::vector<uint8_t> pkt_data;
-    while (jb.pop(pkt_data)) {
-        auto& dec = decoders_[pid];
-        int16_t pcm[FRAME_SIZE];
-        int samples = dec.decode(pkt_data.data(), static_cast<int>(pkt_data.size()),
-                                 pcm, FRAME_SIZE);
-        if (samples > 0) {
-            std::lock_guard<std::mutex> lock(peer_buffers_mutex_);
-            auto it = peer_buffers_.find(pid);
-            if (it != peer_buffers_.end()) {
-                it->second->write(pcm, static_cast<size_t>(samples));
-            }
-            decoded_count++;
-        } else {
-            MELLO_LOG_WARN("pipeline", "opus decode error for '%s': %d (pkt_size=%zu)",
-                           peer_id, samples, pkt_data.size());
-        }
-    }
-
-    if ((seq % 250) == 0 && decoded_count > 0) {
-        MELLO_LOG_DEBUG("pipeline", "feed(%s): seq=%u decoded=%d jitter_buf=%d",
-                        peer_id, seq, decoded_count, jb.buffered_count());
+    if ((seq % 500) == 0) {
+        std::lock_guard<std::mutex> lock2(peer_buffers_mutex_);
+        auto jit = jitter_buffers_.find(pid);
+        int buf_count = jit != jitter_buffers_.end() ? jit->second.buffered_count() : 0;
+        MELLO_LOG_DEBUG("pipeline", "feed(%s): seq=%u jitter_buf=%d",
+                        peer_id, seq, buf_count);
     }
 }
 
 size_t AudioPipeline::mix_output(int16_t* out, size_t count) {
     std::lock_guard<std::mutex> lock(peer_buffers_mutex_);
+
+    // Drain jitter buffers into ring buffers. The jitter buffer's pop()
+    // enforces the playout delay, so packets are only released when ready.
+    for (auto& [pid, jb] : jitter_buffers_) {
+        std::vector<uint8_t> pkt_data;
+        while (jb.pop(pkt_data)) {
+            auto dit = decoders_.find(pid);
+            if (dit == decoders_.end()) continue;
+            int16_t pcm[FRAME_SIZE];
+            int samples = dit->second.decode(pkt_data.data(),
+                                             static_cast<int>(pkt_data.size()),
+                                             pcm, FRAME_SIZE);
+            if (samples > 0) {
+                auto bit = peer_buffers_.find(pid);
+                if (bit != peer_buffers_.end()) {
+                    bit->second->write(pcm, static_cast<size_t>(samples));
+                }
+            }
+        }
+    }
 
     std::memset(out, 0, count * sizeof(int16_t));
     bool any_remote = false;
@@ -464,25 +463,22 @@ size_t AudioPipeline::mix_output(int16_t* out, size_t count) {
 }
 
 float AudioPipeline::pipeline_delay_ms() const {
-    // Jitter buffer hold time (avg across all peers)
+    std::lock_guard<std::mutex> lock(peer_buffers_mutex_);
+
     float jb_ms = 0.0f;
-    int count = 0;
+    int jb_count = 0;
     for (auto& [pid, jb] : jitter_buffers_) {
         jb_ms += jb.avg_hold_ms();
-        count++;
+        jb_count++;
     }
-    if (count > 0) jb_ms /= static_cast<float>(count);
+    if (jb_count > 0) jb_ms /= static_cast<float>(jb_count);
 
-    // Playback ring buffer depth (avg across all peer buffers)
     float pb_ms = 0.0f;
-    {
-        std::lock_guard<std::mutex> lock(peer_buffers_mutex_);
-        for (auto& [pid, buf] : peer_buffers_) {
-            pb_ms += static_cast<float>(buf->available()) / 48.0f; // 48 samples/ms
-        }
-        if (!peer_buffers_.empty())
-            pb_ms /= static_cast<float>(peer_buffers_.size());
+    for (auto& [pid, buf] : peer_buffers_) {
+        pb_ms += static_cast<float>(buf->available()) / 48.0f;
     }
+    if (!peer_buffers_.empty())
+        pb_ms /= static_cast<float>(peer_buffers_.size());
 
     return jb_ms + pb_ms;
 }
