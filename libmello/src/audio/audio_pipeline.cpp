@@ -348,9 +348,13 @@ size_t AudioPipeline::mix_output(int16_t* out, size_t count) {
 
     // Drain jitter buffers into ring buffers. The jitter buffer's pop()
     // enforces the playout delay, so packets are only released when ready.
+    int total_popped = 0;
+    int total_decoded = 0;
+    int decode_errors = 0;
     for (auto& [pid, jb] : jitter_buffers_) {
         std::vector<uint8_t> pkt_data;
         while (jb.pop(pkt_data)) {
+            total_popped++;
             auto dit = decoders_.find(pid);
             if (dit == decoders_.end()) continue;
             int16_t pcm[FRAME_SIZE];
@@ -358,10 +362,13 @@ size_t AudioPipeline::mix_output(int16_t* out, size_t count) {
                                              static_cast<int>(pkt_data.size()),
                                              pcm, FRAME_SIZE);
             if (samples > 0) {
+                total_decoded++;
                 auto bit = peer_buffers_.find(pid);
                 if (bit != peer_buffers_.end()) {
                     bit->second->write(pcm, static_cast<size_t>(samples));
                 }
+            } else {
+                decode_errors++;
             }
         }
     }
@@ -394,8 +401,8 @@ size_t AudioPipeline::mix_output(int16_t* out, size_t count) {
                 sum += s * s;
             }
             float rms = static_cast<float>(std::sqrt(sum / count));
-            MELLO_LOG_DEBUG("pipeline", "mix_output: pre_rms=%.4f count=%zu peers=%zu",
-                            rms, count, peer_buffers_.size());
+            MELLO_LOG_INFO("pipeline", "mix_output #%u: rms=%.4f count=%zu peers=%zu popped=%d decoded=%d errs=%d",
+                           mix_log_ctr, rms, count, peer_buffers_.size(), total_popped, total_decoded, decode_errors);
         }
 
         float og = output_gain_.load(std::memory_order_relaxed);
@@ -408,7 +415,15 @@ size_t AudioPipeline::mix_output(int16_t* out, size_t count) {
             }
         }
     } else {
-        underrun_count_.fetch_add(1, std::memory_order_relaxed);
+        uint32_t ur = underrun_count_.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (!peer_buffers_.empty() && (ur <= 10 || (ur % 500) == 0)) {
+            int total_jb = 0;
+            int total_rb = 0;
+            for (auto& [pid, jb] : jitter_buffers_) total_jb += jb.buffered_count();
+            for (auto& [pid, buf] : peer_buffers_) total_rb += static_cast<int>(buf->available());
+            MELLO_LOG_INFO("pipeline", "mix_output UNDERRUN #%u: peers=%zu jb_pkts=%d rb_samples=%d popped=%d decoded=%d errs=%d",
+                           ur, peer_buffers_.size(), total_jb, total_rb, total_popped, total_decoded, decode_errors);
+        }
     }
 
     // Clip buffer: mix remote playback + local mic for "all participants" recording
