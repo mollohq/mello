@@ -20,6 +20,7 @@ public:
     void set_error(const std::string& error);
     const char* get_error() const;
 
+    // Public for SEH wrapper in context.cpp (Windows crash guard)
     bool initialize_inner();
 
 private:

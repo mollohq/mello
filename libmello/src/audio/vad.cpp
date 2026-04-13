@@ -4,6 +4,11 @@
 #include <algorithm>
 #include <cmath>
 
+#ifdef _WIN32
+#include <Windows.h>
+#include <filesystem>
+#endif
+
 namespace mello::audio {
 
 VoiceActivityDetector::VoiceActivityDetector() = default;
@@ -14,34 +19,73 @@ VoiceActivityDetector::~VoiceActivityDetector() {
 
 bool VoiceActivityDetector::initialize(const std::string& model_path) {
     try {
-        env_ = std::make_unique<Ort::Env>(ORT_LOGGING_LEVEL_WARNING, "mello_vad");
-
-        session_options_.SetIntraOpNumThreads(1);
-        session_options_.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
-
 #ifdef _WIN32
-        std::wstring wpath(model_path.begin(), model_path.end());
-        session_ = new Ort::Session(*env_, wpath.c_str(), session_options_);
+        // Windows ships onnxruntime.dll in System32/WinSxS (Copilot, Studio Effects)
+        // which shadows ours via the PE loader. Bypass the import table entirely:
+        // LoadLibrary our copy by full path and GetProcAddress for OrtGetApiBase.
+        {
+            auto dll_path = std::filesystem::path(model_path).parent_path() / "onnxruntime.dll";
+            MELLO_LOG_INFO("vad", "loading ORT DLL by path: %s", dll_path.string().c_str());
+
+            HMODULE h = LoadLibraryExW(dll_path.c_str(), nullptr,
+                                       LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR |
+                                       LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
+            if (!h) {
+                MELLO_LOG_WARN("vad", "LoadLibraryExW failed (err=%lu), trying LoadLibraryW",
+                               GetLastError());
+                h = LoadLibraryW(dll_path.c_str());
+            }
+            if (!h) {
+                MELLO_LOG_ERROR("vad", "cannot load onnxruntime.dll (err=%lu)", GetLastError());
+                return false;
+            }
+
+            auto get_api_base = reinterpret_cast<decltype(&OrtGetApiBase)>(
+                GetProcAddress(h, "OrtGetApiBase"));
+            if (!get_api_base) {
+                MELLO_LOG_ERROR("vad", "OrtGetApiBase not found in DLL");
+                return false;
+            }
+
+            const OrtApiBase* api_base = get_api_base();
+            MELLO_LOG_INFO("vad", "ORT DLL version=%s (need API %d)",
+                           api_base->GetVersionString(), ORT_API_VERSION);
+
+            const OrtApi* api = api_base->GetApi(ORT_API_VERSION);
+            if (!api) {
+                MELLO_LOG_ERROR("vad", "GetApi(%d) returned null — DLL too old (%s)",
+                                ORT_API_VERSION, api_base->GetVersionString());
+                return false;
+            }
+            Ort::InitApi(api);
+        }
 #else
-        session_ = new Ort::Session(*env_, model_path.c_str(), session_options_);
+        const OrtApiBase* api_base = OrtGetApiBase();
+        if (!api_base) {
+            MELLO_LOG_ERROR("vad", "OrtGetApiBase() returned null");
+            return false;
+        }
+        const OrtApi* api = api_base->GetApi(ORT_API_VERSION);
+        if (!api) {
+            MELLO_LOG_ERROR("vad", "ORT API version mismatch (need %d, DLL=%s)",
+                            ORT_API_VERSION, api_base->GetVersionString());
+            return false;
+        }
+        Ort::InitApi(api);
 #endif
 
-        Ort::AllocatorWithDefaultOptions allocator;
-        size_t num_in = session_->GetInputCount();
-        size_t num_out = session_->GetOutputCount();
-        MELLO_LOG_DEBUG("vad", "model inputs=%zu outputs=%zu", num_in, num_out);
-        for (size_t i = 0; i < num_in; ++i) {
-            auto name = session_->GetInputNameAllocated(i, allocator);
-            auto type_info = session_->GetInputTypeInfo(i);
-            auto tensor_info = type_info.GetTensorTypeAndShapeInfo();
-            auto shape = tensor_info.GetShape();
-            auto type = tensor_info.GetElementType();
-            std::string shape_str;
-            for (auto d : shape) shape_str += std::to_string(d) + ",";
-            MELLO_LOG_DEBUG("vad", "  input[%zu] name='%s' shape=[%s] type=%d",
-                           i, name.get(), shape_str.c_str(), (int)type);
-        }
+        env_ = std::make_unique<Ort::Env>(ORT_LOGGING_LEVEL_WARNING, "mello_vad");
+        session_options_ = std::make_unique<Ort::SessionOptions>();
+        session_options_->SetIntraOpNumThreads(1);
+        session_options_->SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
 
+        MELLO_LOG_INFO("vad", "loading model: %s", model_path.c_str());
+#ifdef _WIN32
+        std::wstring wpath(model_path.begin(), model_path.end());
+        session_ = new Ort::Session(*env_, wpath.c_str(), *session_options_);
+#else
+        session_ = new Ort::Session(*env_, model_path.c_str(), *session_options_);
+#endif
         h_state_.resize(VAD_STATE_SIZE, 0.0f);
         context_.resize(VAD_CONTEXT_SIZE, 0.0f);
         model_input_buf_.resize(VAD_CONTEXT_SIZE + VAD_CHUNK_SIZE);
@@ -60,6 +104,8 @@ void VoiceActivityDetector::shutdown() {
         delete session_;
         session_ = nullptr;
     }
+    session_options_.reset();
+    env_.reset();
     h_state_.clear();
     context_.clear();
     initialized_ = false;
