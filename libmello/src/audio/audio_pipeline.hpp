@@ -94,6 +94,7 @@ public:
 
 private:
     void on_captured_audio(const int16_t* samples, size_t count);
+    void clear_remote_streams();
 #ifdef _WIN32
     void apply_session(AudioPlayback* pb);
 #endif

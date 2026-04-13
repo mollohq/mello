@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::ffi::{CStr, CString};
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::{Arc, Mutex};
@@ -5,7 +6,10 @@ use std::sync::{Arc, Mutex};
 use futures::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
-use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::tungstenite::{
+    protocol::{frame::coding::CloseCode, CloseFrame},
+    Message,
+};
 
 use crate::stream::StreamError;
 
@@ -263,7 +267,16 @@ impl SfuConnection {
             "seq": 0,
             "data": {}
         });
-        let _ = self.send_signaling(&msg).await;
+        if let Err(e) = self.send_signaling(&msg).await {
+            log::debug!("SFU: leave signaling send failed: {}", e);
+        }
+        let mut tx = self.ws_tx.lock().await;
+        let _ = tx
+            .send(Message::Close(Some(CloseFrame {
+                code: CloseCode::Normal,
+                reason: Cow::Borrowed("client_leave"),
+            })))
+            .await;
     }
 
     /// Receive the next event from the SFU (member joins/leaves, media, disconnect).

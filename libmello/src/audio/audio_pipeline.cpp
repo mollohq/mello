@@ -190,12 +190,17 @@ bool AudioPipeline::start_capture() {
 }
 
 void AudioPipeline::stop_capture() {
-    if (!capturing_) return;
-    if (capture_) capture_->stop();
-    capturing_ = false;
+    if (capturing_) {
+        if (capture_) capture_->stop();
+        capturing_ = false;
+    }
 
     std::lock_guard<std::mutex> lock(accum_mutex_);
     capture_accum_.clear();
+
+    // Leaving voice should immediately flush remote decode state so playback
+    // cannot keep synthesizing PLC/noise from stale peers after disconnect.
+    clear_remote_streams();
 }
 
 void AudioPipeline::set_mute(bool muted) { muted_ = muted; }
@@ -577,6 +582,20 @@ float AudioPipeline::pipeline_delay_ms() const {
         pb_ms /= static_cast<float>(peer_buffers_.size());
 
     return jb_ms + pb_ms;
+}
+
+void AudioPipeline::clear_remote_streams() {
+    std::lock_guard<std::mutex> lock(peer_buffers_mutex_);
+    size_t had = peer_buffers_.size();
+    decoders_.clear();
+    decoder_primed_.clear();
+    last_decoded_seq_.clear();
+    jitter_buffers_.clear();
+    peer_buffers_.clear();
+    active_streams_.store(0, std::memory_order_relaxed);
+    if (had > 0) {
+        MELLO_LOG_INFO("pipeline", "cleared %zu remote voice streams", had);
+    }
 }
 
 AudioDeviceEnumerator& AudioPipeline::device_enumerator() {
