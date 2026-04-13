@@ -1,5 +1,6 @@
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use tokio::sync::{mpsc, oneshot};
 
@@ -64,8 +65,9 @@ pub struct StreamManager {
     config: StreamConfig,
     #[allow(dead_code)]
     input: Arc<dyn InputPassthrough>,
-    video_rx: mpsc::UnboundedReceiver<VideoPacket>,
-    audio_rx: mpsc::UnboundedReceiver<AudioPacket>,
+    video_rx: mpsc::Receiver<VideoPacket>,
+    audio_rx: mpsc::Receiver<AudioPacket>,
+    last_queue_keyframe_request: Instant,
 }
 
 unsafe impl Send for StreamManager {}
@@ -87,8 +89,8 @@ impl StreamManager {
         host: *mut mello_sys::MelloStreamHost,
         sink: Arc<dyn PacketSink>,
         config: StreamConfig,
-        video_rx: mpsc::UnboundedReceiver<VideoPacket>,
-        audio_rx: mpsc::UnboundedReceiver<AudioPacket>,
+        video_rx: mpsc::Receiver<VideoPacket>,
+        audio_rx: mpsc::Receiver<AudioPacket>,
     ) -> Self {
         Self {
             ctx,
@@ -102,6 +104,7 @@ impl StreamManager {
             input: Arc::new(InputPassthroughStub),
             video_rx,
             audio_rx,
+            last_queue_keyframe_request: Instant::now() - Duration::from_secs(5),
         }
     }
 
@@ -129,6 +132,10 @@ impl StreamManager {
                 Some(pkt) = self.audio_rx.recv() => {
                     self.handle_audio(pkt).await;
                 }
+                else => {
+                    log::info!("Stream manager: packet channels closed");
+                    break;
+                }
             }
         }
 
@@ -136,22 +143,59 @@ impl StreamManager {
     }
 
     async fn handle_video(&mut self, pkt: VideoPacket) {
+        let mut packet = pkt;
+        let mut coalesced = 0usize;
+        let mut newest_keyframe: Option<VideoPacket> = None;
+
+        while let Ok(next) = self.video_rx.try_recv() {
+            coalesced += 1;
+            if next.is_keyframe {
+                newest_keyframe = Some(next);
+            } else if newest_keyframe.is_none() {
+                packet = next;
+            }
+        }
+
+        if let Some(kf) = newest_keyframe {
+            packet = kf;
+        }
+
+        if coalesced > 0 {
+            if coalesced <= 5 || coalesced.is_multiple_of(30) {
+                log::warn!(
+                    "Stream manager video coalesce: dropped_stale={} keep_keyframe={}",
+                    coalesced,
+                    packet.is_keyframe
+                );
+            }
+            if !packet.is_keyframe
+                && self.last_queue_keyframe_request.elapsed() >= Duration::from_secs(1)
+            {
+                unsafe {
+                    mello_sys::mello_stream_request_keyframe(self.host);
+                }
+                self.last_queue_keyframe_request = Instant::now();
+                log::warn!("Stream manager coalesced deltas under pressure: requested keyframe");
+            }
+        }
+
         let seq = self.video_seq.fetch_add(1, Ordering::Relaxed);
 
-        if pkt.is_keyframe {
+        if packet.is_keyframe {
             self.fec_encoder.reset();
         }
 
         let fec_group_last = self.fec_encoder.is_enabled()
             && self.fec_encoder.pending_count() == self.fec_encoder.group_size() - 1;
 
-        let packet = StreamPacket::video(pkt.data.clone(), seq, pkt.is_keyframe, fec_group_last);
-        let _ = self.sink.send_video(&packet).await;
-
-        if let Some(parity) = self.fec_encoder.push(&pkt.data) {
+        if let Some(parity) = self.fec_encoder.push(&packet.data) {
             let fec_packet = StreamPacket::fec(parity, seq);
             let _ = self.sink.send_video(&fec_packet).await;
         }
+
+        let stream_packet =
+            StreamPacket::video(packet.data, seq, packet.is_keyframe, fec_group_last);
+        let _ = self.sink.send_video(&stream_packet).await;
     }
 
     async fn handle_audio(&mut self, pkt: AudioPacket) {

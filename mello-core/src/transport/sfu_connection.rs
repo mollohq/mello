@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 use std::ffi::{CStr, CString};
-use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::atomic::{AtomicI32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use futures::{SinkExt, StreamExt};
@@ -13,7 +13,7 @@ use tokio_tungstenite::tungstenite::{
 
 use crate::stream::StreamError;
 
-const RECV_BUF_SIZE: usize = 65536;
+const RECV_BUF_SIZE: usize = 262144;
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -298,6 +298,7 @@ impl SfuConnection {
     /// Poll received packets from the DataChannel (non-blocking).
     /// Returns received media data, or empty vec if nothing pending.
     pub fn poll_recv(&self) -> Vec<Vec<u8>> {
+        static TRUNCATIONS: AtomicU64 = AtomicU64::new(0);
         let mut packets = Vec::new();
         let mut buf = [0u8; RECV_BUF_SIZE];
         loop {
@@ -306,6 +307,16 @@ impl SfuConnection {
             };
             if size <= 0 {
                 break;
+            }
+            if size as usize == RECV_BUF_SIZE {
+                let n = TRUNCATIONS.fetch_add(1, Ordering::Relaxed) + 1;
+                if n <= 5 || n.is_multiple_of(100) {
+                    log::warn!(
+                        "SFU recv likely truncated at {} bytes (count={})",
+                        RECV_BUF_SIZE,
+                        n
+                    );
+                }
             }
             packets.push(buf[..size as usize].to_vec());
         }

@@ -10,14 +10,23 @@ const LOSS_STEP_DOWN_THRESHOLD: f32 = 0.05; // 5%
 const LOSS_STEP_UP_THRESHOLD: f32 = 0.01; // 1%
 /// How long all viewers must report low loss before stepping up.
 const STEP_UP_DURATION_SECS: u64 = 10;
+/// Hold-off after a bitrate step-down before any step-up is allowed.
+const STEP_UP_HOLDOFF_AFTER_DOWN_SECS: u64 = 6;
 /// Bitrate reduction factor on step-down.
 const STEP_DOWN_FACTOR: f32 = 0.75; // reduce by 25%
 /// Bitrate increase factor on step-up.
 const STEP_UP_FACTOR: f32 = 1.10; // increase by 10%
+/// Minimum interval between two bitrate step-downs.
+const STEP_DOWN_COOLDOWN_MS: u64 = 750;
+/// Ignore viewers whose loss reports are too old.
+const REPORT_STALE_SECS: u64 = 3;
+/// EWMA alpha for smoothing per-viewer loss (0..1).
+const LOSS_EWMA_ALPHA: f32 = 0.35;
 
 /// Per-viewer loss tracking state.
 struct ViewerLossState {
     last_report: Instant,
+    smoothed_loss: f32,
     /// Timestamp since which the viewer has been continuously healthy.
     healthy_since: Option<Instant>,
 }
@@ -26,6 +35,10 @@ struct ViewerLossState {
 const FEC_N_HEALTHY: usize = 0; // no FEC when loss < 1%
 const FEC_N_MODERATE: usize = 10; // 10% overhead when 1-5% loss
 const FEC_N_HIGH: usize = 5; // 20% overhead when > 5% loss
+const FEC_MODERATE_ENTER_THRESHOLD: f32 = 0.015; // enter moderate >= 1.5%
+const FEC_MODERATE_EXIT_THRESHOLD: f32 = 0.008; // leave moderate <= 0.8%
+const FEC_HIGH_ENTER_THRESHOLD: f32 = 0.060; // enter high >= 6%
+const FEC_HIGH_EXIT_THRESHOLD: f32 = 0.035; // leave high <= 3.5%
 
 #[derive(Debug, Clone)]
 pub struct AbrChange {
@@ -48,6 +61,7 @@ pub struct AbrController {
     max_bitrate_kbps: u32,
     current_fec_n: usize,
     viewers: HashMap<String, ViewerLossState>,
+    last_step_down: Option<Instant>,
 }
 
 impl AbrController {
@@ -58,6 +72,7 @@ impl AbrController {
             max_bitrate_kbps: config.bitrate_kbps,
             current_fec_n: 0,
             viewers: HashMap::new(),
+            last_step_down: None,
         }
     }
 
@@ -74,6 +89,7 @@ impl AbrController {
             viewer_id.to_string(),
             ViewerLossState {
                 last_report: Instant::now(),
+                smoothed_loss: 0.0,
                 healthy_since: Some(Instant::now()),
             },
         );
@@ -93,33 +109,43 @@ impl AbrController {
         let now = Instant::now();
         let loss = report.loss_ratio();
 
-        // Adaptive FEC: adjust group size based on loss ratio (before borrowing viewers)
-        let fec_change = self.update_fec(loss);
-
         // Update per-viewer state
-        {
+        let smoothed_loss = {
             let state = self
                 .viewers
                 .entry(viewer_id.to_string())
                 .or_insert(ViewerLossState {
                     last_report: now,
+                    smoothed_loss: loss,
                     healthy_since: Some(now),
                 });
             state.last_report = now;
+            if state.smoothed_loss == 0.0 {
+                state.smoothed_loss = loss;
+            } else {
+                state.smoothed_loss =
+                    LOSS_EWMA_ALPHA * loss + (1.0 - LOSS_EWMA_ALPHA) * state.smoothed_loss;
+            }
 
-            if loss > LOSS_STEP_DOWN_THRESHOLD {
+            if state.smoothed_loss > LOSS_STEP_DOWN_THRESHOLD {
                 state.healthy_since = None;
-            } else if loss < LOSS_STEP_UP_THRESHOLD {
+            } else if state.smoothed_loss < LOSS_STEP_UP_THRESHOLD {
                 if state.healthy_since.is_none() {
                     state.healthy_since = Some(now);
                 }
             } else {
                 state.healthy_since = None;
             }
-        }
 
-        if loss > LOSS_STEP_DOWN_THRESHOLD {
-            let mut change = self.step_down(viewer_id, loss);
+            state.smoothed_loss
+        };
+
+        // Adaptive FEC: drive parity from worst recent viewer leg (smoothed).
+        let worst_recent_loss = self.worst_recent_loss(now).unwrap_or(smoothed_loss);
+        let fec_change = self.update_fec(worst_recent_loss);
+
+        if smoothed_loss > LOSS_STEP_DOWN_THRESHOLD {
+            let mut change = self.step_down(viewer_id, smoothed_loss, now);
             if let Some(ref mut c) = change {
                 if fec_change.is_some() {
                     c.new_fec_n = fec_change;
@@ -150,17 +176,57 @@ impl AbrController {
         }
     }
 
+    fn worst_recent_loss(&self, now: Instant) -> Option<f32> {
+        self.viewers
+            .values()
+            .filter(|v| now.duration_since(v.last_report).as_secs() <= REPORT_STALE_SECS)
+            .map(|v| v.smoothed_loss)
+            .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+    }
+
     fn update_fec(&mut self, loss: f32) -> Option<usize> {
-        let target = if loss > LOSS_STEP_DOWN_THRESHOLD {
-            FEC_N_HIGH
-        } else if loss > LOSS_STEP_UP_THRESHOLD {
-            FEC_N_MODERATE
-        } else {
-            FEC_N_HEALTHY
+        let target = match self.current_fec_n {
+            FEC_N_HEALTHY => {
+                if loss >= FEC_HIGH_ENTER_THRESHOLD {
+                    FEC_N_HIGH
+                } else if loss >= FEC_MODERATE_ENTER_THRESHOLD {
+                    FEC_N_MODERATE
+                } else {
+                    FEC_N_HEALTHY
+                }
+            }
+            FEC_N_MODERATE => {
+                if loss >= FEC_HIGH_ENTER_THRESHOLD {
+                    FEC_N_HIGH
+                } else if loss <= FEC_MODERATE_EXIT_THRESHOLD {
+                    FEC_N_HEALTHY
+                } else {
+                    FEC_N_MODERATE
+                }
+            }
+            FEC_N_HIGH => {
+                if loss <= FEC_MODERATE_EXIT_THRESHOLD {
+                    FEC_N_HEALTHY
+                } else if loss <= FEC_HIGH_EXIT_THRESHOLD {
+                    FEC_N_MODERATE
+                } else {
+                    FEC_N_HIGH
+                }
+            }
+            _ => {
+                if loss >= FEC_HIGH_ENTER_THRESHOLD {
+                    FEC_N_HIGH
+                } else if loss >= FEC_MODERATE_ENTER_THRESHOLD {
+                    FEC_N_MODERATE
+                } else {
+                    FEC_N_HEALTHY
+                }
+            }
         };
+
         if target != self.current_fec_n {
             log::info!(
-                "ABR FEC: fec_n {} -> {} (loss={:.1}%)",
+                "ABR FEC: fec_n {} -> {} (worst_loss={:.1}%)",
                 self.current_fec_n,
                 target,
                 loss * 100.0
@@ -172,7 +238,13 @@ impl AbrController {
         }
     }
 
-    fn step_down(&mut self, viewer_id: &str, loss_pct: f32) -> Option<AbrChange> {
+    fn step_down(&mut self, viewer_id: &str, loss_pct: f32, now: Instant) -> Option<AbrChange> {
+        if let Some(last) = self.last_step_down {
+            if now.duration_since(last).as_millis() < STEP_DOWN_COOLDOWN_MS as u128 {
+                return None;
+            }
+        }
+
         let new_bitrate = (self.current_bitrate_kbps as f32 * STEP_DOWN_FACTOR) as u32;
         let new_bitrate = new_bitrate.max(self.min_bitrate_kbps);
 
@@ -189,6 +261,7 @@ impl AbrController {
         );
 
         self.current_bitrate_kbps = new_bitrate;
+        self.last_step_down = Some(now);
         Some(AbrChange {
             new_bitrate_kbps: Some(new_bitrate),
             new_fec_n: None,
@@ -204,10 +277,17 @@ impl AbrController {
             return None;
         }
 
+        if let Some(last_down) = self.last_step_down {
+            if now.duration_since(last_down).as_secs() < STEP_UP_HOLDOFF_AFTER_DOWN_SECS {
+                return None;
+            }
+        }
+
         let all_healthy = self.viewers.values().all(|v| {
-            v.healthy_since
-                .map(|since| now.duration_since(since).as_secs() >= STEP_UP_DURATION_SECS)
-                .unwrap_or(false)
+            now.duration_since(v.last_report).as_secs() <= REPORT_STALE_SECS
+                && v.healthy_since
+                    .map(|since| now.duration_since(since).as_secs() >= STEP_UP_DURATION_SECS)
+                    .unwrap_or(false)
         });
 
         if !all_healthy || self.viewers.is_empty() {

@@ -19,11 +19,12 @@ public:
     const char* backend_name() const override;
 
     bool get_cursor(CursorData& out) override;
+    bool consume_swap_event() override;
 
 private:
     void monitor_thread();
-    void swap_to_dxgi();
-    void swap_to_wgc();
+    bool swap_to_dxgi();
+    bool swap_to_wgc();
 
     uint32_t                         pid_ = 0;
     GraphicsDevice                   device_{};

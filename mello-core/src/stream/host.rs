@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
@@ -9,6 +10,9 @@ use super::config::StreamConfig;
 use super::error::StreamError;
 use super::manager::{AudioPacket, StreamManager, StreamSession, VideoPacket};
 use super::sink::PacketSink;
+
+const VIDEO_QUEUE_CAPACITY: usize = 8;
+const AUDIO_QUEUE_CAPACITY: usize = 128;
 
 #[derive(Debug, Serialize)]
 pub struct StartStreamRequest {
@@ -86,11 +90,13 @@ pub async fn request_start_stream(
 // ---------------------------------------------------------------------------
 
 struct VideoCallbackCtx {
-    tx: mpsc::UnboundedSender<VideoPacket>,
+    tx: mpsc::Sender<VideoPacket>,
+    dropped: AtomicU64,
 }
 
 struct AudioCallbackCtx {
-    tx: mpsc::UnboundedSender<AudioPacket>,
+    tx: mpsc::Sender<AudioPacket>,
+    dropped: AtomicU64,
 }
 
 unsafe extern "C" fn on_video_packet(
@@ -102,11 +108,23 @@ unsafe extern "C" fn on_video_packet(
 ) {
     let ctx = &*(user_data as *const VideoCallbackCtx);
     let payload = std::slice::from_raw_parts(data, size as usize).to_vec();
-    let _ = ctx.tx.send(VideoPacket {
+    let packet = VideoPacket {
         data: payload,
         is_keyframe,
         timestamp: ts,
-    });
+    };
+    if let Err(err) = ctx.tx.try_send(packet) {
+        if matches!(err, mpsc::error::TrySendError::Full(_)) {
+            let n = ctx.dropped.fetch_add(1, Ordering::Relaxed) + 1;
+            if n <= 5 || n.is_multiple_of(120) {
+                log::warn!(
+                    "Stream host video queue full: dropped={} cap={}",
+                    n,
+                    VIDEO_QUEUE_CAPACITY
+                );
+            }
+        }
+    }
 }
 
 unsafe extern "C" fn on_audio_packet(
@@ -117,10 +135,22 @@ unsafe extern "C" fn on_audio_packet(
 ) {
     let ctx = &*(user_data as *const AudioCallbackCtx);
     let payload = std::slice::from_raw_parts(data, size as usize).to_vec();
-    let _ = ctx.tx.send(AudioPacket {
+    let packet = AudioPacket {
         data: payload,
         timestamp: ts,
-    });
+    };
+    if let Err(err) = ctx.tx.try_send(packet) {
+        if matches!(err, mpsc::error::TrySendError::Full(_)) {
+            let n = ctx.dropped.fetch_add(1, Ordering::Relaxed) + 1;
+            if n <= 5 || n.is_multiple_of(300) {
+                log::warn!(
+                    "Stream host audio queue full: dropped={} cap={}",
+                    n,
+                    AUDIO_QUEUE_CAPACITY
+                );
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -147,8 +177,8 @@ impl Drop for HostResources {
 
 type StartHostResult = (
     *mut mello_sys::MelloStreamHost,
-    mpsc::UnboundedReceiver<VideoPacket>,
-    mpsc::UnboundedReceiver<AudioPacket>,
+    mpsc::Receiver<VideoPacket>,
+    mpsc::Receiver<AudioPacket>,
     HostResources,
 );
 
@@ -162,11 +192,17 @@ pub unsafe fn start_host(
     source: &mello_sys::MelloCaptureSource,
     config: &mello_sys::MelloStreamConfig,
 ) -> Result<StartHostResult, StreamError> {
-    let (video_tx, video_rx) = mpsc::unbounded_channel();
-    let (audio_tx, audio_rx) = mpsc::unbounded_channel();
+    let (video_tx, video_rx) = mpsc::channel(VIDEO_QUEUE_CAPACITY);
+    let (audio_tx, audio_rx) = mpsc::channel(AUDIO_QUEUE_CAPACITY);
 
-    let video_cb_ctx = Box::into_raw(Box::new(VideoCallbackCtx { tx: video_tx }));
-    let audio_cb_ctx = Box::into_raw(Box::new(AudioCallbackCtx { tx: audio_tx }));
+    let video_cb_ctx = Box::into_raw(Box::new(VideoCallbackCtx {
+        tx: video_tx,
+        dropped: AtomicU64::new(0),
+    }));
+    let audio_cb_ctx = Box::into_raw(Box::new(AudioCallbackCtx {
+        tx: audio_tx,
+        dropped: AtomicU64::new(0),
+    }));
 
     let host = unsafe {
         mello_sys::mello_stream_start_host(
@@ -211,8 +247,8 @@ pub fn create_stream_session(
     host: *mut mello_sys::MelloStreamHost,
     resp: &StartStreamResponse,
     config: StreamConfig,
-    video_rx: mpsc::UnboundedReceiver<VideoPacket>,
-    audio_rx: mpsc::UnboundedReceiver<AudioPacket>,
+    video_rx: mpsc::Receiver<VideoPacket>,
+    audio_rx: mpsc::Receiver<AudioPacket>,
     _resources: HostResources,
     sink: Arc<dyn PacketSink>,
 ) -> Result<StreamSession, StreamError> {

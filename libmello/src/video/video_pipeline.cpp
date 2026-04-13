@@ -289,6 +289,11 @@ bool VideoPipeline::encoder_available() const {
 void VideoPipeline::on_captured_frame(ID3D11Texture2D* texture, uint64_t timestamp_us) {
     if (!host_running_.load()) return;
 
+    if (capture_ && capture_->consume_swap_event()) {
+        MELLO_LOG_WARN(TAG, "Capture backend swap detected, forcing keyframe");
+        request_keyframe();
+    }
+
     if (frames_encoded_ < 3) {
         D3D11_TEXTURE2D_DESC cap_desc{};
         texture->GetDesc(&cap_desc);

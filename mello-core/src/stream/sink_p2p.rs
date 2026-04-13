@@ -13,7 +13,7 @@ const MAX_P2P_VIEWERS: usize = 5;
 /// Max payload per DataChannel message. SCTP fragments anything larger into
 /// many chunks; losing a single fragment kills the entire message in unreliable
 /// mode. Matches the proven chunk size from stream-host tool.
-const CHUNK_MAX_PAYLOAD: usize = 60_000;
+pub const CHUNK_MAX_PAYLOAD: usize = 60_000;
 
 /// Chunk header: [msg_id:2][chunk_idx:2][chunk_count:2] = 6 bytes.
 /// Prepended to every DataChannel message so the viewer can reassemble.

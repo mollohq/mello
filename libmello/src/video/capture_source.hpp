@@ -56,6 +56,9 @@ public:
     virtual const char* backend_name() const = 0;
 
     virtual bool get_cursor(CursorData& out) { (void)out; return false; }
+    // Backends with runtime source/backend switching can raise a swap event.
+    // The pipeline consumes this to force a keyframe and accelerate recovery.
+    virtual bool consume_swap_event() { return false; }
 };
 
 std::unique_ptr<CaptureSource> create_capture_source(const CaptureSourceDesc& desc);

@@ -32,7 +32,8 @@ impl ChunkAssembler {
 
     /// Feed a raw DataChannel message. Returns the reassembled payload if complete.
     pub fn feed(&mut self, raw: &[u8]) -> Option<Vec<u8>> {
-        use crate::stream::sink_p2p::CHUNK_HEADER_SIZE;
+        use crate::stream::sink_p2p::{CHUNK_HEADER_SIZE, CHUNK_MAX_PAYLOAD};
+        const MAX_CHUNKS_PER_MESSAGE: u16 = 64;
         if raw.len() < CHUNK_HEADER_SIZE {
             return None;
         }
@@ -42,7 +43,11 @@ impl ChunkAssembler {
         let chunk_count = u16::from_le_bytes([raw[4], raw[5]]);
         let payload = &raw[CHUNK_HEADER_SIZE..];
 
-        if chunk_count == 0 || chunk_idx >= chunk_count {
+        if chunk_count == 0
+            || chunk_count > MAX_CHUNKS_PER_MESSAGE
+            || chunk_idx >= chunk_count
+            || payload.len() > CHUNK_MAX_PAYLOAD
+        {
             return None;
         }
 
@@ -95,6 +100,9 @@ pub(super) struct ViewerState {
     pub _ice_cb_data: *mut StreamIceCallbackData,
     pub got_keyframe: bool,
     pub frames_presented: u64,
+    pub transport_packets: u64,
+    pub transport_bytes: u64,
+    pub transport_truncations: u64,
     pub recv_buf: Vec<u8>,
     pub stream_viewer: StreamViewer,
     pub chunk_assembler: ChunkAssembler,
@@ -266,4 +274,45 @@ pub(super) fn flush_ice_buffer(cb_data: &StreamIceCallbackData) {
     cb_data
         .flushed
         .store(true, std::sync::atomic::Ordering::Release);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ChunkAssembler;
+    use crate::stream::sink_p2p::{CHUNK_HEADER_SIZE, CHUNK_MAX_PAYLOAD};
+
+    fn make_chunk(msg_id: u16, idx: u16, count: u16, payload: &[u8]) -> Vec<u8> {
+        let mut out = Vec::with_capacity(CHUNK_HEADER_SIZE + payload.len());
+        out.extend_from_slice(&msg_id.to_le_bytes());
+        out.extend_from_slice(&idx.to_le_bytes());
+        out.extend_from_slice(&count.to_le_bytes());
+        out.extend_from_slice(payload);
+        out
+    }
+
+    #[test]
+    fn chunk_assembler_reassembles_complete_message() {
+        let mut asm = ChunkAssembler::new();
+        let c0 = make_chunk(7, 0, 2, b"hello ");
+        let c1 = make_chunk(7, 1, 2, b"world");
+
+        assert!(asm.feed(&c0).is_none());
+        let msg = asm.feed(&c1).expect("message should reassemble");
+        assert_eq!(msg, b"hello world");
+    }
+
+    #[test]
+    fn chunk_assembler_rejects_invalid_chunk_count() {
+        let mut asm = ChunkAssembler::new();
+        let bad = make_chunk(8, 0, 65, b"x");
+        assert!(asm.feed(&bad).is_none());
+    }
+
+    #[test]
+    fn chunk_assembler_rejects_oversized_chunk_payload() {
+        let mut asm = ChunkAssembler::new();
+        let oversized = vec![0u8; CHUNK_MAX_PAYLOAD + 1];
+        let bad = make_chunk(9, 0, 1, &oversized);
+        assert!(asm.feed(&bad).is_none());
+    }
 }

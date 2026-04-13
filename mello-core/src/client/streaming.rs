@@ -395,9 +395,15 @@ impl super::Client {
 
         // Collect raw packets from the transport (SFU or P2P)
         let packets: Vec<Vec<u8>> = if vs.mode == "sfu" {
-            // SFU path: raw StreamPacket bytes, no chunking
+            // SFU path: chunked DataChannel messages -> reassemble
             if let Some(ref conn) = vs.sfu_connection {
-                conn.poll_recv()
+                let mut reassembled = Vec::new();
+                for raw in conn.poll_recv() {
+                    if let Some(full_msg) = vs.chunk_assembler.feed(&raw) {
+                        reassembled.push(full_msg);
+                    }
+                }
+                reassembled
             } else {
                 Vec::new()
             }
@@ -416,6 +422,18 @@ impl super::Client {
                 if size <= 0 {
                     break;
                 }
+                if size as usize == vs.recv_buf.len() {
+                    vs.transport_truncations = vs.transport_truncations.saturating_add(1);
+                    if vs.transport_truncations <= 5 || vs.transport_truncations.is_multiple_of(100)
+                    {
+                        log::warn!(
+                            "Stream recv likely truncated: size={} buf={} truncations={}",
+                            size,
+                            vs.recv_buf.len(),
+                            vs.transport_truncations
+                        );
+                    }
+                }
                 let raw = &vs.recv_buf[..size as usize];
                 if let Some(full_msg) = vs.chunk_assembler.feed(raw) {
                     reassembled.push(full_msg);
@@ -423,6 +441,26 @@ impl super::Client {
             }
             reassembled
         };
+
+        if !packets.is_empty() {
+            let mut bytes = 0usize;
+            for p in &packets {
+                bytes += p.len();
+            }
+            vs.transport_packets = vs.transport_packets.saturating_add(packets.len() as u64);
+            vs.transport_bytes = vs.transport_bytes.saturating_add(bytes as u64);
+            if vs.transport_packets <= 10 || vs.transport_packets.is_multiple_of(500) {
+                log::info!(
+                    "Stream ingress: mode={} packets={} bytes={} total_packets={} total_bytes={} truncations={}",
+                    vs.mode,
+                    packets.len(),
+                    bytes,
+                    vs.transport_packets,
+                    vs.transport_bytes,
+                    vs.transport_truncations
+                );
+            }
+        }
 
         for data in &packets {
             let results = vs.stream_viewer.feed_packet(data);
@@ -475,7 +513,7 @@ impl super::Client {
                             let connected = unsafe { mello_sys::mello_peer_is_connected(peer) };
                             if connected {
                                 unsafe {
-                                    mello_sys::mello_peer_send_unreliable(
+                                    mello_sys::mello_peer_send_reliable(
                                         peer,
                                         ctrl_data.as_ptr(),
                                         ctrl_data.len() as i32,
@@ -1131,6 +1169,9 @@ impl super::Client {
             _ice_cb_data: std::ptr::null_mut(),
             got_keyframe: false,
             frames_presented: 0,
+            transport_packets: 0,
+            transport_bytes: 0,
+            transport_truncations: 0,
             recv_buf: vec![0u8; VIEWER_RECV_BUF_SIZE],
             stream_viewer: crate::stream::viewer::StreamViewer::new(config.fec_n),
             chunk_assembler: ChunkAssembler::new(),
@@ -1244,6 +1285,9 @@ impl super::Client {
             _ice_cb_data: ice_cb_data,
             got_keyframe: false,
             frames_presented: 0,
+            transport_packets: 0,
+            transport_bytes: 0,
+            transport_truncations: 0,
             recv_buf: vec![0u8; VIEWER_RECV_BUF_SIZE],
             stream_viewer: crate::stream::viewer::StreamViewer::new(config.fec_n),
             chunk_assembler: ChunkAssembler::new(),
