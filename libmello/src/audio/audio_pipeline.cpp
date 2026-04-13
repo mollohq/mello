@@ -238,11 +238,11 @@ void AudioPipeline::on_captured_audio(const int16_t* samples, size_t count) {
                 local_clip_ring_->write(capture_accum_.data(), FRAME_SIZE);
             }
 
+            // Run suppression before VAD so speech gating sees denoised audio.
+            noise_suppressor_.process(capture_accum_.data(), FRAME_SIZE);
             vad_.feed(capture_accum_.data(), FRAME_SIZE);
 
             if (vad_.is_speaking()) {
-                noise_suppressor_.process(capture_accum_.data(), FRAME_SIZE);
-
                 uint8_t raw_pkt[MAX_PACKET_SIZE];
                 int encoded = encoder_.encode(capture_accum_.data(), FRAME_SIZE,
                                               raw_pkt, MAX_PACKET_SIZE);
@@ -323,6 +323,8 @@ void AudioPipeline::feed_packet(const char* peer_id, const uint8_t* data, int si
                 decoders_.erase(pid);
                 return;
             }
+            decoder_primed_[pid] = false;
+            last_decoded_seq_.erase(pid);
         }
         if (peer_buffers_.find(pid) == peer_buffers_.end()) {
             peer_buffers_[pid] = std::make_unique<util::RingBuffer<int16_t>>(48000);
@@ -346,27 +348,89 @@ void AudioPipeline::feed_packet(const char* peer_id, const uint8_t* data, int si
 size_t AudioPipeline::mix_output(int16_t* out, size_t count) {
     std::lock_guard<std::mutex> lock(peer_buffers_mutex_);
 
-    // Drain jitter buffers into ring buffers. The jitter buffer's pop()
-    // enforces the playout delay, so packets are only released when ready.
+    // Drain jitter buffers into ring buffers. Cap per-peer drain work per
+    // callback so a backlog on one stream doesn't monopolize the audio lock.
+    constexpr uint32_t kMaxConcealFramesPerPacket = 3;
+    constexpr int kMaxDrainPacketsPerPeer = 6;
     int total_popped = 0;
     int total_decoded = 0;
     int decode_errors = 0;
+    int concealment_fec = 0;
+    int concealment_plc = 0;
     for (auto& [pid, jb] : jitter_buffers_) {
         std::vector<uint8_t> pkt_data;
-        while (jb.pop(pkt_data)) {
-            total_popped++;
+        uint32_t pkt_seq = 0;
+        int drained = 0;
+        while (drained < kMaxDrainPacketsPerPeer) {
+            auto pop_result = jb.pop(pkt_data, &pkt_seq);
+            if (pop_result == JitterPopResult::None) {
+                break;
+            }
+            drained++;
             auto dit = decoders_.find(pid);
             if (dit == decoders_.end()) continue;
+            auto bit = peer_buffers_.find(pid);
+            if (bit == peer_buffers_.end()) continue;
+
+            if (pop_result == JitterPopResult::Missing) {
+                if (decoder_primed_[pid]) {
+                    int16_t plc_pcm[FRAME_SIZE];
+                    int plc_samples = dit->second.decode_plc(plc_pcm, FRAME_SIZE);
+                    if (plc_samples > 0) {
+                        bit->second->write(plc_pcm, static_cast<size_t>(plc_samples));
+                        concealment_plc++;
+                        total_decoded++;
+                    }
+                }
+                continue;
+            }
+
+            total_popped++;
+            bool primed = decoder_primed_[pid];
+            auto last_it = last_decoded_seq_.find(pid);
+            uint32_t missing_frames = 0;
+            if (last_it != last_decoded_seq_.end() && pkt_seq > last_it->second + 1) {
+                missing_frames = pkt_seq - last_it->second - 1;
+            }
+
+            if (primed && missing_frames > 0) {
+                bool used_fec = false;
+                // With one-frame loss, try in-band FEC from the current packet first.
+                if (missing_frames == 1) {
+                    int16_t fec_pcm[FRAME_SIZE];
+                    int fec_samples = dit->second.decode_fec(
+                        pkt_data.data(), static_cast<int>(pkt_data.size()), fec_pcm, FRAME_SIZE);
+                    if (fec_samples > 0) {
+                        bit->second->write(fec_pcm, static_cast<size_t>(fec_samples));
+                        concealment_fec++;
+                        total_decoded++;
+                        used_fec = true;
+                    }
+                }
+
+                if (!used_fec) {
+                    uint32_t plc_frames =
+                        std::min<uint32_t>(missing_frames, kMaxConcealFramesPerPacket);
+                    for (uint32_t i = 0; i < plc_frames; ++i) {
+                        int16_t plc_pcm[FRAME_SIZE];
+                        int plc_samples = dit->second.decode_plc(plc_pcm, FRAME_SIZE);
+                        if (plc_samples <= 0) break;
+                        bit->second->write(plc_pcm, static_cast<size_t>(plc_samples));
+                        concealment_plc++;
+                        total_decoded++;
+                    }
+                }
+            }
+
             int16_t pcm[FRAME_SIZE];
             int samples = dit->second.decode(pkt_data.data(),
                                              static_cast<int>(pkt_data.size()),
                                              pcm, FRAME_SIZE);
             if (samples > 0) {
                 total_decoded++;
-                auto bit = peer_buffers_.find(pid);
-                if (bit != peer_buffers_.end()) {
-                    bit->second->write(pcm, static_cast<size_t>(samples));
-                }
+                bit->second->write(pcm, static_cast<size_t>(samples));
+                decoder_primed_[pid] = true;
+                last_decoded_seq_[pid] = pkt_seq;
             } else {
                 decode_errors++;
             }
@@ -380,6 +444,23 @@ size_t AudioPipeline::mix_output(int16_t* out, size_t count) {
         std::vector<int16_t> temp(count);
         for (auto& [pid, buf] : peer_buffers_) {
             size_t got = buf->read(temp.data(), count);
+            if (got < count && decoder_primed_[pid]) {
+                auto dit = decoders_.find(pid);
+                if (dit != decoders_.end()) {
+                    size_t write_pos = got;
+                    while (write_pos < count) {
+                        int16_t plc_pcm[FRAME_SIZE];
+                        int plc_samples = dit->second.decode_plc(plc_pcm, FRAME_SIZE);
+                        if (plc_samples <= 0) break;
+                        size_t copy_n = (std::min)(static_cast<size_t>(plc_samples), count - write_pos);
+                        std::memcpy(temp.data() + write_pos, plc_pcm, copy_n * sizeof(int16_t));
+                        write_pos += copy_n;
+                        concealment_plc++;
+                        total_decoded++;
+                    }
+                    got = write_pos;
+                }
+            }
             if (got > 0) {
                 any_remote = true;
                 for (size_t i = 0; i < got; ++i) {
@@ -401,8 +482,8 @@ size_t AudioPipeline::mix_output(int16_t* out, size_t count) {
                 sum += s * s;
             }
             float rms = static_cast<float>(std::sqrt(sum / count));
-            MELLO_LOG_INFO("pipeline", "mix_output #%u: rms=%.4f count=%zu peers=%zu popped=%d decoded=%d errs=%d",
-                           mix_log_ctr, rms, count, peer_buffers_.size(), total_popped, total_decoded, decode_errors);
+            MELLO_LOG_INFO("pipeline", "mix_output #%u: rms=%.4f count=%zu peers=%zu popped=%d decoded=%d fec=%d plc=%d errs=%d",
+                           mix_log_ctr, rms, count, peer_buffers_.size(), total_popped, total_decoded, concealment_fec, concealment_plc, decode_errors);
         }
 
         float og = output_gain_.load(std::memory_order_relaxed);
@@ -421,8 +502,8 @@ size_t AudioPipeline::mix_output(int16_t* out, size_t count) {
             int total_rb = 0;
             for (auto& [pid, jb] : jitter_buffers_) total_jb += jb.buffered_count();
             for (auto& [pid, buf] : peer_buffers_) total_rb += static_cast<int>(buf->available());
-            MELLO_LOG_INFO("pipeline", "mix_output UNDERRUN #%u: peers=%zu jb_pkts=%d rb_samples=%d popped=%d decoded=%d errs=%d",
-                           ur, peer_buffers_.size(), total_jb, total_rb, total_popped, total_decoded, decode_errors);
+            MELLO_LOG_INFO("pipeline", "mix_output UNDERRUN #%u: peers=%zu jb_pkts=%d rb_samples=%d popped=%d decoded=%d fec=%d plc=%d errs=%d",
+                           ur, peer_buffers_.size(), total_jb, total_rb, total_popped, total_decoded, concealment_fec, concealment_plc, decode_errors);
         }
     }
 

@@ -461,11 +461,7 @@ impl Client {
                 self.voice.set_agc(enabled);
             }
             Command::SetNoiseSuppression { enabled } => {
-                // TODO: Wire noise_suppression toggle to libmello when C API is added
-                log::info!(
-                    "Noise suppression {}",
-                    if enabled { "enabled" } else { "disabled" }
-                );
+                self.voice.set_noise_suppression(enabled);
             }
             Command::SetInputVolume { volume } => {
                 self.voice.set_input_volume(volume);

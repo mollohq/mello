@@ -118,6 +118,29 @@ bool CoreAudioCapture::initialize(const char* device_id) {
         return false;
     }
 
+    AudioStreamBasicDescription actual = {};
+    UInt32 actual_size = sizeof(actual);
+    status = AudioUnitGetProperty(audio_unit_,
+        kAudioUnitProperty_StreamFormat,
+        kAudioUnitScope_Output,
+        1,
+        &actual, &actual_size);
+    if (status != noErr) {
+        MELLO_LOG_ERROR("capture", "CoreAudio: get actual format failed: %d", (int)status);
+        return false;
+    }
+    if (std::fabs(actual.mSampleRate - 48000.0) > 1.0 ||
+        actual.mChannelsPerFrame != 1 ||
+        actual.mBitsPerChannel != 16) {
+        MELLO_LOG_ERROR(
+            "capture",
+            "CoreAudio: format contract mismatch actual(rate=%.1f ch=%u bits=%u)",
+            actual.mSampleRate,
+            (unsigned)actual.mChannelsPerFrame,
+            (unsigned)actual.mBitsPerChannel);
+        return false;
+    }
+
     sample_rate_ = 48000;
     channels_ = 1;
 

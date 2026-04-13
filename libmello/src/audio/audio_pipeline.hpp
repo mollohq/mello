@@ -49,6 +49,7 @@ public:
     float output_volume() const { return output_gain_.load(std::memory_order_relaxed); }
     void set_echo_cancellation(bool enabled) { echo_canceller_.set_aec_enabled(enabled); }
     void set_agc(bool enabled) { echo_canceller_.set_agc_enabled(enabled); }
+    void set_noise_suppression(bool enabled) { noise_suppressor_.set_enabled(enabled); }
     bool echo_cancellation_enabled() const { return echo_canceller_.aec_enabled(); }
     bool agc_enabled() const { return echo_canceller_.agc_enabled(); }
     bool noise_suppression_enabled() const { return noise_suppressor_.is_enabled(); }
@@ -109,6 +110,8 @@ private:
     EchoCanceller echo_canceller_;
     VoiceActivityDetector vad_;
     std::unordered_map<std::string, OpusDec> decoders_;
+    std::unordered_map<std::string, bool> decoder_primed_;
+    std::unordered_map<std::string, uint32_t> last_decoded_seq_;
     std::unordered_map<std::string, JitterBuffer> jitter_buffers_;
     std::unique_ptr<AudioDeviceEnumerator> device_enum_;
 

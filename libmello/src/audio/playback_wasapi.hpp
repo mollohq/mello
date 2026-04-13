@@ -7,6 +7,7 @@
 #include <thread>
 #include <atomic>
 #include "../util/ring_buffer.hpp"
+#include <vector>
 
 namespace mello::audio {
 
@@ -37,9 +38,17 @@ private:
     IAudioRenderClient* render_client_ = nullptr;
     HANDLE event_ = nullptr;
 
-    uint32_t sample_rate_ = 48000;
+    uint32_t sample_rate_ = 48000; // internal contract rate
+    uint32_t device_sample_rate_ = 48000;
     uint32_t device_channels_ = 2;
+    bool device_float_format_ = true;
+    uint16_t device_bits_per_sample_ = 32;
     uint32_t buffer_frames_ = 0;
+
+    // 48k internal stream -> device-rate stream resampler state
+    std::vector<float> src_fifo_;
+    double src_fifo_pos_ = 0.0;
+    std::vector<int16_t> render_src_i16_;
 
     std::thread thread_;
     std::atomic<bool> running_{false};

@@ -51,6 +51,11 @@ int OpusDec::decode(const uint8_t* data, int len, int16_t* pcm, int max_frame_si
     return opus_decode(decoder_, data, len, pcm, max_frame_size, 0);
 }
 
+int OpusDec::decode_fec(const uint8_t* data, int len, int16_t* pcm, int max_frame_size) {
+    if (!decoder_) return -1;
+    return opus_decode(decoder_, data, len, pcm, max_frame_size, 1);
+}
+
 int OpusDec::decode_plc(int16_t* pcm, int frame_size) {
     if (!decoder_) return -1;
     return opus_decode(decoder_, nullptr, 0, pcm, frame_size, 0);

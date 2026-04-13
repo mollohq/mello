@@ -241,6 +241,7 @@ pub fn wire(ctx: &AppContext) {
         let s = ctx.settings.clone();
         let hk = ctx.hotkey_mgr.clone();
         let cmd = ctx.cmd_tx.clone();
+        let app_weak = ctx.app.as_weak();
         ctx.app.on_setting_changed_input_mode(move |is_ptt| {
             let mut settings = s.borrow_mut();
             settings.input_mode = if is_ptt {
@@ -250,8 +251,21 @@ pub fn wire(ctx: &AppContext) {
             };
             settings.save();
             hk.borrow().set_active(is_ptt);
+            let current_deafened = app_weak
+                .upgrade()
+                .map(|app| app.get_deafened())
+                .unwrap_or(false);
+            let target_muted = is_ptt || current_deafened;
             // Mute when entering PTT (unmute on key press), unmute when leaving PTT
-            let _ = cmd.try_send(Command::SetMute { muted: is_ptt });
+            let _ = cmd.try_send(Command::SetMute {
+                muted: target_muted,
+            });
+            if let Some(app) = app_weak.upgrade() {
+                let _ = cmd.try_send(Command::BroadcastMuteState {
+                    muted: target_muted,
+                    deafened: app.get_deafened(),
+                });
+            }
         });
     }
     {
@@ -292,11 +306,50 @@ pub fn wire(ctx: &AppContext) {
         let s = ctx.settings.clone();
         let app_weak = ctx.app.as_weak();
         let hk = ctx.hotkey_mgr.clone();
+        let cmd = ctx.cmd_tx.clone();
+        let hud = ctx.hud_manager.clone();
+        let fg = ctx.fg_monitor.clone();
         ctx.app.on_settings_reset_defaults(move || {
             let defaults = Settings::default();
+            let current_deafened = app_weak
+                .upgrade()
+                .map(|app| app.get_deafened())
+                .unwrap_or(false);
+            let target_muted = defaults.input_mode == "push_to_talk" || current_deafened;
             *s.borrow_mut() = defaults.clone();
             s.borrow().save();
             hk.borrow().unregister_ptt();
+            hk.borrow()
+                .set_active(defaults.input_mode == "push_to_talk");
+
+            let _ = cmd.try_send(Command::SetInputVolume {
+                volume: defaults.input_volume,
+            });
+            let _ = cmd.try_send(Command::SetOutputVolume {
+                volume: defaults.output_volume,
+            });
+            let _ = cmd.try_send(Command::SetNoiseSuppression {
+                enabled: defaults.noise_suppression,
+            });
+            let _ = cmd.try_send(Command::SetEchoCancellation {
+                enabled: defaults.echo_cancellation,
+            });
+            let _ = cmd.try_send(Command::SetMute {
+                muted: target_muted,
+            });
+
+            fg.borrow_mut().set_hud_enabled(defaults.hud_enabled);
+            fg.borrow_mut()
+                .set_overlay_enabled(defaults.hud_show_overlay_in_game);
+            hud.push_settings(crate::hud_manager::HudSettings {
+                overlay_opacity: defaults.hud_overlay_opacity,
+                show_clip_toasts: defaults.hud_show_clip_toasts,
+                overlay_enabled: defaults.hud_show_overlay_in_game,
+            });
+            if !defaults.hud_enabled {
+                hud.shutdown();
+            }
+
             if let Some(app) = app_weak.upgrade() {
                 app.set_settings_start_on_boot(defaults.start_on_boot);
                 app.set_settings_start_minimized(defaults.start_minimized);
@@ -315,6 +368,11 @@ pub fn wire(ctx: &AppContext) {
                 app.set_settings_hud_overlay_in_game(defaults.hud_show_overlay_in_game);
                 app.set_settings_hud_overlay_opacity(defaults.hud_overlay_opacity);
                 app.set_settings_hud_clip_toasts(defaults.hud_show_clip_toasts);
+
+                let _ = cmd.try_send(Command::BroadcastMuteState {
+                    muted: target_muted,
+                    deafened: app.get_deafened(),
+                });
             }
             if let Err(e) = crate::autolaunch::set_start_on_boot(false) {
                 log::warn!("Failed to reset auto-launch: {}", e);

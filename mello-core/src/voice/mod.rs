@@ -254,6 +254,14 @@ impl VoiceManager {
         }
     }
 
+    pub fn set_noise_suppression(&mut self, enabled: bool) {
+        if !self.ctx.is_null() {
+            unsafe {
+                mello_sys::mello_voice_set_noise_suppression(self.ctx, enabled);
+            }
+        }
+    }
+
     pub fn set_input_volume(&mut self, volume: f32) {
         if !self.ctx.is_null() {
             unsafe {

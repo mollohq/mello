@@ -5,6 +5,10 @@
 #include <combaseapi.h>
 #include <vector>
 #include <cstring>
+#include <algorithm>
+#include <mmreg.h>
+#include <ks.h>
+#include <ksmedia.h>
 
 namespace mello::audio {
 
@@ -12,6 +16,16 @@ static const CLSID CLSID_MMDeviceEnumerator_ = __uuidof(MMDeviceEnumerator);
 static const IID IID_IMMDeviceEnumerator_ = __uuidof(IMMDeviceEnumerator);
 static const IID IID_IAudioClient_ = __uuidof(IAudioClient);
 static const IID IID_IAudioCaptureClient_ = __uuidof(IAudioCaptureClient);
+
+static bool is_float_format(const WAVEFORMATEX* fmt) {
+    if (!fmt) return false;
+    if (fmt->wFormatTag == WAVE_FORMAT_IEEE_FLOAT) return true;
+    if (fmt->wFormatTag == WAVE_FORMAT_EXTENSIBLE && fmt->cbSize >= 22) {
+        auto* ext = reinterpret_cast<const WAVEFORMATEXTENSIBLE*>(fmt);
+        return IsEqualGUID(ext->SubFormat, KSDATAFORMAT_SUBTYPE_IEEE_FLOAT);
+    }
+    return false;
+}
 
 WasapiCapture::WasapiCapture() = default;
 
@@ -70,41 +84,27 @@ bool WasapiCapture::initialize(const char* device_id) {
                            reinterpret_cast<void**>(&audio_client_));
     if (FAILED(hr)) return false;
 
-    // Desired format: 48kHz mono 16-bit PCM
-    WAVEFORMATEX desired = {};
-    desired.wFormatTag = WAVE_FORMAT_PCM;
-    desired.nChannels = 1;
-    desired.nSamplesPerSec = 48000;
-    desired.wBitsPerSample = 16;
-    desired.nBlockAlign = desired.nChannels * desired.wBitsPerSample / 8;
-    desired.nAvgBytesPerSec = desired.nSamplesPerSec * desired.nBlockAlign;
-
-    // Try our desired format first; fall back to mix format
-    WAVEFORMATEX* closest = nullptr;
-    hr = audio_client_->IsFormatSupported(AUDCLNT_SHAREMODE_SHARED, &desired, &closest);
-    if (hr == S_OK) {
-        // Desired format is supported directly
-        sample_rate_ = desired.nSamplesPerSec;
-        channels_ = desired.nChannels;
-        if (closest) CoTaskMemFree(closest);
-    } else {
-        // Use the device's mix format and we'll resample/convert in the capture thread
-        if (closest) CoTaskMemFree(closest);
-        WAVEFORMATEX* mix = nullptr;
-        hr = audio_client_->GetMixFormat(&mix);
-        if (FAILED(hr)) return false;
-        sample_rate_ = mix->nSamplesPerSec;
-        channels_ = mix->nChannels;
-        CoTaskMemFree(mix);
-    }
-
-    // Re-get mix format for initialization (shared mode requires device format)
+    // Shared-mode capture uses the endpoint mix format; normalize to the
+    // internal 48k mono contract in the capture thread.
     WAVEFORMATEX* mix_fmt = nullptr;
     hr = audio_client_->GetMixFormat(&mix_fmt);
     if (FAILED(hr)) return false;
 
-    sample_rate_ = mix_fmt->nSamplesPerSec;
-    channels_ = mix_fmt->nChannels;
+    device_sample_rate_ = mix_fmt->nSamplesPerSec;
+    device_channels_ = std::max<uint16_t>(1, mix_fmt->nChannels);
+    device_float_format_ = is_float_format(mix_fmt);
+    device_bits_per_sample_ = mix_fmt->wBitsPerSample;
+    if (!device_float_format_ && device_bits_per_sample_ != 16) {
+        MELLO_LOG_ERROR(
+            "capture",
+            "unsupported capture mix format: bits=%u tag=0x%04x",
+            device_bits_per_sample_,
+            mix_fmt->wFormatTag);
+        CoTaskMemFree(mix_fmt);
+        return false;
+    }
+    sample_rate_ = 48000;
+    channels_ = 1;
 
     event_ = CreateEventW(nullptr, FALSE, FALSE, nullptr);
     if (!event_) { CoTaskMemFree(mix_fmt); return false; }
@@ -131,8 +131,15 @@ bool WasapiCapture::initialize(const char* device_id) {
         return false;
     }
 
-    MELLO_LOG_INFO("capture", "initialized: rate=%u ch=%u buf=%u frames",
-                   sample_rate_, channels_, buffer_frames_);
+    MELLO_LOG_INFO(
+        "capture",
+        "initialized: device_rate=%u device_ch=%u fmt=%s -> internal_rate=%u internal_ch=%u buf=%u frames",
+        device_sample_rate_,
+        device_channels_,
+        device_float_format_ ? "f32" : "i16",
+        sample_rate_,
+        channels_,
+        buffer_frames_);
     return true;
 }
 
@@ -147,6 +154,9 @@ bool WasapiCapture::start(Callback callback) {
         running_ = false;
         return false;
     }
+    resample_src_pos_ = 0.0;
+    src_mono_f32_.clear();
+    resampled_i16_.clear();
 
     thread_ = std::thread(&WasapiCapture::capture_thread, this);
     MELLO_LOG_INFO("capture", "started");
@@ -164,8 +174,6 @@ void WasapiCapture::stop() {
 
 void WasapiCapture::capture_thread() {
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
-    // Resampling buffer: we convert from device format to mono 16-bit
-    std::vector<int16_t> mono_buf;
 
     while (running_) {
         DWORD wait = WaitForSingleObject(event_, 100);
@@ -181,26 +189,53 @@ void WasapiCapture::capture_thread() {
             if (FAILED(hr)) break;
 
             if (callback_ && frames > 0) {
-                if (flags & AUDCLNT_BUFFERFLAGS_SILENT) {
-                    // Send silence
-                    mono_buf.assign(frames, 0);
-                    callback_(mono_buf.data(), frames);
-                } else {
-                    // Device gave us float32 samples (typical WASAPI shared mode)
-                    // Downmix to mono int16
-                    const float* fdata = reinterpret_cast<const float*>(data);
-                    mono_buf.resize(frames);
-                    for (UINT32 i = 0; i < frames; ++i) {
-                        float sum = 0.0f;
-                        for (uint32_t ch = 0; ch < channels_; ++ch) {
-                            sum += fdata[i * channels_ + ch];
+                src_mono_f32_.assign(frames, 0.0f);
+                if (!(flags & AUDCLNT_BUFFERFLAGS_SILENT)) {
+                    if (device_float_format_) {
+                        const float* fdata = reinterpret_cast<const float*>(data);
+                        for (UINT32 i = 0; i < frames; ++i) {
+                            float sum = 0.0f;
+                            for (uint32_t ch = 0; ch < device_channels_; ++ch) {
+                                sum += fdata[i * device_channels_ + ch];
+                            }
+                            src_mono_f32_[i] = sum / static_cast<float>(device_channels_);
                         }
-                        float mono = sum / static_cast<float>(channels_);
-                        // Clamp and convert to int16
-                        mono = (mono < -1.0f) ? -1.0f : (mono > 1.0f) ? 1.0f : mono;
-                        mono_buf[i] = static_cast<int16_t>(mono * 32767.0f);
+                    } else {
+                        const int16_t* idata = reinterpret_cast<const int16_t*>(data);
+                        for (UINT32 i = 0; i < frames; ++i) {
+                            float sum = 0.0f;
+                            for (uint32_t ch = 0; ch < device_channels_; ++ch) {
+                                sum += static_cast<float>(idata[i * device_channels_ + ch]) / 32768.0f;
+                            }
+                            src_mono_f32_[i] = sum / static_cast<float>(device_channels_);
+                        }
                     }
-                    callback_(mono_buf.data(), frames);
+                }
+
+                resampled_i16_.clear();
+                if (device_sample_rate_ == sample_rate_) {
+                    resampled_i16_.resize(frames);
+                    for (UINT32 i = 0; i < frames; ++i) {
+                        float s = std::clamp(src_mono_f32_[i], -1.0f, 1.0f);
+                        resampled_i16_[i] = static_cast<int16_t>(s * 32767.0f);
+                    }
+                } else {
+                    const double step =
+                        static_cast<double>(device_sample_rate_) / static_cast<double>(sample_rate_);
+                    while (resample_src_pos_ < static_cast<double>(src_mono_f32_.size())) {
+                        size_t idx = static_cast<size_t>(resample_src_pos_);
+                        double frac = resample_src_pos_ - static_cast<double>(idx);
+                        float s0 = src_mono_f32_[idx];
+                        float s1 = (idx + 1 < src_mono_f32_.size()) ? src_mono_f32_[idx + 1] : s0;
+                        float sample = std::clamp(s0 + static_cast<float>((s1 - s0) * frac), -1.0f, 1.0f);
+                        resampled_i16_.push_back(static_cast<int16_t>(sample * 32767.0f));
+                        resample_src_pos_ += step;
+                    }
+                    resample_src_pos_ -= static_cast<double>(src_mono_f32_.size());
+                }
+
+                if (!resampled_i16_.empty()) {
+                    callback_(resampled_i16_.data(), resampled_i16_.size());
                 }
             }
 

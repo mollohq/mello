@@ -38,6 +38,9 @@ public:
     // Decode a packet. Returns number of samples per channel, or negative on error.
     int decode(const uint8_t* data, int len, int16_t* pcm, int max_frame_size);
 
+    // Attempt to decode in-band FEC from the current packet (for previous loss).
+    int decode_fec(const uint8_t* data, int len, int16_t* pcm, int max_frame_size);
+
     // Packet loss concealment
     int decode_plc(int16_t* pcm, int frame_size);
 

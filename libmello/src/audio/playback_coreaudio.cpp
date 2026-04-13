@@ -3,6 +3,7 @@
 #include "../util/log.hpp"
 #include <cstring>
 #include <vector>
+#include <cmath>
 
 namespace mello::audio {
 
@@ -96,6 +97,29 @@ bool CoreAudioPlayback::initialize(const char* device_id) {
         &format, sizeof(format));
     if (status != noErr) {
         MELLO_LOG_ERROR("playback", "CoreAudio: set format failed: %d", (int)status);
+        return false;
+    }
+
+    AudioStreamBasicDescription actual = {};
+    UInt32 actual_size = sizeof(actual);
+    status = AudioUnitGetProperty(audio_unit_,
+        kAudioUnitProperty_StreamFormat,
+        kAudioUnitScope_Input,
+        0,
+        &actual, &actual_size);
+    if (status != noErr) {
+        MELLO_LOG_ERROR("playback", "CoreAudio: get actual format failed: %d", (int)status);
+        return false;
+    }
+    if (std::fabs(actual.mSampleRate - 48000.0) > 1.0 ||
+        actual.mChannelsPerFrame != 1 ||
+        actual.mBitsPerChannel != 16) {
+        MELLO_LOG_ERROR(
+            "playback",
+            "CoreAudio: format contract mismatch actual(rate=%.1f ch=%u bits=%u)",
+            actual.mSampleRate,
+            (unsigned)actual.mChannelsPerFrame,
+            (unsigned)actual.mBitsPerChannel);
         return false;
     }
 

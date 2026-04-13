@@ -173,6 +173,12 @@ void mello_voice_set_agc(MelloContext* ctx, bool enabled) {
     } catch (...) {}
 }
 
+void mello_voice_set_noise_suppression(MelloContext* ctx, bool enabled) {
+    try {
+        if (ctx) ctx_cast(ctx)->audio().set_noise_suppression(enabled);
+    } catch (...) {}
+}
+
 void mello_voice_set_input_volume(MelloContext* ctx, float volume) {
     try {
         if (ctx) ctx_cast(ctx)->audio().set_input_volume(volume);

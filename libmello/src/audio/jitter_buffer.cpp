@@ -82,11 +82,11 @@ void JitterBuffer::push(uint32_t sequence, const uint8_t* data, int size) {
     adapt_target();
 }
 
-bool JitterBuffer::pop(std::vector<uint8_t>& out_data) {
+JitterPopResult JitterBuffer::pop(std::vector<uint8_t>& out_data, uint32_t* out_sequence) {
     std::lock_guard<std::mutex> lock(mutex_);
 
     if (packets_.empty()) {
-        return false;
+        return JitterPopResult::None;
     }
 
     // Pre-buffering: wait until we've accumulated enough packets before
@@ -95,36 +95,44 @@ bool JitterBuffer::pop(std::vector<uint8_t>& out_data) {
         int64_t elapsed = now_ms() - stream_start_ms_;
         int needed = std::max(2, target_delay_ms_ / 20);
         if (static_cast<int>(packets_.size()) < needed && elapsed < target_delay_ms_) {
-            return false;
+            return JitterPopResult::None;
         }
         prebuffering_ = false;
     }
 
     auto it = packets_.find(next_seq_);
     if (it == packets_.end()) {
-        if (!packets_.empty() && packets_.begin()->first > next_seq_ + 3) {
-            next_seq_ = packets_.begin()->first;
-            it = packets_.begin();
-        } else {
-            underruns_++;
-            return false;
+        // If newer packets have already been buffered long enough, consider
+        // the expected packet lost and let the caller conceal.
+        if (!packets_.empty() && packets_.begin()->first > next_seq_) {
+            int64_t oldest_hold = now_ms() - packets_.begin()->second.arrival_time_ms;
+            if (oldest_hold >= target_delay_ms_ ||
+                static_cast<int>(packets_.size()) >= JITTER_MAX_PACKETS/3) {
+                underruns_++;
+                next_seq_++;
+                return JitterPopResult::Missing;
+            }
         }
+        return JitterPopResult::None;
     }
 
     // Enforce playout delay: don't release a packet until it has been
     // held in the buffer for at least target_delay_ms_.
     int64_t hold = now_ms() - it->second.arrival_time_ms;
     if (hold < target_delay_ms_ && static_cast<int>(packets_.size()) < JITTER_MAX_PACKETS / 2) {
-        return false;
+        return JitterPopResult::None;
     }
 
     avg_hold_ms_ = avg_hold_ms_ * 0.9f + static_cast<float>(hold) * 0.1f;
 
+    if (out_sequence) {
+        *out_sequence = it->second.sequence;
+    }
     out_data = std::move(it->second.data);
     packets_.erase(it);
     next_seq_++;
     last_pop_time_ = now_ms();
-    return true;
+    return JitterPopResult::Packet;
 }
 
 int JitterBuffer::buffered_count() const {

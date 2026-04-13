@@ -18,6 +18,12 @@ struct JitterPacket {
     int64_t arrival_time_ms;
 };
 
+enum class JitterPopResult {
+    None,    // No packet ready yet
+    Packet,  // Packet popped into out_data/out_sequence
+    Missing, // Expected packet considered lost; playout should conceal
+};
+
 class JitterBuffer {
 public:
     JitterBuffer();
@@ -27,9 +33,11 @@ public:
 
     void push(uint32_t sequence, const uint8_t* data, int size);
 
-    // Returns the next packet if the playout delay has been met.
-    // Called from the audio device thread (mix_output).
-    bool pop(std::vector<uint8_t>& out_data);
+    // Pops from playout timeline:
+    // - Packet when data is ready
+    // - Missing when a packet is considered lost and concealment should run
+    // - None when still prebuffering / waiting for delay
+    JitterPopResult pop(std::vector<uint8_t>& out_data, uint32_t* out_sequence = nullptr);
 
     int buffered_count() const;
     int target_delay_ms() const { return target_delay_ms_; }

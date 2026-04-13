@@ -11,6 +11,10 @@ use crate::platform::{self, StatusItem, VoiceState};
 use crate::updater::UpdateEvent;
 use crate::VoiceChannelMember;
 
+fn broadcast_mute_state(cmd_tx: &tokio::sync::mpsc::Sender<Command>, muted: bool, deafened: bool) {
+    let _ = cmd_tx.try_send(Command::BroadcastMuteState { muted, deafened });
+}
+
 pub fn start(
     ctx: &AppContext,
     event_rx: std::sync::mpsc::Receiver<Event>,
@@ -180,6 +184,11 @@ pub fn start(
                         let _ = poll_ctx
                             .cmd_tx
                             .try_send(Command::SetMute { muted: new_muted });
+                        broadcast_mute_state(
+                            &poll_ctx.cmd_tx,
+                            new_muted,
+                            poll_ctx.app.get_deafened(),
+                        );
                         poll_ctx
                             .status_item
                             .borrow_mut()
@@ -253,6 +262,11 @@ pub fn start(
                                 let _ = poll_ctx
                                     .cmd_tx
                                     .try_send(Command::SetMute { muted: new_muted });
+                                broadcast_mute_state(
+                                    &poll_ctx.cmd_tx,
+                                    new_muted,
+                                    poll_ctx.app.get_deafened(),
+                                );
                             }
                             "deafen" => {
                                 let new_deafened = !poll_ctx.app.get_deafened();
@@ -275,6 +289,11 @@ pub fn start(
                                     let _ =
                                         poll_ctx.cmd_tx.try_send(Command::SetMute { muted: false });
                                 }
+                                broadcast_mute_state(
+                                    &poll_ctx.cmd_tx,
+                                    poll_ctx.app.get_mic_muted(),
+                                    new_deafened,
+                                );
                             }
                             "github" => {
                                 if let Err(e) = open::that("https://github.com/mollohq/mello") {
@@ -373,6 +392,11 @@ pub fn start(
                             let _ = poll_ctx
                                 .cmd_tx
                                 .try_send(Command::SetMute { muted: new_muted });
+                            broadcast_mute_state(
+                                &poll_ctx.cmd_tx,
+                                new_muted,
+                                poll_ctx.app.get_deafened(),
+                            );
                             poll_ctx
                                 .status_item
                                 .borrow_mut()
@@ -390,7 +414,33 @@ pub fn start(
                             platform::bring_main_window_to_front();
                         }
                         crate::hud_manager::HudActionKind::DeafenToggle => {
-                            log::info!("[hud] deafen toggle requested (not yet wired)");
+                            let new_deafened = !poll_ctx.app.get_deafened();
+                            poll_ctx.app.set_deafened(new_deafened);
+                            let _ = poll_ctx.cmd_tx.try_send(Command::SetDeafen {
+                                deafened: new_deafened,
+                            });
+                            if new_deafened {
+                                poll_ctx
+                                    .muted_before_deafen
+                                    .set(poll_ctx.app.get_mic_muted());
+                                if !poll_ctx.app.get_mic_muted() {
+                                    poll_ctx.app.set_mic_muted(true);
+                                    let _ =
+                                        poll_ctx.cmd_tx.try_send(Command::SetMute { muted: true });
+                                }
+                            } else if !poll_ctx.muted_before_deafen.get() {
+                                poll_ctx.app.set_mic_muted(false);
+                                let _ = poll_ctx.cmd_tx.try_send(Command::SetMute { muted: false });
+                            }
+                            broadcast_mute_state(
+                                &poll_ctx.cmd_tx,
+                                poll_ctx.app.get_mic_muted(),
+                                new_deafened,
+                            );
+                            poll_ctx
+                                .status_item
+                                .borrow_mut()
+                                .set_mute_checked(poll_ctx.app.get_mic_muted());
                         }
                         crate::hud_manager::HudActionKind::OpenSettings => {
                             poll_ctx.app.show().ok();
