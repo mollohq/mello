@@ -512,6 +512,26 @@ bool mello_peer_is_connected(MelloPeerConnection* peer) {
     }
 }
 
+bool mello_peer_is_unreliable_open(MelloPeerConnection* peer) {
+    if (!peer) return false;
+    try {
+        auto* pc = reinterpret_cast<mello::transport::PeerConnectionImpl*>(peer);
+        return pc->is_unreliable_open();
+    } catch (...) {
+        return false;
+    }
+}
+
+bool mello_peer_is_reliable_open(MelloPeerConnection* peer) {
+    if (!peer) return false;
+    try {
+        auto* pc = reinterpret_cast<mello::transport::PeerConnectionImpl*>(peer);
+        return pc->is_reliable_open();
+    } catch (...) {
+        return false;
+    }
+}
+
 void mello_peer_send_ping(MelloPeerConnection* peer) {
     if (!peer) return;
     try {

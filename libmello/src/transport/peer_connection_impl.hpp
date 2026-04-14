@@ -33,6 +33,8 @@ public:
     bool send_reliable(const uint8_t* data, int size);
     bool send_audio(const uint8_t* data, int size);
     bool is_connected() const;
+    bool is_unreliable_open() const;
+    bool is_reliable_open() const;
 
     // Poll next received unreliable packet. Returns size copied, 0 if empty.
     int recv(uint8_t* buffer, int buffer_size);
@@ -73,6 +75,8 @@ private:
     void* audio_track_ud_ = nullptr;
 
     std::atomic<bool> connected_{false};
+    std::atomic<bool> unreliable_open_{false};
+    std::atomic<bool> reliable_open_{false};
     std::atomic<int> send_audio_count_{0};
     std::atomic<int> recv_track_count_{0};
     std::atomic<float> rtt_ms_{0.0f};

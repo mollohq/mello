@@ -32,6 +32,7 @@ pub(crate) struct EgressPacer {
     paced_bytes: u64,
     sleep_count: u64,
     sleep_ms_total: u64,
+    oversize_pace_count: u64,
 }
 
 impl EgressPacer {
@@ -46,6 +47,7 @@ impl EgressPacer {
             paced_bytes: 0,
             sleep_count: 0,
             sleep_ms_total: 0,
+            oversize_pace_count: 0,
         }
     }
 
@@ -60,15 +62,32 @@ impl EgressPacer {
 
     pub(crate) async fn pace(&mut self, bytes: usize) {
         let bytes = bytes as f64;
+        // Packets can be larger than current bucket burst capacity (for example
+        // a large keyframe chunk). If we require tokens >= bytes while tokens
+        // are capped at burst_bytes, we can deadlock forever.
+        let required_tokens = if bytes > self.burst_bytes {
+            self.oversize_pace_count = self.oversize_pace_count.saturating_add(1);
+            if self.oversize_pace_count <= 3 || self.oversize_pace_count.is_multiple_of(200) {
+                log::warn!(
+                    "Pacer oversized payload: bytes={} burst_bytes={:.0} target_kbps={}",
+                    bytes as u64,
+                    self.burst_bytes,
+                    self.target_kbps
+                );
+            }
+            self.burst_bytes
+        } else {
+            bytes
+        };
         loop {
             self.refill();
-            if self.tokens_bytes >= bytes {
-                self.tokens_bytes -= bytes;
+            if self.tokens_bytes >= required_tokens {
+                self.tokens_bytes -= required_tokens;
                 self.paced_bytes = self.paced_bytes.saturating_add(bytes as u64);
                 return;
             }
 
-            let needed = (bytes - self.tokens_bytes).max(1.0);
+            let needed = (required_tokens - self.tokens_bytes).max(1.0);
             let wait_secs = needed / self.bytes_per_sec();
             let wait = Duration::from_secs_f64(wait_secs)
                 .min(Duration::from_millis(PACER_MAX_SLEEP_MS))
@@ -128,7 +147,8 @@ pub(crate) fn calc_stream_pacing_target_kbps(
 
 #[cfg(test)]
 mod tests {
-    use super::{calc_stream_pacing_target_kbps, PacingTelemetry};
+    use super::{calc_stream_pacing_target_kbps, EgressPacer, PacingTelemetry};
+    use tokio::time::{timeout, Duration};
 
     #[test]
     fn pacing_target_accounts_for_fec_and_audio() {
@@ -160,5 +180,17 @@ mod tests {
         assert_eq!(c.paced_bytes, 30_000);
         assert_eq!(c.sleep_count, 7);
         assert_eq!(c.sleep_ms_total, 35);
+    }
+
+    #[tokio::test]
+    async fn oversized_payload_does_not_deadlock() {
+        let mut pacer = EgressPacer::new(4_160);
+        // > burst at this bitrate (roughly ~20KB with current constants)
+        let oversized = 60_000usize;
+        let res = timeout(Duration::from_millis(200), pacer.pace(oversized)).await;
+        assert!(
+            res.is_ok(),
+            "pacer should not deadlock on oversized payloads"
+        );
     }
 }

@@ -232,6 +232,8 @@ MELLO_API MelloResult mello_peer_send_reliable(
 );
 
 MELLO_API bool mello_peer_is_connected(MelloPeerConnection* peer);
+MELLO_API bool mello_peer_is_unreliable_open(MelloPeerConnection* peer);
+MELLO_API bool mello_peer_is_reliable_open(MelloPeerConnection* peer);
 
 /** Send raw Opus frame via the RTP audio track. Packetization is automatic. */
 MELLO_API MelloResult mello_peer_send_audio(MelloPeerConnection* peer, const uint8_t* data, int size);

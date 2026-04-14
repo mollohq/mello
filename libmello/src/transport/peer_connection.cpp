@@ -88,6 +88,10 @@ void PeerConnectionImpl::create_pc() {
 
     pc_->onStateChange([this](rtc::PeerConnection::State state) {
         connected_ = (state == rtc::PeerConnection::State::Connected);
+        if (!connected_) {
+            unreliable_open_.store(false, std::memory_order_release);
+            reliable_open_.store(false, std::memory_order_release);
+        }
         if (state_cb_) {
             state_cb_(state_ud_, static_cast<int>(state));
         }
@@ -196,6 +200,17 @@ void PeerConnectionImpl::setup_incoming_track(std::shared_ptr<rtc::Track> track)
 }
 
 void PeerConnectionImpl::setup_dc_handlers(std::shared_ptr<rtc::DataChannel> dc, bool reliable) {
+    auto* open_flag = reliable ? &reliable_open_ : &unreliable_open_;
+    dc->onOpen([open_flag]() {
+        open_flag->store(true, std::memory_order_release);
+    });
+    dc->onClosed([open_flag]() {
+        open_flag->store(false, std::memory_order_release);
+    });
+    dc->onError([open_flag](std::string) {
+        open_flag->store(false, std::memory_order_release);
+    });
+
     dc->onMessage([this, reliable](auto data) {
         if (auto* str = std::get_if<std::string>(&data)) {
             if (reliable && str->size() > 14 && str->substr(0, 14) == R"({"type":"pong")") {
@@ -425,6 +440,14 @@ bool PeerConnectionImpl::send_audio(const uint8_t* data, int size) {
 
 bool PeerConnectionImpl::is_connected() const {
     return connected_;
+}
+
+bool PeerConnectionImpl::is_unreliable_open() const {
+    return unreliable_open_.load(std::memory_order_acquire);
+}
+
+bool PeerConnectionImpl::is_reliable_open() const {
+    return reliable_open_.load(std::memory_order_acquire);
 }
 
 int PeerConnectionImpl::recv(uint8_t* buffer, int buffer_size) {

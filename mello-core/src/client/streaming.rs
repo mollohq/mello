@@ -397,7 +397,6 @@ impl super::Client {
             Some(v) => v,
             None => return, // Decoder not yet initialized (waiting for Answer)
         };
-        let mut fed_any = false;
 
         // Collect raw packets from the transport (SFU or P2P)
         let packets: Vec<Vec<u8>> = if vs.mode == "sfu" {
@@ -500,7 +499,6 @@ impl super::Client {
                         if !ok && is_keyframe {
                             log::warn!("feed_packet failed for keyframe ({} bytes)", payload.len());
                         }
-                        fed_any = true;
                     }
                     ViewerFeedResult::AudioPayload(payload) => unsafe {
                         mello_sys::mello_stream_feed_audio_packet(
@@ -533,13 +531,13 @@ impl super::Client {
             }
         }
 
-        // Present the latest decoded frame only if the UI has consumed the
-        // previous one. This skips the entire GPU readback + memcpy chain when
-        // decoding outpaces display (common at >30fps decode vs 60fps UI).
-        if fed_any
-            && self
-                .frame_consumed
-                .load(std::sync::atomic::Ordering::Acquire)
+        // Present independently of packet arrival bursts. Packets can arrive in
+        // batches; tying present to `fed_any` throttles visible FPS even when
+        // decoder throughput is healthy. Keep the UI-consumed gate to avoid
+        // readback/copy piling up.
+        if self
+            .frame_consumed
+            .load(std::sync::atomic::Ordering::Acquire)
         {
             let presented = unsafe { mello_sys::mello_stream_present_frame(viewer) };
             if presented {
@@ -1010,6 +1008,22 @@ impl super::Client {
             let p2p = Arc::new(P2PFanoutSink::new());
             (Arc::clone(&p2p) as _, Some(p2p))
         };
+
+        if resp.mode == "sfu" && p2p_sink.is_some() {
+            let message =
+                "SFU stream setup failed on host; aborting stream start (no silent P2P fallback)";
+            log::error!("{}", message);
+            unsafe {
+                mello_sys::mello_stream_stop_audio(host.0);
+                mello_sys::mello_stream_stop_host(host.0);
+            }
+            let _ = self.event_tx.send(Event::StreamError {
+                message: message.to_string(),
+            });
+            self.stream_host_sink = None;
+            self.stream_sink = None;
+            return;
+        }
 
         // Re-obtain ctx for session creation (sync, no more awaits)
         let ctx = self.voice.mello_ctx();

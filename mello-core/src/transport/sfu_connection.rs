@@ -328,6 +328,16 @@ impl SfuConnection {
         unsafe { mello_sys::mello_peer_is_connected(self.peer) }
     }
 
+    /// Whether the unreliable/media DataChannel is open.
+    pub fn is_media_channel_open(&self) -> bool {
+        unsafe { mello_sys::mello_peer_is_unreliable_open(self.peer) }
+    }
+
+    /// Whether the reliable/control DataChannel is open.
+    pub fn is_control_channel_open(&self) -> bool {
+        unsafe { mello_sys::mello_peer_is_reliable_open(self.peer) }
+    }
+
     pub fn send_ping(&self) {
         if !self.peer.is_null() {
             unsafe { mello_sys::mello_peer_send_ping(self.peer) }
@@ -349,14 +359,18 @@ impl SfuConnection {
         &self.region
     }
 
-    /// Wait for the ICE connection (and DataChannel) to reach the Connected
-    /// state. Returns an error if ICE fails or a 5-second timeout expires.
+    /// Wait for both ICE and media/control DataChannels to be ready.
+    /// Returns an error if ICE fails/closes or a 5-second timeout expires.
     pub async fn wait_for_datachannel_open(&self) -> Result<(), StreamError> {
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
         loop {
             let state = self.ice_state.load(Ordering::Acquire);
             match state {
-                2 => return Ok(()),
+                2 => {
+                    if self.is_media_channel_open() && self.is_control_channel_open() {
+                        return Ok(());
+                    }
+                }
                 4 => {
                     return Err(StreamError::SfuConnectFailed(
                         "ICE connection failed".into(),
@@ -370,9 +384,12 @@ impl SfuConnection {
                 _ => {}
             }
             if tokio::time::Instant::now() >= deadline {
-                return Err(StreamError::SfuConnectFailed(
-                    "DataChannel open timeout (5s)".into(),
-                ));
+                return Err(StreamError::SfuConnectFailed(format!(
+                    "DataChannel open timeout (5s): media_open={} control_open={} ice_state={}",
+                    self.is_media_channel_open(),
+                    self.is_control_channel_open(),
+                    state
+                )));
             }
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         }
