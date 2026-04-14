@@ -335,6 +335,7 @@ mod tests {
     fn step_down_on_high_loss() {
         let mut abr = AbrController::new(&default_config());
         abr.on_viewer_joined("v1");
+        let before_bitrate = abr.current_bitrate_kbps();
 
         let report = LossReport {
             packets_received: 90,
@@ -343,8 +344,8 @@ mod tests {
         let change = abr.process_loss_report("v1", &report);
         assert!(change.is_some());
         let c = change.unwrap();
-        assert!(c.new_bitrate_kbps.unwrap() < 6_000);
-        assert_eq!(c.new_bitrate_kbps.unwrap(), 4_500); // 6000 * 0.75
+        let expected = (before_bitrate as f32 * STEP_DOWN_FACTOR) as u32;
+        assert_eq!(c.new_bitrate_kbps, Some(expected));
         assert_eq!(c.new_fec_n, Some(FEC_N_HIGH));
     }
 
