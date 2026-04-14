@@ -209,6 +209,21 @@ export component DebugPanel inherits Rectangle {
     in property <int> rtp-recv: 0;
     in property <float> delay-ms: 0.0;
     in property <float> rtt-ms: 0.0;
+    in property <string> stream-mode: "idle";
+    in property <int> stream-frames: 0;
+    in property <int> stream-packets: 0;
+    in property <float> stream-mb: 0.0;
+    in property <float> stream-kbps: 0.0;
+    in property <float> stream-fps: 0.0;
+    in property <int> stream-truncations: 0;
+    in property <string> host-pacing-mode: "idle";
+    in property <int> host-pacing-target-kbps: 0;
+    in property <float> host-pacing-out-kbps: 0.0;
+    in property <float> host-pacing-mb: 0.0;
+    in property <int> host-pacing-sleep-count: 0;
+    in property <int> host-pacing-sleep-ms: 0;
+    in property <int> host-pacing-sleep-delta-count: 0;
+    in property <int> host-pacing-sleep-delta-ms: 0;
 
     // Level history ring buffer (set from Rust)
     in property <float> lh0;  in property <float> lh1;  in property <float> lh2;  in property <float> lh3;  in property <float> lh4;
@@ -469,6 +484,268 @@ export component DebugPanel inherits Rectangle {
                     color: root.underruns > 0 ? #FF4444 : Theme.text-secondary;
                     text: "\{root.underruns}";
                     col: 1;
+                }
+            }
+        }
+
+        // ── Stream Transport ──
+        Rectangle { height: 1px; background: Theme.graphic-light; }
+
+        Text {
+            text: "Stream Transport";
+            font-family: Theme.font-mono;
+            font-size: 9px;
+            font-weight: 600;
+            color: Theme.text-tertiary;
+        }
+
+        GridLayout {
+            spacing: 4px;
+            padding: 0;
+
+            Row {
+                Text {
+                    font-family: Theme.font-mono;
+                    font-size: 10px;
+                    color: Theme.text-secondary;
+                    text: "Mode";
+                    col: 0;
+                }
+                Text {
+                    font-family: Theme.font-mono;
+                    font-size: 10px;
+                    color: root.stream-mode == "sfu" ? Theme.accent-green :
+                           root.stream-mode == "p2p" ? #E0A020 : Theme.text-secondary;
+                    text: root.stream-mode;
+                    col: 1;
+                }
+                Text {
+                    font-family: Theme.font-mono;
+                    font-size: 10px;
+                    color: Theme.text-secondary;
+                    text: "Ingress";
+                    col: 2;
+                }
+                Text {
+                    font-family: Theme.font-mono;
+                    font-size: 10px;
+                    color: root.stream-kbps > 6000 ? #FF4444 : root.stream-kbps > 3000 ? #E0A020 : Theme.accent-green;
+                    text: "\{Math.round(root.stream-kbps)} kbps";
+                    col: 3;
+                }
+            }
+            Row {
+                Text {
+                    font-family: Theme.font-mono;
+                    font-size: 10px;
+                    color: Theme.text-secondary;
+                    text: "Frames";
+                    col: 0;
+                }
+                Text {
+                    font-family: Theme.font-mono;
+                    font-size: 10px;
+                    color: Theme.text-secondary;
+                    text: "\{root.stream-frames}";
+                    col: 1;
+                }
+                Text {
+                    font-family: Theme.font-mono;
+                    font-size: 10px;
+                    color: Theme.text-secondary;
+                    text: "Present";
+                    col: 2;
+                }
+                Text {
+                    font-family: Theme.font-mono;
+                    font-size: 10px;
+                    color: root.stream-fps < 30 ? #E0A020 : Theme.accent-green;
+                    text: "\{Math.round(root.stream-fps)} fps";
+                    col: 3;
+                }
+            }
+            Row {
+                Text {
+                    font-family: Theme.font-mono;
+                    font-size: 10px;
+                    color: Theme.text-secondary;
+                    text: "Packets";
+                    col: 0;
+                }
+                Text {
+                    font-family: Theme.font-mono;
+                    font-size: 10px;
+                    color: Theme.text-secondary;
+                    text: "\{root.stream-packets}";
+                    col: 1;
+                }
+                Text {
+                    font-family: Theme.font-mono;
+                    font-size: 10px;
+                    color: Theme.text-secondary;
+                    text: "Data";
+                    col: 2;
+                }
+                Text {
+                    font-family: Theme.font-mono;
+                    font-size: 10px;
+                    color: Theme.text-secondary;
+                    text: "\{(Math.round(root.stream-mb * 10.0) / 10.0)} MB";
+                    col: 3;
+                }
+            }
+            Row {
+                Text {
+                    font-family: Theme.font-mono;
+                    font-size: 10px;
+                    color: root.stream-truncations > 0 ? #FF4444 : Theme.text-secondary;
+                    text: "Trunc";
+                    col: 0;
+                }
+                Text {
+                    font-family: Theme.font-mono;
+                    font-size: 10px;
+                    color: root.stream-truncations > 0 ? #FF4444 : Theme.text-secondary;
+                    text: "\{root.stream-truncations}";
+                    col: 1;
+                }
+            }
+        }
+
+        Rectangle { height: 1px; background: Theme.graphic-light; }
+
+        Text {
+            text: "Host Pacing";
+            font-family: Theme.font-mono;
+            font-size: 9px;
+            font-weight: 600;
+            color: Theme.text-tertiary;
+        }
+
+        GridLayout {
+            spacing: 4px;
+            padding: 0;
+
+            Row {
+                Text {
+                    font-family: Theme.font-mono;
+                    font-size: 10px;
+                    color: Theme.text-secondary;
+                    text: "Mode";
+                    col: 0;
+                }
+                Text {
+                    font-family: Theme.font-mono;
+                    font-size: 10px;
+                    color: root.host-pacing-mode == "sfu" ? Theme.accent-green :
+                           root.host-pacing-mode == "p2p" ? #E0A020 : Theme.text-secondary;
+                    text: root.host-pacing-mode;
+                    col: 1;
+                }
+                Text {
+                    font-family: Theme.font-mono;
+                    font-size: 10px;
+                    color: Theme.text-secondary;
+                    text: "Target";
+                    col: 2;
+                }
+                Text {
+                    font-family: Theme.font-mono;
+                    font-size: 10px;
+                    color: Theme.text-secondary;
+                    text: "\{root.host-pacing-target-kbps} kbps";
+                    col: 3;
+                }
+            }
+            Row {
+                Text {
+                    font-family: Theme.font-mono;
+                    font-size: 10px;
+                    color: Theme.text-secondary;
+                    text: "Out";
+                    col: 0;
+                }
+                Text {
+                    font-family: Theme.font-mono;
+                    font-size: 10px;
+                    color: root.host-pacing-out-kbps > root.host-pacing-target-kbps * 1.15 ? #FF4444 :
+                           root.host-pacing-out-kbps > root.host-pacing-target-kbps * 1.03 ? #E0A020 : Theme.accent-green;
+                    text: "\{Math.round(root.host-pacing-out-kbps)} kbps";
+                    col: 1;
+                }
+                Text {
+                    font-family: Theme.font-mono;
+                    font-size: 10px;
+                    color: Theme.text-secondary;
+                    text: "Paced";
+                    col: 2;
+                }
+                Text {
+                    font-family: Theme.font-mono;
+                    font-size: 10px;
+                    color: Theme.text-secondary;
+                    text: "\{(Math.round(root.host-pacing-mb * 10.0) / 10.0)} MB";
+                    col: 3;
+                }
+            }
+            Row {
+                Text {
+                    font-family: Theme.font-mono;
+                    font-size: 10px;
+                    color: Theme.text-secondary;
+                    text: "Sleep";
+                    col: 0;
+                }
+                Text {
+                    font-family: Theme.font-mono;
+                    font-size: 10px;
+                    color: Theme.text-secondary;
+                    text: "\{root.host-pacing-sleep-count}";
+                    col: 1;
+                }
+                Text {
+                    font-family: Theme.font-mono;
+                    font-size: 10px;
+                    color: Theme.text-secondary;
+                    text: "Sleep ms";
+                    col: 2;
+                }
+                Text {
+                    font-family: Theme.font-mono;
+                    font-size: 10px;
+                    color: Theme.text-secondary;
+                    text: "\{root.host-pacing-sleep-ms}";
+                    col: 3;
+                }
+            }
+            Row {
+                Text {
+                    font-family: Theme.font-mono;
+                    font-size: 10px;
+                    color: Theme.text-secondary;
+                    text: "Sleep d";
+                    col: 0;
+                }
+                Text {
+                    font-family: Theme.font-mono;
+                    font-size: 10px;
+                    color: root.host-pacing-sleep-delta-count > 0 ? #E0A020 : Theme.text-secondary;
+                    text: "\{root.host-pacing-sleep-delta-count}";
+                    col: 1;
+                }
+                Text {
+                    font-family: Theme.font-mono;
+                    font-size: 10px;
+                    color: Theme.text-secondary;
+                    text: "Sleep d ms";
+                    col: 2;
+                }
+                Text {
+                    font-family: Theme.font-mono;
+                    font-size: 10px;
+                    color: root.host-pacing-sleep-delta-ms > 0 ? #E0A020 : Theme.text-secondary;
+                    text: "\{root.host-pacing-sleep-delta-ms}";
+                    col: 3;
                 }
             }
         }

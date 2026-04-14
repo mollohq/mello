@@ -20,11 +20,14 @@ use crate::giphy::GiphyClient;
 use crate::nakama::NakamaClient;
 use crate::nakama::{InternalPresence, InternalSignal};
 use crate::stream::manager::StreamSession;
+use crate::stream::pacer::PacingTelemetry;
+use crate::stream::sink::PacketSink;
 use crate::stream::sink_p2p::P2PFanoutSink;
 use crate::voice::{SignalEnvelope, SignalMessage, SignalPurpose, VoiceManager};
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Instant;
 
 use stream_ffi::{StreamHostPeer, ViewerState};
 
@@ -44,6 +47,7 @@ pub struct Client {
     frame_slot: FrameSlot,
     frame_consumed: Arc<std::sync::atomic::AtomicBool>,
     stream_session: Option<StreamSession>,
+    stream_host_sink: Option<Arc<dyn PacketSink>>,
     stream_sink: Option<Arc<P2PFanoutSink>>,
     stream_host_peers: HashMap<String, StreamHostPeer>,
     viewer_state: Option<ViewerState>,
@@ -69,6 +73,8 @@ pub struct Client {
     game_sensor: Option<GameSensor>,
     clip_was_playing: bool,
     clip_tick_counter: u8,
+    host_pacing_last: Option<PacingTelemetry>,
+    host_pacing_last_at: Instant,
 }
 
 impl Client {
@@ -86,6 +92,7 @@ impl Client {
             frame_slot,
             frame_consumed,
             stream_session: None,
+            stream_host_sink: None,
             stream_sink: None,
             stream_host_peers: HashMap::new(),
             viewer_state: None,
@@ -104,6 +111,8 @@ impl Client {
             game_sensor: None,
             clip_was_playing: false,
             clip_tick_counter: 0,
+            host_pacing_last: None,
+            host_pacing_last_at: Instant::now(),
         }
     }
 

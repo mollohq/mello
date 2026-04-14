@@ -3,13 +3,18 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use tokio::sync::{mpsc, oneshot};
+use tokio::time::MissedTickBehavior;
 
 use super::abr::AbrController;
 use super::config::StreamConfig;
 use super::fec::FecEncoder;
 use super::input::{InputPassthrough, InputPassthroughStub};
+use super::pacer::{calc_stream_pacing_target_kbps, PacingTelemetry};
 use super::packet::{ControlSubtype, LossReport, PacketType, StreamPacket};
 use super::sink::PacketSink;
+
+const AUDIO_PACING_BUDGET_KBPS: u32 = 160;
+const PACING_TELEMETRY_INTERVAL_SECS: u64 = 2;
 
 pub struct VideoPacket {
     pub data: Vec<u8>,
@@ -68,6 +73,8 @@ pub struct StreamManager {
     video_rx: mpsc::Receiver<VideoPacket>,
     audio_rx: mpsc::Receiver<AudioPacket>,
     last_queue_keyframe_request: Instant,
+    last_pacing_telemetry: Option<PacingTelemetry>,
+    last_pacing_sample_at: Instant,
 }
 
 unsafe impl Send for StreamManager {}
@@ -105,7 +112,50 @@ impl StreamManager {
             video_rx,
             audio_rx,
             last_queue_keyframe_request: Instant::now() - Duration::from_secs(5),
+            last_pacing_telemetry: None,
+            last_pacing_sample_at: Instant::now(),
         }
+    }
+
+    fn calc_pacing_target_kbps(video_bitrate_kbps: u32, fec_n: usize) -> u32 {
+        calc_stream_pacing_target_kbps(video_bitrate_kbps, fec_n, AUDIO_PACING_BUDGET_KBPS)
+    }
+
+    async fn refresh_pacing_target(&self) {
+        let target = Self::calc_pacing_target_kbps(
+            self.abr.current_bitrate_kbps(),
+            self.abr.current_fec_n(),
+        );
+        self.sink.set_pacing_kbps(target).await;
+    }
+
+    async fn log_pacing_telemetry(&mut self) {
+        let Some(now_stats) = self.sink.pacing_telemetry().await else {
+            return;
+        };
+        let now = Instant::now();
+        if let Some(prev) = self.last_pacing_telemetry {
+            let elapsed_secs = now
+                .duration_since(self.last_pacing_sample_at)
+                .as_secs_f32()
+                .max(0.001);
+            let delta_bytes = now_stats.paced_bytes.saturating_sub(prev.paced_bytes);
+            let delta_sleep_count = now_stats.sleep_count.saturating_sub(prev.sleep_count);
+            let delta_sleep_ms = now_stats.sleep_ms_total.saturating_sub(prev.sleep_ms_total);
+            let out_kbps = (delta_bytes as f32 * 8.0 / 1000.0) / elapsed_secs;
+            log::info!(
+                "Stream pacing: target_kbps={} out_kbps={:.1} paced_bytes_total={} sleep_count_total={} sleep_ms_total={} sleep_count_delta={} sleep_ms_delta={}",
+                now_stats.target_kbps,
+                out_kbps,
+                now_stats.paced_bytes,
+                now_stats.sleep_count,
+                now_stats.sleep_ms_total,
+                delta_sleep_count,
+                delta_sleep_ms
+            );
+        }
+        self.last_pacing_telemetry = Some(now_stats);
+        self.last_pacing_sample_at = now;
     }
 
     pub fn abr(&mut self) -> &mut AbrController {
@@ -119,6 +169,11 @@ impl StreamManager {
     /// Main run loop — called from a dedicated tokio task after stream start.
     pub async fn run(&mut self, mut stop: oneshot::Receiver<()>) {
         log::info!("Stream manager run loop started");
+        self.refresh_pacing_target().await;
+        self.log_pacing_telemetry().await;
+        let mut pacing_tick =
+            tokio::time::interval(Duration::from_secs(PACING_TELEMETRY_INTERVAL_SECS));
+        pacing_tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
         loop {
             tokio::select! {
@@ -131,6 +186,9 @@ impl StreamManager {
                 }
                 Some(pkt) = self.audio_rx.recv() => {
                     self.handle_audio(pkt).await;
+                }
+                _ = pacing_tick.tick() => {
+                    self.log_pacing_telemetry().await;
                 }
                 else => {
                     log::info!("Stream manager: packet channels closed");
@@ -205,7 +263,7 @@ impl StreamManager {
     }
 
     /// Process an incoming control packet from a viewer.
-    pub fn handle_control_packet(
+    pub async fn handle_control_packet(
         &mut self,
         viewer_id: &str,
         packet: &StreamPacket,
@@ -226,11 +284,12 @@ impl StreamManager {
             Some(ControlSubtype::LossReport) => {
                 if let Some(report) = LossReport::parse(&packet.payload) {
                     log::debug!(
-                        "Loss report from {}: recv={} lost={} ({:.1}%)",
+                        "Loss report from {}: recv={} lost={} ({:.1}%) rx_kbps={}",
                         viewer_id,
                         report.packets_received,
                         report.packets_lost,
-                        report.loss_ratio() * 100.0
+                        report.loss_ratio() * 100.0,
+                        report.observed_rx_kbps.unwrap_or(0)
                     );
                     let change = self.abr.process_loss_report(viewer_id, &report);
                     if let Some(ref c) = change {
@@ -242,6 +301,7 @@ impl StreamManager {
                         if let Some(new_fec) = c.new_fec_n {
                             self.fec_encoder.set_group_size(new_fec);
                         }
+                        self.refresh_pacing_target().await;
                     }
                     change
                 } else {

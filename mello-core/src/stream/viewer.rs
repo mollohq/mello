@@ -16,6 +16,7 @@ pub struct StreamViewer {
     // Loss tracking (per 1-second window)
     packets_received: u16,
     packets_lost: u16,
+    bytes_received: u32,
     last_report_time: Instant,
 
     // IDR request state
@@ -53,6 +54,7 @@ impl StreamViewer {
             fec_decoder: FecDecoder::new(fec_n),
             packets_received: 0,
             packets_lost: 0,
+            bytes_received: 0,
             last_report_time: now,
             consecutive_unrecoverable: 0,
             last_idr_request: now - std::time::Duration::from_secs(IDR_RATE_LIMIT_SECS + 1),
@@ -73,13 +75,16 @@ impl StreamViewer {
         match packet.ptype {
             PacketType::Video => {
                 self.packets_received = self.packets_received.saturating_add(1);
+                self.bytes_received = self.bytes_received.saturating_add(data.len() as u32);
                 self.on_video_packet(&packet, &mut results);
             }
             PacketType::Audio => {
                 self.packets_received = self.packets_received.saturating_add(1);
+                self.bytes_received = self.bytes_received.saturating_add(data.len() as u32);
                 results.push(ViewerFeedResult::AudioPayload(packet.payload));
             }
             PacketType::Fec => {
+                self.bytes_received = self.bytes_received.saturating_add(data.len() as u32);
                 self.on_fec_packet(&packet, &mut results);
             }
             PacketType::Control => {
@@ -207,18 +212,31 @@ impl StreamViewer {
         let report = LossReport {
             packets_received: self.packets_received,
             packets_lost: self.packets_lost,
+            observed_rx_kbps: {
+                if self.bytes_received == 0 {
+                    None
+                } else {
+                    let elapsed_secs = now.duration_since(self.last_report_time).as_secs_f32();
+                    let elapsed_secs = elapsed_secs.max(0.001);
+                    let kbps =
+                        ((self.bytes_received as f32 * 8.0) / 1000.0 / elapsed_secs).round() as u32;
+                    Some(kbps.min(u16::MAX as u32) as u16)
+                }
+            },
         };
 
         log::debug!(
-            "Sending loss report: recv={} lost={} ({:.1}%)",
+            "Sending loss report: recv={} lost={} ({:.1}%) rx_kbps={}",
             report.packets_received,
             report.packets_lost,
-            report.loss_ratio() * 100.0
+            report.loss_ratio() * 100.0,
+            report.observed_rx_kbps.unwrap_or(0)
         );
 
         // Reset counters for next window
         self.packets_received = 0;
         self.packets_lost = 0;
+        self.bytes_received = 0;
         self.last_report_time = now;
 
         let payload = report.serialize();
@@ -257,5 +275,35 @@ mod tests {
             .iter()
             .any(|r| matches!(r, ViewerFeedResult::AudioPayload(_)));
         assert!(has_audio);
+    }
+
+    #[test]
+    fn loss_report_includes_observed_throughput() {
+        let mut viewer = StreamViewer::new(3);
+        let pkt = StreamPacket::video(vec![0xAB; 1200], 1, true, false);
+        let _ = viewer.feed_packet(&pkt.serialize());
+
+        viewer.last_report_time = Instant::now() - std::time::Duration::from_secs(1);
+        let action = viewer.maybe_send_loss_report();
+        assert!(action.is_some());
+
+        let ViewerAction::SendControl(wire) = action.unwrap();
+        let control = StreamPacket::parse(&wire).unwrap();
+        let report = LossReport::parse(&control.payload).unwrap();
+        assert!(report.observed_rx_kbps.unwrap_or(0) > 0);
+    }
+
+    #[test]
+    fn loss_report_without_received_bytes_has_no_throughput() {
+        let mut viewer = StreamViewer::new(3);
+        viewer.last_report_time = Instant::now() - std::time::Duration::from_secs(1);
+
+        let action = viewer.maybe_send_loss_report();
+        assert!(action.is_some());
+
+        let ViewerAction::SendControl(wire) = action.unwrap();
+        let control = StreamPacket::parse(&wire).unwrap();
+        let report = LossReport::parse(&control.payload).unwrap();
+        assert_eq!(report.observed_rx_kbps, None);
     }
 }

@@ -1,5 +1,6 @@
 use std::ffi::{CStr, CString};
 use std::sync::Arc;
+use std::time::Instant;
 
 use crate::events::Event;
 use crate::stream::sink_p2p::P2PFanoutSink;
@@ -11,6 +12,9 @@ use super::stream_ffi::{
     FrameCallbackData, StreamHostHandle, StreamHostPeer, StreamIceCallbackData, ViewerState,
 };
 use super::VIEWER_RECV_BUF_SIZE;
+
+const STREAM_DEBUG_EVENT_INTERVAL_SECS: f32 = 1.0;
+const HOST_PACING_DEBUG_EVENT_INTERVAL_SECS: f32 = 1.0;
 
 impl super::Client {
     pub(super) fn handle_stream_signal(&mut self, from: &str, envelope: SignalEnvelope) {
@@ -381,6 +385,8 @@ impl super::Client {
             }
         }
 
+        self.emit_host_pacing_debug_stats().await;
+
         // 2. Poll viewer for incoming stream packets
         if self.viewer_state.is_none() {
             return;
@@ -555,6 +561,86 @@ impl super::Client {
                 }
             }
         }
+
+        let elapsed = vs.debug_last_emit.elapsed().as_secs_f32();
+        if elapsed >= STREAM_DEBUG_EVENT_INTERVAL_SECS {
+            let delta_bytes = vs.transport_bytes.saturating_sub(vs.debug_last_bytes);
+            let delta_frames = vs
+                .frames_presented
+                .saturating_sub(vs.debug_last_frames_presented);
+            let ingress_kbps = (delta_bytes as f32 * 8.0 / 1000.0) / elapsed.max(0.001);
+            let present_fps = (delta_frames as f32) / elapsed.max(0.001);
+
+            let _ = self.event_tx.send(Event::StreamDebugStats {
+                mode: vs.mode.clone(),
+                transport_packets: vs.transport_packets,
+                transport_bytes: vs.transport_bytes,
+                transport_truncations: vs.transport_truncations,
+                frames_presented: vs.frames_presented,
+                present_fps,
+                ingress_kbps,
+            });
+
+            vs.debug_last_emit = Instant::now();
+            vs.debug_last_packets = vs.transport_packets;
+            vs.debug_last_bytes = vs.transport_bytes;
+            vs.debug_last_frames_presented = vs.frames_presented;
+        }
+    }
+
+    async fn emit_host_pacing_debug_stats(&mut self) {
+        if self.stream_session.is_none() {
+            return;
+        }
+        let Some(sink) = self.stream_host_sink.clone() else {
+            return;
+        };
+
+        let elapsed = self.host_pacing_last_at.elapsed().as_secs_f32();
+        if elapsed < HOST_PACING_DEBUG_EVENT_INTERVAL_SECS {
+            return;
+        }
+
+        let Some(now_stats) = sink.pacing_telemetry().await else {
+            return;
+        };
+
+        let (delta_bytes, delta_sleep_count, delta_sleep_ms) =
+            if let Some(prev) = self.host_pacing_last {
+                (
+                    now_stats.paced_bytes.saturating_sub(prev.paced_bytes),
+                    now_stats.sleep_count.saturating_sub(prev.sleep_count),
+                    now_stats.sleep_ms_total.saturating_sub(prev.sleep_ms_total),
+                )
+            } else {
+                (0, 0, 0)
+            };
+
+        let out_kbps = if elapsed > 0.0 {
+            (delta_bytes as f32 * 8.0 / 1000.0) / elapsed
+        } else {
+            0.0
+        };
+
+        let mode = self
+            .stream_session
+            .as_ref()
+            .map(|s| s.mode.clone())
+            .unwrap_or_else(|| "unknown".to_string());
+
+        let _ = self.event_tx.send(Event::StreamHostPacingStats {
+            mode,
+            target_kbps: now_stats.target_kbps,
+            out_kbps,
+            paced_bytes: now_stats.paced_bytes,
+            sleep_count: now_stats.sleep_count,
+            sleep_ms_total: now_stats.sleep_ms_total,
+            sleep_count_delta: delta_sleep_count,
+            sleep_ms_delta: delta_sleep_ms,
+        });
+
+        self.host_pacing_last = Some(now_stats);
+        self.host_pacing_last_at = Instant::now();
     }
 
     pub(super) fn handle_list_capture_sources(&mut self) {
@@ -929,7 +1015,14 @@ impl super::Client {
         let ctx = self.voice.mello_ctx();
         let host = host.0;
         match crate::stream::host::create_stream_session(
-            ctx, host, &resp, config, video_rx, audio_rx, resources, sink,
+            ctx,
+            host,
+            &resp,
+            config,
+            video_rx,
+            audio_rx,
+            resources,
+            Arc::clone(&sink),
         ) {
             Ok(session) => {
                 let _ = self.event_tx.send(Event::StreamStarted {
@@ -937,8 +1030,11 @@ impl super::Client {
                     session_id: session.session_id.clone(),
                     mode: session.mode.clone(),
                 });
+                self.stream_host_sink = Some(Arc::clone(&sink));
                 self.stream_sink = p2p_sink;
                 self.stream_session = Some(session);
+                self.host_pacing_last = None;
+                self.host_pacing_last_at = Instant::now();
             }
             Err(e) => {
                 log::error!("Failed to create stream session: {}", e);
@@ -949,6 +1045,7 @@ impl super::Client {
                 let _ = self.event_tx.send(Event::StreamError {
                     message: e.to_string(),
                 });
+                self.stream_host_sink = None;
             }
         }
     }
@@ -968,6 +1065,9 @@ impl super::Client {
                 log::info!("Destroyed stream host peer {}", id);
             }
             self.stream_sink = None;
+            self.stream_host_sink = None;
+            self.host_pacing_last = None;
+            self.host_pacing_last_at = Instant::now();
             self.pending_remote_ice.clear();
             self.stream_encode_width = 0;
             self.stream_encode_height = 0;
@@ -1172,6 +1272,10 @@ impl super::Client {
             transport_packets: 0,
             transport_bytes: 0,
             transport_truncations: 0,
+            debug_last_emit: Instant::now(),
+            debug_last_packets: 0,
+            debug_last_bytes: 0,
+            debug_last_frames_presented: 0,
             recv_buf: vec![0u8; VIEWER_RECV_BUF_SIZE],
             stream_viewer: crate::stream::viewer::StreamViewer::new(config.fec_n),
             chunk_assembler: ChunkAssembler::new(),
@@ -1288,6 +1392,10 @@ impl super::Client {
             transport_packets: 0,
             transport_bytes: 0,
             transport_truncations: 0,
+            debug_last_emit: Instant::now(),
+            debug_last_packets: 0,
+            debug_last_bytes: 0,
+            debug_last_frames_presented: 0,
             recv_buf: vec![0u8; VIEWER_RECV_BUF_SIZE],
             stream_viewer: crate::stream::viewer::StreamViewer::new(config.fec_n),
             chunk_assembler: ChunkAssembler::new(),

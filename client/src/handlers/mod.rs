@@ -72,6 +72,8 @@ pub fn handle_event(ctx: &AppContext, event: Event) {
         | Event::StreamWatching { .. }
         | Event::StreamWatchingStopped
         | Event::StreamFrame { .. }
+        | Event::StreamDebugStats { .. }
+        | Event::StreamHostPacingStats { .. }
         | Event::StreamError { .. } => streaming::handle(ctx, event),
 
         // Presence & crew state

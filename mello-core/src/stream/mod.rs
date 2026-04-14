@@ -5,6 +5,7 @@ pub mod fec;
 pub mod host;
 pub mod input;
 pub mod manager;
+pub mod pacer;
 pub mod packet;
 pub mod sink;
 pub mod sink_p2p;

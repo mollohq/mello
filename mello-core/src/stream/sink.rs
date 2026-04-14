@@ -3,6 +3,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 
 use super::error::StreamError;
+use super::pacer::PacingTelemetry;
 use super::packet::StreamPacket;
 
 /// Topology-agnostic packet sink. The stream manager sends encoded packets
@@ -12,6 +13,8 @@ pub trait PacketSink: Send + Sync {
     async fn send_video(&self, packet: &StreamPacket) -> Result<(), StreamError>;
     async fn send_audio(&self, packet: &StreamPacket) -> Result<(), StreamError>;
     async fn send_control(&self, packet: &StreamPacket) -> Result<(), StreamError>;
+    async fn set_pacing_kbps(&self, target_kbps: u32);
+    async fn pacing_telemetry(&self) -> Option<PacingTelemetry>;
 
     /// Called when a new viewer joins mid-session (triggers keyframe request).
     async fn on_viewer_joined(&self, viewer_id: &str);
@@ -46,6 +49,22 @@ impl PacketSink for DualSink {
         let _ = self.primary.send_control(packet).await;
         let _ = self.secondary.send_control(packet).await;
         Ok(())
+    }
+
+    async fn set_pacing_kbps(&self, target_kbps: u32) {
+        self.primary.set_pacing_kbps(target_kbps).await;
+        self.secondary.set_pacing_kbps(target_kbps).await;
+    }
+
+    async fn pacing_telemetry(&self) -> Option<PacingTelemetry> {
+        let p = self.primary.pacing_telemetry().await;
+        let s = self.secondary.pacing_telemetry().await;
+        match (p, s) {
+            (Some(a), Some(b)) => Some(a.aggregate(b)),
+            (Some(a), None) => Some(a),
+            (None, Some(b)) => Some(b),
+            (None, None) => None,
+        }
     }
 
     async fn on_viewer_joined(&self, viewer_id: &str) {

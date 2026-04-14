@@ -147,22 +147,33 @@ impl StreamPacket {
 pub struct LossReport {
     pub packets_received: u16,
     pub packets_lost: u16,
+    /// Optional app-level observed receive throughput for ABR v2 (kbps).
+    pub observed_rx_kbps: Option<u16>,
 }
 
 impl LossReport {
-    pub const WIRE_SIZE: usize = 6; // subtype(1) + received(2) + lost(2) + reserved(1)
+    pub const WIRE_SIZE_V1: usize = 6; // subtype(1) + received(2) + lost(2) + reserved(1)
+    pub const WIRE_SIZE_V2: usize = 8; // v1 + observed_rx_kbps(2)
 
     pub fn serialize(&self) -> Vec<u8> {
-        let mut buf = Vec::with_capacity(Self::WIRE_SIZE);
+        let v2 = self.observed_rx_kbps.is_some();
+        let mut buf = Vec::with_capacity(if v2 {
+            Self::WIRE_SIZE_V2
+        } else {
+            Self::WIRE_SIZE_V1
+        });
         buf.push(ControlSubtype::LossReport as u8);
         buf.extend_from_slice(&self.packets_received.to_be_bytes());
         buf.extend_from_slice(&self.packets_lost.to_be_bytes());
         buf.push(0); // reserved
+        if let Some(kbps) = self.observed_rx_kbps {
+            buf.extend_from_slice(&kbps.to_be_bytes());
+        }
         buf
     }
 
     pub fn parse(data: &[u8]) -> Option<Self> {
-        if data.len() < Self::WIRE_SIZE {
+        if data.len() < Self::WIRE_SIZE_V1 {
             return None;
         }
         if data[0] != ControlSubtype::LossReport as u8 {
@@ -170,9 +181,20 @@ impl LossReport {
         }
         let packets_received = u16::from_be_bytes([data[1], data[2]]);
         let packets_lost = u16::from_be_bytes([data[3], data[4]]);
+        let observed_rx_kbps = if data.len() >= Self::WIRE_SIZE_V2 {
+            let kbps = u16::from_be_bytes([data[6], data[7]]);
+            if kbps == 0 {
+                None
+            } else {
+                Some(kbps)
+            }
+        } else {
+            None
+        };
         Some(Self {
             packets_received,
             packets_lost,
+            observed_rx_kbps,
         })
     }
 
@@ -231,14 +253,61 @@ mod tests {
         let report = LossReport {
             packets_received: 950,
             packets_lost: 50,
+            observed_rx_kbps: Some(7_500),
         };
         let bytes = report.serialize();
-        assert_eq!(bytes.len(), LossReport::WIRE_SIZE);
+        assert_eq!(bytes.len(), LossReport::WIRE_SIZE_V2);
 
         let parsed = LossReport::parse(&bytes).unwrap();
         assert_eq!(parsed.packets_received, 950);
         assert_eq!(parsed.packets_lost, 50);
+        assert_eq!(parsed.observed_rx_kbps, Some(7_500));
         assert!((parsed.loss_ratio() - 0.05).abs() < 0.001);
+    }
+
+    #[test]
+    fn parse_legacy_loss_report_v1() {
+        let mut v1 = Vec::with_capacity(LossReport::WIRE_SIZE_V1);
+        v1.push(ControlSubtype::LossReport as u8);
+        v1.extend_from_slice(&100u16.to_be_bytes());
+        v1.extend_from_slice(&5u16.to_be_bytes());
+        v1.push(0);
+
+        let parsed = LossReport::parse(&v1).unwrap();
+        assert_eq!(parsed.packets_received, 100);
+        assert_eq!(parsed.packets_lost, 5);
+        assert_eq!(parsed.observed_rx_kbps, None);
+    }
+
+    #[test]
+    fn serialize_loss_report_v1_when_no_throughput() {
+        let report = LossReport {
+            packets_received: 123,
+            packets_lost: 7,
+            observed_rx_kbps: None,
+        };
+        let bytes = report.serialize();
+        assert_eq!(bytes.len(), LossReport::WIRE_SIZE_V1);
+
+        let parsed = LossReport::parse(&bytes).unwrap();
+        assert_eq!(parsed.packets_received, 123);
+        assert_eq!(parsed.packets_lost, 7);
+        assert_eq!(parsed.observed_rx_kbps, None);
+    }
+
+    #[test]
+    fn parse_loss_report_v2_zero_throughput_treated_as_none() {
+        let mut v2 = Vec::with_capacity(LossReport::WIRE_SIZE_V2);
+        v2.push(ControlSubtype::LossReport as u8);
+        v2.extend_from_slice(&100u16.to_be_bytes());
+        v2.extend_from_slice(&2u16.to_be_bytes());
+        v2.push(0);
+        v2.extend_from_slice(&0u16.to_be_bytes());
+
+        let parsed = LossReport::parse(&v2).unwrap();
+        assert_eq!(parsed.packets_received, 100);
+        assert_eq!(parsed.packets_lost, 2);
+        assert_eq!(parsed.observed_rx_kbps, None);
     }
 
     #[test]

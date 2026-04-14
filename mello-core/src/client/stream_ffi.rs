@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::ffi::CStr;
 use std::sync::Arc;
+use std::time::Instant;
 
 use crate::stream::viewer::StreamViewer;
 use crate::voice::{SignalEnvelope, SignalMessage, SignalPurpose};
@@ -103,6 +104,10 @@ pub(super) struct ViewerState {
     pub transport_packets: u64,
     pub transport_bytes: u64,
     pub transport_truncations: u64,
+    pub debug_last_emit: Instant,
+    pub debug_last_packets: u64,
+    pub debug_last_bytes: u64,
+    pub debug_last_frames_presented: u64,
     pub recv_buf: Vec<u8>,
     pub stream_viewer: StreamViewer,
     pub chunk_assembler: ChunkAssembler,
