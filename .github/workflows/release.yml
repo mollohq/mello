@@ -52,7 +52,7 @@ jobs:
           Set-Content Cargo.toml -Value $content -NoNewline
 
       - name: Build client
-        run: cargo build --release --features production
+        run: cargo build --release --locked --workspace --features mello-client/production
         env:
           GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
@@ -61,10 +61,10 @@ jobs:
           NAKAMA_HTTP_KEY: ${{ secrets.NAKAMA_HTTP_KEY }}
 
       - name: Run tests
-        run: cargo test --workspace
+        run: cargo test --workspace --locked
 
       - name: Clippy
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
       - name: Assemble dist
         shell: pwsh
@@ -177,7 +177,7 @@ jobs:
             "${{ env.NOTARY_PROFILE_NAME }}"
 
       - name: Build client
-        run: cargo build --release --features production
+        run: cargo build --release --locked --workspace --features mello-client/production
         env:
           GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
@@ -186,22 +186,26 @@ jobs:
           NAKAMA_HTTP_KEY: ${{ secrets.NAKAMA_HTTP_KEY }}
 
       - name: Run tests
-        run: cargo test --workspace
+        run: cargo test --workspace --locked
 
       - name: Clippy
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
       - name: Assemble dist
         run: |
           mkdir -p dist
           cp target/release/mello dist/
-          cp libmello/third_party/onnxruntime/onnxruntime-osx-arm64-*/lib/libonnxruntime*.dylib dist/
+          # Preserve ORT symlink structure so the unversioned dylib stays a symlink.
+          cp -P libmello/third_party/onnxruntime/onnxruntime-osx-arm64-*/lib/libonnxruntime*.dylib dist/
           cp $(find target/release/build -name silero_vad.onnx | head -1) dist/
 
       - name: Codesign external libraries
         run: |
           echo "Signing ONNX Runtime libraries..."
           for dylib in dist/libonnxruntime*.dylib; do
+            if [ -L "$dylib" ]; then
+              continue
+            fi
             codesign --force --verbose --options runtime --timestamp \
               --sign "Developer ID Application: ${{ secrets.APPLE_TEAM_NAME }}" \
               "$dylib"

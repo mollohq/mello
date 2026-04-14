@@ -175,9 +175,9 @@ fn main() {
                     let name = entry.file_name();
                     let name_str = name.to_string_lossy();
                     if name_str.starts_with("libonnxruntime") && name_str.ends_with(".dylib") {
-                        let _ = std::fs::copy(entry.path(), target_dir.join(&name));
+                        let _ = copy_file_or_symlink(&entry.path(), &target_dir.join(&name));
                         if let Some(parent) = target_dir.parent() {
-                            let _ = std::fs::copy(entry.path(), parent.join(&name));
+                            let _ = copy_file_or_symlink(&entry.path(), &parent.join(&name));
                         }
                     }
                 }
@@ -369,4 +369,27 @@ fn find_libclang() -> Option<String> {
     }
 
     None
+}
+
+fn copy_file_or_symlink(src: &Path, dst: &Path) -> std::io::Result<()> {
+    let metadata = std::fs::symlink_metadata(src)?;
+    if metadata.file_type().is_symlink() {
+        if std::fs::symlink_metadata(dst).is_ok() {
+            let _ = std::fs::remove_file(dst);
+        }
+        #[cfg(unix)]
+        {
+            let target = std::fs::read_link(src)?;
+            std::os::unix::fs::symlink(target, dst)?;
+        }
+        #[cfg(not(unix))]
+        {
+            let resolved = src.canonicalize()?;
+            let _ = std::fs::copy(resolved, dst)?;
+        }
+        return Ok(());
+    }
+
+    let _ = std::fs::copy(src, dst)?;
+    Ok(())
 }
