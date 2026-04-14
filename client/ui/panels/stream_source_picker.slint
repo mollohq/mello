@@ -416,9 +416,9 @@ export component StreamSourcePicker inherits Rectangle {
                     Text {
                         text: selected-preset == 0 ? "1080p @ 60fps"
                             : selected-preset == 1 ? "1080p @ 30fps"
-                            : selected-preset == 2 ? "720p @ 30fps"
-                            : selected-preset == 3 ? "480p @ 30fps"
-                            : "360p @ 15fps";
+                            : selected-preset == 2 ? "720p @ 60fps"
+                            : selected-preset == 3 ? "720p @ 30fps"
+                            : "480p @ 30fps";
                         font-family: Theme.font-mono;
                         font-size: 11px;
                         color: Theme.text-secondary;
@@ -434,10 +434,10 @@ export component StreamSourcePicker inherits Rectangle {
 
                     Text {
                         text: selected-preset == 0 ? "~6 Mbit/s"
-                            : selected-preset == 1 ? "~3 Mbit/s"
-                            : selected-preset == 2 ? "~1.5 Mbit/s"
-                            : selected-preset == 3 ? "~0.8 Mbit/s  (martin mode)"
-                            : "~0.3 Mbit/s";
+                            : selected-preset == 1 ? "~4.5 Mbit/s"
+                            : selected-preset == 2 ? "~4 Mbit/s"
+                            : selected-preset == 3 ? "~2.5 Mbit/s  (martin mode)"
+                            : "~1.5 Mbit/s";
                         font-family: Theme.font-mono;
                         font-size: 11px;
                         color: Theme.text-tertiary;

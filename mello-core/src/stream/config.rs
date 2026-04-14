@@ -34,17 +34,17 @@ impl QualityPreset {
             Self::High => PresetParams {
                 width: 1920,
                 height: 1080,
-                fps: 60,
+                fps: 30,
                 bitrate_kbps: match codec {
-                    Codec::H264 => 6_000,
-                    Codec::Av1 => 4_000,
+                    Codec::H264 => 4_500,
+                    Codec::Av1 => 3_000,
                 },
                 fec_n: 5,
             },
             Self::Medium => PresetParams {
-                width: 1920,
-                height: 1080,
-                fps: 30,
+                width: 1280,
+                height: 720,
+                fps: 60,
                 bitrate_kbps: match codec {
                     Codec::H264 => 4_000,
                     Codec::Av1 => 2_500,
@@ -62,8 +62,8 @@ impl QualityPreset {
                 fec_n: 3,
             },
             Self::Potato => PresetParams {
-                width: 1280,
-                height: 720,
+                width: 854,
+                height: 480,
                 fps: 30,
                 bitrate_kbps: 1_500,
                 fec_n: 3,
@@ -132,7 +132,7 @@ mod tests {
         let potato = QualityPreset::Potato.params(Codec::H264);
         assert_eq!(potato.bitrate_kbps, 1_500);
         assert_eq!(potato.fec_n, 3);
-        assert_eq!(potato.width, 1280);
+        assert_eq!(potato.width, 854);
     }
 
     #[test]
