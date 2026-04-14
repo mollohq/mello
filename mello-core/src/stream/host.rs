@@ -261,10 +261,15 @@ pub fn create_stream_session(
     let session = StreamSession::new(session_id, mode, stop_tx);
 
     tokio::spawn(async move {
-        let mut mgr = manager;
-        // _resources is moved into this task — dropped when the task exits
+        // Keep callback contexts alive for the entire lifetime of the host.
+        // IMPORTANT: Drop StreamManager (which stops the C++ host) before
+        // dropping callback contexts, otherwise capture threads can still invoke
+        // callbacks with dangling user_data pointers during shutdown.
         let _res = _resources;
-        mgr.run(stop_rx).await;
+        {
+            let mut mgr = manager;
+            mgr.run(stop_rx).await;
+        }
     });
 
     Ok(session)

@@ -15,6 +15,7 @@ use super::sink::PacketSink;
 
 const AUDIO_PACING_BUDGET_KBPS: u32 = 160;
 const PACING_TELEMETRY_INTERVAL_SECS: u64 = 2;
+const MAX_VIDEO_COALESCE_DRAIN: usize = 32;
 
 pub struct VideoPacket {
     pub data: Vec<u8>,
@@ -201,22 +202,8 @@ impl StreamManager {
     }
 
     async fn handle_video(&mut self, pkt: VideoPacket) {
-        let mut packet = pkt;
-        let mut coalesced = 0usize;
-        let mut newest_keyframe: Option<VideoPacket> = None;
-
-        while let Ok(next) = self.video_rx.try_recv() {
-            coalesced += 1;
-            if next.is_keyframe {
-                newest_keyframe = Some(next);
-            } else if newest_keyframe.is_none() {
-                packet = next;
-            }
-        }
-
-        if let Some(kf) = newest_keyframe {
-            packet = kf;
-        }
+        let (packet, coalesced) =
+            coalesce_video_packet(pkt, &mut self.video_rx, MAX_VIDEO_COALESCE_DRAIN);
 
         if coalesced > 0 {
             if coalesced <= 5 || coalesced.is_multiple_of(30) {
@@ -236,6 +223,12 @@ impl StreamManager {
                 log::warn!("Stream manager coalesced deltas under pressure: requested keyframe");
             }
         }
+        if coalesced == MAX_VIDEO_COALESCE_DRAIN {
+            log::warn!(
+                "Stream manager video coalesce hit drain cap={} (preventing run-loop starvation)",
+                MAX_VIDEO_COALESCE_DRAIN
+            );
+        }
 
         let seq = self.video_seq.fetch_add(1, Ordering::Relaxed);
 
@@ -248,18 +241,24 @@ impl StreamManager {
 
         if let Some(parity) = self.fec_encoder.push(&packet.data) {
             let fec_packet = StreamPacket::fec(parity, seq);
-            let _ = self.sink.send_video(&fec_packet).await;
+            if let Err(e) = self.sink.send_video(&fec_packet).await {
+                log::warn!("Stream manager failed to send FEC packet: {}", e);
+            }
         }
 
         let stream_packet =
             StreamPacket::video(packet.data, seq, packet.is_keyframe, fec_group_last);
-        let _ = self.sink.send_video(&stream_packet).await;
+        if let Err(e) = self.sink.send_video(&stream_packet).await {
+            log::warn!("Stream manager failed to send video packet: {}", e);
+        }
     }
 
     async fn handle_audio(&mut self, pkt: AudioPacket) {
         let seq = self.audio_seq.fetch_add(1, Ordering::Relaxed);
         let packet = StreamPacket::audio(pkt.data, seq);
-        let _ = self.sink.send_audio(&packet).await;
+        if let Err(e) = self.sink.send_audio(&packet).await {
+            log::warn!("Stream manager failed to send audio packet: {}", e);
+        }
     }
 
     /// Process an incoming control packet from a viewer.
@@ -310,5 +309,63 @@ impl StreamManager {
             }
             _ => None,
         }
+    }
+}
+
+fn coalesce_video_packet(
+    mut packet: VideoPacket,
+    video_rx: &mut mpsc::Receiver<VideoPacket>,
+    max_drain: usize,
+) -> (VideoPacket, usize) {
+    let mut coalesced = 0usize;
+    let mut newest_keyframe: Option<VideoPacket> = None;
+
+    while coalesced < max_drain {
+        let Ok(next) = video_rx.try_recv() else {
+            break;
+        };
+        coalesced += 1;
+        if next.is_keyframe {
+            newest_keyframe = Some(next);
+        } else if newest_keyframe.is_none() {
+            packet = next;
+        }
+    }
+
+    if let Some(kf) = newest_keyframe {
+        packet = kf;
+    }
+    (packet, coalesced)
+}
+
+#[cfg(test)]
+mod tests {
+    use tokio::sync::mpsc;
+
+    use super::{coalesce_video_packet, VideoPacket, MAX_VIDEO_COALESCE_DRAIN};
+
+    #[test]
+    fn coalesce_video_packet_caps_drain_to_avoid_starvation() {
+        let first = VideoPacket {
+            data: vec![1],
+            is_keyframe: false,
+            timestamp: 1,
+        };
+        let (tx, mut rx) = mpsc::channel(256);
+        for i in 0..200u64 {
+            tx.try_send(VideoPacket {
+                data: vec![2],
+                is_keyframe: false,
+                timestamp: i + 2,
+            })
+            .expect("queue should have room");
+        }
+
+        let (_picked, coalesced) = coalesce_video_packet(first, &mut rx, MAX_VIDEO_COALESCE_DRAIN);
+        assert_eq!(coalesced, MAX_VIDEO_COALESCE_DRAIN);
+        assert!(
+            rx.try_recv().is_ok(),
+            "queue should still contain pending frames"
+        );
     }
 }

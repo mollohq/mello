@@ -69,6 +69,11 @@ impl PacketSink for SfuSink {
 
 impl SfuSink {
     async fn send_chunked_media(&self, data: &[u8]) -> Result<(), StreamError> {
+        if !self.connection.is_media_channel_open() {
+            // Host can start producing before SFU DataChannel is fully open.
+            // Drop instead of pacing/stalling on packets that cannot be sent yet.
+            return Ok(());
+        }
         let chunk_count = data.len().div_ceil(CHUNK_MAX_PAYLOAD).max(1) as u16;
         let msg_id = self.msg_seq.fetch_add(1, Ordering::Relaxed);
 
@@ -84,7 +89,17 @@ impl SfuSink {
             msg.extend_from_slice(payload);
 
             self.pacer.lock().await.pace(msg.len()).await;
-            self.connection.send_media(&msg)?;
+            if let Err(e) = self.connection.send_media(&msg) {
+                log::warn!(
+                    "SFU sink media send failed: msg_id={} chunk={}/{} bytes={} err={}",
+                    msg_id,
+                    chunk_idx + 1,
+                    chunk_count,
+                    msg.len(),
+                    e
+                );
+                return Err(e);
+            }
         }
         Ok(())
     }

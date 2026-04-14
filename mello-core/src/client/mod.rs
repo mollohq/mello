@@ -129,6 +129,9 @@ impl Client {
         let mut signal_rx = self.nakama.take_signal_rx().unwrap();
         let mut presence_rx = self.nakama.take_presence_rx().unwrap();
         let mut voice_tick = tokio::time::interval(tokio::time::Duration::from_millis(20));
+        voice_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut stream_tick = tokio::time::interval(tokio::time::Duration::from_millis(16));
+        stream_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         // Refresh access token every 45 minutes (token lives 1 hour)
         let mut refresh_tick = tokio::time::interval(tokio::time::Duration::from_secs(45 * 60));
         refresh_tick.tick().await; // consume the immediate first tick
@@ -167,8 +170,10 @@ impl Client {
                 }
                 _ = voice_tick.tick() => {
                     self.voice_tick().await;
-                    self.stream_tick().await;
                     self.clip_playback_tick();
+                }
+                _ = stream_tick.tick() => {
+                    self.stream_tick().await;
                 }
                 _ = refresh_tick.tick() => {
                     self.refresh_token().await;
