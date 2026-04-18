@@ -363,6 +363,10 @@ typedef void (*MelloAudioPacketCallback)(void* user_data, const uint8_t* data, i
 /** Decoded frame callback: rgba pixels, width, height, timestamp. */
 typedef void (*MelloFrameCallback)(void* user_data, const uint8_t* rgba, uint32_t w, uint32_t h, uint64_t ts);
 
+/** Native decoded frame callback: shared GPU texture handle, width, height, timestamp.
+ *  The handle is currently a Windows shared D3D11 texture handle. */
+typedef void (*MelloNativeFrameCallback)(void* user_data, void* shared_handle, uint32_t w, uint32_t h, uint64_t ts);
+
 /* ---- Host ---- */
 
 /** Start hosting with a specific capture source. Returns an opaque handle. */
@@ -414,6 +418,14 @@ MELLO_API bool mello_stream_feed_packet(MelloStreamView* view, const uint8_t* da
 /** Read back the latest decoded frame and deliver it via the frame callback.
  *  Call once per display frame after feeding all available packets. */
 MELLO_API bool mello_stream_present_frame(MelloStreamView* view);
+
+/** Register callback for native GPU frame handles on viewer side.
+ *  When set, the viewer pipeline can bypass CPU readback in mello_stream_present_frame(). */
+MELLO_API void mello_stream_set_native_frame_callback(
+    MelloStreamView*          view,
+    MelloNativeFrameCallback  callback,
+    void*                     user_data
+);
 
 /** Feed an encoded game-audio packet received from the host for playback. */
 MELLO_API MelloResult mello_stream_feed_audio_packet(

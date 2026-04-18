@@ -395,6 +395,10 @@ bool VideoPipeline::start_viewer(const PipelineConfig& config, FrameCallback on_
     return true;
 }
 
+void VideoPipeline::set_native_frame_callback(NativeFrameCallback on_native_frame) {
+    native_frame_cb_ = std::move(on_native_frame);
+}
+
 void VideoPipeline::stop_viewer() {
     if (!viewer_running_.load()) return;
     viewer_running_ = false;
@@ -474,7 +478,16 @@ bool VideoPipeline::present_frame() {
 #ifdef _WIN32
     if (!viewer_running_.load() || !latest_decoded_) return false;
 
-    staging_->copy_from(latest_decoded_);
+    // Native GPU presenter path: keep the frame on GPU and surface a shared texture
+    // handle to the client. This avoids costly GPU->CPU readback stalls.
+    if (native_frame_cb_ && staging_->shared_rgba_handle()) {
+        staging_->copy_from(latest_decoded_, false);
+        native_frame_cb_(staging_->shared_rgba_handle(), config_.width, config_.height, now_us());
+        latest_decoded_ = nullptr;
+        return true;
+    }
+
+    staging_->copy_from(latest_decoded_, true);
     staging_->read_rgba(rgba_buf_.data());
 
     if (frames_decoded_ < 2 && getenv("MELLO_DUMP_FRAMES")) {

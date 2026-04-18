@@ -11,6 +11,8 @@ use crate::platform::{self, StatusItem, VoiceState};
 use crate::updater::UpdateEvent;
 use crate::VoiceChannelMember;
 
+const MAX_CORE_EVENTS_PER_POLL_TICK: usize = 128;
+
 fn broadcast_mute_state(cmd_tx: &tokio::sync::mpsc::Sender<Command>, muted: bool, deafened: bool) {
     let _ = cmd_tx.try_send(Command::BroadcastMuteState { muted, deafened });
 }
@@ -84,7 +86,10 @@ pub fn start(
             }
 
             // --- Core events ---
-            while let Ok(event) = event_rx.try_recv() {
+            for _ in 0..MAX_CORE_EVENTS_PER_POLL_TICK {
+                let Ok(event) = event_rx.try_recv() else {
+                    break;
+                };
                 // Update tray icon based on voice state changes
                 match &event {
                     Event::VoiceStateChanged { in_call } => {

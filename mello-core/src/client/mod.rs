@@ -39,12 +39,15 @@ const VIEWER_RECV_BUF_SIZE: usize = 64 * 1024;
 /// unbounded queue buildup that occurs when sending ~11 MB frames through a
 /// channel at 30+ fps.
 pub type FrameSlot = Arc<std::sync::Mutex<Option<(u32, u32, Vec<u8>)>>>;
+/// Shared single-slot for native GPU frame metadata (shared texture handle).
+pub type NativeFrameSlot = Arc<std::sync::Mutex<Option<(u32, u32, usize, u64)>>>;
 
 pub struct Client {
     nakama: NakamaClient,
     voice: VoiceManager,
     event_tx: std::sync::mpsc::Sender<Event>,
     frame_slot: FrameSlot,
+    native_frame_slot: NativeFrameSlot,
     frame_consumed: Arc<std::sync::atomic::AtomicBool>,
     stream_session: Option<StreamSession>,
     stream_host_sink: Option<Arc<dyn PacketSink>>,
@@ -83,6 +86,7 @@ impl Client {
         event_tx: std::sync::mpsc::Sender<Event>,
         loopback: bool,
         frame_slot: FrameSlot,
+        native_frame_slot: NativeFrameSlot,
         frame_consumed: Arc<std::sync::atomic::AtomicBool>,
     ) -> Self {
         Self {
@@ -90,6 +94,7 @@ impl Client {
             voice: VoiceManager::new(event_tx.clone(), loopback),
             event_tx,
             frame_slot,
+            native_frame_slot,
             frame_consumed,
             stream_session: None,
             stream_host_sink: None,

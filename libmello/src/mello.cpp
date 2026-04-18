@@ -42,6 +42,8 @@ struct MelloStreamView {
     mello::Context*          ctx;
     MelloFrameCallback       callback;
     void*                    user_data;
+    MelloNativeFrameCallback native_callback;
+    void*                    native_user_data;
 };
 
 extern "C" {
@@ -883,7 +885,7 @@ MelloStreamView* mello_stream_start_viewer(
         pc.fps          = config->fps;
         pc.bitrate_kbps = config->bitrate_kbps;
 
-        auto* view = new MelloStreamView{c, on_frame, user_data};
+        auto* view = new MelloStreamView{c, on_frame, user_data, nullptr, nullptr};
 
         auto cb = [view](const uint8_t* rgba, uint32_t w, uint32_t h, uint64_t ts) {
             view->callback(view->user_data, rgba, w, h, ts);
@@ -900,6 +902,7 @@ MelloStreamView* mello_stream_start_viewer(
 void mello_stream_stop_viewer(MelloStreamView* view) {
     if (!view) return;
     try {
+        view->ctx->video().set_native_frame_callback({});
         view->ctx->video().stop_viewer();
         delete view;
     } catch (...) {}
@@ -917,6 +920,30 @@ bool mello_stream_present_frame(MelloStreamView* view) {
     try {
         return view->ctx->video().present_frame();
     } catch (...) { return false; }
+}
+
+void mello_stream_set_native_frame_callback(
+    MelloStreamView* view,
+    MelloNativeFrameCallback callback,
+    void* user_data)
+{
+    if (!view) return;
+    try {
+        view->native_callback = callback;
+        view->native_user_data = user_data;
+
+        if (!callback) {
+            view->ctx->video().set_native_frame_callback({});
+            return;
+        }
+
+        auto native_cb = [view](void* shared_handle, uint32_t w, uint32_t h, uint64_t ts) {
+            if (view->native_callback) {
+                view->native_callback(view->native_user_data, shared_handle, w, h, ts);
+            }
+        };
+        view->ctx->video().set_native_frame_callback(native_cb);
+    } catch (...) {}
 }
 
 MelloResult mello_stream_feed_audio_packet(MelloStreamView* view, const uint8_t* data, int size) {

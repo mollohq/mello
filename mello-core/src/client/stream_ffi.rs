@@ -7,9 +7,11 @@ use crate::stream::viewer::StreamViewer;
 use crate::voice::{SignalEnvelope, SignalMessage, SignalPurpose};
 
 use super::FrameSlot;
+use super::NativeFrameSlot;
 
 pub(super) struct FrameCallbackData {
     pub frame_slot: FrameSlot,
+    pub native_frame_slot: NativeFrameSlot,
     pub frame_consumed: Arc<std::sync::atomic::AtomicBool>,
 }
 
@@ -101,13 +103,22 @@ pub(super) struct ViewerState {
     pub _ice_cb_data: *mut StreamIceCallbackData,
     pub got_keyframe: bool,
     pub frames_presented: u64,
+    pub stream_tick_count: u64,
+    pub present_attempts: u64,
+    pub present_forced_attempts: u64,
+    pub present_skipped_unconsumed: u64,
     pub transport_packets: u64,
     pub transport_bytes: u64,
     pub transport_truncations: u64,
     pub debug_last_emit: Instant,
+    pub debug_last_tick_count: u64,
+    pub debug_last_present_attempts: u64,
+    pub debug_last_present_forced_attempts: u64,
+    pub debug_last_present_skipped_unconsumed: u64,
     pub debug_last_packets: u64,
     pub debug_last_bytes: u64,
     pub debug_last_frames_presented: u64,
+    pub last_present_attempt: Instant,
     pub recv_buf: Vec<u8>,
     pub stream_viewer: StreamViewer,
     pub chunk_assembler: ChunkAssembler,
@@ -183,6 +194,24 @@ pub(super) unsafe extern "C" fn on_viewer_frame(
                 *slot = Some((w, h, src.to_vec()));
             }
         }
+        data.frame_consumed
+            .store(false, std::sync::atomic::Ordering::Release);
+    }
+}
+
+pub(super) unsafe extern "C" fn on_viewer_native_frame(
+    user_data: *mut std::ffi::c_void,
+    shared_handle: *mut std::ffi::c_void,
+    w: u32,
+    h: u32,
+    ts: u64,
+) {
+    if user_data.is_null() || shared_handle.is_null() || w == 0 || h == 0 {
+        return;
+    }
+    let data = &*(user_data as *const FrameCallbackData);
+    if let Ok(mut slot) = data.native_frame_slot.lock() {
+        *slot = Some((w, h, shared_handle as usize, ts));
         data.frame_consumed
             .store(false, std::sync::atomic::Ordering::Release);
     }

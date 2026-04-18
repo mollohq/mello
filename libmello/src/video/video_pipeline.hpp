@@ -28,6 +28,7 @@ class VideoPipeline {
 public:
     using PacketCallback = std::function<void(const uint8_t* data, size_t size, bool is_keyframe, uint64_t ts)>;
     using FrameCallback  = std::function<void(const uint8_t* rgba, uint32_t w, uint32_t h, uint64_t ts)>;
+    using NativeFrameCallback = std::function<void(void* shared_handle, uint32_t w, uint32_t h, uint64_t ts)>;
 
     VideoPipeline();
     ~VideoPipeline();
@@ -47,6 +48,7 @@ public:
     void stop_viewer();
     bool feed_packet(const uint8_t* data, size_t size, bool is_keyframe);
     bool present_frame();
+    void set_native_frame_callback(NativeFrameCallback on_native_frame);
 
     // CURSOR
     bool get_cursor_packet(uint8_t* buf, size_t* size);
@@ -77,6 +79,7 @@ private:
 
     PacketCallback  packet_cb_;
     FrameCallback   frame_cb_;
+    NativeFrameCallback native_frame_cb_;
     PipelineConfig  config_{};
 
     std::atomic<bool> host_running_{false};
