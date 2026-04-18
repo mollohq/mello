@@ -51,6 +51,10 @@ jobs:
           $content = $content -replace '(?m)^(version\s*=\s*")[^"]+"', "`${1}$env:RELEASE_VERSION`""
           Set-Content Cargo.toml -Value $content -NoNewline
 
+      - name: Refresh lockfile for stamped workspace version
+        shell: pwsh
+        run: cargo update --workspace --offline
+
       - name: Build client
         run: cargo build --release --locked --workspace --features mello-client/production
         env:
@@ -140,6 +144,9 @@ jobs:
 
       - name: Stamp version in Cargo.toml
         run: sed -i'' -e "s/^version = \"[^\"]*\"/version = \"$RELEASE_VERSION\"/" Cargo.toml
+
+      - name: Refresh lockfile for stamped workspace version
+        run: cargo update --workspace --offline
 
       - name: Stamp version in Info.plist
         run: |

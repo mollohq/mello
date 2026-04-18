@@ -24,21 +24,31 @@ bool VoiceActivityDetector::initialize(const std::string& model_path) {
         // which shadows ours via the PE loader. Bypass the import table entirely:
         // LoadLibrary our copy by full path and GetProcAddress for OrtGetApiBase.
         {
-            auto dll_path = std::filesystem::path(model_path).parent_path() / "onnxruntime.dll";
-            MELLO_LOG_INFO("vad", "loading ORT DLL by path: %s", dll_path.string().c_str());
+            auto try_load = [](const std::filesystem::path& p) -> HMODULE {
+                HMODULE h = LoadLibraryExW(p.c_str(), nullptr,
+                                           LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR |
+                                           LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
+                if (!h) h = LoadLibraryW(p.c_str());
+                return h;
+            };
 
-            HMODULE h = LoadLibraryExW(dll_path.c_str(), nullptr,
-                                       LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR |
-                                       LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
+            // Try next to the model first (production layout), then next to
+            // the exe (dev layout — build.rs copies DLLs to target/<profile>/).
+            auto model_dir = std::filesystem::path(model_path).parent_path();
+            HMODULE h = try_load(model_dir / "onnxruntime.dll");
             if (!h) {
-                MELLO_LOG_WARN("vad", "LoadLibraryExW failed (err=%lu), trying LoadLibraryW",
-                               GetLastError());
-                h = LoadLibraryW(dll_path.c_str());
+                wchar_t exe_buf[MAX_PATH];
+                GetModuleFileNameW(nullptr, exe_buf, MAX_PATH);
+                auto exe_dir = std::filesystem::path(exe_buf).parent_path();
+                h = try_load(exe_dir / "onnxruntime.dll");
             }
             if (!h) {
                 MELLO_LOG_ERROR("vad", "cannot load onnxruntime.dll (err=%lu)", GetLastError());
                 return false;
             }
+            wchar_t loaded[MAX_PATH];
+            GetModuleFileNameW(h, loaded, MAX_PATH);
+            MELLO_LOG_INFO("vad", "ORT DLL loaded: %ls", loaded);
 
             auto get_api_base = reinterpret_cast<decltype(&OrtGetApiBase)>(
                 GetProcAddress(h, "OrtGetApiBase"));
