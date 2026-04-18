@@ -16,6 +16,9 @@ public:
     ID3D11Texture2D* get_frame() override;
     DXGI_FORMAT      frame_format() const override;
     uint32_t         coded_height() const { return coded_height_; }
+    void*            shared_frame_handle() const override;
+    DXGI_FORMAT      shared_frame_format() const override;
+    uint32_t         shared_frame_uv_offset() const override;
     bool             supports_codec(VideoCodec codec) const override;
     const char*      name() const override { return "NVDEC"; }
 
@@ -50,6 +53,8 @@ private:
     Microsoft::WRL::ComPtr<ID3D11Device>    device_;
     Microsoft::WRL::ComPtr<ID3D11DeviceContext> context_;
     Microsoft::WRL::ComPtr<ID3D11Texture2D> frame_tex_;
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> shared_frame_tex_;
+    void* shared_frame_handle_ = nullptr;
 
     void* cuda_gfx_resource_ = nullptr; // CUgraphicsResource for frame_tex_ (interop only)
     std::vector<uint8_t> nv12_buf_;    // fallback only (when interop unavailable)

@@ -365,7 +365,26 @@ typedef void (*MelloFrameCallback)(void* user_data, const uint8_t* rgba, uint32_
 
 /** Native decoded frame callback: shared GPU texture handle, width, height, timestamp.
  *  The handle is currently a Windows shared D3D11 texture handle. */
-typedef void (*MelloNativeFrameCallback)(void* user_data, void* shared_handle, uint32_t w, uint32_t h, uint64_t ts);
+typedef enum MelloNativeFrameFormat {
+    MELLO_NATIVE_FRAME_FORMAT_UNKNOWN = 0,
+    MELLO_NATIVE_FRAME_FORMAT_RGBA8 = 1,
+    MELLO_NATIVE_FRAME_FORMAT_R8_NV12_LAYOUT = 2,
+    MELLO_NATIVE_FRAME_FORMAT_NV12 = 3,
+} MelloNativeFrameFormat;
+
+/** Native decoded frame callback: shared GPU texture handle + format metadata.
+ *  - `w`/`h`: visible video dimensions
+ *  - `format`: texture layout
+ *  - `uv_y_offset`: row offset where UV plane starts (for NV12-layout formats) */
+typedef void (*MelloNativeFrameCallback)(
+    void*                   user_data,
+    void*                   shared_handle,
+    uint32_t                w,
+    uint32_t                h,
+    MelloNativeFrameFormat  format,
+    uint32_t                uv_y_offset,
+    uint64_t                ts
+);
 
 /* ---- Host ---- */
 
@@ -425,6 +444,13 @@ MELLO_API void mello_stream_set_native_frame_callback(
     MelloStreamView*          view,
     MelloNativeFrameCallback  callback,
     void*                     user_data
+);
+
+/** Enable/disable RGBA callback mirroring while native callback is active.
+ *  Useful for diagnostics tools that need both native cadence and CPU-visible frames. */
+MELLO_API void mello_stream_set_native_frame_mirror_rgba(
+    MelloStreamView* view,
+    bool             enabled
 );
 
 /** Feed an encoded game-audio packet received from the host for playback. */

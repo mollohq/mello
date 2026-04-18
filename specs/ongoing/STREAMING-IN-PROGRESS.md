@@ -1,23 +1,32 @@
 # Streaming In-Progress Handoff (Windows Focus)
 
 > **Status:** IN PROGRESS  
-> **Updated:** 2026-04-14  
+> **Updated:** 2026-04-18  
 > **Priority:** Windows host -> Windows viewer (primary), macOS viewer secondary
 
 ---
 
 ## 1) Current Snapshot
 
-Major SFU pipeline blockers were fixed and stream now runs end-to-end with stable host pacing and responsive UI controls.
+Windows->Windows SFU probe path is now stable end-to-end with significantly better smoothness than baseline, but residual quality issues remain (micro-freezes + persistent blockiness/artifacts).
 
-What is now true:
-- Host no longer hard-stalls after first packets.
-- Stream stop works and manager exits cleanly.
-- SFU relay path is active (packets and bytes flow host -> SFU -> viewer).
-- Host-side pacing telemetry updates continuously.
+What is now true (2026-04-18):
+- Host no longer hard-stalls after startup.
+- Viewer no longer enters "keyframe then long decay corruption" state.
+- Host probe now updates backend with actual encode resolution (no stale requested dimensions).
+- Viewer join triggers explicit host keyframe request.
+- Probe host exits on sustained SFU channel closure (no endless encode with 0 kbps egress).
+- SFU viewer probe runs at correct decoded size via `watch_stream` response.
+- Typical probe metrics now sit around:
+  - decode/native FPS: ~42-48 (with dips into mid/upper 30s)
+  - ingress: ~46-50 pps, ~5.8-7.4 Mbps
+  - present_hz above decode_hz (present path not primary limiter)
 
-Open quality issue:
-- macOS viewer presentation is around ~30-35 FPS even when sender is configured 720p60.
+Open quality issues:
+- Periodic micro-freezes remain.
+- Persistent blockiness/artifacts remain visible most of the time.
+- First keyframe still frequently fails once (`feed_packet failed for keyframe`), then recovery continues.
+- Host still reports recurring `Stream manager video coalesce` events (often even before viewer joins).
 
 ---
 
@@ -59,6 +68,32 @@ Open quality issue:
   - `mello-core/src/client/streaming.rs`
 - Split voice and stream ticks (20ms voice, 16ms stream):
   - `mello-core/src/client/mod.rs`
+
+### 2.7 Probe tooling for SFU-only isolation (new)
+- Added dedicated SFU viewer probe:
+  - `tools/sfu-stream-viewer-probe`
+  - title-bar + log telemetry (`dec/native/present/msg_hz/ingress/rtt`)
+- Added direct Nakama `watch_stream` helper flow in viewer probe:
+  - `--watch-stream-print --nakama-http-base --nakama-auth-token --session`
+  - auto-populates endpoint/token and prints response fields
+- Added SFU host mode to stream-host probe:
+  - manual mode: `--sfu-endpoint --sfu-token --sfu-session`
+  - auto mode: `--nakama-start-stream --nakama-http-base --nakama-auth-token --crew-id`
+
+### 2.8 Host probe robustness fixes (new)
+- On SFU host probe start, backend resolution now updated to actual encode size:
+  - `update_stream_resolution` RPC call after `mello_stream_get_host_resolution`
+- On SFU `MemberJoined`, host probe now requests immediate keyframe.
+- Host probe now auto-stops if media/control channels remain closed for multiple ticks.
+
+### 2.9 Stream send-path tuning (new)
+- SFU-only chunk payload reduced from 60k to 40k:
+  - `mello-core/src/stream/sink_sfu.rs`
+- Queue-pressure keyframe requests heavily rate-limited and only for severe coalesce:
+  - `mello-core/src/stream/manager.rs`
+- Coalescer corrected to avoid fast-forwarding to arbitrary delta frames:
+  - only jumps ahead when a keyframe is available
+  - added test `coalesce_video_packet_keeps_oldest_delta_without_keyframe`
 
 ---
 
@@ -112,6 +147,8 @@ This is the broader queue we have been executing across slices, with current sta
    - pass/fail criteria on motion-heavy scenes over WAN.
 5. **Architecture checkpoint: DataChannel vs RTP video**
    - decide using measured failure modes + quality/latency envelope, not preference.
+6. **Voice CPU efficiency pass (VC baseline parity)**
+   - profile and cut in-call CPU overhead (current ~10% vs Discord <2%) across capture, DSP, encode/decode, and mix hot paths.
 
 ### Exit criteria for "close to Discord-quality"
 - Stable W->W 720p60 and 1080p60 in real scenes.
@@ -187,4 +224,63 @@ Pass indicators:
 - Keep changes incremental and evidence-driven.
 - Do not remove existing diagnostics until W->W gate is green and stable.
 - Primary user goal: excellent Windows-to-Windows streaming first, then macOS viewer polish.
+
+---
+
+## 9) 2026-04-18 Continuation Handoff (Critical)
+
+### 9.1 Latest interpretation
+- We have materially improved quality and removed worst regressions, but not hit "buttery" parity.
+- Current symptom profile suggests residual loss/jitter/backpressure behavior under SFU relay and/or packet scheduling interactions.
+- This is likely no longer a pure UI presenter bottleneck.
+
+### 9.2 Key evidence from latest logs
+- Host:
+  - encode pipeline healthy at 60 fps (`libmello::video/pipeline` host counters stable)
+  - pacing output typically ~6.0-7.1 Mbps against 8.16 Mbps target
+  - recurring `Stream manager video coalesce` persists
+- Viewer:
+  - decode usually ~42-48 fps with periodic dips to high/mid 30s
+  - ingress remains active and fairly stable
+  - first keyframe still occasionally fails once, then decode recovers
+
+### 9.3 Exact next actions (next session)
+1. **Bring in `mello-sfu` repo (same parent directory) and instrument relay path**
+   - per-session recv/send msg rates
+   - per-session forwarded bytes and drop counters
+   - buffered/backpressure metrics per peer
+   - keyframe-sized message handling visibility
+2. **Correlate timestamps across host + viewer + SFU**
+   - specifically around decode FPS dips and visible micro-freezes
+3. **Decide SFU-side mitigation**
+   - queue policy, prioritization, or pacing handoff behavior
+   - keyframe-path handling strategy under congestion
+
+### 9.4 Commands used for current probe loop
+- Host probe (auto Nakama start):
+  - `cargo run -p stream-host -- --fps 60 --bitrate 8000 --nakama-start-stream --nakama-http-base <...> --nakama-auth-token <...> --crew-id <...>`
+- Viewer probe (auto watch_stream fetch):
+  - `cargo run -p sfu-stream-viewer-probe -- --watch-stream-print --nakama-http-base <...> --nakama-auth-token <...> --session <...> --native-metrics`
+
+### 9.5 Files changed during this continuation slice
+- `mello-core/src/stream/sink_sfu.rs`
+- `mello-core/src/stream/manager.rs`
+- `tools/stream-host/src/main.rs`
+- `tools/stream-host/Cargo.toml`
+- `tools/sfu-stream-viewer-probe/src/main.rs`
+- `tools/sfu-stream-viewer-probe/Cargo.toml`
+- `Cargo.toml` (workspace tools members)
+
+### 9.6 Most recent run result (after latest coalescer fix)
+- "Keyframe then long decay" failure mode appears resolved.
+- Remaining symptom is now:
+  - periodic micro-freezes,
+  - constant low-level blockiness/artifacts.
+- Latest logs still show:
+  - host recurring `Stream manager video coalesce` (typically dropped_stale=1..2),
+  - viewer decode oscillating around ~40-48 FPS with periodic dips.
+- Practical conclusion for next session:
+  - continue with SFU-side instrumentation in `mello-sfu` before further client-side tuning,
+  - correlate host/viewer/SFU timelines around dips and visible freeze moments,
+  - focus on relay/backpressure/jitter behavior during keyframe and near-keyframe windows.
 

@@ -5,6 +5,16 @@ members = [
     "hud",
     "mello-core",
     "mello-sys",
+    "tools/stream-host",
+    "tools/stream-viewer",
+    "tools/rtp-client-test",
+    "tools/sfu-stream-viewer-probe",
+]
+default-members = [
+    "client",
+    "hud",
+    "mello-core",
+    "mello-sys",
 ]
 
 [workspace.package]

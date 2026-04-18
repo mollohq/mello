@@ -550,13 +550,16 @@ impl super::Client {
         let frame_consumed = self
             .frame_consumed
             .load(std::sync::atomic::Ordering::Acquire);
+        let native_frame_active = self
+            .native_frame_active
+            .load(std::sync::atomic::Ordering::Acquire);
         let force_due = !frame_consumed
             && vs.last_present_attempt.elapsed()
                 >= std::time::Duration::from_millis(STREAM_FORCE_PRESENT_MAX_WAIT_MS);
 
-        if frame_consumed || force_due {
+        if native_frame_active || frame_consumed || force_due {
             vs.present_attempts = vs.present_attempts.saturating_add(1);
-            if force_due {
+            if !native_frame_active && force_due {
                 vs.present_forced_attempts = vs.present_forced_attempts.saturating_add(1);
             }
             let presented = unsafe { mello_sys::mello_stream_present_frame(viewer) };
@@ -1285,8 +1288,11 @@ impl super::Client {
         let frame_cb_data = Box::into_raw(Box::new(FrameCallbackData {
             frame_slot: self.frame_slot.clone(),
             native_frame_slot: self.native_frame_slot.clone(),
+            native_frame_active: self.native_frame_active.clone(),
             frame_consumed: self.frame_consumed.clone(),
         }));
+        self.native_frame_active
+            .store(false, std::sync::atomic::Ordering::Release);
 
         let mello_config = mello_sys::MelloStreamConfig {
             width: w,
@@ -1455,8 +1461,11 @@ impl super::Client {
         let frame_cb_data = Box::into_raw(Box::new(FrameCallbackData {
             frame_slot: self.frame_slot.clone(),
             native_frame_slot: self.native_frame_slot.clone(),
+            native_frame_active: self.native_frame_active.clone(),
             frame_consumed: self.frame_consumed.clone(),
         }));
+        self.native_frame_active
+            .store(false, std::sync::atomic::Ordering::Release);
 
         let _ = self.event_tx.send(Event::StreamWatching {
             host_id: host_id.to_string(),
@@ -1508,6 +1517,8 @@ impl super::Client {
                 conn.leave().await;
             }
             drop(vs);
+            self.native_frame_active
+                .store(false, std::sync::atomic::Ordering::Release);
             let _ = self.event_tx.send(Event::StreamWatchingStopped);
         }
     }

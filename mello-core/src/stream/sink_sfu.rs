@@ -8,10 +8,13 @@ use super::error::StreamError;
 use super::pacer::{EgressPacer, PacingTelemetry};
 use super::packet::StreamPacket;
 use super::sink::PacketSink;
-use super::sink_p2p::{CHUNK_HEADER_SIZE, CHUNK_MAX_PAYLOAD};
+use super::sink_p2p::CHUNK_HEADER_SIZE;
 use crate::transport::SfuConnection;
 
 const DEFAULT_SINK_PACING_KBPS: u32 = 6_000;
+// Keep SFU chunks under the default ~40ms burst budget at 8 Mbps
+// to avoid oversized pacing and reduce decode artifact spikes.
+const SFU_CHUNK_MAX_PAYLOAD: usize = 40_000;
 
 pub struct SfuSink {
     connection: Arc<SfuConnection>,
@@ -74,12 +77,12 @@ impl SfuSink {
             // Drop instead of pacing/stalling on packets that cannot be sent yet.
             return Ok(());
         }
-        let chunk_count = data.len().div_ceil(CHUNK_MAX_PAYLOAD).max(1) as u16;
+        let chunk_count = data.len().div_ceil(SFU_CHUNK_MAX_PAYLOAD).max(1) as u16;
         let msg_id = self.msg_seq.fetch_add(1, Ordering::Relaxed);
 
         for chunk_idx in 0..chunk_count {
-            let start = chunk_idx as usize * CHUNK_MAX_PAYLOAD;
-            let end = (start + CHUNK_MAX_PAYLOAD).min(data.len());
+            let start = chunk_idx as usize * SFU_CHUNK_MAX_PAYLOAD;
+            let end = (start + SFU_CHUNK_MAX_PAYLOAD).min(data.len());
             let payload = &data[start..end];
 
             let mut msg = Vec::with_capacity(CHUNK_HEADER_SIZE + payload.len());

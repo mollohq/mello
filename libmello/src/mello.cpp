@@ -903,6 +903,7 @@ void mello_stream_stop_viewer(MelloStreamView* view) {
     if (!view) return;
     try {
         view->ctx->video().set_native_frame_callback({});
+        view->ctx->video().set_native_frame_mirror_rgba(false);
         view->ctx->video().stop_viewer();
         delete view;
     } catch (...) {}
@@ -937,12 +938,37 @@ void mello_stream_set_native_frame_callback(
             return;
         }
 
-        auto native_cb = [view](void* shared_handle, uint32_t w, uint32_t h, uint64_t ts) {
+        auto native_cb = [view](
+            void* shared_handle,
+            uint32_t w,
+            uint32_t h,
+            uint32_t format,
+            uint32_t uv_y_offset,
+            uint64_t ts
+        ) {
             if (view->native_callback) {
-                view->native_callback(view->native_user_data, shared_handle, w, h, ts);
+                view->native_callback(
+                    view->native_user_data,
+                    shared_handle,
+                    w,
+                    h,
+                    static_cast<MelloNativeFrameFormat>(format),
+                    uv_y_offset,
+                    ts
+                );
             }
         };
         view->ctx->video().set_native_frame_callback(native_cb);
+    } catch (...) {}
+}
+
+void mello_stream_set_native_frame_mirror_rgba(
+    MelloStreamView* view,
+    bool enabled)
+{
+    if (!view) return;
+    try {
+        view->ctx->video().set_native_frame_mirror_rgba(enabled);
     } catch (...) {}
 }
 

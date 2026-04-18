@@ -12,6 +12,7 @@ use super::NativeFrameSlot;
 pub(super) struct FrameCallbackData {
     pub frame_slot: FrameSlot,
     pub native_frame_slot: NativeFrameSlot,
+    pub native_frame_active: Arc<std::sync::atomic::AtomicBool>,
     pub frame_consumed: Arc<std::sync::atomic::AtomicBool>,
 }
 
@@ -204,14 +205,18 @@ pub(super) unsafe extern "C" fn on_viewer_native_frame(
     shared_handle: *mut std::ffi::c_void,
     w: u32,
     h: u32,
+    format: i32,
+    uv_y_offset: u32,
     ts: u64,
 ) {
     if user_data.is_null() || shared_handle.is_null() || w == 0 || h == 0 {
         return;
     }
     let data = &*(user_data as *const FrameCallbackData);
+    data.native_frame_active
+        .store(true, std::sync::atomic::Ordering::Release);
     if let Ok(mut slot) = data.native_frame_slot.lock() {
-        *slot = Some((w, h, shared_handle as usize, ts));
+        *slot = Some((w, h, shared_handle as usize, format as u32, uv_y_offset, ts));
         data.frame_consumed
             .store(false, std::sync::atomic::Ordering::Release);
     }

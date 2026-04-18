@@ -528,10 +528,12 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
                     None
                 };
 
-                if let Some((w, h, shared_handle, _ts)) = native_frame {
+                if let Some((w, h, shared_handle, format, uv_y_offset, _ts)) = native_frame {
                     frame_consumed.store(true, std::sync::atomic::Ordering::Release);
                     if let Some(presenter) = native_stream_presenter.as_mut() {
-                        if let Err(err) = presenter.render_shared_frame(w, h, shared_handle) {
+                        if let Err(err) =
+                            presenter.render_shared_frame(w, h, shared_handle, format, uv_y_offset)
+                        {
                             log::warn!("Native shared-frame render failed: {}", err);
                         } else {
                             frame_timer_consumed = frame_timer_consumed.saturating_add(1);

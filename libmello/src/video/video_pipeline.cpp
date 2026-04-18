@@ -18,6 +18,10 @@ std::unique_ptr<CaptureSource> create_capture_source(const CaptureSourceDesc&) {
 #endif
 
 static constexpr const char* TAG = "video/pipeline";
+static constexpr uint32_t NATIVE_FMT_UNKNOWN = 0;
+static constexpr uint32_t NATIVE_FMT_RGBA8 = 1;
+static constexpr uint32_t NATIVE_FMT_R8_NV12_LAYOUT = 2;
+static constexpr uint32_t NATIVE_FMT_NV12 = 3;
 
 static void save_bmp_rgba(const char* path, const uint8_t* rgba, uint32_t w, uint32_t h) {
     FILE* f = fopen(path, "wb");
@@ -399,6 +403,10 @@ void VideoPipeline::set_native_frame_callback(NativeFrameCallback on_native_fram
     native_frame_cb_ = std::move(on_native_frame);
 }
 
+void VideoPipeline::set_native_frame_mirror_rgba(bool enabled) {
+    native_frame_mirror_rgba_ = enabled;
+}
+
 void VideoPipeline::stop_viewer() {
     if (!viewer_running_.load()) return;
     viewer_running_ = false;
@@ -477,14 +485,74 @@ bool VideoPipeline::feed_packet(const uint8_t* data, size_t size, bool is_keyfra
 bool VideoPipeline::present_frame() {
 #ifdef _WIN32
     if (!viewer_running_.load() || !latest_decoded_) return false;
+    const bool mirror_native_to_rgba = native_frame_mirror_rgba_;
 
-    // Native GPU presenter path: keep the frame on GPU and surface a shared texture
-    // handle to the client. This avoids costly GPU->CPU readback stalls.
-    if (native_frame_cb_ && staging_->shared_rgba_handle()) {
-        staging_->copy_from(latest_decoded_, false);
-        native_frame_cb_(staging_->shared_rgba_handle(), config_.width, config_.height, now_us());
-        latest_decoded_ = nullptr;
-        return true;
+    // Native GPU presenter path: first try direct decoded-texture handoff.
+    if (native_frame_cb_) {
+        void* direct_handle = decoder_ ? decoder_->shared_frame_handle() : nullptr;
+        if (direct_handle) {
+            DXGI_FORMAT frame_fmt = decoder_->shared_frame_format();
+            uint32_t native_fmt = NATIVE_FMT_UNKNOWN;
+            if (frame_fmt == DXGI_FORMAT_R8_UNORM) {
+                native_fmt = NATIVE_FMT_R8_NV12_LAYOUT;
+            } else if (frame_fmt == DXGI_FORMAT_NV12) {
+                native_fmt = NATIVE_FMT_NV12;
+            } else if (frame_fmt == DXGI_FORMAT_R8G8B8A8_UNORM) {
+                native_fmt = NATIVE_FMT_RGBA8;
+            }
+
+            if (native_fmt != NATIVE_FMT_UNKNOWN) {
+                uint32_t uv_offset = decoder_->shared_frame_uv_offset();
+                if (uv_offset == 0) uv_offset = config_.height;
+                native_frame_cb_(
+                    direct_handle,
+                    config_.width,
+                    config_.height,
+                    native_fmt,
+                    uv_offset,
+                    now_us()
+                );
+                if (!mirror_native_to_rgba) {
+                    latest_decoded_ = nullptr;
+                    return true;
+                }
+
+                // Diagnostics mode: keep native callback active but also mirror to
+                // CPU RGBA callback for local visualization tools.
+                staging_->copy_from(latest_decoded_, true);
+                staging_->read_rgba(rgba_buf_.data());
+                if (frame_cb_) {
+                    frame_cb_(rgba_buf_.data(), config_.width, config_.height, now_us());
+                }
+                latest_decoded_ = nullptr;
+                return true;
+            }
+        }
+
+        // Fallback: GPU convert to shared RGBA surface for presenter.
+        if (staging_->shared_rgba_handle()) {
+            staging_->copy_from(latest_decoded_, mirror_native_to_rgba);
+            native_frame_cb_(
+                staging_->shared_rgba_handle(),
+                config_.width,
+                config_.height,
+                NATIVE_FMT_RGBA8,
+                config_.height,
+                now_us()
+            );
+            if (!mirror_native_to_rgba) {
+                latest_decoded_ = nullptr;
+                return true;
+            }
+
+            // Debug/profiling mode: also mirror into RGBA callback for local viewers.
+            staging_->read_rgba(rgba_buf_.data());
+            if (frame_cb_) {
+                frame_cb_(rgba_buf_.data(), config_.width, config_.height, now_us());
+            }
+            latest_decoded_ = nullptr;
+            return true;
+        }
     }
 
     staging_->copy_from(latest_decoded_, true);

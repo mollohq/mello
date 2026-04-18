@@ -32,6 +32,11 @@ public:
 
     /// Macroblock-aligned height (UV plane offset in decoded NV12 surface). 0 = same as config height.
     virtual uint32_t coded_height() const { return 0; }
+
+    /// Optional shared-handle path for native GPU presentation.
+    virtual void* shared_frame_handle() const { return nullptr; }
+    virtual DXGI_FORMAT shared_frame_format() const { return DXGI_FORMAT_UNKNOWN; }
+    virtual uint32_t shared_frame_uv_offset() const { return 0; }
 #elif defined(__APPLE__)
     /// Returns the latest decoded frame as a CVPixelBufferRef (BGRA). Caller must NOT release it.
     /// Valid until the next call to decode().

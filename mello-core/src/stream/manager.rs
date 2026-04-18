@@ -16,6 +16,8 @@ use super::sink::PacketSink;
 const AUDIO_PACING_BUDGET_KBPS: u32 = 160;
 const PACING_TELEMETRY_INTERVAL_SECS: u64 = 2;
 const MAX_VIDEO_COALESCE_DRAIN: usize = 32;
+const QUEUE_KEYFRAME_COALESCE_THRESHOLD: usize = 8;
+const QUEUE_KEYFRAME_REQUEST_COOLDOWN_SECS: u64 = 5;
 
 pub struct VideoPacket {
     pub data: Vec<u8>,
@@ -112,7 +114,8 @@ impl StreamManager {
             input: Arc::new(InputPassthroughStub),
             video_rx,
             audio_rx,
-            last_queue_keyframe_request: Instant::now() - Duration::from_secs(5),
+            last_queue_keyframe_request: Instant::now()
+                - Duration::from_secs(QUEUE_KEYFRAME_REQUEST_COOLDOWN_SECS),
             last_pacing_telemetry: None,
             last_pacing_sample_at: Instant::now(),
         }
@@ -214,13 +217,18 @@ impl StreamManager {
                 );
             }
             if !packet.is_keyframe
-                && self.last_queue_keyframe_request.elapsed() >= Duration::from_secs(1)
+                && coalesced >= QUEUE_KEYFRAME_COALESCE_THRESHOLD
+                && self.last_queue_keyframe_request.elapsed()
+                    >= Duration::from_secs(QUEUE_KEYFRAME_REQUEST_COOLDOWN_SECS)
             {
                 unsafe {
                     mello_sys::mello_stream_request_keyframe(self.host);
                 }
                 self.last_queue_keyframe_request = Instant::now();
-                log::warn!("Stream manager coalesced deltas under pressure: requested keyframe");
+                log::warn!(
+                    "Stream manager severe coalesce under pressure: dropped_stale={} requested keyframe",
+                    coalesced
+                );
             }
         }
         if coalesced == MAX_VIDEO_COALESCE_DRAIN {
@@ -327,11 +335,12 @@ fn coalesce_video_packet(
         coalesced += 1;
         if next.is_keyframe {
             newest_keyframe = Some(next);
-        } else if newest_keyframe.is_none() {
-            packet = next;
         }
     }
 
+    // Never fast-forward to an arbitrary delta frame: dropping earlier deltas
+    // while keeping a later delta often breaks H264 reference chains and causes
+    // prolonged visual corruption. Only jump ahead when we have a keyframe.
     if let Some(kf) = newest_keyframe {
         packet = kf;
     }
@@ -367,5 +376,32 @@ mod tests {
             rx.try_recv().is_ok(),
             "queue should still contain pending frames"
         );
+    }
+
+    #[test]
+    fn coalesce_video_packet_keeps_oldest_delta_without_keyframe() {
+        let first = VideoPacket {
+            data: vec![1],
+            is_keyframe: false,
+            timestamp: 1,
+        };
+        let (tx, mut rx) = mpsc::channel(32);
+        tx.try_send(VideoPacket {
+            data: vec![2],
+            is_keyframe: false,
+            timestamp: 2,
+        })
+        .expect("queue should have room");
+        tx.try_send(VideoPacket {
+            data: vec![3],
+            is_keyframe: false,
+            timestamp: 3,
+        })
+        .expect("queue should have room");
+
+        let (picked, coalesced) = coalesce_video_packet(first, &mut rx, MAX_VIDEO_COALESCE_DRAIN);
+        assert_eq!(coalesced, 2);
+        assert_eq!(picked.timestamp, 1);
+        assert_eq!(picked.data, vec![1]);
     }
 }
