@@ -1,0 +1,242 @@
+<html lang="en" vid="0"><head vid="1">
+    <meta charset="UTF-8" vid="2">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" vid="3">
+    <title vid="4">M3LLO Crew Sidebar</title>
+    <script src="https://cdn.tailwindcss.com/3.4.17" vid="5"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&amp;family=JetBrains+Mono:wght@400;500;700;800&amp;display=swap" rel="stylesheet" vid="6">
+    <script src="https://unpkg.com/@phosphor-icons/web" vid="7"></script>
+    <script vid="8">
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                        mono: ['JetBrains Mono', 'monospace'],
+                    },
+                    colors: {
+                        bgMain: '#1C1C1C',
+                        bgCard: '#242424',
+                        bgDark: '#151515',
+                        borderMain: '#2A2A2A',
+                        textPrimary: '#F3F4F6',
+                        textMuted: '#9CA3AF',
+                        textDark: '#6B7280',
+                        accentRed: '#FF1E56',
+                        accentGreen: '#10B981',
+                        accentAmber: '#F59E0B',
+                    }
+                }
+            }
+        }
+    </script>
+    <style vid="9">
+        .custom-scrollbar::-webkit-scrollbar {
+            width: 4px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+            background: #374151;
+            border-radius: 4px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+            background: #4B5563;
+        }
+
+        .wave-bar {
+            animation: pulse-height 0.8s ease-in-out infinite alternate;
+        }
+        @keyframes pulse-height {
+            0% { transform: scaleY(0.3); }
+            100% { transform: scaleY(1); }
+        }
+    </style>
+</head>
+<body class="bg-[#0a0a0c] text-textPrimary font-sans w-[400px] h-screen flex flex-col relative overflow-hidden antialiased selection:bg-accentAmber/30" vid="10">
+
+    <div class="flex-1 overflow-y-auto custom-scrollbar p-3 pb-[100px] space-y-4" vid="11">
+        
+        
+        <div class="bg-[#1a1b1e] border border-[#2b2d31] rounded-xl overflow-hidden shadow-sm" vid="12">
+            
+            <div class="p-3 border-b border-[#2b2d31] bg-[#222428] flex items-center justify-between cursor-pointer hover:bg-[#2b2d31] transition-colors group" vid="13">
+<div class="flex items-center gap-3 flex-1" vid="14">
+                <div class="w-10 h-10 rounded-lg bg-accentRed flex items-center justify-center font-bold text-white shadow-inner group-hover:scale-105 transition-transform shrink-0" vid="15">
+                    m3
+                </div>
+                <h1 class="font-bold text-base text-white tracking-wide flex-1 text-center pr-10" vid="16">M3LLO CREW</h1>
+            </div>
+                <i class="ph ph-caret-down text-textMuted group-hover:text-white transition-colors" vid="17"></i>
+            </div>
+            
+            <div class="p-2 space-y-4" vid="18">
+                
+                
+                <div vid="19">
+                    <div class="flex items-center justify-between px-2 py-1 text-textMuted mb-1 group/header cursor-pointer" vid="20">
+                        <div class="flex items-center gap-2" vid="21">
+                            <i class="ph ph-caret-down text-[10px]" vid="22"></i>
+                            <span class="text-xs font-bold uppercase tracking-wider group-hover/header:text-textPrimary transition-colors" vid="23">General</span>
+                        </div>
+                        <div class="flex items-center gap-2" vid="24">
+                            <span class="text-[10px] font-mono text-accentRed font-bold" vid="25">03</span>
+                            <i class="ph-fill ph-speaker-high text-xs opacity-50 group-hover/header:opacity-100 transition-opacity" vid="26"></i>
+                        </div>
+                    </div>
+                    <div class="flex flex-col gap-[2px]" vid="27">
+                        <div class="flex items-center gap-2 px-2 py-1.5 rounded-md bg-[#2b2d31]/50 cursor-pointer border border-[#2b2d31]" vid="28">
+                            <div class="w-6 h-6 rounded bg-pink-500 flex items-center justify-center text-[10px] font-bold text-white outline outline-2 outline-accentGreen outline-offset-[1px]" vid="29">os</div>
+                            <span class="text-sm font-medium text-white" vid="30">ostkatt</span>
+                            <div class="ml-auto flex items-end gap-[2px] h-3" vid="31">
+                                <div class="w-1 bg-accentGreen rounded-full h-full wave-bar origin-bottom" style="animation-delay: 0.1s" vid="32"></div>
+                                <div class="w-1 bg-accentGreen rounded-full h-[60%] wave-bar origin-bottom" style="animation-delay: 0.3s" vid="33"></div>
+                                <div class="w-1 bg-accentGreen rounded-full h-[80%] wave-bar origin-bottom" style="animation-delay: 0.2s" vid="34"></div>
+                            </div>
+                        </div>
+                        <div class="flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-[#2b2d31]/50 cursor-pointer transition-colors" vid="35">
+                            <div class="w-6 h-6 rounded bg-blue-500 flex items-center justify-center text-[10px] font-bold text-white" vid="36">Fa</div>
+                            <span class="text-sm font-medium text-textMuted hover:text-white transition-colors" vid="37">FaiL</span>
+                        </div>
+                        <div class="flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-[#2b2d31]/50 cursor-pointer transition-colors" vid="38">
+                            <div class="w-6 h-6 rounded bg-accentGreen flex items-center justify-center text-[10px] font-bold text-black" vid="39">b0</div>
+                            <span class="text-sm font-medium text-textMuted hover:text-white transition-colors" vid="40">b0bben</span>
+                        </div>
+                    </div>
+                </div>
+
+                
+                <div vid="41">
+                    <div class="flex items-center justify-between px-2 py-1 text-textMuted mb-1 group/header cursor-pointer" vid="42">
+                        <div class="flex items-center gap-2" vid="43">
+                            <i class="ph ph-caret-down text-[10px]" vid="44"></i>
+                            <span class="text-xs font-bold uppercase tracking-wider group-hover/header:text-textPrimary transition-colors" vid="45">Ranked Grind</span>
+                        </div>
+                        <div class="flex items-center gap-2" vid="46">
+                            <span class="text-[10px] font-mono text-accentAmber font-bold" vid="47">02</span>
+                            <i class="ph-fill ph-speaker-high text-xs opacity-50 group-hover/header:opacity-100 transition-opacity" vid="48"></i>
+                        </div>
+                    </div>
+                    <div class="flex flex-col gap-[2px]" vid="49">
+                        <div class="flex items-center gap-2 px-2 py-1.5 rounded-md bg-[#2b2d31]/50 cursor-pointer border border-[#2b2d31]" vid="50">
+                            <div class="w-6 h-6 rounded bg-indigo-500 flex items-center justify-center text-[10px] font-bold text-white outline outline-2 outline-accentGreen outline-offset-[1px]" vid="51">wi</div>
+                            <span class="text-sm font-medium text-white" vid="52">win_dev_1</span>
+                            <div class="ml-auto flex items-end gap-[2px] h-3" vid="53">
+                                <div class="w-1 bg-accentGreen rounded-full h-full wave-bar origin-bottom" style="animation-delay: 0.2s" vid="54"></div>
+                                <div class="w-1 bg-accentGreen rounded-full h-[40%] wave-bar origin-bottom" style="animation-delay: 0.1s" vid="55"></div>
+                                <div class="w-1 bg-accentGreen rounded-full h-[90%] wave-bar origin-bottom" style="animation-delay: 0.4s" vid="56"></div>
+                            </div>
+                        </div>
+                        <div class="flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-[#2b2d31]/50 cursor-pointer transition-colors" vid="57">
+                            <div class="w-6 h-6 rounded bg-amber-500 flex items-center justify-center text-[10px] font-bold text-black" vid="58">ti</div>
+                            <span class="text-sm font-medium text-textMuted hover:text-white transition-colors" vid="59">titovicka</span>
+                        </div>
+                    </div>
+                </div>
+
+                
+                <div class="space-y-[2px] pt-2 border-t border-[#2b2d31]/50" vid="60">
+                    <div class="flex items-center justify-between px-2 py-1.5 text-textMuted hover:text-textPrimary cursor-pointer hover:bg-[#2b2d31]/30 rounded-md transition-colors" vid="61">
+                        <div class="flex items-center gap-2 opacity-80" vid="62">
+                            <i class="ph-bold ph-coffee text-xs" vid="63"></i>
+                            <span class="text-sm font-medium" vid="64">Chill [0]</span>
+                        </div>
+                    </div>
+                    <div class="flex items-center justify-between px-2 py-1.5 text-textMuted hover:text-textPrimary cursor-pointer hover:bg-[#2b2d31]/30 rounded-md transition-colors" vid="65">
+                        <div class="flex items-center gap-2 opacity-80" vid="66">
+                            <i class="ph-bold ph-film-strip text-xs" vid="67"></i>
+                            <span class="text-sm font-medium" vid="68">Movie night [0]</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        
+        <div class="space-y-3 pt-2" vid="69">
+            
+            
+            <div class="bg-[#1a1b1e] hover:bg-[#202226] transition-colors rounded-xl p-3 border border-[#2b2d31] cursor-pointer group shadow-sm" vid="70">
+                <div class="flex justify-between items-start gap-3" vid="71">
+                    <div class="flex-1 min-w-0" vid="72">
+                        <div class="flex items-center gap-2.5 mb-1" vid="73">
+                            <div class="w-7 h-7 rounded-lg bg-blue-900/50 border border-blue-500/30 text-blue-400 text-[10px] font-bold flex items-center justify-center shrink-0" vid="74">NS</div>
+                            <span class="font-bold text-sm text-gray-200 group-hover:text-white transition-colors" vid="75">Neon Syndicate</span>
+                        </div>
+                        <div class="mb-1.5" vid="76">
+                            <span class="text-[10px] text-gray-500 font-medium uppercase tracking-wider" vid="77">Most played last week</span>
+                        </div>
+                        <div class="mb-2 flex gap-1.5 flex-wrap" vid="78">
+                            <div class="text-[10px] text-gray-400 bg-gray-500/10 border border-gray-500/20 px-1.5 py-0.5 rounded font-medium" vid="79">CS2</div>
+                            <div class="text-[10px] text-gray-400 bg-gray-500/10 border border-gray-500/20 px-1.5 py-0.5 rounded font-medium" vid="80">Valorant</div>
+                            <div class="text-[10px] text-gray-400 bg-gray-500/10 border border-gray-500/20 px-1.5 py-0.5 rounded font-medium" vid="81">Fortnite</div>
+                        </div>
+                    </div>
+                    <div class="flex items-center gap-1.5 shrink-0" vid="82">
+                        <div class="flex items-center gap-1 bg-red-600 px-1.5 py-[2px] rounded-[3px]" vid="83">
+                            <span class="w-1.5 h-1.5 rounded-full bg-white animate-pulse" vid="84"></span>
+                            <span class="text-[9px] font-bold text-white uppercase" vid="85">LIVE</span>
+                        </div>
+                        <div class="bg-[#0a0a0c] border border-[#2b2d31] text-gray-400 text-[10px] px-2 py-1 rounded-md flex items-center gap-1.5 font-mono shadow-inner" vid="86">
+                            4 <i class="ph-fill ph-headset text-accentGreen" vid="87"></i>
+                        </div>
+                    </div>
+                </div>
+                <div class="bg-[#0a0a0c] border border-[#2b2d31]/50 rounded-lg p-2.5 flex flex-col gap-1.5" vid="88">
+                    <div class="text-[11px] leading-tight flex gap-1.5" vid="89">
+                        <span class="text-gray-500 font-semibold shrink-0" vid="90">vex_r:</span>
+                        <span class="text-gray-300 truncate" vid="91">rush B don't stop</span>
+                    </div>
+                    <div class="text-[11px] leading-tight flex gap-1.5" vid="92">
+                        <span class="text-gray-500 font-semibold shrink-0" vid="93">cypher:</span>
+                        <span class="text-gray-300 truncate" vid="94">im flanking with cam</span>
+                    </div>
+                </div>
+            </div>
+
+            
+            <div class="bg-[#1a1b1e] hover:bg-[#202226] transition-colors rounded-xl p-3 border border-[#2b2d31] cursor-pointer group shadow-sm" vid="95">
+                <div class="flex justify-between items-center mb-1" vid="96">
+                    <div class="flex items-center gap-2.5" vid="97">
+                        <div class="w-7 h-7 rounded-lg bg-purple-900/50 border border-purple-500/30 text-purple-400 text-[10px] font-bold flex items-center justify-center" vid="98">DS</div>
+                        <span class="font-bold text-sm text-gray-200 group-hover:text-white transition-colors" vid="99">Deep Space</span>
+                    </div>
+                    <div class="bg-[#0a0a0c] border border-[#2b2d31] text-gray-400 text-[10px] px-2 py-1 rounded-md flex items-center gap-1.5 font-mono shadow-inner" vid="100">
+                        2 <i class="ph-fill ph-headset text-accentGreen" vid="101"></i>
+                    </div>
+                </div>
+                <div class="mb-1" vid="102">
+                    <span class="text-[10px] text-gray-500 font-medium uppercase tracking-wider" vid="103">Most played last week</span>
+                </div>
+                <div class="mb-2 flex gap-1.5 flex-wrap" vid="104">
+                    <span class="text-[10px] text-gray-400 bg-gray-500/10 border border-gray-500/20 px-1.5 py-0.5 rounded font-medium" vid="105">Apex Legends</span>
+                    <span class="text-[10px] text-gray-400 bg-gray-500/10 border border-gray-500/20 px-1.5 py-0.5 rounded font-medium" vid="106">Overwatch 2</span>
+                    <span class="text-[10px] text-gray-400 bg-gray-500/10 border border-gray-500/20 px-1.5 py-0.5 rounded font-medium" vid="107">CoD</span>
+                </div>
+                <div class="bg-[#0a0a0c] border border-[#2b2d31]/50 rounded-lg p-2.5 flex flex-col gap-1.5" vid="108">
+                    <div class="text-[11px] leading-tight flex gap-1.5" vid="109">
+                        <span class="text-gray-500 font-semibold shrink-0" vid="110">apollo:</span>
+                        <span class="text-gray-300 truncate" vid="111">anyone on?</span>
+                    </div>
+                    <div class="text-[11px] leading-tight flex gap-1.5" vid="112">
+                        <span class="text-gray-500 font-semibold shrink-0" vid="113">star:</span>
+                        <span class="text-gray-300 truncate" vid="114">jumping in 5</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+    </div>
+    
+    
+    <div class="absolute bottom-0 left-0 w-full px-3 pb-3 pt-6 bg-gradient-to-t from-[#0a0a0c] via-[#0a0a0c] to-transparent flex gap-2" vid="115">
+        <button class="flex-1 bg-[#1a1b1e] hover:bg-[#2b2d31] text-gray-400 hover:text-gray-200 py-2 rounded-lg text-xs font-medium transition-colors flex items-center justify-center gap-1.5 border border-[#2b2d31]" vid="116">
+            <i class="ph-bold ph-plus text-sm" vid="117"></i> New crew
+        </button>
+        <button class="flex-1 bg-[#1a1b1e] hover:bg-[#2b2d31] text-gray-400 hover:text-gray-200 py-2 rounded-lg text-xs font-medium transition-colors flex items-center justify-center gap-1.5 border border-[#2b2d31]" vid="118">
+            <i class="ph-bold ph-compass text-sm" vid="119"></i> Discover
+        </button>
+    </div>
+
+
+</body></html>

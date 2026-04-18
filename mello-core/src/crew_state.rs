@@ -173,6 +173,8 @@ pub struct CrewSidebarState {
     #[serde(default)]
     pub stream: Option<StreamState>,
     #[serde(default)]
+    pub active_games: Vec<ActiveGameInfo>,
+    #[serde(default)]
     pub recent_messages: Vec<MessagePreview>,
     #[serde(default)]
     pub idle: bool,

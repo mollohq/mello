@@ -216,28 +216,52 @@ pub fn handle(ctx: &AppContext, event: Event) {
                         c.member_count = state.counts.total as i32;
                         c.online_count = state.counts.online as i32;
                         c.sfu_enabled = state.sfu_enabled;
-                        let vlen = state.voice.members.len().min(4);
+                        c.voice_count = 0;
+                        c.v0_name = "".into();
+                        c.v0_initials = "".into();
+                        c.v0_speaking = false;
+                        c.v1_name = "".into();
+                        c.v1_initials = "".into();
+                        c.v1_speaking = false;
+                        c.v2_name = "".into();
+                        c.v2_initials = "".into();
+                        c.v2_speaking = false;
+                        c.v3_name = "".into();
+                        c.v3_initials = "".into();
+                        c.v3_speaking = false;
+                        let mut voice_members: Vec<_> = state
+                            .voice_channels
+                            .iter()
+                            .flat_map(|ch| ch.members.iter())
+                            .collect();
+                        if voice_members.is_empty() {
+                            voice_members = state.voice.members.iter().collect();
+                        }
+                        let vlen = voice_members.len().min(4);
                         c.voice_count = vlen as i32;
-                        if let Some(m) = state.voice.members.first() {
+                        if let Some(m) = voice_members.first() {
                             c.v0_name = m.username.clone().into();
                             c.v0_initials = make_initials(&m.username).into();
                             c.v0_speaking = m.speaking.unwrap_or(false);
                         }
-                        if let Some(m) = state.voice.members.get(1) {
+                        if let Some(m) = voice_members.get(1) {
                             c.v1_name = m.username.clone().into();
                             c.v1_initials = make_initials(&m.username).into();
                             c.v1_speaking = m.speaking.unwrap_or(false);
                         }
-                        if let Some(m) = state.voice.members.get(2) {
+                        if let Some(m) = voice_members.get(2) {
                             c.v2_name = m.username.clone().into();
                             c.v2_initials = make_initials(&m.username).into();
                             c.v2_speaking = m.speaking.unwrap_or(false);
                         }
-                        if let Some(m) = state.voice.members.get(3) {
+                        if let Some(m) = voice_members.get(3) {
                             c.v3_name = m.username.clone().into();
                             c.v3_initials = make_initials(&m.username).into();
                             c.v3_speaking = m.speaking.unwrap_or(false);
                         }
+
+                        c.has_stream = false;
+                        c.stream_name = "".into();
                         if let Some(ref stream) = state.stream {
                             c.has_stream = stream.active;
                             let streamer = stream.streamer_username.clone().unwrap_or_default();
@@ -253,6 +277,23 @@ pub fn handle(ctx: &AppContext, event: Event) {
                             }
                             .into();
                         }
+
+                        c.game_count = 0;
+                        c.g0_name = "".into();
+                        c.g0_initial = "".into();
+                        c.g0_count = 0;
+                        c.g1_name = "".into();
+                        c.g1_initial = "".into();
+                        c.g1_count = 0;
+                        c.g2_name = "".into();
+                        c.g2_initial = "".into();
+                        c.g2_count = 0;
+                        c.g3_name = "".into();
+                        c.g3_initial = "".into();
+                        c.g3_count = 0;
+                        c.g4_name = "".into();
+                        c.g4_initial = "".into();
+                        c.g4_count = 0;
                         // Active games
                         let glen = state.active_games.len().min(5);
                         c.game_count = glen as i32;
@@ -282,6 +323,11 @@ pub fn handle(ctx: &AppContext, event: Event) {
                             c.g4_count = g.players.len() as i32;
                         }
 
+                        c.msg_count = 0;
+                        c.m0_author = "".into();
+                        c.m0_text = "".into();
+                        c.m1_author = "".into();
+                        c.m1_text = "".into();
                         c.msg_count = state.recent_messages.len().min(2) as i32;
                         if let Some(m) = state.recent_messages.first() {
                             c.m0_author = m.username.clone().into();
@@ -452,6 +498,8 @@ pub fn handle(ctx: &AppContext, event: Event) {
             let mut updated: Vec<CrewData> = (0..current.row_count())
                 .map(|i| current.row_data(i).unwrap())
                 .collect();
+            let active_crew_id = ctx.app.get_active_crew_id().to_string();
+            let mut catchup_requests: Vec<String> = Vec::new();
 
             for sc in &sidebar_crews {
                 let c = if let Some(c) = updated.iter_mut().find(|c| c.id == sc.crew_id.as_str()) {
@@ -466,28 +514,57 @@ pub fn handle(ctx: &AppContext, event: Event) {
                     updated.last_mut().unwrap()
                 };
 
+                if !sc.name.is_empty() {
+                    c.name = sc.name.clone().into();
+                }
+                c.member_count = sc.counts.total as i32;
                 c.online_count = sc.counts.online as i32;
                 c.sfu_enabled = sc.sfu_enabled;
-                if let Some(ref voice) = sc.voice {
-                    let vlen = voice.members.len().min(4);
-                    c.voice_count = vlen as i32;
-                    if let Some(m) = voice.members.first() {
-                        c.v0_name = m.username.clone().into();
-                        c.v0_initials = make_initials(&m.username).into();
-                    }
-                    if let Some(m) = voice.members.get(1) {
-                        c.v1_name = m.username.clone().into();
-                        c.v1_initials = make_initials(&m.username).into();
-                    }
-                    if let Some(m) = voice.members.get(2) {
-                        c.v2_name = m.username.clone().into();
-                        c.v2_initials = make_initials(&m.username).into();
-                    }
-                    if let Some(m) = voice.members.get(3) {
-                        c.v3_name = m.username.clone().into();
-                        c.v3_initials = make_initials(&m.username).into();
+
+                c.voice_count = 0;
+                c.v0_name = "".into();
+                c.v0_initials = "".into();
+                c.v0_speaking = false;
+                c.v1_name = "".into();
+                c.v1_initials = "".into();
+                c.v1_speaking = false;
+                c.v2_name = "".into();
+                c.v2_initials = "".into();
+                c.v2_speaking = false;
+                c.v3_name = "".into();
+                c.v3_initials = "".into();
+                c.v3_speaking = false;
+                let mut voice_members: Vec<_> = sc
+                    .voice_channels
+                    .iter()
+                    .flat_map(|ch| ch.members.iter())
+                    .collect();
+                if voice_members.is_empty() {
+                    if let Some(ref voice) = sc.voice {
+                        voice_members = voice.members.iter().collect();
                     }
                 }
+                let vlen = voice_members.len().min(4);
+                c.voice_count = vlen as i32;
+                if let Some(m) = voice_members.first() {
+                    c.v0_name = m.username.clone().into();
+                    c.v0_initials = make_initials(&m.username).into();
+                }
+                if let Some(m) = voice_members.get(1) {
+                    c.v1_name = m.username.clone().into();
+                    c.v1_initials = make_initials(&m.username).into();
+                }
+                if let Some(m) = voice_members.get(2) {
+                    c.v2_name = m.username.clone().into();
+                    c.v2_initials = make_initials(&m.username).into();
+                }
+                if let Some(m) = voice_members.get(3) {
+                    c.v3_name = m.username.clone().into();
+                    c.v3_initials = make_initials(&m.username).into();
+                }
+
+                c.has_stream = false;
+                c.stream_name = "".into();
                 if let Some(ref stream) = sc.stream {
                     c.has_stream = stream.active;
                     let streamer = stream.streamer_username.clone().unwrap_or_default();
@@ -502,7 +579,54 @@ pub fn handle(ctx: &AppContext, event: Event) {
                         "streaming".to_string()
                     }
                     .into();
-                    if c.id == ctx.app.get_active_crew_id() {
+                }
+
+                c.game_count = 0;
+                c.g0_name = "".into();
+                c.g0_initial = "".into();
+                c.g0_count = 0;
+                c.g1_name = "".into();
+                c.g1_initial = "".into();
+                c.g1_count = 0;
+                c.g2_name = "".into();
+                c.g2_initial = "".into();
+                c.g2_count = 0;
+                c.g3_name = "".into();
+                c.g3_initial = "".into();
+                c.g3_count = 0;
+                c.g4_name = "".into();
+                c.g4_initial = "".into();
+                c.g4_count = 0;
+                let glen = sc.active_games.len().min(5);
+                c.game_count = glen as i32;
+                if let Some(g) = sc.active_games.first() {
+                    c.g0_name = g.game_name.clone().into();
+                    c.g0_initial = g.short_name.clone().into();
+                    c.g0_count = g.players.len() as i32;
+                }
+                if let Some(g) = sc.active_games.get(1) {
+                    c.g1_name = g.game_name.clone().into();
+                    c.g1_initial = g.short_name.clone().into();
+                    c.g1_count = g.players.len() as i32;
+                }
+                if let Some(g) = sc.active_games.get(2) {
+                    c.g2_name = g.game_name.clone().into();
+                    c.g2_initial = g.short_name.clone().into();
+                    c.g2_count = g.players.len() as i32;
+                }
+                if let Some(g) = sc.active_games.get(3) {
+                    c.g3_name = g.game_name.clone().into();
+                    c.g3_initial = g.short_name.clone().into();
+                    c.g3_count = g.players.len() as i32;
+                }
+                if let Some(g) = sc.active_games.get(4) {
+                    c.g4_name = g.game_name.clone().into();
+                    c.g4_initial = g.short_name.clone().into();
+                    c.g4_count = g.players.len() as i32;
+                }
+
+                if c.id == ctx.app.get_active_crew_id() {
+                    if let Some(ref stream) = sc.stream {
                         if stream.active {
                             let sid = stream.streamer_id.clone().unwrap_or_default();
                             let sname = stream.streamer_username.clone().unwrap_or_default();
@@ -523,8 +647,20 @@ pub fn handle(ctx: &AppContext, event: Event) {
                             ctx.app.set_active_stream_width(0);
                             ctx.app.set_active_stream_height(0);
                         }
+                    } else {
+                        ctx.app.set_active_streamer_id("".into());
+                        ctx.app.set_active_streamer_name("".into());
+                        ctx.app.set_active_stream_session_id("".into());
+                        ctx.app.set_active_stream_width(0);
+                        ctx.app.set_active_stream_height(0);
                     }
                 }
+
+                c.msg_count = 0;
+                c.m0_author = "".into();
+                c.m0_text = "".into();
+                c.m1_author = "".into();
+                c.m1_text = "".into();
                 c.msg_count = sc.recent_messages.len().min(2) as i32;
                 if let Some(m) = sc.recent_messages.first() {
                     c.m0_author = m.username.clone().into();
@@ -534,9 +670,20 @@ pub fn handle(ctx: &AppContext, event: Event) {
                     c.m1_author = m.username.clone().into();
                     c.m1_text = m.preview.clone().into();
                 }
+
+                if c.id != active_crew_id.as_str() && !c.catchup_loaded {
+                    catchup_requests.push(sc.crew_id.clone());
+                }
             }
             ctx.app
                 .set_crews(Rc::new(slint::VecModel::from(updated)).into());
+
+            for crew_id in catchup_requests {
+                let _ = ctx.cmd_tx.try_send(Command::CrewCatchup {
+                    crew_id,
+                    last_seen: 0,
+                });
+            }
         }
         Event::CrewEventReceived { event } => {
             log::info!("UI: crew event {} in crew {}", event.event, event.crew_id);
@@ -556,6 +703,8 @@ pub fn handle(ctx: &AppContext, event: Event) {
                     let mut c = crews.row_data(i).unwrap();
                     if c.id == response.crew_id.as_str() {
                         c.has_catchup = response.has_events;
+                        c.catchup_count = response.event_count as i32;
+                        c.catchup_loaded = true;
                         c.catchup_text = response.catchup_text.clone().into();
                     }
                     c

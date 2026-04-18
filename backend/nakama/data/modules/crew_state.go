@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/heroiclabs/nakama-common/runtime"
 	"github.com/heroiclabs/nakama-common/rtapi"
+	"github.com/heroiclabs/nakama-common/runtime"
 )
 
 // ---------------------------------------------------------------------------
@@ -24,7 +24,7 @@ type CrewCounts struct {
 }
 
 type CrewVoiceState struct {
-	Active    bool                `json:"active"`
+	Active    bool               `json:"active"`
 	MemberIDs []string           `json:"member_ids,omitempty"`
 	Members   []*VoiceMemberInfo `json:"members"`
 }
@@ -46,15 +46,15 @@ type VoiceChannelStateView struct {
 }
 
 type CrewStreamState struct {
-	Active            bool   `json:"active"`
-	StreamID          string `json:"stream_id,omitempty"`
-	StreamerID        string `json:"streamer_id,omitempty"`
-	StreamerUsername  string `json:"streamer_username,omitempty"`
-	Title             string `json:"title,omitempty"`
-	ViewerCount       int    `json:"viewer_count,omitempty"`
-	ThumbnailURL      string `json:"thumbnail_url,omitempty"`
-	Width             uint32 `json:"width,omitempty"`
-	Height            uint32 `json:"height,omitempty"`
+	Active             bool   `json:"active"`
+	StreamID           string `json:"stream_id,omitempty"`
+	StreamerID         string `json:"streamer_id,omitempty"`
+	StreamerUsername   string `json:"streamer_username,omitempty"`
+	Title              string `json:"title,omitempty"`
+	ViewerCount        int    `json:"viewer_count,omitempty"`
+	ThumbnailURL       string `json:"thumbnail_url,omitempty"`
+	Width              uint32 `json:"width,omitempty"`
+	Height             uint32 `json:"height,omitempty"`
 	ThumbnailUpdatedAt string `json:"thumbnail_updated_at,omitempty"`
 }
 
@@ -74,11 +74,11 @@ type CrewMemberInfo struct {
 }
 
 type ActiveGameEntry struct {
-	GameID    string        `json:"game_id"`
-	GameName  string        `json:"game_name"`
-	ShortName string        `json:"short_name"`
-	Color     string        `json:"color"`
-	Players   []PlayerInfo  `json:"players"`
+	GameID    string       `json:"game_id"`
+	GameName  string       `json:"game_name"`
+	ShortName string       `json:"short_name"`
+	Color     string       `json:"color"`
+	Players   []PlayerInfo `json:"players"`
 }
 
 type PlayerInfo struct {
@@ -109,6 +109,7 @@ type CrewSidebarState struct {
 	Voice          *CrewVoiceState          `json:"voice"`
 	VoiceChannels  []*VoiceChannelStateView `json:"voice_channels,omitempty"`
 	Stream         *CrewStreamState         `json:"stream"`
+	ActiveGames    []*ActiveGameEntry       `json:"active_games,omitempty"`
 	RecentMessages []*MessagePreview        `json:"recent_messages,omitempty"`
 	Idle           bool                     `json:"idle,omitempty"`
 	SFUEnabled     bool                     `json:"sfu_enabled,omitempty"`
@@ -322,16 +323,16 @@ func getActiveStreamForCrew(ctx context.Context, nk runtime.NakamaModule, crewID
 	}
 
 	return &CrewStreamState{
-		Active:            true,
-		StreamID:          meta.StreamID,
-		StreamerID:        meta.StreamerID,
-		StreamerUsername:  meta.StreamerUsername,
-		Title:             meta.Title,
-		ViewerCount:       len(meta.ViewerIDs),
-		ThumbnailURL:      meta.ThumbnailURL,
+		Active:             true,
+		StreamID:           meta.StreamID,
+		StreamerID:         meta.StreamerID,
+		StreamerUsername:   meta.StreamerUsername,
+		Title:              meta.Title,
+		ViewerCount:        len(meta.ViewerIDs),
+		ThumbnailURL:       meta.ThumbnailURL,
 		ThumbnailUpdatedAt: meta.ThumbnailUpdatedAt,
-		Width:             meta.Width,
-		Height:            meta.Height,
+		Width:              meta.Width,
+		Height:             meta.Height,
 	}
 }
 
@@ -342,6 +343,7 @@ func (cs *CrewState) ToSidebar() *CrewSidebarState {
 		Name:           cs.Name,
 		Counts:         cs.Counts,
 		Stream:         cs.Stream,
+		ActiveGames:    cs.ActiveGames,
 		RecentMessages: cs.RecentMessages,
 		Idle:           cs.Counts.Online == 0,
 		SFUEnabled:     cs.SFUEnabled,
