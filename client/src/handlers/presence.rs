@@ -354,6 +354,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
                         let sid = stream.streamer_id.clone().unwrap_or_default();
                         let sname = stream.streamer_username.clone().unwrap_or_default();
                         let stitle = stream.title.clone().unwrap_or_default();
+                        let viewer_count = stream.viewer_count as i32;
                         let local_id = ctx.app.get_user_id().to_string();
                         if sid != local_id {
                             ctx.app.set_active_streamer_id(sid.into());
@@ -364,6 +365,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
                             );
                             ctx.app.set_active_stream_width(stream.width as i32);
                             ctx.app.set_active_stream_height(stream.height as i32);
+                            ctx.app.set_active_stream_viewer_count(viewer_count);
                         } else {
                             ctx.app.set_active_streamer_id("".into());
                             ctx.app.set_active_streamer_name("".into());
@@ -371,6 +373,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
                             ctx.app.set_active_stream_session_id("".into());
                             ctx.app.set_active_stream_width(0);
                             ctx.app.set_active_stream_height(0);
+                            ctx.app.set_active_stream_viewer_count(viewer_count);
                         }
                     } else {
                         ctx.app.set_active_streamer_id("".into());
@@ -379,6 +382,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
                         ctx.app.set_active_stream_session_id("".into());
                         ctx.app.set_active_stream_width(0);
                         ctx.app.set_active_stream_height(0);
+                        ctx.app.set_active_stream_viewer_count(0);
                     }
                 } else {
                     ctx.app.set_active_streamer_id("".into());
@@ -387,6 +391,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
                     ctx.app.set_active_stream_session_id("".into());
                     ctx.app.set_active_stream_width(0);
                     ctx.app.set_active_stream_height(0);
+                    ctx.app.set_active_stream_viewer_count(0);
                 }
                 sync_active_stream_cards(ctx);
             }
@@ -641,6 +646,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
                             let sid = stream.streamer_id.clone().unwrap_or_default();
                             let sname = stream.streamer_username.clone().unwrap_or_default();
                             let stitle = stream.title.clone().unwrap_or_default();
+                            let viewer_count = stream.viewer_count as i32;
                             let local_id = ctx.app.get_user_id().to_string();
                             if sid != local_id {
                                 ctx.app.set_active_streamer_id(sid.into());
@@ -651,6 +657,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
                                 );
                                 ctx.app.set_active_stream_width(stream.width as i32);
                                 ctx.app.set_active_stream_height(stream.height as i32);
+                                ctx.app.set_active_stream_viewer_count(viewer_count);
                             } else {
                                 ctx.app.set_active_streamer_id("".into());
                                 ctx.app.set_active_streamer_name("".into());
@@ -658,6 +665,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
                                 ctx.app.set_active_stream_session_id("".into());
                                 ctx.app.set_active_stream_width(0);
                                 ctx.app.set_active_stream_height(0);
+                                ctx.app.set_active_stream_viewer_count(viewer_count);
                             }
                         } else {
                             ctx.app.set_active_streamer_id("".into());
@@ -666,6 +674,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
                             ctx.app.set_active_stream_session_id("".into());
                             ctx.app.set_active_stream_width(0);
                             ctx.app.set_active_stream_height(0);
+                            ctx.app.set_active_stream_viewer_count(0);
                         }
                     } else {
                         ctx.app.set_active_streamer_id("".into());
@@ -674,6 +683,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
                         ctx.app.set_active_stream_session_id("".into());
                         ctx.app.set_active_stream_width(0);
                         ctx.app.set_active_stream_height(0);
+                        ctx.app.set_active_stream_viewer_count(0);
                     }
                     sync_active_stream_cards(ctx);
                 }

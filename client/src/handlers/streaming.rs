@@ -124,6 +124,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
             ctx.app.set_active_stream_session_id("".into());
             ctx.app.set_active_stream_width(0);
             ctx.app.set_active_stream_height(0);
+            ctx.app.set_active_stream_viewer_count(0);
             ctx.app.set_dbg_stream_mode("idle".into());
             ctx.app.set_dbg_stream_frames(0);
             ctx.app.set_dbg_stream_packets(0);

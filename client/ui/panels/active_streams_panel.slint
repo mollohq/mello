@@ -41,6 +41,7 @@ component StreamCard inherits Rectangle {
     property <bool> show-live-frame: selected-card && is-watching && card.can-watch;
     property <bool> show-hosting-state: selected-card && is-hosting && !card.can-watch;
     property <bool> show-watch-cta: card.can-watch && !show-live-frame;
+    property <length> live-badge-height: 24px;
 
     border-radius: 16px;
     border-width: 1px;
@@ -157,9 +158,11 @@ component StreamCard inherits Rectangle {
 
                 Rectangle {
                     width: live-row.preferred-width + 2px;
-                    height: 24px;
+                    height: root.live-badge-height;
                     border-radius: 0px;
                     background: Theme.accent;
+                    border-width: 1px;
+                    border-color: transparent;
 
                     live-row := HorizontalLayout {
                         alignment: center;
@@ -177,13 +180,13 @@ component StreamCard inherits Rectangle {
                     }
                 }
 
-                Rectangle {
+                if root.card.viewer-count > 0: Rectangle {
                     width: viewers-row.preferred-width + 2px;
-                    height: 24px;
+                    height: root.live-badge-height;
                     border-radius: 0px;
                     background: #000000B3;
-                    border-width: 1px;
-                    border-color: #FFFFFF1A;
+                    border-width: 0px;
+                    border-color: transparent;
 
                     viewers-row := HorizontalLayout {
                         alignment: center;
@@ -206,7 +209,7 @@ component StreamCard inherits Rectangle {
                         }
 
                         viewers-text := Text {
-                            text: root.card.viewer-count > 0 ? root.card.viewer-count + "" : "LIVE";
+                            text: root.card.viewer-count + "";
                             font-family: Theme.font-mono;
                             font-size: 11px;
                             font-weight: 700;
