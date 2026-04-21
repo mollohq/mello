@@ -11,9 +11,9 @@ import {
     DiscoverCrewData,
     SearchUserData,
     FeedCardData,
+    StreamCardData,
 } from "types.slint";
 import { CrewPanel } from "panels/crew_panel.slint";
-import { StreamView } from "panels/stream_view.slint";
 import { StreamSourcePicker } from "panels/stream_source_picker.slint";
 import { VoiceChannelView } from "panels/voice_channel_view.slint";
 import { ChatPanel } from "panels/chat_panel.slint";
@@ -28,7 +28,7 @@ import { UpdateToast } from "panels/update_banner.slint";
 import { DiscoverPanel } from "panels/discover_panel.slint";
 
 
-export { CrewData, MemberData, ChatMessageData, AudioDeviceData, VoiceChannelData, VoiceChannelMember, CaptureSourceData, DiscoverCrewData, SearchUserData, FeedCardData, Theme }
+export { CrewData, MemberData, ChatMessageData, AudioDeviceData, VoiceChannelData, VoiceChannelMember, CaptureSourceData, DiscoverCrewData, SearchUserData, FeedCardData, StreamCardData, Theme }
 
 export component MainWindow inherits Window {
     title: "Mello";
@@ -238,9 +238,11 @@ export component MainWindow inherits Window {
     in property <image> stream-frame;
     in property <string> active-streamer-id: "";
     in property <string> active-streamer-name: "";
+    in property <string> active-stream-title: "";
     in property <string> active-stream-session-id: "";
     in property <int> active-stream-width: 0;
     in property <int> active-stream-height: 0;
+    in property <[StreamCardData]> active-stream-cards: [];
 
     // --- New crew modal ---
     in-out property <bool> new-crew-open: false;
@@ -690,74 +692,59 @@ export component MainWindow inherits Window {
                     width: parent.width - parent.chat-w - Theme.gap;
                     height: parent.height;
 
-                    property <bool> stream-active: root.is-hosting || root.is-watching || root.active-streamer-id != "";
-
-                    // Stream view (shown when streaming)
-                    if stream-active: StreamView {
+                    Rectangle {
                         y: 0;
                         width: parent.width;
                         height: parent.height - 84px - Theme.gap;
-                        members: root.members;
-                        is-hosting: root.is-hosting;
-                        is-watching: root.is-watching;
-                        stream-label: root.stream-label;
-                        streamer-name: root.streamer-name;
-                        stream-frame: root.stream-frame;
-                        active-streamer-id: root.active-streamer-id;
-                        active-streamer-name: root.active-streamer-name;
-                        active-stream-session-id: root.active-stream-session-id;
-                        stream-width: root.active-stream-width;
-                        stream-height: root.active-stream-height;
-                        start-stream-clicked => {
-                            root.list-capture-sources();
-                            root.source-picker-open = true;
-                        }
-                        stop-stream-clicked => {
-                            root.stop-stream();
-                        }
-                        stop-watching-clicked => {
-                            root.stop-watching();
-                        }
-                        watch-stream-clicked(host-id, session-id, w, h) => {
-                            root.watch-stream(host-id, session-id, w, h);
-                        }
-                    }
 
-                    // Crew feed (shown when no active stream)
-                    if !stream-active: CrewFeed {
-                        y: 0;
-                        width: parent.width;
-                        height: parent.height - 84px - Theme.gap;
-                        cards: root.feed-cards;
-                        is-cold-start: root.feed-cold-start;
-                        clip-count: root.feed-clip-count;
-                        clip-playing-path: root.clip-playing-path;
-                        clip-progress: root.clip-progress;
-                        clip-paused: root.clip-paused;
-                        clip-anim-tick: root.clip-anim-tick;
-                        clip-position-text: root.clip-position-text;
-                        clip-duration-text: root.clip-duration-text;
-                        go-live-clicked => {
-                            root.list-capture-sources();
-                            root.source-picker-open = true;
-                        }
-                        card-clicked(clip-path) => {
-                            if clip-path != "" {
-                                if clip-path == root.clip-playing-path {
-                                    if root.clip-paused {
-                                        root.resume-clip();
+                        CrewFeed {
+                            width: parent.width;
+                            height: parent.height;
+                            cards: root.feed-cards;
+                            stream-cards: root.active-stream-cards;
+                            is-hosting: root.is-hosting;
+                            is-watching: root.is-watching;
+                            active-streamer-id: root.active-streamer-id;
+                            stream-frame: root.stream-frame;
+                            is-cold-start: root.feed-cold-start;
+                            clip-count: root.feed-clip-count;
+                            clip-playing-path: root.clip-playing-path;
+                            clip-progress: root.clip-progress;
+                            clip-paused: root.clip-paused;
+                            clip-anim-tick: root.clip-anim-tick;
+                            clip-position-text: root.clip-position-text;
+                            clip-duration-text: root.clip-duration-text;
+                            go-live-clicked => {
+                                root.list-capture-sources();
+                                root.source-picker-open = true;
+                            }
+                            stop-stream-clicked => {
+                                root.stop-stream();
+                            }
+                            stop-watching-clicked => {
+                                root.stop-watching();
+                            }
+                            watch-stream-clicked(host-id, session-id, w, h) => {
+                                root.watch-stream(host-id, session-id, w, h);
+                            }
+                            card-clicked(clip-path) => {
+                                if clip-path != "" {
+                                    if clip-path == root.clip-playing-path {
+                                        if root.clip-paused {
+                                            root.resume-clip();
+                                        } else {
+                                            root.pause-clip();
+                                        }
                                     } else {
-                                        root.pause-clip();
+                                        root.play-clip(clip-path);
                                     }
-                                } else {
-                                    root.play-clip(clip-path);
                                 }
                             }
-                        }
-                        seek-clip(v) => {
-                            root.seek-clip(v);
-                        }
-                        invite-clicked => {
+                            seek-clip(v) => {
+                                root.seek-clip(v);
+                            }
+                            invite-clicked => {
+                            }
                         }
                     }
 

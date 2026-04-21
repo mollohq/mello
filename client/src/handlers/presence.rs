@@ -4,6 +4,7 @@ use base64::Engine as _;
 use mello_core::{Command, Event};
 use slint::Model;
 
+use super::stream_cards::sync_active_stream_cards;
 use crate::app_context::AppContext;
 use crate::converters::{
     channels_to_ui, chat_messages_to_slint, make_initials, update_active_crew_card, VoiceUiCtx,
@@ -107,6 +108,9 @@ pub fn handle(ctx: &AppContext, event: Event) {
                     }
                 }
             }
+
+            // Avatar updates should immediately reflect in stream cards.
+            sync_active_stream_cards(ctx);
         }
         Event::MemberJoined { member, .. } => {
             let current = ctx.app.get_members();
@@ -349,10 +353,12 @@ pub fn handle(ctx: &AppContext, event: Event) {
                     if stream.active {
                         let sid = stream.streamer_id.clone().unwrap_or_default();
                         let sname = stream.streamer_username.clone().unwrap_or_default();
+                        let stitle = stream.title.clone().unwrap_or_default();
                         let local_id = ctx.app.get_user_id().to_string();
                         if sid != local_id {
                             ctx.app.set_active_streamer_id(sid.into());
                             ctx.app.set_active_streamer_name(sname.into());
+                            ctx.app.set_active_stream_title(stitle.into());
                             ctx.app.set_active_stream_session_id(
                                 stream.stream_id.clone().unwrap_or_default().into(),
                             );
@@ -361,6 +367,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
                         } else {
                             ctx.app.set_active_streamer_id("".into());
                             ctx.app.set_active_streamer_name("".into());
+                            ctx.app.set_active_stream_title("".into());
                             ctx.app.set_active_stream_session_id("".into());
                             ctx.app.set_active_stream_width(0);
                             ctx.app.set_active_stream_height(0);
@@ -368,6 +375,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
                     } else {
                         ctx.app.set_active_streamer_id("".into());
                         ctx.app.set_active_streamer_name("".into());
+                        ctx.app.set_active_stream_title("".into());
                         ctx.app.set_active_stream_session_id("".into());
                         ctx.app.set_active_stream_width(0);
                         ctx.app.set_active_stream_height(0);
@@ -375,10 +383,12 @@ pub fn handle(ctx: &AppContext, event: Event) {
                 } else {
                     ctx.app.set_active_streamer_id("".into());
                     ctx.app.set_active_streamer_name("".into());
+                    ctx.app.set_active_stream_title("".into());
                     ctx.app.set_active_stream_session_id("".into());
                     ctx.app.set_active_stream_width(0);
                     ctx.app.set_active_stream_height(0);
                 }
+                sync_active_stream_cards(ctx);
             }
 
             if ctx.app.get_active_crew_id() == state.crew_id.as_str() {
@@ -630,19 +640,29 @@ pub fn handle(ctx: &AppContext, event: Event) {
                         if stream.active {
                             let sid = stream.streamer_id.clone().unwrap_or_default();
                             let sname = stream.streamer_username.clone().unwrap_or_default();
+                            let stitle = stream.title.clone().unwrap_or_default();
                             let local_id = ctx.app.get_user_id().to_string();
                             if sid != local_id {
                                 ctx.app.set_active_streamer_id(sid.into());
                                 ctx.app.set_active_streamer_name(sname.into());
+                                ctx.app.set_active_stream_title(stitle.into());
                                 ctx.app.set_active_stream_session_id(
                                     stream.stream_id.clone().unwrap_or_default().into(),
                                 );
                                 ctx.app.set_active_stream_width(stream.width as i32);
                                 ctx.app.set_active_stream_height(stream.height as i32);
+                            } else {
+                                ctx.app.set_active_streamer_id("".into());
+                                ctx.app.set_active_streamer_name("".into());
+                                ctx.app.set_active_stream_title("".into());
+                                ctx.app.set_active_stream_session_id("".into());
+                                ctx.app.set_active_stream_width(0);
+                                ctx.app.set_active_stream_height(0);
                             }
                         } else {
                             ctx.app.set_active_streamer_id("".into());
                             ctx.app.set_active_streamer_name("".into());
+                            ctx.app.set_active_stream_title("".into());
                             ctx.app.set_active_stream_session_id("".into());
                             ctx.app.set_active_stream_width(0);
                             ctx.app.set_active_stream_height(0);
@@ -650,10 +670,12 @@ pub fn handle(ctx: &AppContext, event: Event) {
                     } else {
                         ctx.app.set_active_streamer_id("".into());
                         ctx.app.set_active_streamer_name("".into());
+                        ctx.app.set_active_stream_title("".into());
                         ctx.app.set_active_stream_session_id("".into());
                         ctx.app.set_active_stream_width(0);
                         ctx.app.set_active_stream_height(0);
                     }
+                    sync_active_stream_cards(ctx);
                 }
 
                 c.msg_count = 0;
