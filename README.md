@@ -74,8 +74,9 @@ All releases, changelogs, and previous versions on the [Releases page](https://g
 We hang out on m3llo itself.
 
 - **m3llo crew:** [m3llo.app/crew/m3llo](https://m3llo.app/crew/m3llo)
-- **Bluesky:** [@m3lloapp](https://bsky.app/profile/m3lloapp.bsky.social)
+- **Bluesky:** [@m3lloapp](https://bsky.app/profile/m3llo.app)
 - **Reddit:** [r/m3llo_app](https://reddit.com/r/m3llo_app)
+- **Threads:** [@m3llo.app](https://www.threads.com/@m3llo.app)
 - **Issues:** [GitHub Issues](https://github.com/mollohq/mello/issues) for bugs and feature requests
 
 ---
