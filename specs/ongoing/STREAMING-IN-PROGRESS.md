@@ -244,17 +244,21 @@ Pass indicators:
   - ingress remains active and fairly stable
   - first keyframe still occasionally fails once, then decode recovers
 
-### 9.3 Exact next actions (next session)
-1. **Bring in `mello-sfu` repo (same parent directory) and instrument relay path**
-   - per-session recv/send msg rates
-   - per-session forwarded bytes and drop counters
-   - buffered/backpressure metrics per peer
-   - keyframe-sized message handling visibility
-2. **Correlate timestamps across host + viewer + SFU**
-   - specifically around decode FPS dips and visible micro-freezes
-3. **Decide SFU-side mitigation**
-   - queue policy, prioritization, or pacing handoff behavior
-   - keyframe-path handling strategy under congestion
+### 9.3 Completed actions from this continuation
+1. **`mello-sfu` relay path instrumentation added**
+   - per-session media/control ingress + forward + drop counters
+   - forwarded bytes, dropped bytes, max message size, message size buckets
+   - keyframe-like message counter visibility
+   - peer backpressure state (`buffer_usage`, `slow_peer`) in anomaly logs
+2. **Timeline correlation flow implemented**
+   - host/viewer probes emit `session`, `wall_ms`, `mono_ms`
+   - `coalesce_stream_timeline.py` merges host + viewer + SFU into one ordered JSONL
+   - `--session auto` added to remove session-id friction during repeated restarts
+3. **Windows tooling hardening done**
+   - host/viewer PowerShell launchers added (`run-stream-host.ps1`, `run-stream-viewer.ps1`)
+   - fixed PowerShell `NativeCommandError` false-positive behavior for `cargo` output
+4. **Cross-platform SFU build fix done**
+   - Windows `go test` failure fixed by splitting CPU metrics into `cpu_unix.go` + `cpu_windows.go`
 
 ### 9.4 Commands used for current probe loop
 - Host probe (auto Nakama start):
@@ -283,4 +287,75 @@ Pass indicators:
   - continue with SFU-side instrumentation in `mello-sfu` before further client-side tuning,
   - correlate host/viewer/SFU timelines around dips and visible freeze moments,
   - focus on relay/backpressure/jitter behavior during keyframe and near-keyframe windows.
+
+---
+
+## 10) 2026-04-18/19 Tuning Log + Current Hypothesis (for external reviewer)
+
+### 10.1 What was tried (chronological)
+- **Pass A (stability + telemetry baseline):**
+  - Added SFU relay counters/anomaly logs + admin exposure.
+  - Added correlation timestamps and timeline coalescing script updates.
+  - Added host/viewer launch scripts and Windows PowerShell fixes.
+  - Result: richer evidence, no major infra blockers.
+- **Pass B (aggressive recovery):**
+  - Host + viewer recovery guards made very aggressive (frequent pressure reactions, viewer dropping under backlog).
+  - Result: severe regression (`viewer_low_dec_samples=50`, `max_decode_stall_ms=4039`, `severe_coalesce=11`).
+- **Pass C (rollback/tune back):**
+  - Removed aggressive viewer non-keyframe dropping.
+  - Kept backlog guard as keyframe-request-only.
+  - Host recovery adjusted to avoid hard freeze behavior.
+  - Result: hard stalls mostly resolved (`max_decode_stall_ms` back to ~149), but micro-stutters + artifacts persist.
+- **Pass D (latest, keyframe-thrash reduction):**
+  - `mello-core/src/stream/viewer.rs`:
+    - `IDR_RATE_LIMIT_SECS`: `2 -> 4`
+    - `IDR_THRESHOLD`: `2 -> 4` consecutive unrecoverable groups
+    - new guard: do not request IDR immediately after a recently seen keyframe
+  - `mello-core/src/stream/manager.rs`:
+    - `QUEUE_KEYFRAME_REQUEST_COOLDOWN_SECS`: `1 -> 2`
+  - `tools/sfu-stream-viewer-probe/src/main.rs`:
+    - backlog guard tune: trigger `100 -> 120`, cooldown `2s -> 4s`
+    - added per-second control-action breakdown:
+      - `feed_control_keyframe_req_hz`
+      - `feed_control_loss_report_hz`
+      - `feed_control_other_hz`
+      - `feed_control_send_fail_hz`
+  - Result: build-check passes; awaiting A/B run evidence.
+
+### 10.2 Last three measured highlights (before Pass D)
+- **Run 1 (best of recent set):**
+  - `coalesce=44`, `severe_coalesce=0`, `viewer_low_dec_samples=7`, `max_decode_stall_ms=217`, `max_decode_backlog_est=161`
+- **Run 2 (bad regression):**
+  - `coalesce=45`, `severe_coalesce=11`, `viewer_low_dec_samples=50`, `max_decode_stall_ms=4039`, `max_decode_backlog_est=174`
+- **Run 3 (post-rollback, still imperfect):**
+  - `coalesce=40`, `severe_coalesce=1`, `viewer_low_dec_samples=17`, `max_decode_stall_ms=149`, `max_decode_backlog_est=252`
+
+### 10.3 New user-visible signal (most important)
+- User reports micro-stutter events correlate with moments when a **new keyframe is drawn**.
+- This aligns with over-frequent forced-IDR risk and/or expensive keyframe decode bursts while backlog is already elevated.
+
+### 10.4 Current best hypothesis
+- We likely resolved the catastrophic freeze path, but still have a **quality loop**:
+  1. queue pressure and/or loss triggers IDR request path
+  2. keyframe bursts arrive during existing decode backlog
+  3. visible stutter spikes around keyframe draw
+  4. residual artifacts persist between keyframe recoveries due to ongoing coalesce/delta disruption
+- SFU anomalies remain non-zero, but current evidence still points to cross-boundary interaction (host coalesce + viewer decode/backlog + IDR policy), not a single isolated SFU bug.
+
+### 10.5 What next reviewer should do first
+1. Run one fresh capture with latest Pass D code and compare:
+   - `feed_control_keyframe_req_hz` vs `viewer_low_dec_samples`
+   - `backlog_guard_req_hz` vs keyframe-stutter moments
+   - host `coalesce`/`severe_coalesce` vs viewer `decode_backlog_est`
+2. If keyframe-request rates are still elevated during stutter windows:
+   - gate IDR requests on sustained pressure window (multi-second), not single-sample pressure
+   - consider a bounded "cooldown after successful keyframe decode" across both viewer request paths
+3. If keyframe-request rates are low but stutter persists:
+   - inspect decoder-side cost spikes on keyframe feed/present path
+   - examine host encoder keyframe size variance (possible bitrate spike during IDR)
+
+### 10.6 Reviewer context boundaries
+- Primary target lane remains **Windows host -> Windows viewer via SFU**.
+- Goal remains "Parsec/Discord-like" subjective smoothness, not just avoidance of hard stalls.
+- Keep existing telemetry until the lane is green for repeated runs; do not remove diagnostics yet.
 

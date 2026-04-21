@@ -1,10 +1,11 @@
 use std::collections::HashMap;
 use std::ffi::c_void;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::Mutex;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use mello_core::nakama::WatchStreamResponse;
+use mello_core::stream::packet::{ControlSubtype, KeyframeRequest, PacketType, StreamPacket};
 use mello_core::stream::viewer::{StreamViewer, ViewerAction, ViewerFeedResult};
 use mello_core::transport::{SfuConnection, SfuEvent};
 use minifb::{Key, Window, WindowOptions};
@@ -13,6 +14,8 @@ const WINDOW_W: u32 = 1920;
 const WINDOW_H: u32 = 1080;
 const CHUNK_HEADER_SIZE: usize = 6; // msg_id(2) + chunk_idx(2) + chunk_count(2)
 const MAX_CHUNKS_PER_MESSAGE: u16 = 64;
+const BACKLOG_GUARD_TRIGGER_FRAMES: u64 = 120;
+const BACKLOG_GUARD_KEYFRAME_REQUEST_COOLDOWN_SECS: u64 = 4;
 
 struct FrameBuffer {
     buf: Vec<u32>,
@@ -29,17 +32,38 @@ struct ChunkAssembly {
 
 struct ChunkAssembler {
     pending: HashMap<u16, ChunkAssembly>,
+    highest_msg_id: Option<u16>,
+    last_completed_msg_id: Option<u16>,
+    stats: ChunkAssemblerStats,
+}
+
+#[derive(Clone, Copy, Default)]
+struct ChunkAssemblerStats {
+    chunks_in: u64,
+    completed_msgs: u64,
+    invalid_chunks: u64,
+    duplicate_chunks: u64,
+    evicted_msgs: u64,
+    evicted_missing_chunks: u64,
+    late_chunks: u64,
+    pending_msgs: u64,
+    pending_missing_chunks: u64,
 }
 
 impl ChunkAssembler {
     fn new() -> Self {
         Self {
             pending: HashMap::new(),
+            highest_msg_id: None,
+            last_completed_msg_id: None,
+            stats: ChunkAssemblerStats::default(),
         }
     }
 
     fn feed(&mut self, raw: &[u8]) -> Option<Vec<u8>> {
+        self.stats.chunks_in = self.stats.chunks_in.saturating_add(1);
         if raw.len() < CHUNK_HEADER_SIZE {
+            self.stats.invalid_chunks = self.stats.invalid_chunks.saturating_add(1);
             return None;
         }
 
@@ -49,11 +73,49 @@ impl ChunkAssembler {
         let payload = &raw[CHUNK_HEADER_SIZE..];
 
         if chunk_count == 0 || chunk_count > MAX_CHUNKS_PER_MESSAGE || chunk_idx >= chunk_count {
+            self.stats.invalid_chunks = self.stats.invalid_chunks.saturating_add(1);
             return None;
         }
 
         // Keep only a small rolling window of IDs.
-        self.pending.retain(|&id, _| msg_id.wrapping_sub(id) < 64);
+        let mut evicted_msgs = 0u64;
+        let mut evicted_missing_chunks = 0u64;
+        self.pending.retain(|&id, assembly| {
+            let keep = msg_id.wrapping_sub(id) < 64;
+            if !keep {
+                evicted_msgs = evicted_msgs.saturating_add(1);
+                let missing = assembly
+                    .chunk_count
+                    .saturating_sub(assembly.chunks_received);
+                evicted_missing_chunks = evicted_missing_chunks.saturating_add(missing as u64);
+            }
+            keep
+        });
+        self.stats.evicted_msgs = self.stats.evicted_msgs.saturating_add(evicted_msgs);
+        self.stats.evicted_missing_chunks = self
+            .stats
+            .evicted_missing_chunks
+            .saturating_add(evicted_missing_chunks);
+
+        let known_message = self.pending.contains_key(&msg_id);
+        let mut late_chunk = false;
+        if let Some(highest) = self.highest_msg_id {
+            if is_older_msg_id(msg_id, highest) && !known_message {
+                late_chunk = true;
+            } else if is_older_msg_id(highest, msg_id) {
+                self.highest_msg_id = Some(msg_id);
+            }
+        } else {
+            self.highest_msg_id = Some(msg_id);
+        }
+        if let Some(last_completed) = self.last_completed_msg_id {
+            if is_older_msg_id(msg_id, last_completed) && !known_message {
+                late_chunk = true;
+            }
+        }
+        if late_chunk {
+            self.stats.late_chunks = self.stats.late_chunks.saturating_add(1);
+        }
 
         let entry = self.pending.entry(msg_id).or_insert_with(|| ChunkAssembly {
             chunk_count,
@@ -62,9 +124,13 @@ impl ChunkAssembler {
         });
 
         let idx = chunk_idx as usize;
-        if idx < entry.chunks.len() && entry.chunks[idx].is_none() {
-            entry.chunks[idx] = Some(payload.to_vec());
-            entry.chunks_received += 1;
+        if idx < entry.chunks.len() {
+            if entry.chunks[idx].is_none() {
+                entry.chunks[idx] = Some(payload.to_vec());
+                entry.chunks_received += 1;
+            } else {
+                self.stats.duplicate_chunks = self.stats.duplicate_chunks.saturating_add(1);
+            }
         }
 
         if entry.chunks_received == entry.chunk_count {
@@ -78,17 +144,39 @@ impl ChunkAssembler {
             for c in assembly.chunks.into_iter().flatten() {
                 out.extend_from_slice(&c);
             }
+            self.stats.completed_msgs = self.stats.completed_msgs.saturating_add(1);
+            self.last_completed_msg_id = Some(msg_id);
             Some(out)
         } else {
             None
         }
     }
+
+    fn stats_snapshot(&self) -> ChunkAssemblerStats {
+        let mut stats = self.stats;
+        stats.pending_msgs = self.pending.len() as u64;
+        stats.pending_missing_chunks = self
+            .pending
+            .values()
+            .map(|assembly| {
+                assembly
+                    .chunk_count
+                    .saturating_sub(assembly.chunks_received) as u64
+            })
+            .sum();
+        stats
+    }
+}
+
+fn is_older_msg_id(candidate: u16, reference: u16) -> bool {
+    candidate != reference && reference.wrapping_sub(candidate) < (u16::MAX / 2)
 }
 
 static FRAME: Mutex<Option<FrameBuffer>> = Mutex::new(None);
 static FRAMES_DECODED: AtomicU32 = AtomicU32::new(0);
 static NATIVE_FRAMES: AtomicU32 = AtomicU32::new(0);
 static VIEWER_READY: AtomicBool = AtomicBool::new(false);
+static DECODED_LAST_WALL_MS: AtomicU64 = AtomicU64::new(0);
 
 unsafe extern "C" fn on_decoded_frame(
     _user_data: *mut c_void,
@@ -120,6 +208,7 @@ unsafe extern "C" fn on_decoded_frame(
         });
     }
     FRAMES_DECODED.fetch_add(1, Ordering::Relaxed);
+    DECODED_LAST_WALL_MS.store(unix_time_ms() as u64, Ordering::Relaxed);
 }
 
 unsafe extern "C" fn on_native_frame(
@@ -375,6 +464,37 @@ fn main() {
     let mut present_true: u64 = 0;
     let mut last_present_calls: u64 = 0;
     let mut last_present_true: u64 = 0;
+    let mut feed_video_packets: u64 = 0;
+    let mut feed_video_failures: u64 = 0;
+    let mut feed_keyframe_failures: u64 = 0;
+    let mut feed_audio_packets: u64 = 0;
+    let mut feed_control_actions: u64 = 0;
+    let mut feed_control_keyframe_req: u64 = 0;
+    let mut feed_control_loss_report: u64 = 0;
+    let mut feed_control_other: u64 = 0;
+    let mut feed_control_send_failures: u64 = 0;
+    let mut pre_keyframe_drop_packets: u64 = 0;
+    let backlog_guard_drop_packets: u64 = 0;
+    let mut backlog_guard_keyframe_requests: u64 = 0;
+    let mut backlog_guard_request_failures: u64 = 0;
+    let mut backlog_guard_activations: u64 = 0;
+    let mut backlog_guard_active = false;
+    let mut backlog_guard_last_request_at =
+        Instant::now() - Duration::from_secs(BACKLOG_GUARD_KEYFRAME_REQUEST_COOLDOWN_SECS);
+    let mut last_feed_video_packets: u64 = 0;
+    let mut last_feed_video_failures: u64 = 0;
+    let mut last_feed_keyframe_failures: u64 = 0;
+    let mut last_feed_audio_packets: u64 = 0;
+    let mut last_feed_control_actions: u64 = 0;
+    let mut last_feed_control_keyframe_req: u64 = 0;
+    let mut last_feed_control_loss_report: u64 = 0;
+    let mut last_feed_control_other: u64 = 0;
+    let mut last_feed_control_send_failures: u64 = 0;
+    let mut last_pre_keyframe_drop_packets: u64 = 0;
+    let mut last_backlog_guard_drop_packets: u64 = 0;
+    let mut last_backlog_guard_keyframe_requests: u64 = 0;
+    let mut last_backlog_guard_request_failures: u64 = 0;
+    let mut last_chunk_stats = chunk_assembler.stats_snapshot();
 
     while window.is_open() && !window.is_key_down(Key::Escape) {
         for ev in conn.poll_events() {
@@ -412,9 +532,23 @@ fn main() {
                                         mono_ms
                                     );
                                 } else {
+                                    pre_keyframe_drop_packets =
+                                        pre_keyframe_drop_packets.saturating_add(1);
                                     continue;
                                 }
                             }
+                            if backlog_guard_active && is_keyframe {
+                                backlog_guard_active = false;
+                                let (wall_ms, mono_ms) = correlation_stamp(correlation_start);
+                                log::info!(
+                                    "viewer_probe_event session={} wall_ms={} mono_ms={} event=backlog_guard_recovered_keyframe dropped_total={}",
+                                    session_id,
+                                    wall_ms,
+                                    mono_ms,
+                                    backlog_guard_drop_packets
+                                );
+                            }
+                            feed_video_packets = feed_video_packets.saturating_add(1);
                             let ok = unsafe {
                                 mello_sys::mello_stream_feed_packet(
                                     viewer,
@@ -424,6 +558,8 @@ fn main() {
                                 )
                             };
                             if !ok && is_keyframe {
+                                feed_video_failures = feed_video_failures.saturating_add(1);
+                                feed_keyframe_failures = feed_keyframe_failures.saturating_add(1);
                                 let (wall_ms, mono_ms) = correlation_stamp(correlation_start);
                                 log::warn!(
                                     "viewer_probe_event session={} wall_ms={} mono_ms={} event=feed_keyframe_failed bytes={}",
@@ -432,17 +568,51 @@ fn main() {
                                     mono_ms,
                                     data.len()
                                 );
+                            } else if !ok {
+                                feed_video_failures = feed_video_failures.saturating_add(1);
                             }
                         }
-                        ViewerFeedResult::AudioPayload(data) => unsafe {
-                            let _ = mello_sys::mello_stream_feed_audio_packet(
-                                viewer,
-                                data.as_ptr(),
-                                data.len() as i32,
-                            );
-                        },
+                        ViewerFeedResult::AudioPayload(data) => {
+                            feed_audio_packets = feed_audio_packets.saturating_add(1);
+                            unsafe {
+                                let _ = mello_sys::mello_stream_feed_audio_packet(
+                                    viewer,
+                                    data.as_ptr(),
+                                    data.len() as i32,
+                                );
+                            }
+                        }
                         ViewerFeedResult::Action(ViewerAction::SendControl(ctrl_data)) => {
-                            let _ = conn.send_control(&ctrl_data);
+                            feed_control_actions = feed_control_actions.saturating_add(1);
+                            if let Some(ctrl_packet) = StreamPacket::parse(&ctrl_data) {
+                                if ctrl_packet.ptype == PacketType::Control
+                                    && !ctrl_packet.payload.is_empty()
+                                {
+                                    match ControlSubtype::from_u8(ctrl_packet.payload[0]) {
+                                        Some(ControlSubtype::KeyframeRequest) => {
+                                            feed_control_keyframe_req =
+                                                feed_control_keyframe_req.saturating_add(1);
+                                        }
+                                        Some(ControlSubtype::LossReport) => {
+                                            feed_control_loss_report =
+                                                feed_control_loss_report.saturating_add(1);
+                                        }
+                                        _ => {
+                                            feed_control_other =
+                                                feed_control_other.saturating_add(1);
+                                        }
+                                    }
+                                } else {
+                                    feed_control_other = feed_control_other.saturating_add(1);
+                                }
+                            } else {
+                                feed_control_other = feed_control_other.saturating_add(1);
+                            }
+
+                            if conn.send_control(&ctrl_data).is_err() {
+                                feed_control_send_failures =
+                                    feed_control_send_failures.saturating_add(1);
+                            }
                         }
                         ViewerFeedResult::None => {}
                     }
@@ -498,6 +668,115 @@ fn main() {
             let msg_hz = (reassembled_msgs - last_reassembled_msgs) as f32 / elapsed;
             let present_hz = (present_calls - last_present_calls) as f32 / elapsed;
             let present_true_hz = (present_true - last_present_true) as f32 / elapsed;
+            let feed_video_hz = (feed_video_packets - last_feed_video_packets) as f32 / elapsed;
+            let feed_video_fail_hz =
+                (feed_video_failures - last_feed_video_failures) as f32 / elapsed;
+            let feed_keyframe_fail_hz =
+                (feed_keyframe_failures - last_feed_keyframe_failures) as f32 / elapsed;
+            let feed_audio_hz = (feed_audio_packets - last_feed_audio_packets) as f32 / elapsed;
+            let feed_control_hz =
+                (feed_control_actions - last_feed_control_actions) as f32 / elapsed;
+            let feed_control_keyframe_req_hz =
+                (feed_control_keyframe_req - last_feed_control_keyframe_req) as f32 / elapsed;
+            let feed_control_loss_report_hz =
+                (feed_control_loss_report - last_feed_control_loss_report) as f32 / elapsed;
+            let feed_control_other_hz =
+                (feed_control_other - last_feed_control_other) as f32 / elapsed;
+            let feed_control_send_fail_hz =
+                (feed_control_send_failures - last_feed_control_send_failures) as f32 / elapsed;
+            let pre_keyframe_drop_hz =
+                (pre_keyframe_drop_packets - last_pre_keyframe_drop_packets) as f32 / elapsed;
+            let backlog_guard_drop_hz =
+                (backlog_guard_drop_packets - last_backlog_guard_drop_packets) as f32 / elapsed;
+            let backlog_guard_keyframe_req_hz =
+                (backlog_guard_keyframe_requests - last_backlog_guard_keyframe_requests) as f32
+                    / elapsed;
+            let backlog_guard_req_fail_hz =
+                (backlog_guard_request_failures - last_backlog_guard_request_failures) as f32
+                    / elapsed;
+
+            let decode_backlog_est = feed_video_packets.saturating_sub(decoded_now as u64);
+            let now_wall_ms = unix_time_ms() as u64;
+            let decoded_last_wall_ms = DECODED_LAST_WALL_MS.load(Ordering::Relaxed);
+            let decode_stall_ms = if decoded_last_wall_ms > 0 && now_wall_ms >= decoded_last_wall_ms
+            {
+                now_wall_ms - decoded_last_wall_ms
+            } else {
+                0
+            };
+
+            let chunk_stats_now = chunk_assembler.stats_snapshot();
+            let chunk_invalid_hz =
+                (chunk_stats_now.invalid_chunks - last_chunk_stats.invalid_chunks) as f32 / elapsed;
+            let chunk_duplicate_hz = (chunk_stats_now.duplicate_chunks
+                - last_chunk_stats.duplicate_chunks) as f32
+                / elapsed;
+            let chunk_late_hz =
+                (chunk_stats_now.late_chunks - last_chunk_stats.late_chunks) as f32 / elapsed;
+            let chunk_evicted_hz =
+                (chunk_stats_now.evicted_msgs - last_chunk_stats.evicted_msgs) as f32 / elapsed;
+            let chunk_evicted_missing_hz = (chunk_stats_now.evicted_missing_chunks
+                - last_chunk_stats.evicted_missing_chunks)
+                as f32
+                / elapsed;
+            let chunk_completed_hz =
+                (chunk_stats_now.completed_msgs - last_chunk_stats.completed_msgs) as f32 / elapsed;
+
+            let decode_deficit_hz = (feed_video_hz - dec_fps).max(0.0);
+            let backlog_pressure = decode_backlog_est >= BACKLOG_GUARD_TRIGGER_FRAMES
+                && (dec_fps < 44.0 || decode_stall_ms >= 100 || decode_deficit_hz >= 4.0);
+            if backlog_pressure {
+                if !backlog_guard_active {
+                    backlog_guard_active = true;
+                    backlog_guard_activations = backlog_guard_activations.saturating_add(1);
+                    let (wall_ms, mono_ms) = correlation_stamp(correlation_start);
+                    log::warn!(
+                        "viewer_probe_event session={} wall_ms={} mono_ms={} event=backlog_guard_enter backlog={} trigger={}",
+                        session_id,
+                        wall_ms,
+                        mono_ms,
+                        decode_backlog_est,
+                        BACKLOG_GUARD_TRIGGER_FRAMES
+                    );
+                }
+                if backlog_guard_last_request_at.elapsed()
+                    >= Duration::from_secs(BACKLOG_GUARD_KEYFRAME_REQUEST_COOLDOWN_SECS)
+                {
+                    let ctrl = StreamPacket::control(KeyframeRequest::serialize(), 0);
+                    match conn.send_control(&ctrl.serialize()) {
+                        Ok(()) => {
+                            backlog_guard_keyframe_requests =
+                                backlog_guard_keyframe_requests.saturating_add(1);
+                        }
+                        Err(err) => {
+                            backlog_guard_request_failures =
+                                backlog_guard_request_failures.saturating_add(1);
+                            let (wall_ms, mono_ms) = correlation_stamp(correlation_start);
+                            log::warn!(
+                                "viewer_probe_event session={} wall_ms={} mono_ms={} event=backlog_guard_keyframe_request_failed backlog={} error={}",
+                                session_id,
+                                wall_ms,
+                                mono_ms,
+                                decode_backlog_est,
+                                err
+                            );
+                        }
+                    }
+                    backlog_guard_last_request_at = Instant::now();
+                }
+            } else if backlog_guard_active {
+                backlog_guard_active = false;
+                let (wall_ms, mono_ms) = correlation_stamp(correlation_start);
+                log::info!(
+                    "viewer_probe_event session={} wall_ms={} mono_ms={} event=backlog_guard_exit backlog={} dec_fps={:.1} decode_stall_ms={}",
+                    session_id,
+                    wall_ms,
+                    mono_ms,
+                    decode_backlog_est,
+                    dec_fps,
+                    decode_stall_ms
+                );
+            }
 
             let title = format!(
                 "SFU Probe | {}x{} dec={:.1}fps native={:.1}fps present={:.1}/{:.1}Hz msgs={:.1}Hz ingress={:.1}pps {:.0}kbps rtt={:.1}ms",
@@ -516,7 +795,7 @@ fn main() {
 
             let (wall_ms, mono_ms) = correlation_stamp(correlation_start);
             log::info!(
-                "viewer_probe_tick session={} wall_ms={} mono_ms={} dec_fps={:.1} native_fps={:.1} present_true_hz={:.1} present_hz={:.1} msg_hz={:.1} ingress_pps={:.1} ingress_kbps={:.0} rtt_ms={:.1}",
+                "viewer_probe_tick session={} wall_ms={} mono_ms={} dec_fps={:.1} native_fps={:.1} present_true_hz={:.1} present_hz={:.1} msg_hz={:.1} ingress_pps={:.1} ingress_kbps={:.0} rtt_ms={:.1} feed_video_hz={:.1} feed_video_fail_hz={:.1} feed_keyframe_fail_hz={:.1} feed_audio_hz={:.1} feed_control_hz={:.1} feed_control_keyframe_req_hz={:.1} feed_control_loss_report_hz={:.1} feed_control_other_hz={:.1} feed_control_send_fail_hz={:.1} pre_keyframe_drop_hz={:.1} backlog_guard_active={} backlog_guard_drop_hz={:.1} backlog_guard_req_hz={:.1} backlog_guard_req_fail_hz={:.1} backlog_guard_req_total={} backlog_guard_req_fail_total={} backlog_guard_activations={} decode_backlog_est={} decode_stall_ms={} chunk_pending_msgs={} chunk_pending_missing={} chunk_completed_hz={:.1} chunk_invalid_hz={:.1} chunk_duplicate_hz={:.1} chunk_late_hz={:.1} chunk_evicted_hz={:.1} chunk_evicted_missing_hz={:.1}",
                 session_id,
                 wall_ms,
                 mono_ms,
@@ -527,7 +806,34 @@ fn main() {
                 msg_hz,
                 ingress_pps,
                 ingress_kbps,
-                conn.rtt_ms()
+                conn.rtt_ms(),
+                feed_video_hz,
+                feed_video_fail_hz,
+                feed_keyframe_fail_hz,
+                feed_audio_hz,
+                feed_control_hz,
+                feed_control_keyframe_req_hz,
+                feed_control_loss_report_hz,
+                feed_control_other_hz,
+                feed_control_send_fail_hz,
+                pre_keyframe_drop_hz,
+                backlog_guard_active,
+                backlog_guard_drop_hz,
+                backlog_guard_keyframe_req_hz,
+                backlog_guard_req_fail_hz,
+                backlog_guard_keyframe_requests,
+                backlog_guard_request_failures,
+                backlog_guard_activations,
+                decode_backlog_est,
+                decode_stall_ms,
+                chunk_stats_now.pending_msgs,
+                chunk_stats_now.pending_missing_chunks,
+                chunk_completed_hz,
+                chunk_invalid_hz,
+                chunk_duplicate_hz,
+                chunk_late_hz,
+                chunk_evicted_hz,
+                chunk_evicted_missing_hz
             );
 
             last_tick = Instant::now();
@@ -538,6 +844,20 @@ fn main() {
             last_reassembled_msgs = reassembled_msgs;
             last_present_calls = present_calls;
             last_present_true = present_true;
+            last_feed_video_packets = feed_video_packets;
+            last_feed_video_failures = feed_video_failures;
+            last_feed_keyframe_failures = feed_keyframe_failures;
+            last_feed_audio_packets = feed_audio_packets;
+            last_feed_control_actions = feed_control_actions;
+            last_feed_control_keyframe_req = feed_control_keyframe_req;
+            last_feed_control_loss_report = feed_control_loss_report;
+            last_feed_control_other = feed_control_other;
+            last_feed_control_send_failures = feed_control_send_failures;
+            last_pre_keyframe_drop_packets = pre_keyframe_drop_packets;
+            last_backlog_guard_drop_packets = backlog_guard_drop_packets;
+            last_backlog_guard_keyframe_requests = backlog_guard_keyframe_requests;
+            last_backlog_guard_request_failures = backlog_guard_request_failures;
+            last_chunk_stats = chunk_stats_now;
         }
     }
 
