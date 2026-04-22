@@ -906,7 +906,7 @@ impl super::Client {
     pub(super) async fn handle_start_stream(
         &mut self,
         crew_id: &str,
-        _title: &str,
+        title: &str,
         capture_mode: &str,
         monitor_index: Option<u32>,
         hwnd: Option<u64>,
@@ -937,6 +937,7 @@ impl super::Client {
         let resp = match crate::stream::host::request_start_stream(
             &self.nakama,
             crew_id,
+            title,
             false, // supports_av1
             config.width,
             config.height,

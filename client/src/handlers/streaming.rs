@@ -3,6 +3,7 @@ use std::rc::Rc;
 use mello_core::Event;
 use slint::Model;
 
+use super::stream_cards::sync_active_stream_cards;
 use crate::app_context::AppContext;
 use crate::CaptureSourceData;
 
@@ -96,7 +97,9 @@ pub fn handle(ctx: &AppContext, event: Event) {
             );
             ctx.app.set_is_hosting(true);
             ctx.app.set_streamer_name(ctx.app.get_user_name());
-            ctx.app.set_stream_label("STREAMING".into());
+            if ctx.app.get_stream_label().is_empty() {
+                ctx.app.set_stream_label("STREAMING".into());
+            }
             ctx.app.set_dbg_stream_mode(mode.into());
             ctx.app.set_dbg_host_pacing_mode("idle".into());
             ctx.app.set_dbg_host_pacing_target_kbps(0);
@@ -106,6 +109,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
             ctx.app.set_dbg_host_pacing_sleep_ms(0);
             ctx.app.set_dbg_host_pacing_sleep_delta_count(0);
             ctx.app.set_dbg_host_pacing_sleep_delta_ms(0);
+            sync_active_stream_cards(ctx);
         }
         Event::StreamEnded { crew_id } => {
             log::info!("Stream ended: crew={}", crew_id);
@@ -116,9 +120,11 @@ pub fn handle(ctx: &AppContext, event: Event) {
             ctx.app.set_stream_frame(slint::Image::default());
             ctx.app.set_active_streamer_id("".into());
             ctx.app.set_active_streamer_name("".into());
+            ctx.app.set_active_stream_title("".into());
             ctx.app.set_active_stream_session_id("".into());
             ctx.app.set_active_stream_width(0);
             ctx.app.set_active_stream_height(0);
+            ctx.app.set_active_stream_viewer_count(0);
             ctx.app.set_dbg_stream_mode("idle".into());
             ctx.app.set_dbg_stream_frames(0);
             ctx.app.set_dbg_stream_packets(0);
@@ -134,6 +140,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
             ctx.app.set_dbg_host_pacing_sleep_ms(0);
             ctx.app.set_dbg_host_pacing_sleep_delta_count(0);
             ctx.app.set_dbg_host_pacing_sleep_delta_ms(0);
+            sync_active_stream_cards(ctx);
         }
         Event::StreamViewerJoined { viewer_id } => {
             log::info!("Stream viewer joined: {}", viewer_id);
@@ -149,6 +156,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
             log::info!("Watching stream from {} ({}x{})", host_id, width, height);
             ctx.app.set_is_watching(true);
             ctx.app.set_streamer_name(host_id.into());
+            sync_active_stream_cards(ctx);
         }
         Event::StreamWatchingStopped => {
             log::info!("Stopped watching stream");
@@ -171,6 +179,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
             ctx.app.set_dbg_host_pacing_sleep_ms(0);
             ctx.app.set_dbg_host_pacing_sleep_delta_count(0);
             ctx.app.set_dbg_host_pacing_sleep_delta_ms(0);
+            sync_active_stream_cards(ctx);
         }
         Event::StreamFrame { .. } => {}
         Event::StreamDebugStats {

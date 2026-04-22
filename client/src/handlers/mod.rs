@@ -4,6 +4,7 @@ mod clip;
 mod crew;
 mod game;
 mod presence;
+mod stream_cards;
 mod streaming;
 mod voice;
 

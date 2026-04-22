@@ -18,6 +18,8 @@ const AUDIO_QUEUE_CAPACITY: usize = 128;
 pub struct StartStreamRequest {
     pub crew_id: String,
     #[serde(default)]
+    pub title: String,
+    #[serde(default)]
     pub supports_av1: bool,
     pub width: u32,
     pub height: u32,
@@ -56,12 +58,14 @@ impl StartStreamResponse {
 pub async fn request_start_stream(
     nakama: &NakamaClient,
     crew_id: &str,
+    title: &str,
     supports_av1: bool,
     width: u32,
     height: u32,
 ) -> Result<StartStreamResponse, StreamError> {
     let req = StartStreamRequest {
         crew_id: crew_id.to_string(),
+        title: title.to_string(),
         supports_av1,
         width,
         height,

@@ -1,0 +1,420 @@
+import { Theme } from "../theme.slint";
+import { StreamCardData } from "../types.slint";
+
+component StreamIconButton inherits Rectangle {
+    in property <image> icon;
+
+    width: 40px;
+    height: 40px;
+    border-radius: 8px;
+    background: btn-hover.has-hover ? Theme.hover-overlay : transparent;
+    border-width: 1px;
+    border-color: btn-hover.has-hover ? Theme.graphic-light : transparent;
+
+    Image {
+        source: icon;
+        colorize: Theme.text-secondary;
+        width: 18px;
+        height: 18px;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+    }
+
+    btn-hover := TouchArea {
+        mouse-cursor: pointer;
+    }
+}
+
+component StreamCard inherits Rectangle {
+    in property <StreamCardData> card;
+    in property <bool> is-watching: false;
+    in property <bool> is-hosting: false;
+    in property <string> active-streamer-id: "";
+    in property <image> stream-frame;
+    in property <length> media-height: 186px;
+
+    callback watch-stream-clicked(string, string, int, int);
+    callback stop-stream-clicked();
+    callback stop-watching-clicked();
+
+    property <bool> selected-card: (is-watching && card.host-id == active-streamer-id) || (is-hosting && !card.can-watch);
+    property <bool> show-live-frame: selected-card && is-watching && card.can-watch;
+    property <bool> show-hosting-state: selected-card && is-hosting && !card.can-watch;
+    property <bool> show-watch-cta: card.can-watch && !show-live-frame;
+    property <length> live-badge-height: 24px;
+
+    border-radius: 16px;
+    border-width: 1px;
+    border-color: selected-card ? Theme.accent : Theme.card-border;
+    background: Theme.card-bg;
+    clip: true;
+
+    VerticalLayout {
+        spacing: 0px;
+
+        Rectangle {
+            height: root.media-height;
+            background: Theme.dark ? @linear-gradient(135deg, #2a2d3e 0%, #111218 100%) : @linear-gradient(135deg, #dce3ff 0%, #b9c6e6 100%);
+            clip: true;
+
+            if show-live-frame: Image {
+                source: root.stream-frame;
+                width: parent.width;
+                height: parent.height;
+                image-fit: contain;
+            }
+
+            if !show-live-frame: Rectangle {
+                width: parent.width;
+                height: parent.height;
+                background: Theme.dark ? #00000026 : #FFFFFF26;
+
+                VerticalLayout {
+                    alignment: center;
+                    spacing: 8px;
+
+                    if !show-watch-cta: Text {
+                        text: show-hosting-state ? "YOU ARE LIVE" : root.card.streamer-name + " IS LIVE";
+                        font-family: Theme.font-mono;
+                        font-size: 14px;
+                        font-weight: 700;
+                        letter-spacing: 1.2px;
+                        color: Theme.text-primary;
+                        horizontal-alignment: center;
+                    }
+
+                    if !show-watch-cta: Text {
+                        text: root.card.subtitle;
+                        font-size: 12px;
+                        color: Theme.text-secondary;
+                        horizontal-alignment: center;
+                    }
+
+                    if show-watch-cta: Rectangle {
+                        width: parent.width;
+                        height: 34px;
+
+                        Rectangle {
+                            width: watch-label.preferred-width + 28px;
+                            height: parent.height;
+                            x: (parent.width - self.width) / 2;
+                            border-radius: 10px;
+                            border-width: 1px;
+                            border-color: #FFFFFF2A;
+                            background: #0000007A;
+
+                            watch-label := Text {
+                                text: "Watch stream";
+                                font-family: Theme.font-mono;
+                                font-size: 11px;
+                                font-weight: 700;
+                                letter-spacing: 0.6px;
+                                color: #FFFFFF;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+                        }
+                    }
+
+                    if show-hosting-state: Rectangle {
+                        width: parent.width;
+                        height: 38px;
+
+                        Rectangle {
+                            width: stop-text.preferred-width + 40px;
+                            height: parent.height;
+                            x: (parent.width - self.width) / 2;
+                            border-radius: 8px;
+                            background: stop-hover.has-hover ? #E0174A : Theme.accent;
+                            border-width: 1px;
+                            border-color: stop-hover.has-hover ? #E0174A : Theme.accent;
+
+                            stop-text := Text {
+                                text: "END STREAM";
+                                font-family: Theme.font-mono;
+                                font-size: 12px;
+                                font-weight: 700;
+                                letter-spacing: 0.8px;
+                                color: #FFFFFF;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+
+                            stop-hover := TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => {
+                                    root.stop-stream-clicked();
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            badge-row := HorizontalLayout {
+                x: 16px;
+                y: 18px;
+                spacing: 8px;
+
+                Rectangle {
+                    width: live-row.preferred-width + 2px;
+                    height: root.live-badge-height;
+                    border-radius: 0px;
+                    background: Theme.accent;
+                    border-width: 1px;
+                    border-color: transparent;
+
+                    live-row := HorizontalLayout {
+                        alignment: center;
+                        spacing: 6px;
+                        padding-left: 8px;
+                        padding-right: 8px;
+
+                        live-text := Text {
+                            text: "LIVE";
+                            font-size: 11px;
+                            font-weight: 700;
+                            color: #FFFFFF;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+
+                if root.card.viewer-count > 0: Rectangle {
+                    width: viewers-row.preferred-width + 2px;
+                    height: root.live-badge-height;
+                    border-radius: 0px;
+                    background: #000000B3;
+                    border-width: 0px;
+                    border-color: transparent;
+
+                    viewers-row := HorizontalLayout {
+                        alignment: center;
+                        spacing: 6px;
+                        padding-left: 8px;
+                        padding-right: 8px;
+
+                        Rectangle {
+                            width: 12px;
+                            height: parent.height;
+                            background: transparent;
+
+                            Image {
+                                source: @image-url("../icons/user.svg");
+                                colorize: Theme.text-secondary;
+                                width: 12px;
+                                height: 12px;
+                                y: (parent.height - self.height) / 2;
+                            }
+                        }
+
+                        viewers-text := Text {
+                            text: root.card.viewer-count + "";
+                            font-family: Theme.font-mono;
+                            font-size: 11px;
+                            font-weight: 700;
+                            color: #FFFFFF;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+            }
+
+            if show-live-frame: Rectangle {
+                width: leave-text.preferred-width + 24px;
+                height: 28px;
+                x: parent.width - self.width - 16px;
+                y: 16px;
+                border-radius: 14px;
+                background: leave-hover.has-hover ? Theme.accent : Theme.bg-app;
+                border-width: 1px;
+                border-color: leave-hover.has-hover ? Theme.accent : Theme.graphic-light;
+
+                leave-text := Text {
+                    text: show-live-frame ? "LEAVE" : "STOP";
+                    font-family: Theme.font-mono;
+                    font-size: 11px;
+                    font-weight: 600;
+                    color: leave-hover.has-hover ? #FFFFFF : Theme.text-secondary;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+
+                leave-hover := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        root.stop-watching-clicked();
+                    }
+                }
+            }
+
+            Rectangle {
+                width: parent.width;
+                height: 52px;
+                y: parent.height - self.height;
+                background: Theme.dark ? @linear-gradient(180deg, #00000000 0%, #00000080 100%) : @linear-gradient(180deg, #FFFFFF00 0%, #00000020 100%);
+            }
+
+            if root.card.can-watch: watch-click := TouchArea {
+                mouse-cursor: pointer;
+                clicked => {
+                    root.watch-stream-clicked(
+                        root.card.host-id,
+                        root.card.session-id,
+                        root.card.stream-width,
+                        root.card.stream-height,
+                    );
+                }
+            }
+        }
+
+        Rectangle {
+            height: 72px;
+            background: Theme.surface;
+            border-width: 1px;
+            border-color: Theme.card-border;
+
+            HorizontalLayout {
+                padding-left: 16px;
+                padding-right: 12px;
+                spacing: 12px;
+
+                Rectangle {
+                    width: 40px;
+                    height: 40px;
+                    border-radius: 8px;
+                    background: root.card.has-avatar
+                        ? transparent
+                        : (root.card.avatar-color-index == 0 ? #EB4D5F : root.card.avatar-color-index == 1 ? #4a9eff : root.card.avatar-color-index == 2 ? #4ade80 : root.card.avatar-color-index == 3 ? #a78bfa : #f59e0b);
+                    y: (parent.height - self.height) / 2;
+
+                    if root.card.has-avatar: Image {
+                        source: root.card.avatar;
+                        width: parent.width;
+                        height: parent.height;
+                        image-fit: cover;
+                    }
+
+                    if !root.card.has-avatar: Text {
+                        text: root.card.avatar-initials;
+                        font-size: 12px;
+                        font-weight: 700;
+                        color: #FFFFFF;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    alignment: center;
+                    spacing: 3px;
+
+                    Text {
+                        text: root.card.streamer-name;
+                        font-size: 15px;
+                        font-weight: 700;
+                        color: Theme.text-primary;
+                        overflow: elide;
+                    }
+
+                    Text {
+                        text: root.card.subtitle;
+                        font-size: 11px;
+                        color: Theme.text-secondary;
+                        overflow: elide;
+                    }
+                }
+
+                HorizontalLayout {
+                    spacing: 4px;
+
+                    StreamIconButton {
+                        icon: @image-url("../icons/volume.svg");
+                    }
+
+                    StreamIconButton {
+                        icon: @image-url("../icons/settings.svg");
+                    }
+
+                    if root.card.can-watch: StreamIconButton {
+                        icon: @image-url("../icons/maximize.svg");
+                    }
+                }
+            }
+        }
+    }
+}
+
+export component ActiveStreamsPanel inherits Rectangle {
+    in property <[StreamCardData]> cards: [];
+    in property <bool> is-watching: false;
+    in property <bool> is-hosting: false;
+    in property <string> active-streamer-id: "";
+    in property <image> stream-frame;
+
+    callback watch-stream-clicked(string, string, int, int);
+    callback stop-stream-clicked();
+    callback stop-watching-clicked();
+
+    out property <int> row-count: cards.length <= 1 ? 1 : (cards.length + 1) / 2;
+    out property <length> panel-height: cards.length <= 1 ? 420px : row-count * 300px + (row-count - 1) * 12px;
+
+    if cards.length == 1: StreamCard {
+        width: parent.width;
+        height: 420px;
+        media-height: 348px;
+        card: cards[0];
+        is-watching: root.is-watching;
+        is-hosting: root.is-hosting;
+        active-streamer-id: root.active-streamer-id;
+        stream-frame: root.stream-frame;
+        watch-stream-clicked(host-id, session-id, w, h) => {
+            root.watch-stream-clicked(host-id, session-id, w, h);
+        }
+        stop-stream-clicked => {
+            root.stop-stream-clicked();
+        }
+        stop-watching-clicked => {
+            root.stop-watching-clicked();
+        }
+    }
+
+    if cards.length > 1: VerticalLayout {
+        spacing: 12px;
+
+        for row-start in [0, 2, 4, 6]: HorizontalLayout {
+            visible: row-start < cards.length;
+            spacing: 12px;
+            height: 300px;
+
+            for col in [0, 1]: Rectangle {
+                property <int> card-index: row-start + col;
+                property <bool> in-range: card-index < root.cards.length;
+                visible: in-range;
+                horizontal-stretch: 1;
+                height: parent.height;
+
+                if in-range: StreamCard {
+                    width: parent.width;
+                    height: parent.height;
+                    media-height: 228px;
+                    card: root.cards[card-index];
+                    is-watching: root.is-watching;
+                    is-hosting: root.is-hosting;
+                    active-streamer-id: root.active-streamer-id;
+                    stream-frame: root.stream-frame;
+                    watch-stream-clicked(host-id, session-id, w, h) => {
+                        root.watch-stream-clicked(host-id, session-id, w, h);
+                    }
+                    stop-stream-clicked => {
+                        root.stop-stream-clicked();
+                    }
+                    stop-watching-clicked => {
+                        root.stop-watching-clicked();
+                    }
+                }
+            }
+        }
+    }
+}

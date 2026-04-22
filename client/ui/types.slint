@@ -62,6 +62,21 @@ export struct FeedCardData {
     is-new: bool,
 }
 
+export struct StreamCardData {
+    host-id: string,
+    session-id: string,
+    streamer-name: string,
+    subtitle: string,
+    avatar: image,
+    has-avatar: bool,
+    avatar-initials: string,
+    avatar-color-index: int,
+    viewer-count: int,
+    stream-width: int,
+    stream-height: int,
+    can-watch: bool,
+}
+
 export struct MemberData {
     id: string,
     name: string,

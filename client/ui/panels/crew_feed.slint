@@ -1,5 +1,6 @@
 import { Theme } from "../theme.slint";
-import { FeedCardData } from "../types.slint";
+import { FeedCardData, StreamCardData } from "../types.slint";
+import { ActiveStreamsPanel } from "./active_streams_panel.slint";
 
 component AvatarDot inherits Rectangle {
     in property <string> initials;
@@ -1387,9 +1388,14 @@ component FeedSlot inherits Rectangle {
 
 export component CrewFeed inherits Rectangle {
     in property <[FeedCardData]> cards: [];
+    in property <[StreamCardData]> stream-cards: [];
     in property <bool> is-cold-start: true;
     in property <string> crew-name: "";
     in property <int> clip-count: 0;
+    in property <bool> is-hosting: false;
+    in property <bool> is-watching: false;
+    in property <string> active-streamer-id: "";
+    in property <image> stream-frame;
 
     in property <string> clip-playing-path: "";
     in property <float> clip-progress: 0.0;
@@ -1404,6 +1410,11 @@ export component CrewFeed inherits Rectangle {
     callback pause-clip();
     callback resume-clip();
     callback seek-clip(float);
+    callback watch-stream-clicked(string, string, int, int);
+    callback stop-stream-clicked();
+    callback stop-watching-clicked();
+
+    property <int> feed-start-index: stream-cards.length == 1 && cards.length > 0 ? 1 : 0;
 
     background: transparent;
 
@@ -1503,13 +1514,37 @@ export component CrewFeed inherits Rectangle {
                 padding-right: 20px;
                 spacing: 12px;
 
-                // Row 1: Hero (2x) + top-right card (1x)
-                if cards.length > 0: HorizontalLayout {
+                // Stream cards live in the feed flow, directly under the header.
+                if stream-cards.length == 1 && cards.length > 0: HorizontalLayout {
                     height: 420px;
                     spacing: 12px;
 
-                    FeedSlot {
+                    Rectangle {
                         horizontal-stretch: 2;
+                        height: parent.height;
+
+                        ActiveStreamsPanel {
+                            width: parent.width;
+                            height: parent.height;
+                            cards: root.stream-cards;
+                            is-hosting: root.is-hosting;
+                            is-watching: root.is-watching;
+                            active-streamer-id: root.active-streamer-id;
+                            stream-frame: root.stream-frame;
+                            watch-stream-clicked(host-id, session-id, w, h) => {
+                                root.watch-stream-clicked(host-id, session-id, w, h);
+                            }
+                            stop-stream-clicked => {
+                                root.stop-stream-clicked();
+                            }
+                            stop-watching-clicked => {
+                                root.stop-watching-clicked();
+                            }
+                        }
+                    }
+
+                    FeedSlot {
+                        horizontal-stretch: 1;
                         card: cards[0];
                         playing-path: root.clip-playing-path;
                         clip-progress: root.clip-progress;
@@ -1520,10 +1555,67 @@ export component CrewFeed inherits Rectangle {
                         play-clicked(id) => { root.card-clicked(id); }
                         seek-clip(v) => { root.seek-clip(v); }
                     }
+                }
 
-                    if cards.length > 1: FeedSlot {
+                if stream-cards.length == 1 && cards.length == 0: ActiveStreamsPanel {
+                    horizontal-stretch: 1;
+                    height: 420px;
+                    cards: root.stream-cards;
+                    is-hosting: root.is-hosting;
+                    is-watching: root.is-watching;
+                    active-streamer-id: root.active-streamer-id;
+                    stream-frame: root.stream-frame;
+                    watch-stream-clicked(host-id, session-id, w, h) => {
+                        root.watch-stream-clicked(host-id, session-id, w, h);
+                    }
+                    stop-stream-clicked => {
+                        root.stop-stream-clicked();
+                    }
+                    stop-watching-clicked => {
+                        root.stop-watching-clicked();
+                    }
+                }
+
+                if stream-cards.length > 1: streams-grid := ActiveStreamsPanel {
+                    horizontal-stretch: 1;
+                    height: min(640px, self.panel-height);
+                    cards: root.stream-cards;
+                    is-hosting: root.is-hosting;
+                    is-watching: root.is-watching;
+                    active-streamer-id: root.active-streamer-id;
+                    stream-frame: root.stream-frame;
+                    watch-stream-clicked(host-id, session-id, w, h) => {
+                        root.watch-stream-clicked(host-id, session-id, w, h);
+                    }
+                    stop-stream-clicked => {
+                        root.stop-stream-clicked();
+                    }
+                    stop-watching-clicked => {
+                        root.stop-watching-clicked();
+                    }
+                }
+
+                // Row 1: Hero (2x) + top-right card (1x)
+                if cards.length > root.feed-start-index: HorizontalLayout {
+                    height: 420px;
+                    spacing: 12px;
+
+                    FeedSlot {
+                        horizontal-stretch: 2;
+                        card: cards[root.feed-start-index];
+                        playing-path: root.clip-playing-path;
+                        clip-progress: root.clip-progress;
+                        clip-paused: root.clip-paused;
+                        clip-anim-tick: root.clip-anim-tick;
+                        clip-position-text: root.clip-position-text;
+                        clip-duration-text: root.clip-duration-text;
+                        play-clicked(id) => { root.card-clicked(id); }
+                        seek-clip(v) => { root.seek-clip(v); }
+                    }
+
+                    if cards.length > root.feed-start-index + 1: FeedSlot {
                         horizontal-stretch: 1;
-                        card: cards[1];
+                        card: cards[root.feed-start-index + 1];
                         playing-path: root.clip-playing-path;
                         clip-progress: root.clip-progress;
                         clip-paused: root.clip-paused;
@@ -1536,14 +1628,15 @@ export component CrewFeed inherits Rectangle {
                 }
 
                 // Row 2: Three 1x cards
-                if cards.length > 2: HorizontalLayout {
+                if cards.length > root.feed-start-index + 2: HorizontalLayout {
                     height: 210px;
                     spacing: 12px;
 
-                    for idx in [2, 3, 4]: FeedSlot {
-                        visible: cards.length > idx;
+                    for rel-idx in [0, 1, 2]: FeedSlot {
+                        property <int> card-idx: root.feed-start-index + 2 + rel-idx;
+                        visible: cards.length > card-idx;
                         horizontal-stretch: 1;
-                        card: cards.length > idx ? cards[idx] : { card-type: "" };
+                        card: cards.length > card-idx ? cards[card-idx] : { card-type: "" };
                         playing-path: root.clip-playing-path;
                         clip-progress: root.clip-progress;
                         clip-paused: root.clip-paused;
@@ -1556,13 +1649,13 @@ export component CrewFeed inherits Rectangle {
                 }
 
                 // Row 3: card (1x) + wide card (2x)
-                if cards.length > 5: HorizontalLayout {
+                if cards.length > root.feed-start-index + 5: HorizontalLayout {
                     height: 210px;
                     spacing: 12px;
 
                     FeedSlot {
                         horizontal-stretch: 1;
-                        card: cards[5];
+                        card: cards[root.feed-start-index + 5];
                         playing-path: root.clip-playing-path;
                         clip-progress: root.clip-progress;
                         clip-paused: root.clip-paused;
@@ -1573,9 +1666,9 @@ export component CrewFeed inherits Rectangle {
                         seek-clip(v) => { root.seek-clip(v); }
                     }
 
-                    if cards.length > 6: FeedSlot {
+                    if cards.length > root.feed-start-index + 6: FeedSlot {
                         horizontal-stretch: 2;
-                        card: cards[6];
+                        card: cards[root.feed-start-index + 6];
                         playing-path: root.clip-playing-path;
                         clip-progress: root.clip-progress;
                         clip-paused: root.clip-paused;
@@ -1588,14 +1681,15 @@ export component CrewFeed inherits Rectangle {
                 }
 
                 // Row 4+ for extra cards (cold start has 9 slots)
-                if cards.length > 7: HorizontalLayout {
+                if cards.length > root.feed-start-index + 7: HorizontalLayout {
                     height: 210px;
                     spacing: 12px;
 
-                    for idx in [7, 8]: FeedSlot {
-                        visible: cards.length > idx;
+                    for rel-idx in [0, 1]: FeedSlot {
+                        property <int> card-idx: root.feed-start-index + 7 + rel-idx;
+                        visible: cards.length > card-idx;
                         horizontal-stretch: 1;
-                        card: cards.length > idx ? cards[idx] : { card-type: "" };
+                        card: cards.length > card-idx ? cards[card-idx] : { card-type: "" };
                         playing-path: root.clip-playing-path;
                         clip-progress: root.clip-progress;
                         clip-paused: root.clip-paused;
@@ -1626,10 +1720,215 @@ export component Preview inherits Rectangle {
     width: 760px;
     height: 920px;
     background: Theme.bg-app;
+    // Preview controls:
+    // - stream-count: 0..3 (clamped)
+    // - preview-watching: show selected watching state on the first stream card
+    in-out property <int> stream-count: 1;
+    in-out property <bool> preview-watching: false;
+    in-out property <bool> preview-hosting: false;
+    property <int> preview-stream-count: max(0, min(stream-count, 3));
+    property <string> preview-active-streamer-id: !preview-hosting && preview-watching && preview-stream-count > 0 ? "alice-id" : "";
+    property <[StreamCardData]> preview-stream-cards-1: [
+        {
+            host-id: "alice-id",
+            session-id: "stream-session-1",
+            streamer-name: "alice",
+            subtitle: "Live now",
+            avatar: @image-url("../icons/user.svg"),
+            has-avatar: false,
+            avatar-initials: "AL",
+            avatar-color-index: 1,
+            viewer-count: 1242,
+            stream-width: 1920,
+            stream-height: 1080,
+            can-watch: true,
+        },
+    ];
+    property <[StreamCardData]> preview-stream-cards-2: [
+        {
+            host-id: "alice-id",
+            session-id: "stream-session-1",
+            streamer-name: "alice",
+            subtitle: "Counter-Strike 2",
+            avatar: @image-url("../icons/user.svg"),
+            has-avatar: false,
+            avatar-initials: "AL",
+            avatar-color-index: 1,
+            viewer-count: 1242,
+            stream-width: 1920,
+            stream-height: 1080,
+            can-watch: true,
+        },
+        {
+            host-id: "fail-id",
+            session-id: "stream-session-2",
+            streamer-name: "FaiL",
+            subtitle: "Valorant",
+            avatar: @image-url("../icons/user.svg"),
+            has-avatar: false,
+            avatar-initials: "Fa",
+            avatar-color-index: 3,
+            viewer-count: 853,
+            stream-width: 1920,
+            stream-height: 1080,
+            can-watch: true,
+        },
+    ];
+    property <[StreamCardData]> preview-stream-cards-3: [
+        {
+            host-id: "alice-id",
+            session-id: "stream-session-1",
+            streamer-name: "alice",
+            subtitle: "Counter-Strike 2",
+            avatar: @image-url("../icons/user.svg"),
+            has-avatar: false,
+            avatar-initials: "AL",
+            avatar-color-index: 1,
+            viewer-count: 1242,
+            stream-width: 1920,
+            stream-height: 1080,
+            can-watch: true,
+        },
+        {
+            host-id: "fail-id",
+            session-id: "stream-session-2",
+            streamer-name: "FaiL",
+            subtitle: "Valorant",
+            avatar: @image-url("../icons/user.svg"),
+            has-avatar: false,
+            avatar-initials: "Fa",
+            avatar-color-index: 3,
+            viewer-count: 853,
+            stream-width: 1920,
+            stream-height: 1080,
+            can-watch: true,
+        },
+        {
+            host-id: "bobben-id",
+            session-id: "stream-session-3",
+            streamer-name: "b0bben",
+            subtitle: "League of Legends",
+            avatar: @image-url("../icons/user.svg"),
+            has-avatar: false,
+            avatar-initials: "b0",
+            avatar-color-index: 2,
+            viewer-count: 420,
+            stream-width: 1920,
+            stream-height: 1080,
+            can-watch: true,
+        },
+    ];
+    property <[StreamCardData]> preview-host-stream-cards-1: [
+        {
+            host-id: "alice-id",
+            session-id: "stream-session-1",
+            streamer-name: "alice",
+            subtitle: "Counter-Strike 2",
+            avatar: @image-url("../icons/user.svg"),
+            has-avatar: false,
+            avatar-initials: "AL",
+            avatar-color-index: 1,
+            viewer-count: 1242,
+            stream-width: 1920,
+            stream-height: 1080,
+            can-watch: false,
+        },
+    ];
+    property <[StreamCardData]> preview-host-stream-cards-2: [
+        {
+            host-id: "alice-id",
+            session-id: "stream-session-1",
+            streamer-name: "alice",
+            subtitle: "Counter-Strike 2",
+            avatar: @image-url("../icons/user.svg"),
+            has-avatar: false,
+            avatar-initials: "AL",
+            avatar-color-index: 1,
+            viewer-count: 1242,
+            stream-width: 1920,
+            stream-height: 1080,
+            can-watch: false,
+        },
+        {
+            host-id: "fail-id",
+            session-id: "stream-session-2",
+            streamer-name: "FaiL",
+            subtitle: "Valorant",
+            avatar: @image-url("../icons/user.svg"),
+            has-avatar: false,
+            avatar-initials: "Fa",
+            avatar-color-index: 3,
+            viewer-count: 853,
+            stream-width: 1920,
+            stream-height: 1080,
+            can-watch: true,
+        },
+    ];
+    property <[StreamCardData]> preview-host-stream-cards-3: [
+        {
+            host-id: "alice-id",
+            session-id: "stream-session-1",
+            streamer-name: "alice",
+            subtitle: "Counter-Strike 2",
+            avatar: @image-url("../icons/user.svg"),
+            has-avatar: false,
+            avatar-initials: "AL",
+            avatar-color-index: 1,
+            viewer-count: 1242,
+            stream-width: 1920,
+            stream-height: 1080,
+            can-watch: false,
+        },
+        {
+            host-id: "fail-id",
+            session-id: "stream-session-2",
+            streamer-name: "FaiL",
+            subtitle: "Valorant",
+            avatar: @image-url("../icons/user.svg"),
+            has-avatar: false,
+            avatar-initials: "Fa",
+            avatar-color-index: 3,
+            viewer-count: 853,
+            stream-width: 1920,
+            stream-height: 1080,
+            can-watch: true,
+        },
+        {
+            host-id: "bobben-id",
+            session-id: "stream-session-3",
+            streamer-name: "b0bben",
+            subtitle: "League of Legends",
+            avatar: @image-url("../icons/user.svg"),
+            has-avatar: false,
+            avatar-initials: "b0",
+            avatar-color-index: 2,
+            viewer-count: 420,
+            stream-width: 1920,
+            stream-height: 1080,
+            can-watch: true,
+        },
+    ];
+    property <[StreamCardData]> preview-stream-cards: preview-stream-count == 0
+        ? []
+        : preview-hosting
+            ? (preview-stream-count == 1
+                ? root.preview-host-stream-cards-1
+                : preview-stream-count == 2
+                    ? root.preview-host-stream-cards-2
+                    : root.preview-host-stream-cards-3)
+            : (preview-stream-count == 1
+                ? root.preview-stream-cards-1
+                : preview-stream-count == 2
+                    ? root.preview-stream-cards-2
+                    : root.preview-stream-cards-3);
 
     CrewFeed {
         width: parent.width;
         height: parent.height;
+        stream-cards: root.preview-stream-cards;
+        is-hosting: root.preview-hosting;
+        is-watching: root.preview-watching;
+        active-streamer-id: root.preview-active-streamer-id;
         clip-count: 12;
         is-cold-start: false;
         cards: [
