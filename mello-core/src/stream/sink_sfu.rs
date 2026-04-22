@@ -1,8 +1,8 @@
 use std::sync::atomic::{AtomicU16, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use async_trait::async_trait;
-use tokio::sync::Mutex;
+use tokio::sync::{mpsc, Mutex};
 
 use super::error::StreamError;
 use super::pacer::{EgressPacer, PacingTelemetry};
@@ -12,23 +12,58 @@ use super::sink_p2p::CHUNK_HEADER_SIZE;
 use crate::transport::SfuConnection;
 
 const DEFAULT_SINK_PACING_KBPS: u32 = 6_000;
-// Keep SFU chunks under the default ~40ms burst budget at 8 Mbps
-// to avoid oversized pacing and reduce decode artifact spikes.
 const SFU_CHUNK_MAX_PAYLOAD: usize = 40_000;
+
+/// Egress channel capacity — enough to absorb encoder bursts without blocking
+/// the manager, but small enough to exert back-pressure before memory bloats.
+const EGRESS_QUEUE_CAPACITY: usize = 128;
 
 pub struct SfuSink {
     connection: Arc<SfuConnection>,
     msg_seq: AtomicU16,
-    pacer: Mutex<EgressPacer>,
+    egress_tx: mpsc::Sender<Vec<u8>>,
+    egress_spawned: OnceLock<()>,
+    egress_rx: std::sync::Mutex<Option<mpsc::Receiver<Vec<u8>>>>,
+    pacer: Arc<Mutex<EgressPacer>>,
 }
 
 impl SfuSink {
     pub fn new(connection: Arc<SfuConnection>) -> Self {
+        let pacer = Arc::new(Mutex::new(EgressPacer::new(DEFAULT_SINK_PACING_KBPS)));
+        let (egress_tx, egress_rx) = mpsc::channel(EGRESS_QUEUE_CAPACITY);
+
         Self {
             connection,
             msg_seq: AtomicU16::new(0),
-            pacer: Mutex::new(EgressPacer::new(DEFAULT_SINK_PACING_KBPS)),
+            egress_tx,
+            egress_spawned: OnceLock::new(),
+            egress_rx: std::sync::Mutex::new(Some(egress_rx)),
+            pacer,
         }
+    }
+
+    /// Lazily spawn the egress task on first use — avoids requiring a tokio
+    /// runtime context at construction time.
+    fn ensure_egress_task(&self) {
+        self.egress_spawned.get_or_init(|| {
+            let conn = self.connection.clone();
+            let pacer = self.pacer.clone();
+            let mut rx = self
+                .egress_rx
+                .lock()
+                .unwrap()
+                .take()
+                .expect("egress_rx taken twice");
+            tokio::spawn(async move {
+                while let Some(msg) = rx.recv().await {
+                    pacer.lock().await.pace(msg.len()).await;
+                    if let Err(e) = conn.send_media(&msg) {
+                        log::warn!("SFU egress task send failed: bytes={} err={}", msg.len(), e);
+                    }
+                }
+                log::info!("SFU egress task exited");
+            });
+        });
     }
 
     pub fn connection(&self) -> &Arc<SfuConnection> {
@@ -40,12 +75,12 @@ impl SfuSink {
 impl PacketSink for SfuSink {
     async fn send_video(&self, packet: &StreamPacket) -> Result<(), StreamError> {
         let data = packet.serialize();
-        self.send_chunked_media(&data).await
+        self.enqueue_chunked_media(&data)
     }
 
     async fn send_audio(&self, packet: &StreamPacket) -> Result<(), StreamError> {
         let data = packet.serialize();
-        self.send_chunked_media(&data).await
+        self.enqueue_chunked_media(&data)
     }
 
     async fn send_control(&self, packet: &StreamPacket) -> Result<(), StreamError> {
@@ -71,10 +106,9 @@ impl PacketSink for SfuSink {
 }
 
 impl SfuSink {
-    async fn send_chunked_media(&self, data: &[u8]) -> Result<(), StreamError> {
+    fn enqueue_chunked_media(&self, data: &[u8]) -> Result<(), StreamError> {
+        self.ensure_egress_task();
         if !self.connection.is_media_channel_open() {
-            // Host can start producing before SFU DataChannel is fully open.
-            // Drop instead of pacing/stalling on packets that cannot be sent yet.
             return Ok(());
         }
         let chunk_count = data.len().div_ceil(SFU_CHUNK_MAX_PAYLOAD).max(1) as u16;
@@ -91,17 +125,14 @@ impl SfuSink {
             msg.extend_from_slice(&chunk_count.to_le_bytes());
             msg.extend_from_slice(payload);
 
-            self.pacer.lock().await.pace(msg.len()).await;
-            if let Err(e) = self.connection.send_media(&msg) {
+            if let Err(_) = self.egress_tx.try_send(msg) {
                 log::warn!(
-                    "SFU sink media send failed: msg_id={} chunk={}/{} bytes={} err={}",
+                    "SFU sink egress queue full: msg_id={} chunk={}/{} — dropping",
                     msg_id,
                     chunk_idx + 1,
                     chunk_count,
-                    msg.len(),
-                    e
                 );
-                return Err(e);
+                return Err(StreamError::SendFailed("egress queue full".to_string()));
             }
         }
         Ok(())

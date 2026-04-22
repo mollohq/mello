@@ -434,6 +434,9 @@ MELLO_API void mello_stream_stop_viewer(MelloStreamView* view);
 
 MELLO_API bool mello_stream_feed_packet(MelloStreamView* view, const uint8_t* data, int size, bool is_keyframe);
 
+/** Number of decoded frames waiting in the ring buffer to be presented. */
+MELLO_API int mello_stream_viewer_decode_queue_depth(MelloStreamView* view);
+
 /** Read back the latest decoded frame and deliver it via the frame callback.
  *  Call once per display frame after feeding all available packets. */
 MELLO_API bool mello_stream_present_frame(MelloStreamView* view);

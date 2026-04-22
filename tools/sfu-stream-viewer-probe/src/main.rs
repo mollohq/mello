@@ -14,7 +14,7 @@ const WINDOW_W: u32 = 1920;
 const WINDOW_H: u32 = 1080;
 const CHUNK_HEADER_SIZE: usize = 6; // msg_id(2) + chunk_idx(2) + chunk_count(2)
 const MAX_CHUNKS_PER_MESSAGE: u16 = 64;
-const BACKLOG_GUARD_TRIGGER_FRAMES: u64 = 120;
+const BACKLOG_GUARD_TRIGGER_FRAMES: u64 = 30;
 const BACKLOG_GUARD_KEYFRAME_REQUEST_COOLDOWN_SECS: u64 = 4;
 
 struct FrameBuffer {
@@ -548,6 +548,14 @@ fn main() {
                                     backlog_guard_drop_packets
                                 );
                             }
+                            if !is_keyframe {
+                                let depth = unsafe {
+                                    mello_sys::mello_stream_viewer_decode_queue_depth(viewer)
+                                };
+                                if depth >= 3 {
+                                    continue;
+                                }
+                            }
                             feed_video_packets = feed_video_packets.saturating_add(1);
                             let ok = unsafe {
                                 mello_sys::mello_stream_feed_packet(
@@ -724,7 +732,7 @@ fn main() {
 
             let decode_deficit_hz = (feed_video_hz - dec_fps).max(0.0);
             let backlog_pressure = decode_backlog_est >= BACKLOG_GUARD_TRIGGER_FRAMES
-                && (dec_fps < 44.0 || decode_stall_ms >= 100 || decode_deficit_hz >= 4.0);
+                && (dec_fps < 50.0 || decode_stall_ms >= 30 || decode_deficit_hz >= 1.5);
             if backlog_pressure {
                 if !backlog_guard_active {
                     backlog_guard_active = true;

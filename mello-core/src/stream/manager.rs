@@ -475,9 +475,7 @@ impl StreamManager {
                     "Stream manager keyframe requested: reason=viewer_control viewer={}",
                     viewer_id
                 );
-                unsafe {
-                    mello_sys::mello_stream_request_keyframe(self.host);
-                }
+                self.request_host_keyframe("viewer_control");
                 None
             }
             Some(ControlSubtype::LossReport) => {
@@ -513,12 +511,13 @@ impl StreamManager {
 }
 
 fn coalesce_video_packet(
-    mut packet: VideoPacket,
+    packet: VideoPacket,
     video_rx: &mut mpsc::Receiver<VideoPacket>,
     max_drain: usize,
 ) -> (VideoPacket, usize) {
     let mut coalesced = 0usize;
     let mut newest_keyframe: Option<VideoPacket> = None;
+    let mut newest_delta: Option<VideoPacket> = None;
 
     while coalesced < max_drain {
         let Ok(next) = video_rx.try_recv() else {
@@ -527,16 +526,23 @@ fn coalesce_video_packet(
         coalesced += 1;
         if next.is_keyframe {
             newest_keyframe = Some(next);
+        } else {
+            newest_delta = Some(next);
         }
     }
 
-    // Never fast-forward to an arbitrary delta frame: dropping earlier deltas
-    // while keeping a later delta often breaks H264 reference chains and causes
-    // prolonged visual corruption. Only jump ahead when we have a keyframe.
+    // Prefer the newest keyframe if one was in the drain window (clean recovery
+    // point). Otherwise prefer the newest delta — the reference chain is already
+    // broken by the dropped intermediates, and the newest delta is temporally
+    // closest to the encoder's current state, minimizing artifact duration until
+    // the next keyframe arrives.
     if let Some(kf) = newest_keyframe {
-        packet = kf;
+        (kf, coalesced)
+    } else if let Some(delta) = newest_delta {
+        (delta, coalesced)
+    } else {
+        (packet, coalesced)
     }
-    (packet, coalesced)
 }
 
 #[cfg(test)]
@@ -571,7 +577,7 @@ mod tests {
     }
 
     #[test]
-    fn coalesce_video_packet_keeps_oldest_delta_without_keyframe() {
+    fn coalesce_video_packet_keeps_newest_delta_without_keyframe() {
         let first = VideoPacket {
             data: vec![1],
             is_keyframe: false,
@@ -593,7 +599,7 @@ mod tests {
 
         let (picked, coalesced) = coalesce_video_packet(first, &mut rx, MAX_VIDEO_COALESCE_DRAIN);
         assert_eq!(coalesced, 2);
-        assert_eq!(picked.timestamp, 1);
-        assert_eq!(picked.data, vec![1]);
+        assert_eq!(picked.timestamp, 3);
+        assert_eq!(picked.data, vec![3]);
     }
 }

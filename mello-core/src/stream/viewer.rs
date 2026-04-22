@@ -3,7 +3,33 @@ use std::time::Instant;
 use super::fec::FecDecoder;
 use super::packet::{KeyframeRequest, LossReport, PacketType, StreamPacket};
 
-/// Rate limit: at most one IDR request per 2 seconds.
+/// Check if an H.264 bitstream starts with an IDR NAL unit (keyframe).
+/// Scans for the first NAL start code and checks if nal_unit_type == 5.
+fn is_h264_idr(data: &[u8]) -> bool {
+    let mut i = 0;
+    while i + 3 < data.len() {
+        if data[i] == 0 && data[i + 1] == 0 {
+            let (start, skip) = if data[i + 2] == 1 {
+                (i + 3, 3)
+            } else if i + 3 < data.len() && data[i + 2] == 0 && data[i + 3] == 1 {
+                (i + 4, 4)
+            } else {
+                i += 1;
+                continue;
+            };
+            if start < data.len() {
+                let nal_type = data[start] & 0x1F;
+                return nal_type == 5;
+            }
+            i += skip;
+        } else {
+            i += 1;
+        }
+    }
+    false
+}
+
+/// Rate limit: at most one IDR request per 4 seconds.
 const IDR_RATE_LIMIT_SECS: u64 = 4;
 
 /// Number of consecutive unrecoverable FEC groups before requesting IDR.
@@ -138,9 +164,10 @@ impl StreamViewer {
 
         // Feed to FEC decoder
         if let Some(recovered) = self.fec_decoder.feed_data(packet.sequence, &packet.payload) {
+            let recovered_is_kf = is_h264_idr(&recovered);
             results.push(ViewerFeedResult::RecoveredVideoPayload {
                 data: recovered,
-                is_keyframe: false,
+                is_keyframe: recovered_is_kf,
             });
         }
 
@@ -158,9 +185,10 @@ impl StreamViewer {
     fn on_fec_packet(&mut self, packet: &StreamPacket, results: &mut Vec<ViewerFeedResult>) {
         if let Some(recovered) = self.fec_decoder.feed_parity(&packet.payload) {
             self.packets_lost = self.packets_lost.saturating_sub(1);
+            let recovered_is_kf = is_h264_idr(&recovered);
             results.push(ViewerFeedResult::RecoveredVideoPayload {
                 data: recovered,
-                is_keyframe: false,
+                is_keyframe: recovered_is_kf,
             });
         }
 

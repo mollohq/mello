@@ -8,6 +8,7 @@
 #include <functional>
 #include <mutex>
 #include <atomic>
+#include <array>
 
 #ifdef _WIN32
 #include "video_preprocessor.hpp"
@@ -55,6 +56,7 @@ public:
     void stop_viewer();
     bool feed_packet(const uint8_t* data, size_t size, bool is_keyframe);
     bool present_frame();
+    size_t decode_queue_depth() const { return decoded_ring_count_; }
     void set_native_frame_callback(NativeFrameCallback on_native_frame);
     void set_native_frame_mirror_rgba(bool enabled);
 
@@ -109,10 +111,29 @@ private:
     uint64_t frames_dropped_   = 0;
 
     std::vector<uint8_t> rgba_buf_;
+
+    static constexpr size_t DECODED_RING_CAP = 3;
 #ifdef _WIN32
-    ID3D11Texture2D*     latest_decoded_ = nullptr;
+    std::array<ID3D11Texture2D*, DECODED_RING_CAP> decoded_ring_{};
 #elif defined(__APPLE__)
-    void*                latest_decoded_ = nullptr; // CVPixelBufferRef
+    std::array<void*, DECODED_RING_CAP> decoded_ring_{}; // CVPixelBufferRef
+#endif
+    size_t decoded_ring_head_ = 0; // next write slot
+    size_t decoded_ring_tail_ = 0; // next read slot
+    size_t decoded_ring_count_ = 0;
+
+    void push_decoded(
+#ifdef _WIN32
+        ID3D11Texture2D* frame
+#elif defined(__APPLE__)
+        void* frame
+#endif
+    );
+
+#ifdef _WIN32
+    ID3D11Texture2D* pop_decoded();
+#elif defined(__APPLE__)
+    void* pop_decoded();
 #endif
 };
 

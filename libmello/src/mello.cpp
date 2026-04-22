@@ -916,6 +916,11 @@ bool mello_stream_feed_packet(MelloStreamView* view, const uint8_t* data, int si
     } catch (...) { return false; }
 }
 
+int mello_stream_viewer_decode_queue_depth(MelloStreamView* view) {
+    if (!view) return 0;
+    return static_cast<int>(view->ctx->video().decode_queue_depth());
+}
+
 bool mello_stream_present_frame(MelloStreamView* view) {
     if (!view) return false;
     try {

@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU16, Ordering};
-use std::sync::RwLock;
+use std::sync::{Arc, OnceLock, RwLock};
 
 use async_trait::async_trait;
-use tokio::sync::Mutex;
+use tokio::sync::{mpsc, Mutex};
 
 use super::error::StreamError;
 use super::pacer::{EgressPacer, PacingTelemetry};
@@ -12,6 +12,7 @@ use super::sink::PacketSink;
 
 const MAX_P2P_VIEWERS: usize = 5;
 const DEFAULT_SINK_PACING_KBPS: u32 = 6_000;
+const EGRESS_QUEUE_CAPACITY: usize = 128;
 
 /// Max payload per DataChannel message. SCTP fragments anything larger into
 /// many chunks; losing a single fragment kills the entire message in unreliable
@@ -35,9 +36,12 @@ unsafe impl Sync for ViewerPeer {}
 /// Fan-out is fire-and-forget — a slow or disconnected viewer does not stall
 /// the pipeline for other viewers.
 pub struct P2PFanoutSink {
-    viewers: RwLock<HashMap<String, ViewerPeer>>,
+    viewers: Arc<RwLock<HashMap<String, ViewerPeer>>>,
     msg_seq: AtomicU16,
-    pacer: Mutex<EgressPacer>,
+    egress_tx: mpsc::Sender<Vec<u8>>,
+    egress_spawned: OnceLock<()>,
+    egress_rx: std::sync::Mutex<Option<mpsc::Receiver<Vec<u8>>>>,
+    pacer: Arc<Mutex<EgressPacer>>,
 }
 
 impl Default for P2PFanoutSink {
@@ -48,11 +52,64 @@ impl Default for P2PFanoutSink {
 
 impl P2PFanoutSink {
     pub fn new() -> Self {
+        let viewers = Arc::new(RwLock::new(HashMap::new()));
+        let pacer = Arc::new(Mutex::new(EgressPacer::new(DEFAULT_SINK_PACING_KBPS)));
+        let (egress_tx, egress_rx) = mpsc::channel(EGRESS_QUEUE_CAPACITY);
+
         Self {
-            viewers: RwLock::new(HashMap::new()),
+            viewers,
             msg_seq: AtomicU16::new(0),
-            pacer: Mutex::new(EgressPacer::new(DEFAULT_SINK_PACING_KBPS)),
+            egress_tx,
+            egress_spawned: OnceLock::new(),
+            egress_rx: std::sync::Mutex::new(Some(egress_rx)),
+            pacer,
         }
+    }
+
+    fn ensure_egress_task(&self) {
+        self.egress_spawned.get_or_init(|| {
+            let viewers = self.viewers.clone();
+            let pacer = self.pacer.clone();
+            let mut rx = self
+                .egress_rx
+                .lock()
+                .unwrap()
+                .take()
+                .expect("egress_rx taken twice");
+            tokio::spawn(async move {
+                while let Some(msg) = rx.recv().await {
+                    let connected_count = {
+                        let vw = viewers.read().unwrap();
+                        vw.values()
+                            .filter(|vp| unsafe { mello_sys::mello_peer_is_connected(vp.peer) })
+                            .count()
+                    };
+                    if connected_count == 0 {
+                        continue;
+                    }
+
+                    pacer.lock().await.pace(msg.len() * connected_count).await;
+
+                    {
+                        let vw = viewers.read().unwrap();
+                        for vp in vw.values() {
+                            let connected = unsafe { mello_sys::mello_peer_is_connected(vp.peer) };
+                            if !connected {
+                                continue;
+                            }
+                            unsafe {
+                                mello_sys::mello_peer_send_unreliable(
+                                    vp.peer,
+                                    msg.as_ptr(),
+                                    msg.len() as i32,
+                                );
+                            }
+                        }
+                    }
+                }
+                log::info!("P2P egress task exited");
+            });
+        });
     }
 
     pub fn add_viewer(
@@ -79,9 +136,8 @@ impl P2PFanoutSink {
         self.viewers.read().unwrap().len()
     }
 
-    /// Send data, chunking if it exceeds CHUNK_MAX_PAYLOAD.
-    /// Small messages (<= CHUNK_MAX_PAYLOAD) are sent as a single chunk.
-    async fn broadcast(&self, data: &[u8]) {
+    fn enqueue_chunked(&self, data: &[u8]) -> Result<(), StreamError> {
+        self.ensure_egress_task();
         let chunk_count = data.len().div_ceil(CHUNK_MAX_PAYLOAD).max(1) as u16;
         let msg_id = self.msg_seq.fetch_add(1, Ordering::Relaxed);
 
@@ -96,40 +152,17 @@ impl P2PFanoutSink {
             msg.extend_from_slice(&chunk_count.to_le_bytes());
             msg.extend_from_slice(payload);
 
-            let connected_count = {
-                let viewers = self.viewers.read().unwrap();
-                viewers
-                    .values()
-                    .filter(|vp| unsafe { mello_sys::mello_peer_is_connected(vp.peer) })
-                    .count()
-            };
-            if connected_count == 0 {
-                return;
-            }
-
-            self.pacer
-                .lock()
-                .await
-                .pace(msg.len() * connected_count)
-                .await;
-
-            {
-                let viewers = self.viewers.read().unwrap();
-                for vp in viewers.values() {
-                    let connected = unsafe { mello_sys::mello_peer_is_connected(vp.peer) };
-                    if !connected {
-                        continue;
-                    }
-                    unsafe {
-                        mello_sys::mello_peer_send_unreliable(
-                            vp.peer,
-                            msg.as_ptr(),
-                            msg.len() as i32,
-                        );
-                    }
-                }
+            if self.egress_tx.try_send(msg).is_err() {
+                log::warn!(
+                    "P2P sink egress queue full: msg_id={} chunk={}/{} — dropping",
+                    msg_id,
+                    chunk_idx + 1,
+                    chunk_count,
+                );
+                return Err(StreamError::SendFailed("egress queue full".to_string()));
             }
         }
+        Ok(())
     }
 }
 
@@ -137,20 +170,17 @@ impl P2PFanoutSink {
 impl PacketSink for P2PFanoutSink {
     async fn send_video(&self, packet: &StreamPacket) -> Result<(), StreamError> {
         let bytes = packet.serialize();
-        self.broadcast(&bytes).await;
-        Ok(())
+        self.enqueue_chunked(&bytes)
     }
 
     async fn send_audio(&self, packet: &StreamPacket) -> Result<(), StreamError> {
         let bytes = packet.serialize();
-        self.broadcast(&bytes).await;
-        Ok(())
+        self.enqueue_chunked(&bytes)
     }
 
     async fn send_control(&self, packet: &StreamPacket) -> Result<(), StreamError> {
         let bytes = packet.serialize();
-        self.broadcast(&bytes).await;
-        Ok(())
+        self.enqueue_chunked(&bytes)
     }
 
     async fn set_pacing_kbps(&self, target_kbps: u32) {

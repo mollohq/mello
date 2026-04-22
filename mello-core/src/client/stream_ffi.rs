@@ -21,10 +21,13 @@ pub(super) struct ChunkAssembler {
     pending: HashMap<u16, ChunkAssembly>,
 }
 
+const CHUNK_ASSEMBLY_EXPIRY_MS: u128 = 500;
+
 struct ChunkAssembly {
     chunk_count: u16,
     chunks_received: u16,
     chunks: Vec<Option<Vec<u8>>>,
+    created_at: Instant,
 }
 
 impl ChunkAssembler {
@@ -55,13 +58,19 @@ impl ChunkAssembler {
             return None;
         }
 
-        // Evict stale assemblies (keep only messages within a recent window)
-        self.pending.retain(|&id, _| msg_id.wrapping_sub(id) < 64);
+        let now = Instant::now();
+
+        // Evict stale assemblies: msg_id window OR time-based expiry
+        self.pending.retain(|&id, assembly| {
+            msg_id.wrapping_sub(id) < 64
+                && now.duration_since(assembly.created_at).as_millis() < CHUNK_ASSEMBLY_EXPIRY_MS
+        });
 
         let entry = self.pending.entry(msg_id).or_insert_with(|| ChunkAssembly {
             chunk_count,
             chunks_received: 0,
             chunks: (0..chunk_count).map(|_| None).collect(),
+            created_at: now,
         });
 
         let idx = chunk_idx as usize;

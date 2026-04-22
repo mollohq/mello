@@ -500,6 +500,17 @@ impl super::Client {
                                 continue;
                             }
                         }
+                        // Skip delta frames when the decode ring is completely full
+                        // to prevent latency accumulation. Keyframes always pass
+                        // through so the decoder can recover cleanly.
+                        if !is_keyframe {
+                            let depth = unsafe {
+                                mello_sys::mello_stream_viewer_decode_queue_depth(viewer)
+                            };
+                            if depth >= 3 {
+                                continue;
+                            }
+                        }
                         let ok = unsafe {
                             mello_sys::mello_stream_feed_packet(
                                 viewer,
@@ -543,21 +554,31 @@ impl super::Client {
             }
         }
 
-        // Present independently of packet arrival bursts. Packets can arrive in
-        // batches; tying present to `fed_any` throttles visible FPS even when
-        // decoder throughput is healthy. Keep the UI-consumed gate to avoid
-        // readback/copy piling up.
-        let frame_consumed = self
-            .frame_consumed
-            .load(std::sync::atomic::Ordering::Acquire);
+        // Present from the decoded frame ring buffer. With multiple frames
+        // potentially queued from bursty packet arrival, drain as many as the UI
+        // can consume to keep visual cadence smooth even when ticks are jittery.
         let native_frame_active = self
             .native_frame_active
             .load(std::sync::atomic::Ordering::Acquire);
-        let force_due = !frame_consumed
-            && vs.last_present_attempt.elapsed()
-                >= std::time::Duration::from_millis(STREAM_FORCE_PRESENT_MAX_WAIT_MS);
 
-        if native_frame_active || frame_consumed || force_due {
+        const MAX_PRESENTS_PER_TICK: u32 = 3;
+        let mut presented_this_tick = 0u32;
+
+        while presented_this_tick < MAX_PRESENTS_PER_TICK {
+            let frame_consumed = self
+                .frame_consumed
+                .load(std::sync::atomic::Ordering::Acquire);
+            let force_due = !frame_consumed
+                && vs.last_present_attempt.elapsed()
+                    >= std::time::Duration::from_millis(STREAM_FORCE_PRESENT_MAX_WAIT_MS);
+
+            if !(native_frame_active || frame_consumed || force_due) {
+                if presented_this_tick == 0 {
+                    vs.present_skipped_unconsumed = vs.present_skipped_unconsumed.saturating_add(1);
+                }
+                break;
+            }
+
             vs.present_attempts = vs.present_attempts.saturating_add(1);
             if !native_frame_active && force_due {
                 vs.present_forced_attempts = vs.present_forced_attempts.saturating_add(1);
@@ -566,12 +587,13 @@ impl super::Client {
             vs.last_present_attempt = Instant::now();
             if presented {
                 vs.frames_presented += 1;
+                presented_this_tick += 1;
                 if vs.frames_presented <= 3 || vs.frames_presented.is_multiple_of(300) {
                     log::info!("Stream frame presented #{}", vs.frames_presented);
                 }
+            } else {
+                break; // ring buffer empty
             }
-        } else {
-            vs.present_skipped_unconsumed = vs.present_skipped_unconsumed.saturating_add(1);
         }
 
         // Poll SFU events to detect session_ended / host disconnect
