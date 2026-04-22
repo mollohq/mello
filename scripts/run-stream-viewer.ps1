@@ -53,7 +53,7 @@ $repoRoot = Split-Path -Parent $PSScriptRoot
 Push-Location $repoRoot
 try {
     $cargoArgs = @(
-        "run", "-p", "sfu-stream-viewer-probe", "--",
+        "run", "--release", "-p", "sfu-stream-viewer-probe", "--",
         "--watch-stream-print",
         "--nakama-http-base", $NakamaHttpBase,
         "--nakama-auth-token", $NakamaAuthToken,

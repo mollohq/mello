@@ -179,12 +179,24 @@ bool VideoPipeline::start_host(const CaptureSourceDesc& source,
         return false;
     }
 
-    // 4. Start capture — frames flow through on_captured_frame
+    // 4. Start encode thread + capture — frames flow: capture -> preprocess -> queue -> encode thread
+    host_running_    = true;
+    host_start_time_ = now_us();
+    frames_encoded_  = 0;
+    eq_head_ = eq_tail_ = eq_count_ = 0;
+    eq_drops_ = 0;
+    last_convert_ms_ = last_encode_ms_ = 0;
+
+    encode_thread_ = std::thread(&VideoPipeline::encode_thread_func, this);
+
     auto self = this;
     if (!capture_->start(config.fps, [self](ID3D11Texture2D* tex, uint64_t ts) {
         self->on_captured_frame(tex, ts);
     })) {
         MELLO_LOG_ERROR(TAG, "Failed to start capture");
+        host_running_ = false;
+        eq_cv_.notify_all();
+        if (encode_thread_.joinable()) encode_thread_.join();
         return false;
     }
 #elif defined(__APPLE__)
@@ -210,18 +222,19 @@ bool VideoPipeline::start_host(const CaptureSourceDesc& source,
         return false;
     }
 
+    host_running_    = true;
+    host_start_time_ = now_us();
+    frames_encoded_  = 0;
+
     auto self = this;
     if (!capture_->start(config.fps, [self](void* pixel_buffer, uint64_t ts) {
         self->on_captured_frame(pixel_buffer, ts);
     })) {
         MELLO_LOG_ERROR(TAG, "Failed to start capture");
+        host_running_ = false;
         return false;
     }
 #endif
-
-    host_running_    = true;
-    host_start_time_ = now_us();
-    frames_encoded_  = 0;
 
     MELLO_LOG_INFO(TAG, "Host pipeline starting: encoder=%s capture=%s res=%ux%u fps=%u bitrate=%ukbps low_latency=%s",
         encoder_ ? encoder_->name() : "none",
@@ -238,6 +251,11 @@ void VideoPipeline::stop_host() {
     host_running_ = false;
 
     if (capture_)   capture_->stop();
+
+    // Wake and join the encode thread before shutting down encoder/preprocessor
+    eq_cv_.notify_all();
+    if (encode_thread_.joinable()) encode_thread_.join();
+
     if (encoder_)   encoder_->shutdown();
 #ifdef _WIN32
     if (preprocessor_) preprocessor_->shutdown();
@@ -333,39 +351,70 @@ void VideoPipeline::on_captured_frame(ID3D11Texture2D* texture, uint64_t timesta
         request_keyframe();
     }
 
-    if (frames_encoded_ < 3) {
-        D3D11_TEXTURE2D_DESC cap_desc{};
-        texture->GetDesc(&cap_desc);
-        MELLO_LOG_DEBUG(TAG, "on_captured_frame[%llu]: capture tex fmt=%u %ux%u bind=0x%X",
-            frames_encoded_, cap_desc.Format, cap_desc.Width, cap_desc.Height, cap_desc.BindFlags);
-    }
+    // Preprocess on the capture thread (fast GPU blit), then enqueue for encode
+    auto t0 = std::chrono::steady_clock::now();
+    auto result = preprocessor_->convert(texture);
+    auto t1 = std::chrono::steady_clock::now();
+    last_convert_ms_ = std::chrono::duration<double, std::milli>(t1 - t0).count();
 
-    // Capture → Preprocess (color convert + downscale) → Encode → Packet callback
-    ID3D11Texture2D* nv12 = preprocessor_->convert(texture);
-    if (!nv12) {
+    if (!result.texture) {
         MELLO_LOG_WARN(TAG, "on_captured_frame: convert() returned null");
         return;
     }
 
-    EncodedPacket packet{};
-    if (encoder_->encode(nv12, packet)) {
-        frames_encoded_++;
-        if (frames_encoded_ <= 3) {
-            MELLO_LOG_DEBUG(TAG, "on_captured_frame[%llu]: encoded %zu bytes keyframe=%d",
-                frames_encoded_, packet.data.size(), packet.is_keyframe);
+    // Enqueue for the encode thread (bounded, drop oldest on overflow)
+    {
+        std::lock_guard<std::mutex> lock(eq_mutex_);
+        if (eq_count_ == ENCODE_QUEUE_CAP) {
+            // Drop the oldest entry to bound latency
+            eq_tail_ = (eq_tail_ + 1) % ENCODE_QUEUE_CAP;
+            eq_count_--;
+            eq_drops_++;
+        }
+        encode_queue_[eq_head_] = {result.texture, timestamp_us};
+        eq_head_ = (eq_head_ + 1) % ENCODE_QUEUE_CAP;
+        eq_count_++;
+    }
+    eq_cv_.notify_one();
+}
+
+void VideoPipeline::encode_thread_func() {
+    while (true) {
+        EncodeJob job{};
+        {
+            std::unique_lock<std::mutex> lock(eq_mutex_);
+            eq_cv_.wait(lock, [this] { return eq_count_ > 0 || !host_running_.load(); });
+            if (eq_count_ == 0 && !host_running_.load()) break;
+            job = encode_queue_[eq_tail_];
+            eq_tail_ = (eq_tail_ + 1) % ENCODE_QUEUE_CAP;
+            eq_count_--;
         }
 
-        if (frames_encoded_ % 300 == 0) {
-            uint64_t uptime_s = (now_us() - host_start_time_) / 1'000'000;
-            EncoderStats stats{};
-            encoder_->get_stats(stats);
-            MELLO_LOG_INFO(TAG, "host: uptime=%llus frames=%llu fps=%u bitrate=%ukbps keyframes=%u bytes=%.1fMB",
-                uptime_s, frames_encoded_, stats.fps_actual, stats.bitrate_kbps,
-                stats.keyframes_sent, static_cast<double>(stats.bytes_sent) / (1024 * 1024));
-        }
+        auto t0 = std::chrono::steady_clock::now();
+        EncodedPacket packet{};
+        if (encoder_->encode(job.texture, packet)) {
+            auto t1 = std::chrono::steady_clock::now();
+            last_encode_ms_ = std::chrono::duration<double, std::milli>(t1 - t0).count();
+            frames_encoded_++;
 
-        if (packet_cb_) {
-            packet_cb_(packet.data.data(), packet.data.size(), packet.is_keyframe, timestamp_us);
+            if (frames_encoded_ <= 3) {
+                MELLO_LOG_DEBUG(TAG, "encode_thread[%llu]: encoded %zu bytes keyframe=%d",
+                    frames_encoded_, packet.data.size(), packet.is_keyframe);
+            }
+
+            if (frames_encoded_ % 300 == 0) {
+                uint64_t uptime_s = (now_us() - host_start_time_) / 1'000'000;
+                EncoderStats stats{};
+                encoder_->get_stats(stats);
+                MELLO_LOG_INFO(TAG, "host: uptime=%llus frames=%llu fps=%u bitrate=%ukbps keyframes=%u bytes=%.1fMB convert_ms=%.1f encode_ms=%.1f eq_depth=%zu eq_drops=%llu",
+                    uptime_s, frames_encoded_, stats.fps_actual, stats.bitrate_kbps,
+                    stats.keyframes_sent, static_cast<double>(stats.bytes_sent) / (1024 * 1024),
+                    last_convert_ms_, last_encode_ms_, eq_count_, eq_drops_);
+            }
+
+            if (packet_cb_) {
+                packet_cb_(packet.data.data(), packet.data.size(), packet.is_keyframe, job.timestamp_us);
+            }
         }
     }
 }

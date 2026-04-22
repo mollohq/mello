@@ -81,20 +81,24 @@ bool DxgiCapture::get_cursor(CursorData& out) {
 
 void DxgiCapture::capture_thread() {
     using clock = std::chrono::steady_clock;
+
+    // DXGI DDI blocks in AcquireNextFrame until the next compositor vsync
+    // delivers a new frame. We use a generous timeout (2 frame intervals)
+    // to avoid busy-spinning while still catching every vsync.
+    UINT timeout_ms = std::max(1000u / target_fps_ * 2, 34u);
     auto frame_interval = std::chrono::microseconds(1'000'000 / target_fps_);
+    auto last_callback  = clock::now() - frame_interval; // allow first frame immediately
+
+    uint64_t frame_count = 0;
+    uint64_t skip_count  = 0;
+    auto     stat_start  = clock::now();
 
     while (running_.load()) {
-        auto frame_start = clock::now();
-
         ComPtr<IDXGIResource> resource;
         DXGI_OUTDUPL_FRAME_INFO frame_info{};
-        HRESULT hr = duplication_->AcquireNextFrame(16, &frame_info, &resource);
+        HRESULT hr = duplication_->AcquireNextFrame(timeout_ms, &frame_info, &resource);
 
         if (hr == DXGI_ERROR_WAIT_TIMEOUT) {
-            auto elapsed = clock::now() - frame_start;
-            if (elapsed < frame_interval) {
-                std::this_thread::sleep_for(frame_interval - elapsed);
-            }
             continue;
         }
 
@@ -139,19 +143,42 @@ void DxgiCapture::capture_thread() {
             }
         }
 
+        // Skip cursor-only updates (no new pixel data)
+        if (frame_info.LastPresentTime.QuadPart == 0) {
+            duplication_->ReleaseFrame();
+            continue;
+        }
+
+        // Throttle to target_fps: skip frames that arrive faster than needed.
+        // DXGI delivers at monitor refresh (e.g. 144Hz) but we only need 60.
+        auto now_tp = clock::now();
+        if (now_tp - last_callback < frame_interval) {
+            duplication_->ReleaseFrame();
+            ++skip_count;
+            continue;
+        }
+
         ComPtr<ID3D11Texture2D> texture;
         hr = resource.As(&texture);
         if (SUCCEEDED(hr) && callback_) {
             auto now = std::chrono::duration_cast<std::chrono::microseconds>(
-                clock::now().time_since_epoch()).count();
+                now_tp.time_since_epoch()).count();
             callback_(texture.Get(), static_cast<uint64_t>(now));
+            last_callback = now_tp;
+            ++frame_count;
         }
 
         duplication_->ReleaseFrame();
 
-        auto elapsed = clock::now() - frame_start;
-        if (elapsed < frame_interval) {
-            std::this_thread::sleep_for(frame_interval - elapsed);
+        // Periodic capture-rate diagnostic
+        auto stat_elapsed = std::chrono::duration_cast<std::chrono::seconds>(now_tp - stat_start);
+        if (stat_elapsed.count() >= 10 && frame_count > 0) {
+            double hz = static_cast<double>(frame_count) / stat_elapsed.count();
+            MELLO_LOG_INFO(TAG, "DXGI-DDI capture: %.1f delivered / %llu skipped (%llds)",
+                hz, (unsigned long long)skip_count, (long long)stat_elapsed.count());
+            frame_count = 0;
+            skip_count  = 0;
+            stat_start  = now_tp;
         }
     }
 }

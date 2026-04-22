@@ -309,16 +309,16 @@ fn select_source(
             let title = unsafe { std::ffi::CStr::from_ptr(win.title.as_ptr()) }
                 .to_string_lossy()
                 .to_string();
-            let hwnd = win.hwnd;
+            let _hwnd = win.hwnd;
             let pid = win.pid;
             let idx = sources.len();
             sources.push((
                 format!("{} (pid {})", title, pid),
                 mello_sys::MelloCaptureSource {
-                    mode: mello_sys::MelloCaptureMode_MELLO_CAPTURE_WINDOW,
+                    mode: mello_sys::MelloCaptureMode_MELLO_CAPTURE_PROCESS,
                     monitor_index: 0,
-                    hwnd,
-                    pid: 0,
+                    hwnd: std::ptr::null_mut(),
+                    pid,
                 },
             ));
             println!("  [{}] {} (pid {})", idx + 1, title, pid);

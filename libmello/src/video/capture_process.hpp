@@ -26,6 +26,8 @@ private:
     bool swap_to_dxgi();
     bool swap_to_wgc();
 
+    bool start_deferred();
+
     uint32_t                         pid_ = 0;
     GraphicsDevice                   device_{};
     FrameCallback                    callback_;
@@ -38,6 +40,12 @@ private:
 
     // Set when a hot-swap occurs so the pipeline can request a keyframe
     std::atomic<bool>                swap_occurred_{false};
+
+    // Deferred start: window was minimized at init time; we store the hwnd
+    // and restored dimensions, then poll for restore in monitor_thread.
+    HWND                             deferred_hwnd_ = nullptr;
+    uint32_t                         deferred_w_ = 0;
+    uint32_t                         deferred_h_ = 0;
 };
 
 /// Check whether a process currently owns a DXGI output (exclusive fullscreen).

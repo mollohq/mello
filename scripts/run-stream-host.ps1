@@ -34,7 +34,7 @@ $repoRoot = Split-Path -Parent $PSScriptRoot
 Push-Location $repoRoot
 try {
     $cargoArgs = @(
-        "run", "-p", "stream-host", "--",
+        "run", "--release", "-p", "stream-host", "--",
         "--fps", $Fps,
         "--bitrate", $BitrateKbps,
         "--nakama-start-stream",

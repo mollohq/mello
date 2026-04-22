@@ -9,6 +9,8 @@
 #include <mutex>
 #include <atomic>
 #include <array>
+#include <thread>
+#include <condition_variable>
 
 #ifdef _WIN32
 #include "video_preprocessor.hpp"
@@ -103,9 +105,31 @@ private:
     uint32_t encode_w_ = 0;
     uint32_t encode_h_ = 0;
 
+    // Async encode thread: capture enqueues, encode thread dequeues
+    struct EncodeJob {
+#ifdef _WIN32
+        ID3D11Texture2D* texture = nullptr;
+#elif defined(__APPLE__)
+        void* texture = nullptr;
+#endif
+        uint64_t timestamp_us = 0;
+    };
+    static constexpr size_t ENCODE_QUEUE_CAP = 2;
+    std::array<EncodeJob, ENCODE_QUEUE_CAP> encode_queue_{};
+    size_t eq_head_ = 0; // next write
+    size_t eq_tail_ = 0; // next read
+    size_t eq_count_ = 0;
+    uint64_t eq_drops_ = 0;
+    std::mutex eq_mutex_;
+    std::condition_variable eq_cv_;
+    std::thread encode_thread_;
+    void encode_thread_func();
+
     // Stats
     uint64_t host_start_time_  = 0;
     uint64_t frames_encoded_   = 0;
+    double   last_convert_ms_  = 0;
+    double   last_encode_ms_   = 0;
     uint64_t viewer_start_time_ = 0;
     uint64_t frames_decoded_   = 0;
     uint64_t frames_dropped_   = 0;

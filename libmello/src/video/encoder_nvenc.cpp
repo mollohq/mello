@@ -211,10 +211,10 @@ bool NvencEncoder::initialize(const GraphicsDevice& device, const EncoderConfig&
 
 void NvencEncoder::shutdown() {
     if (encoder_) {
-        if (reg_res_) {
-            fn_.nvEncUnregisterResource(encoder_, reg_res_);
-            reg_res_ = nullptr;
+        for (auto& [tex, reg] : reg_cache_) {
+            fn_.nvEncUnregisterResource(encoder_, reg);
         }
+        reg_cache_.clear();
         if (out_buf_) {
             fn_.nvEncDestroyBitstreamBuffer(encoder_, out_buf_);
             out_buf_ = nullptr;
@@ -228,20 +228,13 @@ void NvencEncoder::shutdown() {
     }
 }
 
-bool NvencEncoder::encode(ID3D11Texture2D* nv12_texture, EncodedPacket& out) {
-    if (!encoder_) return false;
-
-    // Register the input texture if this is the first frame or texture changed.
-    // For simplicity, we re-register each frame. A real optimization would cache
-    // the registration when the texture pointer doesn't change.
-    if (reg_res_) {
-        fn_.nvEncUnregisterResource(encoder_, reg_res_);
-        reg_res_ = nullptr;
-    }
+NV_ENC_REGISTERED_PTR NvencEncoder::get_or_register(ID3D11Texture2D* tex) {
+    auto it = reg_cache_.find(tex);
+    if (it != reg_cache_.end()) return it->second;
 
     NV_ENC_REGISTER_RESOURCE reg = {NV_ENC_REGISTER_RESOURCE_VER};
     reg.resourceType          = NV_ENC_INPUT_RESOURCE_TYPE_DIRECTX;
-    reg.resourceToRegister    = nv12_texture;
+    reg.resourceToRegister    = tex;
     reg.width                 = config_.width;
     reg.height                = config_.height;
     reg.bufferFormat          = NV_ENC_BUFFER_FORMAT_NV12;
@@ -250,15 +243,23 @@ bool NvencEncoder::encode(ID3D11Texture2D* nv12_texture, EncodedPacket& out) {
     NVENCSTATUS status = fn_.nvEncRegisterResource(encoder_, &reg);
     if (status != NV_ENC_SUCCESS) {
         MELLO_LOG_ERROR(TAG, "NVENC: nvEncRegisterResource failed: %d (seq=%llu)", status, frame_seq_);
-        return false;
+        return nullptr;
     }
-    reg_res_ = reg.registeredResource;
+    reg_cache_[tex] = reg.registeredResource;
+    MELLO_LOG_DEBUG(TAG, "NVENC: registered texture %p (cache size=%zu)", tex, reg_cache_.size());
+    return reg.registeredResource;
+}
 
-    // Map the registered resource
+bool NvencEncoder::encode(ID3D11Texture2D* nv12_texture, EncodedPacket& out) {
+    if (!encoder_) return false;
+
+    NV_ENC_REGISTERED_PTR reg_res = get_or_register(nv12_texture);
+    if (!reg_res) return false;
+
     NV_ENC_MAP_INPUT_RESOURCE map = {NV_ENC_MAP_INPUT_RESOURCE_VER};
-    map.registeredResource = reg_res_;
+    map.registeredResource = reg_res;
 
-    status = fn_.nvEncMapInputResource(encoder_, &map);
+    NVENCSTATUS status = fn_.nvEncMapInputResource(encoder_, &map);
     if (status != NV_ENC_SUCCESS) {
         MELLO_LOG_ERROR(TAG, "NVENC: nvEncMapInputResource failed: %d (seq=%llu)", status, frame_seq_);
         return false;
