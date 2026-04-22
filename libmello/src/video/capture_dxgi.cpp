@@ -82,15 +82,19 @@ bool DxgiCapture::get_cursor(CursorData& out) {
 void DxgiCapture::capture_thread() {
     using clock = std::chrono::steady_clock;
 
-    // DXGI DDI blocks in AcquireNextFrame until the next compositor vsync.
-    // Use 2x frame interval as timeout so we never miss a vsync.
     UINT timeout_ms = std::max(1000u / target_fps_ * 2, 34u);
 
-    // Accept every 2nd vsync: on 144Hz this gives ~72fps which the encode
-    // queue naturally regulates down to target_fps via bounded backpressure.
-    // On 60Hz monitors this accepts every frame (1:1).
-    auto min_interval   = std::chrono::microseconds(1'000'000 / target_fps_ / 2);
-    auto last_callback  = clock::now() - min_interval;
+    // Adaptive throttle: accept a frame when elapsed >= target_interval - tolerance.
+    // The tolerance is half a vsync period so we snap to the nearest vsync that
+    // satisfies target_fps, regardless of monitor refresh rate (60-360Hz).
+    // We estimate vsync from the first two acquired frames; until then use 1ms.
+    auto target_interval = std::chrono::microseconds(1'000'000 / target_fps_);
+    auto tolerance       = std::chrono::microseconds(1000); // updated after first frames
+    auto deadline        = target_interval - tolerance;
+    auto last_callback   = clock::now() - target_interval;
+
+    clock::time_point first_frame_tp{};
+    bool vsync_calibrated = false;
 
     uint64_t frame_count = 0;
     uint64_t skip_count  = 0;
@@ -153,7 +157,29 @@ void DxgiCapture::capture_thread() {
         }
 
         auto now_tp = clock::now();
-        if (now_tp - last_callback < min_interval) {
+
+        // Calibrate vsync interval from the first two delivered frames
+        if (!vsync_calibrated) {
+            if (first_frame_tp == clock::time_point{}) {
+                first_frame_tp = now_tp;
+            } else {
+                auto vsync_us = std::chrono::duration_cast<std::chrono::microseconds>(
+                    now_tp - first_frame_tp);
+                if (vsync_us.count() > 0 && vsync_us.count() < 100'000) {
+                    tolerance = vsync_us / 2;
+                    deadline  = target_interval - tolerance;
+                    if (deadline < std::chrono::microseconds(0))
+                        deadline = std::chrono::microseconds(0);
+                    vsync_calibrated = true;
+                    MELLO_LOG_INFO(TAG, "DXGI-DDI vsync=%.2fms tolerance=%.2fms deadline=%.2fms",
+                        vsync_us.count() / 1000.0,
+                        tolerance.count() / 1000.0,
+                        deadline.count() / 1000.0);
+                }
+            }
+        }
+
+        if (now_tp - last_callback < deadline) {
             duplication_->ReleaseFrame();
             ++skip_count;
             continue;

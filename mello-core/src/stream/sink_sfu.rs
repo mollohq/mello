@@ -125,7 +125,7 @@ impl SfuSink {
             msg.extend_from_slice(&chunk_count.to_le_bytes());
             msg.extend_from_slice(payload);
 
-            if let Err(_) = self.egress_tx.try_send(msg) {
+            if self.egress_tx.try_send(msg).is_err() {
                 log::warn!(
                     "SFU sink egress queue full: msg_id={} chunk={}/{} — dropping",
                     msg_id,

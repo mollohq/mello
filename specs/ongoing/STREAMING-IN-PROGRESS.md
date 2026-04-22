@@ -1,361 +1,186 @@
-# Streaming In-Progress Handoff (Windows Focus)
+# Streaming — Current Implementation & Roadmap
 
-> **Status:** IN PROGRESS  
-> **Updated:** 2026-04-18  
-> **Priority:** Windows host -> Windows viewer (primary), macOS viewer secondary
-
----
-
-## 1) Current Snapshot
-
-Windows->Windows SFU probe path is now stable end-to-end with significantly better smoothness than baseline, but residual quality issues remain (micro-freezes + persistent blockiness/artifacts).
-
-What is now true (2026-04-18):
-- Host no longer hard-stalls after startup.
-- Viewer no longer enters "keyframe then long decay corruption" state.
-- Host probe now updates backend with actual encode resolution (no stale requested dimensions).
-- Viewer join triggers explicit host keyframe request.
-- Probe host exits on sustained SFU channel closure (no endless encode with 0 kbps egress).
-- SFU viewer probe runs at correct decoded size via `watch_stream` response.
-- Typical probe metrics now sit around:
-  - decode/native FPS: ~42-48 (with dips into mid/upper 30s)
-  - ingress: ~46-50 pps, ~5.8-7.4 Mbps
-  - present_hz above decode_hz (present path not primary limiter)
-
-Open quality issues:
-- Periodic micro-freezes remain.
-- Persistent blockiness/artifacts remain visible most of the time.
-- First keyframe still frequently fails once (`feed_packet failed for keyframe`), then recovery continues.
-- Host still reports recurring `Stream manager video coalesce` events (often even before viewer joins).
+> **Updated:** 2026-04-22
+> **Target:** Windows host → Windows viewer via SFU, 1080p60 @ 8 Mbps
 
 ---
 
-## 2) What Was Fixed In This Session
+## Architecture Overview
 
-### 2.1 SFU startup/egress reliability
-- Added send-failure logging in:
-  - `mello-core/src/stream/sink_sfu.rs`
-  - `mello-core/src/stream/manager.rs`
-- Added explicit no-silent-fallback guard when backend mode is SFU:
-  - `mello-core/src/client/streaming.rs`
+```
+ ┌──────────── Host ─────────────┐   SFU    ┌──── Viewer ────┐
+ │ Capture → Preprocess → Encode │ → relay → │ Decode → Present│
+ │  (DXGI)   (BGRA→NV12)  (NVENC)│          │  (DXVA)  (Slint)│
+ └───────────────────────────────┘          └─────────────────┘
+```
 
-### 2.2 DataChannel readiness correctness
-- Added explicit unreliable/reliable DataChannel open tracking in libmello:
-  - `libmello/src/transport/peer_connection_impl.hpp`
-  - `libmello/src/transport/peer_connection.cpp`
-  - `libmello/include/mello.h`
-  - `libmello/src/mello.cpp`
-- Wired those checks into Rust SFU transport:
-  - `mello-core/src/transport/sfu_connection.rs`
-- `wait_for_datachannel_open()` now waits for ICE + both channel states, not ICE only.
+**Rust layer (`mello-core`):** stream lifecycle, SFU signaling (Nakama), chunking/reassembly, ABR, pacing, recovery/keyframe policy.
 
-### 2.3 Stream task starvation fixes
-- Bounded coalescing drain in stream manager to avoid run-loop starvation:
-  - `mello-core/src/stream/manager.rs`
-  - Added test: `coalesce_video_packet_caps_drain_to_avoid_starvation`
+**C++ layer (`libmello`):** hardware capture (DXGI Desktop Duplication / WGC), GPU color-space conversion, hardware encode (NVENC/AMF/QSV), hardware decode (DXVA), cursor capture, audio capture. Linked via `mello-sys` FFI.
 
-### 2.4 Pacer deadlock fix
-- Fixed token-bucket infinite-wait on oversized packets/chunks:
-  - `mello-core/src/stream/pacer.rs`
-  - Added test: `oversized_payload_does_not_deadlock`
-
-### 2.5 Stop-time crash fix
-- Fixed teardown ordering so callback contexts outlive C++ host shutdown:
-  - `mello-core/src/stream/host.rs`
-
-### 2.6 Present/tick scheduling improvements
-- Present is no longer gated by `fed_any` burst timing:
-  - `mello-core/src/client/streaming.rs`
-- Split voice and stream ticks (20ms voice, 16ms stream):
-  - `mello-core/src/client/mod.rs`
-
-### 2.7 Probe tooling for SFU-only isolation (new)
-- Added dedicated SFU viewer probe:
-  - `tools/sfu-stream-viewer-probe`
-  - title-bar + log telemetry (`dec/native/present/msg_hz/ingress/rtt`)
-- Added direct Nakama `watch_stream` helper flow in viewer probe:
-  - `--watch-stream-print --nakama-http-base --nakama-auth-token --session`
-  - auto-populates endpoint/token and prints response fields
-- Added SFU host mode to stream-host probe:
-  - manual mode: `--sfu-endpoint --sfu-token --sfu-session`
-  - auto mode: `--nakama-start-stream --nakama-http-base --nakama-auth-token --crew-id`
-
-### 2.8 Host probe robustness fixes (new)
-- On SFU host probe start, backend resolution now updated to actual encode size:
-  - `update_stream_resolution` RPC call after `mello_stream_get_host_resolution`
-- On SFU `MemberJoined`, host probe now requests immediate keyframe.
-- Host probe now auto-stops if media/control channels remain closed for multiple ticks.
-
-### 2.9 Stream send-path tuning (new)
-- SFU-only chunk payload reduced from 60k to 40k:
-  - `mello-core/src/stream/sink_sfu.rs`
-- Queue-pressure keyframe requests heavily rate-limited and only for severe coalesce:
-  - `mello-core/src/stream/manager.rs`
-- Coalescer corrected to avoid fast-forwarding to arbitrary delta frames:
-  - only jumps ahead when a keyframe is available
-  - added test `coalesce_video_packet_keeps_oldest_delta_without_keyframe`
+**Transport:** DataChannels over WebRTC (libdatachannel). Media is chunked (40 KB max payload) with sequence/chunk headers for reassembly on the viewer side. SFU (`mello-sfu`, Go) forwards media — no transcoding.
 
 ---
 
-## 3) Quick Analysis From Latest Run
+## Host Pipeline (Capture → Network)
 
-### Observed (macOS viewer log)
-- SFU connect/join succeeds.
-- Ingress keeps increasing (no transport stall).
-- Viewer decode continues (VideoToolbox decoding active).
-- Present markers improve but still around ~33 FPS:
-  - frame #300, #600, #900, ... roughly every ~8.9s.
+### 1. Capture
 
-### Additional signal
-- Frequent VideoToolbox session recreation:
-  - repeated `Format description created` + `VTDecompressionSession created`
-- Frequent decode callback errors:
-  - `Decode callback: status=-12909 image_buffer=0x0`
-- These correlate with reduced visual smoothness on macOS viewer.
+Two backends, hot-swappable at runtime per process:
 
-Interpretation:
-- Network/SFU path is mostly healthy.
-- Residual FPS cap is likely decoder/session-churn and/or VT error recovery behavior on macOS viewer path, not pure transport starvation.
+| Backend | API | When used |
+|---------|-----|-----------|
+| **DXGI-DDI** | `IDXGIOutputDuplication` (Desktop Duplication) | Fullscreen / exclusive-fullscreen games — captures the monitor output directly |
+| **WGC** | `Windows.Graphics.Capture` | Windowed games — captures a specific window |
 
----
+`ProcessCapture` wraps both. Given a PID, it finds the main game window via `EnumWindows` (largest restored-area, non-toolwindow), detects fullscreen (covers ≥90% of monitor in either current or restored placement), and picks DXGI or WGC accordingly. A background `monitor_thread` periodically re-evaluates and hot-swaps if the game transitions between windowed ↔ fullscreen.
 
-## 4) General Priority Queue (toward Discord/Parsec quality)
+**Deferred start:** if the target window is minimized at stream start (common when user tabs out to launch), capture waits. The monitor thread polls until the window is restored, then initializes the appropriate backend. Width/height return the restored dimensions during the wait so the encoder can pre-initialize. This matches Discord's behavior.
 
-This is the broader queue we have been executing across slices, with current status.
+**Adaptive frame throttle (DXGI):** DXGI delivers at monitor refresh rate (60–360 Hz). We need exactly `target_fps` (typically 60). On startup, we calibrate the monitor's vsync interval from the first two acquired frames, then set a deadline of `target_interval - half_vsync` so that on any refresh rate we accept the closest vsync that satisfies the target — no excess frames, no under-delivery.
 
-### Completed foundations
-- [x] Baseline stream instrumentation and impairment matrix.
-- [x] Capture reliability hardening (fullscreen/swap/keyframe behavior).
-- [x] SFU transport hardening and chunking/reassembly reliability.
-- [x] ABR v2 base with bandwidth-aware clamp and step-up capping.
-- [x] Sink-level pacing with host pacing telemetry in UI.
-- [x] Stream manager starvation/deadlock fixes and stop-path crash fix.
+| Monitor Hz | Vsync | Deadline (60fps) | Delivered fps |
+|------------|-------|-------------------|---------------|
+| 60 | 16.67ms | 13.3ms | 60 (every frame) |
+| 120 | 8.33ms | 12.5ms | 60 (every 2nd) |
+| 144 | 6.94ms | 13.2ms | 60–72 (every 2nd) |
+| 240 | 4.17ms | 14.6ms | 60 (every 4th) |
 
-### In progress (high leverage)
-- [~] Real-app gate closure at 720p60 and 1080p60 in gameplay scenes (not just synthetic soak).
-- [~] Decoder/present stability (especially macOS VideoToolbox churn `-12909` path).
-- [~] ABR controller refinement (trend/ramp guardrails, smoother oscillation control).
+WGC frame pool uses 3 buffers to avoid stalls from the OS frame queue.
 
-### Next priority slices
-1. **Windows->Windows quality gate (primary user lane)**
-   - lock target thresholds for present FPS, ingress kbps stability, and frame-drop ceiling.
-2. **Encoder/decode deep tuning per backend**
-   - NVENC/AMF/QSV/VT parameter tuning, keyframe policy, copy-pressure reduction.
-3. **P2P fallback parity hardening**
-   - ensure behavior and stability match SFU lane under adverse networks.
-4. **Real-world 1080p60 ship gate**
-   - pass/fail criteria on motion-heavy scenes over WAN.
-5. **Architecture checkpoint: DataChannel vs RTP video**
-   - decide using measured failure modes + quality/latency envelope, not preference.
-6. **Voice CPU efficiency pass (VC baseline parity)**
-   - profile and cut in-call CPU overhead (current ~10% vs Discord <2%) across capture, DSP, encode/decode, and mix hot paths.
+### 2. Preprocessing
 
-### Exit criteria for "close to Discord-quality"
-- Stable W->W 720p60 and 1080p60 in real scenes.
-- No control-plane deadlocks/crashes under repeated start/stop.
-- ABR avoids visible oscillation under normal WAN jitter/loss.
-- P2P fallback does not materially regress UX from SFU baseline.
+GPU-side BGRA → NV12 conversion via a D3D11 compute shader. Uses a 3-slot NV12 ring buffer (`NV12_RING_SLOTS = 3`) so the convert output doesn't alias with an in-flight encode input. Typical `convert_ms` is 0.1–0.3ms (negligible).
+
+### 3. Encode
+
+NVENC hardware encoder. Current config:
+- **Preset:** P1 + Ultra Low Latency (fastest hardware preset — matches Discord/Parsec)
+- **Rate control:** CBR at configured bitrate (default 8 Mbps)
+- **Codec:** H.264
+- Fallback chain: P1+ULL → P1+LL → P4+ULL
+
+Texture registration is cached per NV12 ring slot (`reg_cache_`) so `nvEncRegisterResource` runs once per slot, not per frame.
+
+### 4. Encode Queue (decoupling capture from encode)
+
+A dedicated `encode_thread` pulls from a bounded ring queue (`ENCODE_QUEUE_CAP = 2`). When the queue is full, the oldest job is evicted (newest-wins policy). This decouples the capture callback from the synchronous `nvEncEncodePicture` + `nvEncLockBitstream` blocking time.
+
+Diagnostics emitted every 300 frames: `convert_ms`, `encode_ms`, `eq_depth`, `eq_drops`.
+
+### 5. Chunking & Egress
+
+Encoded NALUs are chunked at 40 KB (`SFU_CHUNK_MAX_PAYLOAD`) with a 12-byte header (msg_id, chunk_idx, chunk_count, payload). Sent over an unreliable DataChannel. The `SfuSink` egress task is lazily spawned on the first `enqueue_chunked_media` call (avoids Tokio runtime requirement at construction time).
 
 ---
 
-## 5) Windows-to-Windows Priority Plan (next session)
+## Viewer Pipeline (Network → Display)
 
-Given user distribution is mostly Windows, prioritize this path first:
+1. **Reassembly:** chunks are collected by msg_id; once all chunks for a message arrive, the full NALU is delivered to decode.
+2. **Decode:** DXVA hardware decode (Windows) or VideoToolbox (macOS). Pre-keyframe packets are dropped until the first keyframe is received.
+3. **Present:** decoded frames are presented via the Slint UI render loop.
 
-1. Validate baseline on W->W:
-   - host 720p60 Medium preset
-   - 2-minute run
-   - collect present_fps, ingress_kbps, dropped decode frames
-2. If W->W is near target (>=50 FPS stable):
-   - ship W->W improvements first
-   - track macOS viewer as separate compatibility lane
-3. If W->W is also low:
-   - investigate present gating on Windows UI thread
-   - inspect decode/present cadence in DXVA/NVDEC path
-   - compare decoded FPS vs presented FPS and look for frame_slot backpressure
+Key viewer diagnostics (per-second): `dec_fps`, `decode_stall_ms`, `ingress_kbps`, `chunk_completed_hz`, `backlog_guard` state.
 
 ---
 
-## 6) Immediate TODO Queue
+## Stream Manager & Recovery
 
-### A) Must verify next
-- [ ] Repeat stop/start stream 10 times (ensure no crash regression).
-- [ ] Run dedicated W->W measurement (2 minutes static + 2 minutes motion).
-- [ ] Record present FPS every 10s from debug panel.
+`mello-core::stream::manager` runs the host-side control loop:
+- Bounded coalescing drain to avoid run-loop starvation.
+- Queue-pressure keyframe requests (rate-limited, severe-coalesce only).
+- Per-second diagnostics: `video_in_hz`, `send_fail_*_delta`, `recovery_mode`, queue lengths.
 
-### B) If macOS viewer still ~30-35 FPS
-- [ ] Add focused VT decoder diagnostics around status `-12909`.
-- [ ] Confirm if VT session reset is triggered on every keyframe or only error bursts.
-- [ ] Rate-limit keyframe requests when decoder is unstable.
-- [ ] Consider keeping existing VT session when SPS/PPS unchanged.
-
-### C) Transport/control-loop follow-up
-- [ ] Continue ABR v2 refinement for bandwidth trend/ramp behavior.
-- [ ] Keep SFU and P2P pacing telemetry parity.
-- [ ] Re-run strict SFU soak gate after next pacing/decoder adjustments.
+Viewer-side IDR request policy: rate-limited to one every 4s, requires 4 consecutive unrecoverable groups, and suppressed if a keyframe was recently received.
 
 ---
 
-## 7) Repro + Evidence Checklist
+## Current Performance (measured 2026-04-22, release build)
 
-For each test run, collect:
-- Host app logs:
-  - `Stream pacing:`
-  - `Stream manager video coalesce`
-  - any `send failed` lines
-- Viewer app logs:
-  - `Stream ingress:`
-  - `Stream frame presented #`
-  - decoder errors
-- SFU logs for session id:
-  - `stats stream_<id>` (pkts/bytes recv+sent)
-  - `pc_state`, `webrtc_disconnected`, `peer_left`
+**Setup:** Windows 11, RTX 3080 Ti, 144 Hz monitor, CS2 fullscreen 1920×1200, host+viewer on same machine via SFU.
 
-Pass indicators:
-- No stalls, no teardown crash.
-- SFU `pkts_sent` tracks `pkts_recv` closely with active viewer.
-- Presented FPS near target for selected platform lane.
+| Metric | Value |
+|--------|-------|
+| NVENC preset | P1 + ULL |
+| DXGI capture delivered | ~72 fps |
+| `encode_ms` | 8–18ms (see TODO below) |
+| `video_in_hz` (host) | 50–68, avg ~57 |
+| `dec_fps` (viewer) | 50–67, avg ~58 |
+| `decode_stall_ms` | 2–22ms |
+| `eq_drops` | ~15/sec (72 capture - 57 encode) |
+| `send_fail_video_delta` | 0 |
+| `chunk_invalid/late/evicted` | 0 |
+| `backlog_guard` activations | 0 |
+| Bitrate | ~7–9 Mbps |
 
----
-
-## 8) Notes For Next Agent Session
-
-- Treat this as active implementation state, not a greenfield design.
-- Keep changes incremental and evidence-driven.
-- Do not remove existing diagnostics until W->W gate is green and stable.
-- Primary user goal: excellent Windows-to-Windows streaming first, then macOS viewer polish.
+Deferred start, hot-swap, and fullscreen detection all working correctly.
 
 ---
 
-## 9) 2026-04-18 Continuation Handoff (Critical)
+## Probe Tooling
 
-### 9.1 Latest interpretation
-- We have materially improved quality and removed worst regressions, but not hit "buttery" parity.
-- Current symptom profile suggests residual loss/jitter/backpressure behavior under SFU relay and/or packet scheduling interactions.
-- This is likely no longer a pure UI presenter bottleneck.
-
-### 9.2 Key evidence from latest logs
-- Host:
-  - encode pipeline healthy at 60 fps (`libmello::video/pipeline` host counters stable)
-  - pacing output typically ~6.0-7.1 Mbps against 8.16 Mbps target
-  - recurring `Stream manager video coalesce` persists
-- Viewer:
-  - decode usually ~42-48 fps with periodic dips to high/mid 30s
-  - ingress remains active and fairly stable
-  - first keyframe still occasionally fails once, then decode recovers
-
-### 9.3 Completed actions from this continuation
-1. **`mello-sfu` relay path instrumentation added**
-   - per-session media/control ingress + forward + drop counters
-   - forwarded bytes, dropped bytes, max message size, message size buckets
-   - keyframe-like message counter visibility
-   - peer backpressure state (`buffer_usage`, `slow_peer`) in anomaly logs
-2. **Timeline correlation flow implemented**
-   - host/viewer probes emit `session`, `wall_ms`, `mono_ms`
-   - `coalesce_stream_timeline.py` merges host + viewer + SFU into one ordered JSONL
-   - `--session auto` added to remove session-id friction during repeated restarts
-3. **Windows tooling hardening done**
-   - host/viewer PowerShell launchers added (`run-stream-host.ps1`, `run-stream-viewer.ps1`)
-   - fixed PowerShell `NativeCommandError` false-positive behavior for `cargo` output
-4. **Cross-platform SFU build fix done**
-   - Windows `go test` failure fixed by splitting CPU metrics into `cpu_unix.go` + `cpu_windows.go`
-
-### 9.4 Commands used for current probe loop
-- Host probe (auto Nakama start):
-  - `cargo run -p stream-host -- --fps 60 --bitrate 8000 --nakama-start-stream --nakama-http-base <...> --nakama-auth-token <...> --crew-id <...>`
-- Viewer probe (auto watch_stream fetch):
-  - `cargo run -p sfu-stream-viewer-probe -- --watch-stream-print --nakama-http-base <...> --nakama-auth-token <...> --session <...> --native-metrics`
-
-### 9.5 Files changed during this continuation slice
-- `mello-core/src/stream/sink_sfu.rs`
-- `mello-core/src/stream/manager.rs`
-- `tools/stream-host/src/main.rs`
-- `tools/stream-host/Cargo.toml`
-- `tools/sfu-stream-viewer-probe/src/main.rs`
-- `tools/sfu-stream-viewer-probe/Cargo.toml`
-- `Cargo.toml` (workspace tools members)
-
-### 9.6 Most recent run result (after latest coalescer fix)
-- "Keyframe then long decay" failure mode appears resolved.
-- Remaining symptom is now:
-  - periodic micro-freezes,
-  - constant low-level blockiness/artifacts.
-- Latest logs still show:
-  - host recurring `Stream manager video coalesce` (typically dropped_stale=1..2),
-  - viewer decode oscillating around ~40-48 FPS with periodic dips.
-- Practical conclusion for next session:
-  - continue with SFU-side instrumentation in `mello-sfu` before further client-side tuning,
-  - correlate host/viewer/SFU timelines around dips and visible freeze moments,
-  - focus on relay/backpressure/jitter behavior during keyframe and near-keyframe windows.
+- **`stream-host`** — standalone host probe with Nakama auto-start (`--nakama-start-stream --crew-id`). Runs in release mode via `run-stream-host.ps1`.
+- **`sfu-stream-viewer-probe`** — standalone viewer probe with auto `watch_stream` via Nakama. Per-second telemetry including decode, present, ingress, chunk, and backlog metrics. Runs in release mode via `run-stream-viewer.ps1`.
+- **`coalesce_stream_timeline.py`** — merges host + viewer + SFU logs into a single ordered timeline for analysis. Supports `--session auto`.
 
 ---
 
-## 10) 2026-04-18/19 Tuning Log + Current Hypothesis (for external reviewer)
+## TODO — Path to Buttery 60fps
 
-### 10.1 What was tried (chronological)
-- **Pass A (stability + telemetry baseline):**
-  - Added SFU relay counters/anomaly logs + admin exposure.
-  - Added correlation timestamps and timeline coalescing script updates.
-  - Added host/viewer launch scripts and Windows PowerShell fixes.
-  - Result: richer evidence, no major infra blockers.
-- **Pass B (aggressive recovery):**
-  - Host + viewer recovery guards made very aggressive (frequent pressure reactions, viewer dropping under backlog).
-  - Result: severe regression (`viewer_low_dec_samples=50`, `max_decode_stall_ms=4039`, `severe_coalesce=11`).
-- **Pass C (rollback/tune back):**
-  - Removed aggressive viewer non-keyframe dropping.
-  - Kept backlog guard as keyframe-request-only.
-  - Host recovery adjusted to avoid hard freeze behavior.
-  - Result: hard stalls mostly resolved (`max_decode_stall_ms` back to ~149), but micro-stutters + artifacts persist.
-- **Pass D (latest, keyframe-thrash reduction):**
-  - `mello-core/src/stream/viewer.rs`:
-    - `IDR_RATE_LIMIT_SECS`: `2 -> 4`
-    - `IDR_THRESHOLD`: `2 -> 4` consecutive unrecoverable groups
-    - new guard: do not request IDR immediately after a recently seen keyframe
-  - `mello-core/src/stream/manager.rs`:
-    - `QUEUE_KEYFRAME_REQUEST_COOLDOWN_SECS`: `1 -> 2`
-  - `tools/sfu-stream-viewer-probe/src/main.rs`:
-    - backlog guard tune: trigger `100 -> 120`, cooldown `2s -> 4s`
-    - added per-second control-action breakdown:
-      - `feed_control_keyframe_req_hz`
-      - `feed_control_loss_report_hz`
-      - `feed_control_other_hz`
-      - `feed_control_send_fail_hz`
-  - Result: build-check passes; awaiting A/B run evidence.
+### High priority
 
-### 10.2 Last three measured highlights (before Pass D)
-- **Run 1 (best of recent set):**
-  - `coalesce=44`, `severe_coalesce=0`, `viewer_low_dec_samples=7`, `max_decode_stall_ms=217`, `max_decode_backlog_est=161`
-- **Run 2 (bad regression):**
-  - `coalesce=45`, `severe_coalesce=11`, `viewer_low_dec_samples=50`, `max_decode_stall_ms=4039`, `max_decode_backlog_est=174`
-- **Run 3 (post-rollback, still imperfect):**
-  - `coalesce=40`, `severe_coalesce=1`, `viewer_low_dec_samples=17`, `max_decode_stall_ms=149`, `max_decode_backlog_est=252`
+1. **Async encode (eliminate `LockBitstream` blocking)**
+   `encode_ms` is 8–18ms on P1+ULL which should be 1–3ms. The entire `nvEncEncodePicture` → `nvEncLockBitstream` path is synchronous — `LockBitstream` blocks until the GPU finishes. Switch to async mode: use `NV_ENC_PIC_PARAMS::completionEvent` with a Windows event object, call `nvEncEncodePicture` (returns immediately), then `WaitForSingleObject` on the event. This should bring `encode_ms` to true hardware latency (~2ms) and close the 57→60fps gap.
 
-### 10.3 New user-visible signal (most important)
-- User reports micro-stutter events correlate with moments when a **new keyframe is drawn**.
-- This aligns with over-frequent forced-IDR risk and/or expensive keyframe decode bursts while backlog is already elevated.
+2. **Raise `ENCODE_QUEUE_CAP` to 3 or 4**
+   Currently 2. With async encode + fast drain, a slightly larger queue provides better jitter absorption without meaningful latency increase. Should reduce `eq_drops` to near zero.
 
-### 10.4 Current best hypothesis
-- We likely resolved the catastrophic freeze path, but still have a **quality loop**:
-  1. queue pressure and/or loss triggers IDR request path
-  2. keyframe bursts arrive during existing decode backlog
-  3. visible stutter spikes around keyframe draw
-  4. residual artifacts persist between keyframe recoveries due to ongoing coalesce/delta disruption
-- SFU anomalies remain non-zero, but current evidence still points to cross-boundary interaction (host coalesce + viewer decode/backlog + IDR policy), not a single isolated SFU bug.
+3. **Viewer-side frame pacing / jitter buffer**
+   Currently the viewer presents frames immediately on decode completion. A small jitter buffer (1–2 frames) would smooth out decode timing variance and eliminate the residual 50→67fps oscillation visible in logs.
 
-### 10.5 What next reviewer should do first
-1. Run one fresh capture with latest Pass D code and compare:
-   - `feed_control_keyframe_req_hz` vs `viewer_low_dec_samples`
-   - `backlog_guard_req_hz` vs keyframe-stutter moments
-   - host `coalesce`/`severe_coalesce` vs viewer `decode_backlog_est`
-2. If keyframe-request rates are still elevated during stutter windows:
-   - gate IDR requests on sustained pressure window (multi-second), not single-sample pressure
-   - consider a bounded "cooldown after successful keyframe decode" across both viewer request paths
-3. If keyframe-request rates are low but stutter persists:
-   - inspect decoder-side cost spikes on keyframe feed/present path
-   - examine host encoder keyframe size variance (possible bitrate spike during IDR)
+### Medium priority
 
-### 10.6 Reviewer context boundaries
-- Primary target lane remains **Windows host -> Windows viewer via SFU**.
-- Goal remains "Parsec/Discord-like" subjective smoothness, not just avoidance of hard stalls.
-- Keep existing telemetry until the lane is green for repeated runs; do not remove diagnostics yet.
+4. **WGC capture rate parity**
+   WGC doesn't have the same vsync-aligned delivery as DXGI. Validate capture rate when running windowed games and apply similar adaptive throttling if needed.
 
+5. **AMF / QSV encoder backends**
+   Currently NVENC-only. AMD (AMF) and Intel (QSV) hardware encoders need the same P1-equivalent fast-preset + async treatment for non-NVIDIA users.
+
+6. **ABR v2 refinement**
+   Bandwidth-aware bitrate adaptation exists but needs tuning: smoother ramp-up/down curves, oscillation dampening, and trend-based prediction instead of reactive step changes.
+
+7. **Encoder resolution scaling**
+   When bandwidth is constrained, dynamically scale encode resolution (1080p → 720p) rather than just dropping bitrate. Requires re-initializing NVENC session but avoids blocky artifacts at low bitrate.
+
+### Lower priority
+
+8. **DataChannel vs RTP evaluation**
+   Current transport uses unreliable DataChannels with application-layer chunking/reassembly. RTP would give us standard jitter buffers, NACK-based retransmission, and FEC. Worth evaluating once the current path hits its ceiling.
+
+9. **macOS viewer VideoToolbox stability**
+   VTDecompressionSession churn (status `-12909`) causes decode FPS drops on macOS. Need to keep sessions alive when SPS/PPS are unchanged and rate-limit session recreation.
+
+10. **P2P fallback parity**
+    Ensure quality and stability match SFU path under adverse network conditions.
+
+11. **Voice CPU efficiency**
+    Current in-call CPU overhead is ~10% vs Discord's <2%. Needs profiling across capture, DSP, encode/decode, and mix paths.
+
+---
+
+## Key Files
+
+| Area | Path |
+|------|------|
+| DXGI capture | `libmello/src/video/capture_dxgi.cpp` |
+| WGC capture | `libmello/src/video/capture_wgc.cpp` |
+| Process capture + hot-swap | `libmello/src/video/capture_process.cpp` |
+| GPU preprocessor | `libmello/src/video/video_preprocessor.cpp` |
+| Video pipeline + encode queue | `libmello/src/video/video_pipeline.cpp` |
+| NVENC encoder | `libmello/src/video/encoder_nvenc.cpp` |
+| SFU sink + chunking | `mello-core/src/stream/sink_sfu.rs` |
+| Stream manager | `mello-core/src/stream/manager.rs` |
+| Host probe | `tools/stream-host/src/main.rs` |
+| Viewer probe | `tools/sfu-stream-viewer-probe/src/main.rs` |
+| Timeline analysis | `scripts/coalesce_stream_timeline.py` |
+| Launch scripts | `scripts/run-stream-host.ps1`, `scripts/run-stream-viewer.ps1` |
