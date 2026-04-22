@@ -214,7 +214,7 @@ pub(super) unsafe extern "C" fn on_viewer_native_frame(
     shared_handle: *mut std::ffi::c_void,
     w: u32,
     h: u32,
-    format: i32,
+    format: u32,
     uv_y_offset: u32,
     ts: u64,
 ) {
@@ -225,7 +225,7 @@ pub(super) unsafe extern "C" fn on_viewer_native_frame(
     data.native_frame_active
         .store(true, std::sync::atomic::Ordering::Release);
     if let Ok(mut slot) = data.native_frame_slot.lock() {
-        *slot = Some((w, h, shared_handle as usize, format as u32, uv_y_offset, ts));
+        *slot = Some((w, h, shared_handle as usize, format, uv_y_offset, ts));
         data.frame_consumed
             .store(false, std::sync::atomic::Ordering::Release);
     }
