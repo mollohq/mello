@@ -82,12 +82,15 @@ bool DxgiCapture::get_cursor(CursorData& out) {
 void DxgiCapture::capture_thread() {
     using clock = std::chrono::steady_clock;
 
-    // DXGI DDI blocks in AcquireNextFrame until the next compositor vsync
-    // delivers a new frame. We use a generous timeout (2 frame intervals)
-    // to avoid busy-spinning while still catching every vsync.
+    // DXGI DDI blocks in AcquireNextFrame until the next compositor vsync.
+    // Use 2x frame interval as timeout so we never miss a vsync.
     UINT timeout_ms = std::max(1000u / target_fps_ * 2, 34u);
-    auto frame_interval = std::chrono::microseconds(1'000'000 / target_fps_);
-    auto last_callback  = clock::now() - frame_interval; // allow first frame immediately
+
+    // Accept every 2nd vsync: on 144Hz this gives ~72fps which the encode
+    // queue naturally regulates down to target_fps via bounded backpressure.
+    // On 60Hz monitors this accepts every frame (1:1).
+    auto min_interval   = std::chrono::microseconds(1'000'000 / target_fps_ / 2);
+    auto last_callback  = clock::now() - min_interval;
 
     uint64_t frame_count = 0;
     uint64_t skip_count  = 0;
@@ -149,10 +152,8 @@ void DxgiCapture::capture_thread() {
             continue;
         }
 
-        // Throttle to target_fps: skip frames that arrive faster than needed.
-        // DXGI delivers at monitor refresh (e.g. 144Hz) but we only need 60.
         auto now_tp = clock::now();
-        if (now_tp - last_callback < frame_interval) {
+        if (now_tp - last_callback < min_interval) {
             duplication_->ReleaseFrame();
             ++skip_count;
             continue;

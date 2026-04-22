@@ -113,13 +113,13 @@ bool NvencEncoder::initialize(const GraphicsDevice& device, const EncoderConfig&
     preset_config.presetCfg.version = NV_ENC_CONFIG_VER;
 
     struct { GUID preset; NV_ENC_TUNING_INFO tuning; const char* label; } attempts[] = {
-        { NV_ENC_PRESET_P4_GUID, NV_ENC_TUNING_INFO_ULTRA_LOW_LATENCY, "P4+ULL" },
-        { NV_ENC_PRESET_P4_GUID, NV_ENC_TUNING_INFO_LOW_LATENCY,       "P4+LL"  },
+        { NV_ENC_PRESET_P1_GUID, NV_ENC_TUNING_INFO_ULTRA_LOW_LATENCY, "P1+ULL" },
         { NV_ENC_PRESET_P1_GUID, NV_ENC_TUNING_INFO_LOW_LATENCY,       "P1+LL"  },
+        { NV_ENC_PRESET_P4_GUID, NV_ENC_TUNING_INFO_ULTRA_LOW_LATENCY, "P4+ULL" },
     };
 
     bool have_preset = false;
-    GUID used_preset = NV_ENC_PRESET_P4_GUID;
+    GUID used_preset = NV_ENC_PRESET_P1_GUID;
     for (auto& a : attempts) {
         memset(&preset_config, 0, sizeof(preset_config));
         preset_config.version = NV_ENC_PRESET_CONFIG_VER;
