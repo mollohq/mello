@@ -14,7 +14,8 @@ use windows::Win32::Graphics::Direct3D11::{
     ID3D11Device, ID3D11DeviceContext, ID3D11PixelShader, ID3D11RenderTargetView,
     ID3D11ShaderResourceView, ID3D11Texture2D, ID3D11VertexShader, D3D11_BIND_CONSTANT_BUFFER,
     D3D11_BUFFER_DESC, D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_SDK_VERSION,
-    D3D11_SHADER_RESOURCE_VIEW_DESC, D3D11_TEX2D_SRV, D3D11_USAGE_DEFAULT, D3D11_VIEWPORT,
+    D3D11_SHADER_RESOURCE_VIEW_DESC, D3D11_SHADER_RESOURCE_VIEW_DESC_0, D3D11_TEX2D_SRV,
+    D3D11_USAGE_DEFAULT, D3D11_VIEWPORT,
 };
 use windows::Win32::Graphics::Dxgi::Common::{
     DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_R8_UNORM, DXGI_MODE_DESC, DXGI_RATIONAL,
@@ -136,26 +137,28 @@ impl NativeStreamPresenter {
             )
             .map_err(|e| format!("CreateWindowExW failed: {}", e))?;
 
-            let mut swap_desc = DXGI_SWAP_CHAIN_DESC::default();
-            swap_desc.BufferDesc = DXGI_MODE_DESC {
-                Width: 2,
-                Height: 2,
-                RefreshRate: DXGI_RATIONAL {
-                    Numerator: 0,
-                    Denominator: 1,
+            let swap_desc = DXGI_SWAP_CHAIN_DESC {
+                BufferDesc: DXGI_MODE_DESC {
+                    Width: 2,
+                    Height: 2,
+                    RefreshRate: DXGI_RATIONAL {
+                        Numerator: 0,
+                        Denominator: 1,
+                    },
+                    Format: DXGI_FORMAT_R8G8B8A8_UNORM,
+                    ..Default::default()
                 },
-                Format: DXGI_FORMAT_R8G8B8A8_UNORM,
+                SampleDesc: DXGI_SAMPLE_DESC {
+                    Count: 1,
+                    Quality: 0,
+                },
+                BufferUsage: DXGI_USAGE_RENDER_TARGET_OUTPUT,
+                BufferCount: 2,
+                OutputWindow: child_hwnd,
+                Windowed: true.into(),
+                SwapEffect: DXGI_SWAP_EFFECT_DISCARD,
                 ..Default::default()
             };
-            swap_desc.SampleDesc = DXGI_SAMPLE_DESC {
-                Count: 1,
-                Quality: 0,
-            };
-            swap_desc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
-            swap_desc.BufferCount = 2;
-            swap_desc.OutputWindow = child_hwnd;
-            swap_desc.Windowed = true.into();
-            swap_desc.SwapEffect = DXGI_SWAP_EFFECT_DISCARD;
 
             let mut swap_chain = None;
             let mut device = None;
@@ -333,12 +336,15 @@ impl NativeStreamPresenter {
                 return Ok(());
             };
             let mut srv = None;
-            let mut srv_desc = D3D11_SHADER_RESOURCE_VIEW_DESC::default();
-            srv_desc.Format = DXGI_FORMAT_R8_UNORM;
-            srv_desc.ViewDimension = D3D_SRV_DIMENSION_TEXTURE2D;
-            srv_desc.Anonymous.Texture2D = D3D11_TEX2D_SRV {
-                MostDetailedMip: 0,
-                MipLevels: 1,
+            let srv_desc = D3D11_SHADER_RESOURCE_VIEW_DESC {
+                Format: DXGI_FORMAT_R8_UNORM,
+                ViewDimension: D3D_SRV_DIMENSION_TEXTURE2D,
+                Anonymous: D3D11_SHADER_RESOURCE_VIEW_DESC_0 {
+                    Texture2D: D3D11_TEX2D_SRV {
+                        MostDetailedMip: 0,
+                        MipLevels: 1,
+                    },
+                },
             };
             unsafe {
                 self.device
@@ -545,6 +551,6 @@ unsafe fn compile_shader_blob(
     shader.ok_or_else(|| "D3DCompile returned no shader blob".to_string())
 }
 
-unsafe fn blob_bytes<'a>(blob: &'a ID3DBlob) -> &'a [u8] {
+unsafe fn blob_bytes(blob: &ID3DBlob) -> &[u8] {
     std::slice::from_raw_parts(blob.GetBufferPointer() as *const u8, blob.GetBufferSize())
 }
