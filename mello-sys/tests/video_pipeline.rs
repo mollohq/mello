@@ -68,6 +68,10 @@ fn encoder_available() {
 
 #[test]
 fn host_to_viewer_loopback() {
+    if std::env::var("CI").is_ok() {
+        eprintln!("SKIP: Loopback test disabled in CI (requires live desktop + GPU)");
+        return;
+    }
     if cfg!(target_os = "macos") {
         eprintln!(
             "SKIP: Loopback test disabled on macOS (ScreenCaptureKit/TCC can block in automated runs)"
