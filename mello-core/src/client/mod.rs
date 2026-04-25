@@ -40,7 +40,7 @@ const VIEWER_RECV_BUF_SIZE: usize = 64 * 1024;
 /// channel at 30+ fps.
 pub type FrameSlot = Arc<std::sync::Mutex<Option<(u32, u32, Vec<u8>)>>>;
 /// Shared single-slot for native GPU frame metadata (shared texture handle).
-pub type NativeFrameSlot = Arc<std::sync::Mutex<Option<(u32, u32, usize, u32, u32, u64)>>>;
+pub type NativeFrameSlot = Arc<std::sync::Mutex<Option<(u32, u32, usize, i32, u32, u64)>>>;
 
 pub struct Client {
     nakama: NakamaClient,

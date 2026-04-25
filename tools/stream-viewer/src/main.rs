@@ -112,7 +112,7 @@ unsafe extern "C" fn on_native_frame(
     _shared_handle: *mut c_void,
     _w: u32,
     _h: u32,
-    _format: u32,
+    _format: mello_sys::MelloNativeFrameFormat,
     _uv_y_offset: u32,
     _ts: u64,
 ) {

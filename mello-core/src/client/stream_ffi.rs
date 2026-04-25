@@ -214,7 +214,7 @@ pub(super) unsafe extern "C" fn on_viewer_native_frame(
     shared_handle: *mut std::ffi::c_void,
     w: u32,
     h: u32,
-    format: u32,
+    format: mello_sys::MelloNativeFrameFormat,
     uv_y_offset: u32,
     ts: u64,
 ) {
