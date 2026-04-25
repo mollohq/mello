@@ -26,6 +26,8 @@ import { Onboarding } from "panels/onboarding.slint";
 import { SignInPanel } from "panels/sign_in.slint";
 import { UpdateToast } from "panels/update_banner.slint";
 import { DiscoverPanel } from "panels/discover_panel.slint";
+import { JoinCrewModal } from "panels/join_crew_modal.slint";
+import { InviteShareModal } from "panels/invite_share_modal.slint";
 
 
 export { CrewData, MemberData, ChatMessageData, AudioDeviceData, VoiceChannelData, VoiceChannelMember, CaptureSourceData, DiscoverCrewData, SearchUserData, FeedCardData, StreamCardData, Theme }
@@ -253,6 +255,26 @@ export component MainWindow inherits Window {
     in property <[SearchUserData]> new-crew-invited-users: [];
     in-out property <bool> new-crew-created: false;
     in property <string> new-crew-invite-code: "";
+
+    // --- Join crew modal (deep link invite) ---
+    in-out property <bool> join-crew-modal-open: false;
+    in property <string> join-crew-name: "";
+    in property <string> join-crew-id: "";
+    in property <string> join-crew-invite-code: "";
+    in property <string> join-crew-highlight: "";
+    in property <string> join-crew-avatar-seed: "";
+    in property <string> join-crew-error: "";
+    in property <bool> join-crew-loading: false;
+    callback join-crew-confirmed(/* invite_code */ string);
+    callback join-crew-dismissed();
+
+    // --- Invite share modal ---
+    in-out property <bool> invite-share-open: false;
+    in property <string> invite-share-url: "";
+    in-out property <bool> invite-share-copied: false;
+    callback invite-copy-link();
+    callback invite-share-requested();
+    callback hide-invite-card();
 
     // --- Crew feed ---
     in property <[FeedCardData]> feed-cards: [];
@@ -658,6 +680,9 @@ export component MainWindow inherits Window {
                 join-voice-channel(id) => {
                     root.join-voice-channel(id);
                 }
+                invite-clicked => {
+                    root.invite-share-requested();
+                }
             }
 
             // RIGHT: discover OR (center stage + chat)
@@ -745,6 +770,10 @@ export component MainWindow inherits Window {
                                 root.seek-clip(v);
                             }
                             invite-clicked => {
+                                root.invite-share-requested();
+                            }
+                            hide-invite-clicked => {
+                                root.hide-invite-card();
                             }
                         }
                     }
@@ -1021,6 +1050,36 @@ export component MainWindow inherits Window {
         }
         copy-invite-code => {
             root.new-crew-copy-invite-code();
+        }
+    }
+
+    // ===================== JOIN CREW MODAL =====================
+    if join-crew-modal-open: JoinCrewModal {
+        crew-name: root.join-crew-name;
+        crew-id: root.join-crew-id;
+        highlight: root.join-crew-highlight;
+        avatar-seed: root.join-crew-avatar-seed;
+        error: root.join-crew-error;
+        loading: root.join-crew-loading;
+        join-requested => {
+            root.join-crew-confirmed(root.join-crew-invite-code);
+        }
+        dismiss-requested => {
+            root.join-crew-modal-open = false;
+            root.join-crew-dismissed();
+        }
+    }
+
+    // ===================== INVITE SHARE MODAL =====================
+    if invite-share-open: InviteShareModal {
+        invite-url: root.invite-share-url;
+        copied: root.invite-share-copied;
+        copy-link => {
+            root.invite-copy-link();
+        }
+        close-requested => {
+            root.invite-share-open = false;
+            root.invite-share-copied = false;
         }
     }
 

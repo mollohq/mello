@@ -44,6 +44,7 @@ pub fn start(
         avatar_cache: ctx.avatar_cache.clone(),
         hud_manager: ctx.hud_manager.clone(),
         fg_monitor: ctx.fg_monitor.clone(),
+        pending_deep_link: ctx.pending_deep_link.clone(),
     };
 
     let saved_timer = Rc::new(slint::Timer::default());

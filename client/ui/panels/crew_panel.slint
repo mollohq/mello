@@ -425,6 +425,7 @@ component ActiveCrewCard inherits Rectangle {
     in property <[VoiceChannelData]> voice-channels;
     in property <length> card-height: 320px;
     callback join-voice(string);
+    callback invite-clicked();
 
     border-radius: 10px;
     background: Theme.dark ? #1A1B1E : Theme.card-bg;
@@ -489,6 +490,32 @@ component ActiveCrewCard inherits Rectangle {
                     horizontal-alignment: center;
                     overflow: elide;
                     vertical-alignment: center;
+                }
+
+                Rectangle {
+                    width: 24px;
+
+                    Rectangle {
+                        width: 24px;
+                        height: 24px;
+                        y: (parent.height - self.height) / 2;
+                        border-radius: 5px;
+                        background: invite-touch.has-hover ? Theme.card-bg-hover : transparent;
+
+                        Image {
+                            source: @image-url("../icons/user-plus.svg");
+                            width: 14px;
+                            height: 14px;
+                            colorize: Theme.text-sub;
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                        }
+
+                        invite-touch := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => { root.invite-clicked(); }
+                        }
+                    }
                 }
 
                 Image {
@@ -644,6 +671,7 @@ export component CrewPanel inherits Rectangle {
     callback crew-create-requested();
     callback browse-crews-requested();
     callback join-voice-channel(string);
+    callback invite-clicked();
 
     background: Theme.surface;
     border-width: 1px;
@@ -681,6 +709,9 @@ export component CrewPanel inherits Rectangle {
                             card-height: root.height * 0.48;
                             join-voice(id) => {
                                 join-voice-channel(id);
+                            }
+                            invite-clicked => {
+                                root.invite-clicked();
                             }
                         }
                         if crew.id != active-crew-id: CompactCrewCard {

@@ -1,0 +1,89 @@
+import { Theme } from "../theme.slint";
+
+export component InviteShareModal inherits Rectangle {
+    in property <string> invite-url: "";
+    in property <bool> copied: false;
+
+    callback copy-link();
+    callback close-requested();
+
+    width: 100%;
+    height: 100%;
+    background: #000000AA;
+
+    bg-touch := TouchArea {
+        clicked => { close-requested(); }
+    }
+
+    Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: 420px;
+        height: inner.preferred-height + 64px;
+        background: Theme.surface;
+        border-radius: Theme.radius-lg;
+
+        card-touch := TouchArea {}
+
+        inner := VerticalLayout {
+            padding: 32px;
+            spacing: 20px;
+
+            Text {
+                text: "Invite people";
+                font-size: Theme.font-xl;
+                font-weight: 700;
+                color: Theme.text-primary;
+                horizontal-alignment: center;
+            }
+
+            Text {
+                text: "Share this link to invite anyone to your crew:";
+                font-size: Theme.font-md;
+                color: Theme.text-secondary;
+                horizontal-alignment: center;
+                wrap: word-wrap;
+            }
+
+            // URL display
+            Rectangle {
+                height: 48px;
+                border-radius: Theme.r-inner;
+                background: Theme.bg-app;
+
+                Text {
+                    text: invite-url;
+                    font-family: Theme.font-mono;
+                    font-size: 12px;
+                    color: Theme.text-primary;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+            }
+
+            // Copy link button
+            Rectangle {
+                height: 44px;
+                border-radius: Theme.r-outer;
+                background: copied ? Theme.voice-active : Theme.accent;
+                x: (parent.width - self.width) / 2;
+                width: 160px;
+
+                Text {
+                    text: copied ? "Copied!" : "Copy link";
+                    font-size: Theme.font-md;
+                    font-weight: 600;
+                    color: #FFFFFF;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+
+                copy-touch := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { copy-link(); }
+                }
+            }
+        }
+    }
+}

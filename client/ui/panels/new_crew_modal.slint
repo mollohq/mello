@@ -106,7 +106,7 @@ export component NewCrewModal inherits Rectangle {
                 spacing: 20px;
 
                 Text {
-                    text: "Your crew is ready. Share this invite code with others:";
+                    text: "Your crew is ready. Share this link to invite others:";
                     font-family: Theme.font-sans;
                     font-size: 14px;
                     color: Theme.text-secondary;
@@ -115,21 +115,20 @@ export component NewCrewModal inherits Rectangle {
                 }
 
                 Rectangle {
-                    height: 56px;
+                    height: 48px;
                     background: Theme.bg-app;
                     border-radius: Theme.r-inner;
                     border-width: 1px;
                     border-color: Theme.graphic-light;
 
                     Text {
-                        text: invite-code;
+                        text: "m3llo.app/join/" + invite-code;
                         font-family: Theme.font-mono;
-                        font-size: 22px;
-                        font-weight: 600;
-                        letter-spacing: 4px;
-                        color: Theme.accent;
+                        font-size: 12px;
+                        color: Theme.text-primary;
                         horizontal-alignment: center;
                         vertical-alignment: center;
+                        overflow: elide;
                     }
                 }
 
@@ -139,7 +138,7 @@ export component NewCrewModal inherits Rectangle {
                     background: copy-touch.has-hover ? #FF1E56DD : Theme.accent;
 
                     Text {
-                        text: "Copy Code";
+                        text: "Copy link";
                         font-family: Theme.font-sans;
                         font-size: 13px;
                         font-weight: 600;

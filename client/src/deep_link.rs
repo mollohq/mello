@@ -1,7 +1,6 @@
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub enum DeepLink {
-    Invite { code: String },
+    Join { code: String },
     Crew { id: String },
 }
 
@@ -9,7 +8,7 @@ pub fn parse(url: &str) -> Option<DeepLink> {
     let url = url.strip_prefix("mello://")?;
     let mut parts = url.splitn(2, '/');
     match parts.next()? {
-        "invite" => Some(DeepLink::Invite {
+        "join" => Some(DeepLink::Join {
             code: parts.next()?.to_string(),
         }),
         "crew" => Some(DeepLink::Crew {
@@ -30,11 +29,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parse_invite_link() {
-        let link = parse("mello://invite/abc123").unwrap();
+    fn parse_join_link() {
+        let link = parse("mello://join/ABCD-1234").unwrap();
         match link {
-            DeepLink::Invite { code } => assert_eq!(code, "abc123"),
-            _ => panic!("expected Invite"),
+            DeepLink::Join { code } => assert_eq!(code, "ABCD-1234"),
+            _ => panic!("expected Join"),
         }
     }
 

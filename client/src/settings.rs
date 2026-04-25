@@ -39,6 +39,7 @@ pub struct Settings {
     pub hud_overlay_y: Option<i32>,
     pub hud_miniplayer_x: Option<i32>,
     pub hud_miniplayer_y: Option<i32>,
+    pub hidden_invite_crew_ids: Vec<String>,
 }
 
 impl Default for Settings {
@@ -75,6 +76,7 @@ impl Default for Settings {
             hud_overlay_y: None,
             hud_miniplayer_x: None,
             hud_miniplayer_y: None,
+            hidden_invite_crew_ids: Vec::new(),
         }
     }
 }

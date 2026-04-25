@@ -19,3 +19,11 @@ pub struct Member {
     pub display_name: String,
     pub online: bool,
 }
+
+#[derive(Debug, Clone)]
+pub struct ResolvedInvite {
+    pub crew_name: String,
+    pub avatar_seed: String,
+    pub crew_id: String,
+    pub highlight: String,
+}

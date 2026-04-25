@@ -149,16 +149,26 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
     let instance_id = lock_name;
     let _instance = SingleInstance::new(&instance_id)?;
     if !_instance.is_single() {
-        eprintln!("Mello is already running.");
+        if let Some(url) = std::env::args()
+            .nth(1)
+            .filter(|a| a.starts_with("mello://"))
+        {
+            eprintln!("Mello is already running. Deep link will be lost: {url}");
+            eprintln!("IPC relay not yet implemented — please paste the link in the running app.");
+        } else {
+            eprintln!("Mello is already running.");
+        }
         std::process::exit(0);
     }
 
     // --- Deep link from argv ---
-    if let Some(url) = deep_link::extract_deep_link() {
-        if let Some(link) = deep_link::parse(&url) {
-            log::info!("Deep link: {:?}", link);
+    let pending_deep_link = deep_link::extract_deep_link().and_then(|url| {
+        let link = deep_link::parse(&url);
+        if let Some(ref l) = link {
+            log::info!("Deep link parsed: {:?}", l);
         }
-    }
+        link
+    });
 
     let loopback = std::env::args().any(|a| a == "--loopback");
 
@@ -364,6 +374,7 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
         avatar_cache: Rc::new(RefCell::new(std::collections::HashMap::new())),
         hud_manager: hud_mgr,
         fg_monitor,
+        pending_deep_link: Rc::new(RefCell::new(pending_deep_link)),
     };
 
     // --- Wire all callbacks ---

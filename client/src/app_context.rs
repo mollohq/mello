@@ -41,4 +41,5 @@ pub struct AppContext {
     pub avatar_cache: Rc<RefCell<HashMap<String, slint::Image>>>,
     pub hud_manager: Rc<HudManager>,
     pub fg_monitor: Rc<RefCell<ForegroundMonitor>>,
+    pub pending_deep_link: Rc<RefCell<Option<crate::deep_link::DeepLink>>>,
 }
