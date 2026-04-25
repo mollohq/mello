@@ -76,8 +76,9 @@ public:
     void set_vad_callback(VadCallback cb) { vad_.set_callback(std::move(cb)); }
 
     AudioDeviceEnumerator& device_enumerator();
-    bool set_capture_device(const char* device_id);
-    bool set_playback_device(const char* device_id);
+    // Returns: 0 = failed, 1 = ok, 2 = fell back to default device
+    int set_capture_device(const char* device_id);
+    int set_playback_device(const char* device_id);
 
     void start_clip_buffer();
     void stop_clip_buffer();

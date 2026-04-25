@@ -373,6 +373,7 @@ export component MainWindow inherits Window {
     in property <string> update-version: "";
     in property <float> update-download-progress: -1.0;
     in property <string> protocol-warning: "";
+    in-out property <string> audio-device-warning: "";
 
     // --- Callbacks ---
     callback update-now-clicked();
@@ -879,6 +880,104 @@ export component MainWindow inherits Window {
         }
         dismiss-clicked => {
             root.update-dismiss-clicked();
+        }
+    }
+
+    // ===================== AUDIO DEVICE WARNING MODAL =====================
+    if logged-in && audio-device-warning != "": Rectangle {
+        background: #000000AA;
+
+        TouchArea {}
+
+        Rectangle {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            width: min(420px, parent.width - 64px);
+            height: self.preferred-height;
+            background: Theme.surface;
+            border-radius: 12px;
+            border-width: 1px;
+            border-color: Theme.graphic-light;
+            drop-shadow-blur: 64px;
+            drop-shadow-color: #000000E6;
+            drop-shadow-offset-y: 24px;
+
+            TouchArea {}
+
+            VerticalLayout {
+                padding: 24px;
+                spacing: 16px;
+
+                Text {
+                    text: "Audio device not found";
+                    color: Theme.text-primary;
+                    font-family: Theme.font-sans;
+                    font-size: 16px;
+                    font-weight: 600;
+                }
+
+                Text {
+                    text: root.audio-device-warning;
+                    color: Theme.text-secondary;
+                    font-family: Theme.font-sans;
+                    font-size: 13px;
+                    wrap: word-wrap;
+                }
+
+                HorizontalLayout {
+                    alignment: end;
+                    spacing: 8px;
+
+                    Rectangle {
+                        width: adw-settings-text.preferred-width + 32px;
+                        height: 32px;
+                        background: adw-settings-ta.has-hover ? Theme.graphic-med : Theme.graphic-light;
+                        border-radius: Theme.r-inner;
+                        animate background { duration: 150ms; }
+
+                        adw-settings-text := Text {
+                            text: "Go to Settings";
+                            color: Theme.text-primary;
+                            font-family: Theme.font-sans;
+                            font-size: 13px;
+                            font-weight: 600;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+
+                        adw-settings-ta := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => {
+                                root.audio-device-warning = "";
+                                root.settings-requested();
+                            }
+                        }
+                    }
+
+                    Rectangle {
+                        width: adw-ok-text.preferred-width + 32px;
+                        height: 32px;
+                        background: adw-ok-ta.has-hover ? #FF3D6E : Theme.accent;
+                        border-radius: Theme.r-inner;
+                        animate background { duration: 150ms; }
+
+                        adw-ok-text := Text {
+                            text: "Continue";
+                            color: white;
+                            font-family: Theme.font-sans;
+                            font-size: 13px;
+                            font-weight: 600;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+
+                        adw-ok-ta := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => { root.audio-device-warning = ""; }
+                        }
+                    }
+                }
+            }
         }
     }
 

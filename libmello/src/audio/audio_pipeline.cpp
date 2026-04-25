@@ -594,7 +594,7 @@ AudioDeviceEnumerator& AudioPipeline::device_enumerator() {
     return *device_enum_;
 }
 
-bool AudioPipeline::set_capture_device(const char* device_id) {
+int AudioPipeline::set_capture_device(const char* device_id) {
     MELLO_LOG_INFO("pipeline", "switching capture device (was_capturing=%d)", (int)capturing_.load());
 
     bool was_capturing = capturing_;
@@ -603,10 +603,18 @@ bool AudioPipeline::set_capture_device(const char* device_id) {
         capturing_ = false;
     }
 
+    bool fell_back = false;
+    bool init_ok = false;
     capture_ = create_audio_capture();
-    if (!capture_->initialize(device_id)) {
-        MELLO_LOG_ERROR("pipeline", "capture device switch failed");
-        return false;
+    try { init_ok = capture_->initialize(device_id); } catch (...) { init_ok = false; }
+    if (!init_ok) {
+        MELLO_LOG_WARN("pipeline", "capture device switch failed, falling back to default");
+        capture_ = create_audio_capture();
+        if (!capture_->initialize(nullptr)) {
+            MELLO_LOG_ERROR("pipeline", "default capture device also failed");
+            return 0;
+        }
+        fell_back = true;
     }
 
     if (was_capturing) {
@@ -615,30 +623,41 @@ bool AudioPipeline::set_capture_device(const char* device_id) {
         });
         if (ok) capturing_ = true;
         MELLO_LOG_INFO("pipeline", "capture restarted on new device: %s", ok ? "ok" : "FAILED");
-        return ok;
+        return ok ? (fell_back ? 2 : 1) : 0;
     }
-    return true;
+    return fell_back ? 2 : 1;
 }
 
-bool AudioPipeline::set_playback_device(const char* device_id) {
+int AudioPipeline::set_playback_device(const char* device_id) {
     MELLO_LOG_INFO("pipeline", "switching playback device");
 
     if (playback_) playback_->stop();
 
+    bool fell_back = false;
+    bool init_ok = false;
     playback_ = create_audio_playback();
 #ifdef _WIN32
     apply_session(playback_.get());
 #endif
-    if (!playback_->initialize(device_id)) {
-        MELLO_LOG_ERROR("pipeline", "playback device switch failed");
-        return false;
+    try { init_ok = playback_->initialize(device_id); } catch (...) { init_ok = false; }
+    if (!init_ok) {
+        MELLO_LOG_WARN("pipeline", "playback device switch failed, falling back to default");
+        playback_ = create_audio_playback();
+#ifdef _WIN32
+        apply_session(playback_.get());
+#endif
+        if (!playback_->initialize(nullptr)) {
+            MELLO_LOG_ERROR("pipeline", "default playback device also failed");
+            return 0;
+        }
+        fell_back = true;
     }
     playback_->set_render_source([this](int16_t* out, size_t count) -> size_t {
         return mix_output(out, count);
     });
     bool ok = playback_->start();
     MELLO_LOG_INFO("pipeline", "playback restarted on new device: %s", ok ? "ok" : "FAILED");
-    return ok;
+    return ok ? (fell_back ? 2 : 1) : 0;
 }
 
 void AudioPipeline::start_clip_buffer() {

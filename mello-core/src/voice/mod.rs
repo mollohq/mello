@@ -366,30 +366,48 @@ impl VoiceManager {
         devices
     }
 
-    pub fn set_capture_device(&mut self, device_id: &str) {
+    /// Returns true if the requested device was not found and the pipeline
+    /// fell back to the system default.
+    pub fn set_capture_device(&mut self, device_id: &str) -> bool {
         if self.ctx.is_null() {
-            return;
+            return false;
         }
         let c_id = CString::new(device_id).unwrap_or_default();
         let result = unsafe { mello_sys::mello_set_audio_input(self.ctx, c_id.as_ptr()) };
-        if result != mello_sys::MelloResult_MELLO_OK {
+        if result == mello_sys::MelloResult_MELLO_DEVICE_FALLBACK {
+            log::warn!(
+                "Capture device '{}' not found, fell back to default",
+                device_id
+            );
+            return true;
+        } else if result != mello_sys::MelloResult_MELLO_OK {
             log::error!("Failed to set capture device: {}", result);
         } else {
             log::info!("Capture device set to: {}", device_id);
         }
+        false
     }
 
-    pub fn set_playback_device(&mut self, device_id: &str) {
+    /// Returns true if the requested device was not found and the pipeline
+    /// fell back to the system default.
+    pub fn set_playback_device(&mut self, device_id: &str) -> bool {
         if self.ctx.is_null() {
-            return;
+            return false;
         }
         let c_id = CString::new(device_id).unwrap_or_default();
         let result = unsafe { mello_sys::mello_set_audio_output(self.ctx, c_id.as_ptr()) };
-        if result != mello_sys::MelloResult_MELLO_OK {
+        if result == mello_sys::MelloResult_MELLO_DEVICE_FALLBACK {
+            log::warn!(
+                "Playback device '{}' not found, fell back to default",
+                device_id
+            );
+            return true;
+        } else if result != mello_sys::MelloResult_MELLO_OK {
             log::error!("Failed to set playback device: {}", result);
         } else {
             log::info!("Playback device set to: {}", device_id);
         }
+        false
     }
 
     pub fn get_input_level(&self) -> f32 {

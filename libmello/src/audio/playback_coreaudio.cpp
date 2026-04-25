@@ -40,7 +40,12 @@ bool CoreAudioPlayback::initialize(const char* device_id) {
 
     // Set the output device
     if (device_id && device_id[0] != '\0') {
-        device_id_ = static_cast<AudioDeviceID>(std::stoul(device_id));
+        try {
+            device_id_ = static_cast<AudioDeviceID>(std::stoul(device_id));
+        } catch (...) {
+            MELLO_LOG_ERROR("playback", "CoreAudio: invalid device id '%s'", device_id);
+            return false;
+        }
     } else {
         AudioObjectPropertyAddress prop = {
             kAudioHardwarePropertyDefaultOutputDevice,

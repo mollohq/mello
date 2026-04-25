@@ -169,6 +169,11 @@ pub enum Event {
         playback: Vec<AudioDevice>,
     },
 
+    AudioDeviceFallback {
+        capture_fell_back: bool,
+        playback_fell_back: bool,
+    },
+
     MicLevel {
         level: f32,
     },

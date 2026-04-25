@@ -155,6 +155,35 @@ pub fn handle(ctx: &AppContext, event: Event) {
             hist.push(input_level, is_speaking);
             set_level_history(&ctx.app, &hist);
         }
+        Event::AudioDeviceFallback {
+            capture_fell_back,
+            playback_fell_back,
+        } => {
+            log::warn!(
+                "UI: audio device fallback, capture={} playback={}",
+                capture_fell_back,
+                playback_fell_back
+            );
+            let mut s = ctx.settings.borrow_mut();
+            if capture_fell_back {
+                s.capture_device_id = None;
+                ctx.app.set_selected_capture_id(slint::SharedString::new());
+                ctx.app
+                    .set_selected_capture_name(slint::SharedString::new());
+            }
+            if playback_fell_back {
+                s.playback_device_id = None;
+                ctx.app.set_selected_playback_id(slint::SharedString::new());
+                ctx.app
+                    .set_selected_playback_name(slint::SharedString::new());
+            }
+            s.save();
+            drop(s);
+
+            ctx.app.set_audio_device_warning(
+                "Your saved audio device was not found. Switched to system default — you can change it in Settings.".into(),
+            );
+        }
         Event::AudioDevicesListed { capture, playback } => {
             let cap: Vec<AudioDeviceData> = capture
                 .iter()
@@ -183,12 +212,18 @@ pub fn handle(ctx: &AppContext, event: Event) {
                     ctx.app.set_selected_capture_id(saved_id.as_str().into());
                     ctx.app.set_selected_capture_name(dev.name.as_str().into());
                 }
+            } else if let Some(dev) = capture.iter().find(|d| d.is_default) {
+                ctx.app.set_selected_capture_id(dev.id.as_str().into());
+                ctx.app.set_selected_capture_name(dev.name.as_str().into());
             }
             if let Some(ref saved_id) = s.playback_device_id {
                 if let Some(dev) = playback.iter().find(|d| &d.id == saved_id) {
                     ctx.app.set_selected_playback_id(saved_id.as_str().into());
                     ctx.app.set_selected_playback_name(dev.name.as_str().into());
                 }
+            } else if let Some(dev) = playback.iter().find(|d| d.is_default) {
+                ctx.app.set_selected_playback_id(dev.id.as_str().into());
+                ctx.app.set_selected_playback_name(dev.name.as_str().into());
             }
         }
         Event::VoiceJoined {

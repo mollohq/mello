@@ -32,6 +32,7 @@ typedef struct MelloPeerConnection MelloPeerConnection;
 
 typedef enum MelloResult {
     MELLO_OK = 0,
+    MELLO_DEVICE_FALLBACK = 1,
     MELLO_ERROR_INVALID_PARAM = -1,
     MELLO_ERROR_NOT_INITIALIZED = -2,
     MELLO_ERROR_ALREADY_STARTED = -3,

@@ -463,10 +463,22 @@ impl Client {
                     .send(Event::AudioDevicesListed { capture, playback });
             }
             Command::SetCaptureDevice { id } => {
-                self.voice.set_capture_device(&id);
+                let fell_back = self.voice.set_capture_device(&id);
+                if fell_back {
+                    let _ = self.event_tx.send(Event::AudioDeviceFallback {
+                        capture_fell_back: true,
+                        playback_fell_back: false,
+                    });
+                }
             }
             Command::SetPlaybackDevice { id } => {
-                self.voice.set_playback_device(&id);
+                let fell_back = self.voice.set_playback_device(&id);
+                if fell_back {
+                    let _ = self.event_tx.send(Event::AudioDeviceFallback {
+                        capture_fell_back: false,
+                        playback_fell_back: true,
+                    });
+                }
             }
             Command::SetEchoCancellation { enabled } => {
                 self.voice.set_echo_cancellation(enabled);

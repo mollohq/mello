@@ -135,6 +135,10 @@ bool WasapiPlayback::initialize(const char* device_id) {
 
 bool WasapiPlayback::start() {
     if (running_) return false;
+    if (!audio_client_) {
+        MELLO_LOG_ERROR("playback", "start() called but device not initialized");
+        return false;
+    }
     running_ = true;
 
     HRESULT hr = audio_client_->Start();

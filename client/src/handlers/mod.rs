@@ -52,7 +52,8 @@ pub fn handle_event(ctx: &AppContext, event: Event) {
         | Event::MicPermissionChanged { .. }
         | Event::MicLevel { .. }
         | Event::AudioDebugStats { .. }
-        | Event::AudioDevicesListed { .. } => voice::handle(ctx, event),
+        | Event::AudioDevicesListed { .. }
+        | Event::AudioDeviceFallback { .. } => voice::handle(ctx, event),
 
         // Chat
         Event::MessagesLoaded { .. }

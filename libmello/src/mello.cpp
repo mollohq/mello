@@ -643,8 +643,10 @@ void mello_free_device_list(MelloDevice* devices, int count) {
 MelloResult mello_set_audio_input(MelloContext* ctx, const char* device_id) {
     if (!ctx) return MELLO_ERROR_INVALID_PARAM;
     try {
-        return ctx_cast(ctx)->audio().set_capture_device(device_id)
-            ? MELLO_OK : MELLO_ERROR_FAILED;
+        int r = ctx_cast(ctx)->audio().set_capture_device(device_id);
+        if (r == 0) return MELLO_ERROR_FAILED;
+        if (r == 2) return MELLO_DEVICE_FALLBACK;
+        return MELLO_OK;
     } catch (...) {
         return MELLO_ERROR_FAILED;
     }
@@ -653,8 +655,10 @@ MelloResult mello_set_audio_input(MelloContext* ctx, const char* device_id) {
 MelloResult mello_set_audio_output(MelloContext* ctx, const char* device_id) {
     if (!ctx) return MELLO_ERROR_INVALID_PARAM;
     try {
-        return ctx_cast(ctx)->audio().set_playback_device(device_id)
-            ? MELLO_OK : MELLO_ERROR_FAILED;
+        int r = ctx_cast(ctx)->audio().set_playback_device(device_id);
+        if (r == 0) return MELLO_ERROR_FAILED;
+        if (r == 2) return MELLO_DEVICE_FALLBACK;
+        return MELLO_OK;
     } catch (...) {
         return MELLO_ERROR_FAILED;
     }

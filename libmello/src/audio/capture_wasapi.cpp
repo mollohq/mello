@@ -145,6 +145,10 @@ bool WasapiCapture::initialize(const char* device_id) {
 
 bool WasapiCapture::start(Callback callback) {
     if (running_) return false;
+    if (!audio_client_) {
+        MELLO_LOG_ERROR("capture", "start() called but device not initialized");
+        return false;
+    }
     callback_ = std::move(callback);
     running_ = true;
 

@@ -70,8 +70,12 @@ bool CoreAudioCapture::initialize(const char* device_id) {
 
     // Set the capture device
     if (device_id && device_id[0] != '\0') {
-        // Parse device_id as AudioDeviceID (stored as string of the numeric ID)
-        device_id_ = static_cast<AudioDeviceID>(std::stoul(device_id));
+        try {
+            device_id_ = static_cast<AudioDeviceID>(std::stoul(device_id));
+        } catch (...) {
+            MELLO_LOG_ERROR("capture", "CoreAudio: invalid device id '%s'", device_id);
+            return false;
+        }
     } else {
         // Get default input device
         AudioObjectPropertyAddress prop = {
