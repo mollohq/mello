@@ -454,6 +454,7 @@ fn run_udp_mode(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_sfu_mode(
     ctx: *mut mello_sys::MelloContext,
     source: &mello_sys::MelloCaptureSource,
@@ -561,11 +562,13 @@ fn run_sfu_mode(
         sfu_token: None,
     };
 
-    let mut cfg = StreamConfig::default();
-    cfg.width = cap_w.max(1);
-    cfg.height = cap_h.max(1);
-    cfg.fps = fps;
-    cfg.bitrate_kbps = bitrate;
+    let cfg = StreamConfig {
+        width: cap_w.max(1),
+        height: cap_h.max(1),
+        fps,
+        bitrate_kbps: bitrate,
+        ..StreamConfig::default()
+    };
 
     let mut stream_session = rt
         .block_on(async {

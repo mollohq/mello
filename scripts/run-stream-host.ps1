@@ -4,7 +4,7 @@ param(
     [string]$NakamaHttpBase = $env:MELLO_NAKAMA_HTTP_BASE,
     [string]$NakamaAuthToken = $env:MELLO_NAKAMA_AUTH_TOKEN,
     [string]$CrewId = $env:MELLO_CREW_ID,
-    [int]$Fps = 30,
+    [int]$Fps = 60,
     [int]$BitrateKbps = 5000,
     [int]$RequestWidth = 1920,
     [int]$RequestHeight = 1080,

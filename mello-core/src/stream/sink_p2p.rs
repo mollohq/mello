@@ -139,6 +139,21 @@ impl P2PFanoutSink {
     fn enqueue_chunked(&self, data: &[u8]) -> Result<(), StreamError> {
         self.ensure_egress_task();
         let chunk_count = data.len().div_ceil(CHUNK_MAX_PAYLOAD).max(1) as u16;
+
+        let available = self.egress_tx.capacity();
+        if (chunk_count as usize) > available {
+            let msg_id = self.msg_seq.load(Ordering::Relaxed);
+            log::warn!(
+                "P2P sink egress: dropping whole frame msg_id={} ({} chunks, {} slots free)",
+                msg_id,
+                chunk_count,
+                available,
+            );
+            return Err(StreamError::SendFailed(
+                "egress queue full — whole frame dropped".to_string(),
+            ));
+        }
+
         let msg_id = self.msg_seq.fetch_add(1, Ordering::Relaxed);
 
         for chunk_idx in 0..chunk_count {
@@ -154,7 +169,7 @@ impl P2PFanoutSink {
 
             if self.egress_tx.try_send(msg).is_err() {
                 log::warn!(
-                    "P2P sink egress queue full: msg_id={} chunk={}/{} — dropping",
+                    "P2P sink egress queue full mid-frame: msg_id={} chunk={}/{} — dropping remainder",
                     msg_id,
                     chunk_idx + 1,
                     chunk_count,

@@ -58,7 +58,10 @@ public:
     void stop_viewer();
     bool feed_packet(const uint8_t* data, size_t size, bool is_keyframe);
     bool present_frame();
-    size_t decode_queue_depth() const { return decoded_ring_count_; }
+    size_t decode_queue_depth() const {
+        std::lock_guard<std::mutex> lock(decoded_ring_mutex_);
+        return decoded_ring_count_;
+    }
     void set_native_frame_callback(NativeFrameCallback on_native_frame);
     void set_native_frame_mirror_rgba(bool enabled);
 
@@ -137,6 +140,7 @@ private:
     std::vector<uint8_t> rgba_buf_;
 
     static constexpr size_t DECODED_RING_CAP = 3;
+    mutable std::mutex decoded_ring_mutex_;
 #ifdef _WIN32
     std::array<ID3D11Texture2D*, DECODED_RING_CAP> decoded_ring_{};
 #elif defined(__APPLE__)
@@ -145,6 +149,14 @@ private:
     size_t decoded_ring_head_ = 0; // next write slot
     size_t decoded_ring_tail_ = 0; // next read slot
     size_t decoded_ring_count_ = 0;
+
+    // Jitter/pacing buffer: hold back presentation until ring depth >= target
+    // to absorb network timing jitter. Falls back after a deadline to avoid
+    // adding latency when frames arrive slowly.
+    static constexpr size_t JITTER_TARGET = 2;
+    static constexpr uint64_t JITTER_MAX_HOLD_US = 50'000; // 50ms max hold
+    uint64_t last_present_us_ = 0;
+    bool     jitter_primed_   = false;
 
     void push_decoded(
 #ifdef _WIN32

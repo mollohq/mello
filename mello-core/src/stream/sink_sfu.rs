@@ -109,9 +109,26 @@ impl SfuSink {
     fn enqueue_chunked_media(&self, data: &[u8]) -> Result<(), StreamError> {
         self.ensure_egress_task();
         if !self.connection.is_media_channel_open() {
-            return Ok(());
+            return Err(StreamError::SendFailed("media channel closed".to_string()));
         }
         let chunk_count = data.len().div_ceil(SFU_CHUNK_MAX_PAYLOAD).max(1) as u16;
+
+        // Pre-flight: check that enough queue capacity exists for all chunks.
+        // This avoids sending partial messages that the viewer can never reassemble.
+        let available = self.egress_tx.capacity();
+        if (chunk_count as usize) > available {
+            let msg_id = self.msg_seq.load(Ordering::Relaxed);
+            log::warn!(
+                "SFU sink egress: dropping whole frame msg_id={} ({} chunks, {} slots free)",
+                msg_id,
+                chunk_count,
+                available,
+            );
+            return Err(StreamError::SendFailed(
+                "egress queue full — whole frame dropped".to_string(),
+            ));
+        }
+
         let msg_id = self.msg_seq.fetch_add(1, Ordering::Relaxed);
 
         for chunk_idx in 0..chunk_count {
@@ -127,7 +144,7 @@ impl SfuSink {
 
             if self.egress_tx.try_send(msg).is_err() {
                 log::warn!(
-                    "SFU sink egress queue full: msg_id={} chunk={}/{} — dropping",
+                    "SFU sink egress queue full mid-frame: msg_id={} chunk={}/{} — dropping remainder",
                     msg_id,
                     chunk_idx + 1,
                     chunk_count,

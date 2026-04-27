@@ -26,8 +26,8 @@ void VideoPipeline::push_decoded(ID3D11Texture2D* frame) {
 #elif defined(__APPLE__)
 void VideoPipeline::push_decoded(void* frame) {
 #endif
+    std::lock_guard<std::mutex> lock(decoded_ring_mutex_);
     if (decoded_ring_count_ == DECODED_RING_CAP) {
-        // Full — drop the oldest to make room
 #ifdef __APPLE__
         if (decoded_ring_[decoded_ring_tail_])
             CVPixelBufferRelease((CVPixelBufferRef)decoded_ring_[decoded_ring_tail_]);
@@ -46,6 +46,7 @@ ID3D11Texture2D* VideoPipeline::pop_decoded() {
 #elif defined(__APPLE__)
 void* VideoPipeline::pop_decoded() {
 #endif
+    std::lock_guard<std::mutex> lock(decoded_ring_mutex_);
     if (decoded_ring_count_ == 0) return nullptr;
     auto* frame = decoded_ring_[decoded_ring_tail_];
     decoded_ring_[decoded_ring_tail_] = nullptr;
@@ -475,6 +476,8 @@ bool VideoPipeline::start_viewer(const PipelineConfig& config, FrameCallback on_
     viewer_start_time_ = now_us();
     frames_decoded_    = 0;
     frames_dropped_    = 0;
+    last_present_us_   = 0;
+    jitter_primed_     = false;
 
     MELLO_LOG_INFO(TAG, "Viewer pipeline starting: decoder=%s codec=H264 res=%ux%u",
         decoder_ ? decoder_->name() : "none",
@@ -510,7 +513,7 @@ void VideoPipeline::stop_viewer() {
 #endif
 
     // Drain any remaining frames in the ring buffer
-    while (decoded_ring_count_ > 0) {
+    while (decode_queue_depth() > 0) {
 #ifdef __APPLE__
         void* buf = pop_decoded();
         if (buf) CVPixelBufferRelease((CVPixelBufferRef)buf);
@@ -539,7 +542,7 @@ bool VideoPipeline::feed_packet(const uint8_t* data, size_t size, bool is_keyfra
     if (frames_decoded_ % 300 == 0) {
         uint64_t uptime_s = (now_us() - viewer_start_time_) / 1'000'000;
         MELLO_LOG_INFO(TAG, "viewer: uptime=%llus decoded=%llu dropped=%llu dec=%s ring=%zu",
-            uptime_s, frames_decoded_, frames_dropped_, decoder_->name(), decoded_ring_count_);
+            uptime_s, frames_decoded_, frames_dropped_, decoder_->name(), decode_queue_depth());
     }
 #elif defined(__APPLE__)
     if (!decoder_->decode(data, size, is_keyframe)) {
@@ -558,7 +561,7 @@ bool VideoPipeline::feed_packet(const uint8_t* data, size_t size, bool is_keyfra
     if (frames_decoded_ % 300 == 0) {
         uint64_t uptime_s = (now_us() - viewer_start_time_) / 1'000'000;
         MELLO_LOG_INFO(TAG, "viewer: uptime=%llus decoded=%llu dropped=%llu dec=%s ring=%zu",
-            uptime_s, frames_decoded_, frames_dropped_, decoder_->name(), decoded_ring_count_);
+            uptime_s, frames_decoded_, frames_dropped_, decoder_->name(), decode_queue_depth());
     }
 #else
     (void)data; (void)size; (void)is_keyframe;
@@ -569,8 +572,30 @@ bool VideoPipeline::feed_packet(const uint8_t* data, size_t size, bool is_keyfra
 
 bool VideoPipeline::present_frame() {
 #ifdef _WIN32
+    if (!viewer_running_.load()) return false;
+
+    // Jitter buffer: hold back until the ring has enough depth to smooth
+    // inter-frame timing jitter. Bypass the hold if we've waited too long
+    // (avoids adding latency when frame rate is genuinely low).
+    {
+        size_t depth = decode_queue_depth();
+        if (depth == 0) return false;
+
+        if (!jitter_primed_ && depth < JITTER_TARGET) {
+            uint64_t now = now_us();
+            if (last_present_us_ == 0) {
+                last_present_us_ = now;
+            }
+            if (now - last_present_us_ < JITTER_MAX_HOLD_US) {
+                return false; // hold — ring not full enough yet
+            }
+        }
+        jitter_primed_ = true;
+    }
+
     ID3D11Texture2D* frame = pop_decoded();
-    if (!viewer_running_.load() || !frame) return false;
+    if (!frame) return false;
+    last_present_us_ = now_us();
     const bool mirror_native_to_rgba = native_frame_mirror_rgba_;
 
     // Native GPU presenter path: first try direct decoded-texture handoff.
@@ -649,8 +674,23 @@ bool VideoPipeline::present_frame() {
 
     return true;
 #elif defined(__APPLE__)
+    if (!viewer_running_.load()) return false;
+
+    {
+        size_t depth = decode_queue_depth();
+        if (depth == 0) return false;
+
+        if (!jitter_primed_ && depth < JITTER_TARGET) {
+            uint64_t now = now_us();
+            if (last_present_us_ == 0) last_present_us_ = now;
+            if (now - last_present_us_ < JITTER_MAX_HOLD_US) return false;
+        }
+        jitter_primed_ = true;
+    }
+
     void* popped = pop_decoded();
-    if (!viewer_running_.load() || !popped) return false;
+    if (!popped) return false;
+    last_present_us_ = now_us();
 
     CVPixelBufferRef pb = (CVPixelBufferRef)popped;
     CVPixelBufferLockBaseAddress(pb, kCVPixelBufferLock_ReadOnly);

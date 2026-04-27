@@ -31,6 +31,10 @@ private:
     NV_ENC_OUTPUT_PTR           out_buf_   = nullptr;
     NV_ENC_INPUT_PTR            mapped_input_ = nullptr;
 
+    // Async encode: completion event signalled by NVENC when bitstream is ready
+    HANDLE completion_event_ = nullptr;
+    bool   async_mode_ = false;
+
     // Per-texture registration cache: avoids re-registering the same NV12 ring slot
     std::unordered_map<ID3D11Texture2D*, NV_ENC_REGISTERED_PTR> reg_cache_;
 

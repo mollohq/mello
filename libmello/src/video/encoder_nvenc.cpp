@@ -163,23 +163,33 @@ bool NvencEncoder::initialize(const GraphicsDevice& device, const EncoderConfig&
 
     NV_ENC_INITIALIZE_PARAMS init_params;
     memset(&init_params, 0, sizeof(init_params));
-    init_params.version       = NV_ENC_INITIALIZE_PARAMS_VER;
-    init_params.encodeGUID    = codec_guid;
-    init_params.presetGUID    = used_preset;
-    init_params.encodeWidth   = config.width;
-    init_params.encodeHeight  = config.height;
-    init_params.darWidth      = config.width;
-    init_params.darHeight     = config.height;
-    init_params.frameRateNum  = config.fps;
-    init_params.frameRateDen  = 1;
-    init_params.enablePTD     = 1;
-    init_params.encodeConfig  = &enc_config;
-    init_params.tuningInfo    = NV_ENC_TUNING_INFO_ULTRA_LOW_LATENCY;
+    init_params.version            = NV_ENC_INITIALIZE_PARAMS_VER;
+    init_params.encodeGUID         = codec_guid;
+    init_params.presetGUID         = used_preset;
+    init_params.encodeWidth        = config.width;
+    init_params.encodeHeight       = config.height;
+    init_params.darWidth           = config.width;
+    init_params.darHeight          = config.height;
+    init_params.frameRateNum       = config.fps;
+    init_params.frameRateDen       = 1;
+    init_params.enablePTD          = 1;
+    init_params.enableEncodeAsync  = 1;
+    init_params.encodeConfig       = &enc_config;
+    init_params.tuningInfo         = NV_ENC_TUNING_INFO_ULTRA_LOW_LATENCY;
 
-    MELLO_LOG_INFO(TAG, "NVENC: nvEncInitializeEncoder %ux%u (initVer=0x%08X cfgVer=0x%08X rcVer=0x%08X)",
-        config.width, config.height, init_params.version, enc_config.version, enc_config.rcParams.version);
+    MELLO_LOG_INFO(TAG, "NVENC: nvEncInitializeEncoder %ux%u async=%d (initVer=0x%08X cfgVer=0x%08X rcVer=0x%08X)",
+        config.width, config.height, init_params.enableEncodeAsync,
+        init_params.version, enc_config.version, enc_config.rcParams.version);
 
     status = fn_.nvEncInitializeEncoder(encoder_, &init_params);
+
+    // Some drivers/configs don't support async — fall back to sync mode
+    if (status != NV_ENC_SUCCESS && init_params.enableEncodeAsync) {
+        MELLO_LOG_INFO(TAG, "NVENC: async init failed (%d), falling back to sync mode", status);
+        init_params.enableEncodeAsync = 0;
+        status = fn_.nvEncInitializeEncoder(encoder_, &init_params);
+    }
+
     if (status != NV_ENC_SUCCESS) {
         MELLO_LOG_WARN(TAG, "NVENC: nvEncInitializeEncoder failed: %d — retrying with LOW_LATENCY tuning", status);
         init_params.tuningInfo = NV_ENC_TUNING_INFO_LOW_LATENCY;
@@ -202,6 +212,27 @@ bool NvencEncoder::initialize(const GraphicsDevice& device, const EncoderConfig&
     }
     out_buf_ = bstream.bitstreamBuffer;
 
+    // Register completion event if encoder was initialized in async mode.
+    if (init_params.enableEncodeAsync) {
+        completion_event_ = CreateEventA(nullptr, FALSE, FALSE, nullptr);
+        if (completion_event_) {
+            NV_ENC_EVENT_PARAMS event_params = {NV_ENC_EVENT_PARAMS_VER};
+            event_params.completionEvent = completion_event_;
+            status = fn_.nvEncRegisterAsyncEvent(encoder_, &event_params);
+            if (status == NV_ENC_SUCCESS) {
+                async_mode_ = true;
+                MELLO_LOG_INFO(TAG, "NVENC: async encode enabled (completion event registered)");
+            } else {
+                MELLO_LOG_WARN(TAG, "NVENC: async event registration failed (%d), using sync fallback", status);
+                CloseHandle(completion_event_);
+                completion_event_ = nullptr;
+            }
+        }
+    }
+    if (!async_mode_) {
+        MELLO_LOG_INFO(TAG, "NVENC: using synchronous encode mode");
+    }
+
     MELLO_LOG_INFO(TAG, "Selected encoder: NVENC codec=%s resolution=%ux%u fps=%u bitrate=%ukbps",
         config.codec == VideoCodec::H264 ? "H264" : "AV1",
         config.width, config.height, config.fps, config.bitrate_kbps);
@@ -215,6 +246,14 @@ void NvencEncoder::shutdown() {
             fn_.nvEncUnregisterResource(encoder_, reg);
         }
         reg_cache_.clear();
+        if (completion_event_) {
+            NV_ENC_EVENT_PARAMS event_params = {NV_ENC_EVENT_PARAMS_VER};
+            event_params.completionEvent = completion_event_;
+            fn_.nvEncUnregisterAsyncEvent(encoder_, &event_params);
+            CloseHandle(completion_event_);
+            completion_event_ = nullptr;
+            async_mode_ = false;
+        }
         if (out_buf_) {
             fn_.nvEncDestroyBitstreamBuffer(encoder_, out_buf_);
             out_buf_ = nullptr;
@@ -266,7 +305,6 @@ bool NvencEncoder::encode(ID3D11Texture2D* nv12_texture, EncodedPacket& out) {
     }
     mapped_input_ = map.mappedResource;
 
-    // Encode
     NV_ENC_PIC_PARAMS pic = {NV_ENC_PIC_PARAMS_VER};
     pic.inputBuffer       = mapped_input_;
     pic.bufferFmt         = NV_ENC_BUFFER_FORMAT_NV12;
@@ -274,6 +312,9 @@ bool NvencEncoder::encode(ID3D11Texture2D* nv12_texture, EncodedPacket& out) {
     pic.inputHeight       = config_.height;
     pic.outputBitstream   = out_buf_;
     pic.pictureStruct     = NV_ENC_PIC_STRUCT_FRAME;
+    if (async_mode_) {
+        pic.completionEvent = completion_event_;
+    }
 
     if (force_idr_) {
         pic.encodePicFlags = NV_ENC_PIC_FLAG_FORCEIDR | NV_ENC_PIC_FLAG_OUTPUT_SPSPPS;
@@ -288,7 +329,18 @@ bool NvencEncoder::encode(ID3D11Texture2D* nv12_texture, EncodedPacket& out) {
         return false;
     }
 
-    // Lock bitstream and copy to output
+    // In async mode, wait for the GPU to signal completion before locking.
+    // This frees the CPU during the actual GPU encode work.
+    if (async_mode_) {
+        DWORD wait_result = WaitForSingleObject(completion_event_, 500);
+        if (wait_result != WAIT_OBJECT_0) {
+            MELLO_LOG_ERROR(TAG, "NVENC: async completion event timeout (seq=%llu wait=%lu)", frame_seq_, wait_result);
+            fn_.nvEncUnmapInputResource(encoder_, mapped_input_);
+            mapped_input_ = nullptr;
+            return false;
+        }
+    }
+
     NV_ENC_LOCK_BITSTREAM lock = {NV_ENC_LOCK_BITSTREAM_VER};
     lock.outputBitstream = out_buf_;
 
