@@ -17,7 +17,7 @@ path = "src/main.rs"
 
 [dependencies]
 mello-core = { path = "../mello-core" }
-slint = { version = "1.5", features = ["renderer-winit-skia", "renderer-winit-software"] }
+slint = { version = "1.16", features = ["renderer-winit-skia", "renderer-winit-software"] }
 tokio = { workspace = true }
 log = { workspace = true }
 tracing = "0.1"
@@ -64,7 +64,7 @@ windows = { version = "0.62", features = [
 
 [target.'cfg(target_os = "macos")'.dependencies]
 muda = "0.17"
-i-slint-backend-winit = { version = "=1.15.1", features = ["renderer-skia"] }
+i-slint-backend-winit = { version = "=1.16.1", features = ["renderer-skia"] }
 
 [features]
 default = ["development"]
@@ -73,8 +73,8 @@ development = []
 
 [dev-dependencies]
 toml = "0.8"
-i-slint-backend-testing = "1.5"
+i-slint-backend-testing = "1.16"
 
 [build-dependencies]
-slint-build = "1.5"
+slint-build = "1.16"
 winresource = "0.1"
