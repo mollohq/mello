@@ -147,7 +147,7 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
         .to_string_lossy()
         .to_string();
     #[cfg(not(target_os = "macos"))]
-    let instance_id = lock_name;
+    let instance_id = lock_name.clone();
     let ipc_endpoint = ipc::endpoint_name(&lock_name);
 
     let _instance = SingleInstance::new(&instance_id)?;
