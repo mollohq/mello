@@ -139,6 +139,9 @@ func InitModule(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runti
 	if err := initializer.RegisterRpc("resolve_crew_invite", ResolveCrewInviteRPC); err != nil {
 		return err
 	}
+	if err := initializer.RegisterRpc("migrate_invite_codes", MigrateInviteCodesRPC); err != nil {
+		return err
+	}
 	if err := initializer.RegisterRpc("get_crew_avatar", GetCrewAvatarRPC); err != nil {
 		return err
 	}

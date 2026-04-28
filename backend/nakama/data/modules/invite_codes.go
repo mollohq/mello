@@ -21,13 +21,16 @@ const (
 // GenerateInviteCode creates a short, human-readable invite code for a crew
 // and stores it in Nakama storage. Returns the code.
 func GenerateInviteCode(ctx context.Context, nk runtime.NakamaModule, logger runtime.Logger, crewID string) (string, error) {
-	code := generateCode()
+	code, err := generateCode(ctx, nk)
+	if err != nil {
+		return "", err
+	}
 
 	value, _ := json.Marshal(map[string]string{"crew_id": crewID})
 
 	reverseValue, _ := json.Marshal(map[string]string{"code": code})
 
-	_, err := nk.StorageWrite(ctx, []*runtime.StorageWrite{
+	_, err = nk.StorageWrite(ctx, []*runtime.StorageWrite{
 		{
 			Collection:      InviteCodeCollection,
 			Key:             strings.ToUpper(code),
@@ -189,17 +192,75 @@ func LookupCrewInviteCode(ctx context.Context, nk runtime.NakamaModule, crewID s
 	return data.Code
 }
 
-func generateCode() string {
+const maxCodeAttempts = 5
+
+func generateCode(ctx context.Context, nk runtime.NakamaModule) (string, error) {
 	r := rand.New(rand.NewSource(time.Now().UnixNano()))
 	const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789" // no I/O/0/1 to avoid confusion
-	var b strings.Builder
-	for i := 0; i < InviteCodeLength; i++ {
-		if i == 4 {
-			b.WriteByte('-')
+
+	for attempt := 0; attempt < maxCodeAttempts; attempt++ {
+		var b strings.Builder
+		for i := 0; i < InviteCodeLength; i++ {
+			if i == 4 {
+				b.WriteByte('-')
+			}
+			b.WriteByte(chars[r.Intn(len(chars))])
 		}
-		b.WriteByte(chars[r.Intn(len(chars))])
+		code := b.String()
+
+		objects, err := nk.StorageRead(ctx, []*runtime.StorageRead{
+			{Collection: InviteCodeCollection, Key: code, UserID: SystemUserID},
+		})
+		if err != nil {
+			return "", fmt.Errorf("storage read failed: %w", err)
+		}
+		if len(objects) == 0 {
+			return code, nil
+		}
 	}
-	return b.String()
+	return "", fmt.Errorf("failed to generate unique code after %d attempts", maxCodeAttempts)
+}
+
+// MigrateInviteCodesRPC generates invite codes for all crews that don't have one.
+// Admin-only: callable via server key with ?unwrap=true&http_key=...
+func MigrateInviteCodesRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, payload string) (string, error) {
+	cursor := ""
+	migrated := 0
+	skipped := 0
+
+	for {
+		groups, newCursor, err := nk.GroupsList(ctx, "", "", nil, nil, 100, cursor)
+		if err != nil {
+			return "", fmt.Errorf("failed to list groups: %w", err)
+		}
+
+		for _, g := range groups {
+			existing := LookupCrewInviteCode(ctx, nk, g.GetId())
+			if existing != "" {
+				skipped++
+				continue
+			}
+			code, err := GenerateInviteCode(ctx, nk, logger, g.GetId())
+			if err != nil {
+				logger.Error("migrate_invite_codes: failed for crew %s: %v", g.GetId(), err)
+				continue
+			}
+			logger.Info("migrate_invite_codes: crew %s (%s) → %s", g.GetId(), g.GetName(), code)
+			migrated++
+		}
+
+		if newCursor == "" || len(groups) == 0 {
+			break
+		}
+		cursor = newCursor
+	}
+
+	resp, _ := json.Marshal(map[string]int{
+		"migrated": migrated,
+		"skipped":  skipped,
+	})
+	logger.Info("migrate_invite_codes: done. migrated=%d skipped=%d", migrated, skipped)
+	return string(resp), nil
 }
 
 func buildRecapHighlight(ctx context.Context, nk runtime.NakamaModule, logger runtime.Logger, crewID string) string {
@@ -222,21 +283,28 @@ func buildRecapHighlight(ctx context.Context, nk runtime.NakamaModule, logger ru
 		break
 	}
 
-	if latest == nil || (latest.TotalHangoutMin == 0 && latest.ClipCount == 0) {
+	if latest == nil {
+		return ""
+	}
+	return formatRecapHighlight(latest)
+}
+
+func formatRecapHighlight(recap *WeeklyRecapData) string {
+	if recap.TotalHangoutMin == 0 && recap.ClipCount == 0 {
 		return ""
 	}
 
 	var parts []string
-	if latest.TotalHangoutMin >= 60 {
-		parts = append(parts, fmt.Sprintf("%dh hangout", latest.TotalHangoutMin/60))
-	} else if latest.TotalHangoutMin > 0 {
-		parts = append(parts, fmt.Sprintf("%dm hangout", latest.TotalHangoutMin))
+	if recap.TotalHangoutMin >= 60 {
+		parts = append(parts, fmt.Sprintf("%dh hangout", recap.TotalHangoutMin/60))
+	} else if recap.TotalHangoutMin > 0 {
+		parts = append(parts, fmt.Sprintf("%dm hangout", recap.TotalHangoutMin))
 	}
-	if latest.ClipCount > 0 {
-		parts = append(parts, fmt.Sprintf("%d clips", latest.ClipCount))
+	if recap.ClipCount > 0 {
+		parts = append(parts, fmt.Sprintf("%d clips", recap.ClipCount))
 	}
-	if latest.TopGame != "" {
-		parts = append(parts, latest.TopGame)
+	if recap.TopGame != "" {
+		parts = append(parts, recap.TopGame)
 	}
 
 	return strings.Join(parts, " · ")

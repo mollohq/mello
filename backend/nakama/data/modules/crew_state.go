@@ -278,14 +278,6 @@ func ComputeCrewState(ctx context.Context, logger runtime.Logger, nk runtime.Nak
 	}
 
 	inviteCode := LookupCrewInviteCode(ctx, nk, crewID)
-	if inviteCode == "" {
-		if generated, err := GenerateInviteCode(ctx, nk, logger, crewID); err == nil {
-			inviteCode = generated
-			logger.Info("Auto-generated invite code for legacy crew %s: %s", crewID, inviteCode)
-		} else {
-			logger.Warn("Failed to auto-generate invite code for crew %s: %v", crewID, err)
-		}
-	}
 
 	state := &CrewState{
 		CrewID:     crewID,
