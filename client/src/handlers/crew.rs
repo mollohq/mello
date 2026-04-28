@@ -341,6 +341,39 @@ pub fn handle(ctx: &AppContext, event: Event) {
                 .set_crews(Rc::new(slint::VecModel::from(updated)).into());
             ctx.app.set_active_crew_id("".into());
         }
+        Event::CrewInviteResolved { code, invite } => {
+            log::info!(
+                "[invite] resolved: crew={} id={}",
+                invite.crew_name,
+                invite.crew_id,
+            );
+            let crews = ctx.app.get_crews();
+            let already_member = (0..crews.row_count())
+                .filter_map(|i| crews.row_data(i))
+                .any(|c| c.id == invite.crew_id.as_str());
+
+            if already_member {
+                log::info!("[invite] already a member, navigating to crew");
+                let _ = ctx.cmd_tx.try_send(Command::SelectCrew {
+                    crew_id: invite.crew_id,
+                });
+            } else {
+                ctx.app.set_join_crew_invite_code(code.into());
+                ctx.app.set_join_crew_name(invite.crew_name.into());
+                ctx.app.set_join_crew_id(invite.crew_id.into());
+                ctx.app.set_join_crew_highlight(invite.highlight.into());
+                ctx.app.set_join_crew_avatar_seed(invite.avatar_seed.into());
+                ctx.app.set_join_crew_error("".into());
+                ctx.app.set_join_crew_loading(false);
+                ctx.app.set_join_crew_modal_open(true);
+            }
+        }
+        Event::CrewInviteResolveFailed { reason } => {
+            log::warn!("[invite] resolve failed: {}", reason);
+            ctx.app.set_join_crew_error(reason.into());
+            ctx.app.set_join_crew_loading(false);
+            ctx.app.set_join_crew_modal_open(true);
+        }
         _ => {}
     }
 }

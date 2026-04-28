@@ -89,6 +89,7 @@ type PlayerInfo struct {
 type CrewState struct {
 	CrewID         string                   `json:"crew_id"`
 	Name           string                   `json:"name"`
+	InviteCode     string                   `json:"invite_code,omitempty"`
 	Counts         CrewCounts               `json:"counts"`
 	Members        []*CrewMemberInfo        `json:"members,omitempty"` // only for active crew (full view)
 	Voice          *CrewVoiceState          `json:"voice"`
@@ -276,9 +277,12 @@ func ComputeCrewState(ctx context.Context, logger runtime.Logger, nk runtime.Nak
 		activeGames = append(activeGames, g)
 	}
 
+	inviteCode := LookupCrewInviteCode(ctx, nk, crewID)
+
 	state := &CrewState{
-		CrewID: crewID,
-		Name:   group.GetName(),
+		CrewID:     crewID,
+		Name:       group.GetName(),
+		InviteCode: inviteCode,
 		Counts: CrewCounts{
 			Online: onlineCount,
 			Total:  len(members),

@@ -108,6 +108,29 @@ impl super::Client {
         }
     }
 
+    pub(super) async fn handle_resolve_crew_invite(&self, code: &str) {
+        log::info!("[invite] resolving crew invite code={:?}", code);
+        match self.nakama.resolve_crew_invite(code).await {
+            Ok(invite) => {
+                log::info!(
+                    "[invite] resolved invite: crew={:?} id={}",
+                    invite.crew_name,
+                    invite.crew_id,
+                );
+                let _ = self.event_tx.send(Event::CrewInviteResolved {
+                    code: code.to_string(),
+                    invite,
+                });
+            }
+            Err(e) => {
+                log::error!("[invite] failed to resolve invite code: {}", e);
+                let _ = self.event_tx.send(Event::CrewInviteResolveFailed {
+                    reason: e.to_string(),
+                });
+            }
+        }
+    }
+
     pub(super) async fn handle_join_by_invite_code(&mut self, code: &str) {
         log::info!("[invite] joining crew by invite code={:?}", code);
         match self.nakama.join_by_invite_code(code).await {

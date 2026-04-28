@@ -55,7 +55,6 @@ Do not repeat a corrected mistake in the same session.
   - Client: <100MB install, <100MB RAM, <3s cold start.
   - P2P: <50ms voice latency, >90% NAT traversal success.
 - Before adding a dependency: will it fit inside the size/RAM budget? Check binary size impact.
-- Prefer P2P for media; only touch the server for signaling and state.
 
 ## Slint UI Rules
 - `Image` has NO `vertical-alignment` property — only `Text` does.

@@ -366,6 +366,9 @@ impl Client {
             Command::JoinByInviteCode { code } => {
                 self.handle_join_by_invite_code(&code).await;
             }
+            Command::ResolveCrewInvite { code } => {
+                self.handle_resolve_crew_invite(&code).await;
+            }
             Command::SelectCrew { crew_id } => {
                 self.handle_select_crew(&crew_id).await;
             }

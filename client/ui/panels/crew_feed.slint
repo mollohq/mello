@@ -1278,37 +1278,79 @@ component SkeletonRecentGamesCard inherits Rectangle {
 // Invite CTA card
 component InviteCard inherits Rectangle {
     callback invite-clicked();
+    callback hide-clicked();
 
-    background: Theme.accent-bg;
+    background: Theme.card-bg;
     border-radius: 10px;
     border-width: 1px;
-    border-color: Theme.dark ? #EB4D5F33 : #FF1E5622;
+    border-color: Theme.card-border;
 
     VerticalLayout {
         alignment: center;
-        spacing: 8px;
+        spacing: 10px;
         padding: 20px;
 
         Text {
-            text: "Invite your crew";
+            text: "Invite friends";
             font-size: 14px;
             font-weight: 600;
-            color: Theme.accent;
+            color: Theme.text-primary;
             horizontal-alignment: center;
         }
 
         Text {
-            text: "Everything here comes alive when your friends join. Get them in here.";
+            text: "The feed comes alive when your crew is here.";
             font-size: 11px;
             color: Theme.text-sub;
             horizontal-alignment: center;
             wrap: word-wrap;
         }
-    }
 
-    invite-touch := TouchArea {
-        mouse-cursor: pointer;
-        clicked => { invite-clicked(); }
+        // Primary CTA button — wrapped so VerticalLayout doesn't override x
+        Rectangle {
+            height: 36px;
+
+            Rectangle {
+                width: 140px;
+                height: 36px;
+                x: (parent.width - self.width) / 2;
+                border-radius: Theme.r-inner;
+                background: invite-btn-touch.has-hover ? #FF1E56DD : Theme.accent;
+
+                Text {
+                    text: "Share invite link";
+                    font-size: 12px;
+                    font-weight: 600;
+                    color: #FFFFFF;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+
+                invite-btn-touch := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { invite-clicked(); }
+                }
+            }
+        }
+
+        // Hide link — wrapped so VerticalLayout doesn't override x
+        Rectangle {
+            height: 16px;
+
+            Text {
+                text: "Hide";
+                font-size: 11px;
+                color: Theme.text-tertiary;
+                horizontal-alignment: center;
+                width: parent.width;
+                y: (parent.height - self.height) / 2;
+
+                hide-touch := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { hide-clicked(); }
+                }
+            }
+        }
     }
 }
 
@@ -1323,6 +1365,8 @@ component FeedSlot inherits Rectangle {
     in property <string> clip-duration-text: "";
     callback play-clicked(string);
     callback seek-clip(float);
+    callback invite-clicked();
+    callback hide-invite-clicked();
 
     // Real cards
     if card.card-type == "clip" && card.is-hero: HeroClipCard {
@@ -1354,6 +1398,11 @@ component FeedSlot inherits Rectangle {
     }
     if card.card-type == "catchup": CatchupCard {
         width: parent.width; height: parent.height; card: root.card;
+    }
+    if card.card-type == "invite": InviteCard {
+        width: parent.width; height: parent.height;
+        invite-clicked => { root.invite-clicked(); }
+        hide-clicked => { root.hide-invite-clicked(); }
     }
 
     // Skeleton variants
@@ -1407,6 +1456,7 @@ export component CrewFeed inherits Rectangle {
     callback go-live-clicked();
     callback card-clicked(string);
     callback invite-clicked();
+    callback hide-invite-clicked();
     callback pause-clip();
     callback resume-clip();
     callback seek-clip(float);
@@ -1554,6 +1604,8 @@ export component CrewFeed inherits Rectangle {
                         clip-duration-text: root.clip-duration-text;
                         play-clicked(id) => { root.card-clicked(id); }
                         seek-clip(v) => { root.seek-clip(v); }
+                        invite-clicked => { root.invite-clicked(); }
+                        hide-invite-clicked => { root.hide-invite-clicked(); }
                     }
                 }
 
@@ -1611,6 +1663,8 @@ export component CrewFeed inherits Rectangle {
                         clip-duration-text: root.clip-duration-text;
                         play-clicked(id) => { root.card-clicked(id); }
                         seek-clip(v) => { root.seek-clip(v); }
+                        invite-clicked => { root.invite-clicked(); }
+                        hide-invite-clicked => { root.hide-invite-clicked(); }
                     }
 
                     if cards.length > root.feed-start-index + 1: FeedSlot {
@@ -1624,6 +1678,8 @@ export component CrewFeed inherits Rectangle {
                         clip-duration-text: root.clip-duration-text;
                         play-clicked(id) => { root.card-clicked(id); }
                         seek-clip(v) => { root.seek-clip(v); }
+                        invite-clicked => { root.invite-clicked(); }
+                        hide-invite-clicked => { root.hide-invite-clicked(); }
                     }
                 }
 
@@ -1645,6 +1701,8 @@ export component CrewFeed inherits Rectangle {
                         clip-duration-text: root.clip-duration-text;
                         play-clicked(id) => { root.card-clicked(id); }
                         seek-clip(v) => { root.seek-clip(v); }
+                        invite-clicked => { root.invite-clicked(); }
+                        hide-invite-clicked => { root.hide-invite-clicked(); }
                     }
                 }
 
@@ -1664,6 +1722,8 @@ export component CrewFeed inherits Rectangle {
                         clip-duration-text: root.clip-duration-text;
                         play-clicked(id) => { root.card-clicked(id); }
                         seek-clip(v) => { root.seek-clip(v); }
+                        invite-clicked => { root.invite-clicked(); }
+                        hide-invite-clicked => { root.hide-invite-clicked(); }
                     }
 
                     if cards.length > root.feed-start-index + 6: FeedSlot {
@@ -1677,6 +1737,8 @@ export component CrewFeed inherits Rectangle {
                         clip-duration-text: root.clip-duration-text;
                         play-clicked(id) => { root.card-clicked(id); }
                         seek-clip(v) => { root.seek-clip(v); }
+                        invite-clicked => { root.invite-clicked(); }
+                        hide-invite-clicked => { root.hide-invite-clicked(); }
                     }
                 }
 
@@ -1698,11 +1760,9 @@ export component CrewFeed inherits Rectangle {
                         clip-duration-text: root.clip-duration-text;
                         play-clicked(id) => { root.card-clicked(id); }
                         seek-clip(v) => { root.seek-clip(v); }
+                        invite-clicked => { root.invite-clicked(); }
+                        hide-invite-clicked => { root.hide-invite-clicked(); }
                     }
-                }
-
-                if is-cold-start: InviteCard {
-                    invite-clicked => { root.invite-clicked(); }
                 }
 
                 Rectangle { height: 20px; }
@@ -1982,6 +2042,9 @@ export component Preview inherits Rectangle {
                 game-name: "",
                 duration: "", timestamp: "6 hours ago",
                 participant-count: 0, clip-path: "",
+            },
+            {
+                id: "inv", card-type: "invite", is-hero: false, is-skeleton: false,
             },
             {
                 id: "6", card-type: "clip", is-hero: false, is-skeleton: false,

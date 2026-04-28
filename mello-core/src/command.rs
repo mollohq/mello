@@ -91,6 +91,9 @@ pub enum Command {
     JoinByInviteCode {
         code: String,
     },
+    ResolveCrewInvite {
+        code: String,
+    },
     SelectCrew {
         crew_id: String,
     },

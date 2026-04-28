@@ -1,4 +1,4 @@
-use crate::crew::{Crew, Member};
+use crate::crew::{Crew, Member, ResolvedInvite};
 use crate::crew_state::{
     CrewEvent, CrewSidebarState, CrewState, MessagePreview, PresenceChange, VoiceChannelState,
     VoiceMember,
@@ -108,6 +108,13 @@ pub enum Event {
     },
     CrewLeft {
         crew_id: String,
+    },
+    CrewInviteResolved {
+        code: String,
+        invite: ResolvedInvite,
+    },
+    CrewInviteResolveFailed {
+        reason: String,
     },
 
     MemberJoined {
