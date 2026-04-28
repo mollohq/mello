@@ -45,6 +45,7 @@ pub fn start(
         hud_manager: ctx.hud_manager.clone(),
         fg_monitor: ctx.fg_monitor.clone(),
         pending_deep_link: ctx.pending_deep_link.clone(),
+        ipc_listener: ctx.ipc_listener.clone(),
     };
 
     let saved_timer = Rc::new(slint::Timer::default());
@@ -81,6 +82,29 @@ pub fn start(
                         poll_ctx.app.set_update_available(false);
                     }
                     UpdateEvent::CheckStarted => {}
+                }
+            }
+
+            // --- IPC deep links from second instances ---
+            if let Some(ref listener) = *poll_ctx.ipc_listener.borrow() {
+                for msg in listener.try_recv() {
+                    if let Some(link) = crate::deep_link::parse(&msg) {
+                        log::info!("[ipc] dispatching deep link: {:?}", link);
+                        match link {
+                            crate::deep_link::DeepLink::Join { code } => {
+                                let _ = poll_ctx
+                                    .cmd_tx
+                                    .try_send(Command::ResolveCrewInvite { code });
+                            }
+                            crate::deep_link::DeepLink::Crew { id } => {
+                                let _ = poll_ctx
+                                    .cmd_tx
+                                    .try_send(Command::SelectCrew { crew_id: id });
+                            }
+                        }
+                    } else {
+                        log::warn!("[ipc] ignoring unrecognised message: {}", msg);
+                    }
                 }
             }
 

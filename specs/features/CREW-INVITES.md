@@ -1,119 +1,102 @@
 # Crew Invites
 
 > **Component:** Invite system (Backend · Cloudflare · Client)
-> **Status:** Ready for implementation
+> **Status:** Implemented
 > **Related:** [12-NATIVE-PLATFORM.md](./12-NATIVE-PLATFORM.md) §9, [04-BACKEND.md](./04-BACKEND.md) §8, [00-ARCHITECTURE.md](./00-ARCHITECTURE.md)
 
 ---
 
 ## 1. Overview
 
-Replace the current copy-paste code flow with a shareable link system. Any crew member can share a permanent invite link. Pasting the link anywhere (Discord, iMessage, a Reddit post) renders a rich preview card showing the crew's name, online count, and avatar. Clicking the link opens m3llo directly if installed, or a landing page with a download CTA if not.
+Shareable invite links let any crew member invite people to their crew. Pasting a link anywhere (Discord, iMessage, Reddit) renders a rich Open Graph preview card. Clicking the link opens m3llo directly if installed, or shows a landing page with a download CTA if not.
 
 **User-facing link format:** `https://m3llo.app/join/{code}`
 
 **Deep link format:** `mello://join/{code}`
 
-> Note: The placeholder scheme in 12-NATIVE-PLATFORM.md §9.1 used `mello://invite/{code}`. This spec supersedes that. Update the `DeepLink` enum in `src/deep_link.rs` accordingly (see §6.2).
-
 ---
 
 ## 2. Invite Code
 
-The `XXXX-XXXX` invite code format and its storage in Nakama are already implemented as part of `create_crew` (see 04-BACKEND.md §8). Each crew has exactly one permanent invite code, generated at creation time and stored in Nakama Storage under the system user.
+Format: `XXXX-XXXX` (alphanumeric, uppercase). Each crew has exactly one permanent invite code, generated at crew creation time by the `create_crew` RPC. Codes are stored in Nakama Storage under the system user in two collections:
 
-**This spec does not change code generation or storage.** The code is already there. This spec builds the link layer on top of it.
+- **`invite_codes`** — key is the code, value contains the `crew_id`. Used for code→crew lookup.
+- **`crew_invite_codes`** — key is the `crew_id`, value contains the `code`. Used for crew→code lookup.
 
-The full invite URL is constructed by the client: `https://m3llo.app/join/{code}`.
-
----
-
-## 3. Data Model
-
-No changes to the existing invite storage schema. The Cloudflare Worker resolves codes via the new `resolve_crew_invite` RPC (§4), not by reading Nakama Storage directly.
-
-One prerequisite: confirm the existing invite storage records use `PUBLIC_READ` permission (read permission = 2). If they currently use a lower permission, the `resolve_crew_invite` RPC must use a server key call, not a user token. The Pages Function and Worker always use the server key regardless, so this is a backend concern only.
+The `CrewState` model includes an `InviteCode` field so any member can read the code when loading crew details. The full invite URL is constructed client-side: `https://m3llo.app/join/{code}`.
 
 ---
 
-## 4. Backend: New RPC
+## 3. Backend RPC: `resolve_crew_invite`
 
-The existing `join_by_invite_code` RPC already handles joining. Only one new RPC is needed.
+**File:** `backend/nakama/data/modules/invite_codes.go`
 
-### 4.1 `resolve_crew_invite`
+**Purpose:** Return public crew info for a given invite code. Called by the Cloudflare landing page (server key), the OG image generator (server key), and the client (bearer token) to populate the join confirmation screen.
 
-**Purpose:** Return public crew info for a given invite code. Called by the Cloudflare Pages Function (landing page), the OG image Worker, and the client (to populate the join confirmation screen before the user commits).
-
-**Caller:** Cloudflare Worker (server key) or authenticated client
-
-**Request:**
-```json
-{ "code": "XXXX-XXXX" }
-```
-
-**Logic:**
-1. Look up the invite code in Nakama Storage. Return `NOT_FOUND` if it does not exist.
-2. Fetch the crew record to retrieve name, avatar seed, member count, and current online count.
-3. Return only public-safe fields. Do not expose internal user IDs or `created_by`.
+**Request:** `{ "code": "XXXX-XXXX" }`
 
 **Response:**
 ```json
 {
   "crew_name": "ostkatt's crew",
-  "member_count": 7,
-  "online_count": 3,
   "avatar_seed": "ostkatt",
-  "crew_id": "uuid"
+  "crew_id": "uuid",
+  "highlight": "7h hangout · 3 clips · Counter-Strike 2"
 }
 ```
 
-This RPC must be callable with the Nakama server key (via `?unwrap=true`) so the Cloudflare Worker can call it without a user session.
+**Logic:**
+1. Look up the invite code in `invite_codes` storage. Return `NOT_FOUND` if missing.
+2. Fetch the crew's group metadata for name and avatar seed.
+3. Build a `highlight` string from the crew's latest weekly recap (from `CrewEventLedger`). The highlight combines hangout hours, clip count, and top game into a single human-readable line (e.g. "7h hangout · 3 clips · Counter-Strike 2"). Empty string if no recap data exists yet.
+4. Return only public-safe fields.
+
+The highlight approach was chosen over `online_count`/`member_count` to avoid O(n) presence reads per request and to surface more engaging information on preview cards.
+
+This RPC is callable with the Nakama HTTP key (via `?unwrap=true&http_key=...`) so Cloudflare Functions can call it without a user session.
 
 ---
 
-## 5. Invite Code Accessibility (Client)
+## 4. Client: Deep Link Parsing
 
-The invite code must be readable by any crew member, not just the crew creator. Confirm how the code is currently surfaced:
+**File:** `client/src/deep_link.rs`
 
-- If `get_crew` or equivalent already returns the invite code in the crew record, no backend change is needed. The client constructs the link from the code it already has.
-- If the code is only returned at `create_crew` time, add it to the crew details response so any member can retrieve it.
+The `DeepLink` enum handles two URL patterns:
 
-The Claudie implementing this should check the current `get_crew` RPC response before writing any new backend code.
+- `mello://join/{code}` → `DeepLink::Join { code }`
+- `mello://crew/{id}` → `DeepLink::Crew { id }`
+
+`extract_deep_link()` reads `argv[1]` at startup. The `mello://` scheme is registered in `Cargo.toml` via `osx_url_schemes = ["mello"]` for macOS app bundles.
 
 ---
 
-## 6. Client: URL Scheme
+## 5. Client: IPC Relay for Deep Links
 
-### 6.1 Scheme update
+**File:** `client/src/ipc.rs`
 
-The `mello://join/{code}` path is the canonical deep link for crew invites. Update `Cargo.toml` bundle metadata and any existing references to `mello://invite/` to use `mello://join/` instead.
+When m3llo is already running and the OS launches a second instance (via `mello://join/...`), the second instance must relay the URL to the running instance instead of silently dropping it.
 
-### 6.2 DeepLink enum update
+**Mechanism:** Platform-specific one-shot IPC using a shared endpoint derived from the app lock name (`app.mello.desktop`).
 
-```rust
-// src/deep_link.rs
+- **macOS/Linux:** Unix domain socket at `/tmp/app.mello.desktop.sock`. The first instance binds a non-blocking `UnixListener`. The second instance connects, writes the URL as a newline-terminated string, and exits.
+- **Windows:** Named pipe at `\\.\pipe\app.mello.desktop`. The first instance runs a background thread that blocks on `ConnectNamedPipe` in a loop, reading one line per connection and forwarding it via `mpsc` channel. The second instance opens the pipe as a regular file and writes the URL.
 
-pub enum DeepLink {
-    Join { code: String },   // replaces Invite
-    Crew { id: String },
-}
+The poll loop (`poll_loop.rs`, 50ms timer) calls `ipc_listener.try_recv()` each tick. Received URLs are parsed with `deep_link::parse()` and dispatched immediately as `Command::ResolveCrewInvite` or `Command::SelectCrew` — no `pending_deep_link` needed since the app is already authenticated and running.
 
-pub fn parse(url: &str) -> Option<DeepLink> {
-    let url = url.strip_prefix("mello://")?;
-    let mut parts = url.splitn(2, '/');
-    match parts.next()? {
-        "join" => Some(DeepLink::Join { code: parts.next()?.to_string() }),
-        "crew" => Some(DeepLink::Crew { id:   parts.next()?.to_string() }),
-        _      => None,
-    }
-}
-```
+**Cleanup:** The `IpcListener` removes the socket file on drop (Unix). The socket is also cleaned up before bind to handle stale files from crashes.
 
-### 6.3 Startup deep link handling
+---
 
-The existing `extract_deep_link()` in `main.rs` reads `mello://` URLs from `argv[1]`. On startup, after the user is authenticated, the pending deep link (if any) is dispatched to the UI layer.
+## 6. Client: Startup Deep Link Dispatch
 
-**Pending invite during auth:** If a deep link arrives before the user has logged in (first install, not yet onboarded), store the parsed `DeepLink::Join { code }` in memory. After successful login, dispatch it immediately. Do not persist to disk.
+**File:** `client/src/main.rs`, `client/src/handlers/auth.rs`
+
+On startup, `extract_deep_link()` parses `argv[1]` into a `DeepLink` and stores it in `AppContext::pending_deep_link`. The link is dispatched after authentication completes:
+
+- **Returning user:** dispatched on `Event::LoggedIn` (after `Command::LoadMyCrews`).
+- **New user:** dispatched on `Event::OnboardingReady` (after onboarding finishes and crews are loaded).
+
+`dispatch_pending_deep_link()` takes the pending link and sends the appropriate command to mello-core.
 
 ---
 
@@ -121,150 +104,145 @@ The existing `extract_deep_link()` in `main.rs` reads `mello://` URLs from `argv
 
 ### 7.1 Sharing an invite link
 
-**Entry point:** "Invite" button in the crew panel header. Visible to all crew members.
+**Entry points:**
+- "Invite" icon button in the crew panel header (`crew_panel.slint`)
+- "Share invite link" button on the invite card in the crew feed (`crew_feed.slint`)
 
 **Flow:**
-1. User taps "Invite".
-2. Client retrieves the crew's invite code (from crew state — see §5).
+1. User clicks invite button.
+2. `invite-share-requested` callback fires. Rust reads the `invite_code` from the active crew's data model.
 3. Constructs the full URL: `https://m3llo.app/join/{code}`.
-4. Displays a small modal with:
-   - The full URL in a read-only text field
-   - A "Copy link" button that writes the URL to the clipboard and briefly shows "Copied!"
-   - No other options. No QR code. No expiry controls.
+4. Opens the `InviteShareModal` (`invite_share_modal.slint`) showing the URL and a "Copy link" button.
+5. Clicking "Copy link" writes the URL to the system clipboard via `arboard` and visually confirms with "Copied!" + green button state.
 
-The modal is deliberately minimal. The link is the whole story.
+### 7.2 Invite card in the crew feed
 
-**Also:** Update the existing "CREW ESTABLISHED" modal (shown after crew creation) to display the full URL and "Copy link" instead of the bare code and "Copy Code".
+**File:** `client/src/handlers/clip.rs`, `client/ui/panels/crew_feed.slint`
 
-### 7.2 Joining via deep link (m3llo already installed)
+An `InviteCard` component is injected client-side at a fixed position (slot 2) in the feed layout. It shows "Invite friends" with a description, a primary "Share invite link" button, and a "Hide" link.
 
-When a `DeepLink::Join { code }` is dispatched (either from startup args or from the IPC relay when m3llo is already running):
-
-1. If the user is not yet authenticated: hold the code in memory until login completes, then proceed from step 2.
-2. Call `resolve_crew_invite` to fetch crew info.
-3. If the user is already a member of the resolved crew: navigate directly to that crew. No confirmation screen.
-4. Otherwise: show the **Join Crew** confirmation screen (§7.3).
+- **Visibility:** Always shown unless the user hides it. Hidden crew IDs are persisted in `settings.hidden_invite_crew_ids`.
+- **Hide action:** `on_hide_invite_card` removes the card from the current feed model and saves the crew ID to settings.
 
 ### 7.3 Join Crew confirmation screen
 
-A full-screen modal overlay shown before joining.
+**File:** `client/ui/panels/join_crew_modal.slint`
 
-**Contents:**
-- Crew avatar (large, centred)
-- Crew name (Oxanium, large)
-- "{n} members · {m} online" in Barlow muted text
-- Primary button: **"Join crew"** — calls existing `join_by_invite_code` RPC, then navigates to the crew on success
-- Secondary text link: **"Not now"** — dismisses the modal, returns to previous state
+Full-screen modal overlay shown when `DeepLink::Join` is dispatched:
 
-**Loading state:** Show a skeleton (avatar placeholder, pulsing name and count lines) while `resolve_crew_invite` is in flight.
+- Crew avatar (large, centered)
+- Crew name (large text)
+- Highlight text from the weekly recap (if available), e.g. "7h hangout · 3 clips · Counter-Strike 2"
+- Primary button: **"Join crew"** — calls `join_by_invite_code` RPC, navigates to the crew on success
+- Secondary text link: **"Not now"** — dismisses the modal
 
 **Error states:**
-- `NOT_FOUND`: show "This invite link is no longer valid." with a dismiss button.
-- Network error: show retry option.
+- `NOT_FOUND`: "This invite link is no longer valid." with a dismiss button.
+- Network error: retry option.
 
 ---
 
 ## 8. Landing Page (Cloudflare Pages Function)
 
-**URL:** `https://m3llo.app/join/[code]`
+**File:** `mello-site/functions/join/[code].ts`
 
-Implemented as a Cloudflare Pages Function at `functions/join/[code].ts`. Runs server-side on every request so Open Graph tags are present in the initial HTML response. Link previewers do not execute JavaScript; SSR is required.
+**URL:** `https://m3llo.app/join/{code}`
+
+Server-side rendered on every request so Open Graph tags are present in the initial HTML (link previewers don't execute JS).
 
 ### 8.1 Request flow
 
 1. Extract `code` from the URL path.
-2. Call `resolve_crew_invite` on Nakama via HTTP POST with server key (`NAKAMA_SERVER_KEY`, `NAKAMA_BASE_URL` stored as Pages secrets).
+2. Call `resolve_crew_invite` on Nakama via HTTP POST with HTTP key (`NAKAMA_HTTP_KEY`, `NAKAMA_BASE_URL` stored as Pages environment variables / secrets).
 3. On success: render full HTML with populated OG tags and crew data.
-4. On `NOT_FOUND`: render a minimal branded "invite not found" page.
+4. On `NOT_FOUND`: render a branded "invite not found" page.
+5. Response is cached via `caches.default` with a short TTL.
+
+Pages include `<meta name="robots" content="noindex, nofollow">` to prevent indexing.
 
 ### 8.2 Open Graph tags
 
 ```html
-<meta property="og:title"        content="Join {crew_name} on m3llo" />
-<meta property="og:description"  content="{online_count} online · {member_count} members" />
-<meta property="og:image"        content="https://avatar.m3llo.app/og/{code}.png" />
-<meta property="og:image:width"  content="1200" />
+<meta property="og:title"       content="Join {crew_name} on m3llo" />
+<meta property="og:description" content="{highlight}" />
+<meta property="og:image"       content="https://m3llo.app/og/{code}" />
+<meta property="og:image:width" content="1200" />
 <meta property="og:image:height" content="630" />
-<meta property="og:url"          content="https://m3llo.app/join/{code}" />
-<meta property="og:type"         content="website" />
-<meta name="twitter:card"        content="summary_large_image" />
+<meta property="og:url"         content="https://m3llo.app/join/{code}" />
+<meta property="og:type"        content="website" />
+<meta name="twitter:card"       content="summary_large_image" />
 ```
 
 ### 8.3 Page content
 
-**Above the fold:**
-- Crew avatar (from `avatar.m3llo.app/{seed}.png`)
-- Crew name, online count, member count
-- Primary CTA: **"Open in m3llo"** — fires `mello://join/{code}`
-- Secondary CTA: **"Download m3llo"** — links to `https://m3llo.app/download`
-
-**"Open in m3llo" JS behaviour:**
-```javascript
-window.location.href = 'mello://join/{code}';
-// If the tab is still visible after 2s, m3llo isn't installed
-setTimeout(() => showDownloadPrompt(), 2000);
-window.addEventListener('blur', () => clearTimeout(t)); // app opened, tab lost focus
-```
-
-**Below the fold:**
-- "Voice, streaming and all your crew's best gaming moments. Open source. Made in Europe."
-- m3llo wordmark
-
-Design: dark background `#0D0D0F`, `#EB4D5F` accents, Oxanium for headings, Barlow for body.
+- Crew avatar, name, and highlight text
+- Primary CTA: **"Open in m3llo"** — fires `mello://join/{code}`. If the tab is still visible after 2s (app not installed), shows a download prompt with fallback to `https://m3llo.app/download`.
+- Design: dark background `#0D0D0F`, `#EB4D5F` accents, Oxanium headings, Barlow body.
 
 ---
 
-## 9. OG Image Generator (Cloudflare Worker)
+## 9. OG Image Generator (Cloudflare Pages Function)
 
-**Worker:** `avatar.m3llo.app` (existing worker, new route)
+**File:** `mello-site/functions/og/[code].ts`
 
-**Route:** `GET /og/{code}.png`
+**URL:** `https://m3llo.app/og/{code}`
+
+Generates a 1200×630 PNG Open Graph card on demand using `@resvg/resvg-wasm`.
 
 ### 9.1 Pipeline
 
-1. Check KV cache for `og:{code}`. If hit and not stale (TTL: 5 minutes), return cached PNG immediately.
-2. Call `resolve_crew_invite` on Nakama with server key.
-3. Fetch the crew avatar PNG from `avatar.m3llo.app/{seed}.png` (existing route).
-4. Build SVG card (§9.2).
-5. Rasterize to 1200×630 PNG using `resvg` (existing dependency).
-6. Write to KV with 5-minute TTL.
-7. Return with `Content-Type: image/png`, `Cache-Control: public, max-age=300`.
+1. Call `resolve_crew_invite` on Nakama with HTTP key.
+2. Fetch the crew avatar PNG from `avatar.m3llo.app/{seed}.png`.
+3. Build an SVG card with crew avatar, name, highlight text, and m3llo branding.
+4. Rasterize to PNG using `resvg-wasm` with embedded font buffers.
+5. Return with `Content-Type: image/png`. Cached via `caches.default`.
 
-### 9.2 SVG card layout
+### 9.2 Font embedding
+
+Fonts are subsetted to Latin characters and stored as `.ttf.bin` files (the `.bin` extension is required for Cloudflare Pages Functions bundler to treat them as binary imports):
+
+- `functions/_shared/fonts/Oxanium-Latin.ttf.bin`
+- `functions/_shared/fonts/Barlow-Latin.ttf.bin`
+- `functions/_shared/fonts/Audiowide-Latin.ttf.bin`
+
+These are imported as `ArrayBuffer` and passed to the `Resvg` constructor via `fontBuffers`.
+
+### 9.3 SVG card layout
 
 ```
-┌──────────────────────────────────────────────────────────────────┐  1200×630px
+┌──────────────────────────────────────────────────────────────────┐  1200×630
 │                                                                  │
 │   [avatar 120×120]   {crew_name}                    m3llo        │
 │   rounded square     Oxanium 48px white             Audiowide    │
 │                                                     22px #EB4D5F │
-│                      ● {n} online · {m} members                  │
-│                      Barlow 28px #888  #EB4D5F dot               │
+│                      {highlight}                                 │
+│                      Barlow 28px #888                            │
 │                                                                  │
 │   Background #0D0D0F                                             │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
-- Avatar embedded as base64 data URI in SVG `<image>`, `rx="16"` for rounded corners
-- All fonts embedded as base64 — the Worker has no system fonts
-- Subset Oxanium, Barlow, and Audiowide to Latin characters to keep total Worker bundle under 1MB
+Avatar is embedded as a base64 data URI in SVG `<image>` with `rx="16"` for rounded corners.
 
 ---
 
-## 10. Implementation Order
+## 10. Shared Nakama Client (Cloudflare)
 
-1. **Backend:** `resolve_crew_invite` RPC + confirm invite code is returned in crew details for all members (§5)
-2. **OG image Worker route** (`/og/{code}.png` on `avatar.m3llo.app`)
-3. **Landing page** (Cloudflare Pages Function at `m3llo.app/join/[code]`)
-4. **Client deep link wiring** (`DeepLink::Join` dispatch, pending-during-auth logic)
-5. **Join confirmation screen** (Slint UI)
-6. **Invite modal + "CREW ESTABLISHED" modal update** (Slint UI)
+**File:** `mello-site/functions/_shared/nakama.ts`
 
-End-to-end smoke test: open the invite modal in the client, copy the link, paste it in Discord (verify OG card renders), click the link in a browser (verify landing page and "Open in m3llo"), click the deep link (verify join confirmation screen appears), join (verify crew membership).
+Shared utility used by both Pages Functions. Provides `resolveCrewInvite(env, code)` which calls the Nakama RPC with the HTTP key passed as a query parameter (`&http_key=...`). The `Env` interface expects `NAKAMA_BASE_URL` and `NAKAMA_HTTP_KEY`.
 
 ---
 
-## 11. Out of Scope (this version)
+## 11. Dev Seed
+
+**File:** `backend/nakama/data/modules/dev_seed.go`
+
+The dev seed script creates invite codes for all 6 sample crews (`DEVS-0001`, `GAMR-0001`, `MUSC-0001`, `DSGN-0001`, `OPS_-0001`, `RETR-0001`) with corresponding `invite_codes` and `crew_invite_codes` storage entries.
+
+---
+
+## 12. Out of Scope (this version)
 
 - Invite management UI (view, revoke, list per-crew invites)
 - Per-invite usage analytics

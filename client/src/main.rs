@@ -12,6 +12,7 @@ mod handlers;
 pub mod hud_manager;
 mod hud_state_builder;
 mod image_cache;
+mod ipc;
 mod notifications;
 mod platform;
 mod poll_loop;
@@ -147,19 +148,32 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
         .to_string();
     #[cfg(not(target_os = "macos"))]
     let instance_id = lock_name;
+    let ipc_endpoint = ipc::endpoint_name(&lock_name);
+
     let _instance = SingleInstance::new(&instance_id)?;
     if !_instance.is_single() {
         if let Some(url) = std::env::args()
             .nth(1)
             .filter(|a| a.starts_with("mello://"))
         {
-            eprintln!("Mello is already running. Deep link will be lost: {url}");
-            eprintln!("IPC relay not yet implemented — please paste the link in the running app.");
+            if ipc::send_to_running(&ipc_endpoint, &url) {
+                eprintln!("Relayed deep link to running instance: {url}");
+            } else {
+                eprintln!("Mello is already running. Could not relay deep link: {url}");
+            }
         } else {
             eprintln!("Mello is already running.");
         }
         std::process::exit(0);
     }
+
+    let ipc_listener = match ipc::IpcListener::bind(&ipc_endpoint) {
+        Ok(l) => Some(l),
+        Err(e) => {
+            log::warn!("[ipc] failed to bind listener: {}", e);
+            None
+        }
+    };
 
     // --- Deep link from argv ---
     let pending_deep_link = deep_link::extract_deep_link().and_then(|url| {
@@ -375,6 +389,7 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
         hud_manager: hud_mgr,
         fg_monitor,
         pending_deep_link: Rc::new(RefCell::new(pending_deep_link)),
+        ipc_listener: Rc::new(RefCell::new(ipc_listener)),
     };
 
     // --- Wire all callbacks ---

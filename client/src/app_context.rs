@@ -42,4 +42,5 @@ pub struct AppContext {
     pub hud_manager: Rc<HudManager>,
     pub fg_monitor: Rc<RefCell<ForegroundMonitor>>,
     pub pending_deep_link: Rc<RefCell<Option<crate::deep_link::DeepLink>>>,
+    pub ipc_listener: Rc<RefCell<Option<crate::ipc::IpcListener>>>,
 }

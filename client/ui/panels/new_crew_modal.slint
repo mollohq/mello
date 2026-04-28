@@ -21,6 +21,16 @@ export component NewCrewModal inherits Rectangle {
     property <bool> is-private: true;
     property <string> crew-name-text: "";
     property <string> crew-desc-text: "";
+    property <bool> link-copied: false;
+
+    copy-revert-timer := Timer {
+        interval: 3s;
+        running: false;
+        triggered => {
+            link-copied = false;
+            self.running = false;
+        }
+    }
 
     background: #000000AA;
 
@@ -121,24 +131,25 @@ export component NewCrewModal inherits Rectangle {
                     border-width: 1px;
                     border-color: Theme.graphic-light;
 
-                    Text {
+                    TextInput {
                         text: "m3llo.app/join/" + invite-code;
                         font-family: Theme.font-mono;
                         font-size: 12px;
                         color: Theme.text-primary;
                         horizontal-alignment: center;
                         vertical-alignment: center;
-                        overflow: elide;
+                        read-only: true;
+                        single-line: true;
                     }
                 }
 
                 Rectangle {
                     height: 40px;
                     border-radius: Theme.r-inner;
-                    background: copy-touch.has-hover ? #FF1E56DD : Theme.accent;
+                    background: link-copied ? Theme.voice-active : (copy-touch.has-hover ? #FF1E56DD : Theme.accent);
 
                     Text {
-                        text: "Copy link";
+                        text: link-copied ? "Copied!" : "Copy link";
                         font-family: Theme.font-sans;
                         font-size: 13px;
                         font-weight: 600;
@@ -149,7 +160,12 @@ export component NewCrewModal inherits Rectangle {
 
                     copy-touch := TouchArea {
                         mouse-cursor: pointer;
-                        clicked => { copy-invite-code(); }
+                        clicked => {
+                            copy-invite-code();
+                            link-copied = true;
+                            copy-revert-timer.running = false;
+                            copy-revert-timer.running = true;
+                        }
                     }
                 }
 
