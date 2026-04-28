@@ -137,12 +137,15 @@ mod platform {
         pub fn bind(endpoint: &str) -> std::io::Result<Self> {
             let pipe_name = endpoint.to_string();
             let (tx, rx) = mpsc::channel::<String>();
+            let ready = std::sync::Arc::new(std::sync::Barrier::new(2));
+            let ready2 = ready.clone();
 
             log::info!("[ipc] listening on {}", endpoint);
             let _handle = std::thread::spawn(move || {
-                pipe_accept_loop(&pipe_name, &tx);
+                pipe_accept_loop(&pipe_name, &tx, &ready2);
             });
 
+            ready.wait();
             Ok(Self { rx, _handle })
         }
 
@@ -156,12 +159,13 @@ mod platform {
         }
     }
 
-    fn pipe_accept_loop(pipe_name: &str, tx: &mpsc::Sender<String>) {
+    fn pipe_accept_loop(pipe_name: &str, tx: &mpsc::Sender<String>, ready: &std::sync::Barrier) {
         use windows::core::HSTRING;
         use windows::Win32::Foundation::*;
         use windows::Win32::Storage::FileSystem::*;
         use windows::Win32::System::Pipes::*;
 
+        let mut first = true;
         loop {
             let h_pipe_name = HSTRING::from(pipe_name);
             let pipe = unsafe {
@@ -178,7 +182,15 @@ mod platform {
             };
             if pipe == INVALID_HANDLE_VALUE {
                 log::error!("[ipc] CreateNamedPipeW failed, stopping listener");
+                if first {
+                    ready.wait();
+                }
                 return;
+            }
+
+            if first {
+                first = false;
+                ready.wait();
             }
 
             // Blocks until a client connects (or pipe is broken)
@@ -261,7 +273,16 @@ mod tests {
 
         assert!(send_to_running(&ep, "mello://join/TEST-1234"));
 
-        let msgs = listener.try_recv();
+        // On Windows the listener thread may not have forwarded the message
+        // through the channel yet; poll briefly.
+        let mut msgs = Vec::new();
+        for _ in 0..50 {
+            msgs = listener.try_recv();
+            if !msgs.is_empty() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
         assert_eq!(msgs.len(), 1);
         assert_eq!(msgs[0], "mello://join/TEST-1234");
 
