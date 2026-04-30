@@ -40,7 +40,7 @@ const VIEWER_RECV_BUF_SIZE: usize = 64 * 1024;
 /// channel at 30+ fps.
 pub type FrameSlot = Arc<std::sync::Mutex<Option<(u32, u32, Vec<u8>)>>>;
 /// Shared single-slot for native GPU frame metadata (shared texture handle).
-pub type NativeFrameSlot = Arc<std::sync::Mutex<Option<(u32, u32, usize, i32, u32, u64)>>>;
+pub type NativeFrameSlot = Arc<std::sync::Mutex<Option<(u32, u32, usize, u32, u32, u64)>>>;
 
 pub struct Client {
     nakama: NakamaClient,
@@ -91,7 +91,15 @@ impl Client {
         native_frame_slot: NativeFrameSlot,
         frame_consumed: Arc<std::sync::atomic::AtomicBool>,
     ) -> Self {
-        Self::new_with_game_sensor(config, event_tx, loopback, frame_slot, frame_consumed, true)
+        Self::new_with_game_sensor(
+            config,
+            event_tx,
+            loopback,
+            frame_slot,
+            native_frame_slot,
+            frame_consumed,
+            true,
+        )
     }
 
     /// Construct a client and optionally disable game sensing. Voice-only tools
@@ -101,6 +109,7 @@ impl Client {
         event_tx: std::sync::mpsc::Sender<Event>,
         loopback: bool,
         frame_slot: FrameSlot,
+        native_frame_slot: NativeFrameSlot,
         frame_consumed: Arc<std::sync::atomic::AtomicBool>,
         enable_game_sensor: bool,
     ) -> Self {

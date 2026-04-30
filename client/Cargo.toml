@@ -66,7 +66,7 @@ windows = { version = "0.62", features = [
     "Win32_Storage_FileSystem",
     "Win32_System_IO",
 ] }
-i-slint-backend-winit = { version = "=1.15.1", features = ["renderer-skia"] }
+i-slint-backend-winit = { version = "=1.16.1", features = ["renderer-skia"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 muda = "0.17"
