@@ -71,6 +71,7 @@ pub struct Client {
     game_state: GameStateManager,
     #[allow(dead_code)]
     game_sensor: Option<GameSensor>,
+    enable_game_sensor: bool,
     clip_was_playing: bool,
     clip_tick_counter: u8,
     host_pacing_last: Option<PacingTelemetry>,
@@ -84,6 +85,19 @@ impl Client {
         loopback: bool,
         frame_slot: FrameSlot,
         frame_consumed: Arc<std::sync::atomic::AtomicBool>,
+    ) -> Self {
+        Self::new_with_game_sensor(config, event_tx, loopback, frame_slot, frame_consumed, true)
+    }
+
+    /// Construct a client and optionally disable game sensing. Voice-only tools
+    /// should turn this off to avoid unrelated process scanning overhead.
+    pub fn new_with_game_sensor(
+        config: Config,
+        event_tx: std::sync::mpsc::Sender<Event>,
+        loopback: bool,
+        frame_slot: FrameSlot,
+        frame_consumed: Arc<std::sync::atomic::AtomicBool>,
+        enable_game_sensor: bool,
     ) -> Self {
         Self {
             nakama: NakamaClient::new(config),
@@ -109,6 +123,7 @@ impl Client {
             last_voice_channel: None,
             game_state: GameStateManager::new(),
             game_sensor: None,
+            enable_game_sensor,
             clip_was_playing: false,
             clip_tick_counter: 0,
             host_pacing_last: None,
@@ -120,11 +135,18 @@ impl Client {
         log::info!("Mello client started, waiting for commands...");
 
         // --- Game sensing ---
-        let game_db = GameDatabase::load_bundled();
-        let mello_ctx = self.voice.mello_ctx();
-        let (sensor, game_event_rx) = GameSensor::start(mello_ctx, game_db);
-        self.game_sensor = Some(sensor);
-        log::info!("Game sensor started");
+        let game_event_rx = if self.enable_game_sensor {
+            let game_db = GameDatabase::load_bundled();
+            let mello_ctx = self.voice.mello_ctx();
+            let (sensor, game_event_rx) = GameSensor::start(mello_ctx, game_db);
+            self.game_sensor = Some(sensor);
+            log::info!("Game sensor started");
+            game_event_rx
+        } else {
+            let (_tx, rx) = std::sync::mpsc::channel();
+            log::info!("Game sensor disabled");
+            rx
+        };
 
         let mut signal_rx = self.nakama.take_signal_rx().unwrap();
         let mut presence_rx = self.nakama.take_presence_rx().unwrap();
@@ -492,6 +514,15 @@ impl Client {
             Command::SetNoiseSuppression { enabled } => {
                 self.voice.set_noise_suppression(enabled);
             }
+            Command::SetNsMode { mode } => {
+                self.voice.set_ns_mode(mode);
+            }
+            Command::SetTransientSuppression { enabled } => {
+                self.voice.set_transient_suppression(enabled);
+            }
+            Command::SetHighPassFilter { enabled } => {
+                self.voice.set_high_pass_filter(enabled);
+            }
             Command::SetInputVolume { volume } => {
                 self.voice.set_input_volume(volume);
             }
@@ -500,6 +531,15 @@ impl Client {
             }
             Command::SetLoopback { enabled } => {
                 self.voice.set_loopback(enabled);
+            }
+            Command::StartVoiceCaptureInject => {
+                self.voice.start_capture_inject();
+            }
+            Command::InjectCaptureFrame { samples } => {
+                self.voice.inject_capture_frame(&samples);
+            }
+            Command::StopVoiceCaptureInject => {
+                self.voice.stop_capture_inject();
             }
             Command::SetDebugMode { enabled } => {
                 self.voice.set_debug_mode(enabled);

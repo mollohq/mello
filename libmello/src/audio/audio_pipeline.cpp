@@ -20,6 +20,29 @@
 
 namespace mello::audio {
 
+static constexpr int SPEECH_PRE_ROLL_FRAMES = 5;       // 100ms at 20ms/frame.
+static constexpr int CANDIDATE_HANGOVER_FRAMES = 10;   // Keep Silero warm across brief dips.
+static constexpr int SPEECH_ENCODE_HANGOVER_FRAMES = 8;
+static constexpr float MIN_SPEECH_RMS = 0.002f;        // ~-54 dBFS, before adaptive floor.
+static constexpr float NOISE_FLOOR_GATE_MULT = 2.5f;
+
+static WebRtcNsLevel to_webrtc_ns_mode(NsMode mode) {
+    switch (mode) {
+        case NsMode::WebRtcLow:
+            return WebRtcNsLevel::Low;
+        case NsMode::WebRtcModerate:
+            return WebRtcNsLevel::Moderate;
+        case NsMode::WebRtcHigh:
+            return WebRtcNsLevel::High;
+        case NsMode::WebRtcVeryHigh:
+            return WebRtcNsLevel::VeryHigh;
+        case NsMode::Off:
+        case NsMode::Rnnoise:
+        default:
+            return WebRtcNsLevel::Off;
+    }
+}
+
 static std::string get_exe_dir() {
 #ifdef _WIN32
     char buf[MAX_PATH];
@@ -128,6 +151,9 @@ bool AudioPipeline::initialize() {
         MELLO_LOG_ERROR("pipeline", "echo canceller init failed");
         return false;
     }
+    set_ns_mode(ns_mode());
+    set_transient_suppression(transient_suppression_enabled());
+    set_high_pass_filter(high_pass_filter_enabled());
 
     std::string model_path = find_model_path();
     if (model_path.empty() || !vad_.initialize(model_path)) {
@@ -165,11 +191,17 @@ void AudioPipeline::shutdown() {
     }
 #endif
     initialized_ = false;
+    capture_inject_mode_.store(false, std::memory_order_relaxed);
 }
 
 bool AudioPipeline::start_capture() {
-    if (capturing_) return true;
+    if (capturing_ && !capture_inject_mode_.load(std::memory_order_relaxed)) return true;
     if (!initialized_ || !capture_) return false;
+
+    if (capture_inject_mode_.load(std::memory_order_relaxed)) {
+        capturing_ = false;
+        capture_inject_mode_.store(false, std::memory_order_relaxed);
+    }
 
     bool ok = capture_->start([this](const int16_t* samples, size_t count) {
         on_captured_audio(samples, count);
@@ -180,20 +212,97 @@ bool AudioPipeline::start_capture() {
 
 void AudioPipeline::stop_capture() {
     if (capturing_) {
-        if (capture_) capture_->stop();
+        if (!capture_inject_mode_.load(std::memory_order_relaxed) && capture_) {
+            capture_->stop();
+        }
         capturing_ = false;
+        capture_inject_mode_.store(false, std::memory_order_relaxed);
     }
 
     std::lock_guard<std::mutex> lock(accum_mutex_);
     capture_accum_.clear();
+    speech_pre_roll_.clear();
+    candidate_hangover_frames_ = 0;
+    speech_hangover_frames_ = 0;
+    speech_gate_active_ = false;
+    vad_.force_silence();
 
     // Leaving voice should immediately flush remote decode state so playback
     // cannot keep synthesizing PLC/noise from stale peers after disconnect.
     clear_remote_streams();
 }
 
+bool AudioPipeline::start_capture_inject() {
+    if (!initialized_) return false;
+
+    if (capturing_ && !capture_inject_mode_.load(std::memory_order_relaxed) && capture_) {
+        capture_->stop();
+    }
+
+    capturing_ = true;
+    capture_inject_mode_.store(true, std::memory_order_relaxed);
+    MELLO_LOG_INFO("pipeline", "capture inject mode started");
+    return true;
+}
+
+void AudioPipeline::stop_capture_inject() {
+    stop_capture();
+    MELLO_LOG_INFO("pipeline", "capture inject mode stopped");
+}
+
+void AudioPipeline::inject_capture(const int16_t* samples, int count) {
+    if (!samples || count <= 0) return;
+    if (!capturing_ || !capture_inject_mode_.load(std::memory_order_relaxed)) return;
+    on_captured_audio(samples, static_cast<size_t>(count));
+}
+
+void AudioPipeline::set_ns_mode(NsMode mode) {
+    ns_mode_.store(static_cast<int>(mode), std::memory_order_relaxed);
+    if (mode == NsMode::Rnnoise) {
+        noise_suppressor_.set_enabled(true);
+    } else {
+        noise_suppressor_.set_enabled(false);
+    }
+    echo_canceller_.set_noise_suppression_level(to_webrtc_ns_mode(mode));
+    MELLO_LOG_INFO("pipeline", "noise suppression mode set to %d", static_cast<int>(mode));
+}
+
+void AudioPipeline::set_transient_suppression(bool enabled) {
+    transient_suppression_enabled_.store(enabled, std::memory_order_relaxed);
+    echo_canceller_.set_transient_suppression_enabled(enabled);
+}
+
+void AudioPipeline::set_high_pass_filter(bool enabled) {
+    high_pass_filter_enabled_.store(enabled, std::memory_order_relaxed);
+    echo_canceller_.set_high_pass_filter_enabled(enabled);
+}
+
 void AudioPipeline::set_mute(bool muted) { muted_ = muted; }
 void AudioPipeline::set_deafen(bool deafened) { deafened_ = deafened; }
+
+void AudioPipeline::process_and_encode_frame(int16_t* frame) {
+    if (ns_mode() == NsMode::Rnnoise) {
+        noise_suppressor_.process(frame, FRAME_SIZE);
+    }
+
+    uint8_t raw_pkt[MAX_PACKET_SIZE];
+    int encoded = encoder_.encode(frame, FRAME_SIZE, raw_pkt, MAX_PACKET_SIZE);
+
+    if (encoded > 0) {
+        std::lock_guard<std::mutex> olock(outgoing_mutex_);
+        EncodedPacket pkt;
+        pkt.data.assign(raw_pkt, raw_pkt + encoded);
+        pkt.sequence = sequence_++;
+        outgoing_.push(std::move(pkt));
+
+        if ((pkt.sequence % 250) == 0 || pkt.sequence < 5) {
+            MELLO_LOG_DEBUG("pipeline", "encode: seq=%u size=%d bytes, vad=%.2f, queue=%zu",
+                            pkt.sequence, encoded, vad_.probability(), outgoing_.size());
+        }
+    } else if (encoded < 0) {
+        MELLO_LOG_WARN("pipeline", "opus encode error: %d", encoded);
+    }
+}
 
 void AudioPipeline::on_captured_audio(const int16_t* samples, size_t count) {
     std::lock_guard<std::mutex> lock(accum_mutex_);
@@ -201,13 +310,14 @@ void AudioPipeline::on_captured_audio(const int16_t* samples, size_t count) {
     capture_accum_.insert(capture_accum_.end(), samples, samples + count);
 
     while (capture_accum_.size() >= FRAME_SIZE) {
+        float rms = 0.0f;
         {
             double sum = 0.0;
             for (int i = 0; i < FRAME_SIZE; ++i) {
                 double s = capture_accum_[i] / 32768.0;
                 sum += s * s;
             }
-            float rms = static_cast<float>(std::sqrt(sum / FRAME_SIZE));
+            rms = static_cast<float>(std::sqrt(sum / FRAME_SIZE));
             float db = 20.0f * std::log10f(rms + 1e-10f);
             float level = (db + 60.0f) / 60.0f;
             if (level < 0.0f) level = 0.0f;
@@ -232,29 +342,56 @@ void AudioPipeline::on_captured_audio(const int16_t* samples, size_t count) {
                 local_clip_ring_->write(capture_accum_.data(), FRAME_SIZE);
             }
 
-            // Run suppression before VAD so speech gating sees denoised audio.
-            noise_suppressor_.process(capture_accum_.data(), FRAME_SIZE);
-            vad_.feed(capture_accum_.data(), FRAME_SIZE);
+            const float speech_threshold =
+                (std::max)(MIN_SPEECH_RMS, noise_floor_rms_ * NOISE_FLOOR_GATE_MULT);
+            bool candidate_speech = rms >= speech_threshold;
+
+            if (candidate_speech) {
+                candidate_hangover_frames_ = CANDIDATE_HANGOVER_FRAMES;
+            } else if (candidate_hangover_frames_ > 0) {
+                candidate_hangover_frames_--;
+            }
+
+            bool should_run_vad =
+                candidate_speech || candidate_hangover_frames_ > 0 || speech_hangover_frames_ > 0;
+
+            if (should_run_vad) {
+                vad_.feed(capture_accum_.data(), FRAME_SIZE);
+            }
 
             if (vad_.is_speaking()) {
-                uint8_t raw_pkt[MAX_PACKET_SIZE];
-                int encoded = encoder_.encode(capture_accum_.data(), FRAME_SIZE,
-                                              raw_pkt, MAX_PACKET_SIZE);
+                speech_hangover_frames_ = SPEECH_ENCODE_HANGOVER_FRAMES;
+            } else if (speech_hangover_frames_ > 0) {
+                speech_hangover_frames_--;
+            }
 
-                if (encoded > 0) {
-                    std::lock_guard<std::mutex> olock(outgoing_mutex_);
-                    EncodedPacket pkt;
-                    pkt.data.assign(raw_pkt, raw_pkt + encoded);
-                    pkt.sequence = sequence_++;
-                    outgoing_.push(std::move(pkt));
+            bool should_encode = vad_.is_speaking() || speech_hangover_frames_ > 0;
 
-                    if ((pkt.sequence % 250) == 0 || pkt.sequence < 5) {
-                        MELLO_LOG_DEBUG("pipeline", "encode: seq=%u size=%d bytes, vad=%.2f, queue=%zu",
-                                        pkt.sequence, encoded, vad_.probability(), outgoing_.size());
+            if (should_encode) {
+                if (!speech_gate_active_) {
+                    for (auto& frame : speech_pre_roll_) {
+                        process_and_encode_frame(frame.data());
                     }
-                } else if (encoded < 0) {
-                    MELLO_LOG_WARN("pipeline", "opus encode error: %d", encoded);
+                    speech_pre_roll_.clear();
                 }
+                process_and_encode_frame(capture_accum_.data());
+                speech_gate_active_ = true;
+            } else {
+                if (speech_gate_active_) {
+                    vad_.force_silence();
+                }
+                speech_gate_active_ = false;
+
+                std::array<int16_t, FRAME_SIZE> frame{};
+                std::copy_n(capture_accum_.data(), FRAME_SIZE, frame.data());
+                speech_pre_roll_.push_back(frame);
+                while (speech_pre_roll_.size() > SPEECH_PRE_ROLL_FRAMES) {
+                    speech_pre_roll_.pop_front();
+                }
+
+                // Track ambient floor only while closed so the speech threshold adapts
+                // without chasing active speech.
+                noise_floor_rms_ = 0.98f * noise_floor_rms_ + 0.02f * rms;
             }
         }
         capture_accum_.erase(capture_accum_.begin(),

@@ -36,8 +36,9 @@ New files: `libmello/src/audio/echo_canceller.hpp` and `echo_canceller.cpp`.
 Wraps `webrtc::AudioProcessing` with this configuration:
 - **AEC3**: enabled (default ON, user-toggleable)
 - **AGC2**: adaptive digital mode, enabled (default ON, user-toggleable)
-- **NS**: disabled (we use RNNoise)
-- **Pre-amplifier / HPF**: disabled
+- **NS**: runtime-selectable for evaluation (`off`, WebRTC levels, or RNNoise path in `AudioPipeline`)
+- **Transient suppression / HPF**: runtime-selectable for evaluation
+- **Pre-amplifier**: disabled
 
 Key API:
 
@@ -72,11 +73,9 @@ Both methods must handle frame-size adaptation: APM processes 10ms frames (480 s
 
 ### Processing order
 
-Current: `WASAPI Capture -> VAD -> RNNoise -> Opus`
+Current target: `WASAPI/CoreAudio Capture -> AEC3+AGC2 -> cheap RMS gate -> Silero VAD -> RNNoise/Opus during active speech`
 
-New: `WASAPI Capture -> AEC3+AGC2 -> RNNoise -> Silero VAD -> Opus`
-
-AEC runs first on the raw mic signal (required for proper echo correlation), AGC normalizes levels, then RNNoise denoises. VAD runs last on the cleanest signal.
+AEC runs first on the raw mic signal (required for proper echo correlation), AGC normalizes levels, and the cheap gate avoids neural work for obvious non-speech. Silero confirms candidate speech windows, then RNNoise is applied only when the frame will be transmitted (including pre-roll and hangover).
 
 ### Far-end reference tap
 
@@ -91,7 +90,7 @@ mix_output():
 
 ### Capture path
 
-In `AudioPipeline::on_captured_audio()`, insert `echo_canceller_.process_capture()` before VAD and RNNoise:
+In `AudioPipeline::on_captured_audio()`, `echo_canceller_.process_capture()` runs before the adaptive gate:
 
 ```
 on_captured_audio():
@@ -99,9 +98,11 @@ on_captured_audio():
     compute input_level
     if not muted:
         echo_canceller_.process_capture(frame, FRAME_SIZE)  // <-- new
-        vad_.feed(frame, FRAME_SIZE)
-        noise_suppressor_.process(frame, FRAME_SIZE)
-        opus encode
+        if rms/noise-floor gate says candidate:
+            vad_.feed(frame, FRAME_SIZE)
+        if speech/pre-roll/hangover:
+            noise_suppressor_.process(frame, FRAME_SIZE)
+            opus encode
 ```
 
 ### AudioPipeline changes

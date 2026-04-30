@@ -25,6 +25,7 @@ public:
     void shutdown();
 
     void feed(const int16_t* samples, int count);
+    void force_silence();
 
     bool is_speaking() const { return speaking_; }
     float probability() const { return probability_; }

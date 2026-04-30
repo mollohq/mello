@@ -125,8 +125,8 @@ All functions return `MelloResult` enum. On failure, `mello_get_error()` returns
 │                                                                         │
 │  CAPTURE PATH:                                                          │
 │  ┌─────────┐   ┌─────────┐   ┌─────────┐   ┌─────────┐   ┌─────────┐   │
-│  │ WASAPI  │──▶│AEC3+AGC2│──▶│ RNNoise │──▶│ Silero  │──▶│  Opus   │   │
-│  │ Capture │   │  (APM)  │   │ Denoise │   │   VAD   │   │ Encode  │   │
+│  │ WASAPI  │──▶│AEC3+AGC2│──▶│ RMS gate│──▶│ Silero  │──▶│RNNoise+ │   │
+│  │ Capture │   │  (APM)  │   │pre-roll │   │   VAD   │   │  Opus   │   │
 │  └─────────┘   └─────────┘   └─────────┘   └─────────┘   └─────────┘   │
 │                                                │              │         │
 │                                                ▼              ▼         │
@@ -143,9 +143,10 @@ All functions return `MelloResult` enum. On failure, `mello_get_error()` returns
 
 ### Key design decisions
 
-- **WebRTC APM (AEC3 + AGC2):** Runs first on the raw mic after WASAPI capture (AEC needs the speaker reference from mixed playback). Then RNNoise → Silero VAD → Opus.
-- **RNNoise over alternatives:** Real-time, small model (<100KB), no GPU needed, well-tested in voice comms. Runs at 48kHz which matches Opus.
-- **Silero VAD:** ONNX-based neural VAD with hysteresis (3 speech frames to activate, 15 silence frames to deactivate). More accurate than RNNoise's built-in VAD for detecting speech vs. keyboard/ambient noise.
+- **WebRTC APM (AEC3 + AGC2):** Runs first on the raw mic after WASAPI capture (AEC needs the speaker reference from mixed playback). Optional WebRTC NS, HPF, and transient suppression are runtime-testable.
+- **Adaptive speech gate:** A cheap RMS/noise-floor gate runs before neural work. It keeps a short pre-roll and hangover windows so speech starts/ends are not clipped.
+- **RNNoise over alternatives:** Real-time, small model (<100KB), no GPU needed, well-tested in voice comms. It remains the default quality path, but now only runs during active speech/pre-roll/hangover windows.
+- **Silero VAD:** ONNX-based neural VAD with hysteresis. It confirms candidate speech windows instead of running as the only gate for every frame forever.
 - **Opus at 64kbps stereo:** Good quality for voice, well within P2P bandwidth budget. Frame size is 20ms (960 samples at 48kHz).
 - **Jitter buffer:** Adaptive, compensates for P2P network jitter. Uses PLC (packet loss concealment) via Opus decoder when packets are late.
 
@@ -327,7 +328,7 @@ libmello is **synchronous C++ by design** — no async runtimes. Threads are cre
 | Metric | Target |
 |--------|--------|
 | Audio capture latency | <10ms |
-| RNNoise + VAD processing | <5ms per 20ms frame |
+| Active speech enhancement (RNNoise + VAD) | <5ms per 20ms speech frame |
 | Opus encode | <2ms per 20ms frame |
 | Video capture (DXGI) | <2ms |
 | Video encode (NVENC) | <5ms |

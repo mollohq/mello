@@ -354,7 +354,7 @@ The dialog shows only sections relevant to the current session state. `BackendSt
 │  🎙 VOICE                                │
 │  Mic     Blue Yeti · Opus 64kbps         │
 │  State   speaking  muted=no  deaf=no     │
-│  RNNoise on                              │
+│  NS      RNNoise · adaptive gate active  │
 │                                          │
 │  Peers                                   │
 │  peer_id   name     spk  loss  jit  tpt  │

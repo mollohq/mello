@@ -153,10 +153,13 @@ Mic ──▶ WASAPI Capture
         Echo Cancel + AGC (WebRTC APM)
             │
             ▼
-        Noise Suppress (RNNoise)
+        Cheap RMS / noise-floor gate
             │
             ▼
         Voice Activity (Silero VAD) ──▶ UI indicator
+            │
+            ▼
+        Active speech enhancement (RNNoise)
             │
             ▼
         Encode (Opus, 48kHz, 20ms frames)

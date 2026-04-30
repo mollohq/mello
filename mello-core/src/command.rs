@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::presence::{Activity, PresenceStatus};
+use crate::voice::NsMode;
 
 fn default_preset() -> u32 {
     2
@@ -157,6 +158,15 @@ pub enum Command {
     SetNoiseSuppression {
         enabled: bool,
     },
+    SetNsMode {
+        mode: NsMode,
+    },
+    SetTransientSuppression {
+        enabled: bool,
+    },
+    SetHighPassFilter {
+        enabled: bool,
+    },
     SetInputVolume {
         volume: f32,
     },
@@ -166,6 +176,11 @@ pub enum Command {
     SetLoopback {
         enabled: bool,
     },
+    StartVoiceCaptureInject,
+    InjectCaptureFrame {
+        samples: Vec<i16>,
+    },
+    StopVoiceCaptureInject,
     SetDebugMode {
         enabled: bool,
     },
