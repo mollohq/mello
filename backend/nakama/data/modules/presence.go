@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"sync"
 	"time"
 
 	"github.com/heroiclabs/nakama-common/api"
@@ -22,12 +23,17 @@ const (
 const (
 	ActivityNone      = "none"
 	ActivityInVoice   = "in_voice"
-	ActivityStreaming  = "streaming"
+	ActivityStreaming = "streaming"
 	ActivityWatching  = "watching"
 	ActivityPlaying   = "playing"
 )
 
 const PresenceCollection = "presence"
+
+var (
+	sessionCountsMu sync.Mutex
+	sessionCounts   = make(map[string]int)
+)
 
 // GamePresence is an orthogonal signal — can coexist with any activity type.
 type GamePresence struct {
@@ -224,9 +230,43 @@ func sessionUserID(ctx context.Context, evt *api.Event) string {
 	return ""
 }
 
+func registerSessionStart(userID string) int {
+	sessionCountsMu.Lock()
+	defer sessionCountsMu.Unlock()
+
+	sessionCounts[userID]++
+	return sessionCounts[userID]
+}
+
+func registerSessionEnd(userID string) int {
+	sessionCountsMu.Lock()
+	defer sessionCountsMu.Unlock()
+
+	count := sessionCounts[userID]
+	if count <= 1 {
+		delete(sessionCounts, userID)
+		return 0
+	}
+	count--
+	sessionCounts[userID] = count
+	return count
+}
+
+func resetSessionCountsForTests() {
+	sessionCountsMu.Lock()
+	defer sessionCountsMu.Unlock()
+	sessionCounts = make(map[string]int)
+}
+
 func OnSessionStart(ctx context.Context, logger runtime.Logger, evt *api.Event) {
 	userID := sessionUserID(ctx, evt)
 	if userID == "" {
+		return
+	}
+
+	active := registerSessionStart(userID)
+	if active > 1 {
+		logger.Info("User %s session started (%d active); keeping existing presence/voice state", userID, active)
 		return
 	}
 
@@ -252,6 +292,12 @@ func OnSessionEnd(ctx context.Context, logger runtime.Logger, evt *api.Event) {
 	userID := sessionUserID(ctx, evt)
 	if userID == "" {
 		logger.Warn("OnSessionEnd: could not resolve user_id from context or event properties")
+		return
+	}
+
+	remaining := registerSessionEnd(userID)
+	if remaining > 0 {
+		logger.Info("User %s session ended (%d active remain); skipping offline cleanup", userID, remaining)
 		return
 	}
 
