@@ -111,10 +111,18 @@ func TestResolveCrewInviteRequestParsing(t *testing.T) {
 
 func TestResolveCrewInviteResponseSerialization(t *testing.T) {
 	resp := ResolveCrewInviteResponse{
-		CrewName:   "Test Crew",
-		AvatarSeed: "test",
-		CrewID:     "crew-123",
-		Highlight:  "2h hangout · 5 clips",
+		CrewName:          "Test Crew",
+		AvatarSeed:        "test",
+		CrewID:            "crew-123",
+		Highlight:         "2h hangout · 5 clips",
+		MemberCount:       5,
+		TopGame:           "Valorant",
+		LongestSessionMin: 192,
+		MostActive:        "ostkatt",
+		Members: []InviteMemberPreview{
+			{DisplayName: "alice", AvatarSeed: "alice"},
+			{DisplayName: "bob", AvatarSeed: "bob"},
+		},
 	}
 	data, err := json.Marshal(resp)
 	if err != nil {
@@ -127,17 +135,60 @@ func TestResolveCrewInviteResponseSerialization(t *testing.T) {
 	if !strings.Contains(s, `"highlight":"2h hangout · 5 clips"`) {
 		t.Errorf("missing highlight in JSON: %s", s)
 	}
+	if !strings.Contains(s, `"member_count":5`) {
+		t.Errorf("missing member_count in JSON: %s", s)
+	}
+	if !strings.Contains(s, `"top_game":"Valorant"`) {
+		t.Errorf("missing top_game in JSON: %s", s)
+	}
+	if !strings.Contains(s, `"longest_session_min":192`) {
+		t.Errorf("missing longest_session_min in JSON: %s", s)
+	}
+	if !strings.Contains(s, `"most_active":"ostkatt"`) {
+		t.Errorf("missing most_active in JSON: %s", s)
+	}
+	if !strings.Contains(s, `"display_name":"alice"`) {
+		t.Errorf("missing member display_name in JSON: %s", s)
+	}
 }
 
-func TestResolveCrewInviteResponseOmitsEmptyHighlight(t *testing.T) {
+func TestResolveCrewInviteResponseOmitsEmptyFields(t *testing.T) {
 	resp := ResolveCrewInviteResponse{
 		CrewName:   "Test",
 		AvatarSeed: "test",
 		CrewID:     "crew-1",
 	}
 	data, _ := json.Marshal(resp)
-	if strings.Contains(string(data), "highlight") {
-		t.Errorf("empty highlight should be omitted: %s", string(data))
+	s := string(data)
+	if strings.Contains(s, "highlight") {
+		t.Errorf("empty highlight should be omitted: %s", s)
+	}
+	if strings.Contains(s, "top_game") {
+		t.Errorf("empty top_game should be omitted: %s", s)
+	}
+	if strings.Contains(s, "longest_session_min") {
+		t.Errorf("zero longest_session_min should be omitted: %s", s)
+	}
+	if strings.Contains(s, "most_active") {
+		t.Errorf("empty most_active should be omitted: %s", s)
+	}
+	if strings.Contains(s, "members") {
+		t.Errorf("nil members should be omitted: %s", s)
+	}
+}
+
+func TestInviteMemberPreviewSerialization(t *testing.T) {
+	preview := InviteMemberPreview{
+		DisplayName: "ostkatt",
+		AvatarSeed:  "ostkatt",
+	}
+	data, _ := json.Marshal(preview)
+	s := string(data)
+	if !strings.Contains(s, `"display_name":"ostkatt"`) {
+		t.Errorf("missing display_name: %s", s)
+	}
+	if !strings.Contains(s, `"avatar_seed":"ostkatt"`) {
+		t.Errorf("missing avatar_seed: %s", s)
 	}
 }
 
