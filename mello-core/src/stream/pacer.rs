@@ -1,8 +1,8 @@
 use std::time::{Duration, Instant};
 
 const PACER_MIN_TARGET_KBPS: u32 = 250;
-const PACER_BURST_MS: u32 = 40;
-const PACER_MAX_SLEEP_MS: u64 = 40;
+const PACER_BURST_MS: u32 = 15;
+const PACER_MAX_SLEEP_MS: u64 = 15;
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct PacingTelemetry {
@@ -129,6 +129,9 @@ impl EgressPacer {
     }
 }
 
+/// Overhead factor for packet serialization headers and DataChannel chunking.
+const PACING_OVERHEAD_FACTOR: f64 = 1.25;
+
 pub(crate) fn calc_stream_pacing_target_kbps(
     video_bitrate_kbps: u32,
     fec_n: usize,
@@ -139,7 +142,8 @@ pub(crate) fn calc_stream_pacing_target_kbps(
     } else {
         1.0
     };
-    let paced_video = (video_bitrate_kbps as f64 * fec_factor).round() as u32;
+    let paced_video =
+        (video_bitrate_kbps as f64 * fec_factor * PACING_OVERHEAD_FACTOR).round() as u32;
     paced_video
         .saturating_add(audio_budget_kbps)
         .max(PACER_MIN_TARGET_KBPS)

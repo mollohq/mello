@@ -16,7 +16,7 @@ public:
     bool initialize(const GraphicsDevice& device, uint32_t width, uint32_t video_height,
                     DXGI_FORMAT format = DXGI_FORMAT_NV12, uint32_t uv_y_offset = 0);
 
-    void copy_from(ID3D11Texture2D* source);
+    void copy_from(ID3D11Texture2D* source, bool copy_to_cpu_staging = true);
 
     /// Map staging texture and write RGBA into `out`.
     /// `out` must be pre-allocated: width * video_height * 4 bytes.
@@ -26,6 +26,7 @@ public:
 
     uint32_t width()  const { return width_; }
     uint32_t height() const { return video_height_; }
+    void* shared_rgba_handle() const { return shared_rgba_handle_; }
 
 private:
     bool init_gpu_converter();
@@ -48,6 +49,8 @@ private:
     Microsoft::WRL::ComPtr<ID3D11UnorderedAccessView> rgba_uav_;
     Microsoft::WRL::ComPtr<ID3D11Buffer>              cb_;
     Microsoft::WRL::ComPtr<ID3D11ShaderResourceView>  src_srv_;
+    Microsoft::WRL::ComPtr<ID3D11Texture2D>           shared_rgba_tex_;
+    void*                                              shared_rgba_handle_ = nullptr;
     ID3D11Texture2D* src_tex_cached_ = nullptr;
 };
 

@@ -12,6 +12,7 @@ pub use mesh::{SignalEnvelope, SignalMessage, SignalPurpose, VoiceMesh};
 
 const PACKET_BUF_SIZE: usize = 4000;
 const MAX_DEVICES: usize = 32;
+const DEBUG_STATS_TICK_DIVISOR: u32 = 10; // 100Hz tick -> 10Hz debug updates
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VoiceMode {
@@ -568,7 +569,7 @@ impl VoiceManager {
             }
         }
 
-        if self.debug_mode && self.tick_counter.is_multiple_of(3) {
+        if self.debug_mode && self.tick_counter.is_multiple_of(DEBUG_STATS_TICK_DIVISOR) {
             let mut stats: mello_sys::MelloDebugStats = unsafe { std::mem::zeroed() };
             unsafe {
                 mello_sys::mello_get_debug_stats(self.ctx, &mut stats);

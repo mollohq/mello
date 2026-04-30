@@ -15,7 +15,11 @@ use super::sink::PacketSink;
 
 const AUDIO_PACING_BUDGET_KBPS: u32 = 160;
 const PACING_TELEMETRY_INTERVAL_SECS: u64 = 2;
+const MANAGER_TELEMETRY_INTERVAL_SECS: u64 = 1;
 const MAX_VIDEO_COALESCE_DRAIN: usize = 32;
+const QUEUE_KEYFRAME_COALESCE_THRESHOLD: usize = 2;
+const QUEUE_RECOVERY_COALESCE_THRESHOLD: usize = 10;
+const QUEUE_KEYFRAME_REQUEST_COOLDOWN_SECS: u64 = 2;
 
 pub struct VideoPacket {
     pub data: Vec<u8>,
@@ -76,6 +80,37 @@ pub struct StreamManager {
     last_queue_keyframe_request: Instant,
     last_pacing_telemetry: Option<PacingTelemetry>,
     last_pacing_sample_at: Instant,
+    manager_video_packets_in_total: u64,
+    manager_audio_packets_in_total: u64,
+    manager_video_packets_coalesced_total: u64,
+    manager_video_coalesce_events_total: u64,
+    manager_keyframe_req_queue_pressure_total: u64,
+    manager_keyframe_req_recovery_total: u64,
+    manager_keyframe_req_viewer_total: u64,
+    manager_video_dropped_for_recovery_total: u64,
+    manager_video_send_fail_total: u64,
+    manager_fec_send_fail_total: u64,
+    manager_audio_send_fail_total: u64,
+    manager_max_video_queue_len: usize,
+    manager_max_audio_queue_len: usize,
+    last_manager_sample: ManagerTelemetrySnapshot,
+    last_manager_sample_at: Instant,
+    drop_delta_until_keyframe: bool,
+}
+
+#[derive(Clone, Copy, Default)]
+struct ManagerTelemetrySnapshot {
+    video_packets_in_total: u64,
+    audio_packets_in_total: u64,
+    video_packets_coalesced_total: u64,
+    video_coalesce_events_total: u64,
+    keyframe_req_queue_pressure_total: u64,
+    keyframe_req_recovery_total: u64,
+    keyframe_req_viewer_total: u64,
+    video_dropped_for_recovery_total: u64,
+    video_send_fail_total: u64,
+    fec_send_fail_total: u64,
+    audio_send_fail_total: u64,
 }
 
 unsafe impl Send for StreamManager {}
@@ -112,9 +147,26 @@ impl StreamManager {
             input: Arc::new(InputPassthroughStub),
             video_rx,
             audio_rx,
-            last_queue_keyframe_request: Instant::now() - Duration::from_secs(5),
+            last_queue_keyframe_request: Instant::now()
+                - Duration::from_secs(QUEUE_KEYFRAME_REQUEST_COOLDOWN_SECS),
             last_pacing_telemetry: None,
             last_pacing_sample_at: Instant::now(),
+            manager_video_packets_in_total: 0,
+            manager_audio_packets_in_total: 0,
+            manager_video_packets_coalesced_total: 0,
+            manager_video_coalesce_events_total: 0,
+            manager_keyframe_req_queue_pressure_total: 0,
+            manager_keyframe_req_recovery_total: 0,
+            manager_keyframe_req_viewer_total: 0,
+            manager_video_dropped_for_recovery_total: 0,
+            manager_video_send_fail_total: 0,
+            manager_fec_send_fail_total: 0,
+            manager_audio_send_fail_total: 0,
+            manager_max_video_queue_len: 0,
+            manager_max_audio_queue_len: 0,
+            last_manager_sample: ManagerTelemetrySnapshot::default(),
+            last_manager_sample_at: Instant::now(),
+            drop_delta_until_keyframe: false,
         }
     }
 
@@ -159,6 +211,85 @@ impl StreamManager {
         self.last_pacing_sample_at = now;
     }
 
+    fn manager_snapshot(&self) -> ManagerTelemetrySnapshot {
+        ManagerTelemetrySnapshot {
+            video_packets_in_total: self.manager_video_packets_in_total,
+            audio_packets_in_total: self.manager_audio_packets_in_total,
+            video_packets_coalesced_total: self.manager_video_packets_coalesced_total,
+            video_coalesce_events_total: self.manager_video_coalesce_events_total,
+            keyframe_req_queue_pressure_total: self.manager_keyframe_req_queue_pressure_total,
+            keyframe_req_recovery_total: self.manager_keyframe_req_recovery_total,
+            keyframe_req_viewer_total: self.manager_keyframe_req_viewer_total,
+            video_dropped_for_recovery_total: self.manager_video_dropped_for_recovery_total,
+            video_send_fail_total: self.manager_video_send_fail_total,
+            fec_send_fail_total: self.manager_fec_send_fail_total,
+            audio_send_fail_total: self.manager_audio_send_fail_total,
+        }
+    }
+
+    async fn log_manager_telemetry(&mut self) {
+        let now = Instant::now();
+        let elapsed_secs = now
+            .duration_since(self.last_manager_sample_at)
+            .as_secs_f32()
+            .max(0.001);
+        let now_snapshot = self.manager_snapshot();
+        let prev = self.last_manager_sample;
+
+        let d_video_in = now_snapshot
+            .video_packets_in_total
+            .saturating_sub(prev.video_packets_in_total);
+        let d_audio_in = now_snapshot
+            .audio_packets_in_total
+            .saturating_sub(prev.audio_packets_in_total);
+        let d_coalesced = now_snapshot
+            .video_packets_coalesced_total
+            .saturating_sub(prev.video_packets_coalesced_total);
+        let d_coalesce_events = now_snapshot
+            .video_coalesce_events_total
+            .saturating_sub(prev.video_coalesce_events_total);
+        let d_recovery_drops = now_snapshot
+            .video_dropped_for_recovery_total
+            .saturating_sub(prev.video_dropped_for_recovery_total);
+        let d_video_fail = now_snapshot
+            .video_send_fail_total
+            .saturating_sub(prev.video_send_fail_total);
+        let d_fec_fail = now_snapshot
+            .fec_send_fail_total
+            .saturating_sub(prev.fec_send_fail_total);
+        let d_audio_fail = now_snapshot
+            .audio_send_fail_total
+            .saturating_sub(prev.audio_send_fail_total);
+
+        let video_queue_len = self.video_rx.len();
+        let audio_queue_len = self.audio_rx.len();
+        self.manager_max_video_queue_len = self.manager_max_video_queue_len.max(video_queue_len);
+        self.manager_max_audio_queue_len = self.manager_max_audio_queue_len.max(audio_queue_len);
+
+        log::info!(
+            "Stream manager diag: video_in_hz={:.1} audio_in_hz={:.1} coalesced_hz={:.1} coalesce_events_delta={} recovery_drop_hz={:.1} recovery_mode={} keyframe_req_queue_total={} keyframe_req_recovery_total={} keyframe_req_viewer_total={} send_fail_video_delta={} send_fail_fec_delta={} send_fail_audio_delta={} video_queue_len={} audio_queue_len={} video_queue_max={} audio_queue_max={}",
+            d_video_in as f32 / elapsed_secs,
+            d_audio_in as f32 / elapsed_secs,
+            d_coalesced as f32 / elapsed_secs,
+            d_coalesce_events,
+            d_recovery_drops as f32 / elapsed_secs,
+            self.drop_delta_until_keyframe,
+            now_snapshot.keyframe_req_queue_pressure_total,
+            now_snapshot.keyframe_req_recovery_total,
+            now_snapshot.keyframe_req_viewer_total,
+            d_video_fail,
+            d_fec_fail,
+            d_audio_fail,
+            video_queue_len,
+            audio_queue_len,
+            self.manager_max_video_queue_len,
+            self.manager_max_audio_queue_len
+        );
+
+        self.last_manager_sample = now_snapshot;
+        self.last_manager_sample_at = now;
+    }
+
     pub fn abr(&mut self) -> &mut AbrController {
         &mut self.abr
     }
@@ -175,6 +306,9 @@ impl StreamManager {
         let mut pacing_tick =
             tokio::time::interval(Duration::from_secs(PACING_TELEMETRY_INTERVAL_SECS));
         pacing_tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
+        let mut manager_tick =
+            tokio::time::interval(Duration::from_secs(MANAGER_TELEMETRY_INTERVAL_SECS));
+        manager_tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
         loop {
             tokio::select! {
@@ -191,6 +325,9 @@ impl StreamManager {
                 _ = pacing_tick.tick() => {
                     self.log_pacing_telemetry().await;
                 }
+                _ = manager_tick.tick() => {
+                    self.log_manager_telemetry().await;
+                }
                 else => {
                     log::info!("Stream manager: packet channels closed");
                     break;
@@ -201,11 +338,37 @@ impl StreamManager {
         log::info!("Stream manager run loop exited");
     }
 
+    fn request_host_keyframe(&mut self, reason: &str) -> bool {
+        if self.last_queue_keyframe_request.elapsed()
+            < Duration::from_secs(QUEUE_KEYFRAME_REQUEST_COOLDOWN_SECS)
+        {
+            return false;
+        }
+        unsafe {
+            mello_sys::mello_stream_request_keyframe(self.host);
+        }
+        self.last_queue_keyframe_request = Instant::now();
+        log::warn!(
+            "Stream manager keyframe request: reason={} cooldown_sec={}",
+            reason,
+            QUEUE_KEYFRAME_REQUEST_COOLDOWN_SECS
+        );
+        true
+    }
+
     async fn handle_video(&mut self, pkt: VideoPacket) {
         let (packet, coalesced) =
             coalesce_video_packet(pkt, &mut self.video_rx, MAX_VIDEO_COALESCE_DRAIN);
+        self.manager_video_packets_in_total = self
+            .manager_video_packets_in_total
+            .saturating_add(1 + coalesced as u64);
 
         if coalesced > 0 {
+            self.manager_video_packets_coalesced_total = self
+                .manager_video_packets_coalesced_total
+                .saturating_add(coalesced as u64);
+            self.manager_video_coalesce_events_total =
+                self.manager_video_coalesce_events_total.saturating_add(1);
             if coalesced <= 5 || coalesced.is_multiple_of(30) {
                 log::warn!(
                     "Stream manager video coalesce: dropped_stale={} keep_keyframe={}",
@@ -213,14 +376,26 @@ impl StreamManager {
                     packet.is_keyframe
                 );
             }
-            if !packet.is_keyframe
-                && self.last_queue_keyframe_request.elapsed() >= Duration::from_secs(1)
-            {
-                unsafe {
-                    mello_sys::mello_stream_request_keyframe(self.host);
+            if !packet.is_keyframe && coalesced >= QUEUE_KEYFRAME_COALESCE_THRESHOLD {
+                let requested_keyframe = self.request_host_keyframe("queue_pressure");
+                if requested_keyframe {
+                    self.manager_keyframe_req_queue_pressure_total = self
+                        .manager_keyframe_req_queue_pressure_total
+                        .saturating_add(1);
                 }
-                self.last_queue_keyframe_request = Instant::now();
-                log::warn!("Stream manager coalesced deltas under pressure: requested keyframe");
+                if coalesced >= QUEUE_RECOVERY_COALESCE_THRESHOLD && !self.drop_delta_until_keyframe
+                {
+                    self.drop_delta_until_keyframe = true;
+                    log::warn!(
+                        "Stream manager entering recovery mode: reason=queue_pressure dropped_stale={} hold_non_keyframe=true",
+                        coalesced
+                    );
+                }
+                log::warn!(
+                    "Stream manager severe coalesce under pressure: reason=queue_pressure dropped_stale={} requested_keyframe={}",
+                    coalesced,
+                    requested_keyframe
+                );
             }
         }
         if coalesced == MAX_VIDEO_COALESCE_DRAIN {
@@ -233,7 +408,20 @@ impl StreamManager {
         let seq = self.video_seq.fetch_add(1, Ordering::Relaxed);
 
         if packet.is_keyframe {
+            if self.drop_delta_until_keyframe {
+                self.drop_delta_until_keyframe = false;
+                log::info!("Stream manager recovery mode cleared: reason=keyframe_received");
+            }
             self.fec_encoder.reset();
+        } else if self.drop_delta_until_keyframe {
+            self.manager_video_dropped_for_recovery_total = self
+                .manager_video_dropped_for_recovery_total
+                .saturating_add(1);
+            if self.request_host_keyframe("recovery_wait_keyframe") {
+                self.manager_keyframe_req_recovery_total =
+                    self.manager_keyframe_req_recovery_total.saturating_add(1);
+            }
+            return;
         }
 
         let fec_group_last = self.fec_encoder.is_enabled()
@@ -242,6 +430,8 @@ impl StreamManager {
         if let Some(parity) = self.fec_encoder.push(&packet.data) {
             let fec_packet = StreamPacket::fec(parity, seq);
             if let Err(e) = self.sink.send_video(&fec_packet).await {
+                self.manager_fec_send_fail_total =
+                    self.manager_fec_send_fail_total.saturating_add(1);
                 log::warn!("Stream manager failed to send FEC packet: {}", e);
             }
         }
@@ -249,14 +439,19 @@ impl StreamManager {
         let stream_packet =
             StreamPacket::video(packet.data, seq, packet.is_keyframe, fec_group_last);
         if let Err(e) = self.sink.send_video(&stream_packet).await {
+            self.manager_video_send_fail_total =
+                self.manager_video_send_fail_total.saturating_add(1);
             log::warn!("Stream manager failed to send video packet: {}", e);
         }
     }
 
     async fn handle_audio(&mut self, pkt: AudioPacket) {
+        self.manager_audio_packets_in_total = self.manager_audio_packets_in_total.saturating_add(1);
         let seq = self.audio_seq.fetch_add(1, Ordering::Relaxed);
         let packet = StreamPacket::audio(pkt.data, seq);
         if let Err(e) = self.sink.send_audio(&packet).await {
+            self.manager_audio_send_fail_total =
+                self.manager_audio_send_fail_total.saturating_add(1);
             log::warn!("Stream manager failed to send audio packet: {}", e);
         }
     }
@@ -274,10 +469,13 @@ impl StreamManager {
         let subtype = ControlSubtype::from_u8(packet.payload[0]);
         match subtype {
             Some(ControlSubtype::KeyframeRequest) => {
-                log::info!("Keyframe request from viewer {}", viewer_id);
-                unsafe {
-                    mello_sys::mello_stream_request_keyframe(self.host);
-                }
+                self.manager_keyframe_req_viewer_total =
+                    self.manager_keyframe_req_viewer_total.saturating_add(1);
+                log::info!(
+                    "Stream manager keyframe requested: reason=viewer_control viewer={}",
+                    viewer_id
+                );
+                self.request_host_keyframe("viewer_control");
                 None
             }
             Some(ControlSubtype::LossReport) => {
@@ -313,12 +511,13 @@ impl StreamManager {
 }
 
 fn coalesce_video_packet(
-    mut packet: VideoPacket,
+    packet: VideoPacket,
     video_rx: &mut mpsc::Receiver<VideoPacket>,
     max_drain: usize,
 ) -> (VideoPacket, usize) {
     let mut coalesced = 0usize;
     let mut newest_keyframe: Option<VideoPacket> = None;
+    let mut newest_delta: Option<VideoPacket> = None;
 
     while coalesced < max_drain {
         let Ok(next) = video_rx.try_recv() else {
@@ -327,15 +526,23 @@ fn coalesce_video_packet(
         coalesced += 1;
         if next.is_keyframe {
             newest_keyframe = Some(next);
-        } else if newest_keyframe.is_none() {
-            packet = next;
+        } else {
+            newest_delta = Some(next);
         }
     }
 
+    // Prefer the newest keyframe if one was in the drain window (clean recovery
+    // point). Otherwise prefer the newest delta — the reference chain is already
+    // broken by the dropped intermediates, and the newest delta is temporally
+    // closest to the encoder's current state, minimizing artifact duration until
+    // the next keyframe arrives.
     if let Some(kf) = newest_keyframe {
-        packet = kf;
+        (kf, coalesced)
+    } else if let Some(delta) = newest_delta {
+        (delta, coalesced)
+    } else {
+        (packet, coalesced)
     }
-    (packet, coalesced)
 }
 
 #[cfg(test)]
@@ -367,5 +574,32 @@ mod tests {
             rx.try_recv().is_ok(),
             "queue should still contain pending frames"
         );
+    }
+
+    #[test]
+    fn coalesce_video_packet_keeps_newest_delta_without_keyframe() {
+        let first = VideoPacket {
+            data: vec![1],
+            is_keyframe: false,
+            timestamp: 1,
+        };
+        let (tx, mut rx) = mpsc::channel(32);
+        tx.try_send(VideoPacket {
+            data: vec![2],
+            is_keyframe: false,
+            timestamp: 2,
+        })
+        .expect("queue should have room");
+        tx.try_send(VideoPacket {
+            data: vec![3],
+            is_keyframe: false,
+            timestamp: 3,
+        })
+        .expect("queue should have room");
+
+        let (picked, coalesced) = coalesce_video_packet(first, &mut rx, MAX_VIDEO_COALESCE_DRAIN);
+        assert_eq!(coalesced, 2);
+        assert_eq!(picked.timestamp, 3);
+        assert_eq!(picked.data, vec![3]);
     }
 }

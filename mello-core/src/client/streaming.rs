@@ -8,13 +8,15 @@ use crate::stream::viewer::{ViewerAction, ViewerFeedResult};
 use crate::voice::{SignalEnvelope, SignalMessage, SignalPurpose};
 
 use super::stream_ffi::{
-    flush_ice_buffer, on_viewer_frame, stream_ice_callback, stream_state_callback, ChunkAssembler,
-    FrameCallbackData, StreamHostHandle, StreamHostPeer, StreamIceCallbackData, ViewerState,
+    flush_ice_buffer, on_viewer_frame, on_viewer_native_frame, stream_ice_callback,
+    stream_state_callback, ChunkAssembler, FrameCallbackData, StreamHostHandle, StreamHostPeer,
+    StreamIceCallbackData, ViewerState,
 };
 use super::VIEWER_RECV_BUF_SIZE;
 
 const STREAM_DEBUG_EVENT_INTERVAL_SECS: f32 = 1.0;
 const HOST_PACING_DEBUG_EVENT_INTERVAL_SECS: f32 = 1.0;
+const STREAM_FORCE_PRESENT_MAX_WAIT_MS: u64 = 16;
 
 impl super::Client {
     pub(super) fn handle_stream_signal(&mut self, from: &str, envelope: SignalEnvelope) {
@@ -316,6 +318,15 @@ impl super::Client {
                             frame_cb_data as *mut std::ffi::c_void,
                         )
                     };
+                    if !viewer.is_null() {
+                        unsafe {
+                            mello_sys::mello_stream_set_native_frame_callback(
+                                viewer,
+                                Some(on_viewer_native_frame),
+                                frame_cb_data as *mut std::ffi::c_void,
+                            );
+                        }
+                    }
 
                     if viewer.is_null() {
                         log::error!("Failed to start stream viewer pipeline at {}x{}", w, h);
@@ -393,6 +404,7 @@ impl super::Client {
         }
 
         let vs = self.viewer_state.as_mut().unwrap();
+        vs.stream_tick_count = vs.stream_tick_count.saturating_add(1);
         let viewer = match vs.viewer {
             Some(v) => v,
             None => return, // Decoder not yet initialized (waiting for Answer)
@@ -488,6 +500,17 @@ impl super::Client {
                                 continue;
                             }
                         }
+                        // Skip delta frames when the decode ring is completely full
+                        // to prevent latency accumulation. Keyframes always pass
+                        // through so the decoder can recover cleanly.
+                        if !is_keyframe {
+                            let depth = unsafe {
+                                mello_sys::mello_stream_viewer_decode_queue_depth(viewer)
+                            };
+                            if depth >= 3 {
+                                continue;
+                            }
+                        }
                         let ok = unsafe {
                             mello_sys::mello_stream_feed_packet(
                                 viewer,
@@ -531,20 +554,45 @@ impl super::Client {
             }
         }
 
-        // Present independently of packet arrival bursts. Packets can arrive in
-        // batches; tying present to `fed_any` throttles visible FPS even when
-        // decoder throughput is healthy. Keep the UI-consumed gate to avoid
-        // readback/copy piling up.
-        if self
-            .frame_consumed
-            .load(std::sync::atomic::Ordering::Acquire)
-        {
+        // Present from the decoded frame ring buffer. With multiple frames
+        // potentially queued from bursty packet arrival, drain as many as the UI
+        // can consume to keep visual cadence smooth even when ticks are jittery.
+        let native_frame_active = self
+            .native_frame_active
+            .load(std::sync::atomic::Ordering::Acquire);
+
+        const MAX_PRESENTS_PER_TICK: u32 = 3;
+        let mut presented_this_tick = 0u32;
+
+        while presented_this_tick < MAX_PRESENTS_PER_TICK {
+            let frame_consumed = self
+                .frame_consumed
+                .load(std::sync::atomic::Ordering::Acquire);
+            let force_due = !frame_consumed
+                && vs.last_present_attempt.elapsed()
+                    >= std::time::Duration::from_millis(STREAM_FORCE_PRESENT_MAX_WAIT_MS);
+
+            if !(native_frame_active || frame_consumed || force_due) {
+                if presented_this_tick == 0 {
+                    vs.present_skipped_unconsumed = vs.present_skipped_unconsumed.saturating_add(1);
+                }
+                break;
+            }
+
+            vs.present_attempts = vs.present_attempts.saturating_add(1);
+            if !native_frame_active && force_due {
+                vs.present_forced_attempts = vs.present_forced_attempts.saturating_add(1);
+            }
             let presented = unsafe { mello_sys::mello_stream_present_frame(viewer) };
+            vs.last_present_attempt = Instant::now();
             if presented {
                 vs.frames_presented += 1;
+                presented_this_tick += 1;
                 if vs.frames_presented <= 3 || vs.frames_presented.is_multiple_of(300) {
                     log::info!("Stream frame presented #{}", vs.frames_presented);
                 }
+            } else {
+                break; // ring buffer empty
             }
         }
 
@@ -562,12 +610,26 @@ impl super::Client {
 
         let elapsed = vs.debug_last_emit.elapsed().as_secs_f32();
         if elapsed >= STREAM_DEBUG_EVENT_INTERVAL_SECS {
+            let delta_ticks = vs
+                .stream_tick_count
+                .saturating_sub(vs.debug_last_tick_count);
             let delta_bytes = vs.transport_bytes.saturating_sub(vs.debug_last_bytes);
             let delta_frames = vs
                 .frames_presented
                 .saturating_sub(vs.debug_last_frames_presented);
+            let delta_present_attempts = vs
+                .present_attempts
+                .saturating_sub(vs.debug_last_present_attempts);
+            let delta_present_forced = vs
+                .present_forced_attempts
+                .saturating_sub(vs.debug_last_present_forced_attempts);
+            let delta_present_skipped = vs
+                .present_skipped_unconsumed
+                .saturating_sub(vs.debug_last_present_skipped_unconsumed);
             let ingress_kbps = (delta_bytes as f32 * 8.0 / 1000.0) / elapsed.max(0.001);
             let present_fps = (delta_frames as f32) / elapsed.max(0.001);
+            let stream_tick_hz = (delta_ticks as f32) / elapsed.max(0.001);
+            let present_attempt_hz = (delta_present_attempts as f32) / elapsed.max(0.001);
 
             let _ = self.event_tx.send(Event::StreamDebugStats {
                 mode: vs.mode.clone(),
@@ -579,7 +641,21 @@ impl super::Client {
                 ingress_kbps,
             });
 
+            log::info!(
+                "Stream cadence: mode={} tick_hz={:.1} present_attempt_hz={:.1} present_fps={:.1} forced={} skipped_unconsumed={}",
+                vs.mode,
+                stream_tick_hz,
+                present_attempt_hz,
+                present_fps,
+                delta_present_forced,
+                delta_present_skipped
+            );
+
             vs.debug_last_emit = Instant::now();
+            vs.debug_last_tick_count = vs.stream_tick_count;
+            vs.debug_last_present_attempts = vs.present_attempts;
+            vs.debug_last_present_forced_attempts = vs.present_forced_attempts;
+            vs.debug_last_present_skipped_unconsumed = vs.present_skipped_unconsumed;
             vs.debug_last_packets = vs.transport_packets;
             vs.debug_last_bytes = vs.transport_bytes;
             vs.debug_last_frames_presented = vs.frames_presented;
@@ -1234,8 +1310,12 @@ impl super::Client {
 
         let frame_cb_data = Box::into_raw(Box::new(FrameCallbackData {
             frame_slot: self.frame_slot.clone(),
+            native_frame_slot: self.native_frame_slot.clone(),
+            native_frame_active: self.native_frame_active.clone(),
             frame_consumed: self.frame_consumed.clone(),
         }));
+        self.native_frame_active
+            .store(false, std::sync::atomic::Ordering::Release);
 
         let mello_config = mello_sys::MelloStreamConfig {
             width: w,
@@ -1253,6 +1333,15 @@ impl super::Client {
                 frame_cb_data as *mut std::ffi::c_void,
             )
         };
+        if !viewer.is_null() {
+            unsafe {
+                mello_sys::mello_stream_set_native_frame_callback(
+                    viewer,
+                    Some(on_viewer_native_frame),
+                    frame_cb_data as *mut std::ffi::c_void,
+                );
+            }
+        }
 
         if viewer.is_null() {
             log::error!("Failed to start SFU stream viewer pipeline at {}x{}", w, h);
@@ -1284,13 +1373,22 @@ impl super::Client {
             _ice_cb_data: std::ptr::null_mut(),
             got_keyframe: false,
             frames_presented: 0,
+            stream_tick_count: 0,
+            present_attempts: 0,
+            present_forced_attempts: 0,
+            present_skipped_unconsumed: 0,
             transport_packets: 0,
             transport_bytes: 0,
             transport_truncations: 0,
             debug_last_emit: Instant::now(),
+            debug_last_tick_count: 0,
+            debug_last_present_attempts: 0,
+            debug_last_present_forced_attempts: 0,
+            debug_last_present_skipped_unconsumed: 0,
             debug_last_packets: 0,
             debug_last_bytes: 0,
             debug_last_frames_presented: 0,
+            last_present_attempt: Instant::now(),
             recv_buf: vec![0u8; VIEWER_RECV_BUF_SIZE],
             stream_viewer: crate::stream::viewer::StreamViewer::new(config.fec_n),
             chunk_assembler: ChunkAssembler::new(),
@@ -1385,8 +1483,12 @@ impl super::Client {
         let config = crate::stream::StreamConfig::default();
         let frame_cb_data = Box::into_raw(Box::new(FrameCallbackData {
             frame_slot: self.frame_slot.clone(),
+            native_frame_slot: self.native_frame_slot.clone(),
+            native_frame_active: self.native_frame_active.clone(),
             frame_consumed: self.frame_consumed.clone(),
         }));
+        self.native_frame_active
+            .store(false, std::sync::atomic::Ordering::Release);
 
         let _ = self.event_tx.send(Event::StreamWatching {
             host_id: host_id.to_string(),
@@ -1404,13 +1506,22 @@ impl super::Client {
             _ice_cb_data: ice_cb_data,
             got_keyframe: false,
             frames_presented: 0,
+            stream_tick_count: 0,
+            present_attempts: 0,
+            present_forced_attempts: 0,
+            present_skipped_unconsumed: 0,
             transport_packets: 0,
             transport_bytes: 0,
             transport_truncations: 0,
             debug_last_emit: Instant::now(),
+            debug_last_tick_count: 0,
+            debug_last_present_attempts: 0,
+            debug_last_present_forced_attempts: 0,
+            debug_last_present_skipped_unconsumed: 0,
             debug_last_packets: 0,
             debug_last_bytes: 0,
             debug_last_frames_presented: 0,
+            last_present_attempt: Instant::now(),
             recv_buf: vec![0u8; VIEWER_RECV_BUF_SIZE],
             stream_viewer: crate::stream::viewer::StreamViewer::new(config.fec_n),
             chunk_assembler: ChunkAssembler::new(),
@@ -1429,6 +1540,8 @@ impl super::Client {
                 conn.leave().await;
             }
             drop(vs);
+            self.native_frame_active
+                .store(false, std::sync::atomic::Ordering::Release);
             let _ = self.event_tx.send(Event::StreamWatchingStopped);
         }
     }

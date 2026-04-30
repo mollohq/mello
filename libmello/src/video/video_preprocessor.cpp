@@ -123,34 +123,11 @@ bool VideoPreprocessor::initialize(const GraphicsDevice& device,
         video_context_->VideoProcessorSetOutputTargetRect(video_processor_.Get(), TRUE, &dst_rect);
     }
 
-    // NV12 output texture — used as video processor output and encoder input
-    D3D11_TEXTURE2D_DESC nv12_desc{};
-    nv12_desc.Width  = out_w;
-    nv12_desc.Height = out_h;
-    nv12_desc.MipLevels = 1;
-    nv12_desc.ArraySize = 1;
-    nv12_desc.Format = DXGI_FORMAT_NV12;
-    nv12_desc.SampleDesc.Count = 1;
-    nv12_desc.Usage = D3D11_USAGE_DEFAULT;
-    nv12_desc.BindFlags = D3D11_BIND_RENDER_TARGET;
-
-    hr = device_->CreateTexture2D(&nv12_desc, nullptr, &nv12_texture_);
-    if (FAILED(hr)) {
-        MELLO_LOG_ERROR(TAG, "Failed to create NV12 texture: hr=0x%08X", hr);
-        return false;
+    // NV12 output ring — 3 slots so capture and encode can overlap
+    for (size_t i = 0; i < NV12_RING_SLOTS; ++i) {
+        if (!create_nv12_slot(i, out_w, out_h)) return false;
     }
-
-    // Output view on the NV12 texture
-    D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC out_desc{};
-    out_desc.ViewDimension = D3D11_VPOV_DIMENSION_TEXTURE2D;
-    out_desc.Texture2D.MipSlice = 0;
-
-    hr = video_device_->CreateVideoProcessorOutputView(
-        nv12_texture_.Get(), vp_enum_.Get(), &out_desc, &output_view_);
-    if (FAILED(hr)) {
-        MELLO_LOG_ERROR(TAG, "CreateVideoProcessorOutputView failed: hr=0x%08X", hr);
-        return false;
-    }
+    nv12_write_idx_ = 0;
 
     if (in_w != out_w || in_h != out_h) {
         MELLO_LOG_INFO(TAG, "VideoPreprocessor initialized: %ux%u -> %ux%u BGRA->NV12 (GPU video processor, downscale)",
@@ -161,7 +138,37 @@ bool VideoPreprocessor::initialize(const GraphicsDevice& device,
     return true;
 }
 
-ID3D11Texture2D* VideoPreprocessor::convert(ID3D11Texture2D* bgra_source) {
+bool VideoPreprocessor::create_nv12_slot(size_t idx, uint32_t w, uint32_t h) {
+    D3D11_TEXTURE2D_DESC nv12_desc{};
+    nv12_desc.Width  = w;
+    nv12_desc.Height = h;
+    nv12_desc.MipLevels = 1;
+    nv12_desc.ArraySize = 1;
+    nv12_desc.Format = DXGI_FORMAT_NV12;
+    nv12_desc.SampleDesc.Count = 1;
+    nv12_desc.Usage = D3D11_USAGE_DEFAULT;
+    nv12_desc.BindFlags = D3D11_BIND_RENDER_TARGET;
+
+    HRESULT hr = device_->CreateTexture2D(&nv12_desc, nullptr, &nv12_slots_[idx].texture);
+    if (FAILED(hr)) {
+        MELLO_LOG_ERROR(TAG, "Failed to create NV12 texture slot %zu: hr=0x%08X", idx, hr);
+        return false;
+    }
+
+    D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC out_desc{};
+    out_desc.ViewDimension = D3D11_VPOV_DIMENSION_TEXTURE2D;
+    out_desc.Texture2D.MipSlice = 0;
+
+    hr = video_device_->CreateVideoProcessorOutputView(
+        nv12_slots_[idx].texture.Get(), vp_enum_.Get(), &out_desc, &nv12_slots_[idx].output_view);
+    if (FAILED(hr)) {
+        MELLO_LOG_ERROR(TAG, "CreateVideoProcessorOutputView slot %zu failed: hr=0x%08X", idx, hr);
+        return false;
+    }
+    return true;
+}
+
+ConvertResult VideoPreprocessor::convert(ID3D11Texture2D* bgra_source) {
     D3D11_TEXTURE2D_DESC src_desc{};
     bgra_source->GetDesc(&src_desc);
 
@@ -171,7 +178,10 @@ ID3D11Texture2D* VideoPreprocessor::convert(ID3D11Texture2D* bgra_source) {
             src_desc.BindFlags, src_desc.Usage, src_desc.MiscFlags);
     }
 
-    // Create input view for this frame's BGRA texture
+    size_t slot = nv12_write_idx_;
+    nv12_write_idx_ = (nv12_write_idx_ + 1) % NV12_RING_SLOTS;
+    auto& s = nv12_slots_[slot];
+
     D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC in_desc{};
     in_desc.FourCC = 0;
     in_desc.ViewDimension = D3D11_VPIV_DIMENSION_TEXTURE2D;
@@ -183,7 +193,7 @@ ID3D11Texture2D* VideoPreprocessor::convert(ID3D11Texture2D* bgra_source) {
     if (FAILED(hr)) {
         MELLO_LOG_ERROR(TAG, "CreateVideoProcessorInputView failed: hr=0x%08X (fmt=%u bind=0x%X)",
             hr, src_desc.Format, src_desc.BindFlags);
-        return nullptr;
+        return {nullptr, slot};
     }
 
     D3D11_VIDEO_PROCESSOR_STREAM stream{};
@@ -191,26 +201,25 @@ ID3D11Texture2D* VideoPreprocessor::convert(ID3D11Texture2D* bgra_source) {
     stream.pInputSurface = input_view.Get();
 
     hr = video_context_->VideoProcessorBlt(
-        video_processor_.Get(), output_view_.Get(), 0, 1, &stream);
+        video_processor_.Get(), s.output_view.Get(), 0, 1, &stream);
     if (FAILED(hr)) {
         MELLO_LOG_ERROR(TAG, "VideoProcessorBlt failed: hr=0x%08X", hr);
-        return nullptr;
+        return {nullptr, slot};
     }
 
-    // Debug: on first frame, readback a few NV12 pixels to verify conversion
     if (frame_count_ < 3) {
-        verify_nv12_output(bgra_source);
+        verify_nv12_output(bgra_source, slot);
     }
     frame_count_++;
 
-    return nv12_texture_.Get();
+    return {s.texture.Get(), slot};
 }
 
-void VideoPreprocessor::verify_nv12_output(ID3D11Texture2D* bgra_source) {
+void VideoPreprocessor::verify_nv12_output(ID3D11Texture2D* bgra_source, size_t slot) {
+    auto* nv12_tex = nv12_slots_[slot].texture.Get();
     D3D11_TEXTURE2D_DESC desc{};
-    nv12_texture_->GetDesc(&desc);
+    nv12_tex->GetDesc(&desc);
 
-    // Stage the NV12 output
     D3D11_TEXTURE2D_DESC staging_desc = desc;
     staging_desc.Usage = D3D11_USAGE_STAGING;
     staging_desc.BindFlags = 0;
@@ -220,7 +229,7 @@ void VideoPreprocessor::verify_nv12_output(ID3D11Texture2D* bgra_source) {
     HRESULT hr = device_->CreateTexture2D(&staging_desc, nullptr, &staging);
     if (FAILED(hr)) return;
 
-    context_->CopyResource(staging.Get(), nv12_texture_.Get());
+    context_->CopyResource(staging.Get(), nv12_tex);
 
     D3D11_MAPPED_SUBRESOURCE mapped{};
     hr = context_->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &mapped);
@@ -301,12 +310,14 @@ void VideoPreprocessor::verify_nv12_output(ID3D11Texture2D* bgra_source) {
 }
 
 void VideoPreprocessor::shutdown() {
-    output_view_.Reset();
+    for (auto& s : nv12_slots_) {
+        s.output_view.Reset();
+        s.texture.Reset();
+    }
     video_processor_.Reset();
     vp_enum_.Reset();
     video_context_.Reset();
     video_device_.Reset();
-    nv12_texture_.Reset();
     context_.Reset();
     device_.Reset();
 }

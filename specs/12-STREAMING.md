@@ -1,650 +1,361 @@
-# Streaming Implementation Specification
+# Streaming
 
-> **Component:** libmello (C++) · mello-core (Rust) · mello-client (Rust) · Backend (Go)
-> **Status:** v0.2 Target
-> **Parent:** [00-ARCHITECTURE.md](./00-ARCHITECTURE.md)
-> **Related:** [03-LIBMELLO.md](./03-LIBMELLO.md), [02-MELLO-CORE.md](./02-MELLO-CORE.md), [04-BACKEND.md](./04-BACKEND.md)
-
----
-
-## 1. Overview
-
-Streaming is Mello's core differentiator. The goal is **Parsec-parity quality**: 1080p60, sub-60ms WAN latency, hardware-accelerated encode/decode, and graceful degradation under network stress — favouring visible quality loss over lag.
-
-This spec covers the **mello-core orchestration layer**: transport framing and FEC, loss recovery, quality presets and adaptive bitrate, multi-viewer fan-out, Stream Manager, topology selection (P2P vs. SFU), and the input passthrough stub.
-
-Video capture, GPU color conversion, hardware encode/decode, and the Slint frame handoff are specified in **[14-VIDEO-PIPELINE.md](./14-VIDEO-PIPELINE.md)**.
+> **Component:** libmello (C++) · mello-core (Rust) · mello-client (Rust/Slint) · Backend (Go/Nakama)
+> **Status:** Working, shipping iteratively toward Discord-parity
+> **Related:** [03-LIBMELLO.md](./03-LIBMELLO.md), [02-MELLO-CORE.md](./02-MELLO-CORE.md), [14-VIDEO-PIPELINE.md](./14-VIDEO-PIPELINE.md), [13-SFU.md](./13-SFU.md)
 
 ---
 
-## 2. Design Principles
+## 1. Goals
 
-These principles govern every tradeoff in this spec:
-
-| Principle | Implication |
-|---|---|
-| **Latency over quality** | Drop frames, lower bitrate, or degrade resolution before buffering |
-| **No B-frames** | Encode profile must be latency-optimised (Baseline/Main, no B-frames, minimal VBV buffer) |
-| **Rate-limit recovery events** | IDR requests capped to avoid compounding congestion |
-| **Topology-agnostic core** | Stream Manager sends packets to a `PacketSink` — it does not know or care about P2P vs. SFU |
-| **Server decides topology** | The client never assumes; the backend's `start_stream` response determines the sink type |
+Ship 1080p60 game streaming comparable to Discord/Parsec: hardware-accelerated encode/decode, sub-60ms WAN latency, graceful degradation under network stress. Favour visible quality loss (artifacts, lower bitrate) over lag or stalling.
 
 ---
 
-## 3. Codec Stack
+## 2. Layer Overview
 
-Video codec configuration, encoder/decoder selection and fallback, and all associated libmello C API types (`MelloCodec`, `MelloEncoderBackend`, `MelloDecoderBackend`, `mello_get_encoders`, `mello_get_decoders`) are fully specified in **[14-VIDEO-PIPELINE.md](./14-VIDEO-PIPELINE.md)**.
-
-Summary for context:
-- **Primary:** H.264, low-latency profile (no B-frames, CBR, 1-second VBV)
-- **Stretch goal:** AV1 — activated only when both host and viewer confirm hardware support
-- **Encoder priority:** NVENC → AMF → QSV (oneVPL) → x264 (software, capped 720p30)
-- **Decoder priority:** NVDEC → AMF → D3D11VA → FFmpeg SW
-- When x264 is active, mello-core surfaces a UI warning via `mello_encoder_is_software()`
-
-### 3.4 Audio Codec
-
-Opus at **128 kbps, stereo, 48 kHz**. Stream audio uses a separate Opus encoder instance from the voice encoder, at a higher bitrate. No new API required.
-
----
-
-
-## 4. Stream Audio
-
-### 4.1 Behaviour
-
-Game audio is **always captured and always sent** whenever a stream is active. There is no opt-out toggle in v0.2. (A mute-game-audio control can be added as a UI affordance later without spec changes.)
-
-### 4.2 Capture: WASAPI Loopback
-
-Game audio is captured via the WASAPI loopback interface — the same WASAPI stack already in libmello, but pointed at the render endpoint (what the host's speakers are playing) rather than the capture endpoint (microphone).
-
-```c
-// New API call — initialises a loopback capture session
-MelloResult mello_stream_start_audio(
-    MelloStreamHost* host
-);
-
-void mello_stream_stop_audio(MelloStreamHost* host);
-
-// Returns encoded Opus packet. Same polling pattern as mello_stream_get_video_packet.
-int mello_stream_get_audio_packet(
-    MelloStreamHost* host,
-    uint8_t*         buffer,
-    int              buffer_size
-);
-```
-
-Internally this reuses `WasapiCapture` with the loopback flag set:
-
-```cpp
-// src/audio/capture_wasapi.cpp
-// Existing capture_thread() gains a loopback mode:
-bool WasapiCapture::initialize_loopback() {
-    // Use eRender + eConsole endpoint instead of eCapture
-    // IAudioClient::Initialize with AUDCLNT_STREAMFLAGS_LOOPBACK
-    ...
-}
-```
-
-### 4.3 Mixing
-
-Mic audio and game audio are **separate streams** — they are not mixed before sending. The viewer receives and plays them independently via two Opus decode instances. This keeps them separable for future features (e.g. independent volume sliders, viewer-side muting of game audio while keeping voice).
-
-### 4.4 Viewer Side
-
-```c
-// Feed game audio packet (separate from voice packet)
-MelloResult mello_stream_feed_audio_packet(
-    MelloStreamView* view,
-    const uint8_t*   data,
-    int              size
-);
-```
-
-Playback goes through the existing WASAPI playback path. The viewer's OS audio mixer handles final output.
-
----
-
-## 5. Transport Framing
-
-### 5.1 DataChannel Configuration
-
-All stream data flows over **unreliable, unordered DataChannels**. This is non-negotiable — reliable/ordered channels introduce head-of-line blocking which destroys latency. Loss is handled by FEC and IDR recovery (see §6).
-
-One DataChannel per viewer connection. Voice continues to use its own DataChannel as today.
-
-### 5.2 Packet Format
-
-Every packet sent over the stream DataChannel uses the following binary header:
+The streaming system is split across three layers. Understanding which layer owns what is the single most important thing for working on this code.
 
 ```
- 0                   1                   2                   3
- 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+┌─────────────────────────────────────────────────────────────────┐
+│  mello-core  (Rust)                                             │
+│  Stream lifecycle, transport, framing, FEC, ABR, recovery,      │
+│  viewer chunk reassembly, pacing, quality presets, telemetry     │
 ├─────────────────────────────────────────────────────────────────┤
-│  type (1B) │  flags (1B) │        sequence (2B)                 │
+│  libmello  (C++)                                                │
+│  Hardware capture, GPU color conversion, hardware encode/decode, │
+│  decoded-frame ring, present, cursor, process enumeration        │
 ├─────────────────────────────────────────────────────────────────┤
-│                     timestamp_us (8B)                           │
-├─────────────────────────────────────────────────────────────────┤
-│                     payload (variable)                          │
+│  mello-sys  (Rust FFI bindings, auto-generated via bindgen)     │
+│  Thin unsafe bridge between mello-core and libmello             │
 └─────────────────────────────────────────────────────────────────┘
-
-type:
-  0x01 = video
-  0x02 = audio
-  0x03 = fec (parity)
-  0x04 = control (keyframe request, quality change)
-
-flags (bitfield):
-  bit 0 = is_keyframe
-  bit 1 = fec_group_last  (last data packet in FEC group; parity follows)
-  bit 2 = codec_av1       (0 = H.264, 1 = AV1; set on every video packet)
-
-sequence: monotonically increasing per type (video seq, audio seq tracked separately)
-timestamp_us: capture timestamp in microseconds (host clock)
 ```
 
-This header is 12 bytes. Parsing is done in mello-core (Rust), not libmello.
+mello-core never touches pixels. libmello never touches the network. `mello-sys` is the membrane.
 
-### 5.3 Forward Error Correction (XOR FEC)
+---
 
-FEC operates over groups of video packets. For every N data packets, one parity packet is sent. The parity is the XOR of all N payloads (after stripping the 12-byte header; the header of the parity packet carries its own sequence and the `type = 0x03` marker).
+## 3. Host Pipeline
 
-FEC overhead is **adaptive** — the ABR controller adjusts `fec_n` dynamically based on viewer loss reports (see §7.2):
-- Loss < 1%: FEC disabled (0% overhead)
+The host captures frames, converts them, encodes them, and hands encoded NALUs to the Rust layer which chunks and sends them over the network.
+
+```
+Capture → GPU Preprocess → Encode Queue → Encode Thread → Stream Manager → Egress
+(DXGI/WGC) (BGRA→NV12)    (bounded ring)   (NVENC async)   (FEC, chunking)  (SFU/P2P)
+```
+
+### 3.1 Capture
+
+Two backends, selected automatically per-process:
+
+| Backend | API | When |
+|---------|-----|------|
+| **DXGI-DDI** | `IDXGIOutputDuplication` | Fullscreen / exclusive-fullscreen games |
+| **WGC** | `Windows.Graphics.Capture` | Windowed games |
+
+`ProcessCapture` wraps both. Given a PID it finds the main game window (`EnumWindows`, largest restored-area, non-toolwindow), detects fullscreen (covers ≥90% of monitor), and picks the backend. A background `monitor_thread` periodically re-evaluates and hot-swaps if the game transitions windowed↔fullscreen — triggering a keyframe on swap.
+
+**Deferred start:** If the target window is minimized at stream start (user tabbed out to launch the stream), capture waits. The monitor thread polls until the window is restored, then initializes the backend. Width/height return restored dimensions during the wait so the encoder can pre-initialize. This matches Discord's behaviour.
+
+**Adaptive DXGI throttle:** DXGI delivers at the monitor's refresh rate (60–360 Hz). We only want `target_fps` (typically 60). On startup, we calibrate the monitor's vsync interval from the first two acquired frames, then set a deadline of `target_interval - half_vsync`. This ensures we accept the closest vsync that satisfies the target on any refresh rate, without over- or under-delivering.
+
+**macOS:** `ScreenCaptureKit` (SCK) backend exists for macOS capture.
+
+### 3.2 GPU Preprocessing
+
+BGRA→NV12 conversion via a D3D11 compute shader. Uses a 3-slot NV12 ring buffer so the convert output doesn't alias with an in-flight encode input. Typical `convert_ms` is 0.1–0.3ms. Also handles GPU downscale when the capture resolution exceeds the target encode resolution.
+
+### 3.3 Encode Queue
+
+A dedicated `encode_thread` pulls from a bounded ring queue (`ENCODE_QUEUE_CAP = 2`). When the queue is full, the oldest job is evicted (newest-wins). This decouples the capture callback thread from the potentially-blocking encode path.
+
+### 3.4 Hardware Encode
+
+NVENC with P1+ULL (Ultra Low Latency) preset by default. Fallback chain: P1+ULL → P1+LL → P4+ULL.
+
+**Async mode:** The encoder initializes with `enableEncodeAsync = 1` and registers a Windows completion event. `nvEncEncodePicture` returns immediately while the GPU works; the encode thread waits on the event before calling `nvEncLockBitstream`. Falls back to synchronous mode if the driver doesn't support async.
+
+Rate control is VBR with 1.25× max headroom. Texture registration is cached per NV12 ring slot so `nvEncRegisterResource` runs once per slot, not per frame. `repeatSPSPPS = 1` ensures every keyframe is self-contained.
+
+**Other encoder backends:** AMF (AMD), QSV/oneVPL (Intel), VideoToolbox (macOS) exist in the codebase but are less battle-tested than NVENC.
+
+### 3.5 Encoded Packet Handoff
+
+The encode thread's `packet_cb_` fires with the encoded NALU bytes. This callback was set up by `mello-core` via `mello_stream_start_host` — it sends the bytes over an mpsc channel (capacity 32) to the Rust `StreamManager`.
+
+---
+
+## 4. Stream Manager (Host-side Rust)
+
+`mello-core::stream::manager::StreamManager` is the host-side control loop. It receives encoded video and audio packets from libmello and routes them through FEC, chunking, and the transport sink.
+
+### What it does each tick:
+
+1. **Drain video packets** from the mpsc channel (bounded coalescing to avoid starvation).
+2. **Wrap** each NALU in a `StreamPacket` (12-byte header: type, flags, sequence, timestamp).
+3. **FEC encode** — for every N video packets, emit one XOR parity packet. FEC group resets on each keyframe. Group size is controlled by ABR.
+4. **Send** via the `PacketSink` trait (see §6).
+5. **Drain audio packets** similarly (no FEC — Opus has built-in PLC).
+6. **Process control packets** from viewers (loss reports, keyframe requests).
+7. **Emit telemetry** every second: `video_in_hz`, `send_fail_*_delta`, `recovery_mode`, queue depths.
+
+### Recovery policy
+
+- **Queue-pressure keyframe:** If the video queue grows too large (severe coalescing), force an IDR. Rate-limited.
+- **Viewer-requested keyframe:** Forwarded from control packets, rate-limited.
+- **Recovery mode:** Temporary state after sustained losses — drops delta frames until next keyframe to help the decoder converge faster.
+
+---
+
+## 5. Packet Format
+
+### 5.1 StreamPacket wire format
+
+Every packet on the wire has a 12-byte header:
+
+```
+[type:1][flags:1][sequence:2 BE][timestamp_us:8 BE][payload...]
+
+type: 0x01=Video, 0x02=Audio, 0x03=FEC, 0x04=Control
+flags: bit0=IS_KEYFRAME, bit1=FEC_GROUP_LAST, bit2=CODEC_AV1
+```
+
+Implementation: `mello-core/src/stream/packet.rs`.
+
+### 5.2 DataChannel Message Chunking
+
+Encoded packets (especially keyframes at 100–400 KB) must be chunked before sending over unreliable DataChannels. SCTP fragments large messages internally, and losing a single fragment in unreliable mode drops the entire message.
+
+Each `StreamPacket` is split into chunks with a 6-byte header:
+
+```
+[msg_id:2 LE][chunk_idx:2 LE][chunk_count:2 LE][payload ≤ N bytes]
+```
+
+Chunk payload limits differ by transport:
+- **SFU:** 40,000 bytes (`SFU_CHUNK_MAX_PAYLOAD`)
+- **P2P:** 60,000 bytes (`CHUNK_MAX_PAYLOAD`)
+
+**Whole-frame drop policy:** Before chunking, the sender checks that the egress queue has room for all chunks. If not, the entire frame is dropped — never partial. This prevents the viewer from receiving incomplete messages it can never reassemble.
+
+### 5.3 FEC
+
+XOR-based forward error correction over groups of N video packets. When a group completes, one parity packet (XOR of all N payloads) is sent.
+
+- Loss < 1%: FEC disabled
 - Loss 1–5%: N = 10 (10% overhead)
 - Loss > 5%: N = 5 (20% overhead)
 
-Streams start with FEC disabled. This recovers any single packet loss within a group silently, with zero added latency, and avoids wasting bandwidth on healthy connections.
-
-FEC group formation:
-
-```
-Packets:  [V1] [V2] [V3] [V4] [V5*] [FEC]  [V6] [V7] ...
-                                     parity
-* fec_group_last flag set on V5
-```
-
-The FEC group boundary resets on every keyframe (IDR). This ensures a keyframe always starts a fresh group — partial groups from before the IDR are discarded by the viewer.
-
-FEC does **not** apply to audio packets. Opus has built-in PLC (Packet Loss Concealment) that handles audio loss gracefully.
-
-FEC group size is managed by the ABR controller at runtime. The `FecEncoder` supports `set_group_size(n)` for live adjustment — setting n < 2 disables FEC entirely.
-
-### 5.4 DataChannel Message Chunking
-
-Unreliable DataChannels use SCTP under the hood. When a message exceeds the SCTP MTU (~1200 bytes), SCTP fragments it internally. In unreliable mode, losing **any single SCTP fragment** drops the **entire application-level message**. A single H.264 keyframe can be 200–400 KB — SCTP splits that into hundreds of fragments, making loss near-certain even on good networks.
-
-To mitigate this, the host performs **application-level chunking** before handing data to the DataChannel. Each serialized `StreamPacket` is split into chunks of at most **60,000 bytes** (well under the 64 KB SCTP message size limit). Each chunk carries a 6-byte header:
-
-```
- 0       2       4       6
-├───────┼───────┼───────┤
-│msg_id │chunk_i│chunk_n│  payload (≤60,000 bytes)
-│ (u16) │ (u16) │ (u16) │
-└───────┴───────┴───────┘
-
-msg_id:   monotonically increasing message counter (wraps at u16::MAX)
-chunk_i:  0-based index of this chunk within the message
-chunk_n:  total number of chunks in this message
-```
-
-A single-chunk message (payload ≤ 60 KB) still carries the header with `chunk_i=0, chunk_n=1`.
-
-**Viewer reassembly:** The viewer maintains a `ChunkAssembler` that collects incoming chunks keyed by `msg_id`. When all `chunk_n` chunks for a `msg_id` arrive, the original `StreamPacket` payload is reconstructed and fed to `StreamViewer`. Incomplete assemblies are evicted after newer message IDs arrive (stale threshold: 256 msg_ids behind).
-
-This chunking layer sits **between** the StreamPacket serialization and the DataChannel send — it is transparent to FEC, ABR, and all higher-level logic.
-
-```
-Host:  StreamPacket → serialize → chunk (60KB) → DataChannel send
-Viewer: DataChannel recv → reassemble chunks → deserialize → StreamViewer
-```
-
-#### Rust implementation
-
-```
-mello-core/src/stream/sink_p2p.rs   — chunking (host side)
-mello-core/src/client.rs            — ChunkAssembler (viewer side)
-```
-
-#### Rust implementation location (FEC)
-
-```
-mello-core/src/stream/fec.rs
-```
-
-```rust
-pub struct FecEncoder {
-    n: usize,              // group size
-    group: Vec<Vec<u8>>,   // accumulated data packets
-}
-
-impl FecEncoder {
-    pub fn new(n: usize) -> Self { ... }
-
-    /// Push a data packet. Returns Some(parity_payload) when group is complete.
-    pub fn push(&mut self, payload: &[u8]) -> Option<Vec<u8>> { ... }
-
-    pub fn reset(&mut self) { self.group.clear(); }
-}
-
-pub struct FecDecoder {
-    n: usize,
-    group: HashMap<u16, Vec<u8>>,  // seq -> payload
-    parity: Option<Vec<u8>>,
-}
-
-impl FecDecoder {
-    /// Feed a received packet (data or parity).
-    /// Returns recovered payload if a loss was just repaired.
-    pub fn feed(&mut self, seq: u16, ptype: PacketType, payload: &[u8]) -> Option<Vec<u8>> { ... }
-}
-```
+FEC recovers any single packet loss within a group with zero latency and zero round-trips. Group boundaries reset on keyframes. Implementation: `mello-core/src/stream/fec.rs`.
 
 ---
 
-## 6. Loss Recovery
+## 6. Transport
 
-Three-tier strategy, in order of preference:
+### 6.1 PacketSink Trait
 
-### Tier 1 — FEC (silent, zero latency)
+The stream manager sends packets to a `PacketSink` — it doesn't know whether they go to P2P peers or an SFU. Two implementations:
 
-Any single packet loss within a FEC group is recovered by XOR parity. No round-trip, no visible artefact.
+| Sink | Transport | Max viewers | Chunk size |
+|------|-----------|-------------|------------|
+| `P2PFanoutSink` | Direct DataChannel per viewer | 5 | 60 KB |
+| `SfuSink` | Single SFU WebSocket + DataChannel | Unlimited (SFU-managed) | 40 KB |
 
-### Tier 2 — Drop and continue
+Both sinks have an async egress task with a bounded mpsc queue and a token-bucket `EgressPacer`. There's also a `DualSink` that sends to both simultaneously (e.g. P2P + SFU during migration).
 
-If a FEC group loses 2+ packets (unrecoverable), the viewer simply skips those packets. The decoder will produce artefacted or skipped frames. This is acceptable — **visible artefacts are preferred over stalling**.
+### 6.2 SFU Connection
 
-### Tier 3 — Rate-limited IDR request
+`SfuConnection` handles the SFU lifecycle: WebSocket signaling (connect, join, negotiate ICE/SDP), DataChannel media/control/audio send, and event polling. The SFU is a Go service (`mello-sfu`) that forwards media without transcoding.
 
-If the viewer detects 2 consecutive unrecoverable FEC groups (i.e. sustained loss), it requests a keyframe from the host. IDR requests are **rate-limited to one per 2 seconds** — on a bad network, hammering the host with IDR requests would make things worse, not better. The IDR request is a control packet (type `0x04`).
+When the SFU media channel is closed, send attempts return errors that flow through the existing `video_send_fail_total` telemetry counters.
 
-On the host side, `mello_stream_request_keyframe()` is called when the control packet is received. The next encoded frame will be an IDR.
+### 6.3 Topology Selection
 
-There is no retransmission (ARQ/NACK). The round-trip cost at any non-trivial network latency exceeds the latency budget.
-
----
-
-## 7. Quality Presets and Adaptive Bitrate
-
-### 7.1 Presets
-
-Bitrate targets are tuned for Discord-competitive bandwidth. The host encodes at the preset's target resolution, **not** the native capture resolution — the pipeline downscales via the GPU video preprocessor when capture exceeds the target (see 14-VIDEO-PIPELINE.md §5.5).
-
-| Preset | Resolution | FPS | Bitrate (H.264) | Bitrate (AV1) | Est. Total (+ FEC) |
-|---|---|---|---|---|---|
-| **Ultra** | 1080p | 60 | 8 Mbps | 5 Mbps | ~8–10 Mbps |
-| **High** | 1080p | 60 | 6 Mbps | 4 Mbps | ~6–7 Mbps |
-| **Medium** | 1080p | 30 | 4 Mbps | 2.5 Mbps | ~4–5 Mbps |
-| **Low** | 720p | 30 | 2.5 Mbps | 1.5 Mbps | ~2.5–3 Mbps |
-| **Potato** | 720p | 30 | 1.5 Mbps | — | ~1.5–2 Mbps |
-
-**Default preset:** Medium (1080p30 @ 4 Mbps H.264). Suitable for most internet connections. Power users can select High/Ultra from the stream source picker UI.
-
-Preset selection is exposed as a UI control — the host can override it manually before starting the stream.
-
-### 7.2 Adaptive Bitrate (ABR)
-
-ABR is host-driven. The host monitors per-viewer packet loss acknowledgements (via periodic control packets sent by viewers, see below) and adjusts bitrate dynamically.
-
-ABR rules:
-- **Step down:** if a viewer reports >5% packet loss (after FEC), reduce bitrate by 25% within 1 second
-- **Step up:** if all viewers report <1% loss for 10 consecutive seconds, increase bitrate by 10%
-- **Minimum bitrate:** never go below the Potato preset values
-- **Bitrate changes** are applied via `mello_stream_set_bitrate()` (hot-reconfigures the encoder without restarting the session)
-- **Adaptive FEC:** the ABR controller also adjusts `fec_n` based on loss ratio (see §5.3). FEC changes are applied to the `FecEncoder` via `set_group_size()` alongside bitrate changes.
-
-ABR operates **independently per viewer** when in P2P mode — the host can send different bitrates to different viewers. In SFU mode, the SFU handles per-viewer adaptation; the host sends a single stream at its chosen quality and the SFU is responsible for transcoding tiers (future spec).
-
-### 7.3 Viewer Loss Report Packet
-
-Sent by viewer to host every 1 second via the control DataChannel:
-
-```
-type: 0x04 (control)
-payload: {
-    u8  subtype = 0x01 (loss_report)
-    u16 packets_received
-    u16 packets_lost          // after FEC recovery
-    u8  reserved
-}
-```
-
-### 7.4 libmello API
-
-The ABR controller calls `mello_stream_set_bitrate()` and `mello_stream_get_stats()`. Both are defined in **[14-VIDEO-PIPELINE.md §10](./14-VIDEO-PIPELINE.md)**. `MelloStreamStats` includes `encoder_name` so mello-core can surface the software encoding warning when x264 is active.
+The client never decides topology. The backend's `start_stream` RPC response carries `mode: "p2p" | "sfu"` based on the crew's entitlement. mello-core instantiates the appropriate sink.
 
 ---
 
-## 8. Multi-Viewer Fan-out and Stream Manager
-
-### 8.1 PacketSink trait
-
-The Stream Manager in mello-core sends packets to a `PacketSink`. This trait is the only abstraction needed between the stream pipeline and the transport topology.
-
-```rust
-// mello-core/src/stream/sink.rs
-
-#[async_trait]
-pub trait PacketSink: Send + Sync {
-    async fn send_video(&self, packet: &StreamPacket) -> Result<(), StreamError>;
-    async fn send_audio(&self, packet: &StreamPacket) -> Result<(), StreamError>;
-    async fn send_control(&self, packet: &StreamPacket) -> Result<(), StreamError>;
-
-    /// Called when a new viewer joins mid-session (triggers keyframe request).
-    async fn on_viewer_joined(&self, viewer_id: &str);
-
-    /// Called when a viewer leaves.
-    async fn on_viewer_left(&self, viewer_id: &str);
-}
-```
-
-Two implementations:
+## 7. Viewer Pipeline
 
 ```
-P2PFanoutSink      — sends to N DataChannel connections (max 5 viewers)
-SfuSink            — sends to one SFU WebSocket connection (protocol in 13-SFU.md)
+DataChannel → Chunk Reassembly → StreamViewer → Decode → Ring Buffer → Present
+                (ChunkAssembler)   (FEC, loss)    (NVDEC)   (mutex-guarded)  (jitter-gated)
 ```
 
-### 8.2 P2PFanoutSink
+### 7.1 Chunk Reassembly
 
-```rust
-// mello-core/src/stream/sink_p2p.rs
+`ChunkAssembler` in `mello-core/src/client/stream_ffi.rs` collects incoming chunks by `msg_id`. When all `chunk_count` chunks arrive, the original payload is reconstructed. Incomplete assemblies are evicted when they fall 64 msg_ids behind or after 500ms.
 
-pub struct P2PFanoutSink {
-    viewers: RwLock<HashMap<String, Arc<DataChannel>>>,
-    max_viewers: usize,  // = 5
-}
+### 7.2 StreamViewer (Rust)
 
-impl P2PFanoutSink {
-    pub fn new() -> Self { ... }
+`StreamViewer` handles FEC decode, loss tracking, and IDR request policy:
 
-    pub fn add_viewer(&self, viewer_id: String, channel: Arc<DataChannel>) -> Result<(), StreamError> {
-        let mut viewers = self.viewers.write().unwrap();
-        if viewers.len() >= self.max_viewers {
-            return Err(StreamError::ViewerLimitReached);
-        }
-        viewers.insert(viewer_id, channel);
-        Ok(())
-    }
+- **Pre-keyframe gating:** All packets before the first keyframe are dropped.
+- **FEC recovery:** `FecDecoder` can recover a single missing packet per group.
+- **IDR request:** After 4 consecutive unrecoverable FEC groups, request a keyframe from the host. Rate-limited to once per 4 seconds, and suppressed if a keyframe was received within the last 2 seconds.
+- **H.264 IDR detection:** Scans all NALs in the access unit for type 5 (IDR), not just the first. Needed because NVENC emits SPS+PPS before the IDR slice.
+- **Loss reports:** Sent to the host every second with packets received/lost and observed rx bitrate.
 
-    pub fn remove_viewer(&self, viewer_id: &str) { ... }
-}
+### 7.3 Hardware Decode
 
-#[async_trait]
-impl PacketSink for P2PFanoutSink {
-    async fn send_video(&self, packet: &StreamPacket) -> Result<(), StreamError> {
-        let viewers = self.viewers.read().unwrap();
-        for channel in viewers.values() {
-            // Best-effort — individual send failures do not abort fan-out
-            let _ = channel.send_unreliable(packet.as_bytes()).await;
-        }
-        Ok(())
-    }
-    // ... send_audio, send_control mirror send_video
-}
-```
+NVDEC (CUDA↔D3D11 interop, zero-copy R8 layout), AMF, D3D11VA, OpenH264 on Windows. VideoToolbox on macOS. The decoder outputs to a GPU texture which goes into the decoded-frame ring.
 
-Fan-out is fire-and-forget per viewer. A slow or disconnected viewer does not stall the pipeline for other viewers.
+### 7.4 Decoded-Frame Ring
 
-### 8.3 Stream Manager
+A 3-slot ring buffer in `VideoPipeline` holding decoded GPU textures. Guarded by a mutex — `push_decoded` (from the feed/decode thread) and `pop_decoded` (from the present/UI thread) are synchronized.
 
-```rust
-// mello-core/src/stream/manager.rs
+When the ring is full, the oldest frame is evicted (newest-wins, same principle as the encode queue).
 
-pub struct StreamManager {
-    lib: Arc<LibMello>,
-    sink: Arc<dyn PacketSink>,
-    fec_encoder: FecEncoder,
-    video_seq: AtomicU16,
-    audio_seq: AtomicU16,
-    abr: AbrController,
-}
+### 7.5 Jitter Buffer and Presentation
 
-impl StreamManager {
-    pub fn new(lib: Arc<LibMello>, sink: Arc<dyn PacketSink>, config: StreamConfig) -> Self { ... }
+`present_frame()` doesn't pop immediately. It waits until the ring has ≥ 2 frames (or 50ms since the last present, whichever comes first). This absorbs network and decode timing jitter, producing steadier frame cadence.
 
-    /// Main loop — called from a dedicated thread after stream start.
-    pub async fn run(&mut self, mut stop: tokio::sync::oneshot::Receiver<()>) {
-        loop {
-            tokio::select! {
-                _ = &mut stop => break,
-                _ = tokio::time::sleep(Duration::from_millis(1)) => {
-                    self.poll_video().await;
-                    self.poll_audio().await;
-                }
-            }
-        }
-    }
+The Rust `stream_tick` calls `mello_stream_present_frame` up to 3 times per tick. The present path prefers the native D3D11 shared-texture handoff (zero-copy to the Slint presenter), falling back to CPU RGBA readback when native isn't available.
 
-    async fn poll_video(&mut self) {
-        let mut buf = [0u8; 65536];
-        let mut is_keyframe = false;
-        let n = self.lib.stream_get_video_packet(&mut buf, &mut is_keyframe);
-        if n <= 0 { return; }
+### 7.6 Backlog Guard
 
-        let seq = self.video_seq.fetch_add(1, Ordering::Relaxed);
-        let packet = StreamPacket::video(&buf[..n as usize], seq, is_keyframe);
-
-        if is_keyframe {
-            self.fec_encoder.reset();
-        }
-
-        // FEC encode — sends parity packet when group completes
-        if let Some(parity) = self.fec_encoder.push(packet.payload()) {
-            let fec_packet = StreamPacket::fec(&parity, seq);
-            let _ = self.sink.send_video(&fec_packet).await;
-        }
-
-        let _ = self.sink.send_video(&packet).await;
-    }
-
-    async fn poll_audio(&mut self) { ... }  // mirrors poll_video, no FEC
-}
-```
-
-### 8.4 Viewer Count Enforcement
-
-P2P viewer limit is **5 viewers**. This is enforced in two places:
-1. `P2PFanoutSink::add_viewer()` — hard limit at the connection layer
-2. `start_stream` RPC on the backend — the server will reject watch requests beyond the limit and return an error to the requesting viewer's client
-
-The "upgrade to premium for more viewers" upsell is triggered by the backend when a 6th viewer attempts to join a P2P stream.
+If the decode queue depth exceeds a threshold, the viewer drops incoming delta frames (keeping keyframes) and optionally requests an IDR. This prevents the decode ring from falling behind during sustained network bursts.
 
 ---
 
-## 9. Topology Selection (P2P vs. SFU)
+## 8. Quality Presets and ABR
 
-### 9.1 How the Client Learns Its Topology
+### 8.1 Presets
 
-The client never decides. When the host calls `start_stream`, the backend determines topology based on:
-1. Is this a self-hosted Nakama instance? → always P2P
-2. Does the host/crew have active premium entitlement? → SFU available
+| Preset | Resolution | FPS | Bitrate (H.264) | FEC N |
+|--------|-----------|-----|-----------------|-------|
+| **Ultra** | 1920×1080 | 60 | 8 Mbps | 5 |
+| **High** | 1920×1080 | 60 | 6 Mbps | 5 |
+| **Medium** | 1920×1080 | 30 | 4 Mbps | 5 |
+| **Low** | 1280×720 | 30 | 2.5 Mbps | 3 |
+| **Potato** | 854×480 | 30 | 1.5 Mbps | 3 |
 
-The `start_stream` RPC response carries the topology descriptor:
+Default is Medium. The host can select a preset before starting. The GPU preprocessor downscales capture to the preset's target resolution.
 
-```go
-// nakama/data/modules/streaming.go
+### 8.2 Adaptive Bitrate
 
-type StartStreamRequest struct {
-    CrewID string `json:"crew_id"`
-    // Codec negotiation hint from host
-    SupportsAV1 bool   `json:"supports_av1"`
-    // Actual encode resolution (from capture source, see §9.3)
-    Width       uint32 `json:"width"`
-    Height      uint32 `json:"height"`
-}
+`AbrController` adjusts bitrate and FEC group size based on viewer loss reports:
+- **Step down:** >5% loss → reduce bitrate by 25%
+- **Step up:** <1% loss for 10 consecutive seconds → increase bitrate by 10%
+- **Floor:** Never below Potato bitrate
+- **FEC adaptation:** Group size adjusted alongside bitrate based on loss ratio
 
-type StartStreamResponse struct {
-    SessionID string `json:"session_id"`
-    Mode      string `json:"mode"`       // "p2p" | "sfu"
-
-    // P2P fields (mode == "p2p")
-    MaxViewers int `json:"max_viewers,omitempty"` // always 5
-
-    // SFU fields (mode == "sfu")
-    SFUEndpoint string `json:"sfu_endpoint,omitempty"` // "wss://sfu.mello.app/..."
-    SFUToken    string `json:"sfu_token,omitempty"`
-}
-
-func StartStreamRPC(ctx context.Context, ...) (string, error) {
-    // 1. Validate auth, validate crew membership
-    // 2. Check entitlement (credits system, spec 10-CREDITS-IMPLEMENTATION.md)
-    // 3. Build response
-    if hasPremium {
-        resp = StartStreamResponse{
-            SessionID:   newSessionID(),
-            Mode:        "sfu",
-            SFUEndpoint: sfuEndpointForRegion(userRegion),
-            SFUToken:    signSFUToken(userID, sessionID),
-        }
-    } else {
-        resp = StartStreamResponse{
-            SessionID:  newSessionID(),
-            Mode:       "p2p",
-            MaxViewers: 5,
-        }
-    }
-    // 4. Update presence: StreamingTo = crew_id
-    // 5. Broadcast "X is streaming" to crew via Nakama notification
-}
-```
-
-### 9.2 mello-core Sink Instantiation
-
-```rust
-// mello-core/src/stream/host.rs
-
-pub async fn start_stream(
-    lib: Arc<LibMello>,
-    nakama: Arc<NakamaClient>,
-    config: StreamConfig,
-) -> Result<StreamSession, StreamError> {
-
-    let resp = nakama.rpc("start_stream", &StartStreamRequest::from(&config)).await?;
-
-    let sink: Arc<dyn PacketSink> = match resp.mode.as_str() {
-        "p2p"  => Arc::new(P2PFanoutSink::new()),
-        "sfu"  => Arc::new(SfuSink::new(&resp.sfu_endpoint, &resp.sfu_token).await?),
-        other  => return Err(StreamError::UnknownMode(other.to_string())),
-    };
-
-    let manager = StreamManager::new(lib, sink, config);
-    Ok(StreamSession { manager, session_id: resp.session_id })
-}
-```
-
-`SfuSink` wraps an `SfuConnection` (see EXTERNAL-SFU.md) and forwards `StreamPacket` data via the SFU's media DataChannel.
-
-```rust
-// mello-core/src/stream/sink_sfu.rs
-
-pub struct SfuSink {
-    conn: Arc<SfuConnection>,
-}
-
-impl SfuSink {
-    pub fn new(conn: Arc<SfuConnection>) -> Self { Self { conn } }
-}
-
-impl PacketSink for SfuSink {
-    fn send_video(&self, packet: &[u8]) -> Result<(), StreamError> {
-        self.conn.send_media(packet)
-    }
-}
-```
-
-**Viewer SFU lifecycle:** When a viewer connects via SFU, the `stream_tick` polls both media packets and SFU signaling events. If the SFU sends `session_ended` (host disconnected) or the WebSocket drops, the viewer automatically tears down: emits `StreamWatchingStopped`, drops the `ViewerState`, and clears the last video frame (`set_stream_frame(Image::default())`). The `StreamEnded` event (host-side) also clears the frame.
-
-### 9.3 Resolution Negotiation
-
-The host encodes at its **native capture resolution** (determined by the capture source — e.g. 2560x1440 for a monitor, or the game window size). This resolution is not known until after the capture pipeline starts, so it cannot be hardcoded or assumed by the viewer.
-
-The resolution is propagated through two paths:
-
-**Path 1 — Nakama storage (for stream discovery UI):**
-The host calls `mello_stream_get_host_resolution()` after `mello_stream_start_host()` returns, then includes the actual `width` and `height` in the `start_stream` RPC. The backend stores these in `StreamMeta` and returns them in `CrewState.stream.width/height`. The viewer UI uses these values to display stream info before watching.
-
-**Path 2 — WebRTC signaling (for decoder initialization):**
-When the host responds to a viewer's WebRTC Offer with an Answer, it includes `stream_width` and `stream_height` in the `SignalEnvelope`:
-
-```rust
-// mello-core/src/voice/mesh.rs
-
-pub struct SignalEnvelope {
-    pub purpose: SignalPurpose,
-    pub message: SignalMessage,
-    /// Host encode resolution — included in Stream Answer so the viewer
-    /// can initialize the decoder at the correct size.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub stream_width: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub stream_height: Option<u32>,
-}
-```
-
-**Viewer deferred initialization:** The viewer does **not** create its decoder pipeline (`mello_stream_start_viewer`) when it sends the Offer. It waits for the Answer, reads the resolution from the envelope, and only then initializes the decoder at the correct dimensions. The `ViewerState.viewer` handle is `Option<*mut MelloStreamView>` — `None` until the Answer arrives.
-
-This prevents the resolution mismatch that occurs when the viewer assumes 1920x1080 but the host encodes at a different resolution (causes green screen / CUDA errors on NVDEC).
+In P2P mode, ABR can operate per-viewer. In SFU mode the host sends one stream; per-viewer adaptation is an SFU responsibility (future).
 
 ---
 
-## 10. Input Passthrough (Stub)
+## 9. Audio Streaming
 
-Input passthrough allows a viewer to send keyboard and mouse events to the host for remote control. This is deferred to a future spec. The interface is defined here so the rest of the system can account for it.
+Game audio is captured via WASAPI loopback (the render endpoint). Mic audio and game audio are separate streams — not mixed before sending. The viewer receives and plays them independently, enabling future features like independent volume control.
 
-```rust
-// mello-core/src/stream/input.rs  (stub)
-
-/// Opaque input event — encoding TBD in input passthrough spec.
-pub struct InputEvent {
-    pub raw: Vec<u8>,
-}
-
-pub trait InputPassthrough: Send + Sync {
-    /// Viewer side: send an input event to the host.
-    fn send_event(&self, event: InputEvent) -> Result<(), StreamError>;
-
-    /// Host side: register a callback to receive input events from viewers.
-    fn on_event(&self, callback: Box<dyn Fn(InputEvent) + Send + Sync>);
-}
-
-/// No-op implementation used until the feature is specced and built.
-pub struct InputPassthroughStub;
-
-impl InputPassthrough for InputPassthroughStub {
-    fn send_event(&self, _: InputEvent) -> Result<(), StreamError> {
-        Err(StreamError::NotImplemented)
-    }
-    fn on_event(&self, _: Box<dyn Fn(InputEvent) + Send + Sync>) {}
-}
-```
-
-The `StreamManager` holds an `Arc<dyn InputPassthrough>` initialised to `InputPassthroughStub`. When input passthrough is implemented, it replaces the stub without any other changes to the stream pipeline.
+The C API (`mello_stream_start_audio`, `mello_stream_feed_audio_packet`) exists but the audio capture implementation is currently stubbed. Audio packets use the same `StreamPacket` format with `type=0x02`, no FEC (Opus has built-in PLC).
 
 ---
 
-## 11. Performance Targets
+## 10. Cursor Streaming
 
-| Metric | Target | Notes |
-|---|---|---|
-| Stream latency (LAN) | <20ms | Capture → decode → render |
-| Stream latency (WAN, 30ms ping) | <60ms | |
-| Encoder latency contribution | <8ms | See 14-VIDEO-PIPELINE.md |
-| FEC overhead | 0–20% bandwidth | Adaptive: 0% healthy, 10% moderate, 20% high loss |
-| IDR frequency (stable network) | ≤1 per 120s | Keyframe interval only |
-| IDR frequency (lossy network) | ≤1 per 2s | Rate-limited floor |
-| Host CPU overhead (encoding) | <5% | HW encode; SW encode higher |
-| Viewer RAM | <100MB | Decode buffer + frame buffer |
+The host captures cursor state (position, visibility, shape RGBA) alongside video frames. Cursor data is serialized into a compact binary packet and sent via the control channel. The viewer deserializes and renders the cursor overlay independently of video frames.
 
 ---
 
-## 12. Future Work
+## 11. Stream Lifecycle
 
-| Item | Spec |
-|---|---|
-| SFU wire protocol | 13-SFU.md |
-| Input passthrough (keyboard/mouse) | Future spec |
-| AV1 codec negotiation handshake | 14-VIDEO-PIPELINE.md (extend when AV1 ships) |
-| Per-viewer ABR in SFU mode | 13-SFU.md |
-| macOS/Linux platform support | 14-VIDEO-PIPELINE.md (platform backends) |
+### Host start
+
+1. User picks a capture source (game process or monitor) in the UI.
+2. `mello-core` calls `start_stream` RPC to Nakama → gets session ID, mode, SFU endpoint.
+3. `start_host` creates the libmello video pipeline (capture + preprocess + encoder) and sets up mpsc channels for encoded packets.
+4. `create_stream_session` creates a `StreamManager` with the appropriate `PacketSink` and spawns its async `run` loop.
+
+### Viewer start
+
+1. Viewer discovers stream via crew state (Nakama).
+2. For SFU: connects to the SFU endpoint, joins the session, negotiates WebRTC.
+3. Waits for the first signaling exchange to learn the host's encode resolution.
+4. Creates the decoder pipeline at the correct resolution (`mello_stream_start_viewer`).
+5. `stream_tick` runs each frame: poll network → reassemble → feed decoder → present.
+
+### Teardown
+
+Both sides: stop the pipeline, drain queues, release GPU resources, leave the SFU/P2P session.
+
+---
+
+## 12. Telemetry and Diagnostics
+
+### Host-side (per second)
+
+`video_in_hz`, `audio_in_hz`, `coalesced_hz`, `recovery_mode`, `keyframe_req_*_total`, `send_fail_video_delta`, `send_fail_fec_delta`, `send_fail_audio_delta`, video/audio queue lengths and max, pacing stats.
+
+Encoder periodic (every 300 frames): `convert_ms`, `encode_ms`, `eq_depth`, `eq_drops`.
+
+### Viewer-side (per second)
+
+`dec_fps`, `native_fps`, `present_true_hz`, `ingress_kbps`, `feed_video_hz`, `feed_video_fail_hz`, `decode_stall_ms`, `decode_backlog_est`, chunk stats (`completed_hz`, `invalid_hz`, `evicted_hz`, `late_hz`), `backlog_guard_*`.
+
+### Probe tools
+
+| Tool | Purpose |
+|------|---------|
+| `tools/stream-host` | Standalone host with Nakama auto-start, release mode |
+| `tools/sfu-stream-viewer-probe` | Standalone viewer with full per-second telemetry |
+| `scripts/coalesce_stream_timeline.py` | Merges host + viewer + SFU logs into a single timeline |
+| `scripts/run-stream-host.ps1` | Launch script (default 60fps, release) |
+| `scripts/run-stream-viewer.ps1` | Launch script (release) |
+
+---
+
+## 13. Key Files
+
+| Area | Path |
+|------|------|
+| **Rust stream module** | `mello-core/src/stream/` (14 files) |
+| Stream manager | `mello-core/src/stream/manager.rs` |
+| PacketSink trait | `mello-core/src/stream/sink.rs` |
+| SFU sink + chunking | `mello-core/src/stream/sink_sfu.rs` |
+| P2P fan-out sink | `mello-core/src/stream/sink_p2p.rs` |
+| Viewer FEC/loss/IDR | `mello-core/src/stream/viewer.rs` |
+| Packet format | `mello-core/src/stream/packet.rs` |
+| Quality presets + config | `mello-core/src/stream/config.rs` |
+| FEC encoder/decoder | `mello-core/src/stream/fec.rs` |
+| ABR controller | `mello-core/src/stream/abr.rs` |
+| Host session setup | `mello-core/src/stream/host.rs` |
+| Viewer tick loop | `mello-core/src/client/streaming.rs` |
+| Chunk assembler | `mello-core/src/client/stream_ffi.rs` |
+| SFU connection | `mello-core/src/transport/sfu_connection.rs` |
+| **C++ video pipeline** | `libmello/src/video/video_pipeline.cpp` |
+| DXGI capture | `libmello/src/video/capture_dxgi.cpp` |
+| WGC capture | `libmello/src/video/capture_wgc.cpp` |
+| Process capture + hot-swap | `libmello/src/video/capture_process.cpp` |
+| GPU preprocessor | `libmello/src/video/video_preprocessor.cpp` |
+| NVENC encoder | `libmello/src/video/encoder_nvenc.cpp` |
+| Encoder factory | `libmello/src/video/encoder_factory.cpp` |
+| Decoder factory | `libmello/src/video/decoder_factory.cpp` |
+| NVDEC decoder | `libmello/src/video/decoder_nvdec.cpp` |
+| Staging / readback | `libmello/src/video/staging_texture.cpp` |
+| C API (streaming) | `libmello/src/mello.cpp` (search `mello_stream_`) |
+| **Probe tools** | |
+| Stream host probe | `tools/stream-host/src/main.rs` |
+| Viewer probe | `tools/sfu-stream-viewer-probe/src/main.rs` |
+| Timeline script | `scripts/coalesce_stream_timeline.py` |
+
+---
+
+## 14. Current State and Known Gaps
+
+**What works well:** Process-aware capture with hot-swap, deferred start, DXGI adaptive throttle, GPU preprocessing, async NVENC, mutex-guarded decoded ring, whole-frame egress drops, proper IDR detection, SFU telemetry, jitter buffer, native D3D11 presentation, FEC, rate-limited recovery, probe tooling.
+
+**Known gaps and future work:**
+
+| Gap | Impact | Effort |
+|-----|--------|--------|
+| WGC has no frame throttling (accepts compositor-rate) | Excess encode queue pressure for windowed games | Medium |
+| AMF/QSV encoders less tested | No smooth experience for AMD/Intel GPU users | Medium |
+| Viewer jitter buffer is simple depth-gate, not PID-paced | Residual cadence oscillation under varying network conditions | Medium |
+| No dynamic resolution scaling | Under severe bandwidth constraints, quality degrades but resolution stays fixed | Medium |
+| Audio capture is stubbed | Game audio doesn't stream yet | Small |
+| Input passthrough not implemented | No remote control | Large |
+| ABR needs tuning | Step changes can oscillate; needs trend-based smoothing | Medium |
+| Native presenter viewport tied to Slint layout constants | Layout changes can misplace the stream window | Small |
+| macOS VideoToolbox session churn | Decode FPS drops on SPS/PPS change | Small |
+| Per-viewer ABR in SFU mode | SFU doesn't transcode; all viewers get same bitrate | Large (SFU work) |

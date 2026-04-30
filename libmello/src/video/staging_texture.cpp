@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstring>
+#include <dxgi.h>
 
 namespace mello::video {
 
@@ -101,11 +102,42 @@ bool StagingTexture::init_gpu_converter() {
     rgba_desc.SampleDesc.Count = 1;
     rgba_desc.Usage = D3D11_USAGE_DEFAULT;
     rgba_desc.BindFlags = D3D11_BIND_UNORDERED_ACCESS;
+    shared_rgba_handle_ = nullptr;
 
-    hr = device_->CreateTexture2D(&rgba_desc, nullptr, &rgba_tex_);
-    if (FAILED(hr)) {
-        MELLO_LOG_ERROR(TAG, "CreateTexture2D (RGBA) failed: 0x%08X", hr);
-        return false;
+    // Try to create a shared UAV-capable RGBA target so compute can write directly
+    // into the texture the presenter opens (skip one CopyResource per frame).
+    D3D11_TEXTURE2D_DESC shared_desc = rgba_desc;
+    shared_desc.BindFlags = D3D11_BIND_UNORDERED_ACCESS | D3D11_BIND_SHADER_RESOURCE;
+    shared_desc.MiscFlags = D3D11_RESOURCE_MISC_SHARED;
+    hr = device_->CreateTexture2D(&shared_desc, nullptr, &shared_rgba_tex_);
+    if (SUCCEEDED(hr)) {
+        Microsoft::WRL::ComPtr<IDXGIResource> dxgi_res;
+        hr = shared_rgba_tex_.As(&dxgi_res);
+        if (FAILED(hr)) {
+            MELLO_LOG_WARN(TAG, "Query IDXGIResource on shared texture failed: 0x%08X", hr);
+            shared_rgba_tex_.Reset();
+        } else {
+            HANDLE h = nullptr;
+            hr = dxgi_res->GetSharedHandle(&h);
+            if (FAILED(hr) || !h) {
+                MELLO_LOG_WARN(TAG, "GetSharedHandle failed: 0x%08X", hr);
+                shared_rgba_tex_.Reset();
+            } else {
+                shared_rgba_handle_ = reinterpret_cast<void*>(h);
+                rgba_tex_ = shared_rgba_tex_;
+                MELLO_LOG_INFO(TAG, "Shared RGBA texture initialized for native presenter");
+            }
+        }
+    } else {
+        MELLO_LOG_WARN(TAG, "CreateTexture2D (shared RGBA UAV) failed: 0x%08X", hr);
+    }
+
+    if (!rgba_tex_) {
+        hr = device_->CreateTexture2D(&rgba_desc, nullptr, &rgba_tex_);
+        if (FAILED(hr)) {
+            MELLO_LOG_ERROR(TAG, "CreateTexture2D (RGBA) failed: 0x%08X", hr);
+            return false;
+        }
     }
 
     hr = device_->CreateUnorderedAccessView(rgba_tex_.Get(), nullptr, &rgba_uav_);
@@ -230,7 +262,7 @@ void StagingTexture::debug_trace_source(ID3D11Texture2D* source) {
     context_->Unmap(dbg_staging.Get(), 0);
 }
 
-void StagingTexture::copy_from(ID3D11Texture2D* source) {
+void StagingTexture::copy_from(ID3D11Texture2D* source, bool copy_to_cpu_staging) {
     if (gpu_convert_) {
         if (read_count_ < 3) {
             debug_trace_source(source);
@@ -267,10 +299,20 @@ void StagingTexture::copy_from(ID3D11Texture2D* source) {
         context_->CSSetShaderResources(0, 1, null_srv);
         context_->CSSetUnorderedAccessViews(0, 1, null_uav, nullptr);
 
-        // Copy RGBA result to staging
-        context_->CopyResource(staging_.Get(), rgba_tex_.Get());
+        // Mirror RGBA output into shared GPU texture for native presenter when
+        // compute target is not directly shared.
+        if (shared_rgba_tex_ && shared_rgba_tex_.Get() != rgba_tex_.Get()) {
+            context_->CopyResource(shared_rgba_tex_.Get(), rgba_tex_.Get());
+        }
+
+        // Copy RGBA result to staging for CPU readback path.
+        if (copy_to_cpu_staging) {
+            context_->CopyResource(staging_.Get(), rgba_tex_.Get());
+        }
     } else {
-        context_->CopyResource(staging_.Get(), source);
+        if (copy_to_cpu_staging) {
+            context_->CopyResource(staging_.Get(), source);
+        }
     }
 }
 
@@ -358,6 +400,8 @@ void StagingTexture::read_rgba(uint8_t* out) {
 }
 
 void StagingTexture::shutdown() {
+    shared_rgba_handle_ = nullptr;
+    shared_rgba_tex_.Reset();
     src_srv_.Reset();
     cb_.Reset();
     rgba_uav_.Reset();

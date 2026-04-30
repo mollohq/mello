@@ -79,7 +79,7 @@ bool WgcCapture::start(uint32_t target_fps, FrameCallback callback) {
     frame_pool_ = winrt::Windows::Graphics::Capture::Direct3D11CaptureFramePool::CreateFreeThreaded(
         winrt_device,
         winrt::Windows::Graphics::DirectX::DirectXPixelFormat::B8G8R8A8UIntNormalized,
-        2,
+        3,
         {static_cast<int32_t>(width_), static_cast<int32_t>(height_)});
 
     frame_pool_.FrameArrived({this, &WgcCapture::on_frame_arrived});

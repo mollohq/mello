@@ -3,11 +3,44 @@ use std::time::Instant;
 use super::fec::FecDecoder;
 use super::packet::{KeyframeRequest, LossReport, PacketType, StreamPacket};
 
-/// Rate limit: at most one IDR request per 2 seconds.
-const IDR_RATE_LIMIT_SECS: u64 = 2;
+/// Scan an H.264 access unit for an IDR NAL (nal_unit_type == 5).
+/// Unlike the previous version this does not stop at the first NAL — NVENC
+/// typically emits SPS (7) + PPS (8) before the IDR slice, so we must walk
+/// the entire bitstream.
+fn is_h264_idr(data: &[u8]) -> bool {
+    let mut i = 0;
+    while i + 2 < data.len() {
+        if data[i] == 0 && data[i + 1] == 0 {
+            let start = if data[i + 2] == 1 {
+                i + 3
+            } else if i + 3 < data.len() && data[i + 2] == 0 && data[i + 3] == 1 {
+                i + 4
+            } else {
+                i += 1;
+                continue;
+            };
+            if start < data.len() {
+                let nal_type = data[start] & 0x1F;
+                if nal_type == 5 {
+                    return true;
+                }
+            }
+            i = start;
+        } else {
+            i += 1;
+        }
+    }
+    false
+}
+
+/// Rate limit: at most one IDR request per 4 seconds.
+const IDR_RATE_LIMIT_SECS: u64 = 4;
 
 /// Number of consecutive unrecoverable FEC groups before requesting IDR.
-const IDR_THRESHOLD: u32 = 2;
+const IDR_THRESHOLD: u32 = 4;
+
+/// Avoid requesting IDR immediately after receiving one.
+const MIN_KEYFRAME_GAP_FOR_IDR_SECS: u64 = 2;
 
 /// Viewer-side stream orchestration: FEC recovery, loss tracking, IDR requests.
 pub struct StreamViewer {
@@ -22,6 +55,7 @@ pub struct StreamViewer {
     // IDR request state
     consecutive_unrecoverable: u32,
     last_idr_request: Instant,
+    last_keyframe_seen: Instant,
 
     // FEC group tracking
     current_group_base: Option<u16>,
@@ -58,6 +92,8 @@ impl StreamViewer {
             last_report_time: now,
             consecutive_unrecoverable: 0,
             last_idr_request: now - std::time::Duration::from_secs(IDR_RATE_LIMIT_SECS + 1),
+            last_keyframe_seen: now
+                - std::time::Duration::from_secs(MIN_KEYFRAME_GAP_FOR_IDR_SECS + 1),
             current_group_base: None,
             group_packets_seen: 0,
         }
@@ -108,6 +144,7 @@ impl StreamViewer {
             self.group_packets_seen = 0;
             self.fec_decoder.reset(packet.sequence);
             self.consecutive_unrecoverable = 0;
+            self.last_keyframe_seen = Instant::now();
         } else if self.current_group_base.is_none() {
             self.current_group_base = Some(packet.sequence);
             self.fec_decoder.reset(packet.sequence);
@@ -131,9 +168,10 @@ impl StreamViewer {
 
         // Feed to FEC decoder
         if let Some(recovered) = self.fec_decoder.feed_data(packet.sequence, &packet.payload) {
+            let recovered_is_kf = is_h264_idr(&recovered);
             results.push(ViewerFeedResult::RecoveredVideoPayload {
                 data: recovered,
-                is_keyframe: false,
+                is_keyframe: recovered_is_kf,
             });
         }
 
@@ -151,9 +189,10 @@ impl StreamViewer {
     fn on_fec_packet(&mut self, packet: &StreamPacket, results: &mut Vec<ViewerFeedResult>) {
         if let Some(recovered) = self.fec_decoder.feed_parity(&packet.payload) {
             self.packets_lost = self.packets_lost.saturating_sub(1);
+            let recovered_is_kf = is_h264_idr(&recovered);
             results.push(ViewerFeedResult::RecoveredVideoPayload {
                 data: recovered,
-                is_keyframe: false,
+                is_keyframe: recovered_is_kf,
             });
         }
 
@@ -192,6 +231,9 @@ impl StreamViewer {
     fn maybe_request_idr(&mut self) -> Option<ViewerAction> {
         let now = Instant::now();
         if now.duration_since(self.last_idr_request).as_secs() < IDR_RATE_LIMIT_SECS {
+            return None;
+        }
+        if now.duration_since(self.last_keyframe_seen).as_secs() < MIN_KEYFRAME_GAP_FOR_IDR_SECS {
             return None;
         }
         self.last_idr_request = now;

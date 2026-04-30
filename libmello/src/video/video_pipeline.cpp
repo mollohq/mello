@@ -19,6 +19,46 @@ std::unique_ptr<CaptureSource> create_capture_source(const CaptureSourceDesc&) {
 
 static constexpr const char* TAG = "video/pipeline";
 
+// Ring-buffer helpers for decoded frames ─────────────────────────────────────
+
+#ifdef _WIN32
+void VideoPipeline::push_decoded(ID3D11Texture2D* frame) {
+#elif defined(__APPLE__)
+void VideoPipeline::push_decoded(void* frame) {
+#endif
+    std::lock_guard<std::mutex> lock(decoded_ring_mutex_);
+    if (decoded_ring_count_ == DECODED_RING_CAP) {
+#ifdef __APPLE__
+        if (decoded_ring_[decoded_ring_tail_])
+            CVPixelBufferRelease((CVPixelBufferRef)decoded_ring_[decoded_ring_tail_]);
+#endif
+        decoded_ring_[decoded_ring_tail_] = nullptr;
+        decoded_ring_tail_ = (decoded_ring_tail_ + 1) % DECODED_RING_CAP;
+        decoded_ring_count_--;
+    }
+    decoded_ring_[decoded_ring_head_] = frame;
+    decoded_ring_head_ = (decoded_ring_head_ + 1) % DECODED_RING_CAP;
+    decoded_ring_count_++;
+}
+
+#ifdef _WIN32
+ID3D11Texture2D* VideoPipeline::pop_decoded() {
+#elif defined(__APPLE__)
+void* VideoPipeline::pop_decoded() {
+#endif
+    std::lock_guard<std::mutex> lock(decoded_ring_mutex_);
+    if (decoded_ring_count_ == 0) return nullptr;
+    auto* frame = decoded_ring_[decoded_ring_tail_];
+    decoded_ring_[decoded_ring_tail_] = nullptr;
+    decoded_ring_tail_ = (decoded_ring_tail_ + 1) % DECODED_RING_CAP;
+    decoded_ring_count_--;
+    return frame;
+}
+static constexpr uint32_t NATIVE_FMT_UNKNOWN = 0;
+static constexpr uint32_t NATIVE_FMT_RGBA8 = 1;
+static constexpr uint32_t NATIVE_FMT_R8_NV12_LAYOUT = 2;
+static constexpr uint32_t NATIVE_FMT_NV12 = 3;
+
 static void save_bmp_rgba(const char* path, const uint8_t* rgba, uint32_t w, uint32_t h) {
     FILE* f = fopen(path, "wb");
     if (!f) return;
@@ -140,12 +180,24 @@ bool VideoPipeline::start_host(const CaptureSourceDesc& source,
         return false;
     }
 
-    // 4. Start capture — frames flow through on_captured_frame
+    // 4. Start encode thread + capture — frames flow: capture -> preprocess -> queue -> encode thread
+    host_running_    = true;
+    host_start_time_ = now_us();
+    frames_encoded_  = 0;
+    eq_head_ = eq_tail_ = eq_count_ = 0;
+    eq_drops_ = 0;
+    last_convert_ms_ = last_encode_ms_ = 0;
+
+    encode_thread_ = std::thread(&VideoPipeline::encode_thread_func, this);
+
     auto self = this;
     if (!capture_->start(config.fps, [self](ID3D11Texture2D* tex, uint64_t ts) {
         self->on_captured_frame(tex, ts);
     })) {
         MELLO_LOG_ERROR(TAG, "Failed to start capture");
+        host_running_ = false;
+        eq_cv_.notify_all();
+        if (encode_thread_.joinable()) encode_thread_.join();
         return false;
     }
 #elif defined(__APPLE__)
@@ -171,18 +223,19 @@ bool VideoPipeline::start_host(const CaptureSourceDesc& source,
         return false;
     }
 
+    host_running_    = true;
+    host_start_time_ = now_us();
+    frames_encoded_  = 0;
+
     auto self = this;
     if (!capture_->start(config.fps, [self](void* pixel_buffer, uint64_t ts) {
         self->on_captured_frame(pixel_buffer, ts);
     })) {
         MELLO_LOG_ERROR(TAG, "Failed to start capture");
+        host_running_ = false;
         return false;
     }
 #endif
-
-    host_running_    = true;
-    host_start_time_ = now_us();
-    frames_encoded_  = 0;
 
     MELLO_LOG_INFO(TAG, "Host pipeline starting: encoder=%s capture=%s res=%ux%u fps=%u bitrate=%ukbps low_latency=%s",
         encoder_ ? encoder_->name() : "none",
@@ -199,6 +252,11 @@ void VideoPipeline::stop_host() {
     host_running_ = false;
 
     if (capture_)   capture_->stop();
+
+    // Wake and join the encode thread before shutting down encoder/preprocessor
+    eq_cv_.notify_all();
+    if (encode_thread_.joinable()) encode_thread_.join();
+
     if (encoder_)   encoder_->shutdown();
 #ifdef _WIN32
     if (preprocessor_) preprocessor_->shutdown();
@@ -294,39 +352,70 @@ void VideoPipeline::on_captured_frame(ID3D11Texture2D* texture, uint64_t timesta
         request_keyframe();
     }
 
-    if (frames_encoded_ < 3) {
-        D3D11_TEXTURE2D_DESC cap_desc{};
-        texture->GetDesc(&cap_desc);
-        MELLO_LOG_DEBUG(TAG, "on_captured_frame[%llu]: capture tex fmt=%u %ux%u bind=0x%X",
-            frames_encoded_, cap_desc.Format, cap_desc.Width, cap_desc.Height, cap_desc.BindFlags);
-    }
+    // Preprocess on the capture thread (fast GPU blit), then enqueue for encode
+    auto t0 = std::chrono::steady_clock::now();
+    auto result = preprocessor_->convert(texture);
+    auto t1 = std::chrono::steady_clock::now();
+    last_convert_ms_ = std::chrono::duration<double, std::milli>(t1 - t0).count();
 
-    // Capture → Preprocess (color convert + downscale) → Encode → Packet callback
-    ID3D11Texture2D* nv12 = preprocessor_->convert(texture);
-    if (!nv12) {
+    if (!result.texture) {
         MELLO_LOG_WARN(TAG, "on_captured_frame: convert() returned null");
         return;
     }
 
-    EncodedPacket packet{};
-    if (encoder_->encode(nv12, packet)) {
-        frames_encoded_++;
-        if (frames_encoded_ <= 3) {
-            MELLO_LOG_DEBUG(TAG, "on_captured_frame[%llu]: encoded %zu bytes keyframe=%d",
-                frames_encoded_, packet.data.size(), packet.is_keyframe);
+    // Enqueue for the encode thread (bounded, drop oldest on overflow)
+    {
+        std::lock_guard<std::mutex> lock(eq_mutex_);
+        if (eq_count_ == ENCODE_QUEUE_CAP) {
+            // Drop the oldest entry to bound latency
+            eq_tail_ = (eq_tail_ + 1) % ENCODE_QUEUE_CAP;
+            eq_count_--;
+            eq_drops_++;
+        }
+        encode_queue_[eq_head_] = {result.texture, timestamp_us};
+        eq_head_ = (eq_head_ + 1) % ENCODE_QUEUE_CAP;
+        eq_count_++;
+    }
+    eq_cv_.notify_one();
+}
+
+void VideoPipeline::encode_thread_func() {
+    while (true) {
+        EncodeJob job{};
+        {
+            std::unique_lock<std::mutex> lock(eq_mutex_);
+            eq_cv_.wait(lock, [this] { return eq_count_ > 0 || !host_running_.load(); });
+            if (eq_count_ == 0 && !host_running_.load()) break;
+            job = encode_queue_[eq_tail_];
+            eq_tail_ = (eq_tail_ + 1) % ENCODE_QUEUE_CAP;
+            eq_count_--;
         }
 
-        if (frames_encoded_ % 300 == 0) {
-            uint64_t uptime_s = (now_us() - host_start_time_) / 1'000'000;
-            EncoderStats stats{};
-            encoder_->get_stats(stats);
-            MELLO_LOG_INFO(TAG, "host: uptime=%llus frames=%llu fps=%u bitrate=%ukbps keyframes=%u bytes=%.1fMB",
-                uptime_s, frames_encoded_, stats.fps_actual, stats.bitrate_kbps,
-                stats.keyframes_sent, static_cast<double>(stats.bytes_sent) / (1024 * 1024));
-        }
+        auto t0 = std::chrono::steady_clock::now();
+        EncodedPacket packet{};
+        if (encoder_->encode(job.texture, packet)) {
+            auto t1 = std::chrono::steady_clock::now();
+            last_encode_ms_ = std::chrono::duration<double, std::milli>(t1 - t0).count();
+            frames_encoded_++;
 
-        if (packet_cb_) {
-            packet_cb_(packet.data.data(), packet.data.size(), packet.is_keyframe, timestamp_us);
+            if (frames_encoded_ <= 3) {
+                MELLO_LOG_DEBUG(TAG, "encode_thread[%llu]: encoded %zu bytes keyframe=%d",
+                    frames_encoded_, packet.data.size(), packet.is_keyframe);
+            }
+
+            if (frames_encoded_ % 300 == 0) {
+                uint64_t uptime_s = (now_us() - host_start_time_) / 1'000'000;
+                EncoderStats stats{};
+                encoder_->get_stats(stats);
+                MELLO_LOG_INFO(TAG, "host: uptime=%llus frames=%llu fps=%u bitrate=%ukbps keyframes=%u bytes=%.1fMB convert_ms=%.1f encode_ms=%.1f eq_depth=%zu eq_drops=%llu",
+                    uptime_s, frames_encoded_, stats.fps_actual, stats.bitrate_kbps,
+                    stats.keyframes_sent, static_cast<double>(stats.bytes_sent) / (1024 * 1024),
+                    last_convert_ms_, last_encode_ms_, eq_count_, eq_drops_);
+            }
+
+            if (packet_cb_) {
+                packet_cb_(packet.data.data(), packet.data.size(), packet.is_keyframe, job.timestamp_us);
+            }
         }
     }
 }
@@ -387,12 +476,22 @@ bool VideoPipeline::start_viewer(const PipelineConfig& config, FrameCallback on_
     viewer_start_time_ = now_us();
     frames_decoded_    = 0;
     frames_dropped_    = 0;
+    last_present_us_   = 0;
+    jitter_primed_     = false;
 
     MELLO_LOG_INFO(TAG, "Viewer pipeline starting: decoder=%s codec=H264 res=%ux%u",
         decoder_ ? decoder_->name() : "none",
         config.width, config.height);
 
     return true;
+}
+
+void VideoPipeline::set_native_frame_callback(NativeFrameCallback on_native_frame) {
+    native_frame_cb_ = std::move(on_native_frame);
+}
+
+void VideoPipeline::set_native_frame_mirror_rgba(bool enabled) {
+    native_frame_mirror_rgba_ = enabled;
 }
 
 void VideoPipeline::stop_viewer() {
@@ -413,12 +512,15 @@ void VideoPipeline::stop_viewer() {
     staging_.reset();
 #endif
 
+    // Drain any remaining frames in the ring buffer
+    while (decode_queue_depth() > 0) {
 #ifdef __APPLE__
-    if (latest_decoded_) {
-        CVPixelBufferRelease((CVPixelBufferRef)latest_decoded_);
-        latest_decoded_ = nullptr;
-    }
+        void* buf = pop_decoded();
+        if (buf) CVPixelBufferRelease((CVPixelBufferRef)buf);
+#else
+        pop_decoded();
 #endif
+    }
 
     rgba_buf_.clear();
 }
@@ -433,14 +535,14 @@ bool VideoPipeline::feed_packet(const uint8_t* data, size_t size, bool is_keyfra
     }
 
     ID3D11Texture2D* decoded = decoder_->get_frame();
-    if (decoded) latest_decoded_ = decoded;
+    if (decoded) push_decoded(decoded);
 
     frames_decoded_++;
 
     if (frames_decoded_ % 300 == 0) {
         uint64_t uptime_s = (now_us() - viewer_start_time_) / 1'000'000;
-        MELLO_LOG_INFO(TAG, "viewer: uptime=%llus decoded=%llu dropped=%llu dec=%s",
-            uptime_s, frames_decoded_, frames_dropped_, decoder_->name());
+        MELLO_LOG_INFO(TAG, "viewer: uptime=%llus decoded=%llu dropped=%llu dec=%s ring=%zu",
+            uptime_s, frames_decoded_, frames_dropped_, decoder_->name(), decode_queue_depth());
     }
 #elif defined(__APPLE__)
     if (!decoder_->decode(data, size, is_keyframe)) {
@@ -450,18 +552,16 @@ bool VideoPipeline::feed_packet(const uint8_t* data, size_t size, bool is_keyfra
 
     void* decoded = decoder_->get_frame_buffer();
     if (decoded) {
-        // Retain the new buffer, release the old one
         CVPixelBufferRetain((CVPixelBufferRef)decoded);
-        if (latest_decoded_) CVPixelBufferRelease((CVPixelBufferRef)latest_decoded_);
-        latest_decoded_ = decoded;
+        push_decoded(decoded);
     }
 
     frames_decoded_++;
 
     if (frames_decoded_ % 300 == 0) {
         uint64_t uptime_s = (now_us() - viewer_start_time_) / 1'000'000;
-        MELLO_LOG_INFO(TAG, "viewer: uptime=%llus decoded=%llu dropped=%llu dec=%s",
-            uptime_s, frames_decoded_, frames_dropped_, decoder_->name());
+        MELLO_LOG_INFO(TAG, "viewer: uptime=%llus decoded=%llu dropped=%llu dec=%s ring=%zu",
+            uptime_s, frames_decoded_, frames_dropped_, decoder_->name(), decode_queue_depth());
     }
 #else
     (void)data; (void)size; (void)is_keyframe;
@@ -472,9 +572,94 @@ bool VideoPipeline::feed_packet(const uint8_t* data, size_t size, bool is_keyfra
 
 bool VideoPipeline::present_frame() {
 #ifdef _WIN32
-    if (!viewer_running_.load() || !latest_decoded_) return false;
+    if (!viewer_running_.load()) return false;
 
-    staging_->copy_from(latest_decoded_);
+    // Jitter buffer: hold back until the ring has enough depth to smooth
+    // inter-frame timing jitter. Bypass the hold if we've waited too long
+    // (avoids adding latency when frame rate is genuinely low).
+    {
+        size_t depth = decode_queue_depth();
+        if (depth == 0) return false;
+
+        if (!jitter_primed_ && depth < JITTER_TARGET) {
+            uint64_t now = now_us();
+            if (last_present_us_ == 0) {
+                last_present_us_ = now;
+            }
+            if (now - last_present_us_ < JITTER_MAX_HOLD_US) {
+                return false; // hold — ring not full enough yet
+            }
+        }
+        jitter_primed_ = true;
+    }
+
+    ID3D11Texture2D* frame = pop_decoded();
+    if (!frame) return false;
+    last_present_us_ = now_us();
+    const bool mirror_native_to_rgba = native_frame_mirror_rgba_;
+
+    // Native GPU presenter path: first try direct decoded-texture handoff.
+    if (native_frame_cb_) {
+        void* direct_handle = decoder_ ? decoder_->shared_frame_handle() : nullptr;
+        if (direct_handle) {
+            DXGI_FORMAT frame_fmt = decoder_->shared_frame_format();
+            uint32_t native_fmt = NATIVE_FMT_UNKNOWN;
+            if (frame_fmt == DXGI_FORMAT_R8_UNORM) {
+                native_fmt = NATIVE_FMT_R8_NV12_LAYOUT;
+            } else if (frame_fmt == DXGI_FORMAT_NV12) {
+                native_fmt = NATIVE_FMT_NV12;
+            } else if (frame_fmt == DXGI_FORMAT_R8G8B8A8_UNORM) {
+                native_fmt = NATIVE_FMT_RGBA8;
+            }
+
+            if (native_fmt != NATIVE_FMT_UNKNOWN) {
+                uint32_t uv_offset = decoder_->shared_frame_uv_offset();
+                if (uv_offset == 0) uv_offset = config_.height;
+                native_frame_cb_(
+                    direct_handle,
+                    config_.width,
+                    config_.height,
+                    native_fmt,
+                    uv_offset,
+                    now_us()
+                );
+                if (!mirror_native_to_rgba) {
+                    return true;
+                }
+
+                staging_->copy_from(frame, true);
+                staging_->read_rgba(rgba_buf_.data());
+                if (frame_cb_) {
+                    frame_cb_(rgba_buf_.data(), config_.width, config_.height, now_us());
+                }
+                return true;
+            }
+        }
+
+        // Fallback: GPU convert to shared RGBA surface for presenter.
+        if (staging_->shared_rgba_handle()) {
+            staging_->copy_from(frame, mirror_native_to_rgba);
+            native_frame_cb_(
+                staging_->shared_rgba_handle(),
+                config_.width,
+                config_.height,
+                NATIVE_FMT_RGBA8,
+                config_.height,
+                now_us()
+            );
+            if (!mirror_native_to_rgba) {
+                return true;
+            }
+
+            staging_->read_rgba(rgba_buf_.data());
+            if (frame_cb_) {
+                frame_cb_(rgba_buf_.data(), config_.width, config_.height, now_us());
+            }
+            return true;
+        }
+    }
+
+    staging_->copy_from(frame, true);
     staging_->read_rgba(rgba_buf_.data());
 
     if (frames_decoded_ < 2 && getenv("MELLO_DUMP_FRAMES")) {
@@ -487,12 +672,27 @@ bool VideoPipeline::present_frame() {
         frame_cb_(rgba_buf_.data(), config_.width, config_.height, now_us());
     }
 
-    latest_decoded_ = nullptr;
     return true;
 #elif defined(__APPLE__)
-    if (!viewer_running_.load() || !latest_decoded_) return false;
+    if (!viewer_running_.load()) return false;
 
-    CVPixelBufferRef pb = (CVPixelBufferRef)latest_decoded_;
+    {
+        size_t depth = decode_queue_depth();
+        if (depth == 0) return false;
+
+        if (!jitter_primed_ && depth < JITTER_TARGET) {
+            uint64_t now = now_us();
+            if (last_present_us_ == 0) last_present_us_ = now;
+            if (now - last_present_us_ < JITTER_MAX_HOLD_US) return false;
+        }
+        jitter_primed_ = true;
+    }
+
+    void* popped = pop_decoded();
+    if (!popped) return false;
+    last_present_us_ = now_us();
+
+    CVPixelBufferRef pb = (CVPixelBufferRef)popped;
     CVPixelBufferLockBaseAddress(pb, kCVPixelBufferLock_ReadOnly);
 
     uint32_t w = (uint32_t)CVPixelBufferGetWidth(pb);
@@ -504,10 +704,8 @@ bool VideoPipeline::present_frame() {
         size_t needed = static_cast<size_t>(w) * h * 4;
         if (rgba_buf_.size() < needed) rgba_buf_.resize(needed);
 
-        // BGRA→RGBA swizzle via Accelerate vImage (SIMD-optimized on Apple Silicon)
         vImage_Buffer src  = { base, h, w, stride };
         vImage_Buffer dest = { rgba_buf_.data(), h, w, w * 4u };
-        // permuteMap: BGRA[0,1,2,3] → RGBA = channels [2,1,0,3]
         const uint8_t permuteMap[4] = {2, 1, 0, 3};
         vImagePermuteChannels_ARGB8888(&src, &dest, permuteMap, kvImageNoFlags);
 
@@ -523,9 +721,7 @@ bool VideoPipeline::present_frame() {
     }
 
     CVPixelBufferUnlockBaseAddress(pb, kCVPixelBufferLock_ReadOnly);
-
     CVPixelBufferRelease(pb);
-    latest_decoded_ = nullptr;
     return true;
 #else
     return false;

@@ -7,9 +7,12 @@ use crate::stream::viewer::StreamViewer;
 use crate::voice::{SignalEnvelope, SignalMessage, SignalPurpose};
 
 use super::FrameSlot;
+use super::NativeFrameSlot;
 
 pub(super) struct FrameCallbackData {
     pub frame_slot: FrameSlot,
+    pub native_frame_slot: NativeFrameSlot,
+    pub native_frame_active: Arc<std::sync::atomic::AtomicBool>,
     pub frame_consumed: Arc<std::sync::atomic::AtomicBool>,
 }
 
@@ -18,10 +21,13 @@ pub(super) struct ChunkAssembler {
     pending: HashMap<u16, ChunkAssembly>,
 }
 
+const CHUNK_ASSEMBLY_EXPIRY_MS: u128 = 500;
+
 struct ChunkAssembly {
     chunk_count: u16,
     chunks_received: u16,
     chunks: Vec<Option<Vec<u8>>>,
+    created_at: Instant,
 }
 
 impl ChunkAssembler {
@@ -52,13 +58,19 @@ impl ChunkAssembler {
             return None;
         }
 
-        // Evict stale assemblies (keep only messages within a recent window)
-        self.pending.retain(|&id, _| msg_id.wrapping_sub(id) < 64);
+        let now = Instant::now();
+
+        // Evict stale assemblies: msg_id window OR time-based expiry
+        self.pending.retain(|&id, assembly| {
+            msg_id.wrapping_sub(id) < 64
+                && now.duration_since(assembly.created_at).as_millis() < CHUNK_ASSEMBLY_EXPIRY_MS
+        });
 
         let entry = self.pending.entry(msg_id).or_insert_with(|| ChunkAssembly {
             chunk_count,
             chunks_received: 0,
             chunks: (0..chunk_count).map(|_| None).collect(),
+            created_at: now,
         });
 
         let idx = chunk_idx as usize;
@@ -101,13 +113,22 @@ pub(super) struct ViewerState {
     pub _ice_cb_data: *mut StreamIceCallbackData,
     pub got_keyframe: bool,
     pub frames_presented: u64,
+    pub stream_tick_count: u64,
+    pub present_attempts: u64,
+    pub present_forced_attempts: u64,
+    pub present_skipped_unconsumed: u64,
     pub transport_packets: u64,
     pub transport_bytes: u64,
     pub transport_truncations: u64,
     pub debug_last_emit: Instant,
+    pub debug_last_tick_count: u64,
+    pub debug_last_present_attempts: u64,
+    pub debug_last_present_forced_attempts: u64,
+    pub debug_last_present_skipped_unconsumed: u64,
     pub debug_last_packets: u64,
     pub debug_last_bytes: u64,
     pub debug_last_frames_presented: u64,
+    pub last_present_attempt: Instant,
     pub recv_buf: Vec<u8>,
     pub stream_viewer: StreamViewer,
     pub chunk_assembler: ChunkAssembler,
@@ -183,6 +204,32 @@ pub(super) unsafe extern "C" fn on_viewer_frame(
                 *slot = Some((w, h, src.to_vec()));
             }
         }
+        data.frame_consumed
+            .store(false, std::sync::atomic::Ordering::Release);
+    }
+}
+
+pub(super) unsafe extern "C" fn on_viewer_native_frame(
+    user_data: *mut std::ffi::c_void,
+    shared_handle: *mut std::ffi::c_void,
+    w: u32,
+    h: u32,
+    format: mello_sys::MelloNativeFrameFormat,
+    uv_y_offset: u32,
+    ts: u64,
+) {
+    if user_data.is_null() || shared_handle.is_null() || w == 0 || h == 0 {
+        return;
+    }
+    let data = &*(user_data as *const FrameCallbackData);
+    data.native_frame_active
+        .store(true, std::sync::atomic::Ordering::Release);
+    if let Ok(mut slot) = data.native_frame_slot.lock() {
+        // MelloNativeFrameFormat is u32 on macOS (clang) but i32 on Windows (MSVC);
+        // cast is necessary for Windows, no-op on macOS.
+        #[allow(clippy::unnecessary_cast)]
+        let fmt = format as u32;
+        *slot = Some((w, h, shared_handle as usize, fmt, uv_y_offset, ts));
         data.frame_consumed
             .store(false, std::sync::atomic::Ordering::Release);
     }

@@ -380,6 +380,29 @@ typedef void (*MelloAudioPacketCallback)(void* user_data, const uint8_t* data, i
 /** Decoded frame callback: rgba pixels, width, height, timestamp. */
 typedef void (*MelloFrameCallback)(void* user_data, const uint8_t* rgba, uint32_t w, uint32_t h, uint64_t ts);
 
+/** Native decoded frame callback: shared GPU texture handle, width, height, timestamp.
+ *  The handle is currently a Windows shared D3D11 texture handle. */
+typedef enum MelloNativeFrameFormat {
+    MELLO_NATIVE_FRAME_FORMAT_UNKNOWN = 0,
+    MELLO_NATIVE_FRAME_FORMAT_RGBA8 = 1,
+    MELLO_NATIVE_FRAME_FORMAT_R8_NV12_LAYOUT = 2,
+    MELLO_NATIVE_FRAME_FORMAT_NV12 = 3,
+} MelloNativeFrameFormat;
+
+/** Native decoded frame callback: shared GPU texture handle + format metadata.
+ *  - `w`/`h`: visible video dimensions
+ *  - `format`: texture layout
+ *  - `uv_y_offset`: row offset where UV plane starts (for NV12-layout formats) */
+typedef void (*MelloNativeFrameCallback)(
+    void*                   user_data,
+    void*                   shared_handle,
+    uint32_t                w,
+    uint32_t                h,
+    MelloNativeFrameFormat  format,
+    uint32_t                uv_y_offset,
+    uint64_t                ts
+);
+
 /* ---- Host ---- */
 
 /** Start hosting with a specific capture source. Returns an opaque handle. */
@@ -428,9 +451,27 @@ MELLO_API void mello_stream_stop_viewer(MelloStreamView* view);
 
 MELLO_API bool mello_stream_feed_packet(MelloStreamView* view, const uint8_t* data, int size, bool is_keyframe);
 
+/** Number of decoded frames waiting in the ring buffer to be presented. */
+MELLO_API int mello_stream_viewer_decode_queue_depth(MelloStreamView* view);
+
 /** Read back the latest decoded frame and deliver it via the frame callback.
  *  Call once per display frame after feeding all available packets. */
 MELLO_API bool mello_stream_present_frame(MelloStreamView* view);
+
+/** Register callback for native GPU frame handles on viewer side.
+ *  When set, the viewer pipeline can bypass CPU readback in mello_stream_present_frame(). */
+MELLO_API void mello_stream_set_native_frame_callback(
+    MelloStreamView*          view,
+    MelloNativeFrameCallback  callback,
+    void*                     user_data
+);
+
+/** Enable/disable RGBA callback mirroring while native callback is active.
+ *  Useful for diagnostics tools that need both native cadence and CPU-visible frames. */
+MELLO_API void mello_stream_set_native_frame_mirror_rgba(
+    MelloStreamView* view,
+    bool             enabled
+);
 
 /** Feed an encoded game-audio packet received from the host for playback. */
 MELLO_API MelloResult mello_stream_feed_audio_packet(

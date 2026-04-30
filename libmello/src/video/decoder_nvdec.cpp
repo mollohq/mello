@@ -2,6 +2,7 @@
 #include "decoder_nvdec.hpp"
 #include "../util/log.hpp"
 #include <Windows.h>
+#include <dxgi.h>
 
 namespace mello::video {
 
@@ -182,6 +183,45 @@ bool NvdecDecoder::initialize(const GraphicsDevice& device, const DecoderConfig&
         nv12_buf_.resize(static_cast<size_t>(config.width) * config.height * 3 / 2);
     }
 
+    if (use_interop_) {
+        D3D11_TEXTURE2D_DESC shared_desc{};
+        shared_desc.Width = config.width;
+        shared_desc.Height = coded_height_ + coded_height_ / 2;
+        shared_desc.MipLevels = 1;
+        shared_desc.ArraySize = 1;
+        shared_desc.Format = DXGI_FORMAT_R8_UNORM;
+        shared_desc.SampleDesc.Count = 1;
+        shared_desc.Usage = D3D11_USAGE_DEFAULT;
+        shared_desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+        shared_desc.MiscFlags = D3D11_RESOURCE_MISC_SHARED;
+
+        HRESULT hr = device_->CreateTexture2D(&shared_desc, nullptr, &shared_frame_tex_);
+        if (FAILED(hr)) {
+            MELLO_LOG_WARN(TAG, "NVDEC: shared frame texture creation failed: 0x%08X", hr);
+            shared_frame_tex_.Reset();
+            shared_frame_handle_ = nullptr;
+        } else {
+            Microsoft::WRL::ComPtr<IDXGIResource> dxgi_res;
+            hr = shared_frame_tex_.As(&dxgi_res);
+            if (FAILED(hr)) {
+                MELLO_LOG_WARN(TAG, "NVDEC: shared texture IDXGIResource query failed: 0x%08X", hr);
+                shared_frame_tex_.Reset();
+                shared_frame_handle_ = nullptr;
+            } else {
+                HANDLE h = nullptr;
+                hr = dxgi_res->GetSharedHandle(&h);
+                if (FAILED(hr) || !h) {
+                    MELLO_LOG_WARN(TAG, "NVDEC: shared texture handle fetch failed: 0x%08X", hr);
+                    shared_frame_tex_.Reset();
+                    shared_frame_handle_ = nullptr;
+                } else {
+                    shared_frame_handle_ = reinterpret_cast<void*>(h);
+                    MELLO_LOG_INFO(TAG, "NVDEC: shared decoded frame handle ready");
+                }
+            }
+        }
+    }
+
     MELLO_LOG_DEBUG(TAG, "Probing NVDEC... ok");
     MELLO_LOG_INFO(TAG, "Selected decoder: NVDEC codec=%s resolution=%ux%u interop=%s",
         config.codec == VideoCodec::H264 ? "H264" : "AV1",
@@ -218,6 +258,8 @@ void NvdecDecoder::shutdown() {
     if (cuvid_dll_) { FreeLibrary(cuvid_dll_); cuvid_dll_ = nullptr; }
     if (cuda_dll_)  { FreeLibrary(cuda_dll_);  cuda_dll_ = nullptr; }
     frame_tex_.Reset();
+    shared_frame_tex_.Reset();
+    shared_frame_handle_ = nullptr;
     nv12_buf_.clear();
 }
 
@@ -378,6 +420,10 @@ int CUDAAPI NvdecDecoder::handle_picture_display(void* user, CUVIDPARSERDISPINFO
             if (rc_unmap != 0) {
                 MELLO_LOG_ERROR(TAG, "cuGraphicsUnmapResources failed: %d", rc_unmap);
             }
+
+            if (self->shared_frame_tex_) {
+                self->context_->CopyResource(self->shared_frame_tex_.Get(), self->frame_tex_.Get());
+            }
         }
     } else {
         // Fallback: CUDA → CPU → D3D11 (two PCIe crossings)
@@ -413,6 +459,18 @@ ID3D11Texture2D* NvdecDecoder::get_frame() {
 
 DXGI_FORMAT NvdecDecoder::frame_format() const {
     return use_interop_ ? DXGI_FORMAT_R8_UNORM : DXGI_FORMAT_NV12;
+}
+
+void* NvdecDecoder::shared_frame_handle() const {
+    return use_interop_ ? shared_frame_handle_ : nullptr;
+}
+
+DXGI_FORMAT NvdecDecoder::shared_frame_format() const {
+    return use_interop_ ? DXGI_FORMAT_R8_UNORM : DXGI_FORMAT_UNKNOWN;
+}
+
+uint32_t NvdecDecoder::shared_frame_uv_offset() const {
+    return use_interop_ ? coded_height_ : 0;
 }
 
 bool NvdecDecoder::supports_codec(VideoCodec codec) const {

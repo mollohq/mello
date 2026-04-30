@@ -1,31 +1,69 @@
 use std::sync::atomic::{AtomicU16, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use async_trait::async_trait;
-use tokio::sync::Mutex;
+use tokio::sync::{mpsc, Mutex};
 
 use super::error::StreamError;
 use super::pacer::{EgressPacer, PacingTelemetry};
 use super::packet::StreamPacket;
 use super::sink::PacketSink;
-use super::sink_p2p::{CHUNK_HEADER_SIZE, CHUNK_MAX_PAYLOAD};
+use super::sink_p2p::CHUNK_HEADER_SIZE;
 use crate::transport::SfuConnection;
 
 const DEFAULT_SINK_PACING_KBPS: u32 = 6_000;
+const SFU_CHUNK_MAX_PAYLOAD: usize = 40_000;
+
+/// Egress channel capacity — enough to absorb encoder bursts without blocking
+/// the manager, but small enough to exert back-pressure before memory bloats.
+const EGRESS_QUEUE_CAPACITY: usize = 128;
 
 pub struct SfuSink {
     connection: Arc<SfuConnection>,
     msg_seq: AtomicU16,
-    pacer: Mutex<EgressPacer>,
+    egress_tx: mpsc::Sender<Vec<u8>>,
+    egress_spawned: OnceLock<()>,
+    egress_rx: std::sync::Mutex<Option<mpsc::Receiver<Vec<u8>>>>,
+    pacer: Arc<Mutex<EgressPacer>>,
 }
 
 impl SfuSink {
     pub fn new(connection: Arc<SfuConnection>) -> Self {
+        let pacer = Arc::new(Mutex::new(EgressPacer::new(DEFAULT_SINK_PACING_KBPS)));
+        let (egress_tx, egress_rx) = mpsc::channel(EGRESS_QUEUE_CAPACITY);
+
         Self {
             connection,
             msg_seq: AtomicU16::new(0),
-            pacer: Mutex::new(EgressPacer::new(DEFAULT_SINK_PACING_KBPS)),
+            egress_tx,
+            egress_spawned: OnceLock::new(),
+            egress_rx: std::sync::Mutex::new(Some(egress_rx)),
+            pacer,
         }
+    }
+
+    /// Lazily spawn the egress task on first use — avoids requiring a tokio
+    /// runtime context at construction time.
+    fn ensure_egress_task(&self) {
+        self.egress_spawned.get_or_init(|| {
+            let conn = self.connection.clone();
+            let pacer = self.pacer.clone();
+            let mut rx = self
+                .egress_rx
+                .lock()
+                .unwrap()
+                .take()
+                .expect("egress_rx taken twice");
+            tokio::spawn(async move {
+                while let Some(msg) = rx.recv().await {
+                    pacer.lock().await.pace(msg.len()).await;
+                    if let Err(e) = conn.send_media(&msg) {
+                        log::warn!("SFU egress task send failed: bytes={} err={}", msg.len(), e);
+                    }
+                }
+                log::info!("SFU egress task exited");
+            });
+        });
     }
 
     pub fn connection(&self) -> &Arc<SfuConnection> {
@@ -37,12 +75,12 @@ impl SfuSink {
 impl PacketSink for SfuSink {
     async fn send_video(&self, packet: &StreamPacket) -> Result<(), StreamError> {
         let data = packet.serialize();
-        self.send_chunked_media(&data).await
+        self.enqueue_chunked_media(&data)
     }
 
     async fn send_audio(&self, packet: &StreamPacket) -> Result<(), StreamError> {
         let data = packet.serialize();
-        self.send_chunked_media(&data).await
+        self.enqueue_chunked_media(&data)
     }
 
     async fn send_control(&self, packet: &StreamPacket) -> Result<(), StreamError> {
@@ -68,18 +106,34 @@ impl PacketSink for SfuSink {
 }
 
 impl SfuSink {
-    async fn send_chunked_media(&self, data: &[u8]) -> Result<(), StreamError> {
+    fn enqueue_chunked_media(&self, data: &[u8]) -> Result<(), StreamError> {
+        self.ensure_egress_task();
         if !self.connection.is_media_channel_open() {
-            // Host can start producing before SFU DataChannel is fully open.
-            // Drop instead of pacing/stalling on packets that cannot be sent yet.
-            return Ok(());
+            return Err(StreamError::SendFailed("media channel closed".to_string()));
         }
-        let chunk_count = data.len().div_ceil(CHUNK_MAX_PAYLOAD).max(1) as u16;
+        let chunk_count = data.len().div_ceil(SFU_CHUNK_MAX_PAYLOAD).max(1) as u16;
+
+        // Pre-flight: check that enough queue capacity exists for all chunks.
+        // This avoids sending partial messages that the viewer can never reassemble.
+        let available = self.egress_tx.capacity();
+        if (chunk_count as usize) > available {
+            let msg_id = self.msg_seq.load(Ordering::Relaxed);
+            log::warn!(
+                "SFU sink egress: dropping whole frame msg_id={} ({} chunks, {} slots free)",
+                msg_id,
+                chunk_count,
+                available,
+            );
+            return Err(StreamError::SendFailed(
+                "egress queue full — whole frame dropped".to_string(),
+            ));
+        }
+
         let msg_id = self.msg_seq.fetch_add(1, Ordering::Relaxed);
 
         for chunk_idx in 0..chunk_count {
-            let start = chunk_idx as usize * CHUNK_MAX_PAYLOAD;
-            let end = (start + CHUNK_MAX_PAYLOAD).min(data.len());
+            let start = chunk_idx as usize * SFU_CHUNK_MAX_PAYLOAD;
+            let end = (start + SFU_CHUNK_MAX_PAYLOAD).min(data.len());
             let payload = &data[start..end];
 
             let mut msg = Vec::with_capacity(CHUNK_HEADER_SIZE + payload.len());
@@ -88,17 +142,14 @@ impl SfuSink {
             msg.extend_from_slice(&chunk_count.to_le_bytes());
             msg.extend_from_slice(payload);
 
-            self.pacer.lock().await.pace(msg.len()).await;
-            if let Err(e) = self.connection.send_media(&msg) {
+            if self.egress_tx.try_send(msg).is_err() {
                 log::warn!(
-                    "SFU sink media send failed: msg_id={} chunk={}/{} bytes={} err={}",
+                    "SFU sink egress queue full mid-frame: msg_id={} chunk={}/{} — dropping remainder",
                     msg_id,
                     chunk_idx + 1,
                     chunk_count,
-                    msg.len(),
-                    e
                 );
-                return Err(e);
+                return Err(StreamError::SendFailed("egress queue full".to_string()));
             }
         }
         Ok(())

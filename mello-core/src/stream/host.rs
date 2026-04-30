@@ -11,7 +11,7 @@ use super::error::StreamError;
 use super::manager::{AudioPacket, StreamManager, StreamSession, VideoPacket};
 use super::sink::PacketSink;
 
-const VIDEO_QUEUE_CAPACITY: usize = 8;
+const VIDEO_QUEUE_CAPACITY: usize = 32;
 const AUDIO_QUEUE_CAPACITY: usize = 128;
 
 #[derive(Debug, Serialize)]

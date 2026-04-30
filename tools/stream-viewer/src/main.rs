@@ -74,6 +74,7 @@ impl FrameAssembly {
 
 static FRAME: Mutex<Option<FrameBuffer>> = Mutex::new(None);
 static FRAMES_DECODED: AtomicU32 = AtomicU32::new(0);
+static NATIVE_FRAMES: AtomicU32 = AtomicU32::new(0);
 static VIEWER_READY: AtomicBool = AtomicBool::new(false);
 
 unsafe extern "C" fn on_decoded_frame(
@@ -106,11 +107,24 @@ unsafe extern "C" fn on_decoded_frame(
     FRAMES_DECODED.fetch_add(1, Ordering::Relaxed);
 }
 
+unsafe extern "C" fn on_native_frame(
+    _user_data: *mut c_void,
+    _shared_handle: *mut c_void,
+    _w: u32,
+    _h: u32,
+    _format: mello_sys::MelloNativeFrameFormat,
+    _uv_y_offset: u32,
+    _ts: u64,
+) {
+    NATIVE_FRAMES.fetch_add(1, Ordering::Relaxed);
+}
+
 fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
     let args: Vec<String> = std::env::args().collect();
     let port: u16 = parse_arg(&args, "--port").unwrap_or(DEFAULT_PORT);
+    let native_metrics = args.iter().any(|a| a == "--native-metrics");
 
     let ctx = unsafe { mello_sys::mello_init() };
     if ctx.is_null() {
@@ -120,6 +134,9 @@ fn main() {
 
     println!("\n=== Mello Stream Viewer ===\n");
     println!("Listening on UDP 0.0.0.0:{}...\n", port);
+    if native_metrics {
+        println!("Native metrics mode: ON (GPU callback FPS will be shown)");
+    }
 
     let socket = UdpSocket::bind(format!("0.0.0.0:{}", port)).expect("Failed to bind UDP socket");
     socket
@@ -170,6 +187,7 @@ fn main() {
     let start_time = Instant::now();
     let mut last_fps_check = Instant::now();
     let mut last_frame_count = 0u32;
+    let mut last_native_frame_count = 0u32;
 
     while window.is_open() && !window.is_key_down(Key::Escape) {
         // Receive UDP packets — limit decoded frames per window iteration to keep
@@ -275,6 +293,18 @@ fn main() {
                                 eprintln!("ERROR: mello_stream_start_viewer() failed");
                                 break;
                             }
+                            if native_metrics {
+                                unsafe {
+                                    mello_sys::mello_stream_set_native_frame_callback(
+                                        viewer,
+                                        Some(on_native_frame),
+                                        std::ptr::null_mut(),
+                                    );
+                                    mello_sys::mello_stream_set_native_frame_mirror_rgba(
+                                        viewer, true,
+                                    );
+                                }
+                            }
                             VIEWER_READY.store(true, Ordering::Relaxed);
                         }
 
@@ -344,6 +374,8 @@ fn main() {
         if now.duration_since(last_fps_check).as_millis() >= 1000 {
             let total = FRAMES_DECODED.load(Ordering::Relaxed);
             let fps = total - last_frame_count;
+            let native_total = NATIVE_FRAMES.load(Ordering::Relaxed);
+            let native_fps = native_total - last_native_frame_count;
             let elapsed = start_time.elapsed().as_secs();
 
             let title = if got_keyframe {
@@ -352,9 +384,14 @@ fn main() {
                 } else {
                     String::new()
                 };
+                let native_str = if native_metrics {
+                    format!(" | native={}fps", native_fps)
+                } else {
+                    String::new()
+                };
                 format!(
-                    "Mello Viewer — {}x{} @ {}fps | {}s{}",
-                    frame_w, frame_h, fps, elapsed, drop_str
+                    "Mello Viewer — {}x{} @ {}fps{} | {}s{}",
+                    frame_w, frame_h, fps, native_str, elapsed, drop_str
                 )
             } else {
                 "Mello Viewer — waiting for keyframe...".to_string()
@@ -362,6 +399,7 @@ fn main() {
             window.set_title(&title);
 
             last_frame_count = total;
+            last_native_frame_count = native_total;
             last_fps_check = now;
         }
     }

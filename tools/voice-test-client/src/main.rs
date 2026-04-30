@@ -264,6 +264,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let (inject_status_tx, inject_status_rx) = mpsc::channel::<String>();
 
     let frame_slot: mello_core::FrameSlot = Arc::new(Mutex::new(None));
+    let native_frame_slot: mello_core::NativeFrameSlot = Arc::new(Mutex::new(None));
     let frame_consumed = Arc::new(AtomicBool::new(true));
     let cfg = build_config();
 
@@ -274,6 +275,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             event_tx,
             false,
             frame_slot,
+            native_frame_slot,
             frame_consumed,
             false,
         );
