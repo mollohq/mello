@@ -55,6 +55,15 @@ typedef enum MelloMicPermission {
     MELLO_MIC_DENIED = 2,
 } MelloMicPermission;
 
+typedef enum MelloNsMode {
+    MELLO_NS_OFF              = 0,
+    MELLO_NS_RNNOISE          = 1,
+    MELLO_NS_WEBRTC_LOW       = 2,
+    MELLO_NS_WEBRTC_MODERATE  = 3,
+    MELLO_NS_WEBRTC_HIGH      = 4,
+    MELLO_NS_WEBRTC_VERY_HIGH = 5,
+} MelloNsMode;
+
 typedef void (*MelloVoiceActivityCallback)(void* user_data, bool speaking);
 typedef void (*MelloMicPermissionCallback)(void* user_data, bool granted);
 typedef void (*MelloIceCandidateCallback)(void* user_data, const MelloIceCandidate* candidate);
@@ -104,6 +113,9 @@ MELLO_API void mello_voice_set_agc(MelloContext* ctx, bool enabled);
 
 /** Enable/disable RNNoise suppression. Enabled by default. */
 MELLO_API void mello_voice_set_noise_suppression(MelloContext* ctx, bool enabled);
+MELLO_API void mello_voice_set_ns_mode(MelloContext* ctx, MelloNsMode mode);
+MELLO_API void mello_voice_set_transient_suppression(MelloContext* ctx, bool enabled);
+MELLO_API void mello_voice_set_high_pass_filter(MelloContext* ctx, bool enabled);
 
 /** Set input (microphone) volume. 0.0 = silent, 1.0 = unity gain. */
 MELLO_API void mello_voice_set_input_volume(MelloContext* ctx, float volume);
@@ -124,6 +136,10 @@ MELLO_API MelloResult mello_voice_feed_packet(
     const uint8_t* data,
     int size
 );
+
+MELLO_API MelloResult mello_voice_start_capture_inject(MelloContext* ctx);
+MELLO_API void mello_voice_inject_capture(MelloContext* ctx, const int16_t* samples, int count);
+MELLO_API void mello_voice_stop_capture_inject(MelloContext* ctx);
 
 /* ============================================================================
  * Clip Buffer

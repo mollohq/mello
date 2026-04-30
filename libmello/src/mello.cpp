@@ -30,6 +30,25 @@ static mello::Context* ctx_cast(MelloContext* ctx) {
     return reinterpret_cast<mello::Context*>(ctx);
 }
 
+static mello::audio::NsMode to_ns_mode(MelloNsMode mode) {
+    switch (mode) {
+        case MELLO_NS_OFF:
+            return mello::audio::NsMode::Off;
+        case MELLO_NS_RNNOISE:
+            return mello::audio::NsMode::Rnnoise;
+        case MELLO_NS_WEBRTC_LOW:
+            return mello::audio::NsMode::WebRtcLow;
+        case MELLO_NS_WEBRTC_MODERATE:
+            return mello::audio::NsMode::WebRtcModerate;
+        case MELLO_NS_WEBRTC_HIGH:
+            return mello::audio::NsMode::WebRtcHigh;
+        case MELLO_NS_WEBRTC_VERY_HIGH:
+            return mello::audio::NsMode::WebRtcVeryHigh;
+        default:
+            return mello::audio::NsMode::Rnnoise;
+    }
+}
+
 struct MelloStreamHost {
     mello::Context*          ctx;
     MelloPacketCallback      callback;
@@ -179,6 +198,24 @@ void mello_voice_set_noise_suppression(MelloContext* ctx, bool enabled) {
     } catch (...) {}
 }
 
+void mello_voice_set_ns_mode(MelloContext* ctx, MelloNsMode mode) {
+    try {
+        if (ctx) ctx_cast(ctx)->audio().set_ns_mode(to_ns_mode(mode));
+    } catch (...) {}
+}
+
+void mello_voice_set_transient_suppression(MelloContext* ctx, bool enabled) {
+    try {
+        if (ctx) ctx_cast(ctx)->audio().set_transient_suppression(enabled);
+    } catch (...) {}
+}
+
+void mello_voice_set_high_pass_filter(MelloContext* ctx, bool enabled) {
+    try {
+        if (ctx) ctx_cast(ctx)->audio().set_high_pass_filter(enabled);
+    } catch (...) {}
+}
+
 void mello_voice_set_input_volume(MelloContext* ctx, float volume) {
     try {
         if (ctx) ctx_cast(ctx)->audio().set_input_volume(volume);
@@ -227,6 +264,27 @@ MelloResult mello_voice_feed_packet(
     } catch (...) {
         return MELLO_ERROR_FAILED;
     }
+}
+
+MelloResult mello_voice_start_capture_inject(MelloContext* ctx) {
+    if (!ctx) return MELLO_ERROR_INVALID_PARAM;
+    try {
+        return ctx_cast(ctx)->audio().start_capture_inject() ? MELLO_OK : MELLO_ERROR_FAILED;
+    } catch (...) {
+        return MELLO_ERROR_FAILED;
+    }
+}
+
+void mello_voice_inject_capture(MelloContext* ctx, const int16_t* samples, int count) {
+    try {
+        if (ctx) ctx_cast(ctx)->audio().inject_capture(samples, count);
+    } catch (...) {}
+}
+
+void mello_voice_stop_capture_inject(MelloContext* ctx) {
+    try {
+        if (ctx) ctx_cast(ctx)->audio().stop_capture_inject();
+    } catch (...) {}
 }
 
 /* ============================================================================

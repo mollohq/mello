@@ -28,7 +28,7 @@ pub use config::Config;
 pub use error::{Error, Result};
 pub use events::Event;
 pub use stream::{Codec, QualityPreset, StreamConfig, StreamError};
-pub use voice::AudioDevice;
+pub use voice::{AudioDevice, NsMode};
 
 /// Protocol version this build speaks. Bump on breaking client↔server changes.
 pub const PROTOCOL_VERSION: u32 = 1;

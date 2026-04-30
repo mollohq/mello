@@ -156,3 +156,35 @@ fn multi_peer_feed_packet_concurrent() {
         );
     });
 }
+
+#[test]
+fn voice_ns_controls_smoke() {
+    with_ctx(|ctx| unsafe {
+        mello_sys::mello_voice_set_ns_mode(ctx, mello_sys::MelloNsMode_MELLO_NS_OFF);
+        mello_sys::mello_voice_set_ns_mode(ctx, mello_sys::MelloNsMode_MELLO_NS_RNNOISE);
+        mello_sys::mello_voice_set_ns_mode(ctx, mello_sys::MelloNsMode_MELLO_NS_WEBRTC_LOW);
+        mello_sys::mello_voice_set_ns_mode(ctx, mello_sys::MelloNsMode_MELLO_NS_WEBRTC_MODERATE);
+        mello_sys::mello_voice_set_ns_mode(ctx, mello_sys::MelloNsMode_MELLO_NS_WEBRTC_HIGH);
+        mello_sys::mello_voice_set_ns_mode(ctx, mello_sys::MelloNsMode_MELLO_NS_WEBRTC_VERY_HIGH);
+        mello_sys::mello_voice_set_transient_suppression(ctx, true);
+        mello_sys::mello_voice_set_high_pass_filter(ctx, true);
+        mello_sys::mello_voice_set_transient_suppression(ctx, false);
+        mello_sys::mello_voice_set_high_pass_filter(ctx, false);
+    });
+}
+
+#[test]
+fn voice_capture_inject_smoke() {
+    with_ctx(|ctx| unsafe {
+        let r = mello_sys::mello_voice_start_capture_inject(ctx);
+        assert_eq!(
+            r,
+            mello_sys::MelloResult_MELLO_OK,
+            "start capture inject failed"
+        );
+
+        let frame = [0i16; 960];
+        mello_sys::mello_voice_inject_capture(ctx, frame.as_ptr(), frame.len() as i32);
+        mello_sys::mello_voice_stop_capture_inject(ctx);
+    });
+}
