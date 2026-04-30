@@ -225,7 +225,11 @@ pub(super) unsafe extern "C" fn on_viewer_native_frame(
     data.native_frame_active
         .store(true, std::sync::atomic::Ordering::Release);
     if let Ok(mut slot) = data.native_frame_slot.lock() {
-        *slot = Some((w, h, shared_handle as usize, format, uv_y_offset, ts));
+        // MelloNativeFrameFormat is u32 on macOS (clang) but i32 on Windows (MSVC);
+        // cast is necessary for Windows, no-op on macOS.
+        #[allow(clippy::unnecessary_cast)]
+        let fmt = format as u32;
+        *slot = Some((w, h, shared_handle as usize, fmt, uv_y_offset, ts));
         data.frame_consumed
             .store(false, std::sync::atomic::Ordering::Release);
     }
