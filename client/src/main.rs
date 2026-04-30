@@ -531,7 +531,7 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
             if frame_consumed.load(std::sync::atomic::Ordering::Acquire) {
                 if frame_timer_last_log.elapsed().as_secs_f32() >= 1.0 {
                     let elapsed = frame_timer_last_log.elapsed().as_secs_f32().max(0.001);
-                    log::info!(
+                    log::debug!(
                         "UI frame timer cadence: tick_hz={:.1} consume_hz={:.1}",
                         frame_timer_ticks as f32 / elapsed,
                         frame_timer_consumed as f32 / elapsed
@@ -665,7 +665,7 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
 
             if frame_timer_last_log.elapsed().as_secs_f32() >= 1.0 {
                 let elapsed = frame_timer_last_log.elapsed().as_secs_f32().max(0.001);
-                log::info!(
+                log::debug!(
                     "UI frame timer cadence: tick_hz={:.1} consume_hz={:.1}",
                     frame_timer_ticks as f32 / elapsed,
                     frame_timer_consumed as f32 / elapsed
