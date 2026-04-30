@@ -49,6 +49,7 @@ build_test/
 libmello/build-test/
 vpk-out/
 dist/
+**/test-data/**
 
 # Third-party vendored source
 libmello/third_party/onnxruntime/

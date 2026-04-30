@@ -16,6 +16,8 @@
 #include <mutex>
 #include <vector>
 #include <queue>
+#include <deque>
+#include <array>
 #include <atomic>
 #include <cstdint>
 #include <functional>
@@ -30,6 +32,15 @@ struct EncodedPacket {
     uint32_t sequence;
 };
 
+enum class NsMode {
+    Off = 0,
+    Rnnoise = 1,
+    WebRtcLow = 2,
+    WebRtcModerate = 3,
+    WebRtcHigh = 4,
+    WebRtcVeryHigh = 5,
+};
+
 class AudioPipeline {
 public:
     AudioPipeline();
@@ -40,6 +51,9 @@ public:
 
     bool start_capture();
     void stop_capture();
+    bool start_capture_inject();
+    void stop_capture_inject();
+    void inject_capture(const int16_t* samples, int count);
 
     void set_mute(bool muted);
     void set_deafen(bool deafened);
@@ -49,10 +63,20 @@ public:
     float output_volume() const { return output_gain_.load(std::memory_order_relaxed); }
     void set_echo_cancellation(bool enabled) { echo_canceller_.set_aec_enabled(enabled); }
     void set_agc(bool enabled) { echo_canceller_.set_agc_enabled(enabled); }
-    void set_noise_suppression(bool enabled) { noise_suppressor_.set_enabled(enabled); }
+    void set_noise_suppression(bool enabled) { set_ns_mode(enabled ? NsMode::Rnnoise : NsMode::Off); }
+    void set_ns_mode(NsMode mode);
+    NsMode ns_mode() const { return static_cast<NsMode>(ns_mode_.load(std::memory_order_relaxed)); }
+    void set_transient_suppression(bool enabled);
+    void set_high_pass_filter(bool enabled);
     bool echo_cancellation_enabled() const { return echo_canceller_.aec_enabled(); }
     bool agc_enabled() const { return echo_canceller_.agc_enabled(); }
-    bool noise_suppression_enabled() const { return noise_suppressor_.is_enabled(); }
+    bool noise_suppression_enabled() const { return ns_mode() != NsMode::Off; }
+    bool transient_suppression_enabled() const {
+        return transient_suppression_enabled_.load(std::memory_order_relaxed);
+    }
+    bool high_pass_filter_enabled() const {
+        return high_pass_filter_enabled_.load(std::memory_order_relaxed);
+    }
     uint32_t aec_capture_frames() const { return echo_canceller_.capture_frames(); }
     uint32_t aec_render_frames() const { return echo_canceller_.render_frames(); }
     bool is_muted() const { return muted_; }
@@ -76,8 +100,9 @@ public:
     void set_vad_callback(VadCallback cb) { vad_.set_callback(std::move(cb)); }
 
     AudioDeviceEnumerator& device_enumerator();
-    bool set_capture_device(const char* device_id);
-    bool set_playback_device(const char* device_id);
+    // Returns: 0 = failed, 1 = ok, 2 = fell back to default device
+    int set_capture_device(const char* device_id);
+    int set_playback_device(const char* device_id);
 
     void start_clip_buffer();
     void stop_clip_buffer();
@@ -94,6 +119,7 @@ public:
 
 private:
     void on_captured_audio(const int16_t* samples, size_t count);
+    void process_and_encode_frame(int16_t* frame);
     void clear_remote_streams();
 #ifdef _WIN32
     void apply_session(AudioPlayback* pb);
@@ -124,6 +150,7 @@ private:
     std::atomic<int> rtp_recv_total_{0};
 
     std::vector<int16_t> capture_accum_;
+    std::deque<std::array<int16_t, FRAME_SIZE>> speech_pre_roll_;
     std::mutex accum_mutex_;
 
     std::queue<EncodedPacket> outgoing_;
@@ -136,6 +163,14 @@ private:
     std::atomic<float> input_level_{0.0f};
     std::atomic<float> input_gain_{1.0f};
     std::atomic<float> output_gain_{1.0f};
+    std::atomic<int> ns_mode_{static_cast<int>(NsMode::Rnnoise)};
+    std::atomic<bool> transient_suppression_enabled_{false};
+    std::atomic<bool> high_pass_filter_enabled_{false};
+    std::atomic<bool> capture_inject_mode_{false};
+    float noise_floor_rms_ = 0.001f;
+    int candidate_hangover_frames_ = 0;
+    int speech_hangover_frames_ = 0;
+    bool speech_gate_active_ = false;
 
     uint32_t get_pkt_ctr_ = 0;
 

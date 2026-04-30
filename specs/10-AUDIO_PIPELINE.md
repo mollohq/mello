@@ -75,12 +75,16 @@ public:
     void set_echo_cancellation(bool enabled);
     void set_agc(bool enabled);
     void set_noise_suppression(bool enabled);
+    void set_ns_mode(NsMode mode);
+    void set_transient_suppression(bool enabled);
+    void set_high_pass_filter(bool enabled);
 
     int  get_packet(uint8_t* buffer, int buffer_size);
     void feed_packet(const char* peer_id, const uint8_t* data, int size);
 
 private:
     void on_captured_audio(const int16_t* samples, size_t count);
+    void process_and_encode_frame(int16_t* frame);
     size_t mix_output(int16_t* out, size_t count);
     void clear_remote_streams();
 };
@@ -90,29 +94,55 @@ private:
 
 ## 4. Capture and Encode Path
 
-Per 20ms frame, endpoint processing order is:
+Per 20ms frame, endpoint processing order is adaptive:
 
 1. optional input gain
-2. AEC/AGC capture-side processing
+2. WebRTC APM capture-side processing (AEC3 + AGC2, plus optional WebRTC NS/HPF/transient suppression)
 3. clip ring tap (when clip buffer is active)
-4. noise suppression (RNNoise)
-5. VAD decision (Silero)
-6. Opus encode only when speaking
-7. enqueue encoded packet with monotonically increasing sequence
+4. cheap RMS/noise-floor gate updates input level and decides whether this is a speech candidate
+5. Silero VAD runs only for candidate speech / hangover windows
+6. when speech opens, flush pre-roll frames so starts are not clipped
+7. while speech or hangover is active, apply the selected enhancement mode and Opus encode
+8. enqueue encoded packet with monotonically increasing sequence
+
+RNNoise remains the default quality noise suppression path, but it is not run on obvious
+silence or non-speech background. This preserves Discord-like voice quality during speech
+while avoiding continuous neural DSP cost when no voice is being transmitted. WebRTC NS
+levels remain available as runtime test/diagnostic modes.
 
 ```cpp
 // libmello/src/audio/audio_pipeline.cpp (simplified)
 echo_canceller_.process_capture(capture_accum_.data(), FRAME_SIZE);
-noise_suppressor_.process(capture_accum_.data(), FRAME_SIZE);
-vad_.feed(capture_accum_.data(), FRAME_SIZE);
-if (vad_.is_speaking()) {
-    int encoded = encoder_.encode(...);
-    pkt.sequence = sequence_++;
-    outgoing_.push(std::move(pkt));
+bool candidate = rms >= max(MIN_SPEECH_RMS, noise_floor * NOISE_FLOOR_GATE_MULT);
+if (candidate || candidate_hangover || speech_hangover) {
+    vad_.feed(capture_accum_.data(), FRAME_SIZE);
+}
+if (vad_.is_speaking() || speech_hangover) {
+    flush_pre_roll_if_gate_just_opened();
+    process_and_encode_frame(capture_accum_.data()); // RNNoise/WebRTC mode + Opus
+} else {
+    keep_pre_roll_and_update_noise_floor();
 }
 ```
 
-### 4.1 Packet Format
+### 4.1 Adaptive Speech Gate
+
+The capture path keeps a short pre-roll buffer (currently about `100ms`) and two hangovers:
+
+- **Candidate hangover:** keeps Silero active through brief RMS dips once a candidate speech window opens.
+- **Speech encode hangover:** keeps RNNoise/Opus active briefly after VAD drops to avoid chopped endings.
+
+The gate closes on sustained non-speech. Closing the gate forces the VAD callback to emit `speaking=false`
+and prevents stale speaking indicators when Silero is no longer being fed.
+
+This design was validated with:
+
+- continuous speech: RNNoise runs and quality is preserved
+- music-only/non-speech: RNNoise/Opus stay closed except for brief false positives
+- idle voice channel: baseline CPU remains low
+- no crackles observed in the validated client run
+
+### 4.2 Packet Format
 
 For endpoint packet API (`mello_voice_get_packet` / `mello_voice_feed_packet`), payload is prefixed by a 4-byte little-endian sequence number:
 
@@ -232,6 +262,9 @@ void mello_voice_set_deafen(MelloContext* ctx, bool deafened);
 void mello_voice_set_echo_cancellation(MelloContext* ctx, bool enabled);
 void mello_voice_set_agc(MelloContext* ctx, bool enabled);
 void mello_voice_set_noise_suppression(MelloContext* ctx, bool enabled);
+void mello_voice_set_ns_mode(MelloContext* ctx, MelloNsMode mode);
+void mello_voice_set_transient_suppression(MelloContext* ctx, bool enabled);
+void mello_voice_set_high_pass_filter(MelloContext* ctx, bool enabled);
 int  mello_voice_get_packet(MelloContext* ctx, uint8_t* buffer, int buffer_size);
 MelloResult mello_voice_feed_packet(MelloContext* ctx, const char* peer_id, const uint8_t* data, int size);
 ```

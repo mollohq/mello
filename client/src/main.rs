@@ -12,6 +12,7 @@ mod handlers;
 pub mod hud_manager;
 mod hud_state_builder;
 mod image_cache;
+mod ipc;
 #[cfg(target_os = "windows")]
 mod native_stream_presenter;
 mod notifications;
@@ -155,19 +156,42 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
         .to_string_lossy()
         .to_string();
     #[cfg(not(target_os = "macos"))]
-    let instance_id = lock_name;
+    let instance_id = lock_name.clone();
+    let ipc_endpoint = ipc::endpoint_name(&lock_name);
+
     let _instance = SingleInstance::new(&instance_id)?;
     if !_instance.is_single() {
-        eprintln!("Mello is already running.");
+        if let Some(url) = std::env::args()
+            .nth(1)
+            .filter(|a| a.starts_with("mello://"))
+        {
+            if ipc::send_to_running(&ipc_endpoint, &url) {
+                eprintln!("Relayed deep link to running instance: {url}");
+            } else {
+                eprintln!("Mello is already running. Could not relay deep link: {url}");
+            }
+        } else {
+            eprintln!("Mello is already running.");
+        }
         std::process::exit(0);
     }
 
-    // --- Deep link from argv ---
-    if let Some(url) = deep_link::extract_deep_link() {
-        if let Some(link) = deep_link::parse(&url) {
-            log::info!("Deep link: {:?}", link);
+    let ipc_listener = match ipc::IpcListener::bind(&ipc_endpoint) {
+        Ok(l) => Some(l),
+        Err(e) => {
+            log::warn!("[ipc] failed to bind listener: {}", e);
+            None
         }
-    }
+    };
+
+    // --- Deep link from argv ---
+    let pending_deep_link = deep_link::extract_deep_link().and_then(|url| {
+        let link = deep_link::parse(&url);
+        if let Some(ref l) = link {
+            log::info!("Deep link parsed: {:?}", l);
+        }
+        link
+    });
 
     let loopback = std::env::args().any(|a| a == "--loopback");
 
@@ -377,6 +401,8 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
         avatar_cache: Rc::new(RefCell::new(std::collections::HashMap::new())),
         hud_manager: hud_mgr,
         fg_monitor,
+        pending_deep_link: Rc::new(RefCell::new(pending_deep_link)),
+        ipc_listener: Rc::new(RefCell::new(ipc_listener)),
     };
 
     // --- Wire all callbacks ---

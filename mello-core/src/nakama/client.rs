@@ -818,6 +818,18 @@ impl NakamaClient {
         Ok((result.crew_id, result.name))
     }
 
+    pub async fn resolve_crew_invite(&self, code: &str) -> Result<crate::crew::ResolvedInvite> {
+        let payload = serde_json::json!({ "code": code });
+        let resp_str = self.rpc("resolve_crew_invite", &payload).await?;
+        let result: ResolveCrewInviteResult = serde_json::from_str(&resp_str)?;
+        Ok(crate::crew::ResolvedInvite {
+            crew_name: result.crew_name,
+            avatar_seed: result.avatar_seed,
+            crew_id: result.crew_id,
+            highlight: result.highlight,
+        })
+    }
+
     // --- Generic RPC ---
 
     pub async fn rpc(&self, id: &str, payload: &serde_json::Value) -> Result<String> {

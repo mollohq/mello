@@ -217,6 +217,9 @@ pub fn handle(ctx: &AppContext, event: Event) {
                         if !state.name.is_empty() {
                             c.name = state.name.clone().into();
                         }
+                        if let Some(ref code) = state.invite_code {
+                            c.invite_code = code.clone().into();
+                        }
                         c.member_count = state.counts.total as i32;
                         c.online_count = state.counts.online as i32;
                         c.sfu_enabled = state.sfu_enabled;

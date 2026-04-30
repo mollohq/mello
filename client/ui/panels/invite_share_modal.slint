@@ -1,0 +1,105 @@
+import { Theme } from "../theme.slint";
+
+export component InviteShareModal inherits Rectangle {
+    in property <string> invite-url: "";
+    in-out property <bool> copied: false;
+
+    callback copy-link();
+    callback close-requested();
+
+    width: 100%;
+    height: 100%;
+    background: #000000AA;
+
+    revert-timer := Timer {
+        interval: 3s;
+        running: false;
+        triggered => {
+            copied = false;
+            self.running = false;
+        }
+    }
+
+    bg-touch := TouchArea {
+        clicked => { close-requested(); }
+    }
+
+    Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: 380px;
+        height: inner.preferred-height + 40px;
+        background: Theme.surface;
+        border-radius: Theme.radius-lg;
+
+        card-touch := TouchArea {}
+
+        inner := VerticalLayout {
+            padding: 24px;
+            spacing: 14px;
+
+            Text {
+                text: "Invite people";
+                font-size: Theme.font-xl;
+                font-weight: 700;
+                color: Theme.text-primary;
+                horizontal-alignment: center;
+            }
+
+            Text {
+                text: "Share this link to invite anyone to your crew:";
+                font-size: Theme.font-sm;
+                color: Theme.text-secondary;
+                horizontal-alignment: center;
+                wrap: word-wrap;
+            }
+
+            Rectangle {
+                height: 40px;
+                border-radius: Theme.r-inner;
+                background: Theme.bg-app;
+
+                TextInput {
+                    text: invite-url;
+                    font-family: Theme.font-mono;
+                    font-size: 12px;
+                    color: Theme.text-primary;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                    read-only: true;
+                    single-line: true;
+                }
+            }
+
+            Rectangle {
+                height: 40px;
+
+                Rectangle {
+                    width: 140px;
+                    height: 40px;
+                    x: (parent.width - self.width) / 2;
+                    border-radius: Theme.r-inner;
+                    background: copied ? Theme.voice-active : (copy-touch.has-hover ? #FF1E56DD : Theme.accent);
+
+                    Text {
+                        text: copied ? "Copied!" : "Copy link";
+                        font-size: Theme.font-md;
+                        font-weight: 600;
+                        color: #FFFFFF;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+
+                    copy-touch := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            copy-link();
+                            revert-timer.running = false;
+                            revert-timer.running = true;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

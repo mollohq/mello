@@ -153,6 +153,15 @@ pub struct JoinByInviteCodeResult {
     pub name: String,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct ResolveCrewInviteResult {
+    pub crew_name: String,
+    pub avatar_seed: String,
+    pub crew_id: String,
+    #[serde(default)]
+    pub highlight: String,
+}
+
 // --- WebSocket types ---
 
 #[derive(Debug, Deserialize)]

@@ -21,6 +21,16 @@ export component NewCrewModal inherits Rectangle {
     property <bool> is-private: true;
     property <string> crew-name-text: "";
     property <string> crew-desc-text: "";
+    property <bool> link-copied: false;
+
+    copy-revert-timer := Timer {
+        interval: 3s;
+        running: false;
+        triggered => {
+            link-copied = false;
+            self.running = false;
+        }
+    }
 
     background: #000000AA;
 
@@ -106,7 +116,7 @@ export component NewCrewModal inherits Rectangle {
                 spacing: 20px;
 
                 Text {
-                    text: "Your crew is ready. Share this invite code with others:";
+                    text: "Your crew is ready. Share this link to invite others:";
                     font-family: Theme.font-sans;
                     font-size: 14px;
                     color: Theme.text-secondary;
@@ -115,31 +125,31 @@ export component NewCrewModal inherits Rectangle {
                 }
 
                 Rectangle {
-                    height: 56px;
+                    height: 48px;
                     background: Theme.bg-app;
                     border-radius: Theme.r-inner;
                     border-width: 1px;
                     border-color: Theme.graphic-light;
 
-                    Text {
-                        text: invite-code;
+                    TextInput {
+                        text: "m3llo.app/join/" + invite-code;
                         font-family: Theme.font-mono;
-                        font-size: 22px;
-                        font-weight: 600;
-                        letter-spacing: 4px;
-                        color: Theme.accent;
+                        font-size: 12px;
+                        color: Theme.text-primary;
                         horizontal-alignment: center;
                         vertical-alignment: center;
+                        read-only: true;
+                        single-line: true;
                     }
                 }
 
                 Rectangle {
                     height: 40px;
                     border-radius: Theme.r-inner;
-                    background: copy-touch.has-hover ? #FF1E56DD : Theme.accent;
+                    background: link-copied ? Theme.voice-active : (copy-touch.has-hover ? #FF1E56DD : Theme.accent);
 
                     Text {
-                        text: "Copy Code";
+                        text: link-copied ? "Copied!" : "Copy link";
                         font-family: Theme.font-sans;
                         font-size: 13px;
                         font-weight: 600;
@@ -150,7 +160,12 @@ export component NewCrewModal inherits Rectangle {
 
                     copy-touch := TouchArea {
                         mouse-cursor: pointer;
-                        clicked => { copy-invite-code(); }
+                        clicked => {
+                            copy-invite-code();
+                            link-copied = true;
+                            copy-revert-timer.running = false;
+                            copy-revert-timer.running = true;
+                        }
                     }
                 }
 

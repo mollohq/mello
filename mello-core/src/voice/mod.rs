@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use crate::events::Event;
 use crate::transport::{SfuConnection, SfuEvent};
+use serde::{Deserialize, Serialize};
 
 pub use mesh::{SignalEnvelope, SignalMessage, SignalPurpose, VoiceMesh};
 
@@ -18,6 +19,29 @@ pub enum VoiceMode {
     Disconnected,
     P2P,
     SFU,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum NsMode {
+    Off,
+    Rnnoise,
+    WebRtcLow,
+    WebRtcModerate,
+    WebRtcHigh,
+    WebRtcVeryHigh,
+}
+
+impl NsMode {
+    fn as_ffi(self) -> mello_sys::MelloNsMode {
+        match self {
+            NsMode::Off => mello_sys::MelloNsMode_MELLO_NS_OFF,
+            NsMode::Rnnoise => mello_sys::MelloNsMode_MELLO_NS_RNNOISE,
+            NsMode::WebRtcLow => mello_sys::MelloNsMode_MELLO_NS_WEBRTC_LOW,
+            NsMode::WebRtcModerate => mello_sys::MelloNsMode_MELLO_NS_WEBRTC_MODERATE,
+            NsMode::WebRtcHigh => mello_sys::MelloNsMode_MELLO_NS_WEBRTC_HIGH,
+            NsMode::WebRtcVeryHigh => mello_sys::MelloNsMode_MELLO_NS_WEBRTC_VERY_HIGH,
+        }
+    }
 }
 
 struct VadCallbackData {
@@ -263,6 +287,30 @@ impl VoiceManager {
         }
     }
 
+    pub fn set_ns_mode(&mut self, mode: NsMode) {
+        if !self.ctx.is_null() {
+            unsafe {
+                mello_sys::mello_voice_set_ns_mode(self.ctx, mode.as_ffi());
+            }
+        }
+    }
+
+    pub fn set_transient_suppression(&mut self, enabled: bool) {
+        if !self.ctx.is_null() {
+            unsafe {
+                mello_sys::mello_voice_set_transient_suppression(self.ctx, enabled);
+            }
+        }
+    }
+
+    pub fn set_high_pass_filter(&mut self, enabled: bool) {
+        if !self.ctx.is_null() {
+            unsafe {
+                mello_sys::mello_voice_set_high_pass_filter(self.ctx, enabled);
+            }
+        }
+    }
+
     pub fn set_input_volume(&mut self, volume: f32) {
         if !self.ctx.is_null() {
             unsafe {
@@ -299,6 +347,36 @@ impl VoiceManager {
             log::info!("Loopback disabled (stopped mic test capture)");
         } else {
             log::info!("Loopback {}", if enabled { "enabled" } else { "disabled" });
+        }
+    }
+
+    pub fn start_capture_inject(&mut self) -> bool {
+        if self.ctx.is_null() {
+            return false;
+        }
+        let result = unsafe { mello_sys::mello_voice_start_capture_inject(self.ctx) };
+        if result != mello_sys::MelloResult_MELLO_OK {
+            log::error!("Failed to start capture inject mode: {}", result);
+            return false;
+        }
+        true
+    }
+
+    pub fn inject_capture_frame(&mut self, samples: &[i16]) {
+        if self.ctx.is_null() || samples.is_empty() {
+            return;
+        }
+        unsafe {
+            mello_sys::mello_voice_inject_capture(self.ctx, samples.as_ptr(), samples.len() as i32);
+        }
+    }
+
+    pub fn stop_capture_inject(&mut self) {
+        if self.ctx.is_null() {
+            return;
+        }
+        unsafe {
+            mello_sys::mello_voice_stop_capture_inject(self.ctx);
         }
     }
 
@@ -367,30 +445,48 @@ impl VoiceManager {
         devices
     }
 
-    pub fn set_capture_device(&mut self, device_id: &str) {
+    /// Returns true if the requested device was not found and the pipeline
+    /// fell back to the system default.
+    pub fn set_capture_device(&mut self, device_id: &str) -> bool {
         if self.ctx.is_null() {
-            return;
+            return false;
         }
         let c_id = CString::new(device_id).unwrap_or_default();
         let result = unsafe { mello_sys::mello_set_audio_input(self.ctx, c_id.as_ptr()) };
-        if result != mello_sys::MelloResult_MELLO_OK {
+        if result == mello_sys::MelloResult_MELLO_DEVICE_FALLBACK {
+            log::warn!(
+                "Capture device '{}' not found, fell back to default",
+                device_id
+            );
+            return true;
+        } else if result != mello_sys::MelloResult_MELLO_OK {
             log::error!("Failed to set capture device: {}", result);
         } else {
             log::info!("Capture device set to: {}", device_id);
         }
+        false
     }
 
-    pub fn set_playback_device(&mut self, device_id: &str) {
+    /// Returns true if the requested device was not found and the pipeline
+    /// fell back to the system default.
+    pub fn set_playback_device(&mut self, device_id: &str) -> bool {
         if self.ctx.is_null() {
-            return;
+            return false;
         }
         let c_id = CString::new(device_id).unwrap_or_default();
         let result = unsafe { mello_sys::mello_set_audio_output(self.ctx, c_id.as_ptr()) };
-        if result != mello_sys::MelloResult_MELLO_OK {
+        if result == mello_sys::MelloResult_MELLO_DEVICE_FALLBACK {
+            log::warn!(
+                "Playback device '{}' not found, fell back to default",
+                device_id
+            );
+            return true;
+        } else if result != mello_sys::MelloResult_MELLO_OK {
             log::error!("Failed to set playback device: {}", result);
         } else {
             log::info!("Playback device set to: {}", device_id);
         }
+        false
     }
 
     pub fn get_input_level(&self) -> f32 {

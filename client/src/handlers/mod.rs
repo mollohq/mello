@@ -34,7 +34,9 @@ pub fn handle_event(ctx: &AppContext, event: Event) {
         | Event::CrewLeft { .. }
         | Event::UserSearchResults { .. }
         | Event::CrewAvatarLoaded { .. }
-        | Event::DiscoverCrewsLoaded { .. } => crew::handle(ctx, event),
+        | Event::DiscoverCrewsLoaded { .. }
+        | Event::CrewInviteResolved { .. }
+        | Event::CrewInviteResolveFailed { .. } => crew::handle(ctx, event),
 
         // Voice
         Event::VoiceStateChanged { .. }
@@ -52,7 +54,8 @@ pub fn handle_event(ctx: &AppContext, event: Event) {
         | Event::MicPermissionChanged { .. }
         | Event::MicLevel { .. }
         | Event::AudioDebugStats { .. }
-        | Event::AudioDevicesListed { .. } => voice::handle(ctx, event),
+        | Event::AudioDevicesListed { .. }
+        | Event::AudioDeviceFallback { .. } => voice::handle(ctx, event),
 
         // Chat
         Event::MessagesLoaded { .. }

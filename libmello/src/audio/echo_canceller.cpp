@@ -5,6 +5,23 @@
 
 namespace mello::audio {
 
+static webrtc::AudioProcessing::Config::NoiseSuppression::Level to_webrtc_ns_level(
+    WebRtcNsLevel level) {
+    switch (level) {
+        case WebRtcNsLevel::Low:
+            return webrtc::AudioProcessing::Config::NoiseSuppression::Level::kLow;
+        case WebRtcNsLevel::Moderate:
+            return webrtc::AudioProcessing::Config::NoiseSuppression::Level::kModerate;
+        case WebRtcNsLevel::High:
+            return webrtc::AudioProcessing::Config::NoiseSuppression::Level::kHigh;
+        case WebRtcNsLevel::VeryHigh:
+            return webrtc::AudioProcessing::Config::NoiseSuppression::Level::kVeryHigh;
+        case WebRtcNsLevel::Off:
+        default:
+            return webrtc::AudioProcessing::Config::NoiseSuppression::Level::kModerate;
+    }
+}
+
 EchoCanceller::EchoCanceller() = default;
 
 EchoCanceller::~EchoCanceller() {
@@ -41,8 +58,16 @@ bool EchoCanceller::initialize(int sample_rate, int channels) {
 
     render_scratch_.resize(APM_FRAME_SIZE);
 
-    MELLO_LOG_INFO("aec", "initialized (rate=%d, ch=%d, aec=%d, agc=%d)",
-                   sample_rate, channels, aec_enabled_.load(), agc_enabled_.load());
+    MELLO_LOG_INFO(
+        "aec",
+        "initialized (rate=%d, ch=%d, aec=%d, agc=%d, ns_level=%d, transient=%d, hpf=%d)",
+        sample_rate,
+        channels,
+        aec_enabled_.load(),
+        agc_enabled_.load(),
+        ns_level_.load(),
+        transient_suppression_enabled_.load(),
+        high_pass_filter_enabled_.load());
     return true;
 }
 
@@ -60,10 +85,17 @@ void EchoCanceller::apply_config() {
     webrtc::AudioProcessing::Config cfg;
     cfg.echo_canceller.enabled = aec_enabled_.load(std::memory_order_relaxed);
     cfg.echo_canceller.mobile_mode = false;
+    cfg.echo_canceller.enforce_high_pass_filtering =
+        high_pass_filter_enabled_.load(std::memory_order_relaxed);
     cfg.gain_controller2.enabled = agc_enabled_.load(std::memory_order_relaxed);
     cfg.gain_controller2.adaptive_digital.enabled = true;
-    cfg.noise_suppression.enabled = false;
-    cfg.high_pass_filter.enabled = false;
+    WebRtcNsLevel ns_level =
+        static_cast<WebRtcNsLevel>(ns_level_.load(std::memory_order_relaxed));
+    cfg.noise_suppression.enabled = ns_level != WebRtcNsLevel::Off;
+    cfg.noise_suppression.level = to_webrtc_ns_level(ns_level);
+    cfg.transient_suppression.enabled =
+        transient_suppression_enabled_.load(std::memory_order_relaxed);
+    cfg.high_pass_filter.enabled = high_pass_filter_enabled_.load(std::memory_order_relaxed);
     cfg.pre_amplifier.enabled = false;
     cfg.voice_detection.enabled = false;
     cfg.residual_echo_detector.enabled = true;
@@ -151,6 +183,24 @@ void EchoCanceller::set_agc_enabled(bool enabled) {
     agc_enabled_.store(enabled, std::memory_order_relaxed);
     apply_config();
     MELLO_LOG_INFO("aec", "AGC %s", enabled ? "enabled" : "disabled");
+}
+
+void EchoCanceller::set_noise_suppression_level(WebRtcNsLevel level) {
+    ns_level_.store(static_cast<int>(level), std::memory_order_relaxed);
+    apply_config();
+    MELLO_LOG_INFO("aec", "WebRTC noise suppression level set to %d", static_cast<int>(level));
+}
+
+void EchoCanceller::set_transient_suppression_enabled(bool enabled) {
+    transient_suppression_enabled_.store(enabled, std::memory_order_relaxed);
+    apply_config();
+    MELLO_LOG_INFO("aec", "Transient suppression %s", enabled ? "enabled" : "disabled");
+}
+
+void EchoCanceller::set_high_pass_filter_enabled(bool enabled) {
+    high_pass_filter_enabled_.store(enabled, std::memory_order_relaxed);
+    apply_config();
+    MELLO_LOG_INFO("aec", "High-pass filter %s", enabled ? "enabled" : "disabled");
 }
 
 } // namespace mello::audio

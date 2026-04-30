@@ -1,0 +1,20 @@
+[package]
+name = "voice-test-client"
+version = "0.0.0-DEV"
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+
+[workspace]
+
+[[bin]]
+name = "voice-test-client"
+path = "src/main.rs"
+
+[dependencies]
+mello-core = { path = "../../mello-core" }
+tokio = { version = "1", features = ["full"] }
+slint = { version = "1.16", features = ["renderer-winit-software", "renderer-winit-skia"] }
+log = "0.4"
+env_logger = "0.11"
+rfd = "0.15"

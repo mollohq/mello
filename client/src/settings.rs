@@ -39,6 +39,7 @@ pub struct Settings {
     pub hud_overlay_y: Option<i32>,
     pub hud_miniplayer_x: Option<i32>,
     pub hud_miniplayer_y: Option<i32>,
+    pub hidden_invite_crew_ids: Vec<String>,
 }
 
 impl Default for Settings {
@@ -75,6 +76,7 @@ impl Default for Settings {
             hud_overlay_y: None,
             hud_miniplayer_x: None,
             hud_miniplayer_y: None,
+            hidden_invite_crew_ids: Vec::new(),
         }
     }
 }
@@ -137,5 +139,31 @@ mod tests {
         assert!(decoded.capture_device_id.is_none());
         assert!(decoded.playback_device_id.is_none());
         assert!(!decoded.dark_theme);
+    }
+
+    #[test]
+    fn settings_clear_stale_device_roundtrip() {
+        let mut s = Settings {
+            capture_device_id: Some("{0.0.1.00000000}.{stale-guid}".into()),
+            playback_device_id: Some("{0.0.0.00000000}.{stale-guid}".into()),
+            ..Default::default()
+        };
+        assert!(s.capture_device_id.is_some());
+        assert!(s.playback_device_id.is_some());
+
+        // Simulate what the AudioDeviceFallback handler does
+        s.capture_device_id = None;
+        s.playback_device_id = None;
+
+        let toml_str = toml::to_string(&s).unwrap();
+        let decoded: Settings = toml::from_str(&toml_str).unwrap();
+        assert!(
+            decoded.capture_device_id.is_none(),
+            "cleared capture device should not persist"
+        );
+        assert!(
+            decoded.playback_device_id.is_none(),
+            "cleared playback device should not persist"
+        );
     }
 }

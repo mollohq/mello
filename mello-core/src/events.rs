@@ -1,4 +1,4 @@
-use crate::crew::{Crew, Member};
+use crate::crew::{Crew, Member, ResolvedInvite};
 use crate::crew_state::{
     CrewEvent, CrewSidebarState, CrewState, MessagePreview, PresenceChange, VoiceChannelState,
     VoiceMember,
@@ -109,6 +109,13 @@ pub enum Event {
     CrewLeft {
         crew_id: String,
     },
+    CrewInviteResolved {
+        code: String,
+        invite: ResolvedInvite,
+    },
+    CrewInviteResolveFailed {
+        reason: String,
+    },
 
     MemberJoined {
         crew_id: String,
@@ -167,6 +174,11 @@ pub enum Event {
     AudioDevicesListed {
         capture: Vec<AudioDevice>,
         playback: Vec<AudioDevice>,
+    },
+
+    AudioDeviceFallback {
+        capture_fell_back: bool,
+        playback_fell_back: bool,
     },
 
     MicLevel {

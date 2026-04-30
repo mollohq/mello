@@ -2,6 +2,7 @@ use mello_core::{Command, Event};
 
 use crate::app_context::AppContext;
 use crate::converters::make_initials;
+use crate::deep_link::DeepLink;
 
 pub fn handle(ctx: &AppContext, event: Event) {
     match event {
@@ -44,6 +45,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
             s.save();
             drop(s);
             let _ = ctx.cmd_tx.try_send(Command::LoadMyCrews);
+            dispatch_pending_deep_link(ctx);
         }
         Event::OnboardingFailed { reason } => {
             log::error!("[onboarding] finalization failed: {}", reason);
@@ -99,6 +101,8 @@ pub fn handle(ctx: &AppContext, event: Event) {
             let _ = ctx
                 .cmd_tx
                 .try_send(Command::FetchUserAvatar { user_id: uid });
+
+            dispatch_pending_deep_link(ctx);
         }
         Event::LoginFailed { reason } => {
             log::warn!("[auth] login-failed  reason={}", reason);
@@ -120,5 +124,21 @@ pub fn handle(ctx: &AppContext, event: Event) {
             }
         }
         _ => {}
+    }
+}
+
+fn dispatch_pending_deep_link(ctx: &AppContext) {
+    let link = ctx.pending_deep_link.borrow_mut().take();
+    if let Some(deep_link) = link {
+        match deep_link {
+            DeepLink::Join { code } => {
+                log::info!("[deep_link] dispatching pending join code={}", code);
+                let _ = ctx.cmd_tx.try_send(Command::ResolveCrewInvite { code });
+            }
+            DeepLink::Crew { id } => {
+                log::info!("[deep_link] dispatching pending crew select id={}", id);
+                let _ = ctx.cmd_tx.try_send(Command::SelectCrew { crew_id: id });
+            }
+        }
     }
 }

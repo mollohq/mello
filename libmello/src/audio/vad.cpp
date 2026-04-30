@@ -139,6 +139,18 @@ void VoiceActivityDetector::feed(const int16_t* samples, int count) {
     }
 }
 
+void VoiceActivityDetector::force_silence() {
+    holdover_ = 0;
+    probability_ = 0.0f;
+    if (was_speaking_) {
+        speaking_ = false;
+        was_speaking_ = false;
+        if (callback_) {
+            callback_(false);
+        }
+    }
+}
+
 void VoiceActivityDetector::run_inference() {
     if (!session_) return;
 

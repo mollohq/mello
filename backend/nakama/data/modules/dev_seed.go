@@ -642,6 +642,49 @@ func DevSeedStateRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk 
 	}
 	logger.Info("dev_seed: stale last_seen set for %d users in %d crews", len(users), len(lastSeenCrews))
 
+	// ── invite codes for all seed crews ────────────────────────────
+	inviteCodes := map[string]string{
+		"Devs":   "DEVS-0001",
+		"Gamers": "GAME-0001",
+		"Music":  "MUSC-0001",
+		"Design": "DSGN-0001",
+		"Ops":    "OPS0-0001",
+		"Retro":  "RETR-0001",
+	}
+	inviteCount := 0
+	for crewName, code := range inviteCodes {
+		cid, ok := crewIDs[crewName]
+		if !ok {
+			continue
+		}
+		fwdValue, _ := json.Marshal(map[string]string{"crew_id": cid})
+		revValue, _ := json.Marshal(map[string]string{"code": code})
+		_, err := nk.StorageWrite(ctx, []*runtime.StorageWrite{
+			{
+				Collection:      InviteCodeCollection,
+				Key:             code,
+				UserID:          SystemUserID,
+				Value:           string(fwdValue),
+				PermissionRead:  2,
+				PermissionWrite: 0,
+			},
+			{
+				Collection:      CrewInviteCodeCollection,
+				Key:             cid,
+				UserID:          SystemUserID,
+				Value:           string(revValue),
+				PermissionRead:  2,
+				PermissionWrite: 0,
+			},
+		})
+		if err != nil {
+			logger.Warn("dev_seed: invite code for %s: %v", crewName, err)
+		} else {
+			inviteCount++
+		}
+	}
+	logger.Info("dev_seed: %d invite codes seeded", inviteCount)
+
 	resp, _ := json.Marshal(map[string]interface{}{
 		"success":        true,
 		"users":          len(users),
@@ -651,6 +694,7 @@ func DevSeedStateRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk 
 		"streams":        1,
 		"crew_events":    eventsWritten,
 		"clips_seeded":   clipCount["Gamers"] + clipCount["Devs"] + clipCount["Music"],
+		"invite_codes":   inviteCount,
 	})
 	return string(resp), nil
 }

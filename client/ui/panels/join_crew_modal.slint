@@ -1,0 +1,184 @@
+import { Theme } from "../theme.slint";
+
+export component JoinCrewModal inherits Rectangle {
+    in property <string> crew-name: "";
+    in property <string> crew-id: "";
+    in property <string> highlight: "";
+    in property <string> avatar-seed: "";
+    in property <string> error: "";
+    in property <bool> loading: false;
+
+    callback join-requested();
+    callback dismiss-requested();
+
+    width: 100%;
+    height: 100%;
+    background: #000000AA;
+
+    // Close on background click
+    bg-touch := TouchArea {
+        clicked => { dismiss-requested(); }
+    }
+
+    // Center card
+    Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: 360px;
+        height: content.preferred-height + 64px;
+        background: Theme.surface;
+        border-radius: Theme.radius-lg;
+
+        card-touch := TouchArea {}
+
+        content := VerticalLayout {
+            padding: 32px;
+            spacing: 16px;
+            alignment: center;
+
+            if loading: VerticalLayout {
+                spacing: 16px;
+                alignment: center;
+
+                // Skeleton avatar
+                Rectangle {
+                    width: 96px;
+                    height: 96px;
+                    border-radius: 20px;
+                    background: Theme.skel-element;
+                    x: (parent.width - self.width) / 2;
+                }
+                // Skeleton name
+                Rectangle {
+                    width: 160px;
+                    height: 24px;
+                    border-radius: 4px;
+                    background: Theme.skel-element;
+                    x: (parent.width - self.width) / 2;
+                }
+                // Skeleton counts
+                Rectangle {
+                    width: 120px;
+                    height: 16px;
+                    border-radius: 4px;
+                    background: Theme.skel-element;
+                    x: (parent.width - self.width) / 2;
+                }
+            }
+
+            if !loading && error != "": VerticalLayout {
+                spacing: 20px;
+                alignment: center;
+
+                Text {
+                    text: "This invite link is no longer valid.";
+                    font-size: Theme.font-lg;
+                    color: Theme.text-primary;
+                    horizontal-alignment: center;
+                }
+
+                Rectangle {
+                    height: 44px;
+                    width: 160px;
+                    border-radius: Theme.r-outer;
+                    background: Theme.graphic-light;
+                    x: (parent.width - self.width) / 2;
+
+                    Text {
+                        text: "Dismiss";
+                        font-size: Theme.font-md;
+                        font-weight: 600;
+                        color: Theme.text-primary;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+
+                    dismiss-touch := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { dismiss-requested(); }
+                    }
+                }
+            }
+
+            if !loading && error == "": VerticalLayout {
+                spacing: 16px;
+                alignment: center;
+
+                // Avatar placeholder (circle with initials from seed)
+                Rectangle {
+                    width: 96px;
+                    height: 96px;
+                    border-radius: 20px;
+                    background: Theme.accent;
+                    x: (parent.width - self.width) / 2;
+
+                    Text {
+                        text: crew-name != "" ? crew-name : "?";
+                        font-size: 24px;
+                        font-weight: 700;
+                        color: #FFFFFF;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                        overflow: elide;
+                        max-width: 80px;
+                    }
+                }
+
+                // Crew name
+                Text {
+                    text: crew-name;
+                    font-size: Theme.font-xxl;
+                    font-weight: 700;
+                    color: Theme.text-primary;
+                    horizontal-alignment: center;
+                }
+
+                if highlight != "": Text {
+                    text: highlight;
+                    font-size: Theme.font-md;
+                    color: Theme.text-secondary;
+                    horizontal-alignment: center;
+                }
+
+                // Spacer
+                Rectangle { height: 8px; }
+
+                // Join button
+                Rectangle {
+                    height: 48px;
+                    width: 200px;
+                    border-radius: Theme.r-outer;
+                    background: Theme.accent;
+                    x: (parent.width - self.width) / 2;
+
+                    Text {
+                        text: "Join crew";
+                        font-size: Theme.font-lg;
+                        font-weight: 600;
+                        color: #FFFFFF;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+
+                    join-touch := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { join-requested(); }
+                    }
+                }
+
+                // Not now link
+                Text {
+                    text: "Not now";
+                    font-size: Theme.font-md;
+                    color: Theme.text-secondary;
+                    horizontal-alignment: center;
+
+                    not-now-touch := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { dismiss-requested(); }
+                    }
+                }
+            }
+        }
+    }
+}

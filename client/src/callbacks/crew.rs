@@ -234,9 +234,10 @@ pub fn wire(ctx: &AppContext) {
                 return;
             };
             let code = app.get_new_crew_invite_code().to_string();
+            let url = format!("https://m3llo.app/join/{}", code);
             if let Ok(mut clipboard) = arboard::Clipboard::new() {
-                let _ = clipboard.set_text(&code);
-                log::info!("Invite code copied to clipboard: {}", code);
+                let _ = clipboard.set_text(&url);
+                log::info!("Invite link copied to clipboard: {}", url);
             }
         });
     }
@@ -281,6 +282,99 @@ pub fn wire(ctx: &AppContext) {
             *loading = true;
             log::info!("[discover] load-more triggered");
             let _ = cmd.try_send(Command::DiscoverCrews { cursor });
+        });
+    }
+    {
+        let cmd = ctx.cmd_tx.clone();
+        let app_weak = ctx.app.as_weak();
+        ctx.app.on_join_crew_confirmed(move |invite_code| {
+            log::info!("[invite] join confirmed with code={}", invite_code);
+            let _ = cmd.try_send(Command::JoinByInviteCode {
+                code: invite_code.to_string(),
+            });
+            if let Some(app) = app_weak.upgrade() {
+                app.set_join_crew_modal_open(false);
+            }
+        });
+    }
+    {
+        let app_weak = ctx.app.as_weak();
+        ctx.app.on_join_crew_dismissed(move || {
+            log::info!("[invite] join modal dismissed");
+            if let Some(app) = app_weak.upgrade() {
+                app.set_join_crew_modal_open(false);
+            }
+        });
+    }
+    {
+        let app_weak = ctx.app.as_weak();
+        ctx.app.on_invite_share_requested(move || {
+            let Some(app) = app_weak.upgrade() else {
+                return;
+            };
+            let active_id = app.get_active_crew_id();
+            let crews = app.get_crews();
+            let invite_code = (0..crews.row_count())
+                .filter_map(|i| crews.row_data(i))
+                .find(|c| c.id == active_id)
+                .map(|c| c.invite_code.to_string())
+                .unwrap_or_default();
+
+            if invite_code.is_empty() {
+                log::warn!("[invite] no invite code available for active crew");
+                return;
+            }
+
+            let url = format!("https://m3llo.app/join/{}", invite_code);
+            app.set_invite_share_url(url.into());
+            app.set_invite_share_copied(false);
+            app.set_invite_share_open(true);
+        });
+    }
+    {
+        let app_weak = ctx.app.as_weak();
+        ctx.app.on_invite_copy_link(move || {
+            let Some(app) = app_weak.upgrade() else {
+                return;
+            };
+            let url = app.get_invite_share_url().to_string();
+            if let Ok(mut clipboard) = arboard::Clipboard::new() {
+                let _ = clipboard.set_text(&url);
+                log::info!("[invite] copied invite link to clipboard: {}", url);
+                app.set_invite_share_copied(true);
+            }
+        });
+    }
+    {
+        let app_weak = ctx.app.as_weak();
+        let settings = ctx.settings.clone();
+        ctx.app.on_hide_invite_card(move || {
+            let Some(app) = app_weak.upgrade() else {
+                return;
+            };
+            let crew_id = app.get_active_crew_id().to_string();
+            if crew_id.is_empty() {
+                return;
+            }
+            log::info!("[invite] hiding invite card for crew {}", crew_id);
+
+            // Remove the invite card from the current feed
+            let model = app.get_feed_cards();
+            let mut cards: Vec<crate::FeedCardData> = (0..model.row_count())
+                .filter_map(|i| model.row_data(i))
+                .filter(|c| c.card_type != "invite")
+                .collect();
+            if cards.is_empty() {
+                cards.push(crate::FeedCardData::default());
+            }
+            app.set_feed_cards(Rc::new(slint::VecModel::from(cards)).into());
+
+            // Persist the preference
+            let mut s = settings.borrow_mut();
+            if !s.hidden_invite_crew_ids.contains(&crew_id) {
+                s.hidden_invite_crew_ids.push(crew_id);
+            }
+            s.save();
         });
     }
 }

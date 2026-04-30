@@ -76,11 +76,71 @@ fn set_audio_output_null() {
 }
 
 #[test]
-fn set_audio_input_invalid() {
+fn set_audio_input_invalid_returns_fallback() {
     with_ctx(|ctx| unsafe {
         let bogus = std::ffi::CString::new("nonexistent_device_id_xyz").unwrap();
         let r = mello_sys::mello_set_audio_input(ctx, bogus.as_ptr());
-        // Should not crash. May return OK (WASAPI falls back) or error.
-        let _ = r;
+        // Device doesn't exist; pipeline should fall back to default and signal it.
+        assert_eq!(
+            r,
+            mello_sys::MelloResult_MELLO_DEVICE_FALLBACK,
+            "stale capture device should trigger fallback to default"
+        );
+    });
+}
+
+#[test]
+fn set_audio_output_invalid_returns_fallback() {
+    with_ctx(|ctx| unsafe {
+        let bogus = std::ffi::CString::new("nonexistent_device_id_xyz").unwrap();
+        let r = mello_sys::mello_set_audio_output(ctx, bogus.as_ptr());
+        assert_eq!(
+            r,
+            mello_sys::MelloResult_MELLO_DEVICE_FALLBACK,
+            "stale playback device should trigger fallback to default"
+        );
+    });
+}
+
+#[test]
+fn set_audio_input_invalid_then_capture_works() {
+    with_ctx(|ctx| unsafe {
+        let bogus =
+            std::ffi::CString::new("{0.0.1.00000000}.{deadbeef-dead-dead-dead-deaddeaddead}")
+                .unwrap();
+        let r = mello_sys::mello_set_audio_input(ctx, bogus.as_ptr());
+        assert_eq!(r, mello_sys::MelloResult_MELLO_DEVICE_FALLBACK);
+
+        // After fallback, capture should still work (pipeline is on default device).
+        let r = mello_sys::mello_voice_start_capture(ctx);
+        assert_eq!(
+            r,
+            mello_sys::MelloResult_MELLO_OK,
+            "capture should work after fallback to default"
+        );
+        mello_sys::mello_voice_stop_capture(ctx);
+    });
+}
+
+#[test]
+fn set_audio_output_invalid_then_feed_works() {
+    with_ctx(|ctx| unsafe {
+        let bogus =
+            std::ffi::CString::new("{0.0.0.00000000}.{deadbeef-dead-dead-dead-deaddeaddead}")
+                .unwrap();
+        let r = mello_sys::mello_set_audio_output(ctx, bogus.as_ptr());
+        assert_eq!(r, mello_sys::MelloResult_MELLO_DEVICE_FALLBACK);
+
+        // After fallback, feeding packets should not crash.
+        let peer = std::ffi::CString::new("test_peer").unwrap();
+        let mut pkt = [0u8; 104];
+        pkt[0] = 1; // seq = 1
+        let r =
+            mello_sys::mello_voice_feed_packet(ctx, peer.as_ptr(), pkt.as_ptr(), pkt.len() as i32);
+        assert_eq!(
+            r,
+            mello_sys::MelloResult_MELLO_OK,
+            "feed_packet should work after playback fallback"
+        );
     });
 }

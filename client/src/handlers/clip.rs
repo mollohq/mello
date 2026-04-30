@@ -576,8 +576,25 @@ pub fn handle(ctx: &AppContext, event: Event) {
                 }
             }
 
+            // Inject invite card unless hidden for this crew
+            let active_crew = ctx.app.get_active_crew_id().to_string();
+            let invite_hidden = ctx
+                .settings
+                .borrow()
+                .hidden_invite_crew_ids
+                .contains(&active_crew);
+            if !invite_hidden && !active_crew.is_empty() {
+                let mut invite = skeleton_card("invite");
+                invite.is_skeleton = false;
+                invite.id = "invite".into();
+                let insert_pos = 2.min(ordered.len());
+                ordered.insert(insert_pos, invite);
+            }
+
             let cards = ordered;
-            let is_cold = cards.iter().all(|c| c.card_type.starts_with("skeleton"));
+            let is_cold = cards
+                .iter()
+                .all(|c| c.card_type.starts_with("skeleton") || c.card_type == "invite");
 
             let clip_count = response
                 .entries
