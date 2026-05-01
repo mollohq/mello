@@ -1,5 +1,5 @@
 import { Theme } from "../theme.slint";
-import { StreamCardData } from "../types.slint";
+import { StreamCardData, VideoRect } from "../types.slint";
 
 component StreamIconButton inherits Rectangle {
     in property <image> icon;
@@ -31,7 +31,11 @@ component StreamCard inherits Rectangle {
     in property <bool> is-hosting: false;
     in property <string> active-streamer-id: "";
     in property <image> stream-frame;
+    in property <float> stream-ui-render-fps: 0.0;
     in property <length> media-height: 186px;
+    in property <float> viewport-abs-y: 0;
+    in property <float> viewport-height: 0;
+
 
     callback watch-stream-clicked(string, string, int, int);
     callback stop-stream-clicked();
@@ -52,16 +56,46 @@ component StreamCard inherits Rectangle {
     VerticalLayout {
         spacing: 0px;
 
-        Rectangle {
+        media-rect := Rectangle {
             height: root.media-height;
             background: Theme.dark ? @linear-gradient(135deg, #2a2d3e 0%, #111218 100%) : @linear-gradient(135deg, #dce3ff 0%, #b9c6e6 100%);
             clip: true;
 
-            if show-live-frame: Image {
-                source: root.stream-frame;
+            if show-live-frame: Rectangle {
                 width: parent.width;
                 height: parent.height;
-                image-fit: contain;
+                background: transparent;
+
+                Image {
+                    source: root.stream-frame;
+                    width: parent.width;
+                    height: parent.height;
+                    image-fit: contain;
+                    visible: false;
+                }
+
+                geo-tracker := Rectangle {
+                    width: 0;
+                    height: 0;
+                    property <float> track-x: media-rect.absolute-position.x / 1px;
+                    property <float> track-y: media-rect.absolute-position.y / 1px;
+                    property <float> track-w: media-rect.width / 1px;
+                    property <float> track-h: media-rect.height / 1px;
+
+                    function notify() {
+                        VideoRect.geometry-changed(
+                            self.track-x, self.track-y,
+                            self.track-w, self.track-h,
+                            root.viewport-abs-y, root.viewport-height,
+                        );
+                    }
+
+                    init => { self.notify(); }
+                    changed track-x => { self.notify(); }
+                    changed track-y => { self.notify(); }
+                    changed track-w => { self.notify(); }
+                    changed track-h => { self.notify(); }
+                }
             }
 
             if !show-live-frame: Rectangle {
@@ -221,30 +255,23 @@ component StreamCard inherits Rectangle {
             }
 
             if show-live-frame: Rectangle {
-                width: leave-text.preferred-width + 24px;
-                height: 28px;
+                width: ui-fps-text.preferred-width + 20px;
+                height: 24px;
                 x: parent.width - self.width - 16px;
-                y: 16px;
-                border-radius: 14px;
-                background: leave-hover.has-hover ? Theme.accent : Theme.bg-app;
+                y: 48px;
+                border-radius: 12px;
+                background: #000000B3;
                 border-width: 1px;
-                border-color: leave-hover.has-hover ? Theme.accent : Theme.graphic-light;
+                border-color: Theme.graphic-light;
 
-                leave-text := Text {
-                    text: show-live-frame ? "LEAVE" : "STOP";
+                ui-fps-text := Text {
+                    text: "UI \{Math.round(root.stream-ui-render-fps)} fps";
                     font-family: Theme.font-mono;
-                    font-size: 11px;
+                    font-size: 10px;
                     font-weight: 600;
-                    color: leave-hover.has-hover ? #FFFFFF : Theme.text-secondary;
+                    color: #FFFFFF;
                     horizontal-alignment: center;
                     vertical-alignment: center;
-                }
-
-                leave-hover := TouchArea {
-                    mouse-cursor: pointer;
-                    clicked => {
-                        root.stop-watching-clicked();
-                    }
                 }
             }
 
@@ -326,19 +353,52 @@ component StreamCard inherits Rectangle {
                     }
                 }
 
-                HorizontalLayout {
-                    spacing: 4px;
+                Rectangle {
+                    property <length> btn-area-width: (root.card.can-watch ? 3 : 2) * 40px + (root.card.can-watch ? 2 : 1) * 4px;
+                    width: btn-area-width;
 
-                    StreamIconButton {
-                        icon: @image-url("../icons/volume.svg");
+                    ctrl-row := HorizontalLayout {
+                        y: 0;
+                        spacing: 4px;
+
+                        StreamIconButton {
+                            icon: @image-url("../icons/volume.svg");
+                        }
+
+                        StreamIconButton {
+                            icon: @image-url("../icons/settings.svg");
+                        }
+
+                        if root.card.can-watch: StreamIconButton {
+                            icon: @image-url("../icons/maximize.svg");
+                        }
                     }
 
-                    StreamIconButton {
-                        icon: @image-url("../icons/settings.svg");
-                    }
+                    if show-live-frame: Rectangle {
+                        width: parent.width;
+                        height: 28px;
+                        y: 44px;
+                        border-radius: 6px;
+                        background: leave-hover.has-hover ? #B91C1C : #DC2626;
+                        border-width: 1px;
+                        border-color: transparent;
 
-                    if root.card.can-watch: StreamIconButton {
-                        icon: @image-url("../icons/maximize.svg");
+                        Text {
+                            text: "Leave stream";
+                            font-family: Theme.font-mono;
+                            font-size: 11px;
+                            font-weight: 600;
+                            color: #FFFFFF;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+
+                        leave-hover := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => {
+                                root.stop-watching-clicked();
+                            }
+                        }
                     }
                 }
             }
@@ -352,6 +412,9 @@ export component ActiveStreamsPanel inherits Rectangle {
     in property <bool> is-hosting: false;
     in property <string> active-streamer-id: "";
     in property <image> stream-frame;
+    in property <float> stream-ui-render-fps: 0.0;
+    in property <float> viewport-abs-y: 0;
+    in property <float> viewport-height: 0;
 
     callback watch-stream-clicked(string, string, int, int);
     callback stop-stream-clicked();
@@ -369,6 +432,9 @@ export component ActiveStreamsPanel inherits Rectangle {
         is-hosting: root.is-hosting;
         active-streamer-id: root.active-streamer-id;
         stream-frame: root.stream-frame;
+        stream-ui-render-fps: root.stream-ui-render-fps;
+        viewport-abs-y: root.viewport-abs-y;
+        viewport-height: root.viewport-height;
         watch-stream-clicked(host-id, session-id, w, h) => {
             root.watch-stream-clicked(host-id, session-id, w, h);
         }
@@ -402,8 +468,11 @@ export component ActiveStreamsPanel inherits Rectangle {
                     card: root.cards[card-index];
                     is-watching: root.is-watching;
                     is-hosting: root.is-hosting;
+                    viewport-abs-y: root.viewport-abs-y;
+                    viewport-height: root.viewport-height;
                     active-streamer-id: root.active-streamer-id;
                     stream-frame: root.stream-frame;
+                    stream-ui-render-fps: root.stream-ui-render-fps;
                     watch-stream-clicked(host-id, session-id, w, h) => {
                         root.watch-stream-clicked(host-id, session-id, w, h);
                     }

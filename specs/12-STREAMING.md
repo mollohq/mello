@@ -1,37 +1,40 @@
 # Streaming
 
 > **Component:** libmello (C++) · mello-core (Rust) · mello-client (Rust/Slint) · Backend (Go/Nakama)
-> **Status:** Working, shipping iteratively toward Discord-parity
+> **Status:** Windows zero-copy in-scene render path integrated (Phase A RGBA8), tuning/validation in progress
 > **Related:** [03-LIBMELLO.md](./03-LIBMELLO.md), [02-MELLO-CORE.md](./02-MELLO-CORE.md), [14-VIDEO-PIPELINE.md](./14-VIDEO-PIPELINE.md), [13-SFU.md](./13-SFU.md)
 
 ---
 
 ## 1. Goals
 
-Ship 1080p60 game streaming comparable to Discord/Parsec: hardware-accelerated encode/decode, sub-60ms WAN latency, graceful degradation under network stress. Favour visible quality loss (artifacts, lower bitrate) over lag or stalling.
+Ship 1080p60 game streaming comparable to Discord/Parsec with a zero-copy in-scene renderer path in the desktop client: hardware-accelerated encode/decode, sub-60ms WAN latency, and stable UI render cadence. Favor visible quality loss (artifacts, lower bitrate) over lag or stalling.
 
 ---
 
 ## 2. Layer Overview
 
-The streaming system is split across three layers. Understanding which layer owns what is the single most important thing for working on this code.
+The streaming system is split across four layers. Understanding ownership boundaries is the most important thing for working on this stack.
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
+│  mello-client (Rust/Slint)                                      │
+│  In-scene stream card rendering via Skia texture import hook     │
+├─────────────────────────────────────────────────────────────────┤
 │  mello-core  (Rust)                                             │
 │  Stream lifecycle, transport, framing, FEC, ABR, recovery,      │
-│  viewer chunk reassembly, pacing, quality presets, telemetry     │
+│  viewer chunk reassembly, frame-lifecycle contract, telemetry    │
 ├─────────────────────────────────────────────────────────────────┤
 │  libmello  (C++)                                                │
 │  Hardware capture, GPU color conversion, hardware encode/decode, │
-│  decoded-frame ring, present, cursor, process enumeration        │
+│  decoded-frame ring, native frame callback contract              │
 ├─────────────────────────────────────────────────────────────────┤
 │  mello-sys  (Rust FFI bindings, auto-generated via bindgen)     │
 │  Thin unsafe bridge between mello-core and libmello             │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-mello-core never touches pixels. libmello never touches the network. `mello-sys` is the membrane.
+mello-core never touches pixel memory. libmello never touches transport policy. mello-client owns presentation only. `mello-sys` is the FFI membrane.
 
 ---
 
@@ -178,8 +181,8 @@ The client never decides topology. The backend's `start_stream` RPC response car
 ## 7. Viewer Pipeline
 
 ```
-DataChannel → Chunk Reassembly → StreamViewer → Decode → Ring Buffer → Present
-                (ChunkAssembler)   (FEC, loss)    (NVDEC)   (mutex-guarded)  (jitter-gated)
+DataChannel → Chunk Reassembly → StreamViewer → Decode → NativeSurfaceFrame slot → Slint in-scene render
+                (ChunkAssembler)   (FEC, loss)    (HW dec)   (latest-frame-wins)      (Skia texture import)
 ```
 
 ### 7.1 Chunk Reassembly
@@ -202,17 +205,27 @@ NVDEC (CUDA↔D3D11 interop, zero-copy R8 layout), AMF, D3D11VA, OpenH264 on Win
 
 ### 7.4 Decoded-Frame Ring
 
-A 3-slot ring buffer in `VideoPipeline` holding decoded GPU textures. Guarded by a mutex — `push_decoded` (from the feed/decode thread) and `pop_decoded` (from the present/UI thread) are synchronized.
+A 3-slot ring buffer in `VideoPipeline` holds decoded GPU textures. Guarded by a mutex: `push_decoded` (decode/feed thread) and `pop_decoded` (present path) are synchronized.
 
 When the ring is full, the oldest frame is evicted (newest-wins, same principle as the encode queue).
 
-### 7.5 Jitter Buffer and Presentation
+### 7.5 Jitter Buffer and Native Surface Contract
 
-`present_frame()` doesn't pop immediately. It waits until the ring has ≥ 2 frames (or 50ms since the last present, whichever comes first). This absorbs network and decode timing jitter, producing steadier frame cadence.
+`present_frame()` doesn't pop immediately. It waits until the ring has >= 2 frames (or 50ms since the last present, whichever comes first). This absorbs network/decode jitter and stabilizes cadence.
 
-The Rust `stream_tick` calls `mello_stream_present_frame` up to 3 times per tick. The present path prefers the native D3D11 shared-texture handoff (zero-copy to the Slint presenter), falling back to CPU RGBA readback when native isn't available.
+The Rust `stream_tick` drives `mello_stream_present_frame`, which emits `on_viewer_native_frame` metadata into a single latest-frame slot (`NativeSurfaceFrame`). Lifecycle transitions are explicit: `READY -> LATCHED -> PRESENTED`. The client render path is native-texture only in steady state, with no runtime CPU image fallback.
 
-### 7.6 Backlog Guard
+### 7.6 Slint In-Scene Zero-Copy Rendering (Windows)
+
+The stream card stays a normal Slint `Image` node, but the image source is a 1x1 marker that is intercepted by a local renderer extension in vendored `i-slint-renderer-skia`:
+
+- `mello-client` installs a global external texture provider.
+- During Skia item rendering, marker images bypass normal pixel cache and call the provider every frame.
+- The provider opens the shared texture handle and imports it into a Skia image, then the normal Slint clip/scroll/layout pipeline draws it.
+
+This gives in-scene ownership (scrolling/clipping behaves correctly) while avoiding per-frame `copy_from_slice` + `Image::from_rgba8` uploads.
+
+### 7.7 Backlog Guard
 
 If the decode queue depth exceeds a threshold, the viewer drops incoming delta frames (keeping keyframes) and optionally requests an IDR. This prevents the decode ring from falling behind during sustained network bursts.
 
@@ -273,7 +286,8 @@ The host captures cursor state (position, visibility, shape RGBA) alongside vide
 2. For SFU: connects to the SFU endpoint, joins the session, negotiates WebRTC.
 3. Waits for the first signaling exchange to learn the host's encode resolution.
 4. Creates the decoder pipeline at the correct resolution (`mello_stream_start_viewer`).
-5. `stream_tick` runs each frame: poll network → reassemble → feed decoder → present.
+5. `stream_tick` runs each frame: poll network -> reassemble -> feed decoder -> present.
+6. Slint render pass imports the latest native texture into the stream card in-scene.
 
 ### Teardown
 
@@ -292,6 +306,15 @@ Encoder periodic (every 300 frames): `convert_ms`, `encode_ms`, `eq_depth`, `eq_
 ### Viewer-side (per second)
 
 `dec_fps`, `native_fps`, `present_true_hz`, `ingress_kbps`, `feed_video_hz`, `feed_video_fail_hz`, `decode_stall_ms`, `decode_backlog_est`, chunk stats (`completed_hz`, `invalid_hz`, `evicted_hz`, `late_hz`), `backlog_guard_*`.
+
+Zero-copy specific diagnostics:
+
+- `ui_render_fps` (actual in-scene rendered cadence)
+- native surface descriptor cadence + sequence gaps
+- zero-copy import success/fail rates
+- no-new-frame tick rate
+- unsupported format counts
+- explicit fatal init/import error logs that trigger clean `StopWatching`
 
 ### Probe tools
 
@@ -323,6 +346,12 @@ Encoder periodic (every 300 frames): `convert_ms`, `encode_ms`, `eq_depth`, `eq_
 | Viewer tick loop | `mello-core/src/client/streaming.rs` |
 | Chunk assembler | `mello-core/src/client/stream_ffi.rs` |
 | SFU connection | `mello-core/src/transport/sfu_connection.rs` |
+| Client zero-copy bridge | `client/src/stream_zero_copy.rs` |
+| Client render loop + metrics | `client/src/main.rs` |
+| Slint stream card UI | `client/ui/panels/active_streams_panel.slint` |
+| Vendored Slint hook seam | `vendor/i-slint-renderer-skia-1.16.1/lib.rs` |
+| Vendored marker image import path | `vendor/i-slint-renderer-skia-1.16.1/cached_image.rs` |
+| Vendored per-frame image bypass | `vendor/i-slint-renderer-skia-1.16.1/itemrenderer.rs` |
 | **C++ video pipeline** | `libmello/src/video/video_pipeline.cpp` |
 | DXGI capture | `libmello/src/video/capture_dxgi.cpp` |
 | WGC capture | `libmello/src/video/capture_wgc.cpp` |
@@ -343,7 +372,7 @@ Encoder periodic (every 300 frames): `convert_ms`, `encode_ms`, `eq_depth`, `eq_
 
 ## 14. Current State and Known Gaps
 
-**What works well:** Process-aware capture with hot-swap, deferred start, DXGI adaptive throttle, GPU preprocessing, async NVENC, mutex-guarded decoded ring, whole-frame egress drops, proper IDR detection, SFU telemetry, jitter buffer, native D3D11 presentation, FEC, rate-limited recovery, probe tooling.
+**What works well:** Process-aware capture with hot-swap, deferred start, DXGI adaptive throttle, GPU preprocessing, async NVENC, mutex-guarded decoded ring, whole-frame egress drops, proper IDR detection, SFU telemetry, jitter buffer, in-scene Slint zero-copy texture import (Windows RGBA8 path), FEC, rate-limited recovery, probe tooling.
 
 **Known gaps and future work:**
 
@@ -356,6 +385,42 @@ Encoder periodic (every 300 frames): `convert_ms`, `encode_ms`, `eq_depth`, `eq_
 | Audio capture is stubbed | Game audio doesn't stream yet | Small |
 | Input passthrough not implemented | No remote control | Large |
 | ABR needs tuning | Step changes can oscillate; needs trend-based smoothing | Medium |
-| Native presenter viewport tied to Slint layout constants | Layout changes can misplace the stream window | Small |
+| Zero-copy import currently wired for RGBA8 native handles first | NV12 direct import path still pending | Medium |
+| Adapter/device mismatch diagnostics are log-based only | Better in-UI error reasons still needed | Small |
+| 720p60/1080p60 acceptance sweep still pending on full host/viewer setup | Performance target not yet certified end-to-end | Medium |
 | macOS VideoToolbox session churn | Decode FPS drops on SPS/PPS change | Small |
 | Per-viewer ABR in SFU mode | SFU doesn't transcode; all viewers get same bitrate | Large (SFU work) |
+
+---
+
+## 15. Validation Playbook (Windows)
+
+Use this checklist to validate the zero-copy in-scene path after stream-related changes.
+
+### 15.1 Pre-conditions
+
+- Host and viewer run in release mode.
+- Test both 720p60 and 1080p60 scenarios.
+- Keep game scene representative (motion + static UI content).
+
+### 15.2 Run commands
+
+Host:
+
+- `./scripts/run-stream-host.ps1 -CrewId "<crew-id>"`
+
+Viewer:
+
+- `./scripts/run-stream-viewer.ps1 -HostId "<host-user-id>" -CrewId "<crew-id>"`
+
+Optional local loopback smoke:
+
+- `cargo test -p mello-sys --test video_pipeline host_to_viewer_loopback -- --nocapture`
+
+### 15.3 Acceptance gates
+
+- `dbg_stream_ui_render_fps` tracks near source cadence (target: near 60 on stable 60fps source).
+- zero-copy import failure logs stay at zero during steady state.
+- no per-frame `Image::from_rgba8` upload path is active for live stream rendering.
+- stream remains clipped/scrolled correctly inside stream cards.
+- watch-stream init failures surface as explicit UI/log errors and stop watching cleanly.

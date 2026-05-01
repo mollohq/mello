@@ -22,7 +22,10 @@ pub mod stream;
 pub mod transport;
 pub mod voice;
 
-pub use client::{Client, FrameSlot, NativeFrameSlot};
+pub use client::{
+    Client, FrameLifecycleSlot, FrameSlot, NativeFrameSlot, NativeSurfaceFrame, FRAME_STATE_IDLE,
+    FRAME_STATE_LATCHED, FRAME_STATE_PRESENTED, FRAME_STATE_READY,
+};
 pub use command::Command;
 pub use config::Config;
 pub use error::{Error, Result};

@@ -8,12 +8,16 @@ use crate::voice::{SignalEnvelope, SignalMessage, SignalPurpose};
 
 use super::FrameSlot;
 use super::NativeFrameSlot;
+use super::NativeSurfaceFrame;
+use super::FRAME_STATE_READY;
 
 pub(super) struct FrameCallbackData {
+    #[cfg_attr(target_os = "windows", allow(dead_code))]
     pub frame_slot: FrameSlot,
     pub native_frame_slot: NativeFrameSlot,
-    pub native_frame_active: Arc<std::sync::atomic::AtomicBool>,
     pub frame_consumed: Arc<std::sync::atomic::AtomicBool>,
+    pub frame_lifecycle: Arc<std::sync::atomic::AtomicU8>,
+    pub surface_frame_seq: Arc<std::sync::atomic::AtomicU64>,
 }
 
 /// Reassembles chunked DataChannel messages back into full StreamPackets.
@@ -180,6 +184,7 @@ unsafe impl Sync for StreamHostPeer {}
 pub(super) struct StreamHostHandle(pub *mut mello_sys::MelloStreamHost);
 unsafe impl Send for StreamHostHandle {}
 
+#[cfg_attr(target_os = "windows", allow(dead_code))]
 pub(super) unsafe extern "C" fn on_viewer_frame(
     user_data: *mut std::ffi::c_void,
     rgba: *const u8,
@@ -206,6 +211,8 @@ pub(super) unsafe extern "C" fn on_viewer_frame(
         }
         data.frame_consumed
             .store(false, std::sync::atomic::Ordering::Release);
+        data.frame_lifecycle
+            .store(FRAME_STATE_READY, std::sync::atomic::Ordering::Release);
     }
 }
 
@@ -222,16 +229,28 @@ pub(super) unsafe extern "C" fn on_viewer_native_frame(
         return;
     }
     let data = &*(user_data as *const FrameCallbackData);
-    data.native_frame_active
-        .store(true, std::sync::atomic::Ordering::Release);
     if let Ok(mut slot) = data.native_frame_slot.lock() {
         // MelloNativeFrameFormat is u32 on macOS (clang) but i32 on Windows (MSVC);
         // cast is necessary for Windows, no-op on macOS.
         #[allow(clippy::unnecessary_cast)]
         let fmt = format as u32;
-        *slot = Some((w, h, shared_handle as usize, fmt, uv_y_offset, ts));
+        let sequence = data
+            .surface_frame_seq
+            .fetch_add(1, std::sync::atomic::Ordering::AcqRel)
+            .saturating_add(1);
+        *slot = Some(NativeSurfaceFrame {
+            sequence,
+            width: w,
+            height: h,
+            shared_handle: shared_handle as usize,
+            format: fmt,
+            uv_y_offset,
+            timestamp: ts,
+        });
         data.frame_consumed
             .store(false, std::sync::atomic::Ordering::Release);
+        data.frame_lifecycle
+            .store(FRAME_STATE_READY, std::sync::atomic::Ordering::Release);
     }
 }
 

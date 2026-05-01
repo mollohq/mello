@@ -453,7 +453,8 @@ bool VideoPipeline::start_viewer(const PipelineConfig& config, FrameCallback on_
     staging_ = std::make_unique<StagingTexture>();
     DXGI_FORMAT frame_fmt = decoder_->frame_format();
     uint32_t uv_offset = decoder_->coded_height();
-    if (!staging_->initialize(device_, config.width, config.height, frame_fmt, uv_offset)) {
+    const bool enable_cpu_readback = static_cast<bool>(frame_cb_);
+    if (!staging_->initialize(device_, config.width, config.height, frame_fmt, uv_offset, enable_cpu_readback)) {
         MELLO_LOG_ERROR(TAG, "Failed to initialize staging texture");
         return false;
     }
@@ -470,7 +471,12 @@ bool VideoPipeline::start_viewer(const PipelineConfig& config, FrameCallback on_
     }
 #endif
 
-    rgba_buf_.resize(static_cast<size_t>(config.width) * config.height * 4);
+    if (frame_cb_) {
+        rgba_buf_.resize(static_cast<size_t>(config.width) * config.height * 4);
+    } else {
+        rgba_buf_.clear();
+        rgba_buf_.shrink_to_fit();
+    }
 
     viewer_running_    = true;
     viewer_start_time_ = now_us();
@@ -488,10 +494,6 @@ bool VideoPipeline::start_viewer(const PipelineConfig& config, FrameCallback on_
 
 void VideoPipeline::set_native_frame_callback(NativeFrameCallback on_native_frame) {
     native_frame_cb_ = std::move(on_native_frame);
-}
-
-void VideoPipeline::set_native_frame_mirror_rgba(bool enabled) {
-    native_frame_mirror_rgba_ = enabled;
 }
 
 void VideoPipeline::stop_viewer() {
@@ -596,7 +598,6 @@ bool VideoPipeline::present_frame() {
     ID3D11Texture2D* frame = pop_decoded();
     if (!frame) return false;
     last_present_us_ = now_us();
-    const bool mirror_native_to_rgba = native_frame_mirror_rgba_;
 
     // Native GPU presenter path: first try direct decoded-texture handoff.
     if (native_frame_cb_) {
@@ -615,30 +616,23 @@ bool VideoPipeline::present_frame() {
             if (native_fmt != NATIVE_FMT_UNKNOWN) {
                 uint32_t uv_offset = decoder_->shared_frame_uv_offset();
                 if (uv_offset == 0) uv_offset = config_.height;
-                native_frame_cb_(
-                    direct_handle,
-                    config_.width,
-                    config_.height,
-                    native_fmt,
-                    uv_offset,
-                    now_us()
-                );
-                if (!mirror_native_to_rgba) {
+                if (native_fmt == NATIVE_FMT_RGBA8) {
+                    native_frame_cb_(
+                        direct_handle,
+                        config_.width,
+                        config_.height,
+                        native_fmt,
+                        uv_offset,
+                        now_us()
+                    );
                     return true;
                 }
-
-                staging_->copy_from(frame, true);
-                staging_->read_rgba(rgba_buf_.data());
-                if (frame_cb_) {
-                    frame_cb_(rgba_buf_.data(), config_.width, config_.height, now_us());
-                }
-                return true;
             }
         }
 
-        // Fallback: GPU convert to shared RGBA surface for presenter.
+        // Fallback: GPU convert to shared RGBA surface for native handle callback.
         if (staging_->shared_rgba_handle()) {
-            staging_->copy_from(frame, mirror_native_to_rgba);
+            staging_->copy_from(frame, false);
             native_frame_cb_(
                 staging_->shared_rgba_handle(),
                 config_.width,
@@ -647,16 +641,13 @@ bool VideoPipeline::present_frame() {
                 config_.height,
                 now_us()
             );
-            if (!mirror_native_to_rgba) {
-                return true;
-            }
-
-            staging_->read_rgba(rgba_buf_.data());
-            if (frame_cb_) {
-                frame_cb_(rgba_buf_.data(), config_.width, config_.height, now_us());
-            }
             return true;
         }
+    }
+
+    if (!frame_cb_) {
+        // Zero-copy native callback is required in this mode; no CPU RGBA fallback.
+        return false;
     }
 
     staging_->copy_from(frame, true);

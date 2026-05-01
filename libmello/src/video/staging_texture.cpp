@@ -5,6 +5,7 @@
 #include <chrono>
 #include <cstring>
 #include <dxgi.h>
+#include <dxgi1_2.h>
 
 namespace mello::video {
 
@@ -108,24 +109,29 @@ bool StagingTexture::init_gpu_converter() {
     // into the texture the presenter opens (skip one CopyResource per frame).
     D3D11_TEXTURE2D_DESC shared_desc = rgba_desc;
     shared_desc.BindFlags = D3D11_BIND_UNORDERED_ACCESS | D3D11_BIND_SHADER_RESOURCE;
-    shared_desc.MiscFlags = D3D11_RESOURCE_MISC_SHARED;
+    shared_desc.MiscFlags = D3D11_RESOURCE_MISC_SHARED | D3D11_RESOURCE_MISC_SHARED_NTHANDLE;
     hr = device_->CreateTexture2D(&shared_desc, nullptr, &shared_rgba_tex_);
     if (SUCCEEDED(hr)) {
-        Microsoft::WRL::ComPtr<IDXGIResource> dxgi_res;
+        Microsoft::WRL::ComPtr<IDXGIResource1> dxgi_res;
         hr = shared_rgba_tex_.As(&dxgi_res);
         if (FAILED(hr)) {
-            MELLO_LOG_WARN(TAG, "Query IDXGIResource on shared texture failed: 0x%08X", hr);
+            MELLO_LOG_WARN(TAG, "Query IDXGIResource1 on shared texture failed: 0x%08X", hr);
             shared_rgba_tex_.Reset();
         } else {
             HANDLE h = nullptr;
-            hr = dxgi_res->GetSharedHandle(&h);
+            hr = dxgi_res->CreateSharedHandle(
+                nullptr,
+                DXGI_SHARED_RESOURCE_READ | DXGI_SHARED_RESOURCE_WRITE,
+                nullptr,
+                &h
+            );
             if (FAILED(hr) || !h) {
-                MELLO_LOG_WARN(TAG, "GetSharedHandle failed: 0x%08X", hr);
+                MELLO_LOG_WARN(TAG, "CreateSharedHandle failed: 0x%08X", hr);
                 shared_rgba_tex_.Reset();
             } else {
                 shared_rgba_handle_ = reinterpret_cast<void*>(h);
                 rgba_tex_ = shared_rgba_tex_;
-                MELLO_LOG_INFO(TAG, "Shared RGBA texture initialized for native presenter");
+                MELLO_LOG_INFO(TAG, "Shared RGBA texture initialized for in-scene zero-copy renderer");
             }
         }
     } else {
@@ -164,13 +170,14 @@ bool StagingTexture::init_gpu_converter() {
 }
 
 bool StagingTexture::initialize(const GraphicsDevice& device, uint32_t width, uint32_t video_height,
-                                DXGI_FORMAT format, uint32_t uv_y_offset) {
+                                DXGI_FORMAT format, uint32_t uv_y_offset, bool enable_cpu_readback) {
     device_ = device.d3d11();
     device_->GetImmediateContext(&context_);
     width_        = width;
     video_height_ = video_height;
     uv_y_offset_  = uv_y_offset ? uv_y_offset : video_height;
     format_       = format;
+    cpu_readback_enabled_ = enable_cpu_readback;
 
     // For R8 sources, try GPU compute shader path
     if (format == DXGI_FORMAT_R8_UNORM) {
@@ -192,27 +199,32 @@ bool StagingTexture::initialize(const GraphicsDevice& device, uint32_t width, ui
         staging_h   = video_height;
     }
 
-    D3D11_TEXTURE2D_DESC desc{};
-    desc.Width  = width;
-    desc.Height = staging_h;
-    desc.MipLevels = 1;
-    desc.ArraySize = 1;
-    desc.Format = staging_fmt;
-    desc.SampleDesc.Count = 1;
-    desc.Usage = D3D11_USAGE_STAGING;
-    desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+    if (cpu_readback_enabled_) {
+        D3D11_TEXTURE2D_DESC desc{};
+        desc.Width  = width;
+        desc.Height = staging_h;
+        desc.MipLevels = 1;
+        desc.ArraySize = 1;
+        desc.Format = staging_fmt;
+        desc.SampleDesc.Count = 1;
+        desc.Usage = D3D11_USAGE_STAGING;
+        desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
 
-    HRESULT hr = device_->CreateTexture2D(&desc, nullptr, &staging_);
-    if (FAILED(hr)) {
-        MELLO_LOG_ERROR(TAG, "Failed to create staging texture: hr=0x%08X", hr);
-        return false;
+        HRESULT hr = device_->CreateTexture2D(&desc, nullptr, &staging_);
+        if (FAILED(hr)) {
+            MELLO_LOG_ERROR(TAG, "Failed to create staging texture: hr=0x%08X", hr);
+            return false;
+        }
+    } else {
+        staging_.Reset();
     }
 
     const char* path_str = gpu_convert_ ? "GPU compute" : "CPU";
     const char* fmt_str  = (staging_fmt == DXGI_FORMAT_R8G8B8A8_UNORM) ? "RGBA"
                          : (staging_fmt == DXGI_FORMAT_R8_UNORM) ? "R8" : "NV12";
-    MELLO_LOG_INFO(TAG, "Staging texture initialized: %ux%u %s (video %ux%u, uv_offset=%u, convert=%s)",
-        width, staging_h, fmt_str, width, video_height, uv_y_offset_, path_str);
+    MELLO_LOG_INFO(TAG, "Staging texture initialized: %ux%u %s (video %ux%u, uv_offset=%u, convert=%s, cpu_readback=%s)",
+        width, staging_h, fmt_str, width, video_height, uv_y_offset_, path_str,
+        cpu_readback_enabled_ ? "on" : "off");
     return true;
 }
 
@@ -306,17 +318,21 @@ void StagingTexture::copy_from(ID3D11Texture2D* source, bool copy_to_cpu_staging
         }
 
         // Copy RGBA result to staging for CPU readback path.
-        if (copy_to_cpu_staging) {
+        if (copy_to_cpu_staging && staging_) {
             context_->CopyResource(staging_.Get(), rgba_tex_.Get());
         }
     } else {
-        if (copy_to_cpu_staging) {
+        if (copy_to_cpu_staging && staging_) {
             context_->CopyResource(staging_.Get(), source);
         }
     }
 }
 
 void StagingTexture::read_rgba(uint8_t* out) {
+    if (!staging_) {
+        MELLO_LOG_ERROR(TAG, "read_rgba requested but CPU staging texture is not initialized");
+        return;
+    }
     auto t0 = std::chrono::steady_clock::now();
 
     D3D11_MAPPED_SUBRESOURCE mapped{};
@@ -400,6 +416,9 @@ void StagingTexture::read_rgba(uint8_t* out) {
 }
 
 void StagingTexture::shutdown() {
+    if (shared_rgba_handle_) {
+        ::CloseHandle(reinterpret_cast<HANDLE>(shared_rgba_handle_));
+    }
     shared_rgba_handle_ = nullptr;
     shared_rgba_tex_.Reset();
     src_srv_.Reset();

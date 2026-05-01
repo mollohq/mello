@@ -39,8 +39,31 @@ const VIEWER_RECV_BUF_SIZE: usize = 64 * 1024;
 /// unbounded queue buildup that occurs when sending ~11 MB frames through a
 /// channel at 30+ fps.
 pub type FrameSlot = Arc<std::sync::Mutex<Option<(u32, u32, Vec<u8>)>>>;
-/// Shared single-slot for native GPU frame metadata (shared texture handle).
-pub type NativeFrameSlot = Arc<std::sync::Mutex<Option<(u32, u32, usize, u32, u32, u64)>>>;
+/// Typed metadata for a native GPU frame surface shared from libmello.
+///
+/// This is the canonical frame-surface contract at the Rust/UI boundary.
+/// It intentionally carries only descriptor metadata; texture ownership stays
+/// in native code and consumers import the shared handle on demand.
+#[derive(Debug, Clone, Copy)]
+pub struct NativeSurfaceFrame {
+    pub sequence: u64,
+    pub width: u32,
+    pub height: u32,
+    pub shared_handle: usize,
+    pub format: u32,
+    pub uv_y_offset: u32,
+    pub timestamp: u64,
+}
+
+/// Shared single-slot for latest native GPU frame surface descriptor.
+pub type NativeFrameSlot = Arc<std::sync::Mutex<Option<NativeSurfaceFrame>>>;
+/// Shared lifecycle state for viewer frame ownership handoff.
+pub type FrameLifecycleSlot = Arc<std::sync::atomic::AtomicU8>;
+
+pub const FRAME_STATE_IDLE: u8 = 0;
+pub const FRAME_STATE_READY: u8 = 1;
+pub const FRAME_STATE_LATCHED: u8 = 2;
+pub const FRAME_STATE_PRESENTED: u8 = 3;
 
 pub struct Client {
     nakama: NakamaClient,
@@ -48,8 +71,9 @@ pub struct Client {
     event_tx: std::sync::mpsc::Sender<Event>,
     frame_slot: FrameSlot,
     native_frame_slot: NativeFrameSlot,
-    native_frame_active: Arc<std::sync::atomic::AtomicBool>,
     frame_consumed: Arc<std::sync::atomic::AtomicBool>,
+    frame_lifecycle: FrameLifecycleSlot,
+    surface_frame_seq: Arc<std::sync::atomic::AtomicU64>,
     stream_session: Option<StreamSession>,
     stream_host_sink: Option<Arc<dyn PacketSink>>,
     stream_sink: Option<Arc<P2PFanoutSink>>,
@@ -90,6 +114,7 @@ impl Client {
         frame_slot: FrameSlot,
         native_frame_slot: NativeFrameSlot,
         frame_consumed: Arc<std::sync::atomic::AtomicBool>,
+        frame_lifecycle: FrameLifecycleSlot,
     ) -> Self {
         Self::new_with_game_sensor(
             config,
@@ -98,12 +123,24 @@ impl Client {
             frame_slot,
             native_frame_slot,
             frame_consumed,
+            frame_lifecycle,
             true,
         )
     }
 
+    /// Sequence counter for native surface descriptors produced by callbacks.
+    pub fn surface_frame_seq(&self) -> Arc<std::sync::atomic::AtomicU64> {
+        self.surface_frame_seq.clone()
+    }
+
+    /// Shared frame lifecycle state used by stream_tick() and UI compositor.
+    pub fn frame_lifecycle_slot(&self) -> FrameLifecycleSlot {
+        self.frame_lifecycle.clone()
+    }
+
     /// Construct a client and optionally disable game sensing. Voice-only tools
     /// should turn this off to avoid unrelated process scanning overhead.
+    #[allow(clippy::too_many_arguments)]
     pub fn new_with_game_sensor(
         config: Config,
         event_tx: std::sync::mpsc::Sender<Event>,
@@ -111,6 +148,7 @@ impl Client {
         frame_slot: FrameSlot,
         native_frame_slot: NativeFrameSlot,
         frame_consumed: Arc<std::sync::atomic::AtomicBool>,
+        frame_lifecycle: FrameLifecycleSlot,
         enable_game_sensor: bool,
     ) -> Self {
         Self {
@@ -119,8 +157,9 @@ impl Client {
             event_tx,
             frame_slot,
             native_frame_slot,
-            native_frame_active: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             frame_consumed,
+            frame_lifecycle,
+            surface_frame_seq: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             stream_session: None,
             stream_host_sink: None,
             stream_sink: None,

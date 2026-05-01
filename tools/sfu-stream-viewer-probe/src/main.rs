@@ -428,7 +428,6 @@ fn main() {
                 Some(on_native_frame),
                 std::ptr::null_mut(),
             );
-            mello_sys::mello_stream_set_native_frame_mirror_rgba(viewer, true);
         }
     }
     VIEWER_READY.store(true, Ordering::Relaxed);

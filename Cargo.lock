@@ -3886,6 +3886,7 @@ dependencies = [
  "open",
  "paste",
  "rand 0.8.5",
+ "raw-window-handle",
  "rdev",
  "reqwest",
  "resvg",
@@ -3905,6 +3906,7 @@ dependencies = [
  "uuid",
  "velopack",
  "windows 0.62.2",
+ "windows-numerics 0.3.1",
  "winresource",
 ]
 

@@ -63,7 +63,6 @@ public:
         return decoded_ring_count_;
     }
     void set_native_frame_callback(NativeFrameCallback on_native_frame);
-    void set_native_frame_mirror_rgba(bool enabled);
 
     // CURSOR
     bool get_cursor_packet(uint8_t* buf, size_t* size);
@@ -95,7 +94,6 @@ private:
     PacketCallback  packet_cb_;
     FrameCallback   frame_cb_;
     NativeFrameCallback native_frame_cb_;
-    bool native_frame_mirror_rgba_ = false;
     PipelineConfig  config_{};
 
     std::atomic<bool> host_running_{false};

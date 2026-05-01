@@ -48,6 +48,12 @@ pub fn start(
         fg_monitor: ctx.fg_monitor.clone(),
         pending_deep_link: ctx.pending_deep_link.clone(),
         ipc_listener: ctx.ipc_listener.clone(),
+        #[cfg(target_os = "windows")]
+        native_frame_slot: ctx.native_frame_slot.clone(),
+        #[cfg(target_os = "windows")]
+        frame_lifecycle: ctx.frame_lifecycle.clone(),
+        #[cfg(target_os = "windows")]
+        dcomp_presenter: ctx.dcomp_presenter.clone(),
     };
 
     let saved_timer = Rc::new(slint::Timer::default());

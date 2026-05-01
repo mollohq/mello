@@ -178,3 +178,11 @@ export struct SearchUserData {
     display-name: string,
     is-friend: bool,
 }
+
+export global VideoRect {
+    // Pushed by StreamCard's changed handlers every time absolute-position,
+    // width, or height changes (scroll, resize, layout reflow).
+    // Args: canvas_x, canvas_y, canvas_w, canvas_h, viewport_y, viewport_h
+    // All in logical pixels; Rust multiplies by scale_factor.
+    callback geometry-changed(float, float, float, float, float, float);
+}

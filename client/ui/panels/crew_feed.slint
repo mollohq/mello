@@ -1445,6 +1445,7 @@ export component CrewFeed inherits Rectangle {
     in property <bool> is-watching: false;
     in property <string> active-streamer-id: "";
     in property <image> stream-frame;
+    in property <float> stream-ui-render-fps: 0.0;
 
     in property <string> clip-playing-path: "";
     in property <float> clip-progress: 0.0;
@@ -1555,7 +1556,7 @@ export component CrewFeed inherits Rectangle {
         }
 
         // Scrollable feed area
-        Flickable {
+        feed-flick := Flickable {
             vertical-stretch: 1;
 
             VerticalLayout {
@@ -1581,6 +1582,9 @@ export component CrewFeed inherits Rectangle {
                             is-watching: root.is-watching;
                             active-streamer-id: root.active-streamer-id;
                             stream-frame: root.stream-frame;
+                            stream-ui-render-fps: root.stream-ui-render-fps;
+                            viewport-abs-y: feed-flick.absolute-position.y / 1px;
+                            viewport-height: feed-flick.height / 1px;
                             watch-stream-clicked(host-id, session-id, w, h) => {
                                 root.watch-stream-clicked(host-id, session-id, w, h);
                             }
@@ -1617,6 +1621,9 @@ export component CrewFeed inherits Rectangle {
                     is-watching: root.is-watching;
                     active-streamer-id: root.active-streamer-id;
                     stream-frame: root.stream-frame;
+                    stream-ui-render-fps: root.stream-ui-render-fps;
+                    viewport-abs-y: feed-flick.absolute-position.y / 1px;
+                    viewport-height: feed-flick.height / 1px;
                     watch-stream-clicked(host-id, session-id, w, h) => {
                         root.watch-stream-clicked(host-id, session-id, w, h);
                     }
@@ -1636,6 +1643,9 @@ export component CrewFeed inherits Rectangle {
                     is-watching: root.is-watching;
                     active-streamer-id: root.active-streamer-id;
                     stream-frame: root.stream-frame;
+                    stream-ui-render-fps: root.stream-ui-render-fps;
+                    viewport-abs-y: feed-flick.absolute-position.y / 1px;
+                    viewport-height: feed-flick.height / 1px;
                     watch-stream-clicked(host-id, session-id, w, h) => {
                         root.watch-stream-clicked(host-id, session-id, w, h);
                     }

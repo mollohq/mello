@@ -5,6 +5,8 @@ mod autolaunch;
 mod avatar;
 mod callbacks;
 mod converters;
+#[cfg(target_os = "windows")]
+pub mod dcomp_presenter;
 mod deep_link;
 mod foreground_monitor;
 mod gif_animator;
@@ -13,8 +15,6 @@ pub mod hud_manager;
 mod hud_state_builder;
 mod image_cache;
 mod ipc;
-#[cfg(target_os = "windows")]
-mod native_stream_presenter;
 mod notifications;
 mod platform;
 mod poll_loop;
@@ -25,7 +25,7 @@ pub const APP_NAME: &str = "m3llo";
 
 slint::include_modules!();
 
-use mello_core::{Client, Command, Config, Event};
+use mello_core::{Client, Command, Config, Event, FrameLifecycleSlot, FRAME_STATE_PRESENTED};
 use platform::StatusItem;
 use settings::Settings;
 use slint::{ComponentHandle, Model};
@@ -34,13 +34,7 @@ use std::rc::Rc;
 use std::time::Instant;
 use updater::{UpdateEvent, Updater};
 
-#[cfg(target_os = "windows")]
-use i_slint_backend_winit::winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
-#[cfg(target_os = "windows")]
-use i_slint_backend_winit::WinitWindowAccessor;
 use single_instance::SingleInstance;
-#[cfg(target_os = "windows")]
-use windows::Win32::Foundation::HWND;
 
 const HISTORY_LEN: usize = 30;
 
@@ -227,9 +221,12 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
     let native_frame_slot: mello_core::NativeFrameSlot =
         std::sync::Arc::new(std::sync::Mutex::new(None));
     let frame_consumed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let frame_lifecycle: FrameLifecycleSlot =
+        std::sync::Arc::new(std::sync::atomic::AtomicU8::new(FRAME_STATE_PRESENTED));
     let frame_slot_for_client = frame_slot.clone();
     let native_frame_slot_for_client = native_frame_slot.clone();
     let frame_consumed_for_client = frame_consumed.clone();
+    let frame_lifecycle_for_client = frame_lifecycle.clone();
 
     rt.spawn(async move {
         let mut client = Client::new(
@@ -239,6 +236,7 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
             frame_slot_for_client,
             native_frame_slot_for_client,
             frame_consumed_for_client,
+            frame_lifecycle_for_client,
         );
         client.run(cmd_rx).await;
     });
@@ -259,6 +257,10 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
 
     let app = MainWindow::new()?;
     app.set_settings_build_version(format!("v{}", env!("CARGO_PKG_VERSION")).into());
+
+    #[cfg(target_os = "windows")]
+    let dcomp_presenter: Rc<RefCell<Option<dcomp_presenter::DCompPresenter>>> =
+        Rc::new(RefCell::new(None));
 
     // --- macOS native menu bar ---
     #[cfg(target_os = "macos")]
@@ -403,11 +405,42 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
         fg_monitor,
         pending_deep_link: Rc::new(RefCell::new(pending_deep_link)),
         ipc_listener: Rc::new(RefCell::new(ipc_listener)),
+        #[cfg(target_os = "windows")]
+        native_frame_slot: native_frame_slot.clone(),
+        #[cfg(target_os = "windows")]
+        frame_lifecycle: frame_lifecycle.clone(),
+        #[cfg(target_os = "windows")]
+        dcomp_presenter: dcomp_presenter.clone(),
     };
 
     // --- Wire all callbacks ---
     callbacks::wire_all(&ctx);
     log::info!("[startup] callbacks wired");
+
+    // --- Wire DComp geometry callback (Slint → Rust, synchronous) ---
+    #[cfg(target_os = "windows")]
+    {
+        let geo_dcomp = dcomp_presenter.clone();
+        let geo_app_weak = ctx.app.as_weak();
+        ctx.app.global::<VideoRect>().on_geometry_changed(
+            move |canvas_x, canvas_y, canvas_w, canvas_h, viewport_y, viewport_h| {
+                let scale = geo_app_weak
+                    .upgrade()
+                    .map(|a| a.window().scale_factor())
+                    .unwrap_or(1.0);
+                if let Some(ref presenter) = *geo_dcomp.borrow() {
+                    presenter.update_geometry(
+                        canvas_x * scale,
+                        canvas_y * scale,
+                        canvas_w * scale,
+                        canvas_h * scale,
+                        viewport_y * scale,
+                        viewport_h * scale,
+                    );
+                }
+            },
+        );
+    }
 
     // --- Start chat GIF animator ---
     {
@@ -437,241 +470,67 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
     let frame_app_weak = ctx.app.as_weak();
     let frame_timer = slint::Timer::default();
     let mut frame_timer_ticks: u64 = 0;
-    let mut frame_timer_consumed: u64 = 0;
     let mut frame_timer_last_log = Instant::now();
-    let mut stream_pixel_buf: Option<slint::SharedPixelBuffer<slint::Rgba8Pixel>> = None;
+    let mut frame_timer_presented: u64 = 0;
     #[cfg(target_os = "windows")]
-    let mut native_stream_presenter: Option<native_stream_presenter::NativeStreamPresenter> = None;
+    let mut last_surface_sequence: u64 = 0;
+    #[cfg(target_os = "windows")]
+    let frame_timer_dcomp = dcomp_presenter.clone();
     frame_timer.start(
         slint::TimerMode::Repeated,
         std::time::Duration::from_millis(16),
         move || {
-            frame_timer_ticks = frame_timer_ticks.saturating_add(1);
             let app_for_tick = frame_app_weak.upgrade();
-            #[cfg(target_os = "windows")]
-            let mut native_stream_visible = false;
-            #[cfg(target_os = "windows")]
-            if let Some(app) = app_for_tick.as_ref() {
-                if native_stream_presenter.is_none() {
-                    let parent_hwnd = app
-                        .window()
-                        .with_winit_window(
-                            |winit_window: &i_slint_backend_winit::winit::window::Window| {
-                                winit_window.window_handle().ok().and_then(|handle| {
-                                    if let RawWindowHandle::Win32(win32) = handle.as_raw() {
-                                        Some(HWND(win32.hwnd.get() as *mut _))
-                                    } else {
-                                        None
-                                    }
-                                })
-                            },
-                        )
-                        .flatten();
-                    if let Some(parent_hwnd) = parent_hwnd {
-                        match native_stream_presenter::NativeStreamPresenter::new(parent_hwnd) {
-                            Ok(presenter) => {
-                                log::info!("Native stream presenter initialized");
-                                native_stream_presenter = Some(presenter);
-                            }
-                            Err(err) => {
-                                log::warn!("Native stream presenter init failed: {}", err);
-                            }
-                        }
-                    }
-                }
-
-                native_stream_visible = app.get_is_watching();
-                let mut viewport_x = 0i32;
-                let mut viewport_y = 0i32;
-                let mut viewport_w = 1i32;
-                let mut viewport_h = 1i32;
-                if native_stream_visible {
-                    if let Some((window_w, window_h)) = app.window().with_winit_window(
-                        |winit_window: &i_slint_backend_winit::winit::window::Window| {
-                            let size = winit_window.inner_size();
-                            (size.width as i32, size.height as i32)
-                        },
-                    ) {
-                        // Mirror `main.slint` + `stream_view.slint` layout constants.
-                        const GAP: i32 = 12;
-                        const CREW_PANEL_W: i32 = 240;
-                        const CHAT_PANEL_W: i32 = 340;
-                        const STREAM_VIEW_PAD: i32 = 24;
-                        const STREAM_HEADER_H: i32 = 48;
-                        const STREAM_SPACER_TOP_H: i32 = 16;
-                        const CONTROL_BAR_H: i32 = 84;
-                        const STREAM_SPACER_BOTTOM_H: i32 = 16;
-                        const STREAM_FOOTER_H: i32 = 20;
-
-                        let stage_w =
-                            window_w - (2 * GAP + CREW_PANEL_W + GAP + CHAT_PANEL_W + GAP);
-                        let stream_view_h = (window_h - 2 * GAP) - CONTROL_BAR_H - GAP;
-                        viewport_x = GAP + CREW_PANEL_W + GAP + STREAM_VIEW_PAD;
-                        viewport_y = GAP + STREAM_VIEW_PAD + STREAM_HEADER_H + STREAM_SPACER_TOP_H;
-                        viewport_w = (stage_w - 2 * STREAM_VIEW_PAD).max(1);
-                        viewport_h = (stream_view_h
-                            - (2 * STREAM_VIEW_PAD
-                                + STREAM_HEADER_H
-                                + STREAM_SPACER_TOP_H
-                                + STREAM_SPACER_BOTTOM_H
-                                + STREAM_FOOTER_H))
-                            .max(1);
-                    }
-                }
-                if let Some(presenter) = native_stream_presenter.as_mut() {
-                    presenter.update_viewport(
-                        viewport_x,
-                        viewport_y,
-                        viewport_w,
-                        viewport_h,
-                        native_stream_visible,
-                    );
-                }
-            }
-            if frame_consumed.load(std::sync::atomic::Ordering::Acquire) {
-                if frame_timer_last_log.elapsed().as_secs_f32() >= 1.0 {
-                    let elapsed = frame_timer_last_log.elapsed().as_secs_f32().max(0.001);
-                    log::debug!(
-                        "UI frame timer cadence: tick_hz={:.1} consume_hz={:.1}",
-                        frame_timer_ticks as f32 / elapsed,
-                        frame_timer_consumed as f32 / elapsed
-                    );
-                    frame_timer_ticks = 0;
-                    frame_timer_consumed = 0;
-                    frame_timer_last_log = Instant::now();
+            let is_watching = app_for_tick
+                .as_ref()
+                .map(|app| app.get_is_watching())
+                .unwrap_or(false);
+            if !is_watching {
+                if let Some(app) = app_for_tick.as_ref() {
+                    app.set_dbg_stream_ui_render_fps(0.0);
                 }
                 return;
             }
+
+            frame_timer_ticks = frame_timer_ticks.saturating_add(1);
+
             #[cfg(target_os = "windows")]
-            {
-                let native_frame = if native_stream_visible {
-                    if let Ok(mut slot) = native_frame_slot.lock() {
-                        slot.take()
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                };
-
-                if let Some((w, h, shared_handle, format, uv_y_offset, _ts)) = native_frame {
-                    frame_consumed.store(true, std::sync::atomic::Ordering::Release);
-                    if let Some(presenter) = native_stream_presenter.as_mut() {
-                        if let Err(err) =
-                            presenter.render_shared_frame(w, h, shared_handle, format, uv_y_offset)
-                        {
-                            log::warn!("Native shared-frame render failed: {}", err);
-                        } else {
-                            frame_timer_consumed = frame_timer_consumed.saturating_add(1);
-                        }
-                    }
-                } else if let Some((w, h, rgba)) = {
-                    // Move the frame out quickly so we do expensive pixel conversion
-                    // outside the shared lock.
-                    if let Ok(mut slot) = frame_slot.lock() {
-                        slot.take()
-                    } else {
-                        None
-                    }
-                } {
-                    frame_consumed.store(true, std::sync::atomic::Ordering::Release);
-
-                    let pixel_count = (w as usize) * (h as usize);
-                    let rendered_natively = if native_stream_visible {
-                        if let Some(presenter) = native_stream_presenter.as_mut() {
-                            if let Err(err) = presenter.render_frame(w, h, &rgba) {
-                                log::warn!("Native stream presenter render failed: {}", err);
-                                false
-                            } else {
-                                true
-                            }
-                        } else {
-                            false
-                        }
-                    } else {
-                        false
-                    };
-
-                    if !rendered_natively {
-                        if let Some(app) = app_for_tick.as_ref() {
-                            if rgba.len() == pixel_count * 4 {
-                                let needs_resize = stream_pixel_buf
-                                    .as_ref()
-                                    .map(|buf| buf.width() != w || buf.height() != h)
-                                    .unwrap_or(true);
-                                if needs_resize {
-                                    stream_pixel_buf =
-                                        Some(slint::SharedPixelBuffer::<slint::Rgba8Pixel>::new(
-                                            w, h,
-                                        ));
-                                }
-                                if let Some(buf) = stream_pixel_buf.as_mut() {
-                                    buf.make_mut_bytes().copy_from_slice(&rgba);
-                                    app.set_stream_frame(slint::Image::from_rgba8(buf.clone()));
-                                }
-                                frame_timer_consumed = frame_timer_consumed.saturating_add(1);
+            if let Ok(slot) = native_frame_slot.lock() {
+                if let Some(frame) = *slot {
+                    if frame.sequence != last_surface_sequence {
+                        last_surface_sequence = frame.sequence;
+                        if let Some(ref mut presenter) = *frame_timer_dcomp.borrow_mut() {
+                            if presenter.present_shared_texture(
+                                frame.shared_handle,
+                                frame.width,
+                                frame.height,
+                            ) {
+                                frame_timer_presented = frame_timer_presented.saturating_add(1);
                             }
                         }
-                    } else if rgba.len() == pixel_count * 4 {
-                        frame_timer_consumed = frame_timer_consumed.saturating_add(1);
                     }
-
-                    if let Ok(mut slot) = frame_slot.lock() {
-                        if slot.is_none() {
-                            *slot = Some((w, h, rgba));
-                        }
-                    }
-                } else {
-                    frame_consumed.store(true, std::sync::atomic::Ordering::Release);
                 }
             }
 
-            #[cfg(not(target_os = "windows"))]
-            {
-                let frame = if let Ok(mut slot) = frame_slot.lock() {
-                    slot.take()
-                } else {
-                    None
-                };
-                if let Some((w, h, rgba)) = frame {
-                    frame_consumed.store(true, std::sync::atomic::Ordering::Release);
-                    let pixel_count = (w as usize) * (h as usize);
-                    if let Some(app) = app_for_tick.as_ref() {
-                        if rgba.len() == pixel_count * 4 {
-                            let needs_resize = stream_pixel_buf
-                                .as_ref()
-                                .map(|buf| buf.width() != w || buf.height() != h)
-                                .unwrap_or(true);
-                            if needs_resize {
-                                stream_pixel_buf =
-                                    Some(slint::SharedPixelBuffer::<slint::Rgba8Pixel>::new(w, h));
-                            }
-                            if let Some(buf) = stream_pixel_buf.as_mut() {
-                                buf.make_mut_bytes().copy_from_slice(&rgba);
-                                app.set_stream_frame(slint::Image::from_rgba8(buf.clone()));
-                            }
-                            frame_timer_consumed = frame_timer_consumed.saturating_add(1);
-                        }
-                    }
-                    if let Ok(mut slot) = frame_slot.lock() {
-                        if slot.is_none() {
-                            *slot = Some((w, h, rgba));
-                        }
-                    }
-                } else {
-                    frame_consumed.store(true, std::sync::atomic::Ordering::Release);
-                }
-            }
+            frame_consumed.store(true, std::sync::atomic::Ordering::Release);
+            frame_lifecycle.store(FRAME_STATE_PRESENTED, std::sync::atomic::Ordering::Release);
 
             if frame_timer_last_log.elapsed().as_secs_f32() >= 1.0 {
                 let elapsed = frame_timer_last_log.elapsed().as_secs_f32().max(0.001);
-                log::debug!(
-                    "UI frame timer cadence: tick_hz={:.1} consume_hz={:.1}",
-                    frame_timer_ticks as f32 / elapsed,
-                    frame_timer_consumed as f32 / elapsed
+                let present_fps = frame_timer_presented as f32 / elapsed;
+
+                if let Some(app) = app_for_tick.as_ref() {
+                    app.set_dbg_stream_ui_render_fps(present_fps);
+                }
+
+                log::info!(
+                    "DComp stream: present_fps={:.1} tick_hz={:.1}",
+                    present_fps,
+                    frame_timer_ticks as f32 / elapsed
                 );
+
                 frame_timer_ticks = 0;
-                frame_timer_consumed = 0;
+                frame_timer_presented = 0;
                 frame_timer_last_log = Instant::now();
             }
         },

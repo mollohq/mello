@@ -1,7 +1,7 @@
 use std::rc::Rc;
 
 use mello_core::Event;
-use slint::Model;
+use slint::{ComponentHandle, Model};
 
 use super::stream_cards::sync_active_stream_cards;
 use crate::app_context::AppContext;
@@ -118,6 +118,11 @@ pub fn handle(ctx: &AppContext, event: Event) {
             ctx.app.set_streamer_name("".into());
             ctx.app.set_stream_label("".into());
             ctx.app.set_stream_frame(slint::Image::default());
+            #[cfg(target_os = "windows")]
+            {
+                let _ = ctx.dcomp_presenter.borrow_mut().take();
+                log::info!("DComp presenter destroyed (stream ended)");
+            }
             ctx.app.set_active_streamer_id("".into());
             ctx.app.set_active_streamer_name("".into());
             ctx.app.set_active_stream_title("".into());
@@ -131,6 +136,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
             ctx.app.set_dbg_stream_mb(0.0);
             ctx.app.set_dbg_stream_kbps(0.0);
             ctx.app.set_dbg_stream_fps(0.0);
+            ctx.app.set_dbg_stream_ui_render_fps(0.0);
             ctx.app.set_dbg_stream_truncations(0);
             ctx.app.set_dbg_host_pacing_mode("idle".into());
             ctx.app.set_dbg_host_pacing_target_kbps(0);
@@ -156,6 +162,36 @@ pub fn handle(ctx: &AppContext, event: Event) {
             log::info!("Watching stream from {} ({}x{})", host_id, width, height);
             ctx.app.set_is_watching(true);
             ctx.app.set_streamer_name(host_id.into());
+            #[cfg(target_os = "windows")]
+            {
+                use crate::dcomp_presenter::DCompPresenter;
+                use i_slint_backend_winit::WinitWindowAccessor;
+                let hwnd = ctx
+                    .app
+                    .window()
+                    .with_winit_window(|w: &i_slint_backend_winit::winit::window::Window| {
+                        use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+                        match w.window_handle().map(|h| h.as_raw()) {
+                            Ok(RawWindowHandle::Win32(h)) => Some(h.hwnd.get()),
+                            _ => None,
+                        }
+                    })
+                    .flatten();
+                if let Some(hwnd) = hwnd {
+                    match DCompPresenter::new(hwnd, width, height, 0.0, 0.0) {
+                        Ok(p) => {
+                            *ctx.dcomp_presenter.borrow_mut() = Some(p);
+                            log::info!("DComp presenter created for stream watching");
+                        }
+                        Err(e) => {
+                            log::error!("Failed to create DComp presenter: {}", e);
+                        }
+                    }
+                } else {
+                    log::error!("Could not obtain HWND for DComp presenter");
+                }
+            }
+            ctx.app.set_dbg_stream_ui_render_fps(0.0);
             sync_active_stream_cards(ctx);
         }
         Event::StreamWatchingStopped => {
@@ -164,12 +200,18 @@ pub fn handle(ctx: &AppContext, event: Event) {
             ctx.app.set_streamer_name("".into());
             ctx.app.set_stream_label("".into());
             ctx.app.set_stream_frame(slint::Image::default());
+            #[cfg(target_os = "windows")]
+            {
+                let _ = ctx.dcomp_presenter.borrow_mut().take();
+                log::info!("DComp presenter destroyed (stopped watching)");
+            }
             ctx.app.set_dbg_stream_mode("idle".into());
             ctx.app.set_dbg_stream_frames(0);
             ctx.app.set_dbg_stream_packets(0);
             ctx.app.set_dbg_stream_mb(0.0);
             ctx.app.set_dbg_stream_kbps(0.0);
             ctx.app.set_dbg_stream_fps(0.0);
+            ctx.app.set_dbg_stream_ui_render_fps(0.0);
             ctx.app.set_dbg_stream_truncations(0);
             ctx.app.set_dbg_host_pacing_mode("idle".into());
             ctx.app.set_dbg_host_pacing_target_kbps(0);
