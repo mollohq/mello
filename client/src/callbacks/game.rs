@@ -76,8 +76,49 @@ pub fn wire(ctx: &AppContext) {
     // Stream requested
     {
         let cmd = ctx.cmd_tx.clone();
+        let app_weak = ctx.app.as_weak();
+        let fg_monitor = ctx.fg_monitor.clone();
         ctx.app.on_stream_requested(move || {
-            let _ = cmd.try_send(Command::ListCaptureSources);
+            let Some(app) = app_weak.upgrade() else {
+                return;
+            };
+            if app.get_is_hosting() {
+                return;
+            }
+
+            let crew_id = app.get_active_crew_id().to_string();
+            if crew_id.is_empty() {
+                log::warn!("[ui] stream requested, but no active crew selected");
+                return;
+            }
+
+            let pid = fg_monitor.borrow().game_pid();
+            let Some(game_pid) = pid else {
+                log::warn!("[ui] stream requested, but no detected game PID is available");
+                return;
+            };
+
+            let mut title = app.get_game_name().to_string();
+            if title.trim().is_empty() {
+                title = "STREAMING".to_string();
+            }
+            app.set_stream_label(title.clone().into());
+
+            log::info!(
+                "[ui] quick stream start: crew={} game_pid={} title={}",
+                crew_id,
+                game_pid,
+                title
+            );
+            let _ = cmd.try_send(Command::StartStream {
+                crew_id,
+                title,
+                capture_mode: "process".to_string(),
+                monitor_index: None,
+                hwnd: None,
+                pid: Some(game_pid),
+                preset: 2, // Medium
+            });
         });
     }
 }

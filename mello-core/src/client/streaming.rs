@@ -7,16 +7,18 @@ use crate::stream::sink_p2p::P2PFanoutSink;
 use crate::stream::viewer::{ViewerAction, ViewerFeedResult};
 use crate::voice::{SignalEnvelope, SignalMessage, SignalPurpose};
 
+#[cfg(not(target_os = "windows"))]
+use super::stream_ffi::on_viewer_frame;
 use super::stream_ffi::{
-    flush_ice_buffer, on_viewer_frame, on_viewer_native_frame, stream_ice_callback,
-    stream_state_callback, ChunkAssembler, FrameCallbackData, StreamHostHandle, StreamHostPeer,
-    StreamIceCallbackData, ViewerState,
+    flush_ice_buffer, on_viewer_native_frame, stream_ice_callback, stream_state_callback,
+    ChunkAssembler, FrameCallbackData, StreamHostHandle, StreamHostPeer, StreamIceCallbackData,
+    ViewerState,
 };
+use super::FRAME_STATE_PRESENTED;
 use super::VIEWER_RECV_BUF_SIZE;
 
 const STREAM_DEBUG_EVENT_INTERVAL_SECS: f32 = 1.0;
 const HOST_PACING_DEBUG_EVENT_INTERVAL_SECS: f32 = 1.0;
-const STREAM_FORCE_PRESENT_MAX_WAIT_MS: u64 = 16;
 
 impl super::Client {
     pub(super) fn handle_stream_signal(&mut self, from: &str, envelope: SignalEnvelope) {
@@ -310,11 +312,15 @@ impl super::Client {
                         .as_ref()
                         .map(|v| v._frame_cb_data)
                         .unwrap();
+                    #[cfg(target_os = "windows")]
+                    let frame_callback = None;
+                    #[cfg(not(target_os = "windows"))]
+                    let frame_callback = Some(on_viewer_frame as _);
                     let viewer = unsafe {
                         mello_sys::mello_stream_start_viewer(
                             ctx,
                             &mello_config,
-                            Some(on_viewer_frame),
+                            frame_callback,
                             frame_cb_data as *mut std::ffi::c_void,
                         )
                     };
@@ -322,7 +328,7 @@ impl super::Client {
                         unsafe {
                             mello_sys::mello_stream_set_native_frame_callback(
                                 viewer,
-                                Some(on_viewer_native_frame),
+                                Some(on_viewer_native_frame as _),
                                 frame_cb_data as *mut std::ffi::c_void,
                             );
                         }
@@ -554,35 +560,13 @@ impl super::Client {
             }
         }
 
-        // Present from the decoded frame ring buffer. With multiple frames
-        // potentially queued from bursty packet arrival, drain as many as the UI
-        // can consume to keep visual cadence smooth even when ticks are jittery.
-        let native_frame_active = self
-            .native_frame_active
-            .load(std::sync::atomic::Ordering::Acquire);
-
-        const MAX_PRESENTS_PER_TICK: u32 = 3;
+        // Present at most one frame per stream tick so visual cadence tracks
+        // UI cadence instead of burst-draining the decoder queue.
+        const MAX_PRESENTS_PER_TICK: u32 = 1;
         let mut presented_this_tick = 0u32;
 
         while presented_this_tick < MAX_PRESENTS_PER_TICK {
-            let frame_consumed = self
-                .frame_consumed
-                .load(std::sync::atomic::Ordering::Acquire);
-            let force_due = !frame_consumed
-                && vs.last_present_attempt.elapsed()
-                    >= std::time::Duration::from_millis(STREAM_FORCE_PRESENT_MAX_WAIT_MS);
-
-            if !(native_frame_active || frame_consumed || force_due) {
-                if presented_this_tick == 0 {
-                    vs.present_skipped_unconsumed = vs.present_skipped_unconsumed.saturating_add(1);
-                }
-                break;
-            }
-
             vs.present_attempts = vs.present_attempts.saturating_add(1);
-            if !native_frame_active && force_due {
-                vs.present_forced_attempts = vs.present_forced_attempts.saturating_add(1);
-            }
             let presented = unsafe { mello_sys::mello_stream_present_frame(viewer) };
             vs.last_present_attempt = Instant::now();
             if presented {
@@ -1311,11 +1295,12 @@ impl super::Client {
         let frame_cb_data = Box::into_raw(Box::new(FrameCallbackData {
             frame_slot: self.frame_slot.clone(),
             native_frame_slot: self.native_frame_slot.clone(),
-            native_frame_active: self.native_frame_active.clone(),
             frame_consumed: self.frame_consumed.clone(),
+            frame_lifecycle: self.frame_lifecycle.clone(),
+            surface_frame_seq: self.surface_frame_seq.clone(),
         }));
-        self.native_frame_active
-            .store(false, std::sync::atomic::Ordering::Release);
+        self.frame_lifecycle
+            .store(FRAME_STATE_PRESENTED, std::sync::atomic::Ordering::Release);
 
         let mello_config = mello_sys::MelloStreamConfig {
             width: w,
@@ -1325,11 +1310,15 @@ impl super::Client {
         };
 
         let ctx = self.voice.mello_ctx();
+        #[cfg(target_os = "windows")]
+        let frame_callback = None;
+        #[cfg(not(target_os = "windows"))]
+        let frame_callback = Some(on_viewer_frame as _);
         let viewer = unsafe {
             mello_sys::mello_stream_start_viewer(
                 ctx,
                 &mello_config,
-                Some(on_viewer_frame),
+                frame_callback,
                 frame_cb_data as *mut std::ffi::c_void,
             )
         };
@@ -1337,7 +1326,7 @@ impl super::Client {
             unsafe {
                 mello_sys::mello_stream_set_native_frame_callback(
                     viewer,
-                    Some(on_viewer_native_frame),
+                    Some(on_viewer_native_frame as _),
                     frame_cb_data as *mut std::ffi::c_void,
                 );
             }
@@ -1358,8 +1347,8 @@ impl super::Client {
 
         let _ = self.event_tx.send(Event::StreamWatching {
             host_id: host_id.to_string(),
-            width: stream_width,
-            height: stream_height,
+            width: w,
+            height: h,
         });
 
         let config = crate::stream::StreamConfig::default();
@@ -1484,11 +1473,12 @@ impl super::Client {
         let frame_cb_data = Box::into_raw(Box::new(FrameCallbackData {
             frame_slot: self.frame_slot.clone(),
             native_frame_slot: self.native_frame_slot.clone(),
-            native_frame_active: self.native_frame_active.clone(),
             frame_consumed: self.frame_consumed.clone(),
+            frame_lifecycle: self.frame_lifecycle.clone(),
+            surface_frame_seq: self.surface_frame_seq.clone(),
         }));
-        self.native_frame_active
-            .store(false, std::sync::atomic::Ordering::Release);
+        self.frame_lifecycle
+            .store(FRAME_STATE_PRESENTED, std::sync::atomic::Ordering::Release);
 
         let _ = self.event_tx.send(Event::StreamWatching {
             host_id: host_id.to_string(),
@@ -1540,8 +1530,8 @@ impl super::Client {
                 conn.leave().await;
             }
             drop(vs);
-            self.native_frame_active
-                .store(false, std::sync::atomic::Ordering::Release);
+            self.frame_lifecycle
+                .store(FRAME_STATE_PRESENTED, std::sync::atomic::Ordering::Release);
             let _ = self.event_tx.send(Event::StreamWatchingStopped);
         }
     }

@@ -83,7 +83,7 @@ All UI components live in `client/ui/panels/`:
 |------|-------------|
 | `crew_panel.slint` | Left sidebar: crew list (active/idle sections), member avatars, online counts |
 | `chat_panel.slint` | Right sidebar: message list, chat input |
-| `control_bar.slint` | Bottom bar: user info, mic/deafen toggles, settings button, chat input |
+| `control_bar.slint` | Bottom bar: user info, go-live (broadcast), mic/deafen toggles, clip, settings, game states |
 | `stream_view.slint` | Center: video frame rendering, stream host info, viewer controls |
 | `voice_channel_view.slint` | Center (when not streaming): voice channel list with member avatars |
 | `settings_modal.slint` | Overlay: audio devices, general preferences, profile editing |

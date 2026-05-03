@@ -48,6 +48,11 @@ private:
     bool frame_ready_ = false;
     bool use_interop_ = false;
     uint32_t coded_height_ = 0;
+    uint32_t decoder_coded_width_ = 0;
+    uint32_t decoder_coded_height_ = 0;
+    int decoder_codec_ = -1;
+    int decoder_chroma_format_ = -1;
+    uint64_t sequence_callback_count_ = 0;
 
     DecoderConfig config_{};
     Microsoft::WRL::ComPtr<ID3D11Device>    device_;

@@ -4,7 +4,7 @@ mod wav_player;
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::error::Error;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicU8};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -266,6 +266,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let frame_slot: mello_core::FrameSlot = Arc::new(Mutex::new(None));
     let native_frame_slot: mello_core::NativeFrameSlot = Arc::new(Mutex::new(None));
     let frame_consumed = Arc::new(AtomicBool::new(true));
+    let frame_lifecycle = Arc::new(AtomicU8::new(mello_core::FRAME_STATE_PRESENTED));
     let cfg = build_config();
 
     let cfg_for_client = cfg.clone();
@@ -277,6 +278,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             frame_slot,
             native_frame_slot,
             frame_consumed,
+            frame_lifecycle,
             false,
         );
         client.run(cmd_rx).await;

@@ -25,6 +25,7 @@ pub struct SfuSink {
     egress_spawned: OnceLock<()>,
     egress_rx: std::sync::Mutex<Option<mpsc::Receiver<Vec<u8>>>>,
     pacer: Arc<Mutex<EgressPacer>>,
+    last_keyframe: Mutex<Option<Vec<u8>>>,
 }
 
 impl SfuSink {
@@ -39,6 +40,7 @@ impl SfuSink {
             egress_spawned: OnceLock::new(),
             egress_rx: std::sync::Mutex::new(Some(egress_rx)),
             pacer,
+            last_keyframe: Mutex::new(None),
         }
     }
 
@@ -75,6 +77,9 @@ impl SfuSink {
 impl PacketSink for SfuSink {
     async fn send_video(&self, packet: &StreamPacket) -> Result<(), StreamError> {
         let data = packet.serialize();
+        if packet.is_keyframe() {
+            *self.last_keyframe.lock().await = Some(data.clone());
+        }
         self.enqueue_chunked_media(&data)
     }
 
@@ -98,6 +103,21 @@ impl PacketSink for SfuSink {
 
     async fn on_viewer_joined(&self, viewer_id: &str) {
         log::debug!("SFU sink: viewer joined {}", viewer_id);
+        let cached = self.last_keyframe.lock().await.clone();
+        if let Some(frame) = cached {
+            if let Err(e) = self.enqueue_chunked_media(&frame) {
+                log::warn!(
+                    "SFU sink: failed to replay cached keyframe for viewer {}: {}",
+                    viewer_id,
+                    e
+                );
+            } else {
+                log::debug!(
+                    "SFU sink: replayed cached keyframe to newly joined viewer {}",
+                    viewer_id
+                );
+            }
+        }
     }
 
     async fn on_viewer_left(&self, viewer_id: &str) {

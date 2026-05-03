@@ -43,4 +43,10 @@ pub struct AppContext {
     pub fg_monitor: Rc<RefCell<ForegroundMonitor>>,
     pub pending_deep_link: Rc<RefCell<Option<crate::deep_link::DeepLink>>>,
     pub ipc_listener: Rc<RefCell<Option<crate::ipc::IpcListener>>>,
+    #[cfg(target_os = "windows")]
+    pub native_frame_slot: mello_core::NativeFrameSlot,
+    #[cfg(target_os = "windows")]
+    pub frame_lifecycle: mello_core::FrameLifecycleSlot,
+    #[cfg(target_os = "windows")]
+    pub dcomp_presenter: Rc<RefCell<Option<crate::dcomp_presenter::DCompPresenter>>>,
 }

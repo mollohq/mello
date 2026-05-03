@@ -1,37 +1,40 @@
 # Streaming
 
 > **Component:** libmello (C++) · mello-core (Rust) · mello-client (Rust/Slint) · Backend (Go/Nakama)
-> **Status:** Working, shipping iteratively toward Discord-parity
+> **Status:** Windows DComp underlay rendering integrated, geometry sync implemented, tuning/validation in progress
 > **Related:** [03-LIBMELLO.md](./03-LIBMELLO.md), [02-MELLO-CORE.md](./02-MELLO-CORE.md), [14-VIDEO-PIPELINE.md](./14-VIDEO-PIPELINE.md), [13-SFU.md](./13-SFU.md)
 
 ---
 
 ## 1. Goals
 
-Ship 1080p60 game streaming comparable to Discord/Parsec: hardware-accelerated encode/decode, sub-60ms WAN latency, graceful degradation under network stress. Favour visible quality loss (artifacts, lower bitrate) over lag or stalling.
+Ship 1080p60 game streaming comparable to Discord/Parsec with low idle RAM and hardware-composited video in the desktop client: hardware-accelerated encode/decode, sub-60ms WAN latency, and stable UI render cadence. Favor visible quality loss (artifacts, lower bitrate) over lag or stalling.
 
 ---
 
 ## 2. Layer Overview
 
-The streaming system is split across three layers. Understanding which layer owns what is the single most important thing for working on this code.
+The streaming system is split across four layers. Understanding ownership boundaries is the most important thing for working on this stack.
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
+│  mello-client (Rust/Slint)                                      │
+│  DComp underlay presenter, geometry sync, stream card UI         │
+├─────────────────────────────────────────────────────────────────┤
 │  mello-core  (Rust)                                             │
 │  Stream lifecycle, transport, framing, FEC, ABR, recovery,      │
-│  viewer chunk reassembly, pacing, quality presets, telemetry     │
+│  viewer chunk reassembly, frame-lifecycle contract, telemetry    │
 ├─────────────────────────────────────────────────────────────────┤
 │  libmello  (C++)                                                │
 │  Hardware capture, GPU color conversion, hardware encode/decode, │
-│  decoded-frame ring, present, cursor, process enumeration        │
+│  decoded-frame ring, native frame callback (NT shared handles)   │
 ├─────────────────────────────────────────────────────────────────┤
 │  mello-sys  (Rust FFI bindings, auto-generated via bindgen)     │
 │  Thin unsafe bridge between mello-core and libmello             │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-mello-core never touches pixels. libmello never touches the network. `mello-sys` is the membrane.
+mello-core never touches pixel memory. libmello never touches transport policy. mello-client owns presentation and composition. `mello-sys` is the FFI membrane.
 
 ---
 
@@ -178,8 +181,8 @@ The client never decides topology. The backend's `start_stream` RPC response car
 ## 7. Viewer Pipeline
 
 ```
-DataChannel → Chunk Reassembly → StreamViewer → Decode → Ring Buffer → Present
-                (ChunkAssembler)   (FEC, loss)    (NVDEC)   (mutex-guarded)  (jitter-gated)
+DataChannel → Chunk Reassembly → StreamViewer → Decode → NativeSurfaceFrame slot → DComp underlay
+                (ChunkAssembler)   (FEC, loss)    (HW dec)   (latest-frame-wins)      (shared texture → swap chain)
 ```
 
 ### 7.1 Chunk Reassembly
@@ -202,17 +205,47 @@ NVDEC (CUDA↔D3D11 interop, zero-copy R8 layout), AMF, D3D11VA, OpenH264 on Win
 
 ### 7.4 Decoded-Frame Ring
 
-A 3-slot ring buffer in `VideoPipeline` holding decoded GPU textures. Guarded by a mutex — `push_decoded` (from the feed/decode thread) and `pop_decoded` (from the present/UI thread) are synchronized.
+A 3-slot ring buffer in `VideoPipeline` holds decoded GPU textures. Guarded by a mutex: `push_decoded` (decode/feed thread) and `pop_decoded` (present path) are synchronized.
 
 When the ring is full, the oldest frame is evicted (newest-wins, same principle as the encode queue).
 
-### 7.5 Jitter Buffer and Presentation
+### 7.5 Jitter Buffer and Native Surface Contract
 
-`present_frame()` doesn't pop immediately. It waits until the ring has ≥ 2 frames (or 50ms since the last present, whichever comes first). This absorbs network and decode timing jitter, producing steadier frame cadence.
+`present_frame()` doesn't pop immediately. It waits until the ring has >= 2 frames (or 50ms since the last present, whichever comes first). This absorbs network/decode jitter and stabilizes cadence.
 
-The Rust `stream_tick` calls `mello_stream_present_frame` up to 3 times per tick. The present path prefers the native D3D11 shared-texture handoff (zero-copy to the Slint presenter), falling back to CPU RGBA readback when native isn't available.
+The Rust `stream_tick` drives `mello_stream_present_frame`, which emits `on_viewer_native_frame` metadata into a single latest-frame slot (`NativeSurfaceFrame`). The slot carries an NT shared handle (`DXGI_FORMAT_R8G8B8A8_UNORM`) created by libmello via `IDXGIResource1::CreateSharedHandle`. The client's DComp presenter opens the handle with `ID3D11Device1::OpenSharedResource1` and copies it to the swap chain back buffer.
 
-### 7.6 Backlog Guard
+### 7.6 DirectComposition Underlay Rendering (Windows)
+
+Video frames bypass Slint's renderer entirely. A separate D3D11 device, composition swap chain, and DComp visual tree are created when the viewer starts watching. Slint continues to run with its default software renderer for the UI, keeping idle RAM low (~80 MB target). The GPU context exists only while a stream is active.
+
+**DComp visual tree:**
+
+```
+IDCompositionTarget (bound to the Slint HWND)
+  └─ IDCompositionVisual
+       ├─ Content: IDXGISwapChain1 (CreateSwapChainForComposition)
+       ├─ Offset: SetOffsetX/Y (physical pixels)
+       ├─ Transform: Matrix3x2 scale (stream resolution → card size)
+       └─ Clip: IDCompositionRectangleClip (scroll viewport intersection)
+```
+
+**Per-frame present path:** The 16ms frame timer reads the latest `NativeSurfaceFrame` shared handle, opens it via `OpenSharedResource1`, copies to the swap chain back buffer with `CopyResource`, and calls `Present(0, 0)` (non-blocking, DWM manages VSync).
+
+**Geometry sync:** The Slint stream card contains a zero-size `geo-tracker` element with properties bound to `media-rect.absolute-position` and dimensions. Slint `changed` handlers fire a `VideoRect.geometry-changed` callback synchronously during every layout pass (scroll, resize, reflow). Rust wires this callback to `DCompPresenter::update_geometry`, which:
+
+1. Multiplies logical pixel coords by `window.scale_factor()` to get physical pixels.
+2. Intersects the canvas rect with the scroll container (Flickable) viewport.
+3. Calls `SetOffsetX/Y`, `SetTransform2` (scale matrix), `SetClip` (viewport intersection), `Commit`.
+4. When fully scrolled out of view, removes swap chain content from the visual (`SetContent(None)`).
+
+This pipeline runs entirely on the UI thread with no queueing, so geometry tracks the Slint layout frame-by-frame. Scroll is cheap: only offset + clip + commit, no swap chain resize.
+
+**Swap chain format:** `DXGI_FORMAT_R8G8B8A8_UNORM`, `DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL`, 2 buffers, `DXGI_ALPHA_MODE_IGNORE`. Matches libmello's shared texture format. Swap chain is created at stream resolution; a DComp scale transform maps it to the card's display size, avoiding `ResizeBuffers` during window resize.
+
+**Lifecycle:** `DCompPresenter` is created when `StreamWatching` fires and dropped on `StreamWatchingStopped`. The Slint card's video area is transparent, letting the DComp underlay show through. The `Image` element is kept but hidden (`visible: false`) since the DComp layer renders the actual video.
+
+### 7.7 Backlog Guard
 
 If the decode queue depth exceeds a threshold, the viewer drops incoming delta frames (keeping keyframes) and optionally requests an IDR. This prevents the decode ring from falling behind during sustained network bursts.
 
@@ -273,7 +306,9 @@ The host captures cursor state (position, visibility, shape RGBA) alongside vide
 2. For SFU: connects to the SFU endpoint, joins the session, negotiates WebRTC.
 3. Waits for the first signaling exchange to learn the host's encode resolution.
 4. Creates the decoder pipeline at the correct resolution (`mello_stream_start_viewer`).
-5. `stream_tick` runs each frame: poll network → reassemble → feed decoder → present.
+5. Creates `DCompPresenter` with the stream resolution and parent HWND (Windows).
+6. `stream_tick` runs each frame: poll network → reassemble → feed decoder → present shared handle → DComp swap chain.
+7. `VideoRect.geometry-changed` callback keeps the DComp visual in sync with the Slint card layout.
 
 ### Teardown
 
@@ -292,6 +327,15 @@ Encoder periodic (every 300 frames): `convert_ms`, `encode_ms`, `eq_depth`, `eq_
 ### Viewer-side (per second)
 
 `dec_fps`, `native_fps`, `present_true_hz`, `ingress_kbps`, `feed_video_hz`, `feed_video_fail_hz`, `decode_stall_ms`, `decode_backlog_est`, chunk stats (`completed_hz`, `invalid_hz`, `evicted_hz`, `late_hz`), `backlog_guard_*`.
+
+DComp presenter diagnostics:
+
+- `ui_render_fps` (DComp present cadence)
+- `presented_frames` (total frames presented to swap chain)
+- native surface descriptor cadence + sequence gaps
+- `DComp present failed` error logs (OpenSharedResource1, CopyResource, Present failures)
+- geometry-changed callback frequency (implicit via scroll/resize tracking)
+- explicit fatal init error logs that trigger clean `StopWatching`
 
 ### Probe tools
 
@@ -323,6 +367,11 @@ Encoder periodic (every 300 frames): `convert_ms`, `encode_ms`, `eq_depth`, `eq_
 | Viewer tick loop | `mello-core/src/client/streaming.rs` |
 | Chunk assembler | `mello-core/src/client/stream_ffi.rs` |
 | SFU connection | `mello-core/src/transport/sfu_connection.rs` |
+| DComp presenter (Windows) | `client/src/dcomp_presenter.rs` |
+| Client render loop + metrics | `client/src/main.rs` |
+| Slint stream card UI + geo-tracker | `client/ui/panels/active_streams_panel.slint` |
+| VideoRect global (geometry callback) | `client/ui/types.slint` |
+| CrewFeed (Flickable viewport source) | `client/ui/panels/crew_feed.slint` |
 | **C++ video pipeline** | `libmello/src/video/video_pipeline.cpp` |
 | DXGI capture | `libmello/src/video/capture_dxgi.cpp` |
 | WGC capture | `libmello/src/video/capture_wgc.cpp` |
@@ -343,7 +392,7 @@ Encoder periodic (every 300 frames): `convert_ms`, `encode_ms`, `eq_depth`, `eq_
 
 ## 14. Current State and Known Gaps
 
-**What works well:** Process-aware capture with hot-swap, deferred start, DXGI adaptive throttle, GPU preprocessing, async NVENC, mutex-guarded decoded ring, whole-frame egress drops, proper IDR detection, SFU telemetry, jitter buffer, native D3D11 presentation, FEC, rate-limited recovery, probe tooling.
+**What works well:** Process-aware capture with hot-swap, deferred start, DXGI adaptive throttle, GPU preprocessing, async NVENC, mutex-guarded decoded ring, whole-frame egress drops, proper IDR detection, SFU telemetry, jitter buffer, DComp underlay rendering with NT shared handle import (Windows RGBA8 path), callback-driven geometry sync (scroll/resize/DPI), scroll viewport clipping, FEC, rate-limited recovery, probe tooling.
 
 **Known gaps and future work:**
 
@@ -356,6 +405,46 @@ Encoder periodic (every 300 frames): `convert_ms`, `encode_ms`, `eq_depth`, `eq_
 | Audio capture is stubbed | Game audio doesn't stream yet | Small |
 | Input passthrough not implemented | No remote control | Large |
 | ABR needs tuning | Step changes can oscillate; needs trend-based smoothing | Medium |
-| Native presenter viewport tied to Slint layout constants | Layout changes can misplace the stream window | Small |
+| DComp visual uses overlay, not true underlay (`WS_EX_NOREDIRECTIONBITMAP` not set) | Video composites on top of Slint content; stream card badges moved to bottom bar as workaround | Medium |
+| Adapter/device mismatch diagnostics are log-based only | Better in-UI error reasons still needed | Small |
+| 720p60/1080p60 acceptance sweep still pending on full host/viewer setup | Performance target not yet certified end-to-end | Medium |
+| macOS viewer has no DComp equivalent | macOS needs its own compositor path (Core Animation layer) | Medium |
 | macOS VideoToolbox session churn | Decode FPS drops on SPS/PPS change | Small |
 | Per-viewer ABR in SFU mode | SFU doesn't transcode; all viewers get same bitrate | Large (SFU work) |
+
+---
+
+## 15. Validation Playbook (Windows)
+
+Use this checklist to validate the DComp underlay rendering path after stream-related changes.
+
+### 15.1 Pre-conditions
+
+- Host and viewer run in release mode.
+- Test both 720p60 and 1080p60 scenarios.
+- Keep game scene representative (motion + static UI content).
+
+### 15.2 Run commands
+
+Host:
+
+- `./scripts/run-stream-host.ps1 -CrewId "<crew-id>"`
+
+Viewer:
+
+- `./scripts/run-stream-viewer.ps1 -HostId "<host-user-id>" -CrewId "<crew-id>"`
+
+Optional local loopback smoke:
+
+- `cargo test -p mello-sys --test video_pipeline host_to_viewer_loopback -- --nocapture`
+
+### 15.3 Acceptance gates
+
+- `dbg_stream_ui_render_fps` tracks near source cadence (target: near 60 on stable 60fps source).
+- `DComp present failed` error logs stay at zero during steady state.
+- Scrolling the feed: video moves perfectly with the card, no stutter, no bleed outside the scroll container.
+- Resizing the window: video scales with the card, no crash, no black frames.
+- Scrolling the card fully out of view: DComp visual is hidden (no overlap with surrounding content).
+- DPI change (drag between monitors): video repositions correctly, no crash.
+- watch-stream init failures surface as explicit UI/log errors and stop watching cleanly.
+- Idle RAM stays below ~80 MB (Slint software renderer, no GPU context when not streaming).

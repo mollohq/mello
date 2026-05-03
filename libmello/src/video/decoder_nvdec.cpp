@@ -261,6 +261,11 @@ void NvdecDecoder::shutdown() {
     shared_frame_tex_.Reset();
     shared_frame_handle_ = nullptr;
     nv12_buf_.clear();
+    decoder_coded_width_ = 0;
+    decoder_coded_height_ = 0;
+    decoder_codec_ = -1;
+    decoder_chroma_format_ = -1;
+    sequence_callback_count_ = 0;
 }
 
 bool NvdecDecoder::decode(const uint8_t* data, size_t size, bool is_keyframe) {
@@ -300,11 +305,37 @@ bool NvdecDecoder::decode(const uint8_t* data, size_t size, bool is_keyframe) {
 
 int CUDAAPI NvdecDecoder::handle_video_sequence(void* user, CUVIDEOFORMAT* fmt) {
     auto* self = static_cast<NvdecDecoder*>(user);
+    self->sequence_callback_count_++;
 
     self->coded_height_ = fmt->coded_height;
-    MELLO_LOG_DEBUG(TAG, "NVDEC sequence: coded=%ux%u display=%ux%u",
-        fmt->coded_width, fmt->coded_height,
-        self->config_.width, self->config_.height);
+    const bool decoder_params_unchanged = self->decoder_
+        && self->decoder_coded_width_ == fmt->coded_width
+        && self->decoder_coded_height_ == fmt->coded_height
+        && self->decoder_codec_ == static_cast<int>(fmt->codec)
+        && self->decoder_chroma_format_ == static_cast<int>(fmt->chroma_format);
+    if (decoder_params_unchanged) {
+        if (self->sequence_callback_count_ <= 3 || (self->sequence_callback_count_ % 60) == 0) {
+            MELLO_LOG_DEBUG(
+                TAG,
+                "NVDEC sequence callback #%llu: unchanged coded=%ux%u codec=%d chroma=%d (decoder reuse)",
+                self->sequence_callback_count_,
+                fmt->coded_width,
+                fmt->coded_height,
+                static_cast<int>(fmt->codec),
+                static_cast<int>(fmt->chroma_format)
+            );
+        }
+        return 1;
+    }
+    MELLO_LOG_INFO(
+        TAG,
+        "NVDEC sequence callback #%llu: (re)create decoder coded=%ux%u codec=%d chroma=%d",
+        self->sequence_callback_count_,
+        fmt->coded_width,
+        fmt->coded_height,
+        static_cast<int>(fmt->codec),
+        static_cast<int>(fmt->chroma_format)
+    );
 
     CUVIDDECODECREATEINFO create_info{};
     create_info.CodecType   = fmt->codec;
@@ -336,6 +367,10 @@ int CUDAAPI NvdecDecoder::handle_video_sequence(void* user, CUVIDEOFORMAT* fmt) 
             return 0;
         }
     }
+    self->decoder_coded_width_ = fmt->coded_width;
+    self->decoder_coded_height_ = fmt->coded_height;
+    self->decoder_codec_ = static_cast<int>(fmt->codec);
+    self->decoder_chroma_format_ = static_cast<int>(fmt->chroma_format);
 
     return 1;
 }

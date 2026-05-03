@@ -466,13 +466,6 @@ MELLO_API void mello_stream_set_native_frame_callback(
     void*                     user_data
 );
 
-/** Enable/disable RGBA callback mirroring while native callback is active.
- *  Useful for diagnostics tools that need both native cadence and CPU-visible frames. */
-MELLO_API void mello_stream_set_native_frame_mirror_rgba(
-    MelloStreamView* view,
-    bool             enabled
-);
-
 /** Feed an encoded game-audio packet received from the host for playback. */
 MELLO_API MelloResult mello_stream_feed_audio_packet(
     MelloStreamView* view,

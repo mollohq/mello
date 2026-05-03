@@ -12,6 +12,7 @@ import {
     SearchUserData,
     FeedCardData,
     StreamCardData,
+    VideoRect,
 } from "types.slint";
 import { CrewPanel } from "panels/crew_panel.slint";
 import { StreamSourcePicker } from "panels/stream_source_picker.slint";
@@ -30,7 +31,7 @@ import { JoinCrewModal } from "panels/join_crew_modal.slint";
 import { InviteShareModal } from "panels/invite_share_modal.slint";
 
 
-export { CrewData, MemberData, ChatMessageData, AudioDeviceData, VoiceChannelData, VoiceChannelMember, CaptureSourceData, DiscoverCrewData, SearchUserData, FeedCardData, StreamCardData, Theme }
+export { CrewData, MemberData, ChatMessageData, AudioDeviceData, VoiceChannelData, VoiceChannelMember, CaptureSourceData, DiscoverCrewData, SearchUserData, FeedCardData, StreamCardData, Theme, VideoRect }
 
 export component MainWindow inherits Window {
     title: "Mello";
@@ -318,6 +319,7 @@ export component MainWindow inherits Window {
     in property <float> dbg-stream-mb: 0.0;
     in property <float> dbg-stream-kbps: 0.0;
     in property <float> dbg-stream-fps: 0.0;
+    in property <float> dbg-stream-ui-render-fps: 0.0;
     in property <int> dbg-stream-truncations: 0;
     in property <string> dbg-host-pacing-mode: "idle";
     in property <int> dbg-host-pacing-target-kbps: 0;
@@ -733,6 +735,7 @@ export component MainWindow inherits Window {
                             is-watching: root.is-watching;
                             active-streamer-id: root.active-streamer-id;
                             stream-frame: root.stream-frame;
+                            stream-ui-render-fps: root.dbg-stream-ui-render-fps;
                             is-cold-start: root.feed-cold-start;
                             clip-count: root.feed-clip-count;
                             clip-playing-path: root.clip-playing-path;
@@ -741,10 +744,6 @@ export component MainWindow inherits Window {
                             clip-anim-tick: root.clip-anim-tick;
                             clip-position-text: root.clip-position-text;
                             clip-duration-text: root.clip-duration-text;
-                            go-live-clicked => {
-                                root.list-capture-sources();
-                                root.source-picker-open = true;
-                            }
                             stop-stream-clicked => {
                                 root.stop-stream();
                             }
@@ -800,7 +799,13 @@ export component MainWindow inherits Window {
                         game-short-name: root.game-short-name;
                         game-color: root.game-color;
                         can-stream: root.can-stream;
+                        is-hosting: root.is-hosting;
+                        is-watching: root.is-watching;
                         bar-state <=> root.bar-state;
+                        go-live-clicked => {
+                            root.list-capture-sources();
+                            root.source-picker-open = true;
+                        }
                         mic-toggled => {
                             root.mic-toggle();
                         }
@@ -1042,6 +1047,7 @@ export component MainWindow inherits Window {
             stream-mb: root.dbg-stream-mb;
             stream-kbps: root.dbg-stream-kbps;
             stream-fps: root.dbg-stream-fps;
+            stream-ui-render-fps: root.dbg-stream-ui-render-fps;
             stream-truncations: root.dbg-stream-truncations;
             host-pacing-mode: root.dbg-host-pacing-mode;
             host-pacing-target-kbps: root.dbg-host-pacing-target-kbps;

@@ -241,7 +241,7 @@ Card types in the bento grid:
 - **Skeleton cards** — placeholder cards for cold start (see section 8).
 - **Invite card** — CTA card in brand red tint (see section 8).
 
-The "GO LIVE" button moves to top-right of the center panel header.
+Streaming is initiated via the broadcast icon in the action bar (control bar, always visible).
 
 ### 7.2 State: Active Stream(s)
 

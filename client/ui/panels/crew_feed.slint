@@ -1445,6 +1445,7 @@ export component CrewFeed inherits Rectangle {
     in property <bool> is-watching: false;
     in property <string> active-streamer-id: "";
     in property <image> stream-frame;
+    in property <float> stream-ui-render-fps: 0.0;
 
     in property <string> clip-playing-path: "";
     in property <float> clip-progress: 0.0;
@@ -1453,7 +1454,6 @@ export component CrewFeed inherits Rectangle {
     in property <string> clip-position-text: "";
     in property <string> clip-duration-text: "";
 
-    callback go-live-clicked();
     callback card-clicked(string);
     callback invite-clicked();
     callback hide-invite-clicked();
@@ -1511,41 +1511,6 @@ export component CrewFeed inherits Rectangle {
                     }
                 }
 
-                Rectangle {
-                    width: go-live-text.preferred-width + 36px;
-                    height: 32px;
-                    border-radius: 8px;
-                    background: live-hover.has-hover ? Theme.dark ? #EB4D5F28 : #FF1E5618 : Theme.accent-bg;
-                    border-width: 1px;
-                    border-color: Theme.dark ? #EB4D5F33 : #FF1E5622;
-                    y: (parent.height - self.height) / 2;
-
-                    HorizontalLayout {
-                        alignment: center;
-                        spacing: 6px;
-
-                        Rectangle {
-                            width: 6px;
-                            height: 6px;
-                            border-radius: 3px;
-                            background: Theme.accent;
-                            y: (parent.height - self.height) / 2;
-                        }
-
-                        go-live-text := Text {
-                            text: "GO LIVE";
-                            font-size: 12px;
-                            font-weight: 600;
-                            color: Theme.accent;
-                            vertical-alignment: center;
-                        }
-                    }
-
-                    live-hover := TouchArea {
-                        mouse-cursor: pointer;
-                        clicked => { go-live-clicked(); }
-                    }
-                }
             }
         }
 
@@ -1555,7 +1520,7 @@ export component CrewFeed inherits Rectangle {
         }
 
         // Scrollable feed area
-        Flickable {
+        feed-flick := Flickable {
             vertical-stretch: 1;
 
             VerticalLayout {
@@ -1581,6 +1546,9 @@ export component CrewFeed inherits Rectangle {
                             is-watching: root.is-watching;
                             active-streamer-id: root.active-streamer-id;
                             stream-frame: root.stream-frame;
+                            stream-ui-render-fps: root.stream-ui-render-fps;
+                            viewport-abs-y: feed-flick.absolute-position.y / 1px;
+                            viewport-height: feed-flick.height / 1px;
                             watch-stream-clicked(host-id, session-id, w, h) => {
                                 root.watch-stream-clicked(host-id, session-id, w, h);
                             }
@@ -1617,6 +1585,9 @@ export component CrewFeed inherits Rectangle {
                     is-watching: root.is-watching;
                     active-streamer-id: root.active-streamer-id;
                     stream-frame: root.stream-frame;
+                    stream-ui-render-fps: root.stream-ui-render-fps;
+                    viewport-abs-y: feed-flick.absolute-position.y / 1px;
+                    viewport-height: feed-flick.height / 1px;
                     watch-stream-clicked(host-id, session-id, w, h) => {
                         root.watch-stream-clicked(host-id, session-id, w, h);
                     }
@@ -1636,6 +1607,9 @@ export component CrewFeed inherits Rectangle {
                     is-watching: root.is-watching;
                     active-streamer-id: root.active-streamer-id;
                     stream-frame: root.stream-frame;
+                    stream-ui-render-fps: root.stream-ui-render-fps;
+                    viewport-abs-y: feed-flick.absolute-position.y / 1px;
+                    viewport-height: feed-flick.height / 1px;
                     watch-stream-clicked(host-id, session-id, w, h) => {
                         root.watch-stream-clicked(host-id, session-id, w, h);
                     }

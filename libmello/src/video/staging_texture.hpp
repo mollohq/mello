@@ -13,8 +13,10 @@ public:
     /// @param format  DXGI_FORMAT_NV12 (default) or DXGI_FORMAT_R8_UNORM (NVDEC zero-copy).
     ///                R8 sources get GPU-converted to RGBA via compute shader.
     /// @param uv_y_offset  Row where UV plane starts in R8 layout (coded_height, may differ from video_height).
+    /// @param enable_cpu_readback  If false, skip allocating CPU staging texture/readback path.
     bool initialize(const GraphicsDevice& device, uint32_t width, uint32_t video_height,
-                    DXGI_FORMAT format = DXGI_FORMAT_NV12, uint32_t uv_y_offset = 0);
+                    DXGI_FORMAT format = DXGI_FORMAT_NV12, uint32_t uv_y_offset = 0,
+                    bool enable_cpu_readback = true);
 
     void copy_from(ID3D11Texture2D* source, bool copy_to_cpu_staging = true);
 
@@ -41,6 +43,7 @@ private:
     uint32_t uv_y_offset_  = 0; // UV plane start row in R8 texture (coded_height)
     DXGI_FORMAT format_    = DXGI_FORMAT_NV12;
     uint64_t read_count_   = 0;
+    bool cpu_readback_enabled_ = true;
 
     // GPU NV12→RGBA compute shader path (R8 sources only)
     bool gpu_convert_ = false;

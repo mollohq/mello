@@ -937,7 +937,7 @@ MelloStreamView* mello_stream_start_viewer(
     MelloFrameCallback       on_frame,
     void*                    user_data)
 {
-    if (!ctx || !config || !on_frame) return nullptr;
+    if (!ctx || !config) return nullptr;
     try {
         auto* c = ctx_cast(ctx);
 
@@ -949,9 +949,12 @@ MelloStreamView* mello_stream_start_viewer(
 
         auto* view = new MelloStreamView{c, on_frame, user_data, nullptr, nullptr};
 
-        auto cb = [view](const uint8_t* rgba, uint32_t w, uint32_t h, uint64_t ts) {
-            view->callback(view->user_data, rgba, w, h, ts);
-        };
+        mello::video::VideoPipeline::FrameCallback cb{};
+        if (on_frame) {
+            cb = [view](const uint8_t* rgba, uint32_t w, uint32_t h, uint64_t ts) {
+                view->callback(view->user_data, rgba, w, h, ts);
+            };
+        }
 
         if (!c->video().start_viewer(pc, cb)) {
             delete view;
@@ -965,7 +968,6 @@ void mello_stream_stop_viewer(MelloStreamView* view) {
     if (!view) return;
     try {
         view->ctx->video().set_native_frame_callback({});
-        view->ctx->video().set_native_frame_mirror_rgba(false);
         view->ctx->video().stop_viewer();
         delete view;
     } catch (...) {}
@@ -1026,16 +1028,6 @@ void mello_stream_set_native_frame_callback(
             }
         };
         view->ctx->video().set_native_frame_callback(native_cb);
-    } catch (...) {}
-}
-
-void mello_stream_set_native_frame_mirror_rgba(
-    MelloStreamView* view,
-    bool enabled)
-{
-    if (!view) return;
-    try {
-        view->ctx->video().set_native_frame_mirror_rgba(enabled);
     } catch (...) {}
 }
 

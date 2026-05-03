@@ -130,6 +130,8 @@ export component ControlBar inherits Rectangle {
     in property <string> game-short-name: "";
     in property <color> game-color: #2a2a30;
     in property <bool> can-stream: false;
+    in property <bool> is-hosting: false;
+    in property <bool> is-watching: false;
     // 0=idle, 1=now-playing, 2=post-game, 3=moment-input, 4=confirmed
     in-out property <int> bar-state: 0;
     callback mic-toggled();
@@ -142,6 +144,7 @@ export component ControlBar inherits Rectangle {
     callback debug-toggled();
     callback request-mic-permission();
     callback open-mic-settings();
+    callback go-live-clicked();
 
     // Game callbacks
     callback stream-requested();
@@ -668,6 +671,34 @@ export component ControlBar inherits Rectangle {
                         }
                     }
                 }
+
+                // Go live
+                Rectangle {
+                    width: 40px;
+                    Rectangle {
+                        width: 40px;
+                        height: 40px;
+                        border-radius: 8px;
+                        background: go-live-hover.has-hover ? (Theme.dark ? #FFFFFF1A : #0000000D) : transparent;
+                        y: (parent.height - self.height) / 2;
+                        Image {
+                            source: @image-url("../icons/broadcast.svg");
+                            colorize: is-hosting ? Theme.accent
+                                : go-live-hover.has-hover ? Theme.accent
+                                : Theme.text-secondary;
+                            width: 20px;
+                            height: 20px;
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                        }
+                    }
+
+                    go-live-hover := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { go-live-clicked(); }
+                    }
+                }
+
                 ActionButton {
                     icon: mic-muted ? @image-url("../icons/mic-off.svg") : @image-url("../icons/mic.svg");
                     alert: in-voice && mic-muted;

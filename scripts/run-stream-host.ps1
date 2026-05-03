@@ -5,9 +5,9 @@ param(
     [string]$NakamaAuthToken = $env:MELLO_NAKAMA_AUTH_TOKEN,
     [string]$CrewId = $env:MELLO_CREW_ID,
     [int]$Fps = 60,
-    [int]$BitrateKbps = 5000,
-    [int]$RequestWidth = 1920,
-    [int]$RequestHeight = 1080,
+    [int]$BitrateKbps = 4000,
+    [int]$RequestWidth = 1280,
+    [int]$RequestHeight = 720,
     [string]$StreamTitle = "Stream Host Probe",
     [switch]$SupportsAv1,
     [string]$HostLog = "C:\temp\host.log"

@@ -53,6 +53,10 @@ impl ForegroundMonitor {
         self.current_mode
     }
 
+    pub fn game_pid(&self) -> Option<u32> {
+        self.game_pid
+    }
+
     fn evaluate_with(&mut self, is_main_window: bool, fg_pid: Option<u32>) -> Option<HudMode> {
         let new_mode = self.determine_mode(is_main_window, fg_pid);
         if new_mode != self.current_mode {
