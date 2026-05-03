@@ -166,6 +166,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
             {
                 use crate::dcomp_presenter::DCompPresenter;
                 use i_slint_backend_winit::WinitWindowAccessor;
+                use slint::ComponentHandle as _;
                 let hwnd = ctx
                     .app
                     .window()
