@@ -1,7 +1,7 @@
 use std::rc::Rc;
 
 use mello_core::Event;
-use slint::{ComponentHandle, Model};
+use slint::Model;
 
 use super::stream_cards::sync_active_stream_cards;
 use crate::app_context::AppContext;
