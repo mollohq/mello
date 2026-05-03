@@ -1454,7 +1454,6 @@ export component CrewFeed inherits Rectangle {
     in property <string> clip-position-text: "";
     in property <string> clip-duration-text: "";
 
-    callback go-live-clicked();
     callback card-clicked(string);
     callback invite-clicked();
     callback hide-invite-clicked();
@@ -1512,41 +1511,6 @@ export component CrewFeed inherits Rectangle {
                     }
                 }
 
-                Rectangle {
-                    width: go-live-text.preferred-width + 36px;
-                    height: 32px;
-                    border-radius: 8px;
-                    background: live-hover.has-hover ? Theme.dark ? #EB4D5F28 : #FF1E5618 : Theme.accent-bg;
-                    border-width: 1px;
-                    border-color: Theme.dark ? #EB4D5F33 : #FF1E5622;
-                    y: (parent.height - self.height) / 2;
-
-                    HorizontalLayout {
-                        alignment: center;
-                        spacing: 6px;
-
-                        Rectangle {
-                            width: 6px;
-                            height: 6px;
-                            border-radius: 3px;
-                            background: Theme.accent;
-                            y: (parent.height - self.height) / 2;
-                        }
-
-                        go-live-text := Text {
-                            text: "GO LIVE";
-                            font-size: 12px;
-                            font-weight: 600;
-                            color: Theme.accent;
-                            vertical-alignment: center;
-                        }
-                    }
-
-                    live-hover := TouchArea {
-                        mouse-cursor: pointer;
-                        clicked => { go-live-clicked(); }
-                    }
-                }
             }
         }
 

@@ -1347,8 +1347,8 @@ impl super::Client {
 
         let _ = self.event_tx.send(Event::StreamWatching {
             host_id: host_id.to_string(),
-            width: stream_width,
-            height: stream_height,
+            width: w,
+            height: h,
         });
 
         let config = crate::stream::StreamConfig::default();

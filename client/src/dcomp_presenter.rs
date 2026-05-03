@@ -18,7 +18,7 @@ use windows::Win32::Graphics::DirectComposition::{
 use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_SAMPLE_DESC};
 use windows::Win32::Graphics::Dxgi::{
     CreateDXGIFactory1, IDXGIFactory2, IDXGISwapChain1, DXGI_PRESENT, DXGI_SWAP_CHAIN_DESC1,
-    DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL, DXGI_USAGE_RENDER_TARGET_OUTPUT,
+    DXGI_SWAP_CHAIN_FLAG, DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL, DXGI_USAGE_RENDER_TARGET_OUTPUT,
 };
 
 pub struct DCompPresenter {
@@ -117,38 +117,52 @@ impl DCompPresenter {
             return false;
         }
 
-        // Intersect canvas rect with viewport vertical bounds.
+        // Inset by 2px (physical) so the card border stays visible.
+        let inset = 2.0_f32;
+        let canvas_x = canvas_x + inset;
+        let canvas_y = canvas_y + inset;
+        let canvas_w = (canvas_w - inset * 2.0).max(1.0);
+        let canvas_h = (canvas_h - inset * 2.0).max(1.0);
+
+        // Recompute intersection with the inset rect.
         let vis_top = canvas_y.max(viewport_y);
         let vis_bot = (canvas_y + canvas_h).min(viewport_y + viewport_h);
         let visible = vis_bot > vis_top && canvas_w > 0.0;
 
         unsafe {
             if !visible {
-                // Fully clipped — hide by removing content.
                 let _ = self.dcomp_visual.SetContent(None);
                 let _ = self.dcomp_device.Commit();
                 return true;
             }
 
-            // Restore content if it was hidden.
             let _ = self.dcomp_visual.SetContent(&self.swap_chain);
 
-            if let Err(e) = self.dcomp_visual.SetOffsetX2(canvas_x) {
+            // Uniform scale preserving aspect ratio (contain-fit).
+            let sw = self.stream_width as f32;
+            let sh = self.stream_height as f32;
+            let scale = (canvas_w / sw).min(canvas_h / sh);
+            let rendered_w = sw * scale;
+            let rendered_h = sh * scale;
+
+            // Center within the card area.
+            let offset_x = canvas_x + (canvas_w - rendered_w) * 0.5;
+            let offset_y = canvas_y + (canvas_h - rendered_h) * 0.5;
+
+            if let Err(e) = self.dcomp_visual.SetOffsetX2(offset_x) {
                 log::error!("DComp SetOffsetX: {e}");
                 return false;
             }
-            if let Err(e) = self.dcomp_visual.SetOffsetY2(canvas_y) {
+            if let Err(e) = self.dcomp_visual.SetOffsetY2(offset_y) {
                 log::error!("DComp SetOffsetY: {e}");
                 return false;
             }
 
-            let scale_x = canvas_w / self.stream_width as f32;
-            let scale_y = canvas_h / self.stream_height as f32;
             let matrix = windows_numerics::Matrix3x2 {
-                M11: scale_x,
+                M11: scale,
                 M12: 0.0,
                 M21: 0.0,
-                M22: scale_y,
+                M22: scale,
                 M31: 0.0,
                 M32: 0.0,
             };
@@ -158,9 +172,9 @@ impl DCompPresenter {
             }
 
             // Clip to visible portion (local to the visual, pre-transform).
-            let clip_top = (vis_top - canvas_y) / scale_y;
-            let clip_bottom = (vis_bot - canvas_y) / scale_y;
-            let clip_right = self.stream_width as f32;
+            let clip_top = (vis_top - offset_y) / scale;
+            let clip_bottom = (vis_bot - offset_y) / scale;
+            let clip_right = sw;
             let rect_clip = match self.dcomp_device.CreateRectangleClip() {
                 Ok(c) => c,
                 Err(e) => {
@@ -284,13 +298,37 @@ impl DCompPresenter {
         Ok((dcomp_device, target, visual))
     }
 
-    unsafe fn present_inner(&self, shared_handle: usize) -> Result<bool, String> {
+    unsafe fn present_inner(&mut self, shared_handle: usize) -> Result<bool, String> {
         let handle = HANDLE(shared_handle as *mut _);
 
         let shared_tex: ID3D11Texture2D = self
             .device1
             .OpenSharedResource1(handle)
             .map_err(|e| format!("OpenSharedResource1: {e}"))?;
+
+        // Check if shared texture dimensions differ from swap chain.
+        let mut tex_desc = Default::default();
+        shared_tex.GetDesc(&mut tex_desc);
+        if tex_desc.Width != self.stream_width || tex_desc.Height != self.stream_height {
+            log::info!(
+                "DComp: stream resolution changed {}x{} → {}x{}, resizing swap chain",
+                self.stream_width,
+                self.stream_height,
+                tex_desc.Width,
+                tex_desc.Height
+            );
+            self.stream_width = tex_desc.Width;
+            self.stream_height = tex_desc.Height;
+            self.swap_chain
+                .ResizeBuffers(
+                    2,
+                    tex_desc.Width,
+                    tex_desc.Height,
+                    DXGI_FORMAT_R8G8B8A8_UNORM,
+                    DXGI_SWAP_CHAIN_FLAG(0),
+                )
+                .map_err(|e| format!("ResizeBuffers: {e}"))?;
+        }
 
         let back_tex: ID3D11Texture2D = self
             .swap_chain

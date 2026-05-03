@@ -4,9 +4,9 @@ import { StreamCardData, VideoRect } from "../types.slint";
 component StreamIconButton inherits Rectangle {
     in property <image> icon;
 
-    width: 40px;
-    height: 40px;
-    border-radius: 8px;
+    width: 32px;
+    height: 32px;
+    border-radius: 6px;
     background: btn-hover.has-hover ? Theme.hover-overlay : transparent;
     border-width: 1px;
     border-color: btn-hover.has-hover ? Theme.graphic-light : transparent;
@@ -14,8 +14,8 @@ component StreamIconButton inherits Rectangle {
     Image {
         source: icon;
         colorize: Theme.text-secondary;
-        width: 18px;
-        height: 18px;
+        width: 16px;
+        height: 16px;
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
     }
@@ -45,7 +45,6 @@ component StreamCard inherits Rectangle {
     property <bool> show-live-frame: selected-card && is-watching && card.can-watch;
     property <bool> show-hosting-state: selected-card && is-hosting && !card.can-watch;
     property <bool> show-watch-cta: card.can-watch && !show-live-frame;
-    property <length> live-badge-height: 24px;
 
     border-radius: 16px;
     border-width: 1px;
@@ -185,103 +184,6 @@ component StreamCard inherits Rectangle {
                 }
             }
 
-            badge-row := HorizontalLayout {
-                x: 16px;
-                y: 18px;
-                spacing: 8px;
-
-                Rectangle {
-                    width: live-row.preferred-width + 2px;
-                    height: root.live-badge-height;
-                    border-radius: 0px;
-                    background: Theme.accent;
-                    border-width: 1px;
-                    border-color: transparent;
-
-                    live-row := HorizontalLayout {
-                        alignment: center;
-                        spacing: 6px;
-                        padding-left: 8px;
-                        padding-right: 8px;
-
-                        live-text := Text {
-                            text: "LIVE";
-                            font-size: 11px;
-                            font-weight: 700;
-                            color: #FFFFFF;
-                            vertical-alignment: center;
-                        }
-                    }
-                }
-
-                if root.card.viewer-count > 0: Rectangle {
-                    width: viewers-row.preferred-width + 2px;
-                    height: root.live-badge-height;
-                    border-radius: 0px;
-                    background: #000000B3;
-                    border-width: 0px;
-                    border-color: transparent;
-
-                    viewers-row := HorizontalLayout {
-                        alignment: center;
-                        spacing: 6px;
-                        padding-left: 8px;
-                        padding-right: 8px;
-
-                        Rectangle {
-                            width: 12px;
-                            height: parent.height;
-                            background: transparent;
-
-                            Image {
-                                source: @image-url("../icons/user.svg");
-                                colorize: Theme.text-secondary;
-                                width: 12px;
-                                height: 12px;
-                                y: (parent.height - self.height) / 2;
-                            }
-                        }
-
-                        viewers-text := Text {
-                            text: root.card.viewer-count + "";
-                            font-family: Theme.font-mono;
-                            font-size: 11px;
-                            font-weight: 700;
-                            color: #FFFFFF;
-                            vertical-alignment: center;
-                        }
-                    }
-                }
-            }
-
-            if show-live-frame: Rectangle {
-                width: ui-fps-text.preferred-width + 20px;
-                height: 24px;
-                x: parent.width - self.width - 16px;
-                y: 48px;
-                border-radius: 12px;
-                background: #000000B3;
-                border-width: 1px;
-                border-color: Theme.graphic-light;
-
-                ui-fps-text := Text {
-                    text: "UI \{Math.round(root.stream-ui-render-fps)} fps";
-                    font-family: Theme.font-mono;
-                    font-size: 10px;
-                    font-weight: 600;
-                    color: #FFFFFF;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
-                }
-            }
-
-            Rectangle {
-                width: parent.width;
-                height: 52px;
-                y: parent.height - self.height;
-                background: Theme.dark ? @linear-gradient(180deg, #00000000 0%, #00000080 100%) : @linear-gradient(180deg, #FFFFFF00 0%, #00000020 100%);
-            }
-
             if root.card.can-watch: watch-click := TouchArea {
                 mouse-cursor: pointer;
                 clicked => {
@@ -306,43 +208,96 @@ component StreamCard inherits Rectangle {
                 padding-right: 12px;
                 spacing: 12px;
 
+                // Avatar — wrapper stretches to row height, inner rect centers
                 Rectangle {
                     width: 40px;
-                    height: 40px;
-                    border-radius: 8px;
-                    background: root.card.has-avatar
-                        ? transparent
-                        : (root.card.avatar-color-index == 0 ? #EB4D5F : root.card.avatar-color-index == 1 ? #4a9eff : root.card.avatar-color-index == 2 ? #4ade80 : root.card.avatar-color-index == 3 ? #a78bfa : #f59e0b);
-                    y: (parent.height - self.height) / 2;
+                    horizontal-stretch: 0;
 
-                    if root.card.has-avatar: Image {
-                        source: root.card.avatar;
-                        width: parent.width;
-                        height: parent.height;
-                        image-fit: cover;
-                    }
+                    Rectangle {
+                        width: 40px;
+                        height: 40px;
+                        y: (parent.height - self.height) / 2;
+                        border-radius: 8px;
+                        background: root.card.has-avatar
+                            ? transparent
+                            : (root.card.avatar-color-index == 0 ? #EB4D5F : root.card.avatar-color-index == 1 ? #4a9eff : root.card.avatar-color-index == 2 ? #4ade80 : root.card.avatar-color-index == 3 ? #a78bfa : #f59e0b);
 
-                    if !root.card.has-avatar: Text {
-                        text: root.card.avatar-initials;
-                        font-size: 12px;
-                        font-weight: 700;
-                        color: #FFFFFF;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
+                        if root.card.has-avatar: Image {
+                            source: root.card.avatar;
+                            width: parent.width;
+                            height: parent.height;
+                            image-fit: cover;
+                        }
+
+                        if !root.card.has-avatar: Text {
+                            text: root.card.avatar-initials;
+                            font-size: 12px;
+                            font-weight: 700;
+                            color: #FFFFFF;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
                     }
                 }
 
+                // Name + badges — stretches to fill
                 VerticalLayout {
                     horizontal-stretch: 1;
                     alignment: center;
                     spacing: 3px;
 
-                    Text {
-                        text: root.card.streamer-name;
-                        font-size: 15px;
-                        font-weight: 700;
-                        color: Theme.text-primary;
-                        overflow: elide;
+                    HorizontalLayout {
+                        spacing: 8px;
+
+                        Text {
+                            text: root.card.streamer-name;
+                            font-size: 15px;
+                            font-weight: 700;
+                            color: Theme.text-primary;
+                            overflow: elide;
+                            horizontal-stretch: 0;
+                        }
+
+                        Rectangle {
+                            horizontal-stretch: 0;
+                            width: live-label.preferred-width + 14px;
+                            height: 20px;
+
+                            Rectangle {
+                                width: parent.width;
+                                height: parent.height;
+                                y: (parent.height - self.height) / 2;
+                                border-radius: 3px;
+                                background: Theme.accent;
+
+                                live-label := Text {
+                                    text: "LIVE";
+                                    font-family: Theme.font-mono;
+                                    font-size: 10px;
+                                    font-weight: 700;
+                                    letter-spacing: 0.5px;
+                                    color: #FFFFFF;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                }
+                            }
+                        }
+
+                        if show-live-frame: Rectangle {
+                            horizontal-stretch: 0;
+
+                            Text {
+                                text: "\{Math.round(root.stream-ui-render-fps)} fps";
+                                font-family: Theme.font-mono;
+                                font-size: 10px;
+                                font-weight: 600;
+                                color: Theme.text-secondary;
+                                vertical-alignment: center;
+                            }
+                        }
+
+                        // Spacer absorbs remaining width
+                        Rectangle { horizontal-stretch: 1; }
                     }
 
                     Text {
@@ -353,50 +308,53 @@ component StreamCard inherits Rectangle {
                     }
                 }
 
+                // Right column — icons on top, leave button below
                 Rectangle {
-                    property <length> btn-area-width: (root.card.can-watch ? 3 : 2) * 40px + (root.card.can-watch ? 2 : 1) * 4px;
-                    width: btn-area-width;
+                    horizontal-stretch: 0;
+                    width: ctrl-row.preferred-width;
 
-                    ctrl-row := HorizontalLayout {
-                        y: 0;
+                    VerticalLayout {
+                        alignment: center;
                         spacing: 4px;
 
-                        StreamIconButton {
-                            icon: @image-url("../icons/volume.svg");
+                        ctrl-row := HorizontalLayout {
+                            spacing: 4px;
+
+                            StreamIconButton {
+                                icon: @image-url("../icons/volume.svg");
+                            }
+
+                            StreamIconButton {
+                                icon: @image-url("../icons/settings.svg");
+                            }
+
+                            if root.card.can-watch: StreamIconButton {
+                                icon: @image-url("../icons/maximize.svg");
+                            }
                         }
 
-                        StreamIconButton {
-                            icon: @image-url("../icons/settings.svg");
-                        }
+                        if show-live-frame: Rectangle {
+                            height: 26px;
+                            border-radius: 6px;
+                            background: leave-hover.has-hover ? (Theme.dark ? #FF1E5633 : #FF1E5628) : Theme.accent-bg;
+                            border-width: 1px;
+                            border-color: Theme.dark ? #EB4D5F33 : #FF1E5622;
 
-                        if root.card.can-watch: StreamIconButton {
-                            icon: @image-url("../icons/maximize.svg");
-                        }
-                    }
+                            leave-label := Text {
+                                text: "Leave";
+                                font-family: Theme.font-sans;
+                                font-size: 11px;
+                                font-weight: 600;
+                                color: Theme.accent;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
 
-                    if show-live-frame: Rectangle {
-                        width: parent.width;
-                        height: 28px;
-                        y: 44px;
-                        border-radius: 6px;
-                        background: leave-hover.has-hover ? #B91C1C : #DC2626;
-                        border-width: 1px;
-                        border-color: transparent;
-
-                        Text {
-                            text: "Leave stream";
-                            font-family: Theme.font-mono;
-                            font-size: 11px;
-                            font-weight: 600;
-                            color: #FFFFFF;
-                            horizontal-alignment: center;
-                            vertical-alignment: center;
-                        }
-
-                        leave-hover := TouchArea {
-                            mouse-cursor: pointer;
-                            clicked => {
-                                root.stop-watching-clicked();
+                            leave-hover := TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => {
+                                    root.stop-watching-clicked();
+                                }
                             }
                         }
                     }

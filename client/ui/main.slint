@@ -744,10 +744,6 @@ export component MainWindow inherits Window {
                             clip-anim-tick: root.clip-anim-tick;
                             clip-position-text: root.clip-position-text;
                             clip-duration-text: root.clip-duration-text;
-                            go-live-clicked => {
-                                root.list-capture-sources();
-                                root.source-picker-open = true;
-                            }
                             stop-stream-clicked => {
                                 root.stop-stream();
                             }
@@ -803,7 +799,13 @@ export component MainWindow inherits Window {
                         game-short-name: root.game-short-name;
                         game-color: root.game-color;
                         can-stream: root.can-stream;
+                        is-hosting: root.is-hosting;
+                        is-watching: root.is-watching;
                         bar-state <=> root.bar-state;
+                        go-live-clicked => {
+                            root.list-capture-sources();
+                            root.source-picker-open = true;
+                        }
                         mic-toggled => {
                             root.mic-toggle();
                         }
