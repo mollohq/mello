@@ -315,7 +315,7 @@ impl super::Client {
                     #[cfg(target_os = "windows")]
                     let frame_callback = None;
                     #[cfg(not(target_os = "windows"))]
-                    let frame_callback = Some(on_viewer_frame);
+                    let frame_callback = Some(on_viewer_frame as _);
                     let viewer = unsafe {
                         mello_sys::mello_stream_start_viewer(
                             ctx,
@@ -328,7 +328,7 @@ impl super::Client {
                         unsafe {
                             mello_sys::mello_stream_set_native_frame_callback(
                                 viewer,
-                                Some(on_viewer_native_frame),
+                                Some(on_viewer_native_frame as _),
                                 frame_cb_data as *mut std::ffi::c_void,
                             );
                         }
@@ -1313,7 +1313,7 @@ impl super::Client {
         #[cfg(target_os = "windows")]
         let frame_callback = None;
         #[cfg(not(target_os = "windows"))]
-        let frame_callback = Some(on_viewer_frame);
+        let frame_callback = Some(on_viewer_frame as _);
         let viewer = unsafe {
             mello_sys::mello_stream_start_viewer(
                 ctx,
@@ -1326,7 +1326,7 @@ impl super::Client {
             unsafe {
                 mello_sys::mello_stream_set_native_frame_callback(
                     viewer,
-                    Some(on_viewer_native_frame),
+                    Some(on_viewer_native_frame as _),
                     frame_cb_data as *mut std::ffi::c_void,
                 );
             }

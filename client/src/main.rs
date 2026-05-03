@@ -512,6 +512,20 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
 
+            #[cfg(not(target_os = "windows"))]
+            {
+                let frame_data = frame_slot.lock().ok().and_then(|mut s| s.take());
+                if let Some((w, h, rgba)) = frame_data {
+                    if let Some(app) = app_for_tick.as_ref() {
+                        let buf = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
+                            &rgba, w, h,
+                        );
+                        app.set_stream_frame(slint::Image::from_rgba8(buf));
+                        frame_timer_presented = frame_timer_presented.saturating_add(1);
+                    }
+                }
+            }
+
             frame_consumed.store(true, std::sync::atomic::Ordering::Release);
             frame_lifecycle.store(FRAME_STATE_PRESENTED, std::sync::atomic::Ordering::Release);
 
@@ -523,8 +537,15 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
                     app.set_dbg_stream_ui_render_fps(present_fps);
                 }
 
+                #[cfg(target_os = "windows")]
                 log::info!(
                     "DComp stream: present_fps={:.1} tick_hz={:.1}",
+                    present_fps,
+                    frame_timer_ticks as f32 / elapsed
+                );
+                #[cfg(not(target_os = "windows"))]
+                log::info!(
+                    "Stream: present_fps={:.1} tick_hz={:.1}",
                     present_fps,
                     frame_timer_ticks as f32 / elapsed
                 );
