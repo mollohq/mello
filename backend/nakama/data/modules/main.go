@@ -34,6 +34,14 @@ func InitModule(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runti
 		logger.Warn("SFU JWT signing disabled (SFU_JWT_PRIVATE_KEY not set)")
 	}
 
+	// Snapshots S3 init (non-fatal — stream cards just won't have snapshots)
+	initSnapshotsS3()
+	if snapshotsClient != nil {
+		logger.Info("Snapshots S3 configured: bucket=%s", snapshotsBucket)
+	} else {
+		logger.Warn("Snapshots S3 not configured (SNAPSHOTS_S3_BUCKET / S3_ENDPOINT not set)")
+	}
+
 	// -----------------------------------------------------------------------
 	// Auth hooks
 	// -----------------------------------------------------------------------
@@ -244,6 +252,7 @@ func InitModule(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runti
 	go startChatActivityTicker(ctx, nk, logger, 30*time.Minute)
 	go StartVoiceRoomGC(ctx, nk, logger, 30*time.Second)
 	go StartStreamGC(ctx, nk, logger, 60*time.Second)
+	go StartSnapshotBackfillJob(ctx, nk, logger)
 	go StartWeeklyRecapJob(ctx, nk, logger)
 
 	logger.Info("Mello backend initialized successfully")

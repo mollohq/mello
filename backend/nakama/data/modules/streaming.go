@@ -291,6 +291,13 @@ func StopStreamRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk ru
 				durationMin = 1
 			}
 		}
+
+		snapshotURLs, err := ListSnapshotURLs(req.CrewID, streamMeta.StreamID)
+		if err != nil {
+			logger.Warn("StopStreamRPC: ListSnapshotURLs failed, continuing without snapshots: %v", err)
+			snapshotURLs = []string{}
+		}
+
 		event := CrewEvent{
 			ID:        generateEventID(),
 			CrewID:    req.CrewID,
@@ -299,12 +306,14 @@ func StopStreamRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk ru
 			Timestamp: time.Now().UnixMilli(),
 			Score:     30,
 			Data: StreamSessionData{
+				SessionID:    streamMeta.StreamID,
 				StreamerID:   streamMeta.StreamerID,
 				StreamerName: streamMeta.StreamerUsername,
 				Title:        streamMeta.Title,
 				DurationMin:  durationMin,
 				PeakViewers:  len(streamMeta.ViewerIDs),
 				ViewerIDs:    streamMeta.ViewerIDs,
+				SnapshotURLs: snapshotURLs,
 			},
 		}
 		if appendErr := AppendCrewEvent(ctx, nk, req.CrewID, event); appendErr != nil {
@@ -701,6 +710,11 @@ func cleanupStreamIfHost(ctx context.Context, logger runtime.Logger, nk runtime.
 			durationMin = 1
 		}
 	}
+	snapshotURLs, err := ListSnapshotURLs(crewID, meta.StreamID)
+	if err != nil {
+		logger.Warn("cleanupStreamIfHost: ListSnapshotURLs failed, continuing without snapshots: %v", err)
+		snapshotURLs = []string{}
+	}
 	event := CrewEvent{
 		ID:        generateEventID(),
 		CrewID:    crewID,
@@ -709,12 +723,14 @@ func cleanupStreamIfHost(ctx context.Context, logger runtime.Logger, nk runtime.
 		Timestamp: time.Now().UnixMilli(),
 		Score:     30,
 		Data: StreamSessionData{
+			SessionID:    meta.StreamID,
 			StreamerID:   meta.StreamerID,
 			StreamerName: meta.StreamerUsername,
 			Title:        meta.Title,
 			DurationMin:  durationMin,
 			PeakViewers:  len(meta.ViewerIDs),
 			ViewerIDs:    meta.ViewerIDs,
+			SnapshotURLs: snapshotURLs,
 		},
 	}
 	if appendErr := AppendCrewEvent(ctx, nk, crewID, event); appendErr != nil {
@@ -778,5 +794,79 @@ func streamGC(ctx context.Context, logger runtime.Logger, nk runtime.NakamaModul
 			break
 		}
 		cursor = nextCursor
+	}
+}
+
+// StartSnapshotBackfillJob runs every 60s and checks for stream_session events
+// with empty SnapshotURLs — the SFU may have uploaded frames after StopStreamRPC returned.
+func StartSnapshotBackfillJob(ctx context.Context, nk runtime.NakamaModule, logger runtime.Logger) {
+	ticker := time.NewTicker(60 * time.Second)
+	defer ticker.Stop()
+	for range ticker.C {
+		snapshotBackfill(ctx, nk, logger)
+	}
+}
+
+const snapshotBackfillWindowHours = 24
+
+func snapshotBackfill(ctx context.Context, nk runtime.NakamaModule, logger runtime.Logger) {
+	cutoff := time.Now().Add(-time.Duration(snapshotBackfillWindowHours) * time.Hour).UnixMilli()
+
+	// Scan crew event ledgers directly so ended streams are still discoverable.
+	cursor := ""
+	for {
+		objects, nextCursor, err := nk.StorageList(ctx, "", SystemUserID, CrewEventsCollection, 100, cursor)
+		if err != nil {
+			logger.Warn("SnapshotBackfill: StorageList failed: %v", err)
+			return
+		}
+		for _, obj := range objects {
+			if obj.Key == "" {
+				continue
+			}
+			backfillStreamSession(ctx, nk, logger, obj.Key, cutoff)
+		}
+		if nextCursor == "" {
+			break
+		}
+		cursor = nextCursor
+	}
+}
+
+func backfillStreamSession(ctx context.Context, nk runtime.NakamaModule, logger runtime.Logger, crewID string, cutoff int64) {
+	ledger, _ := readLedger(ctx, nk, crewID)
+
+	for _, e := range ledger.Events {
+		if e.Type != "stream_session" {
+			continue
+		}
+		if e.Timestamp < cutoff {
+			continue
+		}
+
+		data, err := decodeStreamSessionData(e.Data)
+		if err != nil {
+			continue
+		}
+
+		if data.SessionID == "" {
+			continue
+		}
+
+		urls, err := ListSnapshotURLs(crewID, data.SessionID)
+		if err != nil || len(urls) == 0 {
+			continue
+		}
+
+		// Skip if already up-to-date
+		if len(data.SnapshotURLs) >= len(urls) {
+			continue
+		}
+
+		logger.Info("SnapshotBackfill: backfilling %d snapshot URLs for crew=%s session=%s (had %d)", len(urls), crewID, data.SessionID, len(data.SnapshotURLs))
+		if updateErr := UpdateLedgerEventSnapshotURLs(ctx, nk, crewID, e.ID, urls); updateErr != nil {
+			logger.Warn("SnapshotBackfill: update failed for crew=%s session=%s: %v", crewID, data.SessionID, updateErr)
+		}
+		return
 	}
 }

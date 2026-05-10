@@ -39,7 +39,7 @@ rfd = "0.15"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif"] }
 resvg = "0.47"
 base64 = "0.22"
-reqwest = { workspace = true }
+reqwest = { workspace = true, features = ["blocking"] }
 arboard = "3"
 rand = "0.8"
 

@@ -1,0 +1,463 @@
+import { Theme } from "../theme.slint";
+
+component AvatarDot inherits Rectangle {
+    in property <string> initials;
+    in property <int> color-index: 0;
+
+    width: 18px;
+    height: 18px;
+    border-radius: 4px;
+    border-width: 2px;
+    border-color: Theme.card-bg;
+    background: color-index == 0 ? #EB4D5F :
+                color-index == 1 ? #4a9eff :
+                color-index == 2 ? #4ade80 :
+                color-index == 3 ? #a78bfa : #f59e0b;
+
+    Text {
+        text: initials;
+        font-size: 7px;
+        font-weight: 600;
+        color: white;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
+
+export component SessionPreviewCard inherits Rectangle {
+    in property <[string]> snapshot-urls;
+    in property <string> session-id;
+    in property <string> title;
+    in property <string> game-name;
+    in property <string> streamer-username;
+    in property <string> streamer-initials;
+    in property <int> duration-min;
+    in property <int> peak-viewers;
+    in property <int> clip-count;
+    in property <string> time-since-ended;
+    in property <bool> is-hero;
+    in property <bool> was-seen: false;
+
+    // Sliding window: Rust pushes decoded frames via these global properties
+    in property <string> session-frame-id: "";
+    in property <image> session-pushed-frame;
+    in property <bool> session-frame-ready: false;
+
+    callback session-seen(/* session_id */ string);
+    callback request-session-frame(/* session_id */ string, /* index */ int);
+
+    // Playback state
+    property <int> frame-index: 0;
+    property <bool> fading: false;
+    property <bool> playing: false;
+    property <bool> paused: false;
+    property <bool> finished: false;
+    property <int> frames-shown: 0;
+    property <bool> seen-fired: false;
+    property <bool> started: false;
+
+    // Snapshot helpers
+    property <int> image-count: snapshot-urls.length;
+    property <bool> has-urls: image-count > 0;
+    property <bool> show-snapshots: has-urls;
+    property <bool> can-cycle: image-count > 1;
+
+    // Duration formatting
+    property <int> duration-hours: duration-min / 60;
+    property <int> duration-remaining-mins: Math.mod(duration-min, 60);
+    property <string> duration-text: duration-hours > 0
+        ? duration-hours + "h " + duration-remaining-mins + "m"
+        : duration-min + "m";
+
+    // 70% threshold for "seen"
+    property <int> seen-threshold: image-count * 7 / 10;
+
+    // Decoded frame slots (only 2 in memory at a time)
+    property <image> current-image;
+    property <image> next-image;
+    property <bool> has-current: false;
+
+    // Frame indices
+    property <int> next-index: image-count > 0 ? Math.mod((frame-index + 1), image-count) : 0;
+
+    background: card-hover.has-hover ? Theme.card-bg-hover : Theme.card-bg;
+    border-radius: 10px;
+    border-width: 1px;
+    border-color: card-hover.has-hover ? Theme.graphic-med : Theme.card-border;
+    clip: true;
+
+    VerticalLayout {
+        // ── Thumbnail area ──
+        Rectangle {
+            vertical-stretch: 3;
+            min-height: is-hero ? 200px : 110px;
+            clip: true;
+
+            if show-snapshots: Rectangle {
+                background: #000000;
+
+                Image {
+                    x: 0; y: 0; width: parent.width; height: parent.height;
+                    source: root.next-image;
+                    image-fit: cover;
+                }
+
+                Image {
+                    x: 0; y: 0; width: parent.width; height: parent.height;
+                    source: root.current-image;
+                    image-fit: cover;
+                    opacity: fading ? 0.0 : 1.0;
+                    animate opacity { duration: 300ms; easing: ease-in-out; }
+                }
+
+                // Gradient scrim
+                Rectangle {
+                    x: 0;
+                    y: parent.height - (is-hero ? 60px : 40px);
+                    width: parent.width;
+                    height: is-hero ? 60px : 40px;
+                    background: @linear-gradient(0deg, rgba(0,0,0,0.72) 0%, rgba(0,0,0,0) 100%);
+                }
+
+                // Clip badge: top-left (only if clips exist)
+                if clip-count > 0: Rectangle {
+                    x: is-hero ? 12px : 8px;
+                    y: is-hero ? 12px : 8px;
+                    width: clip-txt.preferred-width + (is-hero ? 28px : 22px);
+                    height: is-hero ? 22px : 20px;
+                    border-radius: is-hero ? 5px : 4px;
+                    background: Theme.clip-amber;
+
+                    HorizontalLayout {
+                        alignment: center;
+                        spacing: 3px;
+
+                        Image {
+                            source: @image-url("../icons/scissors.svg");
+                            colorize: white;
+                            width: is-hero ? 10px : 9px;
+                            height: is-hero ? 10px : 9px;
+                            y: (parent.height - self.height) / 2;
+                        }
+
+                        clip-txt := Text {
+                            text: clip-count > 1 ? clip-count + " clips" : "1 clip";
+                            font-size: is-hero ? 10px : 9px;
+                            font-weight: 700;
+                            color: white;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+
+                // Dim scrim when stopped or paused
+                if !root.playing || root.finished || root.paused: Rectangle {
+                    x: 0; y: 0;
+                    width: parent.width; height: parent.height;
+                    background: #00000044;
+                }
+
+                // Play button: visible when stopped
+                if !root.playing || root.finished: Rectangle {
+                    property <int> btn-size: is-hero ? 52 : 32;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    width: 1px * btn-size;
+                    height: 1px * btn-size;
+                    border-radius: 1px * btn-size / 2;
+                    background: #000000aa;
+
+                    Text {
+                        text: "▶";
+                        font-size: is-hero ? 18px : 12px;
+                        color: white;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+
+                // Duration badge: bottom-right (only when not actively playing)
+                if !root.playing || root.finished || root.paused: Rectangle {
+                    x: parent.width - self.width - (is-hero ? 10px : 8px);
+                    y: parent.height - self.height - (is-hero ? 10px : 8px);
+                    width: dur-text.preferred-width + 16px;
+                    height: is-hero ? 22px : 20px;
+                    border-radius: 4px;
+                    background: #000000aa;
+
+                    dur-text := Text {
+                        text: root.duration-text;
+                        font-size: 11px;
+                        color: white;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+
+                // ── Progress bar + pause (visible during active playback) ──
+                if root.playing && !root.finished: Rectangle {
+                    x: 0;
+                    y: parent.height - 22px;
+                    width: parent.width;
+                    height: 22px;
+                    background: #00000066;
+
+                    // Pause/resume button
+                    Rectangle {
+                        x: 4px;
+                        y: (parent.height - self.height) / 2;
+                        width: 18px;
+                        height: 18px;
+                        border-radius: 3px;
+
+                        Text {
+                            text: root.paused ? "▶" : "❚❚";
+                            font-size: root.paused ? 9px : 7px;
+                            color: white;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+
+                        TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => {
+                                root.paused = !root.paused;
+                            }
+                        }
+                    }
+
+                    // Progress track
+                    Rectangle {
+                        x: 26px;
+                        y: (parent.height - self.height) / 2;
+                        width: parent.width - 34px;
+                        height: 3px;
+                        border-radius: 1.5px;
+                        background: #ffffff33;
+
+                        // Fill
+                        Rectangle {
+                            x: 0; y: 0;
+                            width: root.image-count > 1
+                                ? parent.width * (root.frame-index * 1000 / (root.image-count - 1)) / 1000
+                                : parent.width;
+                            height: parent.height;
+                            border-radius: 1.5px;
+                            background: white;
+                            animate width { duration: 300ms; easing: ease-out; }
+                        }
+                    }
+                }
+            }
+
+            // Fallback: no snapshots
+            if !show-snapshots: Rectangle {
+                background: is-hero
+                    ? (Theme.dark
+                        ? @linear-gradient(135deg, #1a0d1a 0%, #150a15 40%, #151520 100%)
+                        : @linear-gradient(135deg, #f0e8f0 0%, #e8dde8 40%, #e0e0ea 100%))
+                    : Theme.card-bg-inset;
+
+                Rectangle {
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    width: is-hero ? 48px : 36px;
+                    height: is-hero ? 48px : 36px;
+                    border-radius: is-hero ? 24px : 18px;
+                    border-width: 1.5px;
+                    border-color: Theme.skel-ghost;
+                    background: transparent;
+
+                    Image {
+                        source: @image-url("../icons/monitor.svg");
+                        colorize: Theme.skel-ghost;
+                        width: is-hero ? 22px : 16px;
+                        height: is-hero ? 22px : 16px;
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
+                    }
+                }
+            }
+
+            // Load initial frame on first visibility (synchronous: request + consume inline)
+            Timer {
+                interval: 100ms;
+                running: root.has-urls && !root.started && root.visible;
+                triggered => {
+                    root.started = true;
+                    root.request-session-frame(root.session-id, 0);
+                    if root.session-frame-ready && root.session-frame-id == root.session-id {
+                        root.current-image = root.session-pushed-frame;
+                        root.has-current = true;
+                        if !root.was-seen && root.can-cycle {
+                            root.playing = true;
+                        }
+                    }
+                }
+            }
+
+            // Advance: request next frame, consume inline, start crossfade
+            Timer {
+                interval: 1000ms;
+                running: root.playing && !root.paused && root.can-cycle && root.visible && !root.finished && root.has-current && !root.fading;
+                triggered => {
+                    root.request-session-frame(root.session-id, root.next-index);
+                    if root.session-frame-ready && root.session-frame-id == root.session-id {
+                        root.next-image = root.session-pushed-frame;
+                        root.fading = true;
+                    }
+                }
+            }
+
+            // Crossfade completion
+            Timer {
+                interval: 300ms;
+                running: root.fading && root.visible;
+                triggered => {
+                    root.frames-shown += 1;
+
+                    if !root.seen-fired && root.frames-shown >= root.seen-threshold && root.session-id != "" {
+                        root.seen-fired = true;
+                        root.session-seen(root.session-id);
+                    }
+
+                    if root.next-index == 0 {
+                        root.current-image = root.next-image;
+                        root.frame-index = root.image-count - 1;
+                        root.fading = false;
+                        root.finished = true;
+                        root.playing = false;
+                    } else {
+                        root.current-image = root.next-image;
+                        root.frame-index = root.next-index;
+                        root.fading = false;
+                    }
+                }
+            }
+        }
+
+        // ── Card body ──
+        if is-hero: VerticalLayout {
+            padding: 12px;
+            padding-left: 14px;
+            padding-right: 14px;
+            spacing: 6px;
+            vertical-stretch: 0;
+
+            HorizontalLayout {
+                spacing: 4px;
+                height: 16px;
+
+                Image {
+                    source: @image-url("../icons/monitor.svg");
+                    colorize: Theme.accent;
+                    width: 11px;
+                    height: 11px;
+                    y: (parent.height - self.height) / 2;
+                }
+
+                Text {
+                    text: "SESSION · " + root.duration-text;
+                    font-size: 11px;
+                    font-weight: 700;
+                    color: Theme.accent;
+                    vertical-alignment: center;
+                }
+            }
+
+            Text {
+                text: root.title;
+                font-size: 14px;
+                font-weight: 500;
+                color: Theme.text-primary;
+                overflow: elide;
+            }
+
+            HorizontalLayout {
+                spacing: 8px;
+                height: 20px;
+
+                if peak-viewers > 0: HorizontalLayout {
+                    spacing: -7px;
+                    width: self.preferred-width;
+
+                    AvatarDot { initials: root.streamer-initials; color-index: 0; }
+                    if peak-viewers > 1: AvatarDot { initials: "+"; color-index: 2; }
+                    if peak-viewers > 2: AvatarDot { initials: ""; color-index: 1; }
+                }
+
+                Text {
+                    text: root.time-since-ended;
+                    font-size: 11px;
+                    color: Theme.text-sub;
+                    vertical-alignment: center;
+                }
+            }
+        }
+
+        // ── Card body (1x compact) ──
+        if !is-hero: VerticalLayout {
+            padding: 10px;
+            padding-left: 12px;
+            padding-right: 12px;
+            spacing: 4px;
+            vertical-stretch: 0;
+
+            HorizontalLayout {
+                spacing: 4px;
+                height: 14px;
+
+                Image {
+                    source: @image-url("../icons/monitor.svg");
+                    colorize: Theme.accent;
+                    width: 10px;
+                    height: 10px;
+                    y: (parent.height - self.height) / 2;
+                }
+
+                Text {
+                    text: "SESSION · " + root.duration-text;
+                    font-size: 10px;
+                    font-weight: 700;
+                    color: Theme.accent;
+                    vertical-alignment: center;
+                }
+            }
+
+            Text {
+                text: root.title;
+                font-size: 13px;
+                font-weight: 500;
+                color: Theme.text-primary;
+                overflow: elide;
+            }
+
+            Text {
+                text: root.time-since-ended;
+                font-size: 11px;
+                color: Theme.text-sub;
+            }
+        }
+    }
+
+    card-hover := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            if root.playing && !root.finished {
+                root.paused = !root.paused;
+            } else if root.show-snapshots {
+                root.frame-index = 0;
+                root.frames-shown = 0;
+                root.finished = false;
+                root.fading = false;
+                root.paused = false;
+                root.request-session-frame(root.session-id, 0);
+                if root.session-frame-ready && root.session-frame-id == root.session-id {
+                    root.current-image = root.session-pushed-frame;
+                    root.has-current = true;
+                }
+                root.playing = true;
+            }
+        }
+    }
+}

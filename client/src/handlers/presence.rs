@@ -722,8 +722,13 @@ pub fn handle(ctx: &AppContext, event: Event) {
         }
         Event::CrewEventReceived { event } => {
             log::info!("UI: crew event {} in crew {}", event.event, event.crew_id);
+            let crew_id = event.crew_id.clone();
             let _ = ctx.cmd_tx.try_send(Command::SetActiveCrew {
-                crew_id: event.crew_id,
+                crew_id: crew_id.clone(),
+            });
+            let _ = ctx.cmd_tx.try_send(Command::LoadCrewTimeline {
+                crew_id,
+                cursor: None,
             });
         }
         Event::CatchupLoaded { response } => {

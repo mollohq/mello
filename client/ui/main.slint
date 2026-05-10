@@ -281,6 +281,13 @@ export component MainWindow inherits Window {
     in property <[FeedCardData]> feed-cards: [];
     in property <bool> feed-cold-start: true;
     in property <int> feed-clip-count: 0;
+    callback session-seen(/* session_id */ string);
+
+    // --- Session snapshot sliding window ---
+    in property <string> session-frame-id: "";
+    in property <image> session-pushed-frame;
+    in property <bool> session-frame-ready: false;
+    callback request-session-frame(/* session_id */ string, /* index */ int);
 
     // --- Clip playback state ---
     in property <string> clip-playing-path: "";
@@ -775,6 +782,15 @@ export component MainWindow inherits Window {
                             hide-invite-clicked => {
                                 root.hide-invite-card();
                             }
+                            session-seen(id) => {
+                                root.session-seen(id);
+                            }
+                            request-session-frame(sid, idx) => {
+                                root.request-session-frame(sid, idx);
+                            }
+                            session-frame-id: root.session-frame-id;
+                            session-pushed-frame: root.session-pushed-frame;
+                            session-frame-ready: root.session-frame-ready;
                         }
                     }
 

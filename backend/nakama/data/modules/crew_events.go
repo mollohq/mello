@@ -62,6 +62,7 @@ type VoiceSessionData struct {
 }
 
 type StreamSessionData struct {
+	SessionID    string   `json:"session_id,omitempty"`
 	StreamerID   string   `json:"streamer_id"`
 	StreamerName string   `json:"streamer_name"`
 	Title        string   `json:"title"`
@@ -69,6 +70,7 @@ type StreamSessionData struct {
 	DurationMin  int      `json:"duration_min"`
 	PeakViewers  int      `json:"peak_viewers"`
 	ViewerIDs    []string `json:"viewer_ids,omitempty"`
+	SnapshotURLs []string `json:"snapshot_urls"` // empty if none captured yet
 }
 
 type GameSessionData struct {
@@ -149,6 +151,78 @@ func writeLedger(ctx context.Context, nk runtime.NakamaModule, crewID string, le
 		},
 	})
 	return err
+}
+
+func decodeStreamSessionData(raw interface{}) (StreamSessionData, error) {
+	var dataBytes []byte
+	switch v := raw.(type) {
+	case []byte:
+		dataBytes = v
+	case map[string]interface{}:
+		var err error
+		dataBytes, err = json.Marshal(v)
+		if err != nil {
+			return StreamSessionData{}, fmt.Errorf("marshal event data: %w", err)
+		}
+	default:
+		return StreamSessionData{}, fmt.Errorf("unexpected Data type %T", raw)
+	}
+
+	var data StreamSessionData
+	if err := json.Unmarshal(dataBytes, &data); err != nil {
+		return StreamSessionData{}, fmt.Errorf("unmarshal event data: %w", err)
+	}
+	return data, nil
+}
+
+func streamSessionDataToObject(data StreamSessionData) (map[string]interface{}, error) {
+	encoded, err := json.Marshal(data)
+	if err != nil {
+		return nil, fmt.Errorf("marshal updated data: %w", err)
+	}
+	var obj map[string]interface{}
+	if err := json.Unmarshal(encoded, &obj); err != nil {
+		return nil, fmt.Errorf("unmarshal updated data: %w", err)
+	}
+	return obj, nil
+}
+
+// UpdateLedgerEventSnapshotURLs finds a stream_session event by eventID and updates its SnapshotURLs.
+// Used by the background backfill job when SFU uploads frames after StopStreamRPC completed.
+func UpdateLedgerEventSnapshotURLs(ctx context.Context, nk runtime.NakamaModule, crewID, eventID string, snapshotURLs []string) error {
+	for attempt := 0; attempt < 3; attempt++ {
+		ledger, version := readLedger(ctx, nk, crewID)
+
+		found := false
+		for i, e := range ledger.Events {
+			if e.ID == eventID {
+				data, err := decodeStreamSessionData(e.Data)
+				if err != nil {
+					return err
+				}
+				data.SnapshotURLs = snapshotURLs
+				updatedObj, err := streamSessionDataToObject(data)
+				if err != nil {
+					return err
+				}
+				ledger.Events[i].Data = updatedObj
+				found = true
+				break
+			}
+		}
+		if !found {
+			return fmt.Errorf("event %s not found in ledger", eventID)
+		}
+
+		ledger.UpdatedAt = time.Now().UnixMilli()
+		err := writeLedger(ctx, nk, crewID, ledger, version)
+		if err == nil {
+			return nil
+		}
+		jitter, _ := rand.Int(rand.Reader, big.NewInt(50))
+		time.Sleep(time.Duration(50*(attempt+1)+int(jitter.Int64())) * time.Millisecond)
+	}
+	return fmt.Errorf("UpdateLedgerEventSnapshotURLs failed after 3 retries for crew %s event %s", crewID, eventID)
 }
 
 // AppendCrewEvent appends an event to a crew's ledger with optimistic concurrency retry.

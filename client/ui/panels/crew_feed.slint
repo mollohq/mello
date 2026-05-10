@@ -1,6 +1,7 @@
 import { Theme } from "../theme.slint";
 import { FeedCardData, StreamCardData } from "../types.slint";
 import { ActiveStreamsPanel } from "./active_streams_panel.slint";
+import { SessionPreviewCard } from "./session_preview_card.slint";
 
 component AvatarDot inherits Rectangle {
     in property <string> initials;
@@ -1367,6 +1368,11 @@ component FeedSlot inherits Rectangle {
     callback seek-clip(float);
     callback invite-clicked();
     callback hide-invite-clicked();
+    callback session-seen(string);
+    callback request-session-frame(/* session_id */ string, /* index */ int);
+    in property <string> session-frame-id: "";
+    in property <image> session-pushed-frame;
+    in property <bool> session-frame-ready: false;
 
     // Real cards
     if card.card-type == "clip" && card.is-hero: HeroClipCard {
@@ -1392,6 +1398,26 @@ component FeedSlot inherits Rectangle {
     }
     if card.card-type == "recap": RecapCard {
         width: parent.width; height: parent.height; card: root.card;
+    }
+    if card.card-type == "session-preview": SessionPreviewCard {
+        width: parent.width; height: parent.height;
+        session-id: card.id;
+        snapshot-urls: card.snapshot-urls;
+        title: card.title;
+        game-name: card.game-name;
+        streamer-username: card.actor-name;
+        streamer-initials: card.actor-initials;
+        duration-min: card.duration-min;
+        peak-viewers: card.participant-count;
+        clip-count: card.clip-count;
+        time-since-ended: card.timestamp;
+        is-hero: card.is-hero;
+        was-seen: card.was-seen;
+        session-frame-id: root.session-frame-id;
+        session-pushed-frame: root.session-pushed-frame;
+        session-frame-ready: root.session-frame-ready;
+        session-seen(id) => { root.session-seen(id); }
+        request-session-frame(sid, idx) => { root.request-session-frame(sid, idx); }
     }
     if card.card-type == "session": SessionCard {
         width: parent.width; height: parent.height; card: root.card;
@@ -1463,6 +1489,11 @@ export component CrewFeed inherits Rectangle {
     callback watch-stream-clicked(string, string, int, int);
     callback stop-stream-clicked();
     callback stop-watching-clicked();
+    callback session-seen(string);
+    callback request-session-frame(/* session_id */ string, /* index */ int);
+    in property <string> session-frame-id: "";
+    in property <image> session-pushed-frame;
+    in property <bool> session-frame-ready: false;
 
     property <int> feed-start-index: stream-cards.length == 1 && cards.length > 0 ? 1 : 0;
 
@@ -1574,6 +1605,11 @@ export component CrewFeed inherits Rectangle {
                         seek-clip(v) => { root.seek-clip(v); }
                         invite-clicked => { root.invite-clicked(); }
                         hide-invite-clicked => { root.hide-invite-clicked(); }
+                        session-seen(id) => { root.session-seen(id); }
+                        request-session-frame(sid, idx) => { root.request-session-frame(sid, idx); }
+                        session-frame-id: root.session-frame-id;
+                        session-pushed-frame: root.session-pushed-frame;
+                        session-frame-ready: root.session-frame-ready;
                     }
                 }
 
@@ -1639,6 +1675,11 @@ export component CrewFeed inherits Rectangle {
                         seek-clip(v) => { root.seek-clip(v); }
                         invite-clicked => { root.invite-clicked(); }
                         hide-invite-clicked => { root.hide-invite-clicked(); }
+                        session-seen(id) => { root.session-seen(id); }
+                        request-session-frame(sid, idx) => { root.request-session-frame(sid, idx); }
+                        session-frame-id: root.session-frame-id;
+                        session-pushed-frame: root.session-pushed-frame;
+                        session-frame-ready: root.session-frame-ready;
                     }
 
                     if cards.length > root.feed-start-index + 1: FeedSlot {
@@ -1654,6 +1695,11 @@ export component CrewFeed inherits Rectangle {
                         seek-clip(v) => { root.seek-clip(v); }
                         invite-clicked => { root.invite-clicked(); }
                         hide-invite-clicked => { root.hide-invite-clicked(); }
+                        session-seen(id) => { root.session-seen(id); }
+                        request-session-frame(sid, idx) => { root.request-session-frame(sid, idx); }
+                        session-frame-id: root.session-frame-id;
+                        session-pushed-frame: root.session-pushed-frame;
+                        session-frame-ready: root.session-frame-ready;
                     }
                 }
 
@@ -1677,6 +1723,11 @@ export component CrewFeed inherits Rectangle {
                         seek-clip(v) => { root.seek-clip(v); }
                         invite-clicked => { root.invite-clicked(); }
                         hide-invite-clicked => { root.hide-invite-clicked(); }
+                        session-seen(id) => { root.session-seen(id); }
+                        request-session-frame(sid, idx) => { root.request-session-frame(sid, idx); }
+                        session-frame-id: root.session-frame-id;
+                        session-pushed-frame: root.session-pushed-frame;
+                        session-frame-ready: root.session-frame-ready;
                     }
                 }
 
@@ -1698,6 +1749,11 @@ export component CrewFeed inherits Rectangle {
                         seek-clip(v) => { root.seek-clip(v); }
                         invite-clicked => { root.invite-clicked(); }
                         hide-invite-clicked => { root.hide-invite-clicked(); }
+                        session-seen(id) => { root.session-seen(id); }
+                        request-session-frame(sid, idx) => { root.request-session-frame(sid, idx); }
+                        session-frame-id: root.session-frame-id;
+                        session-pushed-frame: root.session-pushed-frame;
+                        session-frame-ready: root.session-frame-ready;
                     }
 
                     if cards.length > root.feed-start-index + 6: FeedSlot {
@@ -1713,6 +1769,11 @@ export component CrewFeed inherits Rectangle {
                         seek-clip(v) => { root.seek-clip(v); }
                         invite-clicked => { root.invite-clicked(); }
                         hide-invite-clicked => { root.hide-invite-clicked(); }
+                        session-seen(id) => { root.session-seen(id); }
+                        request-session-frame(sid, idx) => { root.request-session-frame(sid, idx); }
+                        session-frame-id: root.session-frame-id;
+                        session-pushed-frame: root.session-pushed-frame;
+                        session-frame-ready: root.session-frame-ready;
                     }
                 }
 
@@ -1736,6 +1797,11 @@ export component CrewFeed inherits Rectangle {
                         seek-clip(v) => { root.seek-clip(v); }
                         invite-clicked => { root.invite-clicked(); }
                         hide-invite-clicked => { root.hide-invite-clicked(); }
+                        session-seen(id) => { root.session-seen(id); }
+                        request-session-frame(sid, idx) => { root.request-session-frame(sid, idx); }
+                        session-frame-id: root.session-frame-id;
+                        session-pushed-frame: root.session-pushed-frame;
+                        session-frame-ready: root.session-frame-ready;
                     }
                 }
 
@@ -2000,13 +2066,13 @@ export component Preview inherits Rectangle {
                 is-new: true,
             },
             {
-                id: "4", card-type: "session", is-hero: false, is-skeleton: false,
-                title: "Valorant",
-                subtitle: "Saturday night · 2 clips",
-                actor-name: "ostkatt", actor-initials: "os",
-                game-name: "Valorant",
-                duration: "3h 12m", timestamp: "Saturday",
-                participant-count: 3, clip-path: "",
+                id: "4", card-type: "session-preview", is-hero: false, is-skeleton: false,
+                title: "alice streamed Cursor - The best way to code with AI",
+                subtitle: "",
+                actor-name: "alice", actor-initials: "al",
+                game-name: "Cursor",
+                duration: "1h 2m", duration-min: 62, timestamp: "2 days ago",
+                participant-count: 2, clip-count: 3, clip-path: "",
             },
             {
                 id: "5", card-type: "catchup", is-hero: false, is-skeleton: false,
@@ -2030,13 +2096,13 @@ export component Preview inherits Rectangle {
                 participant-count: 1, clip-path: "",
             },
             {
-                id: "7", card-type: "session", is-hero: false, is-skeleton: false,
-                title: "CS2 Competitive",
-                subtitle: "Friday night · 4 clips",
+                id: "7", card-type: "session-preview", is-hero: false, is-skeleton: false,
+                title: "b0bben streamed Counter-Strike 2",
+                subtitle: "",
                 actor-name: "b0bben", actor-initials: "b0",
                 game-name: "Counter-Strike 2",
-                duration: "4h 30m", timestamp: "Friday",
-                participant-count: 4, clip-path: "",
+                duration: "4h 30m", duration-min: 270, timestamp: "Friday",
+                participant-count: 4, clip-count: 0, clip-path: "",
             },
             {
                 id: "8", card-type: "skeleton-stream-clips", is-hero: false, is-skeleton: true,
