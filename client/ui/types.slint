@@ -49,18 +49,22 @@ export struct FeedCardData {
     subtitle: string,
     timestamp: string,
     duration: string,
+    duration-min: int,
     actor-name: string,
     actor-initials: string,
     game-name: string,
     participant-count: int,
+    clip-count: int,
     clip-path: string,
     is-hero: bool,
     is-skeleton: bool,
+    snapshot-urls: [string],
     mvp-count: int,
     mvp0-name: string, mvp0-initials: string, mvp0-stat: string,
     mvp1-name: string, mvp1-initials: string, mvp1-stat: string,
     mvp2-name: string, mvp2-initials: string, mvp2-stat: string,
     is-new: bool,
+    was-seen: bool,
 }
 
 export struct StreamCardData {

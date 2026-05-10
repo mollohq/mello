@@ -40,6 +40,7 @@ pub struct Settings {
     pub hud_miniplayer_x: Option<i32>,
     pub hud_miniplayer_y: Option<i32>,
     pub hidden_invite_crew_ids: Vec<String>,
+    pub seen_session_ids: Vec<String>,
 }
 
 impl Default for Settings {
@@ -77,6 +78,7 @@ impl Default for Settings {
             hud_miniplayer_x: None,
             hud_miniplayer_y: None,
             hidden_invite_crew_ids: Vec::new(),
+            seen_session_ids: Vec::new(),
         }
     }
 }

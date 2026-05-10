@@ -62,7 +62,9 @@ services:
         mc alias set local http://minio:9000 minioadmin minioadmin &&
         mc mb --ignore-existing local/mello-clips &&
         mc anonymous set download local/mello-clips &&
-        echo "Bucket mello-clips ready"
+        mc mb --ignore-existing local/mello-snapshots &&
+        mc anonymous set download local/mello-snapshots &&
+        echo "Buckets mello-clips and mello-snapshots ready"
 
   nakama:
     image: heroiclabs/nakama:3.21.0
@@ -95,6 +97,8 @@ services:
       - S3_ACCESS_KEY=minioadmin
       - S3_SECRET_KEY=minioadmin
       - S3_PUBLIC_URL=http://localhost:9000/mello-clips
+      - SNAPSHOTS_S3_BUCKET=mello-snapshots
+      - SNAPSHOTS_S3_PUBLIC_URL=http://localhost:9000/mello-snapshots
     entrypoint:
       - /bin/sh
       - -c

@@ -19,6 +19,7 @@ mod notifications;
 mod platform;
 mod poll_loop;
 mod settings;
+mod snapshot_cache;
 mod updater;
 
 pub const APP_NAME: &str = "m3llo";

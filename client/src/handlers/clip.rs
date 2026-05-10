@@ -1,19 +1,49 @@
 use std::rc::Rc;
 
+use base64::Engine as _;
 use mello_core::{Command, Event};
 use slint::Model;
 
 use crate::app_context::AppContext;
 use crate::converters::make_initials;
+use crate::snapshot_cache;
 use crate::FeedCardData;
 
-fn map_card_type(backend_type: &str) -> &str {
+fn prefetch_snapshots(snapshot_urls: &[String]) {
+    if !snapshot_urls.is_empty() {
+        let urls = snapshot_urls.to_vec();
+        std::thread::spawn(move || {
+            snapshot_cache::prefetch_all(&urls);
+        });
+    }
+}
+
+fn normalized_entry_data(raw: &serde_json::Value) -> serde_json::Value {
+    if raw.is_object() {
+        return raw.clone();
+    }
+
+    if let Some(encoded) = raw.as_str() {
+        if let Ok(decoded) = base64::engine::general_purpose::STANDARD.decode(encoded) {
+            if let Ok(parsed) = serde_json::from_slice::<serde_json::Value>(&decoded) {
+                if parsed.is_object() {
+                    return parsed;
+                }
+            }
+        }
+    }
+
+    serde_json::Value::Object(serde_json::Map::new())
+}
+
+fn map_card_type(backend_type: &str, has_snapshots: bool) -> String {
     match backend_type {
-        "clip" => "clip",
-        "weekly_recap" => "recap",
-        "voice_session" | "stream_session" | "game_session" => "session",
-        "moment" | "member_joined" | "member_left" | "chat_activity" => "catchup",
-        _ => "catchup",
+        "clip" => "clip".into(),
+        "weekly_recap" => "recap".into(),
+        "stream_session" if has_snapshots => "session-preview".into(),
+        "voice_session" | "stream_session" | "game_session" => "session".into(),
+        "moment" | "member_joined" | "member_left" | "chat_activity" => "catchup".into(),
+        _ => "catchup".into(),
     }
 }
 
@@ -171,13 +201,16 @@ fn skeleton_card(card_type: &str) -> FeedCardData {
         subtitle: Default::default(),
         timestamp: Default::default(),
         duration: Default::default(),
+        duration_min: 0,
         actor_name: Default::default(),
         actor_initials: Default::default(),
         game_name: Default::default(),
         participant_count: 0,
+        clip_count: 0,
         clip_path: Default::default(),
         is_hero: false,
         is_skeleton: true,
+        snapshot_urls: Default::default(),
         mvp_count: 0,
         mvp0_name: Default::default(),
         mvp0_initials: Default::default(),
@@ -189,6 +222,7 @@ fn skeleton_card(card_type: &str) -> FeedCardData {
         mvp2_initials: Default::default(),
         mvp2_stat: Default::default(),
         is_new: false,
+        was_seen: false,
     }
 }
 
@@ -259,6 +293,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
                 actor_initials: "Y".into(),
                 game_name: "".into(),
                 participant_count: 1,
+                clip_count: 0,
                 clip_path: path.clone().into(),
                 is_hero: false,
                 is_skeleton: false,
@@ -329,30 +364,47 @@ pub fn handle(ctx: &AppContext, event: Event) {
                 .entries
                 .iter()
                 .map(|entry| {
-                    let card_type = map_card_type(&entry.entry_type);
-                    let actor = extract_actor(&entry.data, &entry.entry_type);
-                    let title = extract_title(&entry.data, &entry.entry_type, &actor);
-                    let subtitle = extract_subtitle(&entry.data, &entry.entry_type);
+                    let data = normalized_entry_data(&entry.data);
+                    let snapshot_urls: Vec<String> = data
+                        .get("snapshot_urls")
+                        .and_then(|v| v.as_array())
+                        .map(|a| {
+                            a.iter()
+                                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                                .collect()
+                        })
+                        .unwrap_or_default();
 
-                    let duration_secs = entry
-                        .data
+                    let has_snapshots = !snapshot_urls.is_empty();
+                    let card_type = map_card_type(&entry.entry_type, has_snapshots);
+
+                    if has_snapshots {
+                        prefetch_snapshots(&snapshot_urls);
+                    }
+
+                    let actor = extract_actor(&data, &entry.entry_type);
+                    let title = extract_title(&data, &entry.entry_type, &actor);
+                    let subtitle = extract_subtitle(&data, &entry.entry_type);
+
+                    let duration_secs = data
                         .get("duration_seconds")
                         .and_then(|v| v.as_f64())
                         .or_else(|| {
-                            entry
-                                .data
-                                .get("duration_min")
+                            data.get("duration_min")
                                 .and_then(|v| v.as_f64())
                                 .map(|m| m * 60.0)
                         })
                         .or_else(|| {
-                            entry
-                                .data
-                                .get("longest_session_min")
+                            data.get("longest_session_min")
                                 .and_then(|v| v.as_f64())
                                 .map(|m| m * 60.0)
                         })
                         .unwrap_or(0.0);
+
+                    let duration_min = data
+                        .get("duration_min")
+                        .and_then(|v| v.as_i64())
+                        .unwrap_or(0) as i32;
 
                     let duration_str = if duration_secs >= 3600.0 {
                         let h = (duration_secs / 3600.0) as u32;
@@ -365,40 +417,41 @@ pub fn handle(ctx: &AppContext, event: Event) {
                         String::new()
                     };
 
-                    let game = entry
-                        .data
+                    let game = data
                         .get("game")
-                        .or_else(|| entry.data.get("game_name"))
-                        .or_else(|| entry.data.get("top_game"))
-                        .or_else(|| entry.data.get("title"))
+                        .or_else(|| data.get("game_name"))
+                        .or_else(|| data.get("top_game"))
+                        .or_else(|| data.get("title"))
                         .and_then(|v| v.as_str())
                         .unwrap_or("")
                         .to_string();
 
-                    let clip_path = entry
-                        .data
+                    let clip_path = data
                         .get("media_url")
                         .and_then(|v| v.as_str())
                         .filter(|s| !s.is_empty())
-                        .or_else(|| entry.data.get("local_path").and_then(|v| v.as_str()))
+                        .or_else(|| data.get("local_path").and_then(|v| v.as_str()))
                         .unwrap_or("")
                         .to_string();
 
-                    let participant_count = entry
-                        .data
+                    let participant_count = data
                         .get("participants")
-                        .or_else(|| entry.data.get("participant_ids"))
-                        .or_else(|| entry.data.get("player_ids"))
+                        .or_else(|| data.get("participant_ids"))
+                        .or_else(|| data.get("player_ids"))
                         .and_then(|v| v.as_array())
                         .map(|a| a.len() as i32)
                         .or_else(|| {
-                            entry
-                                .data
-                                .get("peak_count")
-                                .or_else(|| entry.data.get("peak_viewers"))
+                            data.get("peak_count")
+                                .or_else(|| data.get("peak_viewers"))
                                 .and_then(|v| v.as_i64())
                                 .map(|n| n as i32)
                         })
+                        .unwrap_or(0);
+
+                    let clip_count = data
+                        .get("clip_count")
+                        .and_then(|v| v.as_i64())
+                        .map(|n| n.max(0) as i32)
                         .unwrap_or(0);
 
                     let ts_secs = entry.ts / 1000;
@@ -437,24 +490,35 @@ pub fn handle(ctx: &AppContext, event: Event) {
                         format!("{}d ago", ago / 86400)
                     };
 
-                    let (mvp_count, mvp0, mvp1, mvp2) =
-                        extract_mvps(&entry.data, &entry.entry_type);
+                    let (mvp_count, mvp0, mvp1, mvp2) = extract_mvps(&data, &entry.entry_type);
+
+                    let was_seen = ctx.settings.borrow().seen_session_ids.contains(&entry.id);
 
                     FeedCardData {
                         id: entry.id.clone().into(),
-                        card_type: card_type.into(),
+                        card_type: card_type.clone().into(),
                         title: title.into(),
                         subtitle: subtitle.into(),
                         timestamp: timestamp.into(),
                         duration: duration_str.into(),
+                        duration_min,
                         actor_name: actor.clone().into(),
                         actor_initials: make_initials(&actor).into(),
                         game_name: game.into(),
                         participant_count,
+                        clip_count,
                         clip_path: clip_path.into(),
                         is_hero: false,
                         is_skeleton: false,
+                        snapshot_urls: Rc::new(slint::VecModel::from(
+                            snapshot_urls
+                                .into_iter()
+                                .map(slint::SharedString::from)
+                                .collect::<Vec<_>>(),
+                        ))
+                        .into(),
                         is_new: false,
+                        was_seen,
                         mvp_count,
                         mvp0_name: mvp0.0.into(),
                         mvp0_initials: mvp0.1.into(),
@@ -469,14 +533,18 @@ pub fn handle(ctx: &AppContext, event: Event) {
                 })
                 .collect();
 
-            // Layout: [0] hero clip, [1] recap (pinned top-right),
+            // Layout: [0] hero (best clip or session-preview), [1] recap (pinned top-right),
             //         [2-5] 1x cards, [6] 2x card.
             // Catchups only go into small 1x slots [2-5], never hero/2x.
             let mut used = vec![false; cards.len()];
             let mut ordered: Vec<FeedCardData> = Vec::with_capacity(cards.len());
 
-            // Slot 0: best clip as hero
-            if let Some(hi) = cards.iter().position(|c| c.card_type == "clip") {
+            // Slot 0: best clip as hero; if no clip, use session-preview as hero
+            let hero_idx = cards
+                .iter()
+                .position(|c| c.card_type == "clip")
+                .or_else(|| cards.iter().position(|c| c.card_type == "session-preview"));
+            if let Some(hi) = hero_idx {
                 let mut hero = cards[hi].clone();
                 hero.is_hero = true;
                 ordered.push(hero);
@@ -504,7 +572,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
             }
 
             // Slots 2-5: mix non-catchups first, then fill with catchups
-            // Slot 6 (2x wide): must be a non-catchup
+            // Slot 6 (2x wide): must be a non-catchup (clip, session-preview, or session)
             let small_slots = 4; // positions 2..5
             let mut small_fill = 0;
             // Fill small slots with non-catchups first
@@ -539,12 +607,13 @@ pub fn handle(ctx: &AppContext, event: Event) {
             }
 
             // Fill remaining grid slots with skeleton cards for cold start / semi-cold start.
-            let has_clip = ordered.iter().any(|c| c.card_type == "clip");
+            let has_hero = ordered.first().map(|c| c.is_hero).unwrap_or(false);
             let has_recap = ordered.iter().any(|c| c.card_type == "recap");
             let has_session = ordered.iter().any(|c| c.card_type == "session");
+            let _has_session_preview = ordered.iter().any(|c| c.card_type == "session-preview");
 
-            // Slot 0: if no hero clip, insert skeleton-hero
-            if !has_clip {
+            // Slot 0: if no real hero card, insert skeleton-hero
+            if !has_hero {
                 ordered.insert(0, skeleton_card("skeleton-hero"));
             }
             // Slot 1: if no recap, insert skeleton-recap at position 1
