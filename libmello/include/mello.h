@@ -267,6 +267,12 @@ MELLO_API void mello_peer_send_ping(MelloPeerConnection* peer);
 /** Get the smoothed RTT in milliseconds (0 if no measurement yet). */
 MELLO_API float mello_peer_rtt_ms(MelloPeerConnection* peer);
 
+/** Number of send_audio calls that were skipped because the track wasn't open. */
+MELLO_API int mello_peer_send_audio_skips(MelloPeerConnection* peer);
+
+/** Number of incoming RTP tracks currently wired (recv_track_count). */
+MELLO_API int mello_peer_recv_track_count(MelloPeerConnection* peer);
+
 /* ============================================================================
  * Video / Streaming
  * ============================================================================ */
