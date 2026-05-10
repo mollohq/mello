@@ -85,6 +85,8 @@ private:
 public:
     void send_ping();
     float rtt_ms() const { return rtt_ms_.load(std::memory_order_relaxed); }
+    int send_audio_skips() const { return send_audio_count_.load(std::memory_order_relaxed); }
+    int recv_track_count() const { return recv_track_count_.load(std::memory_order_relaxed); }
 private:
 
     // Thread-safe receive queue for incoming unreliable audio packets

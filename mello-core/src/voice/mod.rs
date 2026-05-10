@@ -184,6 +184,7 @@ impl VoiceManager {
             return;
         }
 
+        unsafe { connection.start_stats_reporter(self.ctx) };
         self.sfu_connection = Some(connection);
         self.sfu_crew_id = crew_id.to_string();
         self.active = true;

@@ -558,6 +558,7 @@ impl SfuConnection {
                 }
                 use std::sync::atomic::{AtomicU64, Ordering as AtOrd};
                 static CB_COUNT: AtomicU64 = AtomicU64::new(0);
+                static DROP_COUNT: AtomicU64 = AtomicU64::new(0);
                 let n = CB_COUNT.fetch_add(1, AtOrd::Relaxed) + 1;
                 let cb_data = &*(user_data as *const AudioTrackCallbackData);
                 let sid = CStr::from_ptr(sender_id).to_string_lossy().into_owned();
@@ -567,10 +568,26 @@ impl SfuConnection {
                     log::debug!("SFU audio_track_cb #{}: sender={} size={}", n, sid, size);
                 }
                 let pkt = std::slice::from_raw_parts(data, size as usize).to_vec();
-                let _ = cb_data.event_tx.try_send(SfuEvent::AudioTrackData {
-                    sender_id: sid,
-                    data: pkt,
-                });
+                if cb_data
+                    .event_tx
+                    .try_send(SfuEvent::AudioTrackData {
+                        sender_id: sid.clone(),
+                        data: pkt,
+                    })
+                    .is_err()
+                {
+                    // event_rx not draining fast enough (or closed). Audible as
+                    // breakup; log periodically so we can correlate with SFU stats.
+                    let dn = DROP_COUNT.fetch_add(1, AtOrd::Relaxed) + 1;
+                    if dn == 1 || dn.is_multiple_of(50) {
+                        log::warn!(
+                            "SFU audio_track_cb DROPPED #{}: sender={} size={} (mpsc full)",
+                            dn,
+                            sid,
+                            size
+                        );
+                    }
+                }
             }
 
             let audio_cb = Box::into_raw(Box::new(AudioTrackCallbackData {
@@ -824,6 +841,35 @@ impl SfuConnection {
         Ok(session_info)
     }
 
+    /// Spawn a background task that sends `client_stats` to the SFU every 10s.
+    /// Requires a valid MelloContext pointer (used for `mello_get_debug_stats`).
+    ///
+    /// # Safety
+    /// `ctx` must remain valid for the lifetime of the SfuConnection.
+    pub unsafe fn start_stats_reporter(&self, ctx: *mut mello_sys::MelloContext) {
+        let ws_tx = Arc::clone(&self.ws_tx);
+        let peer_addr = self.peer as usize;
+        let ctx_addr = ctx as usize;
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(10));
+            interval.tick().await; // skip first immediate tick
+            loop {
+                interval.tick().await;
+                let payload = unsafe { collect_client_stats(ctx_addr, peer_addr) };
+                let msg = serde_json::json!({
+                    "type": "client_stats",
+                    "seq": 0,
+                    "data": payload,
+                });
+                let mut tx = ws_tx.lock().await;
+                if tx.send(Message::Text(msg.to_string())).await.is_err() {
+                    break;
+                }
+            }
+            log::debug!("SFU: stats reporter ended");
+        });
+    }
+
     async fn send_signaling(&self, msg: &serde_json::Value) -> Result<(), StreamError> {
         self.ws_tx
             .lock()
@@ -881,4 +927,30 @@ fn parse_ws_message(msg: &Message) -> Result<SignalingMessage, StreamError> {
             "expected text message".into(),
         )),
     }
+}
+
+/// # Safety
+/// `ctx_addr` and `peer_addr` must be valid pointers cast to usize.
+unsafe fn collect_client_stats(ctx_addr: usize, peer_addr: usize) -> serde_json::Value {
+    let ctx = ctx_addr as *mut mello_sys::MelloContext;
+    let peer = peer_addr as *mut mello_sys::MelloPeerConnection;
+    let mut debug: mello_sys::MelloDebugStats = std::mem::zeroed();
+    mello_sys::mello_get_debug_stats(ctx, &mut debug);
+    let rtt = mello_sys::mello_peer_rtt_ms(peer);
+    let send_skips = mello_sys::mello_peer_send_audio_skips(peer);
+    let recv_tracks = mello_sys::mello_peer_recv_track_count(peer);
+    serde_json::json!({
+        "packets_encoded": debug.packets_encoded,
+        "rtp_recv_total": debug.rtp_recv_total,
+        "underrun_count": debug.underrun_count,
+        "incoming_streams": debug.incoming_streams,
+        "input_level": (debug.input_level * 100.0) as u32,
+        "is_speaking": debug.is_speaking,
+        "is_capturing": debug.is_capturing,
+        "is_muted": debug.is_muted,
+        "pipeline_delay_ms": debug.pipeline_delay_ms as u32,
+        "rtt_ms": rtt as u32,
+        "send_audio_skips": send_skips,
+        "recv_tracks": recv_tracks,
+    })
 }

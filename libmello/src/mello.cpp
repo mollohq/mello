@@ -610,6 +610,26 @@ float mello_peer_rtt_ms(MelloPeerConnection* peer) {
     }
 }
 
+int mello_peer_send_audio_skips(MelloPeerConnection* peer) {
+    if (!peer) return 0;
+    try {
+        auto* pc = reinterpret_cast<mello::transport::PeerConnectionImpl*>(peer);
+        return pc->send_audio_skips();
+    } catch (...) {
+        return 0;
+    }
+}
+
+int mello_peer_recv_track_count(MelloPeerConnection* peer) {
+    if (!peer) return 0;
+    try {
+        auto* pc = reinterpret_cast<mello::transport::PeerConnectionImpl*>(peer);
+        return pc->recv_track_count();
+    } catch (...) {
+        return 0;
+    }
+}
+
 int mello_peer_recv(MelloPeerConnection* peer, uint8_t* buffer, int buffer_size) {
     if (!peer || !buffer || buffer_size <= 0) return 0;
     try {
