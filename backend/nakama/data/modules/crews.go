@@ -157,7 +157,7 @@ func CreateCrewRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk ru
 
 	// Generate an invite code for the crew
 	inviteCode := ""
-	if code, err := GenerateInviteCode(ctx, nk, logger, group.Id); err != nil {
+	if code, err := GenerateInviteCode(ctx, nk, logger, group.Id, userID); err != nil {
 		logger.Warn("Failed to generate invite code for crew %s: %v", group.Id, err)
 	} else {
 		inviteCode = code

@@ -116,6 +116,12 @@ pub enum Event {
     CrewInviteResolveFailed {
         reason: String,
     },
+    InviteCodeCreated {
+        code: String,
+    },
+    InviteCodeCreateFailed {
+        reason: String,
+    },
 
     MemberJoined {
         crew_id: String,

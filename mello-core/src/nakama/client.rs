@@ -830,6 +830,16 @@ impl NakamaClient {
         })
     }
 
+    pub async fn create_invite_code(&self, crew_id: &str) -> Result<String> {
+        let payload = serde_json::json!({ "crew_id": crew_id });
+        let resp_str = self.rpc("create_invite_code", &payload).await?;
+        let result: serde_json::Value = serde_json::from_str(&resp_str)?;
+        let code = result["code"]
+            .as_str()
+            .ok_or_else(|| Error::Internal("missing code in response".into()))?;
+        Ok(code.to_string())
+    }
+
     // --- Generic RPC ---
 
     pub async fn rpc(&self, id: &str, payload: &serde_json::Value) -> Result<String> {

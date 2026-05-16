@@ -446,6 +446,9 @@ impl Client {
             Command::ResolveCrewInvite { code } => {
                 self.handle_resolve_crew_invite(&code).await;
             }
+            Command::CreateInviteCode { crew_id } => {
+                self.handle_create_invite_code(&crew_id).await;
+            }
             Command::SelectCrew { crew_id } => {
                 self.handle_select_crew(&crew_id).await;
             }

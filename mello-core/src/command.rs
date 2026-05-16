@@ -95,6 +95,9 @@ pub enum Command {
     ResolveCrewInvite {
         code: String,
     },
+    CreateInviteCode {
+        crew_id: String,
+    },
     SelectCrew {
         crew_id: String,
     },

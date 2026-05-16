@@ -36,7 +36,9 @@ pub fn handle_event(ctx: &AppContext, event: Event) {
         | Event::CrewAvatarLoaded { .. }
         | Event::DiscoverCrewsLoaded { .. }
         | Event::CrewInviteResolved { .. }
-        | Event::CrewInviteResolveFailed { .. } => crew::handle(ctx, event),
+        | Event::CrewInviteResolveFailed { .. }
+        | Event::InviteCodeCreated { .. }
+        | Event::InviteCodeCreateFailed { .. } => crew::handle(ctx, event),
 
         // Voice
         Event::VoiceStateChanged { .. }

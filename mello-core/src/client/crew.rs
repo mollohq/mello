@@ -131,6 +131,22 @@ impl super::Client {
         }
     }
 
+    pub(super) async fn handle_create_invite_code(&self, crew_id: &str) {
+        log::info!("[invite] creating invite code for crew={:?}", crew_id);
+        match self.nakama.create_invite_code(crew_id).await {
+            Ok(code) => {
+                log::info!("[invite] created code={} for crew={}", code, crew_id);
+                let _ = self.event_tx.send(Event::InviteCodeCreated { code });
+            }
+            Err(e) => {
+                log::error!("[invite] failed to create invite code: {}", e);
+                let _ = self.event_tx.send(Event::InviteCodeCreateFailed {
+                    reason: e.to_string(),
+                });
+            }
+        }
+    }
+
     pub(super) async fn handle_join_by_invite_code(&mut self, code: &str) {
         log::info!("[invite] joining crew by invite code={:?}", code);
         match self.nakama.join_by_invite_code(code).await {

@@ -657,22 +657,17 @@ func DevSeedStateRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk 
 		if !ok {
 			continue
 		}
-		fwdValue, _ := json.Marshal(map[string]string{"crew_id": cid})
-		revValue, _ := json.Marshal(map[string]string{"code": code})
+		fwdMap := map[string]string{"crew_id": cid}
+		if bob, ok := users["bob"]; ok {
+			fwdMap["inviter_user_id"] = bob.id
+		}
+		fwdValue, _ := json.Marshal(fwdMap)
 		_, err := nk.StorageWrite(ctx, []*runtime.StorageWrite{
 			{
 				Collection:      InviteCodeCollection,
 				Key:             code,
 				UserID:          SystemUserID,
 				Value:           string(fwdValue),
-				PermissionRead:  2,
-				PermissionWrite: 0,
-			},
-			{
-				Collection:      CrewInviteCodeCollection,
-				Key:             cid,
-				UserID:          SystemUserID,
-				Value:           string(revValue),
 				PermissionRead:  2,
 				PermissionWrite: 0,
 			},

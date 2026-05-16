@@ -374,6 +374,16 @@ pub fn handle(ctx: &AppContext, event: Event) {
             ctx.app.set_join_crew_loading(false);
             ctx.app.set_join_crew_modal_open(true);
         }
+        Event::InviteCodeCreated { code } => {
+            let url = format!("https://m3llo.app/join/{}", code);
+            log::info!("[invite] share url ready: {}", url);
+            ctx.app.set_invite_share_url(url.into());
+            ctx.app.set_invite_share_copied(false);
+            ctx.app.set_invite_share_open(true);
+        }
+        Event::InviteCodeCreateFailed { reason } => {
+            log::error!("[invite] failed to create invite code: {}", reason);
+        }
         _ => {}
     }
 }

@@ -308,27 +308,18 @@ pub fn wire(ctx: &AppContext) {
     }
     {
         let app_weak = ctx.app.as_weak();
+        let cmd = ctx.cmd_tx.clone();
         ctx.app.on_invite_share_requested(move || {
             let Some(app) = app_weak.upgrade() else {
                 return;
             };
-            let active_id = app.get_active_crew_id();
-            let crews = app.get_crews();
-            let invite_code = (0..crews.row_count())
-                .filter_map(|i| crews.row_data(i))
-                .find(|c| c.id == active_id)
-                .map(|c| c.invite_code.to_string())
-                .unwrap_or_default();
-
-            if invite_code.is_empty() {
-                log::warn!("[invite] no invite code available for active crew");
+            let crew_id = app.get_active_crew_id().to_string();
+            if crew_id.is_empty() {
+                log::warn!("[invite] no active crew for share");
                 return;
             }
-
-            let url = format!("https://m3llo.app/join/{}", invite_code);
-            app.set_invite_share_url(url.into());
-            app.set_invite_share_copied(false);
-            app.set_invite_share_open(true);
+            log::info!("[invite] requesting new invite code for crew={}", crew_id);
+            let _ = cmd.try_send(Command::CreateInviteCode { crew_id });
         });
     }
     {

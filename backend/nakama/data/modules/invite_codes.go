@@ -13,22 +13,23 @@ import (
 )
 
 const (
-	InviteCodeCollection        = "invite_codes"
-	CrewInviteCodeCollection    = "crew_invite_codes" // reverse lookup: key=crew_id, value={"code":"..."}
-	InviteCodeLength            = 8
+	InviteCodeCollection = "invite_codes"
+	InviteCodeLength     = 8
 )
 
 // GenerateInviteCode creates a short, human-readable invite code for a crew
 // and stores it in Nakama storage. Returns the code.
-func GenerateInviteCode(ctx context.Context, nk runtime.NakamaModule, logger runtime.Logger, crewID string) (string, error) {
+func GenerateInviteCode(ctx context.Context, nk runtime.NakamaModule, logger runtime.Logger, crewID, inviterUserID string) (string, error) {
 	code, err := generateCode(ctx, nk)
 	if err != nil {
 		return "", err
 	}
 
-	value, _ := json.Marshal(map[string]string{"crew_id": crewID})
-
-	reverseValue, _ := json.Marshal(map[string]string{"code": code})
+	valueMap := map[string]string{"crew_id": crewID}
+	if inviterUserID != "" {
+		valueMap["inviter_user_id"] = inviterUserID
+	}
+	value, _ := json.Marshal(valueMap)
 
 	_, err = nk.StorageWrite(ctx, []*runtime.StorageWrite{
 		{
@@ -36,14 +37,6 @@ func GenerateInviteCode(ctx context.Context, nk runtime.NakamaModule, logger run
 			Key:             strings.ToUpper(code),
 			UserID:          SystemUserID,
 			Value:           string(value),
-			PermissionRead:  2,
-			PermissionWrite: 0,
-		},
-		{
-			Collection:      CrewInviteCodeCollection,
-			Key:             crewID,
-			UserID:          SystemUserID,
-			Value:           string(reverseValue),
 			PermissionRead:  2,
 			PermissionWrite: 0,
 		},
@@ -119,6 +112,38 @@ func JoinByInviteCodeRPC(ctx context.Context, logger runtime.Logger, db *sql.DB,
 	return string(respJSON), nil
 }
 
+// CreateInviteCodeRPC generates a fresh invite code for a crew, tagged with the caller's user ID.
+func CreateInviteCodeRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, payload string) (string, error) {
+	userID, ok := ctx.Value(runtime.RUNTIME_CTX_USER_ID).(string)
+	if !ok {
+		return "", runtime.NewError("authentication required", 16)
+	}
+
+	var req struct {
+		CrewID string `json:"crew_id"`
+	}
+	if err := json.Unmarshal([]byte(payload), &req); err != nil {
+		return "", runtime.NewError("invalid request", 3)
+	}
+	if req.CrewID == "" {
+		return "", runtime.NewError("crew_id required", 3)
+	}
+
+	if !isCrewMember(ctx, nk, req.CrewID, userID) {
+		return "", runtime.NewError("not a crew member", 7)
+	}
+
+	code, err := GenerateInviteCode(ctx, nk, logger, req.CrewID, userID)
+	if err != nil {
+		logger.Error("create_invite_code: failed for user %s crew %s: %v", userID, req.CrewID, err)
+		return "", runtime.NewError("failed to generate invite code", 13)
+	}
+
+	logger.Info("User %s created invite code %s for crew %s", userID, code, req.CrewID)
+	resp, _ := json.Marshal(map[string]string{"code": code})
+	return string(resp), nil
+}
+
 type ResolveCrewInviteRequest struct {
 	Code string `json:"code"`
 }
@@ -128,16 +153,28 @@ type InviteMemberPreview struct {
 	AvatarSeed  string `json:"avatar_seed"`
 }
 
+type InviteClipPreview struct {
+	ClipType        string  `json:"clip_type"`
+	ClipperName     string  `json:"clipper_name"`
+	DurationSeconds float64 `json:"duration_seconds"`
+	Game            string  `json:"game,omitempty"`
+	MediaURL        string  `json:"media_url,omitempty"`
+}
+
 type ResolveCrewInviteResponse struct {
-	CrewName          string                `json:"crew_name"`
-	AvatarSeed        string                `json:"avatar_seed"`
-	CrewID            string                `json:"crew_id"`
-	Highlight         string                `json:"highlight,omitempty"`
-	MemberCount       int                   `json:"member_count"`
-	Members           []InviteMemberPreview `json:"members,omitempty"`
-	TopGame           string                `json:"top_game,omitempty"`
-	LongestSessionMin int                   `json:"longest_session_min,omitempty"`
-	MostActive        string                `json:"most_active,omitempty"`
+	CrewName           string                `json:"crew_name"`
+	AvatarSeed         string                `json:"avatar_seed"`
+	CrewID             string                `json:"crew_id"`
+	Highlight          string                `json:"highlight,omitempty"`
+	MemberCount        int                   `json:"member_count"`
+	Members            []InviteMemberPreview `json:"members,omitempty"`
+	TopGame            string                `json:"top_game,omitempty"`
+	LongestSessionMin  int                   `json:"longest_session_min,omitempty"`
+	MostActive         string                `json:"most_active,omitempty"`
+	InviterDisplayName string                `json:"inviter_display_name,omitempty"`
+	InviterAvatarSeed  string                `json:"inviter_avatar_seed,omitempty"`
+	RecentClips        []InviteClipPreview   `json:"recent_clips,omitempty"`
+	SessionSnapshots   []string              `json:"session_snapshots,omitempty"`
 }
 
 // ResolveCrewInviteRPC returns public crew info for a given invite code.
@@ -161,7 +198,8 @@ func ResolveCrewInviteRPC(ctx context.Context, logger runtime.Logger, db *sql.DB
 	}
 
 	var data struct {
-		CrewID string `json:"crew_id"`
+		CrewID        string `json:"crew_id"`
+		InviterUserID string `json:"inviter_user_id"`
 	}
 	if err := json.Unmarshal([]byte(objects[0].GetValue()), &data); err != nil || data.CrewID == "" {
 		return "", runtime.NewError("invalid invite code", 5)
@@ -173,7 +211,7 @@ func ResolveCrewInviteRPC(ctx context.Context, logger runtime.Logger, db *sql.DB
 	}
 	group := groups[0]
 
-	highlight, recap := buildRecapHighlightWithData(ctx, nk, logger, data.CrewID)
+	highlight, recap, ledger := buildRecapHighlightWithData(ctx, nk, logger, data.CrewID)
 
 	resp := ResolveCrewInviteResponse{
 		CrewName:    group.GetName(),
@@ -212,25 +250,63 @@ func ResolveCrewInviteRPC(ctx context.Context, logger runtime.Logger, db *sql.DB
 		resp.Members = previews
 	}
 
+	// Resolve inviter display name
+	if data.InviterUserID != "" {
+		users, err := nk.UsersGetId(ctx, []string{data.InviterUserID}, nil)
+		if err == nil && len(users) > 0 {
+			u := users[0]
+			name := u.GetDisplayName()
+			if name == "" {
+				name = u.GetUsername()
+			}
+			resp.InviterDisplayName = name
+			resp.InviterAvatarSeed = name
+		}
+	}
+
+	// Extract recent clips and session snapshots from ledger
+	if ledger != nil {
+		clips := make([]InviteClipPreview, 0, 4)
+		snapshots := make([]string, 0, 8)
+
+		for i := len(ledger.Events) - 1; i >= 0; i-- {
+			e := ledger.Events[i]
+			if e.Type == "clip" && len(clips) < 4 {
+				dataBytes, _ := json.Marshal(e.Data)
+				var cd ClipData
+				if json.Unmarshal(dataBytes, &cd) == nil && cd.MediaURL != "" {
+					clips = append(clips, InviteClipPreview{
+						ClipType:        cd.ClipType,
+						ClipperName:     cd.ClipperName,
+						DurationSeconds: cd.DurationSeconds,
+						Game:            cd.Game,
+						MediaURL:        cd.MediaURL,
+					})
+				}
+			}
+			if e.Type == "stream_session" && len(snapshots) < 8 {
+				dataBytes, _ := json.Marshal(e.Data)
+				var sd StreamSessionData
+				if json.Unmarshal(dataBytes, &sd) == nil && len(sd.SnapshotURLs) > 0 {
+					for _, url := range sd.SnapshotURLs {
+						if len(snapshots) >= 8 {
+							break
+						}
+						snapshots = append(snapshots, url)
+					}
+				}
+			}
+			if len(clips) >= 4 && len(snapshots) >= 8 {
+				break
+			}
+		}
+
+		resp.RecentClips = clips
+		resp.SessionSnapshots = snapshots
+	}
+
 	respJSON, _ := json.Marshal(resp)
 	return string(respJSON), nil
-}
-
-// LookupCrewInviteCode reads the reverse-mapping to find the invite code for a crew.
-func LookupCrewInviteCode(ctx context.Context, nk runtime.NakamaModule, crewID string) string {
-	objects, err := nk.StorageRead(ctx, []*runtime.StorageRead{
-		{Collection: CrewInviteCodeCollection, Key: crewID, UserID: SystemUserID},
-	})
-	if err != nil || len(objects) == 0 {
-		return ""
-	}
-	var data struct {
-		Code string `json:"code"`
-	}
-	if err := json.Unmarshal([]byte(objects[0].GetValue()), &data); err != nil {
-		return ""
-	}
-	return data.Code
 }
 
 const maxCodeAttempts = 5
@@ -262,54 +338,12 @@ func generateCode(ctx context.Context, nk runtime.NakamaModule) (string, error) 
 	return "", fmt.Errorf("failed to generate unique code after %d attempts", maxCodeAttempts)
 }
 
-// MigrateInviteCodesRPC generates invite codes for all crews that don't have one.
-// Admin-only: callable via server key with ?unwrap=true&http_key=...
-func MigrateInviteCodesRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, payload string) (string, error) {
-	cursor := ""
-	migrated := 0
-	skipped := 0
-
-	for {
-		groups, newCursor, err := nk.GroupsList(ctx, "", "", nil, nil, 100, cursor)
-		if err != nil {
-			return "", fmt.Errorf("failed to list groups: %w", err)
-		}
-
-		for _, g := range groups {
-			existing := LookupCrewInviteCode(ctx, nk, g.GetId())
-			if existing != "" {
-				skipped++
-				continue
-			}
-			code, err := GenerateInviteCode(ctx, nk, logger, g.GetId())
-			if err != nil {
-				logger.Error("migrate_invite_codes: failed for crew %s: %v", g.GetId(), err)
-				continue
-			}
-			logger.Info("migrate_invite_codes: crew %s (%s) → %s", g.GetId(), g.GetName(), code)
-			migrated++
-		}
-
-		if newCursor == "" || len(groups) == 0 {
-			break
-		}
-		cursor = newCursor
-	}
-
-	resp, _ := json.Marshal(map[string]int{
-		"migrated": migrated,
-		"skipped":  skipped,
-	})
-	logger.Info("migrate_invite_codes: done. migrated=%d skipped=%d", migrated, skipped)
-	return string(resp), nil
-}
-
 func buildRecapHighlight(ctx context.Context, nk runtime.NakamaModule, logger runtime.Logger, crewID string) string {
-	hl, _ := buildRecapHighlightWithData(ctx, nk, logger, crewID)
+	hl, _, _ := buildRecapHighlightWithData(ctx, nk, logger, crewID)
 	return hl
 }
 
-func buildRecapHighlightWithData(ctx context.Context, nk runtime.NakamaModule, logger runtime.Logger, crewID string) (string, *WeeklyRecapData) {
+func buildRecapHighlightWithData(ctx context.Context, nk runtime.NakamaModule, logger runtime.Logger, crewID string) (string, *WeeklyRecapData, *CrewEventLedger) {
 	ledger, _ := readLedger(ctx, nk, crewID)
 
 	var latest *WeeklyRecapData
@@ -330,9 +364,9 @@ func buildRecapHighlightWithData(ctx context.Context, nk runtime.NakamaModule, l
 	}
 
 	if latest == nil {
-		return "", nil
+		return "", nil, ledger
 	}
-	return formatRecapHighlight(latest), latest
+	return formatRecapHighlight(latest), latest, ledger
 }
 
 func formatRecapHighlight(recap *WeeklyRecapData) string {

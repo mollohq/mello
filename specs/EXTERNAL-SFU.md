@@ -1380,7 +1380,7 @@ Each SFU VM also runs [coturn](https://github.com/coturn/coturn) as the TURN rel
 
 **Credential flow:** The client calls the `get_ice_servers` Nakama RPC (spec 04 §6.3), which generates time-limited HMAC-SHA1 credentials using the shared `TURN_SECRET`. The same secret is configured in both coturn and Nakama. Credentials expire after 24 hours.
 
-**Deployment:** coturn is installed via the VM startup script (`deploy-turn.sh`) and runs as a systemd service. The TURN secret is stored in GCP instance metadata and read at startup. See `deploy-turn.sh` for the full provisioning script.
+**Deployment:** coturn is installed via the VM startup script (`deploy-instance.sh`) and runs as a systemd service. The TURN secret is stored in GCP instance metadata and read at startup. See `deploy-instance.sh` for the full provisioning script.
 
 ### 10.2 Why GCP
 
@@ -1409,7 +1409,7 @@ Estimated cost: ~$25/month per region ($50/month total for EU + US).
 
 #### Firewall Rules
 
-These rules are created by `deploy-turn.sh` and cover both coturn and the SFU:
+These rules are created by `deploy-instance.sh` and cover both coturn and the SFU:
 
 ```
 # TURN relay (UDP) + SFU WebRTC media
@@ -2251,7 +2251,7 @@ mello-sfu/                            # Private repository
 ├── admin/
 │   └── dashboard.html               # Single-file admin UI (embedded via go:embed)
 ├── deploy/
-│   └── deploy-turn.sh               # GCP VM provisioning + coturn install
+│   └── deploy-instance.sh           # GCP VM provisioning + coturn install
 ├── Dockerfile
 ├── docker-compose.yml                # Local dev (SFU + test clients)
 ├── go.mod
@@ -2282,10 +2282,10 @@ backend/nakama/data/modules/
 ## 17. Implementation Order
 
 ### Phase 0: TURN Server + GCP Infra (Now)
-1. Run `deploy-turn.sh eu` to provision GCP VM in europe-west3 with coturn
+1. Run `deploy-instance.sh eu` to provision GCP VM in europe-west3 with coturn
 2. Update Nakama backend `.env` with `TURN_SECRET` and `TURN_HOST`
 3. Verify TURN works: Trickle ICE test with credentials from `get_ice_servers` RPC
-4. Run `deploy-turn.sh us` for the US region
+4. Run `deploy-instance.sh us` for the US region
 5. Test P2P voice/streaming with TURN relay available
 
 This gives you working NAT traversal immediately, and the VMs are ready for the SFU when it's built.
