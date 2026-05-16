@@ -297,6 +297,35 @@ R2 respects CORS headers. If the desktop client needs to PUT directly:
 
 Current client uses `reqwest` (not a browser), so CORS is typically not required. Add this if/when a web client ships.
 
+### 10.7 Snapshots R2 bucket
+
+Stream snapshots use a second R2 bucket. Same account, same API token (widen scope to include both buckets).
+
+1. Create bucket: `mello-snapshots` (same region as `mello-clips`)
+2. Enable public access with custom domain: `snapshots.m3llo.app`
+3. Ensure the R2 API token covers both `mello-clips` and `mello-snapshots`
+
+**Nakama env vars** (Render):
+
+```
+SNAPSHOTS_S3_BUCKET=mello-snapshots
+SNAPSHOTS_S3_PUBLIC_URL=https://snapshots.m3llo.app
+```
+
+Reuses `S3_ENDPOINT`, `S3_ACCESS_KEY`, `S3_SECRET_KEY` from clips. Nakama only needs `ListObjectsV2` on this bucket.
+
+**SFU env vars** (in `/etc/sfu-certs/sfu.env` on each SFU VM):
+
+```
+SFU_R2_ENDPOINT=https://<account-id>.r2.cloudflarestorage.com
+SFU_R2_BUCKET=mello-snapshots
+SFU_R2_ACCESS_KEY_ID=<access-key-id>
+SFU_R2_SECRET_ACCESS_KEY=<secret-access-key>
+SFU_R2_PUBLIC_DOMAIN=snapshots.m3llo.app
+```
+
+The SFU writes snapshot JPEGs; Nakama only lists them. See [STREAM-SNAPSHOTS-CLIENT.md](./ongoing/STREAM-SNAPSHOTS-CLIENT.md) and `mello-sfu/STREAM-SNAPSHOTS-SFU.md`.
+
 ---
 
 *For architecture details, start with [00-ARCHITECTURE.md](./00-ARCHITECTURE.md).*

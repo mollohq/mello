@@ -56,6 +56,10 @@ services:
         sync: false
       - key: S3_PUBLIC_URL
         sync: false
+      - key: SNAPSHOTS_S3_BUCKET
+        value: mello-snapshots
+      - key: SNAPSHOTS_S3_PUBLIC_URL
+        value: https://snapshots.m3llo.app
 
   - type: web
     name: mello-console
@@ -65,7 +69,7 @@ services:
     rootDir: backend/console-proxy
     dockerfilePath: ./Dockerfile
     region: frankfurt
-    plan: free
+    plan: starter
 
 databases:
   - name: mello-db
