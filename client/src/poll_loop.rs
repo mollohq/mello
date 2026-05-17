@@ -56,6 +56,8 @@ pub fn start(
         frame_lifecycle: ctx.frame_lifecycle.clone(),
         #[cfg(target_os = "windows")]
         dcomp_presenter: ctx.dcomp_presenter.clone(),
+        #[cfg(target_os = "windows")]
+        taskbar_toolbar: ctx.taskbar_toolbar.clone(),
     };
 
     let saved_timer = Rc::new(slint::Timer::default());
@@ -489,6 +491,77 @@ pub fn start(
                             platform::bring_main_window_to_front();
                         }
                     },
+                }
+            }
+
+            // --- Taskbar thumbnail toolbar (Windows) ---
+            #[cfg(target_os = "windows")]
+            {
+                let mut tb = poll_ctx.taskbar_toolbar.borrow_mut();
+                if let Some(ref mut toolbar) = *tb {
+                    toolbar.try_init();
+
+                    while let Some(action) = toolbar.poll_action() {
+                        use crate::platform::taskbar_toolbar::ThumbAction;
+                        match action {
+                            ThumbAction::MuteToggle => {
+                                let new_muted = !poll_ctx.app.get_mic_muted();
+                                poll_ctx.app.set_mic_muted(new_muted);
+                                let _ = poll_ctx
+                                    .cmd_tx
+                                    .try_send(Command::SetMute { muted: new_muted });
+                                broadcast_mute_state(
+                                    &poll_ctx.cmd_tx,
+                                    new_muted,
+                                    poll_ctx.app.get_deafened(),
+                                );
+                                poll_ctx
+                                    .status_item
+                                    .borrow_mut()
+                                    .set_mute_checked(new_muted);
+                            }
+                            ThumbAction::DeafenToggle => {
+                                let new_deafened = !poll_ctx.app.get_deafened();
+                                poll_ctx.app.set_deafened(new_deafened);
+                                let _ = poll_ctx.cmd_tx.try_send(Command::SetDeafen {
+                                    deafened: new_deafened,
+                                });
+                                if new_deafened {
+                                    poll_ctx
+                                        .muted_before_deafen
+                                        .set(poll_ctx.app.get_mic_muted());
+                                    if !poll_ctx.app.get_mic_muted() {
+                                        poll_ctx.app.set_mic_muted(true);
+                                        let _ = poll_ctx
+                                            .cmd_tx
+                                            .try_send(Command::SetMute { muted: true });
+                                    }
+                                } else if !poll_ctx.muted_before_deafen.get() {
+                                    poll_ctx.app.set_mic_muted(false);
+                                    let _ =
+                                        poll_ctx.cmd_tx.try_send(Command::SetMute { muted: false });
+                                }
+                                broadcast_mute_state(
+                                    &poll_ctx.cmd_tx,
+                                    poll_ctx.app.get_mic_muted(),
+                                    new_deafened,
+                                );
+                                poll_ctx
+                                    .status_item
+                                    .borrow_mut()
+                                    .set_mute_checked(poll_ctx.app.get_mic_muted());
+                            }
+                            ThumbAction::LeaveVoice => {
+                                let _ = poll_ctx.cmd_tx.try_send(Command::LeaveVoice);
+                            }
+                        }
+                    }
+
+                    toolbar.update_state(
+                        poll_ctx.app.get_in_voice(),
+                        poll_ctx.app.get_mic_muted(),
+                        poll_ctx.app.get_deafened(),
+                    );
                 }
             }
 

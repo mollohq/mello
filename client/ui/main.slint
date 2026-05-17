@@ -186,7 +186,6 @@ export component MainWindow inherits Window {
     in-out property <bool> settings-show-saved: false;
     // HUD settings
     in-out property <bool> settings-hud-enabled: true;
-    in-out property <bool> settings-hud-overlay-in-game: true;
     in-out property <float> settings-hud-overlay-opacity: 0.8;
     in-out property <bool> settings-hud-clip-toasts: true;
     // Profile settings
@@ -484,7 +483,6 @@ export component MainWindow inherits Window {
     callback settings-reset-defaults();
     // HUD settings callbacks
     callback setting-changed-hud-enabled(bool);
-    callback setting-changed-hud-overlay-in-game(bool);
     callback setting-changed-hud-overlay-opacity(float);
     callback setting-changed-hud-clip-toasts(bool);
 
@@ -1327,7 +1325,6 @@ export component MainWindow inherits Window {
         show-saved <=> root.settings-show-saved;
         // HUD
         settings-hud-enabled <=> root.settings-hud-enabled;
-        settings-hud-overlay-in-game <=> root.settings-hud-overlay-in-game;
         settings-hud-overlay-opacity <=> root.settings-hud-overlay-opacity;
         settings-hud-clip-toasts <=> root.settings-hud-clip-toasts;
         // Callbacks
@@ -1410,10 +1407,6 @@ export component MainWindow inherits Window {
         setting-changed-hud-enabled(v) => {
             root.settings-show-saved = true;
             root.setting-changed-hud-enabled(v);
-        }
-        setting-changed-hud-overlay-in-game(v) => {
-            root.settings-show-saved = true;
-            root.setting-changed-hud-overlay-in-game(v);
         }
         setting-changed-hud-overlay-opacity(v) => {
             root.settings-show-saved = true;

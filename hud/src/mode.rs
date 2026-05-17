@@ -1,7 +1,7 @@
 use crate::protocol::HudMode;
 
 /// Tracks which HUD window is currently visible and performs show/hide
-/// transitions. Both windows are created at startup; only one is ever visible.
+/// transitions.
 pub struct ModeManager {
     current: HudMode,
 }
@@ -41,8 +41,8 @@ mod tests {
     #[test]
     fn change_returns_true() {
         let mut m = ModeManager::new();
-        assert!(m.set_mode(HudMode::MiniPlayer));
-        assert_eq!(m.current(), HudMode::MiniPlayer);
+        assert!(m.set_mode(HudMode::Overlay));
+        assert_eq!(m.current(), HudMode::Overlay);
     }
 
     #[test]
@@ -54,7 +54,6 @@ mod tests {
     #[test]
     fn full_cycle() {
         let mut m = ModeManager::new();
-        assert!(m.set_mode(HudMode::MiniPlayer));
         assert!(m.set_mode(HudMode::Overlay));
         assert!(m.set_mode(HudMode::Hidden));
         assert_eq!(m.current(), HudMode::Hidden);

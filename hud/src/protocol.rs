@@ -33,7 +33,6 @@ pub struct HudState {
 pub enum HudMode {
     #[default]
     Hidden,
-    MiniPlayer,
     Overlay,
 }
 
@@ -42,6 +41,8 @@ pub struct HudCrew {
     pub name: String,
     pub initials: String,
     pub online_count: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub avatar_rgba: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -87,8 +88,6 @@ pub struct HudSettings {
     pub overlay_opacity: f32,
     #[serde(default = "default_true")]
     pub show_clip_toasts: bool,
-    #[serde(default = "default_true")]
-    pub overlay_enabled: bool,
 }
 
 fn default_overlay_opacity() -> f32 {
@@ -103,7 +102,6 @@ impl Default for HudSettings {
         Self {
             overlay_opacity: 0.8,
             show_clip_toasts: true,
-            overlay_enabled: true,
         }
     }
 }
@@ -142,6 +140,7 @@ mod tests {
                 name: "TestCrew".into(),
                 initials: "TC".into(),
                 online_count: 3,
+                avatar_rgba: None,
             }),
             voice: Some(HudVoice {
                 channel_name: "General".into(),
@@ -188,7 +187,6 @@ mod tests {
             HudMessage::Settings(s) => {
                 assert!((s.overlay_opacity - 0.8).abs() < f32::EPSILON);
                 assert!(s.show_clip_toasts);
-                assert!(s.overlay_enabled);
             }
             _ => panic!("expected Settings"),
         }

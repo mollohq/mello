@@ -603,7 +603,6 @@ component GeneralTab inherits VerticalLayout {
     in-out property <bool> hw-acceleration: true;
     // HUD settings
     in-out property <bool> hud-enabled: true;
-    in-out property <bool> hud-overlay-in-game: true;
     in-out property <float> hud-overlay-opacity: 0.8;
     in-out property <bool> hud-clip-toasts: true;
 
@@ -614,7 +613,6 @@ component GeneralTab inherits VerticalLayout {
     callback setting-changed-minimize-on-join(bool);
     callback setting-changed-hw-acceleration(bool);
     callback setting-changed-hud-enabled(bool);
-    callback setting-changed-hud-overlay-in-game(bool);
     callback setting-changed-hud-overlay-opacity(float);
     callback setting-changed-hud-clip-toasts(bool);
 
@@ -697,24 +695,16 @@ component GeneralTab inherits VerticalLayout {
     VerticalLayout {
         spacing: 24px;
 
-        SectionHeader { title: "HUD & OVERLAY"; }
+        SectionHeader { title: "HUD"; }
 
         VerticalLayout {
             spacing: 8px;
 
             ToggleRow {
                 title: "Enable HUD";
-                description: "Show the mini-player or overlay when the main window is not focused.";
+                description: "Show the overlay when the main window is not focused.";
                 checked <=> root.hud-enabled;
                 toggled(v) => { setting-changed-hud-enabled(v); }
-            }
-
-            ToggleRow {
-                title: "Show overlay in games";
-                description: "Display a transparent overlay with crew & voice info while gaming.";
-                checked <=> root.hud-overlay-in-game;
-                toggled(v) => { setting-changed-hud-overlay-in-game(v); }
-                opacity: root.hud-enabled ? 1.0 : 0.4;
             }
 
             ToggleRow {
@@ -1676,7 +1666,6 @@ export component SettingsModal inherits Rectangle {
 
     // HUD settings
     in-out property <bool> settings-hud-enabled: true;
-    in-out property <bool> settings-hud-overlay-in-game: true;
     in-out property <float> settings-hud-overlay-opacity: 0.8;
     in-out property <bool> settings-hud-clip-toasts: true;
 
@@ -1689,7 +1678,6 @@ export component SettingsModal inherits Rectangle {
     callback setting-changed-hw-acceleration(bool);
     // HUD callbacks
     callback setting-changed-hud-enabled(bool);
-    callback setting-changed-hud-overlay-in-game(bool);
     callback setting-changed-hud-overlay-opacity(float);
     callback setting-changed-hud-clip-toasts(bool);
 
@@ -2077,11 +2065,9 @@ export component SettingsModal inherits Rectangle {
                             setting-changed-minimize-on-join(v) => { root.setting-changed-minimize-on-join(v); }
                             setting-changed-hw-acceleration(v) => { root.setting-changed-hw-acceleration(v); }
                             hud-enabled <=> root.settings-hud-enabled;
-                            hud-overlay-in-game <=> root.settings-hud-overlay-in-game;
                             hud-overlay-opacity <=> root.settings-hud-overlay-opacity;
                             hud-clip-toasts <=> root.settings-hud-clip-toasts;
                             setting-changed-hud-enabled(v) => { root.setting-changed-hud-enabled(v); }
-                            setting-changed-hud-overlay-in-game(v) => { root.setting-changed-hud-overlay-in-game(v); }
                             setting-changed-hud-overlay-opacity(v) => { root.setting-changed-hud-overlay-opacity(v); }
                             setting-changed-hud-clip-toasts(v) => { root.setting-changed-hud-clip-toasts(v); }
                         }

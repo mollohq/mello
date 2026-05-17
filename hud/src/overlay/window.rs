@@ -14,6 +14,7 @@ pub struct Win32OverlayWindow {
     needs_render: bool,
     width: u32,
     height: u32,
+    opacity: f32,
 }
 
 #[cfg(target_os = "windows")]
@@ -23,7 +24,7 @@ impl Win32OverlayWindow {
         use windows::Win32::UI::WindowsAndMessaging::*;
 
         let renderer = D2DRenderer::new()?;
-        let width = 300u32;
+        let width = 230u32;
         let height = 200u32;
 
         unsafe {
@@ -66,6 +67,7 @@ impl Win32OverlayWindow {
                 needs_render: false,
                 width,
                 height,
+                opacity: 0.8,
             })
         }
     }
@@ -94,6 +96,13 @@ impl Win32OverlayWindow {
         log::debug!("[overlay] hide");
         unsafe {
             let _ = ShowWindow(self.hwnd, SW_HIDE);
+        }
+    }
+
+    pub fn set_opacity(&mut self, opacity: f32) {
+        if (self.opacity - opacity).abs() > f32::EPSILON {
+            self.opacity = opacity;
+            self.needs_render = true;
         }
     }
 
@@ -199,7 +208,7 @@ impl Win32OverlayWindow {
 
             // Render D2D content into the memory DC
             self.renderer
-                .render(&self.state, mem_dc, self.width, self.height)?;
+                .render(&self.state, mem_dc, self.width, self.height, self.opacity)?;
 
             // Premultiply alpha for UpdateLayeredWindow
             if !bits.is_null() {

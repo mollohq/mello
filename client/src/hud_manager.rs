@@ -42,7 +42,6 @@ pub struct HudState {
 pub enum HudMode {
     #[default]
     Hidden,
-    MiniPlayer,
     Overlay,
 }
 
@@ -51,6 +50,8 @@ pub struct HudCrew {
     pub name: String,
     pub initials: String,
     pub online_count: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub avatar_rgba: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -94,7 +95,6 @@ pub struct HudClipToast {
 pub struct HudSettings {
     pub overlay_opacity: f32,
     pub show_clip_toasts: bool,
-    pub overlay_enabled: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -469,6 +469,7 @@ mod tests {
                 name: "The Vanguard".into(),
                 initials: "TV".into(),
                 online_count: 5,
+                avatar_rgba: None,
             }),
             voice: Some(HudVoice {
                 channel_name: "General".into(),
