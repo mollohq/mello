@@ -82,7 +82,7 @@ All custom server logic is written in Go and loaded as Nakama runtime modules. M
 |--------|-----------------|
 | `main.go` | RPC and hook registration |
 | `auth.go` | Post-authentication hooks (create default metadata) |
-| `crews.go` | `CreateCrewRPC`, `DiscoverCrewsRPC`, `GetCrewAvatarRPC`, after-join/leave hooks |
+| `crews.go` | `CreateCrewRPC`, `DiscoverCrewsRPC`, `UpdateCrewRPC`, `DeleteCrewRPC`, `ChangeCrewRoleRPC`, `KickCrewMemberRPC`, `GetCrewAvatarRPC`, after-join/leave hooks |
 | `streaming.go` | `StartStreamRPC`, `StopStreamRPC`, `UploadThumbnailRPC` |
 | `search_users.go` | `SearchUsersRPC` — friends first, then other matches by display name |
 | `invite_codes.go` | `GenerateInviteCode`, `JoinByInviteCodeRPC` |
@@ -107,6 +107,10 @@ All custom server logic is written in Go and loaded as Nakama runtime modules. M
 | `get_crew_avatar` | No (`http_key`) | Reads crew avatar base64 from storage by crew ID. Returns `{"data":"<base64>"}`. Works without auth for onboarding. |
 | `search_users` | Yes | Searches users by display name prefix. Returns friends first (via `nk.FriendsList`), then non-friends matching the query (via SQL `LIKE` on `users` table). Limit 100 friends, 20 results. |
 | `join_by_invite_code` | Yes | Looks up invite code in storage, joins the associated crew. Returns crew ID + name. |
+| `update_crew` | Yes | Updates crew name, description, avatar, open/closed status, and invite policy. Requires admin role (state ≤ 1). |
+| `delete_crew` | Yes | Deletes a crew. Requires owner role (state 0). |
+| `change_crew_role` | Yes | Promotes/demotes a member between admin (1) and member (2). Requires owner role (state 0). |
+| `kick_crew_member` | Yes | Removes a member from the crew. Admins can kick members; owner can kick anyone except self. |
 | `get_ice_servers` | Yes | Returns STUN server URLs + TURN server URLs with time-limited HMAC credentials (24h TTL). |
 | `start_stream` | Yes | Announces stream start to crew members via crew state stream. |
 | `stop_stream` | Yes | Announces stream end. |
@@ -141,7 +145,7 @@ Every RPC validates its input and returns typed Nakama errors (`UNAUTHENTICATED`
 | `description` | Nakama group | Crew description |
 | `open` | Nakama group | Joinable without invite |
 | `max_count` | Nakama group | Max members (default: 6) |
-| `metadata` | Nakama JSON | `{ max_members, invite_only, created_by, stream_enabled }` |
+| `metadata` | Nakama JSON | `{ max_members, invite_only, created_by, stream_enabled, invite_policy }` |
 
 ### Presence Status (via Nakama presence)
 
@@ -362,6 +366,10 @@ Estimated cost: ~$2,000-5,000/mo
 | POST | `/v2/group/{id}/join` | Yes | Join crew |
 | POST | `/v2/group/{id}/leave` | Yes | Leave crew |
 | POST | `/v2/rpc/create_crew` | Yes | Create crew + avatar + invite code |
+| POST | `/v2/rpc/update_crew` | Yes | Update crew name, description, avatar, privacy, invite policy |
+| POST | `/v2/rpc/delete_crew` | Yes | Delete crew (owner only) |
+| POST | `/v2/rpc/change_crew_role` | Yes | Promote/demote crew member (owner only) |
+| POST | `/v2/rpc/kick_crew_member` | Yes | Kick member from crew |
 | POST | `/v2/rpc/discover_crews` | No (`http_key`) | Paginated public crew list |
 | POST | `/v2/rpc/get_crew_avatar` | No (`http_key`) | Fetch crew avatar base64 |
 | POST | `/v2/rpc/search_users` | Yes | Search users by display name |

@@ -385,6 +385,7 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
         rt: rt.handle().clone(),
         active_voice_channel: Rc::new(RefCell::new(String::new())),
         new_crew_avatar_b64: std::sync::Arc::new(std::sync::Mutex::new(None)),
+        crew_settings_avatar_b64: std::sync::Arc::new(std::sync::Mutex::new(None)),
         invited_users: Rc::new(RefCell::new(Vec::new())),
         discover_cursor: Rc::new(RefCell::new(None)),
         discover_loading: Rc::new(RefCell::new(false)),

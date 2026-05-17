@@ -2,6 +2,7 @@ mod auth;
 mod chat;
 mod clip;
 mod crew;
+mod crew_settings;
 mod game;
 mod onboarding;
 mod settings;
@@ -13,6 +14,7 @@ use crate::app_context::AppContext;
 pub fn wire_all(ctx: &AppContext) {
     auth::wire(ctx);
     crew::wire(ctx);
+    crew_settings::wire(ctx);
     voice::wire(ctx);
     chat::wire(ctx);
     clip::wire(ctx);

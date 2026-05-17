@@ -24,6 +24,7 @@ pub struct AppContext {
     pub rt: tokio::runtime::Handle,
     pub active_voice_channel: Rc<RefCell<String>>,
     pub new_crew_avatar_b64: Arc<Mutex<Option<String>>>,
+    pub crew_settings_avatar_b64: Arc<Mutex<Option<String>>>,
     pub invited_users: Rc<RefCell<InvitedUserList>>,
     pub discover_cursor: Rc<RefCell<Option<String>>>,
     pub discover_loading: Rc<RefCell<bool>>,

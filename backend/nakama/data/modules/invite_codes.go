@@ -129,8 +129,36 @@ func CreateInviteCodeRPC(ctx context.Context, logger runtime.Logger, db *sql.DB,
 		return "", runtime.NewError("crew_id required", 3)
 	}
 
-	if !isCrewMember(ctx, nk, req.CrewID, userID) {
+	// Check membership and enforce invite_policy
+	members, _, err := nk.GroupUsersList(ctx, req.CrewID, 100, nil, "")
+	if err != nil {
+		return "", runtime.NewError("failed to check permissions", 13)
+	}
+	callerRole := -1
+	for _, m := range members {
+		if m.GetUser().GetId() == userID {
+			callerRole = int(m.GetState().GetValue())
+			break
+		}
+	}
+	if callerRole < 0 {
 		return "", runtime.NewError("not a crew member", 7)
+	}
+
+	// Check invite_policy from group metadata
+	groups, err := nk.GroupsGetId(ctx, []string{req.CrewID})
+	if err == nil && len(groups) > 0 {
+		meta := groups[0].GetMetadata()
+		if meta != "" {
+			var metaMap map[string]interface{}
+			if json.Unmarshal([]byte(meta), &metaMap) == nil {
+				if policy, ok := metaMap["invite_policy"].(string); ok && policy == "admins" {
+					if callerRole > 1 {
+						return "", runtime.NewError("only admins can create invites for this crew", 7)
+					}
+				}
+			}
+		}
 	}
 
 	code, err := GenerateInviteCode(ctx, nk, logger, req.CrewID, userID)

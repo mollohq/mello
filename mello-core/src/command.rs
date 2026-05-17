@@ -227,6 +227,33 @@ pub enum Command {
     },
     StopWatching,
 
+    // --- Crew admin ---
+    UpdateCrew {
+        crew_id: String,
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        description: Option<String>,
+        #[serde(default)]
+        avatar: Option<String>,
+        #[serde(default)]
+        open: Option<bool>,
+        #[serde(default)]
+        invite_policy: Option<String>,
+    },
+    DeleteCrew {
+        crew_id: String,
+    },
+    ChangeCrewRole {
+        crew_id: String,
+        user_id: String,
+        new_role: i32,
+    },
+    KickCrewMember {
+        crew_id: String,
+        user_id: String,
+    },
+
     // --- Voice channels CRUD ---
     CreateVoiceChannel {
         crew_id: String,

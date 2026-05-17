@@ -70,6 +70,7 @@ type CrewMemberInfo struct {
 	UserID   string        `json:"user_id"`
 	Username string        `json:"username"`
 	Avatar   string        `json:"avatar,omitempty"`
+	Role     int           `json:"role"`
 	Presence *UserPresence `json:"presence,omitempty"`
 }
 
@@ -89,6 +90,7 @@ type PlayerInfo struct {
 type CrewState struct {
 	CrewID         string                   `json:"crew_id"`
 	Name           string                   `json:"name"`
+	Description    string                   `json:"description,omitempty"`
 	Counts         CrewCounts               `json:"counts"`
 	Members        []*CrewMemberInfo        `json:"members,omitempty"` // only for active crew (full view)
 	Voice          *CrewVoiceState          `json:"voice"`
@@ -98,6 +100,8 @@ type CrewState struct {
 	RecentMessages []*MessagePreview        `json:"recent_messages"`
 	UpdatedAt      string                   `json:"updated_at"`
 	MyRole         int                      `json:"my_role"` // 0=superadmin, 1=admin, 2=member; set per-request
+	Open           bool                     `json:"open"`
+	InvitePolicy   string                   `json:"invite_policy,omitempty"` // "admins" or "everyone" (default: "everyone")
 	SFUEnabled     bool                     `json:"sfu_enabled,omitempty"`
 }
 
@@ -186,6 +190,7 @@ func ComputeCrewState(ctx context.Context, logger runtime.Logger, nk runtime.Nak
 				UserID:   u.GetId(),
 				Username: u.GetDisplayName(),
 				Avatar:   u.GetAvatarUrl(),
+				Role:     int(m.GetState().GetValue()),
 				Presence: p,
 			})
 		}
@@ -276,9 +281,21 @@ func ComputeCrewState(ctx context.Context, logger runtime.Logger, nk runtime.Nak
 		activeGames = append(activeGames, g)
 	}
 
+	// Read invite_policy from group metadata
+	invitePolicy := "everyone"
+	if group.GetMetadata() != "" {
+		var meta map[string]interface{}
+		if json.Unmarshal([]byte(group.GetMetadata()), &meta) == nil {
+			if p, ok := meta["invite_policy"].(string); ok && p != "" {
+				invitePolicy = p
+			}
+		}
+	}
+
 	state := &CrewState{
-		CrewID: crewID,
-		Name:   group.GetName(),
+		CrewID:      crewID,
+		Name:        group.GetName(),
+		Description: group.GetDescription(),
 		Counts: CrewCounts{
 			Online: onlineCount,
 			Total:  len(members),
@@ -291,6 +308,8 @@ func ComputeCrewState(ctx context.Context, logger runtime.Logger, nk runtime.Nak
 		RecentMessages: recentMsgs,
 		UpdatedAt:      time.Now().UTC().Format(time.RFC3339),
 		MyRole:         callerRole,
+		Open:           group.GetOpen().GetValue(),
+		InvitePolicy:   invitePolicy,
 		SFUEnabled:     hasPremiumCrew(ctx, nk, crewID),
 	}
 

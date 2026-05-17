@@ -135,6 +135,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
                 has_avatar: has_av,
                 online: true,
                 speaking: false,
+                role: 2,
             };
             let mut members: Vec<MemberData> = (0..current.row_count())
                 .map(|i| current.row_data(i).unwrap())
@@ -430,6 +431,68 @@ pub fn handle(ctx: &AppContext, event: Event) {
                     .set_voice_channels(Rc::new(slint::VecModel::from(vc_data)).into());
 
                 ctx.app.set_can_manage_channels(state.my_role <= 1);
+                ctx.app.set_crew_settings_my_role(state.my_role);
+                ctx.app.set_crew_settings_name(state.name.clone().into());
+                ctx.app
+                    .set_crew_settings_description(state.description.clone().into());
+                ctx.app.set_crew_settings_is_open(state.open);
+                ctx.app.set_crew_settings_invite_policy(
+                    state.invite_policy.as_deref().unwrap_or("everyone").into(),
+                );
+                // Populate crew settings avatar from the crews model
+                let crews = ctx.app.get_crews();
+                for i in 0..crews.row_count() {
+                    if let Some(c) = crews.row_data(i) {
+                        if c.id == state.crew_id.as_str() {
+                            ctx.app.set_crew_settings_avatar(c.avatar.clone());
+                            ctx.app.set_crew_settings_has_avatar(c.has_avatar);
+                            let initials: String = c
+                                .name
+                                .chars()
+                                .filter(|c| c.is_alphanumeric())
+                                .take(2)
+                                .collect::<String>()
+                                .to_uppercase();
+                            ctx.app.set_crew_settings_initials(initials.into());
+                            break;
+                        }
+                    }
+                }
+                // Build member list with roles from crew state
+                if let Some(ref members) = state.members {
+                    let cache = ctx.avatar_cache.borrow();
+                    let local_uid = ctx.app.get_user_id().to_string();
+                    let member_data: Vec<MemberData> = members
+                        .iter()
+                        .map(|cm| {
+                            let is_self = cm.user_id == local_uid;
+                            let (av, has_av) = if is_self && ctx.app.get_has_user_avatar() {
+                                (ctx.app.get_user_avatar(), true)
+                            } else if let Some(img) = cache.get(&cm.user_id) {
+                                (img.clone(), true)
+                            } else {
+                                (slint::Image::default(), false)
+                            };
+                            let is_online = cm
+                                .presence
+                                .as_ref()
+                                .map(|p| p.status != mello_core::presence::PresenceStatus::Offline)
+                                .unwrap_or(false);
+                            MemberData {
+                                id: cm.user_id.clone().into(),
+                                name: cm.username.clone().into(),
+                                initials: make_initials(&cm.username).into(),
+                                avatar: av,
+                                has_avatar: has_av,
+                                online: is_online,
+                                speaking: false,
+                                role: cm.role,
+                            }
+                        })
+                        .collect();
+                    ctx.app
+                        .set_members(Rc::new(slint::VecModel::from(member_data)).into());
+                }
                 // Catch-up is now fetched in mello-core handle_select_crew
                 // (before set_active_crew) to avoid the last_seen race.
             }

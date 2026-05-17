@@ -424,8 +424,12 @@ component ActiveCrewCard inherits Rectangle {
     in property <CrewData> crew;
     in property <[VoiceChannelData]> voice-channels;
     in property <length> card-height: 320px;
+    in property <bool> can-manage: false;
     callback join-voice(string);
     callback invite-clicked();
+    callback crew-edit-requested();
+    callback crew-leave-requested();
+    callback crew-add-channel-requested();
 
     border-radius: 10px;
     background: Theme.dark ? #1A1B1E : Theme.card-bg;
@@ -518,12 +522,183 @@ component ActiveCrewCard inherits Rectangle {
                     }
                 }
 
-                Image {
-                    source: @image-url("../icons/chevron-down.svg");
-                    width: 12px;
-                    height: 12px;
-                    colorize: Theme.text-sub;
-                    y: (parent.height - self.height) / 2;
+                Rectangle {
+                    width: 24px;
+
+                    Rectangle {
+                        width: 24px;
+                        height: 24px;
+                        y: (parent.height - self.height) / 2;
+                        border-radius: 5px;
+                        background: chevron-touch.has-hover ? Theme.card-bg-hover : transparent;
+
+                        Image {
+                            source: @image-url("../icons/chevron-down.svg");
+                            width: 12px;
+                            height: 12px;
+                            colorize: chevron-touch.has-hover ? Theme.text-primary : Theme.text-sub;
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                        }
+
+                        chevron-touch := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => { crew-context-popup.show(); }
+                        }
+                    }
+                }
+            }
+        }
+
+        crew-context-popup := PopupWindow {
+            x: root.width - 172px;
+            y: 52px;
+            width: 164px;
+
+            Rectangle {
+                background: Theme.surface;
+                border-radius: Theme.r-inner;
+                border-width: 1px;
+                border-color: Theme.graphic-light;
+                drop-shadow-blur: 12px;
+                drop-shadow-color: Theme.dark ? #00000060 : #00000018;
+                drop-shadow-offset-y: 4px;
+
+                VerticalLayout {
+                    padding: 4px;
+
+                    if root.can-manage: Rectangle {
+                        height: 32px;
+                        border-radius: 6px;
+                        background: ctx-edit-ta.has-hover ? Theme.hover-overlay : transparent;
+
+                        HorizontalLayout {
+                            padding-left: 10px;
+                            padding-right: 10px;
+                            spacing: 8px;
+
+                            Image {
+                                source: @image-url("../icons/settings.svg");
+                                width: 14px;
+                                height: 14px;
+                                colorize: Theme.text-secondary;
+                                y: (parent.height - self.height) / 2;
+                            }
+
+                            Text {
+                                text: "Crew settings";
+                                font-size: 13px;
+                                color: Theme.text-primary;
+                                vertical-alignment: center;
+                            }
+                        }
+
+                        ctx-edit-ta := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => { root.crew-edit-requested(); }
+                        }
+                    }
+
+                    if root.can-manage: Rectangle {
+                        height: 32px;
+                        border-radius: 6px;
+                        background: ctx-add-ch-ta.has-hover ? Theme.hover-overlay : transparent;
+
+                        HorizontalLayout {
+                            padding-left: 10px;
+                            padding-right: 10px;
+                            spacing: 8px;
+
+                            Image {
+                                source: @image-url("../icons/plus.svg");
+                                width: 14px;
+                                height: 14px;
+                                colorize: Theme.text-secondary;
+                                y: (parent.height - self.height) / 2;
+                            }
+
+                            Text {
+                                text: "Add channel";
+                                font-size: 13px;
+                                color: Theme.text-primary;
+                                vertical-alignment: center;
+                            }
+                        }
+
+                        ctx-add-ch-ta := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => { root.crew-add-channel-requested(); }
+                        }
+                    }
+
+                    Rectangle {
+                        height: 32px;
+                        border-radius: 6px;
+                        background: ctx-invite-ta.has-hover ? Theme.hover-overlay : transparent;
+
+                        HorizontalLayout {
+                            padding-left: 10px;
+                            padding-right: 10px;
+                            spacing: 8px;
+
+                            Image {
+                                source: @image-url("../icons/user-plus.svg");
+                                width: 14px;
+                                height: 14px;
+                                colorize: Theme.text-secondary;
+                                y: (parent.height - self.height) / 2;
+                            }
+
+                            Text {
+                                text: "Invite";
+                                font-size: 13px;
+                                color: Theme.text-primary;
+                                vertical-alignment: center;
+                            }
+                        }
+
+                        ctx-invite-ta := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => { root.invite-clicked(); }
+                        }
+                    }
+
+                    Rectangle {
+                        height: 1px;
+                        background: Theme.graphic-light;
+                    }
+
+                    Rectangle {
+                        height: 32px;
+                        border-radius: 6px;
+                        background: ctx-leave-ta.has-hover ? Theme.hover-overlay : transparent;
+
+                        HorizontalLayout {
+                            padding-left: 10px;
+                            padding-right: 10px;
+                            spacing: 8px;
+
+                            Image {
+                                source: @image-url("../icons/x.svg");
+                                width: 14px;
+                                height: 14px;
+                                colorize: #ef4444;
+                                y: (parent.height - self.height) / 2;
+                            }
+
+                            Text {
+                                text: "Leave crew";
+                                font-size: 13px;
+                                color: #ef4444;
+                                vertical-alignment: center;
+                            }
+                        }
+
+                        ctx-leave-ta := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => { root.crew-leave-requested(); }
+                        }
+                    }
                 }
             }
         }
@@ -666,12 +841,16 @@ export component CrewPanel inherits Rectangle {
     in property <[CrewData]> crews: [];
     in property <string> active-crew-id: "";
     in property <[VoiceChannelData]> voice-channels: [];
+    in property <bool> can-manage: false;
 
     callback crew-selected(string);
     callback crew-create-requested();
     callback browse-crews-requested();
     callback join-voice-channel(string);
     callback invite-clicked();
+    callback crew-edit-requested();
+    callback crew-leave-requested();
+    callback crew-add-channel-requested();
 
     background: Theme.surface;
     border-width: 1px;
@@ -707,11 +886,21 @@ export component CrewPanel inherits Rectangle {
                             crew: crew;
                             voice-channels: root.voice-channels;
                             card-height: root.height * 0.48;
+                            can-manage: root.can-manage;
                             join-voice(id) => {
                                 join-voice-channel(id);
                             }
                             invite-clicked => {
                                 root.invite-clicked();
+                            }
+                            crew-edit-requested => {
+                                root.crew-edit-requested();
+                            }
+                            crew-leave-requested => {
+                                root.crew-leave-requested();
+                            }
+                            crew-add-channel-requested => {
+                                root.crew-add-channel-requested();
                             }
                         }
                         if crew.id != active-crew-id: CompactCrewCard {

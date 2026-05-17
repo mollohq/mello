@@ -384,6 +384,80 @@ pub fn handle(ctx: &AppContext, event: Event) {
         Event::InviteCodeCreateFailed { reason } => {
             log::error!("[invite] failed to create invite code: {}", reason);
         }
+        Event::CrewUpdated { crew_id } => {
+            log::info!("[crew] crew updated: {}", crew_id);
+            ctx.app.set_crew_settings_show_saved(true);
+            // Clear the pending avatar
+            *ctx.crew_settings_avatar_b64.lock().unwrap() = None;
+            // Refresh crew data
+            let _ = ctx.cmd_tx.try_send(Command::LoadMyCrews);
+            // Re-fetch crew state if this is the active crew
+            if ctx.app.get_active_crew_id() == crew_id.as_str() {
+                let _ = ctx.cmd_tx.try_send(Command::SetActiveCrew { crew_id });
+            }
+        }
+        Event::CrewUpdateFailed { reason } => {
+            log::error!("[crew] crew update failed: {}", reason);
+        }
+        Event::CrewDeleted { crew_id } => {
+            log::info!("[crew] crew deleted: {}", crew_id);
+            ctx.app.set_crew_settings_open(false);
+            // Remove from local list
+            let crews = ctx.app.get_crews();
+            let updated: Vec<CrewData> = (0..crews.row_count())
+                .filter_map(|i| crews.row_data(i))
+                .filter(|c| c.id != crew_id.as_str())
+                .collect();
+            ctx.app
+                .set_crews(Rc::new(slint::VecModel::from(updated)).into());
+            if ctx.app.get_active_crew_id() == crew_id.as_str() {
+                ctx.app.set_active_crew_id("".into());
+            }
+        }
+        Event::CrewDeleteFailed { reason } => {
+            log::error!("[crew] crew delete failed: {}", reason);
+        }
+        Event::CrewRoleChanged {
+            crew_id,
+            user_id,
+            new_role,
+        } => {
+            log::info!(
+                "[crew] role changed: user {} -> {} in {}",
+                user_id,
+                new_role,
+                crew_id
+            );
+            // Update the member model inline
+            let members = ctx.app.get_members();
+            let updated: Vec<crate::MemberData> = (0..members.row_count())
+                .map(|i| {
+                    let mut m = members.row_data(i).unwrap();
+                    if m.id == user_id.as_str() {
+                        m.role = new_role;
+                    }
+                    m
+                })
+                .collect();
+            ctx.app
+                .set_members(Rc::new(slint::VecModel::from(updated)).into());
+        }
+        Event::CrewRoleChangeFailed { reason } => {
+            log::error!("[crew] role change failed: {}", reason);
+        }
+        Event::CrewMemberKicked { user_id, .. } => {
+            log::info!("[crew] member kicked: {}", user_id);
+            let members = ctx.app.get_members();
+            let updated: Vec<crate::MemberData> = (0..members.row_count())
+                .map(|i| members.row_data(i).unwrap())
+                .filter(|m| m.id != user_id.as_str())
+                .collect();
+            ctx.app
+                .set_members(Rc::new(slint::VecModel::from(updated)).into());
+        }
+        Event::CrewMemberKickFailed { reason } => {
+            log::error!("[crew] kick failed: {}", reason);
+        }
         _ => {}
     }
 }

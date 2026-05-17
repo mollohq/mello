@@ -123,6 +123,34 @@ pub enum Event {
         reason: String,
     },
 
+    CrewUpdated {
+        crew_id: String,
+    },
+    CrewUpdateFailed {
+        reason: String,
+    },
+    CrewDeleted {
+        crew_id: String,
+    },
+    CrewDeleteFailed {
+        reason: String,
+    },
+    CrewRoleChanged {
+        crew_id: String,
+        user_id: String,
+        new_role: i32,
+    },
+    CrewRoleChangeFailed {
+        reason: String,
+    },
+    CrewMemberKicked {
+        crew_id: String,
+        user_id: String,
+    },
+    CrewMemberKickFailed {
+        reason: String,
+    },
+
     MemberJoined {
         crew_id: String,
         member: Member,

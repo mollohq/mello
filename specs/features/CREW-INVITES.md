@@ -242,9 +242,21 @@ The dev seed script creates invite codes for all 6 sample crews (`DEVS-0001`, `G
 
 ---
 
-## 12. Out of Scope (this version)
+## 12. Invite Policy
 
-- Invite management UI (view, revoke, list per-crew invites)
+Crew admins can control who is allowed to generate invite codes via the `invite_policy` field in group metadata:
+
+| Policy | Who can create invites |
+|--------|----------------------|
+| `everyone` (default) | Any crew member |
+| `admins` | Only owner (state 0) and admins (state 1) |
+
+The policy is set via the `update_crew` RPC and enforced in `CreateInviteCodeRPC`. The setting is exposed in the crew settings Overview tab as a two-state selector ("Everyone" / "Admins").
+
+---
+
+## 13. Out of Scope (this version)
+
 - Per-invite usage analytics
 - Expiring or single-use invites
 - Deferred deep link via installer embedding

@@ -10,6 +10,8 @@ use crate::presence::{Activity, GamePresence, PresenceStatus, UserPresence};
 pub struct CrewState {
     pub crew_id: String,
     pub name: String,
+    #[serde(default)]
+    pub description: String,
     pub counts: CrewCounts,
     #[serde(default)]
     pub members: Option<Vec<CrewMember>>,
@@ -27,6 +29,10 @@ pub struct CrewState {
     #[serde(default)]
     pub my_role: i32,
     #[serde(default)]
+    pub open: bool,
+    #[serde(default)]
+    pub invite_policy: Option<String>,
+    #[serde(default)]
     pub sfu_enabled: bool,
 }
 
@@ -43,6 +49,8 @@ pub struct CrewMember {
     pub username: String,
     #[serde(default)]
     pub avatar: Option<String>,
+    #[serde(default)]
+    pub role: i32,
     #[serde(default)]
     pub presence: Option<UserPresence>,
 }

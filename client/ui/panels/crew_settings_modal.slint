@@ -1,0 +1,1100 @@
+import { Theme } from "../theme.slint";
+import { VoiceChannelData, MemberData } from "../types.slint";
+
+// ─── Section Header ────────────────────────────────────────────────────────
+component SectionHeader inherits Rectangle {
+    in property <string> title;
+
+    height: 16px;
+
+    HorizontalLayout {
+        spacing: 16px;
+
+        Text {
+            text: title;
+            font-family: Theme.font-mono;
+            font-size: 11px;
+            font-weight: 600;
+            letter-spacing: 2.4px;
+            color: Theme.accent;
+        }
+
+        Rectangle {
+            horizontal-stretch: 1;
+            height: 1px;
+            y: (parent.height - self.height) / 2;
+            background: Theme.graphic-light;
+        }
+    }
+}
+
+// ─── Overview Tab ──────────────────────────────────────────────────────────
+component OverviewTab inherits VerticalLayout {
+    padding: 40px;
+    padding-bottom: 40px;
+    spacing: 32px;
+
+    in-out property <string> crew-name-value: "";
+    in-out property <string> crew-description-value: "";
+    in property <image> crew-avatar;
+    in property <bool> crew-has-avatar: false;
+    in property <string> crew-initials: "";
+    in-out property <bool> is-open: false;
+    in-out property <string> invite-policy: "everyone";
+
+    callback save-requested();
+    callback avatar-upload-clicked();
+
+    // CREW IDENTITY
+    VerticalLayout {
+        spacing: 24px;
+
+        SectionHeader { title: "CREW IDENTITY"; }
+
+        HorizontalLayout {
+            spacing: 28px;
+
+            // Avatar + change
+            VerticalLayout {
+                spacing: 10px;
+                horizontal-stretch: 0;
+
+                Rectangle {
+                    width: 80px;
+                    height: 80px;
+                    border-radius: 14px;
+                    background: Theme.surface;
+                    border-width: 1px;
+                    border-color: Theme.graphic-light;
+                    clip: true;
+
+                    if crew-has-avatar: Image {
+                        source: crew-avatar;
+                        width: parent.width;
+                        height: parent.height;
+                        image-fit: cover;
+                    }
+
+                    if !crew-has-avatar: Text {
+                        text: crew-initials;
+                        font-family: Theme.font-mono;
+                        font-size: 22px;
+                        font-weight: 600;
+                        color: Theme.text-secondary;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+
+                Rectangle {
+                    width: 80px;
+                    height: 28px;
+                    border-radius: 6px;
+                    background: avatar-change-ta.has-hover ? Theme.surface-hover : transparent;
+
+                    avatar-change-ta := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { avatar-upload-clicked(); }
+                    }
+
+                    Text {
+                        text: "Change";
+                        font-family: Theme.font-mono;
+                        font-size: 11px;
+                        letter-spacing: 0.5px;
+                        color: Theme.accent;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+
+            // Name + description
+            VerticalLayout {
+                horizontal-stretch: 1;
+                spacing: 20px;
+
+                VerticalLayout {
+                    spacing: 8px;
+
+                    Text {
+                        text: "CREW NAME";
+                        font-family: Theme.font-mono;
+                        font-size: 12px;
+                        font-weight: 500;
+                        letter-spacing: 2px;
+                        color: Theme.text-secondary;
+                    }
+
+                    Rectangle {
+                        height: 44px;
+                        background: Theme.bg-app;
+                        border-radius: 8px;
+                        border-width: 1px;
+                        border-color: name-input.has-focus ? Theme.accent : Theme.graphic-light;
+
+                        name-input := TextInput {
+                            text <=> crew-name-value;
+                            font-size: 14px;
+                            color: Theme.text-primary;
+                            x: 14px;
+                            y: (parent.height - self.preferred-height) / 2;
+                            width: parent.width - 28px;
+                            single-line: true;
+                        }
+                    }
+                }
+
+                VerticalLayout {
+                    spacing: 8px;
+
+                    Text {
+                        text: "DESCRIPTION";
+                        font-family: Theme.font-mono;
+                        font-size: 12px;
+                        font-weight: 500;
+                        letter-spacing: 2px;
+                        color: Theme.text-secondary;
+                    }
+
+                    Rectangle {
+                        height: 44px;
+                        background: Theme.bg-app;
+                        border-radius: 8px;
+                        border-width: 1px;
+                        border-color: desc-input.has-focus ? Theme.accent : Theme.graphic-light;
+
+                        desc-input := TextInput {
+                            text <=> crew-description-value;
+                            font-size: 14px;
+                            color: Theme.text-primary;
+                            x: 14px;
+                            y: (parent.height - self.preferred-height) / 2;
+                            width: parent.width - 28px;
+                            single-line: true;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // PRIVACY
+    VerticalLayout {
+        spacing: 16px;
+
+        SectionHeader { title: "PRIVACY"; }
+
+        HorizontalLayout {
+            spacing: 12px;
+
+            VerticalLayout {
+                horizontal-stretch: 1;
+                spacing: 2px;
+
+                Text {
+                    text: "Open crew";
+                    font-size: 13px;
+                    font-weight: 500;
+                    color: Theme.text-primary;
+                }
+                Text {
+                    text: "Anyone can find and join this crew without an invite";
+                    font-size: 11px;
+                    color: Theme.text-tertiary;
+                    wrap: word-wrap;
+                }
+            }
+
+            // Toggle switch
+            Rectangle {
+                width: 44px;
+                height: 24px;
+                border-radius: 12px;
+                background: is-open ? Theme.accent : Theme.graphic-light;
+                y: (parent.height - self.height) / 2;
+
+                Rectangle {
+                    width: 18px;
+                    height: 18px;
+                    border-radius: 9px;
+                    background: white;
+                    x: is-open ? parent.width - self.width - 3px : 3px;
+                    y: 3px;
+
+                    animate x { duration: 150ms; }
+                }
+
+                privacy-ta := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { is-open = !is-open; }
+                }
+            }
+        }
+    }
+
+    // INVITES
+    VerticalLayout {
+        spacing: 16px;
+
+        SectionHeader { title: "INVITES"; }
+
+        HorizontalLayout {
+            spacing: 12px;
+
+            VerticalLayout {
+                horizontal-stretch: 1;
+                spacing: 2px;
+
+                Text {
+                    text: "Who can create invite links";
+                    font-size: 13px;
+                    font-weight: 500;
+                    color: Theme.text-primary;
+                }
+                Text {
+                    text: invite-policy == "admins" ? "Only admins can generate invite codes" : "All members can generate invite codes";
+                    font-size: 11px;
+                    color: Theme.text-tertiary;
+                    wrap: word-wrap;
+                }
+            }
+
+            // Two-state pill
+            HorizontalLayout {
+                spacing: 0px;
+                y: (parent.height - self.preferred-height) / 2;
+
+                Rectangle {
+                    width: 80px;
+                    height: 30px;
+                    border-radius: 6px;
+                    background: invite-policy == "everyone" ? Theme.accent-bg : (inv-everyone-ta.has-hover ? Theme.surface-hover : transparent);
+                    border-width: invite-policy == "everyone" ? 1px : 0px;
+                    border-color: Theme.accent;
+
+                    Text {
+                        text: "Everyone";
+                        font-family: Theme.font-mono;
+                        font-size: 11px;
+                        color: invite-policy == "everyone" ? Theme.accent : Theme.text-tertiary;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+
+                    inv-everyone-ta := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { invite-policy = "everyone"; }
+                    }
+                }
+
+                Rectangle {
+                    width: 70px;
+                    height: 30px;
+                    border-radius: 6px;
+                    background: invite-policy == "admins" ? Theme.accent-bg : (inv-admins-ta.has-hover ? Theme.surface-hover : transparent);
+                    border-width: invite-policy == "admins" ? 1px : 0px;
+                    border-color: Theme.accent;
+
+                    Text {
+                        text: "Admins";
+                        font-family: Theme.font-mono;
+                        font-size: 11px;
+                        color: invite-policy == "admins" ? Theme.accent : Theme.text-tertiary;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+
+                    inv-admins-ta := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { invite-policy = "admins"; }
+                    }
+                }
+            }
+        }
+    }
+
+    // SAVE
+    HorizontalLayout {
+        alignment: end;
+
+        Rectangle {
+            width: 120px;
+            height: 40px;
+            border-radius: 6px;
+            background: save-ta.has-hover ? Theme.accent : Theme.accent;
+            opacity: save-ta.has-hover ? 0.9 : 1.0;
+
+            Text {
+                text: "Save";
+                font-family: Theme.font-mono;
+                font-size: 13px;
+                font-weight: 500;
+                letter-spacing: 0.5px;
+                color: #FFFFFF;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+
+            save-ta := TouchArea {
+                mouse-cursor: pointer;
+                clicked => { save-requested(); }
+            }
+        }
+    }
+}
+
+// ─── Voice Channels Tab ────────────────────────────────────────────────────
+component VoiceChannelsTab inherits VerticalLayout {
+    padding: 40px;
+    padding-bottom: 40px;
+    spacing: 32px;
+
+    in property <[VoiceChannelData]> channels: [];
+    in-out property <string> new-channel-name: "";
+
+    callback add-channel(string);
+    callback rename-channel(string, string);
+    callback delete-channel(string);
+
+    VerticalLayout {
+        spacing: 24px;
+
+        SectionHeader { title: "VOICE CHANNELS"; }
+
+        VerticalLayout {
+            spacing: 8px;
+
+            for ch[i] in channels: Rectangle {
+                height: 48px;
+                border-radius: 8px;
+                background: Theme.bg-app;
+                border-width: 1px;
+                border-color: Theme.graphic-light;
+
+                HorizontalLayout {
+                    padding-left: 16px;
+                    padding-right: 8px;
+                    spacing: 12px;
+
+                    Image {
+                        source: @image-url("../icons/mic.svg");
+                        width: 16px;
+                        height: 16px;
+                        colorize: Theme.text-secondary;
+                        y: (parent.height - self.height) / 2;
+                    }
+
+                    Text {
+                        text: ch.name;
+                        font-size: 14px;
+                        font-weight: 500;
+                        color: Theme.text-primary;
+                        horizontal-stretch: 1;
+                        vertical-alignment: center;
+                        overflow: elide;
+                    }
+
+                    if ch.is-default: Rectangle {
+                        width: def-label.preferred-width + 12px;
+                        height: 22px;
+                        border-radius: 4px;
+                        background: Theme.accent-bg;
+                        y: (parent.height - self.height) / 2;
+
+                        def-label := Text {
+                            text: "default";
+                            font-family: Theme.font-mono;
+                            font-size: 10px;
+                            color: Theme.accent;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    if !ch.is-default: Rectangle {
+                        width: 32px;
+                        height: 32px;
+                        border-radius: 6px;
+                        background: del-ta.has-hover ? #ef444422 : transparent;
+                        y: (parent.height - self.height) / 2;
+
+                        Image {
+                            source: @image-url("../icons/x.svg");
+                            width: 14px;
+                            height: 14px;
+                            colorize: del-ta.has-hover ? #ef4444 : Theme.text-tertiary;
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                        }
+
+                        del-ta := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => { delete-channel(ch.id); }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // ADD CHANNEL
+    VerticalLayout {
+        spacing: 12px;
+
+        SectionHeader { title: "ADD CHANNEL"; }
+
+        HorizontalLayout {
+            spacing: 12px;
+
+            Rectangle {
+                horizontal-stretch: 1;
+                height: 44px;
+                background: Theme.bg-app;
+                border-radius: 8px;
+                border-width: 1px;
+                border-color: add-ch-input.has-focus ? Theme.accent : Theme.graphic-light;
+
+                add-ch-input := TextInput {
+                    text <=> new-channel-name;
+                    font-size: 14px;
+                    color: Theme.text-primary;
+                    x: 14px;
+                    y: (parent.height - self.preferred-height) / 2;
+                    width: parent.width - 28px;
+                    single-line: true;
+                    accepted => {
+                        if new-channel-name != "" {
+                            add-channel(new-channel-name);
+                            new-channel-name = "";
+                        }
+                    }
+                }
+            }
+
+            Rectangle {
+                width: 44px;
+                height: 44px;
+                border-radius: 8px;
+                background: add-ch-ta.has-hover ? Theme.accent : Theme.surface;
+                border-width: 1px;
+                border-color: add-ch-ta.has-hover ? Theme.accent : Theme.graphic-light;
+
+                Image {
+                    source: @image-url("../icons/plus.svg");
+                    width: 18px;
+                    height: 18px;
+                    colorize: add-ch-ta.has-hover ? #FFFFFF : Theme.text-secondary;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                }
+
+                add-ch-ta := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        if new-channel-name != "" {
+                            add-channel(new-channel-name);
+                            new-channel-name = "";
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ─── Member Row ────────────────────────────────────────────────────────────
+component MemberRow inherits Rectangle {
+    in property <MemberData> member;
+    in property <bool> is-owner: false;
+    in property <bool> can-change-roles: false;
+    in property <bool> can-kick: false;
+
+    callback promote(string);
+    callback demote(string);
+    callback kick(string);
+
+    height: 52px;
+    border-radius: 8px;
+    background: row-ta.has-hover ? Theme.bg-app : transparent;
+
+    row-ta := TouchArea {}
+
+    HorizontalLayout {
+        padding-left: 16px;
+        padding-right: 12px;
+        spacing: 12px;
+
+        // Avatar
+        Rectangle {
+            width: 32px;
+            height: 32px;
+            border-radius: 8px;
+            background: Theme.accent;
+            y: (parent.height - self.height) / 2;
+            clip: true;
+
+            if member.has-avatar: Image {
+                source: member.avatar;
+                width: parent.width;
+                height: parent.height;
+                image-fit: cover;
+            }
+
+            if !member.has-avatar: Text {
+                text: member.initials;
+                font-family: Theme.font-mono;
+                font-size: 11px;
+                font-weight: 600;
+                color: white;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+
+        // Name + status
+        VerticalLayout {
+            horizontal-stretch: 1;
+            spacing: 2px;
+
+            Rectangle { vertical-stretch: 1; }
+
+            HorizontalLayout {
+                spacing: 6px;
+
+                Text {
+                    text: member.name;
+                    font-size: 13px;
+                    font-weight: 500;
+                    color: Theme.text-primary;
+                    overflow: elide;
+                }
+
+                // Online dot
+                if member.online: Rectangle {
+                    width: 8px;
+                    height: 8px;
+                    border-radius: 4px;
+                    background: #22c55e;
+                    y: (parent.height - self.height) / 2;
+                }
+            }
+
+            Text {
+                text: member.role == 0 ? "Owner" : member.role == 1 ? "Admin" : "Member";
+                font-family: Theme.font-mono;
+                font-size: 11px;
+                color: member.role == 0 ? Theme.accent : Theme.text-tertiary;
+            }
+
+            Rectangle { vertical-stretch: 1; }
+        }
+
+        // Role badge
+        Rectangle {
+            width: role-label.preferred-width + 16px;
+            height: 24px;
+            border-radius: 4px;
+            y: (parent.height - self.height) / 2;
+            background: member.role == 0 ? Theme.accent-bg : (member.role == 1 ? Theme.accent-bg : transparent);
+            border-width: member.role <= 1 ? 0px : 1px;
+            border-color: Theme.graphic-light;
+
+            role-label := Text {
+                text: member.role == 0 ? "OWNER" : member.role == 1 ? "ADMIN" : "MEMBER";
+                font-family: Theme.font-mono;
+                font-size: 10px;
+                letter-spacing: 0.5px;
+                color: member.role <= 1 ? Theme.accent : Theme.text-tertiary;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+
+        // Promote/demote buttons (only for superadmin, not for owner)
+        if can-change-roles && member.role > 0: Rectangle {
+            width: 28px;
+            height: 28px;
+            border-radius: 6px;
+            y: (parent.height - self.height) / 2;
+            background: role-btn-ta.has-hover ? Theme.surface-hover : transparent;
+
+            Image {
+                source: member.role == 2 ? @image-url("../icons/shield-plus.svg") : @image-url("../icons/user.svg");
+                width: 14px;
+                height: 14px;
+                colorize: role-btn-ta.has-hover ? Theme.text-primary : Theme.text-tertiary;
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+            }
+
+            role-btn-ta := TouchArea {
+                mouse-cursor: pointer;
+                clicked => {
+                    if member.role == 2 {
+                        promote(member.id);
+                    } else {
+                        demote(member.id);
+                    }
+                }
+            }
+        }
+
+        // Kick button
+        if can-kick && member.role > 0: Rectangle {
+            width: 28px;
+            height: 28px;
+            border-radius: 6px;
+            y: (parent.height - self.height) / 2;
+            background: kick-ta.has-hover ? #3b1118 : transparent;
+
+            Image {
+                source: @image-url("../icons/x.svg");
+                width: 12px;
+                height: 12px;
+                colorize: kick-ta.has-hover ? #ef4444 : Theme.text-tertiary;
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+            }
+
+            kick-ta := TouchArea {
+                mouse-cursor: pointer;
+                clicked => { kick(member.id); }
+            }
+        }
+    }
+}
+
+// ─── Members Tab ───────────────────────────────────────────────────────────
+component MembersTab inherits VerticalLayout {
+    padding: 40px;
+    padding-bottom: 40px;
+    spacing: 32px;
+
+    in property <[MemberData]> members: [];
+    in property <int> my-role: 2;
+
+    callback promote-member(string);
+    callback demote-member(string);
+    callback kick-member(string);
+
+    // OWNER
+    VerticalLayout {
+        spacing: 8px;
+
+        SectionHeader { title: "OWNER"; }
+
+        for m in members: VerticalLayout {
+            if m.role == 0: MemberRow {
+                member: m;
+                is-owner: true;
+            }
+        }
+    }
+
+    // ADMINS
+    VerticalLayout {
+        spacing: 8px;
+
+        SectionHeader { title: "ADMINS"; }
+
+        for m in members: VerticalLayout {
+            if m.role == 1: MemberRow {
+                member: m;
+                can-change-roles: root.my-role == 0;
+                can-kick: root.my-role == 0;
+                promote(id) => { }
+                demote(id) => { root.demote-member(id); }
+                kick(id) => { root.kick-member(id); }
+            }
+        }
+    }
+
+    // MEMBERS
+    VerticalLayout {
+        spacing: 8px;
+
+        SectionHeader { title: "MEMBERS"; }
+
+        for m in members: VerticalLayout {
+            if m.role == 2: MemberRow {
+                member: m;
+                can-change-roles: root.my-role == 0;
+                can-kick: root.my-role <= 1;
+                promote(id) => { root.promote-member(id); }
+                demote(id) => { }
+                kick(id) => { root.kick-member(id); }
+            }
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ─── Crew Settings Modal (main export) ─────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════
+export component CrewSettingsModal inherits Rectangle {
+    in-out property <string> crew-name: "";
+    in-out property <string> crew-description: "";
+    in property <image> crew-avatar;
+    in property <bool> crew-has-avatar: false;
+    in property <string> crew-initials: "";
+    in property <int> my-role: 2;   // 0=superadmin, 1=admin, 2=member
+    in property <[VoiceChannelData]> channels: [];
+    in property <[MemberData]> members: [];
+
+    in-out property <string> crew-name-value: crew-name;
+    in-out property <string> crew-description-value: crew-description;
+    in-out property <bool> crew-is-open: false;
+    in-out property <string> crew-invite-policy: "everyone";
+    in-out property <string> new-channel-name: "";
+
+    // Tab state: 0 = Overview, 1 = Voice Channels, 2 = Members
+    in-out property <int> active-tab: 0;
+
+    in-out property <bool> show-saved: false;
+
+    callback close-requested();
+    callback save-crew(string, string);
+    callback avatar-upload-clicked();
+    callback add-channel(string);
+    callback rename-channel(string, string);
+    callback delete-channel(string);
+    callback delete-crew-requested();
+    callback promote-member(string);
+    callback demote-member(string);
+    callback kick-member(string);
+
+    // Backdrop
+    background: #000000AA;
+
+    TouchArea {
+        clicked => { close-requested(); }
+    }
+
+    // Modal container
+    Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: min(896px, parent.width - 64px);
+        height: 600px;
+        background: Theme.bg-app;
+        border-radius: 12px;
+        border-width: 1px;
+        border-color: Theme.graphic-light;
+        drop-shadow-blur: 64px;
+        drop-shadow-color: #000000E6;
+        drop-shadow-offset-y: 24px;
+
+        TouchArea {}
+
+        VerticalLayout {
+            // ─── Header ──────────────────────────────────────────
+            Rectangle {
+                height: 64px;
+                background: Theme.bg-app;
+
+                Rectangle {
+                    y: parent.height - 1px;
+                    height: 1px;
+                    background: Theme.graphic-light;
+                }
+
+                Image {
+                    source: @image-url("../icons/settings.svg");
+                    width: 20px;
+                    height: 20px;
+                    colorize: Theme.accent;
+                    x: 24px;
+                    y: (parent.height - self.height) / 2;
+                }
+
+                Text {
+                    text: "CREW SETTINGS";
+                    font-family: Theme.font-mono;
+                    font-size: 13px;
+                    font-weight: 500;
+                    letter-spacing: 2.4px;
+                    color: Theme.text-primary;
+                    x: 24px + 20px + 12px;
+                    y: (parent.height - self.preferred-height) / 2;
+                }
+
+                Rectangle {
+                    width: 32px;
+                    height: 32px;
+                    border-radius: 6px;
+                    x: parent.width - self.width - 16px;
+                    y: (parent.height - self.height) / 2;
+                    background: close-btn-ta.has-hover ? Theme.surface-hover : transparent;
+
+                    Image {
+                        source: @image-url("../icons/x.svg");
+                        width: 18px;
+                        height: 18px;
+                        colorize: close-btn-ta.has-hover ? Theme.text-primary : Theme.text-secondary;
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
+                    }
+
+                    close-btn-ta := TouchArea {
+                        clicked => { close-requested(); }
+                    }
+                }
+            }
+
+            // ─── Body (sidebar + content) ────────────────────────
+            HorizontalLayout {
+                vertical-stretch: 1;
+
+                // Sidebar
+                Rectangle {
+                    width: 220px;
+                    background: Theme.bg-app;
+
+                    Rectangle {
+                        x: parent.width - 1px;
+                        width: 1px;
+                        background: Theme.graphic-light;
+                    }
+
+                    VerticalLayout {
+                        padding-top: 24px;
+                        padding-left: 16px;
+                        padding-right: 16px;
+                        spacing: 0px;
+
+                        VerticalLayout {
+                            spacing: 6px;
+
+                            // Overview
+                            Rectangle {
+                                height: 40px;
+                                border-radius: 6px;
+                                background: active-tab == 0 ? Theme.surface : (overview-ta.has-hover ? Theme.surface-hover : transparent);
+                                border-width: active-tab == 0 ? 1px : 0px;
+                                border-color: active-tab == 0 ? Theme.graphic-light : transparent;
+
+                                Image {
+                                    source: @image-url("../icons/settings.svg");
+                                    width: 16px;
+                                    height: 16px;
+                                    colorize: active-tab == 0 ? Theme.text-primary : Theme.text-secondary;
+                                    x: 12px;
+                                    y: (parent.height - self.height) / 2;
+                                    opacity: 0.8;
+                                }
+
+                                Text {
+                                    text: "OVERVIEW";
+                                    font-family: Theme.font-mono;
+                                    font-size: 12px;
+                                    font-weight: 500;
+                                    letter-spacing: 0.6px;
+                                    color: active-tab == 0 ? Theme.text-primary : Theme.text-secondary;
+                                    x: 12px + 16px + 12px;
+                                    y: (parent.height - self.preferred-height) / 2;
+                                }
+
+                                overview-ta := TouchArea {
+                                    clicked => { active-tab = 0; }
+                                }
+                            }
+
+                            // Voice Channels
+                            Rectangle {
+                                height: 40px;
+                                border-radius: 6px;
+                                background: active-tab == 1 ? Theme.surface : (channels-ta.has-hover ? Theme.surface-hover : transparent);
+                                border-width: active-tab == 1 ? 1px : 0px;
+                                border-color: active-tab == 1 ? Theme.graphic-light : transparent;
+
+                                Image {
+                                    source: @image-url("../icons/mic.svg");
+                                    width: 16px;
+                                    height: 16px;
+                                    colorize: active-tab == 1 ? Theme.text-primary : Theme.text-secondary;
+                                    x: 12px;
+                                    y: (parent.height - self.height) / 2;
+                                    opacity: 0.8;
+                                }
+
+                                Text {
+                                    text: "CHANNELS";
+                                    font-family: Theme.font-mono;
+                                    font-size: 12px;
+                                    font-weight: 500;
+                                    letter-spacing: 0.6px;
+                                    color: active-tab == 1 ? Theme.text-primary : Theme.text-secondary;
+                                    x: 12px + 16px + 12px;
+                                    y: (parent.height - self.preferred-height) / 2;
+                                }
+
+                                channels-ta := TouchArea {
+                                    clicked => { active-tab = 1; }
+                                }
+                            }
+
+                            // Members
+                            Rectangle {
+                                height: 40px;
+                                border-radius: 6px;
+                                background: active-tab == 2 ? Theme.surface : (members-ta.has-hover ? Theme.surface-hover : transparent);
+                                border-width: active-tab == 2 ? 1px : 0px;
+                                border-color: active-tab == 2 ? Theme.graphic-light : transparent;
+
+                                Image {
+                                    source: @image-url("../icons/user.svg");
+                                    width: 16px;
+                                    height: 16px;
+                                    colorize: active-tab == 2 ? Theme.text-primary : Theme.text-secondary;
+                                    x: 12px;
+                                    y: (parent.height - self.height) / 2;
+                                    opacity: 0.8;
+                                }
+
+                                Text {
+                                    text: "MEMBERS";
+                                    font-family: Theme.font-mono;
+                                    font-size: 12px;
+                                    font-weight: 500;
+                                    letter-spacing: 0.6px;
+                                    color: active-tab == 2 ? Theme.text-primary : Theme.text-secondary;
+                                    x: 12px + 16px + 12px;
+                                    y: (parent.height - self.preferred-height) / 2;
+                                }
+
+                                members-ta := TouchArea {
+                                    clicked => { active-tab = 2; }
+                                }
+                            }
+                        }
+
+                        Rectangle {
+                            vertical-stretch: 1;
+                        }
+                    }
+                }
+
+                // Content area
+                Rectangle {
+                    horizontal-stretch: 1;
+                    background: Theme.surface;
+                    clip: true;
+
+                    Flickable {
+                        viewport-height: active-tab == 0 ? overview-tab.preferred-height : (active-tab == 1 ? channels-tab.preferred-height : members-tab.preferred-height);
+
+                        overview-tab := OverviewTab {
+                            visible: active-tab == 0;
+                            width: parent.width;
+                            crew-name-value <=> root.crew-name-value;
+                            crew-description-value <=> root.crew-description-value;
+                            crew-avatar: root.crew-avatar;
+                            crew-has-avatar: root.crew-has-avatar;
+                            crew-initials: root.crew-initials;
+                            is-open <=> root.crew-is-open;
+                            invite-policy <=> root.crew-invite-policy;
+                            save-requested => { root.save-crew(root.crew-name-value, root.crew-description-value); }
+                            avatar-upload-clicked => { root.avatar-upload-clicked(); }
+                        }
+
+                        channels-tab := VoiceChannelsTab {
+                            visible: active-tab == 1;
+                            width: parent.width;
+                            channels: root.channels;
+                            new-channel-name <=> root.new-channel-name;
+                            add-channel(name) => { root.add-channel(name); }
+                            rename-channel(id, name) => { root.rename-channel(id, name); }
+                            delete-channel(id) => { root.delete-channel(id); }
+                        }
+
+                        members-tab := MembersTab {
+                            visible: active-tab == 2;
+                            width: parent.width;
+                            members: root.members;
+                            my-role: root.my-role;
+                            promote-member(id) => { root.promote-member(id); }
+                            demote-member(id) => { root.demote-member(id); }
+                            kick-member(id) => { root.kick-member(id); }
+                        }
+                    }
+                }
+            }
+
+            // ─── Footer ──────────────────────────────────────────
+            Rectangle {
+                height: 64px;
+                background: Theme.bg-app;
+
+                Rectangle {
+                    y: 0;
+                    height: 1px;
+                    background: Theme.graphic-light;
+                }
+
+                // Left: Delete crew (superadmin only)
+                if my-role == 0: Rectangle {
+                    x: 32px;
+                    y: (parent.height - self.height) / 2;
+                    width: delete-text.preferred-width + 24px;
+                    height: 32px;
+                    border-radius: 4px;
+                    background: delete-ta.has-hover ? #ef444422 : transparent;
+
+                    delete-text := Text {
+                        text: "DELETE CREW";
+                        font-family: Theme.font-mono;
+                        font-size: 12px;
+                        letter-spacing: 1.2px;
+                        color: delete-ta.has-hover ? #ef4444 : Theme.text-tertiary;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+
+                    delete-ta := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { delete-crew-requested(); }
+                    }
+                }
+
+                // Saved indicator
+                Text {
+                    visible: root.show-saved;
+                    x: parent.width - 32px - 120px - 16px - self.preferred-width;
+                    y: (parent.height - self.preferred-height) / 2;
+                    text: "Saved ✓";
+                    font-family: Theme.font-mono;
+                    font-size: 12px;
+                    color: Theme.text-tertiary;
+                }
+
+                // Close button
+                Rectangle {
+                    x: parent.width - self.width - 32px;
+                    y: (parent.height - self.height) / 2;
+                    width: 120px;
+                    height: 40px;
+                    border-radius: 6px;
+                    background: close-footer-ta.has-hover ? Theme.surface-hover : transparent;
+                    border-width: 1px;
+                    border-color: Theme.graphic-light;
+
+                    Text {
+                        text: "Close";
+                        font-family: Theme.font-mono;
+                        font-size: 13px;
+                        font-weight: 500;
+                        letter-spacing: 0.5px;
+                        color: Theme.text-primary;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+
+                    close-footer-ta := TouchArea {
+                        clicked => { close-requested(); }
+                    }
+                }
+            }
+        }
+    }
+}

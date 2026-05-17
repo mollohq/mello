@@ -29,6 +29,7 @@ import { UpdateToast } from "panels/update_banner.slint";
 import { DiscoverPanel } from "panels/discover_panel.slint";
 import { JoinCrewModal } from "panels/join_crew_modal.slint";
 import { InviteShareModal } from "panels/invite_share_modal.slint";
+import { CrewSettingsModal } from "panels/crew_settings_modal.slint";
 
 
 export { CrewData, MemberData, ChatMessageData, AudioDeviceData, VoiceChannelData, VoiceChannelMember, CaptureSourceData, DiscoverCrewData, SearchUserData, FeedCardData, StreamCardData, Theme, VideoRect }
@@ -276,6 +277,30 @@ export component MainWindow inherits Window {
     callback invite-copy-link();
     callback invite-share-requested();
     callback hide-invite-card();
+
+    // --- Crew settings modal ---
+    in-out property <bool> crew-settings-open: false;
+    in-out property <string> crew-settings-name: "";
+    in-out property <string> crew-settings-description: "";
+    in property <image> crew-settings-avatar;
+    in property <bool> crew-settings-has-avatar: false;
+    in property <string> crew-settings-initials: "";
+    in property <int> crew-settings-my-role: 2;
+    in-out property <bool> crew-settings-show-saved: false;
+    in-out property <int> crew-settings-active-tab: 0;
+    in-out property <bool> crew-settings-is-open: false;
+    in-out property <string> crew-settings-invite-policy: "everyone";
+    callback crew-settings-save(/* name */ string, /* description */ string);
+    callback crew-settings-avatar-upload();
+    callback crew-settings-add-channel(/* name */ string);
+    callback crew-settings-rename-channel(/* id */ string, /* name */ string);
+    callback crew-settings-delete-channel(/* id */ string);
+    callback crew-settings-delete-crew();
+    callback crew-settings-promote-member(/* user_id */ string);
+    callback crew-settings-demote-member(/* user_id */ string);
+    callback crew-settings-kick-member(/* user_id */ string);
+    callback crew-context-add-channel();
+    callback crew-context-leave();
 
     // --- Crew feed ---
     in property <[FeedCardData]> feed-cards: [];
@@ -674,6 +699,7 @@ export component MainWindow inherits Window {
                 crews: root.crews;
                 active-crew-id: root.active-crew-id;
                 voice-channels: root.voice-channels;
+                can-manage: root.can-manage-channels;
                 crew-selected(id) => {
                     root.show-discover = false;
                     root.select-crew(id);
@@ -692,6 +718,16 @@ export component MainWindow inherits Window {
                 }
                 invite-clicked => {
                     root.invite-share-requested();
+                }
+                crew-edit-requested => {
+                    root.crew-settings-active-tab = 0;
+                    root.crew-settings-open = true;
+                }
+                crew-leave-requested => {
+                    root.crew-context-leave();
+                }
+                crew-add-channel-requested => {
+                    root.crew-context-add-channel();
                 }
             }
 
@@ -1387,6 +1423,52 @@ export component MainWindow inherits Window {
         setting-changed-hud-clip-toasts(v) => {
             root.settings-show-saved = true;
             root.setting-changed-hud-clip-toasts(v);
+        }
+    }
+
+    // ===================== CREW SETTINGS OVERLAY =====================
+    if crew-settings-open: CrewSettingsModal {
+        active-tab <=> root.crew-settings-active-tab;
+        crew-name: root.crew-settings-name;
+        crew-description: root.crew-settings-description;
+        crew-avatar: root.crew-settings-avatar;
+        crew-has-avatar: root.crew-settings-has-avatar;
+        crew-initials: root.crew-settings-initials;
+        my-role: root.crew-settings-my-role;
+        channels: root.voice-channels;
+        members: root.members;
+        crew-is-open <=> root.crew-settings-is-open;
+        crew-invite-policy <=> root.crew-settings-invite-policy;
+        show-saved <=> root.crew-settings-show-saved;
+        close-requested => {
+            root.crew-settings-open = false;
+        }
+        save-crew(name, description) => {
+            root.crew-settings-save(name, description);
+        }
+        avatar-upload-clicked => {
+            root.crew-settings-avatar-upload();
+        }
+        add-channel(name) => {
+            root.crew-settings-add-channel(name);
+        }
+        rename-channel(id, name) => {
+            root.crew-settings-rename-channel(id, name);
+        }
+        delete-channel(id) => {
+            root.crew-settings-delete-channel(id);
+        }
+        delete-crew-requested => {
+            root.crew-settings-delete-crew();
+        }
+        promote-member(id) => {
+            root.crew-settings-promote-member(id);
+        }
+        demote-member(id) => {
+            root.crew-settings-demote-member(id);
+        }
+        kick-member(id) => {
+            root.crew-settings-kick-member(id);
         }
     }
 

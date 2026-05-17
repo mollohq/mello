@@ -29,6 +29,7 @@ pub fn start(
         rt: ctx.rt.clone(),
         active_voice_channel: ctx.active_voice_channel.clone(),
         new_crew_avatar_b64: ctx.new_crew_avatar_b64.clone(),
+        crew_settings_avatar_b64: ctx.crew_settings_avatar_b64.clone(),
         invited_users: ctx.invited_users.clone(),
         discover_cursor: ctx.discover_cursor.clone(),
         discover_loading: ctx.discover_loading.clone(),
