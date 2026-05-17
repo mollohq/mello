@@ -21,5 +21,16 @@
     <string>mello.icns</string>
     <key>NSHighResolutionCapable</key>
     <true/>
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleURLName</key>
+            <string>app.m3llo.macos</string>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>mello</string>
+            </array>
+        </dict>
+    </array>
 </dict>
 </plist>

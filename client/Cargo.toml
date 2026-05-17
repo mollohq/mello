@@ -52,6 +52,7 @@ notify-rust = "4"
 auto-launch = "0.5"
 
 [target.'cfg(target_os = "windows")'.dependencies]
+winreg = "0.55"
 windows = { version = "0.62", features = [
     "Foundation_Numerics",
     "Win32_Foundation",

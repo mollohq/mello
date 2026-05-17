@@ -19,7 +19,50 @@ pub struct Updater {
 impl Updater {
     /// Must be called as the very first thing in main(), before any other init.
     pub fn run_lifecycle_hooks() {
-        VelopackApp::build().run();
+        let mut app = VelopackApp::build();
+
+        #[cfg(target_os = "windows")]
+        {
+            app = app
+                .on_after_install_fast_callback(|_version| {
+                    Self::register_url_protocol();
+                })
+                .on_after_update_fast_callback(|_version| {
+                    Self::register_url_protocol();
+                })
+                .on_before_uninstall_fast_callback(|_version| {
+                    Self::unregister_url_protocol();
+                });
+        }
+
+        app.run();
+    }
+
+    #[cfg(target_os = "windows")]
+    fn register_url_protocol() {
+        use winreg::enums::*;
+        use winreg::RegKey;
+
+        let exe = std::env::current_exe().unwrap_or_default();
+        let exe_str = exe.to_string_lossy();
+
+        let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+        if let Ok((key, _)) = hkcu.create_subkey("Software\\Classes\\mello") {
+            let _ = key.set_value("", &"URL:mello Protocol");
+            let _ = key.set_value("URL Protocol", &"");
+            if let Ok((cmd_key, _)) = key.create_subkey("shell\\open\\command") {
+                let _ = cmd_key.set_value("", &format!("\"{}\" \"%1\"", exe_str));
+            }
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    fn unregister_url_protocol() {
+        use winreg::enums::*;
+        use winreg::RegKey;
+
+        let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+        let _ = hkcu.delete_subkey_all("Software\\Classes\\mello");
     }
 
     pub fn new(event_tx: mpsc::Sender<UpdateEvent>) -> Result<Self, Box<dyn std::error::Error>> {
