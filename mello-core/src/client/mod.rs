@@ -664,6 +664,40 @@ impl Client {
                 self.handle_stop_watching().await;
             }
 
+            // --- Crew admin ---
+            Command::UpdateCrew {
+                crew_id,
+                name,
+                description,
+                avatar,
+                open,
+                invite_policy,
+            } => {
+                self.handle_update_crew(
+                    &crew_id,
+                    name.as_deref(),
+                    description.as_deref(),
+                    avatar.as_deref(),
+                    open,
+                    invite_policy.as_deref(),
+                )
+                .await;
+            }
+            Command::DeleteCrew { crew_id } => {
+                self.handle_delete_crew(&crew_id).await;
+            }
+            Command::KickCrewMember { crew_id, user_id } => {
+                self.handle_kick_crew_member(&crew_id, &user_id).await;
+            }
+            Command::ChangeCrewRole {
+                crew_id,
+                user_id,
+                new_role,
+            } => {
+                self.handle_change_crew_role(&crew_id, &user_id, new_role)
+                    .await;
+            }
+
             // --- Voice channels CRUD ---
             Command::CreateVoiceChannel { crew_id, name } => {
                 self.handle_create_voice_channel(&crew_id, &name).await;

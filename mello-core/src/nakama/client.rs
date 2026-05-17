@@ -1298,6 +1298,59 @@ impl NakamaClient {
         Ok(())
     }
 
+    pub async fn update_crew(
+        &self,
+        crew_id: &str,
+        name: Option<&str>,
+        description: Option<&str>,
+        avatar: Option<&str>,
+        open: Option<bool>,
+        invite_policy: Option<&str>,
+    ) -> Result<()> {
+        let mut payload = serde_json::json!({ "crew_id": crew_id });
+        if let Some(n) = name {
+            payload["name"] = serde_json::Value::String(n.to_string());
+        }
+        if let Some(d) = description {
+            payload["description"] = serde_json::Value::String(d.to_string());
+        }
+        if let Some(a) = avatar {
+            payload["avatar"] = serde_json::Value::String(a.to_string());
+        }
+        if let Some(o) = open {
+            payload["open"] = serde_json::Value::Bool(o);
+        }
+        if let Some(p) = invite_policy {
+            payload["invite_policy"] = serde_json::Value::String(p.to_string());
+        }
+        self.rpc("update_crew", &payload).await?;
+        Ok(())
+    }
+
+    pub async fn delete_crew(&self, crew_id: &str) -> Result<()> {
+        let payload = serde_json::json!({ "crew_id": crew_id });
+        self.rpc("delete_crew", &payload).await?;
+        Ok(())
+    }
+
+    pub async fn kick_crew_member(&self, crew_id: &str, user_id: &str) -> Result<()> {
+        let payload = serde_json::json!({ "crew_id": crew_id, "user_id": user_id });
+        self.rpc("kick_crew_member", &payload).await?;
+        Ok(())
+    }
+
+    pub async fn change_crew_role(
+        &self,
+        crew_id: &str,
+        user_id: &str,
+        new_role: i32,
+    ) -> Result<()> {
+        let payload =
+            serde_json::json!({ "crew_id": crew_id, "user_id": user_id, "new_role": new_role });
+        self.rpc("change_crew_role", &payload).await?;
+        Ok(())
+    }
+
     pub async fn channel_list(
         &self,
         crew_id: &str,

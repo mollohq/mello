@@ -38,7 +38,15 @@ pub fn handle_event(ctx: &AppContext, event: Event) {
         | Event::CrewInviteResolved { .. }
         | Event::CrewInviteResolveFailed { .. }
         | Event::InviteCodeCreated { .. }
-        | Event::InviteCodeCreateFailed { .. } => crew::handle(ctx, event),
+        | Event::InviteCodeCreateFailed { .. }
+        | Event::CrewUpdated { .. }
+        | Event::CrewUpdateFailed { .. }
+        | Event::CrewDeleted { .. }
+        | Event::CrewDeleteFailed { .. }
+        | Event::CrewRoleChanged { .. }
+        | Event::CrewRoleChangeFailed { .. }
+        | Event::CrewMemberKicked { .. }
+        | Event::CrewMemberKickFailed { .. } => crew::handle(ctx, event),
 
         // Voice
         Event::VoiceStateChanged { .. }

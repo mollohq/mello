@@ -432,4 +432,101 @@ impl super::Client {
             }
         }
     }
+
+    pub(super) async fn handle_update_crew(
+        &self,
+        crew_id: &str,
+        name: Option<&str>,
+        description: Option<&str>,
+        avatar: Option<&str>,
+        open: Option<bool>,
+        invite_policy: Option<&str>,
+    ) {
+        match self
+            .nakama
+            .update_crew(crew_id, name, description, avatar, open, invite_policy)
+            .await
+        {
+            Ok(()) => {
+                log::info!("[crew] updated crew {}", crew_id);
+                let _ = self.event_tx.send(Event::CrewUpdated {
+                    crew_id: crew_id.to_string(),
+                });
+            }
+            Err(e) => {
+                log::error!("[crew] failed to update crew {}: {}", crew_id, e);
+                let _ = self.event_tx.send(Event::CrewUpdateFailed {
+                    reason: e.to_string(),
+                });
+            }
+        }
+    }
+
+    pub(super) async fn handle_kick_crew_member(&self, crew_id: &str, user_id: &str) {
+        match self.nakama.kick_crew_member(crew_id, user_id).await {
+            Ok(()) => {
+                log::info!("[crew] kicked {} from {}", user_id, crew_id);
+                let _ = self.event_tx.send(Event::CrewMemberKicked {
+                    crew_id: crew_id.to_string(),
+                    user_id: user_id.to_string(),
+                });
+            }
+            Err(e) => {
+                log::error!("[crew] failed to kick member: {}", e);
+                let _ = self.event_tx.send(Event::CrewMemberKickFailed {
+                    reason: e.to_string(),
+                });
+            }
+        }
+    }
+
+    pub(super) async fn handle_change_crew_role(
+        &self,
+        crew_id: &str,
+        user_id: &str,
+        new_role: i32,
+    ) {
+        match self
+            .nakama
+            .change_crew_role(crew_id, user_id, new_role)
+            .await
+        {
+            Ok(()) => {
+                log::info!(
+                    "[crew] changed role of {} to {} in {}",
+                    user_id,
+                    new_role,
+                    crew_id
+                );
+                let _ = self.event_tx.send(Event::CrewRoleChanged {
+                    crew_id: crew_id.to_string(),
+                    user_id: user_id.to_string(),
+                    new_role,
+                });
+            }
+            Err(e) => {
+                log::error!("[crew] failed to change role: {}", e);
+                let _ = self.event_tx.send(Event::CrewRoleChangeFailed {
+                    reason: e.to_string(),
+                });
+            }
+        }
+    }
+
+    pub(super) async fn handle_delete_crew(&mut self, crew_id: &str) {
+        match self.nakama.delete_crew(crew_id).await {
+            Ok(()) => {
+                log::info!("[crew] deleted crew {}", crew_id);
+                let _ = self.event_tx.send(Event::CrewDeleted {
+                    crew_id: crew_id.to_string(),
+                });
+            }
+            Err(e) => {
+                log::error!("[crew] failed to delete crew {}: {}", crew_id, e);
+                let _ = self.event_tx.send(Event::CrewDeleteFailed {
+                    reason: e.to_string(),
+                });
+            }
+        }
+    }
 }

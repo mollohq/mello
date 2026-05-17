@@ -153,6 +153,18 @@ func InitModule(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runti
 	if err := initializer.RegisterRpc("get_crew_avatar", GetCrewAvatarRPC); err != nil {
 		return err
 	}
+	if err := initializer.RegisterRpc("update_crew", UpdateCrewRPC); err != nil {
+		return err
+	}
+	if err := initializer.RegisterRpc("delete_crew", DeleteCrewRPC); err != nil {
+		return err
+	}
+	if err := initializer.RegisterRpc("change_crew_role", ChangeCrewRoleRPC); err != nil {
+		return err
+	}
+	if err := initializer.RegisterRpc("kick_crew_member", KickCrewMemberRPC); err != nil {
+		return err
+	}
 
 	// -----------------------------------------------------------------------
 	// RPCs — voice
