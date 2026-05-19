@@ -64,6 +64,13 @@ export struct FeedCardData {
     mvp2-name: string, mvp2-initials: string, mvp2-stat: string,
     is-new: bool,
     was-seen: bool,
+    snapshot-loading: bool,
+    snapshot-poster: image,
+    snapshot-poster-ready: bool,
+    snapshot-error: bool,
+    snapshot-playback-frame: image,
+    snapshot-playback-index: int,
+    snapshot-playback-revision: int,
 }
 
 export struct StreamCardData {

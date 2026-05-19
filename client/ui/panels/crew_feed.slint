@@ -1369,10 +1369,7 @@ component FeedSlot inherits Rectangle {
     callback invite-clicked();
     callback hide-invite-clicked();
     callback session-seen(string);
-    callback request-session-frame(/* session_id */ string, /* index */ int);
-    in property <string> session-frame-id: "";
-    in property <image> session-pushed-frame;
-    in property <bool> session-frame-ready: false;
+    callback session-preview-request-frame(/* session_id */ string, /* index */ int);
 
     // Real cards
     if card.card-type == "clip" && card.is-hero: HeroClipCard {
@@ -1413,11 +1410,15 @@ component FeedSlot inherits Rectangle {
         time-since-ended: card.timestamp;
         is-hero: card.is-hero;
         was-seen: card.was-seen;
-        session-frame-id: root.session-frame-id;
-        session-pushed-frame: root.session-pushed-frame;
-        session-frame-ready: root.session-frame-ready;
+        snapshot-loading: card.snapshot-loading;
+        snapshot-poster: card.snapshot-poster;
+        snapshot-poster-ready: card.snapshot-poster-ready;
+        snapshot-error: card.snapshot-error;
+        snapshot-playback-frame: card.snapshot-playback-frame;
+        snapshot-playback-index: card.snapshot-playback-index;
+        snapshot-playback-revision: card.snapshot-playback-revision;
         session-seen(id) => { root.session-seen(id); }
-        request-session-frame(sid, idx) => { root.request-session-frame(sid, idx); }
+        session-preview-request-frame(sid, idx) => { root.session-preview-request-frame(sid, idx); }
     }
     if card.card-type == "session": SessionCard {
         width: parent.width; height: parent.height; card: root.card;
@@ -1465,6 +1466,7 @@ export component CrewFeed inherits Rectangle {
     in property <[FeedCardData]> cards: [];
     in property <[StreamCardData]> stream-cards: [];
     in property <bool> is-cold-start: true;
+    in property <bool> feed-has-more: false;
     in property <string> crew-name: "";
     in property <int> clip-count: 0;
     in property <bool> is-hosting: false;
@@ -1490,10 +1492,8 @@ export component CrewFeed inherits Rectangle {
     callback stop-stream-clicked();
     callback stop-watching-clicked();
     callback session-seen(string);
-    callback request-session-frame(/* session_id */ string, /* index */ int);
-    in property <string> session-frame-id: "";
-    in property <image> session-pushed-frame;
-    in property <bool> session-frame-ready: false;
+    callback session-preview-request-frame(/* session_id */ string, /* index */ int);
+    callback feed-show-more-clicked();
 
     property <int> feed-start-index: stream-cards.length == 1 && cards.length > 0 ? 1 : 0;
 
@@ -1606,10 +1606,7 @@ export component CrewFeed inherits Rectangle {
                         invite-clicked => { root.invite-clicked(); }
                         hide-invite-clicked => { root.hide-invite-clicked(); }
                         session-seen(id) => { root.session-seen(id); }
-                        request-session-frame(sid, idx) => { root.request-session-frame(sid, idx); }
-                        session-frame-id: root.session-frame-id;
-                        session-pushed-frame: root.session-pushed-frame;
-                        session-frame-ready: root.session-frame-ready;
+                        session-preview-request-frame(sid, idx) => { root.session-preview-request-frame(sid, idx); }
                     }
                 }
 
@@ -1676,10 +1673,7 @@ export component CrewFeed inherits Rectangle {
                         invite-clicked => { root.invite-clicked(); }
                         hide-invite-clicked => { root.hide-invite-clicked(); }
                         session-seen(id) => { root.session-seen(id); }
-                        request-session-frame(sid, idx) => { root.request-session-frame(sid, idx); }
-                        session-frame-id: root.session-frame-id;
-                        session-pushed-frame: root.session-pushed-frame;
-                        session-frame-ready: root.session-frame-ready;
+                        session-preview-request-frame(sid, idx) => { root.session-preview-request-frame(sid, idx); }
                     }
 
                     if cards.length > root.feed-start-index + 1: FeedSlot {
@@ -1696,10 +1690,7 @@ export component CrewFeed inherits Rectangle {
                         invite-clicked => { root.invite-clicked(); }
                         hide-invite-clicked => { root.hide-invite-clicked(); }
                         session-seen(id) => { root.session-seen(id); }
-                        request-session-frame(sid, idx) => { root.request-session-frame(sid, idx); }
-                        session-frame-id: root.session-frame-id;
-                        session-pushed-frame: root.session-pushed-frame;
-                        session-frame-ready: root.session-frame-ready;
+                        session-preview-request-frame(sid, idx) => { root.session-preview-request-frame(sid, idx); }
                     }
                 }
 
@@ -1724,10 +1715,7 @@ export component CrewFeed inherits Rectangle {
                         invite-clicked => { root.invite-clicked(); }
                         hide-invite-clicked => { root.hide-invite-clicked(); }
                         session-seen(id) => { root.session-seen(id); }
-                        request-session-frame(sid, idx) => { root.request-session-frame(sid, idx); }
-                        session-frame-id: root.session-frame-id;
-                        session-pushed-frame: root.session-pushed-frame;
-                        session-frame-ready: root.session-frame-ready;
+                        session-preview-request-frame(sid, idx) => { root.session-preview-request-frame(sid, idx); }
                     }
                 }
 
@@ -1750,10 +1738,7 @@ export component CrewFeed inherits Rectangle {
                         invite-clicked => { root.invite-clicked(); }
                         hide-invite-clicked => { root.hide-invite-clicked(); }
                         session-seen(id) => { root.session-seen(id); }
-                        request-session-frame(sid, idx) => { root.request-session-frame(sid, idx); }
-                        session-frame-id: root.session-frame-id;
-                        session-pushed-frame: root.session-pushed-frame;
-                        session-frame-ready: root.session-frame-ready;
+                        session-preview-request-frame(sid, idx) => { root.session-preview-request-frame(sid, idx); }
                     }
 
                     if cards.length > root.feed-start-index + 6: FeedSlot {
@@ -1770,10 +1755,7 @@ export component CrewFeed inherits Rectangle {
                         invite-clicked => { root.invite-clicked(); }
                         hide-invite-clicked => { root.hide-invite-clicked(); }
                         session-seen(id) => { root.session-seen(id); }
-                        request-session-frame(sid, idx) => { root.request-session-frame(sid, idx); }
-                        session-frame-id: root.session-frame-id;
-                        session-pushed-frame: root.session-pushed-frame;
-                        session-frame-ready: root.session-frame-ready;
+                        session-preview-request-frame(sid, idx) => { root.session-preview-request-frame(sid, idx); }
                     }
                 }
 
@@ -1798,10 +1780,35 @@ export component CrewFeed inherits Rectangle {
                         invite-clicked => { root.invite-clicked(); }
                         hide-invite-clicked => { root.hide-invite-clicked(); }
                         session-seen(id) => { root.session-seen(id); }
-                        request-session-frame(sid, idx) => { root.request-session-frame(sid, idx); }
-                        session-frame-id: root.session-frame-id;
-                        session-pushed-frame: root.session-pushed-frame;
-                        session-frame-ready: root.session-frame-ready;
+                        session-preview-request-frame(sid, idx) => { root.session-preview-request-frame(sid, idx); }
+                    }
+                }
+
+                if root.feed-has-more && !root.is-cold-start: HorizontalLayout {
+                    height: 44px;
+                    alignment: center;
+
+                    Rectangle {
+                        width: show-more-label.preferred-width + 32px;
+                        height: 36px;
+                        border-radius: 8px;
+                        border-width: 1px;
+                        border-color: show-more-touch.has-hover ? Theme.graphic-med : Theme.card-border;
+                        background: show-more-touch.has-hover ? Theme.card-bg-hover : Theme.card-bg;
+
+                        show-more-label := Text {
+                            text: "Show more";
+                            font-size: 13px;
+                            font-weight: 500;
+                            color: Theme.text-primary;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+
+                        show-more-touch := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => { root.feed-show-more-clicked(); }
+                        }
                     }
                 }
 

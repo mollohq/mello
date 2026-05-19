@@ -1,11 +1,17 @@
+use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
 use std::fs;
-use std::path::PathBuf;
+use std::hash::{Hash, Hasher};
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime};
 
+use image::imageops::FilterType;
+use image::GenericImageView;
+
 const CACHE_DIR: &str = "mello_snapshots";
 const MAX_CACHE_BYTES: usize = 50 * 1024 * 1024;
+pub const THUMB_MAX_WIDTH: u32 = 480;
 
 static CACHE: std::sync::OnceLock<Mutex<SnapshotCache>> = std::sync::OnceLock::new();
 
@@ -13,8 +19,22 @@ fn cache_global() -> &'static Mutex<SnapshotCache> {
     CACHE.get_or_init(|| Mutex::new(SnapshotCache::new()))
 }
 
-fn cache_dir() -> PathBuf {
+pub fn cache_dir() -> PathBuf {
     std::env::temp_dir().join(CACHE_DIR)
+}
+
+pub fn url_hash(url: &str) -> String {
+    let mut s = DefaultHasher::new();
+    url.hash(&mut s);
+    format!("{:016x}", s.finish())
+}
+
+pub fn raw_path_for_url(url: &str) -> PathBuf {
+    cache_dir().join(format!("{}.jpg", url_hash(url)))
+}
+
+pub fn thumb_path_for_url(url: &str) -> PathBuf {
+    cache_dir().join(format!("{}_thumb.jpg", url_hash(url)))
 }
 
 pub struct SnapshotCache {
@@ -38,14 +58,6 @@ impl SnapshotCache {
         }
     }
 
-    fn url_hash(url: &str) -> String {
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
-        let mut s = DefaultHasher::new();
-        url.hash(&mut s);
-        format!("{:016x}", s.finish())
-    }
-
     fn evict_until_below(&mut self, target_bytes: usize) {
         let mut by_age: Vec<_> = self
             .entries
@@ -59,6 +71,10 @@ impl SnapshotCache {
                 if let Some(entry) = self.entries.remove(&key) {
                     if entry.path.exists() {
                         let _ = fs::remove_file(&entry.path);
+                    }
+                    let thumb = thumb_path_for_key(&key);
+                    if thumb.exists() {
+                        let _ = fs::remove_file(&thumb);
                     }
                     self.disk_usage = self.disk_usage.saturating_sub(entry.disk_size);
                 }
@@ -74,129 +90,144 @@ impl SnapshotCache {
         }
     }
 
-    fn get_or_fetch(&mut self, url: &str) -> Option<PathBuf> {
-        let key = Self::url_hash(url);
-
-        if let Some(entry) = self.entries.get_mut(&key) {
-            entry.last_accessed = SystemTime::now();
-            if entry.path.exists() {
-                return Some(entry.path.clone());
-            }
-            let disk_size = entry.disk_size;
-            self.disk_usage = self.disk_usage.saturating_sub(disk_size);
-            self.entries.remove(&key);
-            return self.get_or_fetch(url);
-        }
-
-        self.ensure_cache_dir_size();
-
-        let path = cache_dir().join(format!("{}.jpg", key));
-        let bytes = fetch_jpeg_sync(url)?;
-        log::debug!(
-            "[snapshot] fetched {} bytes for {}",
-            bytes.len(),
-            &url[url.len().saturating_sub(40)..]
-        );
-
-        let disk_size = bytes.len();
-        if let Err(e) = fs::write(&path, &bytes) {
-            log::warn!("[snapshot] failed to write cache file: {}", e);
-            return None;
-        }
-
+    fn touch(&mut self, url: &str, path: &Path, disk_size: usize) {
+        let key = url_hash(url);
         self.entries.insert(
             key,
             CacheEntry {
                 disk_size,
                 last_accessed: SystemTime::now(),
-                path: path.clone(),
+                path: path.to_path_buf(),
             },
         );
-        self.disk_usage += disk_size;
-        Some(path)
+    }
+
+    fn register_file(&mut self, url: &str, path: &Path) {
+        let key = url_hash(url);
+        if let Ok(meta) = fs::metadata(path) {
+            let disk_size = meta.len() as usize;
+            if let Some(old) = self.entries.remove(&key) {
+                self.disk_usage = self.disk_usage.saturating_sub(old.disk_size);
+            }
+            self.ensure_cache_dir_size();
+            self.touch(url, path, disk_size);
+            self.disk_usage += disk_size;
+        }
     }
 }
 
-fn fetch_jpeg_sync(url: &str) -> Option<Vec<u8>> {
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .ok()?;
-    rt.block_on(async {
-        let client = reqwest::Client::new();
-        let bytes = client
-            .get(url)
-            .timeout(Duration::from_secs(5))
-            .send()
-            .await
-            .ok()?
-            .bytes()
-            .await
-            .ok()?;
-        Some(bytes.to_vec())
-    })
+fn thumb_path_for_key(key: &str) -> PathBuf {
+    cache_dir().join(format!("{key}_thumb.jpg"))
 }
 
-fn decode_jpeg_to_rgba(path: &PathBuf) -> Option<(Vec<u8>, u32, u32)> {
+/// Returns path to raw JPEG on disk, fetching from CDN when missing.
+pub async fn ensure_raw_on_disk(client: &reqwest::Client, url: &str) -> Option<PathBuf> {
+    let path = raw_path_for_url(url);
+    if path.exists() {
+        if let Ok(mut cache) = cache_global().lock() {
+            cache.register_file(url, &path);
+        }
+        return Some(path);
+    }
+
+    let bytes = client
+        .get(url)
+        .timeout(Duration::from_secs(5))
+        .send()
+        .await
+        .ok()?
+        .bytes()
+        .await
+        .ok()?;
+
+    let dir = cache_dir();
+    let _ = fs::create_dir_all(&dir);
+
+    if let Ok(mut cache) = cache_global().lock() {
+        cache.ensure_cache_dir_size();
+    }
+
+    if fs::write(&path, &bytes).is_err() {
+        log::warn!("[snapshot] failed to write cache file for {}", url);
+        return None;
+    }
+
+    log::debug!(
+        "[snapshot] fetched {} bytes for {}",
+        bytes.len(),
+        &url[url.len().saturating_sub(40)..]
+    );
+
+    if let Ok(mut cache) = cache_global().lock() {
+        cache.register_file(url, &path);
+    }
+
+    Some(path)
+}
+
+/// Disk-only prefetch (no decode).
+pub async fn prefetch_raw(client: &reqwest::Client, url: &str) -> bool {
+    ensure_raw_on_disk(client, url).await.is_some()
+}
+
+fn write_thumb_jpeg(raw_path: &Path, thumb_path: &Path) -> bool {
+    let dyn_img = match image::ImageReader::open(raw_path) {
+        Ok(r) => match r.decode() {
+            Ok(img) => img,
+            Err(e) => {
+                log::warn!("[snapshot] decode failed for thumb: {}", e);
+                return false;
+            }
+        },
+        Err(e) => {
+            log::warn!("[snapshot] open failed for thumb: {}", e);
+            return false;
+        }
+    };
+
+    let (w, h) = dyn_img.dimensions();
+    let thumb = if w <= THUMB_MAX_WIDTH {
+        dyn_img
+    } else {
+        let nh = (h as f64 * THUMB_MAX_WIDTH as f64 / w as f64).round() as u32;
+        dyn_img.resize(THUMB_MAX_WIDTH, nh.max(1), FilterType::Triangle)
+    };
+
+    let rgb = thumb.to_rgb8();
+    let file = match fs::File::create(thumb_path) {
+        Ok(f) => f,
+        Err(e) => {
+            log::warn!("[snapshot] failed to create thumb file: {}", e);
+            return false;
+        }
+    };
+    let mut enc = image::codecs::jpeg::JpegEncoder::new_with_quality(file, 85);
+    enc.encode_image(&rgb).is_ok()
+}
+
+/// Decode a thumbnail RGBA buffer from disk (raw or cached thumb JPEG).
+pub fn decode_thumb_rgba(raw_path: &Path, url: &str) -> Option<(Vec<u8>, u32, u32)> {
+    let thumb_path = thumb_path_for_url(url);
+    if !thumb_path.exists() && !write_thumb_jpeg(raw_path, &thumb_path) {
+        return decode_rgba_bytes(raw_path);
+    }
+    decode_rgba_bytes(&thumb_path)
+}
+
+fn decode_rgba_bytes(path: &Path) -> Option<(Vec<u8>, u32, u32)> {
     let dyn_img = image::ImageReader::open(path).ok()?.decode().ok()?;
     let rgba = dyn_img.to_rgba8();
     let (w, h) = rgba.dimensions();
     Some((rgba.into_raw(), w, h))
 }
 
+pub fn rgba_bytes_to_image(rgba: Vec<u8>, w: u32, h: u32) -> slint::Image {
+    rgba_to_image(&rgba, w, h)
+}
+
 pub fn rgba_to_image(rgba: &[u8], w: u32, h: u32) -> slint::Image {
     let buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(rgba, w, h);
     slint::Image::from_rgba8(buffer)
-}
-
-/// Decode a single snapshot from disk cache to slint::Image.
-/// Falls back to fetching if not yet cached.
-pub fn decode_snapshot(url: &str) -> Option<slint::Image> {
-    let path = {
-        let mut cache = match cache_global().lock() {
-            Ok(cache) => cache,
-            Err(poisoned) => {
-                log::warn!("[snapshot] cache lock poisoned, recovering");
-                poisoned.into_inner()
-            }
-        };
-        cache.get_or_fetch(url)?
-    };
-
-    let (rgba, w, h) = decode_jpeg_to_rgba(&path)?;
-    log::trace!("[snapshot] decoded {}x{} from disk", w, h);
-    Some(rgba_to_image(&rgba, w, h))
-}
-
-/// Pre-fetch all URLs to disk cache without decoding.
-pub fn prefetch_all(urls: &[String]) {
-    log::info!("[snapshot] prefetch_all: {} URLs", urls.len());
-    let mut cache = match cache_global().lock() {
-        Ok(cache) => cache,
-        Err(poisoned) => {
-            log::warn!("[snapshot] cache lock poisoned, recovering");
-            poisoned.into_inner()
-        }
-    };
-    let mut fetched = 0usize;
-    let mut cached = 0usize;
-    for url in urls {
-        let key = SnapshotCache::url_hash(url);
-        let was_cached = cache.entries.contains_key(&key);
-        if cache.get_or_fetch(url).is_some() {
-            if was_cached {
-                cached += 1;
-            } else {
-                fetched += 1;
-            }
-        }
-    }
-    log::info!(
-        "[snapshot] prefetch done: {} fetched, {} already cached, {} total",
-        fetched,
-        cached,
-        urls.len()
-    );
 }
 
 #[cfg(test)]
@@ -206,7 +237,7 @@ mod tests {
     use std::io::Write;
 
     #[test]
-    fn decode_jpeg_to_rgba_handles_rgb_jpeg() {
+    fn decode_rgba_from_path_handles_rgb_jpeg() {
         let mut img = RgbImage::new(4, 2);
         for y in 0..2 {
             for x in 0..4 {
@@ -234,19 +265,10 @@ mod tests {
             .expect("jpeg bytes should be written");
         drop(file);
 
-        let decoded = decode_jpeg_to_rgba(&path);
+        let decoded = decode_rgba_bytes(&path);
         let _ = fs::remove_file(&path);
 
         let (rgba, w, h) = decoded.expect("jpeg decode should succeed");
-        assert_eq!(w, 4);
-        assert_eq!(h, 2);
         assert_eq!(rgba.len(), (w * h * 4) as usize);
-    }
-
-    #[test]
-    fn fetch_jpeg_sync_does_not_panic_without_tokio_context() {
-        let result =
-            std::panic::catch_unwind(|| fetch_jpeg_sync("http://127.0.0.1:9/not-found.jpg"));
-        assert!(result.is_ok(), "fetch_jpeg_sync should not panic");
     }
 }

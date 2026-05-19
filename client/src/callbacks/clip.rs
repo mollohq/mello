@@ -1,11 +1,15 @@
 use mello_core::Command;
-use slint::{ComponentHandle, Model};
+use slint::ComponentHandle;
 
 use crate::app_context::AppContext;
-use crate::snapshot_cache;
+use crate::snapshot_loader;
 use crate::MainWindow;
 
 pub fn wire(ctx: &AppContext) {
+    ctx.app.on_feed_show_more_clicked(|| {
+        log::debug!("UI: feed show more (premium pagination — not implemented)");
+    });
+
     let settings = ctx.settings.clone();
     ctx.app.on_session_seen(move |session_id| {
         let id = session_id.to_string();
@@ -19,55 +23,25 @@ pub fn wire(ctx: &AppContext) {
         }
     });
 
+    let loader = ctx.snapshot_loader.clone();
     let app_weak: slint::Weak<MainWindow> = ctx.app.as_weak();
-    ctx.app.on_request_session_frame(move |session_id, index| {
-        let sid = session_id.to_string();
-        let idx = index as usize;
-        log::debug!("[snapshot] request frame sid={} idx={}", sid, idx);
+    ctx.app
+        .on_session_preview_request_frame(move |session_id, index| {
+            let sid = session_id.to_string();
+            let idx = index;
+            log::debug!("[snapshot] playback frame request sid={} idx={}", sid, idx);
 
-        if let Some(app) = app_weak.upgrade() {
-            let cards = app.get_feed_cards();
-            let card_count = cards.row_count();
-            let url: Option<String> = (0..card_count)
-                .filter_map(|i| cards.row_data(i))
-                .find(|c| c.id == sid.as_str())
-                .and_then(|c| {
-                    let urls = c.snapshot_urls;
-                    let url_count = urls.row_count();
-                    if idx < url_count {
-                        urls.row_data(idx)
-                            .map(|u: slint::SharedString| u.to_string())
-                    } else {
-                        log::warn!("[snapshot] idx {} out of range (total={})", idx, url_count);
-                        None
-                    }
-                });
-
-            if url.is_none() {
-                log::warn!(
-                    "[snapshot] no URL found for sid={} idx={} (cards={})",
-                    sid,
-                    idx,
-                    card_count
-                );
+            if let Some(app) = app_weak.upgrade() {
+                let cards = app.get_feed_cards();
+                let Some(url) = snapshot_loader::snapshot_url_for_card(&cards, &sid, idx as usize)
+                else {
+                    log::warn!("[snapshot] no URL for sid={} idx={}", sid, idx);
+                    return;
+                };
+                let gen = loader.current_generation();
+                loader.request_playback_frame(app_weak.clone(), sid, url, idx, gen);
             }
-
-            if let Some(ref url) = url {
-                match snapshot_cache::decode_snapshot(url) {
-                    Some(img) => {
-                        app.set_session_frame_ready(false);
-                        app.set_session_frame_id(sid.clone().into());
-                        app.set_session_pushed_frame(img);
-                        app.set_session_frame_ready(true);
-                        log::debug!("[snapshot] pushed frame sid={} idx={}", sid, idx);
-                    }
-                    None => {
-                        log::warn!("[snapshot] decode failed for sid={} idx={}", sid, idx);
-                    }
-                }
-            }
-        }
-    });
+        });
 
     let cmd = ctx.cmd_tx.clone();
     ctx.app.on_clip_captured(move || {

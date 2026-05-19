@@ -305,14 +305,12 @@ export component MainWindow inherits Window {
     // --- Crew feed ---
     in property <[FeedCardData]> feed-cards: [];
     in property <bool> feed-cold-start: true;
+    in property <bool> feed-has-more: false;
     in property <int> feed-clip-count: 0;
+    callback feed-show-more-clicked();
     callback session-seen(/* session_id */ string);
 
-    // --- Session snapshot sliding window ---
-    in property <string> session-frame-id: "";
-    in property <image> session-pushed-frame;
-    in property <bool> session-frame-ready: false;
-    callback request-session-frame(/* session_id */ string, /* index */ int);
+    callback session-preview-request-frame(/* session_id */ string, /* index */ int);
 
     // --- Clip playback state ---
     in property <string> clip-playing-path: "";
@@ -780,7 +778,11 @@ export component MainWindow inherits Window {
                             stream-frame: root.stream-frame;
                             stream-ui-render-fps: root.dbg-stream-ui-render-fps;
                             is-cold-start: root.feed-cold-start;
+                            feed-has-more: root.feed-has-more;
                             clip-count: root.feed-clip-count;
+                            feed-show-more-clicked => {
+                                root.feed-show-more-clicked();
+                            }
                             clip-playing-path: root.clip-playing-path;
                             clip-progress: root.clip-progress;
                             clip-paused: root.clip-paused;
@@ -821,12 +823,9 @@ export component MainWindow inherits Window {
                             session-seen(id) => {
                                 root.session-seen(id);
                             }
-                            request-session-frame(sid, idx) => {
-                                root.request-session-frame(sid, idx);
+                            session-preview-request-frame(sid, idx) => {
+                                root.session-preview-request-frame(sid, idx);
                             }
-                            session-frame-id: root.session-frame-id;
-                            session-pushed-frame: root.session-pushed-frame;
-                            session-frame-ready: root.session-frame-ready;
                         }
                     }
 

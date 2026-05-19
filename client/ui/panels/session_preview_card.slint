@@ -38,15 +38,17 @@ export component SessionPreviewCard inherits Rectangle {
     in property <bool> is-hero;
     in property <bool> was-seen: false;
 
-    // Sliding window: Rust pushes decoded frames via these global properties
-    in property <string> session-frame-id: "";
-    in property <image> session-pushed-frame;
-    in property <bool> session-frame-ready: false;
+    in property <bool> snapshot-loading: false;
+    in property <image> snapshot-poster;
+    in property <bool> snapshot-poster-ready: false;
+    in property <bool> snapshot-error: false;
+    in property <image> snapshot-playback-frame;
+    in property <int> snapshot-playback-index: 0;
+    in property <int> snapshot-playback-revision: 0;
 
     callback session-seen(/* session_id */ string);
-    callback request-session-frame(/* session_id */ string, /* index */ int);
+    callback session-preview-request-frame(/* session_id */ string, /* index */ int);
 
-    // Playback state
     property <int> frame-index: 0;
     property <bool> fading: false;
     property <bool> playing: false;
@@ -54,30 +56,27 @@ export component SessionPreviewCard inherits Rectangle {
     property <bool> finished: false;
     property <int> frames-shown: 0;
     property <bool> seen-fired: false;
-    property <bool> started: false;
+    property <int> last-playback-revision: 0;
 
-    // Snapshot helpers
     property <int> image-count: snapshot-urls.length;
     property <bool> has-urls: image-count > 0;
-    property <bool> show-snapshots: has-urls;
+    property <bool> show-placeholder: !has-urls || snapshot-error;
+    property <bool> show-loading: has-urls && snapshot-loading && !snapshot-poster-ready && !snapshot-error;
+    property <bool> show-thumbnail: has-urls && !snapshot-error && !show-loading;
     property <bool> can-cycle: image-count > 1;
 
-    // Duration formatting
     property <int> duration-hours: duration-min / 60;
     property <int> duration-remaining-mins: Math.mod(duration-min, 60);
     property <string> duration-text: duration-hours > 0
         ? duration-hours + "h " + duration-remaining-mins + "m"
         : duration-min + "m";
 
-    // 70% threshold for "seen"
     property <int> seen-threshold: image-count * 7 / 10;
 
-    // Decoded frame slots (only 2 in memory at a time)
     property <image> current-image;
     property <image> next-image;
     property <bool> has-current: false;
 
-    // Frame indices
     property <int> next-index: image-count > 0 ? Math.mod((frame-index + 1), image-count) : 0;
 
     background: card-hover.has-hover ? Theme.card-bg-hover : Theme.card-bg;
@@ -86,14 +85,56 @@ export component SessionPreviewCard inherits Rectangle {
     border-color: card-hover.has-hover ? Theme.graphic-med : Theme.card-border;
     clip: true;
 
+    changed snapshot-poster-ready => {
+        if snapshot-poster-ready && !playing {
+            root.current-image = snapshot-poster;
+            root.has-current = true;
+        }
+    }
+
+    changed snapshot-playback-revision => {
+        if playing && snapshot-playback-revision != last-playback-revision {
+            last-playback-revision = snapshot-playback-revision;
+            if snapshot-playback-index == next-index {
+                next-image = snapshot-playback-frame;
+                fading = true;
+            }
+        }
+    }
+
     VerticalLayout {
-        // ── Thumbnail area ──
         Rectangle {
             vertical-stretch: 3;
             min-height: is-hero ? 200px : 110px;
             clip: true;
 
-            if show-snapshots: Rectangle {
+            // Loading skeleton
+            if show-loading: Rectangle {
+                background: Theme.card-bg-skel;
+
+                Rectangle {
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    width: is-hero ? 48px : 36px;
+                    height: is-hero ? 48px : 36px;
+                    border-radius: is-hero ? 24px : 18px;
+                    border-width: 1.5px;
+                    border-color: Theme.skel-ghost;
+                    background: transparent;
+
+                    Image {
+                        source: @image-url("../icons/monitor.svg");
+                        colorize: Theme.skel-ghost;
+                        width: is-hero ? 22px : 16px;
+                        height: is-hero ? 22px : 16px;
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
+                    }
+                }
+            }
+
+            // Poster / playback
+            if show-thumbnail: Rectangle {
                 background: #000000;
 
                 Image {
@@ -104,13 +145,12 @@ export component SessionPreviewCard inherits Rectangle {
 
                 Image {
                     x: 0; y: 0; width: parent.width; height: parent.height;
-                    source: root.current-image;
+                    source: playing ? root.current-image : root.snapshot-poster;
                     image-fit: cover;
                     opacity: fading ? 0.0 : 1.0;
                     animate opacity { duration: 300ms; easing: ease-in-out; }
                 }
 
-                // Gradient scrim
                 Rectangle {
                     x: 0;
                     y: parent.height - (is-hero ? 60px : 40px);
@@ -119,7 +159,6 @@ export component SessionPreviewCard inherits Rectangle {
                     background: @linear-gradient(0deg, rgba(0,0,0,0.72) 0%, rgba(0,0,0,0) 100%);
                 }
 
-                // Clip badge: top-left (only if clips exist)
                 if clip-count > 0: Rectangle {
                     x: is-hero ? 12px : 8px;
                     y: is-hero ? 12px : 8px;
@@ -150,15 +189,13 @@ export component SessionPreviewCard inherits Rectangle {
                     }
                 }
 
-                // Dim scrim when stopped or paused
                 if !root.playing || root.finished || root.paused: Rectangle {
                     x: 0; y: 0;
                     width: parent.width; height: parent.height;
                     background: #00000044;
                 }
 
-                // Play button: visible when stopped
-                if !root.playing || root.finished: Rectangle {
+                if snapshot-poster-ready && (!root.playing || root.finished): Rectangle {
                     property <int> btn-size: is-hero ? 52 : 32;
                     x: (parent.width - self.width) / 2;
                     y: (parent.height - self.height) / 2;
@@ -176,7 +213,6 @@ export component SessionPreviewCard inherits Rectangle {
                     }
                 }
 
-                // Duration badge: bottom-right (only when not actively playing)
                 if !root.playing || root.finished || root.paused: Rectangle {
                     x: parent.width - self.width - (is-hero ? 10px : 8px);
                     y: parent.height - self.height - (is-hero ? 10px : 8px);
@@ -194,7 +230,6 @@ export component SessionPreviewCard inherits Rectangle {
                     }
                 }
 
-                // ── Progress bar + pause (visible during active playback) ──
                 if root.playing && !root.finished: Rectangle {
                     x: 0;
                     y: parent.height - 22px;
@@ -202,7 +237,6 @@ export component SessionPreviewCard inherits Rectangle {
                     height: 22px;
                     background: #00000066;
 
-                    // Pause/resume button
                     Rectangle {
                         x: 4px;
                         y: (parent.height - self.height) / 2;
@@ -220,13 +254,10 @@ export component SessionPreviewCard inherits Rectangle {
 
                         TouchArea {
                             mouse-cursor: pointer;
-                            clicked => {
-                                root.paused = !root.paused;
-                            }
+                            clicked => { root.paused = !root.paused; }
                         }
                     }
 
-                    // Progress track
                     Rectangle {
                         x: 26px;
                         y: (parent.height - self.height) / 2;
@@ -235,7 +266,6 @@ export component SessionPreviewCard inherits Rectangle {
                         border-radius: 1.5px;
                         background: #ffffff33;
 
-                        // Fill
                         Rectangle {
                             x: 0; y: 0;
                             width: root.image-count > 1
@@ -250,8 +280,8 @@ export component SessionPreviewCard inherits Rectangle {
                 }
             }
 
-            // Fallback: no snapshots
-            if !show-snapshots: Rectangle {
+            // No snapshots fallback
+            if show-placeholder: Rectangle {
                 background: is-hero
                     ? (Theme.dark
                         ? @linear-gradient(135deg, #1a0d1a 0%, #150a15 40%, #151520 100%)
@@ -279,37 +309,15 @@ export component SessionPreviewCard inherits Rectangle {
                 }
             }
 
-            // Load initial frame on first visibility (synchronous: request + consume inline)
-            Timer {
-                interval: 100ms;
-                running: root.has-urls && !root.started && root.visible;
-                triggered => {
-                    root.started = true;
-                    root.request-session-frame(root.session-id, 0);
-                    if root.session-frame-ready && root.session-frame-id == root.session-id {
-                        root.current-image = root.session-pushed-frame;
-                        root.has-current = true;
-                        if !root.was-seen && root.can-cycle {
-                            root.playing = true;
-                        }
-                    }
-                }
-            }
-
-            // Advance: request next frame, consume inline, start crossfade
+            // Advance slideshow (manual play only)
             Timer {
                 interval: 1000ms;
                 running: root.playing && !root.paused && root.can-cycle && root.visible && !root.finished && root.has-current && !root.fading;
                 triggered => {
-                    root.request-session-frame(root.session-id, root.next-index);
-                    if root.session-frame-ready && root.session-frame-id == root.session-id {
-                        root.next-image = root.session-pushed-frame;
-                        root.fading = true;
-                    }
+                    root.session-preview-request-frame(root.session-id, root.next-index);
                 }
             }
 
-            // Crossfade completion
             Timer {
                 interval: 300ms;
                 running: root.fading && root.visible;
@@ -327,6 +335,7 @@ export component SessionPreviewCard inherits Rectangle {
                         root.fading = false;
                         root.finished = true;
                         root.playing = false;
+                        root.next-image = root.snapshot-poster;
                     } else {
                         root.current-image = root.next-image;
                         root.frame-index = root.next-index;
@@ -336,7 +345,6 @@ export component SessionPreviewCard inherits Rectangle {
             }
         }
 
-        // ── Card body ──
         if is-hero: VerticalLayout {
             padding: 12px;
             padding-left: 14px;
@@ -395,7 +403,6 @@ export component SessionPreviewCard inherits Rectangle {
             }
         }
 
-        // ── Card body (1x compact) ──
         if !is-hero: VerticalLayout {
             padding: 10px;
             padding-left: 12px;
@@ -445,18 +452,16 @@ export component SessionPreviewCard inherits Rectangle {
         clicked => {
             if root.playing && !root.finished {
                 root.paused = !root.paused;
-            } else if root.show-snapshots {
+            } else if snapshot-poster-ready && root.can-cycle {
                 root.frame-index = 0;
                 root.frames-shown = 0;
                 root.finished = false;
                 root.fading = false;
                 root.paused = false;
-                root.request-session-frame(root.session-id, 0);
-                if root.session-frame-ready && root.session-frame-id == root.session-id {
-                    root.current-image = root.session-pushed-frame;
-                    root.has-current = true;
-                }
+                root.current-image = root.snapshot-poster;
+                root.has-current = true;
                 root.playing = true;
+                root.session-preview-request-frame(root.session-id, root.next-index);
             }
         }
     }

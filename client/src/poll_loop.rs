@@ -49,6 +49,7 @@ pub fn start(
         fg_monitor: ctx.fg_monitor.clone(),
         pending_deep_link: ctx.pending_deep_link.clone(),
         ipc_listener: ctx.ipc_listener.clone(),
+        snapshot_loader: ctx.snapshot_loader.clone(),
         #[cfg(target_os = "windows")]
         native_frame_slot: ctx.native_frame_slot.clone(),
         #[cfg(target_os = "windows")]

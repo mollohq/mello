@@ -2,21 +2,12 @@ use std::rc::Rc;
 
 use base64::Engine as _;
 use mello_core::{Command, Event};
-use slint::Model;
+use slint::{ComponentHandle, Model};
 
 use crate::app_context::AppContext;
 use crate::converters::make_initials;
-use crate::snapshot_cache;
+use crate::feed_layout;
 use crate::FeedCardData;
-
-fn prefetch_snapshots(snapshot_urls: &[String]) {
-    if !snapshot_urls.is_empty() {
-        let urls = snapshot_urls.to_vec();
-        std::thread::spawn(move || {
-            snapshot_cache::prefetch_all(&urls);
-        });
-    }
-}
 
 fn normalized_entry_data(raw: &serde_json::Value) -> serde_json::Value {
     if raw.is_object() {
@@ -223,6 +214,7 @@ fn skeleton_card(card_type: &str) -> FeedCardData {
         mvp2_stat: Default::default(),
         is_new: false,
         was_seen: false,
+        ..Default::default()
     }
 }
 
@@ -378,10 +370,6 @@ pub fn handle(ctx: &AppContext, event: Event) {
                     let has_snapshots = !snapshot_urls.is_empty();
                     let card_type = map_card_type(&entry.entry_type, has_snapshots);
 
-                    if has_snapshots {
-                        prefetch_snapshots(&snapshot_urls);
-                    }
-
                     let actor = extract_actor(&data, &entry.entry_type);
                     let title = extract_title(&data, &entry.entry_type, &actor);
                     let subtitle = extract_subtitle(&data, &entry.entry_type);
@@ -529,82 +517,17 @@ pub fn handle(ctx: &AppContext, event: Event) {
                         mvp2_name: mvp2.0.into(),
                         mvp2_initials: mvp2.1.into(),
                         mvp2_stat: mvp2.2.into(),
+                        snapshot_loading: card_type == "session-preview" && has_snapshots,
+                        snapshot_poster_ready: false,
+                        snapshot_error: false,
+                        snapshot_playback_index: 0,
+                        snapshot_playback_revision: 0,
+                        ..Default::default()
                     }
                 })
                 .collect();
 
-            // Layout: [0] hero (best clip or session-preview), [1] recap (pinned top-right),
-            //         [2-5] 1x cards, [6] 2x card.
-            // Catchups only go into small 1x slots [2-5], never hero/2x.
-            let mut used = vec![false; cards.len()];
-            let mut ordered: Vec<FeedCardData> = Vec::with_capacity(cards.len());
-
-            // Slot 0: best clip as hero; if no clip, use session-preview as hero
-            let hero_idx = cards
-                .iter()
-                .position(|c| c.card_type == "clip")
-                .or_else(|| cards.iter().position(|c| c.card_type == "session-preview"));
-            if let Some(hi) = hero_idx {
-                let mut hero = cards[hi].clone();
-                hero.is_hero = true;
-                ordered.push(hero);
-                used[hi] = true;
-            }
-
-            // Slot 1: weekly recap (always pinned top-right)
-            if let Some(ri) = cards.iter().position(|c| c.card_type == "recap") {
-                ordered.push(cards[ri].clone());
-                used[ri] = true;
-            }
-
-            // Remaining cards split into non-catchups and catchups
-            let mut non_catchups: Vec<FeedCardData> = Vec::new();
-            let mut catchups: Vec<FeedCardData> = Vec::new();
-            for (i, card) in cards.iter().enumerate() {
-                if used[i] {
-                    continue;
-                }
-                if card.card_type == "catchup" {
-                    catchups.push(card.clone());
-                } else {
-                    non_catchups.push(card.clone());
-                }
-            }
-
-            // Slots 2-5: mix non-catchups first, then fill with catchups
-            // Slot 6 (2x wide): must be a non-catchup (clip, session-preview, or session)
-            let small_slots = 4; // positions 2..5
-            let mut small_fill = 0;
-            // Fill small slots with non-catchups first
-            let mut nc_iter = non_catchups.into_iter();
-            while small_fill < small_slots {
-                if let Some(c) = nc_iter.next() {
-                    ordered.push(c);
-                    small_fill += 1;
-                } else {
-                    break;
-                }
-            }
-            // Remaining non-catchups: first one goes to slot 6 (2x wide)
-            let wide_card = nc_iter.next();
-
-            // Fill remaining small slots with catchups
-            let mut cu_iter = catchups.into_iter();
-            while small_fill < small_slots {
-                if let Some(c) = cu_iter.next() {
-                    ordered.push(c);
-                    small_fill += 1;
-                } else {
-                    break;
-                }
-            }
-
-            // Slot 6: wide card (non-catchup preferred, fallback to catchup)
-            if let Some(wc) = wide_card {
-                ordered.push(wc);
-            } else if let Some(c) = cu_iter.next() {
-                ordered.push(c);
-            }
+            let mut ordered = feed_layout::order_feed_cards(cards);
 
             // Fill remaining grid slots with skeleton cards for cold start / semi-cold start.
             let has_hero = ordered.first().map(|c| c.is_hero).unwrap_or(false);
@@ -674,6 +597,11 @@ pub fn handle(ctx: &AppContext, event: Event) {
                 .set_feed_cards(Rc::new(slint::VecModel::from(cards)).into());
             ctx.app.set_feed_cold_start(is_cold);
             ctx.app.set_feed_clip_count(clip_count);
+            ctx.app.set_feed_has_more(response.has_more);
+
+            let gen = ctx.snapshot_loader.bump_generation();
+            ctx.snapshot_loader
+                .load_session_preview_cards(ctx.app.as_weak(), gen);
 
             // Update clip-count on the active crew's sidebar card
             let active_crew_id = ctx.app.get_active_crew_id().to_string();

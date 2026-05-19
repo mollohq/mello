@@ -8,6 +8,7 @@ mod converters;
 #[cfg(target_os = "windows")]
 pub mod dcomp_presenter;
 mod deep_link;
+mod feed_layout;
 mod foreground_monitor;
 mod gif_animator;
 mod handlers;
@@ -20,6 +21,7 @@ mod platform;
 mod poll_loop;
 mod settings;
 mod snapshot_cache;
+mod snapshot_loader;
 mod updater;
 
 pub const APP_NAME: &str = "m3llo";
@@ -378,11 +380,14 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
     let gif_chat_anim = gif_animator::GifAnimator::new(50, Some(2));
 
     // --- Build AppContext ---
+    let snapshot_loader = Rc::new(snapshot_loader::SnapshotLoader::new(rt.handle().clone()));
+
     let ctx = app_context::AppContext {
         app,
         cmd_tx,
         settings,
         rt: rt.handle().clone(),
+        snapshot_loader,
         active_voice_channel: Rc::new(RefCell::new(String::new())),
         new_crew_avatar_b64: std::sync::Arc::new(std::sync::Mutex::new(None)),
         crew_settings_avatar_b64: std::sync::Arc::new(std::sync::Mutex::new(None)),

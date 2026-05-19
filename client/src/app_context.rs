@@ -9,6 +9,7 @@ use mello_core::Command;
 use crate::foreground_monitor::ForegroundMonitor;
 use crate::gif_animator::GifAnimator;
 use crate::hud_manager::HudManager;
+use crate::snapshot_loader::SnapshotLoader;
 use crate::updater::Updater;
 use crate::{MainWindow, Settings};
 
@@ -44,6 +45,7 @@ pub struct AppContext {
     pub fg_monitor: Rc<RefCell<ForegroundMonitor>>,
     pub pending_deep_link: Rc<RefCell<Option<crate::deep_link::DeepLink>>>,
     pub ipc_listener: Rc<RefCell<Option<crate::ipc::IpcListener>>>,
+    pub snapshot_loader: Rc<SnapshotLoader>,
     #[cfg(target_os = "windows")]
     pub native_frame_slot: mello_core::NativeFrameSlot,
     #[cfg(target_os = "windows")]

@@ -324,7 +324,7 @@ SFU_R2_SECRET_ACCESS_KEY=<secret-access-key>
 SFU_R2_PUBLIC_DOMAIN=snapshots.m3llo.app
 ```
 
-The SFU writes snapshot JPEGs; Nakama only lists them. See [STREAM-SNAPSHOTS-CLIENT.md](./ongoing/STREAM-SNAPSHOTS-CLIENT.md) and `mello-sfu/STREAM-SNAPSHOTS-SFU.md`.
+The SFU writes snapshot JPEGs; Nakama only lists them. See [STREAM-SNAPSHOTS-CLIENT.md](./features/STREAM-SNAPSHOTS-CLIENT.md) and `mello-sfu/STREAM-SNAPSHOTS-SFU.md`.
 
 ---
 
