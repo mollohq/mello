@@ -62,6 +62,7 @@ pub struct VoiceManager {
     mesh: VoiceMesh,
     muted: bool,
     deafened: bool,
+    push_to_talk: bool,
     active: bool,
     loopback: bool,
     debug_mode: bool,
@@ -124,6 +125,7 @@ impl VoiceManager {
             mesh: VoiceMesh::new(),
             muted: false,
             deafened: false,
+            push_to_talk: false,
             active: false,
             loopback,
             debug_mode: false,
@@ -154,6 +156,7 @@ impl VoiceManager {
 
         self.active = true;
         self.mode = VoiceMode::P2P;
+        self.apply_push_to_talk();
         log::info!(
             "Voice capture started (P2P), {} peers to connect",
             members.len()
@@ -189,6 +192,7 @@ impl VoiceManager {
         self.sfu_crew_id = crew_id.to_string();
         self.active = true;
         self.mode = VoiceMode::SFU;
+        self.apply_push_to_talk();
         log::info!("Voice capture started (SFU)");
     }
 
@@ -252,6 +256,20 @@ impl VoiceManager {
             unsafe {
                 mello_sys::mello_voice_set_mute(self.ctx, muted);
             }
+        }
+    }
+
+    pub fn set_push_to_talk(&mut self, enabled: bool) {
+        self.push_to_talk = enabled;
+        self.apply_push_to_talk();
+    }
+
+    fn apply_push_to_talk(&self) {
+        if self.ctx.is_null() {
+            return;
+        }
+        unsafe {
+            mello_sys::mello_voice_set_push_to_talk(self.ctx, self.push_to_talk);
         }
     }
 

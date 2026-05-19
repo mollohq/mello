@@ -251,6 +251,7 @@ pub fn wire(ctx: &AppContext) {
             };
             settings.save();
             hk.borrow().set_active(is_ptt);
+            let _ = cmd.try_send(Command::SetPushToTalk { enabled: is_ptt });
             let current_deafened = app_weak
                 .upgrade()
                 .map(|app| app.get_deafened())
@@ -333,6 +334,9 @@ pub fn wire(ctx: &AppContext) {
             });
             let _ = cmd.try_send(Command::SetEchoCancellation {
                 enabled: defaults.echo_cancellation,
+            });
+            let _ = cmd.try_send(Command::SetPushToTalk {
+                enabled: defaults.input_mode == "push_to_talk",
             });
             let _ = cmd.try_send(Command::SetMute {
                 muted: target_muted,

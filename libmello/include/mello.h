@@ -97,6 +97,8 @@ MELLO_API MelloResult mello_voice_start_capture(MelloContext* ctx);
 MELLO_API MelloResult mello_voice_stop_capture(MelloContext* ctx);
 MELLO_API void mello_voice_set_mute(MelloContext* ctx, bool muted);
 MELLO_API void mello_voice_set_deafen(MelloContext* ctx, bool deafened);
+/** When enabled, Silero VAD and the adaptive RMS speech gate are bypassed while unmuted. */
+MELLO_API void mello_voice_set_push_to_talk(MelloContext* ctx, bool enabled);
 MELLO_API bool mello_voice_is_speaking(MelloContext* ctx);
 
 MELLO_API void mello_voice_set_vad_callback(

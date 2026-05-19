@@ -57,6 +57,7 @@ public:
 
     void set_mute(bool muted);
     void set_deafen(bool deafened);
+    void set_push_to_talk(bool enabled);
     void set_input_volume(float vol) { input_gain_.store(vol, std::memory_order_relaxed); }
     void set_output_volume(float vol) { output_gain_.store(vol, std::memory_order_relaxed); }
     float input_volume() const { return input_gain_.load(std::memory_order_relaxed); }
@@ -86,8 +87,15 @@ public:
     void feed_packet(const char* peer_id, const uint8_t* data, int size);
 
     bool is_capturing() const { return capturing_; }
-    bool is_speaking() const { return vad_.is_speaking(); }
-    float speech_probability() const { return vad_.probability(); }
+    bool is_speaking() const {
+        return push_to_talk_mode_.load(std::memory_order_relaxed)
+                   ? false
+                   : vad_.is_speaking();
+    }
+    float speech_probability() const {
+        return push_to_talk_mode_.load(std::memory_order_relaxed) ? 0.0f
+                                                                  : vad_.probability();
+    }
     float rnnoise_probability() const { return noise_suppressor_.speech_probability(); }
     float input_level() const { return input_level_.load(std::memory_order_relaxed); }
     uint32_t packets_encoded() const { return sequence_; }
@@ -120,6 +128,7 @@ public:
 private:
     void on_captured_audio(const int16_t* samples, size_t count);
     void process_and_encode_frame(int16_t* frame);
+    void reset_speech_gate_state();
     void clear_remote_streams();
 #ifdef _WIN32
     void apply_session(AudioPlayback* pb);
@@ -159,6 +168,7 @@ private:
 
     std::atomic<bool> muted_{false};
     std::atomic<bool> deafened_{false};
+    std::atomic<bool> push_to_talk_mode_{false};
     std::atomic<bool> capturing_{false};
     std::atomic<float> input_level_{0.0f};
     std::atomic<float> input_gain_{1.0f};

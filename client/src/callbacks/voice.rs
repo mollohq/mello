@@ -95,8 +95,11 @@ pub fn wire(ctx: &AppContext) {
     // --- Voice channel callbacks ---
     {
         let cmd = ctx.cmd_tx.clone();
+        let settings = ctx.settings.clone();
         ctx.app.on_join_voice_channel(move |channel_id| {
             log::info!("UI: join voice channel '{}'", channel_id);
+            let ptt = settings.borrow().input_mode == "push_to_talk";
+            let _ = cmd.try_send(Command::SetPushToTalk { enabled: ptt });
             let _ = cmd.try_send(Command::JoinVoice {
                 channel_id: channel_id.to_string(),
             });

@@ -45,6 +45,24 @@ fn voice_mute_deafen() {
 }
 
 #[test]
+fn voice_push_to_talk_mode() {
+    with_ctx(|ctx| unsafe {
+        mello_sys::mello_voice_set_push_to_talk(ctx, true);
+        assert!(
+            !mello_sys::mello_voice_is_speaking(ctx),
+            "PTT mode should not report Silero speaking state"
+        );
+
+        let mut stats: mello_sys::MelloDebugStats = std::mem::zeroed();
+        mello_sys::mello_get_debug_stats(ctx, &mut stats);
+        assert_eq!(stats.silero_vad_prob, 0.0);
+        assert!(!stats.is_speaking);
+
+        mello_sys::mello_voice_set_push_to_talk(ctx, false);
+    });
+}
+
+#[test]
 fn voice_get_packet_without_capture() {
     with_ctx(|ctx| unsafe {
         let mut buf = [0u8; 4000];

@@ -339,6 +339,9 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
         }
         let ptt_active = s.input_mode == "push_to_talk";
         hotkey_mgr.borrow().set_active(ptt_active);
+        let _ = cmd_tx.try_send(Command::SetPushToTalk {
+            enabled: ptt_active,
+        });
         if ptt_active {
             let _ = cmd_tx.try_send(Command::SetMute { muted: true });
         }

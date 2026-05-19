@@ -221,11 +221,7 @@ void AudioPipeline::stop_capture() {
 
     std::lock_guard<std::mutex> lock(accum_mutex_);
     capture_accum_.clear();
-    speech_pre_roll_.clear();
-    candidate_hangover_frames_ = 0;
-    speech_hangover_frames_ = 0;
-    speech_gate_active_ = false;
-    vad_.force_silence();
+    reset_speech_gate_state();
 
     // Leaving voice should immediately flush remote decode state so playback
     // cannot keep synthesizing PLC/noise from stale peers after disconnect.
@@ -279,6 +275,23 @@ void AudioPipeline::set_high_pass_filter(bool enabled) {
 
 void AudioPipeline::set_mute(bool muted) { muted_ = muted; }
 void AudioPipeline::set_deafen(bool deafened) { deafened_ = deafened; }
+
+void AudioPipeline::reset_speech_gate_state() {
+    speech_pre_roll_.clear();
+    candidate_hangover_frames_ = 0;
+    speech_hangover_frames_ = 0;
+    speech_gate_active_ = false;
+    vad_.force_silence();
+}
+
+void AudioPipeline::set_push_to_talk(bool enabled) {
+    push_to_talk_mode_.store(enabled, std::memory_order_relaxed);
+    if (enabled) {
+        std::lock_guard<std::mutex> lock(accum_mutex_);
+        reset_speech_gate_state();
+    }
+    MELLO_LOG_INFO("pipeline", "push_to_talk mode %s", enabled ? "enabled" : "disabled");
+}
 
 void AudioPipeline::process_and_encode_frame(int16_t* frame) {
     if (ns_mode() == NsMode::Rnnoise) {
@@ -342,56 +355,60 @@ void AudioPipeline::on_captured_audio(const int16_t* samples, size_t count) {
                 local_clip_ring_->write(capture_accum_.data(), FRAME_SIZE);
             }
 
-            const float speech_threshold =
-                (std::max)(MIN_SPEECH_RMS, noise_floor_rms_ * NOISE_FLOOR_GATE_MULT);
-            bool candidate_speech = rms >= speech_threshold;
-
-            if (candidate_speech) {
-                candidate_hangover_frames_ = CANDIDATE_HANGOVER_FRAMES;
-            } else if (candidate_hangover_frames_ > 0) {
-                candidate_hangover_frames_--;
-            }
-
-            bool should_run_vad =
-                candidate_speech || candidate_hangover_frames_ > 0 || speech_hangover_frames_ > 0;
-
-            if (should_run_vad) {
-                vad_.feed(capture_accum_.data(), FRAME_SIZE);
-            }
-
-            if (vad_.is_speaking()) {
-                speech_hangover_frames_ = SPEECH_ENCODE_HANGOVER_FRAMES;
-            } else if (speech_hangover_frames_ > 0) {
-                speech_hangover_frames_--;
-            }
-
-            bool should_encode = vad_.is_speaking() || speech_hangover_frames_ > 0;
-
-            if (should_encode) {
-                if (!speech_gate_active_) {
-                    for (auto& frame : speech_pre_roll_) {
-                        process_and_encode_frame(frame.data());
-                    }
-                    speech_pre_roll_.clear();
-                }
+            if (push_to_talk_mode_.load(std::memory_order_relaxed)) {
                 process_and_encode_frame(capture_accum_.data());
-                speech_gate_active_ = true;
             } else {
-                if (speech_gate_active_) {
-                    vad_.force_silence();
-                }
-                speech_gate_active_ = false;
+                const float speech_threshold =
+                    (std::max)(MIN_SPEECH_RMS, noise_floor_rms_ * NOISE_FLOOR_GATE_MULT);
+                bool candidate_speech = rms >= speech_threshold;
 
-                std::array<int16_t, FRAME_SIZE> frame{};
-                std::copy_n(capture_accum_.data(), FRAME_SIZE, frame.data());
-                speech_pre_roll_.push_back(frame);
-                while (speech_pre_roll_.size() > SPEECH_PRE_ROLL_FRAMES) {
-                    speech_pre_roll_.pop_front();
+                if (candidate_speech) {
+                    candidate_hangover_frames_ = CANDIDATE_HANGOVER_FRAMES;
+                } else if (candidate_hangover_frames_ > 0) {
+                    candidate_hangover_frames_--;
                 }
 
-                // Track ambient floor only while closed so the speech threshold adapts
-                // without chasing active speech.
-                noise_floor_rms_ = 0.98f * noise_floor_rms_ + 0.02f * rms;
+                bool should_run_vad = candidate_speech || candidate_hangover_frames_ > 0 ||
+                                      speech_hangover_frames_ > 0;
+
+                if (should_run_vad) {
+                    vad_.feed(capture_accum_.data(), FRAME_SIZE);
+                }
+
+                if (vad_.is_speaking()) {
+                    speech_hangover_frames_ = SPEECH_ENCODE_HANGOVER_FRAMES;
+                } else if (speech_hangover_frames_ > 0) {
+                    speech_hangover_frames_--;
+                }
+
+                bool should_encode = vad_.is_speaking() || speech_hangover_frames_ > 0;
+
+                if (should_encode) {
+                    if (!speech_gate_active_) {
+                        for (auto& frame : speech_pre_roll_) {
+                            process_and_encode_frame(frame.data());
+                        }
+                        speech_pre_roll_.clear();
+                    }
+                    process_and_encode_frame(capture_accum_.data());
+                    speech_gate_active_ = true;
+                } else {
+                    if (speech_gate_active_) {
+                        vad_.force_silence();
+                    }
+                    speech_gate_active_ = false;
+
+                    std::array<int16_t, FRAME_SIZE> frame{};
+                    std::copy_n(capture_accum_.data(), FRAME_SIZE, frame.data());
+                    speech_pre_roll_.push_back(frame);
+                    while (speech_pre_roll_.size() > SPEECH_PRE_ROLL_FRAMES) {
+                        speech_pre_roll_.pop_front();
+                    }
+
+                    // Track ambient floor only while closed so the speech threshold adapts
+                    // without chasing active speech.
+                    noise_floor_rms_ = 0.98f * noise_floor_rms_ + 0.02f * rms;
+                }
             }
         }
         capture_accum_.erase(capture_accum_.begin(),

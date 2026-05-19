@@ -136,6 +136,9 @@ pub enum Command {
     SetMute {
         muted: bool,
     },
+    SetPushToTalk {
+        enabled: bool,
+    },
     SetDeafen {
         deafened: bool,
     },

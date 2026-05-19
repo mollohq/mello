@@ -499,6 +499,9 @@ impl Client {
             Command::SetMute { muted } => {
                 self.voice.set_mute(muted);
             }
+            Command::SetPushToTalk { enabled } => {
+                self.voice.set_push_to_talk(enabled);
+            }
             Command::SetDeafen { deafened } => {
                 self.voice.set_deafen(deafened);
             }

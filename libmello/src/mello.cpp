@@ -160,6 +160,12 @@ void mello_voice_set_deafen(MelloContext* ctx, bool deafened) {
     } catch (...) {}
 }
 
+void mello_voice_set_push_to_talk(MelloContext* ctx, bool enabled) {
+    try {
+        if (ctx) ctx_cast(ctx)->audio().set_push_to_talk(enabled);
+    } catch (...) {}
+}
+
 bool mello_voice_is_speaking(MelloContext* ctx) {
     if (!ctx) return false;
     try {

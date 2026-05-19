@@ -279,6 +279,10 @@ pub fn start(
                                 poll_ctx
                                     .app
                                     .set_settings_ptt_mode(settings.input_mode == "push_to_talk");
+                                let ptt_enabled = settings.input_mode == "push_to_talk";
+                                let _ = poll_ctx.cmd_tx.try_send(Command::SetPushToTalk {
+                                    enabled: ptt_enabled,
+                                });
                                 poll_ctx
                                     .app
                                     .set_settings_vad_threshold(settings.vad_threshold);
