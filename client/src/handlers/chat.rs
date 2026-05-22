@@ -4,8 +4,44 @@ use mello_core::{Command, Event};
 use slint::{ComponentHandle, Model};
 
 use crate::app_context::AppContext;
-use crate::converters::{chat_messages_to_slint, fetch_gif_images_for_messages};
+use crate::converters::{
+    apply_unread_to_crews, chat_messages_to_slint, fetch_gif_images_for_messages,
+    member_names_from_app, ChatConvertOptions,
+};
 use crate::{image_cache, notifications, CrewData, GifItemData};
+
+fn refresh_chat_ui(ctx: &AppContext) {
+    let uid = ctx.app.get_user_id().to_string();
+    let uav = ctx.app.get_user_avatar();
+    let huav = ctx.app.get_has_user_avatar();
+    let member_names = member_names_from_app(&ctx.app);
+    let first_unread = ctx.chat_scroll.first_unread_id();
+    let opts = ChatConvertOptions {
+        user_id: &uid,
+        user_avatar: &uav,
+        has_user_avatar: huav,
+        avatar_cache: &ctx.avatar_cache.borrow(),
+        member_names: &member_names,
+        first_unread_id: first_unread.as_deref(),
+    };
+    let raw = ctx.chat_messages.borrow();
+    let display = chat_messages_to_slint(&raw, &opts);
+    let rc = Rc::new(slint::VecModel::from(display));
+    ctx.app.set_messages(rc.clone().into());
+    ctx.app
+        .set_chat_messages_today(mello_core::chat::count_messages_today(&raw));
+    fetch_gif_images_for_messages(&rc, &ctx.rt, &ctx.gif_chat_anim);
+    ctx.chat_scroll.apply_to_window(&ctx.app);
+}
+
+fn upsert_message(ctx: &AppContext, message: mello_core::events::ChatMessage) {
+    let mut msgs = ctx.chat_messages.borrow_mut();
+    if let Some(existing) = msgs.iter_mut().find(|m| m.message_id == message.message_id) {
+        *existing = message;
+    } else {
+        msgs.push(message);
+    }
+}
 
 pub fn handle(ctx: &AppContext, event: Event) {
     match event {
@@ -27,18 +63,13 @@ pub fn handle(ctx: &AppContext, event: Event) {
                     .try_send(Command::FetchUserAvatars { user_ids: uncached });
             }
             *ctx.chat_messages.borrow_mut() = messages;
-            let uav = ctx.app.get_user_avatar();
-            let huav = ctx.app.get_has_user_avatar();
-            let display = chat_messages_to_slint(
-                &ctx.chat_messages.borrow(),
-                &uid,
-                &uav,
-                huav,
-                &ctx.avatar_cache.borrow(),
-            );
-            let rc = Rc::new(slint::VecModel::from(display));
-            ctx.app.set_messages(rc.clone().into());
-            fetch_gif_images_for_messages(&rc, &ctx.rt, &ctx.gif_chat_anim);
+            ctx.chat_scroll.reset_on_messages_loaded();
+            let active = ctx.app.get_active_crew_id().to_string();
+            if !active.is_empty() {
+                ctx.unread_tracker.borrow_mut().reset(&active);
+                apply_unread_to_crews(&ctx.app, &ctx.unread_tracker.borrow());
+            }
+            refresh_chat_ui(ctx);
         }
         Event::MessageReceived { message } => {
             if !ctx.app.window().is_visible() {
@@ -46,20 +77,30 @@ pub fn handle(ctx: &AppContext, event: Event) {
                 notifications::notify_message(&crew_name, &message.sender_name, &message.content);
             }
             let sender_id = message.sender_id.clone();
-            ctx.chat_messages.borrow_mut().push(message);
+            let message_id = message.message_id.clone();
             let uid = ctx.app.get_user_id().to_string();
-            let uav = ctx.app.get_user_avatar();
-            let huav = ctx.app.get_has_user_avatar();
-            let display = chat_messages_to_slint(
-                &ctx.chat_messages.borrow(),
-                &uid,
-                &uav,
-                huav,
-                &ctx.avatar_cache.borrow(),
-            );
-            let rc = Rc::new(slint::VecModel::from(display));
-            ctx.app.set_messages(rc.clone().into());
-            fetch_gif_images_for_messages(&rc, &ctx.rt, &ctx.gif_chat_anim);
+            let is_own = sender_id == uid;
+
+            let member_names = member_names_from_app(&ctx.app);
+            let mentions_self =
+                mello_core::chat::prepare_body_for_display(&message.content, &uid, &member_names).1;
+
+            let active_crew = ctx.app.get_active_crew_id().to_string();
+            let was_at_bottom = ctx.chat_scroll.at_bottom.get();
+            if !is_own && !was_at_bottom && !active_crew.is_empty() {
+                ctx.unread_tracker
+                    .borrow_mut()
+                    .increment(&active_crew, mentions_self);
+                apply_unread_to_crews(&ctx.app, &ctx.unread_tracker.borrow());
+            } else if (is_own || was_at_bottom) && !active_crew.is_empty() {
+                ctx.unread_tracker.borrow_mut().reset(&active_crew);
+                apply_unread_to_crews(&ctx.app, &ctx.unread_tracker.borrow());
+            }
+
+            ctx.chat_scroll.on_incoming_message(is_own, &message_id);
+            upsert_message(ctx, message);
+            refresh_chat_ui(ctx);
+
             if sender_id != uid && !ctx.avatar_cache.borrow().contains_key(&sender_id) {
                 let _ = ctx
                     .cmd_tx
@@ -67,23 +108,13 @@ pub fn handle(ctx: &AppContext, event: Event) {
             }
         }
         Event::HistoryLoaded { messages, .. } => {
+            let prepended = messages.len();
             let mut all = messages;
             all.append(&mut ctx.chat_messages.borrow().clone());
             *ctx.chat_messages.borrow_mut() = all;
-            let uid = ctx.app.get_user_id().to_string();
-            let uav = ctx.app.get_user_avatar();
-            let huav = ctx.app.get_has_user_avatar();
-            let display = chat_messages_to_slint(
-                &ctx.chat_messages.borrow(),
-                &uid,
-                &uav,
-                huav,
-                &ctx.avatar_cache.borrow(),
-            );
-            let rc = Rc::new(slint::VecModel::from(display));
-            ctx.app.set_messages(rc.clone().into());
+            ctx.chat_scroll.on_history_prepended(prepended);
             ctx.app.set_loading_history(false);
-            fetch_gif_images_for_messages(&rc, &ctx.rt, &ctx.gif_chat_anim);
+            refresh_chat_ui(ctx);
         }
         Event::ChatMessageEdited {
             message_id,
@@ -91,32 +122,28 @@ pub fn handle(ctx: &AppContext, event: Event) {
             update_time,
         } => {
             log::info!("Message edited: {} at {}", message_id, update_time);
-            let mut msgs = ctx.chat_messages.borrow_mut();
-            if let Some(m) = msgs.iter_mut().find(|m| m.message_id == message_id) {
-                m.content = new_content;
-                m.update_time = update_time;
+            {
+                let mut msgs = ctx.chat_messages.borrow_mut();
+                if let Some(m) = msgs.iter_mut().find(|m| m.message_id == message_id) {
+                    m.content = new_content;
+                    m.update_time = update_time;
+                    m.is_edited = true;
+                    m.is_deleted = false;
+                }
             }
-            let uid = ctx.app.get_user_id().to_string();
-            let uav = ctx.app.get_user_avatar();
-            let huav = ctx.app.get_has_user_avatar();
-            let display =
-                chat_messages_to_slint(&msgs, &uid, &uav, huav, &ctx.avatar_cache.borrow());
-            let rc = Rc::new(slint::VecModel::from(display));
-            ctx.app.set_messages(rc.into());
+            refresh_chat_ui(ctx);
         }
         Event::ChatMessageDeleted { message_id } => {
             log::info!("Message deleted: {}", message_id);
-            let mut msgs = ctx.chat_messages.borrow_mut();
-            if let Some(m) = msgs.iter_mut().find(|m| m.message_id == message_id) {
-                m.content = "[message deleted]".to_string();
+            {
+                let mut msgs = ctx.chat_messages.borrow_mut();
+                if let Some(m) = msgs.iter_mut().find(|m| m.message_id == message_id) {
+                    m.content.clear();
+                    m.is_deleted = true;
+                    m.is_edited = false;
+                }
             }
-            let uid = ctx.app.get_user_id().to_string();
-            let uav = ctx.app.get_user_avatar();
-            let huav = ctx.app.get_has_user_avatar();
-            let display =
-                chat_messages_to_slint(&msgs, &uid, &uav, huav, &ctx.avatar_cache.borrow());
-            let rc = Rc::new(slint::VecModel::from(display));
-            ctx.app.set_messages(rc.into());
+            refresh_chat_ui(ctx);
         }
         Event::GifsLoaded { gifs } => {
             log::info!("[gif] loaded {} results", gifs.len());

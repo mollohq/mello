@@ -1,4 +1,4 @@
-import { Theme } from "../theme.slint";
+import { Theme, MelloTextInput } from "../theme.slint";
 import { GameBadge } from "../components/game_badge.slint";
 
 component ActionButton inherits Rectangle {
@@ -563,7 +563,7 @@ export component ControlBar inherits Rectangle {
                             y: (parent.height - self.height) / 2;
                         }
 
-                        moment-input := TextInput {
+                        moment-input := MelloTextInput {
                             font-size: 13px;
                             color: Theme.text-primary;
                             horizontal-stretch: 1;

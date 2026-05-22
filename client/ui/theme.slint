@@ -27,6 +27,10 @@ export global Theme {
     out property <color> accent:       #FF1E56;
     out property <color> accent-bg:    dark ? #FF1E561A : #FF1E5614;
 
+    // --- Text selection (override Slint cupertino/fluent default blue) ---
+    out property <color> selection-bg: dark ? #FF1E5655 : #FF1E5648;
+    out property <color> selection-fg: text-primary;
+
     // --- Voice ---
     out property <color> voice-active:    #46923c;
     out property <color> voice-active-bg: dark ? #46923c26 : #46923c1A;
@@ -94,4 +98,10 @@ export global Theme {
     // --- Hover helpers ---
     out property <color> hover-overlay: dark ? #FFFFFF0D : #0000000D;
     out property <color> surface-hover: dark ? #2A2A2A : #F0F0F0;
+}
+
+/// TextInput with Mello selection colors (not platform default blue).
+export component MelloTextInput inherits TextInput {
+    selection-background-color: Theme.selection-bg;
+    selection-foreground-color: Theme.selection-fg;
 }

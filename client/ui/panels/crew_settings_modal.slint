@@ -1,4 +1,4 @@
-import { Theme } from "../theme.slint";
+import { Theme, MelloTextInput } from "../theme.slint";
 import { VoiceChannelData, MemberData } from "../types.slint";
 
 // ─── Section Header ────────────────────────────────────────────────────────
@@ -133,7 +133,7 @@ component OverviewTab inherits VerticalLayout {
                         border-width: 1px;
                         border-color: name-input.has-focus ? Theme.accent : Theme.graphic-light;
 
-                        name-input := TextInput {
+                        name-input := MelloTextInput {
                             text <=> crew-name-value;
                             font-size: 14px;
                             color: Theme.text-primary;
@@ -164,7 +164,7 @@ component OverviewTab inherits VerticalLayout {
                         border-width: 1px;
                         border-color: desc-input.has-focus ? Theme.accent : Theme.graphic-light;
 
-                        desc-input := TextInput {
+                        desc-input := MelloTextInput {
                             text <=> crew-description-value;
                             font-size: 14px;
                             color: Theme.text-primary;
@@ -455,7 +455,7 @@ component VoiceChannelsTab inherits VerticalLayout {
                 border-width: 1px;
                 border-color: add-ch-input.has-focus ? Theme.accent : Theme.graphic-light;
 
-                add-ch-input := TextInput {
+                add-ch-input := MelloTextInput {
                     text <=> new-channel-name;
                     font-size: 14px;
                     color: Theme.text-primary;

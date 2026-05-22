@@ -1,4 +1,4 @@
-import { Theme } from "../theme.slint";
+import { Theme, MelloTextInput } from "../theme.slint";
 import { AudioDeviceData } from "../types.slint";
 import { AvatarCard } from "../components/avatar_card.slint";
 
@@ -1352,7 +1352,7 @@ component ProfileTab inherits VerticalLayout {
                 border-width: 1px;
                 border-color: nick-input.has-focus ? Theme.accent : Theme.graphic-light;
 
-                nick-input := TextInput {
+                nick-input := MelloTextInput {
                     text <=> profile-nickname-value;
                     font-size: 14px;
                     color: Theme.text-primary;

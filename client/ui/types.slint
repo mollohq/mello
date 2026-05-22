@@ -99,6 +99,11 @@ export struct MemberData {
     role: int,
 }
 
+export struct ChatLinkData {
+    url: string,
+    label: string,
+}
+
 export struct ChatMessageData {
     message-id: string,
     sender-id: string,
@@ -107,11 +112,15 @@ export struct ChatMessageData {
     sender-avatar: image,
     has-sender-avatar: bool,
     text: string,
+    display-text: string,
+    display-styled: styled-text,
+    links: [ChatLinkData],
     timestamp: string,
     display-time: string,
     is-group-start: bool,
     is-continuation: bool,
     is-system: bool,
+    is-unread-divider: bool,
     is-gif: bool,
     gif-image: image,
     has-gif-image: bool,
@@ -121,6 +130,23 @@ export struct ChatMessageData {
     is-clip: bool,
     clip-duration: string,
     clip-id: string,
+    mentions-self: bool,
+    reply-to-id: string,
+    reply-to-name: string,
+    reply-preview-text: string,
+    is-edited: bool,
+    is-deleted: bool,
+}
+
+export struct EmojiItemData {
+    emoji: string,
+    name: string,
+}
+
+export struct MentionMemberData {
+    user-id: string,
+    display-name: string,
+    initials: string,
 }
 
 export struct GifItemData {

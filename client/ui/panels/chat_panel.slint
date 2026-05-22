@@ -1,5 +1,55 @@
-import { Theme } from "../theme.slint";
-import { ChatMessageData, GifItemData } from "../types.slint";
+import { Theme, MelloTextInput } from "../theme.slint";
+import { ChatMessageData, ChatLinkData, GifItemData, EmojiItemData, MentionMemberData } from "../types.slint";
+
+component LinkPill inherits Rectangle {
+    in property <string> url;
+    in property <string> label;
+    callback clicked(/* url */ string);
+
+    property <length> pill-max-width: 260px;
+    max-width: pill-max-width;
+
+    border-radius: Theme.r-pill;
+    background: pill-touch.has-hover
+        ? (Theme.dark ? #FFFFFF14 : #0000000A)
+        : (Theme.dark ? #FFFFFF0A : #00000006);
+    border-width: 1px;
+    border-color: Theme.dark ? #FFFFFF1A : Theme.graphic-light;
+
+    pill-touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(root.url); }
+    }
+
+    pill-layout := HorizontalLayout {
+        max-width: root.pill-max-width;
+        padding-left: 10px;
+        padding-right: 10px;
+        padding-top: 4px;
+        padding-bottom: 4px;
+        spacing: 5px;
+        alignment: center;
+
+        Text {
+            text: "↗";
+            font-size: 10px;
+            font-weight: 600;
+            color: Theme.accent;
+            vertical-alignment: center;
+        }
+
+        Text {
+            text: root.label;
+            font-size: Theme.font-xs;
+            font-weight: 500;
+            color: Theme.text-primary;
+            vertical-alignment: center;
+            overflow: elide;
+            horizontal-stretch: 1;
+            min-width: 0;
+        }
+    }
+}
 
 component AvatarCircle inherits Rectangle {
     in property <string> initials;
@@ -191,7 +241,7 @@ component GifPopover inherits Rectangle {
             border-width: 1px;
             border-color: Theme.graphic-light;
 
-            gif-search := TextInput {
+            gif-search := MelloTextInput {
                 x: 10px;
                 width: parent.width - 20px;
                 height: parent.height;
@@ -273,6 +323,7 @@ component GifPopover inherits Rectangle {
 
 export component ChatPanel inherits Rectangle {
     in property <[ChatMessageData]> messages: [];
+    in property <int> messages-today: 0;
     in property <string> user-name: "";
     in property <string> user-id: "";
     in property <bool> loading-history: false;
@@ -292,8 +343,28 @@ export component ChatPanel inherits Rectangle {
 
     // New messages pill state
     in-out property <bool> has-new-messages: false;
+    in-out property <bool> scroll-to-bottom-request: false;
+    in property <int> history-prepended-rows: 0;
+    in property <[MentionMemberData]> mention-members: [];
+    in property <[MentionMemberData]> mention-suggestions: [];
+    in property <[EmojiItemData]> emoji-list: [];
+
+    in-out property <bool> emoji-popover-open: false;
+    in-out property <string> more-menu-message-id: "";
+    in-out property <string> delete-confirm-message-id: "";
 
     callback message-submitted(/* text */ string);
+    callback chat-viewport-changed(/* at_bottom */ bool);
+    callback scroll-to-bottom-done();
+    callback link-clicked(/* url */ string);
+    callback copy-message-text(/* text */ string);
+    callback mention-selected(/* user_id */ string, /* display_name */ string);
+    callback chat-input-changed(/* text */ string);
+    callback history-prepended-done();
+    in-out property <string> chat-input-text: "";
+    in-out property <int> composer-line-count: 1;
+    in-out property <bool> composer-multiline: false;
+    in-out property <bool> pending-newline: false;
     callback message-submitted-with-reply(/* text */ string, /* reply_to */ string);
     callback request-history();
     callback gif-pill-clicked();
@@ -308,23 +379,62 @@ export component ChatPanel inherits Rectangle {
     background: Theme.surface;
     border-width: 1px;
     border-color: Theme.graphic-light;
-    border-radius: Theme.r-outer;
+    border-radius: 0px;
 
     VerticalLayout {
-        padding-top: Theme.pad;
-        padding-bottom: Theme.pad;
-        padding-left: 12px;
-        padding-right: 12px;
+        x: 0px;
+        y: 0px;
+        width: parent.width;
+        height: parent.height;
+        padding: 0px;
         spacing: 0px;
 
-        // --- Header kicker ---
-        Text {
-            text: "CREW CHAT";
-            font-size: Theme.font-sm;
-            font-weight: 600;
-            letter-spacing: 1.3px;
-            color: Theme.text-secondary;
-            height: 16px;
+        // --- Header (matches crew_feed.slint) ---
+        Rectangle {
+            height: 48px;
+            background: transparent;
+
+            HorizontalLayout {
+                padding-left: 12px;
+                padding-right: 12px;
+                spacing: 10px;
+
+                HorizontalLayout {
+                    spacing: 10px;
+                    horizontal-stretch: 1;
+                    alignment: start;
+
+                    Text {
+                        text: "Crew chat";
+                        font-size: 15px;
+                        font-weight: 500;
+                        color: Theme.text-primary;
+                        vertical-alignment: center;
+                    }
+
+                    if root.messages-today > 0: Rectangle {
+                        width: msg-badge-text.preferred-width + 20px;
+                        height: 22px;
+                        border-radius: 11px;
+                        background: Theme.card-border;
+
+                        msg-badge-text := Text {
+                            text: root.messages-today == 1
+                                ? "1 message today"
+                                : root.messages-today + " messages today";
+                            font-size: 11px;
+                            color: Theme.text-sub;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+            }
+        }
+
+        Rectangle {
+            height: 1px;
+            background: Theme.card-border;
         }
 
         // --- Chat feed container (for overlay pill) ---
@@ -332,19 +442,32 @@ export component ChatPanel inherits Rectangle {
             vertical-stretch: 1;
 
         feed := Flickable {
+            // feed id visible to scroll handlers below
             width: parent.width;
             height: parent.height;
 
+            property <bool> at-bottom: feed.viewport-height <= feed.height
+                || (-feed.viewport-y + feed.height) >= (feed.viewport-height - 32px);
+
             flicked => {
+                root.chat-viewport-changed(at-bottom);
                 if feed.viewport-y >= 0px && !root.loading-history {
                     root.request-history();
                 }
+                if root.more-menu-message-id != "" {
+                    root.more-menu-message-id = "";
+                }
+            }
+
+            changed viewport-y => {
+                root.chat-viewport-changed(at-bottom);
             }
 
             VerticalLayout {
                 width: feed.width;
                 spacing: 0px;
                 padding-top: 12px;
+                padding-bottom: 8px;
                 alignment: end;
 
                 if root.loading-history: Rectangle {
@@ -371,10 +494,54 @@ export component ChatPanel inherits Rectangle {
                 }
 
                 for msg[idx] in messages: VerticalLayout {
-                    padding-top: msg.is-group-start && idx > 0 ? 16px : 2px;
+                    width: feed.width;
+                    padding-top: msg.is-unread-divider ? 8px : (msg.is-group-start && idx > 0 ? 16px : 2px);
+
+                    // Unread divider — stretch wrappers for lines; inner rect centers 1px rule (y ignored on HL children)
+                    if msg.is-unread-divider: HorizontalLayout {
+                        width: parent.width;
+                        height: 20px;
+                        spacing: 8px;
+                        padding-left: 8px;
+                        padding-right: 8px;
+                        padding-bottom: 8px;
+
+                        Rectangle {
+                            horizontal-stretch: 1;
+
+                            Rectangle {
+                                height: 1px;
+                                width: parent.width;
+                                y: (parent.height - self.height) / 2;
+                                background: Theme.accent;
+                                opacity: 0.5;
+                            }
+                        }
+
+                        Text {
+                            text: "New messages";
+                            font-size: Theme.font-xs;
+                            font-weight: 600;
+                            color: Theme.accent;
+                            horizontal-stretch: 0;
+                            vertical-alignment: center;
+                        }
+
+                        Rectangle {
+                            horizontal-stretch: 1;
+
+                            Rectangle {
+                                height: 1px;
+                                width: parent.width;
+                                y: (parent.height - self.height) / 2;
+                                background: Theme.accent;
+                                opacity: 0.5;
+                            }
+                        }
+                    }
 
                     // System message
-                    if msg.is-system: HorizontalLayout {
+                    if msg.is-system && !msg.is-unread-divider: HorizontalLayout {
                         padding-left: 36px;
                         padding-right: 8px;
                         padding-top: 4px;
@@ -390,15 +557,23 @@ export component ChatPanel inherits Rectangle {
                         }
                     }
 
-                    // Group start: header row (not hoverable for actions)
-                    if !msg.is-system && msg.is-group-start: HorizontalLayout {
+                    // Group start header — full feed width; spacer pushes timestamp right (no alignment:)
+                    if !msg.is-system && !msg.is-unread-divider && msg.is-group-start: HorizontalLayout {
+                        width: parent.width;
                         spacing: 8px;
 
-                        AvatarCircle {
-                            initials: msg.sender-initials;
-                            avatar: msg.sender-avatar;
-                            has-avatar: msg.has-sender-avatar;
-                            y: (parent.height - self.height) / 2;
+                        Rectangle {
+                            width: 28px;
+                            height: 28px;
+                            horizontal-stretch: 0;
+
+                            AvatarCircle {
+                                initials: msg.sender-initials;
+                                avatar: msg.sender-avatar;
+                                has-avatar: msg.has-sender-avatar;
+                                x: (parent.width - self.width) / 2;
+                                y: (parent.height - self.height) / 2;
+                            }
                         }
 
                         Text {
@@ -407,41 +582,286 @@ export component ChatPanel inherits Rectangle {
                             font-weight: 600;
                             color: msg.sender-name == root.user-name ? Theme.accent : Theme.text-primary;
                             vertical-alignment: center;
+                            horizontal-stretch: 0;
                         }
 
-                        Rectangle { horizontal-stretch: 1; }
+                        Rectangle {
+                            horizontal-stretch: 1;
+                        }
 
-                        Text {
+                        if msg.display-time != "": Text {
                             text: msg.display-time;
                             font-family: Theme.font-mono;
                             font-size: Theme.font-xs;
                             color: Theme.text-tertiary;
                             vertical-alignment: center;
+                            horizontal-stretch: 0;
                         }
                     }
 
-                    // Message body (hoverable — context actions appear here)
-                    if !msg.is-system: Rectangle {
+                    // Message row: left gutter (hover actions) + content
+                    if !msg.is-system && !msg.is-unread-divider: HorizontalLayout {
+                        spacing: 8px;
                         width: feed.width;
-                        property <bool> body-hovered: body-hover.has-hover;
+                        alignment: start;
+                        property <length> actions-y: 0px;
+                        property <bool> body-hovered: body-hover.has-hover
+                            || hover-bar-hover.has-hover
+                            || reply-touch.has-hover
+                            || more-touch.has-hover;
 
-                        body-hover := TouchArea {
-                            width: parent.width;
-                            height: parent.height;
+                        // Gutter column for hover actions (avatar is in header row above)
+                        Rectangle {
+                            width: 28px;
+
+                            hover-bar-hover := TouchArea {
+                                x: 0;
+                                y: actions-y;
+                                width: 28px;
+                                height: 24px;
+
+                                HorizontalLayout {
+                                    width: parent.width;
+                                    height: 24px;
+                                    opacity: body-hovered ? 1 : 0;
+                                    spacing: 2px;
+                                    alignment: center;
+
+                                    Rectangle {
+                                        width: 16px;
+                                        height: 16px;
+                                        border-radius: 4px;
+                                        background: reply-touch.has-hover ? Theme.bg-tertiary : Theme.surface;
+
+                                        Image {
+                                            source: @image-url("../icons/reply.svg");
+                                            width: 12px;
+                                            height: 12px;
+                                            colorize: Theme.text-secondary;
+                                            x: (parent.width - self.width) / 2;
+                                            y: (parent.height - self.height) / 2;
+                                        }
+
+                                        reply-touch := TouchArea {
+                                            clicked => {
+                                                root.reply-mode = true;
+                                                root.reply-to-id = msg.message-id;
+                                                root.reply-to-name = msg.sender-name;
+                                            }
+                                        }
+                                    }
+
+                                    Rectangle {
+                                        width: 16px;
+                                        height: 16px;
+                                        border-radius: 4px;
+                                        background: more-touch.has-hover ? Theme.bg-tertiary : Theme.surface;
+
+                                        Image {
+                                            source: @image-url("../icons/more.svg");
+                                            width: 12px;
+                                            height: 12px;
+                                            colorize: Theme.text-secondary;
+                                            x: (parent.width - self.width) / 2;
+                                            y: (parent.height - self.height) / 2;
+                                        }
+
+                                        more-touch := TouchArea {
+                                            clicked => {
+                                                root.more-menu-message-id =
+                                                    root.more-menu-message-id == msg.message-id ? "" : msg.message-id;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            if root.more-menu-message-id == msg.message-id: Rectangle {
+                                property <length> menu-w: 120px;
+                                property <bool> menu-above: feed.at-bottom && idx >= messages.length - 2;
+
+                                menu-col := VerticalLayout {
+                                    padding: 4px;
+                                    spacing: 2px;
+
+                                    if msg.sender-id == root.user-id: Rectangle {
+                                        height: 28px;
+                                        background: menu-edit-touch.has-hover ? Theme.bg-tertiary : transparent;
+                                        border-radius: 4px;
+
+                                        Text {
+                                            text: "Edit";
+                                            font-size: Theme.font-sm;
+                                            color: Theme.text-secondary;
+                                            x: 8px;
+                                            vertical-alignment: center;
+                                        }
+
+                                        menu-edit-touch := TouchArea {
+                                            clicked => {
+                                                root.edit-mode = true;
+                                                root.edit-message-id = msg.message-id;
+                                                chat-input.text = msg.text;
+                                                chat-input.focus();
+                                                root.more-menu-message-id = "";
+                                            }
+                                        }
+                                    }
+
+                                    if msg.sender-id == root.user-id: Rectangle {
+                                        height: 28px;
+                                        background: menu-del-touch.has-hover ? Theme.bg-tertiary : transparent;
+                                        border-radius: 4px;
+
+                                        Text {
+                                            text: "Delete";
+                                            font-size: Theme.font-sm;
+                                            color: #E05555;
+                                            x: 8px;
+                                            vertical-alignment: center;
+                                        }
+
+                                        menu-del-touch := TouchArea {
+                                            clicked => {
+                                                root.delete-confirm-message-id = msg.message-id;
+                                                root.more-menu-message-id = "";
+                                            }
+                                        }
+                                    }
+
+                                    Rectangle {
+                                        height: 28px;
+                                        background: menu-copy-touch.has-hover ? Theme.bg-tertiary : transparent;
+                                        border-radius: 4px;
+
+                                        Text {
+                                            text: "Copy text";
+                                            font-size: Theme.font-sm;
+                                            color: Theme.text-secondary;
+                                            x: 8px;
+                                            vertical-alignment: center;
+                                        }
+
+                                        menu-copy-touch := TouchArea {
+                                            clicked => {
+                                                root.copy-message-text(msg.text);
+                                                root.more-menu-message-id = "";
+                                            }
+                                        }
+                                    }
+                                }
+
+                                x: 0;
+                                y: menu-above ? actions-y - menu-col.preferred-height - 8px : actions-y + 20px;
+                                width: menu-w;
+                                height: menu-col.preferred-height + 8px;
+                                background: Theme.surface;
+                                border-radius: 6px;
+                                border-width: 1px;
+                                border-color: Theme.graphic-light;
+                                drop-shadow-blur: 6px;
+                                drop-shadow-color: #00000030;
+                            }
                         }
 
-                        VerticalLayout {
-                            width: parent.width;
-                            padding-left: 36px;
-                            spacing: 4px;
+                        // Message content
+                        Rectangle {
+                            horizontal-stretch: 1;
+                            background: msg.mentions-self ? (Theme.dark ? #6C5CE714 : #6C5CE720) : transparent;
+                            border-radius: Theme.radius-sm;
+
+                            body-hover := TouchArea {
+                                width: parent.width;
+                                height: parent.height;
+                            }
+
+                            if root.more-menu-message-id != "": TouchArea {
+                                width: parent.width;
+                                height: parent.height;
+                                clicked => { root.more-menu-message-id = ""; }
+                            }
+
+                            VerticalLayout {
+                                horizontal-stretch: 1;
+                                spacing: 4px;
+
+                            // Reply quote block
+                            if msg.reply-to-id != "": HorizontalLayout {
+                                spacing: 0px;
+
+                                Rectangle {
+                                    width: 3px;
+                                    background: Theme.accent;
+                                }
+
+                                Rectangle {
+                                    horizontal-stretch: 1;
+                                    background: Theme.bg-tertiary;
+                                    border-radius: 4px;
+
+                                    VerticalLayout {
+                                        padding: 6px;
+                                        spacing: 2px;
+
+                                        Text {
+                                            text: "Replying to " + msg.reply-to-name;
+                                            font-size: Theme.font-xs;
+                                            font-weight: 600;
+                                            color: Theme.accent;
+                                        }
+
+                                        Text {
+                                            text: msg.reply-preview-text;
+                                            font-size: Theme.font-xs;
+                                            color: Theme.text-tertiary;
+                                            wrap: word-wrap;
+                                            overflow: elide;
+                                        }
+                                    }
+                                }
+                            }
 
                             // Body text (shown for text messages, or GIF + text)
-                            if msg.text != "": Text {
-                                text: msg.text;
+                            if msg.text != "" && !msg.is-deleted: HorizontalLayout {
+                                spacing: 6px;
+
+                                VerticalLayout {
+                                    horizontal-stretch: 1;
+                                    spacing: 6px;
+
+                                    StyledText {
+                                        text: msg.display-styled;
+                                        default-color: Theme.text-secondary;
+                                        default-font-size: Theme.font-md;
+                                        horizontal-stretch: 1;
+                                    }
+
+                                    if msg.links.length > 0: HorizontalLayout {
+                                        spacing: 6px;
+                                        alignment: start;
+
+                                        for link[idx] in msg.links: LinkPill {
+                                            url: msg.links[idx].url;
+                                            label: msg.links[idx].label;
+                                            clicked(url) => { root.link-clicked(url); }
+                                        }
+                                    }
+                                }
+
+                                if msg.is-edited: Text {
+                                    text: "(edited)";
+                                    font-size: Theme.font-xs;
+                                    color: Theme.text-tertiary;
+                                    vertical-alignment: bottom;
+                                }
+                            }
+
+                            if msg.is-deleted: Text {
+                                text: "[message deleted]";
                                 font-size: Theme.font-md;
-                                color: Theme.text-secondary;
+                                color: Theme.text-tertiary;
+                                font-italic: true;
                                 wrap: word-wrap;
-                                horizontal-stretch: 1;
                             }
 
                             // Clip inline card
@@ -476,73 +896,22 @@ export component ChatPanel inherits Rectangle {
                                     vertical-alignment: center;
                                 }
 
-                                TouchArea {
+                                gif-touch := TouchArea {
                                     mouse-cursor: pointer;
                                     moved => {
                                         root.gif-hovered(msg.gif-preview-url);
                                     }
                                 }
                             }
-                        }
-
-                        if body-hovered: HorizontalLayout {
-                            x: parent.width - self.width;
-                            y: 0;
-                            height: 24px;
-                            spacing: 2px;
-
-                            Rectangle {
-                                width: 24px;
-                                height: 24px;
-                                border-radius: 4px;
-                                background: reply-touch.has-hover ? Theme.bg-tertiary : Theme.surface;
-
-                                Image {
-                                    source: @image-url("../icons/reply.svg");
-                                    width: 14px;
-                                    height: 14px;
-                                    colorize: Theme.text-secondary;
-                                    x: (parent.width - self.width) / 2;
-                                    y: (parent.height - self.height) / 2;
-                                }
-
-                                reply-touch := TouchArea {
-                                    clicked => {
-                                        root.reply-mode = true;
-                                        root.reply-to-id = msg.message-id;
-                                        root.reply-to-name = msg.sender-name;
-                                    }
-                                }
-                            }
-
-                            Rectangle {
-                                width: 24px;
-                                height: 24px;
-                                border-radius: 4px;
-                                background: more-touch.has-hover ? Theme.bg-tertiary : Theme.surface;
-
-                                Image {
-                                    source: @image-url("../icons/more.svg");
-                                    width: 14px;
-                                    height: 14px;
-                                    colorize: Theme.text-secondary;
-                                    x: (parent.width - self.width) / 2;
-                                    y: (parent.height - self.height) / 2;
-                                }
-
-                                more-touch := TouchArea {
-                                    clicked => {
-                                        if msg.sender-id == root.user-id {
-                                            root.edit-mode = true;
-                                            root.edit-message-id = msg.message-id;
-                                            chat-input.text = msg.text;
-                                            chat-input.focus();
-                                        }
-                                    }
-                                }
                             }
                         }
                     }
+                }
+
+                // Bottom spacer so the last message isn't clipped above the composer
+                if messages.length > 0: Rectangle {
+                    height: 24px;
+                    width: parent.width;
                 }
             }
         }
@@ -560,9 +929,7 @@ export component ChatPanel inherits Rectangle {
 
             new-msg-touch := TouchArea {
                 clicked => {
-                    root.has-new-messages = false;
-                    // Scroll to bottom by setting viewport to show latest
-                    feed.viewport-y = -(feed.viewport-height - feed.height);
+                    root.scroll-to-bottom-request = true;
                 }
             }
 
@@ -575,15 +942,39 @@ export component ChatPanel inherits Rectangle {
                 vertical-alignment: center;
             }
         }
+
+        scroll-timer := Timer {
+            interval: 1ms;
+            running: root.scroll-to-bottom-request;
+            triggered => {
+                feed.viewport-y = -(feed.viewport-height - feed.height);
+                root.scroll-to-bottom-request = false;
+                root.has-new-messages = false;
+                root.scroll-to-bottom-done();
+            }
+        }
+
+        history-timer := Timer {
+            interval: 1ms;
+            running: root.history-prepended-rows > 0;
+            triggered => {
+                feed.viewport-y = feed.viewport-y + root.history-prepended-rows * 56px;
+                root.history-prepended-done();
+            }
+        }
         } // close feed container Rectangle
 
-        // --- Separator ---
         Rectangle {
             height: 1px;
             background: Theme.graphic-light;
         }
 
-        Rectangle { height: 4px; }
+        // --- Composer block (inset padding; panel shell is edge-to-edge) ---
+        VerticalLayout {
+            spacing: 4px;
+            padding-left: 8px;
+            padding-right: 8px;
+            padding-bottom: 8px;
 
         // --- Reply bar ---
         if root.reply-mode: HorizontalLayout {
@@ -667,6 +1058,175 @@ export component ChatPanel inherits Rectangle {
             }
         }
 
+        // --- Delete confirmation ---
+        if root.delete-confirm-message-id != "": Rectangle {
+            height: 36px;
+            background: Theme.bg-tertiary;
+            border-radius: Theme.radius-sm;
+
+            HorizontalLayout {
+                padding-left: 12px;
+                padding-right: 8px;
+                spacing: 8px;
+
+                Text {
+                    text: "Delete this message?";
+                    font-size: Theme.font-sm;
+                    color: Theme.text-secondary;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                }
+
+                Rectangle {
+                    width: 56px;
+                    height: 24px;
+                    border-radius: 4px;
+                    background: del-cancel-touch.has-hover ? Theme.graphic-light : transparent;
+
+                    Text {
+                        text: "Cancel";
+                        font-size: Theme.font-xs;
+                        color: Theme.text-tertiary;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+
+                    del-cancel-touch := TouchArea {
+                        clicked => { root.delete-confirm-message-id = ""; }
+                    }
+                }
+
+                Rectangle {
+                    width: 56px;
+                    height: 24px;
+                    border-radius: 4px;
+                    background: del-ok-touch.has-hover ? #C0392B : #E05555;
+
+                    Text {
+                        text: "Delete";
+                        font-size: Theme.font-xs;
+                        font-weight: 600;
+                        color: white;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+
+                    del-ok-touch := TouchArea {
+                        clicked => {
+                            root.delete-message(root.delete-confirm-message-id);
+                            root.delete-confirm-message-id = "";
+                        }
+                    }
+                }
+            }
+        }
+
+        // --- @mention autocomplete (suggestions from Rust) ---
+        if root.mention-suggestions.length > 0: Rectangle {
+            height: min(120px, root.mention-suggestions.length * 32px + 8px);
+            background: Theme.surface;
+            border-width: 1px;
+            border-color: Theme.graphic-light;
+            border-radius: Theme.r-inner;
+            clip: true;
+
+            Flickable {
+                width: parent.width;
+                height: parent.height;
+
+                VerticalLayout {
+                    padding: 4px;
+                    for m in root.mention-suggestions: Rectangle {
+                        height: 30px;
+                        background: mention-row-touch.has-hover ? Theme.bg-tertiary : transparent;
+                        border-radius: 4px;
+
+                        HorizontalLayout {
+                            padding-left: 8px;
+                            spacing: 8px;
+
+                            Text {
+                                text: m.initials;
+                                font-size: 10px;
+                                font-family: Theme.font-mono;
+                                font-weight: 600;
+                                color: Theme.text-secondary;
+                                vertical-alignment: center;
+                            }
+
+                            Text {
+                                text: m.display-name;
+                                font-size: Theme.font-sm;
+                                color: Theme.text-primary;
+                                vertical-alignment: center;
+                            }
+                        }
+
+                        mention-row-touch := TouchArea {
+                            clicked => {
+                                root.mention-selected(m.user-id, m.display-name);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // --- Emoji popover ---
+        if root.emoji-popover-open: Rectangle {
+            height: 200px;
+            background: Theme.surface;
+            border-width: 1px;
+            border-color: Theme.graphic-light;
+            border-radius: Theme.r-inner;
+            clip: true;
+
+            Flickable {
+                width: parent.width;
+                height: parent.height;
+
+                VerticalLayout {
+                    padding: 8px;
+                    spacing: 4px;
+
+                    for row-start[row-idx] in [0, 8, 16, 24, 32, 40, 48, 56, 64, 72, 80, 88, 96, 104, 112, 120, 128, 136, 144, 152]: HorizontalLayout {
+                        spacing: 2px;
+
+                        for col in [0, 1, 2, 3, 4, 5, 6, 7]: Rectangle {
+                            property <int> emoji-index: row-start + col;
+                            property <bool> in-range: emoji-index < emoji-list.length;
+                            visible: in-range;
+                            width: 32px;
+                            height: 32px;
+                            border-radius: 4px;
+                            clip: true;
+
+                            if in-range: Rectangle {
+                                width: parent.width;
+                                height: parent.height;
+                                background: emoji-cell-touch.has-hover ? Theme.bg-tertiary : transparent;
+
+                                Text {
+                                    text: emoji-list[emoji-index].emoji;
+                                    font-size: 18px;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                }
+
+                                emoji-cell-touch := TouchArea {
+                                    clicked => {
+                                        chat-input.text += emoji-list[emoji-index].emoji;
+                                        chat-input.focus();
+                                        root.emoji-popover-open = false;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         // --- GIF popover ---
         if root.gif-popover-open: GifPopover {
             show: root.gif-popover-open;
@@ -683,7 +1243,7 @@ export component ChatPanel inherits Rectangle {
         HorizontalLayout {
             height: 28px;
             spacing: 4px;
-            padding-left: 4px;
+            padding-left: 0px;
 
             PillButton {
                 icon: @image-url("../icons/gif.svg");
@@ -700,103 +1260,223 @@ export component ChatPanel inherits Rectangle {
             PillButton {
                 icon: @image-url("../icons/smile.svg");
                 label: "Emoji";
-                clicked => { root.emoji-pill-clicked(); }
+                active: root.emoji-popover-open;
+                clicked => {
+                    root.emoji-popover-open = !root.emoji-popover-open;
+                    if root.emoji-popover-open {
+                        root.emoji-pill-clicked();
+                    }
+                }
             }
         }
 
-        // --- Chat input ---
+        // --- Chat input (compact single-line; multiline only after Shift+Enter) ---
         Rectangle {
-            height: 48px;
+            property <length> box-height: root.composer-multiline
+                ? min(120px, 32px + root.composer-line-count * 20px)
+                : 40px;
+            height: box-height;
+
             background: Theme.bg-app;
             border-radius: Theme.r-inner;
             border-width: 1px;
             border-color: Theme.graphic-light;
 
-            chat-input := TextInput {
+            newline-timer := Timer {
+                interval: 0ms;
+                running: root.pending-newline;
+                triggered => {
+                    root.pending-newline = false;
+                    root.chat-input-text += "\n";
+                    chat-input.set-selection-offsets(
+                        root.chat-input-text.character-count,
+                        root.chat-input-text.character-count,
+                    );
+                }
+            }
+
+            chat-input := MelloTextInput {
+                text <=> root.chat-input-text;
                 x: 18px;
+                y: 0;
                 width: parent.width - 36px;
                 height: parent.height;
                 font-size: Theme.font-md;
                 color: Theme.text-primary;
-                vertical-alignment: center;
-                accepted => {
-                    if chat-input.text != "" {
-                        if root.edit-mode {
-                            root.edit-message(root.edit-message-id, chat-input.text);
-                            root.edit-mode = false;
-                            root.edit-message-id = "";
-                        } else if root.reply-mode {
-                            root.message-submitted-with-reply(chat-input.text, root.reply-to-id);
-                            root.reply-mode = false;
-                            root.reply-to-id = "";
-                            root.reply-to-name = "";
+                single-line: !root.composer-multiline;
+                wrap: root.composer-multiline ? word-wrap : no-wrap;
+                vertical-alignment: root.composer-multiline ? top : center;
+                edited => { root.chat-input-changed(self.text); }
+
+                key-pressed(event) => {
+                    if event.text == Key.Return {
+                        if event.modifiers.shift {
+                            if !root.composer-multiline {
+                                root.composer-multiline = true;
+                            }
+                            root.pending-newline = true;
+                            accept
                         } else {
-                            root.message-submitted(chat-input.text);
+                            if root.chat-input-text != "" {
+                                if root.edit-mode {
+                                    root.edit-message(root.edit-message-id, root.chat-input-text);
+                                    root.edit-mode = false;
+                                    root.edit-message-id = "";
+                                } else if root.reply-mode {
+                                    root.message-submitted-with-reply(root.chat-input-text, root.reply-to-id);
+                                    root.reply-mode = false;
+                                    root.reply-to-id = "";
+                                    root.reply-to-name = "";
+                                } else {
+                                    root.message-submitted(root.chat-input-text);
+                                }
+                                root.chat-input-text = "";
+                                root.composer-multiline = false;
+                                root.composer-line-count = 1;
+                            }
+                            accept
                         }
-                        chat-input.text = "";
+                    } else {
+                        reject
                     }
                 }
             }
-            if chat-input.text == "" && !root.edit-mode: Text {
+
+            if root.chat-input-text == "" && !root.edit-mode: Text {
                 x: 18px;
+                y: root.composer-multiline ? 10px : (parent.height - self.height) / 2;
                 color: Theme.text-tertiary;
                 font-size: Theme.font-md;
-                vertical-alignment: center;
                 text: "Message crewmates...";
             }
         }
+        } // composer block
     }
 }
 
-// --- Slint Live Preview mock ---
+// --- Slint Live Preview (open this file → Preview component) ---
 export component Preview inherits ChatPanel {
-    width: 380px;
-    height: 720px;
+    width: 400px;
+    height: 820px;
     user-name: "bobdev";
     user-id: "u1";
+    messages-today: 12;
+    has-new-messages: true;
+    emoji-list: [
+        { emoji: "😀", name: "grinning" },
+        { emoji: "👍", name: "thumbsup" },
+        { emoji: "🔥", name: "fire" },
+        { emoji: "❤️", name: "heart" },
+    ];
+    mention-members: [
+        { user-id: "u2", display-name: "oweboweob", initials: "OW" },
+        { user-id: "u3", display-name: "k0ji", initials: "K0" },
+    ];
     messages: [
+        // Grouped messages (continuation)
         {
-            message-id: "1", sender-id: "u1", sender-name: "bobdev",
-            sender-initials: "B0", text: "jfjwejfwe\nwjepgojweg\nwegjwöelgkjwe",
-            timestamp: "", display-time: "Yesterday",
-            is-group-start: true, is-continuation: false, is-system: false
+            message-id: "p1", sender-id: "u2", sender-name: "oweboweob",
+            sender-initials: "OW", text: "hey crew, stream at 8?",
+            display-text: "hey crew, stream at 8?",
+            display-styled: @markdown("hey crew, stream at 8?"),
+            timestamp: "May 19, 8:02 PM", display-time: "Yesterday",
+            is-group-start: true,
         },
         {
-            message-id: "2", sender-id: "u1", sender-name: "bobdev",
-            sender-initials: "B0", text: "glwkjegöweljg",
-            timestamp: "", display-time: "Yesterday",
-            is-group-start: false, is-continuation: true, is-system: false
+            message-id: "p2", sender-id: "u2", sender-name: "oweboweob",
+            sender-initials: "OW", text: "bring snacks",
+            display-text: "bring snacks",
+            display-styled: @markdown("bring snacks"),
+            timestamp: "May 19, 8:03 PM", display-time: "",
+            is-group-start: false, is-continuation: true,
         },
+        // Markdown + link
         {
-            message-id: "3", sender-id: "u2", sender-name: "oweboweob",
-            sender-initials: "OW", text: "*borat voice* VERY NICE!",
-            timestamp: "", display-time: "03:18",
-            is-group-start: true, is-continuation: false, is-system: false
+            message-id: "p3", sender-id: "u1", sender-name: "bobdev",
+            sender-initials: "B0", text: "Check **bold**, *italic*, and https://slint.dev",
+            display-text: "Check **bold**, *italic*, and",
+            display-styled: @markdown("Check **bold**, *italic*, and"),
+            links: [{ url: "https://slint.dev/releases/1.16", label: "slint.dev/releases/1.16" }],
+            timestamp: "May 19, 8:05 PM", display-time: "8:05 PM",
+            is-group-start: true,
         },
+        // @mention highlight (self)
         {
-            message-id: "4", sender-id: "u2", sender-name: "oweboweob",
-            sender-initials: "OW", text: "yoooo\nwazaaa\nhehe",
-            timestamp: "", display-time: "1m ago",
-            is-group-start: true, is-continuation: false, is-system: false
+            message-id: "p4", sender-id: "u3", sender-name: "k0ji",
+            sender-initials: "K0", text: "yo @bobdev you in?",
+            display-text: "yo @bobdev you in?",
+            display-styled: @markdown("yo **@bobdev** you in?"),
+            timestamp: "May 19, 8:06 PM", display-time: "8:06 PM",
+            is-group-start: true, mentions-self: true,
         },
+        // Reply quote
         {
-            message-id: "5", sender-id: "sys", sender-name: "",
+            message-id: "p5", sender-id: "u1", sender-name: "bobdev",
+            sender-initials: "B0", text: "yeah omw",
+            display-text: "yeah omw",
+            display-styled: @markdown("yeah omw"),
+            timestamp: "May 19, 8:07 PM", display-time: "8:07 PM",
+            is-group-start: true,
+            reply-to-id: "p1", reply-to-name: "oweboweob",
+            reply-preview-text: "hey crew, stream at 8?",
+        },
+        // Edited message
+        {
+            message-id: "p6", sender-id: "u1", sender-name: "bobdev",
+            sender-initials: "B0", text: "actually 8:30 — traffic",
+            display-text: "actually 8:30 — traffic",
+            display-styled: @markdown("actually 8:30 — traffic"),
+            timestamp: "May 19, 8:08 PM", display-time: "8:08 PM",
+            is-group-start: false, is-continuation: true, is-edited: true,
+        },
+        // Unread divider
+        {
+            message-id: "__unread__", is-unread-divider: true,
+        },
+        // GIF placeholder
+        {
+            message-id: "p7", sender-id: "u2", sender-name: "oweboweob",
+            sender-initials: "OW", text: "",
+            display-text: "", display-styled: @markdown(""),
+            timestamp: "May 19, 8:10 PM", display-time: "8:10 PM",
+            is-group-start: true, is-gif: true,
+            gif-preview-url: "https://media.giphy.com/media/example.gif",
+            gif-width: 320, gif-height: 240,
+        },
+        // Clip card
+        {
+            message-id: "p8", sender-id: "u3", sender-name: "k0ji",
+            sender-initials: "K0", text: "",
+            display-text: "", display-styled: @markdown(""),
+            timestamp: "May 19, 8:12 PM", display-time: "8:12 PM",
+            is-group-start: true, is-clip: true,
+            clip-duration: "1:42", clip-id: "clip-preview",
+        },
+        // Deleted message
+        {
+            message-id: "p9", sender-id: "u2", sender-name: "oweboweob",
+            sender-initials: "OW", text: "oops wrong channel",
+            display-text: "", display-styled: @markdown(""),
+            timestamp: "May 19, 8:13 PM", display-time: "8:13 PM",
+            is-group-start: true, is-deleted: true,
+        },
+        // System message
+        {
+            message-id: "p10", sender-id: "sys", sender-name: "",
             sender-initials: "", text: "k0ji joined the crew",
-            timestamp: "", display-time: "",
-            is-group-start: false, is-continuation: false, is-system: true
+            display-text: "k0ji joined the crew",
+            display-styled: @markdown("k0ji joined the crew"),
+            is-system: true,
         },
+        // Own message (Edit/Delete in ⋮ menu — hover to test)
         {
-            message-id: "6", sender-id: "u3", sender-name: "k0ji",
-            sender-initials: "K0", text: "sup guys 👋",
-            timestamp: "", display-time: "just now",
-            is-group-start: true, is-continuation: false, is-system: false
-        },
-        {
-            message-id: "7", sender-id: "u1", sender-name: "bobdev",
-            sender-initials: "B0", text: "",
-            timestamp: "", display-time: "just now",
-            is-group-start: true, is-continuation: false, is-system: false,
-            is-clip: true, clip-duration: "0:28", clip-id: "clip-001"
+            message-id: "p11", sender-id: "u1", sender-name: "bobdev",
+            sender-initials: "B0",
+            text: "Preview: hover for reply / ⋮ menu. Click outside to dismiss menu.",
+            display-text: "Preview: hover for reply / ⋮ menu. Click outside to dismiss menu.",
+            display-styled: @markdown("Preview: hover for reply / ⋮ menu. Click outside to dismiss menu."),
+            timestamp: "May 19, 8:15 PM", display-time: "just now",
+            is-group-start: true,
         },
     ];
 }

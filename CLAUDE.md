@@ -57,6 +57,7 @@ Do not repeat a corrected mistake in the same session.
 - Before adding a dependency: will it fit inside the size/RAM budget? Check binary size impact.
 
 ## Slint UI Rules
+- Use `MelloTextInput` from `theme.slint` instead of raw `TextInput` — it applies `Theme.selection-bg` / `selection-fg` (accent-tinted highlight) instead of Slint’s default cupertino blue.
 - `Image` has NO `vertical-alignment` property — only `Text` does.
   To vertically center an `Image` inside a layout or container, use:
   `y: (parent.height - self.height) / 2;`

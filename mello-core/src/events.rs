@@ -23,6 +23,10 @@ pub struct ChatMessage {
     pub create_time: String,
     pub update_time: String,
     pub gif: Option<crate::chat::GifData>,
+    pub reply_to: Option<String>,
+    pub is_system: bool,
+    pub is_edited: bool,
+    pub is_deleted: bool,
 }
 
 #[derive(Debug, Clone)]

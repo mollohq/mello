@@ -4,6 +4,7 @@ mod app_context;
 mod autolaunch;
 mod avatar;
 mod callbacks;
+mod chat_ui;
 mod converters;
 #[cfg(target_os = "windows")]
 pub mod dcomp_presenter;
@@ -398,6 +399,9 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
         discover_cursor: Rc::new(RefCell::new(None)),
         discover_loading: Rc::new(RefCell::new(false)),
         chat_messages: Rc::new(RefCell::new(Vec::new())),
+        chat_scroll: Rc::new(chat_ui::ChatScrollState::new()),
+        unread_tracker: Rc::new(RefCell::new(mello_core::chat::UnreadTracker::new())),
+        active_crew_id: Rc::new(RefCell::new(String::new())),
         avatar_state: std::sync::Arc::new(std::sync::Mutex::new(avatar::AvatarGridState::new())),
         profile_avatar_state: std::sync::Arc::new(std::sync::Mutex::new(
             avatar::AvatarGridState::new(),
