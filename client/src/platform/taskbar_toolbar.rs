@@ -283,10 +283,10 @@ fn put_pixel(buf: &mut [u8], x: i32, y: i32, r: u8, g: u8, b: u8, a: u8) {
     buf[i + 3] = a;
 }
 
-fn draw_rect(buf: &mut [u8], x: i32, y: i32, w: i32, h: i32, r: u8, g: u8, b: u8) {
+fn draw_rect(buf: &mut [u8], x: i32, y: i32, w: i32, h: i32, rgb: [u8; 3]) {
     for py in y..y + h {
         for px in x..x + w {
-            put_pixel(buf, px, py, r, g, b, 255);
+            put_pixel(buf, px, py, rgb[0], rgb[1], rgb[2], 255);
         }
     }
 }
@@ -307,33 +307,33 @@ fn render_mic_icon(muted: bool) -> HICON {
     let n = (ICON_SIZE * ICON_SIZE * 4) as usize;
     let mut buf = vec![0u8; n];
 
-    let (cr, cg, cb) = if muted {
-        (224, 32, 32)
+    let c = if muted {
+        [224, 32, 32]
     } else {
-        (255, 255, 255)
+        [255, 255, 255]
     };
 
     // Mic head (rounded rectangle approximation)
-    draw_rect(&mut buf, 6, 2, 4, 7, cr, cg, cb);
-    draw_circle(&mut buf, 7, 3, 1, cr, cg, cb);
-    draw_circle(&mut buf, 8, 3, 1, cr, cg, cb);
+    draw_rect(&mut buf, 6, 2, 4, 7, c);
+    draw_circle(&mut buf, 7, 3, 1, c[0], c[1], c[2]);
+    draw_circle(&mut buf, 8, 3, 1, c[0], c[1], c[2]);
 
     // Stand arc (simplified as U shape)
-    put_pixel(&mut buf, 4, 6, cr, cg, cb, 255);
-    put_pixel(&mut buf, 4, 7, cr, cg, cb, 255);
-    put_pixel(&mut buf, 4, 8, cr, cg, cb, 255);
-    put_pixel(&mut buf, 11, 6, cr, cg, cb, 255);
-    put_pixel(&mut buf, 11, 7, cr, cg, cb, 255);
-    put_pixel(&mut buf, 11, 8, cr, cg, cb, 255);
-    put_pixel(&mut buf, 5, 9, cr, cg, cb, 255);
-    put_pixel(&mut buf, 10, 9, cr, cg, cb, 255);
-    draw_rect(&mut buf, 6, 10, 4, 1, cr, cg, cb);
+    put_pixel(&mut buf, 4, 6, c[0], c[1], c[2], 255);
+    put_pixel(&mut buf, 4, 7, c[0], c[1], c[2], 255);
+    put_pixel(&mut buf, 4, 8, c[0], c[1], c[2], 255);
+    put_pixel(&mut buf, 11, 6, c[0], c[1], c[2], 255);
+    put_pixel(&mut buf, 11, 7, c[0], c[1], c[2], 255);
+    put_pixel(&mut buf, 11, 8, c[0], c[1], c[2], 255);
+    put_pixel(&mut buf, 5, 9, c[0], c[1], c[2], 255);
+    put_pixel(&mut buf, 10, 9, c[0], c[1], c[2], 255);
+    draw_rect(&mut buf, 6, 10, 4, 1, c);
 
     // Stem
-    draw_rect(&mut buf, 7, 10, 2, 2, cr, cg, cb);
+    draw_rect(&mut buf, 7, 10, 2, 2, c);
 
     // Base
-    draw_rect(&mut buf, 5, 12, 6, 1, cr, cg, cb);
+    draw_rect(&mut buf, 5, 12, 6, 1, c);
 
     if muted {
         // Diagonal slash
@@ -349,21 +349,21 @@ fn render_mic_icon(muted: bool) -> HICON {
 fn render_headphones_icon() -> HICON {
     let n = (ICON_SIZE * ICON_SIZE * 4) as usize;
     let mut buf = vec![0u8; n];
-    let c = (255, 255, 255);
+    let c = [255u8, 255, 255];
 
     // Headband arc (top half)
     for angle_deg in 0..=180 {
         let a = (angle_deg as f32).to_radians();
         let px = 8.0 + 5.0 * a.cos();
         let py = 6.0 - 5.0 * a.sin();
-        put_pixel(&mut buf, px as i32, py as i32, c.0, c.1, c.2, 255);
+        put_pixel(&mut buf, px as i32, py as i32, c[0], c[1], c[2], 255);
     }
 
     // Left ear pad
-    draw_rect(&mut buf, 2, 6, 3, 5, c.0, c.1, c.2);
+    draw_rect(&mut buf, 2, 6, 3, 5, c);
 
     // Right ear pad
-    draw_rect(&mut buf, 11, 6, 3, 5, c.0, c.1, c.2);
+    draw_rect(&mut buf, 11, 6, 3, 5, c);
 
     create_icon_from_rgba(&buf)
 }
@@ -371,19 +371,19 @@ fn render_headphones_icon() -> HICON {
 fn render_leave_icon() -> HICON {
     let n = (ICON_SIZE * ICON_SIZE * 4) as usize;
     let mut buf = vec![0u8; n];
-    let c = (224, 32, 32);
+    let c = [224u8, 32, 32];
 
     // Phone handset rotated 135° (hangup icon) - simplified as diagonal bar
     // Earpiece
-    draw_rect(&mut buf, 2, 4, 3, 3, c.0, c.1, c.2);
+    draw_rect(&mut buf, 2, 4, 3, 3, c);
     // Mouthpiece
-    draw_rect(&mut buf, 11, 9, 3, 3, c.0, c.1, c.2);
+    draw_rect(&mut buf, 11, 9, 3, 3, c);
     // Handle connecting them (diagonal)
     for i in 0..8 {
         let x = 4 + i;
         let y = 6 + i / 2;
-        put_pixel(&mut buf, x, y, c.0, c.1, c.2, 255);
-        put_pixel(&mut buf, x, y + 1, c.0, c.1, c.2, 255);
+        put_pixel(&mut buf, x, y, c[0], c[1], c[2], 255);
+        put_pixel(&mut buf, x, y + 1, c[0], c[1], c[2], 255);
     }
 
     create_icon_from_rgba(&buf)
