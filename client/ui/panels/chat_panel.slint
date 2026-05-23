@@ -79,6 +79,122 @@ component AvatarCircle inherits Rectangle {
     }
 }
 
+// PopupWindow lives in a component (not in `for`) so it can anchor to the ⋮ button.
+component MessageMoreMenu inherits Rectangle {
+    in property <bool> active: false;
+    in property <bool> open-above: false;
+    in property <bool> is-own-message: false;
+    out property <bool> pointer-hover: more-touch.has-hover;
+
+    callback toggled();
+    callback edit-requested();
+    callback delete-requested();
+    callback copy-requested();
+
+    width: 16px;
+    height: 16px;
+    border-radius: 4px;
+    background: more-touch.has-hover ? Theme.bg-tertiary : Theme.surface;
+
+    more-touch := TouchArea {
+        width: parent.width;
+        height: parent.height;
+        mouse-cursor: pointer;
+        clicked => { root.toggled(); }
+    }
+
+    Image {
+        source: @image-url("../icons/more.svg");
+        width: 12px;
+        height: 12px;
+        colorize: Theme.text-secondary;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+    }
+
+    menu-popup := PopupWindow {
+        x: 0px;
+        y: open-above ? -menu-box.height - 8px : parent.height + 4px;
+        width: 120px;
+
+        menu-box := Rectangle {
+            background: Theme.surface;
+            border-radius: 6px;
+            border-width: 1px;
+            border-color: Theme.graphic-light;
+            drop-shadow-blur: 6px;
+            drop-shadow-color: #00000030;
+
+            VerticalLayout {
+                padding: 4px;
+                spacing: 2px;
+
+                if is-own-message: Rectangle {
+                    height: 28px;
+                    background: menu-edit-touch.has-hover ? Theme.bg-tertiary : transparent;
+                    border-radius: 4px;
+
+                    Text {
+                        text: "Edit";
+                        font-size: Theme.font-sm;
+                        color: Theme.text-secondary;
+                        x: 8px;
+                        vertical-alignment: center;
+                    }
+
+                    menu-edit-touch := TouchArea {
+                        clicked => { root.edit-requested(); }
+                    }
+                }
+
+                if is-own-message: Rectangle {
+                    height: 28px;
+                    background: menu-del-touch.has-hover ? Theme.bg-tertiary : transparent;
+                    border-radius: 4px;
+
+                    Text {
+                        text: "Delete";
+                        font-size: Theme.font-sm;
+                        color: #E05555;
+                        x: 8px;
+                        vertical-alignment: center;
+                    }
+
+                    menu-del-touch := TouchArea {
+                        clicked => { root.delete-requested(); }
+                    }
+                }
+
+                Rectangle {
+                    height: 28px;
+                    background: menu-copy-touch.has-hover ? Theme.bg-tertiary : transparent;
+                    border-radius: 4px;
+
+                    Text {
+                        text: "Copy text";
+                        font-size: Theme.font-sm;
+                        color: Theme.text-secondary;
+                        x: 8px;
+                        vertical-alignment: center;
+                    }
+
+                    menu-copy-touch := TouchArea {
+                        clicked => { root.copy-requested(); }
+                    }
+                }
+            }
+        }
+    }
+
+    changed active => {
+        if active {
+            menu-popup.show();
+        } else {
+            menu-popup.close();
+        }
+    }
+}
+
 component PillButton inherits Rectangle {
     in property <image> icon;
     in property <string> label;
@@ -622,7 +738,8 @@ export component ChatPanel inherits Rectangle {
                         property <bool> body-hovered: body-hover.has-hover
                             || hover-bar-hover.has-hover
                             || reply-touch.has-hover
-                            || more-touch.has-hover;
+                            || more-menu.pointer-hover
+                            || root.more-menu-message-id == msg.message-id;
 
                         // Gutter column for hover actions (avatar is in header row above)
                         Rectangle {
@@ -665,116 +782,31 @@ export component ChatPanel inherits Rectangle {
                                         }
                                     }
 
-                                    Rectangle {
-                                        width: 16px;
-                                        height: 16px;
-                                        border-radius: 4px;
-                                        background: more-touch.has-hover ? Theme.bg-tertiary : Theme.surface;
-
-                                        Image {
-                                            source: @image-url("../icons/more.svg");
-                                            width: 12px;
-                                            height: 12px;
-                                            colorize: Theme.text-secondary;
-                                            x: (parent.width - self.width) / 2;
-                                            y: (parent.height - self.height) / 2;
+                                    more-menu := MessageMoreMenu {
+                                        active: root.more-menu-message-id == msg.message-id;
+                                        open-above: feed.at-bottom && idx >= messages.length - 2;
+                                        is-own-message: msg.sender-id == root.user-id;
+                                        toggled => {
+                                            root.more-menu-message-id =
+                                                root.more-menu-message-id == msg.message-id ? "" : msg.message-id;
                                         }
-
-                                        more-touch := TouchArea {
-                                            clicked => {
-                                                root.more-menu-message-id =
-                                                    root.more-menu-message-id == msg.message-id ? "" : msg.message-id;
-                                            }
+                                        edit-requested => {
+                                            root.edit-mode = true;
+                                            root.edit-message-id = msg.message-id;
+                                            chat-input.text = msg.text;
+                                            chat-input.focus();
+                                            root.more-menu-message-id = "";
                                         }
-                                    }
-                                }
-                            }
-
-                            if root.more-menu-message-id == msg.message-id: Rectangle {
-                                property <length> menu-w: 120px;
-                                property <bool> menu-above: feed.at-bottom && idx >= messages.length - 2;
-
-                                menu-col := VerticalLayout {
-                                    padding: 4px;
-                                    spacing: 2px;
-
-                                    if msg.sender-id == root.user-id: Rectangle {
-                                        height: 28px;
-                                        background: menu-edit-touch.has-hover ? Theme.bg-tertiary : transparent;
-                                        border-radius: 4px;
-
-                                        Text {
-                                            text: "Edit";
-                                            font-size: Theme.font-sm;
-                                            color: Theme.text-secondary;
-                                            x: 8px;
-                                            vertical-alignment: center;
+                                        delete-requested => {
+                                            root.delete-confirm-message-id = msg.message-id;
+                                            root.more-menu-message-id = "";
                                         }
-
-                                        menu-edit-touch := TouchArea {
-                                            clicked => {
-                                                root.edit-mode = true;
-                                                root.edit-message-id = msg.message-id;
-                                                chat-input.text = msg.text;
-                                                chat-input.focus();
-                                                root.more-menu-message-id = "";
-                                            }
-                                        }
-                                    }
-
-                                    if msg.sender-id == root.user-id: Rectangle {
-                                        height: 28px;
-                                        background: menu-del-touch.has-hover ? Theme.bg-tertiary : transparent;
-                                        border-radius: 4px;
-
-                                        Text {
-                                            text: "Delete";
-                                            font-size: Theme.font-sm;
-                                            color: #E05555;
-                                            x: 8px;
-                                            vertical-alignment: center;
-                                        }
-
-                                        menu-del-touch := TouchArea {
-                                            clicked => {
-                                                root.delete-confirm-message-id = msg.message-id;
-                                                root.more-menu-message-id = "";
-                                            }
-                                        }
-                                    }
-
-                                    Rectangle {
-                                        height: 28px;
-                                        background: menu-copy-touch.has-hover ? Theme.bg-tertiary : transparent;
-                                        border-radius: 4px;
-
-                                        Text {
-                                            text: "Copy text";
-                                            font-size: Theme.font-sm;
-                                            color: Theme.text-secondary;
-                                            x: 8px;
-                                            vertical-alignment: center;
-                                        }
-
-                                        menu-copy-touch := TouchArea {
-                                            clicked => {
-                                                root.copy-message-text(msg.text);
-                                                root.more-menu-message-id = "";
-                                            }
+                                        copy-requested => {
+                                            root.copy-message-text(msg.text);
+                                            root.more-menu-message-id = "";
                                         }
                                     }
                                 }
-
-                                x: 0;
-                                y: menu-above ? actions-y - menu-col.preferred-height - 8px : actions-y + 20px;
-                                width: menu-w;
-                                height: menu-col.preferred-height + 8px;
-                                background: Theme.surface;
-                                border-radius: 6px;
-                                border-width: 1px;
-                                border-color: Theme.graphic-light;
-                                drop-shadow-blur: 6px;
-                                drop-shadow-color: #00000030;
                             }
                         }
 

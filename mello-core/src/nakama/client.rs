@@ -453,12 +453,12 @@ impl NakamaClient {
     }
 
     async fn ws_send(&self, msg: String) -> Result<()> {
-        if let Some(tx) = &self.ws_tx {
-            tx.send(msg)
-                .await
-                .map_err(|e| Error::WebSocket(e.to_string()))?;
-        }
-        Ok(())
+        let Some(tx) = &self.ws_tx else {
+            return Err(Error::NotConnected);
+        };
+        tx.send(msg)
+            .await
+            .map_err(|e| Error::WebSocket(e.to_string()))
     }
 
     // --- Crews ---
@@ -1783,6 +1783,15 @@ async fn handle_ws_message(
             }
         }
 
+        let message_id = msg.message_id.unwrap_or_default();
+
+        // Nakama channel message codes: 0 = create, 1 = update, 2 = remove
+        let code = msg.code.unwrap_or(0);
+        if code == 2 {
+            let _ = event_tx.send(Event::ChatMessageDeleted { message_id });
+            return;
+        }
+
         let envelope = match crate::chat::parse_content(&content_str) {
             Some(e) => e,
             None => return,
@@ -1799,14 +1808,6 @@ async fn handle_ws_message(
 
         let create_time = msg.create_time.unwrap_or_default();
         let update_time = msg.update_time.unwrap_or_default();
-        let message_id = msg.message_id.unwrap_or_default();
-
-        // Nakama channel message codes: 0 = create, 1 = update, 2 = remove
-        let code = msg.code.unwrap_or(0);
-        if code == 2 {
-            let _ = event_tx.send(Event::ChatMessageDeleted { message_id });
-            return;
-        }
 
         let Some(chat_msg) = crate::chat::chat_message_from_envelope(
             message_id.clone(),
