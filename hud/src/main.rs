@@ -44,6 +44,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let current_state = Rc::new(RefCell::new(HudState::default()));
     let clip_toast_deadline: Rc<RefCell<Option<Instant>>> = Rc::new(RefCell::new(None));
     let show_clip_toasts = Rc::new(RefCell::new(true));
+    let last_diag: Rc<RefCell<Instant>> = Rc::new(RefCell::new(Instant::now()));
 
     log::info!("[hud] overlay created, entering slint event loop");
 
@@ -54,6 +55,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         let current_state = current_state.clone();
         let clip_toast_deadline = clip_toast_deadline.clone();
         let show_clip_toasts = show_clip_toasts.clone();
+        let last_diag = last_diag.clone();
 
         move || {
             while let Ok(msg) = state_rx.try_recv() {
@@ -123,6 +125,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 
             if mode_mgr.borrow().current() == HudMode::Overlay {
                 overlay_win.borrow().ensure_topmost();
+
+                let now = Instant::now();
+                if now.duration_since(*last_diag.borrow()) >= Duration::from_secs(5) {
+                    *last_diag.borrow_mut() = now;
+                    overlay_win.borrow().log_diagnostics();
+                }
             }
         }
     });

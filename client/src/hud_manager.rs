@@ -2,14 +2,7 @@ use std::sync::mpsc;
 
 use serde::{Deserialize, Serialize};
 
-#[cfg(target_os = "windows")]
-use std::io::{BufRead, BufReader, Write};
-#[cfg(target_os = "windows")]
-use std::process::{Child, Command as StdCommand};
-#[cfg(target_os = "windows")]
-use std::time::Duration;
-
-// ── IPC protocol types (mirrored from hud/src/protocol.rs) ────────────────
+// ── IPC protocol types (kept for state builder / serde compatibility) ────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
@@ -117,36 +110,40 @@ pub enum HudAction {
 
 // ── HudManager ────────────────────────────────────────────────────────────
 
-/// Manages the m3llo-hud.exe child process: spawning, IPC, crash respawn.
+/// Manages the in-process HUD overlay thread.
 pub struct HudManager {
-    state_tx: mpsc::Sender<HudMessage>,
-    action_rx: mpsc::Receiver<HudAction>,
+    tx: mpsc::Sender<HudMessage>,
     enabled: bool,
 }
 
 impl HudManager {
-    /// Start the HUD manager. Spawns the named pipe server thread and the HUD
-    /// child process. Returns the manager handle.
+    /// Start the HUD manager. If enabled (and on Windows), spawns the overlay
+    /// thread. Returns the manager handle.
     pub fn start(enabled: bool) -> Self {
         let enabled = enabled && cfg!(target_os = "windows");
-        let (state_tx, state_internal_rx) = mpsc::channel::<HudMessage>();
-        let (action_internal_tx, action_rx) = mpsc::channel::<HudAction>();
 
-        if enabled {
-            // Spawn the pipe server + process manager on a background thread
-            std::thread::spawn(move || {
-                server_loop(state_internal_rx, action_internal_tx);
-            });
-        }
+        let tx = if enabled {
+            #[cfg(target_os = "windows")]
+            {
+                let sender = crate::hud_overlay::spawn();
+                log::info!("[hud_mgr] overlay thread spawned");
+                sender
+            }
+            #[cfg(not(target_os = "windows"))]
+            {
+                // Unreachable due to the check above, but keeps the compiler happy
+                let (sender, _) = mpsc::channel();
+                sender
+            }
+        } else {
+            let (sender, _) = mpsc::channel();
+            sender
+        };
 
-        Self {
-            state_tx,
-            action_rx,
-            enabled,
-        }
+        Self { tx, enabled }
     }
 
-    /// Push a state update to the HUD process.
+    /// Push a state update to the overlay.
     pub fn push_state(&self, state: HudState) {
         if !self.enabled {
             return;
@@ -157,263 +154,32 @@ impl HudManager {
             state.crew.is_some(),
             state.voice.as_ref().map_or(0, |v| v.members.len()),
         );
-        if let Err(e) = self.state_tx.send(HudMessage::State(Box::new(state))) {
-            log::error!("[hud_mgr] send failed (server thread dead?): {}", e);
+        if let Err(e) = self.tx.send(HudMessage::State(Box::new(state))) {
+            log::error!("[hud_mgr] send failed (overlay thread dead?): {}", e);
         }
     }
 
-    /// Push a settings update to the HUD process.
+    /// Push a settings update to the overlay.
     pub fn push_settings(&self, settings: HudSettings) {
         if !self.enabled {
             return;
         }
-        let _ = self.state_tx.send(HudMessage::Settings(settings));
+        let _ = self.tx.send(HudMessage::Settings(settings));
     }
 
-    /// Poll for user actions from the HUD.
+    /// Poll for user actions from the HUD (currently unused -- overlay is click-through).
     pub fn poll_action(&self) -> Option<HudAction> {
-        self.action_rx.try_recv().ok()
+        None
     }
 
-    /// Send shutdown and stop managing.
+    /// Send shutdown to the overlay thread.
     pub fn shutdown(&self) {
-        let _ = self.state_tx.send(HudMessage::Shutdown);
+        let _ = self.tx.send(HudMessage::Shutdown);
     }
 
     pub fn is_enabled(&self) -> bool {
         self.enabled
     }
-}
-
-// ── Pipe server + process management ──────────────────────────────────────
-
-#[cfg(target_os = "windows")]
-fn server_loop(state_rx: mpsc::Receiver<HudMessage>, action_tx: mpsc::Sender<HudAction>) {
-    kill_zombie_hud_processes();
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        server_loop_inner(&state_rx, &action_tx);
-    }));
-    if let Err(e) = result {
-        log::error!("[hud_mgr] server thread PANICKED: {:?}", e);
-    }
-}
-
-#[cfg(target_os = "windows")]
-fn server_loop_inner(state_rx: &mpsc::Receiver<HudMessage>, action_tx: &mpsc::Sender<HudAction>) {
-    let mut spawn_failures = 0u32;
-
-    loop {
-        let hud_exe = hud_exe_path();
-        log::info!("[hud_mgr] spawning HUD process: {}", hud_exe.display());
-        let mut child = match StdCommand::new(&hud_exe).spawn() {
-            Ok(c) => {
-                log::info!("[hud_mgr] HUD process started, pid={}", c.id());
-                spawn_failures = 0;
-                c
-            }
-            Err(e) => {
-                spawn_failures += 1;
-                if spawn_failures <= 3 {
-                    log::error!("[hud_mgr] failed to spawn HUD: {}", e);
-                } else if spawn_failures == 4 {
-                    log::error!(
-                        "[hud_mgr] failed to spawn HUD {} times, suppressing further logs",
-                        spawn_failures
-                    );
-                }
-                // Back off: 5s, 10s, 30s, then cap at 60s
-                let delay = match spawn_failures {
-                    1 => 5,
-                    2 => 10,
-                    3 => 30,
-                    _ => 60,
-                };
-                std::thread::sleep(Duration::from_secs(delay));
-                continue;
-            }
-        };
-
-        match run_pipe_server(state_rx, action_tx, &mut child) {
-            Ok(()) => {
-                log::info!("[hud_mgr] pipe session ended normally");
-            }
-            Err(e) => {
-                log::warn!("[hud_mgr] pipe session error: {}", e);
-            }
-        }
-
-        let _ = child.kill();
-        let _ = child.wait();
-
-        if let Ok(HudMessage::Shutdown) = state_rx.try_recv() {
-            log::info!("[hud_mgr] shutdown received, not respawning");
-            return;
-        }
-
-        log::info!("[hud_mgr] respawning HUD in 2s");
-        std::thread::sleep(Duration::from_secs(2));
-    }
-}
-
-#[cfg(target_os = "windows")]
-fn run_pipe_server(
-    state_rx: &mpsc::Receiver<HudMessage>,
-    action_tx: &mpsc::Sender<HudAction>,
-    child: &mut Child,
-) -> Result<(), Box<dyn std::error::Error>> {
-    use std::os::windows::io::FromRawHandle;
-    use windows::core::*;
-    use windows::Win32::Foundation::*;
-    use windows::Win32::Storage::FileSystem::*;
-    use windows::Win32::System::Pipes::*;
-
-    unsafe {
-        let state_pipe_name = w!(r"\\.\pipe\m3llo-hud-state");
-        let action_pipe_name = w!(r"\\.\pipe\m3llo-hud-action");
-
-        // State pipe: server writes, HUD reads
-        let state_pipe = CreateNamedPipeW(
-            state_pipe_name,
-            PIPE_ACCESS_OUTBOUND,
-            PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
-            1,
-            4096,
-            0,
-            0,
-            None,
-        );
-        if state_pipe == INVALID_HANDLE_VALUE {
-            return Err("CreateNamedPipeW (state) failed".into());
-        }
-
-        // Action pipe: HUD writes, server reads
-        let action_pipe = CreateNamedPipeW(
-            action_pipe_name,
-            PIPE_ACCESS_INBOUND,
-            PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
-            1,
-            0,
-            4096,
-            0,
-            None,
-        );
-        if action_pipe == INVALID_HANDLE_VALUE {
-            return Err("CreateNamedPipeW (action) failed".into());
-        }
-
-        log::info!("[hud_mgr] waiting for HUD to connect to pipes");
-
-        let _ = ConnectNamedPipe(state_pipe, None);
-        log::info!("[hud_mgr] HUD connected (state pipe)");
-
-        let _ = ConnectNamedPipe(action_pipe, None);
-        log::info!("[hud_mgr] HUD connected (action pipe)");
-
-        let mut writer = std::fs::File::from_raw_handle(state_pipe.0);
-        let reader = BufReader::new(std::fs::File::from_raw_handle(action_pipe.0));
-
-        // Spawn a thread to read actions from HUD
-        let action_tx_clone = action_tx.clone();
-        let reader_thread = std::thread::spawn(move || {
-            for line_result in reader.lines() {
-                match line_result {
-                    Ok(ref text) if !text.is_empty() => {
-                        match serde_json::from_str::<HudAction>(text) {
-                            Ok(action) => {
-                                let _ = action_tx_clone.send(action);
-                            }
-                            Err(e) => {
-                                log::warn!("[hud_mgr] bad action from HUD: {}", e);
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        log::debug!("[hud_mgr] reader error: {}", e);
-                        break;
-                    }
-                    _ => {}
-                }
-            }
-        });
-
-        log::info!("[hud_mgr] entering write loop");
-        loop {
-            match child.try_wait() {
-                Ok(Some(status)) => {
-                    log::warn!("[hud_mgr] HUD process exited: {:?}", status);
-                    break;
-                }
-                Err(e) => {
-                    log::warn!("[hud_mgr] failed to check child status: {}", e);
-                    break;
-                }
-                Ok(None) => {}
-            }
-
-            match state_rx.recv_timeout(Duration::from_millis(50)) {
-                Ok(msg) => {
-                    let is_shutdown = matches!(msg, HudMessage::Shutdown);
-                    match serde_json::to_string(&msg) {
-                        Ok(json) => {
-                            let line = format!("{}\n", json);
-                            if let Err(e) = writer.write_all(line.as_bytes()) {
-                                log::warn!("[hud_mgr] pipe write error: {}", e);
-                                break;
-                            }
-                        }
-                        Err(e) => {
-                            log::warn!("[hud_mgr] failed to serialize: {}", e);
-                        }
-                    }
-                    if is_shutdown {
-                        break;
-                    }
-                }
-                Err(mpsc::RecvTimeoutError::Timeout) => {}
-                Err(mpsc::RecvTimeoutError::Disconnected) => {
-                    log::info!("[hud_mgr] state sender dropped, exiting");
-                    break;
-                }
-            }
-        }
-
-        let _ = reader_thread.join();
-        Ok(())
-    }
-}
-
-#[cfg(not(target_os = "windows"))]
-fn server_loop(_state_rx: mpsc::Receiver<HudMessage>, _action_tx: mpsc::Sender<HudAction>) {
-    log::warn!("[hud_mgr] HUD manager is Windows-only");
-}
-
-/// Kill any orphaned m3llo-hud.exe processes from previous runs.
-#[cfg(target_os = "windows")]
-fn kill_zombie_hud_processes() {
-    use std::process::Command as StdCmd;
-
-    let output = match StdCmd::new("taskkill")
-        .args(["/F", "/IM", "m3llo-hud.exe"])
-        .output()
-    {
-        Ok(o) => o,
-        Err(_) => return,
-    };
-    if output.status.success() {
-        let msg = String::from_utf8_lossy(&output.stdout);
-        log::info!("[hud_mgr] killed zombie HUD process(es): {}", msg.trim());
-    }
-}
-
-/// Resolve the path to m3llo-hud.exe, adjacent to the main binary.
-#[cfg(target_os = "windows")]
-fn hud_exe_path() -> std::path::PathBuf {
-    let mut path = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("."));
-    path.pop(); // remove mello.exe filename
-    path.push("m3llo-hud");
-    #[cfg(target_os = "windows")]
-    path.set_extension("exe");
-    path
 }
 
 /// Derive initials from a display name (max 2 chars, uppercase).

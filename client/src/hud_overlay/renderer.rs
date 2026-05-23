@@ -8,7 +8,7 @@ use windows_numerics::Vector2;
 
 use base64::Engine;
 
-use crate::protocol::HudState;
+use crate::hud_manager::HudState;
 
 const PANEL_WIDTH: f32 = 230.0;
 const PANEL_PADDING: f32 = 10.0;
@@ -220,7 +220,7 @@ impl D2DRenderer {
     unsafe fn draw_header(
         &self,
         rt: &ID2D1RenderTarget,
-        crew: &crate::protocol::HudCrew,
+        crew: &crate::hud_manager::HudCrew,
         y: &mut f32,
         width: f32,
     ) -> Result<()> {
@@ -299,7 +299,7 @@ impl D2DRenderer {
     unsafe fn draw_member_row(
         &self,
         rt: &ID2D1RenderTarget,
-        member: &crate::protocol::HudVoiceMember,
+        member: &crate::hud_manager::HudVoiceMember,
         is_streaming: bool,
         y: &mut f32,
         _width: f32,
@@ -504,7 +504,7 @@ impl D2DRenderer {
     unsafe fn draw_clip_toast(
         &self,
         rt: &ID2D1RenderTarget,
-        toast: &crate::protocol::HudClipToast,
+        toast: &crate::hud_manager::HudClipToast,
         y: &mut f32,
         width: f32,
     ) -> Result<()> {

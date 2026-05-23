@@ -13,6 +13,8 @@ mod foreground_monitor;
 mod gif_animator;
 mod handlers;
 pub mod hud_manager;
+#[cfg(target_os = "windows")]
+mod hud_overlay;
 mod hud_state_builder;
 mod image_cache;
 mod ipc;

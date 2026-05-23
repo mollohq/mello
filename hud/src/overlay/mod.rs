@@ -52,4 +52,9 @@ impl OverlayWindow {
         #[cfg(target_os = "windows")]
         self.inner.ensure_topmost();
     }
+
+    pub fn log_diagnostics(&self) {
+        #[cfg(target_os = "windows")]
+        self.inner.log_diagnostics();
+    }
 }

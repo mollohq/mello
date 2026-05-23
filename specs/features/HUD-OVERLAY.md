@@ -1,7 +1,7 @@
 # HUD Overlay Specification
 
 > **Component:** Crew HUD (Client, Windows)
-> **Version:** 0.3
+> **Version:** 0.4
 > **Status:** Implemented (Windows), Planned (macOS)
 > **Parent:** [00-ARCHITECTURE.md](./00-ARCHITECTURE.md)
 > **Related:** [11-PRESENCE-CREW-STATE.md](./11-PRESENCE-CREW-STATE.md), [13-VOICE-CHANNELS.md](./13-VOICE-CHANNELS.md)
@@ -18,7 +18,7 @@ The HUD is a small, transparent, click-through overlay that shows crew and voice
 | Not focused, in voice, HUD enabled | Overlay visible |
 | Not in voice / HUD disabled | HUD hidden |
 
-The overlay is implemented in a separate lightweight process: `m3llo-hud.exe`, spawned by the main client on launch. On Windows, the taskbar thumbnail toolbar provides mute/deafen/leave controls when hovering over the m3llo icon in the taskbar.
+On Windows, the taskbar thumbnail toolbar provides mute/deafen/leave controls when hovering over the m3llo icon in the taskbar.
 
 **Out of scope:**
 - Chat input
@@ -29,81 +29,45 @@ The overlay is implemented in a separate lightweight process: `m3llo-hud.exe`, s
 
 ---
 
-## 2. Process Architecture
+## 2. Architecture
 
-### 2.1 Process model
+### 2.1 In-client overlay thread
 
-`m3llo-hud.exe` is a standalone Rust binary. It is not a DLL, not injected, and never reads or writes to any game process.
-
-The main client spawns `m3llo-hud.exe` on launch and terminates it on exit. If the HUD process crashes, the main client detects the exit and respawns it after 2 seconds.
+The overlay runs on a dedicated thread within the main `mello.exe` process. No separate binary is built or shipped.
 
 ```
-m3llo.exe  ──IPC named pipe──►  m3llo-hud.exe
-                                 └── Win32/D2D window  (Overlay)
+mello.exe
+ ├── main thread (Slint UI)
+ ├── poll loop thread
+ └── hud-overlay thread  (Win32 message loop + D2D rendering)
+       └── mpsc::Receiver<HudMessage>
 ```
 
-The overlay window is created at startup and persists for the lifetime of the HUD process. It is shown/hidden by the mode manager based on state pushed from the main client.
+`HudManager` owns the `mpsc::Sender` and pushes state/settings/shutdown messages. The overlay thread creates its Win32 window, sets up the DComp rendering pipeline, and enters a message loop that drains both Win32 messages and channel messages every ~16ms.
 
-### 2.2 IPC protocol
+### 2.2 Message protocol
 
-Named pipe: `\\.\pipe\m3llo-hud`
+All communication uses `mpsc::channel<HudMessage>`. Three message variants:
 
-All messages are newline-delimited JSON. The main client pushes state; the HUD pushes user actions back.
-
-**State push (main → HUD):**
-
-```json
-{
-  "type": "state",
-  "mode": "overlay",
-  "crew": {
-    "name": "The Vanguard",
-    "initials": "TV",
-    "avatar_rgba": "24:24:<base64>",
-    "online_count": 5
-  },
-  "voice": {
-    "channel_name": "General",
-    "members": [
-      {
-        "id": "abc",
-        "display_name": "k0ji_tech",
-        "initials": "KT",
-        "avatar_rgba": "24:24:<base64>",
-        "speaking": true,
-        "muted": false,
-        "is_self": false
-      }
-    ],
-    "self_muted": false
-  },
-  "stream_card": {
-    "streamer": "k0ji_tech",
-    "title": "PROJECT AVALON"
-  },
-  "clip_toast": null
-}
+**State push:**
+```rust
+HudMessage::State(Box<HudState>)
 ```
 
-If `voice` is `null`, the user is not in a voice channel and the HUD hides entirely.
+`HudState` contains: `mode` (Hidden/Overlay), `crew` (name, initials, avatar), `voice` (channel name, members with speaking/muted/streaming state, avatars), `stream_card`, `clip_toast`.
 
-The `mode` field tells the HUD whether to show or hide. The main client is the source of truth for mode; the HUD does not independently determine it. Valid modes: `"hidden"`, `"overlay"`.
+Avatars are pre-rasterized 24×24 RGBA bitmaps, base64-encoded by the main client. The overlay never fetches or decodes images itself.
 
-`avatar_rgba` is a string in format `w:h:<base64_rgba>`, containing a 24×24 RGBA bitmap pre-rasterized and downscaled by the main client. The HUD never fetches or decodes images itself. When `null`, the renderer falls back to initials.
-
-**Settings push (main → HUD):**
-
-```json
-{ "type": "settings", "overlay_opacity": 0.8, "show_clip_toasts": true }
+**Settings push:**
+```rust
+HudMessage::Settings(HudSettings { overlay_opacity, show_clip_toasts })
 ```
 
-Settings are applied instantly on receipt — opacity updates the D2D panel background alpha, clip toast flag suppresses/enables toast display.
+Applied instantly — opacity updates the D2D panel background alpha, clip toast flag suppresses/enables toast display.
 
-**User action (HUD → main):**
-
-```json
-{ "type": "action", "action": "mute_toggle" }
-{ "type": "action", "action": "leave_voice" }
+**Shutdown:**
+```rust
+HudMessage::Shutdown
 ```
 
 ### 2.3 Visibility rules
@@ -113,7 +77,10 @@ Settings are applied instantly on receipt — opacity updates the D2D panel back
 | User not in a voice channel | Hidden |
 | m3llo main window focused | Hidden |
 | HUD disabled in settings | Hidden |
+| Fullscreen app covers monitor | Hidden (suppressed) |
 | Any other foreground window | Overlay |
+
+When a fullscreen application covers the entire monitor (detected via `GetWindowRect` + `MonitorFromWindow`), the overlay is hidden to avoid blocking input behind an invisible overlay.
 
 ---
 
@@ -122,20 +89,28 @@ Settings are applied instantly on receipt — opacity updates the D2D panel back
 ### 3.1 Window setup
 
 ```
-WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOPMOST | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW
+WS_EX_NOREDIRECTIONBITMAP | WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOPMOST | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW
 ```
 
-- `WS_EX_LAYERED` — per-pixel alpha compositing via `UpdateLayeredWindow`
-- `WS_EX_TRANSPARENT` — all input passes through
+- `WS_EX_NOREDIRECTIONBITMAP` — required for DirectComposition rendering
+- `WS_EX_LAYERED` + `WS_EX_TRANSPARENT` — cross-process click-through (input passes to windows behind)
 - `WS_EX_TOPMOST` — always above other windows (re-asserted each tick)
 - `WS_EX_NOACTIVATE` — never steals focus
 - `WS_EX_TOOLWINDOW` — excluded from taskbar and Alt+Tab
 
-### 3.2 Rendering
+After creation, `SetLayeredWindowAttributes(alpha=255)` activates the layered window at full opacity — DComp handles actual content compositing.
 
-Direct2D DC render target, rendered into a memory DC with a 32-bit DIB section. Pixels are premultiplied and composited via `UpdateLayeredWindow` with `ULW_ALPHA`. The window background is fully transparent; only HUD content has opacity.
+### 3.2 Rendering pipeline
 
-The HUD redraws only on state change (`needs_render` flag). There is no fixed frame-rate render loop.
+DirectComposition (DComp) with a D3D11/DXGI swap chain and D2D1 device context:
+
+1. D3D11 device → DXGI device → DComp device
+2. DXGI swap chain (FLIP_SEQUENTIAL, premultiplied alpha) bound to a DComp visual
+3. DComp visual tree: target → visual → swap chain
+4. D2D1 device context renders to a bitmap created from the swap chain's back buffer
+5. Present + DComp Commit
+
+The overlay redraws only on state change (`needs_render` flag). There is no fixed frame-rate render loop.
 
 ### 3.3 Visual design
 
@@ -146,10 +121,8 @@ Panel: dark semi-transparent background (`rgba(0,0,0, <user opacity>)`) with rou
 1. **Header row** (24px)
    - Crew avatar (22×22px, 5px radius rounded rect): shows bitmap if available, falls back to accent-tinted rounded rect with initials
    - Crew name (Inter semi-bold, 12px, white)
-   - Online count pill (dark fill, green dot + count in JetBrains Mono 11px)
-   - Optional LIVE badge (red pill, 38×16px) when a crewmate is streaming
 
-2. **Channel name** (16px) — `# channel-name` in Inter 11px, muted grey
+2. **Channel name** (16px) — `.:: channel-name ::.` in Inter 11px, muted grey
 
 3. **Separator** — 1px line, `rgba(255,255,255,0.10)`
 
@@ -159,13 +132,21 @@ Panel: dark semi-transparent background (`rgba(0,0,0, <user opacity>)`) with rou
      - Muted: dark bg, dimmed initials
      - Idle: dark bg, grey initials
    - Display name (Inter medium/semi-bold 13px): white for speaking, light grey for idle, muted grey for muted
+   - LIVE indicator (next to streaming member's name): red dot + "LIVE" text with 1px red border, no background fill
    - State indicator (right side): 3-bar animation for speaking, mic-slash icon for muted
 
 5. **Clip toast** (when active, 26px) — accent pill with white text. Auto-dismissed after 4 seconds.
 
-### 3.4 Position
+### 3.4 Position & dragging
 
 Default: top-left corner of the primary monitor, inset 16px from each edge.
+
+The overlay is repositionable via a **grip window** — a separate 20×20 Win32 window that appears at the overlay's top-right corner when the user hovers over the overlay. The grip:
+- Is NOT click-through (no `WS_EX_TRANSPARENT`)
+- Returns `HTCAPTION` from `WM_NCHITTEST` for native Win32 drag
+- Moves the main overlay via `SetWindowPos` in its `WM_MOVE` handler
+- Shows `IDC_SIZEALL` cursor
+- Auto-hides when the cursor leaves the overlay area
 
 ---
 
@@ -189,11 +170,11 @@ Exposed in the main m3llo client under **Settings → HUD**:
 
 | Setting | Default | Notes |
 |---|---|---|
-| Enable HUD | On | Disabling kills the HUD process entirely |
+| Enable HUD | On | Disabling hides the overlay |
 | Overlay opacity | 80% | Scales alpha of the overlay panel background (clamped 10%–100%) |
 | Clip toast notifications | On | Suppresses clip toasts in the overlay when off |
 
-Settings changes are pushed over IPC instantly and applied in the same render tick.
+Settings changes are pushed over the channel instantly and applied in the same render tick.
 
 ---
 
@@ -201,11 +182,10 @@ Settings changes are pushed over IPC instantly and applied in the same render ti
 
 | Metric | Target |
 |---|---|
-| RAM (overlay visible, idle) | < 25 MB |
+| RAM overhead (overlay visible, idle) | < 15 MB |
 | CPU (nothing speaking) | < 0.1% |
 | CPU (speaking animation active) | < 0.5% |
 | GPU (nobody speaking) | 0% |
-| Startup time to first frame | < 200ms |
 
 The HUD must have zero measurable impact on game frame rate or input latency.
 
@@ -215,19 +195,17 @@ The HUD must have zero measurable impact on game frame rate or input latency.
 
 | Failure | Behaviour |
 |---|---|
-| IPC pipe disconnected | HUD hides, polls for reconnect every 2s |
+| Overlay thread panics | Main client continues running; HUD unavailable until restart |
 | Avatar bitmap missing or corrupt | Render initials fallback: rounded rect with state-colored background, initials centered |
-| Direct2D device lost | Recreate D2D resources, re-render current state |
-| HUD process crashes | Main client detects exit, respawns after 2s |
-| `m3llo-hud.exe` not found | Main client logs error, suppresses after 4 failed spawn attempts |
+| Direct2D/DComp device lost | Overlay thread exits; HUD unavailable until restart |
 
 ---
 
 ## 8. Future Work
 
-- **TODO: macOS mini-player menubar app** — Reuse existing mini-player Slint code (retained in `mello/hud/src/mini_player/`) to build a macOS menubar popover that shows crew, voice, chat, and stream info. The mini-player module and its `.slint` UI are kept in the HUD crate specifically for this purpose.
+- **macOS mini-player menubar app** — Reuse existing mini-player Slint code (retained in `mello/hud/src/mini_player/`) to build a macOS menubar popover that shows crew, voice, chat, and stream info
+- Persist overlay position across sessions
 - Stream clip toast with thumbnail preview
 - Push-to-talk indicator in overlay
 - Per-monitor DPI awareness for mixed-scaling multi-monitor setups
 - Global hotkey to toggle HUD visibility
-- User-draggable overlay position (persisted)
