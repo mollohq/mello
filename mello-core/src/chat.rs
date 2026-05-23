@@ -424,16 +424,21 @@ pub fn format_display_time(ts: &str) -> String {
     local_dt.format("%b %-d, %Y").to_string()
 }
 
-/// Count non-system, non-deleted messages from today (local date) in the loaded set.
-pub fn count_messages_today(messages: &[ChatMessage]) -> i32 {
-    let today = Local::now().date_naive();
+/// Count non-system, non-deleted messages from the current local week (Mon–Sun) in the loaded set.
+pub fn count_messages_this_week(messages: &[ChatMessage]) -> i32 {
+    let now = Local::now();
+    let today = now.date_naive();
+    let week_start = today - chrono::Duration::days(now.weekday().num_days_from_monday() as i64);
     messages
         .iter()
         .filter(|m| !m.is_system && !m.is_deleted)
         .filter(|m| {
             parse_timestamp(&m.create_time)
                 .or_else(|| parse_timestamp(&m.timestamp))
-                .is_some_and(|dt| dt.with_timezone(&Local).date_naive() == today)
+                .is_some_and(|dt| {
+                    let d = dt.with_timezone(&Local).date_naive();
+                    d >= week_start && d <= today
+                })
         })
         .count() as i32
 }
@@ -733,22 +738,22 @@ mod tests {
     }
 
     #[test]
-    fn count_messages_today_includes_today_only() {
+    fn count_messages_this_week_includes_current_week_only() {
         let today = Local::now().format("%Y-%m-%dT12:00:00Z").to_string();
-        let yesterday = (Local::now() - chrono::Duration::days(1))
+        let last_week = (Local::now() - chrono::Duration::days(8))
             .format("%Y-%m-%dT12:00:00Z")
             .to_string();
-        let msgs = vec![msg_at(&today), msg_at(&yesterday), msg_at(&today)];
-        assert_eq!(count_messages_today(&msgs), 2);
+        let msgs = vec![msg_at(&today), msg_at(&last_week), msg_at(&today)];
+        assert_eq!(count_messages_this_week(&msgs), 2);
     }
 
     #[test]
-    fn count_messages_today_skips_system_and_deleted() {
+    fn count_messages_this_week_skips_system_and_deleted() {
         let today = Local::now().format("%Y-%m-%dT12:00:00Z").to_string();
         let mut system = msg_at(&today);
         system.is_system = true;
         let mut deleted = msg_at(&today);
         deleted.is_deleted = true;
-        assert_eq!(count_messages_today(&[system, deleted]), 0);
+        assert_eq!(count_messages_this_week(&[system, deleted]), 0);
     }
 }

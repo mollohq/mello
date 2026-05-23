@@ -320,7 +320,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
             let empty: Vec<ChatMessageData> = vec![];
             let rc = Rc::new(slint::VecModel::from(empty));
             ctx.app.set_messages(rc.into());
-            ctx.app.set_chat_messages_today(0);
+            ctx.app.set_chat_messages_this_week(0);
             ctx.app.set_has_new_messages(false);
             apply_unread_to_crews(&ctx.app, &ctx.unread_tracker.borrow());
             *ctx.active_crew_id.borrow_mut() = crew_id.clone();

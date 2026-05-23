@@ -29,7 +29,7 @@ fn refresh_chat_ui(ctx: &AppContext) {
     let rc = Rc::new(slint::VecModel::from(display));
     ctx.app.set_messages(rc.clone().into());
     ctx.app
-        .set_chat_messages_today(mello_core::chat::count_messages_today(&raw));
+        .set_chat_messages_this_week(mello_core::chat::count_messages_this_week(&raw));
     fetch_gif_images_for_messages(&rc, &ctx.rt, &ctx.gif_chat_anim);
     ctx.chat_scroll.apply_to_window(&ctx.app);
 }

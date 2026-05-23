@@ -132,7 +132,7 @@ export component MainWindow inherits Window {
     // --- Members / chat ---
     in property <[MemberData]> members: [];
     in property <[ChatMessageData]> messages: [];
-    in property <int> chat-messages-today: 0;
+    in property <int> chat-messages-this-week: 0;
     in property <[GifItemData]> gif-results: [];
     in property <bool> loading-history: false;
     in-out property <bool> has-new-messages: false;
@@ -931,7 +931,7 @@ export component MainWindow inherits Window {
                     width: parent.chat-w;
                     height: parent.height;
                     messages: root.messages;
-                    messages-today: root.chat-messages-today;
+                    messages-this-week: root.chat-messages-this-week;
                     gif-results: root.gif-results;
                     user-name: root.user-name;
                     user-id: root.user-id;

@@ -323,7 +323,7 @@ component GifPopover inherits Rectangle {
 
 export component ChatPanel inherits Rectangle {
     in property <[ChatMessageData]> messages: [];
-    in property <int> messages-today: 0;
+    in property <int> messages-this-week: 0;
     in property <string> user-name: "";
     in property <string> user-id: "";
     in property <bool> loading-history: false;
@@ -377,8 +377,7 @@ export component ChatPanel inherits Rectangle {
     callback reply-to-message(/* message_id */ string, /* sender_name */ string);
 
     background: Theme.surface;
-    border-width: 1px;
-    border-color: Theme.graphic-light;
+    border-width: 0px;
     border-radius: 0px;
 
     VerticalLayout {
@@ -389,18 +388,21 @@ export component ChatPanel inherits Rectangle {
         padding: 0px;
         spacing: 0px;
 
-        // --- Header (matches crew_feed.slint) ---
+        // --- Header (matches crew_feed.slint on Theme.bg-app) ---
         Rectangle {
+            width: parent.width;
             height: 48px;
-            background: transparent;
+            background: Theme.bg-app;
 
             HorizontalLayout {
+                width: parent.width;
+                height: parent.height;
                 padding-left: 12px;
                 padding-right: 12px;
-                spacing: 10px;
 
                 HorizontalLayout {
                     spacing: 10px;
+                    height: parent.height;
                     horizontal-stretch: 1;
                     alignment: start;
 
@@ -412,16 +414,17 @@ export component ChatPanel inherits Rectangle {
                         vertical-alignment: center;
                     }
 
-                    if root.messages-today > 0: Rectangle {
+                    if root.messages-this-week > 0: Rectangle {
                         width: msg-badge-text.preferred-width + 20px;
                         height: 22px;
                         border-radius: 11px;
                         background: Theme.card-border;
+                        y: (parent.height - self.height) / 2;
 
                         msg-badge-text := Text {
-                            text: root.messages-today == 1
-                                ? "1 message today"
-                                : root.messages-today + " messages today";
+                            text: root.messages-this-week == 1
+                                ? "1 message this week"
+                                : root.messages-this-week + " messages this week";
                             font-size: 11px;
                             color: Theme.text-sub;
                             horizontal-alignment: center;
@@ -436,6 +439,16 @@ export component ChatPanel inherits Rectangle {
             height: 1px;
             background: Theme.card-border;
         }
+
+        // Header strip = bg-app (crew feed); messages + composer = surface.
+        Rectangle {
+            vertical-stretch: 1;
+            background: Theme.surface;
+
+            VerticalLayout {
+                width: parent.width;
+                height: parent.height;
+                spacing: 0px;
 
         // --- Chat feed container (for overlay pill) ---
         Rectangle {
@@ -560,6 +573,7 @@ export component ChatPanel inherits Rectangle {
                     // Group start header — full feed width; spacer pushes timestamp right (no alignment:)
                     if !msg.is-system && !msg.is-unread-divider && msg.is-group-start: HorizontalLayout {
                         width: parent.width;
+                        padding-right: 12px;
                         spacing: 8px;
 
                         Rectangle {
@@ -1351,6 +1365,17 @@ export component ChatPanel inherits Rectangle {
             }
         }
         } // composer block
+            } // chat-body VerticalLayout
+        } // chat-body Rectangle
+    }
+
+    // Full-height left edge (crew panel style); on top so bg-app header does not cover it.
+    Rectangle {
+        x: 0;
+        y: 0;
+        width: 1px;
+        height: parent.height;
+        background: Theme.graphic-light;
     }
 }
 
@@ -1360,7 +1385,7 @@ export component Preview inherits ChatPanel {
     height: 820px;
     user-name: "bobdev";
     user-id: "u1";
-    messages-today: 12;
+    messages-this-week: 12;
     has-new-messages: true;
     emoji-list: [
         { emoji: "😀", name: "grinning" },
