@@ -784,7 +784,7 @@ export component MainWindow inherits Window {
                     Rectangle {
                         y: 0;
                         width: parent.width;
-                        height: parent.height - 84px - Theme.gap;
+                        height: parent.height - Theme.control-bar-height;
 
                         CrewFeed {
                             width: parent.width;
@@ -849,9 +849,10 @@ export component MainWindow inherits Window {
                     }
 
                     ControlBar {
-                        y: parent.height - 84px;
-                        width: parent.width;
-                        height: 84px;
+                        x: -Theme.gap;
+                        y: parent.height - Theme.control-bar-height;
+                        width: parent.width + Theme.gap;
+                        height: Theme.control-bar-height;
                         user-name: root.user-name;
                         user-initials: root.user-initials;
                         user-avatar: root.user-avatar;
