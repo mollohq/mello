@@ -34,6 +34,8 @@ impl OverlayWindow {
     }
 
     pub fn set_opacity(&mut self, opacity: f32) {
+        #[cfg(not(target_os = "windows"))]
+        let _ = opacity;
         #[cfg(target_os = "windows")]
         self.inner.set_opacity(opacity);
     }
