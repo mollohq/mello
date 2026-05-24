@@ -57,4 +57,6 @@ pub struct AppContext {
     pub frame_lifecycle: mello_core::FrameLifecycleSlot,
     #[cfg(target_os = "windows")]
     pub dcomp_presenter: Rc<RefCell<Option<crate::dcomp_presenter::DCompPresenter>>>,
+    #[cfg(target_os = "windows")]
+    pub taskbar_toolbar: Rc<RefCell<Option<crate::platform::taskbar_toolbar::TaskbarToolbar>>>,
 }

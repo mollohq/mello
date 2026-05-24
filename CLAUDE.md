@@ -97,8 +97,6 @@ Do not repeat a corrected mistake in the same session.
 
 ## Running the Client
 - Always use `.\client-prod.ps1` to start the client — there is no local backend.
-- When building the HUD separately, remember `cargo run -p mello-client` does NOT build `mello-hud`.
-  Build it explicitly with `cargo build -p mello-hud` before running the client.
 
 ## Troubleshooting
 - Be systematic. Never throw changes at the wall to see what sticks.

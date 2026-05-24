@@ -30,7 +30,6 @@ pub fn wire(ctx: &AppContext) {
                 app.set_settings_ptt_mode(settings.input_mode == "push_to_talk");
                 app.set_settings_vad_threshold(settings.vad_threshold);
                 app.set_settings_hud_enabled(settings.hud_enabled);
-                app.set_settings_hud_overlay_in_game(settings.hud_show_overlay_in_game);
                 app.set_settings_hud_overlay_opacity(settings.hud_overlay_opacity);
                 app.set_settings_hud_clip_toasts(settings.hud_show_clip_toasts);
                 let ptt_label: slint::SharedString = if let Some(ref key_str) = settings.ptt_key {
@@ -156,22 +155,6 @@ pub fn wire(ctx: &AppContext) {
     {
         let s = ctx.settings.clone();
         let hud = ctx.hud_manager.clone();
-        let fg = ctx.fg_monitor.clone();
-        ctx.app.on_setting_changed_hud_overlay_in_game(move |v| {
-            let mut settings = s.borrow_mut();
-            settings.hud_show_overlay_in_game = v;
-            settings.save();
-            fg.borrow_mut().set_overlay_enabled(v);
-            hud.push_settings(crate::hud_manager::HudSettings {
-                overlay_opacity: settings.hud_overlay_opacity,
-                show_clip_toasts: settings.hud_show_clip_toasts,
-                overlay_enabled: v,
-            });
-        });
-    }
-    {
-        let s = ctx.settings.clone();
-        let hud = ctx.hud_manager.clone();
         ctx.app.on_setting_changed_hud_overlay_opacity(move |v| {
             let mut settings = s.borrow_mut();
             settings.hud_overlay_opacity = v;
@@ -179,7 +162,6 @@ pub fn wire(ctx: &AppContext) {
             hud.push_settings(crate::hud_manager::HudSettings {
                 overlay_opacity: v,
                 show_clip_toasts: settings.hud_show_clip_toasts,
-                overlay_enabled: settings.hud_show_overlay_in_game,
             });
         });
     }
@@ -193,7 +175,6 @@ pub fn wire(ctx: &AppContext) {
             hud.push_settings(crate::hud_manager::HudSettings {
                 overlay_opacity: settings.hud_overlay_opacity,
                 show_clip_toasts: v,
-                overlay_enabled: settings.hud_show_overlay_in_game,
             });
         });
     }
@@ -343,12 +324,9 @@ pub fn wire(ctx: &AppContext) {
             });
 
             fg.borrow_mut().set_hud_enabled(defaults.hud_enabled);
-            fg.borrow_mut()
-                .set_overlay_enabled(defaults.hud_show_overlay_in_game);
             hud.push_settings(crate::hud_manager::HudSettings {
                 overlay_opacity: defaults.hud_overlay_opacity,
                 show_clip_toasts: defaults.hud_show_clip_toasts,
-                overlay_enabled: defaults.hud_show_overlay_in_game,
             });
             if !defaults.hud_enabled {
                 hud.shutdown();
@@ -369,7 +347,6 @@ pub fn wire(ctx: &AppContext) {
                 app.set_settings_vad_threshold(defaults.vad_threshold);
                 app.set_settings_ptt_key_label("Unassigned".into());
                 app.set_settings_hud_enabled(defaults.hud_enabled);
-                app.set_settings_hud_overlay_in_game(defaults.hud_show_overlay_in_game);
                 app.set_settings_hud_overlay_opacity(defaults.hud_overlay_opacity);
                 app.set_settings_hud_clip_toasts(defaults.hud_show_clip_toasts);
 

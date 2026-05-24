@@ -33,6 +33,11 @@ impl OverlayWindow {
         self.inner.hide();
     }
 
+    pub fn set_opacity(&mut self, opacity: f32) {
+        #[cfg(target_os = "windows")]
+        self.inner.set_opacity(opacity);
+    }
+
     pub fn update_state(&mut self, _state: &HudState) {
         #[cfg(target_os = "windows")]
         self.inner.update_state(_state);
@@ -46,5 +51,10 @@ impl OverlayWindow {
     pub fn ensure_topmost(&self) {
         #[cfg(target_os = "windows")]
         self.inner.ensure_topmost();
+    }
+
+    pub fn log_diagnostics(&self) {
+        #[cfg(target_os = "windows")]
+        self.inner.log_diagnostics();
     }
 }

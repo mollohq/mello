@@ -14,6 +14,8 @@ mod foreground_monitor;
 mod gif_animator;
 mod handlers;
 pub mod hud_manager;
+#[cfg(target_os = "windows")]
+mod hud_overlay;
 mod hud_state_builder;
 mod image_cache;
 mod ipc;
@@ -371,13 +373,26 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
         hud_mgr.push_settings(hud_manager::HudSettings {
             overlay_opacity: s.hud_overlay_opacity,
             show_clip_toasts: s.hud_show_clip_toasts,
-            overlay_enabled: s.hud_show_overlay_in_game,
         });
     }
     let fg_monitor = Rc::new(RefCell::new(foreground_monitor::ForegroundMonitor::new(
         hud_enabled,
-        settings.borrow().hud_show_overlay_in_game,
     )));
+
+    // --- Taskbar thumbnail toolbar (Windows) ---
+    #[cfg(target_os = "windows")]
+    let taskbar_toolbar = Rc::new(RefCell::new(
+        match platform::taskbar_toolbar::TaskbarToolbar::new() {
+            Ok(tb) => {
+                log::info!("[startup] taskbar toolbar created");
+                Some(tb)
+            }
+            Err(e) => {
+                log::warn!("[startup] taskbar toolbar init failed: {}", e);
+                None
+            }
+        },
+    ));
 
     // --- GIF animators ---
     let gif_popover_anim = gif_animator::GifAnimator::new(50, None);
@@ -425,6 +440,8 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
         frame_lifecycle: frame_lifecycle.clone(),
         #[cfg(target_os = "windows")]
         dcomp_presenter: dcomp_presenter.clone(),
+        #[cfg(target_os = "windows")]
+        taskbar_toolbar: taskbar_toolbar.clone(),
     };
 
     // --- Wire all callbacks ---
