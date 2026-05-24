@@ -1,4 +1,4 @@
-import { Theme, MelloTextInput } from "../theme.slint";
+import { Theme, MelloInputField, MelloScrollArea } from "../theme.slint";
 import { AudioDeviceData } from "../types.slint";
 import { AvatarCard } from "../components/avatar_card.slint";
 
@@ -1345,24 +1345,10 @@ component ProfileTab inherits VerticalLayout {
 
             SectionHeader { title: "DISPLAY NAME"; }
 
-            Rectangle {
-                height: 44px;
-                background: Theme.bg-app;
-                border-radius: 8px;
-                border-width: 1px;
-                border-color: nick-input.has-focus ? Theme.accent : Theme.graphic-light;
-
-                nick-input := MelloTextInput {
-                    text <=> profile-nickname-value;
-                    font-size: 14px;
-                    color: Theme.text-primary;
-                    x: 14px;
-                    y: (parent.height - self.preferred-height) / 2;
-                    width: parent.width - 28px;
-                    single-line: true;
-                    accepted => {
-                        profile-nickname-accepted(profile-nickname-value);
-                    }
+            nick-input := MelloInputField {
+                text <=> profile-nickname-value;
+                accepted => {
+                    profile-nickname-accepted(profile-nickname-value);
                 }
             }
 
@@ -1657,6 +1643,10 @@ export component SettingsModal inherits Rectangle {
 
     // Tab state: 0 = Profile, 1 = General, 2 = Audio & Video
     in-out property <int> active-tab: 0;
+
+    changed active-tab => {
+        settings-scroll.scroll-y = 0px;
+    }
 
     in-out property <string> profile-nickname-value;
     in-out property <bool> profile-grid-expanded: false;
@@ -2010,8 +2000,10 @@ export component SettingsModal inherits Rectangle {
                     background: Theme.surface;
                     clip: true;
 
-                    Flickable {
-                        viewport-height: active-tab == 0 ? profile-tab.preferred-height : (active-tab == 1 ? general-tab.preferred-height : audio-tab.preferred-height);
+                    settings-scroll := MelloScrollArea {
+                        width: parent.width;
+                        height: parent.height;
+                        content-height: active-tab == 0 ? profile-tab.preferred-height : (active-tab == 1 ? general-tab.preferred-height : audio-tab.preferred-height);
 
                         profile-tab := ProfileTab {
                             visible: active-tab == 0;

@@ -1,4 +1,4 @@
-import { Theme, MelloTextInput } from "../theme.slint";
+import { Theme, MelloInputField, MelloScrollArea } from "../theme.slint";
 import { VoiceChannelData, MemberData } from "../types.slint";
 
 // ─── Section Header ────────────────────────────────────────────────────────
@@ -126,22 +126,8 @@ component OverviewTab inherits VerticalLayout {
                         color: Theme.text-secondary;
                     }
 
-                    Rectangle {
-                        height: 44px;
-                        background: Theme.bg-app;
-                        border-radius: 8px;
-                        border-width: 1px;
-                        border-color: name-input.has-focus ? Theme.accent : Theme.graphic-light;
-
-                        name-input := MelloTextInput {
-                            text <=> crew-name-value;
-                            font-size: 14px;
-                            color: Theme.text-primary;
-                            x: 14px;
-                            y: (parent.height - self.preferred-height) / 2;
-                            width: parent.width - 28px;
-                            single-line: true;
-                        }
+                    MelloInputField {
+                        text <=> crew-name-value;
                     }
                 }
 
@@ -157,22 +143,8 @@ component OverviewTab inherits VerticalLayout {
                         color: Theme.text-secondary;
                     }
 
-                    Rectangle {
-                        height: 44px;
-                        background: Theme.bg-app;
-                        border-radius: 8px;
-                        border-width: 1px;
-                        border-color: desc-input.has-focus ? Theme.accent : Theme.graphic-light;
-
-                        desc-input := MelloTextInput {
-                            text <=> crew-description-value;
-                            font-size: 14px;
-                            color: Theme.text-primary;
-                            x: 14px;
-                            y: (parent.height - self.preferred-height) / 2;
-                            width: parent.width - 28px;
-                            single-line: true;
-                        }
+                    MelloInputField {
+                        text <=> crew-description-value;
                     }
                 }
             }
@@ -447,27 +419,14 @@ component VoiceChannelsTab inherits VerticalLayout {
         HorizontalLayout {
             spacing: 12px;
 
-            Rectangle {
+            add-ch-input := MelloInputField {
                 horizontal-stretch: 1;
-                height: 44px;
-                background: Theme.bg-app;
-                border-radius: 8px;
-                border-width: 1px;
-                border-color: add-ch-input.has-focus ? Theme.accent : Theme.graphic-light;
-
-                add-ch-input := MelloTextInput {
-                    text <=> new-channel-name;
-                    font-size: 14px;
-                    color: Theme.text-primary;
-                    x: 14px;
-                    y: (parent.height - self.preferred-height) / 2;
-                    width: parent.width - 28px;
-                    single-line: true;
-                    accepted => {
-                        if new-channel-name != "" {
-                            add-channel(new-channel-name);
-                            new-channel-name = "";
-                        }
+                text <=> new-channel-name;
+                placeholder: "channel-name";
+                accepted => {
+                    if new-channel-name != "" {
+                        add-channel(new-channel-name);
+                        new-channel-name = "";
                     }
                 }
             }
@@ -751,6 +710,10 @@ export component CrewSettingsModal inherits Rectangle {
     // Tab state: 0 = Overview, 1 = Voice Channels, 2 = Members
     in-out property <int> active-tab: 0;
 
+    changed active-tab => {
+        crew-scroll.scroll-y = 0px;
+    }
+
     in-out property <bool> show-saved: false;
 
     callback close-requested();
@@ -981,8 +944,10 @@ export component CrewSettingsModal inherits Rectangle {
                     background: Theme.surface;
                     clip: true;
 
-                    Flickable {
-                        viewport-height: active-tab == 0 ? overview-tab.preferred-height : (active-tab == 1 ? channels-tab.preferred-height : members-tab.preferred-height);
+                    crew-scroll := MelloScrollArea {
+                        width: parent.width;
+                        height: parent.height;
+                        content-height: active-tab == 0 ? overview-tab.preferred-height : (active-tab == 1 ? channels-tab.preferred-height : members-tab.preferred-height);
 
                         overview-tab := OverviewTab {
                             visible: active-tab == 0;
