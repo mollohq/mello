@@ -4,6 +4,8 @@ import {
     MemberData,
     ChatMessageData,
     GifItemData,
+    EmojiItemData,
+    MentionMemberData,
     AudioDeviceData,
     VoiceChannelData,
     VoiceChannelMember,
@@ -130,8 +132,18 @@ export component MainWindow inherits Window {
     // --- Members / chat ---
     in property <[MemberData]> members: [];
     in property <[ChatMessageData]> messages: [];
+    in property <int> chat-messages-this-week: 0;
     in property <[GifItemData]> gif-results: [];
     in property <bool> loading-history: false;
+    in-out property <bool> has-new-messages: false;
+    in-out property <bool> scroll-to-bottom-request: false;
+    in-out property <int> history-prepended-rows: 0;
+    in property <[MentionMemberData]> mention-members: [];
+    in property <[EmojiItemData]> emoji-list: [];
+    in property <[MentionMemberData]> mention-suggestions: [];
+    in-out property <string> chat-input-text: "";
+    in-out property <int> composer-line-count: 1;
+    in-out property <bool> composer-multiline: false;
 
     // --- Voice ---
     in-out property <bool> mic-muted: false;
@@ -450,6 +462,13 @@ export component MainWindow inherits Window {
     callback gif-selected(/* gif_id */ string, /* url */ string, /* preview_url */ string, /* width */ int, /* height */ int);
     callback gif-hovered(/* preview_url */ string);
     callback emoji-pill-clicked();
+    callback chat-viewport-changed(/* at_bottom */ bool);
+    callback scroll-to-bottom-done();
+    callback link-clicked(/* url */ string);
+    callback copy-message-text(/* text */ string);
+    callback mention-selected(/* user_id */ string, /* display_name */ string);
+    callback chat-input-changed(/* text */ string);
+    callback history-prepended-done();
     callback mic-toggle();
     callback deafen-toggle();
     callback voice-toggle();
@@ -685,7 +704,7 @@ export component MainWindow inherits Window {
             padding-left: 0px;
             padding-top: 0px;
             padding-bottom: 0px;
-            padding-right: Theme.gap;
+            padding-right: 0px;
             spacing: Theme.gap;
 
             // LEFT: Crew sidebar
@@ -757,13 +776,13 @@ export component MainWindow inherits Window {
                 if !root.show-discover: Rectangle {
                     x: 0;
                     y: 0;
-                    width: parent.width - parent.chat-w - Theme.gap;
+                    width: parent.width - parent.chat-w;
                     height: parent.height;
 
                     Rectangle {
                         y: 0;
                         width: parent.width;
-                        height: parent.height - 84px - Theme.gap;
+                        height: parent.height - Theme.control-bar-height;
 
                         CrewFeed {
                             width: parent.width;
@@ -828,9 +847,10 @@ export component MainWindow inherits Window {
                     }
 
                     ControlBar {
-                        y: parent.height - 84px;
-                        width: parent.width;
-                        height: 84px;
+                        x: -Theme.gap;
+                        y: parent.height - Theme.control-bar-height;
+                        width: parent.width + Theme.gap;
+                        height: Theme.control-bar-height;
                         user-name: root.user-name;
                         user-initials: root.user-initials;
                         user-avatar: root.user-avatar;
@@ -910,10 +930,20 @@ export component MainWindow inherits Window {
                     width: parent.chat-w;
                     height: parent.height;
                     messages: root.messages;
+                    messages-this-week: root.chat-messages-this-week;
                     gif-results: root.gif-results;
                     user-name: root.user-name;
                     user-id: root.user-id;
                     loading-history: root.loading-history;
+                    has-new-messages <=> root.has-new-messages;
+                    scroll-to-bottom-request <=> root.scroll-to-bottom-request;
+                    history-prepended-rows: root.history-prepended-rows;
+                    mention-members: root.mention-members;
+                    mention-suggestions: root.mention-suggestions;
+                    emoji-list: root.emoji-list;
+                    chat-input-text <=> root.chat-input-text;
+                    composer-line-count <=> root.composer-line-count;
+                    composer-multiline <=> root.composer-multiline;
                     message-submitted(text) => {
                         root.send-message(text);
                     }
@@ -943,6 +973,27 @@ export component MainWindow inherits Window {
                     }
                     emoji-pill-clicked() => {
                         root.emoji-pill-clicked();
+                    }
+                    chat-viewport-changed(at-bottom) => {
+                        root.chat-viewport-changed(at-bottom);
+                    }
+                    scroll-to-bottom-done() => {
+                        root.scroll-to-bottom-done();
+                    }
+                    link-clicked(url) => {
+                        root.link-clicked(url);
+                    }
+                    copy-message-text(text) => {
+                        root.copy-message-text(text);
+                    }
+                    mention-selected(uid, name) => {
+                        root.mention-selected(uid, name);
+                    }
+                    chat-input-changed(text) => {
+                        root.chat-input-changed(text);
+                    }
+                    history-prepended-done() => {
+                        root.history-prepended-done();
                     }
                 }
             }

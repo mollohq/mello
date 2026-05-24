@@ -1,4 +1,4 @@
-import { Theme } from "../theme.slint";
+import { Theme, MelloTextInput } from "../theme.slint";
 import { GameBadge } from "../components/game_badge.slint";
 
 component ActionButton inherits Rectangle {
@@ -156,10 +156,18 @@ export component ControlBar inherits Rectangle {
     callback clip-captured();
     in property <string> voice-channel-name: "";
     background: Theme.surface;
-    border-width: 1px;
-    border-color: Theme.dark ? #FFFFFF0D : Theme.graphic-light;
-    border-radius: 16px;
+    border-width: 0px;
+    border-radius: 0px;
+
+    Rectangle {
+        y: 0;
+        height: 1px;
+        background: Theme.card-border;
+    }
+
     HorizontalLayout {
+        width: parent.width;
+        height: parent.height;
         padding: 14px;
         spacing: 12px;
 
@@ -563,7 +571,7 @@ export component ControlBar inherits Rectangle {
                             y: (parent.height - self.height) / 2;
                         }
 
-                        moment-input := TextInput {
+                        moment-input := MelloTextInput {
                             font-size: 13px;
                             color: Theme.text-primary;
                             horizontal-stretch: 1;
@@ -791,7 +799,7 @@ export component ControlBar inherits Rectangle {
 
 export component Preview inherits Rectangle {
     width: 900px;
-    height: 84px;
+    height: Theme.control-bar-height;
     background: #111114;
     ControlBar {
         width: parent.width;

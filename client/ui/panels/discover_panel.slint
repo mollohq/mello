@@ -1,4 +1,4 @@
-import { Theme } from "../theme.slint";
+import { Theme, MelloTextInput } from "../theme.slint";
 import { DiscoverCrewData } from "../types.slint";
 
 component DiscoverCrewCard inherits Rectangle {
@@ -316,7 +316,7 @@ export component DiscoverPanel inherits Rectangle {
                                 border-color: invite-input.has-focus ? Theme.accent : Theme.graphic-light;
                                 border-radius: Theme.r-inner;
 
-                                invite-input := TextInput {
+                                invite-input := MelloTextInput {
                                     x: 20px;
                                     width: parent.width - 40px;
                                     height: parent.height;

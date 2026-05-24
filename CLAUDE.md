@@ -57,6 +57,9 @@ Do not repeat a corrected mistake in the same session.
 - Before adding a dependency: will it fit inside the size/RAM budget? Check binary size impact.
 
 ## Slint UI Rules
+- Use `MelloTextInput` from `theme.slint` instead of raw `TextInput` — it applies `Theme.selection-bg` / `selection-fg` (accent-tinted highlight) instead of Slint’s default cupertino blue.
+- For bordered form fields (settings, modals), use `MelloInputField` — it fills the field height so mouse drag-selection works; do not vertically center a bare `MelloTextInput` with `preferred-height` only.
+- Do not put `TextInput` / `MelloTextInput` inside `Flickable` (breaks double/triple-click word selection; slint#6514). Use `MelloScrollArea` for scrollable settings/content instead.
 - `Image` has NO `vertical-alignment` property — only `Text` does.
   To vertically center an `Image` inside a layout or container, use:
   `y: (parent.height - self.height) / 2;`

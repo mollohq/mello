@@ -1,4 +1,4 @@
-import { Theme } from "../theme.slint";
+import { Theme, MelloTextInput } from "../theme.slint";
 import { SearchUserData } from "../types.slint";
 
 export component NewCrewModal inherits Rectangle {
@@ -131,7 +131,7 @@ export component NewCrewModal inherits Rectangle {
                     border-width: 1px;
                     border-color: Theme.graphic-light;
 
-                    TextInput {
+                    MelloTextInput {
                         text: "m3llo.app/join/" + invite-code;
                         font-family: Theme.font-mono;
                         font-size: 12px;
@@ -281,7 +281,7 @@ export component NewCrewModal inherits Rectangle {
                         border-width: 1px;
                         border-color: name-input.has-focus ? Theme.accent : Theme.graphic-light;
 
-                        name-input := TextInput {
+                        name-input := MelloTextInput {
                             x: 16px;
                             width: parent.width - 32px;
                             height: parent.height;
@@ -323,7 +323,7 @@ export component NewCrewModal inherits Rectangle {
                         border-width: 1px;
                         border-color: desc-input.has-focus ? Theme.accent : Theme.graphic-light;
 
-                        desc-input := TextInput {
+                        desc-input := MelloTextInput {
                             x: 16px;
                             y: 12px;
                             width: parent.width - 32px;
@@ -436,7 +436,7 @@ export component NewCrewModal inherits Rectangle {
                         border-width: 1px;
                         border-color: invite-input.has-focus ? Theme.accent : Theme.graphic-light;
 
-                        invite-input := TextInput {
+                        invite-input := MelloTextInput {
                             x: 16px;
                             width: parent.width - 32px;
                             height: parent.height;

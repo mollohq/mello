@@ -44,8 +44,9 @@ impl super::Client {
     }
 
     pub(super) async fn handle_delete_message(&self, message_id: &str) {
+        log::info!("Deleting chat message {}", message_id);
         if let Err(e) = self.nakama.remove_chat_message(message_id).await {
-            log::error!("Failed to delete message: {}", e);
+            log::error!("Failed to delete message {}: {}", message_id, e);
         }
     }
 

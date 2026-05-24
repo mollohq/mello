@@ -453,12 +453,12 @@ impl NakamaClient {
     }
 
     async fn ws_send(&self, msg: String) -> Result<()> {
-        if let Some(tx) = &self.ws_tx {
-            tx.send(msg)
-                .await
-                .map_err(|e| Error::WebSocket(e.to_string()))?;
-        }
-        Ok(())
+        let Some(tx) = &self.ws_tx else {
+            return Err(Error::NotConnected);
+        };
+        tx.send(msg)
+            .await
+            .map_err(|e| Error::WebSocket(e.to_string()))
     }
 
     // --- Crews ---
@@ -1637,29 +1637,23 @@ pub(crate) fn parse_channel_messages(
                 }
             }
 
-            // Parse with structured envelope, falling back to legacy format
             let envelope = crate::chat::parse_content(content_str)?;
-            let text = envelope.body;
-            let gif = envelope.gif;
-
             let sender_id = m.sender_id.unwrap_or_default();
             let sender_name = member_names
                 .get(&sender_id)
                 .cloned()
                 .unwrap_or_else(|| m.username.unwrap_or_default());
-
             let create_time = m.create_time.unwrap_or_default();
             let update_time = m.update_time.unwrap_or_default();
-            Some(ChatMessage {
-                message_id: m.message_id.unwrap_or_default(),
+            crate::chat::chat_message_from_envelope(
+                m.message_id.unwrap_or_default(),
                 sender_id,
                 sender_name,
-                content: text,
-                timestamp: create_time.clone(),
                 create_time,
                 update_time,
-                gif,
-            })
+                envelope,
+                content_str,
+            )
         })
         .collect()
 }
@@ -1789,12 +1783,19 @@ async fn handle_ws_message(
             }
         }
 
+        let message_id = msg.message_id.unwrap_or_default();
+
+        // Nakama channel message codes: 0 = create, 1 = update, 2 = remove
+        let code = msg.code.unwrap_or(0);
+        if code == 2 {
+            let _ = event_tx.send(Event::ChatMessageDeleted { message_id });
+            return;
+        }
+
         let envelope = match crate::chat::parse_content(&content_str) {
             Some(e) => e,
             None => return,
         };
-        let text = envelope.body;
-        let gif = envelope.gif;
 
         let sender_id = msg.sender_id.unwrap_or_default();
         let sender_name = {
@@ -1807,18 +1808,34 @@ async fn handle_ws_message(
 
         let create_time = msg.create_time.unwrap_or_default();
         let update_time = msg.update_time.unwrap_or_default();
-        let _ = event_tx.send(Event::MessageReceived {
-            message: ChatMessage {
-                message_id: msg.message_id.unwrap_or_default(),
-                sender_id,
-                sender_name,
-                content: text,
-                timestamp: create_time.clone(),
-                create_time,
-                update_time,
-                gif,
-            },
-        });
+
+        let Some(chat_msg) = crate::chat::chat_message_from_envelope(
+            message_id.clone(),
+            sender_id,
+            sender_name,
+            create_time,
+            update_time,
+            envelope,
+            &content_str,
+        ) else {
+            return;
+        };
+
+        if chat_msg.is_deleted {
+            let _ = event_tx.send(Event::ChatMessageDeleted { message_id });
+            return;
+        }
+
+        if code == 1 {
+            let _ = event_tx.send(Event::ChatMessageEdited {
+                message_id,
+                new_content: chat_msg.content.clone(),
+                update_time: chat_msg.update_time.clone(),
+            });
+            return;
+        }
+
+        let _ = event_tx.send(Event::MessageReceived { message: chat_msg });
     }
 
     // Channel presence

@@ -96,38 +96,94 @@ pub fn extract_mentions(body: &str) -> Vec<String> {
     mentions
 }
 
-/// Wrap bare URLs as markdown links and resolve `<@user_id>` tokens.
-/// Intended for use with `StyledText { @markdown(body) }` in Slint 1.16+.
+/// A URL extracted from message text for pill rendering in the UI.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChatLink {
+    pub url: String,
+    pub label: String,
+}
+
+/// Max characters shown in a link pill label (host + path/query).
+pub const LINK_LABEL_MAX_CHARS: usize = 52;
+
+/// Host + path/query for link pills, e.g. `https://slint.dev/docs/foo?q=1` → `slint.dev/docs/foo?q=1`.
+pub fn link_display_label(url: &str) -> String {
+    let without_scheme = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))
+        .unwrap_or(url);
+    let host_end = without_scheme
+        .find(&['/', '?', '#'][..])
+        .unwrap_or(without_scheme.len());
+    let host = without_scheme[..host_end]
+        .strip_prefix("www.")
+        .unwrap_or(&without_scheme[..host_end]);
+    let tail = without_scheme[host_end..].trim_start_matches('/');
+    let tail = tail.split('#').next().unwrap_or(tail).trim_end_matches('/');
+    let label = if tail.is_empty() {
+        host.to_string()
+    } else {
+        format!("{host}/{tail}")
+    };
+    truncate_chars(&label, LINK_LABEL_MAX_CHARS)
+}
+
+fn truncate_chars(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        return s.to_string();
+    }
+    let mut out: String = s.chars().take(max.saturating_sub(1)).collect();
+    out.push('…');
+    out
+}
+
+/// Resolve mentions and pull bare URLs out of the body for separate pill widgets.
+/// Returns markdown-safe plain text (no link syntax) plus link metadata.
 pub fn prepare_body_for_markdown(
     body: &str,
     current_user_id: &str,
     member_names: &std::collections::HashMap<String, String>,
-) -> (String, bool) {
+) -> (String, bool, Vec<ChatLink>) {
     let (resolved, mentions_self) = prepare_body_for_display(body, current_user_id, member_names);
-    // Wrap bare URLs as markdown links
-    let mut result = String::with_capacity(resolved.len());
-    let mut rest = resolved.as_str();
+    let (plain, links) = extract_urls_from_text(&resolved);
+    (plain, mentions_self, links)
+}
+
+fn extract_urls_from_text(text: &str) -> (String, Vec<ChatLink>) {
+    let mut plain = String::with_capacity(text.len());
+    let mut links = Vec::new();
+    let mut rest = text;
     while let Some(pos) = rest.find("http") {
-        let before = &rest[..pos];
-        result.push_str(before);
+        let before = rest[..pos].trim_end();
+        if !plain.is_empty() && !before.is_empty() && !plain.ends_with(' ') {
+            plain.push(' ');
+        }
+        plain.push_str(before);
         let url_rest = &rest[pos..];
         let end = url_rest
             .find(|c: char| c.is_whitespace() || c == '>' || c == ')' || c == ']')
             .unwrap_or(url_rest.len());
         let url = &url_rest[..end];
         if url.starts_with("http://") || url.starts_with("https://") {
-            result.push('[');
-            result.push_str(url);
-            result.push_str("](");
-            result.push_str(url);
-            result.push(')');
+            if !plain.is_empty() && !plain.ends_with(' ') {
+                plain.push(' ');
+            }
+            links.push(ChatLink {
+                url: url.to_string(),
+                label: link_display_label(url),
+            });
         } else {
-            result.push_str(url);
+            plain.push_str(url);
         }
         rest = &url_rest[end..];
     }
-    result.push_str(rest);
-    (result, mentions_self)
+    let tail = rest.trim_start();
+    if !plain.is_empty() && !tail.is_empty() && !plain.ends_with(' ') {
+        plain.push(' ');
+    }
+    plain.push_str(tail);
+    let plain = plain.trim().to_string();
+    (plain, links)
 }
 
 /// Resolve `<@user_id>` tokens in a message body to `@display_name`.
@@ -152,6 +208,59 @@ pub fn prepare_body_for_display(
         result = result.replace(&token, &display);
     }
     (result, mentions_self)
+}
+
+/// Build a [`ChatMessage`] from a parsed envelope and Nakama metadata.
+pub fn chat_message_from_envelope(
+    message_id: String,
+    sender_id: String,
+    sender_name: String,
+    create_time: String,
+    update_time: String,
+    envelope: MessageEnvelope,
+    content_str: &str,
+) -> Option<ChatMessage> {
+    let is_system = envelope.msg_type == MessageType::System;
+    let is_deleted = !is_system
+        && content_str.trim().is_empty()
+        && envelope.gif.is_none()
+        && envelope.body.is_empty();
+    if is_deleted {
+        return Some(ChatMessage {
+            message_id,
+            sender_id,
+            sender_name,
+            content: String::new(),
+            timestamp: create_time.clone(),
+            create_time,
+            update_time,
+            gif: None,
+            reply_to: envelope.reply_to,
+            is_system: false,
+            is_edited: false,
+            is_deleted: true,
+        });
+    }
+
+    let is_edited = !is_system
+        && !update_time.is_empty()
+        && !create_time.is_empty()
+        && update_time != create_time;
+
+    Some(ChatMessage {
+        message_id,
+        sender_id,
+        sender_name,
+        content: envelope.body,
+        timestamp: create_time.clone(),
+        create_time,
+        update_time,
+        gif: envelope.gif,
+        reply_to: envelope.reply_to,
+        is_system,
+        is_edited,
+        is_deleted: false,
+    })
 }
 
 /// Try to parse the Nakama content field as a structured envelope.
@@ -243,7 +352,12 @@ pub struct DisplayMessage {
     pub is_group_start: bool,
     pub is_continuation: bool,
     pub is_system: bool,
+    pub is_edited: bool,
+    pub is_deleted: bool,
     pub gif: Option<GifData>,
+    pub reply_to: Option<String>,
+    pub reply_to_name: Option<String>,
+    pub reply_preview: Option<String>,
 }
 
 const GROUP_GAP_SECS: i64 = 300; // 5 minutes
@@ -310,16 +424,87 @@ pub fn format_display_time(ts: &str) -> String {
     local_dt.format("%b %-d, %Y").to_string()
 }
 
+/// Count non-system, non-deleted messages from the current local week (Mon–Sun) in the loaded set.
+pub fn count_messages_this_week(messages: &[ChatMessage]) -> i32 {
+    let now = Local::now();
+    let today = now.date_naive();
+    let week_start = today - chrono::Duration::days(now.weekday().num_days_from_monday() as i64);
+    messages
+        .iter()
+        .filter(|m| !m.is_system && !m.is_deleted)
+        .filter(|m| {
+            parse_timestamp(&m.create_time)
+                .or_else(|| parse_timestamp(&m.timestamp))
+                .is_some_and(|dt| {
+                    let d = dt.with_timezone(&Local).date_naive();
+                    d >= week_start && d <= today
+                })
+        })
+        .count() as i32
+}
+
+fn truncate_preview(text: &str, max: usize) -> String {
+    let t = text.trim();
+    if t.chars().count() <= max {
+        return t.to_string();
+    }
+    let mut s: String = t.chars().take(max).collect();
+    s.push('…');
+    s
+}
+
+fn resolve_reply(
+    reply_to: &Option<String>,
+    messages: &[ChatMessage],
+) -> (Option<String>, Option<String>) {
+    let Some(id) = reply_to else {
+        return (None, None);
+    };
+    let Some(orig) = messages.iter().find(|m| &m.message_id == id) else {
+        return (None, None);
+    };
+    let preview = if orig.is_deleted {
+        "[message deleted]".to_string()
+    } else if orig.gif.is_some() && orig.content.is_empty() {
+        "GIF".to_string()
+    } else {
+        truncate_preview(&orig.content, 100)
+    };
+    (Some(orig.sender_name.clone()), Some(preview))
+}
+
 /// Takes a flat list of ChatMessages and produces DisplayMessages with grouping info.
 pub fn prepare_messages_for_display(messages: &[ChatMessage]) -> Vec<DisplayMessage> {
     let mut result = Vec::with_capacity(messages.len());
 
     for (i, msg) in messages.iter().enumerate() {
-        let is_group_start = if i == 0 {
+        if msg.is_system {
+            result.push(DisplayMessage {
+                message_id: msg.message_id.clone(),
+                sender_id: msg.sender_id.clone(),
+                sender_name: msg.sender_name.clone(),
+                sender_initials: String::new(),
+                content: msg.content.clone(),
+                timestamp: msg.timestamp.clone(),
+                display_time: String::new(),
+                is_group_start: false,
+                is_continuation: false,
+                is_system: true,
+                is_edited: false,
+                is_deleted: false,
+                gif: None,
+                reply_to: None,
+                reply_to_name: None,
+                reply_preview: None,
+            });
+            continue;
+        }
+
+        let is_group_start = if msg.reply_to.is_some() || i == 0 {
             true
         } else {
             let prev = &messages[i - 1];
-            if prev.sender_id != msg.sender_id {
+            if prev.is_system || prev.sender_id != msg.sender_id {
                 true
             } else if let (Some(prev_dt), Some(cur_dt)) = (
                 parse_timestamp(&prev.timestamp),
@@ -331,18 +516,29 @@ pub fn prepare_messages_for_display(messages: &[ChatMessage]) -> Vec<DisplayMess
             }
         };
 
+        let (reply_to_name, reply_preview) = resolve_reply(&msg.reply_to, messages);
+
         result.push(DisplayMessage {
             message_id: msg.message_id.clone(),
             sender_id: msg.sender_id.clone(),
             sender_name: msg.sender_name.clone(),
             sender_initials: make_initials(&msg.sender_name),
-            content: msg.content.clone(),
+            content: if msg.is_deleted {
+                "[message deleted]".to_string()
+            } else {
+                msg.content.clone()
+            },
             timestamp: msg.timestamp.clone(),
             display_time: format_display_time(&msg.timestamp),
             is_group_start,
             is_continuation: !is_group_start,
             is_system: false,
+            is_edited: msg.is_edited && !msg.is_deleted,
+            is_deleted: msg.is_deleted,
             gif: msg.gif.clone(),
+            reply_to: msg.reply_to.clone(),
+            reply_to_name,
+            reply_preview,
         });
     }
 
@@ -363,6 +559,10 @@ mod tests {
             create_time: ts.to_string(),
             update_time: ts.to_string(),
             gif: None,
+            reply_to: None,
+            is_system: false,
+            is_edited: false,
+            is_deleted: false,
         }
     }
 
@@ -448,6 +648,32 @@ mod tests {
     }
 
     #[test]
+    fn link_display_label_host_only() {
+        assert_eq!(link_display_label("https://slint.dev"), "slint.dev");
+    }
+
+    #[test]
+    fn prepare_body_extracts_url_pills() {
+        let names = std::collections::HashMap::new();
+        let (plain, _, links) =
+            prepare_body_for_markdown("see https://slint.dev/docs ok", "u1", &names);
+        assert_eq!(plain, "see ok");
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].url, "https://slint.dev/docs");
+        assert_eq!(links[0].label, "slint.dev/docs");
+    }
+
+    #[test]
+    fn link_display_label_includes_query_and_truncates() {
+        let long_path = "a".repeat(60);
+        let url = format!("https://example.com/{long_path}?tab=main");
+        let label = link_display_label(&url);
+        assert!(label.starts_with("example.com/"));
+        assert!(label.contains("?tab=main") || label.ends_with('…'));
+        assert!(label.chars().count() <= LINK_LABEL_MAX_CHARS);
+    }
+
+    #[test]
     fn extract_mentions_basic() {
         let mentions = extract_mentions("hey <@user_abc> check <@user_def> out");
         assert_eq!(mentions, vec!["user_abc", "user_def"]);
@@ -492,5 +718,42 @@ mod tests {
         assert_eq!(parsed.body, "hey <@u1> check this");
         assert_eq!(parsed.reply_to, Some("msg123".into()));
         assert_eq!(parsed.mentions, vec!["u1"]);
+    }
+
+    fn msg_at(iso: &str) -> ChatMessage {
+        ChatMessage {
+            message_id: iso.into(),
+            sender_id: "u1".into(),
+            sender_name: "bob".into(),
+            content: "hi".into(),
+            timestamp: iso.into(),
+            create_time: iso.into(),
+            update_time: iso.into(),
+            gif: None,
+            reply_to: None,
+            is_system: false,
+            is_edited: false,
+            is_deleted: false,
+        }
+    }
+
+    #[test]
+    fn count_messages_this_week_includes_current_week_only() {
+        let today = Local::now().format("%Y-%m-%dT12:00:00Z").to_string();
+        let last_week = (Local::now() - chrono::Duration::days(8))
+            .format("%Y-%m-%dT12:00:00Z")
+            .to_string();
+        let msgs = vec![msg_at(&today), msg_at(&last_week), msg_at(&today)];
+        assert_eq!(count_messages_this_week(&msgs), 2);
+    }
+
+    #[test]
+    fn count_messages_this_week_skips_system_and_deleted() {
+        let today = Local::now().format("%Y-%m-%dT12:00:00Z").to_string();
+        let mut system = msg_at(&today);
+        system.is_system = true;
+        let mut deleted = msg_at(&today);
+        deleted.is_deleted = true;
+        assert_eq!(count_messages_this_week(&[system, deleted]), 0);
     }
 }

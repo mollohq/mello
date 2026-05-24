@@ -27,6 +27,10 @@ export global Theme {
     out property <color> accent:       #FF1E56;
     out property <color> accent-bg:    dark ? #FF1E561A : #FF1E5614;
 
+    // --- Text selection (override Slint cupertino/fluent default blue) ---
+    out property <color> selection-bg: dark ? #FF1E5655 : #FF1E5648;
+    out property <color> selection-fg: text-primary;
+
     // --- Voice ---
     out property <color> voice-active:    #46923c;
     out property <color> voice-active-bg: dark ? #46923c26 : #46923c1A;
@@ -72,6 +76,8 @@ export global Theme {
     // --- Spacing ---
     out property <length> gap: 12px;
     out property <length> pad: 24px;
+    // Composer separator → bottom (1px rule + pills + input + padding); control bar top aligns to that rule.
+    out property <length> control-bar-height: 81px;
 
     out property <length> spacing-xs: 4px;
     out property <length> spacing-sm: 8px;
@@ -94,4 +100,84 @@ export global Theme {
     // --- Hover helpers ---
     out property <color> hover-overlay: dark ? #FFFFFF0D : #0000000D;
     out property <color> surface-hover: dark ? #2A2A2A : #F0F0F0;
+}
+
+/// TextInput with Mello selection colors (not platform default blue).
+export component MelloTextInput inherits TextInput {
+    selection-background-color: Theme.selection-bg;
+    selection-foreground-color: Theme.selection-fg;
+}
+
+/// Bordered single-line (or multiline) field — full-height input for reliable mouse selection.
+export component MelloInputField inherits Rectangle {
+    in-out property <string> text <=> input.text;
+    in property <string> placeholder: "";
+    in property <bool> single-line: true;
+    in property <bool> read-only: false;
+    in property <length> pad-x: 14px;
+    in property <length> pad-y: 0px;
+    in property <length> field-height: 44px;
+    in property <length> font-size: 14px;
+    callback accepted();
+
+    height: field-height;
+    background: Theme.bg-app;
+    border-radius: 8px;
+    border-width: 1px;
+    border-color: input.has-focus ? Theme.accent : Theme.graphic-light;
+
+    input := MelloTextInput {
+        x: pad-x;
+        y: pad-y;
+        width: parent.width - 2 * pad-x;
+        height: parent.height - 2 * pad-y;
+        font-size: root.font-size;
+        color: Theme.text-primary;
+        horizontal-alignment: left;
+        vertical-alignment: single-line ? center : top;
+        single-line: root.single-line;
+        wrap: single-line ? no-wrap : word-wrap;
+        read-only: root.read-only;
+        accepted => { root.accepted(); }
+    }
+
+    if placeholder != "" && input.text == "" && !read-only: Text {
+        x: pad-x;
+        y: pad-y;
+        width: parent.width - 2 * pad-x;
+        height: parent.height - 2 * pad-y;
+        text: placeholder;
+        font-size: root.font-size;
+        color: Theme.text-tertiary;
+        vertical-alignment: single-line ? center : top;
+    }
+}
+
+/// Wheel-scroll container without Flickable — TextInput double/triple-click selection breaks inside Flickable (slint#6514).
+export component MelloScrollArea inherits Rectangle {
+    in-out property <length> scroll-y: 0;
+    in property <length> content-height: 0;
+    property <length> max-y: max(0px, content-height - self.height);
+
+    clip: true;
+
+    changed content-height => {
+        scroll-y = min(scroll-y, max-y);
+    }
+
+    wheel := TouchArea {
+        width: parent.width;
+        height: parent.height;
+        scroll-event(e) => {
+            scroll-y = min(max-y, max(0px, scroll-y - e.delta-y));
+            accept
+        }
+    }
+
+    content := Rectangle {
+        y: -scroll-y;
+        width: parent.width;
+        height: content-height;
+        @children
+    }
 }

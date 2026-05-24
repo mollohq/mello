@@ -1,4 +1,4 @@
-import { Theme } from "../theme.slint";
+import { Theme, MelloTextInput } from "../theme.slint";
 
 component InputField inherits Rectangle {
     in-out property <string> text <=> ti.text;
@@ -11,7 +11,7 @@ component InputField inherits Rectangle {
     border-width: 1px;
     border-color: ti.has-focus ? Theme.graphic-med : Theme.graphic-light;
 
-    ti := TextInput {
+    ti := MelloTextInput {
         x: 16px;
         width: parent.width - 32px;
         height: parent.height;

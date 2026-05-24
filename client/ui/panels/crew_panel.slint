@@ -232,6 +232,23 @@ component CompactCrewCard inherits Rectangle {
                 vertical-alignment: center;
             }
 
+            if crew.unread-count > 0: Rectangle {
+                min-width: 18px;
+                height: 18px;
+                border-radius: 9px;
+                background: crew.unread-mention ? Theme.accent : Theme.graphic-med;
+                y: (parent.height - self.height) / 2;
+
+                Text {
+                    text: crew.unread-count >= 99 ? "99+" : crew.unread-count;
+                    font-size: 10px;
+                    font-weight: 700;
+                    color: white;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+
             if crew.has-stream: Rectangle {
                 border-radius: 3px;
                 background: #dc2626;

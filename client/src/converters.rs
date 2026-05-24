@@ -1,10 +1,12 @@
+use std::collections::HashMap;
 use std::rc::Rc;
 
+use slint::private_unstable_api::re_exports::{parse_markdown, string_to_styled_text, StyledText};
 use slint::Model;
 
 use crate::{
-    ChatMessageData, CrewData, DebugHistory, MainWindow, MemberData, VoiceChannelData,
-    VoiceChannelMember,
+    ChatLinkData, ChatMessageData, CrewData, DebugHistory, MainWindow, MemberData,
+    VoiceChannelData, VoiceChannelMember,
 };
 
 pub fn parse_capture_source_id(id: &str, mode: &str) -> (Option<u32>, Option<u64>, Option<u32>) {
@@ -30,54 +32,131 @@ pub fn make_initials(name: &str) -> String {
     }
 }
 
+pub struct ChatConvertOptions<'a> {
+    pub user_id: &'a str,
+    pub user_avatar: &'a slint::Image,
+    pub has_user_avatar: bool,
+    pub avatar_cache: &'a HashMap<String, slint::Image>,
+    pub member_names: &'a HashMap<String, String>,
+    pub first_unread_id: Option<&'a str>,
+}
+
 pub fn chat_messages_to_slint(
     raw: &[mello_core::events::ChatMessage],
-    user_id: &str,
-    user_avatar: &slint::Image,
-    has_user_avatar: bool,
-    cache: &std::collections::HashMap<String, slint::Image>,
+    opts: &ChatConvertOptions<'_>,
 ) -> Vec<ChatMessageData> {
-    mello_core::chat::prepare_messages_for_display(raw)
-        .into_iter()
-        .map(|d| {
-            let is_gif = d.gif.is_some();
-            let (gif_preview_url, gif_width, gif_height) = match &d.gif {
-                Some(g) => (g.preview.clone(), g.width as i32, g.height as i32),
-                None => (String::new(), 0, 0),
-            };
-            let is_self = d.sender_id == user_id;
-            let (sender_av, has_sender_av) = if is_self && has_user_avatar {
-                (user_avatar.clone(), true)
-            } else if let Some(img) = cache.get(&d.sender_id) {
-                (img.clone(), true)
-            } else {
-                (slint::Image::default(), false)
-            };
-            ChatMessageData {
-                message_id: d.message_id.into(),
-                sender_id: d.sender_id.into(),
-                sender_name: d.sender_name.into(),
-                sender_initials: d.sender_initials.into(),
-                sender_avatar: sender_av,
-                has_sender_avatar: has_sender_av,
-                text: d.content.into(),
-                timestamp: d.timestamp.into(),
-                display_time: d.display_time.into(),
-                is_group_start: d.is_group_start,
-                is_continuation: d.is_continuation,
-                is_system: d.is_system,
-                is_gif,
-                gif_image: slint::Image::default(),
-                has_gif_image: false,
-                gif_preview_url: gif_preview_url.into(),
-                gif_width,
-                gif_height,
-                is_clip: false,
-                clip_duration: slint::SharedString::default(),
-                clip_id: slint::SharedString::default(),
+    let display = mello_core::chat::prepare_messages_for_display(raw);
+    let mut out = Vec::with_capacity(display.len() + 1);
+
+    for d in display {
+        if let Some(unread_id) = opts.first_unread_id {
+            if d.message_id == unread_id {
+                out.push(ChatMessageData {
+                    message_id: slint::SharedString::from("__unread_divider__"),
+                    is_unread_divider: true,
+                    ..Default::default()
+                });
             }
+        }
+
+        let is_gif = d.gif.is_some();
+        let (gif_preview_url, gif_width, gif_height) = match &d.gif {
+            Some(g) => (g.preview.clone(), g.width as i32, g.height as i32),
+            None => (String::new(), 0, 0),
+        };
+        let is_self = d.sender_id == opts.user_id;
+        let (sender_av, has_sender_av) = if is_self && opts.has_user_avatar {
+            (opts.user_avatar.clone(), true)
+        } else if let Some(img) = opts.avatar_cache.get(&d.sender_id) {
+            (img.clone(), true)
+        } else {
+            (slint::Image::default(), false)
+        };
+
+        let (display_text, mentions_self, links) = if d.is_system || d.is_deleted {
+            (d.content.clone(), false, Vec::new())
+        } else {
+            mello_core::chat::prepare_body_for_markdown(&d.content, opts.user_id, opts.member_names)
+        };
+
+        let display_styled: StyledText = if d.is_system || d.is_deleted {
+            string_to_styled_text(display_text.clone())
+        } else {
+            parse_markdown(&display_text, &[] as &[StyledText])
+        };
+
+        let slint_links: Vec<ChatLinkData> = links
+            .into_iter()
+            .map(|l| ChatLinkData {
+                url: l.url.into(),
+                label: l.label.into(),
+            })
+            .collect();
+
+        out.push(ChatMessageData {
+            message_id: d.message_id.into(),
+            sender_id: d.sender_id.into(),
+            sender_name: d.sender_name.into(),
+            sender_initials: d.sender_initials.into(),
+            sender_avatar: sender_av,
+            has_sender_avatar: has_sender_av,
+            text: d.content.into(),
+            display_text: display_text.into(),
+            display_styled,
+            links: Rc::new(slint::VecModel::from(slint_links)).into(),
+            timestamp: d.timestamp.into(),
+            display_time: d.display_time.into(),
+            is_group_start: d.is_group_start,
+            is_continuation: d.is_continuation,
+            is_system: d.is_system,
+            is_unread_divider: false,
+            is_gif,
+            gif_image: slint::Image::default(),
+            has_gif_image: false,
+            gif_preview_url: gif_preview_url.into(),
+            gif_width,
+            gif_height,
+            is_clip: false,
+            clip_duration: slint::SharedString::default(),
+            clip_id: slint::SharedString::default(),
+            mentions_self,
+            reply_to_id: d.reply_to.clone().unwrap_or_default().into(),
+            reply_to_name: d.reply_to_name.clone().unwrap_or_default().into(),
+            reply_preview_text: d.reply_preview.clone().unwrap_or_default().into(),
+            is_edited: d.is_edited,
+            is_deleted: d.is_deleted,
+        });
+    }
+
+    out
+}
+
+pub fn member_names_from_app(app: &MainWindow) -> HashMap<String, String> {
+    let members = app.get_members();
+    let mut names = HashMap::new();
+    for i in 0..members.row_count() {
+        if let Some(m) = members.row_data(i) {
+            names.insert(m.id.to_string(), m.name.to_string());
+        }
+    }
+    names
+}
+
+pub fn apply_unread_to_crews(app: &MainWindow, tracker: &mello_core::chat::UnreadTracker) {
+    let crews = app.get_crews();
+    let updated: Vec<CrewData> = (0..crews.row_count())
+        .map(|i| {
+            let mut c = crews.row_data(i).unwrap();
+            let state = tracker.get(c.id.as_str());
+            c.unread_count = state.count.min(99) as i32;
+            if state.count > 99 {
+                // Slint shows count; use 99+ via separate property if needed — cap at 99 for now
+            }
+            c.unread_mention = state.has_mention;
+            c
         })
-        .collect()
+        .collect();
+    app.set_crews(Rc::new(slint::VecModel::from(updated)).into());
 }
 
 /// Scan messages for GIFs and kick off animated frame fetches.

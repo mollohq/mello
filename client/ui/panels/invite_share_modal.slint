@@ -1,4 +1,4 @@
-import { Theme } from "../theme.slint";
+import { Theme, MelloTextInput } from "../theme.slint";
 
 export component InviteShareModal inherits Rectangle {
     in property <string> invite-url: "";
@@ -59,7 +59,7 @@ export component InviteShareModal inherits Rectangle {
                 border-radius: Theme.r-inner;
                 background: Theme.bg-app;
 
-                TextInput {
+                MelloTextInput {
                     text: invite-url;
                     font-family: Theme.font-mono;
                     font-size: 12px;

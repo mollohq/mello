@@ -6,12 +6,14 @@ use tokio::sync::mpsc::Sender;
 
 use mello_core::Command;
 
+use crate::chat_ui::ChatScrollState;
 use crate::foreground_monitor::ForegroundMonitor;
 use crate::gif_animator::GifAnimator;
 use crate::hud_manager::HudManager;
 use crate::snapshot_loader::SnapshotLoader;
 use crate::updater::Updater;
 use crate::{MainWindow, Settings};
+use mello_core::chat::UnreadTracker;
 
 /// (user_id, display_name, is_friend)
 pub type InvitedUserList = Vec<(String, String, bool)>;
@@ -30,6 +32,9 @@ pub struct AppContext {
     pub discover_cursor: Rc<RefCell<Option<String>>>,
     pub discover_loading: Rc<RefCell<bool>>,
     pub chat_messages: Rc<RefCell<Vec<mello_core::events::ChatMessage>>>,
+    pub chat_scroll: Rc<ChatScrollState>,
+    pub unread_tracker: Rc<RefCell<UnreadTracker>>,
+    pub active_crew_id: Rc<RefCell<String>>,
     pub avatar_state: Arc<Mutex<crate::avatar::AvatarGridState>>,
     pub profile_avatar_state: Arc<Mutex<crate::avatar::AvatarGridState>>,
     pub avatar_shuffle_timer: Rc<RefCell<Option<slint::Timer>>>,

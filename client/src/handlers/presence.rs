@@ -7,7 +7,8 @@ use slint::Model;
 use super::stream_cards::sync_active_stream_cards;
 use crate::app_context::AppContext;
 use crate::converters::{
-    channels_to_ui, chat_messages_to_slint, make_initials, update_active_crew_card, VoiceUiCtx,
+    channels_to_ui, chat_messages_to_slint, make_initials, member_names_from_app,
+    update_active_crew_card, ChatConvertOptions, VoiceUiCtx,
 };
 use crate::{avatar, CrewData, MemberData};
 
@@ -58,13 +59,17 @@ pub fn handle(ctx: &AppContext, event: Event) {
                 let uid = ctx.app.get_user_id().to_string();
                 let uav = ctx.app.get_user_avatar();
                 let huav = ctx.app.get_has_user_avatar();
-                let display = chat_messages_to_slint(
-                    &ctx.chat_messages.borrow(),
-                    &uid,
-                    &uav,
-                    huav,
-                    &ctx.avatar_cache.borrow(),
-                );
+                let member_names = member_names_from_app(&ctx.app);
+                let first_unread = ctx.chat_scroll.first_unread_id();
+                let opts = ChatConvertOptions {
+                    user_id: &uid,
+                    user_avatar: &uav,
+                    has_user_avatar: huav,
+                    avatar_cache: &ctx.avatar_cache.borrow(),
+                    member_names: &member_names,
+                    first_unread_id: first_unread.as_deref(),
+                };
+                let display = chat_messages_to_slint(&ctx.chat_messages.borrow(), &opts);
                 let rc = Rc::new(slint::VecModel::from(display));
                 ctx.app.set_messages(rc.into());
             }
@@ -492,6 +497,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
                         .collect();
                     ctx.app
                         .set_members(Rc::new(slint::VecModel::from(member_data)).into());
+                    crate::callbacks::refresh_mention_members(ctx);
                 }
                 // Catch-up is now fetched in mello-core handle_select_crew
                 // (before set_active_crew) to avoid the last_seen race.
