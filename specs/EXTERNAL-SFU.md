@@ -166,7 +166,7 @@ For stream sessions, if the host disconnects, the session immediately transition
 The client connects via WebSocket to the SFU endpoint received from the `start_stream` or `voice_join` RPC:
 
 ```
-wss://sfu-eu.mello.app/ws?token=<JWT>
+wss://sfu-eu.m3llo.app/ws?token=<JWT>
 ```
 
 The JWT is verified on connection. If invalid, the server responds with HTTP 401 and closes. If valid, the WebSocket is established and the server sends a `welcome` message.
@@ -548,7 +548,7 @@ func StartStreamRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk r
 
     if hasPremium {
         region := selectSFURegion(userRegion)  // "eu-west" or "us-east"
-        endpoint := sfuEndpoints[region]       // "wss://sfu-eu.mello.app/ws" etc.
+        endpoint := sfuEndpoints[region]       // "wss://sfu-eu.m3llo.app/ws" etc.
         sessionID := generateSessionID()
         token := signSFUToken(SFUTokenClaims{
             UserID:    userID,
@@ -712,7 +712,7 @@ Self-hosters purchase SFU access as a subscription. Their Nakama instance routes
 
 ```env
 MELLO_SFU_API_KEY=msk_live_abc123...
-MELLO_SFU_ENDPOINTS=sfu-eu.mello.app,sfu-us.mello.app
+MELLO_SFU_ENDPOINTS=sfu-eu.m3llo.app,sfu-us.m3llo.app
 ```
 
 4. Their Nakama's `getCrewVoiceMode()` checks the API key validity and returns `"sfu"` for all crews
@@ -730,8 +730,8 @@ MELLO_SFU_ENDPOINTS=sfu-eu.mello.app,sfu-us.mello.app
 // nakama/data/modules/sfu_routing.go
 
 var sfuEndpoints = map[string]string{
-    "eu-west": "wss://sfu-eu.mello.app/ws",  // GCP europe-west3 (Frankfurt)
-    "us-east": "wss://sfu-us.mello.app/ws",  // GCP us-east4 (Virginia)
+    "eu-west": "wss://sfu-eu.m3llo.app/ws",  // GCP europe-west3 (Frankfurt)
+    "us-east": "wss://sfu-us.m3llo.app/ws",  // GCP us-east4 (Virginia)
 }
 
 func selectSFURegion(userRegion string) string {
@@ -1329,7 +1329,7 @@ The copy-on-write pattern ensures the forwarding loop (hot path) never takes a l
               ┌────────────┘       └────────────┐
               ▼                                  ▼
     ┌──────────────────┐              ┌──────────────────┐
-    │  sfu-eu.mello.app│              │  sfu-us.mello.app│
+    │  sfu-eu.m3llo.app│              │  sfu-us.m3llo.app│
     │                  │              │                  │
     │  GCP Compute     │              │  GCP Compute     │
     │  Engine          │              │  Engine          │
@@ -1370,7 +1370,7 @@ Each SFU VM also runs [coturn](https://github.com/coturn/coturn) as the TURN rel
 |---|---|
 | Software | coturn 4.6+ |
 | Auth | `use-auth-secret` (HMAC-SHA1 time-limited credentials) |
-| Realm | `mello.app` |
+| Realm | `m3llo.app` |
 | UDP port | 3478 |
 | TCP port | 3478 |
 | TLS port | 5349 |
@@ -1512,7 +1512,7 @@ SFU_ADMIN_PASSWORD=<strong random password>
 SFU_ADMIN_IPS=155.4.130.18,10.0.0.0/8
 
 # Aggregate view (sibling SFU instances)
-SFU_PEERS=sfu-eu.mello.app:8080,sfu-us.mello.app:8080
+SFU_PEERS=sfu-eu.m3llo.app:8080,sfu-us.m3llo.app:8080
 ```
 
 ### 10.6 TLS
@@ -1520,7 +1520,7 @@ SFU_PEERS=sfu-eu.mello.app:8080,sfu-us.mello.app:8080
 Two options for TLS termination:
 
 **Option A: Cloudflare proxy (recommended for beta)**
-- Cloudflare terminates TLS for `sfu-eu.mello.app`
+- Cloudflare terminates TLS for `sfu-eu.m3llo.app`
 - Cloudflare → SFU connection uses origin certificate
 - Pro: Free, automatic cert renewal, DDoS protection
 - Con: Adds ~1-5ms latency (Cloudflare edge hop) — acceptable for signaling (WebSocket), not in the media path (WebRTC is direct UDP)
@@ -1848,7 +1848,7 @@ Aggregate view across all SFU instances. This SFU polls its siblings:
       "server_id": "sfu-eu-01",
       "region": "eu-west",
       "status": "ok",
-      "url": "https://sfu-eu.mello.app:8080",
+      "url": "https://sfu-eu.m3llo.app:8080",
       "sessions": 11,
       "peers": 47,
       "bandwidth_out_mbps": 487.1,
@@ -1859,7 +1859,7 @@ Aggregate view across all SFU instances. This SFU polls its siblings:
       "server_id": "sfu-us-01",
       "region": "us-east",
       "status": "ok",
-      "url": "https://sfu-us.mello.app:8080",
+      "url": "https://sfu-us.m3llo.app:8080",
       "sessions": 6,
       "peers": 23,
       "bandwidth_out_mbps": 201.4,
@@ -2077,7 +2077,7 @@ Auto-refresh interval: overview and sessions every 5 seconds, logs every 2 secon
 Each SFU instance knows about its siblings via an env var:
 
 ```
-SFU_PEERS=sfu-eu.mello.app:8080,sfu-us.mello.app:8080
+SFU_PEERS=sfu-eu.m3llo.app:8080,sfu-us.m3llo.app:8080
 ```
 
 The aggregate view works by polling each sibling's `/health` endpoint (public, no auth required). The dashboard's aggregate banner and the `/admin/api/peers` endpoint both use this data.
@@ -2113,7 +2113,7 @@ SFU_ADMIN_PASSWORD=<strong random password>       # Required for /admin access
 SFU_ADMIN_IPS=155.4.130.18,10.0.0.0/8          # Optional: IP allowlist (empty = password only)
 
 # Peer discovery (for aggregate view)
-SFU_PEERS=sfu-eu.mello.app:8080,sfu-us.mello.app:8080
+SFU_PEERS=sfu-eu.m3llo.app:8080,sfu-us.m3llo.app:8080
 
 # Logging
 SFU_LOG_LEVEL=info                               # debug, info, warn, error
