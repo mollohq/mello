@@ -227,12 +227,17 @@ if(WIN32)
         src/audio/mic_permission_stub.cpp
     )
 elseif(IOS)
-    # Step 1: silent stub backend (no RemoteIO yet — IOS-LIBMELLO-PORT §1a Step 3).
+    # RemoteIO capture/playback + AVAudioSession + mic permission (Step 3). Device
+    # enumeration stays stubbed (iOS has one system-managed route, no picker) and
+    # clip encode stays stubbed until its own step.
     list(APPEND MELLO_SOURCES
-        src/audio/audio_backend_ios_stub.cpp
+        src/audio/capture_remoteio.cpp
+        src/audio/playback_remoteio.cpp
+        src/audio/audio_backend_ios.cpp
+        src/audio/audio_session_ios.mm
+        src/audio/mic_permission_ios.mm
         src/audio/device_enumerator_ios_stub.cpp
         src/audio/clip_encoder_ios_stub.cpp
-        src/audio/mic_permission_stub.cpp
     )
 elseif(APPLE)
     list(APPEND MELLO_SOURCES

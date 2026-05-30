@@ -39,6 +39,24 @@ pub struct MelloEventCallback {
     pub user_data: *mut c_void,
 }
 
+/// Install a process-wide logger once. iOS apps have no stdout/stderr console, so
+/// route the `log` crate (mello-core records + libmello logs bridged via
+/// `mello_set_log_callback`) to the unified logging system: visible in Xcode's
+/// console, Console.app, and `log stream`. No-op on non-iOS hosts (the
+/// examples/tests install their own `env_logger`).
+fn init_logging() {
+    use std::sync::Once;
+    static LOG_INIT: Once = Once::new();
+    LOG_INIT.call_once(|| {
+        #[cfg(target_os = "ios")]
+        {
+            let _ = oslog::OsLogger::new("app.m3llo.ios")
+                .level_filter(log::LevelFilter::Info)
+                .init();
+        }
+    });
+}
+
 /// Send wrapper so the callback + user_data can move into the pump thread.
 /// Safety: the Swift side keeps `user_data` (an `Unmanaged<MelloCore>`) alive for
 /// the lifetime of the handle and the callback is thread-safe on its side.
@@ -73,6 +91,7 @@ pub unsafe extern "C" fn mello_core_create(
     config_json: *const c_char,
     cb: MelloEventCallback,
 ) -> *mut MelloCoreHandle {
+    init_logging();
     if config_json.is_null() {
         log::error!("mello_core_create: null config_json");
         return std::ptr::null_mut();
