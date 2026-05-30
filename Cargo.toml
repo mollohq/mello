@@ -4,6 +4,7 @@ members = [
     "client",
     "hud",
     "mello-core",
+    "mello-core-ffi",
     "mello-sys",
     "tools/stream-host",
     "tools/stream-viewer",

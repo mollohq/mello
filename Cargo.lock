@@ -3930,6 +3930,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "mello-core-ffi"
+version = "0.0.0-DEV"
+dependencies = [
+ "env_logger",
+ "log",
+ "mello-core",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "mello-hud"
 version = "0.0.0-DEV"
 dependencies = [
@@ -3951,6 +3962,7 @@ name = "mello-sys"
 version = "0.0.0-DEV"
 dependencies = [
  "bindgen 0.69.5",
+ "cc",
  "cmake",
 ]
 

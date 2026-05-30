@@ -14,6 +14,16 @@ fn main() {
     let target_arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap();
     let manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
 
+    // iOS has no libmello build yet (see mello-ios/specs/IOS-LIBMELLO-PORT.md). To
+    // unblock the FFI spine on iOS, link a no-op C stub of the mello.h API instead of
+    // building libmello, while bindgen still emits the real Rust types from the same
+    // header so mello-core compiles unchanged. Dropped when the real port lands.
+    if target_os == "ios" {
+        build_ios_stub(&manifest_dir);
+        run_bindgen(&manifest_dir);
+        return;
+    }
+
     // Locate vcpkg inside the repo (external/vcpkg submodule)
     let vcpkg_root = Path::new(&manifest_dir).join("../external/vcpkg");
     let vcpkg_root = strip_win_prefix(
@@ -256,6 +266,12 @@ fn main() {
         }
     }
 
+    run_bindgen(&manifest_dir);
+}
+
+/// Generate the Rust bindings from `mello.h`. Shared by the native build and the
+/// iOS stub path so both produce identical types for `mello-core`.
+fn run_bindgen(manifest_dir: &str) {
     // Auto-detect libclang for bindgen if LIBCLANG_PATH not set
     if env::var("LIBCLANG_PATH").is_err() {
         if let Some(path) = find_libclang() {
@@ -263,8 +279,9 @@ fn main() {
         }
     }
 
+    let header = Path::new(manifest_dir).join("../libmello/include/mello.h");
     let bindings = bindgen::Builder::default()
-        .header("../libmello/include/mello.h")
+        .header(header.to_str().unwrap())
         .allowlist_function("mello_.*")
         .allowlist_type("Mello.*")
         .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
@@ -275,6 +292,18 @@ fn main() {
     bindings
         .write_to_file(out_path.join("bindings.rs"))
         .expect("Failed to write bindings");
+}
+
+/// Compile the iOS no-op stub of the mello.h API and emit the link directive.
+/// The stub `#include`s mello.h, so the C compiler enforces signature agreement.
+fn build_ios_stub(manifest_dir: &str) {
+    println!("cargo:rerun-if-changed=stub/mello_stub.c");
+    let include = Path::new(manifest_dir).join("../libmello/include");
+    cc::Build::new()
+        .file("stub/mello_stub.c")
+        .include(include)
+        .warnings(false)
+        .compile("mello_stub");
 }
 
 /// Bootstrap vcpkg if the binary doesn't exist yet.

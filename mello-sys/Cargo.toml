@@ -8,3 +8,4 @@ links = "mello"
 [build-dependencies]
 bindgen = "0.69"
 cmake = "0.1"
+cc = "1"
