@@ -54,7 +54,10 @@ else()
     message(STATUS "[mello] dav1d not found — AV1 software decoder disabled")
 endif()
 
-# ONNX Runtime — prebuilt shared library, auto-downloaded
+# ONNX Runtime — prebuilt shared library, auto-downloaded.
+# Skipped on iOS: Step 1 stubs Silero VAD (no ORT). A pinned prebuilt static
+# onnxruntime.xcframework is vendored in IOS-LIBMELLO-PORT §1a Step 2 / §4.3.
+if(NOT IOS)
 set(ORT_VERSION "1.23.2")
 set(ORT_BASE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/onnxruntime)
 
@@ -110,6 +113,7 @@ else()
     )
 endif()
 message(STATUS "[mello] ONNX Runtime v${ORT_VERSION} found at ${ORT_DIR}")
+endif() # NOT IOS (ONNX Runtime)
 
 # Build rnnoise from source (vcpkg port uses autotools, unsupported on Windows)
 set(RNNOISE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/rnnoise)
@@ -183,6 +187,14 @@ if(WIN32)
         src/audio/clip_encoder_wmf.cpp
         src/audio/mic_permission_stub.cpp
     )
+elseif(IOS)
+    # Step 1: silent stub backend (no RemoteIO yet — IOS-LIBMELLO-PORT §1a Step 3).
+    list(APPEND MELLO_SOURCES
+        src/audio/audio_backend_ios_stub.cpp
+        src/audio/device_enumerator_ios_stub.cpp
+        src/audio/clip_encoder_ios_stub.cpp
+        src/audio/mic_permission_stub.cpp
+    )
 elseif(APPLE)
     list(APPEND MELLO_SOURCES
         src/audio/capture_coreaudio.cpp
@@ -222,6 +234,16 @@ if(WIN32)
         src/video/decoder_dav1d.cpp
         src/video/openh264_dynload.cpp
     )
+elseif(IOS)
+    # Step 1: Metal graphics device + pipeline link, but decode/encode/capture are
+    # stubbed (factories no-op via MELLO_IOS_NO_VIDEO). VideoToolbox decode lands in
+    # IOS-LIBMELLO-PORT §1a Step 5. No hosting on iOS, so enumeration is stubbed.
+    list(APPEND MELLO_SOURCES
+        src/video/graphics_device_metal.mm
+        src/video/video_pipeline.cpp
+        src/video/process_enum_ios_stub.cpp
+        src/video/window_thumbnail_ios_stub.cpp
+    )
 elseif(APPLE)
     list(APPEND MELLO_SOURCES
         src/video/graphics_device_metal.mm
@@ -257,6 +279,12 @@ add_library(mello STATIC ${MELLO_SOURCES})
 
 target_compile_definitions(mello PRIVATE MELLO_EXPORTS NOMINMAX)
 
+# iOS Step 1 gates: stub VAD (no ORT) and video decode/encode/capture (no
+# VideoToolbox). Removed per-subsystem as IOS-LIBMELLO-PORT §1a Steps 4/5 land.
+if(IOS)
+    target_compile_definitions(mello PRIVATE MELLO_IOS MELLO_IOS_NO_VAD MELLO_IOS_NO_VIDEO)
+endif()
+
 target_include_directories(mello PRIVATE
     ${MELLO_NV_CODEC_DIR}
     ${MELLO_AMF_DIR}
@@ -284,8 +312,10 @@ target_link_libraries(mello
         LibDataChannel::LibDataChannel
         rnnoise
         webrtc_audio_processing
-        onnxruntime
 )
+if(NOT IOS)
+    target_link_libraries(mello PUBLIC onnxruntime)
+endif()
 
 if(WIN32)
     target_link_libraries(mello PUBLIC
@@ -303,6 +333,20 @@ if(WIN32)
         windowsapp
     )
     # OpenH264 is NOT linked — Cisco prebuilt DLL loaded at runtime via LoadLibrary
+elseif(IOS)
+    # iOS: RemoteIO uses AudioToolbox/AVFoundation (no CoreAudio HAL); no
+    # ScreenCaptureKit/AppKit (no hosting). VideoToolbox kept for Step 5.
+    target_link_libraries(mello PUBLIC
+        "-framework AudioToolbox"
+        "-framework AVFoundation"
+        "-framework CoreFoundation"
+        "-framework Metal"
+        "-framework VideoToolbox"
+        "-framework CoreMedia"
+        "-framework CoreVideo"
+        "-framework CoreGraphics"
+        "-framework Accelerate"
+    )
 elseif(APPLE)
     target_link_libraries(mello PUBLIC
         "-framework AudioToolbox"
@@ -328,9 +372,9 @@ if(MELLO_HAS_DAV1D)
     endif()
 endif()
 
-# Download Silero VAD v6.2 model if missing
+# Download Silero VAD v6.2 model if missing (skipped on iOS — VAD stubbed in Step 1)
 set(SILERO_VAD_MODEL "${CMAKE_CURRENT_SOURCE_DIR}/models/silero_vad.onnx")
-if(NOT EXISTS "${SILERO_VAD_MODEL}")
+if(NOT IOS AND NOT EXISTS "${SILERO_VAD_MODEL}")
     message(STATUS "[mello] Downloading Silero VAD v6.2 model...")
     file(MAKE_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/models")
     file(DOWNLOAD
@@ -352,7 +396,9 @@ install(TARGETS mello rnnoise webrtc_audio_processing
     RUNTIME DESTINATION bin
 )
 install(FILES include/mello.h DESTINATION include)
-install(FILES models/silero_vad.onnx DESTINATION models)
+if(NOT IOS)
+    install(FILES models/silero_vad.onnx DESTINATION models)
+endif()
 
 # Tests (opt-in via MELLO_BUILD_TESTS)
 option(MELLO_BUILD_TESTS "Build libmello C++ tests" OFF)

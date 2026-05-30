@@ -18,6 +18,11 @@ VoiceActivityDetector::~VoiceActivityDetector() {
 }
 
 bool VoiceActivityDetector::initialize(const std::string& model_path) {
+#ifdef MELLO_IOS_NO_VAD
+    (void)model_path;
+    MELLO_LOG_WARN("vad", "Silero VAD stubbed on iOS (Step 1) — ORT not linked");
+    return false;
+#else
     try {
 #ifdef _WIN32
         // Windows ships onnxruntime.dll in System32/WinSxS (Copilot, Studio Effects)
@@ -107,15 +112,18 @@ bool VoiceActivityDetector::initialize(const std::string& model_path) {
         MELLO_LOG_ERROR("vad", "Silero VAD init failed: %s", e.what());
         return false;
     }
+#endif // MELLO_IOS_NO_VAD
 }
 
 void VoiceActivityDetector::shutdown() {
+#ifndef MELLO_IOS_NO_VAD
     if (session_) {
         delete session_;
         session_ = nullptr;
     }
     session_options_.reset();
     env_.reset();
+#endif
     h_state_.clear();
     context_.clear();
     initialized_ = false;
@@ -152,6 +160,7 @@ void VoiceActivityDetector::force_silence() {
 }
 
 void VoiceActivityDetector::run_inference() {
+#ifndef MELLO_IOS_NO_VAD
     if (!session_) return;
 
     try {
@@ -219,6 +228,7 @@ void VoiceActivityDetector::run_inference() {
     } catch (const Ort::Exception& e) {
         MELLO_LOG_WARN("vad", "inference error: %s", e.what());
     }
+#endif // MELLO_IOS_NO_VAD
 }
 
 } // namespace mello::audio

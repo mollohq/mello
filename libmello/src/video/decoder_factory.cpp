@@ -7,7 +7,7 @@
 #include "decoder_d3d11va.hpp"
 #include "decoder_openh264.hpp"
 #include "decoder_dav1d.hpp"
-#elif defined(__APPLE__)
+#elif defined(__APPLE__) && !defined(MELLO_IOS_NO_VIDEO)
 #include "decoder_videotoolbox.hpp"
 #endif
 
@@ -60,7 +60,7 @@ std::unique_ptr<Decoder> create_best_decoder(
             MELLO_LOG_WARN(TAG, "OpenH264 DLL not found — H.264 software decode disabled");
         }
     }
-#elif defined(__APPLE__)
+#elif defined(__APPLE__) && !defined(MELLO_IOS_NO_VIDEO)
     if (VTDecoder::is_available()) {
         MELLO_LOG_INFO(TAG, "Probing VideoToolbox decoder...");
         auto dec = std::make_unique<VTDecoder>();
@@ -88,7 +88,7 @@ std::vector<const char*> enumerate_decoders(const GraphicsDevice& device) {
     if (D3d11vaDecoder::is_available(device.d3d11()))    result.push_back("D3D11VA");
     if (OpenH264Decoder::is_available())                 result.push_back("OpenH264");
     if (Dav1dDecoder::is_available())                    result.push_back("dav1d");
-#elif defined(__APPLE__)
+#elif defined(__APPLE__) && !defined(MELLO_IOS_NO_VIDEO)
     (void)device;
     if (VTDecoder::is_available()) result.push_back("VideoToolbox");
 #else

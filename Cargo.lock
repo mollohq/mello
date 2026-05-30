@@ -3962,7 +3962,6 @@ name = "mello-sys"
 version = "0.0.0-DEV"
 dependencies = [
  "bindgen 0.69.5",
- "cc",
  "cmake",
 ]
 
