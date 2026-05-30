@@ -1505,20 +1505,166 @@ impl NakamaClient {
         );
         if let Some(c) = cursor {
             if !c.is_empty() {
-                url.push_str(&format!("&cursor={}", c));
+                url.push_str(&format!("&cursor={}", urlencoding::encode(c)));
             }
         }
 
         let resp = self.http.get(&url).bearer_auth(&token).send().await?;
 
         if !resp.status().is_success() {
-            return Err(Error::Server("Failed to list channel messages".into()));
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            log::warn!(
+                "channel {} message list failed: {} {}",
+                channel_id,
+                status,
+                body
+            );
+            return Err(Error::Server(format!(
+                "Failed to list channel messages: {status}"
+            )));
         }
 
         let list: ApiChannelMessageList = resp.json().await?;
         let next_cursor = list.next_cursor.clone().filter(|c| !c.is_empty());
         let names = self.member_names.read().await;
-        Ok((parse_channel_messages(list, &names), next_cursor))
+        let (messages, stats) = parse_channel_messages_with_stats(list, &names);
+        log::info!(
+            "channel {} message list: {} raw, {} parsed ({} signals, {} unparseable, limit={}, paging={})",
+            channel_id,
+            stats.raw,
+            stats.parsed,
+            stats.signals,
+            stats.parse_failures,
+            limit,
+            cursor.is_some()
+        );
+        Ok((messages, next_cursor))
+    }
+
+    /// Fetch enough displayable chat messages, skipping signal traffic that shares the crew channel.
+    /// Returns messages oldest-first and a cursor for loading even older history.
+    pub async fn list_display_chat_messages(
+        &self,
+        channel_id: &str,
+        target_count: usize,
+        start_cursor: Option<&str>,
+    ) -> Result<(Vec<ChatMessage>, Option<String>)> {
+        const PAGE_RAW: u32 = 100;
+        const MAX_PAGES: usize = 15;
+
+        let mut cur = start_cursor.map(String::from);
+        let mut pages_newest_first: Vec<Vec<ChatMessage>> = Vec::new();
+
+        for page_num in 0..MAX_PAGES {
+            let fetch_result = self
+                .fetch_channel_messages_page(channel_id, PAGE_RAW, cur.as_deref())
+                .await;
+
+            let (page, next, stats) = match fetch_result {
+                Ok(v) => v,
+                Err(e) => {
+                    let parsed_so_far: usize = pages_newest_first.iter().map(|p| p.len()).sum();
+                    if pages_newest_first.is_empty() {
+                        return Err(e);
+                    }
+                    log::warn!(
+                        "channel {} display history page {} failed after {} messages: {}",
+                        channel_id,
+                        page_num + 1,
+                        parsed_so_far,
+                        e
+                    );
+                    break;
+                }
+            };
+
+            log::info!(
+                "channel {} display history page {}: {} raw, {} parsed ({} signals, {} unparseable)",
+                channel_id,
+                page_num + 1,
+                stats.raw,
+                stats.parsed,
+                stats.signals,
+                stats.parse_failures
+            );
+
+            if stats.raw == 0 {
+                break;
+            }
+
+            pages_newest_first.push(page);
+            cur = next;
+
+            let parsed_so_far: usize = pages_newest_first.iter().map(|p| p.len()).sum();
+            if cur.is_none() {
+                break;
+            }
+            if parsed_so_far >= target_count {
+                break;
+            }
+            // Signal-only page: keep paging with the same cursor chain.
+            if stats.parsed == 0 && stats.raw > 0 {
+                continue;
+            }
+        }
+
+        let mut chronological: Vec<ChatMessage> = pages_newest_first
+            .into_iter()
+            .rev()
+            .flat_map(|mut page| {
+                page.reverse();
+                page
+            })
+            .collect();
+
+        if chronological.len() > target_count {
+            chronological = chronological.split_off(chronological.len() - target_count);
+        }
+
+        Ok((chronological, cur))
+    }
+
+    async fn fetch_channel_messages_page(
+        &self,
+        channel_id: &str,
+        limit: u32,
+        cursor: Option<&str>,
+    ) -> Result<(Vec<ChatMessage>, Option<String>, ChannelMessageParseStats)> {
+        let token = self.bearer()?;
+        let mut url = format!(
+            "{}/v2/channel/{}?limit={}&forward=false",
+            self.config.http_base(),
+            channel_id,
+            limit
+        );
+        if let Some(c) = cursor {
+            if !c.is_empty() {
+                url.push_str(&format!("&cursor={}", urlencoding::encode(c)));
+            }
+        }
+
+        let resp = self.http.get(&url).bearer_auth(&token).send().await?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            log::warn!(
+                "channel {} message page failed: {} {}",
+                channel_id,
+                status,
+                body
+            );
+            return Err(Error::Server(format!(
+                "Failed to list channel messages: {status}"
+            )));
+        }
+
+        let list: ApiChannelMessageList = resp.json().await?;
+        let next_cursor = list.next_cursor.clone().filter(|c| !c.is_empty());
+        let names = self.member_names.read().await;
+        let (messages, stats) = parse_channel_messages_with_stats(list, &names);
+        Ok((messages, next_cursor, stats))
     }
 
     // --- Crew members ---
@@ -1620,24 +1766,51 @@ impl NakamaClient {
 
 // --- Message parsing (extracted for testability) ---
 
+#[derive(Debug, Default, Clone, Copy)]
+pub(crate) struct ChannelMessageParseStats {
+    pub raw: usize,
+    pub parsed: usize,
+    pub signals: usize,
+    pub parse_failures: usize,
+}
+
+#[cfg(test)]
 pub(crate) fn parse_channel_messages(
     list: ApiChannelMessageList,
     member_names: &HashMap<String, String>,
 ) -> Vec<ChatMessage> {
-    list.messages
-        .unwrap_or_default()
+    parse_channel_messages_with_stats(list, member_names).0
+}
+
+pub(crate) fn parse_channel_messages_with_stats(
+    list: ApiChannelMessageList,
+    member_names: &HashMap<String, String>,
+) -> (Vec<ChatMessage>, ChannelMessageParseStats) {
+    let messages = list.messages.unwrap_or_default();
+    let mut stats = ChannelMessageParseStats {
+        raw: messages.len(),
+        ..Default::default()
+    };
+
+    let parsed: Vec<ChatMessage> = messages
         .into_iter()
         .filter_map(|m| {
             let content_str = m.content.as_deref().unwrap_or("");
 
-            // Skip signaling messages
-            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(content_str) {
-                if parsed.get("signal").and_then(|v| v.as_bool()) == Some(true) {
+            if let Ok(parsed_json) = serde_json::from_str::<serde_json::Value>(content_str) {
+                if parsed_json.get("signal").and_then(|v| v.as_bool()) == Some(true) {
+                    stats.signals += 1;
                     return None;
                 }
             }
 
-            let envelope = crate::chat::parse_content(content_str)?;
+            let envelope = match crate::chat::parse_content(content_str) {
+                Some(e) => e,
+                None => {
+                    stats.parse_failures += 1;
+                    return None;
+                }
+            };
             let sender_id = m.sender_id.unwrap_or_default();
             let sender_name = member_names
                 .get(&sender_id)
@@ -1655,7 +1828,10 @@ pub(crate) fn parse_channel_messages(
                 content_str,
             )
         })
-        .collect()
+        .collect();
+
+    stats.parsed = parsed.len();
+    (parsed, stats)
 }
 
 // --- WebSocket background tasks ---
@@ -2094,21 +2270,23 @@ mod tests {
     }
 
     #[test]
-    fn parse_filters_out_empty_json_messages() {
+    fn parse_stats_count_signals() {
         let list = ApiChannelMessageList {
             messages: Some(vec![
-                make_api_msg(r#"{"text":"real msg"}"#, "u1", "alice"),
-                make_api_msg(r#"{}"#, "u2", "bob"),
-                make_api_msg(r#"{"text":"also real"}"#, "u3", "carol"),
+                make_api_msg(r#"{"text":"hi"}"#, "u1", "alice"),
+                make_api_msg(r#"{"signal":true,"to":"u1","data":"offer"}"#, "u2", "bob"),
+                make_api_msg(r#"{"text":"bye"}"#, "u3", "carol"),
             ]),
             next_cursor: None,
             prev_cursor: None,
         };
 
-        let result = parse_channel_messages(list, &empty_names());
+        let (result, stats) = parse_channel_messages_with_stats(list, &empty_names());
         assert_eq!(result.len(), 2);
-        assert_eq!(result[0].content, "real msg");
-        assert_eq!(result[1].content, "also real");
+        assert_eq!(stats.raw, 3);
+        assert_eq!(stats.parsed, 2);
+        assert_eq!(stats.signals, 1);
+        assert_eq!(stats.parse_failures, 0);
     }
 
     #[test]
@@ -2150,7 +2328,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_skips_non_json_content() {
+    fn parse_accepts_plain_text_content() {
         let list = ApiChannelMessageList {
             messages: Some(vec![make_api_msg("plain text, not json", "u1", "alice")]),
             next_cursor: None,
@@ -2158,7 +2336,8 @@ mod tests {
         };
 
         let result = parse_channel_messages(list, &empty_names());
-        assert!(result.is_empty());
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].content, "plain text, not json");
     }
 
     #[test]

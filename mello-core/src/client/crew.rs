@@ -156,9 +156,6 @@ impl super::Client {
                     crew_id,
                     name
                 );
-                let _ = self.event_tx.send(Event::CrewJoined {
-                    crew_id: crew_id.clone(),
-                });
                 self.handle_select_crew(&crew_id).await;
                 self.load_crews().await;
             }
@@ -365,26 +362,66 @@ impl super::Client {
             }
         }
 
-        // Wait for WS reader to set channel_id (up to 2s)
-        let channel_id = self.wait_for_channel_id().await;
-        if let Some(ch_id) = channel_id {
-            match self
-                .nakama
-                .list_channel_messages_with_cursor(&ch_id, 50, None)
-                .await
-            {
-                Ok((mut messages, cursor)) => {
-                    messages.reverse();
-                    self.history_cursor = cursor;
-                    let _ = self.event_tx.send(Event::MessagesLoaded { messages });
-                }
-                Err(e) => log::error!("Failed to fetch message history: {}", e),
-            }
-        }
+        self.load_initial_chat_history(crew_id).await;
 
         // Auto-join voice (last-used channel, or default if first time)
         if let Some(ch_id) = &voice_channel_id {
             self.handle_join_voice(ch_id).await;
+        }
+    }
+
+    /// Load the latest page of crew chat history over REST (paginate older via LoadHistory).
+    pub(super) async fn load_initial_chat_history(&mut self, crew_id: &str) {
+        self.history_cursor = None;
+
+        let ws_channel = self.wait_for_channel_id().await;
+        let mut channel_id = ws_channel.unwrap_or_else(|| {
+            log::warn!("channel_id not confirmed via WebSocket; using crew_id for history fetch");
+            crew_id.to_string()
+        });
+
+        let mut result = self
+            .nakama
+            .list_display_chat_messages(&channel_id, 50, None)
+            .await;
+
+        if let Ok((ref messages, _)) = result {
+            if messages.is_empty() && channel_id != crew_id {
+                log::warn!(
+                    "no messages on ws channel {}, retrying history with crew_id",
+                    channel_id
+                );
+                channel_id = crew_id.to_string();
+                result = self
+                    .nakama
+                    .list_display_chat_messages(&channel_id, 50, None)
+                    .await;
+            }
+        }
+
+        match result {
+            Ok((messages, cursor)) => {
+                let has_more_history = cursor.is_some();
+                self.history_cursor = cursor;
+                log::info!(
+                    "Initial chat history for crew {}: {} messages (has_more={})",
+                    crew_id,
+                    messages.len(),
+                    has_more_history
+                );
+                let _ = self.event_tx.send(Event::MessagesLoaded {
+                    messages,
+                    has_more_history,
+                });
+            }
+            Err(e) => {
+                log::error!(
+                    "Failed to fetch message history for crew {} (channel {}): {}",
+                    crew_id,
+                    channel_id,
+                    e
+                );
+            }
         }
     }
 
@@ -404,6 +441,7 @@ impl super::Client {
         if let Err(e) = self.nakama.leave_crew_channel().await {
             log::error!("Failed to leave crew: {}", e);
         }
+        self.history_cursor = None;
         if let Some(id) = crew_id {
             let _ = self.event_tx.send(Event::CrewLeft { crew_id: id });
         }

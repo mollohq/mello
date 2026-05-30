@@ -135,6 +135,7 @@ export component MainWindow inherits Window {
     in property <int> chat-messages-this-week: 0;
     in property <[GifItemData]> gif-results: [];
     in property <bool> loading-history: false;
+    in property <bool> has-more-history: false;
     in-out property <bool> has-new-messages: false;
     in-out property <bool> scroll-to-bottom-request: false;
     in-out property <int> history-prepended-rows: 0;
@@ -935,6 +936,7 @@ export component MainWindow inherits Window {
                     user-name: root.user-name;
                     user-id: root.user-id;
                     loading-history: root.loading-history;
+                    has-more-history: root.has-more-history;
                     has-new-messages <=> root.has-new-messages;
                     scroll-to-bottom-request <=> root.scroll-to-bottom-request;
                     history-prepended-rows: root.history-prepended-rows;

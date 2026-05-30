@@ -173,11 +173,14 @@ pub enum Event {
     },
     MessagesLoaded {
         messages: Vec<ChatMessage>,
+        /// `true` when Nakama returned a pagination cursor (older messages exist).
+        has_more_history: bool,
     },
     HistoryLoaded {
         messages: Vec<ChatMessage>,
         cursor: Option<String>,
     },
+    HistoryLoadFailed,
     ChatMessageEdited {
         message_id: String,
         new_content: String,

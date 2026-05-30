@@ -84,18 +84,20 @@ impl super::Client {
 
         match self
             .nakama
-            .list_channel_messages_with_cursor(&channel_id, 50, effective_cursor)
+            .list_display_chat_messages(&channel_id, 50, effective_cursor)
             .await
         {
-            Ok((mut messages, next_cursor)) => {
-                messages.reverse();
+            Ok((messages, next_cursor)) => {
                 self.history_cursor = next_cursor.clone();
                 let _ = self.event_tx.send(Event::HistoryLoaded {
                     messages,
                     cursor: next_cursor,
                 });
             }
-            Err(e) => log::error!("Failed to load history: {}", e),
+            Err(e) => {
+                log::error!("Failed to load history: {}", e);
+                let _ = self.event_tx.send(Event::HistoryLoadFailed);
+            }
         }
     }
 }

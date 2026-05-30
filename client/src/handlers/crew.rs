@@ -291,8 +291,9 @@ pub fn handle(ctx: &AppContext, event: Event) {
             log::info!("UI: joined crew {}", crew_id);
             ctx.app.set_show_discover(false);
             *ctx.active_voice_channel.borrow_mut() = String::new();
-            let old_id = ctx.app.get_active_crew_id();
-            if !old_id.is_empty() && old_id != crew_id.as_str() {
+            let old_id = ctx.app.get_active_crew_id().to_string();
+            let switching_crew = !old_id.is_empty() && old_id != crew_id.as_str();
+            if switching_crew {
                 let crews = ctx.app.get_crews();
                 let cleared: Vec<CrewData> = (0..crews.row_count())
                     .map(|i| {
@@ -309,19 +310,20 @@ pub fn handle(ctx: &AppContext, event: Event) {
                     .collect();
                 ctx.app
                     .set_crews(Rc::new(slint::VecModel::from(cleared)).into());
+                ctx.chat_messages.borrow_mut().clear();
+                ctx.chat_scroll.reset_on_messages_loaded();
+                let empty: Vec<ChatMessageData> = vec![];
+                let rc = Rc::new(slint::VecModel::from(empty));
+                ctx.app.set_messages(rc.into());
+                ctx.app.set_chat_messages_this_week(0);
+                ctx.app.set_has_more_history(false);
+                ctx.app.set_has_new_messages(false);
             }
             ctx.app.set_active_crew_id(crew_id.clone().into());
             let empty_channels: Vec<VoiceChannelData> = vec![];
             ctx.app
                 .set_voice_channels(Rc::new(slint::VecModel::from(empty_channels)).into());
-            ctx.chat_messages.borrow_mut().clear();
-            ctx.chat_scroll.reset_on_messages_loaded();
             ctx.unread_tracker.borrow_mut().reset(crew_id.as_str());
-            let empty: Vec<ChatMessageData> = vec![];
-            let rc = Rc::new(slint::VecModel::from(empty));
-            ctx.app.set_messages(rc.into());
-            ctx.app.set_chat_messages_this_week(0);
-            ctx.app.set_has_new_messages(false);
             apply_unread_to_crews(&ctx.app, &ctx.unread_tracker.borrow());
             *ctx.active_crew_id.borrow_mut() = crew_id.clone();
             update_active_crew_card(&ctx.app);

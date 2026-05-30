@@ -45,7 +45,10 @@ fn upsert_message(ctx: &AppContext, message: mello_core::events::ChatMessage) {
 
 pub fn handle(ctx: &AppContext, event: Event) {
     match event {
-        Event::MessagesLoaded { messages } => {
+        Event::MessagesLoaded {
+            messages,
+            has_more_history,
+        } => {
             let uid = ctx.app.get_user_id().to_string();
             let uncached: Vec<String> = {
                 let cache = ctx.avatar_cache.borrow();
@@ -63,6 +66,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
                     .try_send(Command::FetchUserAvatars { user_ids: uncached });
             }
             *ctx.chat_messages.borrow_mut() = messages;
+            ctx.app.set_has_more_history(has_more_history);
             ctx.chat_scroll.reset_on_messages_loaded();
             let active = ctx.app.get_active_crew_id().to_string();
             if !active.is_empty() {
@@ -107,14 +111,18 @@ pub fn handle(ctx: &AppContext, event: Event) {
                     .try_send(Command::FetchUserAvatar { user_id: sender_id });
             }
         }
-        Event::HistoryLoaded { messages, .. } => {
+        Event::HistoryLoaded { messages, cursor } => {
             let prepended = messages.len();
             let mut all = messages;
             all.append(&mut ctx.chat_messages.borrow().clone());
             *ctx.chat_messages.borrow_mut() = all;
+            ctx.app.set_has_more_history(cursor.is_some());
             ctx.chat_scroll.on_history_prepended(prepended);
             ctx.app.set_loading_history(false);
             refresh_chat_ui(ctx);
+        }
+        Event::HistoryLoadFailed => {
+            ctx.app.set_loading_history(false);
         }
         Event::ChatMessageEdited {
             message_id,

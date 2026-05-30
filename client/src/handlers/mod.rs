@@ -71,6 +71,7 @@ pub fn handle_event(ctx: &AppContext, event: Event) {
         Event::MessagesLoaded { .. }
         | Event::MessageReceived { .. }
         | Event::HistoryLoaded { .. }
+        | Event::HistoryLoadFailed
         | Event::ChatMessageEdited { .. }
         | Event::ChatMessageDeleted { .. }
         | Event::GifsLoaded { .. }

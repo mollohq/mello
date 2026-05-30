@@ -287,6 +287,11 @@ pub fn parse_content(content_str: &str) -> Option<MessageEnvelope> {
             });
         }
     }
+    // Plain-text content (pre-envelope messages)
+    let trimmed = content_str.trim();
+    if !trimmed.is_empty() {
+        return Some(MessageEnvelope::text(trimmed, None));
+    }
     None
 }
 
@@ -699,6 +704,12 @@ mod tests {
         let env = parse_content(json).unwrap();
         assert_eq!(env.v, 0);
         assert_eq!(env.body, "legacy message");
+    }
+
+    #[test]
+    fn parse_content_plain_text() {
+        let env = parse_content("hello from the past").unwrap();
+        assert_eq!(env.body, "hello from the past");
     }
 
     #[test]

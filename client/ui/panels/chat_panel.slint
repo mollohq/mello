@@ -443,6 +443,7 @@ export component ChatPanel inherits Rectangle {
     in property <string> user-name: "";
     in property <string> user-id: "";
     in property <bool> loading-history: false;
+    in property <bool> has-more-history: false;
 
     // GIF popover
     in property <[GifItemData]> gif-results: [];
@@ -577,10 +578,12 @@ export component ChatPanel inherits Rectangle {
 
             property <bool> at-bottom: feed.viewport-height <= feed.height
                 || (-feed.viewport-y + feed.height) >= (feed.viewport-height - 32px);
+            property <bool> at-top: feed.viewport-y >= -8px;
+            property <bool> was-at-top: false;
 
             flicked => {
                 root.chat-viewport-changed(at-bottom);
-                if feed.viewport-y >= 0px && !root.loading-history {
+                if at-top && root.has-more-history && !root.loading-history {
                     root.request-history();
                 }
                 if root.more-menu-message-id != "" {
@@ -590,6 +593,10 @@ export component ChatPanel inherits Rectangle {
 
             changed viewport-y => {
                 root.chat-viewport-changed(at-bottom);
+                if at-top && !was-at-top && root.has-more-history && !root.loading-history {
+                    root.request-history();
+                }
+                was-at-top = at-top;
             }
 
             VerticalLayout {
@@ -631,8 +638,8 @@ export component ChatPanel inherits Rectangle {
                         width: parent.width;
                         height: 20px;
                         spacing: 8px;
-                        padding-left: 8px;
-                        padding-right: 8px;
+                        padding-left: 4px;
+                        padding-right: 4px;
                         padding-bottom: 8px;
 
                         Rectangle {
@@ -672,7 +679,7 @@ export component ChatPanel inherits Rectangle {
                     // System message
                     if msg.is-system && !msg.is-unread-divider: HorizontalLayout {
                         padding-left: 36px;
-                        padding-right: 8px;
+                        padding-right: 4px;
                         padding-top: 4px;
                         padding-bottom: 4px;
 
@@ -689,7 +696,8 @@ export component ChatPanel inherits Rectangle {
                     // Group start header — full feed width; spacer pushes timestamp right (no alignment:)
                     if !msg.is-system && !msg.is-unread-divider && msg.is-group-start: HorizontalLayout {
                         width: parent.width;
-                        padding-right: 12px;
+                        padding-left: 4px;
+                        padding-right: 4px;
                         spacing: 8px;
 
                         Rectangle {
@@ -733,6 +741,8 @@ export component ChatPanel inherits Rectangle {
                     if !msg.is-system && !msg.is-unread-divider: HorizontalLayout {
                         spacing: 8px;
                         width: feed.width;
+                        padding-left: 4px;
+                        padding-right: 4px;
                         alignment: start;
                         property <length> actions-y: 0px;
                         property <bool> body-hovered: body-hover.has-hover
