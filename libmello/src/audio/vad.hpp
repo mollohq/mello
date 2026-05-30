@@ -1,7 +1,9 @@
 #pragma once
-// iOS Step 1 stubs Silero VAD (no ORT linked yet — see IOS-LIBMELLO-PORT §1a Step 4).
-// Gating the ORT include + members here keeps every TU that includes vad.hpp (e.g.
-// audio_pipeline) free of ONNX Runtime on iOS. Desktop is unaffected (flag is iOS-only).
+// MELLO_IOS_NO_VAD is the documented VAD kill-switch (IOS-LIBMELLO-PORT §4.3
+// fallback): define it to stub Silero out (no ORT) if ORT-iOS regresses. It is
+// NOT defined by default as of Step 2 — iOS links the prebuilt static ORT. When
+// set, gating the ORT include + members here keeps every TU that includes
+// vad.hpp (e.g. audio_pipeline) free of ONNX Runtime. Desktop never sets it.
 #ifndef MELLO_IOS_NO_VAD
 #define ORT_API_MANUAL_INIT
 #include <onnxruntime_cxx_api.h>

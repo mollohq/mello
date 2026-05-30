@@ -296,10 +296,11 @@ fn run_bindgen(manifest_dir: &str) {
 /// Cross-compile libmello for iOS (device `aarch64-apple-ios` or simulator
 /// `aarch64-apple-ios-sim`) through the vcpkg toolchain, then emit link directives.
 ///
-/// Step 1 (IOS-LIBMELLO-PORT.md §1a): the voice DSP (opus/rnnoise/webrtc-apm) and
-/// transport (libdatachannel) link for real; the audio I/O backend, Silero VAD,
-/// and video decode are stubbed (gated by MELLO_IOS_NO_VAD / MELLO_IOS_NO_VIDEO in
-/// the CMake iOS branch). usrsctp needs an iOS patch, supplied via the overlay port.
+/// Steps 1–2 (IOS-LIBMELLO-PORT.md §1a): the voice DSP (opus/rnnoise/webrtc-apm),
+/// transport (libdatachannel), and Silero VAD (prebuilt static ONNX Runtime
+/// xcframework) link for real; the audio I/O backend and video decode are still
+/// stubbed (gated by MELLO_IOS_NO_VIDEO in the CMake iOS branch). usrsctp needs an
+/// iOS patch, supplied via the overlay port.
 fn build_ios(manifest_dir: &str) {
     // Both iOS targets report target_os = "ios"; the simulator triple ends in -sim.
     let target = env::var("TARGET").unwrap();
@@ -339,6 +340,9 @@ fn build_ios(manifest_dir: &str) {
         .define("CMAKE_OSX_ARCHITECTURES", "arm64")
         .define("CMAKE_OSX_SYSROOT", sysroot)
         .define("CMAKE_OSX_DEPLOYMENT_TARGET", "18.0")
+        // Selects the ORT xcframework slice (device vs simulator) deterministically
+        // instead of pattern-matching the resolved CMAKE_OSX_SYSROOT path.
+        .define("MELLO_IOS_SIMULATOR", if is_sim { "ON" } else { "OFF" })
         .profile("Release");
 
     let dst = cmake_cfg.build();
@@ -349,6 +353,22 @@ fn build_ios(manifest_dir: &str) {
     println!("cargo:rustc-link-lib=static=mello");
     println!("cargo:rustc-link-lib=static=rnnoise");
     println!("cargo:rustc-link-lib=static=webrtc_audio_processing");
+
+    // Prebuilt static ONNX Runtime xcframework (downloaded + SHA256-verified by the
+    // CMake iOS branch). The framework binary is a static archive; link it as a
+    // framework so the linker resolves Silero VAD's ORT symbols. The app's real link
+    // goes through build-core.sh (which merges this archive in); this keeps any
+    // cargo-driven iOS link self-consistent.
+    let ort_slice = if is_sim {
+        "ios-arm64_x86_64-simulator"
+    } else {
+        "ios-arm64"
+    };
+    let ort_fw_dir = Path::new(manifest_dir)
+        .join("../libmello/third_party/onnxruntime-ios/onnxruntime.xcframework")
+        .join(ort_slice);
+    println!("cargo:rustc-link-search=framework={}", ort_fw_dir.display());
+    println!("cargo:rustc-link-lib=framework=onnxruntime");
 
     // vcpkg deps (manifest mode installs into the cmake build dir).
     let out_dir = env::var("OUT_DIR").unwrap();

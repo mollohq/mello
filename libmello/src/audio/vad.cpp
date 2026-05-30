@@ -20,7 +20,7 @@ VoiceActivityDetector::~VoiceActivityDetector() {
 bool VoiceActivityDetector::initialize(const std::string& model_path) {
 #ifdef MELLO_IOS_NO_VAD
     (void)model_path;
-    MELLO_LOG_WARN("vad", "Silero VAD stubbed on iOS (Step 1) — ORT not linked");
+    MELLO_LOG_WARN("vad", "Silero VAD stubbed (MELLO_IOS_NO_VAD kill-switch) — ORT not linked");
     return false;
 #else
     try {
