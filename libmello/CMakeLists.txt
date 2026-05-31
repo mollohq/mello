@@ -279,12 +279,13 @@ if(WIN32)
         src/video/openh264_dynload.cpp
     )
 elseif(IOS)
-    # Step 1: Metal graphics device + pipeline link, but decode/encode/capture are
-    # stubbed (factories no-op via MELLO_IOS_NO_VIDEO). VideoToolbox decode lands in
-    # IOS-LIBMELLO-PORT §1a Step 5. No hosting on iOS, so enumeration is stubbed.
+    # Viewer path: Metal graphics device + pipeline + VideoToolbox H.264 decode
+    # (Step 5). No hosting on iOS in v1 — encode + screen capture stay stubbed
+    # (factories no-op via MELLO_IOS_NO_HOSTING) and enumeration is stubbed.
     list(APPEND MELLO_SOURCES
         src/video/graphics_device_metal.mm
         src/video/video_pipeline.cpp
+        src/video/decoder_videotoolbox.mm
         src/video/process_enum_ios_stub.cpp
         src/video/window_thumbnail_ios_stub.cpp
     )
@@ -323,10 +324,10 @@ add_library(mello STATIC ${MELLO_SOURCES})
 
 target_compile_definitions(mello PRIVATE MELLO_EXPORTS NOMINMAX)
 
-# iOS gates: video decode/encode/capture stubbed (no VideoToolbox yet). VAD is
-# live as of Step 2 (prebuilt static ORT). MELLO_IOS_NO_VIDEO drops with Step 5.
+# iOS: VideoToolbox H.264 decode is live (Step 5); encode + screen capture stay
+# stubbed (no mobile hosting in v1). VAD is live as of Step 2 (prebuilt static ORT).
 if(IOS)
-    target_compile_definitions(mello PRIVATE MELLO_IOS MELLO_IOS_NO_VIDEO)
+    target_compile_definitions(mello PRIVATE MELLO_IOS MELLO_IOS_NO_HOSTING)
 endif()
 
 target_include_directories(mello PRIVATE
