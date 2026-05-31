@@ -13,6 +13,8 @@ pub struct User {
     pub username: String,
     pub display_name: String,
     pub tag: String,
+    /// Account creation time (unix seconds), from the user's Nakama metadata.
+    pub created_at: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -479,6 +481,7 @@ mod tests {
                 username: "vex".into(),
                 display_name: "Vex".into(),
                 tag: "0001".into(),
+                created_at: None,
             },
         })
         .unwrap();

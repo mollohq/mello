@@ -388,9 +388,11 @@ impl NakamaClient {
             .ok_or(Error::Internal("No user in account".into()))?;
 
         let mut tag = String::new();
+        let mut created_at = None;
         if let Some(meta_str) = &api_user.metadata {
             if let Ok(meta) = serde_json::from_str::<UserMetadata>(meta_str) {
                 tag = meta.tag.unwrap_or_default();
+                created_at = meta.created_at;
             }
         }
 
@@ -399,6 +401,7 @@ impl NakamaClient {
             username: api_user.username.unwrap_or_default(),
             display_name: api_user.display_name.unwrap_or_default(),
             tag,
+            created_at,
         })
     }
 
