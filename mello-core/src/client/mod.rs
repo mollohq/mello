@@ -96,6 +96,9 @@ pub struct Client {
     sfu_voice_reconnect: Option<(tokio::time::Instant, String, u32)>,
     /// Last voice channel we joined (for reconnection)
     last_voice_channel: Option<String>,
+    /// Auto-join a crew's voice channel on `SelectCrew` (default true; iOS turns
+    /// this off so voice + the mic prompt only start on an explicit join).
+    voice_autojoin: bool,
     game_state: GameStateManager,
     #[allow(dead_code)]
     game_sensor: Option<GameSensor>,
@@ -176,6 +179,7 @@ impl Client {
             giphy: GiphyClient::new(),
             sfu_voice_reconnect: None,
             last_voice_channel: None,
+            voice_autojoin: true,
             game_state: GameStateManager::new(),
             game_sensor: None,
             enable_game_sensor,
@@ -482,6 +486,9 @@ impl Client {
             }
             Command::JoinVoice { channel_id } => {
                 self.handle_join_voice(&channel_id).await;
+            }
+            Command::SetVoiceAutoJoin { enabled } => {
+                self.voice_autojoin = enabled;
             }
             Command::LeaveVoice => {
                 self.handle_leave_voice().await;

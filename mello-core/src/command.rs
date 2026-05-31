@@ -131,6 +131,12 @@ pub enum Command {
         channel_id: String,
     },
     LeaveVoice,
+    /// Enable/disable auto-joining a crew's voice channel on `SelectCrew`.
+    /// Defaults to enabled (desktop). iOS disables it so voice (and the mic
+    /// permission prompt) only starts on an explicit join.
+    SetVoiceAutoJoin {
+        enabled: bool,
+    },
     VoiceSpeaking {
         speaking: bool,
     },
