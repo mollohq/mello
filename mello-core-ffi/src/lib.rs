@@ -50,7 +50,7 @@ fn init_logging() {
     LOG_INIT.call_once(|| {
         #[cfg(target_os = "ios")]
         {
-            let _ = oslog::OsLogger::new("app.m3llo.ios")
+            let _ = oslog::OsLogger::new("app.m3llo.client-ios")
                 .level_filter(log::LevelFilter::Info)
                 .init();
         }
