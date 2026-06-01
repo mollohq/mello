@@ -33,11 +33,31 @@ pub enum Command {
     AuthGoogle,
     AuthTwitch,
     AuthDiscord,
-    AuthApple,
+    /// Authenticate (login or create) with an Apple identity token (JWT) obtained
+    /// natively on the client. Desktop has no native flow → sends an empty token.
+    AuthApple {
+        identity_token: String,
+    },
 
     // Social link (onboarding step 3 — links identity to existing device account)
     LinkGoogle,
     LinkDiscord,
+    /// Link an Apple identity (native identity token) onto the current session.
+    LinkApple {
+        identity_token: String,
+    },
+    /// Link a Google identity using an id_token obtained natively on the client
+    /// (iOS ASWebAuthenticationSession). Mirrors `LinkGoogle` but skips the in-core
+    /// browser flow. Falls back to authenticate if already linked elsewhere.
+    LinkGoogleToken {
+        id_token: String,
+    },
+    /// Link a custom-provider identity (Discord, Twitch) using a token obtained
+    /// natively on the client. Falls back to authenticate if already linked.
+    LinkCustomToken {
+        token: String,
+        provider: String,
+    },
 
     // Onboarding
     DiscoverCrews {

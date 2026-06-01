@@ -364,12 +364,9 @@ impl Client {
                 log::info!("[auth] Discord auth requested");
                 self.handle_auth_discord().await;
             }
-            Command::AuthApple => {
+            Command::AuthApple { identity_token } => {
                 log::info!("[auth] Apple auth requested");
-                // TODO: Apple Sign In -> id_token -> Nakama /authenticate/apple
-                let _ = self.event_tx.send(Event::LoginFailed {
-                    reason: "Apple auth not yet implemented".into(),
-                });
+                self.handle_auth_apple(&identity_token).await;
             }
 
             // Social link (onboarding — attaches identity to current device account)
@@ -380,6 +377,18 @@ impl Client {
             Command::LinkDiscord => {
                 log::info!("[auth] Discord link requested");
                 self.handle_link_discord().await;
+            }
+            Command::LinkApple { identity_token } => {
+                log::info!("[auth] Apple link requested");
+                self.handle_link_apple(&identity_token).await;
+            }
+            Command::LinkGoogleToken { id_token } => {
+                log::info!("[auth] Google token link requested");
+                self.handle_link_google_token(&id_token).await;
+            }
+            Command::LinkCustomToken { token, provider } => {
+                log::info!("[auth] {} token link requested", provider);
+                self.handle_link_custom_token(&token, &provider).await;
             }
             Command::DiscoverCrews { cursor } => {
                 self.handle_discover_crews(cursor.as_deref()).await;

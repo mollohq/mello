@@ -275,6 +275,69 @@ impl NakamaClient {
         Ok(())
     }
 
+    /// Authenticate (login or create) with an Apple identity token via Nakama's
+    /// dedicated Apple endpoint. The server validates against `social.apple.bundle_id`.
+    pub async fn authenticate_apple(&mut self, id_token: &str) -> Result<User> {
+        let url = format!(
+            "{}/v2/account/authenticate/apple?create=true",
+            self.config.http_base()
+        );
+
+        let resp = self
+            .http
+            .post(&url)
+            .basic_auth(&self.config.nakama_key, Some(""))
+            .json(&serde_json::json!({ "token": id_token }))
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            let err: ApiError = resp.json().await.unwrap_or(ApiError {
+                error: Some("Unknown error".into()),
+                message: None,
+                code: None,
+            });
+            return Err(Error::AuthFailed(
+                err.message.or(err.error).unwrap_or_default(),
+            ));
+        }
+
+        let session: ApiSession = resp.json().await?;
+        self.token = Some(session.token.clone());
+        self.refresh_token = session.refresh_token;
+
+        let user = self.get_account().await?;
+        self.current_user = Some(user.clone());
+        Ok(user)
+    }
+
+    /// Link an Apple identity to the current (device-authed) account.
+    pub async fn link_apple(&self, id_token: &str) -> Result<()> {
+        let token = self.bearer()?;
+        let url = format!("{}/v2/account/link/apple", self.config.http_base());
+
+        let resp = self
+            .http
+            .post(&url)
+            .bearer_auth(&token)
+            .json(&serde_json::json!({ "token": id_token }))
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            let err: ApiError = resp.json().await.unwrap_or(ApiError {
+                error: Some("Unknown error".into()),
+                message: None,
+                code: None,
+            });
+            return Err(Error::AuthFailed(
+                err.message.or(err.error).unwrap_or_default(),
+            ));
+        }
+
+        Ok(())
+    }
+
     /// Link a custom provider identity (Discord, Twitch) to the current account.
     pub async fn link_custom(&self, token: &str, provider: &str) -> Result<()> {
         let bearer = self.bearer()?;
