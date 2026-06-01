@@ -136,6 +136,10 @@ bool RemoteIOCapture::start(Callback callback) {
         running_ = false;
         return false;
     }
+    // Resume capture after an interruption ends (the OS stops the unit).
+    register_audio_restart(this, [this] {
+        if (running_) AudioOutputUnitStart(audio_unit_);
+    });
     MELLO_LOG_INFO("capture", "RemoteIO: capture started");
     return true;
 }
@@ -143,6 +147,7 @@ bool RemoteIOCapture::start(Callback callback) {
 void RemoteIOCapture::stop() {
     if (!running_) return;
     running_ = false;
+    unregister_audio_restart(this);
     if (audio_unit_) {
         AudioOutputUnitStop(audio_unit_);
     }

@@ -1,10 +1,60 @@
 #include "audio_session_ios.hpp"
 #include "../util/log.hpp"
 #import <AVFoundation/AVFoundation.h>
+#include <algorithm>
+#include <mutex>
+#include <utility>
+#include <vector>
 
 namespace mello::audio {
 
+namespace {
+
+std::mutex g_restart_mutex;
+std::vector<std::pair<void*, std::function<void()>>> g_restart_hooks;
+
+void restart_all_units() {
+    std::vector<std::function<void()>> hooks;
+    {
+        std::lock_guard<std::mutex> lock(g_restart_mutex);
+        for (auto& [token, fn] : g_restart_hooks) hooks.push_back(fn);
+    }
+    for (auto& fn : hooks) {
+        if (fn) fn();
+    }
+}
+
+// Observe AVAudioSession interruptions once. On interruption end (with the
+// system's resume hint) we reactivate the session and restart the IO units —
+// without this, voice stays dead after an incoming phone call / Siri.
+void install_session_observers() {
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        [[NSNotificationCenter defaultCenter]
+            addObserverForName:AVAudioSessionInterruptionNotification
+                        object:nil
+                         queue:nil
+                    usingBlock:^(NSNotification* note) {
+            NSInteger type = [note.userInfo[AVAudioSessionInterruptionTypeKey] integerValue];
+            if (type == AVAudioSessionInterruptionTypeBegan) {
+                MELLO_LOG_INFO("session", "iOS: audio interrupted");
+                return;
+            }
+            NSInteger opts = [note.userInfo[AVAudioSessionInterruptionOptionKey] integerValue];
+            bool resume = (opts & AVAudioSessionInterruptionOptionShouldResume) != 0;
+            MELLO_LOG_INFO("session", "iOS: interruption ended (resume=%d)", (int)resume);
+            if (resume && configure_voice_session()) {
+                restart_all_units();
+            }
+        }];
+    });
+}
+
+} // namespace
+
 bool configure_voice_session() {
+    install_session_observers();
+
     AVAudioSession* session = [AVAudioSession sharedInstance];
     NSError* err = nil;
 
@@ -48,6 +98,19 @@ void deactivate_voice_session() {
         MELLO_LOG_WARN("session", "iOS: setActive:NO failed: %s",
                        err.localizedDescription.UTF8String);
     }
+}
+
+void register_audio_restart(void* token, std::function<void()> restart) {
+    std::lock_guard<std::mutex> lock(g_restart_mutex);
+    g_restart_hooks.emplace_back(token, std::move(restart));
+}
+
+void unregister_audio_restart(void* token) {
+    std::lock_guard<std::mutex> lock(g_restart_mutex);
+    g_restart_hooks.erase(
+        std::remove_if(g_restart_hooks.begin(), g_restart_hooks.end(),
+                       [token](const auto& p) { return p.first == token; }),
+        g_restart_hooks.end());
 }
 
 } // namespace mello::audio

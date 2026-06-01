@@ -93,6 +93,10 @@ bool RemoteIOPlayback::start() {
         running_ = false;
         return false;
     }
+    // Resume playback after an interruption ends (the OS stops the unit).
+    register_audio_restart(this, [this] {
+        if (running_) AudioOutputUnitStart(audio_unit_);
+    });
     MELLO_LOG_INFO("playback", "RemoteIO: playback started");
     return true;
 }
@@ -100,6 +104,7 @@ bool RemoteIOPlayback::start() {
 void RemoteIOPlayback::stop() {
     if (!running_) return;
     running_ = false;
+    unregister_audio_restart(this);
     if (audio_unit_) {
         AudioOutputUnitStop(audio_unit_);
     }
