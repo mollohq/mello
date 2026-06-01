@@ -1,0 +1,24 @@
+[package]
+name = "mello-core-ffi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# `lib` (rlib) is added alongside `staticlib` so host examples/tests can call the
+# C-ABI directly (e.g. `examples/roundtrip.rs`); `staticlib` is what iOS links.
+[lib]
+crate-type = ["staticlib", "lib"]
+
+[dependencies]
+mello-core = { path = "../mello-core" }
+tokio = { workspace = true }
+serde_json = { workspace = true }
+log = { workspace = true }
+
+# iOS has no stdout/stderr console; route `log` (mello-core + bridged libmello)
+# to the unified logging system so records show in Xcode + Console.app.
+[target.'cfg(target_os = "ios")'.dependencies]
+oslog = "0.2"
+
+[dev-dependencies]
+env_logger = "0.11"

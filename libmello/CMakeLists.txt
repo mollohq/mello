@@ -54,7 +54,49 @@ else()
     message(STATUS "[mello] dav1d not found — AV1 software decoder disabled")
 endif()
 
-# ONNX Runtime — prebuilt shared library, auto-downloaded
+# ONNX Runtime. Desktop: prebuilt shared lib, auto-downloaded. iOS: pinned prebuilt
+# *static* onnxruntime.xcframework (Microsoft official onnxruntime-c pod-archive),
+# auto-downloaded + SHA256-verified (IOS-LIBMELLO-PORT §1a Step 2 / §4.3).
+if(IOS)
+    set(ORT_IOS_VERSION "1.23.0")  # nearest iOS pod to desktop 1.23.2 (same minor)
+    set(ORT_IOS_SHA256 "756a78e0168f29840bc614b43aeb03e63673f44022e0221d21698a2c8ed747ef")
+    set(ORT_IOS_BASE "${CMAKE_CURRENT_SOURCE_DIR}/third_party/onnxruntime-ios")
+    set(ORT_IOS_XCFW "${ORT_IOS_BASE}/onnxruntime.xcframework")
+    if(NOT EXISTS "${ORT_IOS_XCFW}")
+        set(ORT_IOS_ZIP "${CMAKE_CURRENT_BINARY_DIR}/pod-archive-onnxruntime-c-${ORT_IOS_VERSION}.zip")
+        if(NOT EXISTS "${ORT_IOS_ZIP}")
+            message(STATUS "[mello] Downloading ONNX Runtime iOS xcframework v${ORT_IOS_VERSION}...")
+            file(DOWNLOAD
+                "https://download.onnxruntime.ai/pod-archive-onnxruntime-c-${ORT_IOS_VERSION}.zip"
+                "${ORT_IOS_ZIP}"
+                EXPECTED_HASH SHA256=${ORT_IOS_SHA256}
+                SHOW_PROGRESS STATUS ORT_DL_STATUS)
+            list(GET ORT_DL_STATUS 0 ORT_DL_CODE)
+            if(NOT ORT_DL_CODE EQUAL 0)
+                list(GET ORT_DL_STATUS 1 ORT_DL_MSG)
+                message(FATAL_ERROR "[mello] ONNX Runtime iOS download failed: ${ORT_DL_MSG}")
+            endif()
+        endif()
+        file(ARCHIVE_EXTRACT INPUT "${ORT_IOS_ZIP}" DESTINATION "${ORT_IOS_BASE}")
+        message(STATUS "[mello] ONNX Runtime iOS xcframework extracted to ${ORT_IOS_BASE}")
+    endif()
+    # Device slice is arm64; simulator slice is fat (arm64+x86_64). The framework
+    # binary is a static ar archive. MELLO_IOS_SIMULATOR is passed by build.rs.
+    if(MELLO_IOS_SIMULATOR)
+        set(ORT_DIR "${ORT_IOS_XCFW}/ios-arm64_x86_64-simulator/onnxruntime.framework")
+    else()
+        set(ORT_DIR "${ORT_IOS_XCFW}/ios-arm64/onnxruntime.framework")
+    endif()
+    if(NOT EXISTS "${ORT_DIR}/onnxruntime")
+        message(FATAL_ERROR "[mello] ORT iOS slice not found at ${ORT_DIR}")
+    endif()
+    add_library(onnxruntime STATIC IMPORTED)
+    set_target_properties(onnxruntime PROPERTIES
+        IMPORTED_LOCATION "${ORT_DIR}/onnxruntime"
+        INTERFACE_INCLUDE_DIRECTORIES "${ORT_DIR}/Headers"
+    )
+    message(STATUS "[mello] ONNX Runtime iOS v${ORT_IOS_VERSION} (static) at ${ORT_DIR}")
+else()
 set(ORT_VERSION "1.23.2")
 set(ORT_BASE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/onnxruntime)
 
@@ -110,6 +152,7 @@ else()
     )
 endif()
 message(STATUS "[mello] ONNX Runtime v${ORT_VERSION} found at ${ORT_DIR}")
+endif() # IOS vs desktop (ONNX Runtime)
 
 # Build rnnoise from source (vcpkg port uses autotools, unsupported on Windows)
 set(RNNOISE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/rnnoise)
@@ -183,6 +226,19 @@ if(WIN32)
         src/audio/clip_encoder_wmf.cpp
         src/audio/mic_permission_stub.cpp
     )
+elseif(IOS)
+    # RemoteIO capture/playback + AVAudioSession + mic permission (Step 3). Device
+    # enumeration stays stubbed (iOS has one system-managed route, no picker) and
+    # clip encode stays stubbed until its own step.
+    list(APPEND MELLO_SOURCES
+        src/audio/capture_remoteio.cpp
+        src/audio/playback_remoteio.cpp
+        src/audio/audio_backend_ios.cpp
+        src/audio/audio_session_ios.mm
+        src/audio/mic_permission_ios.mm
+        src/audio/device_enumerator_ios_stub.cpp
+        src/audio/clip_encoder_ios_stub.cpp
+    )
 elseif(APPLE)
     list(APPEND MELLO_SOURCES
         src/audio/capture_coreaudio.cpp
@@ -222,6 +278,17 @@ if(WIN32)
         src/video/decoder_dav1d.cpp
         src/video/openh264_dynload.cpp
     )
+elseif(IOS)
+    # Viewer path: Metal graphics device + pipeline + VideoToolbox H.264 decode
+    # (Step 5). No hosting on iOS in v1 — encode + screen capture stay stubbed
+    # (factories no-op via MELLO_IOS_NO_HOSTING) and enumeration is stubbed.
+    list(APPEND MELLO_SOURCES
+        src/video/graphics_device_metal.mm
+        src/video/video_pipeline.cpp
+        src/video/decoder_videotoolbox.mm
+        src/video/process_enum_ios_stub.cpp
+        src/video/window_thumbnail_ios_stub.cpp
+    )
 elseif(APPLE)
     list(APPEND MELLO_SOURCES
         src/video/graphics_device_metal.mm
@@ -257,6 +324,12 @@ add_library(mello STATIC ${MELLO_SOURCES})
 
 target_compile_definitions(mello PRIVATE MELLO_EXPORTS NOMINMAX)
 
+# iOS: VideoToolbox H.264 decode is live (Step 5); encode + screen capture stay
+# stubbed (no mobile hosting in v1). VAD is live as of Step 2 (prebuilt static ORT).
+if(IOS)
+    target_compile_definitions(mello PRIVATE MELLO_IOS MELLO_IOS_NO_HOSTING)
+endif()
+
 target_include_directories(mello PRIVATE
     ${MELLO_NV_CODEC_DIR}
     ${MELLO_AMF_DIR}
@@ -284,8 +357,8 @@ target_link_libraries(mello
         LibDataChannel::LibDataChannel
         rnnoise
         webrtc_audio_processing
-        onnxruntime
 )
+target_link_libraries(mello PUBLIC onnxruntime)
 
 if(WIN32)
     target_link_libraries(mello PUBLIC
@@ -303,6 +376,20 @@ if(WIN32)
         windowsapp
     )
     # OpenH264 is NOT linked — Cisco prebuilt DLL loaded at runtime via LoadLibrary
+elseif(IOS)
+    # iOS: RemoteIO uses AudioToolbox/AVFoundation (no CoreAudio HAL); no
+    # ScreenCaptureKit/AppKit (no hosting). VideoToolbox kept for Step 5.
+    target_link_libraries(mello PUBLIC
+        "-framework AudioToolbox"
+        "-framework AVFoundation"
+        "-framework CoreFoundation"
+        "-framework Metal"
+        "-framework VideoToolbox"
+        "-framework CoreMedia"
+        "-framework CoreVideo"
+        "-framework CoreGraphics"
+        "-framework Accelerate"
+    )
 elseif(APPLE)
     target_link_libraries(mello PUBLIC
         "-framework AudioToolbox"
@@ -328,9 +415,9 @@ if(MELLO_HAS_DAV1D)
     endif()
 endif()
 
-# Download Silero VAD v6.2 model if missing
+# Download Silero VAD v6.2 model if missing (skipped on iOS — VAD stubbed in Step 1)
 set(SILERO_VAD_MODEL "${CMAKE_CURRENT_SOURCE_DIR}/models/silero_vad.onnx")
-if(NOT EXISTS "${SILERO_VAD_MODEL}")
+if(NOT IOS AND NOT EXISTS "${SILERO_VAD_MODEL}")
     message(STATUS "[mello] Downloading Silero VAD v6.2 model...")
     file(MAKE_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/models")
     file(DOWNLOAD
@@ -352,7 +439,9 @@ install(TARGETS mello rnnoise webrtc_audio_processing
     RUNTIME DESTINATION bin
 )
 install(FILES include/mello.h DESTINATION include)
-install(FILES models/silero_vad.onnx DESTINATION models)
+if(NOT IOS)
+    install(FILES models/silero_vad.onnx DESTINATION models)
+endif()
 
 # Tests (opt-in via MELLO_BUILD_TESTS)
 option(MELLO_BUILD_TESTS "Build libmello C++ tests" OFF)

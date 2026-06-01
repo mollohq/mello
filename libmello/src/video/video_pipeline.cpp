@@ -13,7 +13,9 @@
 
 namespace mello::video {
 
-#if !defined(_WIN32) && !defined(__APPLE__)
+// iOS has no hosting/capture in v1 (and the macOS impl lives in the excluded
+// capture_screencapturekit.mm), so provide the nullptr stub here too.
+#if (!defined(_WIN32) && !defined(__APPLE__)) || defined(MELLO_IOS_NO_HOSTING)
 std::unique_ptr<CaptureSource> create_capture_source(const CaptureSourceDesc&) { return nullptr; }
 #endif
 

@@ -247,6 +247,29 @@ impl super::Client {
         }
     }
 
+    /// Authenticate with an Apple identity token captured natively on the client.
+    /// Unlike Google/Discord there's no in-core browser flow — the token arrives
+    /// in the command. An empty token means the platform has no native flow (desktop).
+    pub(super) async fn handle_auth_apple(&mut self, identity_token: &str) {
+        if identity_token.is_empty() {
+            log::warn!("[auth] Apple auth: no identity token (unsupported on this platform)");
+            let _ = self.event_tx.send(Event::LoginFailed {
+                reason: "Apple sign-in isn't available here".into(),
+            });
+            return;
+        }
+
+        match self.nakama.authenticate_apple(identity_token).await {
+            Ok(user) => self.on_social_login(user).await,
+            Err(e) => {
+                log::error!("[auth] Apple Nakama auth failed: {}", e);
+                let _ = self.event_tx.send(Event::LoginFailed {
+                    reason: e.to_string(),
+                });
+            }
+        }
+    }
+
     /// Shared post-auth flow for social logins (same as handle_login success path).
     pub(super) async fn on_social_login(&mut self, user: crate::events::User) {
         log::info!(
@@ -420,6 +443,115 @@ impl super::Client {
             }
             Err(e) => {
                 log::error!("[auth] Discord link failed: {}", e);
+                let _ = self.event_tx.send(Event::SocialLinkFailed {
+                    reason: e.to_string(),
+                });
+            }
+        }
+    }
+
+    /// Link an Apple identity (native token) to the current session. Falls back to
+    /// authenticate if the identity is already attached to another account — same
+    /// shape as Google/Discord linking.
+    pub(super) async fn handle_link_apple(&mut self, identity_token: &str) {
+        if identity_token.is_empty() {
+            log::warn!("[auth] Apple link: no identity token (unsupported on this platform)");
+            let _ = self.event_tx.send(Event::SocialLinkFailed {
+                reason: "Apple sign-in isn't available here".into(),
+            });
+            return;
+        }
+
+        match self.nakama.link_apple(identity_token).await {
+            Ok(()) => {
+                log::info!("[auth] Apple identity linked to account");
+                let _ = self.event_tx.send(Event::SocialLinked);
+            }
+            Err(e) if e.to_string().contains("already in use") => {
+                log::info!("[auth] Apple already linked elsewhere, falling back to authenticate");
+                match self.nakama.authenticate_apple(identity_token).await {
+                    Ok(user) => self.on_social_login(user).await,
+                    Err(e2) => {
+                        log::error!("[auth] Apple authenticate fallback failed: {}", e2);
+                        let _ = self.event_tx.send(Event::SocialLinkFailed {
+                            reason: e2.to_string(),
+                        });
+                    }
+                }
+            }
+            Err(e) => {
+                log::error!("[auth] Apple link failed: {}", e);
+                let _ = self.event_tx.send(Event::SocialLinkFailed {
+                    reason: e.to_string(),
+                });
+            }
+        }
+    }
+
+    /// Link a Google identity from a natively-obtained id_token (iOS). Same shape
+    /// as `handle_link_google` minus the in-core browser flow.
+    pub(super) async fn handle_link_google_token(&mut self, id_token: &str) {
+        if id_token.is_empty() {
+            let _ = self.event_tx.send(Event::SocialLinkFailed {
+                reason: "Google sign-in returned no token".into(),
+            });
+            return;
+        }
+        match self.nakama.link_google(id_token).await {
+            Ok(()) => {
+                log::info!("[auth] Google identity linked to account");
+                let _ = self.event_tx.send(Event::SocialLinked);
+            }
+            Err(e) if e.to_string().contains("already in use") => {
+                log::info!("[auth] Google already linked elsewhere, falling back to authenticate");
+                match self.nakama.authenticate_google(id_token).await {
+                    Ok(user) => self.on_social_login(user).await,
+                    Err(e2) => {
+                        let _ = self.event_tx.send(Event::SocialLinkFailed {
+                            reason: e2.to_string(),
+                        });
+                    }
+                }
+            }
+            Err(e) => {
+                log::error!("[auth] Google link failed: {}", e);
+                let _ = self.event_tx.send(Event::SocialLinkFailed {
+                    reason: e.to_string(),
+                });
+            }
+        }
+    }
+
+    /// Link a custom-provider identity (Discord, Twitch) from a natively-obtained
+    /// token (iOS). Same shape as `handle_link_discord` minus the browser flow.
+    pub(super) async fn handle_link_custom_token(&mut self, token: &str, provider: &str) {
+        if token.is_empty() {
+            let _ = self.event_tx.send(Event::SocialLinkFailed {
+                reason: format!("{} sign-in returned no token", provider),
+            });
+            return;
+        }
+        match self.nakama.link_custom(token, provider).await {
+            Ok(()) => {
+                log::info!("[auth] {} identity linked to account", provider);
+                let _ = self.event_tx.send(Event::SocialLinked);
+            }
+            Err(e) if e.to_string().contains("already in use") => {
+                log::info!(
+                    "[auth] {} already linked elsewhere, falling back to authenticate",
+                    provider
+                );
+                match self.nakama.authenticate_custom(token, provider).await {
+                    Ok(user) => self.on_social_login(user).await,
+                    Err(e2) => {
+                        let _ = self.event_tx.send(Event::SocialLinkFailed {
+                            reason: e2.to_string(),
+                        });
+                    }
+                }
+            }
+            Err(e) => {
+                log::error!("[auth] {} link failed: {}", provider, e);
                 let _ = self.event_tx.send(Event::SocialLinkFailed {
                     reason: e.to_string(),
                 });

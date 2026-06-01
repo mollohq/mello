@@ -1,3 +1,5 @@
+use serde::{Deserialize, Serialize};
+
 use crate::crew::{Crew, Member, ResolvedInvite};
 use crate::crew_state::{
     CrewEvent, CrewSidebarState, CrewState, MessagePreview, PresenceChange, VoiceChannelState,
@@ -5,15 +7,17 @@ use crate::crew_state::{
 };
 use crate::voice::AudioDevice;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct User {
     pub id: String,
     pub username: String,
     pub display_name: String,
     pub tag: String,
+    /// Account creation time (unix seconds), from the user's Nakama metadata.
+    pub created_at: Option<i64>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatMessage {
     pub message_id: String,
     pub sender_id: String,
@@ -29,7 +33,7 @@ pub struct ChatMessage {
     pub is_deleted: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CaptureSource {
     pub id: String,
     pub name: String,
@@ -42,14 +46,15 @@ pub struct CaptureSource {
     pub resolution: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UserSearchResult {
     pub id: String,
     pub display_name: String,
     pub is_friend: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", content = "data")]
 pub enum Event {
     Restoring,
     LoggedIn {
@@ -460,4 +465,34 @@ pub enum Event {
     Error {
         message: String,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The FFI boundary (core -> Swift) serializes events as adjacently-tagged
+    /// JSON: `{ "type": <Variant>, "data": { ...fields } }`. Lock that shape.
+    #[test]
+    fn struct_variant_is_adjacently_tagged() {
+        let json = serde_json::to_value(Event::LoggedIn {
+            user: User {
+                id: "u1".into(),
+                username: "vex".into(),
+                display_name: "Vex".into(),
+                tag: "0001".into(),
+                created_at: None,
+            },
+        })
+        .unwrap();
+        assert_eq!(json["type"], "LoggedIn");
+        assert_eq!(json["data"]["user"]["id"], "u1");
+    }
+
+    #[test]
+    fn unit_variant_has_type_only() {
+        let json = serde_json::to_value(Event::Restoring).unwrap();
+        assert_eq!(json["type"], "Restoring");
+        assert!(json.get("data").is_none());
+    }
 }

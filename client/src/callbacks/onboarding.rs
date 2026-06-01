@@ -259,7 +259,10 @@ pub fn wire(ctx: &AppContext) {
     {
         let cmd = ctx.cmd_tx.clone();
         ctx.app.on_onboarding_auth_apple(move || {
-            let _ = cmd.try_send(Command::AuthApple);
+            // No native Apple flow on desktop yet; empty token → handler reports unsupported.
+            let _ = cmd.try_send(Command::AuthApple {
+                identity_token: String::new(),
+            });
         });
     }
 

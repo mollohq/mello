@@ -8,12 +8,18 @@
       "name": "libdatachannel",
       "features": ["ws", "srtp"]
     },
-    "gtest",
+    {
+      "name": "gtest",
+      "platform": "!ios"
+    },
     {
       "name": "cppwinrt",
       "platform": "windows"
     },
-    "dav1d",
+    {
+      "name": "dav1d",
+      "platform": "!ios"
+    },
     "abseil"
   ]
 }

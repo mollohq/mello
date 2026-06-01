@@ -252,6 +252,8 @@ func VoiceJoinRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk run
 	})
 	// Push voice_update to active crew subscribers
 	PushVoiceUpdate(ctx, logger, nk, req.CrewID)
+	// Refresh Live Now for the crew's sidebar (non-active) subscribers.
+	QueueSidebarVoiceDelta(logger, nk, req.CrewID)
 
 	snap := GetVoiceChannelSnapshot(req.ChannelID)
 
@@ -519,6 +521,7 @@ func voiceLeaveInternal(ctx context.Context, logger runtime.Logger, nk runtime.N
 			"channel_name": channelName,
 		})
 		PushVoiceUpdate(ctx, logger, nk, crewID)
+		QueueSidebarVoiceDelta(logger, nk, crewID)
 	}
 }
 

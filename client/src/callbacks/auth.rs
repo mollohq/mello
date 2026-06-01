@@ -99,7 +99,10 @@ pub fn wire(ctx: &AppContext) {
             if let Some(app) = app_weak.upgrade() {
                 app.set_show_sign_in(false);
             }
-            let _ = cmd.try_send(Command::AuthApple);
+            // No native Apple flow on desktop yet; empty token → handler reports unsupported.
+            let _ = cmd.try_send(Command::AuthApple {
+                identity_token: String::new(),
+            });
         });
     }
 }

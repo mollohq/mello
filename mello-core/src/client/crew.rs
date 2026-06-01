@@ -364,9 +364,13 @@ impl super::Client {
 
         self.load_initial_chat_history(crew_id).await;
 
-        // Auto-join voice (last-used channel, or default if first time)
-        if let Some(ch_id) = &voice_channel_id {
-            self.handle_join_voice(ch_id).await;
+        // Auto-join voice (last-used channel, or default if first time). iOS
+        // disables this (SetVoiceAutoJoin) so voice + the mic permission prompt
+        // only start on an explicit join.
+        if self.voice_autojoin {
+            if let Some(ch_id) = &voice_channel_id {
+                self.handle_join_voice(ch_id).await;
+            }
         }
     }
 

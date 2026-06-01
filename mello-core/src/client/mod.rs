@@ -96,6 +96,9 @@ pub struct Client {
     sfu_voice_reconnect: Option<(tokio::time::Instant, String, u32)>,
     /// Last voice channel we joined (for reconnection)
     last_voice_channel: Option<String>,
+    /// Auto-join a crew's voice channel on `SelectCrew` (default true; iOS turns
+    /// this off so voice + the mic prompt only start on an explicit join).
+    voice_autojoin: bool,
     game_state: GameStateManager,
     #[allow(dead_code)]
     game_sensor: Option<GameSensor>,
@@ -176,6 +179,7 @@ impl Client {
             giphy: GiphyClient::new(),
             sfu_voice_reconnect: None,
             last_voice_channel: None,
+            voice_autojoin: true,
             game_state: GameStateManager::new(),
             game_sensor: None,
             enable_game_sensor,
@@ -360,12 +364,9 @@ impl Client {
                 log::info!("[auth] Discord auth requested");
                 self.handle_auth_discord().await;
             }
-            Command::AuthApple => {
+            Command::AuthApple { identity_token } => {
                 log::info!("[auth] Apple auth requested");
-                // TODO: Apple Sign In -> id_token -> Nakama /authenticate/apple
-                let _ = self.event_tx.send(Event::LoginFailed {
-                    reason: "Apple auth not yet implemented".into(),
-                });
+                self.handle_auth_apple(&identity_token).await;
             }
 
             // Social link (onboarding — attaches identity to current device account)
@@ -376,6 +377,18 @@ impl Client {
             Command::LinkDiscord => {
                 log::info!("[auth] Discord link requested");
                 self.handle_link_discord().await;
+            }
+            Command::LinkApple { identity_token } => {
+                log::info!("[auth] Apple link requested");
+                self.handle_link_apple(&identity_token).await;
+            }
+            Command::LinkGoogleToken { id_token } => {
+                log::info!("[auth] Google token link requested");
+                self.handle_link_google_token(&id_token).await;
+            }
+            Command::LinkCustomToken { token, provider } => {
+                log::info!("[auth] {} token link requested", provider);
+                self.handle_link_custom_token(&token, &provider).await;
             }
             Command::DiscoverCrews { cursor } => {
                 self.handle_discover_crews(cursor.as_deref()).await;
@@ -482,6 +495,9 @@ impl Client {
             }
             Command::JoinVoice { channel_id } => {
                 self.handle_join_voice(&channel_id).await;
+            }
+            Command::SetVoiceAutoJoin { enabled } => {
+                self.voice_autojoin = enabled;
             }
             Command::LeaveVoice => {
                 self.handle_leave_voice().await;

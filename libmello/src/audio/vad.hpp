@@ -1,6 +1,13 @@
 #pragma once
+// MELLO_IOS_NO_VAD is the documented VAD kill-switch (IOS-LIBMELLO-PORT §4.3
+// fallback): define it to stub Silero out (no ORT) if ORT-iOS regresses. It is
+// NOT defined by default as of Step 2 — iOS links the prebuilt static ORT. When
+// set, gating the ORT include + members here keeps every TU that includes
+// vad.hpp (e.g. audio_pipeline) free of ONNX Runtime. Desktop never sets it.
+#ifndef MELLO_IOS_NO_VAD
 #define ORT_API_MANUAL_INIT
 #include <onnxruntime_cxx_api.h>
+#endif
 #include <cstdint>
 #include <vector>
 #include <string>
@@ -37,9 +44,11 @@ private:
     void run_inference();
     void downsample_48_to_16(const int16_t* in, int count);
 
+#ifndef MELLO_IOS_NO_VAD
     std::unique_ptr<Ort::Env> env_;
     std::unique_ptr<Ort::SessionOptions> session_options_;
     Ort::Session* session_ = nullptr;
+#endif
 
     std::vector<float> h_state_;           // [2, 1, 128] flattened
     std::vector<float> context_;           // last 64 samples from previous chunk

@@ -349,6 +349,69 @@ func PushVoiceUpdate(ctx context.Context, logger runtime.Logger, nk runtime.Naka
 }
 
 // ---------------------------------------------------------------------------
+// Voice occupancy -> targeted sidebar delta (debounced)
+// ---------------------------------------------------------------------------
+
+// A voice join/leave changes a crew's Live Now occupancy for users who have the
+// crew in their sidebar but aren't actively viewing it (active viewers get 114).
+// Instead of waiting for the 30s sidebar batch, push a single-crew sidebar_update
+// to just that crew's sidebar subscribers, debounced to coalesce bursts.
+
+const voiceDeltaDebounce = 400 * time.Millisecond
+
+var voiceDelta = struct {
+	mu     sync.Mutex
+	timers map[string]*time.Timer
+}{timers: make(map[string]*time.Timer)}
+
+// QueueSidebarVoiceDelta schedules a targeted sidebar push for a crew whose
+// voice occupancy changed, coalescing changes within the debounce window. The
+// trailing flush reads the latest in-memory snapshot, so a burst (e.g. a group
+// joining at once) collapses into a single push.
+func QueueSidebarVoiceDelta(logger runtime.Logger, nk runtime.NakamaModule, crewID string) {
+	if crewID == "" {
+		return
+	}
+	voiceDelta.mu.Lock()
+	defer voiceDelta.mu.Unlock()
+	if _, scheduled := voiceDelta.timers[crewID]; scheduled {
+		return
+	}
+	voiceDelta.timers[crewID] = time.AfterFunc(voiceDeltaDebounce, func() {
+		voiceDelta.mu.Lock()
+		delete(voiceDelta.timers, crewID)
+		voiceDelta.mu.Unlock()
+		pushSidebarVoiceDelta(context.Background(), logger, nk, crewID)
+	})
+}
+
+func pushSidebarVoiceDelta(ctx context.Context, logger runtime.Logger, nk runtime.NakamaModule, crewID string) {
+	state, err := ComputeCrewState(ctx, logger, nk, crewID, false, "")
+	if err != nil {
+		logger.Warn("sidebar voice delta: compute %s: %v", crewID, err)
+		return
+	}
+
+	content := map[string]interface{}{
+		"type":  "sidebar_update",
+		"crews": []interface{}{state.ToSidebar()},
+	}
+
+	subs := getSubscribersForCrew(crewID)
+	seen := make(map[string]bool, len(subs))
+	for _, sub := range subs {
+		if sub.ActiveCrew == crewID {
+			continue // active viewers already got the full voice_update (114)
+		}
+		if seen[sub.UserID] {
+			continue
+		}
+		seen[sub.UserID] = true
+		pushNotification(ctx, nk, sub.UserID, NotifySidebarUpdate, content)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Message throttling
 // ---------------------------------------------------------------------------
 

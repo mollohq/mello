@@ -12,6 +12,7 @@ fn default_clip_seconds() -> f32 {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", content = "data")]
 pub enum Command {
     TryRestore,
     DeviceAuth {
@@ -32,11 +33,31 @@ pub enum Command {
     AuthGoogle,
     AuthTwitch,
     AuthDiscord,
-    AuthApple,
+    /// Authenticate (login or create) with an Apple identity token (JWT) obtained
+    /// natively on the client. Desktop has no native flow → sends an empty token.
+    AuthApple {
+        identity_token: String,
+    },
 
     // Social link (onboarding step 3 — links identity to existing device account)
     LinkGoogle,
     LinkDiscord,
+    /// Link an Apple identity (native identity token) onto the current session.
+    LinkApple {
+        identity_token: String,
+    },
+    /// Link a Google identity using an id_token obtained natively on the client
+    /// (iOS ASWebAuthenticationSession). Mirrors `LinkGoogle` but skips the in-core
+    /// browser flow. Falls back to authenticate if already linked elsewhere.
+    LinkGoogleToken {
+        id_token: String,
+    },
+    /// Link a custom-provider identity (Discord, Twitch) using a token obtained
+    /// natively on the client. Falls back to authenticate if already linked.
+    LinkCustomToken {
+        token: String,
+        provider: String,
+    },
 
     // Onboarding
     DiscoverCrews {
@@ -130,6 +151,12 @@ pub enum Command {
         channel_id: String,
     },
     LeaveVoice,
+    /// Enable/disable auto-joining a crew's voice channel on `SelectCrew`.
+    /// Defaults to enabled (desktop). iOS disables it so voice (and the mic
+    /// permission prompt) only starts on an explicit join.
+    SetVoiceAutoJoin {
+        enabled: bool,
+    },
     VoiceSpeaking {
         speaking: bool,
     },
@@ -339,4 +366,36 @@ pub enum Command {
         #[serde(default)]
         duration_min: u32,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The FFI boundary (Swift -> core) relies on adjacently-tagged JSON:
+    /// `{ "type": <Variant>, "data": { ...fields } }`. Lock that shape so a
+    /// future enum change can't silently break the Swift `Codable` mirror.
+    #[test]
+    fn struct_variant_is_adjacently_tagged() {
+        let json = serde_json::to_value(Command::DeviceAuth {
+            device_id: "dev_123".into(),
+        })
+        .unwrap();
+        assert_eq!(json["type"], "DeviceAuth");
+        assert_eq!(json["data"]["device_id"], "dev_123");
+    }
+
+    #[test]
+    fn unit_variant_has_type_only() {
+        let json = serde_json::to_value(Command::TryRestore).unwrap();
+        assert_eq!(json["type"], "TryRestore");
+        assert!(json.get("data").is_none());
+    }
+
+    #[test]
+    fn deserializes_from_swift_shape() {
+        let cmd: Command =
+            serde_json::from_str(r#"{"type":"SelectCrew","data":{"crew_id":"crew_abc"}}"#).unwrap();
+        assert!(matches!(cmd, Command::SelectCrew { crew_id } if crew_id == "crew_abc"));
+    }
 }

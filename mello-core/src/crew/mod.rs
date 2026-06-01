@@ -1,7 +1,9 @@
+use serde::{Deserialize, Serialize};
+
 pub type CrewId = String;
 pub type MemberId = String;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Crew {
     pub id: CrewId,
     pub name: String,
@@ -12,7 +14,7 @@ pub struct Crew {
     pub avatar_url: Option<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Member {
     pub id: MemberId,
     pub username: String,
@@ -20,7 +22,7 @@ pub struct Member {
     pub online: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResolvedInvite {
     pub crew_name: String,
     pub avatar_seed: String,

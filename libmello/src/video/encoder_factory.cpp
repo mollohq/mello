@@ -5,7 +5,7 @@
 #include "encoder_nvenc.hpp"
 #include "encoder_amf.hpp"
 #include "encoder_qsv.hpp"
-#elif defined(__APPLE__)
+#elif defined(__APPLE__) && !defined(MELLO_IOS_NO_HOSTING)
 #include "encoder_videotoolbox.hpp"
 #endif
 
@@ -46,7 +46,7 @@ std::unique_ptr<Encoder> create_best_encoder(
     }
 
     MELLO_LOG_ERROR(TAG, "No hardware encoder available (NVENC, AMF, QSV all failed)");
-#elif defined(__APPLE__)
+#elif defined(__APPLE__) && !defined(MELLO_IOS_NO_HOSTING)
     if (VTEncoder::is_available()) {
         MELLO_LOG_INFO(TAG, "Probing VideoToolbox encoder...");
         auto enc = std::make_unique<VTEncoder>();
@@ -73,7 +73,7 @@ std::vector<const char*> enumerate_encoders(const GraphicsDevice& device) {
     if (NvencEncoder::is_available()) result.push_back("NVENC");
     if (AmfEncoder::is_available())   result.push_back("AMF");
     if (QsvEncoder::is_available())   result.push_back("QSV-oneVPL");
-#elif defined(__APPLE__)
+#elif defined(__APPLE__) && !defined(MELLO_IOS_NO_HOSTING)
     if (VTEncoder::is_available()) result.push_back("VideoToolbox");
 #endif
 
