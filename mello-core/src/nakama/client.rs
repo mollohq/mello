@@ -1863,11 +1863,16 @@ pub(crate) fn parse_channel_messages_with_stats(
         .filter_map(|m| {
             let content_str = m.content.as_deref().unwrap_or("");
 
-            if let Ok(parsed_json) = serde_json::from_str::<serde_json::Value>(content_str) {
-                if parsed_json.get("signal").and_then(|v| v.as_bool()) == Some(true) {
+            if crate::chat::is_non_display_channel_content(content_str) {
+                if content_str.contains("\"signal\"")
+                    || content_str.contains("\"to\"")
+                    || content_str.contains("\"data\"")
+                {
                     stats.signals += 1;
-                    return None;
+                } else {
+                    stats.parse_failures += 1;
                 }
+                return None;
             }
 
             let envelope = match crate::chat::parse_content(content_str) {
@@ -2023,6 +2028,10 @@ async fn handle_ws_message(
                 });
                 return;
             }
+        }
+
+        if crate::chat::is_non_display_channel_content(&content_str) {
+            return;
         }
 
         let message_id = msg.message_id.unwrap_or_default();
@@ -2333,6 +2342,18 @@ mod tests {
         assert_eq!(result.len(), 2);
         assert_eq!(result[0].content, "hi");
         assert_eq!(result[1].content, "bye");
+    }
+
+    #[test]
+    fn parse_filters_empty_json_object() {
+        let list = ApiChannelMessageList {
+            messages: Some(vec![make_api_msg("{}", "u1", "alice")]),
+            next_cursor: None,
+            prev_cursor: None,
+        };
+        let (result, stats) = parse_channel_messages_with_stats(list, &empty_names());
+        assert!(result.is_empty());
+        assert_eq!(stats.parse_failures, 1);
     }
 
     #[test]

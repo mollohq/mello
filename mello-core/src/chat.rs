@@ -210,6 +210,69 @@ pub fn prepare_body_for_display(
     (result, mentions_self)
 }
 
+/// True when a Nakama channel `content` field must not appear in chat (signaling, empty JSON, etc.).
+pub fn is_non_display_channel_content(content_str: &str) -> bool {
+    let trimmed = content_str.trim();
+    if trimmed.is_empty() {
+        return true;
+    }
+    let Ok(val) = serde_json::from_str::<serde_json::Value>(trimmed) else {
+        return false;
+    };
+    let Some(obj) = val.as_object() else {
+        return false;
+    };
+    if obj.get("signal").and_then(|v| v.as_bool()) == Some(true) {
+        return true;
+    }
+    if obj.get("to").is_some() && (obj.contains_key("data") || obj.contains_key("signal")) {
+        return true;
+    }
+    if obj.is_empty() {
+        return true;
+    }
+    !json_object_has_displayable_chat(obj)
+}
+
+fn json_object_has_displayable_chat(obj: &serde_json::Map<String, serde_json::Value>) -> bool {
+    if obj
+        .get("text")
+        .and_then(|v| v.as_str())
+        .is_some_and(|s| !s.is_empty())
+    {
+        return true;
+    }
+    if obj.get("gif").is_some() {
+        return true;
+    }
+    if obj.get("event").is_some() {
+        return true;
+    }
+    if obj.get("v").and_then(|v| v.as_u64()).unwrap_or(0) >= 1 {
+        if obj
+            .get("body")
+            .and_then(|v| v.as_str())
+            .is_some_and(|s| !s.trim().is_empty())
+        {
+            return true;
+        }
+        if obj.get("type").and_then(|v| v.as_str()) == Some("system") {
+            return true;
+        }
+    }
+    false
+}
+
+fn envelope_is_displayable(envelope: &MessageEnvelope) -> bool {
+    if envelope.msg_type == MessageType::System {
+        return true;
+    }
+    if envelope.gif.is_some() {
+        return true;
+    }
+    !envelope.body.trim().is_empty()
+}
+
 /// Build a [`ChatMessage`] from a parsed envelope and Nakama metadata.
 pub fn chat_message_from_envelope(
     message_id: String,
@@ -242,6 +305,10 @@ pub fn chat_message_from_envelope(
         });
     }
 
+    if !is_deleted && !envelope_is_displayable(&envelope) {
+        return None;
+    }
+
     let is_edited = !is_system
         && !update_time.is_empty()
         && !create_time.is_empty()
@@ -264,8 +331,12 @@ pub fn chat_message_from_envelope(
 }
 
 /// Try to parse the Nakama content field as a structured envelope.
-/// Falls back to legacy `{"text":"..."}` format.
+/// Falls back to legacy `{"text":"..."}` format, then non-JSON plain text.
 pub fn parse_content(content_str: &str) -> Option<MessageEnvelope> {
+    if is_non_display_channel_content(content_str) {
+        return None;
+    }
+
     // Try structured envelope first
     if let Ok(env) = serde_json::from_str::<MessageEnvelope>(content_str) {
         if env.v >= 1 {
@@ -286,8 +357,12 @@ pub fn parse_content(content_str: &str) -> Option<MessageEnvelope> {
                 data: None,
             });
         }
+        // Valid JSON object without displayable chat fields — do not plain-text fallback.
+        if val.is_object() {
+            return None;
+        }
     }
-    // Plain-text content (pre-envelope messages)
+    // Plain-text content (pre-envelope messages, not JSON)
     let trimmed = content_str.trim();
     if !trimmed.is_empty() {
         return Some(MessageEnvelope::text(trimmed, None));
@@ -710,6 +785,25 @@ mod tests {
     fn parse_content_plain_text() {
         let env = parse_content("hello from the past").unwrap();
         assert_eq!(env.body, "hello from the past");
+    }
+
+    #[test]
+    fn parse_content_rejects_empty_json_object() {
+        assert!(parse_content("{}").is_none());
+        assert!(is_non_display_channel_content("{}"));
+    }
+
+    #[test]
+    fn parse_content_rejects_signaling_shape_without_signal_flag() {
+        let json = r#"{"to":"user-b","data":"{\"Offer\":{}}"}"#;
+        assert!(parse_content(json).is_none());
+        assert!(is_non_display_channel_content(json));
+    }
+
+    #[test]
+    fn parse_content_rejects_signal_payload() {
+        let json = r#"{"signal":true,"to":"user-b","data":"{}"}"#;
+        assert!(parse_content(json).is_none());
     }
 
     #[test]

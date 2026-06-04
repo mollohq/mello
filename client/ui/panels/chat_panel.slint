@@ -737,8 +737,9 @@ export component ChatPanel inherits Rectangle {
                         }
                     }
 
-                    // Message row: left gutter (hover actions) + content
-                    if !msg.is-system && !msg.is-unread-divider: HorizontalLayout {
+                    // Message row: left gutter (hover actions) + text/reply (media is below)
+                    if !msg.is-system && !msg.is-unread-divider
+                        && (msg.text != "" || msg.reply-to-id != "" || msg.is-deleted || msg.is-gif || msg.is-clip): HorizontalLayout {
                         spacing: 8px;
                         width: feed.width;
                         padding-left: 4px;
@@ -919,20 +920,38 @@ export component ChatPanel inherits Rectangle {
                                 font-italic: true;
                                 wrap: word-wrap;
                             }
+                            }
+                        }
+                    }
 
-                            // Clip inline card
+                    // Media row: full content width under avatar column (not double-guttered)
+                    if !msg.is-system && !msg.is-unread-divider && (msg.is-gif || msg.is-clip): HorizontalLayout {
+                        width: feed.width;
+                        padding-left: 4px;
+                        padding-right: 4px;
+                        spacing: 8px;
+                        alignment: start;
+                        property <length> media-col-w: feed.width - 44px;
+
+                        Rectangle {
+                            width: 28px;
+                        }
+
+                        VerticalLayout {
+                            width: media-col-w;
+                            spacing: 4px;
+
                             if msg.is-clip: ChatClipCard {
                                 sender-name: msg.sender-name;
                                 clip-duration: msg.clip-duration;
-                                width: 280px;
+                                width: media-col-w;
                             }
 
-                            // GIF inline preview
                             if msg.is-gif: Rectangle {
                                 property <float> aspect: msg.gif-height > 0 ? msg.gif-width / msg.gif-height : 1.33;
-                                property <length> max-w: 300px;
-                                width: max-w;
-                                height: max-w / aspect;
+                                property <length> media-w: min(400px, media-col-w);
+                                width: media-w;
+                                height: media-w / aspect;
                                 border-radius: Theme.radius-sm;
                                 clip: true;
                                 background: msg.has-gif-image ? transparent : Theme.bg-app;
@@ -958,7 +977,6 @@ export component ChatPanel inherits Rectangle {
                                         root.gif-hovered(msg.gif-preview-url);
                                     }
                                 }
-                            }
                             }
                         }
                     }
