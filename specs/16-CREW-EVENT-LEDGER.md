@@ -307,7 +307,8 @@ Clips and weekly recaps are durable crew memory and are kept outside the ledger 
 Both mirror the ledger storage pattern (system-owned, public read, server-only write, optimistic-concurrency retry).
 
 Read paths:
-- `crew_timeline` merges the ledger with recent durable clips (last 7 days) and the single latest recap, so the live feed still shows them.
+- `crew_feed` is the curated primary feed endpoint. It is server-driven UI: it merges the ledger, recent clips, and recaps and returns `this_week` and `memory` sections whose entries carry `role` and `size` curation knobs (order + role + section + size only; no layout, styling, or copy crosses the boundary). Clients map role/size to native components.
+- `crew_timeline` is the raw paginated source: it merges the ledger with recent durable clips (last 7 days) and the single latest recap, newest first, without curation. Used for deep scroll.
 - `crew_catchup` merges recent clips (newer than `last_seen`) into the candidate set.
 - `crew_clips` and `crew_recaps` RPCs paginate the full durable history (newest first), powering the deeper memory surfaces.
 

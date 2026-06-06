@@ -115,6 +115,8 @@ pub fn handle_event(ctx: &AppContext, event: Event) {
         | Event::ClipPlaybackStarted { .. }
         | Event::ClipPlaybackProgress { .. }
         | Event::ClipPlaybackFinished
+        | Event::FeedLoaded { .. }
+        // Raw timeline is kept for later deep-scroll; no UI handler yet.
         | Event::TimelineLoaded { .. } => clip::handle(ctx, event),
 
         // Game sensing

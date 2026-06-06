@@ -92,7 +92,8 @@ All custom server logic is written in Go and loaded as Nakama runtime modules. M
 | `crew_state.go` | Crew state streaming (sidebar, presence) |
 | `presence.go` | Presence hooks (status tracking) |
 | `push.go` | Push notification helpers |
-| `clips.go` | `PostClipRPC`, `CrewTimelineRPC`, `ClipUploadURLRPC`, `ClipUploadCompleteRPC`, `WeeklyRecapJob` |
+| `clips.go` | `PostClipRPC`, `CrewTimelineRPC`, `CrewClipsRPC`, `CrewRecapsRPC`, `ClipUploadURLRPC`, `ClipUploadCompleteRPC`, `WeeklyRecapJob`; durable `crew_clips`/`crew_recaps` storage |
+| `crew_feed.go` | `CrewFeedRPC` — server-side feed curation (order, role, size, locked card) |
 | `s3.go` | S3/R2 presign client singleton, `GeneratePresignedPUT`, `S3PublicURL` helpers |
 | `dev_seed.go` | Development seed data |
 
@@ -115,10 +116,13 @@ All custom server logic is written in Go and loaded as Nakama runtime modules. M
 | `start_stream` | Yes | Announces stream start to crew members via crew state stream. |
 | `stop_stream` | Yes | Announces stream end. |
 | `upload_thumbnail` | Yes | Stores stream thumbnail (base64) in Nakama storage. |
-| `post_clip` | Yes | Stores clip metadata as a `clip` event in the crew event ledger. Pushes notification to crew. |
-| `crew_timeline` | Yes | Returns paginated crew feed data (clips, sessions, recaps, catch-ups). Cursor-based. |
+| `post_clip` | Yes | Stores clip metadata in the durable per-crew `crew_clips` document (capped, outside the 7-day ledger trim). Pushes notification to crew. |
+| `crew_feed` | Yes | Server-curated primary feed: merges ledger + durable clips/recaps, returns `this_week` + `memory` sections with per-entry `role`/`size` and a server-emitted `locked` card for non-premium users. |
+| `crew_timeline` | Yes | Raw paginated merge (ledger + recent clips + latest recap) for deep scroll. Cursor-based. |
+| `crew_clips` | Yes | Paginated access to durable clips. |
+| `crew_recaps` | Yes | Paginated access to durable recaps. |
 | `clip_upload_url` | Yes | Returns a presigned PUT URL for direct S3/R2 upload and the public `media_url`. |
-| `clip_upload_complete` | Yes | Updates the clip event's `media_url` in the ledger after successful upload. |
+| `clip_upload_complete` | Yes | Updates the clip's `media_url` after successful upload. |
 
 Every RPC validates its input and returns typed Nakama errors (`UNAUTHENTICATED`, `INVALID_ARGUMENT`, `NOT_FOUND`, `PERMISSION_DENIED`, `INTERNAL`).
 
@@ -170,7 +174,9 @@ Nakama's key-value storage is used for data that doesn't fit built-in models:
 | `crew_avatars` | `{crew_id}` | System user (`""`) | `{"data":"<base64 JPEG>"}` | `create_crew`, `get_crew_avatar` |
 | `invite_codes` | `{code}` | System user (`""`) | `{"crew_id":"...","crew_name":"...","created_by":"..."}` | `GenerateInviteCode`, `join_by_invite_code` |
 | `stream_thumbnails` | `{crew_id}` | Streaming user | `{"data":"<base64 JPEG>"}` | `upload_thumbnail` |
-| `crew_events` | `{crew_id}` | System user (`""`) | JSON event ledger (clips, sessions, recaps) | `post_clip`, `crew_timeline`, `clip_upload_complete` |
+| `crew_events` | `{crew_id}` | System user (`""`) | 7-day rolling JSON event ledger (sessions, joins, chat, moments) | `crew_timeline`, `crew_feed`, `post_moment` |
+| `crew_clips` | `{crew_id}` | System user (`""`) | Durable capped list of clip metadata (outside ledger trim) | `post_clip`, `crew_clips`, `crew_feed`, `clip_upload_complete` |
+| `crew_recaps` | `{crew_id}` | System user (`""`) | Durable list of weekly recaps | `WeeklyRecapJob`, `crew_recaps`, `crew_feed` |
 
 **Cloud object storage (S3/R2):** Clip media files (MP4/AAC) are stored in an S3-compatible bucket (`mello-clips`). Clients upload directly via presigned PUT URLs — no data passes through Nakama. See [CLIPS.md §6](./features/CLIPS.md) for the full flow.
 
@@ -378,8 +384,9 @@ Estimated cost: ~$2,000-5,000/mo
 | POST | `/v2/rpc/start_stream` | Yes | Announce stream start |
 | POST | `/v2/rpc/stop_stream` | Yes | Announce stream end |
 | POST | `/v2/rpc/upload_thumbnail` | Yes | Upload stream thumbnail |
-| POST | `/v2/rpc/post_clip` | Yes | Store clip metadata in event ledger |
-| POST | `/v2/rpc/crew_timeline` | Yes | Paginated crew feed (clips, sessions, recaps) |
+| POST | `/v2/rpc/post_clip` | Yes | Store clip metadata in durable `crew_clips` |
+| POST | `/v2/rpc/crew_feed` | Yes | Server-curated crew feed (`this_week` + `memory`) |
+| POST | `/v2/rpc/crew_timeline` | Yes | Raw paginated merge for deep scroll |
 | POST | `/v2/rpc/clip_upload_url` | Yes | Get presigned PUT URL for S3/R2 upload |
 | POST | `/v2/rpc/clip_upload_complete` | Yes | Confirm upload, set media_url |
 

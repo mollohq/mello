@@ -799,6 +799,9 @@ impl Client {
                 self.handle_load_crew_timeline(&crew_id, cursor.as_deref())
                     .await;
             }
+            Command::LoadCrewFeed { crew_id } => {
+                self.handle_load_crew_feed(&crew_id).await;
+            }
 
             // --- Crew events ---
             Command::CrewCatchup { crew_id, last_seen } => {

@@ -9,7 +9,6 @@ mod converters;
 #[cfg(target_os = "windows")]
 pub mod dcomp_presenter;
 mod deep_link;
-mod feed_layout;
 mod foreground_monitor;
 mod gif_animator;
 mod handlers;

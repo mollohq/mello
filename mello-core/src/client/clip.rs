@@ -334,6 +334,22 @@ impl super::Client {
         }
     }
 
+    pub(super) async fn handle_load_crew_feed(&self, crew_id: &str) {
+        match self.nakama.crew_feed(crew_id).await {
+            Ok(response) => {
+                log::info!(
+                    "Feed loaded for crew {}: {} sections",
+                    crew_id,
+                    response.sections.len()
+                );
+                let _ = self.event_tx.send(Event::FeedLoaded { response });
+            }
+            Err(e) => {
+                log::warn!("crew_feed failed: {}", e);
+            }
+        }
+    }
+
     /// Polled from voice_tick (~20ms). Sends progress events every 3rd tick (~60ms).
     pub(super) fn clip_playback_tick(&mut self) {
         let ctx = self.voice.mello_ctx();

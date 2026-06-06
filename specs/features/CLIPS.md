@@ -225,7 +225,7 @@ The center area of the app becomes contextual based on crew activity.
 
 ### 7.1 State: No Active Stream (Default)
 
-Center shows the **Crew Feed**: a bento grid layout with mixed-size cards, newest content at top. Infinite scroll with cursor-based pagination from the `crew_timeline` RPC.
+Center shows the **Crew Feed**: a bento grid layout with mixed-size cards, newest content at top. The feed is server-curated via the `crew_feed` RPC (see section 11.4). Deep scroll falls back to the raw `crew_timeline` / `crew_clips` / `crew_recaps` RPCs.
 
 Card types in the bento grid:
 
@@ -374,7 +374,11 @@ Weekly recaps are durable, stored in `crew_recaps/{crew_id}` (no cap). See secti
 
 ### 11.4 Retrieval
 
-- `crew_timeline` RPC merges the 7-day ledger with recent durable clips (last 7 days) and the single latest recap, paginated newest-first with cursor-based pagination. This is the live feed.
+- `crew_feed` RPC is the curated primary feed. Curation lives server-side: the server decides which items appear, their order, and each item's role and size. It returns two sections:
+  - `this_week`: the curated recent feed (replaces the client-side bento ordering). The best session-preview is the `hero` (the live-stream hero is deferred to a separate multi-stream PR). The latest recap is pinned, then diversity/priority fillers.
+  - `memory`: the durable spine of older recaps and clips not already shown this week, with the server-emitted `locked` m3llo+ upsell pinned at the end when the viewer is not premium.
+  - Each entry is `{ id, type, role, size, ts, data }`. `type` is the data kind (clip | recap | session-preview | session | catchup); `role` (hero | standard | quiet | recap | locked) and `size` (sm | md | lg) are the curation knobs tuned server-side. `data` is the existing typed payload; clients keep their own text formatting and ignore unknown type/role/size values. The role/size weights and the quiet-type set are a server config block (`crew_feed.go`), changeable without a client release.
+- `crew_timeline` RPC is the raw paginated source (merged 7-day ledger + recent clips + latest recap, newest-first, cursor-based). Used for deep scroll.
 - `crew_catchup` RPC merges recent clips (newer than `last_seen`) into its candidate set, ranked higher than passive events.
 - `crew_clips` and `crew_recaps` RPCs paginate the full durable history (newest first) for the deeper memory surfaces.
 
@@ -410,7 +414,8 @@ Weekly recaps are durable, stored in `crew_recaps/{crew_id}` (no cap). See secti
 
 **Backend:**
 - `post_clip` RPC storing clip metadata in the durable `crew_clips/{crew_id}` store (capped at most-recent 250)
-- `crew_timeline` RPC merging the 7-day ledger with recent durable clips and the latest recap
+- `crew_feed` RPC: server-curated `this_week` + `memory` sections with role/size knobs
+- `crew_timeline` RPC merging the 7-day ledger with recent durable clips and the latest recap (raw source for deep scroll)
 - `crew_clips` and `crew_recaps` RPCs paginating the full durable history
 - S3 integration for clip upload and playback URLs
 - Weekly recap generation job (Monday 00:00 UTC) writing to the durable `crew_recaps/{crew_id}` store

@@ -249,6 +249,66 @@ type TimelineResponse struct {
 	HasMore bool            `json:"has_more"`
 }
 
+// buildMergedTimeline merges three bounded sources into the live feed: the
+// 7-day ledger, recent durable clips (last 7 days), and the single latest
+// recap. Result is sorted by timestamp descending (newest first). Durable
+// history beyond this window is reached through crew_clips / crew_recaps.
+func buildMergedTimeline(ctx context.Context, nk runtime.NakamaModule, crewID string) []TimelineEntry {
+	ledger, _ := readLedger(ctx, nk, crewID)
+
+	all := make([]TimelineEntry, 0, len(ledger.Events))
+	for _, e := range ledger.Events {
+		all = append(all, TimelineEntry{
+			ID:      e.ID,
+			Type:    e.Type,
+			ActorID: e.ActorID,
+			Ts:      e.Timestamp,
+			Score:   e.Score,
+			Data:    e.Data,
+		})
+	}
+
+	clipCutoff := time.Now().Add(-time.Duration(EventRollingWindowDays) * 24 * time.Hour).UnixMilli()
+	clipsDoc, _ := readClipsDoc(ctx, nk, crewID)
+	for _, c := range clipsDoc.Clips {
+		if c.Ts < clipCutoff {
+			continue
+		}
+		all = append(all, TimelineEntry{
+			ID:      c.EventID,
+			Type:    "clip",
+			ActorID: c.ActorID,
+			Ts:      c.Ts,
+			Score:   c.Score,
+			Data:    c,
+		})
+	}
+
+	recapsDoc, _ := readRecapsDoc(ctx, nk, crewID)
+	if len(recapsDoc.Recaps) > 0 {
+		latest := recapsDoc.Recaps[0]
+		for _, r := range recapsDoc.Recaps[1:] {
+			if r.WeekStart > latest.WeekStart {
+				latest = r
+			}
+		}
+		all = append(all, TimelineEntry{
+			ID:      fmt.Sprintf("recap_%d", latest.WeekStart),
+			Type:    "weekly_recap",
+			ActorID: "",
+			Ts:      latest.GeneratedAt,
+			Score:   30,
+			Data:    latest,
+		})
+	}
+
+	sort.Slice(all, func(i, j int) bool {
+		return all[i].Ts > all[j].Ts
+	})
+
+	return all
+}
+
 func CrewTimelineRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, payload string) (string, error) {
 	userID, ok := ctx.Value(runtime.RUNTIME_CTX_USER_ID).(string)
 	if !ok {
@@ -271,61 +331,7 @@ func CrewTimelineRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk 
 		limit = TimelinePageSize
 	}
 
-	ledger, _ := readLedger(ctx, nk, req.CrewID)
-
-	// Merge three bounded sources into the live feed: the 7-day ledger, recent
-	// durable clips, and the single latest recap. Durable history beyond this
-	// window is reached through crew_clips / crew_recaps.
-	all := make([]TimelineEntry, 0, len(ledger.Events))
-	for _, e := range ledger.Events {
-		all = append(all, TimelineEntry{
-			ID:      e.ID,
-			Type:    e.Type,
-			ActorID: e.ActorID,
-			Ts:      e.Timestamp,
-			Score:   e.Score,
-			Data:    e.Data,
-		})
-	}
-
-	clipCutoff := time.Now().Add(-time.Duration(EventRollingWindowDays) * 24 * time.Hour).UnixMilli()
-	clipsDoc, _ := readClipsDoc(ctx, nk, req.CrewID)
-	for _, c := range clipsDoc.Clips {
-		if c.Ts < clipCutoff {
-			continue
-		}
-		all = append(all, TimelineEntry{
-			ID:      c.EventID,
-			Type:    "clip",
-			ActorID: c.ActorID,
-			Ts:      c.Ts,
-			Score:   c.Score,
-			Data:    c,
-		})
-	}
-
-	recapsDoc, _ := readRecapsDoc(ctx, nk, req.CrewID)
-	if len(recapsDoc.Recaps) > 0 {
-		latest := recapsDoc.Recaps[0]
-		for _, r := range recapsDoc.Recaps[1:] {
-			if r.WeekStart > latest.WeekStart {
-				latest = r
-			}
-		}
-		all = append(all, TimelineEntry{
-			ID:      fmt.Sprintf("recap_%d", latest.WeekStart),
-			Type:    "weekly_recap",
-			ActorID: "",
-			Ts:      latest.GeneratedAt,
-			Score:   30,
-			Data:    latest,
-		})
-	}
-
-	// Sort by timestamp descending (newest first)
-	sort.Slice(all, func(i, j int) bool {
-		return all[i].Ts > all[j].Ts
-	})
+	all := buildMergedTimeline(ctx, nk, req.CrewID)
 
 	// Cursor-based pagination: cursor is the entry ID of the last item on the previous page
 	startIdx := 0

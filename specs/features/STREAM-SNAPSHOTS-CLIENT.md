@@ -1,7 +1,7 @@
 # Stream Snapshots — Client & Backend
 
 > **Component:** Nakama backend (Go), mello-core (Rust), Client UI (Slint)  
-> **Version:** 1.3  
+> **Version:** 1.4  
 > **Status:** Implemented  
 > **Depends on:** [16-CREW-EVENT-LEDGER.md](../16-CREW-EVENT-LEDGER.md), [CLIPS.md](./CLIPS.md), [00-ARCHITECTURE.md](../00-ARCHITECTURE.md)  
 > **Related:** SFU snapshot capture (`mello-sfu/STREAM-SNAPSHOTS-SFU.md` if present)
@@ -10,7 +10,9 @@
 
 ## 1. Purpose
 
-Stream session cards in the crew feed show still frames captured during a session. Cards with `snapshot_urls` render as **session-preview** tiles with a poster thumbnail and optional manual slideshow. This spec covers Nakama ledger fields, client loading (disk-first), `SessionPreviewCard`, and bento feed curation.
+Stream session cards in the crew feed show still frames captured during a session. Cards with `snapshot_urls` render as **session-preview** tiles with a poster thumbnail and optional manual slideshow. This spec covers Nakama ledger fields, client loading (disk-first), and `SessionPreviewCard`.
+
+Feed curation (which cards appear, in what order, and their role/size, including the session-preview hero) is server-side in `crew_feed`; see [CLIPS.md](./CLIPS.md) §11.4 and [16-CREW-EVENT-LEDGER.md](../16-CREW-EVENT-LEDGER.md). This spec only covers how a `session-preview` entry loads and renders once the server has placed it.
 
 ---
 
@@ -26,13 +28,14 @@ StopStreamRPC (streaming.go)
     │
     ├── Build StreamSessionData { ..., SnapshotURLs: urls }
     │
-    └── AppendCrewEvent → crew event ledger
+    └── AppendCrewEvent → crew event ledger (stream_session stays ephemeral)
                               │
-                              └── crew_timeline RPC
+                              └── crew_feed RPC (curated, primary)
+                              └── crew_timeline RPC (raw, deep-scroll)
                                       → entries[].data.snapshot_urls
 ```
 
-The SFU writes JPEGs to R2 (`mello-snapshots`). `StopStreamRPC` lists the prefix, sorts by timestamp, and stores URLs on `StreamSessionData`. No runtime coordination between SFU and Nakama.
+The SFU writes JPEGs to R2 (`mello-snapshots`). `StopStreamRPC` lists the prefix, sorts by timestamp, and stores URLs on `StreamSessionData`. No runtime coordination between SFU and Nakama. Stream sessions remain ledger events (only clips and recaps became durable); both `crew_feed` and `crew_timeline` read them through the shared `buildMergedTimeline` helper.
 
 ### 2.2 `StreamSessionData`
 
@@ -65,21 +68,21 @@ type StreamSessionData struct {
 
 Reuse `S3_ENDPOINT`, `S3_ACCESS_KEY`, `S3_SECRET_KEY` from clips. Nakama needs `ListObjectsV2` only; SFU writes.
 
-### 2.5 `crew_timeline` RPC
+### 2.5 Feed RPCs
 
-Registered as `crew_timeline` in `backend/nakama/data/modules/clips.go`. Returns paginated ledger entries (newest first, default limit 20). No snapshot-specific shaping — client maps `stream_session` + `snapshot_urls` to feed cards.
+`crew_feed` (`backend/nakama/data/modules/crew_feed.go`) is the curated primary read: it maps `stream_session` + `snapshot_urls` to a `session-preview` entry server-side and assigns its role/size. `crew_timeline` (`backend/nakama/data/modules/clips.go`) is the raw paginated source for deep scroll. Neither does snapshot-specific shaping beyond the type mapping.
 
 Empty `snapshot_urls` when: pre-feature sessions, very short streams, or R2 list failure.
 
 ---
 
-## 3. Client — timeline → feed cards
+## 3. Client — feed → cards
 
 ### 3.1 Card type mapping
 
-In `client/src/handlers/clip.rs`:
+The mapping is server-side in `backend/nakama/data/modules/crew_feed.go` (`mapCardType`); the entry's `type` arrives on the feed. The client only recovers the backend type from the payload for copy (`derive_backend_type` in `client/src/handlers/clip.rs`).
 
-| Ledger `type` | Condition | Feed `card-type` |
+| Ledger `type` | Condition | Feed `type` |
 |---|---|---|
 | `stream_session` | `snapshot_urls` non-empty | `session-preview` |
 | `stream_session` | empty URLs | `session` |
@@ -97,7 +100,7 @@ Only `session-preview` uses `SessionPreviewCard` and snapshot loading.
 
 ### 3.3 Events
 
-`crew_timeline` → `Event::TimelineLoaded` → `handlers/clip.rs` builds cards, runs `feed_layout::order_feed_cards`, sets `feed_cards`, triggers `SnapshotLoader` for posters.
+`crew_feed` → `Event::FeedLoaded` → `handlers/clip.rs` builds cards from the server-ordered `this_week` section (no client ordering), sets `feed_cards`, and triggers `SnapshotLoader` for `session-preview` posters.
 
 ---
 
@@ -118,7 +121,7 @@ File: `client/ui/panels/session_preview_card.slint`
 2. `snapshot_loader.rs` — async fetch + decode off UI thread; `invoke_from_event_loop` updates feed row.
 3. No in-memory decoded URL cache (per `00-ARCHITECTURE.md`).
 
-On `TimelineLoaded`: poster jobs for each `session-preview` in the ordered bento only. No bulk prefetch of every historical URL.
+On `FeedLoaded`: poster jobs for each `session-preview` in the server-ordered bento only. No bulk prefetch of every historical URL.
 
 ### 4.3 Fallback
 
@@ -126,17 +129,17 @@ Empty `snapshot-urls` or `snapshot-error`: placeholder UI (gradient + monitor ic
 
 ---
 
-## 5. Crew feed bento curation
+## 5. Crew feed curation (server-side)
 
-File: `client/src/feed_layout.rs` (client-side; see note below).
+Curation moved off the client into `backend/nakama/data/modules/crew_feed.go`. The client no longer orders cards; it renders the server's `this_week`/`memory` sections by `role`/`size`. The session-preview quality score (below) lives in that file and decides the hero and the wide (`lg`) slot. Full contract: [CLIPS.md](./CLIPS.md) §11.4.
 
-### 5.1 Goals
+### 5.1 Goals (now enforced server-side)
 
 - **Hero:** best `session-preview` by quality score (visual priority over clips).
 - **Deprioritize** short streams (≤2 min, ≤4 snapshots) for hero/wide slots.
-- **Mix:** at least one of each present type in the nine grid slots: `clip`, `session`, `session-preview`, `catchup`, plus pinned `recap`.
+- **Mix:** at least one of each present type: `clip`, `session`, `session-preview`, `catchup`, plus pinned `recap`.
 - **Priority fill:** clips → strong previews → generic sessions → catchups.
-- **Wide slot:** strongest visual among fillers (preview or clip).
+- **Wide slot:** strongest visual among fillers (preview or clip) gets `size: lg`.
 
 ### 5.2 Quality score (session-preview)
 
@@ -145,13 +148,7 @@ if duration_min <= 2 && snapshot_count <= 4 → heavily penalized
 else duration_min * 10 + snapshot_count * 3 + bonuses for duration ≥15 / snapshots ≥8
 ```
 
-### 5.3 Pagination placeholder
-
-When `crew_timeline` returns `has_more: true`, feed shows a **Show more** control (no-op until premium pagination ships). `feed-has-more` on `MainWindow` / `CrewFeed`.
-
-### 5.4 Future: backend curation
-
-Ranking/mix rules may move to `crew_timeline` when premium scroll ships so all clients and pages stay consistent. Bento cell geometry can remain client-side.
+The bento cell geometry stays client-side (`crew_feed.slint`); only order + role + size cross the boundary.
 
 ---
 
@@ -177,9 +174,9 @@ Aligned with `00-ARCHITECTURE.md`. **Disk is the cache; RAM is the exception.**
 | `StreamSessionData` | `backend/nakama/data/modules/crew_events.go` |
 | `StopStreamRPC`, `listSnapshotURLs` | `backend/nakama/data/modules/streaming.go` |
 | Snapshot S3 client | `backend/nakama/data/modules/main.go` |
-| `crew_timeline` RPC | `backend/nakama/data/modules/clips.go` |
-| Timeline → feed cards | `client/src/handlers/clip.rs` |
-| Bento ordering | `client/src/feed_layout.rs` |
+| `crew_feed` / `crew_timeline` RPCs | `backend/nakama/data/modules/crew_feed.go`, `clips.go` |
+| Feed curation + ordering (server) | `backend/nakama/data/modules/crew_feed.go` |
+| Feed → feed cards | `client/src/handlers/clip.rs` |
 | Snapshot disk cache | `client/src/snapshot_cache.rs` |
 | Snapshot async loader | `client/src/snapshot_loader.rs` |
 | `FeedCardData` | `client/ui/types.slint` |
@@ -191,6 +188,6 @@ Aligned with `00-ARCHITECTURE.md`. **Disk is the cache; RAM is the exception.**
 
 ## 8. Testing
 
-- RPC: `crew_timeline` with `{ "crew_id": "<uuid>", "limit": 20 }` — inspect `stream_session` entries and `data.snapshot_urls`.
-- Client unit tests: `feed_layout` (hero, diversity, long preview vs noise sessions).
+- RPC: `crew_feed` with `{ "crew_id": "<uuid>" }` — inspect the `this_week` `session-preview` entries and `data.snapshot_urls`.
+- Backend unit tests: `crew_feed_test.go` (hero, diversity, quiet/size, preview-by-snapshots).
 - Client unit tests: `snapshot_cache` JPEG decode.

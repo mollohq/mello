@@ -316,6 +316,7 @@ export component MainWindow inherits Window {
 
     // --- Crew feed ---
     in property <[FeedCardData]> feed-cards: [];
+    in property <[FeedCardData]> memory-cards: [];
     in property <bool> feed-cold-start: true;
     in property <bool> feed-has-more: false;
     in property <int> feed-clip-count: 0;
@@ -789,6 +790,7 @@ export component MainWindow inherits Window {
                             width: parent.width;
                             height: parent.height;
                             cards: root.feed-cards;
+                            memory-cards: root.memory-cards;
                             stream-cards: root.active-stream-cards;
                             is-hosting: root.is-hosting;
                             is-watching: root.is-watching;

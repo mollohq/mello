@@ -1355,6 +1355,38 @@ component InviteCard inherits Rectangle {
     }
 }
 
+// m3llo+ upsell card pinned at the end of the memory band. Server emits a
+// "locked" entry; copy and visual stay client-side.
+component LockedCard inherits Rectangle {
+    background: Theme.card-bg;
+    border-radius: 10px;
+    border-width: 1px;
+    border-color: Theme.card-border;
+
+    VerticalLayout {
+        alignment: center;
+        spacing: 8px;
+        padding: 20px;
+
+        Text {
+            text: "Unlock your crew's full story";
+            font-size: 14px;
+            font-weight: 600;
+            color: Theme.text-primary;
+            horizontal-alignment: center;
+            wrap: word-wrap;
+        }
+
+        Text {
+            text: "Keep every clip and recap forever with m3llo+.";
+            font-size: 11px;
+            color: Theme.text-sub;
+            horizontal-alignment: center;
+            wrap: word-wrap;
+        }
+    }
+}
+
 // Dispatcher: renders the correct card based on card-type
 component FeedSlot inherits Rectangle {
     in property <FeedCardData> card;
@@ -1431,6 +1463,9 @@ component FeedSlot inherits Rectangle {
         invite-clicked => { root.invite-clicked(); }
         hide-clicked => { root.hide-invite-clicked(); }
     }
+    if card.card-type == "locked": LockedCard {
+        width: parent.width; height: parent.height;
+    }
 
     // Skeleton variants
     if card.card-type == "skeleton": SkeletonCard {
@@ -1464,6 +1499,7 @@ component FeedSlot inherits Rectangle {
 
 export component CrewFeed inherits Rectangle {
     in property <[FeedCardData]> cards: [];
+    in property <[FeedCardData]> memory-cards: [];
     in property <[StreamCardData]> stream-cards: [];
     in property <bool> is-cold-start: true;
     in property <bool> feed-has-more: false;
@@ -1781,6 +1817,47 @@ export component CrewFeed inherits Rectangle {
                         hide-invite-clicked => { root.hide-invite-clicked(); }
                         session-seen(id) => { root.session-seen(id); }
                         session-preview-request-frame(sid, idx) => { root.session-preview-request-frame(sid, idx); }
+                    }
+                }
+
+                // Memory band: the durable spine (recaps + clips, then the
+                // m3llo+ locked card). Always present so a quiet current week
+                // never reads as empty. Server-curated, newest first.
+                if memory-cards.length > 0: VerticalLayout {
+                    spacing: 12px;
+
+                    Text {
+                        text: "Memory";
+                        font-size: 13px;
+                        font-weight: 600;
+                        color: Theme.text-sub;
+                    }
+
+                    Rectangle {
+                        height: 1px;
+                        background: Theme.card-border;
+                    }
+
+                    for r in Math.ceil(memory-cards.length / 3.0): HorizontalLayout {
+                        height: 210px;
+                        spacing: 12px;
+
+                        for c in 3: FeedSlot {
+                            property <int> mem-idx: r * 3 + c;
+                            visible: mem-idx < memory-cards.length;
+                            horizontal-stretch: 1;
+                            card: mem-idx < memory-cards.length ? memory-cards[mem-idx] : { card-type: "" };
+                            playing-path: root.clip-playing-path;
+                            clip-progress: root.clip-progress;
+                            clip-paused: root.clip-paused;
+                            clip-anim-tick: root.clip-anim-tick;
+                            clip-position-text: root.clip-position-text;
+                            clip-duration-text: root.clip-duration-text;
+                            play-clicked(id) => { root.card-clicked(id); }
+                            seek-clip(v) => { root.seek-clip(v); }
+                            session-seen(id) => { root.session-seen(id); }
+                            session-preview-request-frame(sid, idx) => { root.session-preview-request-frame(sid, idx); }
+                        }
                     }
                 }
 
