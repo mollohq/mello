@@ -248,6 +248,12 @@ func InitModule(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runti
 	if err := initializer.RegisterRpc("clip_upload_complete", ClipUploadCompleteRPC); err != nil {
 		return err
 	}
+	if err := initializer.RegisterRpc("crew_clips", CrewClipsRPC); err != nil {
+		return err
+	}
+	if err := initializer.RegisterRpc("crew_recaps", CrewRecapsRPC); err != nil {
+		return err
+	}
 
 	// -----------------------------------------------------------------------
 	// RPCs — dev tools

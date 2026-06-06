@@ -2,7 +2,7 @@
 
 > **Component:** Crew Event Ledger  
 > **Version:** 0.1  
-> **Status:** Planned  
+> **Status:** Implemented  
 > **Parent:** [00-ARCHITECTURE.md](./00-ARCHITECTURE.md)  
 > **Related:** [04-BACKEND.md](./04-BACKEND.md), [11-PRESENCE-CREW-STATE.md](./11-PRESENCE-CREW-STATE.md), [13-VOICE-CHANNELS.md](./13-VOICE-CHANNELS.md)
 
@@ -13,6 +13,8 @@
 The crew event ledger records meaningful activity within a crew. It is the single data source that powers the catch-up card, post-game moments, and future features (activity feeds, weekly digests, year-in-review).
 
 Events are **not** chat messages. They are structured signals derived from crew activity, stored in a rolling 7-day window per crew.
+
+The ledger is strictly the 7-day ephemeral pulse store (voice, stream, game, joins, chat activity, moments). **Clips and weekly recaps are no longer ledger events** -- they are durable and live outside the trim in their own per-crew documents (see section 3.5). The ledger trim deletes only ephemeral pulse events; durable memory persists.
 
 ### Key Decisions
 
@@ -285,7 +287,7 @@ func writeLedgerWithRetry(ctx context.Context, nk runtime.NakamaModule, crewID s
 
 ### 3.4 Document Size Budget
 
-Worst case estimate for a very active crew over 7 days:
+Worst case estimate for a very active crew over 7 days (ephemeral pulse events only; clips and recaps are no longer in the ledger):
 - 50 voice sessions * ~200 bytes = 10 KB
 - 20 stream sessions * ~250 bytes = 5 KB
 - 100 game sessions * ~200 bytes = 20 KB
@@ -294,6 +296,20 @@ Worst case estimate for a very active crew over 7 days:
 - 10 member changes * ~100 bytes = 1 KB
 
 **Total: ~46.5 KB** -- well within Nakama's 256 KB storage object limit.
+
+### 3.5 Durable stores (clips and recaps)
+
+Clips and weekly recaps are durable crew memory and are kept outside the ledger trim in their own system-owned, per-crew documents:
+
+- **`crew_clips/{crew_id}`** -- array of `StoredClip`, newest appended last, capped at the most-recent 250 entries to stay under Nakama's 256 KB object limit. Written by `post_clip` (via `AppendClip`) and updated by `clip_upload_complete`. Full history beyond the cap is deferred to m3llo+.
+- **`crew_recaps/{crew_id}`** -- array of `WeeklyRecapData`, newest appended last, no cap (recaps are tiny, one per crew per week). Written by the weekly recap job (via `AppendRecap`).
+
+Both mirror the ledger storage pattern (system-owned, public read, server-only write, optimistic-concurrency retry).
+
+Read paths:
+- `crew_timeline` merges the ledger with recent durable clips (last 7 days) and the single latest recap, so the live feed still shows them.
+- `crew_catchup` merges recent clips (newer than `last_seen`) into the candidate set.
+- `crew_clips` and `crew_recaps` RPCs paginate the full durable history (newest first), powering the deeper memory surfaces.
 
 ---
 
