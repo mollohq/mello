@@ -354,17 +354,20 @@ func CrewFeedRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runt
 
 	// Items shown in this_week are excluded from the memory spine.
 	shownClipIDs := map[string]bool{}
+	shownSessionIDs := map[string]bool{}
 	shownRecapWeekStart := int64(-1)
 	for _, e := range thisWeek {
 		switch e.Type {
 		case "clip":
 			shownClipIDs[e.ID] = true
+		case "session", "session-preview":
+			shownSessionIDs[e.ID] = true
 		case "recap":
 			fmt.Sscanf(e.ID, "recap_%d", &shownRecapWeekStart)
 		}
 	}
 
-	memory := buildMemorySection(ctx, nk, req.CrewID, shownRecapWeekStart, shownClipIDs)
+	memory := buildMemorySection(ctx, nk, req.CrewID, shownRecapWeekStart, shownClipIDs, shownSessionIDs)
 	// The locked card is the m3llo+ upsell pinned at the end of memory. Gating is
 	// not enforced yet, so IsUserPremium is always false and everyone sees it.
 	memory = appendLockedCard(memory, !IsUserPremium(userID))
@@ -382,10 +385,10 @@ func CrewFeedRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runt
 	return string(data), nil
 }
 
-// buildMemorySection assembles the durable spine: recaps (newest first) and
-// older clips, excluding whatever this_week already shows, sorted by timestamp
-// descending and capped at feedMemoryPageSize.
-func buildMemorySection(ctx context.Context, nk runtime.NakamaModule, crewID string, shownRecapWeekStart int64, shownClipIDs map[string]bool) []FeedEntry {
+// buildMemorySection assembles the durable spine: recaps (newest first),
+// older clips, and stream replays, excluding whatever this_week already shows,
+// sorted by timestamp descending and capped at feedMemoryPageSize.
+func buildMemorySection(ctx context.Context, nk runtime.NakamaModule, crewID string, shownRecapWeekStart int64, shownClipIDs, shownSessionIDs map[string]bool) []FeedEntry {
 	entries := make([]FeedEntry, 0, feedMemoryPageSize)
 
 	recapsDoc, _ := readRecapsDoc(ctx, nk, crewID)
@@ -415,6 +418,27 @@ func buildMemorySection(ctx context.Context, nk runtime.NakamaModule, crewID str
 			Size: "md",
 			Ts:   c.Ts,
 			Data: c,
+		})
+	}
+
+	// Stream replays are durable memories too: a session-preview when snapshots
+	// were captured, otherwise a plain session card.
+	streamDoc, _ := readStreamSessionsDoc(ctx, nk, crewID)
+	for _, s := range streamDoc.Sessions {
+		if shownSessionIDs[s.EventID] {
+			continue
+		}
+		feedType := "session"
+		if len(s.SnapshotURLs) > 0 {
+			feedType = "session-preview"
+		}
+		entries = append(entries, FeedEntry{
+			ID:   s.EventID,
+			Type: feedType,
+			Role: "standard",
+			Size: "md",
+			Ts:   s.Ts,
+			Data: s,
 		})
 	}
 

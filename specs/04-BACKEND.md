@@ -94,6 +94,7 @@ All custom server logic is written in Go and loaded as Nakama runtime modules. M
 | `push.go` | Push notification helpers |
 | `clips.go` | `PostClipRPC`, `CrewTimelineRPC`, `CrewClipsRPC`, `CrewRecapsRPC`, `ClipUploadURLRPC`, `ClipUploadCompleteRPC`, `WeeklyRecapJob`; durable `crew_clips`/`crew_recaps` storage |
 | `crew_feed.go` | `CrewFeedRPC` — server-side feed curation (order, role, size, locked card) |
+| `stream_sessions_store.go` | Durable `crew_stream_sessions` store (`UpsertStreamSession`, cap) so stream replays outlive the ledger trim |
 | `s3.go` | S3/R2 presign client singleton, `GeneratePresignedPUT`, `S3PublicURL` helpers |
 | `dev_seed.go` | Development seed data |
 
@@ -177,6 +178,7 @@ Nakama's key-value storage is used for data that doesn't fit built-in models:
 | `crew_events` | `{crew_id}` | System user (`""`) | 7-day rolling JSON event ledger (sessions, joins, chat, moments) | `crew_timeline`, `crew_feed`, `post_moment` |
 | `crew_clips` | `{crew_id}` | System user (`""`) | Durable capped list of clip metadata (outside ledger trim) | `post_clip`, `crew_clips`, `crew_feed`, `clip_upload_complete` |
 | `crew_recaps` | `{crew_id}` | System user (`""`) | Durable list of weekly recaps | `WeeklyRecapJob`, `crew_recaps`, `crew_feed` |
+| `crew_stream_sessions` | `{crew_id}` | System user (`""`) | Durable capped list of stream replays (outside ledger trim) | `stop_stream`, snapshot backfill, `crew_feed` |
 
 **Cloud object storage (S3/R2):** Clip media files (MP4/AAC) are stored in an S3-compatible bucket (`mello-clips`). Clients upload directly via presigned PUT URLs — no data passes through Nakama. See [CLIPS.md §6](./features/CLIPS.md) for the full flow.
 

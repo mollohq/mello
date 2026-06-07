@@ -355,7 +355,7 @@ Appears as a card in the crew feed. NOT posted to chat. Tapping expands to a ful
 
 ### 11.1 Event Ledger (Existing)
 
-Voice sessions, stream sessions, game sessions, chat activity summaries. These are the ephemeral pulse events, stored in the 7-day rolling ledger `crew_events/{crew_id}`. They generate session cards, catch-up cards, now playing cards, and recent games cards. Clips and recaps are no longer ledger events.
+Voice sessions, stream sessions, game sessions, chat activity summaries. These are the ephemeral pulse events, stored in the 7-day rolling ledger `crew_events/{crew_id}`. They generate session cards, catch-up cards, now playing cards, and recent games cards. Clips and recaps are not ledger events; stream sessions are also mirrored to a durable store (§11.3a) so replays survive the trim.
 
 ### 11.2 Clips (Durable)
 
@@ -372,11 +372,15 @@ Clip metadata is durable, stored in its own per-crew document `crew_clips/{crew_
 
 Weekly recaps are durable, stored in `crew_recaps/{crew_id}` (no cap). See section 10.
 
+### 11.3a Stream Replays (Durable)
+
+Stream sessions stay in the ledger for the recent window, but a lean projection (`StoredStreamSession`: streamer, title, game, duration, peak viewers, snapshot URLs; viewer IDs dropped) is also mirrored into `crew_stream_sessions/{crew_id}` (capped at most-recent 150). It is upserted when a stream ends and again from the snapshot backfill job, so late-arriving snapshots land on the durable copy and snapshot URLs only grow. This keeps stream replays (a `session-preview` when snapshots exist, else `session`) available in the `memory` section long after the 7-day trim.
+
 ### 11.4 Retrieval
 
 - `crew_feed` RPC is the curated primary feed. Curation lives server-side: the server decides which items appear, their order, and each item's role and size. It returns two sections:
   - `this_week`: the curated recent feed (replaces the client-side bento ordering). The best session-preview is the `hero` (the live-stream hero is deferred to a separate multi-stream PR). The latest recap is pinned, then diversity/priority fillers.
-  - `memory`: the durable spine of older recaps and clips not already shown this week, with the server-emitted `locked` m3llo+ upsell pinned at the end when the viewer is not premium.
+  - `memory`: the durable spine of older recaps, clips, and stream replays not already shown this week, with the server-emitted `locked` m3llo+ upsell pinned at the end when the viewer is not premium.
   - Each entry is `{ id, type, role, size, ts, data }`. `type` is the data kind (clip | recap | session-preview | session | catchup); `role` (hero | standard | quiet | recap | locked) and `size` (sm | md | lg) are the curation knobs tuned server-side. `data` is the existing typed payload; clients keep their own text formatting and ignore unknown type/role/size values. The role/size weights and the quiet-type set are a server config block (`crew_feed.go`), changeable without a client release.
 - `crew_timeline` RPC is the raw paginated source (merged 7-day ledger + recent clips + latest recap, newest-first, cursor-based). Used for deep scroll.
 - `crew_catchup` RPC merges recent clips (newer than `last_seen`) into its candidate set, ranked higher than passive events.

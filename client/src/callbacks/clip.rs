@@ -32,8 +32,7 @@ pub fn wire(ctx: &AppContext) {
             log::debug!("[snapshot] playback frame request sid={} idx={}", sid, idx);
 
             if let Some(app) = app_weak.upgrade() {
-                let cards = app.get_feed_cards();
-                let Some(url) = snapshot_loader::snapshot_url_for_card(&cards, &sid, idx as usize)
+                let Some(url) = snapshot_loader::snapshot_url_for_card(&app, &sid, idx as usize)
                 else {
                     log::warn!("[snapshot] no URL for sid={} idx={}", sid, idx);
                     return;

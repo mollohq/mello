@@ -163,30 +163,51 @@ impl SnapshotLoader {
         });
     }
 
-    /// After timeline is set: disk-prefetch frame 0 + decode posters for session-preview cards.
+    /// After the feed is set: disk-prefetch frame 0 + decode posters for
+    /// session-preview cards in both the this_week grid and the memory band.
     pub fn load_session_preview_cards(&self, app_weak: Weak<MainWindow>, gen: u32) {
         if let Some(app) = app_weak.upgrade() {
-            let cards = app.get_feed_cards();
-            for i in 0..cards.row_count() {
-                let Some(mut card) = cards.row_data(i) else {
-                    continue;
-                };
-                if card.card_type.as_str() != "session-preview" {
-                    continue;
+            for cards in card_models(&app) {
+                for i in 0..cards.row_count() {
+                    let Some(mut card) = cards.row_data(i) else {
+                        continue;
+                    };
+                    if card.card_type.as_str() != "session-preview" {
+                        continue;
+                    }
+                    let url = first_snapshot_url(&card);
+                    let Some(url) = url else {
+                        continue;
+                    };
+
+                    card.snapshot_loading = true;
+                    card.snapshot_poster_ready = false;
+                    card.snapshot_error = false;
+                    cards.set_row_data(i, card.clone());
+
+                    self.prefetch_disk(url.clone(), gen);
+                    self.request_poster(app_weak.clone(), card.id.to_string(), url, gen);
                 }
-                let url = first_snapshot_url(&card);
-                let Some(url) = url else {
-                    continue;
-                };
-
-                card.snapshot_loading = true;
-                card.snapshot_poster_ready = false;
-                card.snapshot_error = false;
-                cards.set_row_data(i, card.clone());
-
-                self.prefetch_disk(url.clone(), gen);
-                self.request_poster(app_weak.clone(), card.id.to_string(), url, gen);
             }
+        }
+    }
+}
+
+/// Session-previews live in both the this_week grid (feed_cards) and the memory
+/// band (memory_cards); snapshot work must reach either.
+fn card_models(app: &MainWindow) -> [slint::ModelRc<FeedCardData>; 2] {
+    [app.get_feed_cards(), app.get_memory_cards()]
+}
+
+/// Find the card by id across both models and mutate it in place.
+fn update_card<F: FnOnce(&mut FeedCardData)>(app: &MainWindow, card_id: &str, f: F) {
+    for cards in card_models(app) {
+        if let Some(i) = find_card_row(&cards, card_id) {
+            if let Some(mut card) = cards.row_data(i) {
+                f(&mut card);
+                cards.set_row_data(i, card);
+            }
+            return;
         }
     }
 }
@@ -204,61 +225,44 @@ fn find_card_row(cards: &slint::ModelRc<FeedCardData>, card_id: &str) -> Option<
 }
 
 fn apply_poster(app: &MainWindow, card_id: &str, img: slint::Image) {
-    let cards = app.get_feed_cards();
-    let Some(i) = find_card_row(&cards, card_id) else {
-        return;
-    };
-    let Some(mut card) = cards.row_data(i) else {
-        return;
-    };
-    card.snapshot_loading = false;
-    card.snapshot_poster = img;
-    card.snapshot_poster_ready = true;
-    card.snapshot_error = false;
-    cards.set_row_data(i, card);
+    update_card(app, card_id, |card| {
+        card.snapshot_loading = false;
+        card.snapshot_poster = img;
+        card.snapshot_poster_ready = true;
+        card.snapshot_error = false;
+    });
     log::debug!("[snapshot] poster ready for {}", card_id);
 }
 
 fn set_card_error(app: &MainWindow, card_id: &str) {
-    let cards = app.get_feed_cards();
-    let Some(i) = find_card_row(&cards, card_id) else {
-        return;
-    };
-    let Some(mut card) = cards.row_data(i) else {
-        return;
-    };
-    card.snapshot_loading = false;
-    card.snapshot_poster_ready = false;
-    card.snapshot_error = true;
-    cards.set_row_data(i, card);
+    update_card(app, card_id, |card| {
+        card.snapshot_loading = false;
+        card.snapshot_poster_ready = false;
+        card.snapshot_error = true;
+    });
     log::warn!("[snapshot] poster failed for {}", card_id);
 }
 
 fn apply_playback_frame(app: &MainWindow, card_id: &str, index: i32, img: slint::Image) {
-    let cards = app.get_feed_cards();
-    let Some(i) = find_card_row(&cards, card_id) else {
-        return;
-    };
-    let Some(mut card) = cards.row_data(i) else {
-        return;
-    };
-    card.snapshot_playback_frame = img;
-    card.snapshot_playback_index = index;
-    card.snapshot_playback_revision += 1;
-    cards.set_row_data(i, card);
+    update_card(app, card_id, |card| {
+        card.snapshot_playback_frame = img;
+        card.snapshot_playback_index = index;
+        card.snapshot_playback_revision += 1;
+    });
     log::debug!("[snapshot] playback frame {} ready for {}", index, card_id);
 }
 
-pub fn snapshot_url_for_card(
-    cards: &slint::ModelRc<FeedCardData>,
-    card_id: &str,
-    index: usize,
-) -> Option<String> {
-    let i = find_card_row(cards, card_id)?;
-    let card = cards.row_data(i)?;
-    let urls = &card.snapshot_urls;
-    if index >= urls.row_count() {
-        return None;
+pub fn snapshot_url_for_card(app: &MainWindow, card_id: &str, index: usize) -> Option<String> {
+    for cards in card_models(app) {
+        let Some(i) = find_card_row(&cards, card_id) else {
+            continue;
+        };
+        let card = cards.row_data(i)?;
+        let urls = &card.snapshot_urls;
+        if index >= urls.row_count() {
+            return None;
+        }
+        return urls.row_data(index).map(|u| u.to_string());
     }
-    urls.row_data(index).map(|u| u.to_string())
+    None
 }

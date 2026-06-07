@@ -28,14 +28,15 @@ StopStreamRPC (streaming.go)
     │
     ├── Build StreamSessionData { ..., SnapshotURLs: urls }
     │
-    └── AppendCrewEvent → crew event ledger (stream_session stays ephemeral)
+    └── AppendCrewEvent → crew event ledger (recent window)
+        └── UpsertStreamSession → crew_stream_sessions (durable replay)
                               │
                               └── crew_feed RPC (curated, primary)
                               └── crew_timeline RPC (raw, deep-scroll)
                                       → entries[].data.snapshot_urls
 ```
 
-The SFU writes JPEGs to R2 (`mello-snapshots`). `StopStreamRPC` lists the prefix, sorts by timestamp, and stores URLs on `StreamSessionData`. No runtime coordination between SFU and Nakama. Stream sessions remain ledger events (only clips and recaps became durable); both `crew_feed` and `crew_timeline` read them through the shared `buildMergedTimeline` helper.
+The SFU writes JPEGs to R2 (`mello-snapshots`). `StopStreamRPC` lists the prefix, sorts by timestamp, and stores URLs on `StreamSessionData`. No runtime coordination between SFU and Nakama. Stream sessions feed the recent window from the ledger (via the shared `buildMergedTimeline` helper) and are also mirrored into the durable `crew_stream_sessions` store so replays survive the 7-day trim and appear in the `crew_feed` `memory` section. The snapshot backfill job updates both the ledger event and the durable copy.
 
 ### 2.2 `StreamSessionData`
 
@@ -100,7 +101,7 @@ Only `session-preview` uses `SessionPreviewCard` and snapshot loading.
 
 ### 3.3 Events
 
-`crew_feed` → `Event::FeedLoaded` → `handlers/clip.rs` builds cards from the server-ordered `this_week` section (no client ordering), sets `feed_cards`, and triggers `SnapshotLoader` for `session-preview` posters.
+`crew_feed` → `Event::FeedLoaded` → `handlers/clip.rs` builds cards from the server-ordered `this_week` and `memory` sections (no client ordering), sets `feed_cards` + `memory_cards`, and triggers `SnapshotLoader` for `session-preview` posters in both models (replays in the memory band load their posters too).
 
 ---
 
@@ -175,6 +176,7 @@ Aligned with `00-ARCHITECTURE.md`. **Disk is the cache; RAM is the exception.**
 | `StopStreamRPC`, `listSnapshotURLs` | `backend/nakama/data/modules/streaming.go` |
 | Snapshot S3 client | `backend/nakama/data/modules/main.go` |
 | `crew_feed` / `crew_timeline` RPCs | `backend/nakama/data/modules/crew_feed.go`, `clips.go` |
+| Durable stream-replay store | `backend/nakama/data/modules/stream_sessions_store.go` |
 | Feed curation + ordering (server) | `backend/nakama/data/modules/crew_feed.go` |
 | Feed → feed cards | `client/src/handlers/clip.rs` |
 | Snapshot disk cache | `client/src/snapshot_cache.rs` |

@@ -14,7 +14,7 @@ The crew event ledger records meaningful activity within a crew. It is the singl
 
 Events are **not** chat messages. They are structured signals derived from crew activity, stored in a rolling 7-day window per crew.
 
-The ledger is strictly the 7-day ephemeral pulse store (voice, stream, game, joins, chat activity, moments). **Clips and weekly recaps are no longer ledger events** -- they are durable and live outside the trim in their own per-crew documents (see section 3.5). The ledger trim deletes only ephemeral pulse events; durable memory persists.
+The ledger is the 7-day ephemeral pulse store (voice, stream, game, joins, chat activity, moments). **Clips and weekly recaps are not ledger events** -- they are durable and live outside the trim in their own per-crew documents (see section 3.5). **Stream sessions stay in the ledger for the recent window but are also mirrored into a durable store** so their snapshot replays survive the trim as long-term memory. The ledger trim deletes only ephemeral pulse events; durable memory persists.
 
 ### Key Decisions
 
@@ -297,17 +297,18 @@ Worst case estimate for a very active crew over 7 days (ephemeral pulse events o
 
 **Total: ~46.5 KB** -- well within Nakama's 256 KB storage object limit.
 
-### 3.5 Durable stores (clips and recaps)
+### 3.5 Durable stores (clips, recaps, stream replays)
 
-Clips and weekly recaps are durable crew memory and are kept outside the ledger trim in their own system-owned, per-crew documents:
+Clips, weekly recaps, and stream replays are durable crew memory and are kept outside the ledger trim in their own system-owned, per-crew documents:
 
 - **`crew_clips/{crew_id}`** -- array of `StoredClip`, newest appended last, capped at the most-recent 250 entries to stay under Nakama's 256 KB object limit. Written by `post_clip` (via `AppendClip`) and updated by `clip_upload_complete`. Full history beyond the cap is deferred to m3llo+.
 - **`crew_recaps/{crew_id}`** -- array of `WeeklyRecapData`, newest appended last, no cap (recaps are tiny, one per crew per week). Written by the weekly recap job (via `AppendRecap`).
+- **`crew_stream_sessions/{crew_id}`** -- array of `StoredStreamSession` (a lean, display-only projection: streamer, title, duration, peak viewers, snapshot URLs; viewer IDs dropped), capped at the most-recent 150 entries. Upserted by `UpsertStreamSession` when a stream ends (`stop_stream`, host cleanup) and again from the snapshot backfill job, so the durable copy tracks the ledger's snapshot lifecycle. Snapshot URLs only ever grow on upsert. The ledger still owns the recent window; this store is the long-term spine.
 
-Both mirror the ledger storage pattern (system-owned, public read, server-only write, optimistic-concurrency retry).
+All three mirror the ledger storage pattern (system-owned, public read, server-only write, optimistic-concurrency retry).
 
 Read paths:
-- `crew_feed` is the curated primary feed endpoint. It is server-driven UI: it merges the ledger, recent clips, and recaps and returns `this_week` and `memory` sections whose entries carry `role` and `size` curation knobs (order + role + section + size only; no layout, styling, or copy crosses the boundary). Clients map role/size to native components.
+- `crew_feed` is the curated primary feed endpoint. It is server-driven UI: it merges the ledger, recent clips, and recaps and returns `this_week` and `memory` sections whose entries carry `role` and `size` curation knobs (order + role + section + size only; no layout, styling, or copy crosses the boundary). Clients map role/size to native components. The `memory` section draws from the durable clips, recaps, and stream replays, de-duped against whatever `this_week` already shows.
 - `crew_timeline` is the raw paginated source: it merges the ledger with recent durable clips (last 7 days) and the single latest recap, newest first, without curation. Used for deep scroll.
 - `crew_catchup` merges recent clips (newer than `last_seen`) into the candidate set.
 - `crew_clips` and `crew_recaps` RPCs paginate the full durable history (newest first), powering the deeper memory surfaces.

@@ -298,6 +298,16 @@ func StopStreamRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk ru
 			snapshotURLs = []string{}
 		}
 
+		sessionData := StreamSessionData{
+			SessionID:    streamMeta.StreamID,
+			StreamerID:   streamMeta.StreamerID,
+			StreamerName: streamMeta.StreamerUsername,
+			Title:        streamMeta.Title,
+			DurationMin:  durationMin,
+			PeakViewers:  len(streamMeta.ViewerIDs),
+			ViewerIDs:    streamMeta.ViewerIDs,
+			SnapshotURLs: snapshotURLs,
+		}
 		event := CrewEvent{
 			ID:        generateEventID(),
 			CrewID:    req.CrewID,
@@ -305,19 +315,15 @@ func StopStreamRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk ru
 			ActorID:   userID,
 			Timestamp: time.Now().UnixMilli(),
 			Score:     30,
-			Data: StreamSessionData{
-				SessionID:    streamMeta.StreamID,
-				StreamerID:   streamMeta.StreamerID,
-				StreamerName: streamMeta.StreamerUsername,
-				Title:        streamMeta.Title,
-				DurationMin:  durationMin,
-				PeakViewers:  len(streamMeta.ViewerIDs),
-				ViewerIDs:    streamMeta.ViewerIDs,
-				SnapshotURLs: snapshotURLs,
-			},
+			Data:      sessionData,
 		}
 		if appendErr := AppendCrewEvent(ctx, nk, req.CrewID, event); appendErr != nil {
 			logger.Warn("Failed to write stream_session event for crew %s: %v", req.CrewID, appendErr)
+		}
+		// Mirror into the durable store so the replay survives the ledger trim.
+		if upsertErr := UpsertStreamSession(ctx, nk, req.CrewID,
+			storedStreamSessionFrom(event.ID, event.Timestamp, event.Score, sessionData)); upsertErr != nil {
+			logger.Warn("Failed to persist durable stream_session for crew %s: %v", req.CrewID, upsertErr)
 		}
 	}
 
@@ -715,6 +721,16 @@ func cleanupStreamIfHost(ctx context.Context, logger runtime.Logger, nk runtime.
 		logger.Warn("cleanupStreamIfHost: ListSnapshotURLs failed, continuing without snapshots: %v", err)
 		snapshotURLs = []string{}
 	}
+	sessionData := StreamSessionData{
+		SessionID:    meta.StreamID,
+		StreamerID:   meta.StreamerID,
+		StreamerName: meta.StreamerUsername,
+		Title:        meta.Title,
+		DurationMin:  durationMin,
+		PeakViewers:  len(meta.ViewerIDs),
+		ViewerIDs:    meta.ViewerIDs,
+		SnapshotURLs: snapshotURLs,
+	}
 	event := CrewEvent{
 		ID:        generateEventID(),
 		CrewID:    crewID,
@@ -722,19 +738,15 @@ func cleanupStreamIfHost(ctx context.Context, logger runtime.Logger, nk runtime.
 		ActorID:   userID,
 		Timestamp: time.Now().UnixMilli(),
 		Score:     30,
-		Data: StreamSessionData{
-			SessionID:    meta.StreamID,
-			StreamerID:   meta.StreamerID,
-			StreamerName: meta.StreamerUsername,
-			Title:        meta.Title,
-			DurationMin:  durationMin,
-			PeakViewers:  len(meta.ViewerIDs),
-			ViewerIDs:    meta.ViewerIDs,
-			SnapshotURLs: snapshotURLs,
-		},
+		Data:      sessionData,
 	}
 	if appendErr := AppendCrewEvent(ctx, nk, crewID, event); appendErr != nil {
 		logger.Warn("StreamCleanupUser: failed to write stream_session event for crew %s: %v", crewID, appendErr)
+	}
+	// Mirror into the durable store so the replay survives the ledger trim.
+	if upsertErr := UpsertStreamSession(ctx, nk, crewID,
+		storedStreamSessionFrom(event.ID, event.Timestamp, event.Score, sessionData)); upsertErr != nil {
+		logger.Warn("StreamCleanupUser: failed to persist durable stream_session for crew %s: %v", crewID, upsertErr)
 	}
 
 	InvalidateCrewState(crewID)
@@ -866,6 +878,12 @@ func backfillStreamSession(ctx context.Context, nk runtime.NakamaModule, logger 
 		logger.Info("SnapshotBackfill: backfilling %d snapshot URLs for crew=%s session=%s (had %d)", len(urls), crewID, data.SessionID, len(data.SnapshotURLs))
 		if updateErr := UpdateLedgerEventSnapshotURLs(ctx, nk, crewID, e.ID, urls); updateErr != nil {
 			logger.Warn("SnapshotBackfill: update failed for crew=%s session=%s: %v", crewID, data.SessionID, updateErr)
+		}
+		// Keep the durable replay copy in sync with the freshly backfilled URLs.
+		data.SnapshotURLs = urls
+		if upsertErr := UpsertStreamSession(ctx, nk, crewID,
+			storedStreamSessionFrom(e.ID, e.Timestamp, e.Score, data)); upsertErr != nil {
+			logger.Warn("SnapshotBackfill: durable upsert failed for crew=%s session=%s: %v", crewID, data.SessionID, upsertErr)
 		}
 		return
 	}
