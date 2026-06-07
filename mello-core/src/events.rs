@@ -421,6 +421,10 @@ pub enum Event {
     TimelineLoaded {
         response: crate::crew_events::TimelineResponse,
     },
+    /// Server-curated feed loaded (sectioned: this_week + memory).
+    FeedLoaded {
+        response: crate::crew_events::FeedResponse,
+    },
 
     // --- Crew events (event ledger) ---
     /// Catch-up data loaded for a crew.

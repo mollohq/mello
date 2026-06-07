@@ -345,6 +345,11 @@ pub enum Command {
         #[serde(default)]
         cursor: Option<String>,
     },
+    // Server-curated feed (this_week + memory sections). Primary feed load;
+    // LoadCrewTimeline stays for later deep-scroll pagination.
+    LoadCrewFeed {
+        crew_id: String,
+    },
 
     // --- Crew events (event ledger) ---
     CrewCatchup {

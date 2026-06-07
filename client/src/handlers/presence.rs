@@ -792,10 +792,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
             let _ = ctx.cmd_tx.try_send(Command::SetActiveCrew {
                 crew_id: crew_id.clone(),
             });
-            let _ = ctx.cmd_tx.try_send(Command::LoadCrewTimeline {
-                crew_id,
-                cursor: None,
-            });
+            let _ = ctx.cmd_tx.try_send(Command::LoadCrewFeed { crew_id });
         }
         Event::CatchupLoaded { response } => {
             log::info!(

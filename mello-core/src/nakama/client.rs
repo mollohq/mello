@@ -1229,6 +1229,13 @@ impl NakamaClient {
         Ok(parsed)
     }
 
+    pub async fn crew_feed(&self, crew_id: &str) -> Result<crate::crew_events::FeedResponse> {
+        let payload = serde_json::json!({ "crew_id": crew_id });
+        let resp = self.rpc("crew_feed", &payload).await?;
+        let parsed: crate::crew_events::FeedResponse = serde_json::from_str(&resp)?;
+        Ok(parsed)
+    }
+
     pub async fn clip_upload_url(
         &self,
         req: &crate::crew_events::ClipUploadURLRequest,

@@ -78,6 +78,40 @@ pub struct TimelineResponse {
     pub has_more: bool,
 }
 
+// --- Curated feed (crew_feed) ---
+//
+// role/size/type stay plain strings so the server can ship new curation
+// treatments without a client release; unknown values degrade gracefully.
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FeedEntry {
+    pub id: String,
+    #[serde(rename = "type")]
+    pub entry_type: String,
+    #[serde(default)]
+    pub role: String,
+    #[serde(default)]
+    pub size: String,
+    #[serde(default)]
+    pub ts: i64,
+    #[serde(default)]
+    pub data: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FeedSection {
+    pub id: String,
+    #[serde(default)]
+    pub entries: Vec<FeedEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FeedResponse {
+    pub crew_id: String,
+    #[serde(default)]
+    pub sections: Vec<FeedSection>,
+}
+
 // --- PostClip ---
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

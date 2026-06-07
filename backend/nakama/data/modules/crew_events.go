@@ -351,7 +351,27 @@ func CrewCatchupRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk r
 	}
 
 	ledger, _ := readLedger(ctx, nk, req.CrewID)
-	resp := buildCatchup(ledger.Events, lastSeen, req.CrewID, ctx, nk)
+
+	// Clips are durable and no longer in the ledger. Merge recent clips into the
+	// candidate set as synthetic events so high-value moments still surface.
+	events := ledger.Events
+	clipsDoc, _ := readClipsDoc(ctx, nk, req.CrewID)
+	for _, c := range clipsDoc.Clips {
+		if c.Ts <= lastSeen {
+			continue
+		}
+		events = append(events, CrewEvent{
+			ID:        c.EventID,
+			CrewID:    req.CrewID,
+			Type:      "clip",
+			ActorID:   c.ActorID,
+			Timestamp: c.Ts,
+			Score:     c.Score,
+			Data:      c,
+		})
+	}
+
+	resp := buildCatchup(events, lastSeen, req.CrewID, ctx, nk)
 	data, _ := json.Marshal(resp)
 	return string(data), nil
 }

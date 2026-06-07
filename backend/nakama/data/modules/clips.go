@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"math/big"
 	"sort"
 	"time"
 
@@ -16,10 +18,17 @@ import (
 // ---------------------------------------------------------------------------
 
 const (
-	ClipMaxDurationSec    = 60
-	ClipMaxPerUserPerDay  = 50
-	TimelinePageSize      = 20
-	WeeklyRecapCollection = "weekly_recaps"
+	ClipMaxDurationSec   = 60
+	ClipMaxPerUserPerDay = 50
+	TimelinePageSize     = 20
+
+	CrewClipsCollection = "crew_clips"
+	// CrewClipsMaxRetained caps the per-crew clips document. Clips live in a
+	// single Nakama storage object which is hard-limited to 256KB. A StoredClip
+	// with participant arrays serializes to roughly 400-600 bytes, so 250
+	// entries keeps a safe margin under the limit. Older clips are trimmed;
+	// unbounded history is future m3llo+ work.
+	CrewClipsMaxRetained = 250
 )
 
 // ---------------------------------------------------------------------------
@@ -36,6 +45,92 @@ type ClipData struct {
 	Game             string   `json:"game,omitempty"`
 	LocalPath        string   `json:"local_path,omitempty"`
 	MediaURL         string   `json:"media_url,omitempty"`
+}
+
+// ---------------------------------------------------------------------------
+// Durable clips store — separate per-crew document, outside the ledger trim
+// ---------------------------------------------------------------------------
+
+type StoredClip struct {
+	EventID          string   `json:"event_id"` // time-sortable, from generateEventID()
+	ClipID           string   `json:"clip_id"`
+	ActorID          string   `json:"actor_id"`
+	Ts               int64    `json:"ts"`
+	Score            int      `json:"score"`
+	ClipType         string   `json:"clip_type"`
+	ClipperName      string   `json:"clipper_name"`
+	DurationSeconds  float64  `json:"duration_seconds"`
+	Participants     []string `json:"participants,omitempty"`
+	ParticipantNames []string `json:"participant_names,omitempty"`
+	Game             string   `json:"game,omitempty"`
+	LocalPath        string   `json:"local_path,omitempty"`
+	MediaURL         string   `json:"media_url,omitempty"`
+}
+
+type CrewClipsDoc struct {
+	CrewID    string       `json:"crew_id"`
+	Clips     []StoredClip `json:"clips"` // newest appended last
+	UpdatedAt int64        `json:"updated_at"`
+}
+
+func readClipsDoc(ctx context.Context, nk runtime.NakamaModule, crewID string) (*CrewClipsDoc, string) {
+	objects, err := nk.StorageRead(ctx, []*runtime.StorageRead{
+		{Collection: CrewClipsCollection, Key: crewID, UserID: SystemUserID},
+	})
+	if err != nil || len(objects) == 0 {
+		return &CrewClipsDoc{CrewID: crewID, Clips: []StoredClip{}}, ""
+	}
+
+	var doc CrewClipsDoc
+	if err := json.Unmarshal([]byte(objects[0].GetValue()), &doc); err != nil {
+		return &CrewClipsDoc{CrewID: crewID, Clips: []StoredClip{}}, ""
+	}
+	return &doc, objects[0].GetVersion()
+}
+
+func writeClipsDoc(ctx context.Context, nk runtime.NakamaModule, crewID string, doc *CrewClipsDoc, version string) error {
+	data, err := json.Marshal(doc)
+	if err != nil {
+		return err
+	}
+	_, err = nk.StorageWrite(ctx, []*runtime.StorageWrite{
+		{
+			Collection:      CrewClipsCollection,
+			Key:             crewID,
+			UserID:          SystemUserID,
+			Value:           string(data),
+			Version:         version,
+			PermissionRead:  2,
+			PermissionWrite: 0,
+		},
+	})
+	return err
+}
+
+// capClips trims a clip slice to the most-recent CrewClipsMaxRetained by
+// timestamp. Pure (no I/O) so the cap behavior is unit-testable.
+func capClips(clips []StoredClip) []StoredClip {
+	if len(clips) <= CrewClipsMaxRetained {
+		return clips
+	}
+	sort.Slice(clips, func(i, j int) bool { return clips[i].Ts < clips[j].Ts })
+	return clips[len(clips)-CrewClipsMaxRetained:]
+}
+
+// AppendClip appends a clip to the durable clips doc, trims to the most-recent
+// cap, and retries on version conflict.
+func AppendClip(ctx context.Context, nk runtime.NakamaModule, crewID string, clip StoredClip) error {
+	for attempt := 0; attempt < 3; attempt++ {
+		doc, version := readClipsDoc(ctx, nk, crewID)
+		doc.Clips = capClips(append(doc.Clips, clip))
+		doc.UpdatedAt = time.Now().UnixMilli()
+		if err := writeClipsDoc(ctx, nk, crewID, doc, version); err == nil {
+			return nil
+		}
+		jitter, _ := rand.Int(rand.Reader, big.NewInt(50))
+		time.Sleep(time.Duration(50*(attempt+1)+int(jitter.Int64())) * time.Millisecond)
+	}
+	return fmt.Errorf("crew_clips write failed after 3 retries for crew %s", crewID)
 }
 
 // ---------------------------------------------------------------------------
@@ -75,12 +170,12 @@ func PostClipRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runt
 		return "", runtime.NewError("not a crew member", 7)
 	}
 
-	// Rate limit: max clips per user per day
-	ledger, _ := readLedger(ctx, nk, req.CrewID)
+	// Rate limit: max clips per user per day, counted from the durable clips doc
+	clipsDoc, _ := readClipsDoc(ctx, nk, req.CrewID)
 	dayStart := time.Now().Truncate(24 * time.Hour).UnixMilli()
 	clipCount := 0
-	for _, e := range ledger.Events {
-		if e.Type == "clip" && e.ActorID == userID && e.Timestamp >= dayStart {
+	for _, c := range clipsDoc.Clips {
+		if c.ActorID == userID && c.Ts >= dayStart {
 			clipCount++
 		}
 	}
@@ -97,27 +192,23 @@ func PostClipRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runt
 	}
 
 	eventID := generateEventID()
-	event := CrewEvent{
-		ID:        eventID,
-		CrewID:    req.CrewID,
-		Type:      "clip",
-		ActorID:   userID,
-		Timestamp: time.Now().UnixMilli(),
-		Score:     50,
-		Data: ClipData{
-			ClipID:           req.ClipID,
-			ClipType:         req.ClipType,
-			ClipperName:      username,
-			DurationSeconds:  req.DurationSeconds,
-			Participants:     req.Participants,
-			ParticipantNames: participantNames,
-			Game:             req.Game,
-			LocalPath:        req.LocalPath,
-		},
+	clip := StoredClip{
+		EventID:          eventID,
+		ClipID:           req.ClipID,
+		ActorID:          userID,
+		Ts:               time.Now().UnixMilli(),
+		Score:            50,
+		ClipType:         req.ClipType,
+		ClipperName:      username,
+		DurationSeconds:  req.DurationSeconds,
+		Participants:     req.Participants,
+		ParticipantNames: participantNames,
+		Game:             req.Game,
+		LocalPath:        req.LocalPath,
 	}
 
-	if err := AppendCrewEvent(ctx, nk, req.CrewID, event); err != nil {
-		logger.Error("Failed to append clip event: %v", err)
+	if err := AppendClip(ctx, nk, req.CrewID, clip); err != nil {
+		logger.Error("Failed to append clip: %v", err)
 		return "", runtime.NewError("failed to save clip", 13)
 	}
 
@@ -158,6 +249,66 @@ type TimelineResponse struct {
 	HasMore bool            `json:"has_more"`
 }
 
+// buildMergedTimeline merges three bounded sources into the live feed: the
+// 7-day ledger, recent durable clips (last 7 days), and the single latest
+// recap. Result is sorted by timestamp descending (newest first). Durable
+// history beyond this window is reached through crew_clips / crew_recaps.
+func buildMergedTimeline(ctx context.Context, nk runtime.NakamaModule, crewID string) []TimelineEntry {
+	ledger, _ := readLedger(ctx, nk, crewID)
+
+	all := make([]TimelineEntry, 0, len(ledger.Events))
+	for _, e := range ledger.Events {
+		all = append(all, TimelineEntry{
+			ID:      e.ID,
+			Type:    e.Type,
+			ActorID: e.ActorID,
+			Ts:      e.Timestamp,
+			Score:   e.Score,
+			Data:    e.Data,
+		})
+	}
+
+	clipCutoff := time.Now().Add(-time.Duration(EventRollingWindowDays) * 24 * time.Hour).UnixMilli()
+	clipsDoc, _ := readClipsDoc(ctx, nk, crewID)
+	for _, c := range clipsDoc.Clips {
+		if c.Ts < clipCutoff {
+			continue
+		}
+		all = append(all, TimelineEntry{
+			ID:      c.EventID,
+			Type:    "clip",
+			ActorID: c.ActorID,
+			Ts:      c.Ts,
+			Score:   c.Score,
+			Data:    c,
+		})
+	}
+
+	recapsDoc, _ := readRecapsDoc(ctx, nk, crewID)
+	if len(recapsDoc.Recaps) > 0 {
+		latest := recapsDoc.Recaps[0]
+		for _, r := range recapsDoc.Recaps[1:] {
+			if r.WeekStart > latest.WeekStart {
+				latest = r
+			}
+		}
+		all = append(all, TimelineEntry{
+			ID:      fmt.Sprintf("recap_%d", latest.WeekStart),
+			Type:    "weekly_recap",
+			ActorID: "",
+			Ts:      latest.GeneratedAt,
+			Score:   30,
+			Data:    latest,
+		})
+	}
+
+	sort.Slice(all, func(i, j int) bool {
+		return all[i].Ts > all[j].Ts
+	})
+
+	return all
+}
+
 func CrewTimelineRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, payload string) (string, error) {
 	userID, ok := ctx.Value(runtime.RUNTIME_CTX_USER_ID).(string)
 	if !ok {
@@ -180,17 +331,12 @@ func CrewTimelineRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk 
 		limit = TimelinePageSize
 	}
 
-	ledger, _ := readLedger(ctx, nk, req.CrewID)
+	all := buildMergedTimeline(ctx, nk, req.CrewID)
 
-	// Sort by timestamp descending (newest first)
-	sort.Slice(ledger.Events, func(i, j int) bool {
-		return ledger.Events[i].Timestamp > ledger.Events[j].Timestamp
-	})
-
-	// Cursor-based pagination: cursor is the event ID of the last item on the previous page
+	// Cursor-based pagination: cursor is the entry ID of the last item on the previous page
 	startIdx := 0
 	if req.Cursor != "" {
-		for i, e := range ledger.Events {
+		for i, e := range all {
 			if e.ID == req.Cursor {
 				startIdx = i + 1
 				break
@@ -199,27 +345,16 @@ func CrewTimelineRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk 
 	}
 
 	end := startIdx + limit
-	if end > len(ledger.Events) {
-		end = len(ledger.Events)
+	if end > len(all) {
+		end = len(all)
 	}
 
-	page := ledger.Events[startIdx:end]
-	entries := make([]TimelineEntry, 0, len(page))
-	for _, e := range page {
-		entries = append(entries, TimelineEntry{
-			ID:      e.ID,
-			Type:    e.Type,
-			ActorID: e.ActorID,
-			Ts:      e.Timestamp,
-			Score:   e.Score,
-			Data:    e.Data,
-		})
-	}
+	entries := all[startIdx:end]
 
 	var cursor string
-	hasMore := end < len(ledger.Events)
-	if hasMore && len(page) > 0 {
-		cursor = page[len(page)-1].ID
+	hasMore := end < len(all)
+	if hasMore && len(entries) > 0 {
+		cursor = entries[len(entries)-1].ID
 	}
 
 	// Update last_seen for the user
@@ -317,30 +452,29 @@ func ClipUploadCompleteRPC(ctx context.Context, logger runtime.Logger, db *sql.D
 	key := fmt.Sprintf("crews/%s/%s.mp4", req.CrewID, req.ClipID)
 	mediaURL := S3PublicURL(key)
 
-	ledger, version := readLedger(ctx, nk, req.CrewID)
-
-	found := false
-	for i, e := range ledger.Events {
-		if e.Type != "clip" {
-			continue
+	for attempt := 0; attempt < 3; attempt++ {
+		doc, version := readClipsDoc(ctx, nk, req.CrewID)
+		found := false
+		for i := range doc.Clips {
+			if doc.Clips[i].ClipID == req.ClipID {
+				doc.Clips[i].MediaURL = mediaURL
+				found = true
+				break
+			}
 		}
-		dataBytes, _ := json.Marshal(e.Data)
-		var cd ClipData
-		if json.Unmarshal(dataBytes, &cd) == nil && cd.ClipID == req.ClipID {
-			cd.MediaURL = mediaURL
-			ledger.Events[i].Data = cd
-			found = true
+		if !found {
+			return "", runtime.NewError("clip not found", 5)
+		}
+		doc.UpdatedAt = time.Now().UnixMilli()
+		if err := writeClipsDoc(ctx, nk, req.CrewID, doc, version); err == nil {
 			break
 		}
-	}
-
-	if !found {
-		return "", runtime.NewError("clip not found in ledger", 5)
-	}
-
-	if err := writeLedger(ctx, nk, req.CrewID, ledger, version); err != nil {
-		logger.Error("clip_upload_complete: writeLedger failed: %v", err)
-		return "", runtime.NewError("failed to update ledger", 13)
+		if attempt == 2 {
+			logger.Error("clip_upload_complete: writeClipsDoc failed after 3 retries")
+			return "", runtime.NewError("failed to update clip media url", 13)
+		}
+		jitter, _ := rand.Int(rand.Reader, big.NewInt(50))
+		time.Sleep(time.Duration(50*(attempt+1)+int(jitter.Int64())) * time.Millisecond)
 	}
 
 	logger.Info("Clip upload complete: crew=%s clip=%s media_url=%s", req.CrewID, req.ClipID, mediaURL)
@@ -352,215 +486,79 @@ func ClipUploadCompleteRPC(ctx context.Context, logger runtime.Logger, db *sql.D
 }
 
 // ---------------------------------------------------------------------------
-// Weekly recap job (runs Monday 00:00 UTC)
+// CrewClips RPC — paginated durable clip history (newest first)
 // ---------------------------------------------------------------------------
 
-type RecapMember struct {
-	DisplayName string `json:"display_name"`
-	HangoutMin  int    `json:"hangout_min"`
+type ClipsPageRequest struct {
+	CrewID string `json:"crew_id"`
+	Cursor string `json:"cursor,omitempty"` // last EventID of previous page
+	Limit  int    `json:"limit,omitempty"`
 }
 
-type WeeklyRecapData struct {
-	CrewID            string        `json:"crew_id"`
-	WeekStart         int64         `json:"week_start"`
-	WeekEnd           int64         `json:"week_end"`
-	TotalHangoutMin   int           `json:"total_hangout_min"`
-	TopGame           string        `json:"top_game"`
-	LongestSession    string        `json:"longest_session"`
-	LongestSessionMin int           `json:"longest_session_min"`
-	ClipCount         int           `json:"clip_count"`
-	MostActive        string        `json:"most_active"`
-	MostClipped       string        `json:"most_clipped"`
-	TopMembers        []RecapMember `json:"top_members"`
-	GeneratedAt       int64         `json:"generated_at"`
+type ClipsPageResponse struct {
+	CrewID  string       `json:"crew_id"`
+	Clips   []StoredClip `json:"clips"`
+	Cursor  string       `json:"cursor,omitempty"`
+	HasMore bool         `json:"has_more"`
 }
 
-func generateWeeklyRecap(ctx context.Context, nk runtime.NakamaModule, logger runtime.Logger, crewID string) {
-	ledger, _ := readLedger(ctx, nk, crewID)
-
-	weekEnd := time.Now()
-	weekStart := weekEnd.Add(-7 * 24 * time.Hour)
-	startMs := weekStart.UnixMilli()
-
-	var totalHangoutMin int
-	gameDurations := make(map[string]int)
-	actorActivity := make(map[string]int)
-	actorClips := make(map[string]int)
-	clipCount := 0
-	longestSessionDesc := ""
-	longestSessionMin := 0
-
-	for _, e := range ledger.Events {
-		if e.Timestamp < startMs {
-			continue
-		}
-		actorActivity[e.ActorID]++
-
-		dataBytes, _ := json.Marshal(e.Data)
-		switch e.Type {
-		case "voice_session":
-			var d VoiceSessionData
-			json.Unmarshal(dataBytes, &d)
-			totalHangoutMin += d.DurationMin
-			if d.DurationMin > longestSessionMin {
-				longestSessionMin = d.DurationMin
-				longestSessionDesc = fmt.Sprintf("%s in %s (%dm)",
-					joinNamesList(d.ParticipantNames, 2), d.ChannelName, d.DurationMin)
-			}
-		case "stream_session":
-			var d StreamSessionData
-			json.Unmarshal(dataBytes, &d)
-			totalHangoutMin += d.DurationMin
-			if d.DurationMin > longestSessionMin {
-				longestSessionMin = d.DurationMin
-				longestSessionDesc = fmt.Sprintf("%s streaming %s (%dm)",
-					d.StreamerName, d.Title, d.DurationMin)
-			}
-		case "game_session":
-			var d GameSessionData
-			json.Unmarshal(dataBytes, &d)
-			gameDurations[d.GameName] += d.DurationMin
-		case "clip":
-			clipCount++
-			actorClips[e.ActorID]++
-		}
+func CrewClipsRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, payload string) (string, error) {
+	userID, ok := ctx.Value(runtime.RUNTIME_CTX_USER_ID).(string)
+	if !ok {
+		return "", runtime.NewError("authentication required", 16)
 	}
 
-	topGame := ""
-	topGameMin := 0
-	for game, dur := range gameDurations {
-		if dur > topGameMin {
-			topGame = game
-			topGameMin = dur
-		}
+	var req ClipsPageRequest
+	if err := json.Unmarshal([]byte(payload), &req); err != nil {
+		return "", runtime.NewError("invalid request", 3)
+	}
+	if req.CrewID == "" {
+		return "", runtime.NewError("crew_id required", 3)
+	}
+	if !isCrewMember(ctx, nk, req.CrewID, userID) {
+		return "", runtime.NewError("not a crew member", 7)
 	}
 
-	mostActive := topActor(actorActivity, ctx, nk)
-	mostClipped := topActor(actorClips, ctx, nk)
-	topMembers := topActors(actorActivity, 3, ctx, nk)
-
-	recap := WeeklyRecapData{
-		CrewID:            crewID,
-		WeekStart:         startMs,
-		WeekEnd:           weekEnd.UnixMilli(),
-		TotalHangoutMin:   totalHangoutMin,
-		TopGame:           topGame,
-		LongestSession:    longestSessionDesc,
-		LongestSessionMin: longestSessionMin,
-		ClipCount:         clipCount,
-		MostActive:        mostActive,
-		MostClipped:       mostClipped,
-		TopMembers:        topMembers,
-		GeneratedAt:       time.Now().UnixMilli(),
+	limit := req.Limit
+	if limit <= 0 || limit > TimelinePageSize {
+		limit = TimelinePageSize
 	}
 
-	// Store as a crew event
-	event := CrewEvent{
-		ID:        generateEventID(),
-		CrewID:    crewID,
-		Type:      "weekly_recap",
-		ActorID:   "",
-		Timestamp: time.Now().UnixMilli(),
-		Score:     30,
-		Data:      recap,
-	}
-	if err := AppendCrewEvent(ctx, nk, crewID, event); err != nil {
-		logger.Error("Failed to store weekly recap for crew %s: %v", crewID, err)
-	} else {
-		logger.Info("Weekly recap generated for crew %s: hangout=%dm clips=%d top_game=%s",
-			crewID, totalHangoutMin, clipCount, topGame)
-	}
-}
+	doc, _ := readClipsDoc(ctx, nk, req.CrewID)
 
-func topActors(counts map[string]int, limit int, ctx context.Context, nk runtime.NakamaModule) []RecapMember {
-	type kv struct {
-		id    string
-		count int
-	}
-	sorted := make([]kv, 0, len(counts))
-	for id, c := range counts {
-		sorted = append(sorted, kv{id, c})
-	}
-	for i := 0; i < len(sorted); i++ {
-		for j := i + 1; j < len(sorted); j++ {
-			if sorted[j].count > sorted[i].count {
-				sorted[i], sorted[j] = sorted[j], sorted[i]
+	sort.Slice(doc.Clips, func(i, j int) bool {
+		return doc.Clips[i].Ts > doc.Clips[j].Ts
+	})
+
+	startIdx := 0
+	if req.Cursor != "" {
+		for i, c := range doc.Clips {
+			if c.EventID == req.Cursor {
+				startIdx = i + 1
+				break
 			}
 		}
 	}
-	if len(sorted) > limit {
-		sorted = sorted[:limit]
-	}
-	members := make([]RecapMember, 0, len(sorted))
-	for _, s := range sorted {
-		name := resolveUsername(ctx, nk, s.id)
-		if name == "" {
-			name = s.id
-		}
-		members = append(members, RecapMember{
-			DisplayName: name,
-			HangoutMin:  s.count,
-		})
-	}
-	return members
-}
 
-func topActor(counts map[string]int, ctx context.Context, nk runtime.NakamaModule) string {
-	topID := ""
-	topCount := 0
-	for id, c := range counts {
-		if c > topCount {
-			topID = id
-			topCount = c
-		}
+	end := startIdx + limit
+	if end > len(doc.Clips) {
+		end = len(doc.Clips)
 	}
-	if topID == "" {
-		return ""
-	}
-	if name := resolveUsername(ctx, nk, topID); name != "" {
-		return name
-	}
-	return topID
-}
 
-// StartWeeklyRecapJob runs every hour, checks if it's Monday 00:xx UTC,
-// and generates recaps for all active crews.
-func StartWeeklyRecapJob(ctx context.Context, nk runtime.NakamaModule, logger runtime.Logger) {
-	ticker := time.NewTicker(1 * time.Hour)
-	defer ticker.Stop()
+	page := doc.Clips[startIdx:end]
 
-	lastRunWeek := -1
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case t := <-ticker.C:
-			_, week := t.UTC().ISOWeek()
-			if t.UTC().Weekday() == time.Monday && t.UTC().Hour() == 0 && week != lastRunWeek {
-				lastRunWeek = week
-				logger.Info("Weekly recap job started for week %d", week)
-				generateRecapsForAllCrews(ctx, nk, logger)
-			}
-		}
+	var cursor string
+	hasMore := end < len(doc.Clips)
+	if hasMore && len(page) > 0 {
+		cursor = page[len(page)-1].EventID
 	}
-}
 
-func generateRecapsForAllCrews(ctx context.Context, nk runtime.NakamaModule, logger runtime.Logger) {
-	// List all crews (Nakama groups)
-	cursor := ""
-	for {
-		groups, nextCursor, err := nk.GroupsList(ctx, "", "", nil, nil, 100, cursor)
-		if err != nil {
-			logger.Error("Weekly recap: failed to list groups: %v", err)
-			return
-		}
-		for _, g := range groups {
-			generateWeeklyRecap(ctx, nk, logger, g.GetId())
-		}
-		if nextCursor == "" || len(groups) == 0 {
-			break
-		}
-		cursor = nextCursor
+	resp := ClipsPageResponse{
+		CrewID:  req.CrewID,
+		Clips:   page,
+		Cursor:  cursor,
+		HasMore: hasMore,
 	}
+	data, _ := json.Marshal(resp)
+	return string(data), nil
 }
