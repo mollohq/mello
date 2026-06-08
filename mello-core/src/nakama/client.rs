@@ -618,8 +618,9 @@ impl NakamaClient {
         }
         #[derive(serde::Deserialize)]
         struct DiscoverPayload {
+            // Tolerate an explicit `null` (not just a missing key) for the array.
             #[serde(default)]
-            crews: Vec<DiscoverCrew>,
+            crews: Option<Vec<DiscoverCrew>>,
             #[serde(default)]
             cursor: Option<String>,
         }
@@ -646,6 +647,7 @@ impl NakamaClient {
         let next_cursor = payload.cursor.filter(|c| !c.is_empty());
         let crews = payload
             .crews
+            .unwrap_or_default()
             .into_iter()
             .map(|c| Crew {
                 id: c.id,

@@ -78,7 +78,8 @@ func DiscoverCrewsRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk
 		AvatarURL   string `json:"avatar_url,omitempty"`
 	}
 
-	var result []crewEntry
+	// Non-nil so an empty result marshals to [] (not null), which clients expect.
+	result := make([]crewEntry, 0, len(groups))
 	for _, g := range groups {
 		if joined[g.GetId()] {
 			continue
