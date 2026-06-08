@@ -34,8 +34,9 @@ type CreateCrewResponse struct {
 	InviteCode string `json:"invite_code,omitempty"`
 }
 
-// DiscoverCrewsRPC lists open crews. Callable without auth via http_key.
-// Accepts optional {"cursor":"..."} for pagination.
+// DiscoverCrewsRPC lists open crews. Callable without auth via http_key (guest
+// onboarding) or with a session; when authenticated it excludes crews the caller
+// is already in. Accepts optional {"cursor":"..."} for pagination.
 func DiscoverCrewsRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, payload string) (string, error) {
 	var req struct {
 		Cursor string `json:"cursor"`
@@ -44,8 +45,24 @@ func DiscoverCrewsRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk
 		_ = json.Unmarshal([]byte(payload), &req)
 	}
 
+	// When called with a session (post-onboarding discover), exclude crews the
+	// caller is already in. Guest/onboarding calls (http_key) carry no user id.
+	joined := map[string]bool{}
+	if userID, ok := ctx.Value(runtime.RUNTIME_CTX_USER_ID).(string); ok && userID != "" {
+		if userGroups, _, err := nk.UserGroupsList(ctx, userID, 100, nil, ""); err != nil {
+			logger.Warn("discover_crews: UserGroupsList failed for %s: %v", userID, err)
+		} else {
+			for _, ug := range userGroups {
+				joined[ug.GetGroup().GetId()] = true
+			}
+		}
+	}
+
+	// Filter to open crews at the DB level so closed crews don't consume page
+	// slots (one indexed query per page; the only post-filter is membership).
 	limit := 50
-	groups, nextCursor, err := nk.GroupsList(ctx, "", "", nil, nil, limit, req.Cursor)
+	openOnly := true
+	groups, nextCursor, err := nk.GroupsList(ctx, "", "", nil, &openOnly, limit, req.Cursor)
 	if err != nil {
 		logger.Error("discover_crews: GroupsList failed: %v", err)
 		return "", runtime.NewError("failed to list crews", 13)
@@ -63,7 +80,7 @@ func DiscoverCrewsRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk
 
 	var result []crewEntry
 	for _, g := range groups {
-		if !g.GetOpen().GetValue() {
+		if joined[g.GetId()] {
 			continue
 		}
 		result = append(result, crewEntry{

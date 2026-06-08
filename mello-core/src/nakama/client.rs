@@ -567,28 +567,37 @@ impl NakamaClient {
         Ok(crews)
     }
 
-    /// List open crews via the `discover_crews` RPC (no user session needed).
+    /// List open crews via the `discover_crews` RPC. When a session exists the call
+    /// is authenticated (the server then excludes crews the caller is already in);
+    /// guests (onboarding) fall back to the public `http_key`.
     /// Returns (crews, next_cursor). next_cursor is None when there are no more pages.
     pub async fn discover_crews_public(
         &self,
         _limit: u32,
         cursor: Option<&str>,
     ) -> Result<(Vec<Crew>, Option<String>)> {
-        let url = format!(
-            "{}/v2/rpc/discover_crews?http_key={}",
-            self.config.http_base(),
-            self.config.nakama_http_key,
-        );
-
         let body = match cursor {
             Some(c) => serde_json::json!({ "cursor": c }).to_string(),
             None => String::new(),
         };
         let body = serde_json::Value::String(body);
 
-        let resp = self
-            .http
-            .post(&url)
+        let request = match self.token.as_deref() {
+            Some(token) => {
+                let url = format!("{}/v2/rpc/discover_crews", self.config.http_base());
+                self.http.post(&url).bearer_auth(token)
+            }
+            None => {
+                let url = format!(
+                    "{}/v2/rpc/discover_crews?http_key={}",
+                    self.config.http_base(),
+                    self.config.nakama_http_key,
+                );
+                self.http.post(&url)
+            }
+        };
+
+        let resp = request
             .header("Content-Type", "application/json")
             .json(&body)
             .send()
