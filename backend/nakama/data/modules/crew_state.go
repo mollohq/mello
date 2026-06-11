@@ -246,10 +246,14 @@ func ComputeCrewState(ctx context.Context, logger runtime.Logger, nk runtime.Nak
 	// Stream state
 	streamState := getActiveStreamForCrew(ctx, nk, crewID)
 
-	// Recent messages
+	// Recent messages. The live buffer is in-memory and is lost on restart, so
+	// rehydrate it from persisted channel history when empty (e.g. after a deploy).
 	crewRecentMsgsMu.RLock()
 	recentMsgs := crewRecentMsgs[crewID]
 	crewRecentMsgsMu.RUnlock()
+	if len(recentMsgs) == 0 {
+		recentMsgs = hydrateRecentMessages(ctx, logger, nk, crewID)
+	}
 	if recentMsgs == nil {
 		recentMsgs = []*MessagePreview{}
 	}
@@ -484,6 +488,71 @@ func extractPreview(content string) string {
 		return text
 	}
 	return content
+}
+
+// hydrateRecentMessages rebuilds the in-memory preview buffer for a crew from
+// persisted channel history. The live buffer (crewRecentMsgs) only fills as
+// messages arrive and is lost on restart, so without this the sidebar shows
+// "no messages" for every crew after a deploy until someone posts again.
+// Returns the (oldest-first) last two previews and repopulates the buffer.
+func hydrateRecentMessages(ctx context.Context, logger runtime.Logger, nk runtime.NakamaModule, crewID string) []*MessagePreview {
+	channelID, err := nk.ChannelIdBuild(ctx, "", crewID, runtime.Group)
+	if err != nil {
+		logger.Warn("hydrateRecentMessages: channel id for crew %s: %v", crewID, err)
+		return nil
+	}
+
+	// Pull a small window newest-first; over-fetch so signaling messages we skip
+	// don't starve the two-preview buffer.
+	messages, _, _, err := nk.ChannelMessagesList(ctx, channelID, 12, false, "")
+	if err != nil {
+		logger.Warn("hydrateRecentMessages: list for crew %s: %v", crewID, err)
+		return nil
+	}
+
+	// messages are newest-first; collect up to two real chat messages.
+	collected := make([]*MessagePreview, 0, 2)
+	for _, m := range messages {
+		content := m.GetContent()
+		if strings.Contains(content, `"signal":true`) {
+			continue
+		}
+		preview := extractPreview(content)
+		if len(preview) > 60 {
+			preview = preview[:57] + "..."
+		}
+		username := resolveUsername(ctx, nk, m.GetSenderId())
+		if username == "" {
+			username = m.GetUsername()
+		}
+		ts := time.Now().UTC().Format(time.RFC3339)
+		if ct := m.GetCreateTime(); ct != nil {
+			ts = ct.AsTime().UTC().Format(time.RFC3339)
+		}
+		collected = append(collected, &MessagePreview{
+			MessageID: m.GetMessageId(),
+			UserID:    m.GetSenderId(),
+			Username:  username,
+			Preview:   preview,
+			Timestamp: ts,
+		})
+		if len(collected) == 2 {
+			break
+		}
+	}
+	if len(collected) == 0 {
+		return nil
+	}
+
+	// Reverse to oldest-first to match the live buffer's ordering.
+	for i, j := 0, len(collected)-1; i < j; i, j = i+1, j-1 {
+		collected[i], collected[j] = collected[j], collected[i]
+	}
+
+	crewRecentMsgsMu.Lock()
+	crewRecentMsgs[crewID] = collected
+	crewRecentMsgsMu.Unlock()
+	return collected
 }
 
 // ---------------------------------------------------------------------------
