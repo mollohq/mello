@@ -490,6 +490,53 @@ func extractPreview(content string) string {
 	return content
 }
 
+// isDisplayableChatMessage mirrors the core's filter (mello-core chat.rs):
+// a stored channel message counts as real chat — eligible for previews — only
+// if it carries displayable content. Skips signaling, empty objects, and
+// deleted/empty envelopes so they don't surface as "{}" in sidebar previews.
+func isDisplayableChatMessage(content string) bool {
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" {
+		return false
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal([]byte(trimmed), &raw); err != nil {
+		return true // non-JSON plain text is displayable
+	}
+	if sig, _ := raw["signal"].(bool); sig {
+		return false
+	}
+	if _, hasTo := raw["to"]; hasTo {
+		if _, hasData := raw["data"]; hasData {
+			return false
+		}
+		if _, hasSignal := raw["signal"]; hasSignal {
+			return false
+		}
+	}
+	if len(raw) == 0 {
+		return false
+	}
+	if text, ok := raw["text"].(string); ok && text != "" {
+		return true
+	}
+	if _, ok := raw["gif"]; ok {
+		return true
+	}
+	if _, ok := raw["event"]; ok {
+		return true
+	}
+	if v, ok := raw["v"].(float64); ok && v >= 1 {
+		if body, ok := raw["body"].(string); ok && strings.TrimSpace(body) != "" {
+			return true
+		}
+		if t, _ := raw["type"].(string); t == "system" {
+			return true
+		}
+	}
+	return false
+}
+
 // hydrateRecentMessages rebuilds the in-memory preview buffer for a crew from
 // persisted channel history. The live buffer (crewRecentMsgs) only fills as
 // messages arrive and is lost on restart, so without this the sidebar shows
@@ -514,7 +561,7 @@ func hydrateRecentMessages(ctx context.Context, logger runtime.Logger, nk runtim
 	collected := make([]*MessagePreview, 0, 2)
 	for _, m := range messages {
 		content := m.GetContent()
-		if strings.Contains(content, `"signal":true`) {
+		if !isDisplayableChatMessage(content) {
 			continue
 		}
 		preview := extractPreview(content)
