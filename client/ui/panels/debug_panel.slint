@@ -190,6 +190,46 @@ component LevelHistory inherits Rectangle {
     Rectangle { x: bw * 29 + 1px; width: bw - 1px; height: parent.height * clamp(v29, 0.02, 1.0); y: parent.height - self.height; background: s29 ? #28C840 : #404040; }
 }
 
+// Clickable section header with a chevron; toggles its bound `collapsed` flag.
+component SectionHeader inherits Rectangle {
+    in property <string> title;
+    in-out property <bool> collapsed;
+
+    height: 22px;
+    border-radius: Theme.r-inner;
+    background: hdr.has-hover ? Theme.graphic-light : transparent;
+
+    HorizontalLayout {
+        padding-left: 4px;
+        padding-right: 4px;
+        spacing: 6px;
+        alignment: start;
+
+        Text {
+            text: root.collapsed ? "▸" : "▾";
+            font-family: Theme.font-mono;
+            font-size: 9px;
+            color: Theme.text-tertiary;
+            vertical-alignment: center;
+            width: 10px;
+        }
+        Text {
+            text: root.title;
+            font-family: Theme.font-mono;
+            font-size: 9px;
+            font-weight: 600;
+            color: Theme.text-tertiary;
+            vertical-alignment: center;
+        }
+    }
+
+    hdr := TouchArea {
+        clicked => {
+            root.collapsed = !root.collapsed;
+        }
+    }
+}
+
 export component DebugPanel inherits Rectangle {
     in property <float> input-level: 0.0;
     in property <float> silero-vad-prob: 0.0;
@@ -206,6 +246,7 @@ export component DebugPanel inherits Rectangle {
     in property <int> packets-encoded: 0;
     in property <int> incoming-streams: 0;
     in property <int> underruns: 0;
+    in property <int> underruns-5s: 0;
     in property <int> rtp-recv: 0;
     in property <float> delay-ms: 0.0;
     in property <float> rtt-ms: 0.0;
@@ -248,11 +289,20 @@ export component DebugPanel inherits Rectangle {
     in property <string> diag-status: "";
     callback diagnostic-capture-toggled();
 
+    // Collapse state per section. Stream/streaming sections are irrelevant to
+    // voice debugging, so they start collapsed.
+    in-out property <bool> sec-processing-collapsed: false;
+    in-out property <bool> sec-network-collapsed: false;
+    in-out property <bool> sec-stream-collapsed: true;
+    in-out property <bool> sec-pacing-collapsed: true;
+
     width: 320px;
-    background: Theme.dark ? #181818E8 : #F0F0F0F0;
+    // Opaque (was semi-transparent) so chat/GIFs behind it never bleed through.
+    background: Theme.dark ? #161616 : #F4F4F4;
     border-radius: Theme.r-outer;
     border-width: 1px;
     border-color: Theme.graphic-light;
+    clip: true;
 
     VerticalLayout {
         padding: 12px;
@@ -294,6 +344,16 @@ export component DebugPanel inherits Rectangle {
 
         // Divider
         Rectangle { height: 1px; background: Theme.graphic-light; }
+
+        // Scrollable body. Collapsing the big sections usually keeps everything
+        // on screen; the Flickable guarantees reachability if all are expanded.
+        Flickable {
+            vertical-stretch: 1;
+            viewport-width: self.width;
+            viewport-height: body.preferred-height;
+
+            body := VerticalLayout {
+                spacing: 8px;
 
         // Level waveform
         Text {
@@ -360,58 +420,48 @@ export component DebugPanel inherits Rectangle {
 
         // ── Audio Processing ──
         Rectangle { height: 1px; background: Theme.graphic-light; }
+        SectionHeader { title: "Audio Processing"; collapsed <=> root.sec-processing-collapsed; }
 
-        Text {
-            text: "Audio Processing";
-            font-family: Theme.font-mono;
-            font-size: 9px;
-            font-weight: 600;
-            color: Theme.text-tertiary;
-        }
+        if !root.sec-processing-collapsed: VerticalLayout {
+            spacing: 8px;
 
-        HorizontalLayout {
-            spacing: 12px;
+            HorizontalLayout {
+                spacing: 12px;
 
-            StatusDot { label: root.aec-enabled ? "AEC" : "AEC"; active: root.aec-enabled; }
-            StatusDot { label: root.agc-enabled ? "AGC" : "AGC"; active: root.agc-enabled; }
-            StatusDot { label: root.ns-enabled ? "NS" : "NS"; active: root.ns-enabled; }
-        }
-
-        HorizontalLayout {
-            spacing: 12px;
-
-            Text {
-                text: "Cap: \{root.aec-capture}";
-                font-family: Theme.font-mono;
-                font-size: 10px;
-                color: root.aec-capture > 0 ? Theme.text-primary : Theme.text-secondary;
+                StatusDot { label: root.aec-enabled ? "AEC" : "AEC"; active: root.aec-enabled; }
+                StatusDot { label: root.agc-enabled ? "AGC" : "AGC"; active: root.agc-enabled; }
+                StatusDot { label: root.ns-enabled ? "NS" : "NS"; active: root.ns-enabled; }
             }
-            Text {
-                text: "Ref: \{root.aec-render}";
-                font-family: Theme.font-mono;
-                font-size: 10px;
-                color: root.aec-render > 0 ? Theme.accent-green : #FF4444;
-            }
-            Text {
-                text: "Enc: \{root.packets-encoded}";
-                font-family: Theme.font-mono;
-                font-size: 10px;
-                color: Theme.text-secondary;
+
+            HorizontalLayout {
+                spacing: 12px;
+
+                Text {
+                    text: "Cap: \{root.aec-capture}";
+                    font-family: Theme.font-mono;
+                    font-size: 10px;
+                    color: root.aec-capture > 0 ? Theme.text-primary : Theme.text-secondary;
+                }
+                Text {
+                    text: "Ref: \{root.aec-render}";
+                    font-family: Theme.font-mono;
+                    font-size: 10px;
+                    color: root.aec-render > 0 ? Theme.accent-green : #FF4444;
+                }
+                Text {
+                    text: "Enc: \{root.packets-encoded}";
+                    font-family: Theme.font-mono;
+                    font-size: 10px;
+                    color: Theme.text-secondary;
+                }
             }
         }
 
         // ── Network ──
         Rectangle { height: 1px; background: Theme.graphic-light; }
+        SectionHeader { title: "Network"; collapsed <=> root.sec-network-collapsed; }
 
-        Text {
-            text: "Network";
-            font-family: Theme.font-mono;
-            font-size: 9px;
-            font-weight: 600;
-            color: Theme.text-tertiary;
-        }
-
-        GridLayout {
+        if !root.sec-network-collapsed: GridLayout {
             spacing: 4px;
             padding: 0;
 
@@ -480,15 +530,16 @@ export component DebugPanel inherits Rectangle {
                 Text {
                     font-family: Theme.font-mono;
                     font-size: 10px;
-                    color: root.underruns > 0 ? #FF4444 : Theme.text-secondary;
-                    text: "Underruns";
+                    color: root.underruns-5s > 0 ? #FF4444 : Theme.text-secondary;
+                    text: "Underrun/5s";
                     col: 0;
                 }
                 Text {
                     font-family: Theme.font-mono;
                     font-size: 10px;
-                    color: root.underruns > 0 ? #FF4444 : Theme.text-secondary;
-                    text: "\{root.underruns}";
+                    color: root.underruns-5s > 0 ? #FF4444 : Theme.text-secondary;
+                    // Windowed (real signal) with lifetime total for reference.
+                    text: "\{root.underruns-5s} (Σ\{root.underruns})";
                     col: 1;
                 }
             }
@@ -496,16 +547,9 @@ export component DebugPanel inherits Rectangle {
 
         // ── Stream Transport ──
         Rectangle { height: 1px; background: Theme.graphic-light; }
+        SectionHeader { title: "Stream Transport"; collapsed <=> root.sec-stream-collapsed; }
 
-        Text {
-            text: "Stream Transport";
-            font-family: Theme.font-mono;
-            font-size: 9px;
-            font-weight: 600;
-            color: Theme.text-tertiary;
-        }
-
-        GridLayout {
+        if !root.sec-stream-collapsed: GridLayout {
             spacing: 4px;
             padding: 0;
 
@@ -635,16 +679,9 @@ export component DebugPanel inherits Rectangle {
         }
 
         Rectangle { height: 1px; background: Theme.graphic-light; }
+        SectionHeader { title: "Host Pacing"; collapsed <=> root.sec-pacing-collapsed; }
 
-        Text {
-            text: "Host Pacing";
-            font-family: Theme.font-mono;
-            font-size: 9px;
-            font-weight: 600;
-            color: Theme.text-tertiary;
-        }
-
-        GridLayout {
+        if !root.sec-pacing-collapsed: GridLayout {
             spacing: 4px;
             padding: 0;
 
@@ -771,8 +808,10 @@ export component DebugPanel inherits Rectangle {
                 }
             }
         }
+            }
+        }
 
-        // ── Diagnostic Capture ──
+        // ── Diagnostic Capture (fixed footer, always visible) ──
         Rectangle { height: 1px; background: Theme.graphic-light; }
 
         Text {

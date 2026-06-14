@@ -355,6 +355,7 @@ export component MainWindow inherits Window {
     in property <int> dbg-packets: 0;
     in property <int> dbg-incoming-streams: 0;
     in property <int> dbg-underruns: 0;
+    in property <int> dbg-underruns-5s: 0;
     in property <int> dbg-rtp-recv: 0;
     in property <float> dbg-delay-ms: 0.0;
     in property <float> dbg-rtt-ms: 0.0;
@@ -1128,12 +1129,14 @@ export component MainWindow inherits Window {
 
     // ===================== DEBUG OVERLAY =====================
     if debug-open && logged-in: Rectangle {
-        // Position top-right, floating over content
+        // Position top-right, floating over content; fill to the bottom edge.
         x: root.width - 332px;
         y: 50px;
         width: 320px;
+        height: root.height - self.y - 12px;
 
         DebugPanel {
+            height: parent.height;
             diag-capturing: root.diag-capturing;
             diag-status: root.diag-status;
             diagnostic-capture-toggled => {
@@ -1155,6 +1158,7 @@ export component MainWindow inherits Window {
             packets-encoded: root.dbg-packets;
             incoming-streams: root.dbg-incoming-streams;
             underruns: root.dbg-underruns;
+            underruns-5s: root.dbg-underruns-5s;
             rtp-recv: root.dbg-rtp-recv;
             delay-ms: root.dbg-delay-ms;
             rtt-ms: root.dbg-rtt-ms;

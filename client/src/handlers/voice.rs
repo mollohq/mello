@@ -128,6 +128,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
             aec_render_frames,
             incoming_streams,
             underrun_count,
+            underrun_windowed,
             rtp_recv_total,
             pipeline_delay_ms,
             rtt_ms,
@@ -147,6 +148,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
             ctx.app.set_dbg_aec_render(aec_render_frames as i32);
             ctx.app.set_dbg_incoming_streams(incoming_streams);
             ctx.app.set_dbg_underruns(underrun_count);
+            ctx.app.set_dbg_underruns_5s(underrun_windowed);
             ctx.app.set_dbg_rtp_recv(rtp_recv_total);
             ctx.app.set_dbg_delay_ms(pipeline_delay_ms);
             ctx.app.set_dbg_rtt_ms(rtt_ms);

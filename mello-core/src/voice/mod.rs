@@ -1,8 +1,10 @@
 mod mesh;
 
+use std::collections::VecDeque;
 use std::ffi::CString;
 use std::sync::mpsc as std_mpsc;
 use std::sync::Arc;
+use std::time::Instant;
 
 use crate::events::Event;
 use crate::transport::{SfuConnection, SfuEvent};
@@ -13,6 +15,7 @@ pub use mesh::{SignalEnvelope, SignalMessage, SignalPurpose, VoiceMesh};
 const PACKET_BUF_SIZE: usize = 4000;
 const MAX_DEVICES: usize = 32;
 const DEBUG_STATS_TICK_DIVISOR: u32 = 10; // 100Hz tick -> 10Hz debug updates
+const UNDERRUN_WINDOW: std::time::Duration = std::time::Duration::from_secs(5);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VoiceMode {
@@ -70,6 +73,12 @@ pub struct VoiceManager {
     /// the log file (for a user-driven repro upload), independent of whether the
     /// debug panel is open.
     capture_mode: bool,
+    /// Rolling samples of (time, underrun delta) used to compute a windowed
+    /// underrun rate. Deltas are only counted while incoming audio is expected
+    /// (incoming_streams > 0), so a quiet/solo session reads 0 instead of the
+    /// ever-growing lifetime counter's idle-starvation noise.
+    underrun_window: VecDeque<(Instant, i32)>,
+    prev_underrun_total: i32,
     tick_counter: u32,
     mode: VoiceMode,
     sfu_connection: Option<Arc<SfuConnection>>,
@@ -138,6 +147,8 @@ impl VoiceManager {
             loopback,
             debug_mode: false,
             capture_mode: false,
+            underrun_window: VecDeque::new(),
+            prev_underrun_total: 0,
             tick_counter: 0,
             mode: VoiceMode::Disconnected,
             sfu_connection: None,
@@ -568,6 +579,31 @@ impl VoiceManager {
         );
     }
 
+    /// Underruns observed in the last [`UNDERRUN_WINDOW`], counting only ticks
+    /// where audio was incoming (`streams > 0`). Mirrors libmello's peer-gated
+    /// warning logic so a quiet/solo session reads ~0 instead of the lifetime
+    /// counter's constant idle-starvation growth.
+    fn windowed_underrun(&mut self, total: i32, streams: i32) -> i32 {
+        let now = Instant::now();
+        // Don't count the (possibly large) backlog accumulated before the first
+        // sample after stats were enabled — seed the baseline instead.
+        let first_sample = self.underrun_window.is_empty();
+        let inc = (total - self.prev_underrun_total).max(0);
+        self.prev_underrun_total = total;
+
+        let counted = if first_sample || streams <= 0 { 0 } else { inc };
+        self.underrun_window.push_back((now, counted));
+
+        while let Some(&(t, _)) = self.underrun_window.front() {
+            if now.duration_since(t) > UNDERRUN_WINDOW {
+                self.underrun_window.pop_front();
+            } else {
+                break;
+            }
+        }
+        self.underrun_window.iter().map(|&(_, c)| c).sum()
+    }
+
     pub fn is_active(&self) -> bool {
         self.active
     }
@@ -660,13 +696,17 @@ impl VoiceManager {
                 mello_sys::mello_get_debug_stats(self.ctx, &mut stats);
             }
             let rtt = self.sfu_connection.as_ref().map_or(0.0, |c| c.rtt_ms());
+            let underrun_5s = self.windowed_underrun(stats.underrun_count, stats.incoming_streams);
 
             // Diagnostic capture: persist the same stats to the log so a
             // user-uploaded repro shows the sender/receiver-side timeline.
+            // `ur5s` is the windowed underrun count (only while audio is
+            // incoming) — the real health signal; `underrun` is the noisy
+            // lifetime counter kept for reference.
             if self.capture_mode {
                 log::info!(
                     target: "audio_stats",
-                    "in={:.3} vad={:.3} rnn={:.3} spk={} cap={} mute={} deaf={} pkts={} streams={} underrun={} rtp_recv={} delay_ms={:.1} rtt_ms={:.1}",
+                    "in={:.3} vad={:.3} rnn={:.3} spk={} cap={} mute={} deaf={} pkts={} streams={} underrun={} ur5s={} rtp_recv={} delay_ms={:.1} rtt_ms={:.1}",
                     stats.input_level,
                     stats.silero_vad_prob,
                     stats.rnnoise_prob,
@@ -677,6 +717,7 @@ impl VoiceManager {
                     stats.packets_encoded,
                     stats.incoming_streams,
                     stats.underrun_count,
+                    underrun_5s,
                     stats.rtp_recv_total,
                     stats.pipeline_delay_ms,
                     rtt,
@@ -700,6 +741,7 @@ impl VoiceManager {
                     aec_render_frames: stats.aec_render_frames,
                     incoming_streams: stats.incoming_streams,
                     underrun_count: stats.underrun_count,
+                    underrun_windowed: underrun_5s,
                     rtp_recv_total: stats.rtp_recv_total,
                     pipeline_delay_ms: stats.pipeline_delay_ms,
                     rtt_ms: rtt,
