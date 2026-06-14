@@ -64,7 +64,8 @@ services:
         mc anonymous set download local/mello-clips &&
         mc mb --ignore-existing local/mello-snapshots &&
         mc anonymous set download local/mello-snapshots &&
-        echo "Buckets mello-clips and mello-snapshots ready"
+        mc mb --ignore-existing local/mello-diagnostics &&
+        echo "Buckets mello-clips, mello-snapshots and mello-diagnostics ready"
 
   nakama:
     image: heroiclabs/nakama:3.21.0
@@ -99,6 +100,8 @@ services:
       - S3_PUBLIC_URL=http://localhost:9000/mello-clips
       - SNAPSHOTS_S3_BUCKET=mello-snapshots
       - SNAPSHOTS_S3_PUBLIC_URL=http://localhost:9000/mello-snapshots
+      # Private bucket for user-driven diagnostic log captures (no public URL).
+      - DIAGNOSTICS_S3_BUCKET=mello-diagnostics
     entrypoint:
       - /bin/sh
       - -c

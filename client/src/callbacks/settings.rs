@@ -4,7 +4,32 @@ use slint::ComponentHandle;
 use crate::app_context::AppContext;
 use crate::avatar;
 use crate::platform;
-use crate::Settings;
+use crate::{MainWindow, Settings};
+use tokio::sync::mpsc::UnboundedSender;
+
+/// Stop an active diagnostic capture: restore log verbosity, slice the captured
+/// window out of the log file, and kick off the upload. Shared by the manual
+/// Stop button and the safety auto-stop timer.
+fn stop_diagnostic_capture(app: &MainWindow, cmd: &UnboundedSender<Command>) {
+    if !crate::diag_capture::is_active() {
+        return;
+    }
+    app.set_diag_capturing(false);
+    let _ = cmd.send(Command::SetDiagnosticCapture { enabled: false });
+
+    match crate::diag_capture::finish() {
+        Some((path, capture_id)) => {
+            app.set_diag_status("Uploading…".into());
+            let _ = cmd.send(Command::UploadDiagnosticLog {
+                local_path: path.to_string_lossy().to_string(),
+                capture_id,
+            });
+        }
+        None => {
+            app.set_diag_status("Capture stopped (nothing to upload).".into());
+        }
+    }
+}
 
 pub fn wire(ctx: &AppContext) {
     // --- Settings modal open ---
@@ -80,6 +105,50 @@ pub fn wire(ctx: &AppContext) {
             if let Some(app) = app_weak.upgrade() {
                 let enabled = app.get_mic_testing();
                 let _ = cmd.send(Command::SetLoopback { enabled });
+            }
+        });
+    }
+
+    // --- Diagnostic capture (debug panel) ---
+    {
+        let cmd = ctx.cmd_tx.clone();
+        let app_weak = ctx.app.as_weak();
+        let autostop = ctx.diag_autostop_timer.clone();
+        ctx.app.on_diagnostic_capture_toggled(move || {
+            let Some(app) = app_weak.upgrade() else {
+                return;
+            };
+            // main.slint has already flipped diag-capturing for us.
+            if app.get_diag_capturing() {
+                match crate::diag_capture::begin() {
+                    Some(_id) => {
+                        let _ = cmd.send(Command::SetDiagnosticCapture { enabled: true });
+                        app.set_diag_status(
+                            "Recording… reproduce the issue, then press Stop.".into(),
+                        );
+                        // Safety auto-stop after 5 minutes.
+                        let timer = slint::Timer::default();
+                        let cmd2 = cmd.clone();
+                        let app_weak2 = app.as_weak();
+                        timer.start(
+                            slint::TimerMode::SingleShot,
+                            std::time::Duration::from_secs(5 * 60),
+                            move || {
+                                if let Some(app) = app_weak2.upgrade() {
+                                    stop_diagnostic_capture(&app, &cmd2);
+                                }
+                            },
+                        );
+                        *autostop.borrow_mut() = Some(timer);
+                    }
+                    None => {
+                        app.set_diag_capturing(false);
+                        app.set_diag_status("Capture unavailable (no log file).".into());
+                    }
+                }
+            } else {
+                *autostop.borrow_mut() = None;
+                stop_diagnostic_capture(&app, &cmd);
             }
         });
     }

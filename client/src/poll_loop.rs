@@ -44,6 +44,7 @@ pub fn start(
         avatar_state: ctx.avatar_state.clone(),
         profile_avatar_state: ctx.profile_avatar_state.clone(),
         avatar_shuffle_timer: ctx.avatar_shuffle_timer.clone(),
+        diag_autostop_timer: ctx.diag_autostop_timer.clone(),
         muted_before_deafen: ctx.muted_before_deafen.clone(),
         updater: ctx.updater.clone(),
         hotkey_mgr: ctx.hotkey_mgr.clone(),

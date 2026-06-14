@@ -142,6 +142,20 @@ pub fn handle_event(ctx: &AppContext, event: Event) {
         Event::ProtocolMismatch { message, .. } => {
             ctx.app.set_protocol_warning(message.into());
         }
+        Event::DiagnosticCaptureState { phase, message } => {
+            let status = match phase.as_str() {
+                "capturing" => "Recording… reproduce the issue, then press Stop.".to_string(),
+                "uploading" => "Uploading…".to_string(),
+                "done" => "Uploaded — thanks! The team can see it now.".to_string(),
+                "skipped" => "Saved locally (upload not configured).".to_string(),
+                "failed" => format!("Upload failed: {}", message),
+                _ => message,
+            };
+            if matches!(phase.as_str(), "done" | "failed" | "skipped") {
+                ctx.app.set_diag_capturing(false);
+            }
+            ctx.app.set_diag_status(status.into());
+        }
         Event::Error { message } => {
             log::error!("UI: error: {}", message);
         }

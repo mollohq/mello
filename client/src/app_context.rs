@@ -38,6 +38,9 @@ pub struct AppContext {
     pub avatar_state: Arc<Mutex<crate::avatar::AvatarGridState>>,
     pub profile_avatar_state: Arc<Mutex<crate::avatar::AvatarGridState>>,
     pub avatar_shuffle_timer: Rc<RefCell<Option<slint::Timer>>>,
+    /// Single-shot safety timer that auto-stops a diagnostic capture after a
+    /// max duration so a user can't leave verbose logging on indefinitely.
+    pub diag_autostop_timer: Rc<RefCell<Option<slint::Timer>>>,
     pub muted_before_deafen: Rc<Cell<bool>>,
     pub updater: Rc<RefCell<Option<Updater>>>,
     pub hotkey_mgr: Rc<RefCell<crate::platform::hotkeys::HotkeyManager>>,

@@ -338,6 +338,8 @@ export component MainWindow inherits Window {
 
     // --- Debug panel ---
     in-out property <bool> debug-open: false;
+    in-out property <bool> diag-capturing: false;
+    in property <string> diag-status: "";
     in property <float> dbg-input-level: 0.0;
     in property <float> dbg-silero-prob: 0.0;
     in property <float> dbg-rnnoise-prob: 0.0;
@@ -484,6 +486,7 @@ export component MainWindow inherits Window {
     callback playback-device-selected(string);
     callback mic-test-toggled();
     callback debug-toggled();
+    callback diagnostic-capture-toggled();
     // Voice channel callbacks
     callback join-voice-channel(string);
     callback toggle-voice-channel(string);
@@ -1131,6 +1134,12 @@ export component MainWindow inherits Window {
         width: 320px;
 
         DebugPanel {
+            diag-capturing: root.diag-capturing;
+            diag-status: root.diag-status;
+            diagnostic-capture-toggled => {
+                root.diag-capturing = !root.diag-capturing;
+                root.diagnostic-capture-toggled();
+            }
             input-level: root.dbg-input-level;
             silero-vad-prob: root.dbg-silero-prob;
             rnnoise-prob: root.dbg-rnnoise-prob;

@@ -3,6 +3,7 @@ mod chat;
 mod clip;
 mod connection;
 mod crew;
+mod diagnostics;
 mod presence;
 mod reconnect;
 mod stream_ffi;
@@ -632,6 +633,16 @@ impl Client {
             }
             Command::SetDebugMode { enabled } => {
                 self.voice.set_debug_mode(enabled);
+            }
+            Command::SetDiagnosticCapture { enabled } => {
+                self.voice.set_diagnostic_capture(enabled);
+            }
+            Command::UploadDiagnosticLog {
+                local_path,
+                capture_id,
+            } => {
+                self.handle_upload_diagnostic_log(&local_path, &capture_id)
+                    .await;
             }
             Command::UpdateProfile {
                 display_name,

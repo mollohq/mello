@@ -116,6 +116,11 @@ void mello_set_log_callback(MelloLogCallback callback, void* user_data) {
     mello::set_log_callback(callback, user_data);
 }
 
+void mello_set_log_level(int level) {
+    if (level < 0 || level > 3) return;
+    mello::set_log_level(static_cast<mello::LogLevel>(level));
+}
+
 const char* mello_get_error(MelloContext* ctx) {
     if (!ctx) return "Context is null";
     try {

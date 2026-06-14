@@ -1311,6 +1311,17 @@ impl NakamaClient {
         Ok(parsed)
     }
 
+    pub async fn diagnostic_log_upload_url(
+        &self,
+        req: &crate::crew_events::DiagnosticLogUploadURLRequest,
+    ) -> Result<crate::crew_events::DiagnosticLogUploadURLResponse> {
+        let payload = serde_json::to_value(req)?;
+        let resp = self.rpc("diagnostic_log_upload_url", &payload).await?;
+        let parsed: crate::crew_events::DiagnosticLogUploadURLResponse =
+            serde_json::from_str(&resp)?;
+        Ok(parsed)
+    }
+
     // --- Health / version RPCs ---
 
     pub async fn health_check(&self) -> Result<HealthResponse> {

@@ -66,6 +66,10 @@ pub struct VoiceManager {
     active: bool,
     loopback: bool,
     debug_mode: bool,
+    /// Diagnostic capture: when true, per-frame audio stats are also written to
+    /// the log file (for a user-driven repro upload), independent of whether the
+    /// debug panel is open.
+    capture_mode: bool,
     tick_counter: u32,
     mode: VoiceMode,
     sfu_connection: Option<Arc<SfuConnection>>,
@@ -133,6 +137,7 @@ impl VoiceManager {
             active: false,
             loopback,
             debug_mode: false,
+            capture_mode: false,
             tick_counter: 0,
             mode: VoiceMode::Disconnected,
             sfu_connection: None,
@@ -547,6 +552,22 @@ impl VoiceManager {
         );
     }
 
+    /// Toggle diagnostic capture: raise libmello verbosity to Debug and start
+    /// writing per-frame audio stats to the log (see `tick`). Restores Info on
+    /// stop. The Rust-side log filter + file slicing/upload are driven by the
+    /// client; this only controls libmello + the audio-stats log lines.
+    pub fn set_diagnostic_capture(&mut self, enabled: bool) {
+        self.capture_mode = enabled;
+        // 0 = Debug, 1 = Info (see mello.h log levels).
+        unsafe { mello_sys::mello_set_log_level(if enabled { 0 } else { 1 }) };
+        log::info!(
+            target: "audio_stats",
+            "diagnostic capture {} (crew={})",
+            if enabled { "started" } else { "stopped" },
+            self.sfu_crew_id
+        );
+    }
+
     pub fn is_active(&self) -> bool {
         self.active
     }
@@ -631,32 +652,59 @@ impl VoiceManager {
             }
         }
 
-        if self.debug_mode && self.tick_counter.is_multiple_of(DEBUG_STATS_TICK_DIVISOR) {
+        if (self.debug_mode || self.capture_mode)
+            && self.tick_counter.is_multiple_of(DEBUG_STATS_TICK_DIVISOR)
+        {
             let mut stats: mello_sys::MelloDebugStats = unsafe { std::mem::zeroed() };
             unsafe {
                 mello_sys::mello_get_debug_stats(self.ctx, &mut stats);
             }
             let rtt = self.sfu_connection.as_ref().map_or(0.0, |c| c.rtt_ms());
-            let _ = self.event_tx.send(Event::AudioDebugStats {
-                input_level: stats.input_level,
-                silero_vad_prob: stats.silero_vad_prob,
-                rnnoise_prob: stats.rnnoise_prob,
-                is_speaking: stats.is_speaking,
-                is_capturing: stats.is_capturing,
-                is_muted: stats.is_muted,
-                is_deafened: stats.is_deafened,
-                echo_cancellation_enabled: stats.echo_cancellation_enabled,
-                agc_enabled: stats.agc_enabled,
-                noise_suppression_enabled: stats.noise_suppression_enabled,
-                packets_encoded: stats.packets_encoded,
-                aec_capture_frames: stats.aec_capture_frames,
-                aec_render_frames: stats.aec_render_frames,
-                incoming_streams: stats.incoming_streams,
-                underrun_count: stats.underrun_count,
-                rtp_recv_total: stats.rtp_recv_total,
-                pipeline_delay_ms: stats.pipeline_delay_ms,
-                rtt_ms: rtt,
-            });
+
+            // Diagnostic capture: persist the same stats to the log so a
+            // user-uploaded repro shows the sender/receiver-side timeline.
+            if self.capture_mode {
+                log::info!(
+                    target: "audio_stats",
+                    "in={:.3} vad={:.3} rnn={:.3} spk={} cap={} mute={} deaf={} pkts={} streams={} underrun={} rtp_recv={} delay_ms={:.1} rtt_ms={:.1}",
+                    stats.input_level,
+                    stats.silero_vad_prob,
+                    stats.rnnoise_prob,
+                    stats.is_speaking,
+                    stats.is_capturing,
+                    stats.is_muted,
+                    stats.is_deafened,
+                    stats.packets_encoded,
+                    stats.incoming_streams,
+                    stats.underrun_count,
+                    stats.rtp_recv_total,
+                    stats.pipeline_delay_ms,
+                    rtt,
+                );
+            }
+
+            if self.debug_mode {
+                let _ = self.event_tx.send(Event::AudioDebugStats {
+                    input_level: stats.input_level,
+                    silero_vad_prob: stats.silero_vad_prob,
+                    rnnoise_prob: stats.rnnoise_prob,
+                    is_speaking: stats.is_speaking,
+                    is_capturing: stats.is_capturing,
+                    is_muted: stats.is_muted,
+                    is_deafened: stats.is_deafened,
+                    echo_cancellation_enabled: stats.echo_cancellation_enabled,
+                    agc_enabled: stats.agc_enabled,
+                    noise_suppression_enabled: stats.noise_suppression_enabled,
+                    packets_encoded: stats.packets_encoded,
+                    aec_capture_frames: stats.aec_capture_frames,
+                    aec_render_frames: stats.aec_render_frames,
+                    incoming_streams: stats.incoming_streams,
+                    underrun_count: stats.underrun_count,
+                    rtp_recv_total: stats.rtp_recv_total,
+                    pipeline_delay_ms: stats.pipeline_delay_ms,
+                    rtt_ms: rtt,
+                });
+            }
         }
 
         let mut buf = [0u8; PACKET_BUF_SIZE];

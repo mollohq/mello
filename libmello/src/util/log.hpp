@@ -8,12 +8,16 @@ namespace mello {
 
 enum class LogLevel { Debug = 0, Info = 1, Warn = 2, Error = 3 };
 
-inline LogLevel g_log_level = LogLevel::Info;
+// Atomic because the diagnostic-capture feature flips this at runtime from the
+// command thread while the audio thread reads it on every log call.
+inline std::atomic<LogLevel> g_log_level{LogLevel::Info};
 
 inline std::atomic<MelloLogCallback> g_log_callback{nullptr};
 inline std::atomic<void*> g_log_user_data{nullptr};
 
-inline void set_log_level(LogLevel level) { g_log_level = level; }
+inline void set_log_level(LogLevel level) {
+    g_log_level.store(level, std::memory_order_relaxed);
+}
 
 inline void set_log_callback(MelloLogCallback cb, void* ud) {
     g_log_user_data.store(ud, std::memory_order_release);
@@ -21,7 +25,7 @@ inline void set_log_callback(MelloLogCallback cb, void* ud) {
 }
 
 inline void log(LogLevel level, const char* tag, const char* fmt, ...) {
-    if (level < g_log_level) return;
+    if (level < g_log_level.load(std::memory_order_relaxed)) return;
 
     char buf[2048];
     va_list args;

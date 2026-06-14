@@ -243,6 +243,11 @@ export component DebugPanel inherits Rectangle {
 
     callback close-requested();
 
+    // Diagnostic capture: one-click verbose-log + upload for repro reports.
+    in property <bool> diag-capturing: false;
+    in property <string> diag-status: "";
+    callback diagnostic-capture-toggled();
+
     width: 320px;
     background: Theme.dark ? #181818E8 : #F0F0F0F0;
     border-radius: Theme.r-outer;
@@ -765,6 +770,49 @@ export component DebugPanel inherits Rectangle {
                     col: 3;
                 }
             }
+        }
+
+        // ── Diagnostic Capture ──
+        Rectangle { height: 1px; background: Theme.graphic-light; }
+
+        Text {
+            text: "Diagnostic Capture";
+            font-family: Theme.font-mono;
+            font-size: 9px;
+            font-weight: 600;
+            color: Theme.text-tertiary;
+        }
+
+        Rectangle {
+            height: 30px;
+            border-radius: Theme.r-inner;
+            background: root.diag-capturing
+                ? #E0402080
+                : (diag-hover.has-hover ? Theme.graphic-light : Theme.bg-app);
+            border-width: 1px;
+            border-color: root.diag-capturing ? #E06020 : Theme.graphic-light;
+
+            Text {
+                text: root.diag-capturing ? "⏺ Stop & upload" : "Start diagnostic capture";
+                font-family: Theme.font-mono;
+                font-size: 10px;
+                font-weight: 600;
+                color: Theme.text-primary;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+
+            diag-hover := TouchArea {
+                clicked => { root.diagnostic-capture-toggled(); }
+            }
+        }
+
+        if root.diag-status != "": Text {
+            text: root.diag-status;
+            font-family: Theme.font-mono;
+            font-size: 9px;
+            color: Theme.text-secondary;
+            wrap: word-wrap;
         }
     }
 }

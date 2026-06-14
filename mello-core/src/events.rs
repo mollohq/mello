@@ -475,6 +475,16 @@ pub enum Event {
         reconnecting: bool,
     },
 
+    /// Diagnostic capture lifecycle, surfaced in the debug panel so the user
+    /// knows when a capture is recording, uploading, or done/failed.
+    DiagnosticCaptureState {
+        /// One of: "capturing", "uploading", "done", "failed", "skipped".
+        phase: String,
+        /// Human-readable detail (e.g. an error reason or the stored key).
+        #[serde(default)]
+        message: String,
+    },
+
     Error {
         message: String,
     },

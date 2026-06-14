@@ -9,6 +9,7 @@ mod converters;
 #[cfg(target_os = "windows")]
 pub mod dcomp_presenter;
 mod deep_link;
+mod diag_capture;
 mod foreground_monitor;
 mod gif_animator;
 mod handlers;
@@ -79,31 +80,56 @@ fn nakama_config() -> Config {
 }
 
 fn init_logging() -> Option<std::path::PathBuf> {
-    use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
+    use tracing_subscriber::{
+        fmt, layer::SubscriberExt, reload, util::SubscriberInitExt, EnvFilter,
+    };
 
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    // Keep the base directive so diagnostic capture can restore it (rather than
+    // forcing plain "info" and dropping a developer's RUST_LOG).
+    let base_directive = std::env::var("RUST_LOG")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "info".to_string());
+    let filter = EnvFilter::try_new(&base_directive).unwrap_or_else(|_| EnvFilter::new("info"));
+    let (filter_layer, reload_handle) = reload::Layer::new(filter);
 
     let stderr_layer = fmt::layer().with_target(true).with_writer(std::io::stderr);
 
     let registry = tracing_subscriber::registry()
-        .with(filter)
+        .with(filter_layer)
         .with(stderr_layer);
 
-    if let Some(data_dir) = directories::ProjectDirs::from("app", "mello", "mello") {
-        let log_dir = data_dir.data_dir().join("logs");
-        if std::fs::create_dir_all(&log_dir).is_ok() {
-            let file_appender = tracing_appender::rolling::daily(&log_dir, "mello.log");
-            let file_layer = fmt::layer()
-                .with_target(true)
-                .with_ansi(false)
-                .with_writer(file_appender);
-            registry.with(file_layer).init();
-            return Some(log_dir);
+    // Toggle closure handed to the diagnostic-capture module; flips the live
+    // filter between the base directive and the verbose capture directive.
+    let toggle: diag_capture::FilterToggle = Box::new(move |verbose: bool| {
+        let directive = if verbose {
+            diag_capture::CAPTURE_DIRECTIVE
+        } else {
+            base_directive.as_str()
+        };
+        if let Ok(f) = EnvFilter::try_new(directive) {
+            let _ = reload_handle.reload(f);
         }
+    });
+
+    let log_dir = directories::ProjectDirs::from("app", "mello", "mello").and_then(|data_dir| {
+        let log_dir = data_dir.data_dir().join("logs");
+        std::fs::create_dir_all(&log_dir).ok().map(|_| log_dir)
+    });
+
+    if let Some(ref log_dir) = log_dir {
+        let file_appender = tracing_appender::rolling::daily(log_dir, "mello.log");
+        let file_layer = fmt::layer()
+            .with_target(true)
+            .with_ansi(false)
+            .with_writer(file_appender);
+        registry.with(file_layer).init();
+    } else {
+        registry.init();
     }
 
-    registry.init();
-    None
+    diag_capture::install_log_control(toggle, log_dir.clone());
+    log_dir
 }
 
 fn main() {
@@ -421,6 +447,7 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
             avatar::AvatarGridState::new(),
         )),
         avatar_shuffle_timer: Rc::new(RefCell::new(None)),
+        diag_autostop_timer: Rc::new(RefCell::new(None)),
         muted_before_deafen: Rc::new(Cell::new(false)),
         updater,
         hotkey_mgr,

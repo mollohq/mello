@@ -217,6 +217,18 @@ pub enum Command {
     SetDebugMode {
         enabled: bool,
     },
+    /// Toggle diagnostic capture: raises libmello log verbosity and writes
+    /// per-frame audio stats to the log so a user can self-capture a repro.
+    /// The client side bumps the Rust log filter + slices/uploads the file.
+    SetDiagnosticCapture {
+        enabled: bool,
+    },
+    /// Upload a sliced diagnostic log file to private storage via a presigned
+    /// URL. Driven by the client after it stops a capture and writes the slice.
+    UploadDiagnosticLog {
+        local_path: String,
+        capture_id: String,
+    },
     UpdateProfile {
         display_name: String,
         avatar_data: Option<String>,

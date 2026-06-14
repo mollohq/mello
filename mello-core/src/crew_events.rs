@@ -168,3 +168,20 @@ pub struct ClipUploadCompleteResponse {
     #[serde(default)]
     pub media_url: String,
 }
+
+// --- Diagnostic log upload ---
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DiagnosticLogUploadURLRequest {
+    pub capture_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DiagnosticLogUploadURLResponse {
+    /// Presigned PUT URL; empty when storage is not configured (client skips).
+    #[serde(default)]
+    pub upload_url: String,
+    /// Object key the log will be stored under (for support tooling reference).
+    #[serde(default)]
+    pub key: String,
+}

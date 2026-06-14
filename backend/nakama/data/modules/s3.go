@@ -107,6 +107,39 @@ func GeneratePresignedPUT(key, contentType string, expiry time.Duration) (string
 	return result.URL, nil
 }
 
+// DiagnosticsBucket returns the private bucket diagnostic logs are written to.
+// Empty when unset so we never fall back to the public clips bucket.
+func DiagnosticsBucket() string {
+	return os.Getenv("DIAGNOSTICS_S3_BUCKET")
+}
+
+// DiagnosticsConfigured reports whether diagnostic-log upload is available
+// (S3 credentials present AND a dedicated private bucket configured).
+func DiagnosticsConfigured() bool {
+	initS3()
+	return s3Available && DiagnosticsBucket() != ""
+}
+
+// GeneratePresignedPUTToBucket presigns a PUT against an explicit bucket, reusing
+// the shared S3 credentials/presigner. Used for diagnostics (private bucket)
+// rather than the public clips bucket bound to GeneratePresignedPUT.
+func GeneratePresignedPUTToBucket(bucket, key, contentType string, expiry time.Duration) (string, error) {
+	initS3()
+	if !s3Available {
+		return "", fmt.Errorf("S3 not configured")
+	}
+
+	result, err := s3Presigner.PresignPutObject(context.Background(), &s3.PutObjectInput{
+		Bucket:      aws.String(bucket),
+		Key:         aws.String(key),
+		ContentType: aws.String(contentType),
+	}, s3.WithPresignExpires(expiry))
+	if err != nil {
+		return "", fmt.Errorf("presign PUT failed: %w", err)
+	}
+	return result.URL, nil
+}
+
 func S3PublicURL(key string) string {
 	initS3()
 	if s3PublicURL == "" {

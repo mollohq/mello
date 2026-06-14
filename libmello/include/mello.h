@@ -82,6 +82,10 @@ MELLO_API const char* mello_get_error(MelloContext* ctx);
 /** Set a log callback to receive all libmello log output. Pass NULL to revert to stderr. */
 MELLO_API void mello_set_log_callback(MelloLogCallback callback, void* user_data);
 
+/** Set the libmello log verbosity at runtime (0=debug,1=info,2=warn,3=error).
+ *  Used by diagnostic capture to temporarily raise verbosity. Out-of-range values are ignored. */
+MELLO_API void mello_set_log_level(int level);
+
 /* ============================================================================
  * Microphone Permission (macOS: AVCaptureDevice; others: always granted)
  * ============================================================================ */
