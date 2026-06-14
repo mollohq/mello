@@ -38,6 +38,17 @@ pub enum Command {
     AuthApple {
         identity_token: String,
     },
+    /// Authenticate (login or create) with a Google id_token obtained natively on
+    /// the client (iOS). Sign-in counterpart to `LinkGoogleToken` — no browser flow.
+    AuthGoogleToken {
+        id_token: String,
+    },
+    /// Authenticate (login or create) with a custom-provider token (Discord/Twitch)
+    /// obtained natively on the client (iOS). Sign-in counterpart to `LinkCustomToken`.
+    AuthCustomToken {
+        token: String,
+        provider: String,
+    },
 
     // Social link (onboarding step 3 — links identity to existing device account)
     LinkGoogle,

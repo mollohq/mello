@@ -37,6 +37,9 @@ pub enum OAuthMode {
     AuthorizationCode,
     /// Implicit flow — token arrives as `#access_token=` fragment (not sent to server).
     Implicit,
+    /// Steam OpenID 2.0 — the provider redirects back with the `openid.*` response
+    /// in the query string; we capture it verbatim for server-side verification.
+    OpenIDQuery,
 }
 
 /// Blocking OAuth flow using a localhost callback server.
@@ -53,7 +56,33 @@ impl OAuthFlow {
         match mode {
             OAuthMode::AuthorizationCode => Self::wait_for_code(&server),
             OAuthMode::Implicit => Self::wait_for_fragment(&server),
+            OAuthMode::OpenIDQuery => Self::wait_for_query(&server),
         }
+    }
+
+    /// Steam OpenID: capture the full query string of the callback redirect (the
+    /// `openid.*` response), to be verified server-side via `check_authentication`.
+    fn wait_for_query(server: &Server) -> Result<String, OAuthError> {
+        let request = server
+            .recv_timeout(Duration::from_secs(120))
+            .map_err(|_| OAuthError::Timeout)?
+            .ok_or(OAuthError::Timeout)?;
+
+        let raw_url = request.url().to_string();
+        let query = raw_url
+            .split_once('?')
+            .map(|(_, q)| q.to_string())
+            .unwrap_or_default();
+
+        let html = Self::success_html();
+        let response = Response::from_string(html)
+            .with_header(Header::from_bytes("Content-Type", "text/html").unwrap());
+        let _ = request.respond(response);
+
+        if query.is_empty() {
+            return Err(OAuthError::NoToken);
+        }
+        Ok(query)
     }
 
     /// Authorization Code: code is in the query string.

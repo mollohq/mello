@@ -8,7 +8,9 @@ import (
 	"io"
 	"math/rand"
 	"net/http"
+	"net/url"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/heroiclabs/nakama-common/api"
@@ -32,6 +34,11 @@ type TwitchUser struct {
 	Email       string `json:"email"`
 }
 
+type SteamUser struct {
+	ID          string
+	PersonaName string
+}
+
 // ---------------------------------------------------------------------------
 // BeforeAuthenticateCustom — dispatches on provider var to validate tokens
 // ---------------------------------------------------------------------------
@@ -49,6 +56,8 @@ func BeforeAuthenticateCustom(ctx context.Context, logger runtime.Logger, db *sq
 		return handleDiscordAuth(logger, in, token)
 	case "twitch":
 		return handleTwitchAuth(logger, in, token)
+	case "steam":
+		return handleSteamAuth(logger, in, token)
 	default:
 		return in, nil
 	}
@@ -86,9 +95,25 @@ func handleTwitchAuth(logger runtime.Logger, in *api.AuthenticateCustomRequest, 
 	return in, nil
 }
 
+func handleSteamAuth(logger runtime.Logger, in *api.AuthenticateCustomRequest, token string) (*api.AuthenticateCustomRequest, error) {
+	user, err := validateSteamOpenID(token)
+	if err != nil {
+		logger.Error("Steam validation failed: %v", err)
+		return nil, runtime.NewError("Invalid Steam sign-in", 16)
+	}
+
+	in.Account.Id = fmt.Sprintf("steam_%s", user.ID)
+	if in.Username == "" && user.PersonaName != "" {
+		in.Username = user.PersonaName
+	}
+
+	logger.Info("Steam auth for user: %s (%s)", user.PersonaName, user.ID)
+	return in, nil
+}
+
 // ---------------------------------------------------------------------------
 // BeforeLinkCustom — same validation as BeforeAuthenticateCustom so that
-// linking a Discord/Twitch identity during onboarding works correctly.
+// linking a Discord/Twitch/Steam identity during onboarding works correctly.
 // ---------------------------------------------------------------------------
 
 func BeforeLinkCustom(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, in *api.AccountCustom) (*api.AccountCustom, error) {
@@ -116,6 +141,14 @@ func BeforeLinkCustom(ctx context.Context, logger runtime.Logger, db *sql.DB, nk
 		}
 		in.Id = fmt.Sprintf("twitch_%s", user.ID)
 		logger.Info("Twitch link for user: %s (%s)", user.DisplayName, user.ID)
+	case "steam":
+		user, err := validateSteamOpenID(token)
+		if err != nil {
+			logger.Error("Steam validation failed (link): %v", err)
+			return nil, runtime.NewError("Invalid Steam sign-in", 16)
+		}
+		in.Id = fmt.Sprintf("steam_%s", user.ID)
+		logger.Info("Steam link for user: %s (%s)", user.PersonaName, user.ID)
 	}
 
 	return in, nil
@@ -179,6 +212,76 @@ func validateTwitchToken(token string) (*TwitchUser, error) {
 		return nil, fmt.Errorf("no user data from Twitch")
 	}
 	return &result.Data[0], nil
+}
+
+// validateSteamOpenID verifies a Steam OpenID 2.0 response. `token` is the raw
+// query string of the `return_to` redirect (the `openid.*` params). We echo the
+// params back to Steam with `mode=check_authentication`; Steam answers
+// `is_valid:true` only if it issued them. The steamid is parsed from claimed_id
+// (`https://steamcommunity.com/openid/id/<steamid>`). Persona name is resolved
+// best-effort via the Steam Web API when STEAM_WEB_API_KEY is set.
+func validateSteamOpenID(token string) (*SteamUser, error) {
+	values, err := url.ParseQuery(token)
+	if err != nil {
+		return nil, fmt.Errorf("parse openid params: %w", err)
+	}
+	claimed := values.Get("openid.claimed_id")
+	if values.Get("openid.mode") == "" || claimed == "" || values.Get("openid.sig") == "" {
+		return nil, fmt.Errorf("incomplete openid response")
+	}
+
+	values.Set("openid.mode", "check_authentication")
+	resp, err := http.PostForm("https://steamcommunity.com/openid/login", values)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(body), "is_valid:true") {
+		return nil, fmt.Errorf("steam openid verification rejected")
+	}
+
+	idx := strings.LastIndex(claimed, "/")
+	if idx == -1 || idx+1 >= len(claimed) {
+		return nil, fmt.Errorf("malformed claimed_id: %s", claimed)
+	}
+	steamID := claimed[idx+1:]
+
+	return &SteamUser{ID: steamID, PersonaName: resolveSteamPersona(steamID)}, nil
+}
+
+// resolveSteamPersona fetches a Steam display name via the Web API. Best-effort:
+// returns "" if no key is configured or the call fails (auth still succeeds).
+func resolveSteamPersona(steamID string) string {
+	key := os.Getenv("STEAM_WEB_API_KEY")
+	if key == "" {
+		return ""
+	}
+	u := fmt.Sprintf(
+		"https://api.steampowered.com/ISteamUser/GetPlayerSummaries/v2/?key=%s&steamids=%s",
+		url.QueryEscape(key), url.QueryEscape(steamID))
+	resp, err := http.Get(u)
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return ""
+	}
+	var result struct {
+		Response struct {
+			Players []struct {
+				PersonaName string `json:"personaname"`
+			} `json:"players"`
+		} `json:"response"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return ""
+	}
+	if len(result.Response.Players) == 0 {
+		return ""
+	}
+	return result.Response.Players[0].PersonaName
 }
 
 // ---------------------------------------------------------------------------

@@ -357,10 +357,7 @@ impl Client {
             // Social auth
             Command::AuthSteam => {
                 log::info!("[auth] Steam auth requested");
-                // TODO: implemented by client/src/auth/steam.rs -> sends ticket to Nakama
-                let _ = self.event_tx.send(Event::LoginFailed {
-                    reason: "Steam auth not yet implemented".into(),
-                });
+                self.handle_auth_steam().await;
             }
             Command::AuthGoogle => {
                 log::info!("[auth] Google auth requested");
@@ -368,10 +365,7 @@ impl Client {
             }
             Command::AuthTwitch => {
                 log::info!("[auth] Twitch auth requested");
-                // TODO: OAuth2 PKCE flow -> access_token -> Nakama /authenticate/custom
-                let _ = self.event_tx.send(Event::LoginFailed {
-                    reason: "Twitch auth not yet implemented".into(),
-                });
+                self.handle_auth_twitch().await;
             }
             Command::AuthDiscord => {
                 log::info!("[auth] Discord auth requested");
@@ -380,6 +374,14 @@ impl Client {
             Command::AuthApple { identity_token } => {
                 log::info!("[auth] Apple auth requested");
                 self.handle_auth_apple(&identity_token).await;
+            }
+            Command::AuthGoogleToken { id_token } => {
+                log::info!("[auth] Google token auth requested");
+                self.handle_auth_google_token(&id_token).await;
+            }
+            Command::AuthCustomToken { token, provider } => {
+                log::info!("[auth] {} token auth requested", provider);
+                self.handle_auth_custom_token(&token, &provider).await;
             }
 
             // Social link (onboarding — attaches identity to current device account)

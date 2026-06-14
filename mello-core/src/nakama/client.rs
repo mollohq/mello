@@ -193,10 +193,12 @@ impl NakamaClient {
             .ok_or_else(|| Error::AuthFailed("No id_token from Google".into()))
     }
 
-    /// Authenticate with Nakama using a Google id_token (creates or logs into account).
+    /// Authenticate with Nakama using a Google id_token. `create=false`: sign-in
+    /// only logs into an existing (linked) account — new accounts must go through
+    /// onboarding (guest device auth + link), never auto-created from the login screen.
     pub async fn authenticate_google(&mut self, id_token: &str) -> Result<User> {
         let url = format!(
-            "{}/v2/account/authenticate/google?create=true",
+            "{}/v2/account/authenticate/google?create=false",
             self.config.http_base()
         );
 
@@ -229,10 +231,12 @@ impl NakamaClient {
     }
 
     /// Authenticate with a provider token via Nakama's custom auth endpoint.
-    /// Used for Discord and Twitch whose tokens are validated by the backend hook.
+    /// Used for Discord/Twitch/Steam whose tokens are validated by the backend hook.
+    /// `create=false`: sign-in only logs into an existing (linked) account; new
+    /// accounts go through onboarding, never auto-created from the login screen.
     pub async fn authenticate_custom(&mut self, token: &str, provider: &str) -> Result<User> {
         let url = format!(
-            "{}/v2/account/authenticate/custom?create=true",
+            "{}/v2/account/authenticate/custom?create=false",
             self.config.http_base()
         );
 
@@ -294,11 +298,13 @@ impl NakamaClient {
         Ok(())
     }
 
-    /// Authenticate (login or create) with an Apple identity token via Nakama's
-    /// dedicated Apple endpoint. The server validates against `social.apple.bundle_id`.
+    /// Authenticate with an Apple identity token via Nakama's dedicated Apple
+    /// endpoint (validates against `social.apple.bundle_id`). `create=false`: sign-in
+    /// only logs into an existing (linked) account; new accounts go through
+    /// onboarding, never auto-created from the login screen.
     pub async fn authenticate_apple(&mut self, id_token: &str) -> Result<User> {
         let url = format!(
-            "{}/v2/account/authenticate/apple?create=true",
+            "{}/v2/account/authenticate/apple?create=false",
             self.config.http_base()
         );
 

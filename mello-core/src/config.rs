@@ -10,6 +10,7 @@ pub struct Config {
     pub google_client_id: Option<String>,
     pub google_client_secret: Option<String>,
     pub discord_client_id: Option<String>,
+    pub twitch_client_id: Option<String>,
 }
 
 impl Config {
@@ -27,6 +28,7 @@ impl Config {
             google_client_id: option_env!("GOOGLE_CLIENT_ID").map(Into::into),
             google_client_secret: option_env!("GOOGLE_CLIENT_SECRET").map(Into::into),
             discord_client_id: option_env!("DISCORD_CLIENT_ID").map(Into::into),
+            twitch_client_id: option_env!("TWITCH_CLIENT_ID").map(Into::into),
         }
     }
 
@@ -61,6 +63,7 @@ impl Default for Config {
             google_client_id: option_env!("GOOGLE_CLIENT_ID").map(Into::into),
             google_client_secret: option_env!("GOOGLE_CLIENT_SECRET").map(Into::into),
             discord_client_id: option_env!("DISCORD_CLIENT_ID").map(Into::into),
+            twitch_client_id: option_env!("TWITCH_CLIENT_ID").map(Into::into),
         }
     }
 }

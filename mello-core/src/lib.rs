@@ -1,5 +1,7 @@
 pub mod auth_discord;
 pub mod auth_google;
+pub mod auth_steam;
+pub mod auth_twitch;
 pub mod chat;
 pub mod client;
 pub mod command;

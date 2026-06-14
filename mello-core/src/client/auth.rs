@@ -255,6 +255,91 @@ impl super::Client {
         }
     }
 
+    /// Authenticate (login or create) via the Twitch OAuth2 implicit browser flow
+    /// (desktop). The access_token is sent to Nakama's custom endpoint; the backend
+    /// hook validates it via Helix and derives the Twitch user id.
+    pub(super) async fn handle_auth_twitch(&mut self) {
+        let client_id = match self.nakama.config().twitch_client_id.clone() {
+            Some(id) => id,
+            None => {
+                log::warn!("[auth] TWITCH_CLIENT_ID not configured");
+                let _ = self.event_tx.send(Event::LoginFailed {
+                    reason: "Twitch login not configured".into(),
+                });
+                return;
+            }
+        };
+
+        let oauth_result = tokio::task::spawn_blocking(move || {
+            crate::auth_twitch::TwitchAuth::authenticate(&client_id)
+        })
+        .await;
+
+        let token = match oauth_result {
+            Ok(Ok(t)) => t,
+            Ok(Err(e)) => {
+                log::error!("[auth] Twitch OAuth flow failed: {}", e);
+                let _ = self.event_tx.send(Event::LoginFailed {
+                    reason: format!("Twitch sign-in failed: {}", e),
+                });
+                return;
+            }
+            Err(e) => {
+                log::error!("[auth] Twitch OAuth task panicked: {}", e);
+                let _ = self.event_tx.send(Event::LoginFailed {
+                    reason: "Twitch sign-in failed unexpectedly".into(),
+                });
+                return;
+            }
+        };
+
+        match self.nakama.authenticate_custom(&token, "twitch").await {
+            Ok(user) => self.on_social_login(user).await,
+            Err(e) => {
+                log::error!("[auth] Twitch Nakama auth failed: {}", e);
+                let _ = self.event_tx.send(Event::LoginFailed {
+                    reason: e.to_string(),
+                });
+            }
+        }
+    }
+
+    /// Authenticate (login or create) via the Steam OpenID 2.0 browser flow
+    /// (desktop). The raw `openid.*` response is sent to Nakama's custom endpoint;
+    /// the backend hook verifies it with Steam and derives the steamid.
+    pub(super) async fn handle_auth_steam(&mut self) {
+        let oauth_result =
+            tokio::task::spawn_blocking(crate::auth_steam::SteamAuth::authenticate).await;
+
+        let openid = match oauth_result {
+            Ok(Ok(q)) => q,
+            Ok(Err(e)) => {
+                log::error!("[auth] Steam OpenID flow failed: {}", e);
+                let _ = self.event_tx.send(Event::LoginFailed {
+                    reason: format!("Steam sign-in failed: {}", e),
+                });
+                return;
+            }
+            Err(e) => {
+                log::error!("[auth] Steam OpenID task panicked: {}", e);
+                let _ = self.event_tx.send(Event::LoginFailed {
+                    reason: "Steam sign-in failed unexpectedly".into(),
+                });
+                return;
+            }
+        };
+
+        match self.nakama.authenticate_custom(&openid, "steam").await {
+            Ok(user) => self.on_social_login(user).await,
+            Err(e) => {
+                log::error!("[auth] Steam Nakama auth failed: {}", e);
+                let _ = self.event_tx.send(Event::LoginFailed {
+                    reason: e.to_string(),
+                });
+            }
+        }
+    }
+
     /// Authenticate with an Apple identity token captured natively on the client.
     /// Unlike Google/Discord there's no in-core browser flow — the token arrives
     /// in the command. An empty token means the platform has no native flow (desktop).
@@ -271,6 +356,46 @@ impl super::Client {
             Ok(user) => self.on_social_login(user).await,
             Err(e) => {
                 log::error!("[auth] Apple Nakama auth failed: {}", e);
+                let _ = self.event_tx.send(Event::LoginFailed {
+                    reason: e.to_string(),
+                });
+            }
+        }
+    }
+
+    /// Authenticate (login or create) with a Google id_token captured natively on
+    /// the client (iOS login screen). Sign-in counterpart to `handle_link_google_token`.
+    pub(super) async fn handle_auth_google_token(&mut self, id_token: &str) {
+        if id_token.is_empty() {
+            let _ = self.event_tx.send(Event::LoginFailed {
+                reason: "Google sign-in returned no token".into(),
+            });
+            return;
+        }
+        match self.nakama.authenticate_google(id_token).await {
+            Ok(user) => self.on_social_login(user).await,
+            Err(e) => {
+                log::error!("[auth] Google Nakama auth failed: {}", e);
+                let _ = self.event_tx.send(Event::LoginFailed {
+                    reason: e.to_string(),
+                });
+            }
+        }
+    }
+
+    /// Authenticate (login or create) with a custom-provider token (Discord/Twitch)
+    /// captured natively on the client. Sign-in counterpart to `handle_link_custom_token`.
+    pub(super) async fn handle_auth_custom_token(&mut self, token: &str, provider: &str) {
+        if token.is_empty() {
+            let _ = self.event_tx.send(Event::LoginFailed {
+                reason: format!("{} sign-in returned no token", provider),
+            });
+            return;
+        }
+        match self.nakama.authenticate_custom(token, provider).await {
+            Ok(user) => self.on_social_login(user).await,
+            Err(e) => {
+                log::error!("[auth] {} Nakama auth failed: {}", provider, e);
                 let _ = self.event_tx.send(Event::LoginFailed {
                     reason: e.to_string(),
                 });
