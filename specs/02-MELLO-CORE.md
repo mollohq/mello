@@ -225,4 +225,19 @@ Key crate dependencies (see `mello-core/Cargo.toml` for versions):
 
 ---
 
+## Connection Robustness (v0.3)
+
+mello-core keeps voice/UI state accurate across sleep/wake, long sessions, dropped events, and reconnects. Authority model: **Nakama is authoritative** for the voice roster; the SFU is a media transport and a reconcile oracle (see [04-BACKEND.md](./04-BACKEND.md)).
+
+- **Nakama WS lifecycle (`nakama/client.rs`).** WS ping/pong + read timeouts detect half-open sockets. The connection is generation-safe: each `connect_ws` aborts the previous reader/writer tasks and installs a *fresh* `ws_connected` flag, so a stale task can never clobber the live connection's state. `clear_session()` fully tears down the socket + auth state on logout.
+- **Reconnect supervisor (`client/reconnect.rs`).** Pure, unit-tested decision logic: backoff reconnects, monotonic-clock **sleep/wake gap detection** (a wall-clock jump between ticks infers suspend → proactive reconnect + resync), and presence-heartbeat cadence. Inert when there is no session (post-logout).
+- **Post-reconnect resync (`client/connection.rs`).** A reconnect re-asserts Nakama voice membership only (`reassert_voice_after_reconnect`); it does **not** rebuild the SFU media connection. The voice tick is the sole owner of SFU media recovery, so Nakama WS blips don't churn the SFU peer.
+- **In-tick SFU health check (`voice/mod.rs`).** The voice tick sends a control-channel ping (~2s) and, in SFU mode, marks the session dead after 3 consecutive `!is_connected()` checks (~6s) → reconnect. Surfaces SFU `error`/`session_ended` signaling as `SfuEvent::Disconnected`.
+- **Out-of-order push rejection.** `voice_update` carries a monotonic `seq`; stale/duplicate updates are dropped client-side.
+- **`SfuConnection` task lifecycle (`transport/sfu_connection.rs`).** The signaling listener and `client_stats` reporter handles are tracked and aborted on `Drop`, so a dropped connection's tasks don't linger ticking against a dead socket.
+
+Test harnesses (headless scenarios, fault injection, soak) are documented in [`TESTING.md`](../TESTING.md).
+
+---
+
 *This spec defines mello-core. For low-level implementation, see [03-LIBMELLO.md](./03-LIBMELLO.md).*

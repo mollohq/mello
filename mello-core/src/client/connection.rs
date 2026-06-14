@@ -152,8 +152,8 @@ impl super::Client {
 
     /// After the realtime socket is rebuilt, restore the active crew's channel
     /// subscription and pull authoritative state (snapshot-wins resync). If we
-    /// were in a voice channel, re-join so Nakama voice membership and the SFU
-    /// session are re-established.
+    /// were in a voice channel, re-assert Nakama membership without rebuilding a
+    /// healthy media session.
     pub(super) async fn resync_after_reconnect(&mut self) {
         let Some(crew_id) = self.nakama.active_crew_id().map(String::from) else {
             return;
@@ -163,7 +163,40 @@ impl super::Client {
         }
         self.handle_set_active_crew(&crew_id).await;
         if let Some(channel) = self.last_voice_channel.clone() {
-            self.handle_join_voice(&channel).await;
+            self.reassert_voice_after_reconnect(&channel).await;
+        }
+    }
+
+    /// Re-register our voice membership with Nakama after a realtime reconnect,
+    /// WITHOUT tearing down or rebuilding the media session.
+    ///
+    /// A Nakama WS blip does not imply the SFU/P2P media leg died — that has its
+    /// own liveness detection (`SfuEvent::Disconnected` -> `mark_disconnected`),
+    /// and the voice tick is the sole owner of media rebuilds. Rebuilding here on
+    /// every reconnect (the old behaviour) churned the SFU and, combined with a
+    /// reconnect loop, got peers evicted server-side. So:
+    /// - If the media session is live, send only the idempotent `voice_join` RPC
+    ///   to re-assert membership in the (possibly GC'd) room and refresh the
+    ///   roster.
+    /// - If voice is already Disconnected, do nothing: the voice tick's reconnect
+    ///   scheduler handles the rebuild.
+    pub(super) async fn reassert_voice_after_reconnect(&mut self, channel_id: &str) {
+        if !self.voice.is_active() {
+            return;
+        }
+        let Some(crew_id) = self.nakama.active_crew_id().map(String::from) else {
+            return;
+        };
+        match self.nakama.voice_join(&crew_id, channel_id).await {
+            Ok(resp) => {
+                self.last_voice_channel = Some(resp.channel_id.clone());
+                let _ = self.event_tx.send(Event::VoiceJoined {
+                    crew_id,
+                    channel_id: resp.channel_id,
+                    members: resp.voice_state.members,
+                });
+            }
+            Err(e) => log::warn!("Reconnect: voice membership re-assert failed: {}", e),
         }
     }
 

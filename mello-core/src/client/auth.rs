@@ -133,6 +133,10 @@ impl super::Client {
             }
         }
         self.voice.leave_voice();
+        // Drop client-level voice state so the voice tick's SFU reconnect
+        // scheduler can't try to rejoin the old channel after logout.
+        self.last_voice_channel = None;
+        self.sfu_voice_reconnect = None;
         let _ = self
             .event_tx
             .send(Event::VoiceStateChanged { in_call: false });
@@ -141,6 +145,10 @@ impl super::Client {
         if let Err(e) = self.nakama.leave_crew_channel().await {
             log::warn!("Leave channel on logout: {}", e);
         }
+        // Close the realtime socket and drop in-memory auth so the reconnect
+        // supervisor stays inert until the next login (otherwise it would
+        // immediately rebuild the just-closed socket).
+        self.nakama.clear_session();
         log::info!("Logged out, session cleared");
     }
 

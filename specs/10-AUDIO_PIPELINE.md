@@ -335,3 +335,12 @@ Audio pipeline work for this milestone is complete when:
 - SFU leave/rejoin/renegotiation behaves deterministically under churn
 - per-leg telemetry and admin troubleshooting views are sufficient for rapid diagnosis
 
+---
+
+## 12. Long-Session Health Metrics (v0.3)
+
+Two changes keep audio health decisions accurate over long-running sessions:
+
+- **Windowed underrun rate.** The pipeline keeps the raw lifetime `underrun_count` (monotonic, shown in the debug panel for reference) **and** a rolling ~5s windowed underrun count used for health decisions and the `audio_stats` log line. The lifetime counter climbs forever and is useless for "is audio bad *right now*"; the windowed value reflects current playback health.
+- **Renegotiation-tolerant track reads (SFU side).** The SFU's consecutive-EOF track cutoff is raised/paused during active renegotiation so transient read errors don't tear down a healthy inbound audio track. See [SFU-INTEGRATION.md](./features/SFU-INTEGRATION.md).
+

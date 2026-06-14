@@ -57,9 +57,14 @@ pub struct NakamaClient {
     presence_tx_template: Option<mpsc::Sender<InternalPresence>>,
     /// user_id -> display_name cache, shared with the WS reader task
     member_names: Arc<RwLock<HashMap<String, String>>>,
-    /// True while the WS reader+writer tasks are alive. Set false when either
-    /// exits (close, error, or read timeout) so the client can reconnect.
+    /// True while the *current* generation's WS reader+writer tasks are alive.
+    /// Replaced with a fresh Arc on every `connect_ws` so a dying task from a
+    /// previous generation can't clobber the new connection's liveness flag.
     ws_connected: Arc<AtomicBool>,
+    /// Join handles for the current generation's reader+writer tasks, aborted
+    /// when we reconnect or force-disconnect so old sockets don't linger (which
+    /// would otherwise duplicate stream broadcasts and stomp `ws_connected`).
+    ws_tasks: Vec<tokio::task::JoinHandle<()>>,
 }
 
 impl NakamaClient {
@@ -82,6 +87,7 @@ impl NakamaClient {
             presence_rx: Some(pres_rx),
             presence_tx_template: Some(pres_tx),
             ws_connected: Arc::new(AtomicBool::new(false)),
+            ws_tasks: Vec::new(),
         }
     }
 
@@ -497,6 +503,11 @@ impl NakamaClient {
 
         let (write, read) = ws_stream.split();
 
+        // The new socket is up: retire any previous generation now so its reader
+        // doesn't linger (duplicating stream broadcasts) and its writer can't
+        // store `false` into the flag we're about to mark live.
+        self.shutdown_ws_tasks();
+
         let (ws_tx, ws_rx) = mpsc::channel::<String>(256);
         self.ws_tx = Some(ws_tx);
 
@@ -507,20 +518,34 @@ impl NakamaClient {
         let signal_tx = self.signal_tx_template.clone().unwrap();
         let presence_tx = self.presence_tx_template.clone().unwrap();
 
-        self.ws_connected.store(true, Ordering::SeqCst);
-        tokio::spawn(ws_writer_task(ws_rx, write, self.ws_connected.clone()));
-        tokio::spawn(ws_reader_task(
+        // Per-generation liveness flag: only this connection's own tasks can flip
+        // it, so a straggler from an earlier generation is harmless.
+        let connected = Arc::new(AtomicBool::new(true));
+        self.ws_connected = connected.clone();
+        let writer = tokio::spawn(ws_writer_task(ws_rx, write, connected.clone()));
+        let reader = tokio::spawn(ws_reader_task(
             read,
             event_tx,
             shared,
             signal_tx,
             presence_tx,
             self.member_names.clone(),
-            self.ws_connected.clone(),
+            connected,
         ));
+        self.ws_tasks = vec![writer, reader];
 
         log::info!("WebSocket connected");
         Ok(())
+    }
+
+    /// Abort the current generation's reader+writer tasks and drop the writer
+    /// channel. Aborting drops the socket halves, closing the old connection so
+    /// the server stops broadcasting to it.
+    fn shutdown_ws_tasks(&mut self) {
+        self.ws_tx = None;
+        for handle in self.ws_tasks.drain(..) {
+            handle.abort();
+        }
     }
 
     /// True while the WS reader+writer tasks are alive.
@@ -539,9 +564,20 @@ impl NakamaClient {
     /// it immediately instead of waiting for the read timeout.
     pub fn force_ws_disconnect(&mut self) {
         self.ws_connected.store(false, Ordering::SeqCst);
-        // Dropping the writer sender ends the writer task; the orphaned reader
-        // task exits on its own read timeout.
-        self.ws_tx = None;
+        // Tear down both tasks immediately so the reader doesn't linger until its
+        // read timeout, holding a second live socket that duplicates broadcasts.
+        self.shutdown_ws_tasks();
+    }
+
+    /// Tear down the realtime socket and drop in-memory auth state. Used on
+    /// logout so the old account's socket closes and the reconnect supervisor
+    /// stays inert (`has_session()` -> false) until the next login.
+    pub fn clear_session(&mut self) {
+        self.force_ws_disconnect();
+        self.token = None;
+        self.refresh_token = None;
+        self.current_user = None;
+        self.active_crew_id = None;
     }
 
     /// Take the signal receiver (call once, from the client run loop)

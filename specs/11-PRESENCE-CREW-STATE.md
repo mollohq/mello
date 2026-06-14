@@ -1395,4 +1395,16 @@ Flush batcher:
 
 ---
 
+## Voice State Robustness (v0.3)
+
+The voice roster is push-based and best-effort; these additions keep it from drifting permanently after a single missed/duplicated event.
+
+- **Sequenced `voice_update`.** Each `voice_update` (notification code 114) carries a per-crew monotonic `seq`. Clients drop any update with a `seq` ≤ the last applied for that crew, eliminating out-of-order/duplicate flicker (e.g. during reconnect storms).
+- **Coalesced pushes.** `PushVoiceUpdate` is debounced/coalesced backend-side so VAD churn (speaking on/off) can't produce a push storm.
+- **Presence heartbeat.** Clients send a periodic lightweight heartbeat so the backend can detect dead sessions faster than the generic presence GC; `voiceRoomGC` uses a short staleness window for `in_voice` activity instead of the blanket long TTL.
+- **SFU reconcile oracle (Nakama-authoritative).** For SFU crews, Nakama periodically/triggered-pulls the SFU admin session API to correct `voiceRooms` drift (ghost/missing members), then re-pushes a sequenced `voice_update`. No-op for P2P crews and absent for self-hosters without an SFU. See [04-BACKEND.md](./04-BACKEND.md).
+- **Self-healing UI.** Speaking indicators auto-clear on a TTL if a "stopped" push is lost; connection-degraded state is surfaced in the UI/debug panel rather than silently showing `in_voice`.
+
+---
+
 *Implementation spec for presence and crew state. See [00-ARCHITECTURE.md](./00-ARCHITECTURE.md) for system context.*

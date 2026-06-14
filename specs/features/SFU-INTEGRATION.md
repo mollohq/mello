@@ -1202,3 +1202,19 @@ mello-core/src/
 - [ ] Viewer loss reports reach host (ABR adjusts)
 - [ ] Voice works through SFU (2+ members)
 - [ ] Disconnection handled cleanly (no orphaned sessions)
+
+---
+
+## 8. Robustness (v0.3)
+
+The original `SfuConnection` sketch above is augmented with liveness and lifecycle hardening (client behaviour in [02-MELLO-CORE.md](../02-MELLO-CORE.md)).
+
+- **Liveness keepalive / RTT.** The client sends `{"type":"ping","ts":<ms>}` on the reliable control DataChannel (~2s). The SFU echoes the same payload with the type changed to `"pong"`; the client derives control-channel RTT from `ts`. The voice tick marks the SFU session dead after ~3 consecutive failed `is_connected()` checks and reconnects.
+  - *Server note:* the pong is produced by copying the ping bytes and overwriting index **10** (`'i'`→`'o'`) of `{"type":"ping"` to form `{"type":"pong"`. Overwriting index 9 yields `"oing"` and silently breaks RTT — regression-prone, keep the index correct.
+- **Server-initiated disconnect signaling.** `error` / `session_ended` / slow-peer signals are surfaced to the client as `SfuEvent::Disconnected` to drive reconnect, rather than being logged-only.
+- **`SfuConnection` task lifecycle.** The signaling-listener and `client_stats`-reporter tasks are tracked and **aborted on `Drop`** so a replaced/stale connection's tasks stop immediately instead of ticking against a dead socket.
+- **Reconnect decoupled from Nakama.** A Nakama WS reconnect re-asserts roster membership only; SFU media rebuild is owned solely by the voice tick, so Nakama blips don't churn the SFU peer.
+- **Renegotiation-tolerant track reads.** The SFU raises/pauses its consecutive-EOF inbound-track cutoff during active renegotiation so transient read errors don't kill healthy audio tracks.
+- **Diagnostics.** The SFU logs `peer_close_called` (with a compact caller stack) and `pc_closed` at INFO so every peer teardown is attributable to a concrete cause.
+
+Reconcile-oracle (Nakama → SFU admin API) is covered in [04-BACKEND.md](../04-BACKEND.md). Soak/fault harnesses are in [`TESTING.md`](../../TESTING.md).

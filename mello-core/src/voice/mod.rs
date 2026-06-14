@@ -670,6 +670,12 @@ impl VoiceManager {
         if self.tick_counter.is_multiple_of(200) {
             if let Some(conn) = &self.sfu_connection {
                 conn.send_ping();
+                log::debug!(
+                    "SFU liveness: connected={} ctrl_open={} rtt_ms={:.1}",
+                    conn.is_connected(),
+                    conn.is_control_channel_open(),
+                    conn.rtt_ms()
+                );
                 if self.mode == VoiceMode::SFU && !conn.is_connected() {
                     self.sfu_unhealthy_checks += 1;
                     log::warn!(

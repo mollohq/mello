@@ -45,6 +45,10 @@ pub struct SfuConnection {
     server_id: String,
     region: String,
     ice_state: Arc<AtomicI32>,
+    /// Background tasks (signaling listener, stats reporter) spawned for this
+    /// connection. Aborted on drop so a stale connection's tasks don't linger
+    /// ticking against a dead socket.
+    tasks: Mutex<Vec<tokio::task::JoinHandle<()>>>,
 }
 
 unsafe impl Send for SfuConnection {}
@@ -188,6 +192,7 @@ impl SfuConnection {
             server_id,
             region,
             ice_state: Arc::new(AtomicI32::new(0)),
+            tasks: Mutex::new(Vec::new()),
         })
     }
 
@@ -693,11 +698,12 @@ impl SfuConnection {
         let event_tx_clone = self.event_tx.clone();
         let peer_for_task = SendPtr(self.peer);
         let ws_tx_for_task = Arc::clone(&self.ws_tx);
-        tokio::spawn(async move {
+        let listener_task = tokio::spawn(async move {
             while let Some(msg_result) = ws_rx.next().await {
                 match msg_result {
                     Ok(msg) => {
                         if let Ok(sig) = parse_ws_message(&msg) {
+                            log::info!("SFU <- signaling: type={} data={}", sig.msg_type, sig.data);
                             match sig.msg_type.as_str() {
                                 "member_joined" => {
                                     let user_id = sig
@@ -856,6 +862,9 @@ impl SfuConnection {
             }
             log::info!("SFU: signaling listener ended");
         });
+        if let Ok(mut tasks) = self.tasks.lock() {
+            tasks.push(listener_task);
+        }
 
         // Step 13: Return session info
         Ok(session_info)
@@ -870,7 +879,7 @@ impl SfuConnection {
         let ws_tx = Arc::clone(&self.ws_tx);
         let peer_addr = self.peer as usize;
         let ctx_addr = ctx as usize;
-        tokio::spawn(async move {
+        let stats_task = tokio::spawn(async move {
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(10));
             interval.tick().await; // skip first immediate tick
             loop {
@@ -881,13 +890,19 @@ impl SfuConnection {
                     "seq": 0,
                     "data": payload,
                 });
+                let body = msg.to_string();
+                log::debug!("SFU -> client_stats ({} bytes)", body.len());
                 let mut tx = ws_tx.lock().await;
-                if tx.send(Message::Text(msg.to_string())).await.is_err() {
+                if let Err(e) = tx.send(Message::Text(body)).await {
+                    log::warn!("SFU: client_stats send failed: {}", e);
                     break;
                 }
             }
-            log::debug!("SFU: stats reporter ended");
+            log::info!("SFU: stats reporter ended");
         });
+        if let Ok(mut tasks) = self.tasks.lock() {
+            tasks.push(stats_task);
+        }
     }
 
     async fn send_signaling(&self, msg: &serde_json::Value) -> Result<(), StreamError> {
@@ -902,6 +917,11 @@ impl SfuConnection {
 
 impl Drop for SfuConnection {
     fn drop(&mut self) {
+        if let Ok(tasks) = self.tasks.lock() {
+            for t in tasks.iter() {
+                t.abort();
+            }
+        }
         if !self.peer.is_null() {
             unsafe {
                 mello_sys::mello_peer_destroy(self.peer);

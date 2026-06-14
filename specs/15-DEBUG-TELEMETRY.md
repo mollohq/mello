@@ -391,9 +391,29 @@ The viewer displays an estimated end-to-end latency derived from the `timestamp_
 
 ## 6. What Is Not In Scope
 
-- Persistent telemetry / analytics — no data is written to disk or sent to any server in v0.2
+- Always-on persistent telemetry / analytics — no data is continuously written to disk or streamed to a server
 - Performance counters exported to external tools (Windows Performance Monitor, etc.)
 - Crash reporting
-- Remote diagnostics
 
-These can be revisited post-beta once the pipeline is stable.
+(On-demand diagnostic capture *is* now in scope — see §8.)
+
+---
+
+## 7. Connection Telemetry (v0.3)
+
+The debug panel and `MelloStats` gained voice-robustness visibility:
+
+- **Connection state.** Nakama WS state, SFU signaling/ICE state, control-channel RTT, and the reconnect-attempt counter are surfaced in the debug panel (collapsible "Stream Transport" / "Host Pacing" groups), instead of silently showing `in_voice`.
+- **Windowed underruns.** The panel shows a rolling ~5s underrun count for current health, with the raw lifetime counter kept for reference (see [10-AUDIO_PIPELINE.md](./10-AUDIO_PIPELINE.md)).
+- **Control-channel RTT.** The client sends `{"type":"ping","ts":…}` on the reliable DataChannel ~2s; the SFU echoes a `{"type":"pong",…}` and the client derives RTT. (A prior SFU off-by-one mangled the pong type, pinning RTT to 0 — fixed.)
+- **`client_stats` uplink.** The client periodically reports a compact stats blob to the SFU over signaling for server-side correlation during troubleshooting.
+
+## 8. Diagnostic Capture (v0.3)
+
+A user-triggered capture flow for diagnosing field issues without a debug build:
+
+- A **diagnostic capture** button in the audio debug panel raises file log verbosity at runtime (via a `tracing-subscriber` reload filter + `mello_set_log_level` for libmello) and writes to a daily-rotating log file.
+- Pressing it again stops capture and uploads the bundle to object storage (R2/S3) via a short-lived **presigned PUT URL** issued by a backend RPC (see [04-BACKEND.md](./04-BACKEND.md)). Logs are retrieved out-of-band via the storage console.
+- Intended usage: ask a user mid-session to open the panel, start capture, reproduce, stop capture.
+
+See [`TESTING.md`](../TESTING.md) for the broader test/diagnostic harnesses.

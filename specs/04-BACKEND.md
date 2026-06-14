@@ -406,4 +406,19 @@ Estimated cost: ~$2,000-5,000/mo
 
 ---
 
+## Voice State Correctness (v0.3)
+
+Backend changes that make the Nakama-authoritative voice roster correct and durable (see authority model in [02-MELLO-CORE.md](./02-MELLO-CORE.md), client behaviour in [11-PRESENCE-CREW-STATE.md](./11-PRESENCE-CREW-STATE.md)).
+
+- **Idempotent same-channel `voice_join`.** Re-joining the channel a user is already in is a no-op for membership: it skips the `voiceLeaveInternal` remove-then-add and the `voice_left`/`voice_joined` churn, preserves `JoinedAt`, and just re-issues the SFU token / returns the snapshot. Prevents roster flicker on reconnect.
+- **Atomic join + capacity check.** The three voice maps (`voiceRooms` / `voiceUserChannel` / `voiceChannelCrew`) are mutated in a single critical section, closing the capacity TOCTOU.
+- **Voice cleanup on kick / leave-crew.** Kick and `AfterLeaveCrew` paths now evict the user from any voice room (previously left ghosts).
+- **Sequenced + coalesced `voice_update`.** Pushes carry a per-crew monotonic `seq` and are debounced to avoid VAD push storms.
+- **Tighter GC.** `voiceRoomGC` uses a short staleness window for `in_voice` activity instead of the blanket long TTL; combined with the client presence heartbeat.
+- **SFU reconcile oracle.** For SFU crews, Nakama pulls the SFU admin session API (`/admin/api/session/{id}`, `SFU_ADMIN_PASSWORD`) to correct membership drift, then re-pushes a sequenced update. Optional and Nakama-initiated — no-op without an SFU.
+- **`dev_fault` RPC (dev/test only).** Alongside `dev_seed_state`, injects drift for testing: force a ghost voice member, force `voice_leave`, drop the next push. Used by the reconcile/resync tests.
+- **Diagnostic upload URL RPC.** Issues a short-lived presigned PUT URL so production clients can upload a captured diagnostic log bundle (see [15-DEBUG-TELEMETRY.md](./15-DEBUG-TELEMETRY.md)).
+
+---
+
 *This spec defines the backend. For development setup, see [05-GETTING-STARTED.md](./05-GETTING-STARTED.md).*
