@@ -187,6 +187,28 @@ func PresenceUpdateRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, n
 	return `{"success":true}`, nil
 }
 
+// PresenceHeartbeatRPC bumps a live presence's UpdatedAt without broadcasting.
+// Connected clients call this periodically so the voice GC can use a short
+// staleness window to evict genuinely-dropped users while never evicting an
+// idle-but-connected one. Offline presences are not resurrected.
+func PresenceHeartbeatRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, payload string) (string, error) {
+	userID, ok := ctx.Value(runtime.RUNTIME_CTX_USER_ID).(string)
+	if !ok {
+		return "", runtime.NewError("authentication required", 16)
+	}
+	existing, err := ReadPresence(ctx, nk, userID)
+	if err != nil || existing == nil || existing.Status == StatusOffline {
+		return `{"success":true}`, nil
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	existing.LastSeen = now
+	existing.UpdatedAt = now
+	if err := WritePresence(ctx, nk, existing); err != nil {
+		logger.Warn("presence heartbeat write failed for %s: %v", userID, err)
+	}
+	return `{"success":true}`, nil
+}
+
 func PresenceGetRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, payload string) (string, error) {
 	_, ok := ctx.Value(runtime.RUNTIME_CTX_USER_ID).(string)
 	if !ok {

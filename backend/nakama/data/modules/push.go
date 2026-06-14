@@ -286,9 +286,100 @@ func PushPresenceChange(ctx context.Context, logger runtime.Logger, nk runtime.N
 	}
 }
 
+// Per-crew monotonic sequence for voice_update pushes. Lets clients discard
+// stale/out-of-order notifications (best-effort delivery has no ordering).
+var (
+	voiceUpdateSeqMu sync.Mutex
+	voiceUpdateSeq   = make(map[string]uint64)
+)
+
+// Coalescing for high-frequency voice_update triggers (speaking/mute). Bursts
+// collapse into at most one push per flush interval to avoid notification spam.
+var (
+	voiceDirtyMu sync.Mutex
+	voiceDirty   = make(map[string]bool)
+)
+
+// MarkVoiceDirty schedules a coalesced voice_update for the crew. Use for
+// high-frequency state changes; join/leave still push immediately for snappiness.
+func MarkVoiceDirty(crewID string) {
+	if crewID == "" {
+		return
+	}
+	voiceDirtyMu.Lock()
+	voiceDirty[crewID] = true
+	voiceDirtyMu.Unlock()
+}
+
+// StartVoiceCoalesceLoop flushes coalesced voice_update pushes until ctx ends.
+func StartVoiceCoalesceLoop(ctx context.Context, nk runtime.NakamaModule, logger runtime.Logger, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			voiceDirtyMu.Lock()
+			if len(voiceDirty) == 0 {
+				voiceDirtyMu.Unlock()
+				continue
+			}
+			crews := make([]string, 0, len(voiceDirty))
+			for c := range voiceDirty {
+				crews = append(crews, c)
+			}
+			voiceDirty = make(map[string]bool)
+			voiceDirtyMu.Unlock()
+			for _, c := range crews {
+				PushVoiceUpdate(ctx, logger, nk, c)
+			}
+		}
+	}
+}
+
+func nextVoiceSeq(crewID string) uint64 {
+	voiceUpdateSeqMu.Lock()
+	defer voiceUpdateSeqMu.Unlock()
+	voiceUpdateSeq[crewID]++
+	return voiceUpdateSeq[crewID]
+}
+
+// voiceDropNextPush lets the dev_fault RPC simulate lost voice_update pushes
+// (event-loss drift) for a crew. Test/dev only; never set in production.
+var (
+	voiceDropNextPushMu sync.Mutex
+	voiceDropNextPush   = make(map[string]int)
+)
+
+// DropNextVoicePush schedules the next n voice_update pushes for crewID to be
+// dropped, simulating notification loss for resilience testing.
+func DropNextVoicePush(crewID string, n int) {
+	if crewID == "" || n <= 0 {
+		return
+	}
+	voiceDropNextPushMu.Lock()
+	voiceDropNextPush[crewID] += n
+	voiceDropNextPushMu.Unlock()
+}
+
+func shouldDropVoicePush(crewID string) bool {
+	voiceDropNextPushMu.Lock()
+	defer voiceDropNextPushMu.Unlock()
+	if voiceDropNextPush[crewID] > 0 {
+		voiceDropNextPush[crewID]--
+		return true
+	}
+	return false
+}
+
 // PushVoiceUpdate sends voice state to active crew subscribers (includes speaking).
 // Sends per-channel voice data so clients can render multi-channel state.
 func PushVoiceUpdate(ctx context.Context, logger runtime.Logger, nk runtime.NakamaModule, crewID string) {
+	if shouldDropVoicePush(crewID) {
+		logger.Warn("dev_fault: dropping voice_update push for crew %s", crewID)
+		return
+	}
 	// Build per-channel voice data
 	channelDefs, _ := GetVoiceChannels(ctx, nk, crewID)
 	var channels []map[string]interface{}
@@ -297,15 +388,15 @@ func PushVoiceUpdate(ctx context.Context, logger runtime.Logger, nk runtime.Naka
 		for _, ch := range channelDefs.Channels {
 			snap := GetVoiceChannelSnapshot(ch.ID)
 			members := make([]map[string]interface{}, 0, len(snap.Members))
-		for _, m := range snap.Members {
-			members = append(members, map[string]interface{}{
-				"user_id":   m.UserID,
-				"username":  m.Username,
-				"speaking":  m.Speaking,
-				"muted":     m.Muted,
-				"deafened":  m.Deafened,
-				"joined_at": m.JoinedAt,
-			})
+			for _, m := range snap.Members {
+				members = append(members, map[string]interface{}{
+					"user_id":   m.UserID,
+					"username":  m.Username,
+					"speaking":  m.Speaking,
+					"muted":     m.Muted,
+					"deafened":  m.Deafened,
+					"joined_at": m.JoinedAt,
+				})
 			}
 			channels = append(channels, map[string]interface{}{
 				"id":         ch.ID,
@@ -333,6 +424,7 @@ func PushVoiceUpdate(ctx context.Context, logger runtime.Logger, nk runtime.Naka
 	content := map[string]interface{}{
 		"type":           "voice_update",
 		"crew_id":        crewID,
+		"seq":            nextVoiceSeq(crewID),
 		"members":        legacyMembers,
 		"voice_channels": channels,
 	}
@@ -416,7 +508,7 @@ func pushSidebarVoiceDelta(ctx context.Context, logger runtime.Logger, nk runtim
 // ---------------------------------------------------------------------------
 
 type throttleState struct {
-	lastPush map[string]time.Time      // crewID -> last push time
+	lastPush map[string]time.Time       // crewID -> last push time
 	pending  map[string]*MessagePreview // crewID -> latest pending message
 	mu       sync.Mutex
 }

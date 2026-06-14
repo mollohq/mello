@@ -13,8 +13,12 @@ use crate::VoiceChannelMember;
 
 const MAX_CORE_EVENTS_PER_POLL_TICK: usize = 128;
 
-fn broadcast_mute_state(cmd_tx: &tokio::sync::mpsc::Sender<Command>, muted: bool, deafened: bool) {
-    let _ = cmd_tx.try_send(Command::BroadcastMuteState { muted, deafened });
+fn broadcast_mute_state(
+    cmd_tx: &tokio::sync::mpsc::UnboundedSender<Command>,
+    muted: bool,
+    deafened: bool,
+) {
+    let _ = cmd_tx.send(Command::BroadcastMuteState { muted, deafened });
 }
 
 pub fn start(
@@ -107,14 +111,10 @@ pub fn start(
                         log::info!("[ipc] dispatching deep link: {:?}", link);
                         match link {
                             crate::deep_link::DeepLink::Join { code } => {
-                                let _ = poll_ctx
-                                    .cmd_tx
-                                    .try_send(Command::ResolveCrewInvite { code });
+                                let _ = poll_ctx.cmd_tx.send(Command::ResolveCrewInvite { code });
                             }
                             crate::deep_link::DeepLink::Crew { id } => {
-                                let _ = poll_ctx
-                                    .cmd_tx
-                                    .try_send(Command::SelectCrew { crew_id: id });
+                                let _ = poll_ctx.cmd_tx.send(Command::SelectCrew { crew_id: id });
                             }
                         }
                     } else {
@@ -224,9 +224,7 @@ pub fn start(
                     "tray_mute" => {
                         let new_muted = !poll_ctx.app.get_mic_muted();
                         poll_ctx.app.set_mic_muted(new_muted);
-                        let _ = poll_ctx
-                            .cmd_tx
-                            .try_send(Command::SetMute { muted: new_muted });
+                        let _ = poll_ctx.cmd_tx.send(Command::SetMute { muted: new_muted });
                         broadcast_mute_state(
                             &poll_ctx.cmd_tx,
                             new_muted,
@@ -238,7 +236,7 @@ pub fn start(
                             .set_mute_checked(new_muted);
                     }
                     "tray_leave" => {
-                        let _ = poll_ctx.cmd_tx.try_send(Command::LeaveVoice);
+                        let _ = poll_ctx.cmd_tx.send(Command::LeaveVoice);
                     }
                     "tray_quit" => {
                         log::info!("[quit] tray quit");
@@ -249,7 +247,7 @@ pub fn start(
                         #[cfg(target_os = "macos")]
                         match id {
                             "prefs" => {
-                                let _ = poll_ctx.cmd_tx.try_send(Command::ListAudioDevices);
+                                let _ = poll_ctx.cmd_tx.send(Command::ListAudioDevices);
                                 let settings = poll_ctx.settings.borrow();
                                 poll_ctx
                                     .app
@@ -285,7 +283,7 @@ pub fn start(
                                     .app
                                     .set_settings_ptt_mode(settings.input_mode == "push_to_talk");
                                 let ptt_enabled = settings.input_mode == "push_to_talk";
-                                let _ = poll_ctx.cmd_tx.try_send(Command::SetPushToTalk {
+                                let _ = poll_ctx.cmd_tx.send(Command::SetPushToTalk {
                                     enabled: ptt_enabled,
                                 });
                                 poll_ctx
@@ -306,9 +304,7 @@ pub fn start(
                             "mute" => {
                                 let new_muted = !poll_ctx.app.get_mic_muted();
                                 poll_ctx.app.set_mic_muted(new_muted);
-                                let _ = poll_ctx
-                                    .cmd_tx
-                                    .try_send(Command::SetMute { muted: new_muted });
+                                let _ = poll_ctx.cmd_tx.send(Command::SetMute { muted: new_muted });
                                 broadcast_mute_state(
                                     &poll_ctx.cmd_tx,
                                     new_muted,
@@ -318,7 +314,7 @@ pub fn start(
                             "deafen" => {
                                 let new_deafened = !poll_ctx.app.get_deafened();
                                 poll_ctx.app.set_deafened(new_deafened);
-                                let _ = poll_ctx.cmd_tx.try_send(Command::SetDeafen {
+                                let _ = poll_ctx.cmd_tx.send(Command::SetDeafen {
                                     deafened: new_deafened,
                                 });
                                 if new_deafened {
@@ -327,14 +323,12 @@ pub fn start(
                                         .set(poll_ctx.app.get_mic_muted());
                                     if !poll_ctx.app.get_mic_muted() {
                                         poll_ctx.app.set_mic_muted(true);
-                                        let _ = poll_ctx
-                                            .cmd_tx
-                                            .try_send(Command::SetMute { muted: true });
+                                        let _ =
+                                            poll_ctx.cmd_tx.send(Command::SetMute { muted: true });
                                     }
                                 } else if !poll_ctx.muted_before_deafen.get() {
                                     poll_ctx.app.set_mic_muted(false);
-                                    let _ =
-                                        poll_ctx.cmd_tx.try_send(Command::SetMute { muted: false });
+                                    let _ = poll_ctx.cmd_tx.send(Command::SetMute { muted: false });
                                 }
                                 broadcast_mute_state(
                                     &poll_ctx.cmd_tx,
@@ -367,12 +361,10 @@ pub fn start(
             // --- PTT hotkey events ---
             while let Some(event) = poll_ctx.hotkey_mgr.borrow().poll() {
                 let pressed = event == platform::hotkeys::PttEvent::Pressed;
+                let _ = poll_ctx.cmd_tx.send(Command::SetMute { muted: !pressed });
                 let _ = poll_ctx
                     .cmd_tx
-                    .try_send(Command::SetMute { muted: !pressed });
-                let _ = poll_ctx
-                    .cmd_tx
-                    .try_send(Command::VoiceSpeaking { speaking: pressed });
+                    .send(Command::VoiceSpeaking { speaking: pressed });
 
                 // Update local UI speaking state
                 let my_id = poll_ctx.app.get_user_id();
@@ -436,9 +428,7 @@ pub fn start(
                         crate::hud_manager::HudActionKind::MuteToggle => {
                             let new_muted = !poll_ctx.app.get_mic_muted();
                             poll_ctx.app.set_mic_muted(new_muted);
-                            let _ = poll_ctx
-                                .cmd_tx
-                                .try_send(Command::SetMute { muted: new_muted });
+                            let _ = poll_ctx.cmd_tx.send(Command::SetMute { muted: new_muted });
                             broadcast_mute_state(
                                 &poll_ctx.cmd_tx,
                                 new_muted,
@@ -450,7 +440,7 @@ pub fn start(
                                 .set_mute_checked(new_muted);
                         }
                         crate::hud_manager::HudActionKind::LeaveVoice => {
-                            let _ = poll_ctx.cmd_tx.try_send(Command::LeaveVoice);
+                            let _ = poll_ctx.cmd_tx.send(Command::LeaveVoice);
                         }
                         crate::hud_manager::HudActionKind::OpenCrew => {
                             poll_ctx.app.show().ok();
@@ -463,7 +453,7 @@ pub fn start(
                         crate::hud_manager::HudActionKind::DeafenToggle => {
                             let new_deafened = !poll_ctx.app.get_deafened();
                             poll_ctx.app.set_deafened(new_deafened);
-                            let _ = poll_ctx.cmd_tx.try_send(Command::SetDeafen {
+                            let _ = poll_ctx.cmd_tx.send(Command::SetDeafen {
                                 deafened: new_deafened,
                             });
                             if new_deafened {
@@ -472,12 +462,11 @@ pub fn start(
                                     .set(poll_ctx.app.get_mic_muted());
                                 if !poll_ctx.app.get_mic_muted() {
                                     poll_ctx.app.set_mic_muted(true);
-                                    let _ =
-                                        poll_ctx.cmd_tx.try_send(Command::SetMute { muted: true });
+                                    let _ = poll_ctx.cmd_tx.send(Command::SetMute { muted: true });
                                 }
                             } else if !poll_ctx.muted_before_deafen.get() {
                                 poll_ctx.app.set_mic_muted(false);
-                                let _ = poll_ctx.cmd_tx.try_send(Command::SetMute { muted: false });
+                                let _ = poll_ctx.cmd_tx.send(Command::SetMute { muted: false });
                             }
                             broadcast_mute_state(
                                 &poll_ctx.cmd_tx,
@@ -510,9 +499,7 @@ pub fn start(
                             ThumbAction::MuteToggle => {
                                 let new_muted = !poll_ctx.app.get_mic_muted();
                                 poll_ctx.app.set_mic_muted(new_muted);
-                                let _ = poll_ctx
-                                    .cmd_tx
-                                    .try_send(Command::SetMute { muted: new_muted });
+                                let _ = poll_ctx.cmd_tx.send(Command::SetMute { muted: new_muted });
                                 broadcast_mute_state(
                                     &poll_ctx.cmd_tx,
                                     new_muted,
@@ -526,7 +513,7 @@ pub fn start(
                             ThumbAction::DeafenToggle => {
                                 let new_deafened = !poll_ctx.app.get_deafened();
                                 poll_ctx.app.set_deafened(new_deafened);
-                                let _ = poll_ctx.cmd_tx.try_send(Command::SetDeafen {
+                                let _ = poll_ctx.cmd_tx.send(Command::SetDeafen {
                                     deafened: new_deafened,
                                 });
                                 if new_deafened {
@@ -535,14 +522,12 @@ pub fn start(
                                         .set(poll_ctx.app.get_mic_muted());
                                     if !poll_ctx.app.get_mic_muted() {
                                         poll_ctx.app.set_mic_muted(true);
-                                        let _ = poll_ctx
-                                            .cmd_tx
-                                            .try_send(Command::SetMute { muted: true });
+                                        let _ =
+                                            poll_ctx.cmd_tx.send(Command::SetMute { muted: true });
                                     }
                                 } else if !poll_ctx.muted_before_deafen.get() {
                                     poll_ctx.app.set_mic_muted(false);
-                                    let _ =
-                                        poll_ctx.cmd_tx.try_send(Command::SetMute { muted: false });
+                                    let _ = poll_ctx.cmd_tx.send(Command::SetMute { muted: false });
                                 }
                                 broadcast_mute_state(
                                     &poll_ctx.cmd_tx,
@@ -555,7 +540,7 @@ pub fn start(
                                     .set_mute_checked(poll_ctx.app.get_mic_muted());
                             }
                             ThumbAction::LeaveVoice => {
-                                let _ = poll_ctx.cmd_tx.try_send(Command::LeaveVoice);
+                                let _ = poll_ctx.cmd_tx.send(Command::LeaveVoice);
                             }
                         }
                     }

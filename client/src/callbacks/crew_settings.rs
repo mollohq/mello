@@ -20,7 +20,7 @@ pub fn wire(ctx: &AppContext) {
             let avatar = avatar_b64.lock().unwrap().take();
             let open = app.get_crew_settings_is_open();
             let invite_policy = app.get_crew_settings_invite_policy().to_string();
-            let _ = cmd.try_send(Command::UpdateCrew {
+            let _ = cmd.send(Command::UpdateCrew {
                 crew_id,
                 name: if name.is_empty() {
                     None
@@ -104,7 +104,7 @@ pub fn wire(ctx: &AppContext) {
             if crew_id.is_empty() || name.is_empty() {
                 return;
             }
-            let _ = cmd.try_send(Command::CreateVoiceChannel {
+            let _ = cmd.send(Command::CreateVoiceChannel {
                 crew_id,
                 name: name.to_string(),
             });
@@ -124,7 +124,7 @@ pub fn wire(ctx: &AppContext) {
                 if crew_id.is_empty() {
                     return;
                 }
-                let _ = cmd.try_send(Command::RenameVoiceChannel {
+                let _ = cmd.send(Command::RenameVoiceChannel {
                     crew_id,
                     channel_id: channel_id.to_string(),
                     name: new_name.to_string(),
@@ -144,7 +144,7 @@ pub fn wire(ctx: &AppContext) {
             if crew_id.is_empty() {
                 return;
             }
-            let _ = cmd.try_send(Command::DeleteVoiceChannel {
+            let _ = cmd.send(Command::DeleteVoiceChannel {
                 crew_id,
                 channel_id: channel_id.to_string(),
             });
@@ -163,7 +163,7 @@ pub fn wire(ctx: &AppContext) {
             if crew_id.is_empty() {
                 return;
             }
-            let _ = cmd.try_send(Command::DeleteCrew { crew_id });
+            let _ = cmd.send(Command::DeleteCrew { crew_id });
         });
     }
 
@@ -179,7 +179,7 @@ pub fn wire(ctx: &AppContext) {
             if crew_id.is_empty() {
                 return;
             }
-            let _ = cmd.try_send(Command::ChangeCrewRole {
+            let _ = cmd.send(Command::ChangeCrewRole {
                 crew_id,
                 user_id: user_id.to_string(),
                 new_role: 1,
@@ -199,7 +199,7 @@ pub fn wire(ctx: &AppContext) {
             if crew_id.is_empty() {
                 return;
             }
-            let _ = cmd.try_send(Command::ChangeCrewRole {
+            let _ = cmd.send(Command::ChangeCrewRole {
                 crew_id,
                 user_id: user_id.to_string(),
                 new_role: 2,
@@ -219,7 +219,7 @@ pub fn wire(ctx: &AppContext) {
             if crew_id.is_empty() {
                 return;
             }
-            let _ = cmd.try_send(Command::KickCrewMember {
+            let _ = cmd.send(Command::KickCrewMember {
                 crew_id,
                 user_id: user_id.to_string(),
             });
@@ -242,7 +242,7 @@ pub fn wire(ctx: &AppContext) {
     {
         let cmd = ctx.cmd_tx.clone();
         ctx.app.on_crew_context_leave(move || {
-            let _ = cmd.try_send(Command::LeaveCrew);
+            let _ = cmd.send(Command::LeaveCrew);
         });
     }
 }

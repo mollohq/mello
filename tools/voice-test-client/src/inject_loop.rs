@@ -20,13 +20,13 @@ impl InjectLoopHandle {
 
 pub fn start_inject_loop(
     rt: &Handle,
-    cmd_tx: tokio_mpsc::Sender<Command>,
+    cmd_tx: tokio_mpsc::UnboundedSender<Command>,
     mut mixer: FrameMixer,
     status_tx: mpsc::Sender<String>,
 ) -> InjectLoopHandle {
     let (stop_tx, mut stop_rx) = oneshot::channel::<()>();
     rt.spawn(async move {
-        if cmd_tx.send(Command::StartVoiceCaptureInject).await.is_err() {
+        if cmd_tx.send(Command::StartVoiceCaptureInject).is_err() {
             let _ = status_tx.send("failed to start inject mode: command channel closed".to_string());
             return;
         }
@@ -46,7 +46,7 @@ pub fn start_inject_loop(
                         let _ = status_tx.send("capture injection finished (source exhausted)".to_string());
                         break;
                     };
-                    if cmd_tx.send(Command::InjectCaptureFrame { samples: frame }).await.is_err() {
+                    if cmd_tx.send(Command::InjectCaptureFrame { samples: frame }).is_err() {
                         let _ = status_tx.send("capture injection stopped: command channel closed".to_string());
                         break;
                     }
@@ -54,7 +54,7 @@ pub fn start_inject_loop(
             }
         }
 
-        let _ = cmd_tx.send(Command::StopVoiceCaptureInject).await;
+        let _ = cmd_tx.send(Command::StopVoiceCaptureInject);
     });
 
     InjectLoopHandle {

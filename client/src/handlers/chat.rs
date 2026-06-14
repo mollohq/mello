@@ -63,7 +63,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
             if !uncached.is_empty() {
                 let _ = ctx
                     .cmd_tx
-                    .try_send(Command::FetchUserAvatars { user_ids: uncached });
+                    .send(Command::FetchUserAvatars { user_ids: uncached });
             }
             *ctx.chat_messages.borrow_mut() = messages;
             ctx.app.set_has_more_history(has_more_history);
@@ -108,7 +108,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
             if sender_id != uid && !ctx.avatar_cache.borrow().contains_key(&sender_id) {
                 let _ = ctx
                     .cmd_tx
-                    .try_send(Command::FetchUserAvatar { user_id: sender_id });
+                    .send(Command::FetchUserAvatar { user_id: sender_id });
             }
         }
         Event::HistoryLoaded { messages, cursor } => {

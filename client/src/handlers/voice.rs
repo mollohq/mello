@@ -55,7 +55,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
             member_id,
             speaking,
         } => {
-            let _ = ctx.cmd_tx.try_send(Command::VoiceSpeaking { speaking });
+            let _ = ctx.cmd_tx.send(Command::VoiceSpeaking { speaking });
 
             let current = ctx.app.get_members();
             let members: Vec<MemberData> = (0..current.row_count())
@@ -459,7 +459,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
         }
         Event::VoiceMembershipChanged { crew_id } => {
             log::debug!("SFU voice membership changed in crew {}", crew_id);
-            let _ = ctx.cmd_tx.try_send(Command::SetActiveCrew { crew_id });
+            let _ = ctx.cmd_tx.send(Command::SetActiveCrew { crew_id });
         }
         _ => {}
     }

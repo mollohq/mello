@@ -158,6 +158,11 @@ private:
     std::atomic<int> underrun_count_{0};
     std::atomic<int> rtp_recv_total_{0};
 
+    // Windowed underrun health (audio-thread only; no atomics needed).
+    int underrun_window_count_ = 0;
+    int64_t underrun_window_start_ms_ = 0;
+    int64_t last_underrun_warn_ms_ = 0;
+
     std::vector<int16_t> capture_accum_;
     std::deque<std::array<int16_t, FRAME_SIZE>> speech_pre_roll_;
     std::mutex accum_mutex_;

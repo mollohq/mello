@@ -108,6 +108,9 @@ func InitModule(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runti
 	if err := initializer.RegisterRpc("presence_get", PresenceGetRPC); err != nil {
 		return err
 	}
+	if err := initializer.RegisterRpc("presence_heartbeat", PresenceHeartbeatRPC); err != nil {
+		return err
+	}
 
 	// -----------------------------------------------------------------------
 	// RPCs — crew state
@@ -264,6 +267,9 @@ func InitModule(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runti
 	if err := initializer.RegisterRpc("dev_seed_state", DevSeedStateRPC); err != nil {
 		return err
 	}
+	if err := initializer.RegisterRpc("dev_fault", DevFaultRPC); err != nil {
+		return err
+	}
 
 	// -----------------------------------------------------------------------
 	// Background goroutines
@@ -272,6 +278,12 @@ func InitModule(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runti
 	go StartMessageThrottleLoop(nk, logger, 10*time.Second)
 	go startChatActivityTicker(ctx, nk, logger, 30*time.Minute)
 	go StartVoiceRoomGC(ctx, nk, logger, 30*time.Second)
+	go StartVoiceCoalesceLoop(ctx, nk, logger, 200*time.Millisecond)
+	if sfuReconcileEnabled() {
+		go StartVoiceReconcile(ctx, nk, logger, 20*time.Second)
+	} else {
+		logger.Info("Voice SFU reconcile disabled (SFU_ADMIN_PASSWORD and SFU_ADMIN_BASE_* not set)")
+	}
 	go StartStreamGC(ctx, nk, logger, 60*time.Second)
 	go StartSnapshotBackfillJob(ctx, nk, logger)
 	go StartWeeklyRecapJob(ctx, nk, logger)

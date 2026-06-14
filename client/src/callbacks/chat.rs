@@ -57,7 +57,7 @@ pub fn wire(ctx: &AppContext) {
             let cmd = cmd.clone();
             let s = scroll_ctx.clone();
             move |text| {
-                let _ = cmd.try_send(Command::SendMessage {
+                let _ = cmd.send(Command::SendMessage {
                     content: text.to_string(),
                     reply_to: None,
                 });
@@ -73,7 +73,7 @@ pub fn wire(ctx: &AppContext) {
             app: ctx.app.as_weak(),
         });
         ctx.app.on_send_message_with_reply(move |text, reply_to| {
-            let _ = cmd.try_send(Command::SendMessage {
+            let _ = cmd.send(Command::SendMessage {
                 content: text.to_string(),
                 reply_to: Some(reply_to.to_string()),
             });
@@ -87,7 +87,7 @@ pub fn wire(ctx: &AppContext) {
             if let Some(a) = app_weak.upgrade() {
                 a.set_loading_history(true);
             }
-            let _ = cmd.try_send(Command::LoadHistory { cursor: None });
+            let _ = cmd.send(Command::LoadHistory { cursor: None });
         });
     }
     {
@@ -98,7 +98,7 @@ pub fn wire(ctx: &AppContext) {
             app: ctx.app.as_weak(),
         });
         ctx.app.on_edit_message(move |message_id, new_body| {
-            let _ = cmd.try_send(Command::EditMessage {
+            let _ = cmd.send(Command::EditMessage {
                 message_id: message_id.to_string(),
                 new_body: new_body.to_string(),
             });
@@ -108,7 +108,7 @@ pub fn wire(ctx: &AppContext) {
     {
         let cmd = ctx.cmd_tx.clone();
         ctx.app.on_delete_message(move |message_id| {
-            let _ = cmd.try_send(Command::DeleteMessage {
+            let _ = cmd.send(Command::DeleteMessage {
                 message_id: message_id.to_string(),
             });
         });
@@ -117,7 +117,7 @@ pub fn wire(ctx: &AppContext) {
         let cmd = ctx.cmd_tx.clone();
         ctx.app.on_gif_pill_clicked(move || {
             log::info!("[gif] pill clicked, loading trending");
-            let _ = cmd.try_send(Command::LoadTrendingGifs);
+            let _ = cmd.send(Command::LoadTrendingGifs);
         });
     }
     {
@@ -125,9 +125,9 @@ pub fn wire(ctx: &AppContext) {
         ctx.app.on_gif_search(move |query| {
             let q = query.to_string();
             if q.is_empty() {
-                let _ = cmd.try_send(Command::LoadTrendingGifs);
+                let _ = cmd.send(Command::LoadTrendingGifs);
             } else {
-                let _ = cmd.try_send(Command::SearchGifs { query: q });
+                let _ = cmd.send(Command::SearchGifs { query: q });
             }
         });
     }
@@ -149,7 +149,7 @@ pub fn wire(ctx: &AppContext) {
                     height: _h as u32,
                     alt: String::new(),
                 };
-                let _ = cmd.try_send(Command::SendGif {
+                let _ = cmd.send(Command::SendGif {
                     gif,
                     body: String::new(),
                 });

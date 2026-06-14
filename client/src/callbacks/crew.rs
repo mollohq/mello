@@ -12,7 +12,7 @@ pub fn wire(ctx: &AppContext) {
     {
         let cmd = ctx.cmd_tx.clone();
         ctx.app.on_select_crew(move |crew_id| {
-            let _ = cmd.try_send(Command::SelectCrew {
+            let _ = cmd.send(Command::SelectCrew {
                 crew_id: crew_id.to_string(),
             });
         });
@@ -152,7 +152,7 @@ pub fn wire(ctx: &AppContext) {
                     avatar.is_some(),
                     invite_user_ids.len()
                 );
-                let _ = cmd.try_send(Command::CreateCrew {
+                let _ = cmd.send(Command::CreateCrew {
                     name: name.to_string(),
                     description: description.to_string(),
                     open: !is_private,
@@ -165,7 +165,7 @@ pub fn wire(ctx: &AppContext) {
         let cmd = ctx.cmd_tx.clone();
         ctx.app.on_new_crew_search_users(move |query| {
             if query.len() >= 2 {
-                let _ = cmd.try_send(Command::SearchUsers {
+                let _ = cmd.send(Command::SearchUsers {
                     query: query.to_string(),
                 });
             }
@@ -246,13 +246,13 @@ pub fn wire(ctx: &AppContext) {
     {
         let cmd = ctx.cmd_tx.clone();
         ctx.app.on_discover_requested(move || {
-            let _ = cmd.try_send(Command::DiscoverCrews { cursor: None });
+            let _ = cmd.send(Command::DiscoverCrews { cursor: None });
         });
     }
     {
         let cmd = ctx.cmd_tx.clone();
         ctx.app.on_discover_join_crew(move |crew_id| {
-            let _ = cmd.try_send(Command::JoinCrew {
+            let _ = cmd.send(Command::JoinCrew {
                 crew_id: crew_id.to_string(),
             });
         });
@@ -261,7 +261,7 @@ pub fn wire(ctx: &AppContext) {
         let cmd = ctx.cmd_tx.clone();
         ctx.app.on_discover_join_invite(move |code| {
             log::info!("[discover] join-by-invite code={}", code);
-            let _ = cmd.try_send(Command::JoinByInviteCode {
+            let _ = cmd.send(Command::JoinByInviteCode {
                 code: code.to_string(),
             });
         });
@@ -281,7 +281,7 @@ pub fn wire(ctx: &AppContext) {
             }
             *loading = true;
             log::info!("[discover] load-more triggered");
-            let _ = cmd.try_send(Command::DiscoverCrews { cursor });
+            let _ = cmd.send(Command::DiscoverCrews { cursor });
         });
     }
     {
@@ -289,7 +289,7 @@ pub fn wire(ctx: &AppContext) {
         let app_weak = ctx.app.as_weak();
         ctx.app.on_join_crew_confirmed(move |invite_code| {
             log::info!("[invite] join confirmed with code={}", invite_code);
-            let _ = cmd.try_send(Command::JoinByInviteCode {
+            let _ = cmd.send(Command::JoinByInviteCode {
                 code: invite_code.to_string(),
             });
             if let Some(app) = app_weak.upgrade() {
@@ -319,7 +319,7 @@ pub fn wire(ctx: &AppContext) {
                 return;
             }
             log::info!("[invite] requesting new invite code for crew={}", crew_id);
-            let _ = cmd.try_send(Command::CreateInviteCode { crew_id });
+            let _ = cmd.send(Command::CreateInviteCode { crew_id });
         });
     }
     {

@@ -4,6 +4,11 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+# Test/dev-only fault-injection commands (force disconnects, simulate suspend).
+# Off by default so production and the FFI/Swift Command mirror are unaffected.
+test-faults = []
+
 [dependencies]
 tokio = { workspace = true }
 tokio-tungstenite = { version = "0.21", features = ["native-tls"] }

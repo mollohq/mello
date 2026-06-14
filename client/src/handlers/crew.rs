@@ -96,7 +96,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
             }
 
             if !avatar_crew_ids.is_empty() {
-                let _ = ctx.cmd_tx.try_send(Command::FetchCrewAvatars {
+                let _ = ctx.cmd_tx.send(Command::FetchCrewAvatars {
                     crew_ids: avatar_crew_ids,
                 });
             }
@@ -153,7 +153,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
             ctx.app.set_crews(rc.into());
 
             if !avatar_crew_ids.is_empty() {
-                let _ = ctx.cmd_tx.try_send(Command::FetchCrewAvatars {
+                let _ = ctx.cmd_tx.send(Command::FetchCrewAvatars {
                     crew_ids: avatar_crew_ids,
                 });
             }
@@ -171,7 +171,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
                     }),
                 };
                 if let Some(id) = target {
-                    let _ = ctx.cmd_tx.try_send(Command::SelectCrew { crew_id: id });
+                    let _ = ctx.cmd_tx.send(Command::SelectCrew { crew_id: id });
                 }
             }
         }
@@ -362,7 +362,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
 
             if already_member {
                 log::info!("[invite] already a member, navigating to crew");
-                let _ = ctx.cmd_tx.try_send(Command::SelectCrew {
+                let _ = ctx.cmd_tx.send(Command::SelectCrew {
                     crew_id: invite.crew_id,
                 });
             } else {
@@ -398,10 +398,10 @@ pub fn handle(ctx: &AppContext, event: Event) {
             // Clear the pending avatar
             *ctx.crew_settings_avatar_b64.lock().unwrap() = None;
             // Refresh crew data
-            let _ = ctx.cmd_tx.try_send(Command::LoadMyCrews);
+            let _ = ctx.cmd_tx.send(Command::LoadMyCrews);
             // Re-fetch crew state if this is the active crew
             if ctx.app.get_active_crew_id() == crew_id.as_str() {
-                let _ = ctx.cmd_tx.try_send(Command::SetActiveCrew { crew_id });
+                let _ = ctx.cmd_tx.send(Command::SetActiveCrew { crew_id });
             }
         }
         Event::CrewUpdateFailed { reason } => {

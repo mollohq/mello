@@ -253,6 +253,10 @@ pub struct VoiceUpdate {
     pub crew_id: String,
     #[serde(default)]
     pub channel_id: String,
+    /// Per-crew monotonic sequence. Lets the client discard stale/out-of-order
+    /// pushes (0 when sent by an older server that doesn't set it).
+    #[serde(default)]
+    pub seq: u64,
     #[serde(default)]
     pub members: Vec<VoiceMember>,
     #[serde(default)]

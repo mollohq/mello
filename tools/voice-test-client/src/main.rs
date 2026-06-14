@@ -1,3 +1,4 @@
+mod headless;
 mod inject_loop;
 mod wav_player;
 
@@ -171,11 +172,8 @@ export component VoiceTestWindow inherits Window {
 }
 }
 
-fn send_command(rt: &Handle, cmd_tx: &tokio_mpsc::Sender<Command>, cmd: Command) {
-    let tx = cmd_tx.clone();
-    rt.spawn(async move {
-        let _ = tx.send(cmd).await;
-    });
+fn send_command(_rt: &Handle, cmd_tx: &tokio_mpsc::UnboundedSender<Command>, cmd: Command) {
+    let _ = cmd_tx.send(cmd);
 }
 
 fn push_log(window: &VoiceTestWindow, logs: &RcLog, message: String) {
@@ -256,10 +254,25 @@ fn build_config() -> Config {
 fn main() -> Result<(), Box<dyn Error>> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
+    // Headless scripted mode: `--scenario <file>` or VOICE_TEST_SCENARIO=<file>.
+    let args: Vec<String> = std::env::args().collect();
+    let scenario_path = args
+        .windows(2)
+        .find(|w| w[0] == "--scenario")
+        .map(|w| w[1].clone())
+        .or_else(|| {
+            std::env::var("VOICE_TEST_SCENARIO")
+                .ok()
+                .filter(|s| !s.is_empty())
+        });
+    if let Some(path) = scenario_path {
+        return headless::run_scenario(&path, build_config());
+    }
+
     let runtime = Runtime::new()?;
     let rt_handle = runtime.handle().clone();
 
-    let (cmd_tx, cmd_rx) = tokio_mpsc::channel::<Command>(512);
+    let (cmd_tx, cmd_rx) = tokio_mpsc::unbounded_channel::<Command>();
     let (event_tx, event_rx) = mpsc::channel::<Event>();
     let (inject_status_tx, inject_status_rx) = mpsc::channel::<String>();
 

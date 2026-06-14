@@ -4,6 +4,7 @@ mod clip;
 mod connection;
 mod crew;
 mod presence;
+mod reconnect;
 mod stream_ffi;
 mod streaming;
 mod voice;
@@ -107,6 +108,10 @@ pub struct Client {
     clip_tick_counter: u8,
     host_pacing_last: Option<PacingTelemetry>,
     host_pacing_last_at: Instant,
+    /// Realtime WS reconnect/liveness state machine (backoff, edge detection,
+    /// sleep/wake gap, heartbeat cadence). Pure decision logic, unit-tested in
+    /// `reconnect.rs`; `connection_tick` is its IO adapter.
+    reconnect: reconnect::ReconnectSupervisor,
 }
 
 impl Client {
@@ -187,10 +192,11 @@ impl Client {
             clip_tick_counter: 0,
             host_pacing_last: None,
             host_pacing_last_at: Instant::now(),
+            reconnect: reconnect::ReconnectSupervisor::new(),
         }
     }
 
-    pub async fn run(&mut self, mut cmd_rx: mpsc::Receiver<Command>) {
+    pub async fn run(&mut self, mut cmd_rx: mpsc::UnboundedReceiver<Command>) {
         log::info!("Mello client started, waiting for commands...");
 
         // --- Game sensing ---
@@ -216,6 +222,9 @@ impl Client {
         // Refresh access token every 45 minutes (token lives 1 hour)
         let mut refresh_tick = tokio::time::interval(tokio::time::Duration::from_secs(45 * 60));
         refresh_tick.tick().await; // consume the immediate first tick
+                                   // Supervise the realtime WS: detect drops/half-open/sleep-wake and reconnect.
+        let mut connection_tick = tokio::time::interval(tokio::time::Duration::from_secs(3));
+        connection_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
         loop {
             // Drain game events (non-blocking) before entering select!
@@ -258,6 +267,9 @@ impl Client {
                 }
                 _ = refresh_tick.tick() => {
                     self.refresh_token().await;
+                }
+                _ = connection_tick.tick() => {
+                    self.connection_tick().await;
                 }
             }
         }
@@ -823,6 +835,22 @@ impl Client {
             } => {
                 self.handle_game_session_end(&crew_id, &game_name, duration_min)
                     .await;
+            }
+
+            #[cfg(feature = "test-faults")]
+            Command::FaultNakamaDisconnect => {
+                log::warn!("test-fault: forcing Nakama WS disconnect");
+                self.nakama.force_ws_disconnect();
+            }
+            #[cfg(feature = "test-faults")]
+            Command::FaultSfuDisconnect => {
+                log::warn!("test-fault: forcing SFU voice disconnect");
+                self.voice.mark_disconnected();
+            }
+            #[cfg(feature = "test-faults")]
+            Command::FaultSimulateSuspend => {
+                log::warn!("test-fault: simulating suspend (backdating liveness clock)");
+                self.reconnect.backdate_liveness();
             }
         }
     }

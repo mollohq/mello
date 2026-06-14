@@ -10,6 +10,7 @@ members = [
     "tools/stream-viewer",
     "tools/rtp-client-test",
     "tools/sfu-stream-viewer-probe",
+    "tools/voice-test-client",
 ]
 default-members = [
     "client",

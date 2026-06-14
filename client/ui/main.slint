@@ -440,6 +440,9 @@ export component MainWindow inherits Window {
     in property <string> update-version: "";
     in property <float> update-download-progress: -1.0;
     in property <string> protocol-warning: "";
+    // Non-empty while the realtime connection is down/reconnecting (shown in the
+    // top banner so the user knows the UI may be momentarily stale).
+    in property <string> connection-warning: "";
     in-out property <string> audio-device-warning: "";
 
     // --- Callbacks ---
@@ -1013,6 +1016,7 @@ export component MainWindow inherits Window {
         version: root.update-version;
         download-progress: root.update-download-progress;
         protocol-warning: root.protocol-warning;
+        connection-warning: root.connection-warning;
         update-clicked => {
             root.update-now-clicked();
         }
