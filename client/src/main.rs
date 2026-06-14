@@ -201,7 +201,7 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
 
     let rt = tokio::runtime::Runtime::new()?;
 
-    let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel::<Command>(256);
+    let (cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel::<Command>();
     let (event_tx, event_rx) = std::sync::mpsc::channel::<Event>();
 
     // --- Auto-updater ---
@@ -311,21 +311,21 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
     {
         let s = settings.borrow();
         if let Some(ref id) = s.capture_device_id {
-            let _ = cmd_tx.try_send(Command::SetCaptureDevice { id: id.clone() });
+            let _ = cmd_tx.send(Command::SetCaptureDevice { id: id.clone() });
         }
         if let Some(ref id) = s.playback_device_id {
-            let _ = cmd_tx.try_send(Command::SetPlaybackDevice { id: id.clone() });
+            let _ = cmd_tx.send(Command::SetPlaybackDevice { id: id.clone() });
         }
-        let _ = cmd_tx.try_send(Command::SetEchoCancellation {
+        let _ = cmd_tx.send(Command::SetEchoCancellation {
             enabled: s.echo_cancellation,
         });
-        let _ = cmd_tx.try_send(Command::SetNoiseSuppression {
+        let _ = cmd_tx.send(Command::SetNoiseSuppression {
             enabled: s.noise_suppression,
         });
-        let _ = cmd_tx.try_send(Command::SetInputVolume {
+        let _ = cmd_tx.send(Command::SetInputVolume {
             volume: s.input_volume,
         });
-        let _ = cmd_tx.try_send(Command::SetOutputVolume {
+        let _ = cmd_tx.send(Command::SetOutputVolume {
             volume: s.output_volume,
         });
     }
@@ -341,11 +341,11 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
         }
         let ptt_active = s.input_mode == "push_to_talk";
         hotkey_mgr.borrow().set_active(ptt_active);
-        let _ = cmd_tx.try_send(Command::SetPushToTalk {
+        let _ = cmd_tx.send(Command::SetPushToTalk {
             enabled: ptt_active,
         });
         if ptt_active {
-            let _ = cmd_tx.try_send(Command::SetMute { muted: true });
+            let _ = cmd_tx.send(Command::SetMute { muted: true });
         }
     }
 
@@ -355,13 +355,13 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
         log::info!("[auth] startup  onboarding_step={}", s.onboarding_step);
         if s.onboarding_step > 3 {
             log::info!("[auth] onboarding done ÔÇö attempting session restore");
-            let _ = cmd_tx.try_send(Command::TryRestore);
+            let _ = cmd_tx.send(Command::TryRestore);
         } else {
             log::info!("[auth] onboarding in progress ÔÇö fetching crews (no auth)");
-            let _ = cmd_tx.try_send(Command::DiscoverCrews { cursor: None });
+            let _ = cmd_tx.send(Command::DiscoverCrews { cursor: None });
         }
         app.set_onboarding_step(s.onboarding_step as i32);
-        let _ = cmd_tx.try_send(Command::CheckMicPermission);
+        let _ = cmd_tx.send(Command::CheckMicPermission);
     }
 
     // --- HUD manager ---

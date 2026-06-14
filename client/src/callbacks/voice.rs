@@ -36,7 +36,7 @@ pub fn wire(ctx: &AppContext) {
     {
         let cmd = ctx.cmd_tx.clone();
         ctx.app.on_voice_toggle(move || {
-            let _ = cmd.try_send(Command::LeaveVoice);
+            let _ = cmd.send(Command::LeaveVoice);
         });
     }
 
@@ -48,8 +48,8 @@ pub fn wire(ctx: &AppContext) {
             if let Some(app) = app_weak.upgrade() {
                 let new_muted = !app.get_mic_muted();
                 app.set_mic_muted(new_muted);
-                let _ = cmd.try_send(Command::SetMute { muted: new_muted });
-                let _ = cmd.try_send(Command::BroadcastMuteState {
+                let _ = cmd.send(Command::SetMute { muted: new_muted });
+                let _ = cmd.send(Command::BroadcastMuteState {
                     muted: new_muted,
                     deafened: app.get_deafened(),
                 });
@@ -67,7 +67,7 @@ pub fn wire(ctx: &AppContext) {
             if let Some(app) = app_weak.upgrade() {
                 let new_deafened = !app.get_deafened();
                 app.set_deafened(new_deafened);
-                let _ = cmd.try_send(Command::SetDeafen {
+                let _ = cmd.send(Command::SetDeafen {
                     deafened: new_deafened,
                 });
 
@@ -75,15 +75,15 @@ pub fn wire(ctx: &AppContext) {
                     mbd.set(app.get_mic_muted());
                     if !app.get_mic_muted() {
                         app.set_mic_muted(true);
-                        let _ = cmd.try_send(Command::SetMute { muted: true });
+                        let _ = cmd.send(Command::SetMute { muted: true });
                     }
                 } else {
                     if !mbd.get() {
                         app.set_mic_muted(false);
-                        let _ = cmd.try_send(Command::SetMute { muted: false });
+                        let _ = cmd.send(Command::SetMute { muted: false });
                     }
                 }
-                let _ = cmd.try_send(Command::BroadcastMuteState {
+                let _ = cmd.send(Command::BroadcastMuteState {
                     muted: app.get_mic_muted(),
                     deafened: new_deafened,
                 });
@@ -99,8 +99,8 @@ pub fn wire(ctx: &AppContext) {
         ctx.app.on_join_voice_channel(move |channel_id| {
             log::info!("UI: join voice channel '{}'", channel_id);
             let ptt = settings.borrow().input_mode == "push_to_talk";
-            let _ = cmd.try_send(Command::SetPushToTalk { enabled: ptt });
-            let _ = cmd.try_send(Command::JoinVoice {
+            let _ = cmd.send(Command::SetPushToTalk { enabled: ptt });
+            let _ = cmd.send(Command::JoinVoice {
                 channel_id: channel_id.to_string(),
             });
         });
@@ -142,7 +142,7 @@ pub fn wire(ctx: &AppContext) {
             log::info!("UI: create voice channel '{}'", name);
             if let Some(app) = app_weak.upgrade() {
                 let crew_id = app.get_active_crew_id().to_string();
-                let _ = cmd.try_send(Command::CreateVoiceChannel { crew_id, name });
+                let _ = cmd.send(Command::CreateVoiceChannel { crew_id, name });
             }
         });
     }
@@ -152,7 +152,7 @@ pub fn wire(ctx: &AppContext) {
         let cmd = ctx.cmd_tx.clone();
         ctx.app.on_request_mic_permission(move || {
             log::info!("UI: requesting mic permission");
-            let _ = cmd.try_send(Command::RequestMicPermission);
+            let _ = cmd.send(Command::RequestMicPermission);
         });
     }
     {

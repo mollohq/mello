@@ -1,8 +1,17 @@
 use futures::{SinkExt, StreamExt};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock};
 use tokio_tungstenite::tungstenite::Message;
+
+/// How often the WS writer sends a ping frame to keep the socket alive and to
+/// give the reader a heartbeat to time against.
+const WS_PING_INTERVAL: std::time::Duration = std::time::Duration::from_secs(20);
+/// If the reader sees no frame (data OR pong) within this window the socket is
+/// treated as half-open (the classic sleep/wake outcome) and torn down so the
+/// reconnect supervisor can rebuild it.
+const WS_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(45);
 
 use super::types::*;
 use crate::config::Config;
@@ -48,6 +57,9 @@ pub struct NakamaClient {
     presence_tx_template: Option<mpsc::Sender<InternalPresence>>,
     /// user_id -> display_name cache, shared with the WS reader task
     member_names: Arc<RwLock<HashMap<String, String>>>,
+    /// True while the WS reader+writer tasks are alive. Set false when either
+    /// exits (close, error, or read timeout) so the client can reconnect.
+    ws_connected: Arc<AtomicBool>,
 }
 
 impl NakamaClient {
@@ -69,6 +81,7 @@ impl NakamaClient {
             member_names: Arc::new(RwLock::new(HashMap::new())),
             presence_rx: Some(pres_rx),
             presence_tx_template: Some(pres_tx),
+            ws_connected: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -494,7 +507,8 @@ impl NakamaClient {
         let signal_tx = self.signal_tx_template.clone().unwrap();
         let presence_tx = self.presence_tx_template.clone().unwrap();
 
-        tokio::spawn(ws_writer_task(ws_rx, write));
+        self.ws_connected.store(true, Ordering::SeqCst);
+        tokio::spawn(ws_writer_task(ws_rx, write, self.ws_connected.clone()));
         tokio::spawn(ws_reader_task(
             read,
             event_tx,
@@ -502,10 +516,32 @@ impl NakamaClient {
             signal_tx,
             presence_tx,
             self.member_names.clone(),
+            self.ws_connected.clone(),
         ));
 
         log::info!("WebSocket connected");
         Ok(())
+    }
+
+    /// True while the WS reader+writer tasks are alive.
+    pub fn is_ws_connected(&self) -> bool {
+        self.ws_connected.load(Ordering::SeqCst)
+    }
+
+    /// True once we hold an access token (i.e. the client is authenticated and
+    /// a WS reconnect is meaningful).
+    pub fn has_session(&self) -> bool {
+        self.token.is_some()
+    }
+
+    /// Force the realtime socket down. Used when we detect a likely half-open
+    /// connection (e.g. after sleep/wake) so the reconnect supervisor rebuilds
+    /// it immediately instead of waiting for the read timeout.
+    pub fn force_ws_disconnect(&mut self) {
+        self.ws_connected.store(false, Ordering::SeqCst);
+        // Dropping the writer sender ends the writer task; the orphaned reader
+        // task exits on its own read timeout.
+        self.ws_tx = None;
     }
 
     /// Take the signal receiver (call once, from the client run loop)
@@ -1131,6 +1167,14 @@ impl NakamaClient {
     pub async fn presence_get(&self, user_ids: &[String]) -> Result<String> {
         let payload = serde_json::json!({ "user_ids": user_ids });
         self.rpc("presence_get", &payload).await
+    }
+
+    /// Lightweight liveness ping: refreshes our presence timestamp server-side
+    /// (no broadcast) so the voice GC can use a short staleness window.
+    pub async fn presence_heartbeat(&self) -> Result<()> {
+        self.rpc("presence_heartbeat", &serde_json::json!({}))
+            .await?;
+        Ok(())
     }
 
     // --- Crew state RPCs ---
@@ -1933,13 +1977,31 @@ async fn ws_writer_task(
         >,
         Message,
     >,
+    connected: Arc<AtomicBool>,
 ) {
-    while let Some(msg) = rx.recv().await {
-        if let Err(e) = write.send(Message::Text(msg)).await {
-            log::error!("WebSocket write error: {}", e);
-            break;
+    let mut ping = tokio::time::interval(WS_PING_INTERVAL);
+    ping.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    ping.tick().await; // consume the immediate first tick
+    loop {
+        tokio::select! {
+            msg = rx.recv() => match msg {
+                Some(msg) => {
+                    if let Err(e) = write.send(Message::Text(msg)).await {
+                        log::error!("WebSocket write error: {}", e);
+                        break;
+                    }
+                }
+                None => break,
+            },
+            _ = ping.tick() => {
+                if let Err(e) = write.send(Message::Ping(Vec::new())).await {
+                    log::warn!("WebSocket ping failed: {}", e);
+                    break;
+                }
+            }
         }
     }
+    connected.store(false, Ordering::SeqCst);
 }
 
 async fn ws_reader_task(
@@ -1953,8 +2015,23 @@ async fn ws_reader_task(
     signal_tx: mpsc::Sender<InternalSignal>,
     presence_tx: mpsc::Sender<InternalPresence>,
     member_names: Arc<RwLock<HashMap<String, String>>>,
+    connected: Arc<AtomicBool>,
 ) {
-    while let Some(msg) = read.next().await {
+    loop {
+        let msg = match tokio::time::timeout(WS_READ_TIMEOUT, read.next()).await {
+            Ok(Some(msg)) => msg,
+            Ok(None) => {
+                log::info!("WebSocket stream ended");
+                break;
+            }
+            Err(_) => {
+                log::warn!(
+                    "WebSocket read idle for {:?}; treating as half-open and reconnecting",
+                    WS_READ_TIMEOUT
+                );
+                break;
+            }
+        };
         match msg {
             Ok(Message::Text(text)) => {
                 handle_ws_message(
@@ -1981,6 +2058,7 @@ async fn ws_reader_task(
             _ => {}
         }
     }
+    connected.store(false, Ordering::SeqCst);
 }
 
 async fn handle_ws_message(
@@ -2175,6 +2253,31 @@ async fn handle_ws_message(
     }
 }
 
+/// Tracks the highest voice_update sequence seen per crew so stale/duplicate
+/// pushes can be discarded. A large backward jump is treated as a server
+/// restart (seq counter reset) and re-baselines instead of dropping forever.
+fn voice_update_is_stale(crew_id: &str, seq: u64) -> bool {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+
+    if seq == 0 {
+        return false; // older server without sequencing; never drop
+    }
+    static TRACKER: OnceLock<Mutex<HashMap<String, u64>>> = OnceLock::new();
+    let mut map = TRACKER
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap();
+    if let Some(&last) = map.get(crew_id) {
+        // Within the normal ordering window: older-or-equal => stale.
+        if seq <= last && last.saturating_sub(seq) < 1000 {
+            return true;
+        }
+    }
+    map.insert(crew_id.to_string(), seq);
+    false
+}
+
 fn handle_notification(code: i32, content: &str, event_tx: &std::sync::mpsc::Sender<Event>) {
     use crate::crew_state;
 
@@ -2215,11 +2318,20 @@ fn handle_notification(code: i32, content: &str, event_tx: &std::sync::mpsc::Sen
         114 => match serde_json::from_str::<crew_state::VoiceUpdate>(content) {
             Ok(update) => {
                 log::debug!(
-                    "Notification 114: voice_update crew={} channels={} members={}",
+                    "Notification 114: voice_update crew={} seq={} channels={} members={}",
                     update.crew_id,
+                    update.seq,
                     update.voice_channels.len(),
                     update.members.len()
                 );
+                if voice_update_is_stale(&update.crew_id, update.seq) {
+                    log::debug!(
+                        "Dropping stale voice_update crew={} seq={}",
+                        update.crew_id,
+                        update.seq
+                    );
+                    return;
+                }
                 if !update.voice_channels.is_empty() {
                     let _ = event_tx.send(Event::VoiceChannelsUpdated {
                         crew_id: update.crew_id.clone(),

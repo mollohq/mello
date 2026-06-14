@@ -461,6 +461,9 @@ func KickCrewMemberRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, n
 		return "", runtime.NewError("failed to kick user", 13)
 	}
 
+	// Remove the kicked user from voice if they were in this crew's voice.
+	cleanupVoiceOnCrewExit(ctx, logger, nk, req.UserID, req.CrewID)
+
 	InvalidateCrewState(req.CrewID)
 
 	logger.Info("User %s kicked %s from crew %s", callerID, req.UserID, req.CrewID)
@@ -514,6 +517,9 @@ func AfterLeaveCrew(ctx context.Context, logger runtime.Logger, db *sql.DB, nk r
 	userID, _ := ctx.Value(runtime.RUNTIME_CTX_USER_ID).(string)
 	crewID := in.GetGroupId()
 	logger.Info("User %s left crew %s", userID, crewID)
+
+	// Remove the departing user from voice if they were in this crew's voice.
+	cleanupVoiceOnCrewExit(ctx, logger, nk, userID, crewID)
 
 	displayName := resolveUsername(ctx, nk, userID)
 	event := CrewEvent{

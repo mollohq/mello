@@ -152,7 +152,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
             if !is_self && !has_av && !ctx.avatar_cache.borrow().contains_key(&member_id) {
                 let _ = ctx
                     .cmd_tx
-                    .try_send(Command::FetchUserAvatar { user_id: member_id });
+                    .send(Command::FetchUserAvatar { user_id: member_id });
             }
             ctx.app.set_members(rc.into());
             update_active_crew_card(&ctx.app);
@@ -567,7 +567,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
                         "[avatar] fetching avatars for {} users not in crew state",
                         need_fetch.len()
                     );
-                    let _ = ctx.cmd_tx.try_send(Command::FetchUserAvatars {
+                    let _ = ctx.cmd_tx.send(Command::FetchUserAvatars {
                         user_ids: need_fetch,
                     });
                 }
@@ -780,7 +780,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
                 .set_crews(Rc::new(slint::VecModel::from(updated)).into());
 
             for crew_id in catchup_requests {
-                let _ = ctx.cmd_tx.try_send(Command::CrewCatchup {
+                let _ = ctx.cmd_tx.send(Command::CrewCatchup {
                     crew_id,
                     last_seen: 0,
                 });
@@ -789,10 +789,10 @@ pub fn handle(ctx: &AppContext, event: Event) {
         Event::CrewEventReceived { event } => {
             log::info!("UI: crew event {} in crew {}", event.event, event.crew_id);
             let crew_id = event.crew_id.clone();
-            let _ = ctx.cmd_tx.try_send(Command::SetActiveCrew {
+            let _ = ctx.cmd_tx.send(Command::SetActiveCrew {
                 crew_id: crew_id.clone(),
             });
-            let _ = ctx.cmd_tx.try_send(Command::LoadCrewFeed { crew_id });
+            let _ = ctx.cmd_tx.send(Command::LoadCrewFeed { crew_id });
         }
         Event::CatchupLoaded { response } => {
             log::info!(

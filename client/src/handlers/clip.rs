@@ -519,13 +519,13 @@ pub fn handle(ctx: &AppContext, event: Event) {
 
             let crew_id = ctx.app.get_active_crew_id().to_string();
             if !crew_id.is_empty() {
-                let _ = ctx.cmd_tx.try_send(Command::PostClip {
+                let _ = ctx.cmd_tx.send(Command::PostClip {
                     crew_id: crew_id.clone(),
                     clip_id: clip_id.clone(),
                     duration_seconds: duration_seconds as f64,
                     local_path: path.clone(),
                 });
-                let _ = ctx.cmd_tx.try_send(Command::UploadClip {
+                let _ = ctx.cmd_tx.send(Command::UploadClip {
                     crew_id,
                     clip_id,
                     wav_path: path,
@@ -540,7 +540,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
 
             let crew_id = ctx.app.get_active_crew_id().to_string();
             if !crew_id.is_empty() {
-                let _ = ctx.cmd_tx.try_send(Command::LoadCrewFeed { crew_id });
+                let _ = ctx.cmd_tx.send(Command::LoadCrewFeed { crew_id });
             }
         }
         Event::ClipUploaded { clip_id, media_url } => {

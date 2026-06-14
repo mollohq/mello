@@ -25,7 +25,7 @@ pub struct MelloCoreHandle {
     // handle's lifetime; only ever touched via `Drop` in `mello_core_destroy`.
     #[allow(dead_code)]
     rt: tokio::runtime::Runtime,
-    cmd_tx: tokio::sync::mpsc::Sender<Command>,
+    cmd_tx: tokio::sync::mpsc::UnboundedSender<Command>,
     pump: Option<JoinHandle<()>>,
 }
 
@@ -113,7 +113,7 @@ pub unsafe extern "C" fn mello_core_create(
         }
     };
 
-    let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel::<Command>(256);
+    let (cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel::<Command>();
     let (event_tx, event_rx) = std::sync::mpsc::channel::<Event>();
 
     // Frame slots are required by `Client::new` for the desktop stream-viewer
@@ -187,7 +187,7 @@ pub unsafe extern "C" fn mello_core_send_command(
             return -2;
         }
     };
-    match handle.cmd_tx.try_send(cmd) {
+    match handle.cmd_tx.send(cmd) {
         Ok(()) => 0,
         Err(e) => {
             log::warn!("mello_core_send_command: enqueue failed: {e}");

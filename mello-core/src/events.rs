@@ -466,6 +466,15 @@ pub enum Event {
         client_outdated: bool,
     },
 
+    /// Realtime (Nakama WebSocket) connection state changed. Lets the UI show a
+    /// "reconnecting" banner instead of silently freezing on stale state.
+    ConnectionStateChanged {
+        /// True when the realtime socket is up.
+        connected: bool,
+        /// True while a reconnect attempt is in flight.
+        reconnecting: bool,
+    },
+
     Error {
         message: String,
     },

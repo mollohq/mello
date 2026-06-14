@@ -24,7 +24,7 @@ pub fn wire(ctx: &AppContext) {
                 .map(|a: MainWindow| a.get_game_name().to_string())
                 .unwrap_or_default();
 
-            let _ = cmd.try_send(Command::PostMoment {
+            let _ = cmd.send(Command::PostMoment {
                 crew_id: String::new(),
                 sentiment,
                 text: String::new(),
@@ -48,7 +48,7 @@ pub fn wire(ctx: &AppContext) {
                 .map(|a: MainWindow| a.get_game_name().to_string())
                 .unwrap_or_default();
 
-            let _ = cmd.try_send(Command::PostMoment {
+            let _ = cmd.send(Command::PostMoment {
                 crew_id: String::new(),
                 sentiment: "highlight".into(),
                 text: text.to_string(),
@@ -110,7 +110,7 @@ pub fn wire(ctx: &AppContext) {
                 game_pid,
                 title
             );
-            let _ = cmd.try_send(Command::StartStream {
+            let _ = cmd.send(Command::StartStream {
                 crew_id,
                 title,
                 capture_mode: "process".to_string(),

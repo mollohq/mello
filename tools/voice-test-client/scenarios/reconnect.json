@@ -1,0 +1,22 @@
+{
+  "name": "reconnect-roster",
+  "steps": [
+    { "action": "login", "email": "${VOICE_TEST_EMAIL}", "password": "${VOICE_TEST_PASSWORD}" },
+    { "action": "expect_event", "event": "LoggedIn", "timeout_ms": 15000 },
+
+    { "action": "select_crew", "crew_id": "${VOICE_TEST_CREW_ID}" },
+    { "action": "join_voice", "channel_id": "${VOICE_TEST_CHANNEL_ID}" },
+    { "action": "expect_event", "event": "VoiceJoined", "timeout_ms": 15000 },
+
+    { "action": "inject_wav", "path": "${VOICE_TEST_WAV}", "loop_source": true },
+    { "action": "sleep", "ms": 3000 },
+
+    { "action": "fault", "kind": "nakama_disconnect" },
+    { "action": "expect_event", "event": "ConnectionStateChanged", "timeout_ms": 20000 },
+
+    { "action": "expect_event", "event": "VoiceJoined", "timeout_ms": 30000 },
+
+    { "action": "stop_inject" },
+    { "action": "leave_voice" }
+  ]
+}

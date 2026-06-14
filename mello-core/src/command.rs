@@ -371,6 +371,20 @@ pub enum Command {
         #[serde(default)]
         duration_min: u32,
     },
+
+    // --- Test/dev fault injection (feature-gated; never compiled into prod) ---
+    /// Force the realtime Nakama WebSocket down so the supervisor's reconnect
+    /// path is exercised.
+    #[cfg(feature = "test-faults")]
+    FaultNakamaDisconnect,
+    /// Force the SFU voice session into a disconnected state so the voice
+    /// tick's reconnect scheduler rebuilds it.
+    #[cfg(feature = "test-faults")]
+    FaultSfuDisconnect,
+    /// Backdate the liveness clock so the next connection tick detects a
+    /// sleep/wake gap and triggers a full reconnect + resync.
+    #[cfg(feature = "test-faults")]
+    FaultSimulateSuspend,
 }
 
 #[cfg(test)]

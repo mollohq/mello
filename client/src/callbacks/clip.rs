@@ -45,7 +45,7 @@ pub fn wire(ctx: &AppContext) {
     let cmd = ctx.cmd_tx.clone();
     ctx.app.on_clip_captured(move || {
         log::info!("UI: clip button pressed");
-        let _ = cmd.try_send(Command::CaptureClip { seconds: 30.0 });
+        let _ = cmd.send(Command::CaptureClip { seconds: 30.0 });
     });
 
     let cmd = ctx.cmd_tx.clone();
@@ -53,20 +53,20 @@ pub fn wire(ctx: &AppContext) {
         let path = path.to_string();
         if !path.is_empty() {
             log::info!("UI: play clip {}", path);
-            let _ = cmd.try_send(Command::PlayClip { path });
+            let _ = cmd.send(Command::PlayClip { path });
         }
     });
 
     let cmd = ctx.cmd_tx.clone();
     ctx.app.on_pause_clip(move || {
         log::info!("UI: pause clip");
-        let _ = cmd.try_send(Command::PauseClip);
+        let _ = cmd.send(Command::PauseClip);
     });
 
     let cmd = ctx.cmd_tx.clone();
     ctx.app.on_resume_clip(move || {
         log::info!("UI: resume clip");
-        let _ = cmd.try_send(Command::ResumeClip);
+        let _ = cmd.send(Command::ResumeClip);
     });
 
     let cmd = ctx.cmd_tx.clone();
@@ -84,7 +84,7 @@ pub fn wire(ctx: &AppContext) {
             };
             let position_ms = (normalized * duration_ms as f32) as u32;
             log::info!("UI: seek clip to {}ms", position_ms);
-            let _ = cmd.try_send(Command::SeekClip { position_ms });
+            let _ = cmd.send(Command::SeekClip { position_ms });
         }
     });
 }

@@ -70,6 +70,10 @@ pub struct VoiceManager {
     mode: VoiceMode,
     sfu_connection: Option<Arc<SfuConnection>>,
     sfu_crew_id: String,
+    /// Consecutive SFU health checks (every ~2s) that found the peer connection
+    /// down. Used to detect half-open SFU sessions (e.g. after sleep/wake) that
+    /// never surface a `Disconnected` signaling event.
+    sfu_unhealthy_checks: u32,
 }
 
 // Safety: VoiceManager is only ever accessed from a single tokio task (the client run loop).
@@ -133,6 +137,7 @@ impl VoiceManager {
             mode: VoiceMode::Disconnected,
             sfu_connection: None,
             sfu_crew_id: String::new(),
+            sfu_unhealthy_checks: 0,
         }
     }
 
@@ -227,6 +232,25 @@ impl VoiceManager {
 
     pub fn sfu_connection(&self) -> Option<&Arc<SfuConnection>> {
         self.sfu_connection.as_ref()
+    }
+
+    /// Force the voice session into the Disconnected state and emit
+    /// `VoiceSfuDisconnected` so the client's reconnect scheduler takes over.
+    /// Used when an external signal (e.g. sleep/wake) makes the current SFU
+    /// session untrustworthy. No-op outside SFU mode.
+    pub fn mark_disconnected(&mut self) {
+        if self.mode != VoiceMode::SFU {
+            return;
+        }
+        let crew_id = self.sfu_crew_id.clone();
+        self.sfu_connection = None;
+        self.active = false;
+        self.mode = VoiceMode::Disconnected;
+        self.sfu_unhealthy_checks = 0;
+        let _ = self.event_tx.send(Event::VoiceSfuDisconnected {
+            crew_id,
+            reason: "sleep_wake".into(),
+        });
     }
 
     fn setup_vad_callback(&self, local_id: &str) {
@@ -581,10 +605,29 @@ impl VoiceManager {
             let _ = self.event_tx.send(Event::MicLevel { level });
         }
 
-        // Send a DC ping every ~2 seconds (200 ticks at 100Hz)
+        // Send a DC ping every ~2 seconds (200 ticks at 100Hz) and run an SFU
+        // liveness check. By the time mode is SFU the connection was confirmed
+        // healthy (join waits for the DataChannels), so a sustained
+        // !is_connected() means the session went half-open (e.g. sleep/wake)
+        // without delivering a Disconnected signaling event.
         if self.tick_counter.is_multiple_of(200) {
             if let Some(conn) = &self.sfu_connection {
                 conn.send_ping();
+                if self.mode == VoiceMode::SFU && !conn.is_connected() {
+                    self.sfu_unhealthy_checks += 1;
+                    log::warn!(
+                        "SFU peer connection unhealthy ({}/3 checks)",
+                        self.sfu_unhealthy_checks
+                    );
+                } else {
+                    self.sfu_unhealthy_checks = 0;
+                }
+            }
+            // 3 consecutive bad checks (~6s) -> declare the session dead.
+            if self.sfu_unhealthy_checks >= 3 {
+                log::warn!("SFU peer connection dead after repeated checks; reconnecting");
+                self.mark_disconnected();
+                return;
             }
         }
 

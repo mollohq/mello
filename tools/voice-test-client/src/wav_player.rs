@@ -144,10 +144,8 @@ impl FrameMixer {
 
             let noise = match self.noise.as_ref() {
                 Some(noise) if !noise.is_empty() => {
-                    if self.noise_pos >= noise.len() {
-                        if self.looping {
-                            self.noise_pos = 0;
-                        }
+                    if self.noise_pos >= noise.len() && self.looping {
+                        self.noise_pos = 0;
                     }
                     if self.noise_pos < noise.len() {
                         let v = noise[self.noise_pos] as f32;

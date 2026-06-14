@@ -44,7 +44,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
             s.onboarding_step = 3;
             s.save();
             drop(s);
-            let _ = ctx.cmd_tx.try_send(Command::LoadMyCrews);
+            let _ = ctx.cmd_tx.send(Command::LoadMyCrews);
             dispatch_pending_deep_link(ctx);
         }
         Event::OnboardingFailed { reason } => {
@@ -98,9 +98,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
                 s.onboarding_step = 4;
                 s.save();
             }
-            let _ = ctx
-                .cmd_tx
-                .try_send(Command::FetchUserAvatar { user_id: uid });
+            let _ = ctx.cmd_tx.send(Command::FetchUserAvatar { user_id: uid });
 
             dispatch_pending_deep_link(ctx);
         }
@@ -117,7 +115,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
                 s.onboarding_step = 1;
                 s.save();
                 if let Some(ref device_id) = s.device_id {
-                    let _ = ctx.cmd_tx.try_send(Command::DeviceAuth {
+                    let _ = ctx.cmd_tx.send(Command::DeviceAuth {
                         device_id: device_id.clone(),
                     });
                 }
@@ -133,11 +131,11 @@ fn dispatch_pending_deep_link(ctx: &AppContext) {
         match deep_link {
             DeepLink::Join { code } => {
                 log::info!("[deep_link] dispatching pending join code={}", code);
-                let _ = ctx.cmd_tx.try_send(Command::ResolveCrewInvite { code });
+                let _ = ctx.cmd_tx.send(Command::ResolveCrewInvite { code });
             }
             DeepLink::Crew { id } => {
                 log::info!("[deep_link] dispatching pending crew select id={}", id);
-                let _ = ctx.cmd_tx.try_send(Command::SelectCrew { crew_id: id });
+                let _ = ctx.cmd_tx.send(Command::SelectCrew { crew_id: id });
             }
         }
     }

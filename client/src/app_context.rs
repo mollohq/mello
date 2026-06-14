@@ -2,7 +2,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
-use tokio::sync::mpsc::Sender;
+use tokio::sync::mpsc::UnboundedSender;
 
 use mello_core::Command;
 
@@ -22,7 +22,7 @@ pub type InvitedUserList = Vec<(String, String, bool)>;
 /// Created once in main(), passed by reference everywhere.
 pub struct AppContext {
     pub app: MainWindow,
-    pub cmd_tx: Sender<Command>,
+    pub cmd_tx: UnboundedSender<Command>,
     pub settings: Rc<RefCell<Settings>>,
     pub rt: tokio::runtime::Handle,
     pub active_voice_channel: Rc<RefCell<String>>,

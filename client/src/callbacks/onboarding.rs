@@ -21,7 +21,7 @@ pub fn wire(ctx: &AppContext) {
         let shuffle_timer = ctx.avatar_shuffle_timer.clone();
         let rt_handle = ctx.rt.clone();
         ctx.app.on_onboarding_crew_selected(move |crew_id| {
-            let _ = cmd.try_send(Command::ListAudioDevices);
+            let _ = cmd.send(Command::ListAudioDevices);
             if let Some(app) = app_weak.upgrade() {
                 app.set_onboarding_step(2);
                 let mut settings = s.borrow_mut();
@@ -64,7 +64,7 @@ pub fn wire(ctx: &AppContext) {
         let cmd = ctx.cmd_tx.clone();
         let app_weak = ctx.app.as_weak();
         ctx.app.on_onboarding_create_crew(move |_name| {
-            let _ = cmd.try_send(Command::ListAudioDevices);
+            let _ = cmd.send(Command::ListAudioDevices);
             if let Some(app) = app_weak.upgrade() {
                 app.set_new_crew_has_avatar(false);
                 app.set_new_crew_created(false);
@@ -191,7 +191,7 @@ pub fn wire(ctx: &AppContext) {
                         crew_name,
                         avatar_data.is_some(),
                     );
-                    let _ = cmd.try_send(Command::FinalizeOnboarding {
+                    let _ = cmd.send(Command::FinalizeOnboarding {
                         crew_id,
                         crew_name,
                         crew_description,
@@ -226,7 +226,7 @@ pub fn wire(ctx: &AppContext) {
                 let mut settings = s.borrow_mut();
                 settings.onboarding_step = 4;
                 settings.save();
-                let _ = cmd.try_send(Command::LoadMyCrews);
+                let _ = cmd.send(Command::LoadMyCrews);
             }
         });
     }
@@ -235,32 +235,32 @@ pub fn wire(ctx: &AppContext) {
     {
         let cmd = ctx.cmd_tx.clone();
         ctx.app.on_onboarding_auth_steam(move || {
-            let _ = cmd.try_send(Command::AuthSteam);
+            let _ = cmd.send(Command::AuthSteam);
         });
     }
     {
         let cmd = ctx.cmd_tx.clone();
         ctx.app.on_onboarding_auth_google(move || {
-            let _ = cmd.try_send(Command::LinkGoogle);
+            let _ = cmd.send(Command::LinkGoogle);
         });
     }
     {
         let cmd = ctx.cmd_tx.clone();
         ctx.app.on_onboarding_auth_twitch(move || {
-            let _ = cmd.try_send(Command::AuthTwitch);
+            let _ = cmd.send(Command::AuthTwitch);
         });
     }
     {
         let cmd = ctx.cmd_tx.clone();
         ctx.app.on_onboarding_auth_discord(move || {
-            let _ = cmd.try_send(Command::LinkDiscord);
+            let _ = cmd.send(Command::LinkDiscord);
         });
     }
     {
         let cmd = ctx.cmd_tx.clone();
         ctx.app.on_onboarding_auth_apple(move || {
             // No native Apple flow on desktop yet; empty token → handler reports unsupported.
-            let _ = cmd.try_send(Command::AuthApple {
+            let _ = cmd.send(Command::AuthApple {
                 identity_token: String::new(),
             });
         });
@@ -270,7 +270,7 @@ pub fn wire(ctx: &AppContext) {
     {
         let cmd = ctx.cmd_tx.clone();
         ctx.app.on_onboarding_link_email(move |email, password| {
-            let _ = cmd.try_send(Command::LinkEmail {
+            let _ = cmd.send(Command::LinkEmail {
                 email: email.to_string(),
                 password: password.to_string(),
             });
@@ -298,7 +298,7 @@ pub fn wire(ctx: &AppContext) {
         let s = ctx.settings.clone();
         ctx.app.on_onboarding_capture_device_selected(move |id| {
             let id_str = id.to_string();
-            let _ = cmd.try_send(Command::SetCaptureDevice { id: id_str.clone() });
+            let _ = cmd.send(Command::SetCaptureDevice { id: id_str.clone() });
             let mut settings = s.borrow_mut();
             settings.capture_device_id = Some(id_str);
             settings.save();
@@ -309,7 +309,7 @@ pub fn wire(ctx: &AppContext) {
         let s = ctx.settings.clone();
         ctx.app.on_onboarding_playback_device_selected(move |id| {
             let id_str = id.to_string();
-            let _ = cmd.try_send(Command::SetPlaybackDevice { id: id_str.clone() });
+            let _ = cmd.send(Command::SetPlaybackDevice { id: id_str.clone() });
             let mut settings = s.borrow_mut();
             settings.playback_device_id = Some(id_str);
             settings.save();

@@ -126,6 +126,19 @@ pub fn handle_event(ctx: &AppContext, event: Event) {
 
         // Misc
         Event::SignalReceived { .. } => {}
+        Event::ConnectionStateChanged {
+            connected,
+            reconnecting,
+        } => {
+            let msg = if reconnecting {
+                "Reconnecting…"
+            } else if !connected {
+                "Connection lost"
+            } else {
+                ""
+            };
+            ctx.app.set_connection_warning(msg.into());
+        }
         Event::ProtocolMismatch { message, .. } => {
             ctx.app.set_protocol_warning(message.into());
         }

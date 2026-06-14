@@ -798,13 +798,33 @@ impl SfuConnection {
                                     }
                                 }
                                 "error" => {
+                                    let code =
+                                        sig.data.get("code").and_then(|v| v.as_str()).unwrap_or("");
                                     let error_msg = sig
                                         .data
                                         .get("message")
                                         .and_then(|v| v.as_str())
                                         .unwrap_or("unknown error")
                                         .to_string();
-                                    log::error!("SFU signaling error: {}", error_msg);
+                                    log::error!("SFU signaling error [{}]: {}", code, error_msg);
+                                    // Fatal errors leave the session unusable, so
+                                    // surface them as a disconnect to drive a full
+                                    // reconnect. Transient validation errors (e.g. a
+                                    // stray ICE candidate) are logged only.
+                                    const FATAL: &[&str] = &[
+                                        "INVALID_TOKEN",
+                                        "INVALID_ROLE",
+                                        "SESSION_FULL",
+                                        "WEBRTC_ERROR",
+                                    ];
+                                    if FATAL.contains(&code) {
+                                        let _ = event_tx_clone
+                                            .send(SfuEvent::Disconnected {
+                                                reason: format!("error:{}", code),
+                                            })
+                                            .await;
+                                        break;
+                                    }
                                 }
                                 "session_ended" => {
                                     let _ = event_tx_clone

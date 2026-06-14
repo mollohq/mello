@@ -14,7 +14,7 @@ pub fn wire(ctx: &AppContext) {
         let s = ctx.settings.clone();
         let prof_st = ctx.profile_avatar_state.clone();
         ctx.app.on_settings_requested(move || {
-            let _ = cmd.try_send(Command::ListAudioDevices);
+            let _ = cmd.send(Command::ListAudioDevices);
             if let Some(app) = app_weak.upgrade() {
                 let settings = s.borrow();
                 app.set_settings_start_on_boot(settings.start_on_boot);
@@ -56,7 +56,7 @@ pub fn wire(ctx: &AppContext) {
         let s = ctx.settings.clone();
         ctx.app.on_capture_device_selected(move |id| {
             let id_str = id.to_string();
-            let _ = cmd.try_send(Command::SetCaptureDevice { id: id_str.clone() });
+            let _ = cmd.send(Command::SetCaptureDevice { id: id_str.clone() });
             let mut settings = s.borrow_mut();
             settings.capture_device_id = Some(id_str);
             settings.save();
@@ -67,7 +67,7 @@ pub fn wire(ctx: &AppContext) {
         let s = ctx.settings.clone();
         ctx.app.on_playback_device_selected(move |id| {
             let id_str = id.to_string();
-            let _ = cmd.try_send(Command::SetPlaybackDevice { id: id_str.clone() });
+            let _ = cmd.send(Command::SetPlaybackDevice { id: id_str.clone() });
             let mut settings = s.borrow_mut();
             settings.playback_device_id = Some(id_str);
             settings.save();
@@ -79,7 +79,7 @@ pub fn wire(ctx: &AppContext) {
         ctx.app.on_mic_test_toggled(move || {
             if let Some(app) = app_weak.upgrade() {
                 let enabled = app.get_mic_testing();
-                let _ = cmd.try_send(Command::SetLoopback { enabled });
+                let _ = cmd.send(Command::SetLoopback { enabled });
             }
         });
     }
@@ -185,7 +185,7 @@ pub fn wire(ctx: &AppContext) {
             let mut settings = s.borrow_mut();
             settings.input_volume = v;
             settings.save();
-            let _ = cmd.try_send(Command::SetInputVolume { volume: v });
+            let _ = cmd.send(Command::SetInputVolume { volume: v });
         });
     }
     {
@@ -195,7 +195,7 @@ pub fn wire(ctx: &AppContext) {
             let mut settings = s.borrow_mut();
             settings.output_volume = v;
             settings.save();
-            let _ = cmd.try_send(Command::SetOutputVolume { volume: v });
+            let _ = cmd.send(Command::SetOutputVolume { volume: v });
         });
     }
     {
@@ -205,7 +205,7 @@ pub fn wire(ctx: &AppContext) {
             let mut settings = s.borrow_mut();
             settings.noise_suppression = v;
             settings.save();
-            let _ = cmd.try_send(Command::SetNoiseSuppression { enabled: v });
+            let _ = cmd.send(Command::SetNoiseSuppression { enabled: v });
         });
     }
     {
@@ -215,7 +215,7 @@ pub fn wire(ctx: &AppContext) {
             let mut settings = s.borrow_mut();
             settings.echo_cancellation = v;
             settings.save();
-            let _ = cmd.try_send(Command::SetEchoCancellation { enabled: v });
+            let _ = cmd.send(Command::SetEchoCancellation { enabled: v });
         });
     }
     {
@@ -232,18 +232,18 @@ pub fn wire(ctx: &AppContext) {
             };
             settings.save();
             hk.borrow().set_active(is_ptt);
-            let _ = cmd.try_send(Command::SetPushToTalk { enabled: is_ptt });
+            let _ = cmd.send(Command::SetPushToTalk { enabled: is_ptt });
             let current_deafened = app_weak
                 .upgrade()
                 .map(|app| app.get_deafened())
                 .unwrap_or(false);
             let target_muted = is_ptt || current_deafened;
             // Mute when entering PTT (unmute on key press), unmute when leaving PTT
-            let _ = cmd.try_send(Command::SetMute {
+            let _ = cmd.send(Command::SetMute {
                 muted: target_muted,
             });
             if let Some(app) = app_weak.upgrade() {
-                let _ = cmd.try_send(Command::BroadcastMuteState {
+                let _ = cmd.send(Command::BroadcastMuteState {
                     muted: target_muted,
                     deafened: app.get_deafened(),
                 });
@@ -304,22 +304,22 @@ pub fn wire(ctx: &AppContext) {
             hk.borrow()
                 .set_active(defaults.input_mode == "push_to_talk");
 
-            let _ = cmd.try_send(Command::SetInputVolume {
+            let _ = cmd.send(Command::SetInputVolume {
                 volume: defaults.input_volume,
             });
-            let _ = cmd.try_send(Command::SetOutputVolume {
+            let _ = cmd.send(Command::SetOutputVolume {
                 volume: defaults.output_volume,
             });
-            let _ = cmd.try_send(Command::SetNoiseSuppression {
+            let _ = cmd.send(Command::SetNoiseSuppression {
                 enabled: defaults.noise_suppression,
             });
-            let _ = cmd.try_send(Command::SetEchoCancellation {
+            let _ = cmd.send(Command::SetEchoCancellation {
                 enabled: defaults.echo_cancellation,
             });
-            let _ = cmd.try_send(Command::SetPushToTalk {
+            let _ = cmd.send(Command::SetPushToTalk {
                 enabled: defaults.input_mode == "push_to_talk",
             });
-            let _ = cmd.try_send(Command::SetMute {
+            let _ = cmd.send(Command::SetMute {
                 muted: target_muted,
             });
 
@@ -350,7 +350,7 @@ pub fn wire(ctx: &AppContext) {
                 app.set_settings_hud_overlay_opacity(defaults.hud_overlay_opacity);
                 app.set_settings_hud_clip_toasts(defaults.hud_show_clip_toasts);
 
-                let _ = cmd.try_send(Command::BroadcastMuteState {
+                let _ = cmd.send(Command::BroadcastMuteState {
                     muted: target_muted,
                     deafened: app.get_deafened(),
                 });
@@ -383,7 +383,7 @@ pub fn wire(ctx: &AppContext) {
         ctx.app.on_debug_toggled(move || {
             if let Some(app) = app_weak.upgrade() {
                 let enabled = app.get_debug_open();
-                let _ = cmd.try_send(Command::SetDebugMode { enabled });
+                let _ = cmd.send(Command::SetDebugMode { enabled });
             }
         });
     }
@@ -421,7 +421,7 @@ pub fn wire(ctx: &AppContext) {
 
             if let Some(app) = app_weak.upgrade() {
                 let nickname = app.get_profile_nickname_value().to_string();
-                let _ = cmd.try_send(Command::UpdateProfile {
+                let _ = cmd.send(Command::UpdateProfile {
                     display_name: nickname,
                     avatar_data,
                     avatar_format,
@@ -507,7 +507,7 @@ pub fn wire(ctx: &AppContext) {
             if nickname.is_empty() {
                 return;
             }
-            let _ = cmd.try_send(Command::UpdateProfile {
+            let _ = cmd.send(Command::UpdateProfile {
                 display_name: nickname,
                 avatar_data: None,
                 avatar_format: None,

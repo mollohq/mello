@@ -3,6 +3,7 @@
 #include <cstring>
 #include <algorithm>
 #include <cmath>
+#include <chrono>
 #include <fstream>
 
 #ifdef _WIN32
@@ -652,6 +653,31 @@ size_t AudioPipeline::mix_output(int16_t* out, size_t count) {
             for (auto& [pid, buf] : peer_buffers_) total_rb += static_cast<int>(buf->available());
             MELLO_LOG_INFO("pipeline", "mix_output UNDERRUN #%u: peers=%zu jb_pkts=%d rb_samples=%d popped=%d decoded=%d fec=%d plc=%d errs=%d",
                            ur, peer_buffers_.size(), total_jb, total_rb, total_popped, total_decoded, concealment_fec, concealment_plc, decode_errors);
+        }
+        // Windowed underrun rate: warn when underruns are *currently* sustained
+        // rather than relying on the ever-growing lifetime counter, which looks
+        // alarming on long sessions even when audio is presently fine.
+        if (!peer_buffers_.empty()) {
+            int64_t now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                 std::chrono::steady_clock::now().time_since_epoch())
+                                 .count();
+            constexpr int64_t kUnderrunWindowMs = 5000;
+            if (underrun_window_start_ms_ == 0) underrun_window_start_ms_ = now_ms;
+            ++underrun_window_count_;
+            int64_t elapsed = now_ms - underrun_window_start_ms_;
+            if (elapsed >= kUnderrunWindowMs) {
+                // ~5 underruns/sec sustained over the window => audibly degraded.
+                if (underrun_window_count_ >= 25 &&
+                    now_ms - last_underrun_warn_ms_ >= kUnderrunWindowMs) {
+                    MELLO_LOG_WARN("pipeline",
+                                   "sustained audio underruns: %d in last %lldms (%.1f/s) -- output likely degraded",
+                                   underrun_window_count_, (long long)elapsed,
+                                   underrun_window_count_ * 1000.0 / elapsed);
+                    last_underrun_warn_ms_ = now_ms;
+                }
+                underrun_window_start_ms_ = now_ms;
+                underrun_window_count_ = 0;
+            }
         }
     }
 

@@ -46,8 +46,8 @@ pub fn wire(ctx: &AppContext) {
     {
         let cmd = ctx.cmd_tx.clone();
         ctx.app.on_list_capture_sources(move || {
-            let _ = cmd.try_send(Command::ListCaptureSources);
-            let _ = cmd.try_send(Command::StartThumbnailRefresh);
+            let _ = cmd.send(Command::ListCaptureSources);
+            let _ = cmd.send(Command::StartThumbnailRefresh);
         });
     }
     {
@@ -77,8 +77,8 @@ pub fn wire(ctx: &AppContext) {
 
                 let (monitor_index, hwnd, pid) = parse_capture_source_id(&id, &mode);
 
-                let _ = cmd.try_send(Command::StopThumbnailRefresh);
-                let _ = cmd.try_send(Command::StartStream {
+                let _ = cmd.send(Command::StopThumbnailRefresh);
+                let _ = cmd.send(Command::StartStream {
                     crew_id,
                     title: stream_title,
                     capture_mode: mode,
@@ -92,19 +92,19 @@ pub fn wire(ctx: &AppContext) {
     {
         let cmd = ctx.cmd_tx.clone();
         ctx.app.on_stop_stream(move || {
-            let _ = cmd.try_send(Command::StopStream);
+            let _ = cmd.send(Command::StopStream);
         });
     }
     {
         let cmd = ctx.cmd_tx.clone();
         ctx.app.on_stop_thumbnail_refresh(move || {
-            let _ = cmd.try_send(Command::StopThumbnailRefresh);
+            let _ = cmd.send(Command::StopThumbnailRefresh);
         });
     }
     {
         let cmd = ctx.cmd_tx.clone();
         ctx.app.on_stop_watching(move || {
-            let _ = cmd.try_send(Command::StopWatching);
+            let _ = cmd.send(Command::StopWatching);
         });
     }
     {
@@ -118,7 +118,7 @@ pub fn wire(ctx: &AppContext) {
                     width,
                     height
                 );
-                let _ = cmd.try_send(Command::WatchStream {
+                let _ = cmd.send(Command::WatchStream {
                     host_id: host_id.to_string(),
                     session_id: session_id.to_string(),
                     width: width as u32,

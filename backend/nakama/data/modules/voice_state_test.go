@@ -1,6 +1,9 @@
 package main
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func resetVoiceState() {
 	voiceRoomsMu.Lock()
@@ -119,6 +122,87 @@ func TestVoiceRoomJoinLeave(t *testing.T) {
 	snap = GetVoiceSnapshot(crewID)
 	if snap.Active {
 		t.Error("expected inactive after last member left")
+	}
+}
+
+// A same-channel rejoin (reconnect) must keep the member present, preserve
+// their original JoinedAt, and refresh the username -- without recreating the
+// entry (which is what caused the roster flicker for other members).
+func TestUpsertVoiceMember_IdempotentRejoin(t *testing.T) {
+	resetVoiceState()
+
+	crewID := "crew_re"
+	channelID := "ch_re"
+	userID := "user_1"
+
+	// Seed an existing member with a known (old) JoinedAt.
+	originalJoinedAt := time.Now().Add(-10 * time.Minute).UnixMilli()
+	voiceRoomsMu.Lock()
+	voiceRooms[channelID] = &VoiceRoom{
+		ChannelID: channelID,
+		CrewID:    crewID,
+		Members: map[string]*VoiceMemberState{
+			userID: {UserID: userID, Username: "alice", JoinedAt: originalJoinedAt, Speaking: true},
+		},
+	}
+	voiceRoomsMu.Unlock()
+	voiceUserChannelMu.Lock()
+	voiceUserChannel[userID] = channelID
+	voiceUserChannelMu.Unlock()
+
+	existed := upsertVoiceMember(channelID, crewID, userID, "alice_renamed")
+	if !existed {
+		t.Fatal("expected upsert to report the member already existed")
+	}
+
+	voiceRoomsMu.RLock()
+	m := voiceRooms[channelID].Members[userID]
+	count := len(voiceRooms[channelID].Members)
+	voiceRoomsMu.RUnlock()
+
+	if count != 1 {
+		t.Fatalf("expected 1 member after rejoin, got %d", count)
+	}
+	if m.JoinedAt != originalJoinedAt {
+		t.Errorf("rejoin must preserve JoinedAt: want %d, got %d", originalJoinedAt, m.JoinedAt)
+	}
+	if m.Username != "alice_renamed" {
+		t.Errorf("rejoin should refresh username, got %s", m.Username)
+	}
+	if !m.Speaking {
+		t.Error("rejoin should preserve existing member state (speaking)")
+	}
+
+	voiceChannelCrewMu.RLock()
+	gotCrew := voiceChannelCrew[channelID]
+	voiceChannelCrewMu.RUnlock()
+	if gotCrew != crewID {
+		t.Errorf("expected channel->crew map kept consistent, got %s", gotCrew)
+	}
+}
+
+// Upsert into a channel with no existing room should create the room and the
+// member with a fresh JoinedAt.
+func TestUpsertVoiceMember_FirstJoinCreatesRoom(t *testing.T) {
+	resetVoiceState()
+
+	existed := upsertVoiceMember("ch_new", "crew_new", "user_x", "xavier")
+	if existed {
+		t.Fatal("expected first join to report member did not exist")
+	}
+
+	voiceRoomsMu.RLock()
+	room, ok := voiceRooms["ch_new"]
+	voiceRoomsMu.RUnlock()
+	if !ok {
+		t.Fatal("expected room to be created")
+	}
+	m, ok := room.Members["user_x"]
+	if !ok {
+		t.Fatal("expected member to be added")
+	}
+	if m.JoinedAt == 0 {
+		t.Error("expected fresh JoinedAt to be set")
 	}
 }
 

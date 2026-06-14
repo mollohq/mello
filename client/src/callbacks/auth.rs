@@ -13,7 +13,7 @@ pub fn wire(ctx: &AppContext) {
                 app.set_login_loading(true);
                 app.set_login_error("".into());
             }
-            let _ = cmd.try_send(Command::Login {
+            let _ = cmd.send(Command::Login {
                 email: email.to_string(),
                 password: password.to_string(),
             });
@@ -28,7 +28,7 @@ pub fn wire(ctx: &AppContext) {
         let avatar_cache_ref = ctx.avatar_cache.clone();
         ctx.app.on_logout(move || {
             avatar_cache_ref.borrow_mut().clear();
-            let _ = cmd.try_send(Command::Logout);
+            let _ = cmd.send(Command::Logout);
             if let Some(app) = app_weak.upgrade() {
                 app.set_logged_in(false);
                 app.set_user_name("".into());
@@ -44,7 +44,7 @@ pub fn wire(ctx: &AppContext) {
             s.save();
             log::info!("Logged out — returning to onboarding step 1");
             if let Some(ref device_id) = s.device_id {
-                let _ = cmd.try_send(Command::DeviceAuth {
+                let _ = cmd.send(Command::DeviceAuth {
                     device_id: device_id.clone(),
                 });
             }
@@ -59,7 +59,7 @@ pub fn wire(ctx: &AppContext) {
             if let Some(app) = app_weak.upgrade() {
                 app.set_show_sign_in(false);
             }
-            let _ = cmd.try_send(Command::AuthSteam);
+            let _ = cmd.send(Command::AuthSteam);
         });
     }
     {
@@ -69,7 +69,7 @@ pub fn wire(ctx: &AppContext) {
             if let Some(app) = app_weak.upgrade() {
                 app.set_show_sign_in(false);
             }
-            let _ = cmd.try_send(Command::AuthGoogle);
+            let _ = cmd.send(Command::AuthGoogle);
         });
     }
     {
@@ -79,7 +79,7 @@ pub fn wire(ctx: &AppContext) {
             if let Some(app) = app_weak.upgrade() {
                 app.set_show_sign_in(false);
             }
-            let _ = cmd.try_send(Command::AuthTwitch);
+            let _ = cmd.send(Command::AuthTwitch);
         });
     }
     {
@@ -89,7 +89,7 @@ pub fn wire(ctx: &AppContext) {
             if let Some(app) = app_weak.upgrade() {
                 app.set_show_sign_in(false);
             }
-            let _ = cmd.try_send(Command::AuthDiscord);
+            let _ = cmd.send(Command::AuthDiscord);
         });
     }
     {
@@ -100,7 +100,7 @@ pub fn wire(ctx: &AppContext) {
                 app.set_show_sign_in(false);
             }
             // No native Apple flow on desktop yet; empty token → handler reports unsupported.
-            let _ = cmd.try_send(Command::AuthApple {
+            let _ = cmd.send(Command::AuthApple {
                 identity_token: String::new(),
             });
         });

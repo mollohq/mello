@@ -118,6 +118,62 @@ func GetVoiceSnapshot(crewID string) *VoiceSnapshot {
 	return &VoiceSnapshot{Active: false, Members: []*VoiceMemberState{}}
 }
 
+// upsertVoiceMember ensures userID is a member of channelID, creating the room
+// if needed and PRESERVING an existing member's JoinedAt. It also keeps the
+// channel->crew reverse map consistent. Used by the idempotent same-channel
+// rejoin path (e.g. reconnects) so a member's roster entry is never recreated.
+// Returns true if the member already existed.
+func upsertVoiceMember(channelID, crewID, userID, username string) bool {
+	voiceRoomsMu.Lock()
+	room, exists := voiceRooms[channelID]
+	if !exists {
+		room = &VoiceRoom{
+			ChannelID: channelID,
+			CrewID:    crewID,
+			Members:   make(map[string]*VoiceMemberState),
+		}
+		voiceRooms[channelID] = room
+	}
+	m, existed := room.Members[userID]
+	if existed {
+		m.Username = username
+	} else {
+		room.Members[userID] = &VoiceMemberState{
+			UserID:   userID,
+			Username: username,
+			JoinedAt: time.Now().UnixMilli(),
+		}
+	}
+	voiceRoomsMu.Unlock()
+
+	voiceChannelCrewMu.Lock()
+	voiceChannelCrew[channelID] = crewID
+	voiceChannelCrewMu.Unlock()
+
+	return existed
+}
+
+// cleanupVoiceOnCrewExit removes a user from voice when they leave or are
+// kicked from a crew, but ONLY if their current voice channel belongs to that
+// crew (a user could be in another crew's voice). Prevents voice ghosts that
+// otherwise linger until the staleness GC.
+func cleanupVoiceOnCrewExit(ctx context.Context, logger runtime.Logger, nk runtime.NakamaModule, userID, crewID string) {
+	voiceUserChannelMu.RLock()
+	ch := voiceUserChannel[userID]
+	voiceUserChannelMu.RUnlock()
+	if ch == "" {
+		return
+	}
+	voiceChannelCrewMu.RLock()
+	chCrew := voiceChannelCrew[ch]
+	voiceChannelCrewMu.RUnlock()
+	if chCrew != crewID {
+		return
+	}
+	logger.Info("Cleaning up voice for user=%s leaving crew=%s (channel=%s)", userID, crewID, ch)
+	voiceLeaveInternal(ctx, logger, nk, userID)
+}
+
 // ---------------------------------------------------------------------------
 // RPCs
 // ---------------------------------------------------------------------------
@@ -175,14 +231,19 @@ func VoiceJoinRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk run
 	// Determine voice mode based on crew entitlement
 	sfuMode := sfuAuthEnabled() && hasPremiumCrew(ctx, nk, req.CrewID)
 
-	// Check capacity (SFU: 50, P2P: 6)
+	// Check capacity (SFU: 50, P2P: 6). An existing member re-joining the same
+	// channel is already counted, so don't reject them when the room is full.
 	maxMembers := MaxVoiceChannelMembers
 	if sfuMode {
 		maxMembers = MaxSFUVoiceChannelMembers
 	}
 	voiceRoomsMu.RLock()
 	room, exists := voiceRooms[req.ChannelID]
-	if exists && len(room.Members) >= maxMembers {
+	alreadyMember := false
+	if exists {
+		_, alreadyMember = room.Members[userID]
+	}
+	if exists && !alreadyMember && len(room.Members) >= maxMembers {
 		voiceRoomsMu.RUnlock()
 		return "", runtime.NewError(fmt.Sprintf("channel full (%d members max)", maxMembers), 9)
 	}
@@ -191,42 +252,55 @@ func VoiceJoinRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk run
 	// Resolve username
 	username := resolveUsername(ctx, nk, userID)
 
-	// Leave any existing voice room first
-	voiceLeaveInternal(ctx, logger, nk, userID)
+	// Is this an idempotent re-join of the channel the user is already in
+	// (e.g. a reconnect)? If so we must NOT churn the roster (no leave/join
+	// broadcasts) and must preserve the original JoinedAt. This is the fix for
+	// the roster flicker every other crew member saw on a peer's reconnect.
+	voiceUserChannelMu.RLock()
+	sameChannelRejoin := voiceUserChannel[userID] == req.ChannelID
+	voiceUserChannelMu.RUnlock()
 
-	// Join the new room
-	voiceRoomsMu.Lock()
-	room, exists = voiceRooms[req.ChannelID]
-	if !exists {
-		room = &VoiceRoom{
-			ChannelID: req.ChannelID,
-			CrewID:    req.CrewID,
-			Members:   make(map[string]*VoiceMemberState),
+	if sameChannelRejoin {
+		// Ensure the member entry exists, preserve JoinedAt, refresh username.
+		upsertVoiceMember(req.ChannelID, req.CrewID, userID, username)
+		logger.Info("Voice re-join (idempotent): user=%s crew=%s channel=%s", userID, req.CrewID, req.ChannelID)
+	} else {
+		// First join or channel switch: leave any prior room, then add.
+		voiceLeaveInternal(ctx, logger, nk, userID)
+
+		voiceRoomsMu.Lock()
+		room, exists = voiceRooms[req.ChannelID]
+		if !exists {
+			room = &VoiceRoom{
+				ChannelID: req.ChannelID,
+				CrewID:    req.CrewID,
+				Members:   make(map[string]*VoiceMemberState),
+			}
+			voiceRooms[req.ChannelID] = room
 		}
-		voiceRooms[req.ChannelID] = room
+		room.Members[userID] = &VoiceMemberState{
+			UserID:   userID,
+			Username: username,
+			JoinedAt: time.Now().UnixMilli(),
+		}
+		voiceRoomsMu.Unlock()
+
+		voiceUserChannelMu.Lock()
+		voiceUserChannel[userID] = req.ChannelID
+		voiceUserChannelMu.Unlock()
+
+		voiceChannelCrewMu.Lock()
+		voiceChannelCrew[req.ChannelID] = req.CrewID
+		voiceChannelCrewMu.Unlock()
+
+		// Track voice session for event ledger
+		voiceSessionOnJoin(req.ChannelID, req.CrewID, channelName, userID, username)
 	}
-	room.Members[userID] = &VoiceMemberState{
-		UserID:   userID,
-		Username: username,
-		JoinedAt: time.Now().UnixMilli(),
-	}
-	voiceRoomsMu.Unlock()
-
-	voiceUserChannelMu.Lock()
-	voiceUserChannel[userID] = req.ChannelID
-	voiceUserChannelMu.Unlock()
-
-	voiceChannelCrewMu.Lock()
-	voiceChannelCrew[req.ChannelID] = req.CrewID
-	voiceChannelCrewMu.Unlock()
-
-	// Track voice session for event ledger
-	voiceSessionOnJoin(req.ChannelID, req.CrewID, channelName, userID, username)
 
 	// Update last-seen for event ledger catch-up
 	updateLastSeen(ctx, nk, userID, req.CrewID)
 
-	// Update user presence activity
+	// Update user presence activity (also corrects any drift after a reconnect)
 	now := time.Now().UTC().Format(time.RFC3339)
 	_ = WritePresence(ctx, nk, &UserPresence{
 		UserID:   userID,
@@ -243,17 +317,21 @@ func VoiceJoinRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk run
 
 	InvalidateCrewState(req.CrewID)
 
-	// Push priority event: voice_joined to all crew subscribers
-	PushCrewEvent(ctx, logger, nk, req.CrewID, "voice_joined", map[string]interface{}{
-		"user_id":      userID,
-		"username":     username,
-		"channel_id":   req.ChannelID,
-		"channel_name": channelName,
-	})
-	// Push voice_update to active crew subscribers
-	PushVoiceUpdate(ctx, logger, nk, req.CrewID)
-	// Refresh Live Now for the crew's sidebar (non-active) subscribers.
-	QueueSidebarVoiceDelta(logger, nk, req.CrewID)
+	// Only broadcast roster churn on a genuine join/switch, never on an
+	// idempotent rejoin (which would flicker every other member's UI).
+	if !sameChannelRejoin {
+		// Push priority event: voice_joined to all crew subscribers
+		PushCrewEvent(ctx, logger, nk, req.CrewID, "voice_joined", map[string]interface{}{
+			"user_id":      userID,
+			"username":     username,
+			"channel_id":   req.ChannelID,
+			"channel_name": channelName,
+		})
+		// Push voice_update to active crew subscribers
+		PushVoiceUpdate(ctx, logger, nk, req.CrewID)
+		// Refresh Live Now for the crew's sidebar (non-active) subscribers.
+		QueueSidebarVoiceDelta(logger, nk, req.CrewID)
+	}
 
 	snap := GetVoiceChannelSnapshot(req.ChannelID)
 
@@ -361,7 +439,8 @@ func VoiceSpeakingRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk
 	}
 
 	if crewID != "" {
-		PushVoiceUpdate(ctx, logger, nk, crewID)
+		// Coalesced: speaking transitions can be very frequent.
+		MarkVoiceDirty(crewID)
 	}
 
 	return `{"success":true}`, nil
@@ -408,7 +487,8 @@ func VoiceMuteStateRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, n
 	}
 
 	if crewID != "" {
-		PushVoiceUpdate(ctx, logger, nk, crewID)
+		// Coalesced: mute/deafen toggles can burst.
+		MarkVoiceDirty(crewID)
 	}
 
 	return `{"success":true}`, nil
@@ -561,7 +641,10 @@ func StartVoiceRoomGC(ctx context.Context, nk runtime.NakamaModule, logger runti
 	}
 }
 
-const voiceGCStalenessThreshold = 2 * time.Hour
+// Connected clients heartbeat presence every ~60s (presence_heartbeat), so a
+// genuinely-dropped in-voice member goes stale well within this window while an
+// idle-but-connected one stays fresh. Backstop for missed OnSessionEnd.
+const voiceGCStalenessThreshold = 5 * time.Minute
 
 func voiceRoomGC(ctx context.Context, logger runtime.Logger, nk runtime.NakamaModule) {
 	voiceRoomsMu.RLock()

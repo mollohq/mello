@@ -1,0 +1,7 @@
+{
+  "name": "smoke-device-auth",
+  "steps": [
+    { "action": "device_auth", "device_id": "voice-test-ci-smoke" },
+    { "action": "expect_event", "event": "DeviceAuthed", "timeout_ms": 15000 }
+  ]
+}

@@ -5,11 +5,16 @@ export component UpdateToast inherits Rectangle {
     in property <string> version: "";
     in property <float> download-progress: -1.0;
     in property <string> protocol-warning: "";
+    in property <string> connection-warning: "";
 
     callback update-clicked();
     callback dismiss-clicked();
 
-    property <bool> show: update-available || protocol-warning != "";
+    // A status-only banner (protocol mismatch or connection state) suppresses
+    // the update text/progress/button.
+    property <bool> status-only: protocol-warning != "" || connection-warning != "";
+    property <string> status-text: connection-warning != "" ? connection-warning : protocol-warning;
+    property <bool> show: update-available || status-only;
     property <bool> downloading: download-progress >= 0;
 
     visible: show;
@@ -34,7 +39,7 @@ export component UpdateToast inherits Rectangle {
             spacing: 2px;
 
             Text {
-                text: protocol-warning != "" ? protocol-warning
+                text: status-only ? status-text
                     : downloading ? "Updating…"
                     : "New version available";
                 color: Theme.text-primary;
@@ -43,7 +48,7 @@ export component UpdateToast inherits Rectangle {
                 font-weight: 600;
             }
 
-            if protocol-warning == "": Text {
+            if !status-only: Text {
                 text: downloading ? "Downloading v" + version
                     : "v" + version;
                 color: Theme.text-secondary;
@@ -53,7 +58,7 @@ export component UpdateToast inherits Rectangle {
         }
 
         // Progress bar (during download)
-        if downloading && protocol-warning == "": VerticalLayout {
+        if downloading && !status-only: VerticalLayout {
             alignment: center;
             Rectangle {
                 width: 80px;
@@ -73,7 +78,7 @@ export component UpdateToast inherits Rectangle {
         }
 
         // Update button
-        if !downloading && protocol-warning == "": VerticalLayout {
+        if !downloading && !status-only: VerticalLayout {
             alignment: center;
             Rectangle {
                 width: btn-text.preferred-width + 28px;
