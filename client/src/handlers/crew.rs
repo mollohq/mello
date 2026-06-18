@@ -6,7 +6,9 @@ use slint::Model;
 
 use crate::app_context::AppContext;
 use crate::converters::{apply_unread_to_crews, bento_bases, update_active_crew_card};
-use crate::{ChatMessageData, CrewData, DiscoverCrewData, SearchUserData, VoiceChannelData};
+use crate::{
+    ChatMessageData, CrewData, DiscoverCrewData, FeedCardData, SearchUserData, VoiceChannelData,
+};
 
 pub fn handle(ctx: &AppContext, event: Event) {
     match event {
@@ -319,6 +321,14 @@ pub fn handle(ctx: &AppContext, event: Event) {
                 ctx.app.set_has_more_history(false);
                 ctx.app.set_has_new_messages(false);
             }
+            let empty_feed: Vec<FeedCardData> = vec![];
+            ctx.app
+                .set_feed_cards(Rc::new(slint::VecModel::from(empty_feed.clone())).into());
+            ctx.app
+                .set_memory_cards(Rc::new(slint::VecModel::from(empty_feed)).into());
+            ctx.app.set_feed_cold_start(true);
+            ctx.app.set_feed_clip_count(0);
+            ctx.app.set_feed_has_more(false);
             ctx.app.set_active_crew_id(crew_id.clone().into());
             let empty_channels: Vec<VoiceChannelData> = vec![];
             ctx.app

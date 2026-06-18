@@ -21,7 +21,7 @@ import (
 const (
 	feedFillerSlots    = 7 // grid slots after hero + recap (hero + recap + 7 = up to 9)
 	feedWideFillerIdx  = 5 // index within the fillers promoted to the wide (lg) cell
-	feedMemoryPageSize = 20
+	feedMemoryPageSize = 60
 
 	// feedMinQuality mirrors the Rust i32::MIN/2 sentinel for non-preview cards.
 	feedMinQuality = -(1 << 30)

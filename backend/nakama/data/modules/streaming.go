@@ -44,26 +44,26 @@ type ActiveStream struct {
 
 // StreamMeta is the extended metadata stored in stream_meta/{crew_id}.
 type StreamMeta struct {
-	StreamID          string   `json:"stream_id"`
-	CrewID            string   `json:"crew_id"`
-	StreamerID        string   `json:"streamer_id"`
-	StreamerUsername  string   `json:"streamer_username"`
-	Title             string   `json:"title"`
-	StartedAt         string   `json:"started_at"`
-	ThumbnailURL      string   `json:"thumbnail_url,omitempty"`
-	ThumbnailUpdatedAt string  `json:"thumbnail_updated_at,omitempty"`
-	ViewerIDs         []string `json:"viewer_ids,omitempty"`
-	Width             uint32   `json:"width,omitempty"`
-	Height            uint32   `json:"height,omitempty"`
+	StreamID           string   `json:"stream_id"`
+	CrewID             string   `json:"crew_id"`
+	StreamerID         string   `json:"streamer_id"`
+	StreamerUsername   string   `json:"streamer_username"`
+	Title              string   `json:"title"`
+	StartedAt          string   `json:"started_at"`
+	ThumbnailURL       string   `json:"thumbnail_url,omitempty"`
+	ThumbnailUpdatedAt string   `json:"thumbnail_updated_at,omitempty"`
+	ViewerIDs          []string `json:"viewer_ids,omitempty"`
+	Width              uint32   `json:"width,omitempty"`
+	Height             uint32   `json:"height,omitempty"`
 }
 
 const (
-	StreamCollection    = "active_streams"
+	StreamCollection     = "active_streams"
 	StreamMetaCollection = "stream_meta"
-	SystemUserID        = "00000000-0000-0000-0000-000000000000" // Nakama system user
-	ThumbnailCollection = "thumbnails"
-	NotifyStreamStart   = 100
-	NotifyStreamEnd     = 101
+	SystemUserID         = "00000000-0000-0000-0000-000000000000" // Nakama system user
+	ThumbnailCollection  = "thumbnails"
+	NotifyStreamStart    = 100
+	NotifyStreamEnd      = 101
 )
 
 // ---------------------------------------------------------------------------
@@ -171,10 +171,10 @@ func StartStreamRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk r
 
 	// Push priority event: stream_started
 	PushCrewEvent(ctx, logger, nk, req.CrewID, "stream_started", map[string]interface{}{
-		"stream_id":          streamID,
-		"streamer_id":        userID,
-		"streamer_username":  users[0].GetDisplayName(),
-		"title":              req.Title,
+		"stream_id":         streamID,
+		"streamer_id":       userID,
+		"streamer_username": users[0].GetDisplayName(),
+		"title":             req.Title,
 	})
 
 	// SFU path: premium crews get server-relayed streaming
@@ -870,14 +870,19 @@ func backfillStreamSession(ctx context.Context, nk runtime.NakamaModule, logger 
 			continue
 		}
 
-		// Skip if already up-to-date
-		if len(data.SnapshotURLs) >= len(urls) {
+		streamDoc, _ := readStreamSessionsDoc(ctx, nk, crewID)
+		needsDurableUpsert := streamSessionNeedsDurableUpsert(streamDoc.Sessions, e.ID, data.SessionID, len(urls))
+
+		// Skip only when both ledger snapshots and the durable replay copy are up-to-date.
+		if len(data.SnapshotURLs) >= len(urls) && !needsDurableUpsert {
 			continue
 		}
 
-		logger.Info("SnapshotBackfill: backfilling %d snapshot URLs for crew=%s session=%s (had %d)", len(urls), crewID, data.SessionID, len(data.SnapshotURLs))
-		if updateErr := UpdateLedgerEventSnapshotURLs(ctx, nk, crewID, e.ID, urls); updateErr != nil {
-			logger.Warn("SnapshotBackfill: update failed for crew=%s session=%s: %v", crewID, data.SessionID, updateErr)
+		if len(data.SnapshotURLs) < len(urls) {
+			logger.Info("SnapshotBackfill: backfilling %d snapshot URLs for crew=%s session=%s (had %d)", len(urls), crewID, data.SessionID, len(data.SnapshotURLs))
+			if updateErr := UpdateLedgerEventSnapshotURLs(ctx, nk, crewID, e.ID, urls); updateErr != nil {
+				logger.Warn("SnapshotBackfill: update failed for crew=%s session=%s: %v", crewID, data.SessionID, updateErr)
+			}
 		}
 		// Keep the durable replay copy in sync with the freshly backfilled URLs.
 		data.SnapshotURLs = urls

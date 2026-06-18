@@ -208,6 +208,8 @@ fn skeleton_card(card_type: &str) -> FeedCardData {
     FeedCardData {
         id: Default::default(),
         card_type: card_type.into(),
+        role: Default::default(),
+        size: Default::default(),
         title: Default::default(),
         subtitle: Default::default(),
         timestamp: Default::default(),
@@ -277,9 +279,10 @@ fn build_feed_card(
     ctx: &AppContext,
     id: &str,
     feed_type: &str,
+    role: &str,
+    size: &str,
     raw_data: &serde_json::Value,
     ts: i64,
-    is_hero: bool,
 ) -> FeedCardData {
     let data = normalized_entry_data(raw_data);
     let backend_type = derive_backend_type(feed_type, &data);
@@ -414,6 +417,8 @@ fn build_feed_card(
     FeedCardData {
         id: id.into(),
         card_type: feed_type.into(),
+        role: role.into(),
+        size: size.into(),
         title: title.into(),
         subtitle: subtitle.into(),
         timestamp: timestamp.into(),
@@ -425,7 +430,7 @@ fn build_feed_card(
         participant_count,
         clip_count,
         clip_path: clip_path.into(),
-        is_hero,
+        is_hero: role == "hero",
         is_skeleton: false,
         snapshot_urls: Rc::new(slint::VecModel::from(
             snapshot_urls
@@ -481,6 +486,8 @@ pub fn handle(ctx: &AppContext, event: Event) {
             let new_card = FeedCardData {
                 id: clip_id.clone().into(),
                 card_type: "clip".into(),
+                role: "standard".into(),
+                size: "md".into(),
                 title: "".into(),
                 subtitle: "".into(),
                 timestamp: "just now".into(),
@@ -568,9 +575,10 @@ pub fn handle(ctx: &AppContext, event: Event) {
                                     ctx,
                                     &e.id,
                                     &e.entry_type,
+                                    &e.role,
+                                    &e.size,
                                     &e.data,
                                     e.ts,
-                                    e.role == "hero",
                                 )
                             })
                             .collect();
@@ -580,7 +588,15 @@ pub fn handle(ctx: &AppContext, event: Event) {
                             .entries
                             .iter()
                             .map(|e| {
-                                build_feed_card(ctx, &e.id, &e.entry_type, &e.data, e.ts, false)
+                                build_feed_card(
+                                    ctx,
+                                    &e.id,
+                                    &e.entry_type,
+                                    &e.role,
+                                    &e.size,
+                                    &e.data,
+                                    e.ts,
+                                )
                             })
                             .collect();
                     }
@@ -590,61 +606,39 @@ pub fn handle(ctx: &AppContext, event: Event) {
 
             let clip_count = this_week.iter().filter(|c| c.card_type == "clip").count() as i32;
 
-            // Fill remaining this_week grid slots with skeletons for cold / semi-cold start.
+            // Fill with skeletons only for a true cold start. Once the server
+            // returns real feed or memory content, the client must not invent
+            // onboarding cards that compete with crew memory.
             let mut ordered = this_week;
-            let has_hero = ordered.first().map(|c| c.is_hero).unwrap_or(false);
-            let has_recap = ordered.iter().any(|c| c.card_type == "recap");
-            let has_session = ordered.iter().any(|c| c.card_type == "session");
+            let has_real_memory = memory.iter().any(|c| c.card_type != "locked");
+            let is_cold = ordered.is_empty() && !has_real_memory;
+            if is_cold {
+                ordered.push(skeleton_card("skeleton-hero"));
+                ordered.push(skeleton_card("skeleton-recap"));
+                ordered.push(skeleton_card("skeleton-session"));
+                ordered.push(skeleton_card("skeleton-clip"));
+                ordered.push(skeleton_card("skeleton-catchup"));
+                ordered.push(skeleton_card("skeleton-now-playing"));
+                ordered.push(skeleton_card("skeleton-stream-clips"));
+                ordered.push(skeleton_card("skeleton-recent-games"));
 
-            if !has_hero {
-                ordered.insert(0, skeleton_card("skeleton-hero"));
-            }
-            if !has_recap {
-                let pos = 1.min(ordered.len());
-                ordered.insert(pos, skeleton_card("skeleton-recap"));
-            }
-
-            let mut fillers: Vec<&str> = Vec::new();
-            if !has_session {
-                fillers.push("skeleton-session");
-            }
-            fillers.extend_from_slice(&[
-                "skeleton-clip",
-                "skeleton-catchup",
-                "skeleton-now-playing",
-                "skeleton-stream-clips",
-                "skeleton-recent-games",
-            ]);
-
-            let target_slots = 9;
-            let mut filler_iter = fillers.into_iter();
-            while ordered.len() < target_slots {
-                if let Some(skel_type) = filler_iter.next() {
-                    ordered.push(skeleton_card(skel_type));
-                } else {
-                    break;
+                // Inject invite card unless hidden for this crew.
+                let active_crew = ctx.app.get_active_crew_id().to_string();
+                let invite_hidden = ctx
+                    .settings
+                    .borrow()
+                    .hidden_invite_crew_ids
+                    .contains(&active_crew);
+                if !invite_hidden && !active_crew.is_empty() {
+                    let mut invite = skeleton_card("invite");
+                    invite.is_skeleton = false;
+                    invite.id = "invite".into();
+                    let insert_pos = 2.min(ordered.len());
+                    ordered.insert(insert_pos, invite);
                 }
             }
 
-            // Inject invite card unless hidden for this crew
-            let active_crew = ctx.app.get_active_crew_id().to_string();
-            let invite_hidden = ctx
-                .settings
-                .borrow()
-                .hidden_invite_crew_ids
-                .contains(&active_crew);
-            if !invite_hidden && !active_crew.is_empty() {
-                let mut invite = skeleton_card("invite");
-                invite.is_skeleton = false;
-                invite.id = "invite".into();
-                let insert_pos = 2.min(ordered.len());
-                ordered.insert(insert_pos, invite);
-            }
-
             let cards = ordered;
-            let is_cold = cards
-                .iter()
-                .all(|c| c.card_type.starts_with("skeleton") || c.card_type == "invite");
 
             ctx.app
                 .set_feed_cards(Rc::new(slint::VecModel::from(cards)).into());

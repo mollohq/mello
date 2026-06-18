@@ -116,6 +116,15 @@ func upsertStreamSession(sessions []StoredStreamSession, s StoredStreamSession) 
 	return append(sessions, s)
 }
 
+func streamSessionNeedsDurableUpsert(sessions []StoredStreamSession, eventID, sessionID string, snapshotCount int) bool {
+	for _, s := range sessions {
+		if (sessionID != "" && s.SessionID == sessionID) || (eventID != "" && s.EventID == eventID) {
+			return len(s.SnapshotURLs) < snapshotCount
+		}
+	}
+	return true
+}
+
 // UpsertStreamSession persists (or refreshes) a stream session in the durable
 // store, trims to the cap, and retries on version conflict. Called when a
 // stream ends and again when snapshots backfill, so the durable copy stays in

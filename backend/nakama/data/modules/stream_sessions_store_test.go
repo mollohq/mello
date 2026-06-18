@@ -65,3 +65,24 @@ func TestUpsertStreamSessionNeverShrinksSnapshots(t *testing.T) {
 		t.Fatalf("snapshots must not shrink: got %d want 6", len(got[0].SnapshotURLs))
 	}
 }
+
+func TestStreamSessionNeedsDurableUpsertWhenMissing(t *testing.T) {
+	sessions := []StoredStreamSession{storedSession("other", 1, 3)}
+	if !streamSessionNeedsDurableUpsert(sessions, "a_evt", "a", 3) {
+		t.Fatal("missing durable session should require upsert")
+	}
+}
+
+func TestStreamSessionNeedsDurableUpsertWhenSnapshotCountGrows(t *testing.T) {
+	sessions := []StoredStreamSession{storedSession("a", 1, 2)}
+	if !streamSessionNeedsDurableUpsert(sessions, "a_evt", "a", 5) {
+		t.Fatal("durable session with fewer snapshots should require upsert")
+	}
+}
+
+func TestStreamSessionSkipsDurableUpsertWhenCurrent(t *testing.T) {
+	sessions := []StoredStreamSession{storedSession("a", 1, 5)}
+	if streamSessionNeedsDurableUpsert(sessions, "a_evt", "a", 5) {
+		t.Fatal("current durable session should not require upsert")
+	}
+}
