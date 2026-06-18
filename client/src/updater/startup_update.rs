@@ -8,6 +8,9 @@ use slint::ComponentHandle;
 use super::{UpdateEvent, Updater};
 use crate::ForceUpdateWindow;
 
+const FORCE_UPDATE_WIDTH: f32 = 360.0;
+const FORCE_UPDATE_HEIGHT: f32 = 188.0;
+
 pub(crate) fn apply_renderer_override() {
     if std::env::args().any(|a| a == "--software-rendering") {
         log::info!("[startup] forcing software rendering backend");
@@ -48,6 +51,7 @@ pub(crate) fn run_gate(
     dialog
         .window()
         .on_close_requested(|| slint::CloseRequestResponse::KeepWindowShown);
+    center_on_primary_screen(&dialog);
 
     let continue_current = Rc::new(Cell::new(false));
     {
@@ -132,6 +136,28 @@ pub(crate) fn run_gate(
         Err("Force update window closed unexpectedly".into())
     }
 }
+
+#[cfg(target_os = "windows")]
+fn center_on_primary_screen(dialog: &ForceUpdateWindow) {
+    use slint::PhysicalPosition;
+    use windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_CXSCREEN, SM_CYSCREEN};
+
+    let scale = dialog.window().scale_factor();
+    let width = (FORCE_UPDATE_WIDTH * scale).round() as i32;
+    let height = (FORCE_UPDATE_HEIGHT * scale).round() as i32;
+    let screen_width = unsafe { GetSystemMetrics(SM_CXSCREEN) };
+    let screen_height = unsafe { GetSystemMetrics(SM_CYSCREEN) };
+
+    if screen_width > 0 && screen_height > 0 {
+        dialog.window().set_position(PhysicalPosition::new(
+            (screen_width - width) / 2,
+            (screen_height - height) / 2,
+        ));
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn center_on_primary_screen(_dialog: &ForceUpdateWindow) {}
 
 fn format_update_bytes(downloaded: u64, total: u64) -> String {
     const MB: f64 = 1_048_576.0;

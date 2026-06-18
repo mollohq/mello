@@ -35,12 +35,12 @@ component ForceUpdateButton inherits Rectangle {
 export component ForceUpdateWindow inherits Window {
     title: "Updating m3llo";
     no-frame: true;
-    preferred-width: 424px;
-    preferred-height: 240px;
-    min-width: 424px;
-    min-height: 240px;
-    max-width: 424px;
-    max-height: 240px;
+    preferred-width: 360px;
+    preferred-height: failed ? 244px : 188px;
+    min-width: 360px;
+    min-height: failed ? 244px : 188px;
+    max-width: 360px;
+    max-height: failed ? 244px : 188px;
     background: transparent;
     default-font-family: Theme.font-sans;
 
@@ -81,20 +81,16 @@ export component ForceUpdateWindow inherits Window {
     Rectangle {
         width: parent.width;
         height: parent.height;
-        background: transparent;
+        background: #15171B;
+        border-width: 1px;
+        border-color: #FFFFFF12;
+        border-radius: Theme.radius-lg;
+        clip: true;
 
         card := Rectangle {
-            x: (parent.width - self.width) / 2;
-            y: (parent.height - self.height) / 2;
-            width: 360px;
-            height: content.preferred-height + 44px;
-            background: #15171B;
-            border-width: 1px;
-            border-color: #FFFFFF12;
-            border-radius: Theme.radius-lg;
-            drop-shadow-blur: 70px;
-            drop-shadow-color: #0000008C;
-            drop-shadow-offset-y: 24px;
+            width: parent.width;
+            height: parent.height;
+            background: transparent;
 
             content := VerticalLayout {
                 padding-left: 22px;
