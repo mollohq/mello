@@ -1,0 +1,260 @@
+import { Theme } from "../theme.slint";
+
+component ForceUpdateButton inherits Rectangle {
+    in property <string> text: "";
+    in property <bool> primary: false;
+
+    callback clicked();
+
+    width: label.preferred-width + 32px;
+    height: 34px;
+    background: primary
+        ? (touch.has-hover ? #D8404F : #EB4D5F)
+        : (touch.has-hover ? #FFFFFF0D : transparent);
+    border-width: primary ? 0px : 1px;
+    border-color: #FFFFFF24;
+    border-radius: 9px;
+    animate background { duration: 150ms; }
+
+    label := Text {
+        text: root.text;
+        color: primary ? white : #C9CCD2;
+        font-family: Theme.font-sans;
+        font-size: Theme.font-md;
+        font-weight: 500;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+export component ForceUpdateWindow inherits Window {
+    title: "Updating m3llo";
+    no-frame: true;
+    preferred-width: 424px;
+    preferred-height: 240px;
+    min-width: 424px;
+    min-height: 240px;
+    max-width: 424px;
+    max-height: 240px;
+    background: transparent;
+    default-font-family: Theme.font-sans;
+
+    in property <string> current-version: "";
+    in property <string> target-version: "";
+    in property <string> stage: "Downloading";
+    in property <float> progress: 0.0;
+    in property <string> progress-text: "0%";
+    in property <string> bytes-text: "";
+    in property <bool> failed: false;
+    in property <bool> hard-failure: false;
+    in property <string> error-code: "";
+    in property <string> error-message: "";
+
+    callback retry-clicked();
+    callback start-current-clicked();
+    callback quit-clicked();
+
+    property <bool> indeterminate: progress < 0.0 && !failed;
+    property <float> indeterminate-position: 0.0;
+    property <string> version-text: current-version + " -> " + target-version;
+    property <string> failure-body: error-message != "" ? error-message
+        : hard-failure
+            ? "Your version can no longer connect to m3llo. Updating is required to continue."
+            : "Couldn't download the update. You can keep using your current version for now.";
+    property <string> secondary-action: hard-failure ? "Quit" : "Start m3llo " + current-version;
+
+    indeterminate-timer := Timer {
+        interval: 16ms;
+        running: root.indeterminate;
+        triggered => {
+            root.indeterminate-position = root.indeterminate-position >= 1.0
+                ? 0.0
+                : root.indeterminate-position + 0.025;
+        }
+    }
+
+    Rectangle {
+        width: parent.width;
+        height: parent.height;
+        background: transparent;
+
+        card := Rectangle {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            width: 360px;
+            height: content.preferred-height + 44px;
+            background: #15171B;
+            border-width: 1px;
+            border-color: #FFFFFF12;
+            border-radius: Theme.radius-lg;
+            drop-shadow-blur: 70px;
+            drop-shadow-color: #0000008C;
+            drop-shadow-offset-y: 24px;
+
+            content := VerticalLayout {
+                padding-left: 22px;
+                padding-right: 22px;
+                padding-top: 22px;
+                padding-bottom: 18px;
+                spacing: 0px;
+
+                HorizontalLayout {
+                    spacing: 12px;
+                    padding-bottom: failed ? 18px : 20px;
+
+                    Text {
+                        text: "m3llo";
+                        color: #F4F5F7;
+                        font-family: Theme.font-sans;
+                        font-size: Theme.font-xl;
+                        font-weight: 700;
+                        letter-spacing: -0.4px;
+                    }
+
+                    Rectangle { horizontal-stretch: 1; }
+
+                    Text {
+                        text: root.version-text;
+                        color: failed ? #7A8089 : #C9CCD2;
+                        font-family: Theme.font-mono;
+                        font-size: 12px;
+                        font-weight: 600;
+                    }
+                }
+
+                if failed: VerticalLayout {
+                    spacing: 0px;
+
+                    Text {
+                        text: "Update failed";
+                        color: #F4F5F7;
+                        font-family: Theme.font-sans;
+                        font-size: Theme.font-lg;
+                        font-weight: 500;
+                    }
+
+                    Text {
+                        text: root.failure-body;
+                        color: #9AA0A8;
+                        font-family: Theme.font-sans;
+                        font-size: 12.5px;
+                        wrap: word-wrap;
+                        height: max(self.preferred-height, 38px);
+                    }
+                }
+
+                if !failed: HorizontalLayout {
+                    padding-bottom: 11px;
+
+                    Text {
+                        text: root.stage;
+                        color: #B3B7BE;
+                        font-family: Theme.font-sans;
+                        font-size: Theme.font-md;
+                        font-weight: 500;
+                    }
+
+                    Rectangle { horizontal-stretch: 1; }
+
+                    Text {
+                        visible: !root.indeterminate;
+                        text: root.progress-text;
+                        color: #F4F5F7;
+                        font-family: Theme.font-mono;
+                        font-size: Theme.font-md;
+                        font-weight: 600;
+                    }
+                }
+
+                track := Rectangle {
+                    height: 3px;
+                    background: #FFFFFF14;
+                    border-radius: 3px;
+                    clip: true;
+
+                    Rectangle {
+                        x: root.indeterminate
+                            ? (parent.width + self.width) * root.indeterminate-position - self.width
+                            : 0px;
+                        width: failed
+                            ? parent.width * 0.34
+                            : root.indeterminate
+                                ? parent.width * 0.28
+                                : parent.width * clamp(root.progress, 0.0, 1.0);
+                        height: parent.height;
+                        background: failed ? #4A4F57 : #EB4D5F;
+                        border-radius: 3px;
+                        animate width { duration: 100ms; }
+                        animate x { duration: 50ms; }
+                    }
+                }
+
+                if failed: Rectangle {
+                    height: 25px;
+
+                    Text {
+                        y: 11px;
+                        text: root.error-code;
+                        color: #6B7079;
+                        font-family: Theme.font-mono;
+                        font-size: Theme.font-sm;
+                        font-weight: 600;
+                        letter-spacing: 0.22px;
+                    }
+                }
+
+                if !failed: HorizontalLayout {
+                    padding-top: 13px;
+
+                    Text {
+                        text: "Required update";
+                        color: #6B7079;
+                        font-family: Theme.font-sans;
+                        font-size: Theme.font-sm;
+                    }
+
+                    Rectangle { horizontal-stretch: 1; }
+
+                    Text {
+                        visible: !root.indeterminate;
+                        text: root.bytes-text;
+                        color: #6B7079;
+                        font-family: Theme.font-mono;
+                        font-size: Theme.font-sm;
+                        font-weight: 600;
+                    }
+                }
+
+                if failed: HorizontalLayout {
+                    padding-top: 16px;
+                    spacing: 10px;
+
+                    Rectangle { horizontal-stretch: 1; }
+
+                    ForceUpdateButton {
+                        text: root.secondary-action;
+                        primary: false;
+                        clicked => {
+                            if root.hard-failure {
+                                root.quit-clicked();
+                            } else {
+                                root.start-current-clicked();
+                            }
+                        }
+                    }
+
+                    ForceUpdateButton {
+                        text: "Try again";
+                        primary: true;
+                        clicked => { root.retry-clicked(); }
+                    }
+                }
+            }
+        }
+    }
+}

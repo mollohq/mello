@@ -1,6 +1,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::Arc;
+use std::time::Duration;
 use velopack::sources::{FileSource, HttpSource};
 use velopack::{UpdateCheck, UpdateInfo, UpdateManager, VelopackApp};
 
@@ -96,6 +97,30 @@ impl Updater {
         self.manager.get_current_version_as_string()
     }
 
+    pub fn target_version(&self) -> Option<String> {
+        self.cached_update
+            .as_ref()
+            .map(|info| info.TargetFullRelease.Version.clone())
+    }
+
+    pub fn target_download_size(&self) -> Option<u64> {
+        self.cached_update
+            .as_ref()
+            .map(|info| info.TargetFullRelease.Size)
+    }
+
+    pub fn set_event_sender(&mut self, event_tx: mpsc::Sender<UpdateEvent>) {
+        self.event_tx = event_tx;
+    }
+
+    fn apply_delay_from_env() -> Option<Duration> {
+        std::env::var("MELLO_UPDATE_APPLY_DELAY_MS")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .filter(|millis| *millis > 0)
+            .map(Duration::from_millis)
+    }
+
     /// Check for updates. Returns true if an update is available.
     pub fn check_for_updates(&mut self) -> bool {
         self.event_tx.send(UpdateEvent::CheckStarted).ok();
@@ -160,15 +185,24 @@ impl Updater {
         let info = info.clone();
         let event_tx = self.event_tx.clone();
         let guard = Arc::clone(&self.update_job_active);
+        let apply_delay = Self::apply_delay_from_env();
 
         std::thread::spawn(move || {
+            let total_bytes = info.TargetFullRelease.Size;
+            let _ = event_tx.send(UpdateEvent::DownloadStarted { total_bytes });
+
             let (progress_tx, progress_rx) = mpsc::channel::<i16>();
             let event_tx_progress = event_tx.clone();
             std::thread::spawn(move || {
                 while let Ok(pct) = progress_rx.recv() {
                     let progress = pct as f32 / 100.0;
+                    let downloaded_bytes = ((total_bytes as f32) * progress).round() as u64;
                     event_tx_progress
-                        .send(UpdateEvent::DownloadProgress { progress })
+                        .send(UpdateEvent::DownloadProgress {
+                            progress,
+                            downloaded_bytes,
+                            total_bytes,
+                        })
                         .ok();
                 }
             });
@@ -180,7 +214,14 @@ impl Updater {
                 return;
             }
 
+            let _ = event_tx.send(UpdateEvent::DownloadComplete);
+            if let Some(delay) = apply_delay {
+                log::info!("Delaying update apply for {}ms", delay.as_millis());
+                std::thread::sleep(delay);
+            }
+
             log::info!("Download complete, applying update and restarting...");
+            let _ = event_tx.send(UpdateEvent::ApplyStarted);
             if let Err(e) = manager.apply_updates_and_restart(&info) {
                 log::warn!("Apply update / restart failed: {}", e);
                 let _ = event_tx.send(UpdateEvent::Error(format!("Apply update failed: {}", e)));

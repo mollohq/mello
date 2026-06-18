@@ -94,8 +94,14 @@ pub fn start(
                             log::info!("Update available, size: {:?} bytes", download_size);
                         }
                     }
-                    UpdateEvent::DownloadProgress { progress } => {
+                    UpdateEvent::DownloadStarted { .. } => {
+                        poll_ctx.app.set_update_download_progress(0.0);
+                    }
+                    UpdateEvent::DownloadProgress { progress, .. } => {
                         poll_ctx.app.set_update_download_progress(progress);
+                    }
+                    UpdateEvent::DownloadComplete | UpdateEvent::ApplyStarted => {
+                        poll_ctx.app.set_update_download_progress(1.0);
                     }
                     UpdateEvent::Error(msg) => {
                         log::warn!("Update error: {}", msg);

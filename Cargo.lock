@@ -3873,7 +3873,7 @@ dependencies = [
 
 [[package]]
 name = "mello-client"
-version = "0.0.0-DEV"
+version = "0.1.0"
 dependencies = [
  "arboard",
  "auto-launch",
@@ -3917,7 +3917,7 @@ dependencies = [
 
 [[package]]
 name = "mello-core"
-version = "0.0.0-DEV"
+version = "0.1.0"
 dependencies = [
  "async-trait",
  "base64",
@@ -3944,7 +3944,7 @@ dependencies = [
 
 [[package]]
 name = "mello-core-ffi"
-version = "0.0.0-DEV"
+version = "0.1.0"
 dependencies = [
  "env_logger",
  "log",
@@ -3956,7 +3956,7 @@ dependencies = [
 
 [[package]]
 name = "mello-hud"
-version = "0.0.0-DEV"
+version = "0.1.0"
 dependencies = [
  "base64",
  "log",
@@ -3973,7 +3973,7 @@ dependencies = [
 
 [[package]]
 name = "mello-sys"
-version = "0.0.0-DEV"
+version = "0.1.0"
 dependencies = [
  "bindgen 0.69.5",
  "cmake",
@@ -5733,7 +5733,7 @@ dependencies = [
 
 [[package]]
 name = "rtp-client-test"
-version = "0.0.0-DEV"
+version = "0.1.0"
 dependencies = [
  "env_logger",
  "log",
@@ -6054,7 +6054,7 @@ dependencies = [
 
 [[package]]
 name = "sfu-stream-viewer-probe"
-version = "0.0.0-DEV"
+version = "0.1.0"
 dependencies = [
  "env_logger",
  "log",
@@ -6455,7 +6455,7 @@ checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 
 [[package]]
 name = "stream-host"
-version = "0.0.0-DEV"
+version = "0.1.0"
 dependencies = [
  "ctrlc",
  "env_logger",
@@ -6469,7 +6469,7 @@ dependencies = [
 
 [[package]]
 name = "stream-viewer"
-version = "0.0.0-DEV"
+version = "0.1.0"
 dependencies = [
  "env_logger",
  "log",
