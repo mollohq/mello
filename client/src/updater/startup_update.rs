@@ -51,7 +51,6 @@ pub(crate) fn run_gate(
     dialog
         .window()
         .on_close_requested(|| slint::CloseRequestResponse::KeepWindowShown);
-    center_on_primary_screen(&dialog);
 
     let continue_current = Rc::new(Cell::new(false));
     {
@@ -125,8 +124,10 @@ pub(crate) fn run_gate(
     );
 
     dialog.show()?;
+    let center_timer = center_on_primary_screen_after_show(&dialog);
     start_update(&updater, &dialog);
     slint::run_event_loop_until_quit()?;
+    center_timer.stop();
     poll_timer.stop();
     dialog.hide()?;
 
@@ -156,7 +157,76 @@ fn center_on_primary_screen(dialog: &ForceUpdateWindow) {
     }
 }
 
-#[cfg(not(target_os = "windows"))]
+fn center_on_primary_screen_after_show(dialog: &ForceUpdateWindow) -> slint::Timer {
+    center_on_primary_screen(dialog);
+
+    let dialog_weak = dialog.as_weak();
+    let timer = slint::Timer::default();
+    timer.start(
+        slint::TimerMode::SingleShot,
+        Duration::from_millis(100),
+        move || {
+            if let Some(dialog) = dialog_weak.upgrade() {
+                center_on_primary_screen(&dialog);
+            }
+        },
+    );
+    timer
+}
+
+#[cfg(target_os = "macos")]
+fn center_on_primary_screen(dialog: &ForceUpdateWindow) {
+    use slint::LogicalPosition;
+
+    #[repr(C)]
+    struct CGPoint {
+        x: f64,
+        y: f64,
+    }
+
+    #[repr(C)]
+    struct CGSize {
+        width: f64,
+        height: f64,
+    }
+
+    #[repr(C)]
+    struct CGRect {
+        origin: CGPoint,
+        size: CGSize,
+    }
+
+    #[link(name = "CoreGraphics", kind = "framework")]
+    unsafe extern "C" {
+        fn CGMainDisplayID() -> u32;
+        fn CGDisplayBounds(display: u32) -> CGRect;
+    }
+
+    // Safety: these CoreGraphics calls only query geometry for the main display id.
+    let bounds = unsafe { CGDisplayBounds(CGMainDisplayID()) };
+    let scale = f64::from(dialog.window().scale_factor()).max(1.0);
+    let size = dialog.window().size();
+    let width = if size.width > 0 && scale > 0.0 {
+        f64::from(size.width) / scale
+    } else {
+        f64::from(FORCE_UPDATE_WIDTH)
+    };
+    let height = if size.height > 0 && scale > 0.0 {
+        f64::from(size.height) / scale
+    } else {
+        f64::from(FORCE_UPDATE_HEIGHT)
+    };
+
+    if bounds.size.width > 0.0 && bounds.size.height > 0.0 && width > 0.0 && height > 0.0 {
+        let x = bounds.origin.x + (bounds.size.width - width) / 2.0;
+        let y = bounds.origin.y + (bounds.size.height - height) / 2.0;
+        dialog
+            .window()
+            .set_position(LogicalPosition::new(x as f32, y as f32));
+    }
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
 fn center_on_primary_screen(_dialog: &ForceUpdateWindow) {}
 
 fn format_update_bytes(downloaded: u64, total: u64) -> String {

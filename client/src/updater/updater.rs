@@ -3,7 +3,7 @@ use std::sync::mpsc;
 use std::sync::Arc;
 use std::time::Duration;
 use velopack::sources::{FileSource, HttpSource};
-use velopack::{UpdateCheck, UpdateInfo, UpdateManager, VelopackApp};
+use velopack::{UpdateCheck, UpdateInfo, UpdateManager, UpdateOptions, VelopackApp};
 
 use super::UpdateEvent;
 
@@ -68,16 +68,26 @@ impl Updater {
 
     pub fn new(event_tx: mpsc::Sender<UpdateEvent>) -> Result<Self, Box<dyn std::error::Error>> {
         let update_url = std::env::var("MELLO_UPDATE_URL").ok();
+        let update_options = std::env::var("MELLO_UPDATE_CHANNEL")
+            .ok()
+            .filter(|channel| !channel.is_empty())
+            .map(|channel| {
+                log::info!("Update channel override: {}", channel);
+                UpdateOptions {
+                    ExplicitChannel: Some(channel),
+                    ..Default::default()
+                }
+            });
         let manager = match update_url.as_deref() {
             Some(url) if url.starts_with("http") => {
                 log::info!("Update source override (HTTP): {}", url);
-                UpdateManager::new(HttpSource::new(url), None, None)?
+                UpdateManager::new(HttpSource::new(url), update_options, None)?
             }
             Some(path) => {
                 log::info!("Update source override (local): {}", path);
-                UpdateManager::new(FileSource::new(path), None, None)?
+                UpdateManager::new(FileSource::new(path), update_options, None)?
             }
-            None => UpdateManager::new(HttpSource::new(GITHUB_RELEASES_URL), None, None)?,
+            None => UpdateManager::new(HttpSource::new(GITHUB_RELEASES_URL), update_options, None)?,
         };
 
         log::info!(
