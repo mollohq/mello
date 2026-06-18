@@ -98,8 +98,7 @@ impl super::Client {
             // Drop the (likely dead) SFU voice connection so the voice tick's
             // reconnect scheduler rebuilds it against fresh state.
             if self.voice.is_active() {
-                self.sfu_leave_if_connected().await;
-                self.voice.mark_disconnected();
+                self.voice.mark_disconnected_with_reason("sleep_wake");
             }
         }
 

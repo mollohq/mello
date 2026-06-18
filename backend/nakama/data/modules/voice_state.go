@@ -52,6 +52,9 @@ var (
 
 	voiceChannelCrew   = make(map[string]string) // channelID -> crewID
 	voiceChannelCrewMu sync.RWMutex
+
+	voiceGCMissesMu sync.Mutex
+	voiceGCMisses   = make(map[string]int) // userID -> consecutive stale detections
 )
 
 // GetVoiceChannelSnapshot returns a read-only snapshot for a single voice channel.
@@ -645,13 +648,17 @@ func StartVoiceRoomGC(ctx context.Context, nk runtime.NakamaModule, logger runti
 // genuinely-dropped in-voice member goes stale well within this window while an
 // idle-but-connected one stays fresh. Backstop for missed OnSessionEnd.
 const voiceGCStalenessThreshold = 5 * time.Minute
+const voiceGCOfflineGrace = 30 * time.Second
+const voiceGCRequiredConsecutiveDetections = 2
 
 func voiceRoomGC(ctx context.Context, logger runtime.Logger, nk runtime.NakamaModule) {
 	voiceRoomsMu.RLock()
 	var userIDs []string
+	activeUsers := make(map[string]struct{})
 	for _, room := range voiceRooms {
 		for uid := range room.Members {
 			userIDs = append(userIDs, uid)
+			activeUsers[uid] = struct{}{}
 		}
 	}
 	voiceRoomsMu.RUnlock()
@@ -659,6 +666,13 @@ func voiceRoomGC(ctx context.Context, logger runtime.Logger, nk runtime.NakamaMo
 	if len(userIDs) == 0 {
 		return
 	}
+	voiceGCMissesMu.Lock()
+	for uid := range voiceGCMisses {
+		if _, ok := activeUsers[uid]; !ok {
+			delete(voiceGCMisses, uid)
+		}
+	}
+	voiceGCMissesMu.Unlock()
 
 	removed := 0
 	for _, uid := range userIDs {
@@ -669,7 +683,13 @@ func voiceRoomGC(ctx context.Context, logger runtime.Logger, nk runtime.NakamaMo
 
 		stale := false
 		if p.Status == StatusOffline {
-			stale = true
+			offlineLongEnough := true
+			if p.UpdatedAt != "" {
+				if updatedAt, parseErr := time.Parse(time.RFC3339, p.UpdatedAt); parseErr == nil {
+					offlineLongEnough = time.Since(updatedAt) > voiceGCOfflineGrace
+				}
+			}
+			stale = offlineLongEnough
 		} else if p.UpdatedAt != "" {
 			// Catch ghost "online" presences that were never flipped to offline
 			// (e.g. OnSessionEnd failed or never fired).
@@ -680,23 +700,45 @@ func voiceRoomGC(ctx context.Context, logger runtime.Logger, nk runtime.NakamaMo
 			}
 		}
 
-		if stale {
-			logger.Info("Voice GC: removing stale member %s (status=%s, updated_at=%s)", uid, p.Status, p.UpdatedAt)
-			voiceLeaveInternal(ctx, logger, nk, uid, voiceLeaveInternalOpts{skipPresenceWrite: true})
-
-			// Also fix the stored presence if it's not already offline.
-			if p.Status != StatusOffline {
-				now := time.Now().UTC().Format(time.RFC3339)
-				_ = WritePresence(ctx, nk, &UserPresence{
-					UserID:    uid,
-					Status:    StatusOffline,
-					LastSeen:  now,
-					Activity:  &Activity{Type: ActivityNone},
-					UpdatedAt: now,
-				})
-			}
-			removed++
+		if !stale {
+			voiceGCMissesMu.Lock()
+			delete(voiceGCMisses, uid)
+			voiceGCMissesMu.Unlock()
+			continue
 		}
+
+		voiceGCMissesMu.Lock()
+		voiceGCMisses[uid]++
+		misses := voiceGCMisses[uid]
+		voiceGCMissesMu.Unlock()
+		if misses < voiceGCRequiredConsecutiveDetections {
+			continue
+		}
+
+		logger.Info(
+			"Voice GC: removing stale member %s (status=%s, updated_at=%s, misses=%d)",
+			uid,
+			p.Status,
+			p.UpdatedAt,
+			misses,
+		)
+		voiceLeaveInternal(ctx, logger, nk, uid, voiceLeaveInternalOpts{skipPresenceWrite: true})
+
+		// Also fix the stored presence if it's not already offline.
+		if p.Status != StatusOffline {
+			now := time.Now().UTC().Format(time.RFC3339)
+			_ = WritePresence(ctx, nk, &UserPresence{
+				UserID:    uid,
+				Status:    StatusOffline,
+				LastSeen:  now,
+				Activity:  &Activity{Type: ActivityNone},
+				UpdatedAt: now,
+			})
+		}
+		voiceGCMissesMu.Lock()
+		delete(voiceGCMisses, uid)
+		voiceGCMissesMu.Unlock()
+		removed++
 	}
 	if removed > 0 {
 		logger.Info("Voice GC: cleaned up %d stale members", removed)

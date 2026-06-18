@@ -2,6 +2,7 @@ use std::borrow::Cow;
 use std::ffi::{CStr, CString};
 use std::sync::atomic::{AtomicI32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use futures::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
@@ -45,6 +46,7 @@ pub struct SfuConnection {
     server_id: String,
     region: String,
     ice_state: Arc<AtomicI32>,
+    last_signaling_activity_ms: Arc<AtomicU64>,
     /// Background tasks (signaling listener, stats reporter) spawned for this
     /// connection. Aborted on drop so a stale connection's tasks don't linger
     /// ticking against a dead socket.
@@ -179,6 +181,7 @@ impl SfuConnection {
         log::info!("SFU: connected to {} ({})", server_id, region);
 
         let (event_tx, event_rx) = mpsc::channel(256);
+        let last_signaling_activity_ms = Arc::new(AtomicU64::new(now_millis()));
 
         Ok(Self {
             peer: std::ptr::null_mut(),
@@ -192,6 +195,7 @@ impl SfuConnection {
             server_id,
             region,
             ice_state: Arc::new(AtomicI32::new(0)),
+            last_signaling_activity_ms,
             tasks: Mutex::new(Vec::new()),
         })
     }
@@ -354,6 +358,20 @@ impl SfuConnection {
             return 0.0;
         }
         unsafe { mello_sys::mello_peer_rtt_ms(self.peer) }
+    }
+
+    /// Milliseconds since the last control-channel pong; -1 if none observed.
+    pub fn pong_age_ms(&self) -> i64 {
+        if self.peer.is_null() {
+            return -1;
+        }
+        unsafe { mello_sys::mello_peer_pong_age_ms(self.peer) }
+    }
+
+    /// Milliseconds since the last signaling message from SFU.
+    pub fn signaling_idle_ms(&self) -> u64 {
+        let last = self.last_signaling_activity_ms.load(Ordering::Relaxed);
+        now_millis().saturating_sub(last)
     }
 
     pub fn server_id(&self) -> &str {
@@ -698,11 +716,13 @@ impl SfuConnection {
         let event_tx_clone = self.event_tx.clone();
         let peer_for_task = SendPtr(self.peer);
         let ws_tx_for_task = Arc::clone(&self.ws_tx);
+        let signaling_activity_for_task = Arc::clone(&self.last_signaling_activity_ms);
         let listener_task = tokio::spawn(async move {
             while let Some(msg_result) = ws_rx.next().await {
                 match msg_result {
                     Ok(msg) => {
                         if let Ok(sig) = parse_ws_message(&msg) {
+                            signaling_activity_for_task.store(now_millis(), Ordering::Relaxed);
                             log::info!("SFU <- signaling: type={} data={}", sig.msg_type, sig.data);
                             match sig.msg_type.as_str() {
                                 "member_joined" => {
@@ -967,6 +987,13 @@ fn parse_ws_message(msg: &Message) -> Result<SignalingMessage, StreamError> {
             "expected text message".into(),
         )),
     }
+}
+
+fn now_millis() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 /// # Safety

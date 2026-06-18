@@ -221,6 +221,7 @@ void PeerConnectionImpl::setup_dc_handlers(std::shared_ptr<rtc::DataChannel> dc,
                     auto now = std::chrono::steady_clock::now();
                     int64_t now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                         now.time_since_epoch()).count();
+                    last_pong_ts_ms_.store(now_ms, std::memory_order_relaxed);
                     float rtt = static_cast<float>(now_ms - sent_ts);
                     if (rtt >= 0 && rtt < 10000) {
                         float prev = rtt_ms_.load(std::memory_order_relaxed);
@@ -234,6 +235,24 @@ void PeerConnectionImpl::setup_dc_handlers(std::shared_ptr<rtc::DataChannel> dc,
         if (auto* bin = std::get_if<rtc::binary>(&data)) {
             auto* bytes = reinterpret_cast<const uint8_t*>(bin->data());
             auto size = static_cast<int>(bin->size());
+
+            if (reliable && size > 14 && std::memcmp(bytes, R"({"type":"pong")", 14) == 0) {
+                std::string pong(reinterpret_cast<const char*>(bytes), static_cast<size_t>(size));
+                auto pos = pong.find("\"ts\":");
+                if (pos != std::string::npos) {
+                    int64_t sent_ts = std::strtoll(pong.c_str() + pos + 5, nullptr, 10);
+                    auto now = std::chrono::steady_clock::now();
+                    int64_t now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        now.time_since_epoch()).count();
+                    last_pong_ts_ms_.store(now_ms, std::memory_order_relaxed);
+                    float rtt = static_cast<float>(now_ms - sent_ts);
+                    if (rtt >= 0 && rtt < 10000) {
+                        float prev = rtt_ms_.load(std::memory_order_relaxed);
+                        float smoothed = (prev < 0.1f) ? rtt : prev * 0.7f + rtt * 0.3f;
+                        rtt_ms_.store(smoothed, std::memory_order_relaxed);
+                    }
+                }
+            }
 
             if (!reliable) {
                 std::lock_guard<std::mutex> lock(recv_mutex_);
@@ -257,6 +276,16 @@ void PeerConnectionImpl::send_ping() {
     try {
         reliable_dc_->send(msg);
     } catch (...) {}
+}
+
+int64_t PeerConnectionImpl::pong_age_ms() const {
+    int64_t last_pong_ms = last_pong_ts_ms_.load(std::memory_order_relaxed);
+    if (last_pong_ms <= 0) return -1;
+    auto now = std::chrono::steady_clock::now();
+    int64_t now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        now.time_since_epoch()).count();
+    int64_t age = now_ms - last_pong_ms;
+    return age < 0 ? 0 : age;
 }
 
 void PeerConnectionImpl::setup_channels() {

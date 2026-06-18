@@ -621,6 +621,16 @@ float mello_peer_rtt_ms(MelloPeerConnection* peer) {
     }
 }
 
+int64_t mello_peer_pong_age_ms(MelloPeerConnection* peer) {
+    if (!peer) return -1;
+    try {
+        auto* pc = reinterpret_cast<mello::transport::PeerConnectionImpl*>(peer);
+        return pc->pong_age_ms();
+    } catch (...) {
+        return -1;
+    }
+}
+
 int mello_peer_send_audio_skips(MelloPeerConnection* peer) {
     if (!peer) return 0;
     try {

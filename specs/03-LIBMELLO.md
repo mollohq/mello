@@ -101,7 +101,7 @@ The entire library is exposed through a single C header (`mello.h`). This is the
 | **Voice** | `mello_voice_start_capture`, `stop_capture`, `set_mute`, `set_deafen`, `is_speaking`, `set_vad_callback`, `get_packet`, `feed_packet` | Mute stops sending but capture continues for VAD |
 | **Stream Host** | `mello_stream_start_host`, `stop_host`, `get_video_packet`, `request_keyframe` | Config struct controls resolution/bitrate/encoder |
 | **Stream View** | `mello_stream_start_view`, `stop_view`, `feed_video_packet`, `get_frame`, `free_frame` | Caller must free frames after use |
-| **P2P Transport** | `mello_peer_create`, `destroy`, `set_ice_servers`, `create_offer`, `create_answer`, `set_remote_description`, `add_ice_candidate`, `send_unreliable`, `send_reliable`, `recv` | Two data channels per peer: reliable (control) + unreliable (media) |
+| **P2P Transport** | `mello_peer_create`, `destroy`, `set_ice_servers`, `create_offer`, `create_answer`, `set_remote_description`, `add_ice_candidate`, `send_unreliable`, `send_reliable`, `recv`, `send_ping`, `rtt_ms`, `pong_age_ms` | Two data channels per peer: reliable (control) + unreliable (media), plus control-plane liveness/RTT probes |
 | **Devices** | `mello_get_audio_inputs`, `get_audio_outputs`, `set_audio_input`, `set_audio_output`, `get_encoders` | Query/switch audio devices and video encoders at runtime |
 
 ### Callbacks
@@ -110,6 +110,13 @@ The entire library is exposed through a single C header (`mello.h`). This is the
 - `MelloAudioFrameCallback` / `MelloVideoFrameCallback` — raw frame delivery
 - `MelloIceCandidateCallback` — ICE trickle candidate generated
 - `MelloPeerStateCallback` — peer connection state change
+
+### Transport liveness helpers
+
+- `mello_peer_send_ping` sends a timestamped keepalive on the reliable/control DataChannel.
+- `mello_peer_rtt_ms` exposes smoothed control-path RTT derived from pong `ts`.
+- `mello_peer_pong_age_ms` exposes time since the last observed pong (`-1` if none yet).
+- Pong parsing accepts both text and binary control payloads so mixed client/server stacks do not lose liveness updates silently.
 
 ### Error handling
 

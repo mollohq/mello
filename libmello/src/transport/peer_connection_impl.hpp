@@ -80,11 +80,13 @@ private:
     std::atomic<int> send_audio_count_{0};
     std::atomic<int> recv_track_count_{0};
     std::atomic<float> rtt_ms_{0.0f};
+    std::atomic<int64_t> last_pong_ts_ms_{0};
     std::mutex mutex_;
 
 public:
     void send_ping();
     float rtt_ms() const { return rtt_ms_.load(std::memory_order_relaxed); }
+    int64_t pong_age_ms() const;
     int send_audio_skips() const { return send_audio_count_.load(std::memory_order_relaxed); }
     int recv_track_count() const { return recv_track_count_.load(std::memory_order_relaxed); }
 private:

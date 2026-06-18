@@ -218,6 +218,8 @@ func sfuEndpointForRegion(region string) string {
 }
 ```
 
+**Local multi-device note:** when testing desktop + mobile against local Nakama/SFU, `SFU_ENDPOINT_EU` must be a LAN-reachable host (`ws://<lan-ip>:8443/ws`), not `localhost`. The SFU itself must also advertise a non-loopback ICE host candidate (`SFU_PUBLIC_IP=<lan-ip>`), or remote devices will connect signaling but fail media.
+
 ### 2.3 `sfu_entitlement.go` - Premium Crew Check
 
 For beta, this is a simple flag in crew metadata. No credits system, no Stripe integration yet. When that ships, this function gets a real implementation.
@@ -1209,12 +1211,15 @@ mello-core/src/
 
 The original `SfuConnection` sketch above is augmented with liveness and lifecycle hardening (client behaviour in [02-MELLO-CORE.md](../02-MELLO-CORE.md)).
 
-- **Liveness keepalive / RTT.** The client sends `{"type":"ping","ts":<ms>}` on the reliable control DataChannel (~2s). The SFU echoes the same payload with the type changed to `"pong"`; the client derives control-channel RTT from `ts`. The voice tick marks the SFU session dead after ~3 consecutive failed `is_connected()` checks and reconnects.
-  - *Server note:* the pong is produced by copying the ping bytes and overwriting index **10** (`'i'`→`'o'`) of `{"type":"ping"` to form `{"type":"pong"`. Overwriting index 9 yields `"oing"` and silently breaks RTT — regression-prone, keep the index correct.
+- **Liveness keepalive / RTT.** The client sends `{"type":"ping","ts":<ms>}` on the reliable control DataChannel (~2s). The SFU echoes the payload as `"pong"` and the client derives control-path RTT/pong-age from `ts`.
+  - Health is **multi-signal**, not only `is_connected()`: `is_connected && control_dc_open && pong_fresh`, with a short signaling grace window so renegotiation churn does not cause false reconnects.
+  - The client declares dead after 3 consecutive unhealthy checks (~6s) and tears down via a unified SFU disconnect path (`liveness_timeout`) before reconnect.
+  - *Server note:* the pong type flip is byte-sensitive (`"ping"` -> `"pong"`). Keep it on the text/control path and preserve the correct byte index; malformed `"pong"` silently breaks RTT/liveness.
 - **Server-initiated disconnect signaling.** `error` / `session_ended` / slow-peer signals are surfaced to the client as `SfuEvent::Disconnected` to drive reconnect, rather than being logged-only.
 - **`SfuConnection` task lifecycle.** The signaling-listener and `client_stats`-reporter tasks are tracked and **aborted on `Drop`** so a replaced/stale connection's tasks stop immediately instead of ticking against a dead socket.
 - **Reconnect decoupled from Nakama.** A Nakama WS reconnect re-asserts roster membership only; SFU media rebuild is owned solely by the voice tick, so Nakama blips don't churn the SFU peer.
 - **Renegotiation-tolerant track reads.** The SFU raises/pauses its consecutive-EOF inbound-track cutoff during active renegotiation so transient read errors don't kill healthy audio tracks.
+- **Current join failure policy (known caveat).** The client still falls back to P2P when SFU connect/join/DC-open fails. This preserves call continuity but can cause "joined voice, wrong transport" confusion in mixed setups; a stricter fail-closed SFU policy is tracked separately.
 - **Diagnostics.** The SFU logs `peer_close_called` (with a compact caller stack) and `pc_closed` at INFO so every peer teardown is attributable to a concrete cause.
 
 Reconcile-oracle (Nakama → SFU admin API) is covered in [04-BACKEND.md](../04-BACKEND.md). Soak/fault harnesses are in [`TESTING.md`](../../TESTING.md).

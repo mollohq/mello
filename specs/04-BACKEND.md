@@ -414,8 +414,8 @@ Backend changes that make the Nakama-authoritative voice roster correct and dura
 - **Atomic join + capacity check.** The three voice maps (`voiceRooms` / `voiceUserChannel` / `voiceChannelCrew`) are mutated in a single critical section, closing the capacity TOCTOU.
 - **Voice cleanup on kick / leave-crew.** Kick and `AfterLeaveCrew` paths now evict the user from any voice room (previously left ghosts).
 - **Sequenced + coalesced `voice_update`.** Pushes carry a per-crew monotonic `seq` and are debounced to avoid VAD push storms.
-- **Tighter GC.** `voiceRoomGC` uses a short staleness window for `in_voice` activity instead of the blanket long TTL; combined with the client presence heartbeat.
-- **SFU reconcile oracle.** For SFU crews, Nakama pulls the SFU admin session API (`/admin/api/session/{id}`, `SFU_ADMIN_PASSWORD`) to correct membership drift, then re-pushes a sequenced update. Optional and Nakama-initiated — no-op without an SFU.
+- **Tighter GC with grace + consecutive detections.** `voiceRoomGC` now combines: offline grace (`30s`), stale-online threshold (`5m`), and `2` consecutive stale detections before pruning. This reduces false-prune churn during transient reconnects while still removing ghosts.
+- **SFU reconcile oracle with miss hysteresis.** For SFU crews, Nakama pulls the SFU admin session API (`/admin/api/session/{id}`, `SFU_ADMIN_PASSWORD`) to correct membership drift, then re-pushes a sequenced update. Pruning requires `2` consecutive SFU misses and respects a `45s` post-join grace; unknown SFU session lookups do not prune (treat as P2P/transient).
 - **`dev_fault` RPC (dev/test only).** Alongside `dev_seed_state`, injects drift for testing: force a ghost voice member, force `voice_leave`, drop the next push. Used by the reconcile/resync tests.
 - **Diagnostic upload URL RPC.** Issues a short-lived presigned PUT URL so production clients can upload a captured diagnostic log bundle (see [15-DEBUG-TELEMETRY.md](./15-DEBUG-TELEMETRY.md)).
 

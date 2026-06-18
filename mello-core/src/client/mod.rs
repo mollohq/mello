@@ -858,7 +858,7 @@ impl Client {
             #[cfg(feature = "test-faults")]
             Command::FaultSfuDisconnect => {
                 log::warn!("test-fault: forcing SFU voice disconnect");
-                self.voice.mark_disconnected();
+                self.voice.mark_disconnected_with_reason("test_fault");
             }
             #[cfg(feature = "test-faults")]
             Command::FaultSimulateSuspend => {

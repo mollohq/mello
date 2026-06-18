@@ -16,6 +16,8 @@ const PACKET_BUF_SIZE: usize = 4000;
 const MAX_DEVICES: usize = 32;
 const DEBUG_STATS_TICK_DIVISOR: u32 = 10; // 100Hz tick -> 10Hz debug updates
 const UNDERRUN_WINDOW: std::time::Duration = std::time::Duration::from_secs(5);
+const SFU_PONG_STALE_MS: i64 = 8_000;
+const SFU_SIGNALING_GRACE_MS: u64 = 5_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VoiceMode {
@@ -222,9 +224,7 @@ impl VoiceManager {
             return;
         }
 
-        unsafe {
-            mello_sys::mello_voice_stop_capture(self.ctx);
-        }
+        self.stop_capture();
 
         match self.mode {
             VoiceMode::P2P => {
@@ -255,18 +255,55 @@ impl VoiceManager {
     /// Used when an external signal (e.g. sleep/wake) makes the current SFU
     /// session untrustworthy. No-op outside SFU mode.
     pub fn mark_disconnected(&mut self) {
+        self.mark_disconnected_with_reason("sleep_wake");
+    }
+
+    /// Same as `mark_disconnected`, but allows the caller to attach the source
+    /// reason from the triggering signal (fault, liveness, SFU error, etc.).
+    pub fn mark_disconnected_with_reason(&mut self, reason: impl Into<String>) {
         if self.mode != VoiceMode::SFU {
             return;
         }
+        let reason = reason.into();
         let crew_id = self.sfu_crew_id.clone();
-        self.sfu_connection = None;
+        // Disconnect teardown order matters: stop capture first so libmello
+        // state cannot continue capturing against a dead transport.
+        if self.active {
+            self.stop_capture();
+        }
+        if let Some(conn) = self.sfu_connection.take() {
+            Self::spawn_best_effort_sfu_leave(conn);
+        }
         self.active = false;
         self.mode = VoiceMode::Disconnected;
         self.sfu_unhealthy_checks = 0;
-        let _ = self.event_tx.send(Event::VoiceSfuDisconnected {
-            crew_id,
-            reason: "sleep_wake".into(),
-        });
+        self.sfu_crew_id.clear();
+        let _ = self
+            .event_tx
+            .send(Event::VoiceSfuDisconnected { crew_id, reason });
+        log::info!("Voice stopped (SFU disconnect)");
+    }
+
+    fn stop_capture(&self) {
+        if self.ctx.is_null() {
+            return;
+        }
+        unsafe {
+            mello_sys::mello_voice_stop_capture(self.ctx);
+        }
+    }
+
+    fn spawn_best_effort_sfu_leave(conn: Arc<SfuConnection>) {
+        match tokio::runtime::Handle::try_current() {
+            Ok(handle) => {
+                handle.spawn(async move {
+                    conn.leave().await;
+                });
+            }
+            Err(e) => {
+                log::debug!("SFU leave skipped (no tokio runtime): {}", e);
+            }
+        }
     }
 
     fn setup_vad_callback(&self, local_id: &str) {
@@ -663,25 +700,48 @@ impl VoiceManager {
         }
 
         // Send a DC ping every ~2 seconds (200 ticks at 100Hz) and run an SFU
-        // liveness check. By the time mode is SFU the connection was confirmed
-        // healthy (join waits for the DataChannels), so a sustained
-        // !is_connected() means the session went half-open (e.g. sleep/wake)
-        // without delivering a Disconnected signaling event.
+        // liveness check. Health is multi-signal (PC connected, control channel
+        // open, fresh pong RTT) with a short signaling grace so transient
+        // renegotiation churn doesn't look like a dead session.
         if self.tick_counter.is_multiple_of(200) {
             if let Some(conn) = &self.sfu_connection {
                 conn.send_ping();
+                let connected = conn.is_connected();
+                let ctrl_open = conn.is_control_channel_open();
+                let rtt_ms = conn.rtt_ms();
+                let pong_age_ms = conn.pong_age_ms();
+                let signaling_idle_ms = conn.signaling_idle_ms();
+                let in_signaling_grace = signaling_idle_ms <= SFU_SIGNALING_GRACE_MS;
+                // Some stacks can briefly miss pong parsing right after join; don't
+                // fail solely on "no pong observed yet" while transport is healthy.
+                let pong_fresh = pong_age_ms < 0 || pong_age_ms <= SFU_PONG_STALE_MS;
+                let healthy = connected && ctrl_open && pong_fresh;
                 log::debug!(
-                    "SFU liveness: connected={} ctrl_open={} rtt_ms={:.1}",
-                    conn.is_connected(),
-                    conn.is_control_channel_open(),
-                    conn.rtt_ms()
+                    "SFU liveness: connected={} ctrl_open={} rtt_ms={:.1} pong_age_ms={} signaling_idle_ms={}",
+                    connected,
+                    ctrl_open,
+                    rtt_ms,
+                    pong_age_ms,
+                    signaling_idle_ms
                 );
-                if self.mode == VoiceMode::SFU && !conn.is_connected() {
-                    self.sfu_unhealthy_checks += 1;
-                    log::warn!(
-                        "SFU peer connection unhealthy ({}/3 checks)",
-                        self.sfu_unhealthy_checks
-                    );
+                if self.mode == VoiceMode::SFU && !healthy {
+                    if in_signaling_grace {
+                        self.sfu_unhealthy_checks = 0;
+                        log::debug!(
+                            "SFU liveness: suppressing unhealthy check during signaling grace (idle={}ms)",
+                            signaling_idle_ms
+                        );
+                    } else {
+                        self.sfu_unhealthy_checks += 1;
+                        log::warn!(
+                            "SFU peer unhealthy ({}/3 checks): connected={} ctrl_open={} pong_age_ms={} rtt_ms={:.1}",
+                            self.sfu_unhealthy_checks,
+                            connected,
+                            ctrl_open,
+                            pong_age_ms,
+                            rtt_ms
+                        );
+                    }
                 } else {
                     self.sfu_unhealthy_checks = 0;
                 }
@@ -689,7 +749,7 @@ impl VoiceManager {
             // 3 consecutive bad checks (~6s) -> declare the session dead.
             if self.sfu_unhealthy_checks >= 3 {
                 log::warn!("SFU peer connection dead after repeated checks; reconnecting");
-                self.mark_disconnected();
+                self.mark_disconnected_with_reason("liveness_timeout");
                 return;
             }
         }
@@ -844,13 +904,7 @@ impl VoiceManager {
                                 }
                                 SfuEvent::Disconnected { reason } => {
                                     log::warn!("SFU voice disconnected: {}", reason);
-                                    let crew_id = self.sfu_crew_id.clone();
-                                    self.sfu_connection = None;
-                                    self.active = false;
-                                    self.mode = VoiceMode::Disconnected;
-                                    let _ = self
-                                        .event_tx
-                                        .send(Event::VoiceSfuDisconnected { crew_id, reason });
+                                    self.mark_disconnected_with_reason(reason);
                                     return;
                                 }
                                 _ => {}

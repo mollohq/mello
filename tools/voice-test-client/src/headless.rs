@@ -15,6 +15,7 @@
 //!     {"action": "select_crew", "crew_id": "<crew>"},
 //!     {"action": "join_voice", "channel_id": "<channel>"},
 //!     {"action": "expect_event", "event": "VoiceJoined", "timeout_ms": 10000},
+//!     {"action": "assert_no_event", "event": "VoiceSfuDisconnected", "duration_ms": 20000},
 //!     {"action": "inject_wav", "path": "clean.wav", "loop_source": true},
 //!     {"action": "sleep", "ms": 3000},
 //!     {"action": "fault", "kind": "nakama_disconnect"},
@@ -87,6 +88,11 @@ enum Step {
         event: String,
         #[serde(default = "default_timeout")]
         timeout_ms: u64,
+    },
+    /// Ensure an Event whose `type` equals `event` is NOT observed in window.
+    AssertNoEvent {
+        event: String,
+        duration_ms: u64,
     },
 }
 
@@ -260,6 +266,9 @@ pub fn run_scenario(path: &str, cfg: Config) -> Result<(), Box<dyn Error>> {
                 Step::ExpectEvent { event, timeout_ms } => {
                     expect_event(&event_rx, event, Duration::from_millis(*timeout_ms))?;
                 }
+                Step::AssertNoEvent { event, duration_ms } => {
+                    assert_no_event(&event_rx, event, Duration::from_millis(*duration_ms))?;
+                }
             }
         }
         Ok(())
@@ -333,6 +342,40 @@ fn expect_event(
                     "timed out waiting for event {} after {:?}",
                     want, timeout
                 ));
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                return Err("event channel disconnected (client exited)".to_string());
+            }
+        }
+    }
+}
+
+fn assert_no_event(
+    event_rx: &mpsc::Receiver<Event>,
+    forbidden: &str,
+    window: Duration,
+) -> Result<(), String> {
+    let deadline = Instant::now() + window;
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            println!("  confirmed no event: {} for {:?}", forbidden, window);
+            return Ok(());
+        }
+        match event_rx.recv_timeout(remaining) {
+            Ok(ev) => {
+                let ty = event_type(&ev);
+                log_event(&ev);
+                if ty == forbidden {
+                    return Err(format!(
+                        "unexpected event {} observed within {:?}",
+                        forbidden, window
+                    ));
+                }
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                println!("  confirmed no event: {} for {:?}", forbidden, window);
+                return Ok(());
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
                 return Err("event channel disconnected (client exited)".to_string());

@@ -23,6 +23,7 @@ then jump to the section you need.
 | `stream-soak` | SFU stream relay | Yes (live SFU) | No (manual/integration) | `go run ./tools/stream-soak ...` |
 | `voice-test-client` (GUI) | Client DSP A/B | Yes (live backend) | No (manual) | `cargo run` in `tools/voice-test-client` |
 | `voice-test-client` (headless) | Client reconnect/resync E2E | Yes (live backend) | 🔧 integration job | `cargo run -- --scenario scenarios/<f>.json` |
+| `scripts/voice/voice-local-gate.sh` | Cross-repo local RED/GREEN gate + artifacts | Yes (local Nakama + SFU) | 🔧 integration job | `../scripts/voice/voice-local-gate.sh` |
 | `sfu-test.html` | Browser voice/stream + robustness | Yes (live SFU) | No (manual) | open via `npm run dev` in `mello-site` |
 
 Legend: ✅ runs today · ⚠️ runnable, not yet in the PR workflow · 🔧 needs an
@@ -237,8 +238,8 @@ cargo run -- --scenario scenarios/smoke.json
 
 Scenario steps: `device_auth`, `login`, `select_crew`, `join_voice`,
 `leave_voice`, `inject_wav`, `stop_inject`, `set_mute`, `sleep`, `fault`,
-`expect_event`. `${ENV}` tokens in the JSON are expanded from the environment, so
-one file parameterises per run/CI.
+`expect_event`, `assert_no_event`. `${ENV}` tokens in the JSON are expanded from
+the environment, so one file parameterises per run/CI.
 
 Fault kinds (compiled in via the `test-faults` feature, which this tool enables —
 they are **never** in production/FFI builds):
@@ -254,7 +255,9 @@ Bundled scenarios in `scenarios/`:
   crew/channel/WAV fixtures needed. Good first gate for an integration job.
 - **`reconnect.json`** — login → join voice → inject audio → `nakama_disconnect`
   → expect `ConnectionStateChanged` (loss detected) → expect a second
-  `VoiceJoined` (resync re-joined voice = **recovery proven**) → leave.
+  `VoiceJoined` (resync re-joined voice = **recovery proven**) plus stability
+  windows (`assert_no_event VoiceSfuDisconnected`) before/after fault injection
+  → leave.
   Parameterised via env:
 
   | Var | Meaning |
@@ -269,6 +272,29 @@ Bundled scenarios in `scenarios/`:
 
 The process exits `0` on `PASS`, non-zero on `FAIL` (first unmet `expect_event`),
 so scenarios gate a CI job directly.
+
+### External local gate (`../scripts/voice`)
+
+For end-to-end local stack validation across `mello` + `mello-sfu`, use the
+workspace-level harness:
+
+```bash
+../scripts/voice/voice-local-up.sh
+unset CARGO_TARGET_DIR
+../scripts/voice/voice-local-gate.sh --skip-up --skip-fixtures
+```
+
+Key guards baked into the gate:
+
+- Fails on SFU liveness regression markers (`liveness_timeout`, repeated unhealthy checks).
+- Fails if voice scenarios silently fell back to P2P (`SFU peer creation failed ... falling back to P2P`).
+- Collects per-step artifacts (`command.log`, Nakama/SFU logs, health/overview API snapshots).
+
+Desktop + mobile LAN testing:
+
+- `voice-local-up.sh` now auto-sets `SFU_ENDPOINT_EU=ws://<lan-ip>:8443/ws`.
+- It also sets `SFU_PUBLIC_IP=<lan-ip>` for ICE host candidates.
+- Verify startup output is non-loopback before joining from mobile.
 
 ---
 
