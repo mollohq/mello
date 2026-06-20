@@ -147,10 +147,29 @@ fn extract_title(data: &serde_json::Value, backend_type: &str, actor: &str) -> S
                         .join(", ")
                 })
                 .unwrap_or_default();
-            if names.is_empty() {
-                format!("Played {}", game)
+            // Telemetry record/streak (spec 18), appended when present.
+            let wins = data.get("wins").and_then(|v| v.as_u64()).unwrap_or(0);
+            let losses = data.get("losses").and_then(|v| v.as_u64()).unwrap_or(0);
+            let streak = data
+                .get("streak_after")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0);
+            let record = if wins > 0 || losses > 0 {
+                let streak_txt = if streak >= 2 {
+                    format!(", {}-win streak", streak)
+                } else if streak <= -2 {
+                    format!(", {}-loss skid", -streak)
+                } else {
+                    String::new()
+                };
+                format!(" · {}W\u{2013}{}L{}", wins, losses, streak_txt)
             } else {
-                format!("{} played {}", names, game)
+                String::new()
+            };
+            if names.is_empty() {
+                format!("Played {}{}", game, record)
+            } else {
+                format!("{} played {}{}", names, game, record)
             }
         }
         "weekly_recap" => {
