@@ -826,7 +826,12 @@ impl VoiceManager {
             }
 
             // Detection-only: inbound RTP stall while a remote stream is present.
-            if self.mode == VoiceMode::SFU && self.sfu_connection.is_some() {
+            // Gated to capture mode only -- it can't distinguish a real blackout
+            // from a silently-listening remote without remote speaking state
+            // (which lives outside VoiceManager), so it would be noisy in normal
+            // use. The SFU's is_speaking-gated `rtp_blackout` is the authoritative
+            // signal; this just marks the stall in a diagnostic capture log.
+            if self.capture_mode && self.mode == VoiceMode::SFU && self.sfu_connection.is_some() {
                 self.detect_rtp_stall();
             }
         }
