@@ -18,6 +18,10 @@ const DEBUG_STATS_TICK_DIVISOR: u32 = 10; // 100Hz tick -> 10Hz debug updates
 const UNDERRUN_WINDOW: std::time::Duration = std::time::Duration::from_secs(5);
 const SFU_PONG_STALE_MS: i64 = 8_000;
 const SFU_SIGNALING_GRACE_MS: u64 = 5_000;
+/// Grace window after an SFU connection is established during which "no pong
+/// observed yet" (pong_age_ms < 0) is tolerated. After this, a persistent lack
+/// of pongs means the control round-trip is dead and the session is unhealthy.
+const SFU_PONG_GRACE_MS: i64 = 15_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VoiceMode {
@@ -89,6 +93,15 @@ pub struct VoiceManager {
     /// down. Used to detect half-open SFU sessions (e.g. after sleep/wake) that
     /// never surface a `Disconnected` signaling event.
     sfu_unhealthy_checks: u32,
+    /// When the current SFU connection was established. Used to apply a grace
+    /// window before treating "no pong observed yet" as unhealthy.
+    sfu_connected_at: Option<Instant>,
+    /// Previous `rtp_recv_total` and consecutive liveness ticks (~2s each) where
+    /// inbound RTP was flat while a remote stream was present. Detection-only
+    /// for now (logged, not acted on) so the field signal can be validated
+    /// before it drives a reconnect.
+    prev_rtp_recv_total: i32,
+    rtp_stall_checks: u32,
 }
 
 // Safety: VoiceManager is only ever accessed from a single tokio task (the client run loop).
@@ -156,6 +169,9 @@ impl VoiceManager {
             sfu_connection: None,
             sfu_crew_id: String::new(),
             sfu_unhealthy_checks: 0,
+            sfu_connected_at: None,
+            prev_rtp_recv_total: 0,
+            rtp_stall_checks: 0,
         }
     }
 
@@ -215,6 +231,9 @@ impl VoiceManager {
         self.sfu_crew_id = crew_id.to_string();
         self.active = true;
         self.mode = VoiceMode::SFU;
+        self.sfu_connected_at = Some(Instant::now());
+        self.prev_rtp_recv_total = 0;
+        self.rtp_stall_checks = 0;
         self.apply_push_to_talk();
         log::info!("Voice capture started (SFU)");
     }
@@ -233,6 +252,8 @@ impl VoiceManager {
             VoiceMode::SFU => {
                 self.sfu_connection = None;
                 self.sfu_crew_id.clear();
+                self.sfu_connected_at = None;
+                self.rtp_stall_checks = 0;
             }
             VoiceMode::Disconnected => {}
         }
@@ -277,11 +298,13 @@ impl VoiceManager {
         self.active = false;
         self.mode = VoiceMode::Disconnected;
         self.sfu_unhealthy_checks = 0;
+        self.sfu_connected_at = None;
+        self.rtp_stall_checks = 0;
         self.sfu_crew_id.clear();
+        log::info!("Voice stopped (SFU disconnect): reason={}", reason);
         let _ = self
             .event_tx
             .send(Event::VoiceSfuDisconnected { crew_id, reason });
-        log::info!("Voice stopped (SFU disconnect)");
     }
 
     fn stop_capture(&self) {
@@ -304,6 +327,45 @@ impl VoiceManager {
                 log::debug!("SFU leave skipped (no tokio runtime): {}", e);
             }
         }
+    }
+
+    /// Detection-only inbound RTP-stall signal. Logs (without acting) when no
+    /// inbound RTP arrives for ~10s while a remote stream is present -- well
+    /// beyond a normal DTX silence gap and matching the field RTP blackout.
+    /// Once validated against real captures this can drive a reconnect.
+    fn detect_rtp_stall(&mut self) {
+        if self.ctx.is_null() {
+            return;
+        }
+        let mut stats: mello_sys::MelloDebugStats = unsafe { std::mem::zeroed() };
+        unsafe {
+            mello_sys::mello_get_debug_stats(self.ctx, &mut stats);
+        }
+        if stats.incoming_streams > 0 && stats.rtp_recv_total == self.prev_rtp_recv_total {
+            self.rtp_stall_checks += 1;
+            // ~2s per check: warn at ~10s, then every ~10s while still stalled.
+            if self.rtp_stall_checks == 5
+                || (self.rtp_stall_checks > 5 && self.rtp_stall_checks.is_multiple_of(5))
+            {
+                log::warn!(
+                    "SFU RTP stall (detect-only): no inbound RTP for ~{}s while {} stream(s) present (rtp_recv_total={}, pkts_encoded={})",
+                    self.rtp_stall_checks * 2,
+                    stats.incoming_streams,
+                    stats.rtp_recv_total,
+                    stats.packets_encoded
+                );
+            }
+        } else {
+            if self.rtp_stall_checks >= 5 {
+                log::info!(
+                    "SFU RTP stall cleared after ~{}s (rtp_recv_total={})",
+                    self.rtp_stall_checks * 2,
+                    stats.rtp_recv_total
+                );
+            }
+            self.rtp_stall_checks = 0;
+        }
+        self.prev_rtp_recv_total = stats.rtp_recv_total;
     }
 
     fn setup_vad_callback(&self, local_id: &str) {
@@ -712,9 +774,19 @@ impl VoiceManager {
                 let pong_age_ms = conn.pong_age_ms();
                 let signaling_idle_ms = conn.signaling_idle_ms();
                 let in_signaling_grace = signaling_idle_ms <= SFU_SIGNALING_GRACE_MS;
-                // Some stacks can briefly miss pong parsing right after join; don't
-                // fail solely on "no pong observed yet" while transport is healthy.
-                let pong_fresh = pong_age_ms < 0 || pong_age_ms <= SFU_PONG_STALE_MS;
+                let since_connect_ms = self
+                    .sfu_connected_at
+                    .map(|t| t.elapsed().as_millis() as i64)
+                    .unwrap_or(i64::MAX);
+                // Pong freshness: if we've seen a pong, it must be recent. If we've
+                // never seen one (pong_age_ms < 0), tolerate it only briefly after
+                // connect — past the grace window, a persistent lack of pongs means
+                // the control round-trip is dead.
+                let pong_fresh = if pong_age_ms < 0 {
+                    since_connect_ms < SFU_PONG_GRACE_MS
+                } else {
+                    pong_age_ms <= SFU_PONG_STALE_MS
+                };
                 let healthy = connected && ctrl_open && pong_fresh;
                 log::debug!(
                     "SFU liveness: connected={} ctrl_open={} rtt_ms={:.1} pong_age_ms={} signaling_idle_ms={}",
@@ -751,6 +823,11 @@ impl VoiceManager {
                 log::warn!("SFU peer connection dead after repeated checks; reconnecting");
                 self.mark_disconnected_with_reason("liveness_timeout");
                 return;
+            }
+
+            // Detection-only: inbound RTP stall while a remote stream is present.
+            if self.mode == VoiceMode::SFU && self.sfu_connection.is_some() {
+                self.detect_rtp_stall();
             }
         }
 
