@@ -1,0 +1,85 @@
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Oxanium:wght@600;700&display=swap">
+<style>
+.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+.f-stage{min-height:400px;background:#0a0b0d;border-radius:var(--border-radius-lg);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:20px;padding:2rem}
+.f-win{width:360px;background:#15171b;border:1px solid rgba(255,255,255,.07);border-radius:16px;padding:22px;box-shadow:0 24px 70px rgba(0,0,0,.55)}
+.f-top{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:18px}
+.f-wm{font-family:'Oxanium',sans-serif;font-weight:700;font-size:20px;letter-spacing:-.02em;color:#f4f5f7}
+.f-ver{font-family:'Oxanium',sans-serif;font-weight:600;font-size:12px;font-variant-numeric:tabular-nums}
+.f-ver .o{color:#3f444b}.f-ver .a{color:#4a4f57;margin:0 5px}.f-ver .n{color:#7a8089}
+.f-head{font-family:var(--font-sans);font-size:14px;font-weight:500;color:#f4f5f7;margin-bottom:6px}
+.f-sub{font-family:var(--font-sans);font-size:12.5px;line-height:1.5;color:#9aa0a8;margin-bottom:16px;min-height:38px}
+.f-track{height:3px;background:rgba(255,255,255,.08);border-radius:3px;overflow:hidden;position:relative}
+.f-fill{height:100%;width:34%;background:#4a4f57;border-radius:3px}
+.f-track.indet .f-fill{width:28%;background:#EB4D5F;animation:f-indet 1.05s cubic-bezier(.5,.1,.5,.9) infinite}
+@keyframes f-indet{0%{transform:translateX(-120%)}100%{transform:translateX(460%)}}
+.f-codewrap{margin-top:11px;min-height:14px}
+.f-code{font-family:'Oxanium',sans-serif;font-weight:600;font-size:11px;color:#6b7079;letter-spacing:.02em}
+.f-btns{display:flex;justify-content:flex-end;gap:10px;margin-top:16px;padding-top:16px;border-top:1px solid rgba(255,255,255,.06)}
+.f-pri{background:#EB4D5F;color:#fff;border:none;border-radius:9px;padding:9px 16px;font-family:var(--font-sans);font-size:13px;font-weight:500;cursor:pointer}
+.f-pri:hover{background:#d8404f}
+.f-sec{background:transparent;color:#c9ccd2;border:1px solid rgba(255,255,255,.14);border-radius:9px;padding:9px 16px;font-family:var(--font-sans);font-size:13px;font-weight:500;cursor:pointer}
+.f-sec:hover{background:rgba(255,255,255,.05)}
+.f-cap{font-family:var(--font-sans);font-size:11px;color:#6b7079;margin-bottom:6px;text-align:center}
+.f-seg{display:flex;gap:6px;justify-content:center}
+.f-seg button{background:transparent;border:1px solid rgba(255,255,255,.12);color:#9aa0a8;border-radius:8px;padding:6px 12px;font-family:var(--font-sans);font-size:12px;cursor:pointer}
+.f-seg button.on{background:rgba(255,255,255,.08);color:#f4f5f7;border-color:rgba(255,255,255,.22)}
+</style>
+<div class="f-stage">
+  <h2 class="sr-only">Mockup of the m3llo update failure dialog with two variants: a soft failure that lets the user start their current version 2.1.4, and a hard compatibility gate that only offers retry or quit.</h2>
+  <div class="f-win" role="img" aria-label="m3llo update failed window">
+    <div class="f-top">
+      <span class="f-wm">m3llo</span>
+      <span class="f-ver"><span class="o">2.1.4</span><span class="a">&#8594;</span><span class="n">2.2.0</span></span>
+    </div>
+    <div class="f-head" id="fHead">Update failed</div>
+    <div class="f-sub" id="fSub"></div>
+    <div class="f-track" id="fTrack"><div class="f-fill" id="fFill"></div></div>
+    <div class="f-codewrap"><span class="f-code" id="fCode">E_NET_TIMEOUT</span></div>
+    <div class="f-btns" id="fBtns">
+      <button class="f-sec" id="fSec"></button>
+      <button class="f-pri" id="fPri">Try again</button>
+    </div>
+  </div>
+  <div>
+    <div class="f-cap">Failure type</div>
+    <div class="f-seg">
+      <button id="fSoft" class="on">Old build still works</button>
+      <button id="fHard">Compatibility gate</button>
+    </div>
+  </div>
+</div>
+<script>
+(function(){
+  var head=document.getElementById('fHead'),sub=document.getElementById('fSub'),
+      track=document.getElementById('fTrack'),fill=document.getElementById('fFill'),
+      code=document.getElementById('fCode'),btns=document.getElementById('fBtns'),
+      sec=document.getElementById('fSec'),pri=document.getElementById('fPri'),
+      bSoft=document.getElementById('fSoft'),bHard=document.getElementById('fHard');
+  var mode='soft', gen=0;
+  var COPY={
+    soft:{head:'Update failed',sub:'Couldn\u2019t download the update. You can keep using your current version for now.',sec:'Start m3llo 2.1.4'},
+    hard:{head:'Update failed',sub:'Your version can no longer connect to m3llo. Updating is required to continue.',sec:'Quit'}
+  };
+  function renderFail(){
+    gen++;
+    var c=COPY[mode];
+    track.classList.remove('indet');fill.style.background='#4a4f57';fill.style.width='34%';
+    head.textContent=c.head;sub.textContent=c.sub;
+    sec.textContent=c.sec;sec.style.visibility='visible';pri.style.visibility='visible';
+    code.style.visibility='visible';
+  }
+  function retry(){
+    var g=++gen;
+    head.textContent='Reconnecting';sub.textContent='Downloading the update.';
+    track.classList.add('indet');
+    sec.style.visibility='hidden';pri.style.visibility='hidden';code.style.visibility='hidden';
+    setTimeout(function(){if(g===gen)renderFail();},1600);
+  }
+  function setMode(m){mode=m;bSoft.classList.toggle('on',m==='soft');bHard.classList.toggle('on',m==='hard');renderFail();}
+  pri.addEventListener('click',retry);
+  bSoft.addEventListener('click',function(){setMode('soft')});
+  bHard.addEventListener('click',function(){setMode('hard')});
+  renderFail();
+})();
+</script>

@@ -1,8 +1,8 @@
 # MELLO Auto-Updater Specification
 
 > **Component:** Auto-Update System  
-> **Version:** 0.3  
-> **Status:** Planned  
+> **Version:** 0.4
+> **Status:** Implemented
 > **Parent:** [00-ARCHITECTURE.md](./00-ARCHITECTURE.md)
 
 ---
@@ -11,12 +11,14 @@
 
 Mello includes a built-in auto-updater powered by [Velopack](https://velopack.io). Velopack handles packaging, code signing, delta updates, and the full install/update lifecycle on Windows and macOS. Updates are distributed via GitHub Releases.
 
+The current client checks for updates during startup. If an update is available, Mello shows a small Slint force-update window before the main app is created, downloads the update immediately, applies it, and restarts into the new version.
+
 ### Goals
 
-- **Seamless:** Check on startup, non-blocking UI
-- **User-controlled:** User decides when to install
+- **Required at startup:** New versions are applied before the main app starts
+- **Visible:** Show a focused startup dialog with version, progress, and failure state
 - **Reliable:** Atomic updates with automatic rollback
-- **Transparent:** Show release notes and download progress
+- **Transparent:** Show download/apply progress
 - **Signed:** All binaries are code-signed (Azure Trusted Signing on Windows, Apple Developer ID + notarization on macOS)
 - **Efficient:** Delta updates minimize download size between versions
 
@@ -24,52 +26,31 @@ Mello includes a built-in auto-updater powered by [Velopack](https://velopack.io
 
 ## 2. Update Flow
 
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                         UPDATE FLOW                                     │
-│                                                                         │
-│   ┌─────────────┐                                                       │
-│   │ App Start   │                                                       │
-│   └──────┬──────┘                                                       │
-│          │                                                              │
-│          ▼                                                              │
-│   ┌───────────────────────────┐                                         │
-│   │ VelopackApp::build().run()│  ← MUST be first call in main()        │
-│   │ (handles install/uninstall│    Velopack lifecycle hooks run here    │
-│   │  hooks silently)          │                                         │
-│   └──────┬────────────────────┘                                         │
-│          │                                                              │
-│          ▼                                                              │
-│   ┌─────────────────────────┐                                           │
-│   │ UpdateManager::new()    │◀── Source: GitHub Releases                │
-│   │ check_for_updates()     │    (reads releases.{channel}.json)       │
-│   │ (background thread)     │                                           │
-│   └──────┬──────────────────┘                                           │
-│          │                                                              │
-│          ▼                                                              │
-│   ┌─────────────────────────┐     ┌────────────────────────────────┐    │
-│   │ Update available?       │────▶│ Yes → show banner in UI        │    │
-│   │ (Velopack compares      │     │ No  → up to date, done         │    │
-│   │  against release index) │     └────────────────────────────────┘    │
-│   └──────┬──────────────────┘                                           │
-│          │                                                              │
-│          ▼ (user clicks "Update")                                       │
-│   ┌─────────────────────────┐                                           │
-│   │ download_updates()      │──── Velopack downloads delta or full     │
-│   │ (background)            │     nupkg, shows progress via callback   │
-│   └──────┬──────────────────┘                                           │
-│          │                                                              │
-│          ▼                                                              │
-│   ┌─────────────────────────┐                                           │
-│   │ apply_updates_and_      │                                           │
-│   │ restart()               │──── Velopack applies update atomically   │
-│   │                         │     and restarts the app                 │
-│   └─────────────────────────┘                                           │
-│                                                                         │
-└─────────────────────────────────────────────────────────────────────────┘
+```text
+App start
+  -> Updater::run_lifecycle_hooks()
+     -> VelopackApp::build().run()
+        handles install/update/uninstall lifecycle hooks and may exit
+  -> init logging / panic hook
+  -> enforce single-instance
+  -> Updater::new()
+     source = MELLO_UPDATE_URL override, or GitHub Releases
+     channel = MELLO_UPDATE_CHANNEL override, or Velopack package channel
+  -> check_for_updates()
+     no update: continue normal app startup
+     update available: create ForceUpdateWindow before MainWindow
+  -> startup_update::run_gate()
+     shows a centered borderless progress dialog
+     calls update_and_restart() immediately
+     maps Velopack progress/errors to dialog state
+  -> download_updates()
+  -> apply_updates_and_restart()
+     Velopack applies update atomically and restarts the app
 ```
 
-**Key difference from a hand-rolled updater:** Velopack handles delta computation, checksum verification, atomic binary replacement, and restart internally. The client code only calls three methods: `check_for_updates()`, `download_updates()`, `apply_updates_and_restart()`.
+The settings-panel updater still uses the same `Updater` event stream, but the primary path is the startup gate. The main app is not created until the check reports no update, the user explicitly continues after a soft failure, or Velopack restarts into the updated version.
+
+**Key difference from a hand-rolled updater:** Velopack handles delta computation, checksum verification, atomic binary replacement, and restart internally. The client code calls `check_for_updates()`, `download_updates()`, and `apply_updates_and_restart()`.
 
 ---
 
@@ -81,15 +62,15 @@ Velopack generates platform-specific artifacts that are uploaded to each GitHub 
 mollohq/mello
 └── releases
     └── v0.2.0
-        ├── Mello-Setup.exe                     (Windows installer, signed via ATS)
-        ├── Mello-0.2.0-win-x64-full.nupkg      (Windows full update package)
-        ├── Mello-0.2.0-win-x64-delta.nupkg     (Windows delta update, if prev release exists)
-        ├── releases.win-x64.json                (Windows release index — Velopack reads this)
+        ├── m3llo-win-x64-stable-Setup.exe      (Windows installer, signed via ATS)
+        ├── m3llo-0.2.0-win-x64-stable-full.nupkg
+        ├── m3llo-0.2.0-win-x64-stable-delta.nupkg
+        ├── releases.win-x64-stable.json         (Windows release index — Velopack reads this)
         │
-        ├── Mello.pkg                            (macOS installer, signed + notarized)
-        ├── Mello-0.2.0-osx-arm64-full.nupkg    (macOS full update package)
-        ├── Mello-0.2.0-osx-arm64-delta.nupkg   (macOS delta update, if prev release exists)
-        └── releases.osx-arm64.json              (macOS release index — Velopack reads this)
+        ├── m3llo-osx-arm64-stable-Setup.pkg    (macOS installer, signed + notarized)
+        ├── m3llo-0.2.0-osx-arm64-stable-full.nupkg
+        ├── m3llo-0.2.0-osx-arm64-stable-delta.nupkg
+        └── releases.osx-arm64-stable.json       (macOS release index — Velopack reads this)
 ```
 
 ### How Velopack uses the release index
@@ -121,17 +102,17 @@ The `self_update`, `sha2`, `hex`, `futures-util`, and `reqwest` (for update purp
 
 ### 4.2 Startup Hook
 
-`VelopackApp::build().run()` **must** be the very first call in `main()`, before any other initialization. This is how Velopack handles install, uninstall, and update lifecycle hooks (e.g., creating/removing Start Menu shortcuts on Windows).
+`Updater::run_lifecycle_hooks()` **must** be the very first call in `main()`, before any other initialization. It calls `VelopackApp::build().run()`, which handles install, uninstall, and update lifecycle hooks.
 
 ```rust
 // client/src/main.rs
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // ──── Velopack lifecycle hook — MUST be first ────
-    velopack::VelopackApp::build().run();
+    Updater::run_lifecycle_hooks();
     // ─────────────────────────────────────────────────
 
-    env_logger::init();
+    let log_dir = init_logging();
 
     // ... rest of startup (Slint, updater, etc.)
 }
@@ -144,220 +125,75 @@ If the process was spawned by Velopack for a lifecycle event (install, uninstall
 ```rust
 // client/src/updater/mod.rs
 
-/// Simplified update status for the UI layer.
-/// Wraps Velopack's internal update info.
-#[derive(Debug, Clone, PartialEq)]
-pub enum UpdateStatus {
-    /// Haven't checked yet
-    Idle,
-
-    /// Checking GitHub for updates
-    Checking,
-
-    /// No update available (already on latest)
-    UpToDate,
-
-    /// Update available, waiting for user action
-    Available {
-        version: String,
-        /// Delta size if available, otherwise full size (bytes)
-        download_size: u64,
-    },
-
-    /// Downloading update
-    Downloading {
-        progress: f32,      // 0.0 to 1.0
-    },
-
-    /// Downloaded, ready to install
-    ReadyToInstall,
-
-    /// Update failed
-    Error(String),
-}
-
-/// Events emitted by updater for the UI
 #[derive(Debug, Clone)]
 pub enum UpdateEvent {
     CheckStarted,
-    CheckComplete { update_available: bool },
-    DownloadProgress { progress: f32 },
+    CheckComplete {
+        update_available: bool,
+        version: Option<String>,
+        download_size: Option<u64>,
+    },
+    DownloadStarted {
+        total_bytes: u64,
+    },
+    DownloadProgress {
+        progress: f32,
+        downloaded_bytes: u64,
+        total_bytes: u64,
+    },
     DownloadComplete,
-    InstallReady,
+    ApplyStarted,
     Error(String),
 }
 ```
 
 ### 4.4 Updater Implementation
 
-```rust
-// client/src/updater/updater.rs
+`client/src/updater/updater.rs` wraps Velopack's `UpdateManager` and keeps the latest `UpdateInfo` cached after `check_for_updates()`. It uses a standard `mpsc::Sender<UpdateEvent>` so both the startup gate and settings panel can consume update state without binding the updater to Slint.
 
-use velopack::{UpdateManager, UpdateOptions, sources::GithubSource};
-use std::sync::Arc;
-use tokio::sync::{mpsc, RwLock};
+Important implementation points:
 
-const GITHUB_REPO_OWNER: &str = "mollohq";
-const GITHUB_REPO_NAME: &str = "mello";
-
-pub struct Updater {
-    manager: UpdateManager<GithubSource>,
-    status: Arc<RwLock<UpdateStatus>>,
-    event_tx: mpsc::Sender<UpdateEvent>,
-}
-
-impl Updater {
-    pub fn new(event_tx: mpsc::Sender<UpdateEvent>) -> Result<Self, Box<dyn std::error::Error>> {
-        let source = GithubSource::new(
-            &format!("https://github.com/{}/{}", GITHUB_REPO_OWNER, GITHUB_REPO_NAME),
-            None,  // no pre-release filter
-            false, // not pre-release channel
-        );
-
-        let manager = UpdateManager::new(
-            source,
-            None, // default options
-            None, // default locator
-        )?;
-
-        Ok(Self {
-            manager,
-            status: Arc::new(RwLock::new(UpdateStatus::Idle)),
-            event_tx,
-        })
-    }
-
-    /// Get current status
-    pub async fn status(&self) -> UpdateStatus {
-        self.status.read().await.clone()
-    }
-
-    /// Check for updates (run in background)
-    pub async fn check_for_updates(&self) -> Result<bool, Box<dyn std::error::Error>> {
-        *self.status.write().await = UpdateStatus::Checking;
-        self.event_tx.send(UpdateEvent::CheckStarted).await.ok();
-
-        match self.manager.check_for_updates() {
-            Ok(Some(update_info)) => {
-                let version = update_info.target_full_release.version.to_string();
-                let download_size = update_info.target_full_release.size as u64;
-
-                *self.status.write().await = UpdateStatus::Available {
-                    version: version.clone(),
-                    download_size,
-                };
-                self.event_tx.send(UpdateEvent::CheckComplete { update_available: true }).await.ok();
-
-                log::info!("Update available: v{}", version);
-                Ok(true)
-            }
-            Ok(None) => {
-                *self.status.write().await = UpdateStatus::UpToDate;
-                self.event_tx.send(UpdateEvent::CheckComplete { update_available: false }).await.ok();
-                log::info!("Already on latest version");
-                Ok(false)
-            }
-            Err(e) => {
-                let msg = format!("Update check failed: {}", e);
-                *self.status.write().await = UpdateStatus::Error(msg.clone());
-                self.event_tx.send(UpdateEvent::Error(msg)).await.ok();
-                Err(e.into())
-            }
-        }
-    }
-
-    /// Download the update with progress reporting
-    pub async fn download(&self) -> Result<(), Box<dyn std::error::Error>> {
-        let update_info = self.manager.check_for_updates()?
-            .ok_or("No update available")?;
-
-        let status = self.status.clone();
-        let tx = self.event_tx.clone();
-
-        self.manager.download_updates(&update_info, Some(move |progress: i16| {
-            let pct = progress as f32 / 100.0;
-            // Fire-and-forget status update
-            let _ = tx.try_send(UpdateEvent::DownloadProgress { progress: pct });
-        }))?;
-
-        *self.status.write().await = UpdateStatus::ReadyToInstall;
-        self.event_tx.send(UpdateEvent::DownloadComplete).await.ok();
-
-        Ok(())
-    }
-
-    /// Apply the downloaded update and restart the app.
-    /// This function does not return on success — the process is replaced.
-    pub fn apply_and_restart(&self) -> Result<(), Box<dyn std::error::Error>> {
-        let update_info = self.manager.check_for_updates()?
-            .ok_or("No update available")?;
-
-        // This replaces the current process and restarts into the new version.
-        self.manager.apply_updates_and_restart(&update_info, &[])?;
-
-        // Should not reach here
-        Ok(())
-    }
-}
-```
+- `Updater::run_lifecycle_hooks()` calls `VelopackApp::build().run()` and must remain the first call in `main()`.
+- `Updater::new()` uses `MELLO_UPDATE_URL` as an HTTP or local file-source override. Without it, the source is GitHub Releases: `https://github.com/mollohq/mello/releases/latest/download/`.
+- `MELLO_UPDATE_CHANNEL` is an optional local/dev override that maps to Velopack `UpdateOptions::ExplicitChannel`. CI does not set it; production releases use the channel embedded in the installed package.
+- `check_for_updates()` emits `CheckStarted`, `CheckComplete`, and caches the `UpdateInfo`.
+- `update_and_restart()` runs download/apply on a background thread, emits progress events, then calls `apply_updates_and_restart()`.
+- `MELLO_UPDATE_APPLY_DELAY_MS` is a test-only delay before apply, used to keep the startup dialog visible during local scenarios.
 
 ### 4.5 Integration with App Startup
 
-```rust
-// client/src/main.rs
+Current startup order in `client/src/main.rs`:
 
-mod updater;
-
-use updater::{Updater, UpdateEvent};
-use tokio::sync::mpsc;
-
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // ──── Velopack lifecycle hook — MUST be first ────
-    velopack::VelopackApp::build().run();
-    // ─────────────────────────────────────────────────
-
-    env_logger::init();
-
-    let rt = tokio::runtime::Runtime::new()?;
-
-    let (event_tx, mut event_rx) = mpsc::channel::<UpdateEvent>(32);
-
-    // Create updater (may fail if not installed via Velopack — dev mode)
-    let updater = match Updater::new(event_tx) {
-        Ok(u) => Some(u),
-        Err(e) => {
-            log::warn!("Updater init failed (dev mode?): {}", e);
-            None
-        }
-    };
-
-    // Check for updates in background
-    if let Some(ref updater) = updater {
-        let updater_ref = updater.clone();
-        rt.spawn(async move {
-            if let Err(e) = updater_ref.check_for_updates().await {
-                log::warn!("Update check failed: {}", e);
-            }
-        });
-    }
-
-    // Continue with normal startup...
-    let app = MainWindow::new()?;
-
-    // Wire up update events to UI (poll event_rx in the Slint event loop)
-    // ...
-
-    app.run()?;
-
-    Ok(())
-}
-```
+1. `Updater::run_lifecycle_hooks()` is called first in `main()`.
+2. `run_app()` enforces single-instance and creates the updater.
+3. `check_for_updates()` runs synchronously before `MainWindow::new()`.
+4. If an update is available:
+   - `startup_update::configure_slint_platform()` initializes the pre-main Slint platform on macOS.
+   - `startup_update::run_gate()` creates `ForceUpdateWindow`, starts the download immediately, and runs a temporary Slint event loop.
+   - success path restarts the app via Velopack; soft failure lets the user continue into the current version.
+5. If no update is available, startup continues normally and the main window/poll loop reuse a fresh update-event channel.
 
 ---
 
 ## 5. UI Components
 
-### 5.1 Update Banner
+### 5.1 Startup Force-Update Dialog
+
+The startup dialog is `ForceUpdateWindow` from `client/ui/panels/force_update_dialog.slint`, exported through `client/ui/main.slint` and driven by `client/src/updater/startup_update.rs`.
+
+Behavior:
+
+- Borderless fixed-size window: `360px` wide, `188px` tall during download, `244px` on failure.
+- Shows current version, target version, stage, percentage, byte count, and failure details.
+- Close button is intercepted with `CloseRequestResponse::KeepWindowShown`.
+- Retry starts `update_and_restart()` again.
+- Non-hard failures show a secondary action to start the current version.
+- macOS uses the winit Slint backend with the default menu bar disabled for the pre-main window.
+- Windows and macOS center the dialog on the primary screen before showing it.
+
+### 5.2 Historical Banner UI
+
+Earlier revisions planned an in-app update banner. That design is superseded by the startup gate, but the settings-panel updater may still reuse the same `Updater` events for manual update affordances.
 
 ```slint
 // client/ui/components/update_banner.slint
@@ -602,12 +438,14 @@ The UI components are wired to the Velopack-backed `Updater` events rather than 
 
 ## 6. GitHub Actions: Build & Release
 
-Two separate workflows — one for Windows, one for macOS. Each builds the client, packages with Velopack, signs, and uploads artifacts to a GitHub Release.
+The current release workflow is `.github/workflows/release.yml`. It has separate Windows and macOS jobs, then a publish job that uploads both platforms' Velopack artifacts to the GitHub Release.
+
+Both platform jobs stamp the workspace version, refresh the lockfile offline, build with production features, run tests and clippy, assemble `dist/`, download the previous release artifacts for delta generation, and run `vpk pack`.
 
 ### 6.1 Windows Workflow
 
 ```yaml
-# .github/workflows/release-windows.yml
+# .github/workflows/release.yml
 
 name: Windows Release
 
@@ -700,15 +538,15 @@ jobs:
           mkdir vpk-out
           vpk download github --repoUrl https://github.com/mollohq/mello --outputDir vpk-out --channel %RELEASE_CHANNEL% --token ${{ secrets.GH_PAT }}
           vpk pack ^
-            --packId Mello ^
+            --packId m3llo ^
             --packVersion %RELEASE_VERSION% ^
             --packDir dist ^
             --mainExe mello.exe ^
             --packTitle Mello ^
             --channel %RELEASE_CHANNEL% ^
             --outputDir vpk-out ^
-            --icon assets/icons/app_icon.ico ^
-            --azureTrustedSignFile windows/signing-metadata.json
+            --icon client/assets/icons/mello.ico ^
+            --azureTrustedSignFile client/windows/signing-metadata.json
 
       # Upload Velopack artifacts to the GitHub Release
       - name: Upload to GitHub Release
@@ -733,7 +571,7 @@ jobs:
 ### 6.2 macOS Workflow
 
 ```yaml
-# .github/workflows/release-macos.yml
+# .github/workflows/release.yml
 
 name: macOS Release
 
@@ -837,18 +675,20 @@ jobs:
           mkdir -p vpk-out
           vpk download github --repoUrl https://github.com/mollohq/mello --outputDir vpk-out --channel $RELEASE_CHANNEL --token ${{ secrets.GH_PAT }}
           vpk pack \
-            --packId Mello \
+            --packId m3llo \
             --packVersion $RELEASE_VERSION \
             --packDir dist \
             --mainExe mello \
             --packTitle Mello \
             --channel $RELEASE_CHANNEL \
             --outputDir vpk-out \
-            --icon assets/icons/app_icon.icns \
+            --icon client/assets/icons/mello.icns \
             --signAppIdentity "Developer ID Application: ${{ secrets.APPLE_TEAM_NAME }}" \
             --signInstallIdentity "Developer ID Installer: ${{ secrets.APPLE_TEAM_NAME }}" \
-            --notaryProfile "AC_PASSWORD" \
-            --signEntitlements client/macos/release.entitlements
+            --notaryProfile "${{ env.NOTARY_PROFILE_NAME }}" \
+            --keychain "$KEYCHAIN_PATH" \
+            --signEntitlements client/macos/release.entitlements \
+            --plist client/macos/Info.plist
 
       # Upload Velopack artifacts to the GitHub Release
       - name: Upload to GitHub Release
@@ -961,43 +801,13 @@ Entitlements grant the app permissions for:
 
 ## 8. Configuration
 
-### 8.1 Update Settings
+There is no persisted updater settings object today. The updater follows the channel embedded in the installed Velopack package, with environment overrides for local testing and diagnostics:
 
-```rust
-// client/src/config.rs
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct UpdateConfig {
-    /// Check for updates on startup
-    pub check_on_startup: bool,
-    
-    /// Automatically download updates (but don't install)
-    pub auto_download: bool,
-    
-    /// Include pre-release versions
-    pub include_prerelease: bool,
-    
-    /// Update channel
-    pub channel: UpdateChannel,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum UpdateChannel {
-    Stable,
-    Beta,
-}
-
-impl Default for UpdateConfig {
-    fn default() -> Self {
-        Self {
-            check_on_startup: true,
-            auto_download: false,
-            include_prerelease: false,
-            channel: UpdateChannel::Stable,
-        }
-    }
-}
-```
+| Variable | Purpose |
+|---|---|
+| `MELLO_UPDATE_URL` | Overrides the update source. HTTP URLs use `HttpSource`; any other value is treated as a local `FileSource`. |
+| `MELLO_UPDATE_CHANNEL` | Optional Velopack explicit-channel override. Used by local dev scripts to force `osx-arm64-dev` or `win-x64-dev`; CI does not set this. |
+| `MELLO_UPDATE_APPLY_DELAY_MS` | Optional delay between download completion and apply/restart, useful for seeing the startup dialog during tests. |
 
 Velopack channels map to the `--channel` flag used during `vpk pack`:
 
@@ -1008,20 +818,42 @@ Velopack channels map to the `--channel` flag used during `vpk pack`:
 
 The channel determines which `releases.{channel}.json` the `UpdateManager` reads from GitHub Releases.
 
+### 8.1 Local Test Scripts
+
+Windows:
+
+```powershell
+.\scripts\test-updater.ps1 -Action scenario
+```
+
+macOS:
+
+```bash
+./scripts/test-updater.sh --action scenario --old-version 0.3.0 --new-version 0.3.1
+```
+
+The macOS script:
+
+- Builds and packages unsigned local Velopack releases on `osx-arm64-dev`.
+- Installs the old version to the current user's app location.
+- Packs a newer version into `vpk-out/`.
+- Launches the installed app binary directly so `MELLO_UPDATE_URL`, `MELLO_UPDATE_CHANNEL`, and `MELLO_UPDATE_APPLY_DELAY_MS` are inherited.
+- Backs up and restores `Cargo.toml`, `Cargo.lock`, and `client/macos/Info.plist` while stamping temporary versions.
+
 ---
 
 ## 9. Testing Checklist
 
 - [ ] `VelopackApp::build().run()` is the first call in `main()`
-- [ ] Update check works on startup (background, non-blocking)
-- [ ] UI shows update banner when update is available
+- [ ] Update check works on startup before `MainWindow` is created
+- [ ] Startup force-update dialog appears when update is available
 - [ ] Download shows progress via Velopack callback
-- [ ] "Update Now" triggers download, then shows "Restart"
-- [ ] "Restart" calls `apply_updates_and_restart()` — app relaunches on new version
+- [ ] Startup dialog starts download immediately
+- [ ] `apply_updates_and_restart()` relaunches on the new version
 - [ ] Delta updates work when previous release exists
 - [ ] Full update works for first install or when delta is unavailable
-- [ ] "Later" dismisses banner until next startup
-- [ ] Handles offline gracefully (update check fails silently)
+- [ ] Soft failure allows starting the current version
+- [ ] Handles offline gracefully (update check logs and continues)
 - [ ] Updater init fails gracefully in dev mode (not installed via Velopack)
 - [ ] **Windows:** Installer (`Mello-Setup.exe`) runs without SmartScreen warning
 - [ ] **Windows:** Installed app has valid Authenticode signature (check with `signtool verify`)
@@ -1029,6 +861,7 @@ The channel determines which `releases.{channel}.json` the `UpdateManager` reads
 - [ ] **macOS:** App binary passes `codesign --verify --deep --strict`
 - [ ] **macOS:** App passes `spctl --assess --type install` (notarization check)
 - [ ] **macOS:** `libonnxruntime.dylib` is correctly signed alongside the app
+- [ ] **macOS local:** `scripts/test-updater.sh --action scenario` shows the centered startup update dialog and applies the newer local package
 
 ---
 
@@ -1100,7 +933,7 @@ client.PROTOCOL_VERSION < server.min_client_protocol  →  "Please update Mello"
 server.protocol_version < client.MIN_SERVER_PROTOCOL   →  "Server needs updating"
 ```
 
-Both cases emit a `ProtocolMismatch` event that the UI renders as a non-dismissable banner (update banner component, see §5). The app remains functional for best-effort use but warns clearly.
+Both cases emit a `ProtocolMismatch` event that the UI should render as a non-dismissable compatibility warning. The app remains functional for best-effort use but warns clearly.
 
 ### Constants (initial values)
 

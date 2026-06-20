@@ -1,3 +1,4 @@
+pub(crate) mod startup_update;
 #[allow(clippy::module_inception)]
 mod updater;
 
@@ -11,8 +12,15 @@ pub enum UpdateEvent {
         version: Option<String>,
         download_size: Option<u64>,
     },
+    DownloadStarted {
+        total_bytes: u64,
+    },
     DownloadProgress {
         progress: f32,
+        downloaded_bytes: u64,
+        total_bytes: u64,
     },
+    DownloadComplete,
+    ApplyStarted,
     Error(String),
 }

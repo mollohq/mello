@@ -1,0 +1,97 @@
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Oxanium:wght@600;700&display=swap">
+<style>
+.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+.m-stage{min-height:380px;background:#0a0b0d;border-radius:var(--border-radius-lg);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;padding:2rem}
+.m-win{width:360px;background:#15171b;border:1px solid rgba(255,255,255,.07);border-radius:16px;padding:22px 22px 18px;box-shadow:0 24px 70px rgba(0,0,0,.55)}
+.m-top{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:20px}
+.m-wm{font-family:'Oxanium',sans-serif;font-weight:700;font-size:20px;letter-spacing:-.02em;color:#f4f5f7}
+.m-ver{font-family:'Oxanium',sans-serif;font-weight:600;font-size:12px;color:#5b6068;font-variant-numeric:tabular-nums}
+.m-ver .old{color:#474c54}
+.m-ver .arr{margin:0 5px;color:#5b6068}
+.m-ver .new{color:#c9ccd2}
+.m-row{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:11px}
+.m-lbl{font-family:var(--font-sans);font-size:13px;font-weight:500;color:#b3b7be}
+.m-pct{font-family:'Oxanium',sans-serif;font-weight:600;font-size:13px;color:#f4f5f7;font-variant-numeric:tabular-nums}
+.m-track{height:3px;background:rgba(255,255,255,.08);border-radius:3px;overflow:hidden;position:relative}
+.m-fill{height:100%;width:0;background:#EB4D5F;border-radius:3px;box-shadow:1px 0 0 rgba(255,255,255,.28)}
+.m-track.indet .m-fill{width:28%;animation:m-indet 1.05s cubic-bezier(.5,.1,.5,.9) infinite}
+@keyframes m-indet{0%{transform:translateX(-120%)}100%{transform:translateX(460%)}}
+.m-bottom{display:flex;justify-content:space-between;align-items:baseline;margin-top:13px}
+.m-req{font-family:var(--font-sans);font-size:11px;color:#6b7079;letter-spacing:.01em}
+.m-bytes{font-family:'Oxanium',sans-serif;font-weight:600;font-size:11px;color:#6b7079;font-variant-numeric:tabular-nums}
+.m-replay{background:transparent;border:1px solid rgba(255,255,255,.12);color:#b3b7be;border-radius:8px;padding:6px 14px;font-family:var(--font-sans);font-size:12px;cursor:pointer}
+.m-replay:hover{background:rgba(255,255,255,.05)}
+</style>
+<div class="m-stage">
+  <h2 class="sr-only">Mockup of the m3llo desktop force-update dialog showing version 2.1.4 updating to 2.2.0, with a progress bar moving through download, verify, install and restart stages.</h2>
+  <div class="m-win" role="img" aria-label="m3llo update window">
+    <div class="m-top">
+      <span class="m-wm">m3llo</span>
+      <span class="m-ver"><span class="old">2.1.4</span><span class="arr">&#8594;</span><span class="new">2.2.0</span></span>
+    </div>
+    <div class="m-row">
+      <span class="m-lbl" id="mLbl">Downloading</span>
+      <span class="m-pct" id="mPct">0%</span>
+    </div>
+    <div class="m-track" id="mTrack"><div class="m-fill" id="mFill"></div></div>
+    <div class="m-bottom">
+      <span class="m-req">Required update</span>
+      <span class="m-bytes" id="mBytes">0.0 / 42.0 MB</span>
+    </div>
+  </div>
+  <button class="m-replay" id="mReplay">Replay</button>
+</div>
+<script>
+(function(){
+  var lbl=document.getElementById('mLbl'),pct=document.getElementById('mPct'),
+      track=document.getElementById('mTrack'),fill=document.getElementById('mFill'),
+      bytes=document.getElementById('mBytes'),replay=document.getElementById('mReplay');
+  var TOTAL=42.0, gen=0;
+  function sleep(ms,g){return new Promise(function(r){setTimeout(function(){if(g===gen)r()},ms)})}
+  function ease(t){return 1-Math.pow(1-t,3)}
+  function setDet(){track.classList.remove('indet');fill.style.transform=''}
+  function ramp(ms,g,onTick){
+    return new Promise(function(res){
+      var t0=null;
+      function step(ts){
+        if(g!==gen)return;
+        if(t0===null)t0=ts;
+        var p=Math.min(1,(ts-t0)/ms);
+        onTick(p);
+        if(p<1)requestAnimationFrame(step);else res();
+      }
+      requestAnimationFrame(step);
+    });
+  }
+  async function run(){
+    var g=++gen;
+    setDet();fill.style.width='0%';pct.textContent='0%';pct.style.visibility='visible';
+    lbl.textContent='Downloading';bytes.style.visibility='visible';bytes.textContent='0.0 / '+TOTAL.toFixed(1)+' MB';
+    await sleep(350,g);if(g!==gen)return;
+    await ramp(2200,g,function(p){
+      var e=ease(p);
+      fill.style.width=(e*100).toFixed(1)+'%';
+      pct.textContent=Math.round(e*100)+'%';
+      bytes.textContent=(e*TOTAL).toFixed(1)+' / '+TOTAL.toFixed(1)+' MB';
+    });
+    if(g!==gen)return;
+    lbl.textContent='Verifying';pct.style.visibility='hidden';bytes.style.visibility='hidden';
+    track.classList.add('indet');
+    await sleep(1150,g);if(g!==gen)return;
+    setDet();fill.style.width='0%';
+    lbl.textContent='Installing';pct.style.visibility='visible';pct.textContent='0%';
+    await ramp(1200,g,function(p){
+      var e=ease(p);
+      fill.style.width=(e*100).toFixed(1)+'%';
+      pct.textContent=Math.round(e*100)+'%';
+    });
+    if(g!==gen)return;
+    lbl.textContent='Restarting';fill.style.width='100%';pct.textContent='100%';
+    await sleep(1300,g);if(g!==gen)return;
+    await sleep(700,g);if(g!==gen)return;
+    run();
+  }
+  replay.addEventListener('click',run);
+  run();
+})();
+</script>

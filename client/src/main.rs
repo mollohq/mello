@@ -225,13 +225,10 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
         Settings::default().save();
     }
 
-    let rt = tokio::runtime::Runtime::new()?;
-
-    let (cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel::<Command>();
-    let (event_tx, event_rx) = std::sync::mpsc::channel::<Event>();
+    updater::startup_update::apply_renderer_override();
 
     // --- Auto-updater ---
-    let (update_event_tx, update_event_rx) = std::sync::mpsc::channel::<UpdateEvent>();
+    let (update_event_tx, mut update_event_rx) = std::sync::mpsc::channel::<UpdateEvent>();
     let updater: Rc<RefCell<Option<Updater>>> =
         Rc::new(RefCell::new(match Updater::new(update_event_tx) {
             Ok(u) => {
@@ -244,9 +241,30 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
             }
         }));
 
-    if let Some(ref mut u) = *updater.borrow_mut() {
-        u.check_for_updates();
+    let mut slint_platform_configured = false;
+    let startup_update_available = {
+        let mut updater_ref = updater.borrow_mut();
+        updater_ref
+            .as_mut()
+            .map(|updater| updater.check_for_updates())
+            .unwrap_or(false)
+    };
+    if startup_update_available {
+        updater::startup_update::configure_slint_platform()?;
+        slint_platform_configured = true;
+        updater::startup_update::run_gate(updater.clone(), update_event_rx)?;
+
+        let (update_event_tx, next_update_event_rx) = std::sync::mpsc::channel::<UpdateEvent>();
+        if let Some(ref mut updater) = *updater.borrow_mut() {
+            updater.set_event_sender(update_event_tx);
+        }
+        update_event_rx = next_update_event_rx;
     }
+
+    let rt = tokio::runtime::Runtime::new()?;
+
+    let (cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel::<Command>();
+    let (event_tx, event_rx) = std::sync::mpsc::channel::<Event>();
 
     let frame_slot: mello_core::FrameSlot = std::sync::Arc::new(std::sync::Mutex::new(None));
     let native_frame_slot: mello_core::NativeFrameSlot =
@@ -272,18 +290,8 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
         client.run(cmd_rx).await;
     });
 
-    if std::env::args().any(|a| a == "--software-rendering") {
-        log::info!("[startup] forcing software rendering backend");
-        std::env::set_var("SLINT_BACKEND", "winit-software");
-    }
-
-    // --- macOS: disable Slint's default menu bar ---
-    #[cfg(target_os = "macos")]
-    {
-        let backend = i_slint_backend_winit::Backend::builder()
-            .with_default_menu_bar(false)
-            .build()?;
-        slint::platform::set_platform(Box::new(backend))?;
+    if !slint_platform_configured {
+        updater::startup_update::configure_slint_platform()?;
     }
 
     let app = MainWindow::new()?;
