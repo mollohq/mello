@@ -79,6 +79,13 @@ type GameSessionData struct {
 	PlayerIDs   []string `json:"player_ids"`
 	PlayerNames []string `json:"player_names"`
 	DurationMin int      `json:"duration_min"`
+	// Telemetry-derived outcome fields (spec 18). Omitted for games without a
+	// telemetry adapter. StreakAfter is the privacy bridge: the actor's signed
+	// streak (from the private user_game_stats store) copied into this public event.
+	Wins        int    `json:"wins,omitempty"`
+	Losses      int    `json:"losses,omitempty"`
+	Result      string `json:"result,omitempty"` // "win" | "loss" | "even"
+	StreakAfter int    `json:"streak_after,omitempty"`
 }
 
 type MemberJoinedData struct {
@@ -520,7 +527,19 @@ func renderEventFragment(e CrewEvent, ctx context.Context, nk runtime.NakamaModu
 	case "game_session":
 		var d GameSessionData
 		json.Unmarshal(dataBytes, &d)
-		return fmt.Sprintf("%s played %s", joinNamesList(d.PlayerNames, 3), d.GameName)
+		name := joinNamesList(d.PlayerNames, 3)
+		if d.Wins > 0 || d.Losses > 0 {
+			record := fmt.Sprintf("%dW–%dL", d.Wins, d.Losses)
+			switch {
+			case d.StreakAfter >= 2:
+				return fmt.Sprintf("%s went %s in %s, riding a %d-win streak", name, record, d.GameName, d.StreakAfter)
+			case d.StreakAfter <= -2:
+				return fmt.Sprintf("%s went %s in %s, on a %d-loss skid", name, record, d.GameName, -d.StreakAfter)
+			default:
+				return fmt.Sprintf("%s went %s in %s", name, record, d.GameName)
+			}
+		}
+		return fmt.Sprintf("%s played %s", name, d.GameName)
 
 	case "member_joined":
 		var d MemberJoinedData
@@ -669,7 +688,10 @@ func PostMomentRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk ru
 type GameSessionEndRequest struct {
 	CrewID      string `json:"crew_id"`
 	GameName    string `json:"game_name"`
+	GameID      string `json:"game_id"` // stable id, key for per-user stats; empty if no telemetry
 	DurationMin int    `json:"duration_min"`
+	Wins        int    `json:"wins"`
+	Losses      int    `json:"losses"`
 }
 
 func GameSessionEndRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, payload string) (string, error) {
@@ -692,20 +714,42 @@ func GameSessionEndRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, n
 
 	username := resolveUsername(ctx, nk, userID)
 
+	data := GameSessionData{
+		GameName:    req.GameName,
+		GameIGDBID:  0,
+		PlayerIDs:   []string{userID},
+		PlayerNames: []string{username},
+		DurationMin: req.DurationMin,
+	}
+	score := 10
+
+	// Telemetry outcomes: update the actor's private per-game stats and bridge
+	// only the resulting streak into this public event. Decisive sessions score
+	// higher so heaters/skids surface in the catch-up card.
+	streakAfter := 0
+	if req.GameID != "" && (req.Wins > 0 || req.Losses > 0) {
+		stats, result, err := UpdateUserGameStats(ctx, nk, userID, req.GameID, req.Wins, req.Losses)
+		if err != nil {
+			// Non-fatal: still record the session, just without the streak.
+			logger.Warn("user_game_stats update failed for %s/%s: %v", userID, req.GameID, err)
+		} else {
+			streakAfter = stats.CurrentStreak
+			data.Wins = req.Wins
+			data.Losses = req.Losses
+			data.Result = result
+			data.StreakAfter = streakAfter
+			score = 30
+		}
+	}
+
 	event := CrewEvent{
 		ID:        generateEventID(),
 		CrewID:    req.CrewID,
 		Type:      "game_session",
 		ActorID:   userID,
 		Timestamp: time.Now().UnixMilli(),
-		Score:     10,
-		Data: GameSessionData{
-			GameName:    req.GameName,
-			GameIGDBID:  0,
-			PlayerIDs:   []string{userID},
-			PlayerNames: []string{username},
-			DurationMin: req.DurationMin,
-		},
+		Score:     score,
+		Data:      data,
 	}
 
 	if err := AppendCrewEvent(ctx, nk, req.CrewID, event); err != nil {
@@ -713,8 +757,9 @@ func GameSessionEndRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, n
 		return "", runtime.NewError("failed to save game session", 13)
 	}
 
-	logger.Info("User %s game session end in crew %s: game=%s duration=%dm", userID, req.CrewID, req.GameName, req.DurationMin)
-	resp, _ := json.Marshal(map[string]interface{}{"success": true})
+	logger.Info("User %s game session end in crew %s: game=%s duration=%dm %dW-%dL streak=%d",
+		userID, req.CrewID, req.GameName, req.DurationMin, req.Wins, req.Losses, streakAfter)
+	resp, _ := json.Marshal(map[string]interface{}{"success": true, "streak_after": streakAfter})
 	return string(resp), nil
 }
 
