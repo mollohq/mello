@@ -46,8 +46,27 @@ pub struct PostMomentResponse {
 pub struct GameSessionEndRequest {
     pub crew_id: String,
     pub game_name: String,
+    /// Stable game DB id, used as the per-user stats key. Empty for games
+    /// without telemetry (server falls back to game_name-only behavior).
+    #[serde(default)]
+    pub game_id: String,
     #[serde(default)]
     pub duration_min: u32,
+    /// Decisive (streak-eligible) wins/losses this session, from telemetry.
+    #[serde(default)]
+    pub wins: u32,
+    #[serde(default)]
+    pub losses: u32,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct GameSessionEndResponse {
+    #[serde(default)]
+    pub success: bool,
+    /// Signed streak after this session: +N win streak, -N loss streak.
+    /// Defaults to 0 against older servers that don't return it.
+    #[serde(default)]
+    pub streak_after: i32,
 }
 
 // --- Timeline (crew feed) ---

@@ -123,6 +123,8 @@ Written when a detected game session ends for a user in this crew. Requires game
 
 **Note:** `game_igdb_id` is 0 until IGDB integration is implemented. The `game_name` comes from the client's process-detected game name.
 
+**Amendment (spec 18 — Game Telemetry):** when the client has a telemetry adapter for the game (e.g. CS2 GSI), this event's `data` is enriched with additive fields `wins`, `losses`, `result` (`"win"`/`"loss"`/`"even"`), and `streak_after` (signed: +N win streak, −N loss streak). These are backward compatible — older clients omit them. The `streak_after` value is derived server-side from the actor's private `user_game_stats` store and copied into this public event so crew surfaces can show streaks without exposing raw per-user history. See [18-GAME-TELEMETRY.md](./18-GAME-TELEMETRY.md) §5.
+
 #### `member_joined`
 
 Written by the `AfterJoinGroup` hook.

@@ -461,6 +461,26 @@ pub enum Event {
     },
     /// Post-game prompt timed out without interaction.
     PostGameTimeout,
+    /// A match resolved mid-session (from a telemetry adapter, e.g. CS2 GSI).
+    /// Live signal for HUD / future auto-clip hooks.
+    MatchEnded {
+        /// "win" | "loss" | "draw"
+        result: String,
+        rounds_won: u32,
+        rounds_lost: u32,
+        map: String,
+    },
+    /// End-of-session outcome summary, emitted after the server records the
+    /// session and returns the updated streak. Drives the pre-filled post-game
+    /// card. Only emitted when the session had decisive (streak-eligible) results.
+    SessionSummary {
+        game_name: String,
+        duration_min: u32,
+        wins: u32,
+        losses: u32,
+        /// Signed streak after this session: +N win streak, -N loss streak.
+        streak_after: i32,
+    },
 
     /// Client-server protocol version mismatch.
     ProtocolMismatch {

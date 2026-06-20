@@ -392,7 +392,13 @@ pub enum Command {
         crew_id: String,
         game_name: String,
         #[serde(default)]
+        game_id: String,
+        #[serde(default)]
         duration_min: u32,
+        #[serde(default)]
+        wins: u32,
+        #[serde(default)]
+        losses: u32,
     },
 
     // --- Test/dev fault injection (feature-gated; never compiled into prod) ---

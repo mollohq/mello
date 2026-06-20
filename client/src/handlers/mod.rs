@@ -119,10 +119,12 @@ pub fn handle_event(ctx: &AppContext, event: Event) {
         // Raw timeline is kept for later deep-scroll; no UI handler yet.
         | Event::TimelineLoaded { .. } => clip::handle(ctx, event),
 
-        // Game sensing
-        Event::GameDetected { .. } | Event::GameEnded { .. } | Event::PostGameTimeout => {
-            game::handle(ctx, event)
-        }
+        // Game sensing + telemetry
+        Event::GameDetected { .. }
+        | Event::GameEnded { .. }
+        | Event::PostGameTimeout
+        | Event::MatchEnded { .. }
+        | Event::SessionSummary { .. } => game::handle(ctx, event),
 
         // Misc
         Event::SignalReceived { .. } => {}

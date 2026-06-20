@@ -129,6 +129,9 @@ export component ControlBar inherits Rectangle {
     in property <string> game-name: "";
     in property <string> game-short-name: "";
     in property <color> game-color: #2a2a30;
+    // Pre-filled post-game record from telemetry (e.g. "5W–3L · 2-win streak").
+    // Empty when no telemetry result; the card falls back to "How'd it go?".
+    in property <string> game-summary: "";
     in property <bool> can-stream: false;
     in property <bool> is-hosting: false;
     in property <bool> is-watching: false;
@@ -504,9 +507,9 @@ export component ControlBar inherits Rectangle {
                 }
 
                 Text {
-                    text: "How'd it go?";
+                    text: game-summary != "" ? game-summary : "How'd it go?";
                     font-size: 13px;
-                    color: Theme.text-secondary;
+                    color: game-summary != "" ? Theme.text-primary : Theme.text-secondary;
                     vertical-alignment: center;
                 }
 

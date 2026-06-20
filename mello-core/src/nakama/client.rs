@@ -1294,10 +1294,12 @@ impl NakamaClient {
     pub async fn game_session_end(
         &self,
         req: &crate::crew_events::GameSessionEndRequest,
-    ) -> Result<()> {
+    ) -> Result<crate::crew_events::GameSessionEndResponse> {
         let payload = serde_json::to_value(req)?;
-        let _ = self.rpc("game_session_end", &payload).await?;
-        Ok(())
+        let resp = self.rpc("game_session_end", &payload).await?;
+        // Older servers reply `{"success":true}` with no streak; default to 0.
+        let parsed = serde_json::from_str(&resp).unwrap_or_default();
+        Ok(parsed)
     }
 
     // --- Clips RPCs ---
