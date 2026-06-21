@@ -67,10 +67,11 @@ pub fn handle(ctx: &AppContext, event: Event) {
         Event::SessionSummary {
             wins,
             losses,
+            draws,
             streak_after,
             ..
         } => {
-            let summary = format_session_summary(wins, losses, streak_after);
+            let summary = format_session_summary(wins, losses, draws, streak_after);
             log::info!("[ui] session summary: {}", summary);
             // Pre-fill the post-game card with the auto-detected record so the
             // user can confirm/share instead of cold-tapping win/loss.
@@ -83,13 +84,25 @@ pub fn handle(ctx: &AppContext, event: Event) {
 }
 
 /// Build the pre-filled post-game record line, e.g. "5W–3L · 2-win streak".
-fn format_session_summary(wins: u32, losses: u32, streak_after: i32) -> String {
+fn format_session_summary(wins: u32, losses: u32, draws: u32, streak_after: i32) -> String {
+    let record = if wins + losses == 0 && draws > 0 {
+        // A draw-only night (e.g. a 15-15 Premier).
+        if draws == 1 {
+            "1 draw".to_string()
+        } else {
+            format!("{} draws", draws)
+        }
+    } else if draws > 0 {
+        format!("{}W\u{2013}{}L\u{2013}{}D", wins, losses, draws)
+    } else {
+        format!("{}W\u{2013}{}L", wins, losses)
+    };
     let streak = match streak_after.cmp(&0) {
         std::cmp::Ordering::Greater => format!(" · {}-win streak", streak_after),
         std::cmp::Ordering::Less => format!(" · {}-loss streak", streak_after.abs()),
         std::cmp::Ordering::Equal => String::new(),
     };
-    format!("{}W\u{2013}{}L{}", wins, losses, streak)
+    format!("{}{}", record, streak)
 }
 
 fn parse_hex_color(hex: &str) -> u32 {

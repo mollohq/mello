@@ -1,0 +1,140 @@
+import { Theme } from "../theme.slint";
+import { YouStripData } from "../types.slint";
+
+component FormPip inherits Rectangle {
+    in property <string> letter;
+
+    width: 18px;
+    height: 18px;
+    border-radius: 4px;
+    background: letter == "W" ? #1e3a2a : letter == "L" ? #3a1e1e : #2a2a30;
+
+    Text {
+        text: letter;
+        font-size: 10px;
+        font-weight: 700;
+        color: letter == "W" ? #4ade80 : letter == "L" ? #f87171 : Theme.text-secondary;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
+
+component StatCell inherits VerticalLayout {
+    in property <string> value;
+    in property <string> label;
+    in property <color> value-color: Theme.text-primary;
+
+    alignment: center;
+    spacing: 2px;
+
+    Text {
+        text: value;
+        font-size: 17px;
+        font-weight: 700;
+        color: value-color;
+        horizontal-alignment: center;
+    }
+
+    Text {
+        text: label;
+        font-size: 10px;
+        color: Theme.text-secondary;
+        horizontal-alignment: center;
+    }
+}
+
+// Personal stats card pinned to the top of the crew feed. Only the viewer sees
+// it. Hidden (zero height) until the viewer has tracked game stats.
+export component YouStrip inherits Rectangle {
+    in property <YouStripData> data;
+
+    height: data.has-stats ? 92px : 0px;
+    visible: data.has-stats;
+    background: transparent;
+
+    Rectangle {
+        x: 16px;
+        y: 8px;
+        width: parent.width - 32px;
+        height: 76px;
+        background: Theme.card-bg;
+        border-radius: 12px;
+        border-width: 1px;
+        border-color: #ffffff14;
+
+        HorizontalLayout {
+            padding: 14px;
+            spacing: 14px;
+
+            // Game badge (vertically centered via the wrapping layout).
+            VerticalLayout {
+                alignment: center;
+                Rectangle {
+                    width: 40px;
+                    height: 40px;
+                    border-radius: 8px;
+                    background: data.game-color;
+                    Text {
+                        text: data.short-name;
+                        font-size: 12px;
+                        font-weight: 700;
+                        color: white;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+
+            // Game name + recent form.
+            VerticalLayout {
+                horizontal-stretch: 1;
+                alignment: center;
+                spacing: 4px;
+
+                Text {
+                    text: "Your stats";
+                    font-size: 10px;
+                    letter-spacing: 1px;
+                    color: Theme.text-secondary;
+                }
+
+                Text {
+                    text: data.game-name;
+                    font-size: 14px;
+                    font-weight: 600;
+                    color: Theme.text-primary;
+                }
+
+                HorizontalLayout {
+                    spacing: 4px;
+                    alignment: start;
+                    for pip in data.recent-form: FormPip {
+                        letter: pip;
+                    }
+                }
+            }
+
+            // Headline stats.
+            HorizontalLayout {
+                spacing: 20px;
+
+                StatCell {
+                    value: data.streak-text;
+                    label: "streak";
+                    value-color: data.streak-positive ? #4ade80 : #f87171;
+                }
+
+                StatCell {
+                    value: data.win-rate-text;
+                    label: "win rate";
+                }
+
+                StatCell {
+                    value: data.record-text;
+                    label: "record";
+                    value-color: Theme.text-secondary;
+                }
+            }
+        }
+    }
+}

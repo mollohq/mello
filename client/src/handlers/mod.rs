@@ -4,6 +4,7 @@ mod clip;
 mod crew;
 mod game;
 mod presence;
+mod stats;
 mod stream_cards;
 mod streaming;
 mod voice;
@@ -125,6 +126,9 @@ pub fn handle_event(ctx: &AppContext, event: Event) {
         | Event::PostGameTimeout
         | Event::MatchEnded { .. }
         | Event::SessionSummary { .. } => game::handle(ctx, event),
+
+        // Personal stats (You strip)
+        Event::UserGameStatsLoaded { .. } => stats::handle(ctx, event),
 
         // Misc
         Event::SignalReceived { .. } => {}

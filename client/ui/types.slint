@@ -75,6 +75,20 @@ export struct FeedCardData {
     snapshot-playback-revision: int,
 }
 
+// Personal stats for the "You strip" pinned atop the crew feed (spec 19).
+// Only the viewer sees it; display strings are pre-formatted in Rust.
+export struct YouStripData {
+    has-stats: bool,        // false → strip hidden (no games tracked yet)
+    game-name: string,
+    short-name: string,
+    game-color: color,
+    streak-text: string,    // "W4" / "L2" / "—"
+    streak-positive: bool,
+    record-text: string,    // "12W 5L"
+    win-rate-text: string,  // "62%"
+    recent-form: [string],  // each "W" | "L" | "D", newest last
+}
+
 export struct StreamCardData {
     host-id: string,
     session-id: string,

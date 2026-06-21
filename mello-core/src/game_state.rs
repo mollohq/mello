@@ -50,14 +50,15 @@ impl GameStateManager {
                     .map(|s| ((now_ms() - s) / 60_000) as u32)
                     .unwrap_or(0);
 
-                let (wins, losses) = tally(&self.matches);
+                let (wins, losses, draws) = tally(&self.matches);
 
                 log::info!(
-                    "[game-state] game stopped: {} (duration={}min, {}W-{}L over {} matches)",
+                    "[game-state] game stopped: {} (duration={}min, {}W-{}L-{}D over {} matches)",
                     game.game_name,
                     duration_min,
                     wins,
                     losses,
+                    draws,
                     self.matches.len(),
                 );
 
@@ -68,6 +69,7 @@ impl GameStateManager {
                         duration_min,
                         wins,
                         losses,
+                        draws,
                         matches: std::mem::take(&mut self.matches),
                     });
                 }
@@ -132,21 +134,26 @@ pub struct SessionSummary {
     /// Decisive (streak-eligible) wins/losses this session.
     pub wins: u32,
     pub losses: u32,
+    /// Drawn matches — recorded but don't move the streak.
+    pub draws: u32,
     pub matches: Vec<MatchResult>,
 }
 
-/// Count decisive wins/losses; draws and incompletes don't move the record.
-fn tally(matches: &[MatchResult]) -> (u32, u32) {
+/// Count wins/losses/draws. Wins/losses move the record; draws are recorded but
+/// don't move the streak; incompletes (crash/disconnect) are ignored entirely.
+fn tally(matches: &[MatchResult]) -> (u32, u32, u32) {
     let mut wins = 0;
     let mut losses = 0;
+    let mut draws = 0;
     for m in matches {
         match m.result {
             Outcome::Win => wins += 1,
             Outcome::Loss => losses += 1,
-            Outcome::Draw | Outcome::Incomplete => {}
+            Outcome::Draw => draws += 1,
+            Outcome::Incomplete => {}
         }
     }
-    (wins, losses)
+    (wins, losses, draws)
 }
 
 fn now_ms() -> i64 {
@@ -216,7 +223,7 @@ mod tests {
         let mut mgr = GameStateManager::new();
         mgr.handle_event(GameEvent::Started(test_game()));
 
-        // Three matches: 2 wins, 1 loss, plus a draw that shouldn't count.
+        // Four matches: 2 wins, 1 loss, 1 draw (draw recorded but not in W/L).
         let ui = mgr.handle_telemetry(TelemetryEvent::MatchEnded(match_result(Outcome::Win)));
         assert!(matches!(&ui[0], Event::MatchEnded { result, .. } if result == "win"));
         mgr.handle_telemetry(TelemetryEvent::MatchEnded(match_result(Outcome::Loss)));
@@ -230,6 +237,7 @@ mod tests {
         let summary = session_end.expect("expected a session summary");
         assert_eq!(summary.wins, 2);
         assert_eq!(summary.losses, 1);
+        assert_eq!(summary.draws, 1);
         assert_eq!(summary.matches.len(), 4);
         assert_eq!(summary.game_id, "counter-strike-2");
     }

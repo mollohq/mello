@@ -472,14 +472,19 @@ pub enum Event {
     },
     /// End-of-session outcome summary, emitted after the server records the
     /// session and returns the updated streak. Drives the pre-filled post-game
-    /// card. Only emitted when the session had decisive (streak-eligible) results.
+    /// card. Emitted when the session had any recorded result (win/loss/draw).
     SessionSummary {
         game_name: String,
         duration_min: u32,
         wins: u32,
         losses: u32,
+        draws: u32,
         /// Signed streak after this session: +N win streak, -N loss streak.
         streak_after: i32,
+    },
+    /// The viewer's per-game personal stats loaded (backs the "You strip").
+    UserGameStatsLoaded {
+        games: Vec<crate::crew_events::UserGameStats>,
     },
 
     /// Client-server protocol version mismatch.

@@ -399,7 +399,11 @@ pub enum Command {
         wins: u32,
         #[serde(default)]
         losses: u32,
+        #[serde(default)]
+        draws: u32,
     },
+    /// Fetch the viewer's own per-game stats (for the personal "You strip").
+    GetUserGameStats,
 
     // --- Test/dev fault injection (feature-gated; never compiled into prod) ---
     /// Force the realtime Nakama WebSocket down so the supervisor's reconnect

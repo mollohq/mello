@@ -14,6 +14,7 @@ import {
     SearchUserData,
     FeedCardData,
     StreamCardData,
+    YouStripData,
     VideoRect,
 } from "types.slint";
 import { CrewPanel } from "panels/crew_panel.slint";
@@ -35,7 +36,7 @@ import { InviteShareModal } from "panels/invite_share_modal.slint";
 import { CrewSettingsModal } from "panels/crew_settings_modal.slint";
 
 
-export { CrewData, MemberData, ChatMessageData, AudioDeviceData, VoiceChannelData, VoiceChannelMember, CaptureSourceData, DiscoverCrewData, SearchUserData, FeedCardData, StreamCardData, Theme, VideoRect, ForceUpdateWindow }
+export { CrewData, MemberData, ChatMessageData, AudioDeviceData, VoiceChannelData, VoiceChannelMember, CaptureSourceData, DiscoverCrewData, SearchUserData, FeedCardData, StreamCardData, YouStripData, Theme, VideoRect, ForceUpdateWindow }
 
 export component MainWindow inherits Window {
     title: "Mello";
@@ -320,6 +321,7 @@ export component MainWindow inherits Window {
     // --- Crew feed ---
     in property <[FeedCardData]> feed-cards: [];
     in property <[FeedCardData]> memory-cards: [];
+    in property <YouStripData> you-strip;
     in property <bool> feed-cold-start: true;
     in property <bool> feed-has-more: false;
     in property <int> feed-clip-count: 0;
@@ -801,6 +803,7 @@ export component MainWindow inherits Window {
                             height: parent.height;
                             cards: root.feed-cards;
                             memory-cards: root.memory-cards;
+                            you-strip: root.you-strip;
                             stream-cards: root.active-stream-cards;
                             is-hosting: root.is-hosting;
                             is-watching: root.is-watching;

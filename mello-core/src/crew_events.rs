@@ -57,6 +57,9 @@ pub struct GameSessionEndRequest {
     pub wins: u32,
     #[serde(default)]
     pub losses: u32,
+    /// Drawn matches this session — recorded but don't move the streak.
+    #[serde(default)]
+    pub draws: u32,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -67,6 +70,41 @@ pub struct GameSessionEndResponse {
     /// Defaults to 0 against older servers that don't return it.
     #[serde(default)]
     pub streak_after: i32,
+}
+
+/// Per-game personal stats (mirrors the backend `user_game_stats` store).
+/// Backs the personal "You strip" + profile (spec 19).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct UserGameStats {
+    pub game_id: String,
+    #[serde(default)]
+    pub wins: u32,
+    #[serde(default)]
+    pub losses: u32,
+    #[serde(default)]
+    pub draws: u32,
+    /// Signed: +N win streak, -N loss streak (per session).
+    #[serde(default)]
+    pub current_streak: i32,
+    #[serde(default)]
+    pub longest_win_streak: u32,
+    #[serde(default)]
+    pub longest_loss_streak: u32,
+    /// Per-session form, newest last: "W" | "L" | "D".
+    #[serde(default)]
+    pub recent_form: Vec<String>,
+    #[serde(default)]
+    pub last_result: String,
+    #[serde(default)]
+    pub last_played: i64,
+    #[serde(default)]
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct UserGameStatsListResponse {
+    #[serde(default)]
+    pub games: Vec<UserGameStats>,
 }
 
 // --- Timeline (crew feed) ---

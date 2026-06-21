@@ -310,6 +310,7 @@ impl Client {
                             summary.duration_min,
                             summary.wins,
                             summary.losses,
+                            summary.draws,
                         )
                         .await;
                     }
@@ -929,6 +930,7 @@ impl Client {
                 duration_min,
                 wins,
                 losses,
+                draws,
             } => {
                 self.handle_game_session_end(
                     &crew_id,
@@ -937,9 +939,18 @@ impl Client {
                     duration_min,
                     wins,
                     losses,
+                    draws,
                 )
                 .await;
             }
+            Command::GetUserGameStats => match self.nakama.user_game_stats_get().await {
+                Ok(resp) => {
+                    let _ = self
+                        .event_tx
+                        .send(Event::UserGameStatsLoaded { games: resp.games });
+                }
+                Err(e) => log::warn!("user_game_stats_get failed: {}", e),
+            },
 
             #[cfg(feature = "test-faults")]
             Command::FaultNakamaDisconnect => {

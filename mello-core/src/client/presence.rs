@@ -98,6 +98,7 @@ impl super::Client {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(super) async fn handle_game_session_end(
         &self,
         crew_id: &str,
@@ -106,6 +107,7 @@ impl super::Client {
         duration_min: u32,
         wins: u32,
         losses: u32,
+        draws: u32,
     ) {
         let req = crate::crew_events::GameSessionEndRequest {
             crew_id: crew_id.to_string(),
@@ -114,17 +116,20 @@ impl super::Client {
             duration_min,
             wins,
             losses,
+            draws,
         };
         match self.nakama.game_session_end(&req).await {
             Ok(resp) => {
-                // Only surface a summary when the session had decisive results;
-                // otherwise the generic manual post-game flow stays in charge.
-                if wins + losses > 0 {
+                // Surface a summary whenever the session had any recorded result
+                // (incl. a draw-only night); otherwise the generic manual
+                // post-game flow stays in charge.
+                if wins + losses + draws > 0 {
                     let _ = self.event_tx.send(crate::events::Event::SessionSummary {
                         game_name: game_name.to_string(),
                         duration_min,
                         wins,
                         losses,
+                        draws,
                         streak_after: resp.streak_after,
                     });
                 }

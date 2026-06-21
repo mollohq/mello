@@ -1,7 +1,8 @@
 import { Theme } from "../theme.slint";
-import { FeedCardData, StreamCardData } from "../types.slint";
+import { FeedCardData, StreamCardData, YouStripData } from "../types.slint";
 import { ActiveStreamsPanel } from "./active_streams_panel.slint";
 import { SessionPreviewCard } from "./session_preview_card.slint";
+import { YouStrip } from "./you_strip.slint";
 
 component AvatarDot inherits Rectangle {
     in property <string> initials;
@@ -1501,6 +1502,7 @@ export component CrewFeed inherits Rectangle {
     in property <[FeedCardData]> cards: [];
     in property <[FeedCardData]> memory-cards: [];
     in property <[StreamCardData]> stream-cards: [];
+    in property <YouStripData> you-strip;
     in property <bool> is-cold-start: true;
     in property <bool> feed-has-more: false;
     in property <string> crew-name: "";
@@ -1584,6 +1586,11 @@ export component CrewFeed inherits Rectangle {
         Rectangle {
             height: 1px;
             background: Theme.card-border;
+        }
+
+        // Pinned personal stats (only the viewer sees it); hidden until tracked.
+        YouStrip {
+            data: root.you-strip;
         }
 
         // Scrollable feed area
