@@ -241,6 +241,26 @@ impl Client {
             rx
         };
 
+        // Install adapter configs eagerly on startup. Games like CS2 only read
+        // their GSI config at launch, so installing on first detection alone
+        // would require a game restart; doing it here means the config is in
+        // place before the game is ever opened. Idempotent; a missing game just
+        // logs at debug.
+        if self.enable_game_sensor {
+            for adapter in telemetry_registry.all() {
+                let adapter = adapter.clone();
+                let token = telemetry_token.clone();
+                tokio::task::spawn_blocking(move || {
+                    if let Err(e) = adapter.ensure_installed(&token, TELEMETRY_PORT) {
+                        log::debug!(
+                            "[telemetry] startup install for {} skipped: {e}",
+                            adapter.game_id()
+                        );
+                    }
+                });
+            }
+        }
+
         let mut signal_rx = self.nakama.take_signal_rx().unwrap();
         let mut presence_rx = self.nakama.take_presence_rx().unwrap();
         let mut voice_tick = tokio::time::interval(tokio::time::Duration::from_millis(20));
