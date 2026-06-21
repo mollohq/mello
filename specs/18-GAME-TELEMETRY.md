@@ -4,7 +4,9 @@
 > **Version:** 0.1
 > **Status:** Planned
 > **Parent:** [00-ARCHITECTURE.md](./00-ARCHITECTURE.md)
-> **Related:** [16-CREW-EVENT-LEDGER.md](./16-CREW-EVENT-LEDGER.md), [17-GAME-SENSING.md](./17-GAME-SENSING.md), [11-PRESENCE-CREW-STATE.md](./11-PRESENCE-CREW-STATE.md), [02-MELLO-CORE.md](./02-MELLO-CORE.md)
+> **Related:** [16-CREW-EVENT-LEDGER.md](./16-CREW-EVENT-LEDGER.md), [17-GAME-SENSING.md](./17-GAME-SENSING.md), [11-PRESENCE-CREW-STATE.md](./11-PRESENCE-CREW-STATE.md), [02-MELLO-CORE.md](./02-MELLO-CORE.md), [19-FEED-CURATION-PERSONAL-STATS.md](./19-FEED-CURATION-PERSONAL-STATS.md)
+>
+> **Note:** this spec covers *producing* outcome/streak data. How it's *surfaced* — the personal "my streaks" view (You strip + profile) and crew feed curation (notability gate, adaptive threshold, games digest) — is its own spec, [19-FEED-CURATION-PERSONAL-STATS.md](./19-FEED-CURATION-PERSONAL-STATS.md).
 
 ---
 
