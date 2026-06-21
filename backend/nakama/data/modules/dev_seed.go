@@ -620,6 +620,71 @@ func DevSeedStateRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk 
 	logger.Info("dev_seed: %d crew events written (clips: Gamers=%d, Devs=%d, Music=%d)",
 		eventsWritten, clipCount["Gamers"], clipCount["Devs"], clipCount["Music"])
 
+	// ── Game outcomes (spec 19) ─────────────────────────────────────
+	// Seed game_session outcomes + per-user stats + a recap so the personal
+	// "You strip", the feed notability budget, and the weekly-recap game section
+	// are all testable locally (the real recap job only runs Monday 00:00 UTC).
+	if gid, ok := crewIDs["Gamers"]; ok {
+		gameSessions := []CrewEvent{
+			{
+				ID: generateEventID(), CrewID: gid,
+				Type: "game_session", ActorID: users["bob"].id,
+				Timestamp: nowMs - 2*hour, Score: 30,
+				Data: GameSessionData{
+					GameName:    "Counter-Strike 2",
+					PlayerIDs:   []string{users["bob"].id},
+					PlayerNames: []string{users["bob"].displayName},
+					DurationMin: 95, Wins: 5, Losses: 2, Result: "win", StreakAfter: 4,
+				},
+			},
+			{
+				ID: generateEventID(), CrewID: gid,
+				Type: "game_session", ActorID: users["diana"].id,
+				Timestamp: nowMs - 3*hour, Score: 15,
+				Data: GameSessionData{
+					GameName:    "Counter-Strike 2",
+					PlayerIDs:   []string{users["diana"].id},
+					PlayerNames: []string{users["diana"].displayName},
+					DurationMin: 60, Wins: 1, Losses: 4, Result: "loss", StreakAfter: -2,
+				},
+			},
+		}
+		for _, ev := range gameSessions {
+			if err := AppendCrewEvent(ctx, nk, gid, ev); err != nil {
+				logger.Warn("dev_seed: game_session append failed: %v", err)
+			}
+		}
+	}
+
+	// Per-user stats (You strip): a few sessions of varied outcomes to build a
+	// streak + recent form, for the seed users and the calling tester.
+	statsSessions := [][3]int{{5, 2, 0}, {4, 1, 0}, {3, 3, 1}, {6, 0, 0}}
+	seedStats := func(userID string) {
+		if userID == "" {
+			return
+		}
+		for _, s := range statsSessions {
+			if _, _, err := UpdateUserGameStats(ctx, nk, userID, "counter-strike-2", s[0], s[1], s[2]); err != nil {
+				logger.Warn("dev_seed: user_game_stats update failed for %s: %v", userID, err)
+			}
+		}
+	}
+	seedStats(users["bob"].id)
+	seedStats(users["diana"].id)
+	if callerID, ok := ctx.Value(runtime.RUNTIME_CTX_USER_ID).(string); ok {
+		seedStats(callerID)
+	}
+	logger.Info("dev_seed: user_game_stats seeded (bob, diana, caller)")
+
+	// Generate the weekly recap now so the game leaderboard + awards are visible
+	// immediately instead of waiting for the scheduled job.
+	for _, crewName := range []string{"Gamers", "Devs"} {
+		if cid, ok := crewIDs[crewName]; ok {
+			generateWeeklyRecap(ctx, nk, logger, cid)
+		}
+	}
+	logger.Info("dev_seed: weekly recaps generated (Gamers, Devs)")
+
 	// Set stale last_seen for all users in seeded crews so catch-up triggers
 	lastSeenCrews := []string{"Gamers", "Devs", "Music"}
 	for _, crewName := range lastSeenCrews {
