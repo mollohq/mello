@@ -25,6 +25,7 @@ use crate::stream::manager::StreamSession;
 use crate::stream::pacer::PacingTelemetry;
 use crate::stream::sink::PacketSink;
 use crate::stream::sink_p2p::P2PFanoutSink;
+use crate::telemetry::{self, AdapterRegistry, TelemetryListener, TELEMETRY_PORT};
 use crate::voice::{SignalEnvelope, SignalMessage, SignalPurpose, VoiceManager};
 
 use std::collections::HashMap;
@@ -104,6 +105,9 @@ pub struct Client {
     game_state: GameStateManager,
     #[allow(dead_code)]
     game_sensor: Option<GameSensor>,
+    /// Keeps the telemetry listener thread alive for the client's lifetime.
+    #[allow(dead_code)]
+    telemetry_listener: Option<TelemetryListener>,
     enable_game_sensor: bool,
     clip_was_playing: bool,
     clip_tick_counter: u8,
@@ -188,6 +192,7 @@ impl Client {
             voice_autojoin: true,
             game_state: GameStateManager::new(),
             game_sensor: None,
+            telemetry_listener: None,
             enable_game_sensor,
             clip_was_playing: false,
             clip_tick_counter: 0,
@@ -214,6 +219,48 @@ impl Client {
             rx
         };
 
+        // --- Game telemetry (CS2 GSI etc.) ---
+        // Adapters turn in-game state into match outcomes. The listener receives
+        // local POSTs; cfg install for a detected game happens in the drain loop.
+        let telemetry_registry = Arc::new(AdapterRegistry::with_defaults());
+        let telemetry_token = telemetry::load_or_create_token();
+        let telemetry_event_rx = if self.enable_game_sensor {
+            match TelemetryListener::start(telemetry_registry.clone(), telemetry_token.clone()) {
+                Ok((listener, rx)) => {
+                    self.telemetry_listener = Some(listener);
+                    rx
+                }
+                Err(e) => {
+                    log::warn!("[telemetry] listener failed to bind on {TELEMETRY_PORT}: {e}");
+                    let (_tx, rx) = std::sync::mpsc::channel();
+                    rx
+                }
+            }
+        } else {
+            let (_tx, rx) = std::sync::mpsc::channel();
+            rx
+        };
+
+        // Install adapter configs eagerly on startup. Games like CS2 only read
+        // their GSI config at launch, so installing on first detection alone
+        // would require a game restart; doing it here means the config is in
+        // place before the game is ever opened. Idempotent; a missing game just
+        // logs at debug.
+        if self.enable_game_sensor {
+            for adapter in telemetry_registry.all() {
+                let adapter = adapter.clone();
+                let token = telemetry_token.clone();
+                tokio::task::spawn_blocking(move || {
+                    if let Err(e) = adapter.ensure_installed(&token, TELEMETRY_PORT) {
+                        log::debug!(
+                            "[telemetry] startup install for {} skipped: {e}",
+                            adapter.game_id()
+                        );
+                    }
+                });
+            }
+        }
+
         let mut signal_rx = self.nakama.take_signal_rx().unwrap();
         let mut presence_rx = self.nakama.take_presence_rx().unwrap();
         let mut voice_tick = tokio::time::interval(tokio::time::Duration::from_millis(20));
@@ -230,15 +277,49 @@ impl Client {
         loop {
             // Drain game events (non-blocking) before entering select!
             while let Ok(game_event) = game_event_rx.try_recv() {
+                // Telemetry adapter side-effects on game start/stop: install the
+                // game's config on first detection, and reset adapter state on exit.
+                match &game_event {
+                    crate::game_sensing::GameEvent::Started(game) => {
+                        if let Some(adapter) = telemetry_registry.get(&game.game_id) {
+                            let token = telemetry_token.clone();
+                            tokio::task::spawn_blocking(move || {
+                                if let Err(e) = adapter.ensure_installed(&token, TELEMETRY_PORT) {
+                                    log::warn!("[telemetry] ensure_installed failed: {e}");
+                                }
+                            });
+                        }
+                    }
+                    crate::game_sensing::GameEvent::Stopped(game) => {
+                        if let Some(adapter) = telemetry_registry.get(&game.game_id) {
+                            adapter.reset();
+                        }
+                    }
+                }
+
                 let (ui_events, session_end) = self.game_state.handle_event(game_event);
                 for ev in ui_events {
                     let _ = self.event_tx.send(ev);
                 }
-                if let Some(info) = session_end {
+                if let Some(summary) = session_end {
                     if let Some(crew_id) = self.nakama.active_crew_id().map(String::from) {
-                        self.handle_game_session_end(&crew_id, &info.game_name, info.duration_min)
-                            .await;
+                        self.handle_game_session_end(
+                            &crew_id,
+                            &summary.game_name,
+                            &summary.game_id,
+                            summary.duration_min,
+                            summary.wins,
+                            summary.losses,
+                        )
+                        .await;
                     }
+                }
+            }
+
+            // Drain telemetry events (match outcomes) into the session.
+            while let Ok(tev) = telemetry_event_rx.try_recv() {
+                for ev in self.game_state.handle_telemetry(tev) {
+                    let _ = self.event_tx.send(ev);
                 }
             }
 
@@ -844,10 +925,20 @@ impl Client {
             Command::GameSessionEnd {
                 crew_id,
                 game_name,
+                game_id,
                 duration_min,
+                wins,
+                losses,
             } => {
-                self.handle_game_session_end(&crew_id, &game_name, duration_min)
-                    .await;
+                self.handle_game_session_end(
+                    &crew_id,
+                    &game_name,
+                    &game_id,
+                    duration_min,
+                    wins,
+                    losses,
+                )
+                .await;
             }
 
             #[cfg(feature = "test-faults")]

@@ -162,6 +162,8 @@ export component MainWindow inherits Window {
     in property <string> game-name: "";
     in property <string> game-short-name: "";
     in property <color> game-color: #2a2a30;
+    // Pre-filled post-game record from telemetry (e.g. "5W–3L · 2-win streak").
+    in property <string> game-summary: "";
     in property <bool> can-stream: false;
     in-out property <int> bar-state: 0;
 
@@ -878,6 +880,7 @@ export component MainWindow inherits Window {
                         game-name: root.game-name;
                         game-short-name: root.game-short-name;
                         game-color: root.game-color;
+                        game-summary: root.game-summary;
                         can-stream: root.can-stream;
                         is-hosting: root.is-hosting;
                         is-watching: root.is-watching;

@@ -33,5 +33,10 @@ sha2 = "0.10"
 rand = "0.8"
 url = "2"
 
+# Game telemetry: CS2 GSI cfg install needs Steam path resolution from the registry.
+# winreg is already vendored in the workspace (used by the client crate).
+[target.'cfg(windows)'.dependencies]
+winreg = "0.55"
+
 [dev-dependencies]
 tokio-test = "0.4"

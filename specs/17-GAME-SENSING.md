@@ -4,7 +4,9 @@
 > **Version:** 0.1  
 > **Status:** Planned  
 > **Parent:** [00-ARCHITECTURE.md](./00-ARCHITECTURE.md)  
-> **Related:** [02-MELLO-CORE.md](./02-MELLO-CORE.md), [03-LIBMELLO.md](./03-LIBMELLO.md), [11-PRESENCE-CREW-STATE.md](./11-PRESENCE-CREW-STATE.md), [14-VIDEO-PIPELINE.md](./14-VIDEO-PIPELINE.md), [16-CREW-EVENT-LEDGER.md](./16-CREW-EVENT-LEDGER.md)
+> **Related:** [02-MELLO-CORE.md](./02-MELLO-CORE.md), [03-LIBMELLO.md](./03-LIBMELLO.md), [11-PRESENCE-CREW-STATE.md](./11-PRESENCE-CREW-STATE.md), [14-VIDEO-PIPELINE.md](./14-VIDEO-PIPELINE.md), [16-CREW-EVENT-LEDGER.md](./16-CREW-EVENT-LEDGER.md), [18-GAME-TELEMETRY.md](./18-GAME-TELEMETRY.md)
+
+> **Amendment (spec 18 — Game Telemetry):** this spec covers *process-level* detection only (which game, session start/stop, duration). In-game outcomes (win/loss, score, streaks) are a separate, pluggable layer **above** the process sensor — the `GameSensor` keeps emitting `Started`/`Stopped` unchanged. When a detected game has a registered telemetry adapter (CS2 GSI first), the adapter's config is installed and a loopback listener routes that game's state into the post-game flow. Games without an adapter keep the manual win/loss/highlight tap described in §7.2. See [18-GAME-TELEMETRY.md](./18-GAME-TELEMETRY.md).
 
 ---
 

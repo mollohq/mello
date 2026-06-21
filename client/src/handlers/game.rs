@@ -18,6 +18,8 @@ pub fn handle(ctx: &AppContext, event: Event) {
             ctx.app.set_game_short_name(short_name.into());
             let parsed = slint::Color::from_argb_encoded(parse_hex_color(&color));
             ctx.app.set_game_color(parsed);
+            // Clear any stale summary from a previous session.
+            ctx.app.set_game_summary("".into());
             ctx.app.set_can_stream(true);
             ctx.app.set_bar_state(1);
         }
@@ -44,10 +46,50 @@ pub fn handle(ctx: &AppContext, event: Event) {
             log::info!("[ui] post-game timeout");
             ctx.app.set_game_active(false);
             ctx.app.set_can_stream(false);
+            ctx.app.set_game_summary("".into());
             ctx.app.set_bar_state(0);
+        }
+        Event::MatchEnded {
+            result,
+            rounds_won,
+            rounds_lost,
+            map,
+        } => {
+            // Live match outcome; logged for now (HUD score is future work).
+            log::info!(
+                "[ui] match ended: {} {}-{} on {}",
+                result,
+                rounds_won,
+                rounds_lost,
+                map
+            );
+        }
+        Event::SessionSummary {
+            wins,
+            losses,
+            streak_after,
+            ..
+        } => {
+            let summary = format_session_summary(wins, losses, streak_after);
+            log::info!("[ui] session summary: {}", summary);
+            // Pre-fill the post-game card with the auto-detected record so the
+            // user can confirm/share instead of cold-tapping win/loss.
+            ctx.app.set_game_summary(summary.into());
+            ctx.app.set_game_active(true);
+            ctx.app.set_bar_state(2);
         }
         _ => {}
     }
+}
+
+/// Build the pre-filled post-game record line, e.g. "5W–3L · 2-win streak".
+fn format_session_summary(wins: u32, losses: u32, streak_after: i32) -> String {
+    let streak = match streak_after.cmp(&0) {
+        std::cmp::Ordering::Greater => format!(" · {}-win streak", streak_after),
+        std::cmp::Ordering::Less => format!(" · {}-loss streak", streak_after.abs()),
+        std::cmp::Ordering::Equal => String::new(),
+    };
+    format!("{}W\u{2013}{}L{}", wins, losses, streak)
 }
 
 fn parse_hex_color(hex: &str) -> u32 {

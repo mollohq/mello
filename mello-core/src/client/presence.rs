@@ -102,15 +102,34 @@ impl super::Client {
         &self,
         crew_id: &str,
         game_name: &str,
+        game_id: &str,
         duration_min: u32,
+        wins: u32,
+        losses: u32,
     ) {
         let req = crate::crew_events::GameSessionEndRequest {
             crew_id: crew_id.to_string(),
             game_name: game_name.to_string(),
+            game_id: game_id.to_string(),
             duration_min,
+            wins,
+            losses,
         };
-        if let Err(e) = self.nakama.game_session_end(&req).await {
-            log::warn!("game_session_end failed: {}", e);
+        match self.nakama.game_session_end(&req).await {
+            Ok(resp) => {
+                // Only surface a summary when the session had decisive results;
+                // otherwise the generic manual post-game flow stays in charge.
+                if wins + losses > 0 {
+                    let _ = self.event_tx.send(crate::events::Event::SessionSummary {
+                        game_name: game_name.to_string(),
+                        duration_min,
+                        wins,
+                        losses,
+                        streak_after: resp.streak_after,
+                    });
+                }
+            }
+            Err(e) => log::warn!("game_session_end failed: {}", e),
         }
     }
 }

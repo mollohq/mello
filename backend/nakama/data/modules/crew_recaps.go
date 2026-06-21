@@ -84,6 +84,13 @@ type RecapMember struct {
 	HangoutMin  int    `json:"hangout_min"`
 }
 
+// RecapGameRecord is a member's win/loss record across the week (spec 18).
+type RecapGameRecord struct {
+	DisplayName string `json:"display_name"`
+	Wins        int    `json:"wins"`
+	Losses      int    `json:"losses"`
+}
+
 type WeeklyRecapData struct {
 	CrewID            string        `json:"crew_id"`
 	WeekStart         int64         `json:"week_start"`
@@ -96,7 +103,11 @@ type WeeklyRecapData struct {
 	MostActive        string        `json:"most_active"`
 	MostClipped       string        `json:"most_clipped"`
 	TopMembers        []RecapMember `json:"top_members"`
-	GeneratedAt       int64         `json:"generated_at"`
+	// Telemetry-derived (spec 18); omitted when no game outcomes were recorded.
+	GameRecords    []RecapGameRecord `json:"game_records,omitempty"`
+	BestStreak     int               `json:"best_streak,omitempty"`
+	BestStreakName string            `json:"best_streak_name,omitempty"`
+	GeneratedAt    int64             `json:"generated_at"`
 }
 
 func generateWeeklyRecap(ctx context.Context, nk runtime.NakamaModule, logger runtime.Logger, crewID string) {
@@ -110,6 +121,10 @@ func generateWeeklyRecap(ctx context.Context, nk runtime.NakamaModule, logger ru
 	gameDurations := make(map[string]int)
 	actorActivity := make(map[string]int)
 	actorClips := make(map[string]int)
+	actorWins := make(map[string]int)
+	actorLosses := make(map[string]int)
+	bestStreak := 0
+	bestStreakActor := ""
 	clipCount := 0
 	longestSessionDesc := ""
 	longestSessionMin := 0
@@ -144,6 +159,14 @@ func generateWeeklyRecap(ctx context.Context, nk runtime.NakamaModule, logger ru
 			var d GameSessionData
 			json.Unmarshal(dataBytes, &d)
 			gameDurations[d.GameName] += d.DurationMin
+			if d.Wins > 0 || d.Losses > 0 {
+				actorWins[e.ActorID] += d.Wins
+				actorLosses[e.ActorID] += d.Losses
+				if d.StreakAfter > bestStreak {
+					bestStreak = d.StreakAfter
+					bestStreakActor = e.ActorID
+				}
+			}
 		}
 	}
 
@@ -168,6 +191,16 @@ func generateWeeklyRecap(ctx context.Context, nk runtime.NakamaModule, logger ru
 	mostActive := topActor(actorActivity, ctx, nk)
 	mostClipped := topActor(actorClips, ctx, nk)
 	topMembers := topActors(actorActivity, 3, ctx, nk)
+	gameRecords := buildGameRecords(actorWins, actorLosses, ctx, nk)
+
+	bestStreakName := ""
+	if bestStreakActor != "" {
+		if name := resolveUsername(ctx, nk, bestStreakActor); name != "" {
+			bestStreakName = name
+		} else {
+			bestStreakName = bestStreakActor
+		}
+	}
 
 	recap := WeeklyRecapData{
 		CrewID:            crewID,
@@ -181,6 +214,9 @@ func generateWeeklyRecap(ctx context.Context, nk runtime.NakamaModule, logger ru
 		MostActive:        mostActive,
 		MostClipped:       mostClipped,
 		TopMembers:        topMembers,
+		GameRecords:       gameRecords,
+		BestStreak:        bestStreak,
+		BestStreakName:    bestStreakName,
 		GeneratedAt:       time.Now().UnixMilli(),
 	}
 
@@ -223,6 +259,48 @@ func topActors(counts map[string]int, limit int, ctx context.Context, nk runtime
 		})
 	}
 	return members
+}
+
+// buildGameRecords turns per-actor win/loss tallies into a sorted record list
+// (most wins first, then fewest losses). Resolves display names.
+func buildGameRecords(wins, losses map[string]int, ctx context.Context, nk runtime.NakamaModule) []RecapGameRecord {
+	seen := make(map[string]bool)
+	ids := make([]string, 0, len(wins)+len(losses))
+	for id := range wins {
+		if !seen[id] {
+			seen[id] = true
+			ids = append(ids, id)
+		}
+	}
+	for id := range losses {
+		if !seen[id] {
+			seen[id] = true
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+
+	records := make([]RecapGameRecord, 0, len(ids))
+	for _, id := range ids {
+		name := resolveUsername(ctx, nk, id)
+		if name == "" {
+			name = id
+		}
+		records = append(records, RecapGameRecord{
+			DisplayName: name,
+			Wins:        wins[id],
+			Losses:      losses[id],
+		})
+	}
+	sort.Slice(records, func(i, j int) bool {
+		if records[i].Wins != records[j].Wins {
+			return records[i].Wins > records[j].Wins
+		}
+		return records[i].Losses < records[j].Losses
+	})
+	return records
 }
 
 func topActor(counts map[string]int, ctx context.Context, nk runtime.NakamaModule) string {

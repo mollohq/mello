@@ -17,7 +17,8 @@ When the Human Operator corrects you or says "don't do that" / "we do it this wa
 Do not repeat a corrected mistake in the same session.
 
 ## Before Calling Something Done
-- Run `cargo fmt --all` then `cargo test --workspace` (Rust), `cd libmello && cmake --build build && ctest` (C++)
+- Run `cargo fmt --all` then `CI=true cargo test --workspace` (Rust), `cd libmello && cmake --build build && ctest` (C++)
+- **`CI=true` is mandatory for `cargo test --workspace`** — without it, hardware-dependent voice/video/streaming tests (e.g. `host_to_viewer_loopback`) block forever waiting on real devices. Per-crate runs that don't touch that hardware (e.g. `cargo test -p mello-core --lib`) are fine without it.
 - Fix all warnings — treat warnings as errors in this codebase.
 - Check for regressions in adjacent code you touched.
 - If you added behavior, add a test for it. Tests live next to the code they cover.
@@ -25,6 +26,7 @@ Do not repeat a corrected mistake in the same session.
 ## Git & PRs
 - Commit often with clear messages: `feat(voice): add VAD threshold config`
 - Use conventional commits: feat / fix / refactor / test / docs / chore
+- **Never add `Co-Authored-By` trailers or any AI co-authorship attribution to commits.** These are the Human Operator's commits under their name.
 - Never push directly to main. Always work on a branch.
 - When you think a PR is ready, say so and list what it does — then wait for the Human Operator to say "open it."
 - Do not open PRs autonomously.

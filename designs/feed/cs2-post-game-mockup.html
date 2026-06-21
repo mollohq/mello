@@ -1,0 +1,152 @@
+<html lang="en" vid="0"><head vid="1">
+    <meta charset="UTF-8" vid="2">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" vid="3">
+    <title vid="4">CS2 Session Report</title>
+    <script src="https://cdn.tailwindcss.com/3.4.17" vid="5"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&amp;family=JetBrains+Mono:wght@400;500;600;700&amp;display=swap" rel="stylesheet" vid="6">
+    <script src="https://unpkg.com/@phosphor-icons/web" vid="7"></script>
+    <script vid="8">
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                        mono: ['JetBrains Mono', 'monospace'],
+                    },
+                    colors: {
+                        bgMain: '#111111',
+                        bgCard: '#1A1A1A',
+                        bgDark: '#0D0D0D',
+                        borderMain: '#2A2A2A',
+                        textPrimary: '#F3F4F6',
+                        textMuted: '#9CA3AF',
+                        accentOrange: '#FF9E1B',
+                        accentGreen: '#10B981',
+                        accentRed: '#EF4444',
+                    }
+                }
+            }
+        }
+    </script>
+    <style vid="9">
+        body { background-color: #111111; }
+        .stat-value { font-family: 'JetBrains Mono', monospace; font-weight: 700; }
+        .trend-line {
+            stroke-dasharray: 1000;
+            stroke-dashoffset: 1000;
+            animation: dash 2s ease-in-out forwards;
+        }
+        @keyframes dash { to { stroke-dashoffset: 0; } }
+    </style>
+</head>
+<body class="min-h-screen w-full flex items-center justify-center p-8 font-sans text-textPrimary antialiased" vid="10">
+
+    <div class="w-full max-w-[400px]" vid="11">
+        
+        <div class="bg-bgCard rounded-xl border border-borderMain p-6 flex flex-col shadow-2xl relative overflow-hidden" vid="12">
+            
+            
+            <div class="flex items-start justify-between mb-6 relative z-10" vid="13">
+                <div class="flex items-center gap-3" vid="14">
+                    <div class="w-12 h-12 bg-accentOrange rounded-lg flex items-center justify-center shadow-lg shrink-0" vid="15">
+                        <i class="ph-fill ph-target text-black text-2xl" vid="16"></i>
+                    </div>
+                    <div vid="17">
+                        <h3 class="font-bold text-white text-lg leading-tight" vid="18">Counter-Strike 2</h3>
+                        <p class="text-xs text-textMuted mt-0.5" vid="19">Premier Matchmaking · 4h 15m</p>
+                    </div>
+                </div>
+                <div class="flex flex-col items-end" vid="20">
+                    <div class="text-[10px] font-bold text-accentGreen tracking-widest mb-2 flex items-center gap-1" vid="21">
+                        <div class="w-1.5 h-1.5 rounded-full bg-accentGreen animate-pulse" vid="22"></div>
+                        ACTIVE SESSION
+                    </div>
+                    
+                    <div class="flex gap-1" vid="23">
+                        <div class="h-4 w-1.5 bg-accentGreen rounded-full" vid="24"></div>
+                        <div class="h-4 w-1.5 bg-accentGreen rounded-full" vid="25"></div>
+                        <div class="h-4 w-1.5 bg-accentRed rounded-full opacity-80" vid="26"></div>
+                        <div class="h-4 w-1.5 bg-accentGreen rounded-full" vid="27"></div>
+                        <div class="h-4 w-1.5 bg-accentGreen rounded-full" vid="28"></div>
+                        <div class="h-4 w-1.5 bg-accentGreen rounded-full shadow-[0_0_8px_rgba(16,185,129,0.4)]" vid="29"></div>
+                    </div>
+                </div>
+            </div>
+
+            
+            <div class="mb-6 bg-bgDark/50 rounded-lg p-3 border border-white/5" vid="30">
+                <div class="flex justify-between items-center mb-2" vid="31">
+                    <span class="text-[10px] text-textMuted font-bold uppercase tracking-wider" vid="32">ADR Trend</span>
+                    <span class="text-xs font-mono text-accentGreen" vid="33">Avg: 92.4</span>
+                </div>
+                <div class="h-12 w-full relative" vid="34">
+                    <svg viewBox="0 0 100 40" class="w-full h-full" vid="35">
+                        <path d="M0 35 L20 28 L40 32 L60 15 L80 20 L100 5" fill="none" stroke="url(#gradient)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="trend-line" vid="36"></path>
+                        <defs vid="37">
+                            <linearGradient id="gradient" x1="0%" y1="0%" x2="100%" y2="0%" vid="38">
+                                <stop offset="0%" stop-color="#EF4444" vid="39"></stop>
+                                <stop offset="100%" stop-color="#10B981" vid="40"></stop>
+                            </linearGradient>
+                        </defs>
+                    </svg>
+                </div>
+            </div>
+
+            
+            <div class="grid grid-cols-3 gap-3 mb-6 relative z-10" vid="41">
+                <div class="bg-bgDark rounded-lg border border-borderMain p-3 flex flex-col items-center" vid="42">
+                    <span class="stat-value text-lg text-white" vid="43">1.42</span>
+                    <span class="text-[10px] text-textMuted uppercase tracking-wider mt-1 font-bold" vid="44">K/D Ratio</span>
+                </div>
+                <div class="bg-bgDark rounded-lg border border-borderMain p-3 flex flex-col items-center" vid="45">
+                    <span class="stat-value text-lg text-white" vid="46">54%</span>
+                    <span class="text-[10px] text-textMuted uppercase tracking-wider mt-1 font-bold" vid="47">HS%</span>
+                </div>
+                <div class="bg-bgDark rounded-lg border border-accentGreen/30 p-3 flex flex-col items-center shadow-[inset_0_0_15px_rgba(16,185,129,0.05)]" vid="48">
+                    <span class="stat-value text-lg text-accentGreen" vid="49">W4</span>
+                    <span class="text-[10px] text-accentGreen uppercase tracking-wider mt-1 font-bold opacity-80" vid="50">STREAK</span>
+                </div>
+            </div>
+
+            
+            <div class="mb-6 bg-bgDark/40 p-4 rounded-xl border border-white/5 relative" vid="51">
+                <div class="flex items-center justify-between mb-3" vid="52">
+                    <div class="flex items-center gap-2" vid="53">
+                        <div class="w-8 h-8 bg-blue-900/30 rounded flex items-center justify-center border border-blue-500/20" vid="54">
+                            <i class="ph-fill ph-shield-star text-blue-400" vid="55"></i>
+                        </div>
+                        <div vid="56">
+                            <span class="font-bold text-sm text-gray-200" vid="57">14,285</span>
+                            <p class="text-[10px] text-textMuted" vid="58">Elite Tier</p>
+                        </div>
+                    </div>
+                    <span class="font-mono text-xs text-textMuted" vid="59">+214 today</span>
+                </div>
+                <div class="h-2 w-full bg-black rounded-full overflow-hidden border border-borderMain" vid="60">
+                    <div class="h-full bg-gradient-to-r from-blue-600 to-blue-400 rounded-full w-[65%] shadow-[0_0_12px_rgba(59,130,246,0.4)]" vid="61"></div>
+                </div>
+            </div>
+
+            
+            <div class="mt-auto pt-4 border-t border-borderMain flex items-center justify-between" vid="62">
+                <div class="flex -space-x-2" vid="63">
+                    <div class="w-7 h-7 rounded-full bg-gradient-to-tr from-purple-600 to-blue-500 border-2 border-bgCard flex items-center justify-center text-[10px] font-bold text-white z-40" vid="64">JD</div>
+                    <div class="w-7 h-7 rounded-full bg-gradient-to-tr from-orange-500 to-red-500 border-2 border-bgCard flex items-center justify-center text-[10px] font-bold text-white z-30" vid="65">ML</div>
+                    <div class="w-7 h-7 rounded-full bg-accentGreen border-2 border-bgCard flex items-center justify-center text-[10px] font-bold text-black z-20" vid="66">KR</div>
+                    <div class="w-7 h-7 rounded-full bg-gray-700 border-2 border-bgCard flex items-center justify-center text-[10px] font-bold text-white z-10" vid="67">+2</div>
+                </div>
+                <div class="flex items-center gap-3" vid="68">
+                    <div class="text-xs text-textMuted flex items-center gap-1.5" vid="69">
+                        <i class="ph-bold ph-users text-gray-500" vid="70"></i>
+                        <span class="font-medium" vid="71">6 matches</span>
+                    </div>
+                </div>
+            </div>
+
+            
+            <div class="absolute -bottom-20 -left-20 w-48 h-48 bg-accentOrange/5 rounded-full blur-[80px] pointer-events-none" vid="72"></div>
+        </div>
+    </div>
+
+
+</body></html>
