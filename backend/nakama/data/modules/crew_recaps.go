@@ -80,12 +80,14 @@ func AppendRecap(ctx context.Context, nk runtime.NakamaModule, crewID string, re
 // ---------------------------------------------------------------------------
 
 type RecapMember struct {
+	UserID      string `json:"user_id"` // for client-side avatar resolution (spec 19)
 	DisplayName string `json:"display_name"`
 	HangoutMin  int    `json:"hangout_min"`
 }
 
 // RecapGameRecord is a member's win/loss record across the week (spec 18).
 type RecapGameRecord struct {
+	UserID      string `json:"user_id"` // for client-side avatar resolution (spec 19)
 	DisplayName string `json:"display_name"`
 	Wins        int    `json:"wins"`
 	Losses      int    `json:"losses"`
@@ -344,6 +346,7 @@ func topActors(counts map[string]int, limit int, ctx context.Context, nk runtime
 			name = s.id
 		}
 		members = append(members, RecapMember{
+			UserID:      s.id,
 			DisplayName: name,
 			HangoutMin:  s.count,
 		})
@@ -379,6 +382,7 @@ func buildGameRecords(wins, losses map[string]int, ctx context.Context, nk runti
 			name = id
 		}
 		records = append(records, RecapGameRecord{
+			UserID:      id,
 			DisplayName: name,
 			Wins:        wins[id],
 			Losses:      losses[id],

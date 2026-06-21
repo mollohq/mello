@@ -28,6 +28,35 @@ component AvatarDot inherits Rectangle {
     }
 }
 
+// Shows a real avatar image when cached (spec 19), else the initials dot.
+component RecapAvatar inherits Rectangle {
+    in property <string> initials;
+    in property <int> color-index: 0;
+    in property <image> avatar;
+    in property <bool> has-avatar: false;
+
+    width: 18px;
+    height: 18px;
+
+    if !has-avatar: AvatarDot {
+        initials: root.initials;
+        color-index: root.color-index;
+    }
+
+    if has-avatar: Rectangle {
+        width: 18px;
+        height: 18px;
+        border-radius: 4px;
+        clip: true;
+        Image {
+            source: root.avatar;
+            width: 18px;
+            height: 18px;
+            image-fit: cover;
+        }
+    }
+}
+
 component ClipBadge inherits Rectangle {
     in property <bool> small: false;
 
@@ -572,7 +601,6 @@ component RecapCard inherits Rectangle {
 
         // MVP section with avatars
         if card.mvp-count > 0: Rectangle {
-            vertical-stretch: 1;
 
             VerticalLayout {
                 spacing: 0px;
@@ -597,7 +625,7 @@ component RecapCard inherits Rectangle {
                         spacing: 8px;
                         height: 22px;
 
-                        AvatarDot { initials: card.mvp0-initials; color-index: 0; }
+                        RecapAvatar { initials: card.mvp0-initials; color-index: 0; avatar: card.mvp0-avatar; has-avatar: card.mvp0-has-avatar; }
                         Text {
                             text: card.mvp0-name;
                             font-size: 12px;
@@ -618,7 +646,7 @@ component RecapCard inherits Rectangle {
                         spacing: 8px;
                         height: 22px;
 
-                        AvatarDot { initials: card.mvp1-initials; color-index: 1; }
+                        RecapAvatar { initials: card.mvp1-initials; color-index: 1; avatar: card.mvp1-avatar; has-avatar: card.mvp1-has-avatar; }
                         Text {
                             text: card.mvp1-name;
                             font-size: 12px;
@@ -639,7 +667,7 @@ component RecapCard inherits Rectangle {
                         spacing: 8px;
                         height: 22px;
 
-                        AvatarDot { initials: card.mvp2-initials; color-index: 2; }
+                        RecapAvatar { initials: card.mvp2-initials; color-index: 2; avatar: card.mvp2-avatar; has-avatar: card.mvp2-has-avatar; }
                         Text {
                             text: card.mvp2-name;
                             font-size: 12px;
@@ -651,6 +679,85 @@ component RecapCard inherits Rectangle {
                         Text {
                             text: card.mvp2-stat;
                             font-size: 11px;
+                            color: Theme.text-sub;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+            }
+        }
+
+        // This week in games (spec 19)
+        if card.leaderboard.length > 0 || card.awards.length > 0: Rectangle {
+            VerticalLayout {
+                spacing: 0px;
+
+                Rectangle { height: 1px; background: Theme.card-border; }
+                Rectangle { height: 8px; }
+
+                Text {
+                    text: "THIS WEEK IN GAMES";
+                    font-size: 10px;
+                    font-weight: 600;
+                    color: Theme.skel-text;
+                    letter-spacing: 0.8px;
+                }
+
+                if card.games-summary != "": Text {
+                    text: card.games-summary;
+                    font-size: 11px;
+                    color: Theme.text-sub;
+                }
+
+                Rectangle { height: 6px; }
+
+                VerticalLayout {
+                    spacing: 4px;
+                    for row in card.leaderboard: HorizontalLayout {
+                        spacing: 8px;
+                        height: 22px;
+                        RecapAvatar { initials: row.initials; color-index: row.color-index; avatar: row.avatar; has-avatar: row.has-avatar; }
+                        Text {
+                            text: row.name;
+                            font-size: 12px;
+                            font-weight: 500;
+                            color: Theme.text-primary;
+                            vertical-alignment: center;
+                            horizontal-stretch: 1;
+                        }
+                        Text {
+                            text: row.record;
+                            font-size: 11px;
+                            color: Theme.text-sub;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+
+                if card.awards.length > 0: Rectangle { height: 8px; }
+
+                VerticalLayout {
+                    spacing: 4px;
+                    for a in card.awards: HorizontalLayout {
+                        spacing: 8px;
+                        height: 18px;
+                        Text {
+                            text: a.title;
+                            font-size: 11px;
+                            color: Theme.text-dim;
+                            vertical-alignment: center;
+                            horizontal-stretch: 1;
+                        }
+                        Text {
+                            text: a.name;
+                            font-size: 11px;
+                            font-weight: 500;
+                            color: Theme.text-primary;
+                            vertical-alignment: center;
+                        }
+                        Text {
+                            text: a.detail;
+                            font-size: 10px;
                             color: Theme.text-sub;
                             vertical-alignment: center;
                         }

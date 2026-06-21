@@ -41,6 +41,24 @@ export struct CrewData {
     clip-count: int,
 }
 
+// Recap "this week in games" rows (spec 19). Avatars resolve client-side from
+// the cache by user-id; fall back to the initials dot when not cached.
+export struct RecapLbRow {
+    name: string,
+    initials: string,
+    record: string,      // "12W 5L"
+    color-index: int,
+    avatar: image,
+    has-avatar: bool,
+}
+
+export struct RecapAwardRow {
+    kind: string,        // "grinder" | "heater" | "skid"
+    title: string,
+    name: string,
+    detail: string,
+}
+
 export struct FeedCardData {
     id: string,
     card-type: string,
@@ -64,6 +82,14 @@ export struct FeedCardData {
     mvp0-name: string, mvp0-initials: string, mvp0-stat: string,
     mvp1-name: string, mvp1-initials: string, mvp1-stat: string,
     mvp2-name: string, mvp2-initials: string, mvp2-stat: string,
+    // Real avatars for the MVP rows (spec 19); fall back to the initials dot.
+    mvp0-avatar: image, mvp0-has-avatar: bool,
+    mvp1-avatar: image, mvp1-has-avatar: bool,
+    mvp2-avatar: image, mvp2-has-avatar: bool,
+    // "This week in games" section (spec 19).
+    games-summary: string,
+    leaderboard: [RecapLbRow],
+    awards: [RecapAwardRow],
     is-new: bool,
     was-seen: bool,
     snapshot-loading: bool,
