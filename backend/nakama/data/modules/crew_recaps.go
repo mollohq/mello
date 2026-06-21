@@ -91,6 +91,20 @@ type RecapGameRecord struct {
 	Losses      int    `json:"losses"`
 }
 
+// RecapGameTally is a crew-wide match count for one game (spec 19).
+type RecapGameTally struct {
+	Game    string `json:"game"`
+	Matches int    `json:"matches"`
+}
+
+// RecapAward is a fun, shareable superlative for the week (spec 19).
+type RecapAward struct {
+	Kind   string `json:"kind"` // "grinder" | "heater" | "skid"
+	Title  string `json:"title"`
+	Name   string `json:"name"`
+	Detail string `json:"detail"`
+}
+
 type WeeklyRecapData struct {
 	CrewID            string        `json:"crew_id"`
 	WeekStart         int64         `json:"week_start"`
@@ -103,8 +117,10 @@ type WeeklyRecapData struct {
 	MostActive        string        `json:"most_active"`
 	MostClipped       string        `json:"most_clipped"`
 	TopMembers        []RecapMember `json:"top_members"`
-	// Telemetry-derived (spec 18); omitted when no game outcomes were recorded.
-	GameRecords    []RecapGameRecord `json:"game_records,omitempty"`
+	// Telemetry-derived (spec 18/19); omitted when no game outcomes were recorded.
+	GameRecords    []RecapGameRecord `json:"game_records,omitempty"` // leaderboard, most wins first
+	GamesPlayed    []RecapGameTally  `json:"games_played,omitempty"` // crew-wide match counts
+	Awards         []RecapAward      `json:"awards,omitempty"`
 	BestStreak     int               `json:"best_streak,omitempty"`
 	BestStreakName string            `json:"best_streak_name,omitempty"`
 	GeneratedAt    int64             `json:"generated_at"`
@@ -123,8 +139,12 @@ func generateWeeklyRecap(ctx context.Context, nk runtime.NakamaModule, logger ru
 	actorClips := make(map[string]int)
 	actorWins := make(map[string]int)
 	actorLosses := make(map[string]int)
+	actorMatches := make(map[string]int)
+	gameMatches := make(map[string]int)
 	bestStreak := 0
 	bestStreakActor := ""
+	worstStreak := 0
+	worstStreakActor := ""
 	clipCount := 0
 	longestSessionDesc := ""
 	longestSessionMin := 0
@@ -159,12 +179,19 @@ func generateWeeklyRecap(ctx context.Context, nk runtime.NakamaModule, logger ru
 			var d GameSessionData
 			json.Unmarshal(dataBytes, &d)
 			gameDurations[d.GameName] += d.DurationMin
-			if d.Wins > 0 || d.Losses > 0 {
+			matches := d.Wins + d.Losses + d.Draws
+			if matches > 0 {
+				gameMatches[d.GameName] += matches
+				actorMatches[e.ActorID] += matches
 				actorWins[e.ActorID] += d.Wins
 				actorLosses[e.ActorID] += d.Losses
 				if d.StreakAfter > bestStreak {
 					bestStreak = d.StreakAfter
 					bestStreakActor = e.ActorID
+				}
+				if d.StreakAfter < worstStreak {
+					worstStreak = d.StreakAfter
+					worstStreakActor = e.ActorID
 				}
 			}
 		}
@@ -193,14 +220,9 @@ func generateWeeklyRecap(ctx context.Context, nk runtime.NakamaModule, logger ru
 	topMembers := topActors(actorActivity, 3, ctx, nk)
 	gameRecords := buildGameRecords(actorWins, actorLosses, ctx, nk)
 
-	bestStreakName := ""
-	if bestStreakActor != "" {
-		if name := resolveUsername(ctx, nk, bestStreakActor); name != "" {
-			bestStreakName = name
-		} else {
-			bestStreakName = bestStreakActor
-		}
-	}
+	bestStreakName := resolveOrID(ctx, nk, bestStreakActor)
+	gamesPlayed := buildGamesPlayed(gameMatches)
+	awards := buildAwards(ctx, nk, actorMatches, bestStreak, bestStreakName, worstStreak, worstStreakActor)
 
 	recap := WeeklyRecapData{
 		CrewID:            crewID,
@@ -215,6 +237,8 @@ func generateWeeklyRecap(ctx context.Context, nk runtime.NakamaModule, logger ru
 		MostClipped:       mostClipped,
 		TopMembers:        topMembers,
 		GameRecords:       gameRecords,
+		GamesPlayed:       gamesPlayed,
+		Awards:            awards,
 		BestStreak:        bestStreak,
 		BestStreakName:    bestStreakName,
 		GeneratedAt:       time.Now().UnixMilli(),
@@ -226,6 +250,72 @@ func generateWeeklyRecap(ctx context.Context, nk runtime.NakamaModule, logger ru
 		logger.Info("Weekly recap generated for crew %s: hangout=%dm clips=%d top_game=%s",
 			crewID, totalHangoutMin, clipCount, topGame)
 	}
+}
+
+func resolveOrID(ctx context.Context, nk runtime.NakamaModule, id string) string {
+	if id == "" {
+		return ""
+	}
+	if name := resolveUsername(ctx, nk, id); name != "" {
+		return name
+	}
+	return id
+}
+
+// topKeyCount returns the map key with the highest value (and that value).
+func topKeyCount(counts map[string]int) (string, int) {
+	topID := ""
+	topCount := 0
+	for id, c := range counts {
+		if c > topCount {
+			topID = id
+			topCount = c
+		}
+	}
+	return topID, topCount
+}
+
+// buildGamesPlayed turns crew-wide per-game match counts into a sorted list
+// (most matches first). Pure, so the ordering is unit-testable.
+func buildGamesPlayed(gameMatches map[string]int) []RecapGameTally {
+	out := make([]RecapGameTally, 0, len(gameMatches))
+	for g, m := range gameMatches {
+		out = append(out, RecapGameTally{Game: g, Matches: m})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Matches > out[j].Matches })
+	return out
+}
+
+// buildAwards composes the week's fun superlatives: grinder of the week (most
+// matches), biggest heater (best win streak), roughest patch (worst loss skid).
+func buildAwards(ctx context.Context, nk runtime.NakamaModule, actorMatches map[string]int, bestStreak int, bestStreakName string, worstStreak int, worstStreakActor string) []RecapAward {
+	awards := make([]RecapAward, 0, 3)
+
+	if grinderID, grinderMatches := topKeyCount(actorMatches); grinderID != "" {
+		awards = append(awards, RecapAward{
+			Kind:   "grinder",
+			Title:  "Grinder of the week",
+			Name:   resolveOrID(ctx, nk, grinderID),
+			Detail: fmt.Sprintf("%d matches", grinderMatches),
+		})
+	}
+	if bestStreak >= 2 && bestStreakName != "" {
+		awards = append(awards, RecapAward{
+			Kind:   "heater",
+			Title:  "Biggest heater",
+			Name:   bestStreakName,
+			Detail: fmt.Sprintf("%d-win streak", bestStreak),
+		})
+	}
+	if worstStreak <= -2 && worstStreakActor != "" {
+		awards = append(awards, RecapAward{
+			Kind:   "skid",
+			Title:  "Roughest patch",
+			Name:   resolveOrID(ctx, nk, worstStreakActor),
+			Detail: fmt.Sprintf("%d-loss skid", -worstStreak),
+		})
+	}
+	return awards
 }
 
 func topActors(counts map[string]int, limit int, ctx context.Context, nk runtime.NakamaModule) []RecapMember {
