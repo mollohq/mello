@@ -138,3 +138,43 @@ export component YouStrip inherits Rectangle {
         }
     }
 }
+
+// Slint live-preview harness with mock data (win streak + loss skid variants).
+export component Preview inherits Rectangle {
+    width: 680px;
+    height: 210px;
+    background: #111114;
+
+    VerticalLayout {
+        padding: 8px;
+        spacing: 8px;
+
+        YouStrip {
+            data: {
+                has-stats: true,
+                game-name: "Counter-Strike 2",
+                short-name: "CS2",
+                game-color: #DE9B35,
+                streak-text: "W4",
+                streak-positive: true,
+                record-text: "12W 5L",
+                win-rate-text: "62%",
+                recent-form: ["W", "W", "L", "W", "D", "W"],
+            };
+        }
+
+        YouStrip {
+            data: {
+                has-stats: true,
+                game-name: "Valorant",
+                short-name: "VAL",
+                game-color: #FF4655,
+                streak-text: "L3",
+                streak-positive: false,
+                record-text: "8W 11L",
+                win-rate-text: "42%",
+                recent-form: ["L", "W", "L", "L", "D", "L"],
+            };
+        }
+    }
+}
