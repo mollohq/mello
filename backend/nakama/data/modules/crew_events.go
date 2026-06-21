@@ -84,6 +84,7 @@ type GameSessionData struct {
 	// streak (from the private user_game_stats store) copied into this public event.
 	Wins        int    `json:"wins,omitempty"`
 	Losses      int    `json:"losses,omitempty"`
+	Draws       int    `json:"draws,omitempty"`
 	Result      string `json:"result,omitempty"` // "win" | "loss" | "even"
 	StreakAfter int    `json:"streak_after,omitempty"`
 }
@@ -692,6 +693,7 @@ type GameSessionEndRequest struct {
 	DurationMin int    `json:"duration_min"`
 	Wins        int    `json:"wins"`
 	Losses      int    `json:"losses"`
+	Draws       int    `json:"draws"`
 }
 
 func GameSessionEndRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, payload string) (string, error) {
@@ -727,8 +729,8 @@ func GameSessionEndRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, n
 	// only the resulting streak into this public event. Decisive sessions score
 	// higher so heaters/skids surface in the catch-up card.
 	streakAfter := 0
-	if req.GameID != "" && (req.Wins > 0 || req.Losses > 0) {
-		stats, result, err := UpdateUserGameStats(ctx, nk, userID, req.GameID, req.Wins, req.Losses)
+	if req.GameID != "" && (req.Wins > 0 || req.Losses > 0 || req.Draws > 0) {
+		stats, result, err := UpdateUserGameStats(ctx, nk, userID, req.GameID, req.Wins, req.Losses, req.Draws)
 		if err != nil {
 			// Non-fatal: still record the session, just without the streak.
 			logger.Warn("user_game_stats update failed for %s/%s: %v", userID, req.GameID, err)
@@ -736,9 +738,15 @@ func GameSessionEndRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, n
 			streakAfter = stats.CurrentStreak
 			data.Wins = req.Wins
 			data.Losses = req.Losses
+			data.Draws = req.Draws
 			data.Result = result
 			data.StreakAfter = streakAfter
-			score = 30
+			// Decisive sessions surface in catch-up; even/draw nights score lower.
+			if result == "win" || result == "loss" {
+				score = 30
+			} else {
+				score = 15
+			}
 		}
 	}
 

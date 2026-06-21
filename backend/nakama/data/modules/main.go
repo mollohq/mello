@@ -235,6 +235,9 @@ func InitModule(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runti
 	if err := initializer.RegisterRpc("game_session_end", GameSessionEndRPC); err != nil {
 		return err
 	}
+	if err := initializer.RegisterRpc("user_game_stats_get", UserGameStatsGetRPC); err != nil {
+		return err
+	}
 
 	// -----------------------------------------------------------------------
 	// RPCs — clips
