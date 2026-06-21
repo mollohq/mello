@@ -235,6 +235,9 @@ struct AuthState {
 // ---------------------------------------------------------------------------
 
 /// The GSI config file contents pointing CS2 at our listener.
+/// Windows-only for now; config installation is gated to Windows (spec 17/18
+/// are Windows-first). macOS/Linux paths follow when those backends land.
+#[cfg(windows)]
 fn render_cfg(token: &str, port: u16) -> String {
     format!(
         r#""Mello Game State Integration v1"
@@ -259,6 +262,7 @@ fn render_cfg(token: &str, port: u16) -> String {
     )
 }
 
+#[cfg(windows)]
 const CFG_FILE_NAME: &str = "gamestate_integration_mello.cfg";
 
 #[cfg(windows)]
@@ -509,6 +513,7 @@ mod tests {
         assert_eq!(paths[1], std::path::PathBuf::from("D:\\SteamLibrary"));
     }
 
+    #[cfg(windows)]
     #[test]
     fn rendered_cfg_contains_token_and_port() {
         let cfg = render_cfg("abc123", 29406);
