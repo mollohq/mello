@@ -547,6 +547,9 @@ component RecapCard inherits Rectangle {
         padding: 14px;
         padding-top: 16px;
         spacing: 0px;
+        // Top-pack: each section uses its natural height and any slack collects
+        // at the bottom, instead of stretching the MVP row away from its header.
+        alignment: start;
 
         Text {
             text: "WEEKLY RECAP";
