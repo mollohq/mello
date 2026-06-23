@@ -817,6 +817,155 @@ component SessionCard inherits Rectangle {
     }
 }
 
+// Rich game-session card for notable sessions (spec 19 B2)
+component GameSessionCard inherits Rectangle {
+    in property <FeedCardData> card;
+
+    property <color> game-accent:
+        card.game-name == "Valorant" ? #ff4655 :
+        card.game-name == "Counter-Strike 2" ? #de9b35 :
+        Theme.accent;
+    property <color> record-color: card.game-streak-positive ? #4ade80 : #f87171;
+
+    background: Theme.card-bg;
+    border-radius: 10px;
+    border-width: 1px;
+    border-color: Theme.card-border;
+    clip: true;
+
+    VerticalLayout {
+        padding: 14px;
+        spacing: 0px;
+        alignment: start;
+
+        // Header: game badge + name + actor / time
+        HorizontalLayout {
+            spacing: 10px;
+            height: 40px;
+
+            VerticalLayout {
+                alignment: center;
+                Rectangle {
+                    width: 40px;
+                    height: 40px;
+                    border-radius: 8px;
+                    background: game-accent;
+                    Text {
+                        text: card.game-name == "Valorant" ? "VAL" :
+                              card.game-name == "Counter-Strike 2" ? "CS2" :
+                              card.game-name != "" ? card.game-name : "GG";
+                        font-size: 11px;
+                        font-weight: 800;
+                        color: white;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+
+            VerticalLayout {
+                alignment: center;
+                spacing: 2px;
+                horizontal-stretch: 1;
+                Text {
+                    text: card.game-name != "" ? card.game-name : "Game session";
+                    font-size: 14px;
+                    font-weight: 600;
+                    color: Theme.text-primary;
+                    overflow: elide;
+                }
+                Text {
+                    text: card.actor-name != "" ? card.actor-name + " · " + card.timestamp : card.timestamp;
+                    font-size: 11px;
+                    color: Theme.text-sub;
+                    overflow: elide;
+                }
+            }
+        }
+
+        Rectangle { height: 14px; }
+
+        // Headline record
+        Text {
+            text: card.game-record;
+            font-size: 30px;
+            font-weight: 700;
+            color: record-color;
+        }
+        Text {
+            text: "this session";
+            font-size: 11px;
+            color: Theme.text-sub;
+        }
+
+        Rectangle { height: 12px; }
+        Rectangle { height: 1px; background: Theme.card-border; }
+        Rectangle { height: 10px; }
+
+        // Stat tiles: streak · win rate · matches
+        HorizontalLayout {
+            spacing: 10px;
+
+            VerticalLayout {
+                spacing: 2px;
+                horizontal-stretch: 1;
+                Text {
+                    text: card.game-streak-text;
+                    font-size: 16px;
+                    font-weight: 700;
+                    color: card.game-streak-positive ? #4ade80 : #f87171;
+                }
+                Text { text: "streak"; font-size: 10px; color: Theme.text-sub; }
+            }
+            VerticalLayout {
+                spacing: 2px;
+                horizontal-stretch: 1;
+                Text {
+                    text: card.game-winrate;
+                    font-size: 16px;
+                    font-weight: 700;
+                    color: Theme.text-primary;
+                }
+                Text { text: "win rate"; font-size: 10px; color: Theme.text-sub; }
+            }
+            VerticalLayout {
+                spacing: 2px;
+                horizontal-stretch: 1;
+                Text {
+                    text: "\{card.game-matches}";
+                    font-size: 16px;
+                    font-weight: 700;
+                    color: Theme.text-primary;
+                }
+                Text { text: "matches"; font-size: 10px; color: Theme.text-sub; }
+            }
+        }
+
+        Rectangle { vertical-stretch: 1; }
+
+        // Footer: participants + duration
+        HorizontalLayout {
+            height: 20px;
+
+            HorizontalLayout {
+                spacing: -7px;
+                horizontal-stretch: 1;
+                alignment: start;
+                AvatarDot { initials: card.actor-initials; color-index: 0; }
+                if card.participant-count > 1: AvatarDot { initials: ""; color-index: 1; }
+                if card.participant-count > 2: AvatarDot { initials: ""; color-index: 2; }
+            }
+
+            if card.duration != "": Text {
+                text: card.duration;
+                font-size: 11px;
+                color: Theme.skel-text;
+                vertical-alignment: center;
+            }
+        }
+    }
+}
+
 // Catch-up card
 component CatchupCard inherits Rectangle {
     in property <FeedCardData> card;
@@ -1525,6 +1674,9 @@ component FeedSlot inherits Rectangle {
         session-preview-request-frame(sid, idx) => { root.session-preview-request-frame(sid, idx); }
     }
     if card.card-type == "session": SessionCard {
+        width: parent.width; height: parent.height; card: root.card;
+    }
+    if card.card-type == "game-session": GameSessionCard {
         width: parent.width; height: parent.height; card: root.card;
     }
     if card.card-type == "catchup": CatchupCard {

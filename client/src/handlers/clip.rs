@@ -534,6 +534,52 @@ fn build_feed_card(
         format!("{}d ago", ago / 86400)
     };
 
+    // Rich game-session card fields (spec 19 B2). Retype game sessions so the
+    // feed dispatches them to the rich GameSessionCard instead of SessionCard.
+    let is_game_session = backend_type == "game_session";
+    let card_type = if is_game_session {
+        "game-session"
+    } else {
+        feed_type
+    };
+    let (game_record, game_streak_text, game_streak_positive, game_winrate, game_matches) =
+        if is_game_session {
+            let w = data.get("wins").and_then(|v| v.as_i64()).unwrap_or(0);
+            let l = data.get("losses").and_then(|v| v.as_i64()).unwrap_or(0);
+            let d = data.get("draws").and_then(|v| v.as_i64()).unwrap_or(0);
+            let streak = data
+                .get("streak_after")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0);
+            let record = if d > 0 {
+                format!("{}W\u{2013}{}L\u{2013}{}D", w, l, d)
+            } else {
+                format!("{}W\u{2013}{}L", w, l)
+            };
+            let streak_text = if streak > 0 {
+                format!("W{streak}")
+            } else if streak < 0 {
+                format!("L{}", -streak)
+            } else {
+                "—".to_string()
+            };
+            let decided = w + l;
+            let winrate = if decided > 0 {
+                format!("{}%", (w * 100) / decided)
+            } else {
+                "—".to_string()
+            };
+            (
+                record,
+                streak_text,
+                streak >= 0,
+                winrate,
+                (w + l + d) as i32,
+            )
+        } else {
+            (String::new(), String::new(), true, String::new(), 0)
+        };
+
     let (mvp_count, mvp0, mvp1, mvp2) = extract_mvps(&data, backend_type);
     let (mvp0_av, mvp0_has_av) = resolve_avatar(ctx, &mvp0.3);
     let (mvp1_av, mvp1_has_av) = resolve_avatar(ctx, &mvp1.3);
@@ -550,7 +596,7 @@ fn build_feed_card(
 
     FeedCardData {
         id: id.into(),
-        card_type: feed_type.into(),
+        card_type: card_type.into(),
         role: role.into(),
         size: size.into(),
         title: title.into(),
@@ -594,6 +640,11 @@ fn build_feed_card(
         games_summary: recap_games_summary.into(),
         leaderboard: ModelRc::new(VecModel::from(recap_leaderboard)),
         awards: ModelRc::new(VecModel::from(recap_awards)),
+        game_record: game_record.into(),
+        game_streak_text: game_streak_text.into(),
+        game_streak_positive,
+        game_winrate: game_winrate.into(),
+        game_matches,
         snapshot_loading: feed_type == "session-preview" && has_snapshots,
         snapshot_poster_ready: false,
         snapshot_error: false,

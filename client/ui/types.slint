@@ -99,6 +99,13 @@ export struct FeedCardData {
     snapshot-playback-frame: image,
     snapshot-playback-index: int,
     snapshot-playback-revision: int,
+
+    // Rich game-session card (spec 19 B2). Pre-formatted in Rust.
+    game-record: string,        // "5W–3L" (with draws: "5W–3L–1D")
+    game-streak-text: string,   // "W4" / "L2" / "—"
+    game-streak-positive: bool,
+    game-winrate: string,       // "62%" / "—"
+    game-matches: int,
 }
 
 // Personal stats for the "You strip" pinned atop the crew feed (spec 19).

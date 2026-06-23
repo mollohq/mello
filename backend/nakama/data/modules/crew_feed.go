@@ -36,9 +36,11 @@ const (
 // feedQuietBackendTypes are the low-signal pulse events rendered as quiet rows
 // (ports isQuietRow from Timeline.swift plus the desktop priority). Moments and
 // clips are full cards and are intentionally absent here.
+// game_session is intentionally NOT quiet: routine sessions are pruned by the
+// budget (pruneGameSessions), so the ones that reach the feed are notable and
+// earn the rich GameSessionCard at standard size (spec 19 B2).
 var feedQuietBackendTypes = map[string]bool{
 	"voice_session": true,
-	"game_session":  true,
 	"member_joined": true,
 	"member_left":   true,
 	"chat_activity": true,
