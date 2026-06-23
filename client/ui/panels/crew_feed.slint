@@ -609,7 +609,7 @@ component RecapCard inherits Rectangle {
                 Rectangle { height: 8px; }
 
                 Text {
-                    text: "MVPs";
+                    text: "MVP";
                     font-size: 10px;
                     font-weight: 600;
                     color: Theme.skel-text;
@@ -642,47 +642,8 @@ component RecapCard inherits Rectangle {
                         }
                     }
 
-                    if card.mvp-count >= 2: HorizontalLayout {
-                        spacing: 8px;
-                        height: 22px;
-
-                        RecapAvatar { initials: card.mvp1-initials; color-index: 1; avatar: card.mvp1-avatar; has-avatar: card.mvp1-has-avatar; }
-                        Text {
-                            text: card.mvp1-name;
-                            font-size: 12px;
-                            font-weight: 500;
-                            color: Theme.text-primary;
-                            vertical-alignment: center;
-                            horizontal-stretch: 1;
-                        }
-                        Text {
-                            text: card.mvp1-stat;
-                            font-size: 11px;
-                            color: Theme.text-sub;
-                            vertical-alignment: center;
-                        }
-                    }
-
-                    if card.mvp-count >= 3: HorizontalLayout {
-                        spacing: 8px;
-                        height: 22px;
-
-                        RecapAvatar { initials: card.mvp2-initials; color-index: 2; avatar: card.mvp2-avatar; has-avatar: card.mvp2-has-avatar; }
-                        Text {
-                            text: card.mvp2-name;
-                            font-size: 12px;
-                            font-weight: 500;
-                            color: Theme.text-primary;
-                            vertical-alignment: center;
-                            horizontal-stretch: 1;
-                        }
-                        Text {
-                            text: card.mvp2-stat;
-                            font-size: 11px;
-                            color: Theme.text-sub;
-                            vertical-alignment: center;
-                        }
-                    }
+                    // Single MVP keeps the recap card compact (spec 19 polish);
+                    // mvp1/mvp2 data still arrives but is intentionally not shown.
                 }
             }
         }

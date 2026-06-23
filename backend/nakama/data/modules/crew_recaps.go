@@ -155,7 +155,11 @@ func generateWeeklyRecap(ctx context.Context, nk runtime.NakamaModule, logger ru
 		if e.Timestamp < startMs {
 			continue
 		}
-		actorActivity[e.ActorID]++
+		// System events (e.g. voice_session) have an empty actor; don't let them
+		// pollute the MVP tally (otherwise the top "MVP" can render as a blank "?").
+		if e.ActorID != "" {
+			actorActivity[e.ActorID]++
+		}
 
 		dataBytes, _ := json.Marshal(e.Data)
 		switch e.Type {

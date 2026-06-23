@@ -204,8 +204,13 @@ fn extract_title(data: &serde_json::Value, backend_type: &str, actor: &str) -> S
 fn extract_subtitle(data: &serde_json::Value, backend_type: &str) -> String {
     match backend_type {
         "weekly_recap" => {
+            // Empty when no clips, so the recap card hides the "Clips" row.
             let clips = data.get("clip_count").and_then(|v| v.as_i64()).unwrap_or(0);
-            format!("{}", clips)
+            if clips > 0 {
+                clips.to_string()
+            } else {
+                String::new()
+            }
         }
         "clip" => {
             let clip_type = data
