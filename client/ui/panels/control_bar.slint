@@ -352,12 +352,12 @@ export component ControlBar inherits Rectangle {
                     if in-voice: HorizontalLayout {
                         spacing: 6px;
                         alignment: start;
+                        cross-axis-alignment: center;
                         Rectangle {
                             width: 6px;
                             height: 6px;
                             border-radius: 3px;
                             background: Theme.accent-green;
-                            y: (parent.height - self.height) / 2;
                         }
 
                         Text {

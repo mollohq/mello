@@ -67,9 +67,11 @@ Do not repeat a corrected mistake in the same session.
   `y: (parent.height - self.height) / 2;`
   This is the established pattern throughout the codebase (see control_bar.slint, voice_channel_view.slint, settings_modal.slint).
 - **HorizontalLayout forces `y: 0` on direct children.** Setting `y:` on a direct child of
-  `HorizontalLayout` is silently overridden — the element sticks to the top. To vertically center
-  a fixed-size element (e.g. a 40px button) inside a HorizontalLayout whose height is driven by a
-  taller sibling (e.g. a 44px avatar), wrap it:
+  `HorizontalLayout` is silently overridden — the element sticks to the top.
+  **Preferred (Slint 1.17+):** set `cross-axis-alignment: center;` on the `HorizontalLayout`
+  (or `VerticalLayout`) — it centers each child on the cross axis at its preferred size. Note this
+  applies to *all* children of that layout, so only use it when every child should be centered.
+  For the legacy per-element approach (or when siblings need different alignment), wrap it:
   ```
   // WRONG — y is ignored, button sits at top
   HorizontalLayout {
