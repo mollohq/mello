@@ -461,6 +461,12 @@ pub enum Event {
     },
     /// Post-game prompt timed out without interaction.
     PostGameTimeout,
+    /// Telemetry for the running game needs a one-time user action (e.g.
+    /// Dota 2's launch option). Shown as a hint in the "now playing" card.
+    TelemetrySetupHint {
+        game_id: String,
+        hint: String,
+    },
     /// A match resolved mid-session (from a telemetry adapter, e.g. CS2 GSI).
     /// Live signal for HUD / future auto-clip hooks.
     MatchEnded {

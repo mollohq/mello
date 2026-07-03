@@ -22,8 +22,9 @@ pub fn handle(ctx: &AppContext, event: Event) {
             ctx.app.set_game_short_name(short_name.into());
             let parsed = slint::Color::from_argb_encoded(parse_hex_color(&color));
             ctx.app.set_game_color(parsed);
-            // Clear any stale summary from a previous session.
+            // Clear any stale summary/hint from a previous session.
             ctx.app.set_game_summary("".into());
+            ctx.app.set_telemetry_hint("".into());
             ctx.app.set_can_stream(true);
             ctx.app.set_bar_state(1);
         }
@@ -39,6 +40,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
                 duration_min
             );
             ctx.app.set_can_stream(false);
+            ctx.app.set_telemetry_hint("".into());
             if duration_min >= POST_GAME_MIN_DURATION {
                 ctx.app.set_bar_state(2);
                 start_post_game_timeout(ctx);
@@ -53,6 +55,13 @@ pub fn handle(ctx: &AppContext, event: Event) {
             ctx.app.set_can_stream(false);
             ctx.app.set_game_summary("".into());
             ctx.app.set_bar_state(0);
+        }
+        Event::TelemetrySetupHint { game_id, hint } => {
+            log::info!("[ui] telemetry setup hint for {}: {}", game_id, hint);
+            // Shown under the game name in the "now playing" card.
+            if ctx.app.get_bar_state() == 1 {
+                ctx.app.set_telemetry_hint(hint.into());
+            }
         }
         Event::MatchEnded {
             result,

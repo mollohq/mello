@@ -366,63 +366,11 @@ fn install_cfg(_token: &str, _port: u16) -> Result<(), TelemetryError> {
 /// Steam library folder. CS2 still lives under the legacy CS:GO directory name.
 #[cfg(windows)]
 fn cs2_cfg_dir() -> Result<std::path::PathBuf, TelemetryError> {
-    use std::path::PathBuf;
-    use winreg::enums::HKEY_CURRENT_USER;
-    use winreg::RegKey;
-
-    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-    let steam_path: String = hkcu
-        .open_subkey("Software\\Valve\\Steam")
-        .ok()
-        .and_then(|k| k.get_value("SteamPath").ok())
-        .ok_or_else(|| TelemetryError::GameNotFound("Steam not found in registry".into()))?;
-
-    let steam_root = PathBuf::from(steam_path);
-
-    // Candidate libraries: the Steam root plus any extra library folders.
-    let mut libraries = vec![steam_root.clone()];
-    let lib_vdf = steam_root.join("steamapps").join("libraryfolders.vdf");
-    if let Ok(contents) = std::fs::read_to_string(&lib_vdf) {
-        libraries.extend(parse_library_paths(&contents));
-    }
-
-    for lib in libraries {
-        let cfg = lib
-            .join("steamapps")
-            .join("common")
-            .join("Counter-Strike Global Offensive")
-            .join("game")
-            .join("csgo")
-            .join("cfg");
-        if cfg.is_dir() {
-            return Ok(cfg);
-        }
-    }
-
-    Err(TelemetryError::GameNotFound(
-        "CS2 install (app 730) not found in any Steam library".into(),
-    ))
-}
-
-/// Extract `"path"` values from a `libraryfolders.vdf`. Minimal VDF handling:
-/// each library object has a `"path"  "<dir>"` line with `\\`-escaped separators.
-#[cfg(windows)]
-fn parse_library_paths(vdf: &str) -> Vec<std::path::PathBuf> {
-    let mut out = Vec::new();
-    for line in vdf.lines() {
-        let line = line.trim();
-        let lower = line.to_ascii_lowercase();
-        if !lower.starts_with("\"path\"") {
-            continue;
-        }
-        // Take the second quoted token on the line.
-        let mut parts = line.split('"').filter(|s| !s.trim().is_empty());
-        let _key = parts.next(); // "path"
-        if let Some(raw) = parts.next() {
-            out.push(std::path::PathBuf::from(raw.replace("\\\\", "\\")));
-        }
-    }
-    out
+    super::steam::find_app_subdir(
+        "Counter-Strike Global Offensive",
+        &["game", "csgo", "cfg"],
+        "CS2 install (app 730) not found in any Steam library",
+    )
 }
 
 #[cfg(test)]
@@ -645,32 +593,6 @@ mod tests {
         // New match begins.
         let evs = a.parse(&payload("competitive", "warmup", 0, 0, "CT"), TOKEN);
         assert!(matches!(evs[0], TelemetryEvent::MatchStarted { .. }));
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn parse_library_paths_extracts_dirs() {
-        let vdf = r#"
-"libraryfolders"
-{
-    "0"
-    {
-        "path"    "C:\\Program Files (x86)\\Steam"
-        "apps" { "730" "1234" }
-    }
-    "1"
-    {
-        "path"    "D:\\SteamLibrary"
-    }
-}
-"#;
-        let paths = parse_library_paths(vdf);
-        assert_eq!(paths.len(), 2);
-        assert_eq!(
-            paths[0],
-            std::path::PathBuf::from("C:\\Program Files (x86)\\Steam")
-        );
-        assert_eq!(paths[1], std::path::PathBuf::from("D:\\SteamLibrary"));
     }
 
     #[cfg(windows)]

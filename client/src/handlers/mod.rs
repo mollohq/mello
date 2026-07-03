@@ -124,7 +124,8 @@ pub fn handle_event(ctx: &AppContext, event: Event) {
         | Event::GameEnded { .. }
         | Event::PostGameTimeout
         | Event::MatchEnded { .. }
-        | Event::SessionSummary { .. } => game::handle(ctx, event),
+        | Event::SessionSummary { .. }
+        | Event::TelemetrySetupHint { .. } => game::handle(ctx, event),
 
         // Misc
         Event::SignalReceived { .. } => {}

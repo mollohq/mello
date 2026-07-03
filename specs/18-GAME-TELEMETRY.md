@@ -232,7 +232,7 @@ GSI posts the full state on each change. The adapter tracks a tiny state machine
 | Transition | Action |
 |-----------|--------|
 | `→ warmup`/`live` after a previous `gameover` (or first seen) | `MatchStarted { mode, map }`; reset round tracking |
-| `round.phase` resolves | `RoundEnded { ct_score, t_score }` (live HUD / future auto-clip hook) |
+| `round.phase` resolves | `ScoreChanged { own, opp }` (live HUD / future auto-clip hook) |
 | `→ gameover` | `MatchEnded` — derive `Outcome` |
 | `map` block disappears while a match is active (abandon/disconnect to menu) | `MatchEnded` with `Outcome::Incomplete`; reset match state |
 
@@ -240,11 +240,20 @@ GSI posts the full state on each change. The adapter tracks a tiny state machine
 - Read the player's current side from `player.team` (`"CT"`/`"T"`) — GSI reports the live side, so halftime side-switches are handled by reading at gameover.
 - `own = (player.team == CT) ? map.team_ct.score : map.team_t.score`; `opp = the other`.
 - `own > opp → Win`, `own < opp → Loss`, `own == opp → Draw`.
-- `rounds_won = own`, `rounds_lost = opp`.
+- `own_score = own`, `opp_score = opp`; `player_match_stats` (K/D/A, MVPs, score) fills the `performance` slot when present.
 
 `mode` from `map.mode` (`competitive`, `premier`, `wingman`, `casual`, `deathmatch`, …). Only `competitive`/`premier`/`wingman`/`scrimcomp2v2` are tracked; **non-streak modes emit no telemetry events at all** (v1 decision — casual/DM play stays "played only" at the process level, spec 17). Recording non-streak matches as played-not-streaked becomes possible once `MatchResult` carries explicit streak eligibility (generalized adapter model, §2) and is deferred until an adapter needs it.
 
 **Robustness:** all GSI fields are optional in serde structs (`#[serde(default)]`); a malformed or partial payload yields no events rather than an error. The token check happens before parsing.
+
+### 3.3 Dota 2 GSI Adapter
+
+Same push mechanism, sharing the listener, token, and Steam-discovery helpers. Differences:
+
+- **Config:** `…/dota 2 beta/game/dota/cfg/gamestate_integration/gamestate_integration_mello.cfg` (the subdir is created if missing). Subscribes to `provider`, `map`, `player`, `hero`.
+- **Launch option:** GSI is dead without `-gamestateintegration`. We never edit Steam's `localconfig.vdf`; instead the adapter emits `TelemetryEvent::SetupRequired` on detection when the flag looks absent (read-only heuristic: any `userdata/*/config/localconfig.vdf` containing the flag counts as set). The client shows the hint under the "now playing" card (`Event::TelemetrySetupHint`).
+- **State machine:** keyed on `map.game_state` (`DOTA_GAMERULES_STATE_*`). Active states (hero selection → in progress) start a match; `POST_GAME` ends it with the winner from `map.win_team` vs `player.team_name`; a disappearing `map` block finalizes as `Incomplete` (same as CS2). Custom games (`customgamename` set) emit nothing.
+- **Stats:** kill score from `radiant_score`/`dire_score` (player-oriented) → `own/opp`; `player` K/D/A + last hits → `performance`; `hero.name` → `build.character`. All matchmaking results are `streak_eligible` (GSI doesn't distinguish ranked/unranked).
 
 ---
 

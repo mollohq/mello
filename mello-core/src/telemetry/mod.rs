@@ -5,11 +5,15 @@
 //! See `specs/18-GAME-TELEMETRY.md`.
 
 mod cs2_gsi;
+mod dota2_gsi;
 mod listener;
+#[cfg(windows)]
+mod steam;
 
 use std::sync::Arc;
 
 pub use cs2_gsi::Cs2GsiAdapter;
+pub use dota2_gsi::Dota2GsiAdapter;
 pub use listener::{TelemetryListener, TELEMETRY_PORT};
 
 /// A decisive (or non-decisive) result of a single match.
@@ -126,6 +130,10 @@ pub enum TelemetryEvent {
     /// A match ended with a derived outcome. Boxed: `MatchResult` carries the
     /// optional stat slots and dwarfs the other variants.
     MatchEnded(Box<MatchResult>),
+    /// The adapter needs a one-time user action before it can capture outcomes
+    /// (e.g. Dota 2's `-gamestateintegration` launch option). Surfaced as a
+    /// hint in the "now playing" card; telemetry silently stays off until done.
+    SetupRequired { game_id: String, hint: String },
 }
 
 /// A per-game integration that turns local game state into outcome events.
@@ -192,7 +200,10 @@ impl AdapterRegistry {
     /// Build the default registry with all shipped adapters.
     pub fn with_defaults() -> Self {
         Self {
-            adapters: vec![Arc::new(Cs2GsiAdapter::new())],
+            adapters: vec![
+                Arc::new(Cs2GsiAdapter::new()),
+                Arc::new(Dota2GsiAdapter::new()),
+            ],
         }
     }
 
@@ -289,11 +300,12 @@ mod tests {
     }
 
     #[test]
-    fn registry_finds_cs2() {
+    fn registry_finds_shipped_adapters() {
         let reg = AdapterRegistry::with_defaults();
         assert!(reg.get("counter-strike-2").is_some());
+        assert!(reg.get("dota-2").is_some());
         assert!(reg.get("unknown-game").is_none());
-        assert_eq!(reg.all().len(), 1);
+        assert_eq!(reg.all().len(), 2);
     }
 
     #[test]

@@ -116,6 +116,10 @@ impl GameStateManager {
             // Match start / score changes are tracked by the adapter; no UI
             // event yet (reserved for live HUD score and future auto-clip hooks).
             TelemetryEvent::MatchStarted { .. } | TelemetryEvent::ScoreChanged { .. } => Vec::new(),
+            TelemetryEvent::SetupRequired { game_id, hint } => {
+                log::info!("[game-state] telemetry setup required for {game_id}: {hint}");
+                vec![Event::TelemetrySetupHint { game_id, hint }]
+            }
         }
     }
 
