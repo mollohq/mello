@@ -1,8 +1,12 @@
 use mello_core::Event;
+use slint::ComponentHandle;
 
 use crate::app_context::AppContext;
+use crate::MainWindow;
 
 const POST_GAME_MIN_DURATION: u32 = 5;
+/// Post-game prompt auto-dismisses after this long without interaction (spec 17 §7.2).
+const POST_GAME_TIMEOUT_SECS: u64 = 30;
 
 pub fn handle(ctx: &AppContext, event: Event) {
     match event {
@@ -37,6 +41,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
             ctx.app.set_can_stream(false);
             if duration_min >= POST_GAME_MIN_DURATION {
                 ctx.app.set_bar_state(2);
+                start_post_game_timeout(ctx);
             } else {
                 ctx.app.set_game_active(false);
                 ctx.app.set_bar_state(0);
@@ -72,14 +77,43 @@ pub fn handle(ctx: &AppContext, event: Event) {
         } => {
             let summary = format_session_summary(wins, losses, streak_after);
             log::info!("[ui] session summary: {}", summary);
-            // Pre-fill the post-game card with the auto-detected record so the
-            // user can confirm/share instead of cold-tapping win/loss.
-            ctx.app.set_game_summary(summary.into());
-            ctx.app.set_game_active(true);
-            ctx.app.set_bar_state(2);
+            // Pre-fill the visible post-game card with the auto-detected record
+            // so the user can confirm/share instead of cold-tapping win/loss.
+            // Only enrich — never (re)open the card: the session may have been
+            // under the post-game threshold, the user may have already
+            // dismissed it, or a new game may have started while the RPC ran.
+            if ctx.app.get_bar_state() == 2 {
+                ctx.app.set_game_summary(summary.into());
+            }
         }
         _ => {}
     }
+}
+
+/// Arm the 30 s auto-dismiss for the post-game prompt. Storing the timer in
+/// the context cancels any previous one; user interaction (reaction tap,
+/// text submit, dismiss) also cancels it via `cancel_post_game_timeout`.
+fn start_post_game_timeout(ctx: &AppContext) {
+    let app_weak: slint::Weak<MainWindow> = ctx.app.as_weak();
+    let timer = slint::Timer::default();
+    timer.start(
+        slint::TimerMode::SingleShot,
+        std::time::Duration::from_secs(POST_GAME_TIMEOUT_SECS),
+        move || {
+            let Some(app) = app_weak.upgrade() else {
+                return;
+            };
+            // Dismiss only if the prompt is still idle; leave text input,
+            // confirmations, or a newly started game alone.
+            if app.get_bar_state() == 2 {
+                log::info!("[ui] post-game timeout");
+                app.set_game_active(false);
+                app.set_game_summary("".into());
+                app.set_bar_state(0);
+            }
+        },
+    );
+    *ctx.post_game_timer.borrow_mut() = Some(timer);
 }
 
 /// Build the pre-filled post-game record line, e.g. "5W–3L · 2-win streak".

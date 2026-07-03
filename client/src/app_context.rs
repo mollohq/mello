@@ -41,6 +41,9 @@ pub struct AppContext {
     /// Single-shot safety timer that auto-stops a diagnostic capture after a
     /// max duration so a user can't leave verbose logging on indefinitely.
     pub diag_autostop_timer: Rc<RefCell<Option<slint::Timer>>>,
+    /// Single-shot timer that auto-dismisses the post-game prompt after 30 s
+    /// without interaction (spec 17 §7.2). Cancelled when the user interacts.
+    pub post_game_timer: Rc<RefCell<Option<slint::Timer>>>,
     pub muted_before_deafen: Rc<Cell<bool>>,
     pub updater: Rc<RefCell<Option<Updater>>>,
     pub hotkey_mgr: Rc<RefCell<crate::platform::hotkeys::HotkeyManager>>,

@@ -469,6 +469,7 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
         )),
         avatar_shuffle_timer: Rc::new(RefCell::new(None)),
         diag_autostop_timer: Rc::new(RefCell::new(None)),
+        post_game_timer: Rc::new(RefCell::new(None)),
         muted_before_deafen: Rc::new(Cell::new(false)),
         updater,
         hotkey_mgr,
