@@ -220,26 +220,26 @@ impl Client {
         };
 
         // --- Game telemetry (CS2 GSI etc.) ---
-        // Adapters turn in-game state into match outcomes. The listener receives
-        // local POSTs; cfg install for a detected game happens in the drain loop.
+        // Adapters turn in-game state into match outcomes over one shared
+        // channel: push adapters via the loopback listener, active adapters
+        // (pollers/websockets/log tails) via their own workers started from
+        // the drain loop. Cfg install for a detected game also happens there.
         let telemetry_registry = Arc::new(AdapterRegistry::with_defaults());
         let telemetry_token = telemetry::load_or_create_token();
-        let telemetry_event_rx = if self.enable_game_sensor {
-            match TelemetryListener::start(telemetry_registry.clone(), telemetry_token.clone()) {
-                Ok((listener, rx)) => {
-                    self.telemetry_listener = Some(listener);
-                    rx
-                }
+        let (telemetry_event_tx, telemetry_event_rx) =
+            std::sync::mpsc::channel::<crate::telemetry::TelemetryEvent>();
+        if self.enable_game_sensor {
+            match TelemetryListener::start(
+                telemetry_registry.clone(),
+                telemetry_token.clone(),
+                telemetry_event_tx.clone(),
+            ) {
+                Ok(listener) => self.telemetry_listener = Some(listener),
                 Err(e) => {
                     log::warn!("[telemetry] listener failed to bind on {TELEMETRY_PORT}: {e}");
-                    let (_tx, rx) = std::sync::mpsc::channel();
-                    rx
                 }
             }
-        } else {
-            let (_tx, rx) = std::sync::mpsc::channel();
-            rx
-        };
+        }
 
         // Install adapter configs eagerly on startup. Games like CS2 only read
         // their GSI config at launch, so installing on first detection alone
@@ -282,6 +282,9 @@ impl Client {
                 match &game_event {
                     crate::game_sensing::GameEvent::Started(game) => {
                         if let Some(adapter) = telemetry_registry.get(&game.game_id) {
+                            // Active sources start their transport now; pure
+                            // push adapters no-op.
+                            adapter.start(telemetry_event_tx.clone());
                             let token = telemetry_token.clone();
                             tokio::task::spawn_blocking(move || {
                                 if let Err(e) = adapter.ensure_installed(&token, TELEMETRY_PORT) {

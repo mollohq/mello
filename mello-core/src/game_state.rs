@@ -100,22 +100,22 @@ impl GameStateManager {
                 log::info!(
                     "[game-state] match ended: {} {}-{} on {}",
                     m.result.as_str(),
-                    m.rounds_won,
-                    m.rounds_lost,
+                    m.own_score,
+                    m.opp_score,
                     m.map
                 );
                 let ev = Event::MatchEnded {
                     result: m.result.as_str().to_string(),
-                    rounds_won: m.rounds_won,
-                    rounds_lost: m.rounds_lost,
+                    own_score: m.own_score,
+                    opp_score: m.opp_score,
                     map: m.map.clone(),
                 };
-                self.matches.push(m);
+                self.matches.push(*m);
                 vec![ev]
             }
-            // Match start / round resolution are tracked by the adapter; no UI
+            // Match start / score changes are tracked by the adapter; no UI
             // event yet (reserved for live HUD score and future auto-clip hooks).
-            TelemetryEvent::MatchStarted { .. } | TelemetryEvent::RoundEnded { .. } => Vec::new(),
+            TelemetryEvent::MatchStarted { .. } | TelemetryEvent::ScoreChanged { .. } => Vec::new(),
         }
     }
 
@@ -135,11 +135,15 @@ pub struct SessionSummary {
     pub matches: Vec<MatchResult>,
 }
 
-/// Count decisive wins/losses; draws and incompletes don't move the record.
+/// Count decisive, streak-eligible wins/losses; draws, incompletes, and
+/// non-streak-mode results (played only) don't move the record.
 fn tally(matches: &[MatchResult]) -> (u32, u32) {
     let mut wins = 0;
     let mut losses = 0;
     for m in matches {
+        if !m.streak_eligible {
+            continue;
+        }
         match m.result {
             Outcome::Win => wins += 1,
             Outcome::Loss => losses += 1,
@@ -173,16 +177,21 @@ mod tests {
         }
     }
 
-    fn match_result(result: Outcome) -> MatchResult {
-        MatchResult {
+    fn match_result(result: Outcome) -> Box<MatchResult> {
+        Box::new(MatchResult {
             game_id: "counter-strike-2".into(),
             mode: "competitive".into(),
             map: "de_mirage".into(),
             result,
-            rounds_won: 13,
-            rounds_lost: 7,
+            streak_eligible: true,
+            own_score: 13,
+            opp_score: 7,
+            performance: None,
+            build: None,
+            run: None,
+            source: crate::telemetry::SourceQuality::Live,
             ts: now_ms(),
-        }
+        })
     }
 
     #[test]
@@ -232,6 +241,25 @@ mod tests {
         assert_eq!(summary.losses, 1);
         assert_eq!(summary.matches.len(), 4);
         assert_eq!(summary.game_id, "counter-strike-2");
+    }
+
+    #[test]
+    fn played_only_results_dont_move_record() {
+        let mut mgr = GameStateManager::new();
+        mgr.handle_event(GameEvent::Started(test_game()));
+
+        let mut casual_win = match_result(Outcome::Win);
+        casual_win.streak_eligible = false;
+        mgr.handle_telemetry(TelemetryEvent::MatchEnded(casual_win));
+        mgr.handle_telemetry(TelemetryEvent::MatchEnded(match_result(Outcome::Win)));
+
+        mgr.session_start = Some(now_ms() - 30 * 60_000);
+        let (_e, session_end) = mgr.handle_event(GameEvent::Stopped(test_game()));
+        let summary = session_end.expect("expected a session summary");
+        // Only the streak-eligible win counts; the casual one is played-only.
+        assert_eq!(summary.wins, 1);
+        assert_eq!(summary.losses, 0);
+        assert_eq!(summary.matches.len(), 2);
     }
 
     #[test]

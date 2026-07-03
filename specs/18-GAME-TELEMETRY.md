@@ -65,7 +65,18 @@ The motivating signal: survey respondents ask for things like *"an overview of m
 
 New module `mello-core/src/telemetry/`.
 
-### 2.1 Adapter Trait
+### 2.1 Adapter Trait (v0.2 — generalized source model)
+
+Adapters come in five **source classes**, all sharing one trait and one event
+channel into the client loop:
+
+| Source class | Transport | Examples |
+|--------------|-----------|----------|
+| Local push listener | game POSTs to Mello's loopback listener | CS2 GSI, Dota 2 GSI |
+| Local poll/subscribe | Mello connects to a game-hosted endpoint | LoL Live Client (HTTPS poll), Rocket League Stats API (websocket), SC2 `:6119`, LoR |
+| Local websocket server | game connects to Mello | Apex LiveAPI |
+| Log/file tailer | Mello tails a game-written log | Hearthstone `Power.log`, MTG Arena, PoE `Client.txt`, WoW combat log |
+| Run/replay importer | parse files after match/run end | Slay the Spire `.run`, SC2 replays |
 
 ```rust
 // telemetry/mod.rs
@@ -76,29 +87,54 @@ pub trait GameTelemetryAdapter: Send + Sync {
     fn game_id(&self) -> &str;
 
     /// Install/refresh whatever the game needs to emit telemetry (idempotent).
-    /// Called lazily when the game is first detected.
+    /// Called eagerly at client startup and again on detection.
     fn ensure_installed(&self, token: &str, port: u16) -> Result<(), TelemetryError>;
 
-    /// Parse one inbound payload into telemetry events. `token` is the expected
-    /// per-install auth token; payloads that don't carry it are rejected (`None`).
-    fn parse(&self, body: &str, token: &str) -> Vec<TelemetryEvent>;
+    /// Push sources: parse one inbound loopback payload into events.
+    /// ROUTING CONTRACT: the listener offers payloads to *every* adapter, so
+    /// each must positively identify its own game (e.g. provider appid) and
+    /// yield nothing otherwise. Default: not a push source.
+    fn parse(&self, body: &str, token: &str) -> Vec<TelemetryEvent> { Vec::new() }
+
+    /// Active sources: spawn the adapter-owned transport (poller / websocket /
+    /// tail) on game detection; send events into `tx` until `reset`.
+    /// Default: no-op for pure push sources.
+    fn start(&self, tx: mpsc::Sender<TelemetryEvent>) {}
+
+    /// Stop any transport + clear cross-payload state on game exit.
+    fn reset(&self) {}
 }
 
 #[derive(Debug, Clone)]
 pub enum TelemetryEvent {
     MatchStarted { mode: String, map: String },
-    RoundEnded { ct_score: u32, t_score: u32 },
+    /// Live score change, player perspective (HUD / auto-clip hooks).
+    ScoreChanged { own: u32, opp: u32 },
     MatchEnded(MatchResult),
 }
+```
 
-#[derive(Debug, Clone)]
+### 2.1a Outcome Model — normalized stat slots
+
+`MatchResult` carries a universal scoreline plus **optional stat-slot groups**
+filled per game. Surfaces (spec 19) render only the slots present — never
+empty stat boxes.
+
+```rust
 pub struct MatchResult {
     pub game_id: String,
     pub mode: String,
     pub map: String,
     pub result: Outcome,
-    pub rounds_won: u32,
-    pub rounds_lost: u32,
+    /// Whether this result may move a streak (ranked-ish mode, per adapter).
+    pub streak_eligible: bool,
+    /// Player-perspective scoreline: rounds/goals/points won vs lost.
+    pub own_score: u32,
+    pub opp_score: u32,
+    pub performance: Option<Performance>, // K/D/A, MVPs, damage/healing, goals/saves, CS
+    pub build: Option<BuildInfo>,         // character/deck code/items/build order
+    pub run: Option<RunInfo>,             // stage reached, difficulty, duration
+    pub source: SourceQuality,            // Live | PostMatch | Replay | Manual
     pub ts: i64,
 }
 
@@ -112,6 +148,10 @@ impl Outcome {
     }
 }
 ```
+
+`SourceQuality` tells surfaces how confidently to render a result (a `Live`
+"confirmed W" vs a `Manual` self-report). Session tallies count only
+`streak_eligible` decisive results; other matches are recorded as played.
 
 Adapters are registered in a small registry keyed by `game_id`. A game with no registered adapter contributes no telemetry; the post-game flow falls back to the manual win/loss tap from spec 17.
 
@@ -385,11 +425,35 @@ tools/gsi-emulator/       # dev-only: POST a recorded GSI match sequence to :294
 
 ---
 
-## 9. Future Extensions (Not In Scope)
-- **Outcome-driven auto-clips:** use `RoundEnded`/ace/clutch signals to auto-mark highlights (blocked on video clip capture, spec 14 — only audio clips exist today).
-- **More adapters:** League Live Client Data API, Dota 2 GSI, Valorant (post-match Riot API only; no legit live feed).
-- **Per-match streaks & full stat pages:** K/D/A/ADR/HS%, rank/MMR, a personal profile surface built on `user_game_stats` + stored `matches`.
+## 9. Adapter Expansion Matrix
+
+Priorities, source classes, and risk per game (research verified mid-2026;
+detailed per-game behavior lands in small adapter specs when implementation
+starts). Stat slots use the §2.1a groups.
+
+| Priority | Game | Source class | Setup requirement | Stat slots | Risk |
+|----------|------|--------------|-------------------|------------|------|
+| shipped | CS2 | push (GSI) | cfg drop (auto) | scoreline (+performance planned) | low — official |
+| 1 | Dota 2 | push (GSI) | cfg drop + `-gamestateintegration` launch option (user prompt) | scoreline, performance, build | low — official |
+| 1 | League of Legends | poll (`https://127.0.0.1:2999/liveclientdata`) | none (self-signed cert pinned) | scoreline, performance, build | low — official, register product on dev portal |
+| 1 | Rocket League | subscribe (ws `127.0.0.1:49123`) | ini drop (Stats API, Apr 2026) | scoreline, performance | low — official; no playlist/MMR |
+| 2 | Legends of Runeterra | poll (`127.0.0.1:21337`) | none | scoreline, build (exact decklist) | low — official |
+| 2 | Hearthstone / MTG Arena | log tail | log.config / detailed-logs toggle | scoreline, build | low — publisher-tolerated |
+| 2 | Minecraft | file diff (world stats JSON) | none (singleplayer/LAN only) | build, run | low |
+| 2 | Path of Exile 1/2 | log tail (`Client.txt`) | none | run | low — GGG-friendly |
+| 2 | Slay the Spire | run importer (`.run` files) | none | run, build | low |
+| 2 | StarCraft 2 | poll (`:6119`) + replay import | none | scoreline, build (build order) | med — `:6119` undocumented |
+| 2 | WoW | log tail (combat log) | user enables `/combatlog` (or addon) | performance (dmg/heal, boss attempts) | med — heavy parser, Blizzard-sanctioned |
+| spike | Apex Legends | ws server (LiveAPI) | launch options / config.json | scoreline, performance | med — verify pubs event coverage |
+| presence-only | Roblox | log tail (experience detection) | none | (spec 17 presence enrichment; no outcomes) | med — undocumented log format, degrade to "Roblox" |
+| gated | LoL/TFT match-v5, Valorant (RSO) | web API via backend proxy | Riot production key (weeks; server-side key) | scoreline, performance, build | med — approval process |
+| avoid | FFXIV, CoD, Tarkov, R6 (unofficial), Marvel Rivals (live) | — | — | — | ToS-hostile or no legitimate source |
+
+## 10. Future Extensions (Not In Scope)
+- **Outcome-driven auto-clips:** use `ScoreChanged`/ace/clutch signals to auto-mark highlights (blocked on video clip capture, spec 14 — only audio clips exist today).
+- **Per-match streaks & full stat pages:** ADR/HS%, rank/MMR, a personal profile surface built on `user_game_stats` + stored `matches`.
 - **Rank tracking:** CS2 Premier rating deltas per session.
+- **Played-not-streaked capture:** record non-streak-mode matches (casual/DM) via `streak_eligible: false` once a surface consumes them.
 
 ---
 

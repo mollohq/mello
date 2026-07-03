@@ -4,7 +4,7 @@
 //! Mirrors the localhost-server pattern used by the OAuth flow (`oauth.rs`):
 //! a long-lived `tiny_http::Server` on a dedicated thread.
 
-use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::mpsc::Sender;
 use std::sync::Arc;
 
 use tiny_http::{Response, Server, StatusCode};
@@ -27,28 +27,27 @@ pub struct TelemetryListener {
 }
 
 impl TelemetryListener {
-    /// Bind the listener and start routing inbound payloads through `registry`.
-    /// Binding failure is surfaced so the caller can log and continue without
-    /// telemetry (sensing and the manual post-game flow are unaffected).
+    /// Bind the listener and start routing inbound payloads through `registry`
+    /// into `tx` (the shared telemetry channel, also used by active-source
+    /// adapters). Binding failure is surfaced so the caller can log and
+    /// continue without push telemetry (sensing and the manual post-game flow
+    /// are unaffected).
     pub fn start(
         registry: Arc<AdapterRegistry>,
         token: String,
-    ) -> std::io::Result<(Self, Receiver<TelemetryEvent>)> {
+        tx: Sender<TelemetryEvent>,
+    ) -> std::io::Result<Self> {
         let server = Server::http(format!("127.0.0.1:{TELEMETRY_PORT}"))
             .map_err(|e| std::io::Error::other(e.to_string()))?;
 
-        let (tx, rx) = mpsc::channel();
         let handle = std::thread::Builder::new()
             .name("telemetry-listener".into())
             .spawn(move || listen_loop(server, &registry, &token, &tx))?;
 
         log::info!("[telemetry] listener bound on 127.0.0.1:{TELEMETRY_PORT}");
-        Ok((
-            Self {
-                _handle: Some(handle),
-            },
-            rx,
-        ))
+        Ok(Self {
+            _handle: Some(handle),
+        })
     }
 }
 

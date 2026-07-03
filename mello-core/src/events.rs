@@ -466,8 +466,9 @@ pub enum Event {
     MatchEnded {
         /// "win" | "loss" | "draw"
         result: String,
-        rounds_won: u32,
-        rounds_lost: u32,
+        /// Player-perspective score (rounds/goals/points won vs lost).
+        own_score: u32,
+        opp_score: u32,
         map: String,
     },
     /// End-of-session outcome summary, emitted after the server records the

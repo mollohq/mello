@@ -56,16 +56,16 @@ pub fn handle(ctx: &AppContext, event: Event) {
         }
         Event::MatchEnded {
             result,
-            rounds_won,
-            rounds_lost,
+            own_score,
+            opp_score,
             map,
         } => {
             // Live match outcome; logged for now (HUD score is future work).
             log::info!(
                 "[ui] match ended: {} {}-{} on {}",
                 result,
-                rounds_won,
-                rounds_lost,
+                own_score,
+                opp_score,
                 map
             );
         }

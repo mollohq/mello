@@ -9,7 +9,9 @@ use std::sync::Mutex;
 
 use serde::Deserialize;
 
-use super::{GameTelemetryAdapter, MatchResult, Outcome, TelemetryError, TelemetryEvent};
+use super::{
+    GameTelemetryAdapter, MatchResult, Outcome, SourceQuality, TelemetryError, TelemetryEvent,
+};
 
 /// Game DB id (matches `client/assets/games.json`).
 const GAME_ID: &str = "counter-strike-2";
@@ -97,15 +99,20 @@ impl GameTelemetryAdapter for Cs2GsiAdapter {
                 // (never a loss) so the next match starts from clean state.
                 let mut st = self.state.lock().expect("cs2 telemetry state poisoned");
                 if st.match_active {
-                    let ended = TelemetryEvent::MatchEnded(MatchResult {
+                    let ended = TelemetryEvent::MatchEnded(Box::new(MatchResult {
                         game_id: GAME_ID.to_string(),
                         mode: std::mem::take(&mut st.mode),
                         map: std::mem::take(&mut st.map_name),
                         result: Outcome::Incomplete,
-                        rounds_won: 0,
-                        rounds_lost: 0,
+                        streak_eligible: true,
+                        own_score: 0,
+                        opp_score: 0,
+                        performance: None,
+                        build: None,
+                        run: None,
+                        source: SourceQuality::Live,
                         ts: now_ms(),
-                    });
+                    }));
                     *st = Cs2State::default();
                     return vec![ended];
                 }
@@ -142,42 +149,53 @@ impl GameTelemetryAdapter for Cs2GsiAdapter {
             });
         }
 
-        // Round resolved: the live score changed.
+        let player_team = payload
+            .player
+            .as_ref()
+            .map(|p| p.team.as_str())
+            .unwrap_or("");
+
+        // Round resolved: the live score changed. Player perspective when the
+        // side is known; unknown side falls back to (leading, trailing).
         if st.match_active && (ct != st.last_ct || t != st.last_t) {
             st.last_ct = ct;
             st.last_t = t;
-            events.push(TelemetryEvent::RoundEnded {
-                ct_score: ct,
-                t_score: t,
-            });
+            let (own, opp) = split_scores(player_team, ct, t);
+            events.push(TelemetryEvent::ScoreChanged { own, opp });
         }
 
         // Match over: derive the outcome from the player's current side.
         if phase == "gameover" && st.match_active {
             st.match_active = false;
-            let player_team = payload
-                .player
-                .as_ref()
-                .map(|p| p.team.as_str())
-                .unwrap_or("");
             let result = derive_outcome(player_team, ct, t);
-            let (rounds_won, rounds_lost) = match player_team {
-                "CT" => (ct, t),
-                "T" => (t, ct),
-                _ => (ct.max(t), ct.min(t)),
-            };
-            events.push(TelemetryEvent::MatchEnded(MatchResult {
+            let (own_score, opp_score) = split_scores(player_team, ct, t);
+            events.push(TelemetryEvent::MatchEnded(Box::new(MatchResult {
                 game_id: GAME_ID.to_string(),
                 mode: map.mode.clone(),
                 map: map.name.clone(),
                 result,
-                rounds_won,
-                rounds_lost,
+                streak_eligible: true,
+                own_score,
+                opp_score,
+                performance: None,
+                build: None,
+                run: None,
+                source: SourceQuality::Live,
                 ts: now_ms(),
-            }));
+            })));
         }
 
         events
+    }
+}
+
+/// Split team scores into (own, opp) by the player's side; unknown side falls
+/// back to (leading, trailing) so the numbers stay meaningful for display.
+fn split_scores(player_team: &str, ct: u32, t: u32) -> (u32, u32) {
+    match player_team {
+        "CT" => (ct, t),
+        "T" => (t, ct),
+        _ => (ct.max(t), ct.min(t)),
     }
 }
 
@@ -453,16 +471,12 @@ mod tests {
     fn match_start_then_win() {
         let a = adapter();
 
-        // First live payload → MatchStarted + RoundEnded for the current score.
+        // First live payload → MatchStarted + ScoreChanged for the current score.
         let evs = a.parse(&payload("competitive", "live", 1, 0, "CT"), TOKEN);
         assert!(matches!(evs[0], TelemetryEvent::MatchStarted { .. }));
-        assert!(evs.iter().any(|e| matches!(
-            e,
-            TelemetryEvent::RoundEnded {
-                ct_score: 1,
-                t_score: 0
-            }
-        )));
+        assert!(evs
+            .iter()
+            .any(|e| matches!(e, TelemetryEvent::ScoreChanged { own: 1, opp: 0 })));
 
         // Game over, player on CT with the higher score → Win.
         let evs = a.parse(&payload("competitive", "gameover", 13, 7, "CT"), TOKEN);
@@ -474,8 +488,10 @@ mod tests {
             })
             .expect("expected MatchEnded");
         assert_eq!(ended.result, Outcome::Win);
-        assert_eq!(ended.rounds_won, 13);
-        assert_eq!(ended.rounds_lost, 7);
+        assert_eq!(ended.own_score, 13);
+        assert_eq!(ended.opp_score, 7);
+        assert!(ended.streak_eligible);
+        assert_eq!(ended.source, SourceQuality::Live);
     }
 
     #[test]
@@ -492,8 +508,8 @@ mod tests {
             .unwrap();
         // Player on T (9) vs CT (13) → Loss.
         assert_eq!(ended.result, Outcome::Loss);
-        assert_eq!(ended.rounds_won, 9);
-        assert_eq!(ended.rounds_lost, 13);
+        assert_eq!(ended.own_score, 9);
+        assert_eq!(ended.opp_score, 13);
     }
 
     #[test]
