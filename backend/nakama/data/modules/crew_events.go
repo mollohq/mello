@@ -86,6 +86,9 @@ type GameSessionData struct {
 	Losses      int    `json:"losses,omitempty"`
 	Result      string `json:"result,omitempty"` // "win" | "loss" | "even"
 	StreakAfter int    `json:"streak_after,omitempty"`
+	// True when wins/losses were confirmed against an official post-match API
+	// (Riot match-v5/TFT) rather than taken from the client's local telemetry.
+	Verified bool `json:"verified,omitempty"`
 }
 
 type MemberJoinedData struct {
@@ -790,6 +793,15 @@ func GameSessionEndRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, n
 		DurationMin: req.DurationMin,
 	}
 	score := 10
+
+	// Server-side verification for linked Riot accounts: official post-match
+	// results supersede the client-reported tally (which the server otherwise
+	// can't verify). Best-effort — on any failure the client numbers stand.
+	if wins, losses, ok := enrichGameSessionFromRiot(ctx, nk, logger, userID, req.GameID, req.DurationMin); ok {
+		req.Wins = clampSessionOutcome(wins)
+		req.Losses = clampSessionOutcome(losses)
+		data.Verified = true
+	}
 
 	// Telemetry outcomes: update the actor's private per-game stats and bridge
 	// only the resulting streak into this public event. Decisive sessions score

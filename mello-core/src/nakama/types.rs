@@ -111,6 +111,22 @@ fn default_p2p() -> String {
     "p2p".to_string()
 }
 
+// --- Riot account linking ---
+
+/// Response of `riot_status` / `riot_link`: whether the server has a Riot key
+/// configured and whether this user has linked their Riot ID.
+#[derive(Debug, Default, Deserialize)]
+pub struct RiotStatus {
+    #[serde(default)]
+    pub available: bool,
+    #[serde(default)]
+    pub linked: bool,
+    #[serde(default)]
+    pub riot_id: Option<String>,
+    #[serde(default)]
+    pub region: Option<String>,
+}
+
 // --- RPC request/response types ---
 
 #[derive(Debug, Serialize)]
