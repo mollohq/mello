@@ -66,6 +66,26 @@ impl GameTelemetryAdapter for Dota2GsiAdapter {
         GAME_ID
     }
 
+    fn info(&self) -> super::AdapterInfo {
+        super::AdapterInfo {
+            game_name: "Dota 2",
+            writes_files: true,
+            note: "Adds a Game State Integration config to the Dota 2 folder. Needs the -gamestateintegration launch option in Steam.",
+            account_link: None,
+        }
+    }
+
+    fn detect_install(&self) -> Option<bool> {
+        #[cfg(windows)]
+        {
+            Some(super::steam::find_app_subdir("dota 2 beta", &["game", "dota", "cfg"], "").is_ok())
+        }
+        #[cfg(not(windows))]
+        {
+            None
+        }
+    }
+
     fn ensure_installed(&self, token: &str, port: u16) -> Result<(), TelemetryError> {
         install_cfg(token, port)
     }

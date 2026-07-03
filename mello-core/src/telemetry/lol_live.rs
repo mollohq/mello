@@ -61,6 +61,15 @@ impl GameTelemetryAdapter for LolLiveAdapter {
         GAME_ID
     }
 
+    fn info(&self) -> super::AdapterInfo {
+        super::AdapterInfo {
+            game_name: "League of Legends",
+            writes_files: false,
+            note: "Reads live match data from the game's own local API while you play. Nothing is installed.",
+            account_link: Some("riot"),
+        }
+    }
+
     fn ensure_installed(&self, _token: &str, _port: u16) -> Result<(), TelemetryError> {
         // Nothing to install: the Live Client API is always on during a match.
         Ok(())

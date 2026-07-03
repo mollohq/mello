@@ -234,6 +234,24 @@
             "category": "other"
         },
         {
+            "id": "legends-of-runeterra",
+            "igdb_id": 116530,
+            "name": "Legends of Runeterra",
+            "short_name": "LoR",
+            "exe": ["LoR.exe"],
+            "color": "#19B1A6",
+            "category": "card"
+        },
+        {
+            "id": "starcraft-2",
+            "igdb_id": 239,
+            "name": "StarCraft II",
+            "short_name": "SC2",
+            "exe": ["SC2_x64.exe", "SC2.exe"],
+            "color": "#00AEFF",
+            "category": "rts"
+        },
+        {
             "id": "planet-craft",
             "name": "Planet Craft",
             "short_name": "PC",

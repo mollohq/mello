@@ -6,9 +6,15 @@
 
 mod cs2_gsi;
 mod dota2_gsi;
+mod hearthstone_log;
 mod listener;
+mod log_tail;
 mod lol_live;
+mod lor_local;
+mod minecraft_stats;
+mod poe_log;
 mod rocket_league;
+mod sc2_client;
 #[cfg(windows)]
 mod steam;
 
@@ -16,9 +22,14 @@ use std::sync::Arc;
 
 pub use cs2_gsi::Cs2GsiAdapter;
 pub use dota2_gsi::Dota2GsiAdapter;
+pub use hearthstone_log::HearthstoneAdapter;
 pub use listener::{TelemetryListener, TELEMETRY_PORT};
 pub use lol_live::LolLiveAdapter;
+pub use lor_local::LorAdapter;
+pub use minecraft_stats::MinecraftStatsAdapter;
+pub use poe_log::PoeLogAdapter;
 pub use rocket_league::RocketLeagueAdapter;
+pub use sc2_client::Sc2ClientAdapter;
 
 /// A decisive (or non-decisive) result of a single match.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -193,6 +204,30 @@ pub trait GameTelemetryAdapter: Send + Sync {
     /// the game process exits so a fresh launch starts tracking cleanly.
     /// Default: no-op.
     fn reset(&self) {}
+
+    /// Static description for the Games settings page.
+    fn info(&self) -> AdapterInfo;
+
+    /// Whether the game looks installed on this machine (cheap filesystem or
+    /// registry probe; called off the UI thread). `None` = can't tell on this
+    /// platform / for this game.
+    fn detect_install(&self) -> Option<bool> {
+        None
+    }
+}
+
+/// Static, user-facing description of an adapter for the Games settings page.
+#[derive(Debug, Clone)]
+pub struct AdapterInfo {
+    pub game_name: &'static str,
+    /// True when `ensure_installed` writes a file (config/ini/log toggle) for
+    /// the game to pick up — the thing the per-game consent toggle gates.
+    pub writes_files: bool,
+    /// One-line, user-facing description of how the integration works.
+    pub note: &'static str,
+    /// Account-link provider that unlocks server-verified results ("riot"),
+    /// if the game has one.
+    pub account_link: Option<&'static str>,
 }
 
 /// Registry of available telemetry adapters, keyed by game id.
@@ -209,6 +244,11 @@ impl AdapterRegistry {
                 Arc::new(Dota2GsiAdapter::new()),
                 Arc::new(LolLiveAdapter::new()),
                 Arc::new(RocketLeagueAdapter::new()),
+                Arc::new(LorAdapter::new()),
+                Arc::new(HearthstoneAdapter::new()),
+                Arc::new(MinecraftStatsAdapter::new()),
+                Arc::new(PoeLogAdapter::new()),
+                Arc::new(Sc2ClientAdapter::new()),
             ],
         }
     }
@@ -312,8 +352,13 @@ mod tests {
         assert!(reg.get("dota-2").is_some());
         assert!(reg.get("league-of-legends").is_some());
         assert!(reg.get("rocket-league").is_some());
+        assert!(reg.get("legends-of-runeterra").is_some());
+        assert!(reg.get("hearthstone").is_some());
+        assert!(reg.get("minecraft").is_some());
+        assert!(reg.get("path-of-exile").is_some());
+        assert!(reg.get("starcraft-2").is_some());
         assert!(reg.get("unknown-game").is_none());
-        assert_eq!(reg.all().len(), 4);
+        assert_eq!(reg.all().len(), 9);
     }
 
     #[test]

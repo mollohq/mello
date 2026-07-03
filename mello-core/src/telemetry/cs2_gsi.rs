@@ -64,6 +64,26 @@ impl GameTelemetryAdapter for Cs2GsiAdapter {
         GAME_ID
     }
 
+    fn info(&self) -> super::AdapterInfo {
+        super::AdapterInfo {
+            game_name: "Counter-Strike 2",
+            writes_files: true,
+            note: "Adds a Game State Integration config to the CS2 folder so match results are captured automatically.",
+            account_link: None,
+        }
+    }
+
+    fn detect_install(&self) -> Option<bool> {
+        #[cfg(windows)]
+        {
+            Some(cs2_cfg_dir().is_ok())
+        }
+        #[cfg(not(windows))]
+        {
+            None
+        }
+    }
+
     fn ensure_installed(&self, token: &str, port: u16) -> Result<(), TelemetryError> {
         install_cfg(token, port)
     }

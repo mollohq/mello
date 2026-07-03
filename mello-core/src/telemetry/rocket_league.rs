@@ -69,6 +69,26 @@ impl GameTelemetryAdapter for RocketLeagueAdapter {
         GAME_ID
     }
 
+    fn info(&self) -> super::AdapterInfo {
+        super::AdapterInfo {
+            game_name: "Rocket League",
+            writes_files: true,
+            note: "Adds the official Stats API config to the Rocket League folder. Takes effect after the game restarts.",
+            account_link: None,
+        }
+    }
+
+    fn detect_install(&self) -> Option<bool> {
+        #[cfg(windows)]
+        {
+            Some(super::steam::find_app_subdir("rocketleague", &["TAGame", "Config"], "").is_ok())
+        }
+        #[cfg(not(windows))]
+        {
+            None
+        }
+    }
+
     fn ensure_installed(&self, _token: &str, _port: u16) -> Result<(), TelemetryError> {
         install_ini()
     }
