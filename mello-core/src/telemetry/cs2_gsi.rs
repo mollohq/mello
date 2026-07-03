@@ -10,7 +10,8 @@ use std::sync::Mutex;
 use serde::Deserialize;
 
 use super::{
-    GameTelemetryAdapter, MatchResult, Outcome, SourceQuality, TelemetryError, TelemetryEvent,
+    GameTelemetryAdapter, MatchResult, Outcome, Performance, SourceQuality, TelemetryError,
+    TelemetryEvent,
 };
 
 /// Game DB id (matches `client/assets/games.json`).
@@ -169,6 +170,18 @@ impl GameTelemetryAdapter for Cs2GsiAdapter {
             st.match_active = false;
             let result = derive_outcome(player_team, ct, t);
             let (own_score, opp_score) = split_scores(player_team, ct, t);
+            let performance = payload
+                .player
+                .as_ref()
+                .and_then(|p| p.match_stats.as_ref())
+                .map(|ms| Performance {
+                    kills: Some(ms.kills.max(0) as u32),
+                    deaths: Some(ms.deaths.max(0) as u32),
+                    assists: Some(ms.assists.max(0) as u32),
+                    mvps: Some(ms.mvps.max(0) as u32),
+                    score: Some(ms.score.max(0) as u32),
+                    ..Performance::default()
+                });
             events.push(TelemetryEvent::MatchEnded(Box::new(MatchResult {
                 game_id: GAME_ID.to_string(),
                 mode: map.mode.clone(),
@@ -177,7 +190,7 @@ impl GameTelemetryAdapter for Cs2GsiAdapter {
                 streak_eligible: true,
                 own_score,
                 opp_score,
-                performance: None,
+                performance,
                 build: None,
                 run: None,
                 source: SourceQuality::Live,
@@ -264,6 +277,23 @@ struct TeamState {
 struct PlayerState {
     #[serde(default)]
     team: String,
+    match_stats: Option<MatchStats>,
+}
+
+/// `player.match_stats` from the `player_match_stats` subscription. Values can
+/// go negative in-game (suicides/team kills), hence signed.
+#[derive(Deserialize, Default)]
+struct MatchStats {
+    #[serde(default)]
+    kills: i32,
+    #[serde(default)]
+    assists: i32,
+    #[serde(default)]
+    deaths: i32,
+    #[serde(default)]
+    mvps: i32,
+    #[serde(default)]
+    score: i32,
 }
 
 #[derive(Deserialize, Default)]
@@ -412,7 +442,9 @@ mod tests {
                 "auth": {{ "token": "{TOKEN}" }},
                 "map": {{ "mode": "{mode}", "name": "de_mirage", "phase": "{phase}",
                           "team_ct": {{ "score": {ct} }}, "team_t": {{ "score": {t} }} }},
-                "player": {{ "team": "{team}" }}
+                "player": {{ "team": "{team}",
+                             "match_stats": {{ "kills": 21, "assists": 4, "deaths": 15,
+                                               "mvps": 3, "score": 47 }} }}
             }}"#
         )
     }
@@ -492,6 +524,41 @@ mod tests {
         assert_eq!(ended.opp_score, 7);
         assert!(ended.streak_eligible);
         assert_eq!(ended.source, SourceQuality::Live);
+
+        // player_match_stats flows into the performance slot.
+        let perf = ended.performance.as_ref().expect("expected performance");
+        assert_eq!(perf.kills, Some(21));
+        assert_eq!(perf.deaths, Some(15));
+        assert_eq!(perf.assists, Some(4));
+        assert_eq!(perf.mvps, Some(3));
+        assert_eq!(perf.score, Some(47));
+        assert_eq!(perf.damage, None);
+    }
+
+    #[test]
+    fn gameover_without_match_stats_has_no_performance() {
+        let a = adapter();
+        // Payload without the match_stats block (older cfg / partial payload).
+        let body = format!(
+            r#"{{
+                "provider": {{ "appid": 730 }},
+                "auth": {{ "token": "{TOKEN}" }},
+                "map": {{ "mode": "competitive", "phase": "gameover",
+                          "team_ct": {{ "score": 13 }}, "team_t": {{ "score": 7 }} }},
+                "player": {{ "team": "CT" }}
+            }}"#
+        );
+        a.parse(&payload("competitive", "live", 1, 0, "CT"), TOKEN);
+        let evs = a.parse(&body, TOKEN);
+        let ended = evs
+            .iter()
+            .find_map(|e| match e {
+                TelemetryEvent::MatchEnded(m) => Some(m),
+                _ => None,
+            })
+            .expect("expected MatchEnded");
+        assert_eq!(ended.result, Outcome::Win);
+        assert!(ended.performance.is_none());
     }
 
     #[test]
