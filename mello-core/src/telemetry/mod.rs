@@ -77,6 +77,12 @@ pub trait GameTelemetryAdapter: Send + Sync {
     /// Parse one inbound payload into telemetry events. `token` is the expected
     /// per-install auth token; payloads that don't carry it (or don't belong to
     /// this adapter) yield no events.
+    ///
+    /// **Routing contract:** the listener offers every inbound payload to every
+    /// registered adapter (no per-game routing). Implementations MUST strictly
+    /// verify the payload is their own game's — e.g. by provider app id — and
+    /// return no events otherwise. Different Valve GSI games produce
+    /// near-identical payload shapes, so shape alone is not sufficient.
     fn parse(&self, body: &str, token: &str) -> Vec<TelemetryEvent>;
 
     /// Reset cross-payload state. Called when the game process exits so a fresh

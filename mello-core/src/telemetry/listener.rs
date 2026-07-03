@@ -15,6 +15,11 @@ use super::{AdapterRegistry, TelemetryEvent};
 /// OAuth callback port (`29405`).
 pub const TELEMETRY_PORT: u16 = 29406;
 
+/// Upper bound on an inbound payload. GSI payloads are a few KB; anything
+/// bigger is not a game talking to us, and an unbounded read would let any
+/// local process balloon our memory.
+const MAX_BODY_BYTES: usize = 256 * 1024;
+
 /// Owns the listener thread. Dropping it does not stop the thread (best-effort,
 /// matches the game sensor); the process owns it for its lifetime.
 pub struct TelemetryListener {
@@ -54,13 +59,26 @@ fn listen_loop(
     tx: &Sender<TelemetryEvent>,
 ) {
     for mut request in server.incoming_requests() {
+        // Reject oversized payloads without reading them.
+        if request.body_length().unwrap_or(0) > MAX_BODY_BYTES {
+            let _ = request.respond(Response::empty(StatusCode(413)));
+            continue;
+        }
+
         let mut body = String::new();
-        let _ = request.as_reader().read_to_string(&mut body);
+        {
+            use std::io::Read;
+            let reader = request.as_reader();
+            // Cap the read too: chunked bodies carry no length up front.
+            let _ = reader
+                .take(MAX_BODY_BYTES as u64 + 1)
+                .read_to_string(&mut body);
+        }
 
         // Acknowledge promptly so the game doesn't back-pressure on us.
         let _ = request.respond(Response::empty(StatusCode(200)));
 
-        if body.is_empty() {
+        if body.is_empty() || body.len() > MAX_BODY_BYTES {
             continue;
         }
 

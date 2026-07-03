@@ -81,11 +81,12 @@ impl GameTelemetryAdapter for Cs2GsiAdapter {
             _ => return Vec::new(),
         }
 
-        // Reject payloads from other games (lenient when appid is absent).
-        if let Some(p) = &payload.provider {
-            if p.appid != 0 && p.appid != CS2_APPID {
-                return Vec::new();
-            }
+        // Routing contract (see GameTelemetryAdapter::parse): only payloads
+        // that positively identify as CS2 are ours. Our cfg subscribes to
+        // `provider`, so real CS2 payloads always carry the appid.
+        match &payload.provider {
+            Some(p) if p.appid == CS2_APPID => {}
+            _ => return Vec::new(),
         }
 
         let map = match &payload.map {
@@ -427,6 +428,18 @@ mod tests {
         let a = adapter();
         assert!(a.parse("not json", TOKEN).is_empty());
         assert!(a.parse("{}", TOKEN).is_empty()); // no auth → rejected
+    }
+
+    #[test]
+    fn rejects_payload_without_provider() {
+        // Strict self-identification: no provider block → not ours.
+        let a = adapter();
+        let body = format!(
+            r#"{{ "auth": {{ "token": "{TOKEN}" }},
+                  "map": {{ "mode": "competitive", "phase": "live",
+                            "team_ct": {{"score":1}}, "team_t": {{"score":0}} }} }}"#
+        );
+        assert!(a.parse(&body, TOKEN).is_empty());
     }
 
     #[test]
