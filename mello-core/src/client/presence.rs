@@ -114,6 +114,7 @@ impl super::Client {
             duration_min,
             wins,
             losses,
+            session_id: generate_session_id(),
         };
         match self.nakama.game_session_end(&req).await {
             Ok(resp) => {
@@ -132,4 +133,15 @@ impl super::Client {
             Err(e) => log::warn!("game_session_end failed: {}", e),
         }
     }
+}
+
+/// One id per session-end call: retries of the *same* request (inside the RPC
+/// layer) reuse it, while distinct sessions always get fresh ids.
+fn generate_session_id() -> String {
+    use rand::Rng;
+    rand::thread_rng()
+        .sample_iter(&rand::distributions::Alphanumeric)
+        .take(24)
+        .map(char::from)
+        .collect()
 }

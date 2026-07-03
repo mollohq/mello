@@ -692,6 +692,56 @@ type GameSessionEndRequest struct {
 	DurationMin int    `json:"duration_min"`
 	Wins        int    `json:"wins"`
 	Losses      int    `json:"losses"`
+	// Client-generated idempotency key. Retries of the same session end carry
+	// the same id; duplicates are acknowledged without re-applying stats or
+	// appending a second ledger event. Empty for older clients (no dedup).
+	SessionID string `json:"session_id"`
+}
+
+// The server can't verify client-reported outcomes, but it can bound them:
+// no human session produces more decisive matches than this.
+const maxSessionOutcomes = 30
+
+// clampSessionOutcome bounds a client-reported win/loss count to [0, maxSessionOutcomes].
+func clampSessionOutcome(n int) int {
+	if n < 0 {
+		return 0
+	}
+	if n > maxSessionOutcomes {
+		return maxSessionOutcomes
+	}
+	return n
+}
+
+const gameSessionDedupCollection = "game_session_dedup"
+
+// isDuplicateGameSession records session_id for the user (create-only write) and
+// reports whether it was already present. Best-effort: storage errors are
+// treated as "not a duplicate" so a dedup outage never blocks session recording.
+func isDuplicateGameSession(ctx context.Context, nk runtime.NakamaModule, logger runtime.Logger, userID, sessionID string) bool {
+	objects, err := nk.StorageRead(ctx, []*runtime.StorageRead{
+		{Collection: gameSessionDedupCollection, Key: sessionID, UserID: userID},
+	})
+	if err == nil && len(objects) > 0 {
+		return true
+	}
+	_, err = nk.StorageWrite(ctx, []*runtime.StorageWrite{
+		{
+			Collection:      gameSessionDedupCollection,
+			Key:             sessionID,
+			UserID:          userID,
+			Value:           fmt.Sprintf(`{"ts":%d}`, time.Now().UnixMilli()),
+			Version:         "*", // create-only: concurrent retries race to one winner
+			PermissionRead:  0,
+			PermissionWrite: 0,
+		},
+	})
+	if err != nil {
+		// A create-only conflict means another retry got here first.
+		logger.Debug("game_session dedup write for %s/%s: %v (treating as duplicate)", userID, sessionID, err)
+		return true
+	}
+	return false
 }
 
 func GameSessionEndRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, payload string) (string, error) {
@@ -707,9 +757,27 @@ func GameSessionEndRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, n
 	if req.CrewID == "" || req.GameName == "" {
 		return "", runtime.NewError("crew_id and game_name required", 3)
 	}
+	if len(req.SessionID) > 64 {
+		return "", runtime.NewError("session_id too long", 3)
+	}
+	req.Wins = clampSessionOutcome(req.Wins)
+	req.Losses = clampSessionOutcome(req.Losses)
 
 	if !isCrewMember(ctx, nk, req.CrewID, userID) {
 		return "", runtime.NewError("not a crew member", 7)
+	}
+
+	// Idempotency: a retried session end must not double-apply streaks or
+	// duplicate the ledger event. Acknowledge with the current streak instead.
+	if req.SessionID != "" && isDuplicateGameSession(ctx, nk, logger, userID, req.SessionID) {
+		streakAfter := 0
+		if req.GameID != "" {
+			stats, _ := readUserGameStats(ctx, nk, userID, req.GameID)
+			streakAfter = stats.CurrentStreak
+		}
+		logger.Info("User %s duplicate game session end (session_id=%s), acknowledged without re-applying", userID, req.SessionID)
+		resp, _ := json.Marshal(map[string]interface{}{"success": true, "streak_after": streakAfter, "duplicate": true})
+		return string(resp), nil
 	}
 
 	username := resolveUsername(ctx, nk, userID)

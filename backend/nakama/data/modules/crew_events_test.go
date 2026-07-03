@@ -76,3 +76,19 @@ func TestDecodeStreamSessionDataFromObject(t *testing.T) {
 		t.Fatalf("snapshot_urls mismatch: got %v want %v", decoded.SnapshotURLs, expected.SnapshotURLs)
 	}
 }
+
+func TestClampSessionOutcome(t *testing.T) {
+	cases := []struct{ in, want int }{
+		{-5, 0},
+		{0, 0},
+		{7, 7},
+		{maxSessionOutcomes, maxSessionOutcomes},
+		{maxSessionOutcomes + 1, maxSessionOutcomes},
+		{1000000, maxSessionOutcomes},
+	}
+	for _, c := range cases {
+		if got := clampSessionOutcome(c.in); got != c.want {
+			t.Fatalf("clampSessionOutcome(%d) = %d, want %d", c.in, got, c.want)
+		}
+	}
+}
