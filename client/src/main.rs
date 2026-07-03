@@ -13,6 +13,7 @@ mod diag_capture;
 mod foreground_monitor;
 mod gif_animator;
 mod handlers;
+mod http;
 pub mod hud_manager;
 #[cfg(target_os = "windows")]
 mod hud_overlay;
@@ -20,11 +21,13 @@ mod hud_state_builder;
 mod image_cache;
 mod ipc;
 mod notifications;
+mod perf_mode;
 mod platform;
 mod poll_loop;
 mod settings;
 mod snapshot_cache;
 mod snapshot_loader;
+mod stream_frame_timer;
 mod updater;
 
 pub const APP_NAME: &str = "m3llo";
@@ -37,7 +40,6 @@ use settings::Settings;
 use slint::{ComponentHandle, Model};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
-use std::time::Instant;
 use updater::{UpdateEvent, Updater};
 
 use single_instance::SingleInstance;
@@ -227,6 +229,8 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
 
     updater::startup_update::apply_renderer_override();
 
+    let perf_mode = perf_mode::enabled();
+
     // --- Auto-updater ---
     let (update_event_tx, mut update_event_rx) = std::sync::mpsc::channel::<UpdateEvent>();
     let updater: Rc<RefCell<Option<Updater>>> =
@@ -242,7 +246,9 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
         }));
 
     let mut slint_platform_configured = false;
-    let startup_update_available = {
+    let startup_update_available = if perf_mode {
+        false
+    } else {
         let mut updater_ref = updater.borrow_mut();
         updater_ref
             .as_mut()
@@ -261,10 +267,34 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
         update_event_rx = next_update_event_rx;
     }
 
-    let rt = tokio::runtime::Runtime::new()?;
+    // A desktop chat/voice client is network-light and mostly idle. The default
+    // runtime sizes worker + blocking pools to the core count, which on a many-
+    // core Mac leaves a pile of parked threads (measured ~16 blocking threads /
+    // ~34 MB of stacks at idle). Cap both: 2 workers is plenty (libmello runs
+    // audio/video on its own native threads), and 4 blocking threads bound the
+    // DNS/`spawn_blocking` pool — kept small by the shared keep-alive HTTP client.
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .max_blocking_threads(4)
+        .thread_name("mello-rt")
+        .enable_all()
+        .build()?;
 
     let (cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel::<Command>();
-    let (event_tx, event_rx) = std::sync::mpsc::channel::<Event>();
+    let (event_tx, event_rx_from_core) = std::sync::mpsc::channel::<Event>();
+    let (event_rx, perf_event_rx) = if perf_mode {
+        let (poll_tx, poll_rx) = std::sync::mpsc::channel::<Event>();
+        let (perf_tx, perf_rx) = std::sync::mpsc::channel::<Event>();
+        std::thread::spawn(move || {
+            while let Ok(ev) = event_rx_from_core.recv() {
+                let _ = poll_tx.send(ev.clone());
+                let _ = perf_tx.send(ev);
+            }
+        });
+        (poll_rx, Some(perf_rx))
+    } else {
+        (event_rx_from_core, None)
+    };
 
     let frame_slot: mello_core::FrameSlot = std::sync::Arc::new(std::sync::Mutex::new(None));
     let native_frame_slot: mello_core::NativeFrameSlot =
@@ -399,15 +429,20 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
     // Decide startup path
     {
         let s = settings.borrow();
-        log::info!("[auth] startup  onboarding_step={}", s.onboarding_step);
-        if s.onboarding_step > 3 {
-            log::info!("[auth] onboarding done ÔÇö attempting session restore");
-            let _ = cmd_tx.send(Command::TryRestore);
+        if perf_mode {
+            log::info!("[perf] scenario drives auth — skipping restore");
+            app.set_onboarding_step(4);
         } else {
-            log::info!("[auth] onboarding in progress ÔÇö fetching crews (no auth)");
-            let _ = cmd_tx.send(Command::DiscoverCrews { cursor: None });
+            log::info!("[auth] startup  onboarding_step={}", s.onboarding_step);
+            if s.onboarding_step > 3 {
+                log::info!("[auth] onboarding done ÔÇö attempting session restore");
+                let _ = cmd_tx.send(Command::TryRestore);
+            } else {
+                log::info!("[auth] onboarding in progress ÔÇö fetching crews (no auth)");
+                let _ = cmd_tx.send(Command::DiscoverCrews { cursor: None });
+            }
+            app.set_onboarding_step(s.onboarding_step as i32);
         }
-        app.set_onboarding_step(s.onboarding_step as i32);
         let _ = cmd_tx.send(Command::CheckMicPermission);
     }
 
@@ -447,6 +482,17 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
     // --- Build AppContext ---
     let snapshot_loader = Rc::new(snapshot_loader::SnapshotLoader::new(rt.handle().clone()));
 
+    let stream_frame_timer = Rc::new(stream_frame_timer::StreamFrameTimer::new(
+        app.as_weak(),
+        frame_slot.clone(),
+        frame_consumed.clone(),
+        frame_lifecycle.clone(),
+        #[cfg(target_os = "windows")]
+        native_frame_slot.clone(),
+        #[cfg(target_os = "windows")]
+        dcomp_presenter.clone(),
+    ));
+
     let ctx = app_context::AppContext {
         app,
         cmd_tx,
@@ -481,6 +527,7 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
         fg_monitor,
         pending_deep_link: Rc::new(RefCell::new(pending_deep_link)),
         ipc_listener: Rc::new(RefCell::new(ipc_listener)),
+        stream_frame_timer: stream_frame_timer.clone(),
         #[cfg(target_os = "windows")]
         native_frame_slot: native_frame_slot.clone(),
         #[cfg(target_os = "windows")]
@@ -544,99 +591,13 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
     let _poll_timer = poll_loop::start(&ctx, event_rx, update_event_rx);
     log::info!("[startup] poll loop started");
 
-    // --- 16ms frame timer for stream display ---
-    let frame_app_weak = ctx.app.as_weak();
-    let frame_timer = slint::Timer::default();
-    let mut frame_timer_ticks: u64 = 0;
-    let mut frame_timer_last_log = Instant::now();
-    let mut frame_timer_presented: u64 = 0;
-    #[cfg(target_os = "windows")]
-    let mut last_surface_sequence: u64 = 0;
-    #[cfg(target_os = "windows")]
-    let frame_timer_dcomp = dcomp_presenter.clone();
-    frame_timer.start(
-        slint::TimerMode::Repeated,
-        std::time::Duration::from_millis(16),
-        move || {
-            let app_for_tick = frame_app_weak.upgrade();
-            let is_watching = app_for_tick
-                .as_ref()
-                .map(|app| app.get_is_watching())
-                .unwrap_or(false);
-            if !is_watching {
-                if let Some(app) = app_for_tick.as_ref() {
-                    app.set_dbg_stream_ui_render_fps(0.0);
-                }
-                return;
-            }
-
-            frame_timer_ticks = frame_timer_ticks.saturating_add(1);
-
-            #[cfg(target_os = "windows")]
-            if let Ok(slot) = native_frame_slot.lock() {
-                if let Some(frame) = *slot {
-                    if frame.sequence != last_surface_sequence {
-                        last_surface_sequence = frame.sequence;
-                        if let Some(ref mut presenter) = *frame_timer_dcomp.borrow_mut() {
-                            if presenter.present_shared_texture(
-                                frame.shared_handle,
-                                frame.width,
-                                frame.height,
-                            ) {
-                                frame_timer_presented = frame_timer_presented.saturating_add(1);
-                            }
-                        }
-                    }
-                }
-            }
-
-            #[cfg(not(target_os = "windows"))]
-            {
-                let frame_data = frame_slot.lock().ok().and_then(|mut s| s.take());
-                if let Some((w, h, rgba)) = frame_data {
-                    if let Some(app) = app_for_tick.as_ref() {
-                        let buf = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
-                            &rgba, w, h,
-                        );
-                        app.set_stream_frame(slint::Image::from_rgba8(buf));
-                        frame_timer_presented = frame_timer_presented.saturating_add(1);
-                    }
-                }
-            }
-
-            frame_consumed.store(true, std::sync::atomic::Ordering::Release);
-            frame_lifecycle.store(FRAME_STATE_PRESENTED, std::sync::atomic::Ordering::Release);
-
-            if frame_timer_last_log.elapsed().as_secs_f32() >= 1.0 {
-                let elapsed = frame_timer_last_log.elapsed().as_secs_f32().max(0.001);
-                let present_fps = frame_timer_presented as f32 / elapsed;
-
-                if let Some(app) = app_for_tick.as_ref() {
-                    app.set_dbg_stream_ui_render_fps(present_fps);
-                }
-
-                #[cfg(target_os = "windows")]
-                log::info!(
-                    "DComp stream: present_fps={:.1} tick_hz={:.1}",
-                    present_fps,
-                    frame_timer_ticks as f32 / elapsed
-                );
-                #[cfg(not(target_os = "windows"))]
-                log::info!(
-                    "Stream: present_fps={:.1} tick_hz={:.1}",
-                    present_fps,
-                    frame_timer_ticks as f32 / elapsed
-                );
-
-                frame_timer_ticks = 0;
-                frame_timer_presented = 0;
-                frame_timer_last_log = Instant::now();
-            }
-        },
-    );
+    let _stream_frame_timer = stream_frame_timer;
 
     ctx.app.show()?;
     log::info!("[startup] window shown");
+    if let Some(perf_rx) = perf_event_rx {
+        perf_mode::start(ctx.cmd_tx.clone(), perf_rx);
+    }
     slint::run_event_loop_until_quit()?;
     log::info!("[exit] event loop ended");
 

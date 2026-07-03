@@ -54,6 +54,7 @@ pub struct AppContext {
     pub pending_deep_link: Rc<RefCell<Option<crate::deep_link::DeepLink>>>,
     pub ipc_listener: Rc<RefCell<Option<crate::ipc::IpcListener>>>,
     pub snapshot_loader: Rc<SnapshotLoader>,
+    pub stream_frame_timer: Rc<crate::stream_frame_timer::StreamFrameTimer>,
     #[cfg(target_os = "windows")]
     pub native_frame_slot: mello_core::NativeFrameSlot,
     #[cfg(target_os = "windows")]

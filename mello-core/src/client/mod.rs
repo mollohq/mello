@@ -4,10 +4,13 @@ mod clip;
 mod connection;
 mod crew;
 mod diagnostics;
+mod game_services;
 mod presence;
 mod reconnect;
+mod stats_emit;
 mod stream_ffi;
 mod streaming;
+mod tick_gating;
 mod voice;
 
 use tokio::sync::mpsc;
@@ -15,7 +18,6 @@ use tokio::sync::mpsc;
 use crate::command::Command;
 use crate::config::Config;
 use crate::events::Event;
-use crate::game_db::GameDatabase;
 use crate::game_sensing::GameSensor;
 use crate::game_state::GameStateManager;
 use crate::giphy::GiphyClient;
@@ -25,7 +27,7 @@ use crate::stream::manager::StreamSession;
 use crate::stream::pacer::PacingTelemetry;
 use crate::stream::sink::PacketSink;
 use crate::stream::sink_p2p::P2PFanoutSink;
-use crate::telemetry::{self, AdapterRegistry, TelemetryListener, TELEMETRY_PORT};
+use crate::telemetry::{AdapterRegistry, TelemetryListener, TELEMETRY_PORT};
 use crate::voice::{SignalEnvelope, SignalMessage, SignalPurpose, VoiceManager};
 
 use std::collections::HashMap;
@@ -109,6 +111,13 @@ pub struct Client {
     #[allow(dead_code)]
     telemetry_listener: Option<TelemetryListener>,
     enable_game_sensor: bool,
+    emit_process_stats: bool,
+    game_event_rx:
+        std::sync::Mutex<Option<std::sync::mpsc::Receiver<crate::game_sensing::GameEvent>>>,
+    telemetry_event_rx:
+        std::sync::Mutex<Option<std::sync::mpsc::Receiver<crate::telemetry::TelemetryEvent>>>,
+    telemetry_registry: Option<Arc<AdapterRegistry>>,
+    telemetry_token: Option<String>,
     clip_was_playing: bool,
     clip_tick_counter: u8,
     host_pacing_last: Option<PacingTelemetry>,
@@ -138,6 +147,9 @@ impl Client {
             frame_consumed,
             frame_lifecycle,
             true,
+            // emit_process_stats: 1 Hz MelloStats for the debug panel (spec 15)
+            // and the perf harness. Cheap (one proc_pid_rusage/s).
+            true,
         )
     }
 
@@ -163,6 +175,7 @@ impl Client {
         frame_consumed: Arc<std::sync::atomic::AtomicBool>,
         frame_lifecycle: FrameLifecycleSlot,
         enable_game_sensor: bool,
+        emit_process_stats: bool,
     ) -> Self {
         Self {
             nakama: NakamaClient::new(config),
@@ -194,6 +207,11 @@ impl Client {
             game_sensor: None,
             telemetry_listener: None,
             enable_game_sensor,
+            emit_process_stats,
+            game_event_rx: std::sync::Mutex::new(None),
+            telemetry_event_rx: std::sync::Mutex::new(None),
+            telemetry_registry: None,
+            telemetry_token: None,
             clip_was_playing: false,
             clip_tick_counter: 0,
             host_pacing_last: None,
@@ -204,61 +222,10 @@ impl Client {
 
     pub async fn run(&mut self, mut cmd_rx: mpsc::UnboundedReceiver<Command>) {
         log::info!("Mello client started, waiting for commands...");
-
-        // --- Game sensing ---
-        let game_event_rx = if self.enable_game_sensor {
-            let game_db = GameDatabase::load_bundled();
-            let mello_ctx = self.voice.mello_ctx();
-            let (sensor, game_event_rx) = GameSensor::start(mello_ctx, game_db);
-            self.game_sensor = Some(sensor);
-            log::info!("Game sensor started");
-            game_event_rx
-        } else {
-            let (_tx, rx) = std::sync::mpsc::channel();
-            log::info!("Game sensor disabled");
-            rx
-        };
-
-        // --- Game telemetry (CS2 GSI etc.) ---
-        // Adapters turn in-game state into match outcomes. The listener receives
-        // local POSTs; cfg install for a detected game happens in the drain loop.
-        let telemetry_registry = Arc::new(AdapterRegistry::with_defaults());
-        let telemetry_token = telemetry::load_or_create_token();
-        let telemetry_event_rx = if self.enable_game_sensor {
-            match TelemetryListener::start(telemetry_registry.clone(), telemetry_token.clone()) {
-                Ok((listener, rx)) => {
-                    self.telemetry_listener = Some(listener);
-                    rx
-                }
-                Err(e) => {
-                    log::warn!("[telemetry] listener failed to bind on {TELEMETRY_PORT}: {e}");
-                    let (_tx, rx) = std::sync::mpsc::channel();
-                    rx
-                }
-            }
-        } else {
-            let (_tx, rx) = std::sync::mpsc::channel();
-            rx
-        };
-
-        // Install adapter configs eagerly on startup. Games like CS2 only read
-        // their GSI config at launch, so installing on first detection alone
-        // would require a game restart; doing it here means the config is in
-        // place before the game is ever opened. Idempotent; a missing game just
-        // logs at debug.
         if self.enable_game_sensor {
-            for adapter in telemetry_registry.all() {
-                let adapter = adapter.clone();
-                let token = telemetry_token.clone();
-                tokio::task::spawn_blocking(move || {
-                    if let Err(e) = adapter.ensure_installed(&token, TELEMETRY_PORT) {
-                        log::debug!(
-                            "[telemetry] startup install for {} skipped: {e}",
-                            adapter.game_id()
-                        );
-                    }
-                });
-            }
+            log::info!("Game sensor deferred until post-auth connect");
+        } else {
+            log::info!("Game sensor disabled");
         }
 
         let mut signal_rx = self.nakama.take_signal_rx().unwrap();
@@ -273,26 +240,34 @@ impl Client {
                                    // Supervise the realtime WS: detect drops/half-open/sleep-wake and reconnect.
         let mut connection_tick = tokio::time::interval(tokio::time::Duration::from_secs(3));
         connection_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut stats_tick = tokio::time::interval(tokio::time::Duration::from_secs(1));
+        stats_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        stats_tick.tick().await;
 
         loop {
-            // Drain game events (non-blocking) before entering select!
-            while let Ok(game_event) = game_event_rx.try_recv() {
+            for game_event in self.drain_game_events() {
                 // Telemetry adapter side-effects on game start/stop: install the
                 // game's config on first detection, and reset adapter state on exit.
                 match &game_event {
                     crate::game_sensing::GameEvent::Started(game) => {
-                        if let Some(adapter) = telemetry_registry.get(&game.game_id) {
-                            let token = telemetry_token.clone();
-                            tokio::task::spawn_blocking(move || {
-                                if let Err(e) = adapter.ensure_installed(&token, TELEMETRY_PORT) {
-                                    log::warn!("[telemetry] ensure_installed failed: {e}");
-                                }
-                            });
+                        if let Some(registry) = self.telemetry_registry.as_ref() {
+                            if let Some(adapter) = registry.get(&game.game_id) {
+                                let token = self.telemetry_token.clone().unwrap_or_default();
+                                let adapter = adapter.clone();
+                                tokio::task::spawn_blocking(move || {
+                                    if let Err(e) = adapter.ensure_installed(&token, TELEMETRY_PORT)
+                                    {
+                                        log::warn!("[telemetry] ensure_installed failed: {e}");
+                                    }
+                                });
+                            }
                         }
                     }
                     crate::game_sensing::GameEvent::Stopped(game) => {
-                        if let Some(adapter) = telemetry_registry.get(&game.game_id) {
-                            adapter.reset();
+                        if let Some(registry) = self.telemetry_registry.as_ref() {
+                            if let Some(adapter) = registry.get(&game.game_id) {
+                                adapter.reset();
+                            }
                         }
                     }
                 }
@@ -316,8 +291,7 @@ impl Client {
                 }
             }
 
-            // Drain telemetry events (match outcomes) into the session.
-            while let Ok(tev) = telemetry_event_rx.try_recv() {
+            for tev in self.drain_telemetry_events() {
                 for ev in self.game_state.handle_telemetry(tev) {
                     let _ = self.event_tx.send(ev);
                 }
@@ -340,11 +314,13 @@ impl Client {
                         self.handle_presence(p);
                     }
                 }
-                _ = voice_tick.tick() => {
+                _ = voice_tick.tick(), if self.needs_voice_tick() => {
                     self.voice_tick().await;
-                    self.clip_playback_tick();
+                    if self.clip_was_playing {
+                        self.clip_playback_tick();
+                    }
                 }
-                _ = stream_tick.tick() => {
+                _ = stream_tick.tick(), if self.needs_stream_tick() => {
                     self.stream_tick().await;
                 }
                 _ = refresh_tick.tick() => {
@@ -352,6 +328,9 @@ impl Client {
                 }
                 _ = connection_tick.tick() => {
                     self.connection_tick().await;
+                }
+                _ = stats_tick.tick(), if self.emit_process_stats => {
+                    self.emit_stats_tick();
                 }
             }
         }

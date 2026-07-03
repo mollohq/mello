@@ -11,6 +11,8 @@ members = [
     "tools/rtp-client-test",
     "tools/sfu-stream-viewer-probe",
     "tools/voice-test-client",
+    "tools/perf-harness",
+    "tools/perf-scenarios",
 ]
 default-members = [
     "client",

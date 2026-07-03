@@ -1,4 +1,5 @@
 import { Theme, MelloTextInput } from "../theme.slint";
+import { ListView } from "std-widgets.slint";
 import { ChatMessageData, ChatLinkData, GifItemData, EmojiItemData, MentionMemberData } from "../types.slint";
 
 component LinkPill inherits Rectangle {
@@ -571,67 +572,39 @@ export component ChatPanel inherits Rectangle {
         Rectangle {
             vertical-stretch: 1;
 
-        feed := Flickable {
-            // feed id visible to scroll handlers below
+        feed := ListView {
+            // `feed` id is referenced by the delegates + the scroll/history timers.
+            // ListView virtualizes: only rows near the viewport are instantiated and
+            // drawn, so Skia no longer records the entire feed into one giant glyph
+            // stream — that was the ~180 MB idle allocation this migration removes.
             width: parent.width;
             height: parent.height;
 
-            property <bool> at-bottom: feed.viewport-height <= feed.height
-                || (-feed.viewport-y + feed.height) >= (feed.viewport-height - 32px);
-            property <bool> at-top: feed.viewport-y >= -8px;
+            property <bool> at-bottom: self.viewport-height <= self.height
+                || (-self.viewport-y + self.height) >= (self.viewport-height - 32px);
+            property <bool> at-top: self.viewport-y >= -8px;
             property <bool> was-at-top: false;
+            // Content height captured when older history is requested, so the prepend
+            // nudge below can keep the anchor message exactly in place (measured, not
+            // a fixed per-row estimate — correct for variable-height rows).
+            property <length> saved-viewport-height;
 
-            flicked => {
-                root.chat-viewport-changed(at-bottom);
-                if at-top && root.has-more-history && !root.loading-history {
+            changed viewport-y => {
+                root.chat-viewport-changed(self.at-bottom);
+                if self.at-top && !self.was-at-top && root.has-more-history && !root.loading-history {
+                    self.saved-viewport-height = self.viewport-height;
                     root.request-history();
                 }
+                self.was-at-top = self.at-top;
                 if root.more-menu-message-id != "" {
                     root.more-menu-message-id = "";
                 }
             }
 
-            changed viewport-y => {
-                root.chat-viewport-changed(at-bottom);
-                if at-top && !was-at-top && root.has-more-history && !root.loading-history {
-                    root.request-history();
-                }
-                was-at-top = at-top;
-            }
-
-            VerticalLayout {
-                width: feed.width;
-                spacing: 0px;
-                padding-top: 12px;
-                padding-bottom: 8px;
-                alignment: end;
-
-                if root.loading-history: Rectangle {
-                    height: 32px;
-                    Text {
-                        text: "Loading...";
-                        font-size: Theme.font-sm;
-                        color: Theme.text-tertiary;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
-                    }
-                }
-
-                if messages.length == 0 && !root.loading-history: Rectangle {
-                    vertical-stretch: 1;
-
-                    Text {
-                        text: "No messages yet";
-                        font-size: Theme.font-md;
-                        color: Theme.text-tertiary;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
-                    }
-                }
-
-                for msg[idx] in messages: VerticalLayout {
+            for msg[idx] in messages: VerticalLayout {
                     width: feed.width;
                     padding-top: msg.is-unread-divider ? 8px : (msg.is-group-start && idx > 0 ? 16px : 2px);
+                    padding-bottom: idx == messages.length - 1 ? 24px : 0px;
 
                     // Unread divider — stretch wrappers for lines; inner rect centers 1px rule (y ignored on HL children)
                     if msg.is-unread-divider: HorizontalLayout {
@@ -981,13 +954,32 @@ export component ChatPanel inherits Rectangle {
                         }
                     }
                 }
+        }
 
-                // Bottom spacer so the last message isn't clipped above the composer
-                if messages.length > 0: Rectangle {
-                    height: 24px;
-                    width: parent.width;
-                }
+        // Loading-older-history indicator (overlay; ListView can't host non-delegate rows)
+        if root.loading-history: Rectangle {
+            x: 0;
+            y: 0;
+            width: parent.width;
+            height: 32px;
+            background: Theme.surface;
+
+            Text {
+                text: "Loading...";
+                font-size: Theme.font-sm;
+                color: Theme.text-tertiary;
+                horizontal-alignment: center;
+                vertical-alignment: center;
             }
+        }
+
+        // Empty state (overlay, centered)
+        if messages.length == 0 && !root.loading-history: Text {
+            text: "No messages yet";
+            font-size: Theme.font-md;
+            color: Theme.text-tertiary;
+            horizontal-alignment: center;
+            vertical-alignment: center;
         }
 
         // --- "New messages" floating pill ---
@@ -1032,7 +1024,9 @@ export component ChatPanel inherits Rectangle {
             interval: 1ms;
             running: root.history-prepended-rows > 0;
             triggered => {
-                feed.viewport-y = feed.viewport-y + root.history-prepended-rows * 56px;
+                // Keep the anchor message in place: shift the viewport by the exact
+                // height of the newly-prepended content (measured), not a per-row guess.
+                feed.viewport-y += feed.viewport-height - feed.saved-viewport-height;
                 root.history-prepended-done();
             }
         }

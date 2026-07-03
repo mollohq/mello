@@ -707,6 +707,11 @@ impl VoiceManager {
         self.active
     }
 
+    /// True when the 20ms client tick must poll libmello (in-call or loopback).
+    pub fn needs_periodic_tick(&self) -> bool {
+        self.active || self.loopback
+    }
+
     pub fn set_ice_servers(&mut self, urls: Vec<String>) {
         self.mesh.set_ice_servers(urls);
     }

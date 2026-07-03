@@ -135,6 +135,7 @@ pub unsafe extern "C" fn mello_core_create(
             frame_consumed,
             frame_lifecycle,
             false, // enable_game_sensor
+            false, // emit_process_stats
         );
         client.run(cmd_rx).await;
     });

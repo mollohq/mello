@@ -1,0 +1,43 @@
+{
+  "platform": {
+    "os": "macos",
+    "arch": "aarch64"
+  },
+  "scenarios": {
+    "idle-connected": {
+      "rss_mb": {
+        "p50": 62.671875,
+        "p95": 62.734375
+      },
+      "cpu_pct": {
+        "p50": 0.9,
+        "p95": 2.4
+      }
+    },
+    "voice-muted": {
+      "rss_mb": {
+        "p50": 105.703125,
+        "p95": 105.71875
+      },
+      "cpu_pct": {
+        "p50": 0.8,
+        "p95": 1.9
+      }
+    },
+    "voice-speaking": {
+      "rss_mb": {
+        "p50": 124.328125,
+        "p95": 124.375
+      },
+      "cpu_pct": {
+        "p50": 2.9,
+        "p95": 4.8
+      }
+    }
+  },
+  "tolerances": {
+    "rss_mb_p95_pct": 10.0,
+    "cpu_pct_p95_pct": 25.0,
+    "cpu_pct_p95_abs_pp": 2.0
+  }
+}

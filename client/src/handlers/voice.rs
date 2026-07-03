@@ -5,8 +5,8 @@ use slint::Model;
 
 use crate::app_context::AppContext;
 use crate::converters::{
-    channel_to_ui, channels_to_ui, set_level_history, update_active_crew_card, voice_members_to_ui,
-    VoiceUiCtx,
+    channel_to_ui, channels_to_ui, set_level_history, set_member_speaking,
+    set_voice_member_speaking, update_active_crew_card, voice_members_to_ui, VoiceUiCtx,
 };
 use crate::{AudioDeviceData, MemberData, VoiceChannelData, VoiceChannelMember};
 
@@ -57,48 +57,8 @@ pub fn handle(ctx: &AppContext, event: Event) {
         } => {
             let _ = ctx.cmd_tx.send(Command::VoiceSpeaking { speaking });
 
-            let current = ctx.app.get_members();
-            let members: Vec<MemberData> = (0..current.row_count())
-                .map(|i| {
-                    let mut m = current.row_data(i).unwrap();
-                    if m.id == member_id.as_str() {
-                        m.speaking = speaking;
-                    }
-                    m
-                })
-                .collect();
-            let rc = Rc::new(slint::VecModel::from(members));
-            ctx.app.set_members(rc.into());
-            update_active_crew_card(&ctx.app);
-
-            let current_channels = ctx.app.get_voice_channels();
-            let mut changed = false;
-            let updated_channels: Vec<VoiceChannelData> = (0..current_channels.row_count())
-                .map(|i| {
-                    let mut ch = current_channels.row_data(i).unwrap();
-                    let ch_members: Vec<VoiceChannelMember> = (0..ch.members.row_count())
-                        .map(|j| ch.members.row_data(j).unwrap())
-                        .collect();
-                    if ch_members.iter().any(|m| m.id == member_id.as_str()) {
-                        let new_members: Vec<VoiceChannelMember> = ch_members
-                            .into_iter()
-                            .map(|mut m| {
-                                if m.id == member_id.as_str() {
-                                    m.speaking = speaking;
-                                    changed = true;
-                                }
-                                m
-                            })
-                            .collect();
-                        ch.members = Rc::new(slint::VecModel::from(new_members)).into();
-                    }
-                    ch
-                })
-                .collect();
-            if changed {
-                ctx.app
-                    .set_voice_channels(Rc::new(slint::VecModel::from(updated_channels)).into());
-            }
+            set_member_speaking(&ctx.app, member_id.as_str(), speaking);
+            set_voice_member_speaking(&ctx.app, member_id.as_str(), speaking);
         }
         Event::MicPermissionChanged { granted, denied } => {
             log::info!(

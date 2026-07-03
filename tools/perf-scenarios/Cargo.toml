@@ -1,0 +1,11 @@
+[package]
+name = "perf-scenarios"
+version = "0.0.0-DEV"
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+
+[dependencies]
+mello-core = { path = "../../mello-core" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

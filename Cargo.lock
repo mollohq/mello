@@ -4072,6 +4072,7 @@ dependencies = [
  "notify-rust",
  "open",
  "paste",
+ "perf-scenarios",
  "rand 0.8.5",
  "raw-window-handle",
  "rdev",
@@ -4108,6 +4109,7 @@ dependencies = [
  "chrono",
  "futures",
  "keyring",
+ "libc",
  "log",
  "mello-sys",
  "rand 0.8.5",
@@ -5206,6 +5208,28 @@ name = "percent-encoding"
 version = "2.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
+
+[[package]]
+name = "perf-harness"
+version = "0.0.0-DEV"
+dependencies = [
+ "env_logger",
+ "log",
+ "mello-core",
+ "perf-scenarios",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "perf-scenarios"
+version = "0.0.0-DEV"
+dependencies = [
+ "mello-core",
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "petgraph"

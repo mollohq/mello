@@ -1,0 +1,43 @@
+{
+  "run_id": "perf-1782908740-62669",
+  "git": {
+    "head": "ed7b2fdfacf8e0bfd8766fc47e5b3f9123a3f0e1",
+    "branch": "perf/dont-be-stupid"
+  },
+  "platform": {
+    "os": "macos",
+    "arch": "aarch64"
+  },
+  "build": {
+    "profile": "release"
+  },
+  "scenarios": [
+    {
+      "id": "gui-idle",
+      "duration_s": 30,
+      "samples": 30,
+      "footprint_mb": {
+        "min": 368.87927,
+        "p50": 369.72302,
+        "p95": 369.75427,
+        "max": 826.3168
+      },
+      "wakeups_per_s": 108.53985,
+      "cpu_pct": 0.024198178
+    },
+    {
+      "id": "gui-voice",
+      "duration_s": 30,
+      "samples": 30,
+      "footprint_mb": {
+        "min": 384.42615,
+        "p50": 385.4262,
+        "p95": 842.1137,
+        "max": 842.1137
+      },
+      "wakeups_per_s": 171.24802,
+      "cpu_pct": 0.08883166
+    }
+  ],
+  "regressions": []
+}

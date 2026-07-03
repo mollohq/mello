@@ -1,4 +1,4 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
@@ -15,12 +15,12 @@ struct AnimEntry {
     paused: bool,
 }
 
+type FrameHandler = Rc<dyn Fn(&str, &slint::Image)>;
+
 /// Drives GIF frame animation via a single shared Slint Timer.
 /// Keyed by URL so the same GIF isn't decoded twice.
 ///
-/// `max_loops`: if `Some(n)`, each GIF pauses after `n` full loops.
-/// Call `resume` to restart the loop counter (e.g. on hover).
-/// Clone is cheap (Rc/Arc internals).
+/// The timer starts only when at least one GIF is active (lazy).
 #[derive(Clone)]
 pub struct GifAnimator {
     entries: Rc<RefCell<HashMap<String, AnimEntry>>>,
@@ -28,6 +28,8 @@ pub struct GifAnimator {
     timer: Rc<slint::Timer>,
     tick_ms: u32,
     max_loops: Option<u32>,
+    timer_running: Rc<Cell<bool>>,
+    on_frame: Rc<RefCell<Option<FrameHandler>>>,
 }
 
 impl GifAnimator {
@@ -38,6 +40,8 @@ impl GifAnimator {
             timer: Rc::new(slint::Timer::default()),
             tick_ms,
             max_loops,
+            timer_running: Rc::new(Cell::new(false)),
+            on_frame: Rc::new(RefCell::new(None)),
         }
     }
 
@@ -46,19 +50,32 @@ impl GifAnimator {
         self.inbox.clone()
     }
 
-    /// Start the animation loop. `on_frame` is called with (url, new_image)
-    /// each time a GIF advances to a new frame. Also called once per URL when
-    /// frames first arrive from the inbox (with the first frame).
+    /// Register the frame callback. The 50ms timer starts lazily on first GIF activity.
     pub fn start(&self, on_frame: impl Fn(&str, &slint::Image) + 'static) {
+        *self.on_frame.borrow_mut() = Some(Rc::new(on_frame));
+    }
+
+    fn ensure_timer_running(&self) {
+        if self.timer_running.get() {
+            return;
+        }
+        let Some(handler) = self.on_frame.borrow().clone() else {
+            return;
+        };
+        self.timer_running.set(true);
+
         let entries = self.entries.clone();
         let inbox = self.inbox.clone();
         let tick = self.tick_ms;
         let max_loops = self.max_loops;
+        // Weak (not Rc) to avoid a timer -> closure -> timer reference cycle.
+        let timer_weak = Rc::downgrade(&self.timer);
+        let running = self.timer_running.clone();
+
         self.timer.start(
             slint::TimerMode::Repeated,
             Duration::from_millis(tick as u64),
             move || {
-                // Drain inbox: convert raw bytes → slint::Image on the main thread
                 {
                     let mut pending = inbox.lock().unwrap();
                     for (url, data) in pending.drain(..) {
@@ -75,7 +92,7 @@ impl GifAnimator {
                             .collect();
 
                         if let Some(first) = images.first() {
-                            on_frame(&url, first);
+                            handler(&url, first);
                         }
 
                         entries.borrow_mut().insert(
@@ -92,35 +109,54 @@ impl GifAnimator {
                     }
                 }
 
-                // Advance frames
-                let mut map = entries.borrow_mut();
-                for (url, entry) in map.iter_mut() {
-                    if entry.paused || entry.frames.len() <= 1 {
-                        continue;
-                    }
-                    entry.elapsed += tick;
-                    let delay = entry.delays[entry.current];
-                    if entry.elapsed >= delay {
-                        entry.elapsed -= delay;
-                        let prev = entry.current;
-                        entry.current = (entry.current + 1) % entry.frames.len();
+                {
+                    let mut map = entries.borrow_mut();
+                    for (url, entry) in map.iter_mut() {
+                        if entry.paused || entry.frames.len() <= 1 {
+                            continue;
+                        }
+                        entry.elapsed += tick;
+                        let delay = entry.delays[entry.current];
+                        if entry.elapsed >= delay {
+                            entry.elapsed -= delay;
+                            let prev = entry.current;
+                            entry.current = (entry.current + 1) % entry.frames.len();
 
-                        // Wrapped back to frame 0 → completed a loop
-                        if entry.current < prev {
-                            entry.loops_done += 1;
-                            if let Some(limit) = max_loops {
-                                if entry.loops_done >= limit {
-                                    entry.paused = true;
-                                    continue;
+                            if entry.current < prev {
+                                entry.loops_done += 1;
+                                if let Some(limit) = max_loops {
+                                    if entry.loops_done >= limit {
+                                        entry.paused = true;
+                                        continue;
+                                    }
                                 }
                             }
-                        }
 
-                        on_frame(url, &entry.frames[entry.current]);
+                            handler(url, &entry.frames[entry.current]);
+                        }
+                    }
+                }
+
+                // Nothing left to animate and nothing pending: stop the timer so
+                // an idle client with a finished/paused GIF in view costs zero
+                // wakeups. `note_activity()` / `resume()` restart it.
+                let animating = {
+                    let map = entries.borrow();
+                    map.values().any(|e| !e.paused && e.frames.len() > 1)
+                };
+                if !animating && inbox.lock().unwrap().is_empty() {
+                    running.set(false);
+                    if let Some(timer) = timer_weak.upgrade() {
+                        timer.stop();
                     }
                 }
             },
         );
+    }
+
+    /// Call when a new GIF URL is queued for decode.
+    pub fn note_activity(&self) {
+        self.ensure_timer_running();
     }
 
     /// Unpause a GIF and reset its loop counter (e.g. on hover).
@@ -130,6 +166,7 @@ impl GifAnimator {
                 entry.paused = false;
                 entry.loops_done = 0;
                 entry.elapsed = 0;
+                self.ensure_timer_running();
             }
         }
     }
@@ -137,6 +174,7 @@ impl GifAnimator {
     /// Drop all frame data and stop the timer.
     pub fn stop_and_clear(&self) {
         self.timer.stop();
+        self.timer_running.set(false);
         self.entries.borrow_mut().clear();
         self.inbox.lock().unwrap().clear();
     }

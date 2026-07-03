@@ -508,6 +508,11 @@ pub enum Event {
         message: String,
     },
 
+    /// Periodic runtime snapshot (1 Hz) for debug panel and perf harness.
+    StatsUpdated {
+        stats: crate::stats::MelloStats,
+    },
+
     Error {
         message: String,
     },

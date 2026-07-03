@@ -386,7 +386,7 @@ impl super::Client {
 
         let mut result = self
             .nakama
-            .list_display_chat_messages(&channel_id, 50, None)
+            .list_display_chat_messages(&channel_id, 25, None)
             .await;
 
         if let Ok((ref messages, _)) = result {
@@ -398,7 +398,7 @@ impl super::Client {
                 channel_id = crew_id.to_string();
                 result = self
                     .nakama
-                    .list_display_chat_messages(&channel_id, 50, None)
+                    .list_display_chat_messages(&channel_id, 25, None)
                     .await;
             }
         }

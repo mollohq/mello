@@ -293,6 +293,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             frame_consumed,
             frame_lifecycle,
             false,
+            false,
         );
         client.run(cmd_rx).await;
     });

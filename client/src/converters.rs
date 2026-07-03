@@ -49,6 +49,15 @@ pub fn chat_messages_to_slint(
     let mut out = Vec::with_capacity(display.len() + 1);
 
     for d in display {
+        // TEMP diagnostic (eprintln → stderr, no logger needed). Runs on every
+        // chat render, so grep + `sort -u` to dedupe. Finds the message whose
+        // content makes Slint's StyledText render blow up to ~180 MB.
+        eprintln!(
+            "[chat-dump] id={} len={} content={:?}",
+            d.message_id,
+            d.content.chars().count(),
+            d.content
+        );
         if let Some(unread_id) = opts.first_unread_id {
             if d.message_id == unread_id {
                 out.push(ChatMessageData {
@@ -77,6 +86,28 @@ pub fn chat_messages_to_slint(
             (d.content.clone(), false, Vec::new())
         } else {
             mello_core::chat::prepare_body_for_markdown(&d.content, opts.user_id, opts.member_names)
+        };
+
+        // Guard: one message must never render into a giant Skia glyph buffer.
+        // `wrap: word-wrap` in the .slint handles long messages that contain
+        // spaces; this bounds the glyph count for unbroken/huge pastes (a
+        // spaceless multi-MB string is millions of glyphs that word-wrap can't
+        // break), which is what made a single pasted log cost ~180 MB. The full
+        // untruncated body is still kept in `text` for copy/edit.
+        let display_text = {
+            const MAX_DISPLAY_CHARS: usize = 8000;
+            let char_count = display_text.chars().count();
+            if char_count > MAX_DISPLAY_CHARS {
+                log::warn!(
+                    "[chat] message {} body is {} chars — truncating display to {} to bound render cost",
+                    d.message_id, char_count, MAX_DISPLAY_CHARS
+                );
+                let mut truncated: String = display_text.chars().take(MAX_DISPLAY_CHARS).collect();
+                truncated.push('…');
+                truncated
+            } else {
+                display_text
+            }
         };
 
         let display_styled: StyledText = if d.is_system || d.is_deleted {
@@ -160,17 +191,20 @@ pub fn apply_unread_to_crews(app: &MainWindow, tracker: &mello_core::chat::Unrea
     app.set_crews(Rc::new(slint::VecModel::from(updated)).into());
 }
 
-/// Scan messages for GIFs and kick off animated frame fetches.
+/// Scan recent messages for GIFs and kick off animated frame fetches.
 pub fn fetch_gif_images_for_messages(
     model: &Rc<slint::VecModel<ChatMessageData>>,
     rt: &tokio::runtime::Handle,
     chat_anim: &crate::gif_animator::GifAnimator,
 ) {
+    const MAX_GIF_PREFETCH: usize = 8;
     let inbox = chat_anim.inbox();
-    for i in 0..model.row_count() {
+    let start = model.row_count().saturating_sub(MAX_GIF_PREFETCH);
+    for i in start..model.row_count() {
         if let Some(item) = model.row_data(i) {
             let url = item.gif_preview_url.to_string();
             if item.is_gif && !url.is_empty() && !chat_anim.has_url(&url) {
+                chat_anim.note_activity();
                 crate::image_cache::spawn_gif_fetch(url, rt, &inbox);
             }
         }
@@ -325,6 +359,43 @@ pub fn update_active_crew_card(app: &MainWindow) {
         })
         .collect();
     app.set_crews(Rc::new(slint::VecModel::from(updated)).into());
+}
+
+/// Update one member's speaking flag in the crew member list without rebuilding models.
+pub fn set_member_speaking(app: &MainWindow, member_id: &str, speaking: bool) -> bool {
+    let members = app.get_members();
+    for i in 0..members.row_count() {
+        if let Some(mut m) = members.row_data(i) {
+            if m.id == member_id && m.speaking != speaking {
+                m.speaking = speaking;
+                members.set_row_data(i, m);
+                update_active_crew_card(app);
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Update one voice-channel member row without rebuilding every channel model.
+pub fn set_voice_member_speaking(app: &MainWindow, member_id: &str, speaking: bool) -> bool {
+    let channels = app.get_voice_channels();
+    for i in 0..channels.row_count() {
+        let Some(ch) = channels.row_data(i) else {
+            continue;
+        };
+        let ch_members = ch.members;
+        for j in 0..ch_members.row_count() {
+            if let Some(mut m) = ch_members.row_data(j) {
+                if m.id == member_id && m.speaking != speaking {
+                    m.speaking = speaking;
+                    ch_members.set_row_data(j, m);
+                    return true;
+                }
+            }
+        }
+    }
+    false
 }
 
 pub fn set_level_history(app: &MainWindow, hist: &DebugHistory) {

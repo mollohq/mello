@@ -1,0 +1,8 @@
+{
+  "name": "idle-connected",
+  "steps": [
+    { "action": "device_auth", "device_id": "perf-harness-idle" },
+    { "action": "expect_event", "event": "DeviceAuthed", "timeout_ms": 20000 },
+    { "action": "sample", "duration_s": 30 }
+  ]
+}

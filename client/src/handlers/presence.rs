@@ -6,10 +6,7 @@ use slint::Model;
 
 use super::stream_cards::sync_active_stream_cards;
 use crate::app_context::AppContext;
-use crate::converters::{
-    channels_to_ui, chat_messages_to_slint, make_initials, member_names_from_app,
-    update_active_crew_card, ChatConvertOptions, VoiceUiCtx,
-};
+use crate::converters::{channels_to_ui, make_initials, update_active_crew_card, VoiceUiCtx};
 use crate::{avatar, CrewData, MemberData};
 
 pub fn handle(ctx: &AppContext, event: Event) {
@@ -46,40 +43,26 @@ pub fn handle(ctx: &AppContext, event: Event) {
                 return;
             };
             let is_local = user_id == ctx.app.get_user_id().as_str();
+            let ui_img = crate::avatar::downscale_for_ui(slint_img.clone());
             if is_local {
-                ctx.app.set_user_avatar(slint_img.clone());
+                ctx.app.set_user_avatar(ui_img.clone());
                 ctx.app.set_has_user_avatar(true);
             }
 
-            ctx.avatar_cache
-                .borrow_mut()
-                .insert(user_id.clone(), slint_img.clone());
+            crate::avatar::cache_insert(
+                &mut ctx.avatar_cache.borrow_mut(),
+                user_id.clone(),
+                ui_img.clone(),
+            );
 
-            {
-                let uid = ctx.app.get_user_id().to_string();
-                let uav = ctx.app.get_user_avatar();
-                let huav = ctx.app.get_has_user_avatar();
-                let member_names = member_names_from_app(&ctx.app);
-                let first_unread = ctx.chat_scroll.first_unread_id();
-                let opts = ChatConvertOptions {
-                    user_id: &uid,
-                    user_avatar: &uav,
-                    has_user_avatar: huav,
-                    avatar_cache: &ctx.avatar_cache.borrow(),
-                    member_names: &member_names,
-                    first_unread_id: first_unread.as_deref(),
-                };
-                let display = chat_messages_to_slint(&ctx.chat_messages.borrow(), &opts);
-                let rc = Rc::new(slint::VecModel::from(display));
-                ctx.app.set_messages(rc.into());
-            }
+            crate::avatar::update_chat_avatars_for_sender(&ctx.app, &user_id, &ui_img);
 
             {
                 let members_model = ctx.app.get_members();
                 for i in 0..members_model.row_count() {
                     if let Some(mut m) = members_model.row_data(i) {
                         if m.id == user_id.as_str() {
-                            m.avatar = slint_img.clone();
+                            m.avatar = ui_img.clone();
                             m.has_avatar = true;
                             members_model.set_row_data(i, m);
                             break;
@@ -97,7 +80,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
                         for j in 0..members.row_count() {
                             if let Some(mut m) = members.row_data(j) {
                                 if m.id == user_id.as_str() {
-                                    m.avatar = slint_img.clone();
+                                    m.avatar = ui_img.clone();
                                     m.has_avatar = true;
                                     members.set_row_data(j, m);
                                     changed = true;
@@ -552,9 +535,11 @@ pub fn handle(ctx: &AppContext, event: Event) {
                                     })
                                 };
                                 if let Some(img) = img {
-                                    ctx.avatar_cache
-                                        .borrow_mut()
-                                        .insert(cm.user_id.clone(), img);
+                                    avatar::cache_insert(
+                                        &mut ctx.avatar_cache.borrow_mut(),
+                                        cm.user_id.clone(),
+                                        img,
+                                    );
                                     continue;
                                 }
                             }
@@ -854,10 +839,11 @@ pub fn handle(ctx: &AppContext, event: Event) {
                     })
                 };
                 if let Some(img) = slint_img {
-                    ctx.app.set_user_avatar(img.clone());
+                    let ui_img = avatar::downscale_for_ui(img);
+                    ctx.app.set_user_avatar(ui_img.clone());
                     ctx.app.set_has_user_avatar(true);
                     let uid = ctx.app.get_user_id().to_string();
-                    ctx.avatar_cache.borrow_mut().insert(uid, img);
+                    avatar::cache_insert(&mut ctx.avatar_cache.borrow_mut(), uid, ui_img);
                 }
             }
             ctx.app

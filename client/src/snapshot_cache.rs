@@ -10,7 +10,7 @@ use image::imageops::FilterType;
 use image::GenericImageView;
 
 const CACHE_DIR: &str = "mello_snapshots";
-const MAX_CACHE_BYTES: usize = 50 * 1024 * 1024;
+const MAX_CACHE_BYTES: usize = 15 * 1024 * 1024;
 pub const THUMB_MAX_WIDTH: u32 = 480;
 
 static CACHE: std::sync::OnceLock<Mutex<SnapshotCache>> = std::sync::OnceLock::new();

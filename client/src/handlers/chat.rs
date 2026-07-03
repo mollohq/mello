@@ -65,6 +65,8 @@ pub fn handle(ctx: &AppContext, event: Event) {
                     .cmd_tx
                     .send(Command::FetchUserAvatars { user_ids: uncached });
             }
+            // TEMP diagnostic: dump every loaded message so we can spot the one
+            // whose content makes Slint's StyledText render allocate ~180 MB.
             *ctx.chat_messages.borrow_mut() = messages;
             ctx.app.set_has_more_history(has_more_history);
             ctx.chat_scroll.reset_on_messages_loaded();
@@ -191,6 +193,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
             });
 
             let inbox = ctx.gif_popover_anim.inbox();
+            ctx.gif_popover_anim.note_activity();
             for g in &gifs {
                 image_cache::spawn_gif_fetch(g.preview.clone(), &ctx.rt, &inbox);
             }

@@ -1,6 +1,7 @@
 use image::AnimationDecoder;
 
-const MAX_GIF_FRAMES: usize = 120;
+const MAX_GIF_FRAMES: usize = 32;
+const MAX_GIF_DIMENSION: u32 = 320;
 
 /// Raw decoded GIF frame data (Send-safe, created on async runtime).
 pub struct GifFrameData {
@@ -25,7 +26,7 @@ pub fn spawn_gif_fetch(
 }
 
 async fn fetch_gif_frames(url: &str) -> Option<GifFrameData> {
-    let http = reqwest::Client::new();
+    let http = crate::http::shared();
     let bytes = http.get(url).send().await.ok()?.bytes().await.ok()?;
 
     let cursor = std::io::Cursor::new(bytes.as_ref());
@@ -47,7 +48,29 @@ async fn fetch_gif_frames(url: &str) -> Option<GifFrameData> {
 
         let buf = frame.into_buffer();
         let (w, h) = (buf.width(), buf.height());
-        frames.push((buf.into_raw(), w, h));
+        let rgba = buf.into_raw();
+        let (rgba, w, h) = if w > MAX_GIF_DIMENSION || h > MAX_GIF_DIMENSION {
+            let Some(img) = image::RgbaImage::from_raw(w, h, rgba) else {
+                continue;
+            };
+            let (nw, nh) = if w >= h {
+                (
+                    MAX_GIF_DIMENSION,
+                    (h as u64 * MAX_GIF_DIMENSION as u64 / w as u64).max(1) as u32,
+                )
+            } else {
+                (
+                    (w as u64 * MAX_GIF_DIMENSION as u64 / h as u64).max(1) as u32,
+                    MAX_GIF_DIMENSION,
+                )
+            };
+            let resized =
+                image::imageops::resize(&img, nw, nh, image::imageops::FilterType::Triangle);
+            (resized.into_raw(), nw, nh)
+        } else {
+            (rgba, w, h)
+        };
+        frames.push((rgba, w, h));
     }
 
     Some(GifFrameData { frames, delays })

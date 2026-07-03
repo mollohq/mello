@@ -1,0 +1,41 @@
+{
+  "run_id": "perf-1782847845-37425",
+  "git": {
+    "head": "ed7b2fdfacf8e0bfd8766fc47e5b3f9123a3f0e1",
+    "branch": "main"
+  },
+  "platform": {
+    "os": "macos",
+    "arch": "aarch64"
+  },
+  "build": {
+    "profile": "release"
+  },
+  "scenarios": [
+    {
+      "id": "gui-idle",
+      "duration_s": 30,
+      "samples": 30,
+      "rss_mb": {
+        "min": 541.5156,
+        "p50": 555.8594,
+        "p95": 556.3281,
+        "max": 556.3281
+      },
+      "cpu_pct": {
+        "p50": 1.4,
+        "p95": 12.5,
+        "max": 15.9
+      }
+    }
+  ],
+  "regressions": [
+    {
+      "scenario": "gui-idle",
+      "metric": "cpu_pct_p95",
+      "baseline": 3.6,
+      "actual": 12.5,
+      "tolerance_pct": 25.0
+    }
+  ]
+}
