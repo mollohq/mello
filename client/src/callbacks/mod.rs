@@ -4,6 +4,7 @@ mod clip;
 mod crew;
 mod crew_settings;
 mod game;
+mod games;
 mod onboarding;
 mod settings;
 mod streaming;
@@ -24,4 +25,5 @@ pub fn wire_all(ctx: &AppContext) {
     settings::wire(ctx);
     onboarding::wire(ctx);
     game::wire(ctx);
+    games::wire(ctx);
 }

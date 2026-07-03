@@ -44,6 +44,12 @@ pub struct AppContext {
     /// Single-shot timer that auto-dismisses the post-game prompt after 30 s
     /// without interaction (spec 17 §7.2). Cancelled when the user interacts.
     pub post_game_timer: Rc<RefCell<Option<slint::Timer>>>,
+    /// Set when a Riot-linkable game session just ended; the next RiotStatus
+    /// event decides whether to surface the post-game "connect" CTA.
+    pub riot_cta_pending: Rc<Cell<bool>>,
+    /// Games settings rows as last received from core; merged with the
+    /// disabled set from Settings when pushed to the UI.
+    pub games_integrations: Rc<RefCell<Vec<mello_core::events::GameIntegrationStatus>>>,
     pub muted_before_deafen: Rc<Cell<bool>>,
     pub updater: Rc<RefCell<Option<Updater>>>,
     pub hotkey_mgr: Rc<RefCell<crate::platform::hotkeys::HotkeyManager>>,

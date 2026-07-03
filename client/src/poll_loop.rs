@@ -46,6 +46,8 @@ pub fn start(
         avatar_shuffle_timer: ctx.avatar_shuffle_timer.clone(),
         diag_autostop_timer: ctx.diag_autostop_timer.clone(),
         post_game_timer: ctx.post_game_timer.clone(),
+        riot_cta_pending: ctx.riot_cta_pending.clone(),
+        games_integrations: ctx.games_integrations.clone(),
         muted_before_deafen: ctx.muted_before_deafen.clone(),
         updater: ctx.updater.clone(),
         hotkey_mgr: ctx.hotkey_mgr.clone(),

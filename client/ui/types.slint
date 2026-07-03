@@ -189,6 +189,22 @@ export struct AudioDeviceData {
     is-default: bool,
 }
 
+export struct GameIntegrationData {
+    game-id: string,
+    name: string,
+    // Badge styling (games.json); icon images can replace the badge later.
+    short-name: string,
+    color: color,
+    // "found" | "not-found" | "" (unknown)
+    install-status: string,
+    // Enabling writes a config file for the game to pick up.
+    writes-files: bool,
+    note: string,
+    enabled: bool,
+    // Game supports linking a Riot account for verified stats.
+    has-account-link: bool,
+}
+
 export struct CaptureSourceData {
     id: string,
     name: string,

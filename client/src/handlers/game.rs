@@ -1,4 +1,4 @@
-use mello_core::Event;
+use mello_core::{Command, Event};
 use slint::ComponentHandle;
 
 use crate::app_context::AppContext;
@@ -7,10 +7,14 @@ use crate::MainWindow;
 const POST_GAME_MIN_DURATION: u32 = 5;
 /// Post-game prompt auto-dismisses after this long without interaction (spec 17 §7.2).
 const POST_GAME_TIMEOUT_SECS: u64 = 30;
+/// Games where linking a Riot account unlocks server-verified results — the
+/// post-game "connect" CTA is offered after sessions of these.
+const RIOT_LINK_GAMES: &[&str] = &["league-of-legends"];
 
 pub fn handle(ctx: &AppContext, event: Event) {
     match event {
         Event::GameDetected {
+            game_id,
             game_name,
             short_name,
             color,
@@ -18,18 +22,20 @@ pub fn handle(ctx: &AppContext, event: Event) {
         } => {
             log::info!("[ui] game detected: {}", game_name);
             ctx.app.set_game_active(true);
+            ctx.app.set_game_id(game_id.into());
             ctx.app.set_game_name(game_name.into());
             ctx.app.set_game_short_name(short_name.into());
             let parsed = slint::Color::from_argb_encoded(parse_hex_color(&color));
             ctx.app.set_game_color(parsed);
-            // Clear any stale summary/hint from a previous session.
+            // Clear any stale summary/hint/CTA from a previous session.
             ctx.app.set_game_summary("".into());
             ctx.app.set_telemetry_hint("".into());
+            ctx.app.set_riot_cta_visible(false);
             ctx.app.set_can_stream(true);
             ctx.app.set_bar_state(1);
         }
         Event::GameEnded {
-            game_id: _,
+            game_id,
             game_name,
             short_name: _,
             duration_min,
@@ -44,6 +50,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
             if duration_min >= POST_GAME_MIN_DURATION {
                 ctx.app.set_bar_state(2);
                 start_post_game_timeout(ctx);
+                maybe_offer_riot_link(ctx, &game_id);
             } else {
                 ctx.app.set_game_active(false);
                 ctx.app.set_bar_state(0);
@@ -54,6 +61,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
             ctx.app.set_game_active(false);
             ctx.app.set_can_stream(false);
             ctx.app.set_game_summary("".into());
+            ctx.app.set_riot_cta_visible(false);
             ctx.app.set_bar_state(0);
         }
         Event::TelemetrySetupHint { game_id, hint } => {
@@ -99,6 +107,20 @@ pub fn handle(ctx: &AppContext, event: Event) {
     }
 }
 
+/// After a session of a Riot-linkable game, ask core for the link state; the
+/// RiotStatus handler shows the post-game "connect" CTA if the account is
+/// still unlinked. Skipped entirely once the user dismissed the CTA.
+fn maybe_offer_riot_link(ctx: &AppContext, game_id: &str) {
+    if !RIOT_LINK_GAMES.contains(&game_id) {
+        return;
+    }
+    if ctx.settings.borrow().riot_prompt_dismissed || ctx.app.get_riot_linked() {
+        return;
+    }
+    ctx.riot_cta_pending.set(true);
+    let _ = ctx.cmd_tx.send(Command::LoadRiotStatus);
+}
+
 /// Arm the 30 s auto-dismiss for the post-game prompt. Storing the timer in
 /// the context cancels any previous one; user interaction (reaction tap,
 /// text submit, dismiss) also cancels it via `cancel_post_game_timeout`.
@@ -118,6 +140,7 @@ fn start_post_game_timeout(ctx: &AppContext) {
                 log::info!("[ui] post-game timeout");
                 app.set_game_active(false);
                 app.set_game_summary("".into());
+                app.set_riot_cta_visible(false);
                 app.set_bar_state(0);
             }
         },
@@ -135,7 +158,7 @@ fn format_session_summary(wins: u32, losses: u32, streak_after: i32) -> String {
     format!("{}W\u{2013}{}L{}", wins, losses, streak)
 }
 
-fn parse_hex_color(hex: &str) -> u32 {
+pub(crate) fn parse_hex_color(hex: &str) -> u32 {
     let hex = hex.trim_start_matches('#');
     let rgb = u32::from_str_radix(hex, 16).unwrap_or(0x2a2a30);
     0xFF000000 | rgb

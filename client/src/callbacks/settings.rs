@@ -40,6 +40,8 @@ pub fn wire(ctx: &AppContext) {
         let prof_st = ctx.profile_avatar_state.clone();
         ctx.app.on_settings_requested(move || {
             let _ = cmd.send(Command::ListAudioDevices);
+            // Games tab data: adapter list + install detection + Riot status.
+            let _ = cmd.send(Command::LoadGamesSettings);
             if let Some(app) = app_weak.upgrade() {
                 let settings = s.borrow();
                 app.set_settings_start_on_boot(settings.start_on_boot);
