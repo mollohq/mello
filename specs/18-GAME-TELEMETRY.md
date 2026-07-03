@@ -255,6 +255,15 @@ Same push mechanism, sharing the listener, token, and Steam-discovery helpers. D
 - **State machine:** keyed on `map.game_state` (`DOTA_GAMERULES_STATE_*`). Active states (hero selection → in progress) start a match; `POST_GAME` ends it with the winner from `map.win_team` vs `player.team_name`; a disappearing `map` block finalizes as `Incomplete` (same as CS2). Custom games (`customgamename` set) emit nothing.
 - **Stats:** kill score from `radiant_score`/`dire_score` (player-oriented) → `own/opp`; `player` K/D/A + last hits → `performance`; `hero.name` → `build.character`. All matchmaking results are `streak_eligible` (GSI doesn't distinguish ranked/unranked).
 
+### 3.4 League of Legends Live Client Data Adapter
+
+First **active** source: the game client hosts `https://127.0.0.1:2999/liveclientdata/allgamedata` during a match (self-signed Riot loopback cert — accepted for this client only; it never leaves 127.0.0.1). No install step.
+
+- `start()` spawns a poll thread (3 s interval, sliced sleeps so `reset()` stops it promptly); request errors just mean "no match running" and are quiet.
+- A snapshot without a `GameEnd` event while untracked → `MatchStarted { gameMode, mapName }`.
+- The `GameEnd` event (`Result: "Win"|"Lose"`) → `MatchEnded`; own/opp = total champion kills per side oriented by the active player's team; the active player's scoreboard entry (matched by riot id) fills `performance` (K/D/A, CS) and `build.character` (champion). A guard flag prevents re-emitting from trailing post-game polls.
+- `PRACTICETOOL`/`TUTORIAL` are recorded but not `streak_eligible`.
+
 ---
 
 ## 4. Session & Outcome Model (mello-core)
