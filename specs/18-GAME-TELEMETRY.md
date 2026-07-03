@@ -274,6 +274,26 @@ Active source over the official `MatchStatsExporter_TA` feature: `ensure_install
 - `MatchEnded (WinnerTeamNum)` vs the inferred side → outcome; the target player's tick fills `performance` (goals/assists/saves/shots/score). `MatchDestroyed` or a socket drop mid-match → `Incomplete`.
 - Playlist/MMR are not broadcast; matches with a `MatchGuid` (online/LAN) are `streak_eligible`, offline modes are not.
 
+### 3.6 Legends of Runeterra Local API Adapter
+
+Poll source: the LoR client hosts `http://127.0.0.1:21337` (`/game-result`, `/static-decklist`). A `GameID` increment on `/game-result` means a match just finished: `LocalPlayerWon` → outcome, the last seen `DeckCode` → `build.deck_code`. The API doesn't expose the queue, so all completed games are `streak_eligible` (v1 decision).
+
+### 3.7 Hearthstone Power.log Adapter
+
+Log tailer over the Blizzard-tolerated deck-tracker mechanism. `ensure_installed` writes the `[Power]` section into `%LOCALAPPDATA%\Blizzard\Hearthstone\log.config` (append-only, never clobbers). The tailer follows the newest `Logs/Hearthstone_*/Power.log`. Only `GameState.*` lines are read (`PowerTaskList.*` duplicates lag behind animations): `CREATE_GAME` → `MatchStarted`; the friendly side is the player whose `zone=HAND` entities carry a revealed card id; `tag=PLAYSTATE value=WON/TIED` → outcome (opponent's WON = our loss; unattributable → `Incomplete`). The log doesn't name the queue, so completed games are `streak_eligible`.
+
+### 3.8 Minecraft World-Stats Adapter
+
+File diff, singleplayer/LAN only: snapshot every `saves/<world>/stats/<uuid>.json` at game start, diff at exit (worlds save on quit, before `reset()` runs). The world with the biggest playtime delta becomes one played-only `MatchEnded` (`Incomplete`, never streaked): playtime → `run.duration_sec`, mob kills/deaths → `performance`, blocks mined/placed → `run.stage_reached`. Third-party servers keep stats server-side and contribute nothing.
+
+### 3.9 Path of Exile Client.txt Adapter
+
+Log tailer over the GGG-tolerated client log (Steam install; found via the shared Steam helpers). PoE is sessionful, so the adapter accumulates zones entered, level-ups (`build.character` = "Name (Class), level N"), and deaths, then flushes a single `MatchEnded` with the `run` slot on `reset()` — always `Incomplete`/non-streaked, feeding the "run stats" ask without touching records.
+
+### 3.10 StarCraft II Client API Adapter
+
+Poll source on the undocumented-but-stable `127.0.0.1:6119` (`/ui` + `/game`). Empty `activeScreens` = in a game; the transition back to menus ends it, reading each player's `result` from `/game`. Attribution limit: the API doesn't mark the local player, so vs-AI games (exactly one `user`-type player) get a real outcome (never streaked — it's AI) with race → `build.character`; ladder games with two `user` players are recorded played-only (`Incomplete`) until cross-game name tracking exists. Replays are ignored entirely.
+
 ---
 
 ## 4. Session & Outcome Model (mello-core)
@@ -388,6 +408,14 @@ Flow:
 
 > Streak update granularity is **per session**, not per match — a night nets to one win/loss/even outcome for streak purposes, which matches how the survey framed "win/loss streaks." (Per-match streaks remain a future option; the stored `matches` make it possible.)
 
+### 5.4 Riot API proxy (`riot.go`) — server-verified LoL/TFT outcomes
+
+The one place a web API beats local telemetry: Riot's post-match data can *verify* client-reported outcomes. The production API key lives server-side only (`RIOT_API_KEY` env var; never shipped in the client).
+
+- **Opt-in link:** `riot_link { riot_id: "GameName#TAG", region }` resolves the Riot ID via account-v1 and stores `{riot_id, puuid, region}` in the owner-only `riot_account` collection. `riot_unlink` deletes it (stopping all Riot requests for the user); `riot_status` reports `{available, linked, riot_id, region}` for the settings UI. Client wrappers exist on `NakamaClient`.
+- **Enrichment:** inside `GameSessionEndRPC`, sessions with `game_id == "league-of-legends"` from linked users fetch the player's own match ids since session start (match-v5, falling back to tft-match-v1 — TFT runs in the LoL client), tally win/loss per match (LoL: participant `win`, remakes <5 min skipped; TFT: top-4 = win), and **supersede the client-reported tally**, setting `verified: true` on the public `game_session` event. Strictly best-effort: any failure leaves the client numbers standing. Budget ≤4 requests per session end (2.5 s timeout each).
+- **Scope guard:** only the linked user's own matches are ever requested — no lookups of other players, no public profiles.
+
 ---
 
 ## 6. Crew-First Surfacing
@@ -403,6 +431,26 @@ Flow:
 
 A standalone personal stats page is out of scope (visibility is crew-first), but `user_game_stats` makes it a clean future addition.
 
+### 6.1 Games settings & consent
+
+Settings → **Games** lists every registered adapter (`AdapterInfo`: name, one-line
+mechanism note, `writes_files` flag) with an install-detection badge
+(`detect_install()`, Windows-only probe) and a per-game consent toggle.
+Consent is **default-on**; disabled game ids persist in client settings
+(`disabled_game_integrations`) and are pushed to the core
+(`Command::SetGameIntegrations`, seeded before `run()`), where they skip both
+`ensure_installed` (no files written into game folders) and active-transport
+`start()`. Disabling never deletes previously installed config files.
+
+The tab also hosts **Connected accounts → Riot Games**: connect opens the
+Riot ID dialog (`riot_link_modal.slint`, Riot ID + routing region), backed by
+`Command::RiotLink/RiotUnlink/LoadRiotStatus` → the `riot_*` RPCs (§5.4).
+
+Proactive ask: when a session of a Riot-linkable game (currently
+`league-of-legends`) ends with the post-game card showing and no link exists,
+the card grows a one-time "GET VERIFIED STATS" CTA that opens the same dialog.
+Dismissing it sets `riot_prompt_dismissed` and it is never shown again.
+
 ---
 
 ## 7. File Structure
@@ -411,9 +459,19 @@ A standalone personal stats page is out of scope (visibility is crew-first), but
 
 ```
 mello-core/src/telemetry/
-├── mod.rs          # GameTelemetryAdapter trait, TelemetryEvent, MatchResult, Outcome, registry
-├── listener.rs     # tiny_http loopback listener, token auth, mpsc to client loop
-└── cs2_gsi.rs      # CS2 GSI adapter: cfg install + outcome derivation
+├── mod.rs              # GameTelemetryAdapter trait, TelemetryEvent, MatchResult, Outcome, registry
+├── listener.rs         # tiny_http loopback listener, token auth, mpsc to client loop
+├── steam.rs            # shared Steam library/path discovery (Windows)
+├── log_tail.rs         # shared log tailer for file-based adapters
+├── cs2_gsi.rs          # CS2 GSI adapter: cfg install + outcome derivation
+├── dota2_gsi.rs        # Dota 2 GSI adapter (+ launch-option hint)
+├── lol_live.rs         # LoL Live Client Data poller
+├── rocket_league.rs    # Rocket League Stats API stream
+├── lor_local.rs        # Legends of Runeterra local API poller
+├── hearthstone_log.rs  # Hearthstone Power.log tailer
+├── minecraft_stats.rs  # Minecraft world-stats diff
+├── poe_log.rs          # Path of Exile Client.txt tailer
+└── sc2_client.rs       # StarCraft II client API poller
 
 backend/nakama/data/modules/
 └── user_game_stats.go   # UserGameStats store + update helper (mirrors clips/recaps)
@@ -461,20 +519,23 @@ starts). Stat slots use the §2.1a groups.
 
 | Priority | Game | Source class | Setup requirement | Stat slots | Risk |
 |----------|------|--------------|-------------------|------------|------|
-| shipped | CS2 | push (GSI) | cfg drop (auto) | scoreline (+performance planned) | low — official |
-| 1 | Dota 2 | push (GSI) | cfg drop + `-gamestateintegration` launch option (user prompt) | scoreline, performance, build | low — official |
-| 1 | League of Legends | poll (`https://127.0.0.1:2999/liveclientdata`) | none (self-signed cert pinned) | scoreline, performance, build | low — official, register product on dev portal |
-| 1 | Rocket League | subscribe (ws `127.0.0.1:49123`) | ini drop (Stats API, Apr 2026) | scoreline, performance | low — official; no playlist/MMR |
-| 2 | Legends of Runeterra | poll (`127.0.0.1:21337`) | none | scoreline, build (exact decklist) | low — official |
-| 2 | Hearthstone / MTG Arena | log tail | log.config / detailed-logs toggle | scoreline, build | low — publisher-tolerated |
-| 2 | Minecraft | file diff (world stats JSON) | none (singleplayer/LAN only) | build, run | low |
-| 2 | Path of Exile 1/2 | log tail (`Client.txt`) | none | run | low — GGG-friendly |
+| shipped | CS2 | push (GSI) | cfg drop (auto) | scoreline, performance | low — official |
+| shipped | Dota 2 | push (GSI) | cfg drop + `-gamestateintegration` launch option (user prompt) | scoreline, performance, build | low — official |
+| shipped | League of Legends | poll (`https://127.0.0.1:2999/liveclientdata`) | none (self-signed cert pinned) | scoreline, performance, build | low — official, register product on dev portal |
+| shipped | Rocket League | subscribe (ws `127.0.0.1:49123`) | ini drop (Stats API, Apr 2026) | scoreline, performance | low — official; no playlist/MMR |
+| shipped | Legends of Runeterra | poll (`127.0.0.1:21337`) | none | scoreline, build (exact decklist) | low — official |
+| shipped | Hearthstone | log tail (`Power.log`) | log.config drop (auto) | scoreline | low — publisher-tolerated |
+| shipped | Minecraft | file diff (world stats JSON) | none (singleplayer/LAN only) | performance, run | low |
+| shipped | Path of Exile 1/2 | log tail (`Client.txt`) | none | run, build | low — GGG-friendly |
+| shipped | StarCraft 2 | poll (`:6119`) | none | scoreline (vs AI), build (race) | med — `:6119` undocumented; ladder attribution pending |
+| 2 | MTG Arena | log tail (detailed logs) | detailed-logs toggle | scoreline, build | low — publisher-tolerated |
 | 2 | Slay the Spire | run importer (`.run` files) | none | run, build | low |
-| 2 | StarCraft 2 | poll (`:6119`) + replay import | none | scoreline, build (build order) | med — `:6119` undocumented |
+| 2 | StarCraft 2 replays | replay import (`s2protocol`) | none | build (build order vs race) | med |
 | 2 | WoW | log tail (combat log) | user enables `/combatlog` (or addon) | performance (dmg/heal, boss attempts) | med — heavy parser, Blizzard-sanctioned |
 | spike | Apex Legends | ws server (LiveAPI) | launch options / config.json | scoreline, performance | med — verify pubs event coverage |
 | presence-only | Roblox | log tail (experience detection) | none | (spec 17 presence enrichment; no outcomes) | med — undocumented log format, degrade to "Roblox" |
-| gated | LoL/TFT match-v5, Valorant (RSO) | web API via backend proxy | Riot production key (weeks; server-side key) | scoreline, performance, build | med — approval process |
+| gated | LoL/TFT match-v5 | web API via backend proxy (§5.4, built; awaits production key) | Riot production key (applied mid-2026) + user links Riot ID | scoreline (verified) | low — awaiting approval |
+| gated | Valorant (RSO) | web API via backend proxy | Riot production key + RSO opt-in flow | scoreline, performance | med — RSO integration |
 | avoid | FFXIV, CoD, Tarkov, R6 (unofficial), Marvel Rivals (live) | — | — | — | ToS-hostile or no legitimate source |
 
 ## 10. Future Extensions (Not In Scope)
