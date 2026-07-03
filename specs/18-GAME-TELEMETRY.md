@@ -194,6 +194,7 @@ GSI posts the full state on each change. The adapter tracks a tiny state machine
 | `→ warmup`/`live` after a previous `gameover` (or first seen) | `MatchStarted { mode, map }`; reset round tracking |
 | `round.phase` resolves | `RoundEnded { ct_score, t_score }` (live HUD / future auto-clip hook) |
 | `→ gameover` | `MatchEnded` — derive `Outcome` |
+| `map` block disappears while a match is active (abandon/disconnect to menu) | `MatchEnded` with `Outcome::Incomplete`; reset match state |
 
 `Outcome` at `gameover`:
 - Read the player's current side from `player.team` (`"CT"`/`"T"`) — GSI reports the live side, so halftime side-switches are handled by reading at gameover.
@@ -201,7 +202,7 @@ GSI posts the full state on each change. The adapter tracks a tiny state machine
 - `own > opp → Win`, `own < opp → Loss`, `own == opp → Draw`.
 - `rounds_won = own`, `rounds_lost = opp`.
 
-`mode` from `map.mode` (`competitive`, `premier`, `wingman`, `casual`, `deathmatch`, …). Only `competitive`/`premier`/`wingman` set a streak-affecting `Outcome`; other modes still emit `MatchEnded` with the result for the session summary but `counts_toward_streak()` is gated on `Win`/`Loss` from those modes (casual results are recorded as played, not streaked).
+`mode` from `map.mode` (`competitive`, `premier`, `wingman`, `casual`, `deathmatch`, …). Only `competitive`/`premier`/`wingman`/`scrimcomp2v2` are tracked; **non-streak modes emit no telemetry events at all** (v1 decision — casual/DM play stays "played only" at the process level, spec 17). Recording non-streak matches as played-not-streaked becomes possible once `MatchResult` carries explicit streak eligibility (generalized adapter model, §2) and is deferred until an adapter needs it.
 
 **Robustness:** all GSI fields are optional in serde structs (`#[serde(default)]`); a malformed or partial payload yields no events rather than an error. The token check happens before parsing.
 

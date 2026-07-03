@@ -37,7 +37,9 @@ struct Cs2State {
     match_active: bool,
     last_ct: u32,
     last_t: u32,
-    last_phase: String,
+    /// Mode/map captured at match start, used to finalize an abandoned match.
+    mode: String,
+    map_name: String,
 }
 
 impl Cs2GsiAdapter {
@@ -88,15 +90,35 @@ impl GameTelemetryAdapter for Cs2GsiAdapter {
 
         let map = match &payload.map {
             Some(m) => m,
-            None => return Vec::new(),
+            None => {
+                // No map block = menus/loading. If a match was in flight the
+                // player abandoned or disconnected: finalize it as Incomplete
+                // (never a loss) so the next match starts from clean state.
+                let mut st = self.state.lock().expect("cs2 telemetry state poisoned");
+                if st.match_active {
+                    let ended = TelemetryEvent::MatchEnded(MatchResult {
+                        game_id: GAME_ID.to_string(),
+                        mode: std::mem::take(&mut st.mode),
+                        map: std::mem::take(&mut st.map_name),
+                        result: Outcome::Incomplete,
+                        rounds_won: 0,
+                        rounds_lost: 0,
+                        ts: now_ms(),
+                    });
+                    *st = Cs2State::default();
+                    return vec![ended];
+                }
+                return Vec::new();
+            }
         };
 
         let mut st = self.state.lock().expect("cs2 telemetry state poisoned");
 
         // Non-streak modes (casual, DM, …): track nothing, emit nothing.
+        // Spec 18 §3.2 records this as the v1 decision: non-streak modes are
+        // "played only" at the process level, with no match outcomes.
         if !is_streak_mode(&map.mode) {
-            st.match_active = false;
-            st.last_phase = map.phase.clone();
+            *st = Cs2State::default();
             return Vec::new();
         }
 
@@ -111,6 +133,8 @@ impl GameTelemetryAdapter for Cs2GsiAdapter {
             st.match_active = true;
             st.last_ct = 0;
             st.last_t = 0;
+            st.mode = map.mode.clone();
+            st.map_name = map.name.clone();
             events.push(TelemetryEvent::MatchStarted {
                 mode: map.mode.clone(),
                 map: map.name.clone(),
@@ -152,7 +176,6 @@ impl GameTelemetryAdapter for Cs2GsiAdapter {
             }));
         }
 
-        st.last_phase = phase.to_string();
         events
     }
 }
@@ -475,6 +498,47 @@ mod tests {
             })
             .unwrap();
         assert_eq!(ended.result, Outcome::Win);
+    }
+
+    /// A payload with no `map` block, as CS2 sends from the main menu.
+    fn menu_payload() -> String {
+        format!(
+            r#"{{
+                "provider": {{ "appid": 730 }},
+                "auth": {{ "token": "{TOKEN}" }},
+                "player": {{ "team": "" }}
+            }}"#
+        )
+    }
+
+    #[test]
+    fn abandoned_match_finalizes_incomplete() {
+        let a = adapter();
+        a.parse(&payload("competitive", "live", 3, 5, "T"), TOKEN);
+
+        // Player leaves to the main menu mid-match.
+        let evs = a.parse(&menu_payload(), TOKEN);
+        let ended = evs
+            .iter()
+            .find_map(|e| match e {
+                TelemetryEvent::MatchEnded(m) => Some(m),
+                _ => None,
+            })
+            .expect("expected Incomplete MatchEnded on abandon");
+        assert_eq!(ended.result, Outcome::Incomplete);
+        assert_eq!(ended.mode, "competitive");
+        assert_eq!(ended.map, "de_mirage");
+
+        // Further menu payloads are quiet; the next match starts fresh.
+        assert!(a.parse(&menu_payload(), TOKEN).is_empty());
+        let evs = a.parse(&payload("competitive", "live", 0, 0, "CT"), TOKEN);
+        assert!(matches!(evs[0], TelemetryEvent::MatchStarted { .. }));
+    }
+
+    #[test]
+    fn menu_payload_without_match_is_quiet() {
+        let a = adapter();
+        assert!(a.parse(&menu_payload(), TOKEN).is_empty());
     }
 
     #[test]
