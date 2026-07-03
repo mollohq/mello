@@ -41,6 +41,11 @@ pub struct Settings {
     pub hud_miniplayer_y: Option<i32>,
     pub hidden_invite_crew_ids: Vec<String>,
     pub seen_session_ids: Vec<String>,
+    // Games tab: integrations the user switched off (consent is default-on;
+    // absence from this list means enabled).
+    pub disabled_game_integrations: Vec<String>,
+    /// User dismissed the post-game "connect Riot account" CTA; don't re-ask.
+    pub riot_prompt_dismissed: bool,
 }
 
 impl Default for Settings {
@@ -79,6 +84,8 @@ impl Default for Settings {
             hud_miniplayer_y: None,
             hidden_invite_crew_ids: Vec::new(),
             seen_session_ids: Vec::new(),
+            disabled_game_integrations: Vec::new(),
+            riot_prompt_dismissed: false,
         }
     }
 }
