@@ -8,6 +8,7 @@ mod cs2_gsi;
 mod dota2_gsi;
 mod listener;
 mod lol_live;
+mod rocket_league;
 #[cfg(windows)]
 mod steam;
 
@@ -17,6 +18,7 @@ pub use cs2_gsi::Cs2GsiAdapter;
 pub use dota2_gsi::Dota2GsiAdapter;
 pub use listener::{TelemetryListener, TELEMETRY_PORT};
 pub use lol_live::LolLiveAdapter;
+pub use rocket_league::RocketLeagueAdapter;
 
 /// A decisive (or non-decisive) result of a single match.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -206,6 +208,7 @@ impl AdapterRegistry {
                 Arc::new(Cs2GsiAdapter::new()),
                 Arc::new(Dota2GsiAdapter::new()),
                 Arc::new(LolLiveAdapter::new()),
+                Arc::new(RocketLeagueAdapter::new()),
             ],
         }
     }
@@ -308,8 +311,9 @@ mod tests {
         assert!(reg.get("counter-strike-2").is_some());
         assert!(reg.get("dota-2").is_some());
         assert!(reg.get("league-of-legends").is_some());
+        assert!(reg.get("rocket-league").is_some());
         assert!(reg.get("unknown-game").is_none());
-        assert_eq!(reg.all().len(), 3);
+        assert_eq!(reg.all().len(), 4);
     }
 
     #[test]

@@ -264,6 +264,16 @@ First **active** source: the game client hosts `https://127.0.0.1:2999/liveclien
 - The `GameEnd` event (`Result: "Win"|"Lose"`) → `MatchEnded`; own/opp = total champion kills per side oriented by the active player's team; the active player's scoreboard entry (matched by riot id) fills `performance` (K/D/A, CS) and `build.character` (champion). A guard flag prevents re-emitting from trailing post-game polls.
 - `PRACTICETOOL`/`TUTORIAL` are recorded but not `streak_eligible`.
 
+### 3.5 Rocket League Stats API Adapter
+
+Active source over the official `MatchStatsExporter_TA` feature: `ensure_installed` drops `TAGame/Config/DefaultStatsAPI.ini` (never clobbering an existing user config), which makes the game host a local socket on `127.0.0.1:49123` that streams concatenated JSON envelopes during matches (Psyonix calls it a websocket; the wire format is a raw TCP JSON stream). Requires a game restart after first install — same eager-install-at-startup mitigation as CS2.
+
+- `start()` spawns a connect-and-read thread with quiet 3 s reconnects; `reset()` stops it.
+- `MatchCreated` primes fresh state; the first `UpdateState` tick emits `MatchStarted` and team goal changes emit `ScoreChanged`.
+- The local side is inferred from the spectator `Target` of **non-replay** ticks (first-person play views the local car; goal replays may retarget the scorer and are ignored).
+- `MatchEnded (WinnerTeamNum)` vs the inferred side → outcome; the target player's tick fills `performance` (goals/assists/saves/shots/score). `MatchDestroyed` or a socket drop mid-match → `Incomplete`.
+- Playlist/MMR are not broadcast; matches with a `MatchGuid` (online/LAN) are `streak_eligible`, offline modes are not.
+
 ---
 
 ## 4. Session & Outcome Model (mello-core)
