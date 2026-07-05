@@ -193,12 +193,13 @@ export component StatsProfileModal inherits Rectangle {
                         border-radius: 6px;
                         background: close-ta.has-hover ? Theme.surface-hover : transparent;
 
-                        Text {
-                            text: "✕";
-                            font-size: 14px;
-                            color: Theme.text-secondary;
-                            horizontal-alignment: center;
-                            vertical-alignment: center;
+                        Image {
+                            source: @image-url("../icons/x.svg");
+                            width: 16px;
+                            height: 16px;
+                            colorize: close-ta.has-hover ? Theme.text-primary : Theme.text-secondary;
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
                         }
 
                         close-ta := TouchArea {
