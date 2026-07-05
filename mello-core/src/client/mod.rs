@@ -974,14 +974,9 @@ impl Client {
                 )
                 .await;
             }
-            Command::GetUserGameStats => match self.nakama.user_game_stats_get().await {
-                Ok(resp) => {
-                    let _ = self
-                        .event_tx
-                        .send(Event::UserGameStatsLoaded { games: resp.games });
-                }
-                Err(e) => log::warn!("user_game_stats_get failed: {}", e),
-            },
+            Command::GetUserGameStats => {
+                self.refresh_user_game_stats().await;
+            }
 
             Command::LoadGamesSettings => {
                 // Install detection touches the filesystem/registry: off-thread.

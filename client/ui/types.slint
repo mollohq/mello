@@ -112,6 +112,22 @@ export struct FeedCardData {
     game-verified: bool,
 }
 
+// One per-game card in the personal stats profile (spec 19 A2).
+// Display strings are pre-formatted in Rust.
+export struct GameStatsCardData {
+    game-id: string,          // games.json id, for the bundled icon lookup
+    game-name: string,
+    short-name: string,
+    game-color: color,
+    record-text: string,      // "12W 5L" / "12W 5L 2D"
+    win-rate-text: string,    // "62%" / "—"
+    streak-text: string,      // "W4" / "L2" / "—"
+    streak-positive: bool,
+    best-streak-text: string, // "W7 best · L3 worst" ("" when no history)
+    recent-form: [string],    // each "W" | "L" | "D", newest last (≤10)
+    last-played-text: string, // "2h ago" / "3d ago" / ""
+}
+
 // Personal stats for the "You strip" pinned atop the crew feed (spec 19).
 // Only the viewer sees it; display strings are pre-formatted in Rust.
 export struct YouStripData {
