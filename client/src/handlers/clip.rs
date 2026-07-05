@@ -470,6 +470,13 @@ fn build_feed_card(
         .unwrap_or("")
         .to_string();
 
+    // Stable id for the bundled game icon; empty on legacy events.
+    let game_id = data
+        .get("game_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+
     let clip_path = data
         .get("media_url")
         .and_then(|v| v.as_str())
@@ -542,6 +549,11 @@ fn build_feed_card(
     } else {
         feed_type
     };
+    let game_verified = is_game_session
+        && data
+            .get("verified")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
     let (game_record, game_streak_text, game_streak_positive, game_winrate, game_matches) =
         if is_game_session {
             let w = data.get("wins").and_then(|v| v.as_i64()).unwrap_or(0);
@@ -607,6 +619,7 @@ fn build_feed_card(
         actor_name: actor.clone().into(),
         actor_initials: make_initials(&actor).into(),
         game_name: game.into(),
+        game_id: game_id.into(),
         participant_count,
         clip_count,
         clip_path: clip_path.into(),
@@ -645,6 +658,7 @@ fn build_feed_card(
         game_streak_positive,
         game_winrate: game_winrate.into(),
         game_matches,
+        game_verified,
         snapshot_loading: feed_type == "session-preview" && has_snapshots,
         snapshot_poster_ready: false,
         snapshot_error: false,

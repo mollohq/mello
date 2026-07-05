@@ -1,5 +1,6 @@
 import { Theme } from "../theme.slint";
 import { YouStripData } from "../types.slint";
+import { GameIcon } from "../components/game_icon.slint";
 
 component FormPip inherits Rectangle {
     in property <string> letter;
@@ -66,22 +67,14 @@ export component YouStrip inherits Rectangle {
             padding: 14px;
             spacing: 14px;
 
-            // Game badge (vertically centered via the wrapping layout).
+            // Game icon, badge fallback (vertically centered via the layout).
             VerticalLayout {
                 alignment: center;
-                Rectangle {
-                    width: 40px;
-                    height: 40px;
-                    border-radius: 8px;
-                    background: data.game-color;
-                    Text {
-                        text: data.short-name;
-                        font-size: 12px;
-                        font-weight: 700;
-                        color: white;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
-                    }
+                GameIcon {
+                    game-id: data.game-id;
+                    short-name: data.short-name;
+                    badge-color: data.game-color;
+                    size: 40px;
                 }
             }
 
@@ -152,6 +145,7 @@ export component Preview inherits Rectangle {
         YouStrip {
             data: {
                 has-stats: true,
+                game-id: "counter-strike-2",
                 game-name: "Counter-Strike 2",
                 short-name: "CS2",
                 game-color: #DE9B35,
@@ -166,6 +160,7 @@ export component Preview inherits Rectangle {
         YouStrip {
             data: {
                 has-stats: true,
+                game-id: "valorant",
                 game-name: "Valorant",
                 short-name: "VAL",
                 game-color: #FF4655,

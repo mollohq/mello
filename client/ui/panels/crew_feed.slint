@@ -3,6 +3,7 @@ import { FeedCardData, StreamCardData, YouStripData } from "../types.slint";
 import { ActiveStreamsPanel } from "./active_streams_panel.slint";
 import { SessionPreviewCard } from "./session_preview_card.slint";
 import { YouStrip } from "./you_strip.slint";
+import { GameIcon } from "../components/game_icon.slint";
 
 component AvatarDot inherits Rectangle {
     in property <string> initials;
@@ -845,21 +846,13 @@ component GameSessionCard inherits Rectangle {
 
             VerticalLayout {
                 alignment: center;
-                Rectangle {
-                    width: 40px;
-                    height: 40px;
-                    border-radius: 8px;
-                    background: game-accent;
-                    Text {
-                        text: card.game-name == "Valorant" ? "VAL" :
-                              card.game-name == "Counter-Strike 2" ? "CS2" :
-                              card.game-name != "" ? card.game-name : "GG";
-                        font-size: 11px;
-                        font-weight: 800;
-                        color: white;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
-                    }
+                GameIcon {
+                    game-id: card.game-id;
+                    short-name: card.game-name == "Valorant" ? "VAL" :
+                                card.game-name == "Counter-Strike 2" ? "CS2" :
+                                card.game-name != "" ? card.game-name : "GG";
+                    badge-color: game-accent;
+                    size: 40px;
                 }
             }
 
@@ -879,6 +872,29 @@ component GameSessionCard inherits Rectangle {
                     font-size: 11px;
                     color: Theme.text-sub;
                     overflow: elide;
+                }
+            }
+
+            // Server-verified result (Riot post-match API) — spec 18 §9.
+            if card.game-verified: VerticalLayout {
+                alignment: center;
+                Rectangle {
+                    width: verified-label.preferred-width + 12px;
+                    height: 18px;
+                    border-radius: 4px;
+                    background: #1e2a1e;
+                    border-width: 1px;
+                    border-color: #2d4a2d;
+                    verified-label := Text {
+                        text: "✓ VERIFIED";
+                        font-family: Theme.font-mono;
+                        font-size: 9px;
+                        font-weight: 600;
+                        letter-spacing: 1px;
+                        color: #4ade80;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
                 }
             }
         }

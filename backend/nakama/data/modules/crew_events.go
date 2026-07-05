@@ -74,7 +74,10 @@ type StreamSessionData struct {
 }
 
 type GameSessionData struct {
-	GameName    string   `json:"game_name"`
+	GameName string `json:"game_name"`
+	// Stable games.json id (e.g. "counter-strike-2"); empty on legacy events.
+	// The client uses it for the bundled game icon.
+	GameID      string   `json:"game_id,omitempty"`
 	GameIGDBID  int      `json:"game_igdb_id"`
 	PlayerIDs   []string `json:"player_ids"`
 	PlayerNames []string `json:"player_names"`
@@ -790,6 +793,7 @@ func GameSessionEndRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, n
 
 	data := GameSessionData{
 		GameName:    req.GameName,
+		GameID:      req.GameID,
 		GameIGDBID:  0,
 		PlayerIDs:   []string{userID},
 		PlayerNames: []string{username},

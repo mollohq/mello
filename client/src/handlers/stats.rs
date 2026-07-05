@@ -16,6 +16,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
 fn empty_strip() -> YouStripData {
     YouStripData {
         has_stats: false,
+        game_id: SharedString::new(),
         game_name: SharedString::new(),
         short_name: SharedString::new(),
         game_color: Color::default(),
@@ -75,6 +76,7 @@ fn build_you_strip(games: &[UserGameStats]) -> YouStripData {
 
     YouStripData {
         has_stats: true,
+        game_id: g.game_id.as_str().into(),
         game_name: name.into(),
         short_name: short.into(),
         game_color: color,
