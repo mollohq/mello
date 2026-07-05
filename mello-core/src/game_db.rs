@@ -30,6 +30,7 @@ struct GamesEnvelope {
 #[derive(Clone)]
 pub struct GameDatabase {
     by_exe: HashMap<String, GameEntry>,
+    by_id: HashMap<String, GameEntry>,
 }
 
 impl GameDatabase {
@@ -38,16 +39,22 @@ impl GameDatabase {
         let envelope: GamesEnvelope =
             serde_json::from_str(json).expect("invalid bundled games.json");
         let mut by_exe = HashMap::new();
+        let mut by_id = HashMap::new();
         for entry in &envelope.games {
             for exe in &entry.exe {
                 by_exe.insert(exe.to_lowercase(), entry.clone());
             }
+            by_id.insert(entry.id.clone(), entry.clone());
         }
-        GameDatabase { by_exe }
+        GameDatabase { by_exe, by_id }
     }
 
     pub fn lookup_by_exe(&self, exe: &str) -> Option<&GameEntry> {
         self.by_exe.get(&exe.to_lowercase())
+    }
+
+    pub fn lookup_by_id(&self, id: &str) -> Option<&GameEntry> {
+        self.by_id.get(id)
     }
 }
 
@@ -79,12 +86,14 @@ mod tests {
         }"##;
         let envelope: GamesEnvelope = serde_json::from_str(json).unwrap();
         let mut by_exe = HashMap::new();
+        let mut by_id = HashMap::new();
         for entry in &envelope.games {
             for exe in &entry.exe {
                 by_exe.insert(exe.to_lowercase(), entry.clone());
             }
+            by_id.insert(entry.id.clone(), entry.clone());
         }
-        GameDatabase { by_exe }
+        GameDatabase { by_exe, by_id }
     }
 
     #[test]

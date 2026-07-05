@@ -9,7 +9,10 @@ use std::sync::Mutex;
 
 use serde::Deserialize;
 
-use super::{GameTelemetryAdapter, MatchResult, Outcome, TelemetryError, TelemetryEvent};
+use super::{
+    GameTelemetryAdapter, MatchResult, Outcome, Performance, SourceQuality, TelemetryError,
+    TelemetryEvent,
+};
 
 /// Game DB id (matches `client/assets/games.json`).
 const GAME_ID: &str = "counter-strike-2";
@@ -37,7 +40,9 @@ struct Cs2State {
     match_active: bool,
     last_ct: u32,
     last_t: u32,
-    last_phase: String,
+    /// Mode/map captured at match start, used to finalize an abandoned match.
+    mode: String,
+    map_name: String,
 }
 
 impl Cs2GsiAdapter {
@@ -57,6 +62,26 @@ impl Default for Cs2GsiAdapter {
 impl GameTelemetryAdapter for Cs2GsiAdapter {
     fn game_id(&self) -> &str {
         GAME_ID
+    }
+
+    fn info(&self) -> super::AdapterInfo {
+        super::AdapterInfo {
+            game_name: "Counter-Strike 2",
+            writes_files: true,
+            note: "Adds a Game State Integration config to the CS2 folder so match results are captured automatically.",
+            account_link: None,
+        }
+    }
+
+    fn detect_install(&self) -> Option<bool> {
+        #[cfg(windows)]
+        {
+            Some(cs2_cfg_dir().is_ok())
+        }
+        #[cfg(not(windows))]
+        {
+            None
+        }
     }
 
     fn ensure_installed(&self, token: &str, port: u16) -> Result<(), TelemetryError> {
@@ -79,24 +104,50 @@ impl GameTelemetryAdapter for Cs2GsiAdapter {
             _ => return Vec::new(),
         }
 
-        // Reject payloads from other games (lenient when appid is absent).
-        if let Some(p) = &payload.provider {
-            if p.appid != 0 && p.appid != CS2_APPID {
-                return Vec::new();
-            }
+        // Routing contract (see GameTelemetryAdapter::parse): only payloads
+        // that positively identify as CS2 are ours. Our cfg subscribes to
+        // `provider`, so real CS2 payloads always carry the appid.
+        match &payload.provider {
+            Some(p) if p.appid == CS2_APPID => {}
+            _ => return Vec::new(),
         }
 
         let map = match &payload.map {
             Some(m) => m,
-            None => return Vec::new(),
+            None => {
+                // No map block = menus/loading. If a match was in flight the
+                // player abandoned or disconnected: finalize it as Incomplete
+                // (never a loss) so the next match starts from clean state.
+                let mut st = self.state.lock().expect("cs2 telemetry state poisoned");
+                if st.match_active {
+                    let ended = TelemetryEvent::MatchEnded(Box::new(MatchResult {
+                        game_id: GAME_ID.to_string(),
+                        mode: std::mem::take(&mut st.mode),
+                        map: std::mem::take(&mut st.map_name),
+                        result: Outcome::Incomplete,
+                        streak_eligible: true,
+                        own_score: 0,
+                        opp_score: 0,
+                        performance: None,
+                        build: None,
+                        run: None,
+                        source: SourceQuality::Live,
+                        ts: now_ms(),
+                    }));
+                    *st = Cs2State::default();
+                    return vec![ended];
+                }
+                return Vec::new();
+            }
         };
 
         let mut st = self.state.lock().expect("cs2 telemetry state poisoned");
 
         // Non-streak modes (casual, DM, …): track nothing, emit nothing.
+        // Spec 18 §3.2 records this as the v1 decision: non-streak modes are
+        // "played only" at the process level, with no match outcomes.
         if !is_streak_mode(&map.mode) {
-            st.match_active = false;
-            st.last_phase = map.phase.clone();
+            *st = Cs2State::default();
             return Vec::new();
         }
 
@@ -111,49 +162,73 @@ impl GameTelemetryAdapter for Cs2GsiAdapter {
             st.match_active = true;
             st.last_ct = 0;
             st.last_t = 0;
+            st.mode = map.mode.clone();
+            st.map_name = map.name.clone();
             events.push(TelemetryEvent::MatchStarted {
                 mode: map.mode.clone(),
                 map: map.name.clone(),
             });
         }
 
-        // Round resolved: the live score changed.
+        let player_team = payload
+            .player
+            .as_ref()
+            .map(|p| p.team.as_str())
+            .unwrap_or("");
+
+        // Round resolved: the live score changed. Player perspective when the
+        // side is known; unknown side falls back to (leading, trailing).
         if st.match_active && (ct != st.last_ct || t != st.last_t) {
             st.last_ct = ct;
             st.last_t = t;
-            events.push(TelemetryEvent::RoundEnded {
-                ct_score: ct,
-                t_score: t,
-            });
+            let (own, opp) = split_scores(player_team, ct, t);
+            events.push(TelemetryEvent::ScoreChanged { own, opp });
         }
 
         // Match over: derive the outcome from the player's current side.
         if phase == "gameover" && st.match_active {
             st.match_active = false;
-            let player_team = payload
+            let result = derive_outcome(player_team, ct, t);
+            let (own_score, opp_score) = split_scores(player_team, ct, t);
+            let performance = payload
                 .player
                 .as_ref()
-                .map(|p| p.team.as_str())
-                .unwrap_or("");
-            let result = derive_outcome(player_team, ct, t);
-            let (rounds_won, rounds_lost) = match player_team {
-                "CT" => (ct, t),
-                "T" => (t, ct),
-                _ => (ct.max(t), ct.min(t)),
-            };
-            events.push(TelemetryEvent::MatchEnded(MatchResult {
+                .and_then(|p| p.match_stats.as_ref())
+                .map(|ms| Performance {
+                    kills: Some(ms.kills.max(0) as u32),
+                    deaths: Some(ms.deaths.max(0) as u32),
+                    assists: Some(ms.assists.max(0) as u32),
+                    mvps: Some(ms.mvps.max(0) as u32),
+                    score: Some(ms.score.max(0) as u32),
+                    ..Performance::default()
+                });
+            events.push(TelemetryEvent::MatchEnded(Box::new(MatchResult {
                 game_id: GAME_ID.to_string(),
                 mode: map.mode.clone(),
                 map: map.name.clone(),
                 result,
-                rounds_won,
-                rounds_lost,
+                streak_eligible: true,
+                own_score,
+                opp_score,
+                performance,
+                build: None,
+                run: None,
+                source: SourceQuality::Live,
                 ts: now_ms(),
-            }));
+            })));
         }
 
-        st.last_phase = phase.to_string();
         events
+    }
+}
+
+/// Split team scores into (own, opp) by the player's side; unknown side falls
+/// back to (leading, trailing) so the numbers stay meaningful for display.
+fn split_scores(player_team: &str, ct: u32, t: u32) -> (u32, u32) {
+    match player_team {
+        "CT" => (ct, t),
+        "T" => (t, ct),
+        _ => (ct.max(t), ct.min(t)),
     }
 }
 
@@ -222,6 +297,23 @@ struct TeamState {
 struct PlayerState {
     #[serde(default)]
     team: String,
+    match_stats: Option<MatchStats>,
+}
+
+/// `player.match_stats` from the `player_match_stats` subscription. Values can
+/// go negative in-game (suicides/team kills), hence signed.
+#[derive(Deserialize, Default)]
+struct MatchStats {
+    #[serde(default)]
+    kills: i32,
+    #[serde(default)]
+    assists: i32,
+    #[serde(default)]
+    deaths: i32,
+    #[serde(default)]
+    mvps: i32,
+    #[serde(default)]
+    score: i32,
 }
 
 #[derive(Deserialize, Default)]
@@ -294,63 +386,11 @@ fn install_cfg(_token: &str, _port: u16) -> Result<(), TelemetryError> {
 /// Steam library folder. CS2 still lives under the legacy CS:GO directory name.
 #[cfg(windows)]
 fn cs2_cfg_dir() -> Result<std::path::PathBuf, TelemetryError> {
-    use std::path::PathBuf;
-    use winreg::enums::HKEY_CURRENT_USER;
-    use winreg::RegKey;
-
-    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-    let steam_path: String = hkcu
-        .open_subkey("Software\\Valve\\Steam")
-        .ok()
-        .and_then(|k| k.get_value("SteamPath").ok())
-        .ok_or_else(|| TelemetryError::GameNotFound("Steam not found in registry".into()))?;
-
-    let steam_root = PathBuf::from(steam_path);
-
-    // Candidate libraries: the Steam root plus any extra library folders.
-    let mut libraries = vec![steam_root.clone()];
-    let lib_vdf = steam_root.join("steamapps").join("libraryfolders.vdf");
-    if let Ok(contents) = std::fs::read_to_string(&lib_vdf) {
-        libraries.extend(parse_library_paths(&contents));
-    }
-
-    for lib in libraries {
-        let cfg = lib
-            .join("steamapps")
-            .join("common")
-            .join("Counter-Strike Global Offensive")
-            .join("game")
-            .join("csgo")
-            .join("cfg");
-        if cfg.is_dir() {
-            return Ok(cfg);
-        }
-    }
-
-    Err(TelemetryError::GameNotFound(
-        "CS2 install (app 730) not found in any Steam library".into(),
-    ))
-}
-
-/// Extract `"path"` values from a `libraryfolders.vdf`. Minimal VDF handling:
-/// each library object has a `"path"  "<dir>"` line with `\\`-escaped separators.
-#[cfg(windows)]
-fn parse_library_paths(vdf: &str) -> Vec<std::path::PathBuf> {
-    let mut out = Vec::new();
-    for line in vdf.lines() {
-        let line = line.trim();
-        let lower = line.to_ascii_lowercase();
-        if !lower.starts_with("\"path\"") {
-            continue;
-        }
-        // Take the second quoted token on the line.
-        let mut parts = line.split('"').filter(|s| !s.trim().is_empty());
-        let _key = parts.next(); // "path"
-        if let Some(raw) = parts.next() {
-            out.push(std::path::PathBuf::from(raw.replace("\\\\", "\\")));
-        }
-    }
-    out
+    super::steam::find_app_subdir(
+        "Counter-Strike Global Offensive",
+        &["game", "csgo", "cfg"],
+        "CS2 install (app 730) not found in any Steam library",
+    )
 }
 
 #[cfg(test)]
@@ -370,7 +410,9 @@ mod tests {
                 "auth": {{ "token": "{TOKEN}" }},
                 "map": {{ "mode": "{mode}", "name": "de_mirage", "phase": "{phase}",
                           "team_ct": {{ "score": {ct} }}, "team_t": {{ "score": {t} }} }},
-                "player": {{ "team": "{team}" }}
+                "player": {{ "team": "{team}",
+                             "match_stats": {{ "kills": 21, "assists": 4, "deaths": 15,
+                                               "mvps": 3, "score": 47 }} }}
             }}"#
         )
     }
@@ -407,6 +449,18 @@ mod tests {
     }
 
     #[test]
+    fn rejects_payload_without_provider() {
+        // Strict self-identification: no provider block → not ours.
+        let a = adapter();
+        let body = format!(
+            r#"{{ "auth": {{ "token": "{TOKEN}" }},
+                  "map": {{ "mode": "competitive", "phase": "live",
+                            "team_ct": {{"score":1}}, "team_t": {{"score":0}} }} }}"#
+        );
+        assert!(a.parse(&body, TOKEN).is_empty());
+    }
+
+    #[test]
     fn casual_mode_emits_nothing() {
         let a = adapter();
         let body = payload("casual", "live", 5, 3, "CT");
@@ -417,16 +471,12 @@ mod tests {
     fn match_start_then_win() {
         let a = adapter();
 
-        // First live payload → MatchStarted + RoundEnded for the current score.
+        // First live payload → MatchStarted + ScoreChanged for the current score.
         let evs = a.parse(&payload("competitive", "live", 1, 0, "CT"), TOKEN);
         assert!(matches!(evs[0], TelemetryEvent::MatchStarted { .. }));
-        assert!(evs.iter().any(|e| matches!(
-            e,
-            TelemetryEvent::RoundEnded {
-                ct_score: 1,
-                t_score: 0
-            }
-        )));
+        assert!(evs
+            .iter()
+            .any(|e| matches!(e, TelemetryEvent::ScoreChanged { own: 1, opp: 0 })));
 
         // Game over, player on CT with the higher score → Win.
         let evs = a.parse(&payload("competitive", "gameover", 13, 7, "CT"), TOKEN);
@@ -438,8 +488,45 @@ mod tests {
             })
             .expect("expected MatchEnded");
         assert_eq!(ended.result, Outcome::Win);
-        assert_eq!(ended.rounds_won, 13);
-        assert_eq!(ended.rounds_lost, 7);
+        assert_eq!(ended.own_score, 13);
+        assert_eq!(ended.opp_score, 7);
+        assert!(ended.streak_eligible);
+        assert_eq!(ended.source, SourceQuality::Live);
+
+        // player_match_stats flows into the performance slot.
+        let perf = ended.performance.as_ref().expect("expected performance");
+        assert_eq!(perf.kills, Some(21));
+        assert_eq!(perf.deaths, Some(15));
+        assert_eq!(perf.assists, Some(4));
+        assert_eq!(perf.mvps, Some(3));
+        assert_eq!(perf.score, Some(47));
+        assert_eq!(perf.damage, None);
+    }
+
+    #[test]
+    fn gameover_without_match_stats_has_no_performance() {
+        let a = adapter();
+        // Payload without the match_stats block (older cfg / partial payload).
+        let body = format!(
+            r#"{{
+                "provider": {{ "appid": 730 }},
+                "auth": {{ "token": "{TOKEN}" }},
+                "map": {{ "mode": "competitive", "phase": "gameover",
+                          "team_ct": {{ "score": 13 }}, "team_t": {{ "score": 7 }} }},
+                "player": {{ "team": "CT" }}
+            }}"#
+        );
+        a.parse(&payload("competitive", "live", 1, 0, "CT"), TOKEN);
+        let evs = a.parse(&body, TOKEN);
+        let ended = evs
+            .iter()
+            .find_map(|e| match e {
+                TelemetryEvent::MatchEnded(m) => Some(m),
+                _ => None,
+            })
+            .expect("expected MatchEnded");
+        assert_eq!(ended.result, Outcome::Win);
+        assert!(ended.performance.is_none());
     }
 
     #[test]
@@ -456,8 +543,8 @@ mod tests {
             .unwrap();
         // Player on T (9) vs CT (13) → Loss.
         assert_eq!(ended.result, Outcome::Loss);
-        assert_eq!(ended.rounds_won, 9);
-        assert_eq!(ended.rounds_lost, 13);
+        assert_eq!(ended.own_score, 9);
+        assert_eq!(ended.opp_score, 13);
     }
 
     #[test]
@@ -477,6 +564,47 @@ mod tests {
         assert_eq!(ended.result, Outcome::Win);
     }
 
+    /// A payload with no `map` block, as CS2 sends from the main menu.
+    fn menu_payload() -> String {
+        format!(
+            r#"{{
+                "provider": {{ "appid": 730 }},
+                "auth": {{ "token": "{TOKEN}" }},
+                "player": {{ "team": "" }}
+            }}"#
+        )
+    }
+
+    #[test]
+    fn abandoned_match_finalizes_incomplete() {
+        let a = adapter();
+        a.parse(&payload("competitive", "live", 3, 5, "T"), TOKEN);
+
+        // Player leaves to the main menu mid-match.
+        let evs = a.parse(&menu_payload(), TOKEN);
+        let ended = evs
+            .iter()
+            .find_map(|e| match e {
+                TelemetryEvent::MatchEnded(m) => Some(m),
+                _ => None,
+            })
+            .expect("expected Incomplete MatchEnded on abandon");
+        assert_eq!(ended.result, Outcome::Incomplete);
+        assert_eq!(ended.mode, "competitive");
+        assert_eq!(ended.map, "de_mirage");
+
+        // Further menu payloads are quiet; the next match starts fresh.
+        assert!(a.parse(&menu_payload(), TOKEN).is_empty());
+        let evs = a.parse(&payload("competitive", "live", 0, 0, "CT"), TOKEN);
+        assert!(matches!(evs[0], TelemetryEvent::MatchStarted { .. }));
+    }
+
+    #[test]
+    fn menu_payload_without_match_is_quiet() {
+        let a = adapter();
+        assert!(a.parse(&menu_payload(), TOKEN).is_empty());
+    }
+
     #[test]
     fn second_match_starts_after_gameover() {
         let a = adapter();
@@ -485,32 +613,6 @@ mod tests {
         // New match begins.
         let evs = a.parse(&payload("competitive", "warmup", 0, 0, "CT"), TOKEN);
         assert!(matches!(evs[0], TelemetryEvent::MatchStarted { .. }));
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn parse_library_paths_extracts_dirs() {
-        let vdf = r#"
-"libraryfolders"
-{
-    "0"
-    {
-        "path"    "C:\\Program Files (x86)\\Steam"
-        "apps" { "730" "1234" }
-    }
-    "1"
-    {
-        "path"    "D:\\SteamLibrary"
-    }
-}
-"#;
-        let paths = parse_library_paths(vdf);
-        assert_eq!(paths.len(), 2);
-        assert_eq!(
-            paths[0],
-            std::path::PathBuf::from("C:\\Program Files (x86)\\Steam")
-        );
-        assert_eq!(paths[1], std::path::PathBuf::from("D:\\SteamLibrary"));
     }
 
     #[cfg(windows)]

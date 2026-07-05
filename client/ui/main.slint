@@ -14,6 +14,7 @@ import {
     SearchUserData,
     FeedCardData,
     StreamCardData,
+    GameIntegrationData,
     VideoRect,
 } from "types.slint";
 import { CrewPanel } from "panels/crew_panel.slint";
@@ -33,9 +34,10 @@ import { DiscoverPanel } from "panels/discover_panel.slint";
 import { JoinCrewModal } from "panels/join_crew_modal.slint";
 import { InviteShareModal } from "panels/invite_share_modal.slint";
 import { CrewSettingsModal } from "panels/crew_settings_modal.slint";
+import { RiotLinkModal } from "panels/riot_link_modal.slint";
 
 
-export { CrewData, MemberData, ChatMessageData, AudioDeviceData, VoiceChannelData, VoiceChannelMember, CaptureSourceData, DiscoverCrewData, SearchUserData, FeedCardData, StreamCardData, Theme, VideoRect, ForceUpdateWindow }
+export { CrewData, MemberData, ChatMessageData, AudioDeviceData, VoiceChannelData, VoiceChannelMember, CaptureSourceData, DiscoverCrewData, SearchUserData, FeedCardData, StreamCardData, GameIntegrationData, Theme, VideoRect, ForceUpdateWindow }
 
 export component MainWindow inherits Window {
     title: "Mello";
@@ -159,11 +161,13 @@ export component MainWindow inherits Window {
 
     // --- Game sensing ---
     in property <bool> game-active: false;
+    in property <string> game-id: "";
     in property <string> game-name: "";
     in property <string> game-short-name: "";
     in property <color> game-color: #2a2a30;
     // Pre-filled post-game record from telemetry (e.g. "5W–3L · 2-win streak").
     in property <string> game-summary: "";
+    in property <string> telemetry-hint: "";
     in property <bool> can-stream: false;
     in-out property <int> bar-state: 0;
 
@@ -171,6 +175,10 @@ export component MainWindow inherits Window {
     callback reaction-tapped(string);
     callback moment-submitted(string);
     callback moment-dismissed();
+    // Post-game "connect Riot account" CTA (shown once on the post-game card).
+    in-out property <bool> riot-cta-visible: false;
+    callback riot-cta-clicked();
+    callback riot-cta-dismissed();
 
     // --- Settings ---
     in-out property <bool> settings-open: false;
@@ -204,6 +212,19 @@ export component MainWindow inherits Window {
     in-out property <bool> settings-hud-enabled: true;
     in-out property <float> settings-hud-overlay-opacity: 0.8;
     in-out property <bool> settings-hud-clip-toasts: true;
+    // Games settings
+    in property <[GameIntegrationData]> games-list: [];
+    in property <bool> riot-available: false;
+    in property <bool> riot-linked: false;
+    in property <string> riot-id: "";
+    callback games-integration-toggled(string /* game-id */, bool);
+    callback riot-connect-clicked();
+    callback riot-disconnect-clicked();
+    // Riot link dialog
+    in-out property <bool> riot-dialog-open: false;
+    in-out property <string> riot-dialog-error: "";
+    in-out property <bool> riot-dialog-busy: false;
+    callback riot-link-submitted(string /* riot-id */, string /* region */);
     // Profile settings
     in property <image> profile-avatar-0;
     in property <image> profile-avatar-1;
@@ -877,10 +898,12 @@ export component MainWindow inherits Window {
                         mic-permission-denied: root.mic-permission-denied;
                         presence-status <=> root.presence-status;
                         game-active: root.game-active;
+                        game-id: root.game-id;
                         game-name: root.game-name;
                         game-short-name: root.game-short-name;
                         game-color: root.game-color;
                         game-summary: root.game-summary;
+                        telemetry-hint: root.telemetry-hint;
                         can-stream: root.can-stream;
                         is-hosting: root.is-hosting;
                         is-watching: root.is-watching;
@@ -931,6 +954,17 @@ export component MainWindow inherits Window {
                         }
                         moment-dismissed => {
                             root.moment-dismissed();
+                        }
+                        riot-cta-visible: root.riot-cta-visible;
+                        riot-cta-clicked => {
+                            root.riot-dialog-error = "";
+                            root.riot-dialog-busy = false;
+                            root.riot-dialog-open = true;
+                            root.riot-cta-clicked();
+                        }
+                        riot-cta-dismissed => {
+                            root.riot-cta-visible = false;
+                            root.riot-cta-dismissed();
                         }
                         clip-captured => {
                             root.clip-captured();
@@ -1403,6 +1437,24 @@ export component MainWindow inherits Window {
         settings-hud-enabled <=> root.settings-hud-enabled;
         settings-hud-overlay-opacity <=> root.settings-hud-overlay-opacity;
         settings-hud-clip-toasts <=> root.settings-hud-clip-toasts;
+        // Games
+        games-list: root.games-list;
+        riot-available: root.riot-available;
+        riot-linked: root.riot-linked;
+        riot-id: root.riot-id;
+        games-integration-toggled(id, v) => {
+            root.settings-show-saved = true;
+            root.games-integration-toggled(id, v);
+        }
+        riot-connect-clicked => {
+            root.riot-dialog-error = "";
+            root.riot-dialog-busy = false;
+            root.riot-dialog-open = true;
+            root.riot-connect-clicked();
+        }
+        riot-disconnect-clicked => {
+            root.riot-disconnect-clicked();
+        }
         // Callbacks
         close-requested => {
             root.settings-open = false;
@@ -1491,6 +1543,21 @@ export component MainWindow inherits Window {
         setting-changed-hud-clip-toasts(v) => {
             root.settings-show-saved = true;
             root.setting-changed-hud-clip-toasts(v);
+        }
+    }
+
+    // ===================== RIOT LINK DIALOG =====================
+    if riot-dialog-open: RiotLinkModal {
+        error: root.riot-dialog-error;
+        busy: root.riot-dialog-busy;
+        link-requested(riot-id, region) => {
+            root.riot-dialog-busy = true;
+            root.riot-dialog-error = "";
+            root.riot-link-submitted(riot-id, region);
+        }
+        dismiss-requested => {
+            root.riot-dialog-open = false;
+            root.riot-dialog-busy = false;
         }
     }
 

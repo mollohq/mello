@@ -277,6 +277,11 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
     let frame_consumed_for_client = frame_consumed.clone();
     let frame_lifecycle_for_client = frame_lifecycle.clone();
 
+    // Loaded before the core client starts so the startup telemetry config
+    // installs honor the user's per-game consent; shared with AppContext below.
+    let settings = Rc::new(RefCell::new(Settings::load()));
+    let disabled_integrations = settings.borrow().disabled_game_integrations.clone();
+
     rt.spawn(async move {
         let mut client = Client::new(
             nakama_config(),
@@ -287,6 +292,7 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
             frame_consumed_for_client,
             frame_lifecycle_for_client,
         );
+        client.set_disabled_integrations(disabled_integrations);
         client.run(cmd_rx).await;
     });
 
@@ -331,8 +337,6 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
     let hotkey_mgr = Rc::new(RefCell::new(
         platform::hotkeys::HotkeyManager::new().expect("failed to init hotkey manager"),
     ));
-
-    let settings = Rc::new(RefCell::new(Settings::load()));
 
     // --- Close ÔåÆ tray ---
     {
@@ -469,6 +473,9 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
         )),
         avatar_shuffle_timer: Rc::new(RefCell::new(None)),
         diag_autostop_timer: Rc::new(RefCell::new(None)),
+        post_game_timer: Rc::new(RefCell::new(None)),
+        riot_cta_pending: Rc::new(Cell::new(false)),
+        games_integrations: Rc::new(RefCell::new(Vec::new())),
         muted_before_deafen: Rc::new(Cell::new(false)),
         updater,
         hotkey_mgr,

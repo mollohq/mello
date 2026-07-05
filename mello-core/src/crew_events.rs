@@ -57,6 +57,10 @@ pub struct GameSessionEndRequest {
     pub wins: u32,
     #[serde(default)]
     pub losses: u32,
+    /// Client-generated idempotency key so a retried RPC can't double-apply
+    /// streaks or duplicate the ledger event server-side.
+    #[serde(default)]
+    pub session_id: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
