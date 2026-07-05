@@ -17,6 +17,7 @@ import {
     RecapAwardRow,
     StreamCardData,
     YouStripData,
+    GameStatsCardData,
     GameIntegrationData,
     VideoRect,
 } from "types.slint";
@@ -38,9 +39,10 @@ import { JoinCrewModal } from "panels/join_crew_modal.slint";
 import { InviteShareModal } from "panels/invite_share_modal.slint";
 import { CrewSettingsModal } from "panels/crew_settings_modal.slint";
 import { RiotLinkModal } from "panels/riot_link_modal.slint";
+import { StatsProfileModal } from "panels/stats_profile_modal.slint";
 
 
-export { CrewData, MemberData, ChatMessageData, AudioDeviceData, VoiceChannelData, VoiceChannelMember, CaptureSourceData, DiscoverCrewData, SearchUserData, FeedCardData, RecapLbRow, RecapAwardRow, StreamCardData, YouStripData, GameIntegrationData, Theme, VideoRect, ForceUpdateWindow }
+export { CrewData, MemberData, ChatMessageData, AudioDeviceData, VoiceChannelData, VoiceChannelMember, CaptureSourceData, DiscoverCrewData, SearchUserData, FeedCardData, RecapLbRow, RecapAwardRow, StreamCardData, YouStripData, GameStatsCardData, GameIntegrationData, Theme, VideoRect, ForceUpdateWindow }
 
 export component MainWindow inherits Window {
     title: "Mello";
@@ -345,6 +347,11 @@ export component MainWindow inherits Window {
     in property <[FeedCardData]> feed-cards: [];
     in property <[FeedCardData]> memory-cards: [];
     in property <YouStripData> you-strip;
+    // Personal stats profile (spec 19 A2), opened from the You strip.
+    in-out property <bool> stats-profile-open: false;
+    in property <[GameStatsCardData]> stats-profile-games: [];
+    // Fired on open so the client can refresh user_game_stats.
+    callback stats-profile-opened();
     in property <bool> feed-cold-start: true;
     in property <bool> feed-has-more: false;
     in property <int> feed-clip-count: 0;
@@ -838,6 +845,10 @@ export component MainWindow inherits Window {
                             clip-count: root.feed-clip-count;
                             feed-show-more-clicked => {
                                 root.feed-show-more-clicked();
+                            }
+                            you-strip-clicked => {
+                                root.stats-profile-open = true;
+                                root.stats-profile-opened();
                             }
                             clip-playing-path: root.clip-playing-path;
                             clip-progress: root.clip-progress;
@@ -1552,6 +1563,13 @@ export component MainWindow inherits Window {
     }
 
     // ===================== RIOT LINK DIALOG =====================
+    if stats-profile-open: StatsProfileModal {
+        games: root.stats-profile-games;
+        dismiss-requested => {
+            root.stats-profile-open = false;
+        }
+    }
+
     if riot-dialog-open: RiotLinkModal {
         error: root.riot-dialog-error;
         busy: root.riot-dialog-busy;

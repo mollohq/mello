@@ -322,6 +322,11 @@ impl super::Client {
         // Load the server-curated crew feed
         self.handle_load_crew_feed(crew_id).await;
 
+        // Refresh the viewer's per-game stats for the "You strip" (spec 19).
+        // Done here (not in the UI click callback) so every select path gets
+        // it: startup session restore, deep links, join/create crew, UI clicks.
+        self.refresh_user_game_stats().await;
+
         // Tell the server this is our active crew (registers subscription + returns state)
         let local_user_id = self
             .nakama
@@ -371,6 +376,19 @@ impl super::Client {
             if let Some(ch_id) = &voice_channel_id {
                 self.handle_join_voice(ch_id).await;
             }
+        }
+    }
+
+    /// Fetch the caller's per-game stats and emit `UserGameStatsLoaded`
+    /// (feeds the "You strip" + stats profile).
+    pub(super) async fn refresh_user_game_stats(&self) {
+        match self.nakama.user_game_stats_get().await {
+            Ok(resp) => {
+                let _ = self
+                    .event_tx
+                    .send(Event::UserGameStatsLoaded { games: resp.games });
+            }
+            Err(e) => log::warn!("user_game_stats_get failed: {}", e),
         }
     }
 

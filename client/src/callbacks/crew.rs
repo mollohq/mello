@@ -15,7 +15,14 @@ pub fn wire(ctx: &AppContext) {
             let _ = cmd.send(Command::SelectCrew {
                 crew_id: crew_id.to_string(),
             });
-            // Refresh the viewer's personal stats for the "You strip" atop the feed.
+        });
+    }
+
+    // Stats profile (spec 19 A2): refresh per-game stats on open so the modal
+    // shows current numbers, not the last crew-select snapshot.
+    {
+        let cmd = ctx.cmd_tx.clone();
+        ctx.app.on_stats_profile_opened(move || {
             let _ = cmd.send(Command::GetUserGameStats);
         });
     }

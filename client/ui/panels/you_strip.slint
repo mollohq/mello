@@ -46,8 +46,11 @@ component StatCell inherits VerticalLayout {
 
 // Personal stats card pinned to the top of the crew feed. Only the viewer sees
 // it. Hidden (zero height) until the viewer has tracked game stats.
+// Tapping it opens the full per-game stats profile (spec 19 A2).
 export component YouStrip inherits Rectangle {
     in property <YouStripData> data;
+
+    callback clicked();
 
     height: data.has-stats ? 92px : 0px;
     visible: data.has-stats;
@@ -58,10 +61,15 @@ export component YouStrip inherits Rectangle {
         y: 8px;
         width: parent.width - 32px;
         height: 76px;
-        background: Theme.card-bg;
+        background: strip-ta.has-hover ? Theme.surface-hover : Theme.card-bg;
         border-radius: 12px;
         border-width: 1px;
         border-color: #ffffff14;
+
+        strip-ta := TouchArea {
+            mouse-cursor: pointer;
+            clicked => { root.clicked(); }
+        }
 
         HorizontalLayout {
             padding: 14px;
@@ -126,6 +134,16 @@ export component YouStrip inherits Rectangle {
                     value: data.record-text;
                     label: "record";
                     value-color: Theme.text-secondary;
+                }
+            }
+
+            // Tap affordance → full stats profile.
+            VerticalLayout {
+                alignment: center;
+                Text {
+                    text: "›";
+                    font-size: 18px;
+                    color: Theme.text-tertiary;
                 }
             }
         }

@@ -1771,6 +1771,7 @@ export component CrewFeed inherits Rectangle {
     callback session-seen(string);
     callback session-preview-request-frame(/* session_id */ string, /* index */ int);
     callback feed-show-more-clicked();
+    callback you-strip-clicked();
 
     property <int> feed-start-index: stream-cards.length == 1 && cards.length > 0 ? 1 : 0;
 
@@ -1830,6 +1831,7 @@ export component CrewFeed inherits Rectangle {
         // Pinned personal stats (only the viewer sees it); hidden until tracked.
         YouStrip {
             data: root.you-strip;
+            clicked => { root.you-strip-clicked(); }
         }
 
         // Scrollable feed area
