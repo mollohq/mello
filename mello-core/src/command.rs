@@ -399,7 +399,11 @@ pub enum Command {
         wins: u32,
         #[serde(default)]
         losses: u32,
+        #[serde(default)]
+        draws: u32,
     },
+    /// Fetch the viewer's own per-game stats (for the personal "You strip").
+    GetUserGameStats,
 
     // --- Games settings / integrations ---
     /// Load per-game integration info (adapter registry + install detection)

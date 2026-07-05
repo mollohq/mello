@@ -2,11 +2,11 @@ use std::rc::Rc;
 
 use base64::Engine as _;
 use mello_core::{Command, Event};
-use slint::{ComponentHandle, Model};
+use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
 use crate::app_context::AppContext;
 use crate::converters::make_initials;
-use crate::FeedCardData;
+use crate::{FeedCardData, RecapAwardRow, RecapLbRow};
 
 fn normalized_entry_data(raw: &serde_json::Value) -> serde_json::Value {
     if raw.is_object() {
@@ -204,8 +204,13 @@ fn extract_title(data: &serde_json::Value, backend_type: &str, actor: &str) -> S
 fn extract_subtitle(data: &serde_json::Value, backend_type: &str) -> String {
     match backend_type {
         "weekly_recap" => {
+            // Empty when no clips, so the recap card hides the "Clips" row.
             let clips = data.get("clip_count").and_then(|v| v.as_i64()).unwrap_or(0);
-            format!("{}", clips)
+            if clips > 0 {
+                clips.to_string()
+            } else {
+                String::new()
+            }
         }
         "clip" => {
             let clip_type = data
@@ -259,10 +264,17 @@ fn skeleton_card(card_type: &str) -> FeedCardData {
     }
 }
 
-type MvpSlot = (String, String, String); // (name, initials, stat)
+type MvpSlot = (String, String, String, String); // (name, initials, stat, user_id)
 
 fn extract_mvps(data: &serde_json::Value, backend_type: &str) -> (i32, MvpSlot, MvpSlot, MvpSlot) {
-    let empty = || ("".to_string(), "".to_string(), "".to_string());
+    let empty = || {
+        (
+            "".to_string(),
+            "".to_string(),
+            "".to_string(),
+            "".to_string(),
+        )
+    };
     if backend_type != "weekly_recap" {
         return (0, empty(), empty(), empty());
     }
@@ -277,19 +289,116 @@ fn extract_mvps(data: &serde_json::Value, backend_type: &str) -> (i32, MvpSlot, 
             .unwrap_or("")
             .to_string();
         let initials = make_initials(&name);
+        let user_id = v
+            .get("user_id")
+            .and_then(|n| n.as_str())
+            .unwrap_or("")
+            .to_string();
         let mins = v.get("hangout_min").and_then(|n| n.as_i64()).unwrap_or(0);
         let stat = if mins >= 60 {
             format!("{:.1}h", mins as f64 / 60.0)
         } else {
             format!("{}m", mins)
         };
-        (name, initials, stat)
+        (name, initials, stat, user_id)
     };
     let count = members.len().min(3) as i32;
     let s0 = members.first().map(to_slot).unwrap_or_else(empty);
     let s1 = members.get(1).map(to_slot).unwrap_or_else(empty);
     let s2 = members.get(2).map(to_slot).unwrap_or_else(empty);
     (count, s0, s1, s2)
+}
+
+/// Resolve a real avatar image from the cache by user id (spec 19). Falls back
+/// to (default image, false) so callers render the initials dot instead.
+fn resolve_avatar(ctx: &AppContext, user_id: &str) -> (slint::Image, bool) {
+    if user_id.is_empty() {
+        return (slint::Image::default(), false);
+    }
+    match ctx.avatar_cache.borrow().get(user_id) {
+        Some(img) => (img.clone(), true),
+        None => (slint::Image::default(), false),
+    }
+}
+
+/// Build the recap "this week in games" leaderboard rows from `game_records`.
+fn extract_recap_leaderboard(ctx: &AppContext, data: &serde_json::Value) -> Vec<RecapLbRow> {
+    let arr = match data.get("game_records").and_then(|v| v.as_array()) {
+        Some(a) => a,
+        None => return Vec::new(),
+    };
+    arr.iter()
+        .take(5)
+        .enumerate()
+        .map(|(i, v)| {
+            let name = v
+                .get("display_name")
+                .and_then(|n| n.as_str())
+                .unwrap_or("")
+                .to_string();
+            let user_id = v.get("user_id").and_then(|n| n.as_str()).unwrap_or("");
+            let wins = v.get("wins").and_then(|n| n.as_i64()).unwrap_or(0);
+            let losses = v.get("losses").and_then(|n| n.as_i64()).unwrap_or(0);
+            let (avatar, has_avatar) = resolve_avatar(ctx, user_id);
+            RecapLbRow {
+                initials: make_initials(&name).into(),
+                name: name.into(),
+                record: format!("{}W {}L", wins, losses).into(),
+                color_index: (i % 5) as i32,
+                avatar,
+                has_avatar,
+            }
+        })
+        .collect()
+}
+
+fn extract_recap_awards(data: &serde_json::Value) -> Vec<RecapAwardRow> {
+    let arr = match data.get("awards").and_then(|v| v.as_array()) {
+        Some(a) => a,
+        None => return Vec::new(),
+    };
+    arr.iter()
+        .map(|v| {
+            let s = |k: &str| {
+                v.get(k)
+                    .and_then(|n| n.as_str())
+                    .unwrap_or("")
+                    .to_string()
+                    .into()
+            };
+            RecapAwardRow {
+                kind: s("kind"),
+                title: s("title"),
+                name: s("name"),
+                detail: s("detail"),
+            }
+        })
+        .collect()
+}
+
+/// Compact "this week in games" summary, e.g. "312 matches · CS2, Rocket League".
+fn games_summary(data: &serde_json::Value) -> String {
+    let arr = match data.get("games_played").and_then(|v| v.as_array()) {
+        Some(a) => a,
+        None => return String::new(),
+    };
+    let total: i64 = arr
+        .iter()
+        .filter_map(|v| v.get("matches").and_then(|m| m.as_i64()))
+        .sum();
+    if total == 0 {
+        return String::new();
+    }
+    let games: Vec<String> = arr
+        .iter()
+        .take(3)
+        .filter_map(|v| v.get("game").and_then(|g| g.as_str()).map(String::from))
+        .collect();
+    if games.is_empty() {
+        format!("{} matches", total)
+    } else {
+        format!("{} matches · {}", total, games.join(", "))
+    }
 }
 
 // Build a feed card from a server feed entry. card_type is the server-provided
@@ -361,6 +470,13 @@ fn build_feed_card(
         .unwrap_or("")
         .to_string();
 
+    // Stable id for the bundled game icon; empty on legacy events.
+    let game_id = data
+        .get("game_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+
     let clip_path = data
         .get("media_url")
         .and_then(|v| v.as_str())
@@ -425,7 +541,64 @@ fn build_feed_card(
         format!("{}d ago", ago / 86400)
     };
 
+    // Rich game-session card fields (spec 19 B2). Retype game sessions so the
+    // feed dispatches them to the rich GameSessionCard instead of SessionCard.
+    let is_game_session = backend_type == "game_session";
+    let card_type = if is_game_session {
+        "game-session"
+    } else {
+        feed_type
+    };
+    let game_verified = is_game_session
+        && data
+            .get("verified")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+    let (game_record, game_streak_text, game_streak_positive, game_winrate, game_matches) =
+        if is_game_session {
+            let w = data.get("wins").and_then(|v| v.as_i64()).unwrap_or(0);
+            let l = data.get("losses").and_then(|v| v.as_i64()).unwrap_or(0);
+            let d = data.get("draws").and_then(|v| v.as_i64()).unwrap_or(0);
+            let streak = data
+                .get("streak_after")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0);
+            let record = if d > 0 {
+                format!("{}W\u{2013}{}L\u{2013}{}D", w, l, d)
+            } else {
+                format!("{}W\u{2013}{}L", w, l)
+            };
+            let streak_text = if streak > 0 {
+                format!("W{streak}")
+            } else if streak < 0 {
+                format!("L{}", -streak)
+            } else {
+                "—".to_string()
+            };
+            let decided = w + l;
+            let winrate = if decided > 0 {
+                format!("{}%", (w * 100) / decided)
+            } else {
+                "—".to_string()
+            };
+            (
+                record,
+                streak_text,
+                streak >= 0,
+                winrate,
+                (w + l + d) as i32,
+            )
+        } else {
+            (String::new(), String::new(), true, String::new(), 0)
+        };
+
     let (mvp_count, mvp0, mvp1, mvp2) = extract_mvps(&data, backend_type);
+    let (mvp0_av, mvp0_has_av) = resolve_avatar(ctx, &mvp0.3);
+    let (mvp1_av, mvp1_has_av) = resolve_avatar(ctx, &mvp1.3);
+    let (mvp2_av, mvp2_has_av) = resolve_avatar(ctx, &mvp2.3);
+    let recap_leaderboard = extract_recap_leaderboard(ctx, &data);
+    let recap_awards = extract_recap_awards(&data);
+    let recap_games_summary = games_summary(&data);
     let was_seen = ctx
         .settings
         .borrow()
@@ -435,7 +608,7 @@ fn build_feed_card(
 
     FeedCardData {
         id: id.into(),
-        card_type: feed_type.into(),
+        card_type: card_type.into(),
         role: role.into(),
         size: size.into(),
         title: title.into(),
@@ -446,6 +619,7 @@ fn build_feed_card(
         actor_name: actor.clone().into(),
         actor_initials: make_initials(&actor).into(),
         game_name: game.into(),
+        game_id: game_id.into(),
         participant_count,
         clip_count,
         clip_path: clip_path.into(),
@@ -470,6 +644,21 @@ fn build_feed_card(
         mvp2_name: mvp2.0.into(),
         mvp2_initials: mvp2.1.into(),
         mvp2_stat: mvp2.2.into(),
+        mvp0_avatar: mvp0_av,
+        mvp0_has_avatar: mvp0_has_av,
+        mvp1_avatar: mvp1_av,
+        mvp1_has_avatar: mvp1_has_av,
+        mvp2_avatar: mvp2_av,
+        mvp2_has_avatar: mvp2_has_av,
+        games_summary: recap_games_summary.into(),
+        leaderboard: ModelRc::new(VecModel::from(recap_leaderboard)),
+        awards: ModelRc::new(VecModel::from(recap_awards)),
+        game_record: game_record.into(),
+        game_streak_text: game_streak_text.into(),
+        game_streak_positive,
+        game_winrate: game_winrate.into(),
+        game_matches,
+        game_verified,
         snapshot_loading: feed_type == "session-preview" && has_snapshots,
         snapshot_poster_ready: false,
         snapshot_error: false,

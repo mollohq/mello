@@ -15,6 +15,8 @@ pub fn wire(ctx: &AppContext) {
             let _ = cmd.send(Command::SelectCrew {
                 crew_id: crew_id.to_string(),
             });
+            // Refresh the viewer's personal stats for the "You strip" atop the feed.
+            let _ = cmd.send(Command::GetUserGameStats);
         });
     }
 

@@ -1302,6 +1302,17 @@ impl NakamaClient {
         Ok(parsed)
     }
 
+    /// Fetch the caller's own per-game stats (owner-read), newest first.
+    pub async fn user_game_stats_get(
+        &self,
+    ) -> Result<crate::crew_events::UserGameStatsListResponse> {
+        let resp = self
+            .rpc("user_game_stats_get", &serde_json::json!({}))
+            .await?;
+        let parsed = serde_json::from_str(&resp).unwrap_or_default();
+        Ok(parsed)
+    }
+
     // --- Riot account linking (server-side match enrichment, spec 18 §9) ---
 
     /// Link the user's own Riot ID ("GameName#TAG") for post-session match
