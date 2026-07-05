@@ -117,6 +117,7 @@ impl super::Client {
             wins,
             losses,
             draws,
+            session_id: generate_session_id(),
         };
         match self.nakama.game_session_end(&req).await {
             Ok(resp) => {
@@ -125,6 +126,7 @@ impl super::Client {
                 // post-game flow stays in charge.
                 if wins + losses + draws > 0 {
                     let _ = self.event_tx.send(crate::events::Event::SessionSummary {
+                        game_id: game_id.to_string(),
                         game_name: game_name.to_string(),
                         duration_min,
                         wins,
@@ -137,4 +139,32 @@ impl super::Client {
             Err(e) => log::warn!("game_session_end failed: {}", e),
         }
     }
+
+    /// Emit the current Riot link state. Quiet on failure (not signed in yet,
+    /// or an older server without the riot RPCs) — the UI just keeps its
+    /// "unknown" state and shows nothing.
+    pub(super) async fn send_riot_status(&self) {
+        match self.nakama.riot_status().await {
+            Ok(status) => {
+                let _ = self.event_tx.send(crate::events::Event::RiotStatus {
+                    available: status.available,
+                    linked: status.linked,
+                    riot_id: status.riot_id.unwrap_or_default(),
+                    region: status.region.unwrap_or_default(),
+                });
+            }
+            Err(e) => log::debug!("riot_status unavailable: {e}"),
+        }
+    }
+}
+
+/// One id per session-end call: retries of the *same* request (inside the RPC
+/// layer) reuse it, while distinct sessions always get fresh ids.
+fn generate_session_id() -> String {
+    use rand::Rng;
+    rand::thread_rng()
+        .sample_iter(&rand::distributions::Alphanumeric)
+        .take(24)
+        .map(char::from)
+        .collect()
 }

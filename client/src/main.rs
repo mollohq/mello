@@ -277,6 +277,11 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
     let frame_consumed_for_client = frame_consumed.clone();
     let frame_lifecycle_for_client = frame_lifecycle.clone();
 
+    // Loaded before the core client starts so the startup telemetry config
+    // installs honor the user's per-game consent; shared with AppContext below.
+    let settings = Rc::new(RefCell::new(Settings::load()));
+    let disabled_integrations = settings.borrow().disabled_game_integrations.clone();
+
     rt.spawn(async move {
         let mut client = Client::new(
             nakama_config(),
@@ -287,6 +292,7 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
             frame_consumed_for_client,
             frame_lifecycle_for_client,
         );
+        client.set_disabled_integrations(disabled_integrations);
         client.run(cmd_rx).await;
     });
 
@@ -296,6 +302,19 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
 
     let app = MainWindow::new()?;
     app.set_settings_build_version(format!("v{}", env!("CARGO_PKG_VERSION")).into());
+
+    // Dev-only: start the embedded Slint MCP server so AI tooling can inspect/drive the
+    // running UI. No-op unless SLINT_MCP_PORT is set. Called explicitly here (after the
+    // window forces platform creation) because we set the platform directly on macOS,
+    // bypassing the backend selector's auto-init.
+    #[cfg(feature = "mcp")]
+    {
+        if let Err(e) = i_slint_backend_testing::mcp_server::init() {
+            log::warn!("[mcp] failed to start MCP server: {e:?}");
+        } else if let Ok(port) = std::env::var("SLINT_MCP_PORT") {
+            log::info!("[mcp] MCP server listening on http://localhost:{port}/mcp");
+        }
+    }
 
     #[cfg(target_os = "windows")]
     let dcomp_presenter: Rc<RefCell<Option<dcomp_presenter::DCompPresenter>>> =
@@ -318,8 +337,6 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
     let hotkey_mgr = Rc::new(RefCell::new(
         platform::hotkeys::HotkeyManager::new().expect("failed to init hotkey manager"),
     ));
-
-    let settings = Rc::new(RefCell::new(Settings::load()));
 
     // --- Close ÔåÆ tray ---
     {
@@ -456,6 +473,9 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
         )),
         avatar_shuffle_timer: Rc::new(RefCell::new(None)),
         diag_autostop_timer: Rc::new(RefCell::new(None)),
+        post_game_timer: Rc::new(RefCell::new(None)),
+        riot_cta_pending: Rc::new(Cell::new(false)),
+        games_integrations: Rc::new(RefCell::new(Vec::new())),
         muted_before_deafen: Rc::new(Cell::new(false)),
         updater,
         hotkey_mgr,

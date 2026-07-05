@@ -1,5 +1,5 @@
 import { Theme, MelloTextInput } from "../theme.slint";
-import { GameBadge } from "../components/game_badge.slint";
+import { GameIcon } from "../components/game_icon.slint";
 
 component ActionButton inherits Rectangle {
     in property <image> icon;
@@ -126,12 +126,14 @@ export component ControlBar inherits Rectangle {
 
     // Game sensing
     in property <bool> game-active: false;
+    in property <string> game-id: "";
     in property <string> game-name: "";
     in property <string> game-short-name: "";
     in property <color> game-color: #2a2a30;
     // Pre-filled post-game record from telemetry (e.g. "5W–3L · 2-win streak").
     // Empty when no telemetry result; the card falls back to "How'd it go?".
     in property <string> game-summary: "";
+    in property <string> telemetry-hint: "";
     in property <bool> can-stream: false;
     in property <bool> is-hosting: false;
     in property <bool> is-watching: false;
@@ -154,6 +156,10 @@ export component ControlBar inherits Rectangle {
     callback reaction-tapped(string);
     callback moment-submitted(string);
     callback moment-dismissed();
+    // One-time "connect Riot account" CTA on the post-game card.
+    in property <bool> riot-cta-visible: false;
+    callback riot-cta-clicked();
+    callback riot-cta-dismissed();
 
     // Clip
     callback clip-captured();
@@ -352,12 +358,12 @@ export component ControlBar inherits Rectangle {
                     if in-voice: HorizontalLayout {
                         spacing: 6px;
                         alignment: start;
+                        cross-axis-alignment: center;
                         Rectangle {
                             width: 6px;
                             height: 6px;
                             border-radius: 3px;
                             background: Theme.accent-green;
-                            y: (parent.height - self.height) / 2;
                         }
 
                         Text {
@@ -436,9 +442,10 @@ export component ControlBar inherits Rectangle {
                     padding-left: 12px;
                     padding-right: 12px;
                     spacing: 12px;
-                    GameBadge {
+                    GameIcon {
+                        game-id: game-id;
                         short-name: game-short-name;
-                        bg-color: game-color;
+                        badge-color: game-color;
                         size: 32px;
                         y: (parent.height - self.height) / 2;
                     }
@@ -458,6 +465,13 @@ export component ControlBar inherits Rectangle {
                             font-size: 13px;
                             color: Theme.text-secondary;
                             font-weight: 500;
+                        }
+
+                        // One-time telemetry setup step (e.g. a launch option)
+                        if telemetry-hint != "": Text {
+                            text: telemetry-hint;
+                            font-size: 10px;
+                            color: Theme.text-tertiary;
                         }
                     }
 
@@ -500,9 +514,10 @@ export component ControlBar inherits Rectangle {
             alignment: center;
             HorizontalLayout {
                 spacing: 16px;
-                GameBadge {
+                GameIcon {
+                    game-id: game-id;
                     short-name: game-short-name;
-                    bg-color: game-color;
+                    badge-color: game-color;
                     size: 32px;
                 }
 
@@ -542,6 +557,63 @@ export component ControlBar inherits Rectangle {
                         border-clr: #4a3d1d;
                         clicked => {
                             reaction-tapped("highlight");
+                        }
+                    }
+                }
+
+                if riot-cta-visible: Rectangle {
+                    width: 1px;
+                    height: 24px;
+                    background: Theme.dark ? #FFFFFF14 : #00000014;
+                    y: (parent.height - self.height) / 2;
+                }
+                if riot-cta-visible: Rectangle {
+                    width: riot-cta-label.preferred-width + 24px;
+                    height: 32px;
+                    border-radius: 8px;
+                    border-width: 1px;
+                    border-color: Theme.accent;
+                    background: riot-cta-ta.has-hover ? Theme.surface-hover : transparent;
+                    y: (parent.height - self.height) / 2;
+
+                    riot-cta-label := Text {
+                        text: "GET VERIFIED STATS";
+                        font-family: Theme.font-mono;
+                        font-size: 10px;
+                        font-weight: 700;
+                        letter-spacing: 0.5px;
+                        color: Theme.accent;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+
+                    riot-cta-ta := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            riot-cta-clicked();
+                        }
+                    }
+                }
+                if riot-cta-visible: Rectangle {
+                    width: 24px;
+                    height: 32px;
+                    border-radius: 6px;
+                    background: riot-cta-x-ta.has-hover ? Theme.surface-hover : transparent;
+                    y: (parent.height - self.height) / 2;
+
+                    Image {
+                        source: @image-url("../icons/x.svg");
+                        width: 12px;
+                        height: 12px;
+                        colorize: Theme.text-tertiary;
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
+                    }
+
+                    riot-cta-x-ta := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            riot-cta-dismissed();
                         }
                     }
                 }
@@ -815,6 +887,7 @@ export component Preview inherits Rectangle {
         mic-muted: false;
         presence-status: 0;
         game-active: true;
+        game-id: "counter-strike-2";
         game-name: "Counter-Strike 2";
         game-short-name: "CS2";
         game-color: #DE9B35;

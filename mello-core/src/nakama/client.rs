@@ -1313,6 +1313,28 @@ impl NakamaClient {
         Ok(parsed)
     }
 
+    // --- Riot account linking (server-side match enrichment, spec 18 §9) ---
+
+    /// Link the user's own Riot ID ("GameName#TAG") for post-session match
+    /// verification. `region` is a routing cluster: americas/europe/asia/sea.
+    pub async fn riot_link(&self, riot_id: &str, region: &str) -> Result<RiotStatus> {
+        let payload = serde_json::json!({ "riot_id": riot_id, "region": region });
+        let resp = self.rpc("riot_link", &payload).await?;
+        let mut parsed: RiotStatus = serde_json::from_str(&resp)?;
+        parsed.linked = true;
+        Ok(parsed)
+    }
+
+    pub async fn riot_unlink(&self) -> Result<()> {
+        self.rpc("riot_unlink", &serde_json::json!({})).await?;
+        Ok(())
+    }
+
+    pub async fn riot_status(&self) -> Result<RiotStatus> {
+        let resp = self.rpc("riot_status", &serde_json::json!({})).await?;
+        Ok(serde_json::from_str(&resp)?)
+    }
+
     // --- Clips RPCs ---
 
     pub async fn post_clip(

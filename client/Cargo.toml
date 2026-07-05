@@ -17,7 +17,7 @@ path = "src/main.rs"
 
 [dependencies]
 mello-core = { path = "../mello-core" }
-slint = { version = "1.16", features = ["renderer-winit-skia", "renderer-winit-software"] }
+slint = { version = "1.17", features = ["renderer-winit-skia", "renderer-winit-software"] }
 tokio = { workspace = true }
 log = { workspace = true }
 tracing = "0.1"
@@ -29,6 +29,10 @@ uuid = { version = "1", features = ["v4"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 paste = "1"
+
+# Dev-only: embedded MCP server for AI-driven UI inspection (gated by the `mcp` feature).
+# Runtime is a no-op unless SLINT_MCP_PORT is set; never enabled in production builds.
+i-slint-backend-testing = { version = "1.17", optional = true, features = ["mcp"] }
 
 # Auto-updater
 velopack = "0.0.1298"
@@ -77,22 +81,23 @@ windows = { version = "0.62", features = [
     "Win32_System_IO",
 ] }
 windows-numerics = "0.3"
-i-slint-backend-winit = { version = "=1.16.1" }
+i-slint-backend-winit = { version = "=1.17.0" }
 raw-window-handle = "0.6"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 muda = "0.17"
-i-slint-backend-winit = { version = "=1.16.1", features = ["renderer-skia"] }
+i-slint-backend-winit = { version = "=1.17.0", features = ["renderer-skia"] }
 
 [features]
 default = ["development"]
 production = []
 development = []
+mcp = ["dep:i-slint-backend-testing"]
 
 [dev-dependencies]
 toml = "0.8"
-i-slint-backend-testing = "1.16"
+i-slint-backend-testing = "1.17"
 
 [build-dependencies]
-slint-build = "1.16"
+slint-build = "1.17"
 winresource = "0.1"

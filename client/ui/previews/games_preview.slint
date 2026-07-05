@@ -1,0 +1,98 @@
+// Design-time previews for the Games settings / Riot link surfaces.
+// Not part of the app build — open this file with the Slint extension and
+// pick a component in the preview panel (or run slint-viewer on it).
+
+import { Theme } from "../theme.slint";
+import { ControlBar } from "../panels/control_bar.slint";
+import { RiotLinkModal } from "../panels/riot_link_modal.slint";
+import { SettingsModal } from "../panels/settings_modal.slint";
+import { GameIntegrationData } from "../types.slint";
+
+// Post-game card with the "GET VERIFIED STATS" CTA, as it appears after a
+// LoL session ends with no Riot account linked.
+export component RiotCtaPreview inherits Window {
+    width: 1180px;
+    height: 96px;
+    background: Theme.bg-app;
+
+    ControlBar {
+        y: parent.height - Theme.control-bar-height;
+        width: parent.width;
+        height: Theme.control-bar-height;
+        user-name: "ash";
+        user-initials: "AS";
+        game-active: true;
+        game-id: "league-of-legends";
+        game-name: "League of Legends";
+        game-short-name: "LoL";
+        game-color: #C8AA6E;
+        game-summary: "3W\u{2013}1L · 2-win streak";
+        bar-state: 2;
+        riot-cta-visible: true;
+    }
+}
+
+// The consent + input dialog the CTA (and settings Connect button) opens.
+export component RiotLinkDialogPreview inherits Window {
+    width: 960px;
+    height: 680px;
+    background: Theme.bg-app;
+
+    RiotLinkModal { }
+}
+
+// Same dialog in its error state.
+export component RiotLinkDialogErrorPreview inherits Window {
+    width: 960px;
+    height: 680px;
+    background: Theme.bg-app;
+
+    RiotLinkModal {
+        error: "Riot ID not found. Check the spelling — it looks like GameName#TAG.";
+    }
+}
+
+// Settings modal opened on the Games tab with realistic rows.
+export component GamesTabPreview inherits Window {
+    width: 1180px;
+    height: 760px;
+    background: Theme.bg-app;
+
+    property <[GameIntegrationData]> demo-games: [
+        { game-id: "counter-strike-2", name: "Counter-Strike 2", short-name: "CS2", color: #DE9B35, install-status: "found", writes-files: true, note: "Adds a Game State Integration config to the CS2 folder so match results are captured automatically.", enabled: true, has-account-link: false },
+        { game-id: "dota-2", name: "Dota 2", short-name: "Dota 2", color: #A22A20, install-status: "found", writes-files: true, note: "Adds a Game State Integration config to the Dota 2 folder. Needs the -gamestateintegration launch option in Steam.", enabled: true, has-account-link: false },
+        { game-id: "league-of-legends", name: "League of Legends", short-name: "LoL", color: #C8AA6E, install-status: "", writes-files: false, note: "Reads live match data from the game's own local API while you play. Nothing is installed.", enabled: true, has-account-link: true },
+        { game-id: "rocket-league", name: "Rocket League", short-name: "Rocket", color: #0076FF, install-status: "not-found", writes-files: true, note: "Adds the official Stats API config to the Rocket League folder. Takes effect after the game restarts.", enabled: false, has-account-link: false },
+        { game-id: "legends-of-runeterra", name: "Legends of Runeterra", short-name: "LoR", color: #19B1A6, install-status: "", writes-files: false, note: "Reads game results and decklists from the game's own local API while you play. Nothing is installed.", enabled: true, has-account-link: false },
+        { game-id: "hearthstone", name: "Hearthstone", short-name: "HS", color: #CD8B36, install-status: "found", writes-files: true, note: "Enables Hearthstone's built-in match logging (the same mechanism deck trackers use) and reads the log while you play.", enabled: true, has-account-link: false },
+        { game-id: "minecraft", name: "Minecraft", short-name: "MC", color: #5D8731, install-status: "found", writes-files: false, note: "Reads your singleplayer world statistics before and after a session. Nothing is installed.", enabled: true, has-account-link: false },
+        { game-id: "path-of-exile", name: "Path of Exile", short-name: "PoE", color: #B49256, install-status: "not-found", writes-files: false, note: "Reads the game's client log for zones, level-ups, and deaths while you play. Nothing is installed.", enabled: true, has-account-link: false },
+        { game-id: "starcraft-2", name: "StarCraft II", short-name: "SC2", color: #00AEFF, install-status: "", writes-files: false, note: "Reads match state from the game's own local API while you play. Nothing is installed.", enabled: true, has-account-link: false },
+    ];
+
+    SettingsModal {
+        active-tab: 3;
+        games-list: demo-games;
+        riot-available: true;
+        riot-linked: false;
+    }
+}
+
+// Games tab with a linked Riot account (Connected accounts row state).
+export component GamesTabLinkedPreview inherits Window {
+    width: 1180px;
+    height: 760px;
+    background: Theme.bg-app;
+
+    property <[GameIntegrationData]> demo-games: [
+        { game-id: "league-of-legends", name: "League of Legends", short-name: "LoL", color: #C8AA6E, install-status: "", writes-files: false, note: "Reads live match data from the game's own local API while you play. Nothing is installed.", enabled: true, has-account-link: true },
+    ];
+
+    SettingsModal {
+        active-tab: 3;
+        games-list: demo-games;
+        riot-available: true;
+        riot-linked: true;
+        riot-id: "ash#EUW";
+    }
+}

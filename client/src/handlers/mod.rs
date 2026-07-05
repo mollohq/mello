@@ -3,6 +3,7 @@ mod chat;
 mod clip;
 mod crew;
 mod game;
+mod games;
 mod presence;
 mod stats;
 mod stream_cards;
@@ -125,7 +126,13 @@ pub fn handle_event(ctx: &AppContext, event: Event) {
         | Event::GameEnded { .. }
         | Event::PostGameTimeout
         | Event::MatchEnded { .. }
-        | Event::SessionSummary { .. } => game::handle(ctx, event),
+        | Event::SessionSummary { .. }
+        | Event::TelemetrySetupHint { .. } => game::handle(ctx, event),
+
+        // Games settings + Riot account link
+        Event::GamesSettings { .. }
+        | Event::RiotStatus { .. }
+        | Event::RiotLinkFailed { .. } => games::handle(ctx, event),
 
         // Personal stats (You strip)
         Event::UserGameStatsLoaded { .. } => stats::handle(ctx, event),

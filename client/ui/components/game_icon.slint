@@ -1,0 +1,28 @@
+import { GameIconsDb } from "game_icons_gen.slint";
+import { GameBadge } from "game_badge.slint";
+
+/// Square game tile: bundled SteamGridDB icon when we have it, otherwise the
+/// colored short-name badge.
+export component GameIcon inherits Rectangle {
+    in property <string> game-id;
+    in property <string> short-name;
+    in property <color> badge-color: #2a2a30;
+    in property <length> size: 36px;
+
+    width: size;
+    height: size;
+    border-radius: 8px;
+    clip: true;
+
+    if GameIconsDb.has(game-id): Image {
+        source: GameIconsDb.icon(game-id);
+        width: parent.width;
+        height: parent.height;
+        image-fit: cover;
+    }
+    if !GameIconsDb.has(game-id): GameBadge {
+        short-name: short-name;
+        bg-color: badge-color;
+        size: size;
+    }
+}

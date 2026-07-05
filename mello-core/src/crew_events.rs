@@ -60,6 +60,10 @@ pub struct GameSessionEndRequest {
     /// Drawn matches this session — recorded but don't move the streak.
     #[serde(default)]
     pub draws: u32,
+    /// Client-generated idempotency key so a retried RPC can't double-apply
+    /// streaks or duplicate the ledger event server-side.
+    #[serde(default)]
+    pub session_id: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

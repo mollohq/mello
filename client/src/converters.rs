@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use slint::private_unstable_api::re_exports::{parse_markdown, string_to_styled_text, StyledText};
 use slint::Model;
+use slint::StyledText;
 
 use crate::{
     ChatLinkData, ChatMessageData, CrewData, DebugHistory, MainWindow, MemberData,
@@ -80,9 +80,10 @@ pub fn chat_messages_to_slint(
         };
 
         let display_styled: StyledText = if d.is_system || d.is_deleted {
-            string_to_styled_text(display_text.clone())
+            StyledText::from_plain_text(&display_text)
         } else {
-            parse_markdown(&display_text, &[] as &[StyledText])
+            StyledText::from_markdown(&display_text)
+                .unwrap_or_else(|_| StyledText::from_plain_text(&display_text))
         };
 
         let slint_links: Vec<ChatLinkData> = links

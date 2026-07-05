@@ -1,6 +1,7 @@
 import { Theme, MelloInputField, MelloScrollArea } from "../theme.slint";
-import { AudioDeviceData } from "../types.slint";
+import { AudioDeviceData, GameIntegrationData } from "../types.slint";
 import { AvatarCard } from "../components/avatar_card.slint";
+import { GameIcon } from "../components/game_icon.slint";
 
 // ─── Reusable: Device Dropdown ─────────────────────────────────────────────
 export component DeviceDropdown inherits Rectangle {
@@ -1556,6 +1557,220 @@ component ProfileTab inherits VerticalLayout {
     }
 }
 
+// ─── Games Tab ─────────────────────────────────────────────────────────────
+component GameIntegrationRow inherits Rectangle {
+    in property <GameIntegrationData> game;
+    callback toggled(bool);
+
+    height: game-row-layout.preferred-height;
+    border-radius: 8px;
+    background: game-row-ta.has-hover ? Theme.surface-hover : transparent;
+
+    game-row-ta := TouchArea {
+        clicked => { toggled(!game.enabled); }
+    }
+
+    game-row-layout := HorizontalLayout {
+        padding-top: 14px;
+        padding-bottom: 14px;
+        padding-left: 20px;
+        padding-right: 20px;
+        spacing: 16px;
+
+        VerticalLayout {
+            alignment: center;
+            GameIcon {
+                game-id: game.game-id;
+                short-name: game.short-name;
+                badge-color: game.color;
+                size: 36px;
+            }
+        }
+
+        VerticalLayout {
+            horizontal-stretch: 1;
+            spacing: 6px;
+            alignment: center;
+
+            HorizontalLayout {
+                spacing: 10px;
+                alignment: start;
+
+                Text {
+                    text: game.name;
+                    font-size: 15px;
+                    font-weight: 500;
+                    color: Theme.text-primary;
+                    letter-spacing: 0.3px;
+                    vertical-alignment: center;
+                }
+
+                if game.install-status != "": Rectangle {
+                    width: status-text.preferred-width + 12px;
+                    height: 18px;
+                    border-radius: 4px;
+                    background: game.install-status == "found" ? #1e2a1e : Theme.surface;
+                    border-width: 1px;
+                    border-color: game.install-status == "found" ? #2d4a2d : Theme.graphic-light;
+                    y: (parent.height - self.height) / 2;
+
+                    status-text := Text {
+                        text: game.install-status == "found" ? "FOUND" : "NOT FOUND";
+                        font-family: Theme.font-mono;
+                        font-size: 9px;
+                        font-weight: 600;
+                        letter-spacing: 1px;
+                        color: game.install-status == "found" ? #4ade80 : Theme.text-tertiary;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+
+            Text {
+                text: game.note;
+                font-size: 13px;
+                color: Theme.text-secondary;
+                wrap: word-wrap;
+            }
+        }
+
+        VerticalLayout {
+            alignment: center;
+            SettingsToggle {
+                checked: game.enabled;
+                toggled(v) => { root.toggled(v); }
+            }
+        }
+    }
+}
+
+component GamesTab inherits VerticalLayout {
+    padding: 40px;
+    padding-bottom: 80px;
+    spacing: 48px;
+
+    in property <[GameIntegrationData]> games: [];
+    in property <bool> riot-available: false;
+    in property <bool> riot-linked: false;
+    in property <string> riot-id: "";
+
+    callback integration-toggled(string /* game-id */, bool);
+    callback riot-connect-clicked();
+    callback riot-disconnect-clicked();
+
+    // GAME INTEGRATIONS
+    VerticalLayout {
+        spacing: 24px;
+
+        SectionHeader { title: "GAME INTEGRATIONS"; }
+
+        Text {
+            text: "m3llo captures match results for these games while you play. Some games need a small config file in their game folder — turning a game off skips any setup and stops capture for it.";
+            font-size: 13px;
+            color: Theme.text-secondary;
+            wrap: word-wrap;
+        }
+
+        VerticalLayout {
+            spacing: 8px;
+
+            for game in games: GameIntegrationRow {
+                game: game;
+                toggled(v) => { integration-toggled(game.game-id, v); }
+            }
+        }
+    }
+
+    // CONNECTED ACCOUNTS
+    VerticalLayout {
+        spacing: 24px;
+
+        SectionHeader { title: "CONNECTED ACCOUNTS"; }
+
+        Rectangle {
+            height: riot-row-layout.preferred-height;
+            border-radius: 8px;
+
+            riot-row-layout := HorizontalLayout {
+                padding-top: 14px;
+                padding-bottom: 14px;
+                padding-left: 20px;
+                padding-right: 20px;
+                spacing: 32px;
+
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    spacing: 6px;
+                    alignment: center;
+
+                    Text {
+                        text: "Riot Games";
+                        font-size: 15px;
+                        font-weight: 500;
+                        color: Theme.text-primary;
+                        letter-spacing: 0.3px;
+                    }
+
+                    Text {
+                        text: riot-linked
+                            ? "Linked as \{riot-id}. Match results for League of Legends and TFT are verified against Riot's official data."
+                            : "Link your Riot ID to get server-verified match results for League of Legends and TFT. We only read your match history — nothing is posted to your account.";
+                        font-size: 13px;
+                        color: Theme.text-secondary;
+                        wrap: word-wrap;
+                    }
+
+                    if !riot-available && !riot-linked: Text {
+                        text: "Temporarily unavailable.";
+                        font-size: 12px;
+                        color: Theme.text-tertiary;
+                    }
+                }
+
+                VerticalLayout {
+                    alignment: center;
+
+                    Rectangle {
+                        width: riot-btn-text.preferred-width + 28px;
+                        height: 32px;
+                        border-radius: 8px;
+                        background: riot-linked
+                            ? (riot-btn-ta.has-hover ? Theme.surface-hover : Theme.surface)
+                            : Theme.accent;
+                        border-width: riot-linked ? 1px : 0px;
+                        border-color: Theme.graphic-light;
+                        opacity: (riot-available || riot-linked) ? 1.0 : 0.5;
+
+                        riot-btn-text := Text {
+                            text: riot-linked ? "DISCONNECT" : "CONNECT";
+                            font-family: Theme.font-mono;
+                            font-size: 11px;
+                            font-weight: 700;
+                            letter-spacing: 0.5px;
+                            color: riot-linked ? Theme.text-secondary : white;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+
+                        riot-btn-ta := TouchArea {
+                            mouse-cursor: pointer;
+                            enabled: riot-available || riot-linked;
+                            clicked => {
+                                if riot-linked {
+                                    riot-disconnect-clicked();
+                                } else {
+                                    riot-connect-clicked();
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // ─── Settings Modal (main export) ──────────────────────────────────────────
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1658,6 +1873,17 @@ export component SettingsModal inherits Rectangle {
     in-out property <bool> settings-hud-enabled: true;
     in-out property <float> settings-hud-overlay-opacity: 0.8;
     in-out property <bool> settings-hud-clip-toasts: true;
+
+    // Games settings
+    in property <[GameIntegrationData]> games-list: [];
+    in property <bool> riot-available: false;
+    in property <bool> riot-linked: false;
+    in property <string> riot-id: "";
+
+    // Games callbacks
+    callback games-integration-toggled(string /* game-id */, bool);
+    callback riot-connect-clicked();
+    callback riot-disconnect-clicked();
 
     // General callbacks
     callback setting-changed-start-on-boot(bool);
@@ -1893,6 +2119,40 @@ export component SettingsModal inherits Rectangle {
                                 }
                             }
 
+                            // Games
+                            Rectangle {
+                                height: 40px;
+                                border-radius: 6px;
+                                background: active-tab == 3 ? Theme.surface : (games-ta.has-hover ? Theme.surface-hover : transparent);
+                                border-width: active-tab == 3 ? 1px : 0px;
+                                border-color: active-tab == 3 ? Theme.graphic-light : transparent;
+
+                                Image {
+                                    source: @image-url("../icons/gamepad.svg");
+                                    width: 16px;
+                                    height: 16px;
+                                    colorize: active-tab == 3 ? Theme.text-primary : Theme.text-secondary;
+                                    x: 12px;
+                                    y: (parent.height - self.height) / 2;
+                                    opacity: 0.8;
+                                }
+
+                                Text {
+                                    text: "GAMES";
+                                    font-family: Theme.font-mono;
+                                    font-size: 12px;
+                                    font-weight: 500;
+                                    letter-spacing: 0.6px;
+                                    color: active-tab == 3 ? Theme.text-primary : Theme.text-secondary;
+                                    x: 12px + 16px + 12px;
+                                    y: (parent.height - self.preferred-height) / 2;
+                                }
+
+                                games-ta := TouchArea {
+                                    clicked => { active-tab = 3; }
+                                }
+                            }
+
                             // Spacer
                             Rectangle { height: 16px; }
 
@@ -1991,7 +2251,7 @@ export component SettingsModal inherits Rectangle {
                     settings-scroll := MelloScrollArea {
                         width: parent.width;
                         height: parent.height;
-                        content-height: active-tab == 0 ? profile-tab.preferred-height : (active-tab == 1 ? general-tab.preferred-height : audio-tab.preferred-height);
+                        content-height: active-tab == 0 ? profile-tab.preferred-height : (active-tab == 1 ? general-tab.preferred-height : (active-tab == 2 ? audio-tab.preferred-height : games-tab.preferred-height));
 
                         profile-tab := ProfileTab {
                             visible: active-tab == 0;
@@ -2093,6 +2353,18 @@ export component SettingsModal inherits Rectangle {
                             ptt-key-captured(key, ctrl, alt, shift, meta) => { root.ptt-key-captured(key, ctrl, alt, shift, meta); }
                             vad-threshold-changed(v) => { root.setting-changed-vad-threshold(v); }
                             mic-test-toggled => { root.mic-test-toggled(); }
+                        }
+
+                        games-tab := GamesTab {
+                            visible: active-tab == 3;
+                            width: parent.width;
+                            games: root.games-list;
+                            riot-available: root.riot-available;
+                            riot-linked: root.riot-linked;
+                            riot-id: root.riot-id;
+                            integration-toggled(id, v) => { root.games-integration-toggled(id, v); }
+                            riot-connect-clicked => { root.riot-connect-clicked(); }
+                            riot-disconnect-clicked => { root.riot-disconnect-clicked(); }
                         }
                     }
                 }
