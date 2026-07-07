@@ -56,11 +56,32 @@ Also shipped as robustness guards: 8000-char display cap in `converters.rs` (hug
 and the chat feed was migrated to `ListView` (virtualization) — the latter is *hygiene*,
 not the memory fix; keep/revert decision pending (short-history bottom-pin regression).
 
-### Phase 2 — Lazy audio pipeline (~100 wakeups/s) 🎯
-Split `AudioPipeline::initialize()` (libmello); defer playback-start / capture / VAD / AEC to first `JoinVoice`; tear down on `LeaveVoice`.
-- New C ABI `mello_audio_engage()/disengage()` (or fold into join/leave). **Read `specs/03-LIBMELLO.md` first.**
-- Pre-warm on crew-select if first-join latency is noticeable.
-- **Exit:** idle wakeups lose the ~100/s audio floor; Silero/audio buffers gone when not in VC.
+### Phase 2 — In-VC efficiency 🎯 **VERDICT: already at/above Discord (measured 2026-07-07)**
+The app auto-joins VC on startup, so in-VC is the steady state we optimize (not idle-no-VC).
+Measured in an active call (powermetrics, all processes summed):
+
+| | CPU ms/s | wakeups/s |
+|---|---:|---:|
+| Mello (single process) | ~148 | ~172 |
+| Discord (Renderer+GPU+main+helpers) | ~195–215 | ~160–185 |
+
+**Mello beats Discord in-call on CPU by ~25-30% at wakeup parity.** Profiling (macOS
+`sample`, silent vs talking in VC) showed: UI/render absent from hot stacks; Silero ~5
+samples (negligible); the talking-state cost is one hot loop = Opus encode. Shipped:
+`OPUS_SET_COMPLEXITY(8)` (was default 10) in `libmello/src/audio/opus_codec.cpp`.
+
+**Activity Monitor optics:** Discord's branded row shows <1% because Electron hides the
+real cost in "Discord Helper (Renderer)" (~19%); Mello's single process shows everything
+in one row. We are cheaper in total.
+
+**Parked (documented future work, deliberately not done now):**
+- Audio-unit stop/teardown when not in VC (idle-no-VC is 106 wk/s vs Discord ~6; state
+  deprioritized because the app auto-joins VC on startup). Original lazy-init design
+  remains valid if priorities change.
+- Output-buffer 10.7ms → 20ms behind a flag (`playback_coreaudio.cpp` sets no buffer
+  size → system default ~94 cb/s; 20ms halves audio wakeups at +10ms playout latency —
+  A/B before shipping).
+- Event-driven core-event dispatch to replace the 100ms poll loop (~10 wk/s).
 
 ### Phase 3 — Remaining idle wakeups
 - 3.1 Event-driven core events (`slint::invoke_from_event_loop`) replacing the 100 ms poll; slow residual timer only for tray/menu.
