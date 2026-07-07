@@ -40,14 +40,21 @@ Verified with `footprint`, `vmmap`, `MallocStackLogging` + `malloc_history`, and
 - 0.5 Add a `gui-voice` scenario (join VC + injected WAV); implement inject in GUI perf mode.
 - **Exit:** `run-gui.sh` reports footprint + wakeups + true CPU, with `gui-idle` and `gui-voice` baselines committed.
 
-### Phase 1 — Chat virtualization (~180 MB) 🎯
-Migrate the `chat_panel.slint` feed from `Flickable + for` to Slint `ListView`.
-- 1.1 Bottom-anchoring (replace `alignment: end`).
-- 1.2 Scroll-to-bottom + "new messages" pill via ListView `viewport-y`.
-- 1.3 History-prepend position stability via viewport-height delta (drop the `56px` hack).
-- 1.4 Keep incremental row patching; make new messages append (no full-model rebuild / markdown re-parse).
-- 1.5 (optional) cap the live model to ~500 rows, re-fetch on scroll-up.
-- **Exit:** `SkDynamicMemoryWStream` chat allocation gone; idle footprint ~398 → ~215 MB. QA scroll/history/edit/delete/gif.
+### Phase 1 — The ~188 MB memory bug 🎯 **DONE — root cause was NOT chat virtualization**
+**Actual root cause (measured, byte-exact):** rendering *any* color emoji makes Slint 1.17's
+Skia renderer copy the entire `Apple Color Emoji.ttc` (188,589,668 bytes) into the heap and
+cache it forever (`i-slint-renderer-skia/font_cache.rs` `FontMgr::new_from_data`; peaks of
+2-3x from its TTC re-extraction workaround). One 😀 = permanent +188 MB.
+
+**Fix shipped:** bundle OpenMoji COLRv0 (~10 MB) and register it via `SLINT_FONT_PATH`
+before Slint init (`client/src/emoji_font.rs`) — Slint puts it in the generic-family
+fallback chain, so emoji resolve to OpenMoji and the system emoji font never loads.
+Measured: idle with emoji ~400 MB → **~216 MB**. Bonus: identical emoji cross-platform.
+CC BY-SA 4.0 — attribution line required in credits. Upstream Slint issue to be filed.
+
+Also shipped as robustness guards: 8000-char display cap in `converters.rs` (huge pastes),
+and the chat feed was migrated to `ListView` (virtualization) — the latter is *hygiene*,
+not the memory fix; keep/revert decision pending (short-history bottom-pin regression).
 
 ### Phase 2 — Lazy audio pipeline (~100 wakeups/s) 🎯
 Split `AudioPipeline::initialize()` (libmello); defer playback-start / capture / VAD / AEC to first `JoinVoice`; tear down on `LeaveVoice`.
