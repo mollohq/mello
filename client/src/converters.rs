@@ -49,15 +49,6 @@ pub fn chat_messages_to_slint(
     let mut out = Vec::with_capacity(display.len() + 1);
 
     for d in display {
-        // TEMP diagnostic (eprintln → stderr, no logger needed). Runs on every
-        // chat render, so grep + `sort -u` to dedupe. Finds the message whose
-        // content makes Slint's StyledText render blow up to ~180 MB.
-        eprintln!(
-            "[chat-dump] id={} len={} content={:?}",
-            d.message_id,
-            d.content.chars().count(),
-            d.content
-        );
         if let Some(unread_id) = opts.first_unread_id {
             if d.message_id == unread_id {
                 out.push(ChatMessageData {

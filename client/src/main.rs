@@ -10,6 +10,7 @@ mod converters;
 pub mod dcomp_presenter;
 mod deep_link;
 mod diag_capture;
+mod emoji_font;
 mod foreground_monitor;
 mod gif_animator;
 mod handlers;
@@ -228,6 +229,10 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     updater::startup_update::apply_renderer_override();
+
+    // Must run before ANY Slint window (including the force-update dialog):
+    // Slint reads SLINT_FONT_PATH once when the font collection is first used.
+    emoji_font::setup();
 
     let perf_mode = perf_mode::enabled();
 
