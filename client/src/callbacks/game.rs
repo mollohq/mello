@@ -9,7 +9,10 @@ pub fn wire(ctx: &AppContext) {
     {
         let cmd = ctx.cmd_tx.clone();
         let app_weak = ctx.app.as_weak();
+        let post_game_timer = ctx.post_game_timer.clone();
         ctx.app.on_reaction_tapped(move |sentiment| {
+            // User is interacting; stop the 30 s auto-dismiss.
+            post_game_timer.borrow_mut().take();
             let sentiment = sentiment.to_string();
 
             if sentiment == "highlight" {
@@ -42,7 +45,9 @@ pub fn wire(ctx: &AppContext) {
     {
         let cmd = ctx.cmd_tx.clone();
         let app_weak = ctx.app.as_weak();
+        let post_game_timer = ctx.post_game_timer.clone();
         ctx.app.on_moment_submitted(move |text| {
+            post_game_timer.borrow_mut().take();
             let game_name = app_weak
                 .upgrade()
                 .map(|a: MainWindow| a.get_game_name().to_string())
@@ -65,9 +70,12 @@ pub fn wire(ctx: &AppContext) {
     // Moment dismissed
     {
         let app_weak = ctx.app.as_weak();
+        let post_game_timer = ctx.post_game_timer.clone();
         ctx.app.on_moment_dismissed(move || {
+            post_game_timer.borrow_mut().take();
             if let Some(app) = app_weak.upgrade() {
                 app.set_game_active(false);
+                app.set_game_summary("".into());
                 app.set_bar_state(0);
             }
         });

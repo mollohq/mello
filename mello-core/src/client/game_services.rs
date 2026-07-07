@@ -1,14 +1,20 @@
-use std::sync::Arc;
-
 use crate::game_db::GameDatabase;
 use crate::game_sensing::{GameEvent, GameSensor};
-use crate::telemetry::{self, AdapterRegistry, TelemetryListener, TELEMETRY_PORT};
+use crate::telemetry::{self, TelemetryListener, TELEMETRY_PORT};
 
 use super::Client;
 
 impl Client {
     /// Start game process scanning and telemetry listener after auth.
     /// No-op when game sensing is disabled or already started.
+    ///
+    /// Deferring these to post-auth keeps startup lean (no process scanning,
+    /// no loopback HTTP listener until the user is actually connected).
+    /// `disabled_integrations` is seeded from settings before `run()`, so the
+    /// config installs below honor it — games like CS2 only read their GSI
+    /// config at launch, so installing here (before a game is likely open)
+    /// preserves the no-restart-needed behavior. Idempotent; a missing game
+    /// just logs at debug.
     pub(super) fn ensure_game_services(&mut self) {
         if !self.enable_game_sensor {
             return;
@@ -24,21 +30,23 @@ impl Client {
         *self.game_event_rx.lock().unwrap() = Some(game_event_rx);
         log::info!("Game sensor started (post-auth)");
 
-        let telemetry_registry = Arc::new(AdapterRegistry::with_defaults());
         let telemetry_token = telemetry::load_or_create_token();
-        match TelemetryListener::start(telemetry_registry.clone(), telemetry_token.clone()) {
-            Ok((listener, rx)) => {
-                self.telemetry_listener = Some(listener);
-                *self.telemetry_event_rx.lock().unwrap() = Some(rx);
-            }
+        match TelemetryListener::start(
+            self.telemetry_registry.clone(),
+            telemetry_token.clone(),
+            self.telemetry_event_tx.clone(),
+        ) {
+            Ok(listener) => self.telemetry_listener = Some(listener),
             Err(e) => {
                 log::warn!("[telemetry] listener failed to bind on {TELEMETRY_PORT}: {e}");
             }
         }
-        self.telemetry_registry = Some(telemetry_registry.clone());
         self.telemetry_token = Some(telemetry_token.clone());
 
-        for adapter in telemetry_registry.all() {
+        for adapter in self.telemetry_registry.all() {
+            if self.disabled_integrations.contains(adapter.game_id()) {
+                continue; // user opted out of this integration
+            }
             let adapter = adapter.clone();
             let token = telemetry_token.clone();
             tokio::task::spawn_blocking(move || {

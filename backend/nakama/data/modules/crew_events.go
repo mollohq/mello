@@ -74,7 +74,10 @@ type StreamSessionData struct {
 }
 
 type GameSessionData struct {
-	GameName    string   `json:"game_name"`
+	GameName string `json:"game_name"`
+	// Stable games.json id (e.g. "counter-strike-2"); empty on legacy events.
+	// The client uses it for the bundled game icon.
+	GameID      string   `json:"game_id,omitempty"`
 	GameIGDBID  int      `json:"game_igdb_id"`
 	PlayerIDs   []string `json:"player_ids"`
 	PlayerNames []string `json:"player_names"`
@@ -84,8 +87,12 @@ type GameSessionData struct {
 	// streak (from the private user_game_stats store) copied into this public event.
 	Wins        int    `json:"wins,omitempty"`
 	Losses      int    `json:"losses,omitempty"`
+	Draws       int    `json:"draws,omitempty"`
 	Result      string `json:"result,omitempty"` // "win" | "loss" | "even"
 	StreakAfter int    `json:"streak_after,omitempty"`
+	// True when wins/losses were confirmed against an official post-match API
+	// (Riot match-v5/TFT) rather than taken from the client's local telemetry.
+	Verified bool `json:"verified,omitempty"`
 }
 
 type MemberJoinedData struct {
@@ -692,6 +699,57 @@ type GameSessionEndRequest struct {
 	DurationMin int    `json:"duration_min"`
 	Wins        int    `json:"wins"`
 	Losses      int    `json:"losses"`
+	Draws       int    `json:"draws"`
+	// Client-generated idempotency key. Retries of the same session end carry
+	// the same id; duplicates are acknowledged without re-applying stats or
+	// appending a second ledger event. Empty for older clients (no dedup).
+	SessionID string `json:"session_id"`
+}
+
+// The server can't verify client-reported outcomes, but it can bound them:
+// no human session produces more decisive matches than this.
+const maxSessionOutcomes = 30
+
+// clampSessionOutcome bounds a client-reported win/loss count to [0, maxSessionOutcomes].
+func clampSessionOutcome(n int) int {
+	if n < 0 {
+		return 0
+	}
+	if n > maxSessionOutcomes {
+		return maxSessionOutcomes
+	}
+	return n
+}
+
+const gameSessionDedupCollection = "game_session_dedup"
+
+// isDuplicateGameSession records session_id for the user (create-only write) and
+// reports whether it was already present. Best-effort: storage errors are
+// treated as "not a duplicate" so a dedup outage never blocks session recording.
+func isDuplicateGameSession(ctx context.Context, nk runtime.NakamaModule, logger runtime.Logger, userID, sessionID string) bool {
+	objects, err := nk.StorageRead(ctx, []*runtime.StorageRead{
+		{Collection: gameSessionDedupCollection, Key: sessionID, UserID: userID},
+	})
+	if err == nil && len(objects) > 0 {
+		return true
+	}
+	_, err = nk.StorageWrite(ctx, []*runtime.StorageWrite{
+		{
+			Collection:      gameSessionDedupCollection,
+			Key:             sessionID,
+			UserID:          userID,
+			Value:           fmt.Sprintf(`{"ts":%d}`, time.Now().UnixMilli()),
+			Version:         "*", // create-only: concurrent retries race to one winner
+			PermissionRead:  0,
+			PermissionWrite: 0,
+		},
+	})
+	if err != nil {
+		// A create-only conflict means another retry got here first.
+		logger.Debug("game_session dedup write for %s/%s: %v (treating as duplicate)", userID, sessionID, err)
+		return true
+	}
+	return false
 }
 
 func GameSessionEndRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, payload string) (string, error) {
@@ -707,15 +765,35 @@ func GameSessionEndRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, n
 	if req.CrewID == "" || req.GameName == "" {
 		return "", runtime.NewError("crew_id and game_name required", 3)
 	}
+	if len(req.SessionID) > 64 {
+		return "", runtime.NewError("session_id too long", 3)
+	}
+	req.Wins = clampSessionOutcome(req.Wins)
+	req.Losses = clampSessionOutcome(req.Losses)
+	req.Draws = clampSessionOutcome(req.Draws)
 
 	if !isCrewMember(ctx, nk, req.CrewID, userID) {
 		return "", runtime.NewError("not a crew member", 7)
+	}
+
+	// Idempotency: a retried session end must not double-apply streaks or
+	// duplicate the ledger event. Acknowledge with the current streak instead.
+	if req.SessionID != "" && isDuplicateGameSession(ctx, nk, logger, userID, req.SessionID) {
+		streakAfter := 0
+		if req.GameID != "" {
+			stats, _ := readUserGameStats(ctx, nk, userID, req.GameID)
+			streakAfter = stats.CurrentStreak
+		}
+		logger.Info("User %s duplicate game session end (session_id=%s), acknowledged without re-applying", userID, req.SessionID)
+		resp, _ := json.Marshal(map[string]interface{}{"success": true, "streak_after": streakAfter, "duplicate": true})
+		return string(resp), nil
 	}
 
 	username := resolveUsername(ctx, nk, userID)
 
 	data := GameSessionData{
 		GameName:    req.GameName,
+		GameID:      req.GameID,
 		GameIGDBID:  0,
 		PlayerIDs:   []string{userID},
 		PlayerNames: []string{username},
@@ -723,12 +801,21 @@ func GameSessionEndRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, n
 	}
 	score := 10
 
+	// Server-side verification for linked Riot accounts: official post-match
+	// results supersede the client-reported tally (which the server otherwise
+	// can't verify). Best-effort — on any failure the client numbers stand.
+	if wins, losses, ok := enrichGameSessionFromRiot(ctx, nk, logger, userID, req.GameID, req.DurationMin); ok {
+		req.Wins = clampSessionOutcome(wins)
+		req.Losses = clampSessionOutcome(losses)
+		data.Verified = true
+	}
+
 	// Telemetry outcomes: update the actor's private per-game stats and bridge
 	// only the resulting streak into this public event. Decisive sessions score
 	// higher so heaters/skids surface in the catch-up card.
 	streakAfter := 0
-	if req.GameID != "" && (req.Wins > 0 || req.Losses > 0) {
-		stats, result, err := UpdateUserGameStats(ctx, nk, userID, req.GameID, req.Wins, req.Losses)
+	if req.GameID != "" && (req.Wins > 0 || req.Losses > 0 || req.Draws > 0) {
+		stats, result, err := UpdateUserGameStats(ctx, nk, userID, req.GameID, req.Wins, req.Losses, req.Draws)
 		if err != nil {
 			// Non-fatal: still record the session, just without the streak.
 			logger.Warn("user_game_stats update failed for %s/%s: %v", userID, req.GameID, err)
@@ -736,9 +823,15 @@ func GameSessionEndRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, n
 			streakAfter = stats.CurrentStreak
 			data.Wins = req.Wins
 			data.Losses = req.Losses
+			data.Draws = req.Draws
 			data.Result = result
 			data.StreakAfter = streakAfter
-			score = 30
+			// Decisive sessions surface in catch-up; even/draw nights score lower.
+			if result == "win" || result == "loss" {
+				score = 30
+			} else {
+				score = 15
+			}
 		}
 	}
 

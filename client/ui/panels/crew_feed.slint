@@ -1,7 +1,9 @@
 import { Theme } from "../theme.slint";
-import { FeedCardData, StreamCardData } from "../types.slint";
+import { FeedCardData, StreamCardData, YouStripData } from "../types.slint";
 import { ActiveStreamsPanel } from "./active_streams_panel.slint";
 import { SessionPreviewCard } from "./session_preview_card.slint";
+import { YouStrip } from "./you_strip.slint";
+import { GameIcon } from "../components/game_icon.slint";
 
 component AvatarDot inherits Rectangle {
     in property <string> initials;
@@ -24,6 +26,35 @@ component AvatarDot inherits Rectangle {
         color: white;
         horizontal-alignment: center;
         vertical-alignment: center;
+    }
+}
+
+// Shows a real avatar image when cached (spec 19), else the initials dot.
+component RecapAvatar inherits Rectangle {
+    in property <string> initials;
+    in property <int> color-index: 0;
+    in property <image> avatar;
+    in property <bool> has-avatar: false;
+
+    width: 18px;
+    height: 18px;
+
+    if !has-avatar: AvatarDot {
+        initials: root.initials;
+        color-index: root.color-index;
+    }
+
+    if has-avatar: Rectangle {
+        width: 18px;
+        height: 18px;
+        border-radius: 4px;
+        clip: true;
+        Image {
+            source: root.avatar;
+            width: 18px;
+            height: 18px;
+            image-fit: cover;
+        }
     }
 }
 
@@ -517,6 +548,9 @@ component RecapCard inherits Rectangle {
         padding: 14px;
         padding-top: 16px;
         spacing: 0px;
+        // Top-pack: each section uses its natural height and any slack collects
+        // at the bottom, instead of stretching the MVP row away from its header.
+        alignment: start;
 
         Text {
             text: "WEEKLY RECAP";
@@ -571,7 +605,6 @@ component RecapCard inherits Rectangle {
 
         // MVP section with avatars
         if card.mvp-count > 0: Rectangle {
-            vertical-stretch: 1;
 
             VerticalLayout {
                 spacing: 0px;
@@ -580,7 +613,7 @@ component RecapCard inherits Rectangle {
                 Rectangle { height: 8px; }
 
                 Text {
-                    text: "MVPs";
+                    text: "MVP";
                     font-size: 10px;
                     font-weight: 600;
                     color: Theme.skel-text;
@@ -596,7 +629,7 @@ component RecapCard inherits Rectangle {
                         spacing: 8px;
                         height: 22px;
 
-                        AvatarDot { initials: card.mvp0-initials; color-index: 0; }
+                        RecapAvatar { initials: card.mvp0-initials; color-index: 0; avatar: card.mvp0-avatar; has-avatar: card.mvp0-has-avatar; }
                         Text {
                             text: card.mvp0-name;
                             font-size: 12px;
@@ -613,13 +646,44 @@ component RecapCard inherits Rectangle {
                         }
                     }
 
-                    if card.mvp-count >= 2: HorizontalLayout {
+                    // Single MVP keeps the recap card compact (spec 19 polish);
+                    // mvp1/mvp2 data still arrives but is intentionally not shown.
+                }
+            }
+        }
+
+        // This week in games (spec 19)
+        if card.leaderboard.length > 0 || card.awards.length > 0: Rectangle {
+            VerticalLayout {
+                spacing: 0px;
+
+                Rectangle { height: 1px; background: Theme.card-border; }
+                Rectangle { height: 8px; }
+
+                Text {
+                    text: "THIS WEEK IN GAMES";
+                    font-size: 10px;
+                    font-weight: 600;
+                    color: Theme.skel-text;
+                    letter-spacing: 0.8px;
+                }
+
+                if card.games-summary != "": Text {
+                    text: card.games-summary;
+                    font-size: 11px;
+                    color: Theme.text-sub;
+                }
+
+                Rectangle { height: 6px; }
+
+                VerticalLayout {
+                    spacing: 4px;
+                    for row in card.leaderboard: HorizontalLayout {
                         spacing: 8px;
                         height: 22px;
-
-                        AvatarDot { initials: card.mvp1-initials; color-index: 1; }
+                        RecapAvatar { initials: row.initials; color-index: row.color-index; avatar: row.avatar; has-avatar: row.has-avatar; }
                         Text {
-                            text: card.mvp1-name;
+                            text: row.name;
                             font-size: 12px;
                             font-weight: 500;
                             color: Theme.text-primary;
@@ -627,29 +691,38 @@ component RecapCard inherits Rectangle {
                             horizontal-stretch: 1;
                         }
                         Text {
-                            text: card.mvp1-stat;
+                            text: row.record;
                             font-size: 11px;
                             color: Theme.text-sub;
                             vertical-alignment: center;
                         }
                     }
+                }
 
-                    if card.mvp-count >= 3: HorizontalLayout {
+                if card.awards.length > 0: Rectangle { height: 8px; }
+
+                VerticalLayout {
+                    spacing: 4px;
+                    for a in card.awards: HorizontalLayout {
                         spacing: 8px;
-                        height: 22px;
-
-                        AvatarDot { initials: card.mvp2-initials; color-index: 2; }
+                        height: 18px;
                         Text {
-                            text: card.mvp2-name;
-                            font-size: 12px;
-                            font-weight: 500;
-                            color: Theme.text-primary;
+                            text: a.title;
+                            font-size: 11px;
+                            color: Theme.text-dim;
                             vertical-alignment: center;
                             horizontal-stretch: 1;
                         }
                         Text {
-                            text: card.mvp2-stat;
+                            text: a.name;
                             font-size: 11px;
+                            font-weight: 500;
+                            color: Theme.text-primary;
+                            vertical-alignment: center;
+                        }
+                        Text {
+                            text: a.detail;
+                            font-size: 10px;
                             color: Theme.text-sub;
                             vertical-alignment: center;
                         }
@@ -741,6 +814,170 @@ component SessionCard inherits Rectangle {
             text: card.timestamp + (card.subtitle != "" ? " · " + card.subtitle : "");
             font-size: 11px;
             color: Theme.skel-text;
+        }
+    }
+}
+
+// Rich game-session card for notable sessions (spec 19 B2)
+component GameSessionCard inherits Rectangle {
+    in property <FeedCardData> card;
+
+    property <color> game-accent:
+        card.game-name == "Valorant" ? #ff4655 :
+        card.game-name == "Counter-Strike 2" ? #de9b35 :
+        Theme.accent;
+    property <color> record-color: card.game-streak-positive ? #4ade80 : #f87171;
+
+    background: Theme.card-bg;
+    border-radius: 10px;
+    border-width: 1px;
+    border-color: Theme.card-border;
+    clip: true;
+
+    VerticalLayout {
+        padding: 14px;
+        spacing: 0px;
+        alignment: start;
+
+        // Header: game badge + name + actor / time
+        HorizontalLayout {
+            spacing: 10px;
+            height: 40px;
+
+            VerticalLayout {
+                alignment: center;
+                GameIcon {
+                    game-id: card.game-id;
+                    short-name: card.game-name == "Valorant" ? "VAL" :
+                                card.game-name == "Counter-Strike 2" ? "CS2" :
+                                card.game-name != "" ? card.game-name : "GG";
+                    badge-color: game-accent;
+                    size: 40px;
+                }
+            }
+
+            VerticalLayout {
+                alignment: center;
+                spacing: 2px;
+                horizontal-stretch: 1;
+                Text {
+                    text: card.game-name != "" ? card.game-name : "Game session";
+                    font-size: 14px;
+                    font-weight: 600;
+                    color: Theme.text-primary;
+                    overflow: elide;
+                }
+                Text {
+                    text: card.actor-name != "" ? card.actor-name + " · " + card.timestamp : card.timestamp;
+                    font-size: 11px;
+                    color: Theme.text-sub;
+                    overflow: elide;
+                }
+            }
+
+            // Server-verified result (Riot post-match API) — spec 18 §9.
+            if card.game-verified: VerticalLayout {
+                alignment: center;
+                Rectangle {
+                    width: verified-label.preferred-width + 12px;
+                    height: 18px;
+                    border-radius: 4px;
+                    background: #1e2a1e;
+                    border-width: 1px;
+                    border-color: #2d4a2d;
+                    verified-label := Text {
+                        text: "✓ VERIFIED";
+                        font-family: Theme.font-mono;
+                        font-size: 9px;
+                        font-weight: 600;
+                        letter-spacing: 1px;
+                        color: #4ade80;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+        }
+
+        Rectangle { height: 14px; }
+
+        // Headline record
+        Text {
+            text: card.game-record;
+            font-size: 30px;
+            font-weight: 700;
+            color: record-color;
+        }
+        Text {
+            text: "this session";
+            font-size: 11px;
+            color: Theme.text-sub;
+        }
+
+        Rectangle { height: 12px; }
+        Rectangle { height: 1px; background: Theme.card-border; }
+        Rectangle { height: 10px; }
+
+        // Stat tiles: streak · win rate · matches
+        HorizontalLayout {
+            spacing: 10px;
+
+            VerticalLayout {
+                spacing: 2px;
+                horizontal-stretch: 1;
+                Text {
+                    text: card.game-streak-text;
+                    font-size: 16px;
+                    font-weight: 700;
+                    color: card.game-streak-positive ? #4ade80 : #f87171;
+                }
+                Text { text: "streak"; font-size: 10px; color: Theme.text-sub; }
+            }
+            VerticalLayout {
+                spacing: 2px;
+                horizontal-stretch: 1;
+                Text {
+                    text: card.game-winrate;
+                    font-size: 16px;
+                    font-weight: 700;
+                    color: Theme.text-primary;
+                }
+                Text { text: "win rate"; font-size: 10px; color: Theme.text-sub; }
+            }
+            VerticalLayout {
+                spacing: 2px;
+                horizontal-stretch: 1;
+                Text {
+                    text: "\{card.game-matches}";
+                    font-size: 16px;
+                    font-weight: 700;
+                    color: Theme.text-primary;
+                }
+                Text { text: "matches"; font-size: 10px; color: Theme.text-sub; }
+            }
+        }
+
+        Rectangle { vertical-stretch: 1; }
+
+        // Footer: participants + duration
+        HorizontalLayout {
+            height: 20px;
+
+            HorizontalLayout {
+                spacing: -7px;
+                horizontal-stretch: 1;
+                alignment: start;
+                AvatarDot { initials: card.actor-initials; color-index: 0; }
+                if card.participant-count > 1: AvatarDot { initials: ""; color-index: 1; }
+                if card.participant-count > 2: AvatarDot { initials: ""; color-index: 2; }
+            }
+
+            if card.duration != "": Text {
+                text: card.duration;
+                font-size: 11px;
+                color: Theme.skel-text;
+                vertical-alignment: center;
+            }
         }
     }
 }
@@ -1455,6 +1692,9 @@ component FeedSlot inherits Rectangle {
     if card.card-type == "session": SessionCard {
         width: parent.width; height: parent.height; card: root.card;
     }
+    if card.card-type == "game-session": GameSessionCard {
+        width: parent.width; height: parent.height; card: root.card;
+    }
     if card.card-type == "catchup": CatchupCard {
         width: parent.width; height: parent.height; card: root.card;
     }
@@ -1501,6 +1741,7 @@ export component CrewFeed inherits Rectangle {
     in property <[FeedCardData]> cards: [];
     in property <[FeedCardData]> memory-cards: [];
     in property <[StreamCardData]> stream-cards: [];
+    in property <YouStripData> you-strip;
     in property <bool> is-cold-start: true;
     in property <bool> feed-has-more: false;
     in property <string> crew-name: "";
@@ -1530,6 +1771,7 @@ export component CrewFeed inherits Rectangle {
     callback session-seen(string);
     callback session-preview-request-frame(/* session_id */ string, /* index */ int);
     callback feed-show-more-clicked();
+    callback you-strip-clicked();
 
     property <int> feed-start-index: stream-cards.length == 1 && cards.length > 0 ? 1 : 0;
 
@@ -1584,6 +1826,12 @@ export component CrewFeed inherits Rectangle {
         Rectangle {
             height: 1px;
             background: Theme.card-border;
+        }
+
+        // Pinned personal stats (only the viewer sees it); hidden until tracked.
+        YouStrip {
+            data: root.you-strip;
+            clicked => { root.you-strip-clicked(); }
         }
 
         // Scrollable feed area

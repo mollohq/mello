@@ -1,0 +1,186 @@
+import { Theme, MelloInputField } from "../theme.slint";
+
+// Consent + input dialog for linking a Riot ID. Opened from the Games
+// settings tab or the post-game "connect Riot account" CTA.
+export component RiotLinkModal inherits Rectangle {
+    in property <string> error: "";
+    in property <bool> busy: false;
+    in-out property <string> selected-region: "europe";
+
+    callback link-requested(string /* riot-id */, string /* region */);
+    callback dismiss-requested();
+
+    public function clear-input() {
+        riot-id-input.text = "";
+    }
+
+    width: 100%;
+    height: 100%;
+    background: #000000AA;
+
+    TouchArea {
+        clicked => { dismiss-requested(); }
+    }
+
+    Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: 420px;
+        height: content.preferred-height + 64px;
+        background: Theme.surface;
+        border-radius: Theme.radius-lg;
+        border-width: 1px;
+        border-color: Theme.graphic-light;
+
+        // Block clicks from reaching backdrop
+        TouchArea {}
+
+        content := VerticalLayout {
+            padding: 32px;
+            spacing: 16px;
+
+            Text {
+                text: "Connect your Riot account";
+                font-size: Theme.font-xxl;
+                font-weight: 700;
+                color: Theme.text-primary;
+            }
+
+            Text {
+                text: "Get server-verified results for League of Legends and TFT. m3llo only reads your recent match history from Riot's official API — it never touches your account. You can disconnect anytime in Settings → Games.";
+                font-size: Theme.font-md;
+                color: Theme.text-secondary;
+                wrap: word-wrap;
+            }
+
+            VerticalLayout {
+                spacing: 8px;
+
+                Text {
+                    text: "RIOT ID";
+                    font-family: Theme.font-mono;
+                    font-size: 10px;
+                    font-weight: 600;
+                    letter-spacing: 2px;
+                    color: Theme.text-tertiary;
+                }
+
+                riot-id-input := MelloInputField {
+                    placeholder: "GameName#TAG";
+                    accepted => {
+                        if self.text != "" && !busy {
+                            link-requested(self.text, selected-region);
+                        }
+                    }
+                }
+            }
+
+            VerticalLayout {
+                spacing: 8px;
+
+                Text {
+                    text: "REGION";
+                    font-family: Theme.font-mono;
+                    font-size: 10px;
+                    font-weight: 600;
+                    letter-spacing: 2px;
+                    color: Theme.text-tertiary;
+                }
+
+                HorizontalLayout {
+                    spacing: 8px;
+
+                    for region in ["americas", "europe", "asia", "sea"]: Rectangle {
+                        height: 32px;
+                        horizontal-stretch: 1;
+                        border-radius: 8px;
+                        background: selected-region == region
+                            ? Theme.accent
+                            : (region-ta.has-hover ? Theme.surface-hover : Theme.bg-app);
+                        border-width: 1px;
+                        border-color: selected-region == region ? Theme.accent : Theme.graphic-light;
+
+                        Text {
+                            text: region;
+                            font-family: Theme.font-mono;
+                            font-size: 11px;
+                            font-weight: 600;
+                            color: selected-region == region ? white : Theme.text-secondary;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+
+                        region-ta := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => { selected-region = region; }
+                        }
+                    }
+                }
+            }
+
+            if error != "": Text {
+                text: error;
+                font-size: Theme.font-md;
+                color: #f87171;
+                wrap: word-wrap;
+            }
+
+            Rectangle { height: 4px; }
+
+            HorizontalLayout {
+                spacing: 12px;
+                alignment: end;
+
+                Rectangle {
+                    width: cancel-text.preferred-width + 32px;
+                    height: 40px;
+                    border-radius: Theme.r-outer;
+                    background: cancel-ta.has-hover ? Theme.surface-hover : transparent;
+                    border-width: 1px;
+                    border-color: Theme.graphic-light;
+
+                    cancel-text := Text {
+                        text: "Not now";
+                        font-size: Theme.font-md;
+                        font-weight: 600;
+                        color: Theme.text-secondary;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+
+                    cancel-ta := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { dismiss-requested(); }
+                    }
+                }
+
+                Rectangle {
+                    width: connect-text.preferred-width + 32px;
+                    height: 40px;
+                    border-radius: Theme.r-outer;
+                    background: Theme.accent;
+                    opacity: busy ? 0.6 : 1.0;
+
+                    connect-text := Text {
+                        text: busy ? "Connecting…" : "Connect";
+                        font-size: Theme.font-md;
+                        font-weight: 600;
+                        color: white;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+
+                    TouchArea {
+                        mouse-cursor: pointer;
+                        enabled: !busy;
+                        clicked => {
+                            if riot-id-input.text != "" {
+                                link-requested(riot-id-input.text, selected-region);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

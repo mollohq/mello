@@ -53,6 +53,26 @@ pub struct UserSearchResult {
     pub is_friend: bool,
 }
 
+/// One game integration row for the Games settings page (from the telemetry
+/// adapter registry; the enabled/disabled state lives in client settings).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GameIntegrationStatus {
+    pub game_id: String,
+    pub name: String,
+    /// Badge text from games.json (e.g. "CS2"); falls back to the name.
+    pub short_name: String,
+    /// Badge hex color from games.json (e.g. "#DE9B35").
+    pub color: String,
+    /// Whether the game looks installed on this machine; None = unknown.
+    pub installed: Option<bool>,
+    /// True when enabling writes a config file for the game to pick up.
+    pub writes_files: bool,
+    /// One-line description of how the integration works.
+    pub note: String,
+    /// Account-link provider that unlocks verified results ("riot"), if any.
+    pub account_link: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", content = "data")]
 pub enum Event {
@@ -461,25 +481,60 @@ pub enum Event {
     },
     /// Post-game prompt timed out without interaction.
     PostGameTimeout,
+    /// Telemetry for the running game needs a one-time user action (e.g.
+    /// Dota 2's launch option). Shown as a hint in the "now playing" card.
+    TelemetrySetupHint {
+        game_id: String,
+        hint: String,
+    },
     /// A match resolved mid-session (from a telemetry adapter, e.g. CS2 GSI).
     /// Live signal for HUD / future auto-clip hooks.
     MatchEnded {
         /// "win" | "loss" | "draw"
         result: String,
-        rounds_won: u32,
-        rounds_lost: u32,
+        /// Player-perspective score (rounds/goals/points won vs lost).
+        own_score: u32,
+        opp_score: u32,
         map: String,
     },
     /// End-of-session outcome summary, emitted after the server records the
     /// session and returns the updated streak. Drives the pre-filled post-game
-    /// card. Only emitted when the session had decisive (streak-eligible) results.
+    /// card. Emitted when the session had any recorded result (win/loss/draw).
     SessionSummary {
+        #[serde(default)]
+        game_id: String,
         game_name: String,
         duration_min: u32,
         wins: u32,
         losses: u32,
+        draws: u32,
         /// Signed streak after this session: +N win streak, -N loss streak.
         streak_after: i32,
+    },
+    /// The viewer's per-game personal stats loaded (backs the "You strip").
+    UserGameStatsLoaded {
+        games: Vec<crate::crew_events::UserGameStats>,
+    },
+
+    // --- Games settings / integrations ---
+    /// Per-game integration info for the Games settings page (loaded on
+    /// settings open; install detection runs off the UI thread).
+    GamesSettings {
+        games: Vec<GameIntegrationStatus>,
+    },
+    /// Riot account link state (response to LoadRiotStatus / RiotLink /
+    /// RiotUnlink). `available` = the server has a Riot API key configured.
+    RiotStatus {
+        available: bool,
+        linked: bool,
+        #[serde(default)]
+        riot_id: String,
+        #[serde(default)]
+        region: String,
+    },
+    /// A riot_link attempt failed (bad id, rate limit, server down).
+    RiotLinkFailed {
+        reason: String,
     },
 
     /// Client-server protocol version mismatch.

@@ -41,6 +41,24 @@ export struct CrewData {
     clip-count: int,
 }
 
+// Recap "this week in games" rows (spec 19). Avatars resolve client-side from
+// the cache by user-id; fall back to the initials dot when not cached.
+export struct RecapLbRow {
+    name: string,
+    initials: string,
+    record: string,      // "12W 5L"
+    color-index: int,
+    avatar: image,
+    has-avatar: bool,
+}
+
+export struct RecapAwardRow {
+    kind: string,        // "grinder" | "heater" | "skid"
+    title: string,
+    name: string,
+    detail: string,
+}
+
 export struct FeedCardData {
     id: string,
     card-type: string,
@@ -54,6 +72,7 @@ export struct FeedCardData {
     actor-name: string,
     actor-initials: string,
     game-name: string,
+    game-id: string,       // games.json id for the bundled icon; "" on legacy events
     participant-count: int,
     clip-count: int,
     clip-path: string,
@@ -64,6 +83,14 @@ export struct FeedCardData {
     mvp0-name: string, mvp0-initials: string, mvp0-stat: string,
     mvp1-name: string, mvp1-initials: string, mvp1-stat: string,
     mvp2-name: string, mvp2-initials: string, mvp2-stat: string,
+    // Real avatars for the MVP rows (spec 19); fall back to the initials dot.
+    mvp0-avatar: image, mvp0-has-avatar: bool,
+    mvp1-avatar: image, mvp1-has-avatar: bool,
+    mvp2-avatar: image, mvp2-has-avatar: bool,
+    // "This week in games" section (spec 19).
+    games-summary: string,
+    leaderboard: [RecapLbRow],
+    awards: [RecapAwardRow],
     is-new: bool,
     was-seen: bool,
     snapshot-loading: bool,
@@ -73,6 +100,47 @@ export struct FeedCardData {
     snapshot-playback-frame: image,
     snapshot-playback-index: int,
     snapshot-playback-revision: int,
+
+    // Rich game-session card (spec 19 B2). Pre-formatted in Rust.
+    game-record: string,        // "5W–3L" (with draws: "5W–3L–1D")
+    game-streak-text: string,   // "W4" / "L2" / "—"
+    game-streak-positive: bool,
+    game-winrate: string,       // "62%" / "—"
+    game-matches: int,
+    // Result confirmed server-side against an official post-match API
+    // (Riot match-v5/TFT) rather than client-reported telemetry.
+    game-verified: bool,
+}
+
+// One per-game card in the personal stats profile (spec 19 A2).
+// Display strings are pre-formatted in Rust.
+export struct GameStatsCardData {
+    game-id: string,          // games.json id, for the bundled icon lookup
+    game-name: string,
+    short-name: string,
+    game-color: color,
+    record-text: string,      // "12W 5L" / "12W 5L 2D"
+    win-rate-text: string,    // "62%" / "—"
+    streak-text: string,      // "W4" / "L2" / "—"
+    streak-positive: bool,
+    best-streak-text: string, // "W7 best · L3 worst" ("" when no history)
+    recent-form: [string],    // each "W" | "L" | "D", newest last (≤10)
+    last-played-text: string, // "2h ago" / "3d ago" / ""
+}
+
+// Personal stats for the "You strip" pinned atop the crew feed (spec 19).
+// Only the viewer sees it; display strings are pre-formatted in Rust.
+export struct YouStripData {
+    has-stats: bool,        // false → strip hidden (no games tracked yet)
+    game-id: string,        // games.json id, for the bundled icon lookup
+    game-name: string,
+    short-name: string,
+    game-color: color,
+    streak-text: string,    // "W4" / "L2" / "—"
+    streak-positive: bool,
+    record-text: string,    // "12W 5L"
+    win-rate-text: string,  // "62%"
+    recent-form: [string],  // each "W" | "L" | "D", newest last
 }
 
 export struct StreamCardData {
@@ -187,6 +255,22 @@ export struct AudioDeviceData {
     id: string,
     name: string,
     is-default: bool,
+}
+
+export struct GameIntegrationData {
+    game-id: string,
+    name: string,
+    // Badge styling (games.json); icon images can replace the badge later.
+    short-name: string,
+    color: color,
+    // "found" | "not-found" | "" (unknown)
+    install-status: string,
+    // Enabling writes a config file for the game to pick up.
+    writes-files: bool,
+    note: string,
+    enabled: bool,
+    // Game supports linking a Riot account for verified stats.
+    has-account-link: bool,
 }
 
 export struct CaptureSourceData {

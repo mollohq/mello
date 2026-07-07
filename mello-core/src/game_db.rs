@@ -30,6 +30,7 @@ struct GamesEnvelope {
 #[derive(Clone)]
 pub struct GameDatabase {
     by_exe: HashMap<String, GameEntry>,
+    by_id: HashMap<String, GameEntry>,
 }
 
 impl GameDatabase {
@@ -37,17 +38,29 @@ impl GameDatabase {
         let json = include_str!("../../client/assets/games.json");
         let envelope: GamesEnvelope =
             serde_json::from_str(json).expect("invalid bundled games.json");
+        Self::from_entries(&envelope.games)
+    }
+
+    fn from_entries(entries: &[GameEntry]) -> Self {
         let mut by_exe = HashMap::new();
-        for entry in &envelope.games {
+        let mut by_id = HashMap::new();
+        for entry in entries {
             for exe in &entry.exe {
                 by_exe.insert(exe.to_lowercase(), entry.clone());
             }
+            by_id.insert(entry.id.clone(), entry.clone());
         }
-        GameDatabase { by_exe }
+        GameDatabase { by_exe, by_id }
     }
 
     pub fn lookup_by_exe(&self, exe: &str) -> Option<&GameEntry> {
         self.by_exe.get(&exe.to_lowercase())
+    }
+
+    /// Look up a game by its stable DB id (e.g. "counter-strike-2"). Used to
+    /// resolve display name/short-name/color for stats surfaces (spec 19).
+    pub fn lookup_by_id(&self, id: &str) -> Option<&GameEntry> {
+        self.by_id.get(id)
     }
 }
 
@@ -78,13 +91,7 @@ mod tests {
             ]
         }"##;
         let envelope: GamesEnvelope = serde_json::from_str(json).unwrap();
-        let mut by_exe = HashMap::new();
-        for entry in &envelope.games {
-            for exe in &entry.exe {
-                by_exe.insert(exe.to_lowercase(), entry.clone());
-            }
-        }
-        GameDatabase { by_exe }
+        GameDatabase::from_entries(&envelope.games)
     }
 
     #[test]
@@ -120,6 +127,15 @@ mod tests {
         let cs2 = db.lookup_by_exe("cs2.exe").unwrap();
         assert_eq!(cs2.id, "counter-strike-2");
         assert_eq!(cs2.short_name, "CS2");
+    }
+
+    #[test]
+    fn lookup_by_id_resolves_display() {
+        let db = GameDatabase::load_bundled();
+        let cs2 = db.lookup_by_id("counter-strike-2").unwrap();
+        assert_eq!(cs2.short_name, "CS2");
+        assert_eq!(cs2.name, "Counter-Strike 2");
+        assert!(db.lookup_by_id("no-such-game").is_none());
     }
 
     #[test]

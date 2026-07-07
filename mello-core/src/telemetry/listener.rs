@@ -4,7 +4,7 @@
 //! Mirrors the localhost-server pattern used by the OAuth flow (`oauth.rs`):
 //! a long-lived `tiny_http::Server` on a dedicated thread.
 
-use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::mpsc::Sender;
 use std::sync::Arc;
 
 use tiny_http::{Response, Server, StatusCode};
@@ -15,6 +15,11 @@ use super::{AdapterRegistry, TelemetryEvent};
 /// OAuth callback port (`29405`).
 pub const TELEMETRY_PORT: u16 = 29406;
 
+/// Upper bound on an inbound payload. GSI payloads are a few KB; anything
+/// bigger is not a game talking to us, and an unbounded read would let any
+/// local process balloon our memory.
+const MAX_BODY_BYTES: usize = 256 * 1024;
+
 /// Owns the listener thread. Dropping it does not stop the thread (best-effort,
 /// matches the game sensor); the process owns it for its lifetime.
 pub struct TelemetryListener {
@@ -22,28 +27,27 @@ pub struct TelemetryListener {
 }
 
 impl TelemetryListener {
-    /// Bind the listener and start routing inbound payloads through `registry`.
-    /// Binding failure is surfaced so the caller can log and continue without
-    /// telemetry (sensing and the manual post-game flow are unaffected).
+    /// Bind the listener and start routing inbound payloads through `registry`
+    /// into `tx` (the shared telemetry channel, also used by active-source
+    /// adapters). Binding failure is surfaced so the caller can log and
+    /// continue without push telemetry (sensing and the manual post-game flow
+    /// are unaffected).
     pub fn start(
         registry: Arc<AdapterRegistry>,
         token: String,
-    ) -> std::io::Result<(Self, Receiver<TelemetryEvent>)> {
+        tx: Sender<TelemetryEvent>,
+    ) -> std::io::Result<Self> {
         let server = Server::http(format!("127.0.0.1:{TELEMETRY_PORT}"))
             .map_err(|e| std::io::Error::other(e.to_string()))?;
 
-        let (tx, rx) = mpsc::channel();
         let handle = std::thread::Builder::new()
             .name("telemetry-listener".into())
             .spawn(move || listen_loop(server, &registry, &token, &tx))?;
 
         log::info!("[telemetry] listener bound on 127.0.0.1:{TELEMETRY_PORT}");
-        Ok((
-            Self {
-                _handle: Some(handle),
-            },
-            rx,
-        ))
+        Ok(Self {
+            _handle: Some(handle),
+        })
     }
 }
 
@@ -54,13 +58,26 @@ fn listen_loop(
     tx: &Sender<TelemetryEvent>,
 ) {
     for mut request in server.incoming_requests() {
+        // Reject oversized payloads without reading them.
+        if request.body_length().unwrap_or(0) > MAX_BODY_BYTES {
+            let _ = request.respond(Response::empty(StatusCode(413)));
+            continue;
+        }
+
         let mut body = String::new();
-        let _ = request.as_reader().read_to_string(&mut body);
+        {
+            use std::io::Read;
+            let reader = request.as_reader();
+            // Cap the read too: chunked bodies carry no length up front.
+            let _ = reader
+                .take(MAX_BODY_BYTES as u64 + 1)
+                .read_to_string(&mut body);
+        }
 
         // Acknowledge promptly so the game doesn't back-pressure on us.
         let _ = request.respond(Response::empty(StatusCode(200)));
 
-        if body.is_empty() {
+        if body.is_empty() || body.len() > MAX_BODY_BYTES {
             continue;
         }
 

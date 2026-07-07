@@ -18,6 +18,7 @@ use tokio::sync::mpsc;
 use crate::command::Command;
 use crate::config::Config;
 use crate::events::Event;
+use crate::game_db::GameDatabase;
 use crate::game_sensing::GameSensor;
 use crate::game_state::GameStateManager;
 use crate::giphy::GiphyClient;
@@ -110,13 +111,22 @@ pub struct Client {
     /// Keeps the telemetry listener thread alive for the client's lifetime.
     #[allow(dead_code)]
     telemetry_listener: Option<TelemetryListener>,
+    telemetry_registry: Arc<AdapterRegistry>,
+    /// Game integrations the user switched off (Games settings page). Disabled
+    /// ids skip config installs and active transports.
+    disabled_integrations: std::collections::HashSet<String>,
     enable_game_sensor: bool,
     emit_process_stats: bool,
     game_event_rx:
         std::sync::Mutex<Option<std::sync::mpsc::Receiver<crate::game_sensing::GameEvent>>>,
+    /// Shared telemetry channel: the loopback listener and active-source
+    /// adapters all send into this. Created at construction so the deferred
+    /// listener (post-auth, see `game_services.rs`) and the game-start
+    /// `adapter.start()` calls share one sender.
+    telemetry_event_tx: std::sync::mpsc::Sender<crate::telemetry::TelemetryEvent>,
     telemetry_event_rx:
         std::sync::Mutex<Option<std::sync::mpsc::Receiver<crate::telemetry::TelemetryEvent>>>,
-    telemetry_registry: Option<Arc<AdapterRegistry>>,
+    /// Token for adapter config installs; loaded post-auth in `ensure_game_services`.
     telemetry_token: Option<String>,
     clip_was_playing: bool,
     clip_tick_counter: u8,
@@ -158,6 +168,12 @@ impl Client {
         self.surface_frame_seq.clone()
     }
 
+    /// Seed the disabled-integration set from persisted client settings.
+    /// Must be called before `run()` so the startup config installs honor it.
+    pub fn set_disabled_integrations(&mut self, ids: impl IntoIterator<Item = String>) {
+        self.disabled_integrations = ids.into_iter().collect();
+    }
+
     /// Shared frame lifecycle state used by stream_tick() and UI compositor.
     pub fn frame_lifecycle_slot(&self) -> FrameLifecycleSlot {
         self.frame_lifecycle.clone()
@@ -177,6 +193,8 @@ impl Client {
         enable_game_sensor: bool,
         emit_process_stats: bool,
     ) -> Self {
+        let (telemetry_event_tx, telemetry_event_rx) =
+            std::sync::mpsc::channel::<crate::telemetry::TelemetryEvent>();
         Self {
             nakama: NakamaClient::new(config),
             voice: VoiceManager::new(event_tx.clone(), loopback),
@@ -206,11 +224,13 @@ impl Client {
             game_state: GameStateManager::new(),
             game_sensor: None,
             telemetry_listener: None,
+            telemetry_registry: Arc::new(AdapterRegistry::with_defaults()),
+            disabled_integrations: std::collections::HashSet::new(),
             enable_game_sensor,
             emit_process_stats,
             game_event_rx: std::sync::Mutex::new(None),
-            telemetry_event_rx: std::sync::Mutex::new(None),
-            telemetry_registry: None,
+            telemetry_event_tx,
+            telemetry_event_rx: std::sync::Mutex::new(Some(telemetry_event_rx)),
             telemetry_token: None,
             clip_was_playing: false,
             clip_tick_counter: 0,
@@ -222,6 +242,10 @@ impl Client {
 
     pub async fn run(&mut self, mut cmd_rx: mpsc::UnboundedReceiver<Command>) {
         log::info!("Mello client started, waiting for commands...");
+        // Game sensing + telemetry (listener, adapter config installs) are
+        // deferred to `ensure_game_services()` on post-auth connect — see
+        // `game_services.rs`. Keeps startup lean; `disabled_integrations` is
+        // seeded from settings before `run()`, so the deferred installs honor it.
         if self.enable_game_sensor {
             log::info!("Game sensor deferred until post-auth connect");
         } else {
@@ -250,23 +274,33 @@ impl Client {
                 // game's config on first detection, and reset adapter state on exit.
                 match &game_event {
                     crate::game_sensing::GameEvent::Started(game) => {
-                        if let Some(registry) = self.telemetry_registry.as_ref() {
-                            if let Some(adapter) = registry.get(&game.game_id) {
-                                let token = self.telemetry_token.clone().unwrap_or_default();
-                                let adapter = adapter.clone();
-                                tokio::task::spawn_blocking(move || {
-                                    if let Err(e) = adapter.ensure_installed(&token, TELEMETRY_PORT)
-                                    {
-                                        log::warn!("[telemetry] ensure_installed failed: {e}");
-                                    }
-                                });
-                            }
+                        if self.disabled_integrations.contains(&game.game_id) {
+                            log::info!(
+                                "[telemetry] integration for {} disabled by user, skipping",
+                                game.game_id
+                            );
+                        } else if let Some(adapter) = self.telemetry_registry.get(&game.game_id) {
+                            // Active sources start their transport now; pure
+                            // push adapters no-op.
+                            adapter.start(self.telemetry_event_tx.clone());
+                            let token = self.telemetry_token.clone().unwrap_or_default();
+                            tokio::task::spawn_blocking(move || {
+                                if let Err(e) = adapter.ensure_installed(&token, TELEMETRY_PORT) {
+                                    log::warn!("[telemetry] ensure_installed failed: {e}");
+                                }
+                            });
                         }
                     }
                     crate::game_sensing::GameEvent::Stopped(game) => {
-                        if let Some(registry) = self.telemetry_registry.as_ref() {
-                            if let Some(adapter) = registry.get(&game.game_id) {
-                                adapter.reset();
+                        if let Some(adapter) = self.telemetry_registry.get(&game.game_id) {
+                            adapter.reset();
+                            // reset() may flush a final result (file-based
+                            // adapters); fold everything pending into the
+                            // session before the stop is processed below.
+                            for tev in self.drain_telemetry_events() {
+                                for ev in self.game_state.handle_telemetry(tev) {
+                                    let _ = self.event_tx.send(ev);
+                                }
                             }
                         }
                     }
@@ -285,6 +319,7 @@ impl Client {
                             summary.duration_min,
                             summary.wins,
                             summary.losses,
+                            summary.draws,
                         )
                         .await;
                     }
@@ -908,6 +943,7 @@ impl Client {
                 duration_min,
                 wins,
                 losses,
+                draws,
             } => {
                 self.handle_game_session_end(
                     &crew_id,
@@ -916,8 +952,81 @@ impl Client {
                     duration_min,
                     wins,
                     losses,
+                    draws,
                 )
                 .await;
+            }
+            Command::GetUserGameStats => {
+                self.refresh_user_game_stats().await;
+            }
+
+            Command::LoadGamesSettings => {
+                // Install detection touches the filesystem/registry: off-thread.
+                let registry = self.telemetry_registry.clone();
+                let event_tx = self.event_tx.clone();
+                tokio::task::spawn_blocking(move || {
+                    let game_db = GameDatabase::load_bundled();
+                    let games = registry
+                        .all()
+                        .iter()
+                        .map(|adapter| {
+                            let info = adapter.info();
+                            // Badge styling comes from the game DB entry so the
+                            // settings rows match the now-playing card.
+                            let db_entry = game_db.lookup_by_id(adapter.game_id());
+                            crate::events::GameIntegrationStatus {
+                                game_id: adapter.game_id().to_string(),
+                                name: info.game_name.to_string(),
+                                short_name: db_entry
+                                    .map(|e| e.short_name.clone())
+                                    .unwrap_or_else(|| info.game_name.to_string()),
+                                color: db_entry.and_then(|e| e.color.clone()).unwrap_or_default(),
+                                installed: adapter.detect_install(),
+                                writes_files: info.writes_files,
+                                note: info.note.to_string(),
+                                account_link: info.account_link.map(str::to_string),
+                            }
+                        })
+                        .collect();
+                    let _ = event_tx.send(Event::GamesSettings { games });
+                });
+                self.send_riot_status().await;
+            }
+            Command::SetGameIntegrations { disabled } => {
+                log::info!("[telemetry] disabled integrations set to {disabled:?}");
+                self.disabled_integrations = disabled.into_iter().collect();
+            }
+            Command::RiotLink { riot_id, region } => {
+                match self.nakama.riot_link(&riot_id, &region).await {
+                    Ok(status) => {
+                        let _ = self.event_tx.send(Event::RiotStatus {
+                            available: true,
+                            linked: true,
+                            riot_id: status.riot_id.unwrap_or(riot_id),
+                            region: status.region.unwrap_or(region),
+                        });
+                    }
+                    Err(e) => {
+                        log::warn!("riot_link failed: {e}");
+                        let _ = self.event_tx.send(Event::RiotLinkFailed {
+                            reason: e.to_string(),
+                        });
+                    }
+                }
+            }
+            Command::RiotUnlink => match self.nakama.riot_unlink().await {
+                Ok(()) => {
+                    let _ = self.event_tx.send(Event::RiotStatus {
+                        available: true,
+                        linked: false,
+                        riot_id: String::new(),
+                        region: String::new(),
+                    });
+                }
+                Err(e) => log::warn!("riot_unlink failed: {e}"),
+            },
+            Command::LoadRiotStatus => {
+                self.send_riot_status().await;
             }
 
             #[cfg(feature = "test-faults")]

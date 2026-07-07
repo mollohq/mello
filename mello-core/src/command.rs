@@ -399,7 +399,30 @@ pub enum Command {
         wins: u32,
         #[serde(default)]
         losses: u32,
+        #[serde(default)]
+        draws: u32,
     },
+    /// Fetch the viewer's own per-game stats (for the personal "You strip").
+    GetUserGameStats,
+
+    // --- Games settings / integrations ---
+    /// Load per-game integration info (adapter registry + install detection)
+    /// and the Riot link status for the Games settings page.
+    LoadGamesSettings,
+    /// Replace the set of game integrations the user has switched off.
+    /// Disabled integrations skip config installs and active transports.
+    SetGameIntegrations {
+        #[serde(default)]
+        disabled: Vec<String>,
+    },
+    /// Link the user's Riot ID ("GameName#TAG") for server-verified results.
+    RiotLink {
+        riot_id: String,
+        region: String,
+    },
+    RiotUnlink,
+    /// Query the Riot link state (emits Event::RiotStatus).
+    LoadRiotStatus,
 
     // --- Test/dev fault injection (feature-gated; never compiled into prod) ---
     /// Force the realtime Nakama WebSocket down so the supervisor's reconnect

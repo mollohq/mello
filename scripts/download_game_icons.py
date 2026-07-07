@@ -1,0 +1,194 @@
+#!/usr/bin/env python3
+"""Download square game icons from SteamGridDB for bundling into the client.
+
+IGDB only has portrait covers / wordmark logos — neither reads well in a small
+square tile. SteamGridDB has a dedicated "icon" asset class (the same source
+Playnite/Decky use) and covers non-Steam games too.
+
+Setup (one-time): grab a free API key at
+https://www.steamgriddb.com/profile/preferences/api and export it:
+
+    SGDB_API_KEY=xxx python3 download_game_icons.py [--force]
+
+Requires Pillow (pip install Pillow) for downscaling to MAX_DIM.
+
+For each game in client/assets/games.json the script searches SteamGridDB by
+name, downloads the best square PNG icon into
+client/assets/game_icons/<id>.png, then regenerates
+client/ui/components/game_icons_gen.slint from whatever is on disk (so it can
+also be run without a key just to resync the generated file).
+"""
+
+import io
+import json
+import os
+import sys
+import urllib.parse
+import urllib.request
+
+from PIL import Image
+
+API = "https://www.steamgriddb.com/api/v2"
+
+# Icons render at ~28px in the UI; 128px covers 4x scaling and keeps the
+# embedded asset payload small (raw downloads total several MB).
+MAX_DIM = 128
+
+# games.json name → SteamGridDB search term, for titles that need a nudge.
+SEARCH_OVERRIDES = {
+    "StarCraft II": "StarCraft II: Wings of Liberty",
+}
+
+# games.json id → SGDB icon asset id, pinned where the top-scored asset is
+# wrong (fan art, memes) or the best icon is ICO-only. Verified by eye.
+ICON_OVERRIDES = {
+    "counter-strike-2": 33559,  # CS2 logo (top PNG is the old CS:GO icon)
+    "the-finals": 48985,  # red arch logo (top asset is a plush mascot)
+    "marvel-rivals": 56837,  # yellow R logo (top asset is Jeff the shark meme)
+    "escape-from-tarkov": 92328,  # dark A logo (top asset is character art)
+    "starcraft-2": 108858,  # official SC2 logo, ICO-only
+}
+
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+GAMES_JSON = os.path.join(SCRIPT_DIR, "..", "client", "assets", "games.json")
+ICONS_DIR = os.path.join(SCRIPT_DIR, "..", "client", "assets", "game_icons")
+GEN_SLINT = os.path.join(
+    SCRIPT_DIR, "..", "client", "ui", "components", "game_icons_gen.slint"
+)
+
+
+def api_get(path: str, key: str) -> dict:
+    # Custom UA: Cloudflare 403s urllib's default "Python-urllib/3.x".
+    req = urllib.request.Request(
+        f"{API}{path}",
+        headers={"Authorization": f"Bearer {key}", "User-Agent": "m3llo-icon-fetch"},
+    )
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        return json.load(resp)
+
+
+def pick(pool):
+    """Keep SGDB's score order; prefer 128–512px (crisp at tile size, small
+    on disk) before falling back to the top-scored item of any size."""
+    for i in pool:
+        dim = min(i.get("width", 0), i.get("height", 0))
+        if 128 <= dim <= 512:
+            return i
+    return pool[0] if pool else None
+
+
+def best_icon(icons):
+    pngs = [i for i in icons if i.get("mime") == "image/png"]
+    official = [i for i in pngs if i.get("style") == "official"]
+    return pick(official) or pick(pngs)
+
+
+def fetch_icon(game_id: str, game_name: str, key: str, out_path: str) -> bool:
+    term = SEARCH_OVERRIDES.get(game_name, game_name)
+    search = api_get(f"/search/autocomplete/{urllib.parse.quote(term)}", key)
+    results = search.get("data") or []
+    if not results:
+        print("  no SGDB match")
+        return False
+    sgdb_id = results[0]["id"]
+    print(f"  matched \"{results[0]['name']}\" (sgdb {sgdb_id})")
+
+    icons = api_get(f"/icons/game/{sgdb_id}", key).get("data") or []
+    pinned = ICON_OVERRIDES.get(game_id)
+    if pinned is not None:
+        icon = next((i for i in icons if i["id"] == pinned), None)
+        if not icon:
+            print(f"  pinned icon {pinned} not found")
+            return False
+    else:
+        icon = best_icon(icons)
+        if not icon:
+            print("  no PNG icon available")
+            return False
+
+    # ICO assets: "url" is the raw .ico; "thumb" is a PNG render of it.
+    url = icon["thumb"] if icon["mime"] != "image/png" else icon["url"]
+    req = urllib.request.Request(url, headers={"User-Agent": "m3llo-icon-fetch"})
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        data = resp.read()
+    im = Image.open(io.BytesIO(data)).convert("RGBA")
+    if max(im.size) > MAX_DIM:
+        im.thumbnail((MAX_DIM, MAX_DIM), Image.LANCZOS)
+    im.save(out_path, "PNG", optimize=True)
+    size_kb = os.path.getsize(out_path) // 1024
+    print(
+        f"  saved {os.path.basename(out_path)} "
+        f"({im.width}x{im.height}, {size_kb} KB, {icon.get('style')})"
+    )
+    return True
+
+
+def generate_slint() -> None:
+    """Regenerate the slint lookup from the PNGs currently on disk."""
+    ids = sorted(
+        f[: -len(".png")] for f in os.listdir(ICONS_DIR) if f.endswith(".png")
+    )
+    lines = [
+        "// AUTO-GENERATED by scripts/download_game_icons.py — do not edit.",
+        "// Embeds bundled game icons (SteamGridDB), looked up by games.json id.",
+        "",
+        "export global GameIconsDb {",
+        "    // Empty image returned for games without a bundled icon;",
+        "    // GameIcon shows the colored badge instead in that case.",
+        "    out property <image> no-icon;",
+        "",
+        "    pure public function has(game-id: string) -> bool {",
+    ]
+    if ids:
+        conds = "\n            || ".join(f'game-id == "{gid}"' for gid in ids)
+        lines.append(f"        return {conds};")
+    else:
+        lines.append("        return false;")
+    lines += [
+        "    }",
+        "",
+        "    pure public function icon(game-id: string) -> image {",
+    ]
+    for gid in ids:
+        lines.append(
+            f'        if game-id == "{gid}" {{ return @image-url("../../assets/game_icons/{gid}.png"); }}'
+        )
+    lines += [
+        "        return no-icon;",
+        "    }",
+        "}",
+        "",
+    ]
+    with open(GEN_SLINT, "w") as f:
+        f.write("\n".join(lines))
+    print(f"wrote {os.path.relpath(GEN_SLINT, SCRIPT_DIR + '/..')} ({len(ids)} icons)")
+
+
+def main():
+    force = "--force" in sys.argv
+    key = os.environ.get("SGDB_API_KEY", "")
+    os.makedirs(ICONS_DIR, exist_ok=True)
+
+    if not key:
+        print("SGDB_API_KEY not set — skipping downloads.")
+        print("Get a free key: https://www.steamgriddb.com/profile/preferences/api")
+    else:
+        with open(GAMES_JSON) as f:
+            games = json.load(f)["games"]
+        for game in games:
+            gid, name = game["id"], game["name"]
+            out_path = os.path.join(ICONS_DIR, f"{gid}.png")
+            if os.path.exists(out_path) and not force:
+                print(f"{gid}: exists, skipping (use --force to refetch)")
+                continue
+            print(f"{gid}: searching \"{name}\"")
+            try:
+                fetch_icon(gid, name, key, out_path)
+            except Exception as e:
+                print(f"  FAILED: {e}")
+
+    generate_slint()
+
+
+if __name__ == "__main__":
+    main()

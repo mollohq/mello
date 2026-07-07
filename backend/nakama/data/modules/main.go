@@ -235,6 +235,22 @@ func InitModule(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runti
 	if err := initializer.RegisterRpc("game_session_end", GameSessionEndRPC); err != nil {
 		return err
 	}
+	if err := initializer.RegisterRpc("user_game_stats_get", UserGameStatsGetRPC); err != nil {
+		return err
+	}
+
+	// -----------------------------------------------------------------------
+	// RPCs — Riot account linking (server-side match-v5/TFT enrichment)
+	// -----------------------------------------------------------------------
+	if err := initializer.RegisterRpc("riot_link", RiotLinkRPC); err != nil {
+		return err
+	}
+	if err := initializer.RegisterRpc("riot_unlink", RiotUnlinkRPC); err != nil {
+		return err
+	}
+	if err := initializer.RegisterRpc("riot_status", RiotStatusRPC); err != nil {
+		return err
+	}
 
 	// -----------------------------------------------------------------------
 	// RPCs — clips

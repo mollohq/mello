@@ -50,14 +50,15 @@ impl GameStateManager {
                     .map(|s| ((now_ms() - s) / 60_000) as u32)
                     .unwrap_or(0);
 
-                let (wins, losses) = tally(&self.matches);
+                let (wins, losses, draws) = tally(&self.matches);
 
                 log::info!(
-                    "[game-state] game stopped: {} (duration={}min, {}W-{}L over {} matches)",
+                    "[game-state] game stopped: {} (duration={}min, {}W-{}L-{}D over {} matches)",
                     game.game_name,
                     duration_min,
                     wins,
                     losses,
+                    draws,
                     self.matches.len(),
                 );
 
@@ -68,6 +69,7 @@ impl GameStateManager {
                         duration_min,
                         wins,
                         losses,
+                        draws,
                         matches: std::mem::take(&mut self.matches),
                     });
                 }
@@ -100,22 +102,26 @@ impl GameStateManager {
                 log::info!(
                     "[game-state] match ended: {} {}-{} on {}",
                     m.result.as_str(),
-                    m.rounds_won,
-                    m.rounds_lost,
+                    m.own_score,
+                    m.opp_score,
                     m.map
                 );
                 let ev = Event::MatchEnded {
                     result: m.result.as_str().to_string(),
-                    rounds_won: m.rounds_won,
-                    rounds_lost: m.rounds_lost,
+                    own_score: m.own_score,
+                    opp_score: m.opp_score,
                     map: m.map.clone(),
                 };
-                self.matches.push(m);
+                self.matches.push(*m);
                 vec![ev]
             }
-            // Match start / round resolution are tracked by the adapter; no UI
+            // Match start / score changes are tracked by the adapter; no UI
             // event yet (reserved for live HUD score and future auto-clip hooks).
-            TelemetryEvent::MatchStarted { .. } | TelemetryEvent::RoundEnded { .. } => Vec::new(),
+            TelemetryEvent::MatchStarted { .. } | TelemetryEvent::ScoreChanged { .. } => Vec::new(),
+            TelemetryEvent::SetupRequired { game_id, hint } => {
+                log::info!("[game-state] telemetry setup required for {game_id}: {hint}");
+                vec![Event::TelemetrySetupHint { game_id, hint }]
+            }
         }
     }
 
@@ -132,21 +138,30 @@ pub struct SessionSummary {
     /// Decisive (streak-eligible) wins/losses this session.
     pub wins: u32,
     pub losses: u32,
+    /// Drawn matches — recorded but don't move the streak.
+    pub draws: u32,
     pub matches: Vec<MatchResult>,
 }
 
-/// Count decisive wins/losses; draws and incompletes don't move the record.
-fn tally(matches: &[MatchResult]) -> (u32, u32) {
+/// Count streak-eligible wins/losses/draws. Wins/losses move the record;
+/// draws are recorded but don't move the streak; incompletes (crash/disconnect)
+/// and non-streak-mode results (played only) are ignored entirely.
+fn tally(matches: &[MatchResult]) -> (u32, u32, u32) {
     let mut wins = 0;
     let mut losses = 0;
+    let mut draws = 0;
     for m in matches {
+        if !m.streak_eligible {
+            continue;
+        }
         match m.result {
             Outcome::Win => wins += 1,
             Outcome::Loss => losses += 1,
-            Outcome::Draw | Outcome::Incomplete => {}
+            Outcome::Draw => draws += 1,
+            Outcome::Incomplete => {}
         }
     }
-    (wins, losses)
+    (wins, losses, draws)
 }
 
 fn now_ms() -> i64 {
@@ -173,16 +188,21 @@ mod tests {
         }
     }
 
-    fn match_result(result: Outcome) -> MatchResult {
-        MatchResult {
+    fn match_result(result: Outcome) -> Box<MatchResult> {
+        Box::new(MatchResult {
             game_id: "counter-strike-2".into(),
             mode: "competitive".into(),
             map: "de_mirage".into(),
             result,
-            rounds_won: 13,
-            rounds_lost: 7,
+            streak_eligible: true,
+            own_score: 13,
+            opp_score: 7,
+            performance: None,
+            build: None,
+            run: None,
+            source: crate::telemetry::SourceQuality::Live,
             ts: now_ms(),
-        }
+        })
     }
 
     #[test]
@@ -216,7 +236,7 @@ mod tests {
         let mut mgr = GameStateManager::new();
         mgr.handle_event(GameEvent::Started(test_game()));
 
-        // Three matches: 2 wins, 1 loss, plus a draw that shouldn't count.
+        // Four matches: 2 wins, 1 loss, 1 draw (draw recorded but not in W/L).
         let ui = mgr.handle_telemetry(TelemetryEvent::MatchEnded(match_result(Outcome::Win)));
         assert!(matches!(&ui[0], Event::MatchEnded { result, .. } if result == "win"));
         mgr.handle_telemetry(TelemetryEvent::MatchEnded(match_result(Outcome::Loss)));
@@ -230,8 +250,28 @@ mod tests {
         let summary = session_end.expect("expected a session summary");
         assert_eq!(summary.wins, 2);
         assert_eq!(summary.losses, 1);
+        assert_eq!(summary.draws, 1);
         assert_eq!(summary.matches.len(), 4);
         assert_eq!(summary.game_id, "counter-strike-2");
+    }
+
+    #[test]
+    fn played_only_results_dont_move_record() {
+        let mut mgr = GameStateManager::new();
+        mgr.handle_event(GameEvent::Started(test_game()));
+
+        let mut casual_win = match_result(Outcome::Win);
+        casual_win.streak_eligible = false;
+        mgr.handle_telemetry(TelemetryEvent::MatchEnded(casual_win));
+        mgr.handle_telemetry(TelemetryEvent::MatchEnded(match_result(Outcome::Win)));
+
+        mgr.session_start = Some(now_ms() - 30 * 60_000);
+        let (_e, session_end) = mgr.handle_event(GameEvent::Stopped(test_game()));
+        let summary = session_end.expect("expected a session summary");
+        // Only the streak-eligible win counts; the casual one is played-only.
+        assert_eq!(summary.wins, 1);
+        assert_eq!(summary.losses, 0);
+        assert_eq!(summary.matches.len(), 2);
     }
 
     #[test]

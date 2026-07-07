@@ -427,13 +427,15 @@ func DevSeedStateRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk 
 					DurationMin:      93, PeakCount: 3,
 				},
 			},
-			// Game session (4h ago) — bob + diana played Valorant
+			// Game session with no telemetry outcomes (4h ago) — scores 0 in
+			// gameSessionQuality, so it never earns a feed card (recap only).
 			{
 				ID: generateEventID(), CrewID: crewIDs["Gamers"],
 				Type: "game_session", ActorID: users["bob"].id,
 				Timestamp: nowMs - 4*hour, Score: 15,
 				Data: GameSessionData{
 					GameName:    "Valorant",
+					GameID:      "valorant",
 					PlayerIDs:   []string{users["bob"].id, users["diana"].id},
 					PlayerNames: []string{users["bob"].displayName, users["diana"].displayName},
 					DurationMin: 65,
@@ -619,6 +621,164 @@ func DevSeedStateRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk 
 	}
 	logger.Info("dev_seed: %d crew events written (clips: Gamers=%d, Devs=%d, Music=%d)",
 		eventsWritten, clipCount["Gamers"], clipCount["Devs"], clipCount["Music"])
+
+	// ── Game outcomes (specs 18+19) ─────────────────────────────────
+	// Seed game_session outcomes + per-user stats + a recap so the personal
+	// "You strip", the feed notability budget, and the weekly-recap game section
+	// are all testable locally (the real recap job only runs Monday 00:00 UTC).
+	//
+	// The sessions exercise the whole surface: several adapters (real GameIDs so
+	// bundled icons render), one Riot-verified LoL session, every notability
+	// archetype (heater, flawless, sympathy, big night), draws, and routine
+	// sessions that must be pruned from the feed into the recap. With the
+	// 2-card budget, only the top two (bob's heater 210, diana's skid 150)
+	// earn feed cards; everything else folds into the recap.
+	if gid, ok := crewIDs["Gamers"]; ok {
+		gameSessions := []CrewEvent{
+			// NOTABLE — bob's CS2 heater: 5-win streak + flawless night
+			// (quality 120+70+20 = 210 → top card).
+			{
+				ID: generateEventID(), CrewID: gid,
+				Type: "game_session", ActorID: users["bob"].id,
+				Timestamp: nowMs - 2*hour, Score: 30,
+				Data: GameSessionData{
+					GameName: "Counter-Strike 2", GameID: "counter-strike-2",
+					PlayerIDs:   []string{users["bob"].id},
+					PlayerNames: []string{users["bob"].displayName},
+					DurationMin: 95, Wins: 5, Losses: 0, Result: "win", StreakAfter: 5,
+				},
+			},
+			// NOTABLE — diana's rough LoL night (sympathy card), server-verified
+			// via the Riot proxy → shows the VERIFIED badge (quality 80+50+20 = 150).
+			{
+				ID: generateEventID(), CrewID: gid,
+				Type: "game_session", ActorID: users["diana"].id,
+				Timestamp: nowMs - 3*hour, Score: 30,
+				Data: GameSessionData{
+					GameName: "League of Legends", GameID: "league-of-legends",
+					PlayerIDs:   []string{users["diana"].id},
+					PlayerNames: []string{users["diana"].displayName},
+					DurationMin: 210, Wins: 0, Losses: 5, Result: "loss", StreakAfter: -3,
+					Verified: true,
+				},
+			},
+			// NOTABLE but over budget — alice's big Dota 2 night (8 matches,
+			// quality 80+50 = 130) → third place, pruned by the 2-card cap,
+			// still counts in the recap.
+			{
+				ID: generateEventID(), CrewID: gid,
+				Type: "game_session", ActorID: users["alice"].id,
+				Timestamp: nowMs - 9*hour, Score: 30,
+				Data: GameSessionData{
+					GameName: "Dota 2", GameID: "dota-2",
+					PlayerIDs:   []string{users["alice"].id},
+					PlayerNames: []string{users["alice"].displayName},
+					DurationMin: 300, Wins: 5, Losses: 3, Result: "win", StreakAfter: 3,
+				},
+			},
+			// ROUTINE — charlie's even Rocket League session with a draw
+			// (streak 1, 5 matches → quality 20, below the 50 floor).
+			{
+				ID: generateEventID(), CrewID: gid,
+				Type: "game_session", ActorID: users["charlie"].id,
+				Timestamp: nowMs - 6*hour, Score: 15,
+				Data: GameSessionData{
+					GameName: "Rocket League", GameID: "rocket-league",
+					PlayerIDs:   []string{users["charlie"].id},
+					PlayerNames: []string{users["charlie"].displayName},
+					DurationMin: 55, Wins: 2, Losses: 2, Draws: 1, Result: "even", StreakAfter: 1,
+				},
+			},
+			// ROUTINE — bob's short Hearthstone session earlier in the week.
+			{
+				ID: generateEventID(), CrewID: gid,
+				Type: "game_session", ActorID: users["bob"].id,
+				Timestamp: nowMs - 30*hour, Score: 15,
+				Data: GameSessionData{
+					GameName: "Hearthstone", GameID: "hearthstone",
+					PlayerIDs:   []string{users["bob"].id},
+					PlayerNames: []string{users["bob"].displayName},
+					DurationMin: 40, Wins: 2, Losses: 1, Result: "win", StreakAfter: 1,
+				},
+			},
+			// ROUTINE — diana's draw-only StarCraft II night (the "draw-only
+			// session showed nothing" regression case: quality 0, recap only).
+			{
+				ID: generateEventID(), CrewID: gid,
+				Type: "game_session", ActorID: users["diana"].id,
+				Timestamp: nowMs - 50*hour, Score: 15,
+				Data: GameSessionData{
+					GameName: "StarCraft II", GameID: "starcraft-2",
+					PlayerIDs:   []string{users["diana"].id},
+					PlayerNames: []string{users["diana"].displayName},
+					DurationMin: 70, Draws: 2, Result: "even", StreakAfter: 0,
+				},
+			},
+		}
+		for _, ev := range gameSessions {
+			if err := AppendCrewEvent(ctx, nk, gid, ev); err != nil {
+				logger.Warn("dev_seed: game_session append failed: %v", err)
+			}
+		}
+		logger.Info("dev_seed: %d game sessions seeded (2 notable in budget, 1 pruned, 3 routine)", len(gameSessions))
+	}
+
+	// Per-user stats (You strip + profile): multi-game histories with varied
+	// form so streaks, win rates, draws, and the "most recently played" pick
+	// all have something to show. Each entry is one session (w, l, d);
+	// last entry decides the current streak direction.
+	type statsSeed struct {
+		gameID   string
+		sessions [][3]int
+	}
+	seedStats := func(userID string, games []statsSeed) {
+		if userID == "" {
+			return
+		}
+		for _, g := range games {
+			for _, s := range g.sessions {
+				if _, _, err := UpdateUserGameStats(ctx, nk, userID, g.gameID, s[0], s[1], s[2]); err != nil {
+					logger.Warn("dev_seed: user_game_stats update failed for %s/%s: %v", userID, g.gameID, err)
+				}
+			}
+		}
+	}
+	// bob: CS2 heater (active game) + an older Hearthstone record.
+	seedStats(users["bob"].id, []statsSeed{
+		{gameID: "hearthstone", sessions: [][3]int{{2, 1, 0}, {1, 2, 0}}},
+		{gameID: "counter-strike-2", sessions: [][3]int{{3, 2, 0}, {2, 2, 1}, {4, 1, 0}, {5, 0, 0}}},
+	})
+	// diana: LoL skid (active) after a decent Valorant stretch.
+	seedStats(users["diana"].id, []statsSeed{
+		{gameID: "valorant", sessions: [][3]int{{4, 2, 0}, {3, 1, 0}}},
+		{gameID: "league-of-legends", sessions: [][3]int{{2, 3, 0}, {1, 4, 0}, {0, 5, 0}}},
+	})
+	// alice: steady Dota 2 grinder with draws in the form.
+	seedStats(users["alice"].id, []statsSeed{
+		{gameID: "dota-2", sessions: [][3]int{{3, 2, 0}, {2, 2, 1}, {5, 3, 0}}},
+	})
+	// charlie: even Rocket League record.
+	seedStats(users["charlie"].id, []statsSeed{
+		{gameID: "rocket-league", sessions: [][3]int{{2, 2, 1}, {3, 2, 0}}},
+	})
+	// Caller (the local tester) gets a two-game history so their own You
+	// strip shows the most recently played game with a healthy streak.
+	if callerID, ok := ctx.Value(runtime.RUNTIME_CTX_USER_ID).(string); ok {
+		seedStats(callerID, []statsSeed{
+			{gameID: "league-of-legends", sessions: [][3]int{{2, 2, 0}, {3, 1, 0}}},
+			{gameID: "counter-strike-2", sessions: [][3]int{{5, 2, 0}, {4, 1, 0}, {3, 3, 1}, {6, 0, 0}}},
+		})
+	}
+	logger.Info("dev_seed: user_game_stats seeded (bob, diana, alice, charlie, caller — multi-game)")
+
+	// Generate the weekly recap now so the game leaderboard + awards are visible
+	// immediately instead of waiting for the scheduled job.
+	for _, crewName := range []string{"Gamers", "Devs"} {
+		if cid, ok := crewIDs[crewName]; ok {
+			generateWeeklyRecap(ctx, nk, logger, cid)
+		}
+	}
+	logger.Info("dev_seed: weekly recaps generated (Gamers, Devs)")
 
 	// Set stale last_seen for all users in seeded crews so catch-up triggers
 	lastSeenCrews := []string{"Gamers", "Devs", "Music"}
