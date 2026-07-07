@@ -66,9 +66,14 @@ Measured in an active call (powermetrics, all processes summed):
 | Discord (Renderer+GPU+main+helpers) | ~195–215 | ~160–185 |
 
 **Mello beats Discord in-call on CPU by ~25-30% at wakeup parity.** Profiling (macOS
-`sample`, silent vs talking in VC) showed: UI/render absent from hot stacks; Silero ~5
-samples (negligible); the talking-state cost is one hot loop = Opus encode. Shipped:
-`OPUS_SET_COMPLEXITY(8)` (was default 10) in `libmello/src/audio/opus_codec.cpp`.
+`sample`, silent vs talking in VC, symbolized) attributed the talking-state cost:
+- **RNNoise DNN (`rnn_compute_linear_c`): ~6% of one core** — already NEON-vectorized
+  (`vec_neon.h` active on aarch64; dotprod on by default). This is the inherent price of
+  neural noise suppression, not a defect. If it ever must shrink, the options are product
+  choices: default to the cheaper `NsMode::WebRtc*` modes, or a lighter model.
+- Opus/SILK encode: ~1% (after `OPUS_SET_COMPLEXITY(8)`, was default 10 — kept; standard
+  practice, harmless).
+- Silero VAD: negligible (~5 samples). UI/render: absent from hot stacks.
 
 **Activity Monitor optics:** Discord's branded row shows <1% because Electron hides the
 real cost in "Discord Helper (Renderer)" (~19%); Mello's single process shows everything
