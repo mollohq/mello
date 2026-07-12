@@ -606,7 +606,14 @@ export component ChatPanel inherits Rectangle {
             }
 
             for msg[idx] in messages: VerticalLayout {
-                    width: feed.width;
+                    // visible-width, NOT width: the cupertino ScrollView's inner
+                    // Flickable is `parent.width - 4px` regardless of scrollbar
+                    // policy, and ListView's viewport-width is derived from the
+                    // delegates' widths. Sizing rows by `feed.width` makes the
+                    // viewport 4px wider than the Flickable, which lets the whole
+                    // feed pan sideways by those 4px. `visible-width` is the
+                    // Flickable's real width in every style.
+                    width: feed.visible-width;
                     padding-top: msg.is-unread-divider ? 8px : (msg.is-group-start && idx > 0 ? 16px : 2px);
                     padding-bottom: idx == messages.length - 1 ? 24px : 0px;
 
@@ -718,7 +725,7 @@ export component ChatPanel inherits Rectangle {
                     if !msg.is-system && !msg.is-unread-divider
                         && (msg.text != "" || msg.reply-to-id != "" || msg.is-deleted || msg.is-gif || msg.is-clip): HorizontalLayout {
                         spacing: 8px;
-                        width: feed.width;
+                        width: feed.visible-width;
                         padding-left: 4px;
                         padding-right: 4px;
                         alignment: start;
@@ -903,12 +910,12 @@ export component ChatPanel inherits Rectangle {
 
                     // Media row: full content width under avatar column (not double-guttered)
                     if !msg.is-system && !msg.is-unread-divider && (msg.is-gif || msg.is-clip): HorizontalLayout {
-                        width: feed.width;
+                        width: feed.visible-width;
                         padding-left: 4px;
                         padding-right: 4px;
                         spacing: 8px;
                         alignment: start;
-                        property <length> media-col-w: feed.width - 44px;
+                        property <length> media-col-w: feed.visible-width - 44px;
 
                         Rectangle {
                             width: 28px;
