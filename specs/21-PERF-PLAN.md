@@ -87,6 +87,15 @@ in one row. We are cheaper in total.
   size → system default ~94 cb/s; 20ms halves audio wakeups at +10ms playout latency —
   A/B before shipping).
 - Event-driven core-event dispatch to replace the 100ms poll loop (~10 wk/s).
+- **Transient GPU render burst (~457 MB `IOAccelerator`, ~205 regions):** every redraw
+  of the visible window briefly allocates ~457 MB of GPU scratch textures, freed right
+  after (footprint oscillates ~250↔~707; window hidden → zero spikes). Predates the
+  main merge (visible as `max` in the 07-01 report); main's 30s `SidebarUpdated` push
+  made it frequent enough to hit p95 — that is why the harness baseline shows
+  p95≈673/653 while steady state is ~214/196. Not a leak; steady state unaffected.
+  Hypothesis (unverified): per-element offscreen layers (rounded `clip` / fractional
+  `opacity` / `drop-shadow`) materialized per frame by the Skia renderer. Next step is
+  an Instruments Metal/GPU trace during a sidebar tick — do NOT grep-guess this one.
 
 ### Phase 3 — Remaining idle wakeups
 - 3.1 Event-driven core events (`slint::invoke_from_event_loop`) replacing the 100 ms poll; slow residual timer only for tray/menu.

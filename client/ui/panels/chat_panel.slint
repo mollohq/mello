@@ -579,6 +579,10 @@ export component ChatPanel inherits Rectangle {
             // stream — that was the ~180 MB idle allocation this migration removes.
             width: parent.width;
             height: parent.height;
+            // The pre-ListView Flickable drew no scrollbars; keep that look.
+            // Wheel/trackpad scrolling is unaffected by bar visibility.
+            vertical-scrollbar-policy: ScrollBarPolicy.always-off;
+            horizontal-scrollbar-policy: ScrollBarPolicy.always-off;
 
             property <bool> at-bottom: self.viewport-height <= self.height
                 || (-self.viewport-y + self.height) >= (self.viewport-height - 32px);
