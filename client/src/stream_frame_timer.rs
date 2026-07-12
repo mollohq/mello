@@ -6,12 +6,17 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
-use mello_core::{FrameLifecycleSlot, FrameSlot, FRAME_STATE_PRESENTED};
+#[cfg(not(target_os = "windows"))]
+use mello_core::FrameSlot;
+use mello_core::{FrameLifecycleSlot, FRAME_STATE_PRESENTED};
 
 use crate::MainWindow;
 
 struct TickCtx {
     app_weak: slint::Weak<MainWindow>,
+    // Windows presents via native_frame_slot + DComp below; the RGBA copy
+    // path (and this slot) is the non-Windows fallback.
+    #[cfg(not(target_os = "windows"))]
     frame_slot: FrameSlot,
     frame_consumed: Arc<AtomicBool>,
     frame_lifecycle: FrameLifecycleSlot,
@@ -105,7 +110,7 @@ pub struct StreamFrameTimer {
 impl StreamFrameTimer {
     pub fn new(
         app_weak: slint::Weak<MainWindow>,
-        frame_slot: FrameSlot,
+        #[cfg(not(target_os = "windows"))] frame_slot: FrameSlot,
         frame_consumed: Arc<AtomicBool>,
         frame_lifecycle: FrameLifecycleSlot,
         #[cfg(target_os = "windows")] native_frame_slot: mello_core::NativeFrameSlot,
@@ -118,6 +123,7 @@ impl StreamFrameTimer {
             timer: slint::Timer::default(),
             tick_ctx: Rc::new(TickCtx {
                 app_weak,
+                #[cfg(not(target_os = "windows"))]
                 frame_slot,
                 frame_consumed,
                 frame_lifecycle,

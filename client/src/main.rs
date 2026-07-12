@@ -493,6 +493,7 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
 
     let stream_frame_timer = Rc::new(stream_frame_timer::StreamFrameTimer::new(
         app.as_weak(),
+        #[cfg(not(target_os = "windows"))]
         frame_slot.clone(),
         frame_consumed.clone(),
         frame_lifecycle.clone(),
