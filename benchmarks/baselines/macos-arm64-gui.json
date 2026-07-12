@@ -6,19 +6,19 @@
   "scenarios": {
     "gui-idle": {
       "footprint_mb": {
-        "p50": 369.72302,
-        "p95": 369.75427
+        "p50": 214.36292,
+        "p95": 673.14417
       },
-      "wakeups_per_s": 108.53985,
-      "cpu_pct": 0.024198178
+      "wakeups_per_s": 110.4496,
+      "cpu_pct": 0.05016846
     },
     "gui-voice": {
       "footprint_mb": {
-        "p50": 385.4262,
-        "p95": 842.1137
+        "p50": 196.28491,
+        "p95": 653.2224
       },
-      "wakeups_per_s": 171.24802,
-      "cpu_pct": 0.08883166
+      "wakeups_per_s": 176.0127,
+      "cpu_pct": 0.15401399
     }
   },
   "tolerances": {
