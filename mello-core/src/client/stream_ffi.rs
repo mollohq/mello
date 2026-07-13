@@ -1,15 +1,30 @@
-use std::collections::HashMap;
+use std::collections::VecDeque;
 use std::ffi::CStr;
+use std::ptr::NonNull;
 use std::sync::Arc;
 use std::time::Instant;
 
-use crate::stream::viewer::StreamViewer;
+use crate::stream::congestion::{CongestionSample, ViewerCongestionController};
+use crate::stream::rtp_peer::{self, ReceivedAccessUnit, RtpPeerError};
 use crate::voice::{SignalEnvelope, SignalMessage, SignalPurpose};
 
 use super::FrameSlot;
 use super::NativeFrameSlot;
 use super::NativeSurfaceFrame;
 use super::FRAME_STATE_READY;
+
+/// Maximum native RTP access units polled per stream tick to avoid starvation.
+pub(super) const MAX_AU_POLLS_PER_TICK: usize = 32;
+
+/// Initial Annex-B receive buffer capacity; grown in place on small-buffer retry.
+pub(super) const VIEWER_AU_RECV_BUF_INITIAL: usize = 256 * 1024;
+const MAX_PENDING_STREAM_DISCONNECTS: usize = 64;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct StreamPeerDisconnect {
+    pub peer_id: String,
+    pub callback_data: usize,
+}
 
 pub(super) struct FrameCallbackData {
     #[cfg_attr(target_os = "windows", allow(dead_code))]
@@ -18,87 +33,6 @@ pub(super) struct FrameCallbackData {
     pub frame_consumed: Arc<std::sync::atomic::AtomicBool>,
     pub frame_lifecycle: Arc<std::sync::atomic::AtomicU8>,
     pub surface_frame_seq: Arc<std::sync::atomic::AtomicU64>,
-}
-
-/// Reassembles chunked DataChannel messages back into full StreamPackets.
-pub(super) struct ChunkAssembler {
-    pending: HashMap<u16, ChunkAssembly>,
-}
-
-const CHUNK_ASSEMBLY_EXPIRY_MS: u128 = 500;
-
-struct ChunkAssembly {
-    chunk_count: u16,
-    chunks_received: u16,
-    chunks: Vec<Option<Vec<u8>>>,
-    created_at: Instant,
-}
-
-impl ChunkAssembler {
-    pub fn new() -> Self {
-        Self {
-            pending: HashMap::new(),
-        }
-    }
-
-    /// Feed a raw DataChannel message. Returns the reassembled payload if complete.
-    pub fn feed(&mut self, raw: &[u8]) -> Option<Vec<u8>> {
-        use crate::stream::sink_p2p::{CHUNK_HEADER_SIZE, CHUNK_MAX_PAYLOAD};
-        const MAX_CHUNKS_PER_MESSAGE: u16 = 64;
-        if raw.len() < CHUNK_HEADER_SIZE {
-            return None;
-        }
-
-        let msg_id = u16::from_le_bytes([raw[0], raw[1]]);
-        let chunk_idx = u16::from_le_bytes([raw[2], raw[3]]);
-        let chunk_count = u16::from_le_bytes([raw[4], raw[5]]);
-        let payload = &raw[CHUNK_HEADER_SIZE..];
-
-        if chunk_count == 0
-            || chunk_count > MAX_CHUNKS_PER_MESSAGE
-            || chunk_idx >= chunk_count
-            || payload.len() > CHUNK_MAX_PAYLOAD
-        {
-            return None;
-        }
-
-        let now = Instant::now();
-
-        // Evict stale assemblies: msg_id window OR time-based expiry
-        self.pending.retain(|&id, assembly| {
-            msg_id.wrapping_sub(id) < 64
-                && now.duration_since(assembly.created_at).as_millis() < CHUNK_ASSEMBLY_EXPIRY_MS
-        });
-
-        let entry = self.pending.entry(msg_id).or_insert_with(|| ChunkAssembly {
-            chunk_count,
-            chunks_received: 0,
-            chunks: (0..chunk_count).map(|_| None).collect(),
-            created_at: now,
-        });
-
-        let idx = chunk_idx as usize;
-        if idx < entry.chunks.len() && entry.chunks[idx].is_none() {
-            entry.chunks[idx] = Some(payload.to_vec());
-            entry.chunks_received += 1;
-        }
-
-        if entry.chunks_received == entry.chunk_count {
-            let assembly = self.pending.remove(&msg_id).unwrap();
-            let total: usize = assembly
-                .chunks
-                .iter()
-                .map(|c| c.as_ref().map_or(0, |v| v.len()))
-                .sum();
-            let mut result = Vec::with_capacity(total);
-            for data in assembly.chunks.into_iter().flatten() {
-                result.extend_from_slice(&data);
-            }
-            Some(result)
-        } else {
-            None
-        }
-    }
 }
 
 /// State for the viewer-side streaming pipeline.
@@ -115,15 +49,20 @@ pub(super) struct ViewerState {
     pub host_id: String,
     pub _frame_cb_data: *mut FrameCallbackData,
     pub _ice_cb_data: *mut StreamIceCallbackData,
-    pub got_keyframe: bool,
     pub frames_presented: u64,
     pub stream_tick_count: u64,
     pub present_attempts: u64,
     pub present_forced_attempts: u64,
     pub present_skipped_unconsumed: u64,
+    /// Complete access units fed to the decoder this session.
     pub transport_packets: u64,
+    /// Annex-B bytes fed to the decoder this session.
     pub transport_bytes: u64,
-    pub transport_truncations: u64,
+    /// Times the AU receive buffer was grown after a small-buffer retry.
+    pub au_buffer_grows: u64,
+    pub au_poll_errors: u64,
+    pub au_feed_failures: u64,
+    pub congestion: ViewerCongestionController,
     pub debug_last_emit: Instant,
     pub debug_last_tick_count: u64,
     pub debug_last_present_attempts: u64,
@@ -133,13 +72,17 @@ pub(super) struct ViewerState {
     pub debug_last_bytes: u64,
     pub debug_last_frames_presented: u64,
     pub last_present_attempt: Instant,
-    pub recv_buf: Vec<u8>,
-    pub stream_viewer: StreamViewer,
-    pub chunk_assembler: ChunkAssembler,
+    pub au_recv_buf: Vec<u8>,
 }
 
 unsafe impl Send for ViewerState {}
 unsafe impl Sync for ViewerState {}
+
+impl ViewerState {
+    pub fn new_au_recv_buf() -> Vec<u8> {
+        vec![0_u8; VIEWER_AU_RECV_BUF_INITIAL]
+    }
+}
 
 impl Drop for ViewerState {
     fn drop(&mut self) {
@@ -166,6 +109,7 @@ impl Drop for ViewerState {
 pub(super) struct StreamIceCallbackData {
     pub peer_id: String,
     pub send_queue: std::sync::Arc<std::sync::Mutex<Vec<(String, SignalEnvelope)>>>,
+    pub disconnect_queue: Arc<std::sync::Mutex<VecDeque<StreamPeerDisconnect>>>,
     /// ICE candidates gathered before the offer/answer is queued.
     /// Once `flushed` is true, new candidates go straight to `send_queue`.
     pub pending: std::sync::Mutex<Vec<SignalEnvelope>>,
@@ -183,6 +127,208 @@ unsafe impl Sync for StreamHostPeer {}
 /// Send-safe wrapper for MelloStreamHost pointer, used to pass across async boundaries.
 pub(super) struct StreamHostHandle(pub *mut mello_sys::MelloStreamHost);
 unsafe impl Send for StreamHostHandle {}
+
+/// Outcome of polling and feeding viewer ingress for one stream tick.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct ViewerIngressTick {
+    pub access_units_fed: u32,
+    pub bytes_fed: u64,
+    pub buffer_grows: u32,
+}
+
+/// Feed one complete Annex-B access unit to the native decoder.
+///
+/// # Safety
+/// `viewer` must be a valid `MelloStreamView` pointer.
+pub(super) unsafe fn feed_access_unit_to_decoder(
+    viewer: *mut mello_sys::MelloStreamView,
+    annex_b: &[u8],
+    is_idr: bool,
+) -> bool {
+    if viewer.is_null() || annex_b.is_empty() {
+        return false;
+    }
+    mello_sys::mello_stream_feed_packet(
+        viewer,
+        annex_b.as_ptr(),
+        i32::try_from(annex_b.len()).unwrap_or(i32::MAX),
+        is_idr,
+    )
+}
+
+/// Poll up to [`MAX_AU_POLLS_PER_TICK`] complete access units from `peer` and feed
+/// each to the decoder. Never uses unreliable DataChannel media APIs.
+pub(super) fn poll_p2p_viewer_access_units(
+    vs: &mut ViewerState,
+    viewer: *mut mello_sys::MelloStreamView,
+    peer: NonNull<mello_sys::MelloPeerConnection>,
+) -> ViewerIngressTick {
+    let mut tick = ViewerIngressTick {
+        access_units_fed: 0,
+        bytes_fed: 0,
+        buffer_grows: 0,
+    };
+
+    for _ in 0..MAX_AU_POLLS_PER_TICK {
+        let before_len = vs.au_recv_buf.len();
+        let au = match rtp_peer::poll_received_access_unit(peer, &mut vs.au_recv_buf) {
+            Ok(Some(au)) => au,
+            Ok(None) => break,
+            Err(RtpPeerError::RecvFailed) => {
+                vs.au_poll_errors = vs.au_poll_errors.saturating_add(1);
+                break;
+            }
+            Err(e) => {
+                vs.au_poll_errors = vs.au_poll_errors.saturating_add(1);
+                log::warn!("Viewer AU poll failed: {}", e);
+                break;
+            }
+        };
+        if vs.au_recv_buf.len() > before_len {
+            vs.au_buffer_grows = vs.au_buffer_grows.saturating_add(1);
+            tick.buffer_grows = tick.buffer_grows.saturating_add(1);
+        }
+        if feed_one_access_unit(vs, viewer, &au) {
+            tick.access_units_fed = tick.access_units_fed.saturating_add(1);
+            tick.bytes_fed = tick.bytes_fed.saturating_add(vs.au_recv_buf.len() as u64);
+        }
+    }
+
+    tick
+}
+
+/// Poll up to [`MAX_AU_POLLS_PER_TICK`] complete access units from an SFU viewer
+/// connection and feed each to the decoder.
+pub(super) fn poll_sfu_viewer_access_units(
+    vs: &mut ViewerState,
+    viewer: *mut mello_sys::MelloStreamView,
+    conn: &crate::transport::SfuConnection,
+) -> ViewerIngressTick {
+    let mut tick = ViewerIngressTick {
+        access_units_fed: 0,
+        bytes_fed: 0,
+        buffer_grows: 0,
+    };
+
+    for _ in 0..MAX_AU_POLLS_PER_TICK {
+        let before_len = vs.au_recv_buf.len();
+        let au = match conn.poll_received_access_unit(&mut vs.au_recv_buf) {
+            Ok(Some(au)) => au,
+            Ok(None) => break,
+            Err(e) => {
+                vs.au_poll_errors = vs.au_poll_errors.saturating_add(1);
+                log::warn!("SFU viewer AU poll failed: {}", e);
+                break;
+            }
+        };
+        if vs.au_recv_buf.len() > before_len {
+            vs.au_buffer_grows = vs.au_buffer_grows.saturating_add(1);
+            tick.buffer_grows = tick.buffer_grows.saturating_add(1);
+        }
+        if feed_one_access_unit(vs, viewer, &au) {
+            tick.access_units_fed = tick.access_units_fed.saturating_add(1);
+            tick.bytes_fed = tick.bytes_fed.saturating_add(vs.au_recv_buf.len() as u64);
+        }
+    }
+
+    tick
+}
+
+fn feed_one_access_unit(
+    vs: &mut ViewerState,
+    viewer: *mut mello_sys::MelloStreamView,
+    au: &ReceivedAccessUnit,
+) -> bool {
+    let ok = unsafe { feed_access_unit_to_decoder(viewer, &vs.au_recv_buf, au.is_idr) };
+    if ok {
+        vs.transport_packets = vs.transport_packets.saturating_add(1);
+        vs.transport_bytes = vs
+            .transport_bytes
+            .saturating_add(vs.au_recv_buf.len() as u64);
+    } else {
+        vs.au_feed_failures = vs.au_feed_failures.saturating_add(1);
+        if au.is_idr {
+            log::warn!(
+                "feed_packet failed for IDR access unit ({} bytes)",
+                vs.au_recv_buf.len()
+            );
+        }
+    }
+    ok
+}
+
+/// Apply the viewer congestion controller and emit REMB when the target changes.
+pub(super) fn tick_viewer_congestion_p2p(
+    vs: &mut ViewerState,
+    peer: NonNull<mello_sys::MelloPeerConnection>,
+) {
+    if !rtp_peer::video_is_open(peer) {
+        return;
+    }
+    let mut stats = unsafe { std::mem::zeroed::<mello_sys::MelloRtpVideoStats>() };
+    unsafe { mello_sys::mello_peer_video_get_stats(peer.as_ptr(), &mut stats) };
+    apply_congestion_output(vs, CongestionSample::from_native(&stats), |bps| {
+        rtp_peer::set_receive_target(peer, bps)
+    });
+}
+
+/// Apply the viewer congestion controller on an SFU connection.
+pub(super) fn tick_viewer_congestion_sfu(
+    vs: &mut ViewerState,
+    conn: &crate::transport::SfuConnection,
+) {
+    if !conn.is_video_track_open() {
+        return;
+    }
+    let stats = match conn.video_stats() {
+        Ok(stats) => stats,
+        Err(e) => {
+            log::warn!("Failed to read SFU viewer RTP stats: {}", e);
+            return;
+        }
+    };
+    apply_congestion_output(vs, CongestionSample::from_native(&stats), |bps| {
+        conn.set_video_receive_target(bps)
+            .map_err(|_| RtpPeerError::TransportFailed)
+    });
+}
+
+fn apply_congestion_output<F>(vs: &mut ViewerState, sample: CongestionSample, mut set_target: F)
+where
+    F: FnMut(u32) -> Result<(), RtpPeerError>,
+{
+    let Some(target_bps) = vs.congestion.tick(sample, Instant::now()) else {
+        return;
+    };
+    match set_target(target_bps) {
+        Ok(()) => {
+            log::debug!(
+                "Viewer RTP receive target set to {} bps (mode={})",
+                target_bps,
+                vs.mode
+            );
+        }
+        Err(e) => log::warn!("Failed to set viewer receive target: {}", e),
+    }
+}
+
+/// Log a structured snapshot of native RTP video stats for viewer diagnostics.
+pub(super) fn log_viewer_native_stats(mode: &str, stats: &mello_sys::MelloRtpVideoStats) {
+    log::info!(
+        "Stream native stats mode={} rx_complete={} rx_emitted={} rx_incomplete={} gate_dropped={} nacks={} pli={} jitter={} buffered_aus={} ingress_packets={} ingress_bytes={}",
+        mode,
+        stats.rx_core_complete_access_units,
+        stats.rx_core_emitted_access_units,
+        stats.rx_core_incomplete_access_units,
+        stats.rx_core_gate_dropped_access_units,
+        stats.rx_core_nacks,
+        stats.rx_core_pli_requests,
+        stats.rx_core_interarrival_jitter,
+        stats.rx_core_buffered_access_units,
+        stats.rx_ingress_packets,
+        stats.rx_ingress_bytes,
+    );
+}
 
 #[cfg_attr(target_os = "windows", allow(dead_code))]
 pub(super) unsafe extern "C" fn on_viewer_frame(
@@ -276,6 +422,7 @@ pub(super) unsafe extern "C" fn stream_ice_callback(
         purpose: SignalPurpose::Stream,
         stream_width: None,
         stream_height: None,
+        stream_bitrate_kbps: None,
         message: SignalMessage::IceCandidate {
             candidate: cand,
             sdp_mid: mid,
@@ -304,6 +451,7 @@ pub(super) unsafe extern "C" fn stream_state_callback(
         return;
     }
     let data = &*(user_data as *const StreamIceCallbackData);
+    let queued_disconnect = enqueue_terminal_disconnect(data, state);
     let label = match state {
         0 => "New",
         1 => "Connecting",
@@ -324,6 +472,38 @@ pub(super) unsafe extern "C" fn stream_state_callback(
     } else {
         log::debug!("Stream peer {} ICE state: {}", data.peer_id, label);
     }
+    if queued_disconnect {
+        log::info!(
+            "Queued terminal stream peer cleanup: peer={} state={}",
+            data.peer_id,
+            label
+        );
+    }
+}
+
+fn enqueue_terminal_disconnect(data: &StreamIceCallbackData, state: i32) -> bool {
+    if !matches!(state, 3..=5) {
+        return false;
+    }
+    let Ok(mut queue) = data.disconnect_queue.lock() else {
+        return false;
+    };
+    let notice = StreamPeerDisconnect {
+        peer_id: data.peer_id.clone(),
+        callback_data: std::ptr::from_ref(data) as usize,
+    };
+    if queue.iter().any(|queued| queued == &notice) {
+        return false;
+    }
+    if queue.len() >= MAX_PENDING_STREAM_DISCONNECTS {
+        log::warn!(
+            "Stream disconnect queue full; dropping terminal callback for {}",
+            data.peer_id
+        );
+        return false;
+    }
+    queue.push_back(notice);
+    true
 }
 
 /// Flush buffered ICE candidates from a `StreamIceCallbackData` into the main
@@ -349,41 +529,86 @@ pub(super) fn flush_ice_buffer(cb_data: &StreamIceCallbackData) {
 
 #[cfg(test)]
 mod tests {
-    use super::ChunkAssembler;
-    use crate::stream::sink_p2p::{CHUNK_HEADER_SIZE, CHUNK_MAX_PAYLOAD};
+    use super::*;
+    use std::sync::atomic::AtomicBool;
 
-    fn make_chunk(msg_id: u16, idx: u16, count: u16, payload: &[u8]) -> Vec<u8> {
-        let mut out = Vec::with_capacity(CHUNK_HEADER_SIZE + payload.len());
-        out.extend_from_slice(&msg_id.to_le_bytes());
-        out.extend_from_slice(&idx.to_le_bytes());
-        out.extend_from_slice(&count.to_le_bytes());
-        out.extend_from_slice(payload);
-        out
+    #[test]
+    fn max_au_polls_per_tick_is_bounded() {
+        assert_eq!(MAX_AU_POLLS_PER_TICK, 32);
     }
 
     #[test]
-    fn chunk_assembler_reassembles_complete_message() {
-        let mut asm = ChunkAssembler::new();
-        let c0 = make_chunk(7, 0, 2, b"hello ");
-        let c1 = make_chunk(7, 1, 2, b"world");
-
-        assert!(asm.feed(&c0).is_none());
-        let msg = asm.feed(&c1).expect("message should reassemble");
-        assert_eq!(msg, b"hello world");
+    fn viewer_au_recv_buf_has_sane_initial_capacity() {
+        let buf = ViewerState::new_au_recv_buf();
+        assert_eq!(buf.len(), VIEWER_AU_RECV_BUF_INITIAL);
+        assert!(buf.len() >= 64 * 1024);
     }
 
     #[test]
-    fn chunk_assembler_rejects_invalid_chunk_count() {
-        let mut asm = ChunkAssembler::new();
-        let bad = make_chunk(8, 0, 65, b"x");
-        assert!(asm.feed(&bad).is_none());
+    fn feed_access_unit_to_decoder_rejects_null_viewer() {
+        let ok = unsafe { feed_access_unit_to_decoder(std::ptr::null_mut(), b"annexb", true) };
+        assert!(!ok);
     }
 
     #[test]
-    fn chunk_assembler_rejects_oversized_chunk_payload() {
-        let mut asm = ChunkAssembler::new();
-        let oversized = vec![0u8; CHUNK_MAX_PAYLOAD + 1];
-        let bad = make_chunk(9, 0, 1, &oversized);
-        assert!(asm.feed(&bad).is_none());
+    fn feed_access_unit_to_decoder_rejects_empty_payload() {
+        let viewer = std::ptr::dangling_mut::<mello_sys::MelloStreamView>();
+        let ok = unsafe { feed_access_unit_to_decoder(viewer, &[], true) };
+        assert!(!ok);
+    }
+
+    #[test]
+    fn sfu_designated_mode_never_falls_back_to_p2p() {
+        assert!(!should_fallback_to_p2p("sfu", true));
+        assert!(!should_fallback_to_p2p("sfu", false));
+        assert!(should_fallback_to_p2p("p2p", true));
+        assert!(!should_fallback_to_p2p("p2p", false));
+    }
+
+    fn should_fallback_to_p2p(backend_mode: &str, setup_failed: bool) -> bool {
+        setup_failed && backend_mode != "sfu"
+    }
+
+    #[test]
+    fn duplicate_terminal_callbacks_queue_one_disconnect() {
+        let disconnect_queue = Arc::new(std::sync::Mutex::new(VecDeque::new()));
+        let data = StreamIceCallbackData {
+            peer_id: "viewer-1".to_string(),
+            send_queue: Arc::new(std::sync::Mutex::new(Vec::new())),
+            disconnect_queue: Arc::clone(&disconnect_queue),
+            pending: std::sync::Mutex::new(Vec::new()),
+            flushed: AtomicBool::new(false),
+        };
+
+        assert!(enqueue_terminal_disconnect(&data, 3));
+        assert!(!enqueue_terminal_disconnect(&data, 4));
+        assert!(!enqueue_terminal_disconnect(&data, 5));
+        assert_eq!(
+            disconnect_queue
+                .lock()
+                .expect("disconnect queue lock")
+                .iter()
+                .map(|notice| notice.peer_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["viewer-1"]
+        );
+    }
+
+    #[test]
+    fn non_terminal_callback_does_not_queue_disconnect() {
+        let disconnect_queue = Arc::new(std::sync::Mutex::new(VecDeque::new()));
+        let data = StreamIceCallbackData {
+            peer_id: "viewer-1".to_string(),
+            send_queue: Arc::new(std::sync::Mutex::new(Vec::new())),
+            disconnect_queue: Arc::clone(&disconnect_queue),
+            pending: std::sync::Mutex::new(Vec::new()),
+            flushed: AtomicBool::new(false),
+        };
+
+        assert!(!enqueue_terminal_disconnect(&data, 2));
+        assert!(disconnect_queue
+            .lock()
+            .expect("disconnect queue lock")
+            .is_empty());
     }
 }

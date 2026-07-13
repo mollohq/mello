@@ -2,6 +2,7 @@
 #include "encoder_qsv.hpp"
 #include "../util/log.hpp"
 #include <Windows.h>
+#include <algorithm>
 #include <chrono>
 
 namespace mello::video {
@@ -36,7 +37,7 @@ static bool load_dispatch_table(HMODULE dll, MfxDispatchFn& fn) {
 
     return fn.Load && fn.Unload && fn.CreateSession && fn.Close &&
            fn.CoreSetHandle && fn.CoreSyncOp &&
-           fn.EncInit && fn.EncClose && fn.EncFrameAsync;
+           fn.EncInit && fn.EncClose && fn.EncGetVideoParam && fn.EncFrameAsync;
 }
 
 bool QsvEncoder::is_available() {
@@ -99,11 +100,18 @@ bool QsvEncoder::initialize(const GraphicsDevice& device, const EncoderConfig& c
 
     memset(&video_params_, 0, sizeof(video_params_));
     video_params_.mfx.CodecId                  = MFX_CODEC_AVC;
+    video_params_.mfx.CodecProfile             = MFX_PROFILE_AVC_MAIN;
+    video_params_.mfx.CodecLevel               = MFX_LEVEL_AVC_42;
     video_params_.mfx.TargetUsage              = MFX_TARGETUSAGE_BEST_SPEED;
     // VBR with moderate headroom (1.25x max) for smooth P2P bandwidth.
     video_params_.mfx.TargetKbps               = static_cast<mfxU16>(config.bitrate_kbps);
     video_params_.mfx.MaxKbps                  = static_cast<mfxU16>(config.bitrate_kbps + config.bitrate_kbps / 4);
     video_params_.mfx.RateControlMethod        = MFX_RATECONTROL_VBR;
+    const uint32_t fps = config.fps > 0 ? config.fps : 60;
+    const uint32_t vbv_bits = (config.bitrate_kbps * 1000u) / fps;
+    const mfxU16 vbv_kb = static_cast<mfxU16>(std::max(1u, (vbv_bits + 7999u) / 8000u));
+    video_params_.mfx.BufferSizeInKB           = vbv_kb;
+    video_params_.mfx.InitialDelayInKB         = vbv_kb;
     video_params_.mfx.FrameInfo.FrameRateExtN  = config.fps;
     video_params_.mfx.FrameInfo.FrameRateExtD  = 1;
     video_params_.mfx.FrameInfo.FourCC         = MFX_FOURCC_NV12;
@@ -117,6 +125,26 @@ bool QsvEncoder::initialize(const GraphicsDevice& device, const EncoderConfig& c
     video_params_.mfx.NumRefFrame              = 1;
     video_params_.IOPattern                    = MFX_IOPATTERN_IN_VIDEO_MEMORY;
 
+    mfxExtCodingOption2 opt2{};
+    opt2.Header.BufferId = MFX_EXTBUFF_CODING_OPTION2;
+    opt2.Header.BufferSz = static_cast<mfxU32>(sizeof(opt2));
+    opt2.LookAheadDepth = 0;
+    opt2.AdaptiveI = MFX_CODINGOPTION_OFF;
+    opt2.AdaptiveB = MFX_CODINGOPTION_OFF;
+    opt2.IntRefType = MFX_REFRESH_NO;
+
+    mfxExtCodingOption3 opt3{};
+    opt3.Header.BufferId = MFX_EXTBUFF_CODING_OPTION3;
+    opt3.Header.BufferSz = static_cast<mfxU32>(sizeof(opt3));
+    opt3.LowDelayBRC = MFX_CODINGOPTION_ON;
+    opt3.LowDelayHrd = MFX_CODINGOPTION_ON;
+
+    opt2_ = opt2;
+    opt3_ = opt3;
+    mfxExtBuffer* ext_params[] = { &opt2_.Header, &opt3_.Header };
+    video_params_.ExtParam = ext_params;
+    video_params_.NumExtParam = 2;
+
     sts = fn_.EncInit(session_, &video_params_);
     if (sts != MFX_ERR_NONE && sts != MFX_WRN_PARTIAL_ACCELERATION) {
         MELLO_LOG_ERROR(TAG, "QSV: MFXVideoENCODE_Init failed: %d", sts);
@@ -126,15 +154,29 @@ bool QsvEncoder::initialize(const GraphicsDevice& device, const EncoderConfig& c
         return false;
     }
 
-    if (fn_.EncGetVideoParam) {
-        mfxVideoParam actual_params{};
-        fn_.EncGetVideoParam(session_, &actual_params);
-        uint32_t bs_size = actual_params.mfx.BufferSizeInKB * 1024;
-        if (bs_size == 0) bs_size = config.width * config.height * 2;
-        bs_buf_.resize(bs_size);
-    } else {
-        bs_buf_.resize(config.width * config.height * 2);
+    mfxVideoParam actual_params{};
+    const mfxStatus actual_sts = fn_.EncGetVideoParam(session_, &actual_params);
+    if (actual_sts != MFX_ERR_NONE ||
+        actual_params.mfx.CodecProfile != MFX_PROFILE_AVC_MAIN ||
+        actual_params.mfx.CodecLevel != MFX_LEVEL_AVC_42 ||
+        actual_params.mfx.GopRefDist != 1) {
+        MELLO_LOG_ERROR(TAG,
+            "QSV: effective H264 profile/level/GOP mismatch (status=%d profile=%u level=%u gopRefDist=%u; required Main/4.2/GopRefDist=1)",
+            actual_sts, actual_params.mfx.CodecProfile, actual_params.mfx.CodecLevel,
+            actual_params.mfx.GopRefDist);
+        fn_.EncClose(session_);
+        fn_.Close(session_); session_ = nullptr;
+        fn_.Unload(loader_); loader_ = nullptr;
+        FreeLibrary(dll_); dll_ = nullptr;
+        return false;
     }
+    MELLO_LOG_INFO(TAG,
+        "QSV: effective H264 profile=Main level=4.2 RC=VBR vbv=%uKB target=%uKbps max=%uKbps "
+        "lookahead=disabled lowDelayBRC=on B-frames=disabled",
+        actual_params.mfx.BufferSizeInKB, actual_params.mfx.TargetKbps, actual_params.mfx.MaxKbps);
+    uint32_t bs_size = actual_params.mfx.BufferSizeInKB * 1024;
+    if (bs_size == 0) bs_size = config.width * config.height * 2;
+    bs_buf_.resize(bs_size);
 
     memset(&bitstream_, 0, sizeof(bitstream_));
     bitstream_.Data      = bs_buf_.data();
@@ -171,10 +213,18 @@ bool QsvEncoder::encode(ID3D11Texture2D* nv12_texture, EncodedPacket& out) {
 
     mfxEncodeCtrl ctrl{};
     mfxEncodeCtrl* ctrl_ptr = nullptr;
-    if (force_idr_) {
+    mfxExtInsertHeaders insert_headers{};
+    mfxExtBuffer* ctrl_ext_params[] = { &insert_headers.Header };
+    const bool forcing_idr = force_idr_;
+    if (forcing_idr) {
         ctrl.FrameType = MFX_FRAMETYPE_I | MFX_FRAMETYPE_IDR | MFX_FRAMETYPE_REF;
+        insert_headers.Header.BufferId = MFX_EXTBUFF_INSERT_HEADERS;
+        insert_headers.Header.BufferSz = static_cast<mfxU32>(sizeof(insert_headers));
+        insert_headers.SPS = MFX_CODINGOPTION_ON;
+        insert_headers.PPS = MFX_CODINGOPTION_ON;
+        ctrl.NumExtParam = 1;
+        ctrl.ExtParam = ctrl_ext_params;
         ctrl_ptr = &ctrl;
-        force_idr_ = false;
     }
 
     bitstream_.DataLength = 0;
@@ -187,6 +237,11 @@ bool QsvEncoder::encode(ID3D11Texture2D* nv12_texture, EncodedPacket& out) {
     if (sts != MFX_ERR_NONE && sts != MFX_WRN_DEVICE_BUSY) {
         MELLO_LOG_ERROR(TAG, "QSV: EncodeFrameAsync failed: %d (seq=%llu)", sts, frame_seq_);
         return false;
+    }
+    if (forcing_idr && sts == MFX_ERR_NONE) {
+        // The control and extension buffers remain alive until SyncOperation
+        // completes below; do not persist pointers to stack-owned buffers.
+        force_idr_ = false;
     }
 
     sts = fn_.CoreSyncOp(session_, sync, 1000);
@@ -219,9 +274,23 @@ void QsvEncoder::request_keyframe() {
 
 void QsvEncoder::set_bitrate(uint32_t kbps) {
     if (session_ && fn_.EncReset) {
+        const uint32_t fps = config_.fps > 0 ? config_.fps : 60;
+        const uint32_t vbv_bits = (kbps * 1000u) / fps;
+        const mfxU16 vbv_kb = static_cast<mfxU16>(std::max(1u, (vbv_bits + 7999u) / 8000u));
         video_params_.mfx.TargetKbps = static_cast<mfxU16>(kbps);
         video_params_.mfx.MaxKbps    = static_cast<mfxU16>(kbps + kbps / 4);
-        fn_.EncReset(session_, &video_params_);
+        video_params_.mfx.BufferSizeInKB = vbv_kb;
+        video_params_.mfx.InitialDelayInKB = vbv_kb;
+        mfxExtBuffer* ext_params[] = { &opt2_.Header, &opt3_.Header };
+        video_params_.ExtParam = ext_params;
+        video_params_.NumExtParam = 2;
+        const mfxStatus sts = fn_.EncReset(session_, &video_params_);
+        if (sts != MFX_ERR_NONE) {
+            MELLO_LOG_ERROR(TAG, "QSV: EncReset after bitrate change failed: %d (kbps=%u)", sts, kbps);
+        } else {
+            force_idr_ = true;
+            MELLO_LOG_DEBUG(TAG, "QSV: reconfigured bitrate=%ukbps vbv=%uKB forceIDR=1", kbps, vbv_kb);
+        }
     }
     config_.bitrate_kbps = kbps;
 }

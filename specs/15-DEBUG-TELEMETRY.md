@@ -36,8 +36,8 @@ Use standard `RUST_LOG` environment variable filtering via `tracing-subscriber`.
 | Scenario | `RUST_LOG` value |
 |---|---|
 | Normal development | `info` |
-| Debugging stream pipeline | `info,libmello=debug,mello_core::stream=debug` |
-| Debugging network/FEC | `info,mello_core::stream::fec=debug,mello_core::stream::sink=debug` |
+| Debugging stream pipeline | `info,libmello=debug,mello_core::stream=debug,mello_core::client::stream_ffi=debug` |
+| Debugging RTP/REMB/pacing | `info,mello_core::stream::congestion=debug,mello_core::stream::rtp_peer=debug` |
 | Full firehose | `debug` |
 
 ### 2.3 Log Format
@@ -47,7 +47,7 @@ All log lines should include timestamp, level, target module, and message. Examp
 ```
 2026-03-13T14:22:01.443Z  INFO libmello: [video/device] D3D11 device created: adapter="NVIDIA GeForce RTX 4070" vram=8176MB
 2026-03-13T14:22:01.891Z  INFO mello_core::stream: Stream session started session_id=abc123 mode=p2p viewers_max=5
-2026-03-13T14:22:02.103Z DEBUG mello_core::stream::fec: FEC group complete n=5 parity_bytes=1240
+2026-03-13T14:22:02.103Z DEBUG mello_core::stream::congestion: REMB emit target_bps=4200000 loss=0.04 jitter_ms=8.2
 ```
 
 ---
@@ -92,31 +92,30 @@ stream_manager_started session_id=abc123 encoder=NVENC codec=H264
 stream_manager_stopped session_id=abc123 uptime_secs=142 video_packets=8542 audio_packets=8498
 ```
 
-### 3.4 ABR Decisions
+### 3.4 REMB and bitrate decisions
 
-**Level:** `INFO` — these are infrequent and always worth knowing about.
+**Level:** `INFO` — infrequent and always worth knowing about.
 
-Log every bitrate change decision with the triggering viewer, the loss rate that caused it, and the old and new bitrate.
+Log every host bitrate change with the triggering feedback source and old/new bitrate.
 
 ```
-abr_step_down viewer_id=xyz789 loss_pct=7.2 bitrate_kbps=12000 → 9000
-abr_step_up   viewer_id=xyz789 loss_pct=0.4 bitrate_kbps=9000 → 9900
+remb_step_down viewer_id=sfu remb_bps=3000000 bitrate_kbps=4500 → 3000
+remb_step_up   viewer_id=abc123 remb_bps=4200000 bitrate_kbps=3000 → 3150
+Stream manager REMB from sfu: 3000000 bps (active_viewers=3)
+Stream RTP pacing: target_kbps=3150 out_kbps=3088.2 tx_bytes_total=142948576
 ```
 
-### 3.5 FEC and Loss Recovery
+### 3.5 RTCP recovery (PLI / NACK)
 
-**Level:** `DEBUG` for FEC group completions, `WARN` for unrecoverable groups and IDR requests.
-
-FEC group completions are high-frequency — only log at DEBUG. Unrecoverable loss and IDR requests are important events worth flagging.
+**Level:** `DEBUG` for routine NACK/REMB samples, `WARN` for sustained gate pressure and PLI bursts.
 
 ```
 // DEBUG — hot path, filtered out at INFO
-fec_group_complete n=5 seq_start=1200 parity_bytes=1380
+rtp_stats interval=500 rx_accepted=298 rx_missing=2 rx_repaired=1 rx_nacks=4
 
 // WARN — always visible
-fec_unrecoverable seq_start=1400 lost=2 of n=5 viewer_id=xyz789
-idr_requested viewer_id=xyz789 reason=sustained_loss rate_limited=false
-idr_rate_limited viewer_id=xyz789 last_idr_ms_ago=800 (min=2000)
+viewer_gated buffered_aus=3 reason=waiting_for_keyframe
+idr_requested viewer_id=sfu reason=pli rate_limited=false
 ```
 
 ### 3.6 Packet Flow (Periodic)
@@ -127,10 +126,10 @@ Log a rolling summary every 300 video packets (~5 seconds at 60fps). Do not log 
 
 ```
 // host side
-packet_stats interval=300 video_bytes=24.8MB audio_bytes=0.9MB fec_groups=60 viewers=3
+packet_stats interval=300 video_aus=298 tx_rtp_packets=890 tx_bytes=24.8MB viewers=3
 
-// viewer side  
-packet_stats interval=300 received=298 lost_pre_fec=4 lost_post_fec=1 idr_requests=0
+// viewer side
+packet_stats interval=300 rx_complete=295 rx_emitted=294 rx_incomplete=1 pli=2 remb_emits=1
 ```
 
 ### 3.7 Voice Session
@@ -219,7 +218,14 @@ pub struct HostStats {
     pub capture_backend: String,        // "DXGI-DDI", "WGC"
     pub capture_source:  String,        // e.g. "Minecraft (pid 18432)", "Monitor 0"
 
-    // Per-viewer (P2P mode only; empty slice in SFU mode)
+    // Native RTP egress (host)
+    pub tx_access_units_sent:   u64,
+    pub tx_access_units_dropped: u64,
+    pub tx_rtp_packets:         u64,
+    pub pacing_target_kbps:     u32,
+    pub pacing_out_kbps:        u32,
+
+    // Per-viewer REMB (P2P mode only; empty slice in SFU mode)
     pub viewers: Vec<ViewerPeerStats>,
 
     // Topology
@@ -230,10 +236,10 @@ pub struct HostStats {
 #[derive(Debug, Clone)]
 pub struct ViewerPeerStats {
     pub viewer_id:    String,
-    pub loss_pct:     f32,              // Packet loss % after FEC
+    pub remb_kbps:    u32,              // Last REMB receive target from this viewer
+    pub loss_pct:     f32,              // RTP packet loss % (native stats)
     pub bytes_sent:   u64,
     pub transport:    String,           // "direct" or "relay (TURN)"
-    pub bitrate_kbps: u32,             // Current per-viewer target bitrate
 }
 
 #[derive(Debug, Clone)]
@@ -246,12 +252,14 @@ pub struct ViewerStats {
     pub frames_decoded:    u64,
     pub frames_dropped:    u64,
 
-    // Network (from viewer's perspective)
-    pub loss_pct_pre_fec:  f32,         // Loss before FEC recovery
-    pub loss_pct_post_fec: f32,         // Loss after FEC recovery — delta shows FEC value
-    pub fec_recoveries:    u32,         // Packets silently recovered by FEC
-    pub fec_unrecoverable: u32,         // Groups FEC could not save
-    pub idr_requests:      u32,         // Keyframe requests sent to host
+    // Network (native RTP receiver stats)
+    pub loss_pct:          f32,
+    pub rx_nacks:          u32,
+    pub rx_pli:            u32,
+    pub rx_repaired:       u32,
+    pub rx_incomplete_aus: u32,
+    pub remb_target_kbps:  u32,
+    pub rx_gated:          bool,        // Waiting for keyframe / gate active
 
     // Performance
     pub staging_copy_avg_ms: f32,       // Average VRAM→CPU copy time
@@ -339,15 +347,15 @@ The dialog shows only sections relevant to the current session state. `BackendSt
 │  Topology  P2P                           │
 │                                          │
 │  Viewers                                 │
-│  abc123   loss 0.3%  11840kbps  direct   │
-│  xyz789   loss 6.1%   9000kbps  relay    │
+│  abc123   loss 0.3%  remb 4200kbps  direct │
+│  xyz789   loss 6.1%  remb 3000kbps  relay  │
 ├──────────────────────────────────────────┤
 │  👁 VIEWER                               │
-│  Decoder   NVDEC · H.264 · 1080p60       │
+│  Decoder   NVDEC · H.264 · 720p60        │
 │  FPS       59.6   Dropped  12            │
-│  Loss      pre-FEC 3.2%  post-FEC 0.1%  │
-│  FEC saves 18   Unrecoverable  1         │
-│  IDR reqs  2                             │
+│  Loss      3.2%   NACK repairs  18       │
+│  REMB tgt  4200 kbps   Gated  no         │
+│  PLI       2                             │
 │  Stage copy  0.4ms avg                   │
 │  Latency   ~38ms                         │
 ├──────────────────────────────────────────┤
@@ -385,7 +393,7 @@ The dialog shows only sections relevant to the current session state. `BackendSt
 
 ### 5.4 Latency Estimate
 
-The viewer displays an estimated end-to-end latency derived from the `timestamp_us` field in the packet header (the host's capture timestamp) minus the viewer's current time. This is only meaningful when host and viewer are on the same machine or LAN with NTP sync. When the clock delta appears unreliable (negative or >500ms), display `~` prefix and a muted colour to signal it is approximate.
+The viewer displays an estimated end-to-end latency derived from the access-unit capture timestamp (`timestamp_us` from the encoder) minus the viewer's current time. This is only meaningful when host and viewer are on the same machine or LAN with NTP sync. When the clock delta appears unreliable (negative or >500ms), display `~` prefix and a muted colour to signal it is approximate.
 
 ---
 
@@ -406,6 +414,9 @@ The debug panel and `MelloStats` gained voice-robustness visibility:
 - **Connection state.** Nakama WS state, SFU signaling/ICE state, control-channel RTT, and the reconnect-attempt counter are surfaced in the debug panel (collapsible "Stream Transport" / "Host Pacing" groups), instead of silently showing `in_voice`.
 - **Windowed underruns.** The panel shows a rolling ~5s underrun count for current health, with the raw lifetime counter kept for reference (see [10-AUDIO_PIPELINE.md](./10-AUDIO_PIPELINE.md)).
 - **Control-channel RTT.** The client sends `{"type":"ping","ts":…}` on the reliable DataChannel ~2s; the SFU echoes a `{"type":"pong",…}` and the client derives RTT. (A prior SFU off-by-one mangled the pong type, pinning RTT to 0 — fixed.)
+- **Native RTP timeline markers.** Probe tools emit grep-friendly lines for coalescing:
+  - Host: `host_probe_tick` with `tx_aus_sent`, `tx_rtp_packets`, `tx_remb`, `tx_pli`
+  - Viewer: `viewer_probe_tick` and `viewer_probe_native_rtp` with `rx_complete`, `rx_gated`, `receive_target_bps`
 - **`client_stats` uplink.** The client periodically reports a compact stats blob to the SFU over signaling for server-side correlation during troubleshooting.
 
 ## 8. Diagnostic Capture (v0.3)

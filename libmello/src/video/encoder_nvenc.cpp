@@ -113,13 +113,15 @@ bool NvencEncoder::initialize(const GraphicsDevice& device, const EncoderConfig&
     preset_config.presetCfg.version = NV_ENC_CONFIG_VER;
 
     struct { GUID preset; NV_ENC_TUNING_INFO tuning; const char* label; } attempts[] = {
+        { NV_ENC_PRESET_P4_GUID, NV_ENC_TUNING_INFO_ULTRA_LOW_LATENCY, "P4+ULL" },
         { NV_ENC_PRESET_P1_GUID, NV_ENC_TUNING_INFO_ULTRA_LOW_LATENCY, "P1+ULL" },
         { NV_ENC_PRESET_P1_GUID, NV_ENC_TUNING_INFO_LOW_LATENCY,       "P1+LL"  },
-        { NV_ENC_PRESET_P4_GUID, NV_ENC_TUNING_INFO_ULTRA_LOW_LATENCY, "P4+ULL" },
     };
 
     bool have_preset = false;
-    GUID used_preset = NV_ENC_PRESET_P1_GUID;
+    GUID used_preset = NV_ENC_PRESET_P4_GUID;
+    NV_ENC_TUNING_INFO used_tuning = NV_ENC_TUNING_INFO_ULTRA_LOW_LATENCY;
+    const char* used_preset_label = "P4+ULL";
     for (auto& a : attempts) {
         memset(&preset_config, 0, sizeof(preset_config));
         preset_config.version = NV_ENC_PRESET_CONFIG_VER;
@@ -129,6 +131,8 @@ bool NvencEncoder::initialize(const GraphicsDevice& device, const EncoderConfig&
         if (status == NV_ENC_SUCCESS) {
             have_preset = true;
             used_preset = a.preset;
+            used_tuning = a.tuning;
+            used_preset_label = a.label;
             break;
         }
     }
@@ -144,19 +148,30 @@ bool NvencEncoder::initialize(const GraphicsDevice& device, const EncoderConfig&
     enc_config.rcParams.version = NV_ENC_RC_PARAMS_VER;
 
     // VBR with moderate headroom: 1.25x max lets keyframes get extra bits
-    // without large bandwidth spikes. 1x VBV keeps rate control tight for
-    // smooth bandwidth usage over P2P links.
+    // without large bandwidth spikes. Minimum safe VBV = one frame of bits.
+    const uint32_t fps = config.fps > 0 ? config.fps : 60;
     uint32_t avg = config.bitrate_kbps * 1000;
     uint32_t max = avg + avg / 4;
+    uint32_t vbv = avg / fps;
+    if (vbv == 0) vbv = 1;
     enc_config.rcParams.rateControlMode = NV_ENC_PARAMS_RC_VBR;
     enc_config.rcParams.averageBitRate  = avg;
     enc_config.rcParams.maxBitRate      = max;
-    enc_config.rcParams.vbvBufferSize   = avg;
+    enc_config.rcParams.vbvBufferSize   = vbv;
+    enc_config.rcParams.enableLookahead   = 0;
+    enc_config.rcParams.enableExtLookahead = 0;
+    enc_config.rcParams.lookaheadDepth  = 0;
+    enc_config.rcParams.enableTemporalAQ = 0;
+    enc_config.rcParams.enableAQ        = 1;
+    enc_config.rcParams.aqStrength      = 8;
+    enc_config.rcParams.zeroReorderDelay = 1;
     enc_config.frameIntervalP = 1;
     enc_config.gopLength      = config.keyframe_interval;
 
     if (config.codec == VideoCodec::H264) {
+        enc_config.profileGUID = NV_ENC_H264_PROFILE_MAIN_GUID;
         enc_config.encodeCodecConfig.h264Config.idrPeriod         = config.keyframe_interval;
+        enc_config.encodeCodecConfig.h264Config.level             = NV_ENC_LEVEL_H264_42;
         enc_config.encodeCodecConfig.h264Config.enableIntraRefresh = 0;
         enc_config.encodeCodecConfig.h264Config.repeatSPSPPS      = 1;
     }
@@ -175,7 +190,7 @@ bool NvencEncoder::initialize(const GraphicsDevice& device, const EncoderConfig&
     init_params.enablePTD          = 1;
     init_params.enableEncodeAsync  = 1;
     init_params.encodeConfig       = &enc_config;
-    init_params.tuningInfo         = NV_ENC_TUNING_INFO_ULTRA_LOW_LATENCY;
+    init_params.tuningInfo         = used_tuning;
 
     MELLO_LOG_INFO(TAG, "NVENC: nvEncInitializeEncoder %ux%u async=%d (initVer=0x%08X cfgVer=0x%08X rcVer=0x%08X)",
         config.width, config.height, init_params.enableEncodeAsync,
@@ -200,6 +215,12 @@ bool NvencEncoder::initialize(const GraphicsDevice& device, const EncoderConfig&
         fn_.nvEncDestroyEncoder(encoder_); encoder_ = nullptr;
         FreeLibrary(dll_); dll_ = nullptr;
         return false;
+    }
+    MELLO_LOG_INFO(TAG,
+        "NVENC: effective preset=%s RC=VBR avg=%u max=%u vbv=%u spatialAQ=8 B-frames=disabled lookahead=disabled",
+        used_preset_label, avg, max, vbv);
+    if (config.codec == VideoCodec::H264) {
+        MELLO_LOG_INFO(TAG, "NVENC: initialized H264 profile=Main level=4.2 repeatSPSPPS=enabled");
     }
 
     NV_ENC_CREATE_BITSTREAM_BUFFER bstream = {NV_ENC_CREATE_BITSTREAM_BUFFER_VER};
@@ -385,15 +406,24 @@ void NvencEncoder::request_keyframe() {
 
 void NvencEncoder::set_bitrate(uint32_t kbps) {
     if (encoder_) {
+        const uint32_t fps = config_.fps > 0 ? config_.fps : 60;
         uint32_t avg = kbps * 1000;
         uint32_t max = avg + avg / 4;
+        uint32_t vbv = avg / fps;
+        if (vbv == 0) vbv = 1;
 
         NV_ENC_RECONFIGURE_PARAMS reconfig = {NV_ENC_RECONFIGURE_PARAMS_VER};
         NV_ENC_CONFIG enc_config = {NV_ENC_CONFIG_VER};
         enc_config.rcParams.rateControlMode = NV_ENC_PARAMS_RC_VBR;
         enc_config.rcParams.averageBitRate  = avg;
         enc_config.rcParams.maxBitRate      = max;
-        enc_config.rcParams.vbvBufferSize   = avg;
+        enc_config.rcParams.vbvBufferSize   = vbv;
+        enc_config.rcParams.enableLookahead   = 0;
+        enc_config.rcParams.enableExtLookahead = 0;
+        enc_config.rcParams.lookaheadDepth  = 0;
+        enc_config.rcParams.enableTemporalAQ = 0;
+        enc_config.rcParams.enableAQ        = 1;
+        enc_config.rcParams.aqStrength      = 8;
 
         NV_ENC_INITIALIZE_PARAMS init = {NV_ENC_INITIALIZE_PARAMS_VER};
         init.encodeWidth  = config_.width;
@@ -403,11 +433,10 @@ void NvencEncoder::set_bitrate(uint32_t kbps) {
         init.encodeConfig = &enc_config;
 
         reconfig.reInitEncodeParams = init;
-        // Bitrate changes should not force a keyframe — unnecessary IDRs waste
-        // bandwidth and cause quality dips. Keyframes come from request_keyframe()
-        // or the scheduled GOP interval only.
-        reconfig.forceIDR = 0;
+        reconfig.forceIDR = 1;
         fn_.nvEncReconfigureEncoder(encoder_, &reconfig);
+        force_idr_ = true;
+        MELLO_LOG_DEBUG(TAG, "NVENC: reconfigured bitrate=%ukbps vbv=%u forceIDR=1", kbps, vbv);
     }
     config_.bitrate_kbps = kbps;
 }

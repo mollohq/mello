@@ -133,7 +133,7 @@ private:
     double   last_encode_ms_   = 0;
     uint64_t viewer_start_time_ = 0;
     uint64_t frames_decoded_   = 0;
-    uint64_t frames_dropped_   = 0;
+    uint64_t decode_errors_    = 0;
 
     std::vector<uint8_t> rgba_buf_;
 

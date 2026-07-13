@@ -43,6 +43,7 @@ PROBE_MARKERS = (
     "viewer_probe_start",
     "viewer_probe_event",
     "viewer_probe_tick",
+    "viewer_probe_native_rtp",
 )
 
 TS_PREFIX_RE = re.compile(r"^\[([0-9T:\-\.]+Z)")
@@ -500,8 +501,9 @@ def print_highlights(entries: list[dict[str, Any]]) -> None:
     )
 
     max_decode_stall_ms = 0
-    max_decode_backlog = 0
+    max_rx_buffered_aus = 0
     low_decode_samples = 0
+    high_missing_hz_samples = 0
     for tick in viewer_ticks:
         fields = tick.get("fields")
         if not isinstance(fields, dict):
@@ -509,12 +511,15 @@ def print_highlights(entries: list[dict[str, Any]]) -> None:
         decode_stall = fields.get("decode_stall_ms")
         if isinstance(decode_stall, int):
             max_decode_stall_ms = max(max_decode_stall_ms, decode_stall)
-        decode_backlog = fields.get("decode_backlog_est")
-        if isinstance(decode_backlog, int):
-            max_decode_backlog = max(max_decode_backlog, decode_backlog)
+        rx_buffered = fields.get("rx_buffered_aus")
+        if isinstance(rx_buffered, int):
+            max_rx_buffered_aus = max(max_rx_buffered_aus, rx_buffered)
         dec_fps = fields.get("dec_fps")
         if isinstance(dec_fps, (int, float)) and dec_fps < 40:
             low_decode_samples += 1
+        rx_missing_hz = fields.get("rx_missing_hz")
+        if isinstance(rx_missing_hz, (int, float)) and rx_missing_hz > 0:
+            high_missing_hz_samples += 1
 
     print(
         "Highlights: "
@@ -522,8 +527,9 @@ def print_highlights(entries: list[dict[str, Any]]) -> None:
         f"coalesce={coalesce_events} severe_coalesce={severe_coalesce} "
         f"sfu_anomaly={len(sfu_anomaly)} "
         f"viewer_low_dec_samples(<40fps)={low_decode_samples} "
+        f"viewer_missing_hz_samples={high_missing_hz_samples} "
         f"max_decode_stall_ms={max_decode_stall_ms} "
-        f"max_decode_backlog_est={max_decode_backlog}"
+        f"max_rx_buffered_aus={max_rx_buffered_aus}"
     )
 
 

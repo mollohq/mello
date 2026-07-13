@@ -195,7 +195,138 @@ MELLO_API MelloResult mello_clip_encode(const char* wav_path, const char* mp4_pa
  * P2P Transport
  * ============================================================================ */
 
+typedef enum MelloPeerMediaRole {
+    MELLO_PEER_MEDIA_ROLE_VOICE = 0,
+    MELLO_PEER_MEDIA_ROLE_STREAM_HOST = 1,
+    MELLO_PEER_MEDIA_ROLE_STREAM_VIEWER = 2,
+} MelloPeerMediaRole;
+
+typedef enum MelloPeerVideoFeedbackType {
+    MELLO_PEER_VIDEO_FEEDBACK_PLI = 0,
+    MELLO_PEER_VIDEO_FEEDBACK_REMB = 1,
+    MELLO_PEER_VIDEO_FEEDBACK_LOCAL_IDR_NEEDED = 2,
+} MelloPeerVideoFeedbackType;
+
+typedef struct MelloPeerVideoFeedback {
+    MelloPeerVideoFeedbackType type;
+    uint32_t remb_bitrate_bps;
+} MelloPeerVideoFeedback;
+
+typedef struct MelloRtpVideoAccessUnitInfo {
+    uint32_t size;
+    uint8_t is_idr;
+    uint32_t rtp_timestamp;
+    uint64_t capture_timestamp_us;
+} MelloRtpVideoAccessUnitInfo;
+
+/** Unambiguous error result from mello_peer_video_recv_access_unit(). */
+#define MELLO_PEER_VIDEO_RECV_ERROR INT32_MIN
+
+typedef struct MelloRtpVideoStats {
+    uint8_t media_role;
+    uint8_t video_open;
+    uint8_t tx_active;
+    uint8_t rx_active;
+
+    uint64_t tx_access_units_enqueued;
+    uint64_t tx_access_units_sent;
+    uint64_t tx_access_units_dropped;
+    uint64_t tx_access_units_rejected;
+    uint64_t tx_bytes_sent;
+    uint64_t tx_send_failures;
+    uint64_t tx_rtp_packets_sent;
+    uint64_t tx_rtp_wire_bytes_sent;
+    uint64_t tx_queued_access_units;
+    uint64_t tx_peak_queued_access_units;
+    uint64_t tx_queued_bytes;
+    uint64_t tx_peak_queued_bytes;
+    uint64_t tx_pacing_target_bps;
+    uint64_t tx_current_pacing_delay_us;
+    uint64_t tx_max_pacing_delay_us;
+    uint64_t tx_local_idr_requests;
+    uint64_t tx_pli_requests;
+    uint64_t tx_remb_reports;
+    uint32_t tx_latest_remb_bitrate_bps;
+
+    uint64_t rx_ingress_packets;
+    uint64_t rx_ingress_bytes;
+    uint64_t rx_ingress_dropped_packets;
+    uint64_t rx_ingress_dropped_bytes;
+    uint64_t rx_ingress_overflows;
+    uint64_t rx_ingress_queued_packets;
+    uint64_t rx_ingress_queued_bytes;
+    uint64_t rx_peak_ingress_queued_packets;
+    uint64_t rx_peak_ingress_queued_bytes;
+    uint64_t rx_wrong_ssrc_packets_after_recovery;
+    uint64_t rx_access_units_queued_total;
+    uint64_t rx_access_unit_bytes_queued_total;
+    uint64_t rx_access_units_dropped;
+    uint64_t rx_access_unit_bytes_dropped;
+    uint64_t rx_output_queued_access_units;
+    uint64_t rx_output_queued_bytes;
+    uint64_t rx_peak_output_queued_access_units;
+    uint64_t rx_peak_output_queued_bytes;
+    uint64_t rx_nack_packets_sent;
+    uint64_t rx_nack_sequences_sent;
+    uint64_t rx_pli_requests;
+    uint64_t rx_pli_packets_sent;
+    uint64_t rx_remb_packets_sent;
+    uint64_t rx_receiver_reports_sent;
+    uint64_t rx_sender_reports_received;
+    uint64_t rx_invalid_rtcp_packets;
+    uint64_t rx_feedback_send_failures;
+    uint64_t rx_core_restarts;
+    uint32_t rx_payload_type;
+    uint32_t rx_local_feedback_ssrc;
+    uint32_t rx_remote_media_ssrc;
+    uint32_t rx_receive_target_bps;
+    uint8_t rx_has_remote_media_ssrc;
+    uint8_t rx_awaiting_output_idr;
+
+    uint64_t rx_core_packets;
+    uint64_t rx_core_bytes_received;
+    uint64_t rx_core_accepted_packets;
+    uint64_t rx_core_accepted_bytes;
+    uint64_t rx_core_duplicates;
+    uint64_t rx_core_late_packets;
+    uint64_t rx_core_invalid_rtp_packets;
+    uint64_t rx_core_invalid_h264_packets;
+    uint64_t rx_core_wrong_payload_type_packets;
+    uint64_t rx_core_wrong_ssrc_packets;
+    uint64_t rx_core_backwards_time_inputs;
+    uint64_t rx_core_missing_sequences_detected;
+    uint64_t rx_core_repaired_packets;
+    uint64_t rx_core_nacks;
+    uint64_t rx_core_nack_callbacks;
+    uint64_t rx_core_complete_access_units;
+    uint64_t rx_core_incomplete_access_units;
+    uint64_t rx_core_emitted_access_units;
+    uint64_t rx_core_pli_requests;
+    uint64_t rx_core_gate_dropped_access_units;
+    uint64_t rx_core_gate_entries;
+    uint64_t rx_core_gate_exits;
+    uint64_t rx_core_buffer_evictions;
+    uint64_t rx_core_sequence_discontinuities;
+    uint64_t rx_core_buffered_access_units;
+    uint64_t rx_core_buffered_packets;
+    uint64_t rx_core_buffered_bytes;
+    uint64_t rx_core_peak_buffered_access_units;
+    uint64_t rx_core_peak_buffered_packets;
+    uint64_t rx_core_peak_buffered_bytes;
+    uint8_t rx_core_has_ssrc;
+    uint32_t rx_core_ssrc;
+    uint64_t rx_core_extended_highest_sequence;
+    uint64_t rx_core_cumulative_loss;
+    uint32_t rx_core_interarrival_jitter;
+    uint8_t rx_core_gated;
+} MelloRtpVideoStats;
+
 MELLO_API MelloPeerConnection* mello_peer_create(MelloContext* ctx, const char* peer_id);
+MELLO_API MelloPeerConnection* mello_peer_create_for_role(
+    MelloContext* ctx,
+    const char* peer_id,
+    MelloPeerMediaRole role
+);
 MELLO_API void mello_peer_destroy(MelloPeerConnection* peer);
 
 MELLO_API void mello_peer_set_ice_servers(
@@ -281,6 +412,51 @@ MELLO_API int mello_peer_send_audio_skips(MelloPeerConnection* peer);
 
 /** Number of incoming RTP tracks currently wired (recv_track_count). */
 MELLO_API int mello_peer_recv_track_count(MelloPeerConnection* peer);
+
+/** Send one Annex-B H.264 access unit on a StreamHost peer. */
+MELLO_API MelloResult mello_peer_video_send_access_unit(
+    MelloPeerConnection* peer,
+    const uint8_t* data,
+    int size,
+    uint64_t capture_ts_us
+);
+
+/**
+ * Poll one received access unit.
+ * 0 means no access unit is queued. A positive result is the byte count copied.
+ * A negative result other than MELLO_PEER_VIDEO_RECV_ERROR is the required
+ * capacity; that access unit remains queued. MELLO_PEER_VIDEO_RECV_ERROR means
+ * invalid input, an impossible size conversion, or an internal exception.
+ */
+MELLO_API int mello_peer_video_recv_access_unit(
+    MelloPeerConnection* peer,
+    uint8_t* buffer,
+    int capacity,
+    MelloRtpVideoAccessUnitInfo* info
+);
+
+/** Poll one queued host-side video feedback event. Returns false when empty. */
+MELLO_API uint8_t mello_peer_video_take_feedback(
+    MelloPeerConnection* peer,
+    MelloPeerVideoFeedback* feedback
+);
+
+MELLO_API MelloResult mello_peer_video_set_pacing_target(
+    MelloPeerConnection* peer,
+    uint64_t bps
+);
+
+MELLO_API MelloResult mello_peer_video_set_receive_target(
+    MelloPeerConnection* peer,
+    uint32_t bps
+);
+
+MELLO_API void mello_peer_video_get_stats(
+    MelloPeerConnection* peer,
+    MelloRtpVideoStats* stats
+);
+
+MELLO_API uint8_t mello_peer_video_is_open(MelloPeerConnection* peer);
 
 /* ============================================================================
  * Video / Streaming

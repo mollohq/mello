@@ -15,6 +15,12 @@ struct DecoderConfig {
     VideoCodec codec = VideoCodec::H264;
 };
 
+enum class DecodeFeedResult {
+    Error,
+    Accepted,
+    FrameReady,
+};
+
 class Decoder {
 public:
     virtual ~Decoder() = default;
@@ -22,7 +28,7 @@ public:
     virtual bool initialize(const GraphicsDevice& device, const DecoderConfig& config) = 0;
     virtual void shutdown() = 0;
 
-    virtual bool decode(const uint8_t* data, size_t size, bool is_keyframe) = 0;
+    virtual DecodeFeedResult decode(const uint8_t* data, size_t size, bool is_keyframe) = 0;
 
 #ifdef _WIN32
     virtual ID3D11Texture2D* get_frame() = 0;

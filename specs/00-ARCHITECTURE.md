@@ -339,7 +339,8 @@ Server mixes/forwards
 - Crews up to 6 people with voice channels
 - Voice chat (P2P mesh, RNNoise, Silero VAD)
 - Text chat (Nakama)
-- Stream sharing (watch only, ABR, FEC)
+- Stream sharing (watch only, H.264 RTP, REMB congestion control)
+- Hosted SFU relay for entitled crews; P2P remains available for small sessions
 - Presence indicators and crew state
 - Social login: Steam, Twitch, Google, Apple, Discord + email/device auth
 - Onboarding flow with crew discovery
@@ -351,7 +352,7 @@ Server mixes/forwards
 - Stream control / input passthrough
 - Linux client
 - Mobile clients (iOS/Android)
-- SFU for large groups (>6)
+- Simulcast/SVC and server-side transcoding
 - Recording
 - Advanced permissions / roles
 
@@ -400,7 +401,7 @@ mello/
 │       ├── events.rs            # Event enum (core → UI)
 │       ├── nakama/              # Nakama HTTP + WebSocket client
 │       ├── voice/               # Voice mesh coordination
-│       ├── stream/              # Stream host/viewer, ABR, FEC
+│       ├── stream/              # Stream manager, RTP sinks, congestion/recovery
 │       ├── crew_state.rs        # Sidebar & crew state models
 │       └── presence.rs          # Presence types
 │
@@ -428,7 +429,8 @@ mello/
 │
 └── tools/                       # Standalone test binaries
     ├── stream-host/
-    └── stream-viewer/
+    ├── sfu-stream-viewer-probe/
+    └── stream-viewer/           # Legacy UDP chunk diagnostic only
 ```
 
 ---

@@ -556,7 +556,7 @@ Command::ChannelReorder { crew_id: CrewId, channel_ids: Vec<ChannelId> },
 
 ### 6.4 VoiceManager Update
 
-The `VoiceManager` in `mello-core/src/voice/manager.rs` currently tracks a single `connected_crew: Option<CrewId>`. This becomes:
+The `VoiceManager` in `mello-core/src/voice/mod.rs` tracks crew/channel membership and transport state:
 
 ```rust
 pub struct VoiceManager {
@@ -732,7 +732,7 @@ backend/nakama/data/modules/
 
 mello-core/src/
   voice/mod.rs                   # Re-export channel types
-  voice/manager.rs               # connected_channel, join_channel(), leave_channel()
+  voice/mod.rs                   # VoiceManager, connected channel and transport state
   events.rs                      # New event variants
   command.rs                     # New command variants
   client.rs                      # Updated handle_select_crew, handle_voice_join

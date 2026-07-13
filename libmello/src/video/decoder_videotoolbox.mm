@@ -67,6 +67,10 @@ static void decompress_callback(
 
     auto* self = static_cast<VTDecoder*>(context);
     if (status != noErr || !image_buffer) {
+        {
+            std::lock_guard<std::mutex> lock(self->frame_mutex_);
+            self->callback_failed_ = true;
+        }
         MELLO_LOG_WARN(TAG, "Decode callback: status=%d image_buffer=%p", (int)status, image_buffer);
         return;
     }
@@ -78,6 +82,7 @@ static void decompress_callback(
         CVPixelBufferRelease((CVPixelBufferRef)self->latest_frame_);
     }
     self->latest_frame_ = image_buffer;
+    self->frame_generation_++;
 }
 
 VTDecoder::VTDecoder() = default;
@@ -114,6 +119,8 @@ void VTDecoder::shutdown() {
         CVPixelBufferRelease((CVPixelBufferRef)latest_frame_);
         latest_frame_ = nullptr;
     }
+    frame_generation_ = 0;
+    callback_failed_ = false;
 }
 
 bool VTDecoder::create_format_description(const uint8_t* sps, size_t sps_len,
@@ -209,9 +216,16 @@ bool VTDecoder::create_session() {
     }
 }
 
-bool VTDecoder::decode(const uint8_t* data, size_t size, bool is_keyframe) {
+DecodeFeedResult VTDecoder::decode(const uint8_t* data, size_t size, bool is_keyframe) {
+    uint64_t generation_before = 0;
+    {
+        std::lock_guard<std::mutex> lock(frame_mutex_);
+        generation_before = frame_generation_;
+        callback_failed_ = false;
+    }
+
     auto nalus = parse_nalu_stream(data, size);
-    if (nalus.empty()) return false;
+    if (nalus.empty()) return DecodeFeedResult::Error;
 
     // On keyframe, extract SPS/PPS and (re)create the session
     if (is_keyframe) {
@@ -224,14 +238,18 @@ bool VTDecoder::decode(const uint8_t* data, size_t size, bool is_keyframe) {
         }
 
         if (sps && pps) {
-            if (!create_format_description(sps, sps_len, pps, pps_len)) return false;
-            if (!create_session()) return false;
+            if (!create_format_description(sps, sps_len, pps, pps_len)) {
+                return DecodeFeedResult::Error;
+            }
+            if (!create_session()) return DecodeFeedResult::Error;
         }
     }
 
-    if (!session_ || !format_) return false;
+    if (!session_ || !format_) return DecodeFeedResult::Error;
 
     // Feed each slice NAL to the decoder
+    size_t submitted = 0;
+    bool submission_failed = false;
     for (auto& nalu : nalus) {
         if (nalu.type == 7 || nalu.type == 8) continue; // skip parameter sets
 
@@ -253,7 +271,11 @@ bool VTDecoder::decode(const uint8_t* data, size_t size, bool is_keyframe) {
             nullptr, 0, avcc_size,
             0, &block);
 
-        if (status != noErr) continue;
+        if (status != noErr) {
+            MELLO_LOG_WARN(TAG, "CMBlockBufferCreateWithMemoryBlock failed: %d", (int)status);
+            submission_failed = true;
+            continue;
+        }
 
         CMSampleBufferRef sample = nullptr;
         const size_t sample_size = avcc_size;
@@ -266,7 +288,11 @@ bool VTDecoder::decode(const uint8_t* data, size_t size, bool is_keyframe) {
             &sample);
 
         CFRelease(block);
-        if (status != noErr) continue;
+        if (status != noErr) {
+            MELLO_LOG_WARN(TAG, "CMSampleBufferCreate failed: %d", (int)status);
+            submission_failed = true;
+            continue;
+        }
 
         VTDecodeFrameFlags flags = kVTDecodeFrame_EnableAsynchronousDecompression
                                  | kVTDecodeFrame_1xRealTimePlayback;
@@ -281,13 +307,33 @@ bool VTDecoder::decode(const uint8_t* data, size_t size, bool is_keyframe) {
         if (status != noErr) {
             MELLO_LOG_WARN(TAG, "VTDecompressionSessionDecodeFrame failed: %d (nalu_type=%u)",
                 (int)status, nalu.type);
+            submission_failed = true;
+        } else {
+            submitted++;
         }
     }
 
     // Flush synchronously to ensure the callback fires before we return
-    VTDecompressionSessionWaitForAsynchronousFrames((VTDecompressionSessionRef)session_);
+    if (submitted > 0) {
+        OSStatus status =
+            VTDecompressionSessionWaitForAsynchronousFrames((VTDecompressionSessionRef)session_);
+        if (status != noErr) {
+            MELLO_LOG_WARN(TAG, "VTDecompressionSessionWaitForAsynchronousFrames failed: %d",
+                (int)status);
+            submission_failed = true;
+        }
+    }
 
-    return true;
+    bool callback_failed = false;
+    bool frame_ready = false;
+    {
+        std::lock_guard<std::mutex> lock(frame_mutex_);
+        callback_failed = callback_failed_;
+        frame_ready = frame_generation_ != generation_before;
+    }
+
+    if (submission_failed || callback_failed) return DecodeFeedResult::Error;
+    return frame_ready ? DecodeFeedResult::FrameReady : DecodeFeedResult::Accepted;
 }
 
 void* VTDecoder::get_frame_buffer() {

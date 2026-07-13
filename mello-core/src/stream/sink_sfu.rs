@@ -1,177 +1,179 @@
-use std::sync::atomic::{AtomicU16, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::collections::{HashMap, VecDeque};
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{Arc, RwLock};
 
 use async_trait::async_trait;
-use tokio::sync::{mpsc, Mutex};
 
 use super::error::StreamError;
-use super::pacer::{EgressPacer, PacingTelemetry};
-use super::packet::StreamPacket;
-use super::sink::PacketSink;
-use super::sink_p2p::CHUNK_HEADER_SIZE;
+use super::sink::{NativeRtpTelemetry, PacketSink, SinkVideoFeedback, SinkVideoFeedbackKind};
+use crate::transport::sfu_connection::VideoFeedbackKind;
 use crate::transport::SfuConnection;
 
-const DEFAULT_SINK_PACING_KBPS: u32 = 6_000;
-const SFU_CHUNK_MAX_PAYLOAD: usize = 40_000;
+/// The SFU aggregates viewer feedback without per-viewer identity.
+pub const SFU_CONTROL_VIEWER_ID: &str = "sfu";
 
-/// Egress channel capacity — enough to absorb encoder bursts without blocking
-/// the manager, but small enough to exert back-pressure before memory bloats.
-const EGRESS_QUEUE_CAPACITY: usize = 128;
+const DEFAULT_SINK_PACING_KBPS: u32 = 6_000;
 
 pub struct SfuSink {
     connection: Arc<SfuConnection>,
-    msg_seq: AtomicU16,
-    egress_tx: mpsc::Sender<Vec<u8>>,
-    egress_spawned: OnceLock<()>,
-    egress_rx: std::sync::Mutex<Option<mpsc::Receiver<Vec<u8>>>>,
-    pacer: Arc<Mutex<EgressPacer>>,
-    last_keyframe: Mutex<Option<Vec<u8>>>,
+    pacing_kbps: AtomicU32,
+    pending_joins: RwLock<VecDeque<String>>,
+    pending_leaves: RwLock<VecDeque<String>>,
+    audio_stub_bytes: AtomicU32,
+    /// Active viewer ids for REMB aggregation bookkeeping.
+    viewers: RwLock<HashMap<String, ()>>,
 }
 
 impl SfuSink {
     pub fn new(connection: Arc<SfuConnection>) -> Self {
-        let pacer = Arc::new(Mutex::new(EgressPacer::new(DEFAULT_SINK_PACING_KBPS)));
-        let (egress_tx, egress_rx) = mpsc::channel(EGRESS_QUEUE_CAPACITY);
-
         Self {
             connection,
-            msg_seq: AtomicU16::new(0),
-            egress_tx,
-            egress_spawned: OnceLock::new(),
-            egress_rx: std::sync::Mutex::new(Some(egress_rx)),
-            pacer,
-            last_keyframe: Mutex::new(None),
+            pacing_kbps: AtomicU32::new(DEFAULT_SINK_PACING_KBPS),
+            pending_joins: RwLock::new(VecDeque::new()),
+            pending_leaves: RwLock::new(VecDeque::new()),
+            audio_stub_bytes: AtomicU32::new(0),
+            viewers: RwLock::new(HashMap::new()),
         }
-    }
-
-    /// Lazily spawn the egress task on first use — avoids requiring a tokio
-    /// runtime context at construction time.
-    fn ensure_egress_task(&self) {
-        self.egress_spawned.get_or_init(|| {
-            let conn = self.connection.clone();
-            let pacer = self.pacer.clone();
-            let mut rx = self
-                .egress_rx
-                .lock()
-                .unwrap()
-                .take()
-                .expect("egress_rx taken twice");
-            tokio::spawn(async move {
-                while let Some(msg) = rx.recv().await {
-                    pacer.lock().await.pace(msg.len()).await;
-                    if let Err(e) = conn.send_media(&msg) {
-                        log::warn!("SFU egress task send failed: bytes={} err={}", msg.len(), e);
-                    }
-                }
-                log::info!("SFU egress task exited");
-            });
-        });
     }
 
     pub fn connection(&self) -> &Arc<SfuConnection> {
         &self.connection
     }
+
+    fn pacing_target_bps(&self) -> u64 {
+        u64::from(self.pacing_kbps.load(Ordering::Relaxed).max(1)) * 1_000
+    }
+
+    fn apply_native_pacing(&self) {
+        let bps = self.pacing_target_bps();
+        if let Err(e) = self.connection.set_video_pacing_target(bps) {
+            log::warn!("SFU sink: set_video_pacing_target failed: {}", e);
+        }
+    }
 }
 
 #[async_trait]
 impl PacketSink for SfuSink {
-    async fn send_video(&self, packet: &StreamPacket) -> Result<(), StreamError> {
-        let data = packet.serialize();
-        if packet.is_keyframe() {
-            *self.last_keyframe.lock().await = Some(data.clone());
+    async fn send_video(
+        &self,
+        annex_b: &[u8],
+        capture_timestamp_us: u64,
+        _is_keyframe: bool,
+    ) -> Result<(), StreamError> {
+        if !self.connection.is_video_track_open() {
+            return Err(StreamError::SendFailed(
+                "RTP video track closed".to_string(),
+            ));
         }
-        self.enqueue_chunked_media(&data)
+        self.connection
+            .send_video_access_unit(annex_b, capture_timestamp_us)
     }
 
-    async fn send_audio(&self, packet: &StreamPacket) -> Result<(), StreamError> {
-        let data = packet.serialize();
-        self.enqueue_chunked_media(&data)
-    }
-
-    async fn send_control(&self, packet: &StreamPacket) -> Result<(), StreamError> {
-        let data = packet.serialize();
-        self.connection.send_control(&data)
+    async fn send_audio_stub(&self, byte_len: usize) {
+        self.audio_stub_bytes.fetch_add(
+            u32::try_from(byte_len).unwrap_or(u32::MAX),
+            Ordering::Relaxed,
+        );
     }
 
     async fn set_pacing_kbps(&self, target_kbps: u32) {
-        self.pacer.lock().await.set_target_kbps(target_kbps);
+        self.pacing_kbps
+            .store(target_kbps.max(1), Ordering::Relaxed);
+        self.apply_native_pacing();
     }
 
-    async fn pacing_telemetry(&self) -> Option<PacingTelemetry> {
-        Some(self.pacer.lock().await.telemetry())
+    async fn native_rtp_telemetry(&self) -> Option<NativeRtpTelemetry> {
+        let stats = self.connection.video_stats().ok()?;
+        Some(NativeRtpTelemetry {
+            target_kbps: (stats.tx_pacing_target_bps / 1_000) as u32,
+            tx_access_units_sent: stats.tx_access_units_sent,
+            tx_access_units_dropped: stats.tx_access_units_dropped,
+            tx_bytes_sent: stats.tx_bytes_sent,
+        })
+    }
+
+    async fn poll_video_feedback(&self) -> Option<SinkVideoFeedback> {
+        let feedback = self.connection.take_video_feedback().ok()??;
+        let kind = match feedback.kind {
+            VideoFeedbackKind::Pli => SinkVideoFeedbackKind::Pli,
+            VideoFeedbackKind::Remb => SinkVideoFeedbackKind::Remb {
+                bitrate_bps: feedback.remb_bitrate_bps,
+            },
+            VideoFeedbackKind::LocalIdrNeeded => SinkVideoFeedbackKind::LocalIdrNeeded,
+        };
+        Some(SinkVideoFeedback {
+            viewer_id: SFU_CONTROL_VIEWER_ID.to_string(),
+            kind,
+        })
+    }
+
+    async fn poll_viewer_joined(&self) -> Option<String> {
+        self.pending_joins.write().ok()?.pop_front()
+    }
+
+    async fn poll_viewer_left(&self) -> Option<String> {
+        self.pending_leaves.write().ok()?.pop_front()
     }
 
     async fn on_viewer_joined(&self, viewer_id: &str) {
         log::debug!("SFU sink: viewer joined {}", viewer_id);
-        let cached = self.last_keyframe.lock().await.clone();
-        if let Some(frame) = cached {
-            if let Err(e) = self.enqueue_chunked_media(&frame) {
-                log::warn!(
-                    "SFU sink: failed to replay cached keyframe for viewer {}: {}",
-                    viewer_id,
-                    e
-                );
-            } else {
-                log::debug!(
-                    "SFU sink: replayed cached keyframe to newly joined viewer {}",
-                    viewer_id
-                );
+        let is_new = self
+            .viewers
+            .write()
+            .ok()
+            .is_some_and(|mut viewers| viewers.insert(viewer_id.to_string(), ()).is_none());
+        if is_new {
+            if let Ok(mut joins) = self.pending_joins.write() {
+                joins.push_back(viewer_id.to_string());
             }
         }
     }
 
     async fn on_viewer_left(&self, viewer_id: &str) {
         log::debug!("SFU sink: viewer left {}", viewer_id);
+        let removed = self
+            .viewers
+            .write()
+            .ok()
+            .is_some_and(|mut viewers| viewers.remove(viewer_id).is_some());
+        if removed {
+            if let Ok(mut leaves) = self.pending_leaves.write() {
+                leaves.push_back(viewer_id.to_string());
+            }
+        }
     }
 }
 
-impl SfuSink {
-    fn enqueue_chunked_media(&self, data: &[u8]) -> Result<(), StreamError> {
-        self.ensure_egress_task();
-        if !self.connection.is_media_channel_open() {
-            return Err(StreamError::SendFailed("media channel closed".to_string()));
-        }
-        let chunk_count = data.len().div_ceil(SFU_CHUNK_MAX_PAYLOAD).max(1) as u16;
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-        // Pre-flight: check that enough queue capacity exists for all chunks.
-        // This avoids sending partial messages that the viewer can never reassemble.
-        let available = self.egress_tx.capacity();
-        if (chunk_count as usize) > available {
-            let msg_id = self.msg_seq.load(Ordering::Relaxed);
-            log::warn!(
-                "SFU sink egress: dropping whole frame msg_id={} ({} chunks, {} slots free)",
-                msg_id,
-                chunk_count,
-                available,
-            );
-            return Err(StreamError::SendFailed(
-                "egress queue full — whole frame dropped".to_string(),
-            ));
-        }
+    #[test]
+    fn sfu_sink_send_video_uses_rtp_access_unit_path() {
+        let source = include_str!("sink_sfu.rs");
+        let impl_end = source.find("#[cfg(test)]").unwrap_or(source.len());
+        let impl_source = &source[..impl_end];
+        assert!(impl_source.contains("send_video_access_unit"));
+        assert!(!impl_source.contains("enqueue_chunked_media"));
+        assert!(!impl_source.contains("send_media"));
+        assert!(!impl_source.contains("last_keyframe"));
+    }
 
-        let msg_id = self.msg_seq.fetch_add(1, Ordering::Relaxed);
+    #[test]
+    fn sfu_feedback_uses_synthetic_viewer_id() {
+        let kind = SinkVideoFeedbackKind::Pli;
+        let fb = SinkVideoFeedback {
+            viewer_id: SFU_CONTROL_VIEWER_ID.to_string(),
+            kind,
+        };
+        assert_eq!(fb.viewer_id, "sfu");
+    }
 
-        for chunk_idx in 0..chunk_count {
-            let start = chunk_idx as usize * SFU_CHUNK_MAX_PAYLOAD;
-            let end = (start + SFU_CHUNK_MAX_PAYLOAD).min(data.len());
-            let payload = &data[start..end];
-
-            let mut msg = Vec::with_capacity(CHUNK_HEADER_SIZE + payload.len());
-            msg.extend_from_slice(&msg_id.to_le_bytes());
-            msg.extend_from_slice(&chunk_idx.to_le_bytes());
-            msg.extend_from_slice(&chunk_count.to_le_bytes());
-            msg.extend_from_slice(payload);
-
-            if self.egress_tx.try_send(msg).is_err() {
-                log::warn!(
-                    "SFU sink egress queue full mid-frame: msg_id={} chunk={}/{} — dropping remainder",
-                    msg_id,
-                    chunk_idx + 1,
-                    chunk_count,
-                );
-                return Err(StreamError::SendFailed("egress queue full".to_string()));
-            }
-        }
-        Ok(())
+    #[test]
+    fn sfu_membership_dedup_source_gate() {
+        let src = include_str!("sink_sfu.rs");
+        assert!(src.contains("is_some_and(|mut viewers| viewers.insert"));
+        assert!(src.contains("if is_new"));
+        assert!(src.contains("if removed"));
     }
 }

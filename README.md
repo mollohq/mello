@@ -209,17 +209,23 @@ Full setup instructions in [/docs/self-hosting.md](./docs/self-hosting.md).
 
 |   | Self-hosted | m3llo.app |
 |---|---|---|
-| Voice and streaming | Up to 6 per channel | Up to 6 per channel (free), more as add-on |
+| Voice | P2P mesh, up to 6 per channel | P2P for free crews; hosted SFU capacity for entitled crews |
+| Streaming | P2P, up to 5 viewers | P2P up to 5 viewers; hosted H.264 RTP SFU capacity for entitled crews |
 | All other features | Identical | Identical |
 | Your data | Stays on your hardware | EU-based, GDPR |
 | Setup | Your own hardware | Zero setup |
 | Cost | Free | Free, optional add-ons |
 
-The only real difference is scale. Self-hosted uses direct P2P connections, which caps concurrent participants at 6 per channel. m3llo.app offers an optional infrastructure add-on for larger crews. No mandatory subscription, no features held back to push you toward paid.
+The primary difference is media scale. Self-hosted uses direct P2P connections:
+voice supports up to 6 members per channel and a stream host sends independently
+to at most 5 viewers. m3llo.app can route entitled crews through the hosted SFU.
+No mandatory subscription, no features held back to push you toward paid.
 
 ### Why 6 participants on P2P?
 
-P2P means your stream goes directly to each viewer. With 6 viewers you are uploading 6 copies. Your upload bandwidth becomes the bottleneck fast. The cap is honest about that.
+P2P means your stream goes directly to each viewer. At the 5-viewer stream cap,
+the host uploads five independently paced RTP copies. Upload bandwidth becomes
+the bottleneck quickly.
 
 The add-on routes streams through our infrastructure in Europe, receiving once and relaying to all viewers. Same client, same quality, different plumbing.
 

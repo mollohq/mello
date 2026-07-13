@@ -105,6 +105,8 @@ pub struct WatchStreamResponse {
     pub width: u32,
     #[serde(default)]
     pub height: u32,
+    #[serde(default)]
+    pub bitrate_kbps: u32,
 }
 
 fn default_p2p() -> String {
@@ -290,6 +292,27 @@ pub struct ApiChannelMessage {
 #[derive(Debug, Deserialize)]
 pub struct ChatContent {
     pub text: Option<String>,
+}
+
+#[cfg(test)]
+mod stream_tests {
+    use super::WatchStreamResponse;
+
+    #[test]
+    fn watch_stream_response_parses_bitrate() {
+        let response: WatchStreamResponse = serde_json::from_str(
+            r#"{"mode":"sfu","width":1920,"height":1080,"bitrate_kbps":4500}"#,
+        )
+        .expect("deserialize");
+        assert_eq!(response.bitrate_kbps, 4_500);
+    }
+
+    #[test]
+    fn legacy_watch_stream_response_defaults_bitrate_to_zero() {
+        let response: WatchStreamResponse =
+            serde_json::from_str(r#"{"mode":"p2p"}"#).expect("deserialize");
+        assert_eq!(response.bitrate_kbps, 0);
+    }
 }
 
 // --- Nakama storage ---

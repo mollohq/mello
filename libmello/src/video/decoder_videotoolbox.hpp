@@ -14,8 +14,8 @@ public:
     bool initialize(const GraphicsDevice& device, const DecoderConfig& config) override;
     void shutdown() override;
 
-    bool  decode(const uint8_t* data, size_t size, bool is_keyframe) override;
-    void* get_frame_buffer() override;
+    DecodeFeedResult decode(const uint8_t* data, size_t size, bool is_keyframe) override;
+    void*            get_frame_buffer() override;
 
     bool        supports_codec(VideoCodec codec) const override;
     const char* name() const override { return "VideoToolbox"; }
@@ -23,8 +23,10 @@ public:
     static bool is_available();
 
     // Accessed by the C decompress callback — must be public
-    std::mutex  frame_mutex_;
-    void*       latest_frame_ = nullptr; // CVPixelBufferRef, retained
+    std::mutex frame_mutex_;
+    void*      latest_frame_ = nullptr; // CVPixelBufferRef, retained
+    uint64_t   frame_generation_ = 0;
+    bool       callback_failed_ = false;
 
 private:
     void* session_ = nullptr; // VTDecompressionSessionRef

@@ -21,6 +21,7 @@ type StartStreamRequest struct {
 	SupportsAV1 bool   `json:"supports_av1,omitempty"`
 	Width       uint32 `json:"width,omitempty"`
 	Height      uint32 `json:"height,omitempty"`
+	BitrateKbps uint32 `json:"bitrate_kbps,omitempty"`
 }
 
 const (
@@ -34,12 +35,13 @@ type StopStreamRequest struct {
 }
 
 type ActiveStream struct {
-	HostID    string `json:"host_id"`
-	HostName  string `json:"host_name"`
-	Title     string `json:"title"`
-	StartedAt int64  `json:"started_at"`
-	Width     uint32 `json:"width,omitempty"`
-	Height    uint32 `json:"height,omitempty"`
+	HostID      string `json:"host_id"`
+	HostName    string `json:"host_name"`
+	Title       string `json:"title"`
+	StartedAt   int64  `json:"started_at"`
+	Width       uint32 `json:"width,omitempty"`
+	Height      uint32 `json:"height,omitempty"`
+	BitrateKbps uint32 `json:"bitrate_kbps,omitempty"`
 }
 
 // StreamMeta is the extended metadata stored in stream_meta/{crew_id}.
@@ -55,6 +57,7 @@ type StreamMeta struct {
 	ViewerIDs          []string `json:"viewer_ids,omitempty"`
 	Width              uint32   `json:"width,omitempty"`
 	Height             uint32   `json:"height,omitempty"`
+	BitrateKbps        uint32   `json:"bitrate_kbps,omitempty"`
 }
 
 const (
@@ -106,12 +109,13 @@ func StartStreamRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk r
 	streamID := fmt.Sprintf("stream_%s_%d", userID[:8], now.UnixMilli())
 
 	stream := ActiveStream{
-		HostID:    userID,
-		HostName:  users[0].GetDisplayName(),
-		Title:     req.Title,
-		StartedAt: now.Unix(),
-		Width:     req.Width,
-		Height:    req.Height,
+		HostID:      userID,
+		HostName:    users[0].GetDisplayName(),
+		Title:       req.Title,
+		StartedAt:   now.Unix(),
+		Width:       req.Width,
+		Height:      req.Height,
+		BitrateKbps: req.BitrateKbps,
 	}
 	streamJSON, _ := json.Marshal(stream)
 
@@ -140,6 +144,7 @@ func StartStreamRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk r
 		StartedAt:        now.UTC().Format(time.RFC3339),
 		Width:            req.Width,
 		Height:           req.Height,
+		BitrateKbps:      req.BitrateKbps,
 	}
 	metaJSON, _ := json.Marshal(meta)
 	nk.StorageWrite(ctx, []*runtime.StorageWrite{
@@ -473,7 +478,7 @@ func WatchStreamRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk r
 	}
 
 	// Load StreamMeta for encode resolution
-	var streamWidth, streamHeight uint32
+	var streamWidth, streamHeight, streamBitrateKbps uint32
 	smObjs, smErr := nk.StorageRead(ctx, []*runtime.StorageRead{
 		{
 			Collection: StreamMetaCollection,
@@ -486,6 +491,7 @@ func WatchStreamRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk r
 		if err := json.Unmarshal([]byte(smObjs[0].Value), &sm); err == nil {
 			streamWidth = sm.Width
 			streamHeight = sm.Height
+			streamBitrateKbps = sm.BitrateKbps
 		}
 	}
 
@@ -509,15 +515,17 @@ func WatchStreamRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk r
 			"sfu_token":    token,
 			"width":        streamWidth,
 			"height":       streamHeight,
+			"bitrate_kbps": streamBitrateKbps,
 		})
 		return string(resp), nil
 	}
 
 	// P2P mode: viewer connects directly via signaling
 	resp, _ := json.Marshal(map[string]interface{}{
-		"mode":   "p2p",
-		"width":  streamWidth,
-		"height": streamHeight,
+		"mode":         "p2p",
+		"width":        streamWidth,
+		"height":       streamHeight,
+		"bitrate_kbps": streamBitrateKbps,
 	})
 	return string(resp), nil
 }
