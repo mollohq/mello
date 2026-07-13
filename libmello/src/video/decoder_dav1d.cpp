@@ -73,31 +73,39 @@ void Dav1dDecoder::shutdown() {
     nv12_buf_.clear();
 }
 
-bool Dav1dDecoder::decode(const uint8_t* data, size_t size, bool is_keyframe) {
+DecodeFeedResult Dav1dDecoder::decode(const uint8_t* data, size_t size, bool is_keyframe) {
     (void)is_keyframe;
 
 #ifdef MELLO_HAS_DAV1D
-    if (!ctx_) return false;
+    if (!ctx_) return DecodeFeedResult::Error;
 
     Dav1dData dav1d_data{};
     int rv = dav1d_data_wrap(&dav1d_data, data, size, nullptr, nullptr);
-    if (rv < 0) return false;
+    if (rv < 0) {
+        MELLO_LOG_ERROR(TAG, "dav1d: dav1d_data_wrap failed: %d", rv);
+        return DecodeFeedResult::Error;
+    }
 
     rv = dav1d_send_data(ctx_, &dav1d_data);
     if (rv < 0 && rv != DAV1D_ERR(EAGAIN)) {
         dav1d_data_unref(&dav1d_data);
-        return false;
+        MELLO_LOG_ERROR(TAG, "dav1d: dav1d_send_data failed: %d", rv);
+        return DecodeFeedResult::Error;
     }
 
     Dav1dPicture pic{};
     rv = dav1d_get_picture(ctx_, &pic);
-    if (rv < 0) return false;
+    if (rv == DAV1D_ERR(EAGAIN)) return DecodeFeedResult::Accepted;
+    if (rv < 0) {
+        MELLO_LOG_ERROR(TAG, "dav1d: dav1d_get_picture failed: %d", rv);
+        return DecodeFeedResult::Error;
+    }
 
     // Only handle 8-bit YUV420
     if (pic.p.bpc != 8 || pic.p.layout != DAV1D_PIXEL_LAYOUT_I420) {
         MELLO_LOG_WARN(TAG, "dav1d: unsupported pixel format bpc=%d layout=%d", pic.p.bpc, pic.p.layout);
         dav1d_picture_unref(&pic);
-        return false;
+        return DecodeFeedResult::Error;
     }
 
     uint32_t w = config_.width;
@@ -136,10 +144,10 @@ bool Dav1dDecoder::decode(const uint8_t* data, size_t size, bool is_keyframe) {
         nv12_buf_.data(), w,
         static_cast<UINT>(nv12_buf_.size()));
 
-    return true;
+    return DecodeFeedResult::FrameReady;
 #else
     (void)data; (void)size;
-    return false;
+    return DecodeFeedResult::Error;
 #endif
 }
 

@@ -154,14 +154,26 @@ bool D3d11vaDecoder::submit_decode(const uint8_t* data, size_t size) {
     void* buf_ptr = nullptr;
     hr = video_context_->GetDecoderBuffer(decoder_.Get(),
         D3D11_VIDEO_DECODER_BUFFER_BITSTREAM, &buf_size, &buf_ptr);
-    if (SUCCEEDED(hr) && buf_ptr) {
-        memcpy(buf_ptr, data, std::min(size, static_cast<size_t>(buf_size)));
+    bool submitted = false;
+    if (FAILED(hr) || !buf_ptr) {
+        MELLO_LOG_ERROR(TAG, "D3D11VA: GetDecoderBuffer failed: hr=0x%08X", hr);
+    } else if (size > buf_size) {
+        MELLO_LOG_ERROR(TAG, "D3D11VA: Bitstream buffer too small: packet=%zu buffer=%u", size, buf_size);
         video_context_->ReleaseDecoderBuffer(decoder_.Get(), D3D11_VIDEO_DECODER_BUFFER_BITSTREAM);
-    }
-
-    hr = video_context_->SubmitDecoderBuffers(decoder_.Get(), 1, &buf_desc);
-    if (FAILED(hr)) {
-        MELLO_LOG_ERROR(TAG, "D3D11VA: SubmitDecoderBuffers failed: hr=0x%08X", hr);
+    } else {
+        memcpy(buf_ptr, data, size);
+        hr = video_context_->ReleaseDecoderBuffer(
+            decoder_.Get(), D3D11_VIDEO_DECODER_BUFFER_BITSTREAM);
+        if (FAILED(hr)) {
+            MELLO_LOG_ERROR(TAG, "D3D11VA: ReleaseDecoderBuffer failed: hr=0x%08X", hr);
+        } else {
+            hr = video_context_->SubmitDecoderBuffers(decoder_.Get(), 1, &buf_desc);
+            if (FAILED(hr)) {
+                MELLO_LOG_ERROR(TAG, "D3D11VA: SubmitDecoderBuffers failed: hr=0x%08X", hr);
+            } else {
+                submitted = true;
+            }
+        }
     }
 
     hr = video_context_->DecoderEndFrame(decoder_.Get());
@@ -170,14 +182,14 @@ bool D3d11vaDecoder::submit_decode(const uint8_t* data, size_t size) {
         return false;
     }
 
-    return true;
+    return submitted;
 }
 
-bool D3d11vaDecoder::decode(const uint8_t* data, size_t size, bool is_keyframe) {
-    if (!decoder_) return false;
+DecodeFeedResult D3d11vaDecoder::decode(const uint8_t* data, size_t size, bool is_keyframe) {
+    if (!decoder_) return DecodeFeedResult::Error;
     (void)is_keyframe;
 
-    if (!submit_decode(data, size)) return false;
+    if (!submit_decode(data, size)) return DecodeFeedResult::Error;
 
     // Copy decoded frame from decoder texture (array slice 0) to output
     context_->CopySubresourceRegion(
@@ -185,7 +197,7 @@ bool D3d11vaDecoder::decode(const uint8_t* data, size_t size, bool is_keyframe) 
         decode_tex_.Get(), D3D11CalcSubresource(0, 0, 1),
         nullptr);
 
-    return true;
+    return DecodeFeedResult::FrameReady;
 }
 
 ID3D11Texture2D* D3d11vaDecoder::get_frame() {

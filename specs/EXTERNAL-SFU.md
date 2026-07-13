@@ -1,24 +1,26 @@
 # SFU Server Specification
 
 > **Component:** SFU Server (Go) · mello-core SfuSink (Rust) · Backend Integration (Go)  
-> **Version:** 0.1  
-> **Status:** Planned  
+> **Version:** 0.2
+> **Status:** Superseded for stream media contract — see [mello-sfu/01-SFU.md](../../mello-sfu/01-SFU.md)
 > **Parent:** [00-ARCHITECTURE.md](./00-ARCHITECTURE.md)  
 > **Related:** [12-STREAMING.md](./12-STREAMING.md), [13-VOICE-CHANNELS.md](./13-VOICE-CHANNELS.md), [04-BACKEND.md](./04-BACKEND.md)  
 > **Repository:** Private (proprietary component)
+
+> **Note:** This document retains historical deployment and admin-dashboard detail. For the current stream path (H.264 RTP relay, control-only DataChannel, REMB/PLI aggregation), [mello-sfu/01-SFU.md](../../mello-sfu/01-SFU.md) is authoritative.
 
 ---
 
 ## 1. Overview
 
-The SFU (Selective Forwarding Unit) is Mello's server-side media relay. It receives media packets from senders and forwards them to receivers without transcoding, mixing, or inspecting contents. For **streaming**, the SFU forwards packets over DataChannels using the custom-framed protocol from [12-STREAMING.md §5](./12-STREAMING.md). For **voice**, the SFU forwards Opus audio via RTP tracks (see §5.3).
+The SFU (Selective Forwarding Unit) is Mello's server-side media relay. Its relay hot paths preserve RTP without transcoding or mixing. For **streaming**, it forwards **H.264 RTP** and may clone ingress packets into the optional bounded, non-blocking IDR snapshot pipeline (see [mello-sfu/01-SFU.md §6](../../mello-sfu/01-SFU.md)). For **voice**, it forwards Opus audio via RTP tracks (§5.3 below).
 
 ### 1.1 What the SFU Enables
 
 | Capability | Without SFU (P2P) | With SFU |
 |---|---|---|
-| Stream viewers | Max 5 (host uploads 5×) | Unlimited (host uploads 1×) |
-| Voice per channel | Max 6 (full mesh, 5 connections each) | Unlimited (each member: 1 upload, 1 download) |
+| Stream viewers | Max 5 (host uploads 5×) | Up to configured backend/SFU capacity (currently 100; host uploads 1×) |
+| Voice per channel | Max 6 (full mesh, 5 connections each) | Up to configured SFU capacity (currently 100; each member: 1 upload, N relayed downloads) |
 | Host bandwidth | Scales linearly with viewers | Constant regardless of viewer count |
 | Stream quality consistency | Varies per viewer (per-viewer ABR) | Single quality, server relays equally |
 
@@ -26,11 +28,11 @@ The SFU (Selective Forwarding Unit) is Mello's server-side media relay. It recei
 
 | Principle | Implication |
 |---|---|
-| **Opaque forwarding** | SFU never parses video/audio payloads — it forwards the 12-byte-header packets from spec 12 verbatim |
-| **DataChannel protocol parity** | Client uses the same packet format for both P2P and SFU paths — zero transport-layer changes |
-| **Server decides topology** | Unchanged from spec 12 §9 — `start_stream` RPC returns `"sfu"` mode with endpoint and token |
-| **Latency over features** | No server-side transcoding, no mixing, no simulcast in v1 — raw forwarding only |
-| **Stateless sessions** | Session state is in-memory only — if the SFU restarts, clients reconnect and resume |
+| **Opaque RTP forwarding** | SFU preserves host RTP seq/timestamp/marker; hop-local NACK only |
+| **Control on DataChannel** | Stream sessions use reliable `control` DC; video is not on DataChannel |
+| **Backend decides topology** | `start_stream` / `watch_stream` return P2P or SFU from entitlement and SFU configuration |
+| **Latency over features** | No server-side transcoding, mixing, or simulcast |
+| **Stateless sessions** | Session state is in-memory only — an SFU restart ends active media sessions; clients must reconnect and rejoin |
 | **Region-aware routing** | Nakama routes clients to the nearest SFU region |
 
 ### 1.3 What This Spec Does NOT Cover
@@ -67,7 +69,7 @@ The SFU (Selective Forwarding Unit) is Mello's server-side media relay. It recei
 │  └───────────────┘    └───────────────┘                                 │
 └─────────────────────────────────────────────────────────────────────────┘
          │                        │
-         │ WSS (signaling)        │ WebRTC DataChannel (media)
+         │ WSS (signaling)        │ WebRTC (H.264 RTP + control DC)
          │                        │
 ┌────────┴────────────────────────┴────────────────────────────────────────┐
 │                           MELLO CLIENT                                    │
@@ -79,7 +81,7 @@ The SFU (Selective Forwarding Unit) is Mello's server-side media relay. It recei
 │  │                          │                                             │
 │  │  - WS signaling          │                                             │
 │  │  - WebRTC PeerConnection │                                             │
-│  │  - DataChannel (media)   │                                             │
+│  │  - RTP video + control DC│                                             │
 │  └──────────────────────────┘                                             │
 └───────────────────────────────────────────────────────────────────────────┘
 ```
@@ -111,18 +113,18 @@ This eliminates ICE negotiation latency on the server side. The client's libdata
 
 ## 3. Session Types
 
-The SFU handles two distinct session types with different transport models. Stream sessions use DataChannels (spec 12 packet format). Voice sessions use RTP audio tracks (§5.3).
+The SFU handles two distinct session types with different transport models. Stream sessions use **H.264 RTP tracks** plus a reliable control DataChannel. Voice sessions use RTP audio tracks (§5.3).
 
 ### 3.1 Stream Session (1-to-Many)
 
 ```
-Host ──DataChannel──▶ SFU ──DataChannel──▶ Viewer A
-                           ──DataChannel──▶ Viewer B
-                           ──DataChannel──▶ Viewer C
-                           ──DataChannel──▶ ...
+Host ──H.264 RTP──▶ SFU ──H.264 RTP──▶ Viewer A
+                          ──H.264 RTP──▶ Viewer B
+                          ──H.264 RTP──▶ Viewer C
+     control DC ◀───────▶     (viewer PLI/REMB aggregated upstream)
 ```
 
-- One host publishes video + audio packets
+- One host publishes H.264 RTP video; game/system audio is not implemented on stream sessions
 - N viewers receive forwarded copies
 - Viewers send control packets (loss reports, IDR requests) back to host via SFU
 - Host sends a single stream at chosen quality; no per-viewer ABR at the SFU level in v1
@@ -373,9 +375,9 @@ Client                          SFU Server
   │                                │
   │◀──▶ ice_candidate ────────────▶│  (ICE-lite: usually 1 round)
   │                                │
-  │════ DataChannel established ══▶│
+  │════ RTP video + control DC ══▶│
   │                                │
-  │──── [stream packets] ─────────▶│  (media flows over DataChannel)
+  │──── [H.264 RTP packets] ──────▶│  (video on RTP track)
   │                                │
 ```
 
@@ -383,54 +385,15 @@ Client                          SFU Server
 
 ## 5. Media Transport
 
-### 5.1 DataChannel Configuration
+> **Stream video:** See [mello-sfu/01-SFU.md §6](../../mello-sfu/01-SFU.md) for the current H.264 RTP relay contract (control-only DataChannel, REMB/PLI aggregation, per-viewer bounded queues). The DataChannel media fan-out described in older revisions is removed.
 
-The SFU creates DataChannels with the same configuration used in P2P (spec 12 §5.1):
+### 5.1 Stream control DataChannel
 
-```go
-// DataChannel options — matches client P2P configuration
-dcConfig := webrtc.DataChannelInit{
-    Ordered:        boolPtr(false),
-    MaxRetransmits: uint16Ptr(0),
-}
-```
+Stream peers negotiate one reliable `control` DataChannel. It carries cursor packets, ping/pong, and other reliable metadata. Video does not use an unreliable `media` DataChannel on stream sessions.
 
-**Unreliable, unordered.** This is non-negotiable — same reasoning as spec 12: reliable/ordered channels introduce head-of-line blocking.
+### 5.2 Packet Forwarding (Stream Session) — historical
 
-Two DataChannels per PeerConnection:
-
-| Label | Purpose |
-|---|---|
-| `media` | Video + audio + FEC packets (types 0x01, 0x02, 0x03) |
-| `control` | Control packets (type 0x04): loss reports, IDR requests, quality changes |
-
-Splitting media and control onto separate DataChannels prevents control messages from being delayed behind large video packets in the SCTP send queue.
-
-### 5.2 Packet Forwarding (Stream Session)
-
-The SFU's hot path for stream sessions:
-
-```go
-// Pseudocode — stream session forwarding loop
-func (s *StreamSession) onHostMediaPacket(data []byte) {
-    // No parsing, no inspection — forward the raw blob to all viewers
-    viewers := s.viewers.Snapshot()  // lock-free snapshot
-    for _, viewer := range viewers {
-        viewer.mediaChannel.SendNonBlocking(data)
-    }
-}
-
-func (s *StreamSession) onViewerControlPacket(viewerID string, data []byte) {
-    // Control packets from viewers are forwarded to the host
-    s.host.controlChannel.SendNonBlocking(data)
-}
-```
-
-**Key design decisions:**
-
-- `SendNonBlocking`: if a viewer's DataChannel buffer is full (slow viewer), the packet is dropped. The viewer's FEC / IDR recovery handles the loss. A slow viewer must never block packet delivery to other viewers.
-- No packet inspection: the SFU does not parse the 12-byte header. It does not know whether a packet is a keyframe, FEC parity, or audio. It forwards everything.
-- Exception: the SFU *does* inspect the `type` byte (offset 0) to route between `media` and `control` DataChannels. This is the only byte the SFU reads.
+The former DataChannel hot path (`onHostMediaPacket` → `viewer.SendMedia`) is **removed**. Stream video forwarding is RTP-only; see `stream_session.go` relay loops and `RelaySnapshot` admin metrics in mello-sfu.
 
 ### 5.3 Voice Transport (RTP Tracks)
 
@@ -470,7 +433,7 @@ The client identifies each incoming track's sender via the `msid` SDP attribute 
 
 The SFU does NOT perform bandwidth estimation or congestion control. The client handles this:
 
-- **Stream ABR:** The host's ABR controller (spec 12 §7.2) receives loss reports from viewers (relayed through the SFU) and adjusts bitrate accordingly. In SFU mode, the host adjusts based on the **worst-reporting viewer** — since all viewers receive the same stream, the host targets the lowest common denominator.
+- Stream sessions: host sends one encoded H.264 stream; viewers share it via SFU RTP relay. Host bitrate follows minimum fresh viewer REMB (see [12-STREAMING.md §8.2](./12-STREAMING.md)).
 - **Voice:** Opus at 128kbps stereo is well within any reasonable connection. No ABR needed for voice.
 
 Server-side buffer limits per peer:
@@ -528,7 +491,7 @@ The SFU enforces these rules on `join_*`:
 
 ### 6.3 Encryption
 
-All media flows over DTLS-encrypted WebRTC DataChannels. The SFU terminates DTLS — it decrypts incoming packets and re-encrypts for each outbound peer. This is inherent to the WebRTC forwarding model and cannot be avoided without end-to-end encryption (E2EE), which is deferred.
+All media flows over DTLS-SRTP (RTP tracks) and DTLS-SCTP (DataChannels). The SFU terminates DTLS on each peer connection.
 
 **Future consideration:** E2EE using [Insertable Streams / SFrame](https://www.w3.org/TR/webrtc-encoded-transform/) would allow the SFU to forward encrypted payloads without decryption. This requires client-side key exchange and is a post-v1 feature.
 
@@ -754,6 +717,13 @@ For voice sessions, the **crew creator's region** determines the SFU. This is a 
 
 ## 8. Client Integration (SfuSink)
 
+> **Historical implementation sketch — do not implement from this section.**
+> The current client path is `mello-core/src/client/streaming.rs` →
+> `stream/sink_sfu.rs` → `transport/sfu_connection.rs`. Stream video uses a
+> native RTP track; `StreamPacket`, `send_media`, and a stream `media`
+> DataChannel below are pre-RTP artifacts. The normative client contract is
+> [12-STREAMING.md §6](./12-STREAMING.md).
+
 ### 8.1 SfuSink Implementation
 
 Replaces the stub from spec 12 §9.2:
@@ -901,7 +871,7 @@ impl SfuConnection {
 The `VoiceManager` (spec 13 §6.4) gains SFU awareness. Voice mode is determined at join time based on the `voice_join` RPC response — the VoiceManager is always in one mode for a given crew, never transitions between modes mid-session.
 
 ```rust
-// mello-core/src/voice/manager.rs — updated
+// Historical sketch; current VoiceManager lives in mello-core/src/voice/mod.rs.
 
 pub struct VoiceManager {
     libmello: *mut MelloContext,
@@ -1003,6 +973,12 @@ impl VoiceManager {
 ---
 
 ## 9. SFU Server Implementation
+
+> **Historical implementation sketch — do not implement from this section.**
+> The deployed relay is documented by `mello-sfu/01-SFU.md`; current stream
+> forwarding is `WireVideoTrackFor` / `readHostVideoRTP` / per-viewer RTP legs,
+> and voice forwarding uses RTP tracks. The `mediaChannel`, `SendMedia`, and
+> DataChannel media fan-out examples below are retained only as rollout history.
 
 ### 9.1 Server Entry Point
 
@@ -2149,6 +2125,10 @@ SFU_LOG_LEVEL=info                               # debug, info, warn, error
 
 ## 15. Testing Checklist
 
+> Historical rollout checklist. Current executable gates live in
+> [`TESTING.md`](../TESTING.md), `scripts/run-stream-certification.ps1`, and the
+> SFU `stream-soak` tool.
+
 ### Stream Sessions
 - [ ] Host connects, starts streaming → SFU receives packets
 - [ ] Viewer connects → receives forwarded video + audio packets
@@ -2280,6 +2260,10 @@ backend/nakama/data/modules/
 ---
 
 ## 17. Implementation Order
+
+> Historical rollout record. It is not the current completion or release
+> checklist; use [12-STREAMING.md](./12-STREAMING.md) and
+> [`TESTING.md`](../TESTING.md).
 
 ### Phase 0: TURN Server + GCP Infra (Now)
 1. Run `deploy-instance.sh eu` to provision GCP VM in europe-west3 with coturn

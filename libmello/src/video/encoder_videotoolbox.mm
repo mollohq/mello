@@ -141,9 +141,17 @@ bool VTEncoder::initialize(const GraphicsDevice& device, const EncoderConfig& co
         VTSessionSetProperty(sess, kVTCompressionPropertyKey_RealTime, kCFBooleanTrue);
         VTSessionSetProperty(sess, kVTCompressionPropertyKey_AllowFrameReordering, kCFBooleanFalse);
 
-        // Baseline profile — no B-frames, compatible with all decoders
-        VTSessionSetProperty(sess, kVTCompressionPropertyKey_ProfileLevel,
-            kVTProfileLevel_H264_Main_AutoLevel);
+        status = VTSessionSetProperty(sess, kVTCompressionPropertyKey_ProfileLevel,
+            kVTProfileLevel_H264_Main_4_2);
+        if (status != noErr) {
+            MELLO_LOG_ERROR(TAG,
+                "VideoToolbox: required H264 profile=Main level=4.2 rejected: %d",
+                (int)status);
+            VTCompressionSessionInvalidate(sess);
+            CFRelease(sess);
+            return false;
+        }
+        MELLO_LOG_INFO(TAG, "VideoToolbox: accepted H264 profile=Main level=4.2");
 
         // Bitrate: VBR with max = avg * 1.25 (matches spec §6.1)
         int avg_bps = (int)bitrate_ * 1000;

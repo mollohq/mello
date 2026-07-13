@@ -6,8 +6,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use mello_core::stream::host::{self, StartStreamResponse};
+use mello_core::stream::sink::PacketSink;
 use mello_core::stream::StreamConfig;
-use mello_core::transport::{SfuConnection, SfuEvent};
+use mello_core::transport::{SfuConnection, SfuEvent, StreamPeerRole};
 
 const DEFAULT_PORT: u16 = 9800;
 const HEADER_CONFIG: u8 = 0x00;
@@ -111,6 +112,8 @@ fn main() {
     let mut sfu_token = parse_arg_string(&args, "--sfu-token");
     let mut sfu_session = parse_arg_string(&args, "--sfu-session");
     let sfu_role = parse_arg_string(&args, "--sfu-role").unwrap_or_else(|| "host".to_string());
+    let source_index = parse_arg::<usize>(&args, "--source-index");
+    let source_title_substring = parse_arg_string(&args, "--source-title-substring");
     let nakama_start_stream = has_flag(&args, "--nakama-start-stream");
     let mut nakama_host_context: Option<NakamaHostContext> = None;
 
@@ -153,6 +156,7 @@ fn main() {
             supports_av1,
             req_width,
             req_height,
+            bitrate,
         )
         .unwrap_or_else(|e| {
             eprintln!("start_stream RPC failed: {}", e);
@@ -184,10 +188,11 @@ fn main() {
         });
     }
 
-    let (label, source) = select_source(ctx).unwrap_or_else(|| {
-        unsafe { mello_sys::mello_destroy(ctx) };
-        std::process::exit(1);
-    });
+    let (label, source) = select_source(ctx, source_index, source_title_substring.as_deref())
+        .unwrap_or_else(|| {
+            unsafe { mello_sys::mello_destroy(ctx) };
+            std::process::exit(1);
+        });
     println!("\nStreaming: {}", label);
 
     // Ctrl+C handler
@@ -197,6 +202,7 @@ fn main() {
     .expect("Failed to set Ctrl+C handler");
 
     let use_sfu = sfu_endpoint.is_some() || sfu_token.is_some() || sfu_session.is_some();
+    let legacy_udp = has_flag(&args, "--legacy-udp-chunks");
     let result = if use_sfu {
         let endpoint = sfu_endpoint.unwrap_or_else(|| {
             eprintln!("Missing --sfu-endpoint");
@@ -221,8 +227,15 @@ fn main() {
             &sfu_role,
             nakama_host_context.as_ref(),
         )
-    } else {
+    } else if legacy_udp {
         run_udp_mode(ctx, &source, fps, bitrate, port)
+    } else {
+        eprintln!(
+            "ERROR: legacy UDP chunked video mode removed from default probes. \
+Use --nakama-start-stream / --sfu-* for RTP, or pass --legacy-udp-chunks for diagnostics."
+        );
+        unsafe { mello_sys::mello_destroy(ctx) };
+        std::process::exit(1);
     };
 
     if let Err(e) = result {
@@ -236,15 +249,63 @@ fn main() {
 
 fn select_source(
     ctx: *mut mello_sys::MelloContext,
+    source_index: Option<usize>,
+    source_title_substring: Option<&str>,
 ) -> Option<(String, mello_sys::MelloCaptureSource)> {
     println!("\n=== Mello Stream Host ===\n");
     println!("Available capture sources:\n");
 
+    let sources = enumerate_sources(ctx);
+    for (idx, (label, _)) in sources.iter().enumerate() {
+        println!("  [{}] {}", idx + 1, label);
+    }
+
+    let choice = if let Some(index) = source_index {
+        if index >= 1 && index <= sources.len() {
+            index - 1
+        } else {
+            eprintln!(
+                "ERROR: --source-index {} out of range (1..={})",
+                index,
+                sources.len()
+            );
+            return None;
+        }
+    } else if let Some(needle) = source_title_substring {
+        let needle = needle.to_ascii_lowercase();
+        match sources
+            .iter()
+            .position(|(label, _)| label.to_ascii_lowercase().contains(&needle))
+        {
+            Some(idx) => idx,
+            None => {
+                eprintln!(
+                    "ERROR: no capture source matches --source-title-substring '{}'",
+                    source_title_substring.unwrap_or("")
+                );
+                return None;
+            }
+        }
+    } else {
+        print!("\nSelect source: ");
+        std::io::stdout().flush().ok()?;
+        let mut input = String::new();
+        std::io::stdin().read_line(&mut input).ok()?;
+        match input.trim().parse::<usize>() {
+            Ok(n) if n >= 1 && n <= sources.len() => n - 1,
+            _ => return None,
+        }
+    };
+
+    Some(sources[choice].clone())
+}
+
+fn enumerate_sources(
+    ctx: *mut mello_sys::MelloContext,
+) -> Vec<(String, mello_sys::MelloCaptureSource)> {
     let mut sources: Vec<(String, mello_sys::MelloCaptureSource)> = Vec::new();
 
-    println!("  -- Monitors --");
     for i in 0..2u32 {
-        let idx = sources.len();
         sources.push((
             format!("Monitor {}", i),
             mello_sys::MelloCaptureSource {
@@ -254,7 +315,6 @@ fn select_source(
                 pid: 0,
             },
         ));
-        println!("  [{}] Monitor {}", idx + 1, i);
     }
 
     let mut games = vec![
@@ -268,7 +328,6 @@ fn select_source(
     ];
     let game_count = unsafe { mello_sys::mello_enumerate_games(ctx, games.as_mut_ptr(), 16) };
     if game_count > 0 {
-        println!("\n  -- Games --");
         for game in games.iter().take(game_count as usize) {
             let name = unsafe { std::ffi::CStr::from_ptr(game.name.as_ptr()) }
                 .to_string_lossy()
@@ -279,7 +338,6 @@ fn select_source(
             } else {
                 ""
             };
-            let idx = sources.len();
             sources.push((
                 format!("{} (pid {}){}", name, pid, fs),
                 mello_sys::MelloCaptureSource {
@@ -289,7 +347,6 @@ fn select_source(
                     pid,
                 },
             ));
-            println!("  [{}] {}{} (pid {})", idx + 1, name, fs, pid);
         }
     }
 
@@ -304,14 +361,11 @@ fn select_source(
     ];
     let win_count = unsafe { mello_sys::mello_enumerate_windows(ctx, windows.as_mut_ptr(), 64) };
     if win_count > 0 {
-        println!("\n  -- Windows --");
         for win in windows.iter().take(win_count as usize) {
             let title = unsafe { std::ffi::CStr::from_ptr(win.title.as_ptr()) }
                 .to_string_lossy()
                 .to_string();
-            let _hwnd = win.hwnd;
             let pid = win.pid;
-            let idx = sources.len();
             sources.push((
                 format!("{} (pid {})", title, pid),
                 mello_sys::MelloCaptureSource {
@@ -321,19 +375,10 @@ fn select_source(
                     pid,
                 },
             ));
-            println!("  [{}] {} (pid {})", idx + 1, title, pid);
         }
     }
 
-    print!("\nSelect source: ");
-    std::io::stdout().flush().ok()?;
-    let mut input = String::new();
-    std::io::stdin().read_line(&mut input).ok()?;
-    let choice: usize = match input.trim().parse::<usize>() {
-        Ok(n) if n >= 1 && n <= sources.len() => n - 1,
-        _ => return None,
-    };
-    Some(sources[choice].clone())
+    sources
 }
 
 fn run_udp_mode(
@@ -487,8 +532,8 @@ fn run_sfu_mode(
     let mut conn = rt
         .block_on(SfuConnection::connect(endpoint, token))
         .map_err(|e| format!("SFU connect failed: {}", e))?;
-    let peer_handle = unsafe { SfuConnection::create_peer(ctx) }
-        .map_err(|e| format!("SFU peer creation failed: {}", e))?;
+    let peer_handle = unsafe { SfuConnection::create_stream_peer(ctx, StreamPeerRole::Host) }
+        .map_err(|e| format!("SFU stream peer creation failed: {}", e))?;
     rt.block_on(conn.join_stream(peer_handle, session_id, role))
         .map_err(|e| format!("SFU join_stream failed: {}", e))?;
     rt.block_on(conn.wait_for_datachannel_open())
@@ -550,9 +595,10 @@ fn run_sfu_mode(
     }
     println!("Streaming over SFU... (Ctrl+C to stop)\n");
 
-    let sink: Arc<dyn mello_core::stream::sink::PacketSink> = Arc::new(
+    let sink: Arc<mello_core::stream::sink_sfu::SfuSink> = Arc::new(
         mello_core::stream::sink_sfu::SfuSink::new(Arc::clone(&conn)),
     );
+    let sink_for_events: Arc<dyn mello_core::stream::sink::PacketSink> = Arc::clone(&sink) as _;
     let resp = StartStreamResponse {
         session_id: Some(session_id.to_string()),
         stream_id: None,
@@ -572,7 +618,16 @@ fn run_sfu_mode(
 
     let mut stream_session = rt
         .block_on(async {
-            host::create_stream_session(ctx, host, &resp, cfg, video_rx, audio_rx, resources, sink)
+            host::create_stream_session(
+                ctx,
+                host,
+                &resp,
+                cfg,
+                video_rx,
+                audio_rx,
+                resources,
+                sink_for_events,
+            )
         })
         .map_err(|e| format!("create_stream_session failed: {}", e))?;
 
@@ -581,32 +636,31 @@ fn run_sfu_mode(
     let mut last_disconnect: Option<String> = None;
     let mut channel_closed_streak: u32 = 0;
 
+    let mut last_stats = conn
+        .video_stats()
+        .unwrap_or_else(|_| unsafe { std::mem::zeroed() });
+
     while RUNNING.load(Ordering::Relaxed) {
         std::thread::sleep(Duration::from_secs(1));
         conn.send_ping();
         for ev in conn.poll_events() {
             match ev {
                 SfuEvent::MemberJoined { user_id, role } => {
-                    joined_viewers += 1;
-                    let (wall_ms, mono_ms) = correlation_stamp(correlation_start);
-                    log::info!(
-                        "host_probe_event session={} wall_ms={} mono_ms={} event=member_joined user={} role={}",
-                        session_id,
-                        wall_ms,
-                        mono_ms,
-                        user_id,
-                        role
-                    );
-                    unsafe {
-                        mello_sys::mello_stream_request_keyframe(host);
+                    if role == "viewer" {
+                        joined_viewers += 1;
+                        let (wall_ms, mono_ms) = correlation_stamp(correlation_start);
+                        log::info!(
+                            "host_probe_event session={} wall_ms={} mono_ms={} event=member_joined user={} role={}",
+                            session_id,
+                            wall_ms,
+                            mono_ms,
+                            user_id,
+                            role
+                        );
+                        rt.block_on(async {
+                            sink.on_viewer_joined(&user_id).await;
+                        });
                     }
-                    let (wall_ms, mono_ms) = correlation_stamp(correlation_start);
-                    log::info!(
-                        "host_probe_event session={} wall_ms={} mono_ms={} event=requested_keyframe reason=viewer_join",
-                        session_id,
-                        wall_ms,
-                        mono_ms
-                    );
                 }
                 SfuEvent::MemberLeft { user_id, reason } => {
                     joined_viewers = (joined_viewers - 1).max(0);
@@ -619,6 +673,9 @@ fn run_sfu_mode(
                         user_id,
                         reason
                     );
+                    rt.block_on(async {
+                        sink.on_viewer_left(&user_id).await;
+                    });
                 }
                 SfuEvent::Disconnected { reason } => {
                     last_disconnect = Some(reason.clone());
@@ -636,23 +693,25 @@ fn run_sfu_mode(
             }
         }
 
-        let media_open = conn.is_media_channel_open();
+        let video_open = conn.is_video_track_open();
         let control_open = conn.is_control_channel_open();
-        if media_open || control_open {
+        if video_open && control_open {
             channel_closed_streak = 0;
         } else {
             channel_closed_streak = channel_closed_streak.saturating_add(1);
             if channel_closed_streak == 1 {
                 let (wall_ms, mono_ms) = correlation_stamp(correlation_start);
                 log::warn!(
-                    "host_probe_event session={} wall_ms={} mono_ms={} event=channels_closed media_open=false control_open=false",
+                    "host_probe_event session={} wall_ms={} mono_ms={} event=transport_closed video_open={} control_open={}",
                     session_id,
                     wall_ms,
-                    mono_ms
+                    mono_ms,
+                    video_open,
+                    control_open
                 );
             }
             if channel_closed_streak >= 3 {
-                let reason = "media/control channels stayed closed".to_string();
+                let reason = "control/video transport stayed closed".to_string();
                 last_disconnect = Some(reason.clone());
                 let (wall_ms, mono_ms) = correlation_stamp(correlation_start);
                 log::warn!(
@@ -669,26 +728,41 @@ fn run_sfu_mode(
         let elapsed = start.elapsed().as_secs();
         let (wall_ms, mono_ms) = correlation_stamp(correlation_start);
         let disconnect = last_disconnect.clone().unwrap_or_else(|| "-".to_string());
+        let stats_now = conn
+            .video_stats()
+            .unwrap_or_else(|_| unsafe { std::mem::zeroed() });
         log::info!(
-            "host_probe_tick session={} wall_ms={} mono_ms={} viewers={} media_open={} control_open={} rtt_ms={:.1} disconnect={}",
+            "host_probe_tick session={} wall_ms={} mono_ms={} viewers={} video_open={} control_open={} rtt_ms={:.1} disconnect={} tx_aus_sent={} tx_aus_dropped={} tx_rtp_packets={} tx_rtp_bytes={} tx_queue_peak={} tx_pacing_target_kbps={} tx_pacing_delay_us={} tx_pli={} tx_remb={}",
             session_id,
             wall_ms,
             mono_ms,
             joined_viewers,
-            media_open,
-            control_open,
-            conn.rtt_ms(),
-            disconnect
-        );
-        print!(
-            "\r[{:3}s] viewers={} media_open={} control_open={} rtt_ms={:.1} disconnect={}   ",
-            elapsed,
-            joined_viewers,
-            media_open,
+            video_open,
             control_open,
             conn.rtt_ms(),
             disconnect,
+            stats_now.tx_access_units_sent,
+            stats_now.tx_access_units_dropped,
+            stats_now.tx_rtp_packets_sent,
+            stats_now.tx_rtp_wire_bytes_sent,
+            stats_now.tx_peak_queued_access_units,
+            stats_now.tx_pacing_target_bps / 1_000,
+            stats_now.tx_current_pacing_delay_us,
+            stats_now.tx_pli_requests,
+            stats_now.tx_remb_reports,
         );
+        print!(
+            "\r[{:3}s] viewers={} video_open={} control_open={} tx_aus={} tx_drop={} rtt_ms={:.1} disconnect={}   ",
+            elapsed,
+            joined_viewers,
+            video_open,
+            control_open,
+            stats_now.tx_access_units_sent.saturating_sub(last_stats.tx_access_units_sent),
+            stats_now.tx_access_units_dropped.saturating_sub(last_stats.tx_access_units_dropped),
+            conn.rtt_ms(),
+            disconnect,
+        );
+        last_stats = stats_now;
         std::io::stdout().flush().map_err(|e| e.to_string())?;
     }
 
@@ -731,6 +805,7 @@ fn unix_time_ms() -> u128 {
         .as_millis()
 }
 
+#[allow(clippy::too_many_arguments)]
 fn request_start_stream_via_nakama(
     http_base: &str,
     auth_token: &str,
@@ -739,6 +814,7 @@ fn request_start_stream_via_nakama(
     supports_av1: bool,
     width: u32,
     height: u32,
+    bitrate_kbps: u32,
 ) -> Result<StartStreamResponse, String> {
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -753,6 +829,7 @@ fn request_start_stream_via_nakama(
             "supports_av1": supports_av1,
             "width": width,
             "height": height,
+            "bitrate_kbps": bitrate_kbps,
         });
         // Nakama RPC HTTP expects the payload to be a JSON string.
         let body = serde_json::Value::String(payload.to_string());

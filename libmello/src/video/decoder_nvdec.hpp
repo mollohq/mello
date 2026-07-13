@@ -12,7 +12,7 @@ class NvdecDecoder : public Decoder {
 public:
     bool             initialize(const GraphicsDevice& device, const DecoderConfig& config) override;
     void             shutdown() override;
-    bool             decode(const uint8_t* data, size_t size, bool is_keyframe) override;
+    DecodeFeedResult decode(const uint8_t* data, size_t size, bool is_keyframe) override;
     ID3D11Texture2D* get_frame() override;
     DXGI_FORMAT      frame_format() const override;
     uint32_t         coded_height() const { return coded_height_; }

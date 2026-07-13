@@ -4,7 +4,7 @@
 > **Version:** 1.4  
 > **Status:** Implemented  
 > **Depends on:** [16-CREW-EVENT-LEDGER.md](../16-CREW-EVENT-LEDGER.md), [CLIPS.md](./CLIPS.md), [00-ARCHITECTURE.md](../00-ARCHITECTURE.md)  
-> **Related:** SFU snapshot capture (`mello-sfu/STREAM-SNAPSHOTS-SFU.md` if present)
+> **Related:** SFU snapshot capture contract in `mello-sfu/STREAM-SNAPSHOTS-SFU.md`
 
 ---
 

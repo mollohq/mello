@@ -42,6 +42,8 @@ private:
     mfxLoader  loader_  = nullptr;
     mfxSession session_ = nullptr;
     mfxVideoParam     video_params_{};
+    mfxExtCodingOption2 opt2_{};
+    mfxExtCodingOption3 opt3_{};
     mfxBitstream      bitstream_{};
     std::vector<uint8_t> bs_buf_;
 

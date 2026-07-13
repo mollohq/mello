@@ -40,6 +40,9 @@ pub struct SignalEnvelope {
     pub stream_width: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stream_height: Option<u32>,
+    /// Host configured video bitrate, included for stream viewers' RTP receive target.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stream_bitrate_kbps: Option<u32>,
 }
 
 struct IceCallbackData {
@@ -415,7 +418,7 @@ impl VoiceMesh {
 
 #[cfg(test)]
 mod tests {
-    use super::SignalMessage;
+    use super::{SignalEnvelope, SignalMessage, SignalPurpose};
 
     #[test]
     fn signal_offer_roundtrip() {
@@ -478,5 +481,43 @@ mod tests {
         );
         assert!(json.contains("\"sdp\""), "field name should appear in JSON");
         assert!(json.contains("test_sdp"), "sdp value should appear in JSON");
+    }
+
+    #[test]
+    fn voice_signal_envelope_omits_stream_bitrate() {
+        let envelope = SignalEnvelope {
+            purpose: SignalPurpose::Voice,
+            message: SignalMessage::Offer {
+                sdp: "test_sdp".into(),
+            },
+            stream_width: None,
+            stream_height: None,
+            stream_bitrate_kbps: None,
+        };
+        let json = serde_json::to_string(&envelope).expect("serialize");
+        assert!(!json.contains("stream_bitrate_kbps"));
+    }
+
+    #[test]
+    fn legacy_signal_envelope_defaults_stream_bitrate_to_none() {
+        let json = r#"{"purpose":"stream","Offer":{"sdp":"test_sdp"}}"#;
+        let envelope: SignalEnvelope = serde_json::from_str(json).expect("deserialize");
+        assert_eq!(envelope.stream_bitrate_kbps, None);
+    }
+
+    #[test]
+    fn stream_signal_envelope_roundtrips_configured_bitrate() {
+        let envelope = SignalEnvelope {
+            purpose: SignalPurpose::Stream,
+            message: SignalMessage::Answer {
+                sdp: "answer".into(),
+            },
+            stream_width: Some(1920),
+            stream_height: Some(1080),
+            stream_bitrate_kbps: Some(4_500),
+        };
+        let json = serde_json::to_string(&envelope).expect("serialize");
+        let decoded: SignalEnvelope = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(decoded.stream_bitrate_kbps, Some(4_500));
     }
 }

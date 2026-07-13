@@ -210,6 +210,9 @@ set(MELLO_SOURCES
     src/audio/jitter_buffer.cpp
     src/audio/vad.cpp
     src/transport/peer_connection.cpp
+    src/transport/rtp_h264_receiver.cpp
+    src/transport/rtp_video_receiver_session.cpp
+    src/transport/rtp_video_sender.cpp
     src/video/cursor.cpp
     src/video/encoder_factory.cpp
     src/video/decoder_factory.cpp

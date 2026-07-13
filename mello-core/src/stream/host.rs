@@ -23,6 +23,7 @@ pub struct StartStreamRequest {
     pub supports_av1: bool,
     pub width: u32,
     pub height: u32,
+    pub bitrate_kbps: u32,
 }
 
 #[derive(Debug, Deserialize)]
@@ -62,6 +63,7 @@ pub async fn request_start_stream(
     supports_av1: bool,
     width: u32,
     height: u32,
+    bitrate_kbps: u32,
 ) -> Result<StartStreamResponse, StreamError> {
     let req = StartStreamRequest {
         crew_id: crew_id.to_string(),
@@ -69,6 +71,7 @@ pub async fn request_start_stream(
         supports_av1,
         width,
         height,
+        bitrate_kbps,
     };
     let payload = serde_json::to_value(&req).map_err(|e| StreamError::Backend(e.to_string()))?;
 
@@ -262,9 +265,7 @@ pub fn create_stream_session(
     let manager = StreamManager::new(ctx, host, sink, config, video_rx, audio_rx);
 
     let (stop_tx, stop_rx) = tokio::sync::oneshot::channel();
-    let session = StreamSession::new(session_id, mode, stop_tx);
-
-    tokio::spawn(async move {
+    let manager_task = tokio::spawn(async move {
         // Keep callback contexts alive for the entire lifetime of the host.
         // IMPORTANT: Drop StreamManager (which stops the C++ host) before
         // dropping callback contexts, otherwise capture threads can still invoke
@@ -275,6 +276,26 @@ pub fn create_stream_session(
             mgr.run(stop_rx).await;
         }
     });
+    let session = StreamSession::new(session_id, mode, stop_tx, manager_task);
 
     Ok(session)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::StartStreamRequest;
+
+    #[test]
+    fn start_stream_request_serializes_configured_bitrate() {
+        let request = StartStreamRequest {
+            crew_id: "crew".to_string(),
+            title: "title".to_string(),
+            supports_av1: false,
+            width: 1920,
+            height: 1080,
+            bitrate_kbps: 4_500,
+        };
+        let json = serde_json::to_value(request).expect("serialize request");
+        assert_eq!(json["bitrate_kbps"], 4_500);
+    }
 }

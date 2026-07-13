@@ -12,9 +12,95 @@ use tokio_tungstenite::tungstenite::{
     Message,
 };
 
+use std::ptr::NonNull;
+
+use crate::stream::rtp_peer::{self, ReceivedAccessUnit, RtpPeerError};
 use crate::stream::StreamError;
 
-const RECV_BUF_SIZE: usize = 262144;
+pub use crate::stream::rtp_peer::PeerMediaRole;
+
+fn peer_media_role_is_stream(role: PeerMediaRole) -> bool {
+    matches!(
+        role,
+        PeerMediaRole::StreamHost | PeerMediaRole::StreamViewer
+    )
+}
+
+/// Stream-side peer role for explicit `create_stream_peer` creation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StreamPeerRole {
+    Host,
+    Viewer,
+}
+
+impl StreamPeerRole {
+    /// Map SFU signaling `join_stream` role strings to a stream peer role.
+    pub fn from_signaling(role: &str) -> Result<Self, StreamError> {
+        match role {
+            "host" => Ok(Self::Host),
+            "viewer" => Ok(Self::Viewer),
+            other => Err(StreamError::SfuProtocolError(format!(
+                "invalid stream signaling role: {other}"
+            ))),
+        }
+    }
+
+    pub fn to_media_role(self) -> PeerMediaRole {
+        match self {
+            Self::Host => PeerMediaRole::StreamHost,
+            Self::Viewer => PeerMediaRole::StreamViewer,
+        }
+    }
+}
+
+fn media_role_to_ffi(role: PeerMediaRole) -> mello_sys::MelloPeerMediaRole {
+    match role {
+        PeerMediaRole::Voice => mello_sys::MelloPeerMediaRole_MELLO_PEER_MEDIA_ROLE_VOICE,
+        PeerMediaRole::StreamHost => {
+            mello_sys::MelloPeerMediaRole_MELLO_PEER_MEDIA_ROLE_STREAM_HOST
+        }
+        PeerMediaRole::StreamViewer => {
+            mello_sys::MelloPeerMediaRole_MELLO_PEER_MEDIA_ROLE_STREAM_VIEWER
+        }
+    }
+}
+
+/// Metadata for one polled Annex-B H.264 access unit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RtpAccessUnitInfo {
+    pub size: u32,
+    pub is_idr: bool,
+    pub rtp_timestamp: u32,
+    pub capture_timestamp_us: u64,
+}
+
+/// Result of polling one received RTP video access unit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VideoAccessUnitRecv {
+    /// No complete access unit is queued.
+    Empty,
+    /// One access unit was copied into the caller buffer.
+    Received {
+        bytes: usize,
+        info: RtpAccessUnitInfo,
+    },
+    /// The queued access unit is larger than `buffer`; retry with at least this capacity.
+    BufferTooSmall { required_capacity: i32 },
+}
+
+/// One host-side viewer feedback event (PLI, REMB, local IDR needed).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VideoFeedback {
+    pub kind: VideoFeedbackKind,
+    pub remb_bitrate_bps: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VideoFeedbackKind {
+    Pli,
+    Remb,
+    LocalIdrNeeded,
+}
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -51,6 +137,8 @@ pub struct SfuConnection {
     /// connection. Aborted on drop so a stale connection's tasks don't linger
     /// ticking against a dead socket.
     tasks: Mutex<Vec<tokio::task::JoinHandle<()>>>,
+    /// Set after a successful join; drives readiness and RTP guardrails.
+    media_role: Option<PeerMediaRole>,
 }
 
 unsafe impl Send for SfuConnection {}
@@ -109,6 +197,7 @@ struct AudioTrackCallbackData {
 pub struct PeerHandle {
     pub(crate) peer: *mut mello_sys::MelloPeerConnection,
     pub(crate) peer_id_c: CString,
+    pub(crate) media_role: PeerMediaRole,
 }
 
 unsafe impl Send for PeerHandle {}
@@ -134,7 +223,41 @@ impl SfuConnection {
                 "failed to create PeerConnection".into(),
             ));
         }
-        Ok(PeerHandle { peer, peer_id_c })
+        Ok(PeerHandle {
+            peer,
+            peer_id_c,
+            media_role: PeerMediaRole::Voice,
+        })
+    }
+
+    /// Create a stream PeerConnection with an explicit host/viewer media role.
+    ///
+    /// # Safety
+    /// `ctx` must be a valid, non-null `MelloContext` pointer.
+    pub unsafe fn create_stream_peer(
+        ctx: *mut mello_sys::MelloContext,
+        role: StreamPeerRole,
+    ) -> Result<PeerHandle, StreamError> {
+        let media_role = role.to_media_role();
+        let peer_id_c = CString::new("sfu").expect("CString::new failed");
+        let peer = unsafe {
+            mello_sys::mello_peer_create_for_role(
+                ctx,
+                peer_id_c.as_ptr(),
+                media_role_to_ffi(media_role),
+            )
+        };
+        if peer.is_null() {
+            return Err(StreamError::SfuConnectFailed(format!(
+                "failed to create stream {:?} PeerConnection",
+                role
+            )));
+        }
+        Ok(PeerHandle {
+            peer,
+            peer_id_c,
+            media_role,
+        })
     }
 
     /// Phase 1: WebSocket connect and welcome handshake only.
@@ -197,6 +320,7 @@ impl SfuConnection {
             ice_state: Arc::new(AtomicI32::new(0)),
             last_signaling_activity_ms,
             tasks: Mutex::new(Vec::new()),
+            media_role: None,
         })
     }
 
@@ -234,17 +358,6 @@ impl SfuConnection {
             }
         });
         self.join_and_negotiate(msg, peer_handle).await
-    }
-
-    /// Send media data (video/audio) via the unreliable DataChannel.
-    pub fn send_media(&self, data: &[u8]) -> Result<(), StreamError> {
-        let result = unsafe {
-            mello_sys::mello_peer_send_unreliable(self.peer, data.as_ptr(), data.len() as i32)
-        };
-        if result != mello_sys::MelloResult_MELLO_OK {
-            return Err(StreamError::SfuSendFailed("unreliable send failed".into()));
-        }
-        Ok(())
     }
 
     /// Send raw Opus frame via the RTP audio track (for voice over SFU).
@@ -304,34 +417,6 @@ impl SfuConnection {
         events
     }
 
-    /// Poll received packets from the DataChannel (non-blocking).
-    /// Returns received media data, or empty vec if nothing pending.
-    pub fn poll_recv(&self) -> Vec<Vec<u8>> {
-        static TRUNCATIONS: AtomicU64 = AtomicU64::new(0);
-        let mut packets = Vec::new();
-        let mut buf = [0u8; RECV_BUF_SIZE];
-        loop {
-            let size = unsafe {
-                mello_sys::mello_peer_recv(self.peer, buf.as_mut_ptr(), buf.len() as i32)
-            };
-            if size <= 0 {
-                break;
-            }
-            if size as usize == RECV_BUF_SIZE {
-                let n = TRUNCATIONS.fetch_add(1, Ordering::Relaxed) + 1;
-                if n <= 5 || n.is_multiple_of(100) {
-                    log::warn!(
-                        "SFU recv likely truncated at {} bytes (count={})",
-                        RECV_BUF_SIZE,
-                        n
-                    );
-                }
-            }
-            packets.push(buf[..size as usize].to_vec());
-        }
-        packets
-    }
-
     /// Whether the WebRTC connection is established.
     pub fn is_connected(&self) -> bool {
         unsafe { mello_sys::mello_peer_is_connected(self.peer) }
@@ -342,9 +427,22 @@ impl SfuConnection {
         unsafe { mello_sys::mello_peer_is_unreliable_open(self.peer) }
     }
 
+    /// Whether the native RTP video track is open (stream peers only).
+    pub fn is_video_track_open(&self) -> bool {
+        if self.peer.is_null() {
+            return false;
+        }
+        unsafe { mello_sys::mello_peer_video_is_open(self.peer) != 0 }
+    }
+
     /// Whether the reliable/control DataChannel is open.
     pub fn is_control_channel_open(&self) -> bool {
         unsafe { mello_sys::mello_peer_is_reliable_open(self.peer) }
+    }
+
+    /// Media role negotiated for this connection, if join completed.
+    pub fn media_role(&self) -> Option<PeerMediaRole> {
+        self.media_role
     }
 
     pub fn send_ping(&self) {
@@ -382,15 +480,21 @@ impl SfuConnection {
         &self.region
     }
 
-    /// Wait for both ICE and media/control DataChannels to be ready.
+    /// Wait for ICE and the role-appropriate transport surfaces to be ready.
+    ///
+    /// Voice peers require unreliable media + reliable control DataChannels.
+    /// Stream peers require reliable control + an open native RTP video track.
     /// Returns an error if ICE fails/closes or a 5-second timeout expires.
     pub async fn wait_for_datachannel_open(&self) -> Result<(), StreamError> {
+        let role = self.media_role.ok_or_else(|| {
+            StreamError::SfuProtocolError("wait_for_datachannel_open before join".into())
+        })?;
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
         loop {
             let state = self.ice_state.load(Ordering::Acquire);
             match state {
                 2 => {
-                    if self.is_media_channel_open() && self.is_control_channel_open() {
+                    if self.transport_ready(role) {
                         return Ok(());
                     }
                 }
@@ -407,20 +511,232 @@ impl SfuConnection {
                 _ => {}
             }
             if tokio::time::Instant::now() >= deadline {
-                return Err(StreamError::SfuConnectFailed(format!(
-                    "DataChannel open timeout (5s): media_open={} control_open={} ice_state={}",
-                    self.is_media_channel_open(),
-                    self.is_control_channel_open(),
-                    state
-                )));
+                return Err(StreamError::SfuConnectFailed(
+                    self.transport_timeout_message(role, state),
+                ));
             }
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         }
     }
 
+    /// Send one Annex-B H.264 access unit on a stream-host peer.
+    pub fn send_video_access_unit(
+        &self,
+        data: &[u8],
+        capture_ts_us: u64,
+    ) -> Result<(), StreamError> {
+        self.require_stream_role(PeerMediaRole::StreamHost, "send_video_access_unit")?;
+        let result = unsafe {
+            mello_sys::mello_peer_video_send_access_unit(
+                self.peer,
+                data.as_ptr(),
+                data.len() as i32,
+                capture_ts_us,
+            )
+        };
+        if result != mello_sys::MelloResult_MELLO_OK {
+            return Err(StreamError::SfuSendFailed(
+                "video access unit send failed".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Poll one received RTP video access unit from a stream-viewer peer.
+    pub fn recv_video_access_unit(
+        &self,
+        buffer: &mut [u8],
+    ) -> Result<VideoAccessUnitRecv, StreamError> {
+        self.require_stream_role(PeerMediaRole::StreamViewer, "recv_video_access_unit")?;
+        let mut vec_buf = buffer.to_vec();
+        match self.poll_received_access_unit(&mut vec_buf)? {
+            None => Ok(VideoAccessUnitRecv::Empty),
+            Some(au) => {
+                if vec_buf.len() > buffer.len() {
+                    return Ok(VideoAccessUnitRecv::BufferTooSmall {
+                        required_capacity: i32::try_from(vec_buf.len()).unwrap_or(i32::MAX),
+                    });
+                }
+                buffer[..vec_buf.len()].copy_from_slice(&vec_buf);
+                Ok(VideoAccessUnitRecv::Received {
+                    bytes: vec_buf.len(),
+                    info: RtpAccessUnitInfo {
+                        size: u32::try_from(vec_buf.len()).unwrap_or(u32::MAX),
+                        is_idr: au.is_idr,
+                        rtp_timestamp: au.rtp_timestamp,
+                        capture_timestamp_us: au.capture_timestamp_us,
+                    },
+                })
+            }
+        }
+    }
+
+    /// Poll one complete Annex-B access unit via the shared RTP peer wrapper.
+    pub fn poll_received_access_unit(
+        &self,
+        buffer: &mut Vec<u8>,
+    ) -> Result<Option<ReceivedAccessUnit>, StreamError> {
+        self.require_stream_role(PeerMediaRole::StreamViewer, "poll_received_access_unit")?;
+        let peer = self.peer_nonnull()?;
+        rtp_peer::poll_received_access_unit(peer, buffer).map_err(rtp_peer_error_to_stream_error)
+    }
+
+    /// Valid peer pointer for native RTP helpers.
+    pub fn peer_nonnull(&self) -> Result<NonNull<mello_sys::MelloPeerConnection>, StreamError> {
+        NonNull::new(self.peer)
+            .ok_or_else(|| StreamError::SfuProtocolError("peer not initialized".into()))
+    }
+
+    /// Poll one queued host-side viewer feedback event.
+    pub fn take_video_feedback(&self) -> Result<Option<VideoFeedback>, StreamError> {
+        self.require_stream_role(PeerMediaRole::StreamHost, "take_video_feedback")?;
+        let mut feedback = mello_sys::MelloPeerVideoFeedback {
+            type_: mello_sys::MelloPeerVideoFeedbackType_MELLO_PEER_VIDEO_FEEDBACK_PLI,
+            remb_bitrate_bps: 0,
+        };
+        let has_feedback =
+            unsafe { mello_sys::mello_peer_video_take_feedback(self.peer, &mut feedback) != 0 };
+        if !has_feedback {
+            return Ok(None);
+        }
+        Ok(Some(VideoFeedback {
+            kind: match feedback.type_ {
+                mello_sys::MelloPeerVideoFeedbackType_MELLO_PEER_VIDEO_FEEDBACK_REMB => {
+                    VideoFeedbackKind::Remb
+                }
+                mello_sys::MelloPeerVideoFeedbackType_MELLO_PEER_VIDEO_FEEDBACK_LOCAL_IDR_NEEDED => {
+                    VideoFeedbackKind::LocalIdrNeeded
+                }
+                _ => VideoFeedbackKind::Pli,
+            },
+            remb_bitrate_bps: feedback.remb_bitrate_bps,
+        }))
+    }
+
+    /// Set the stream-host RTP pacing target in bits per second.
+    pub fn set_video_pacing_target(&self, bps: u64) -> Result<(), StreamError> {
+        self.require_stream_role(PeerMediaRole::StreamHost, "set_video_pacing_target")?;
+        let result = unsafe { mello_sys::mello_peer_video_set_pacing_target(self.peer, bps) };
+        if result != mello_sys::MelloResult_MELLO_OK {
+            return Err(StreamError::SfuSendFailed(
+                "set_video_pacing_target failed".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Set the stream-viewer receive target in bits per second.
+    pub fn set_video_receive_target(&self, bps: u32) -> Result<(), StreamError> {
+        self.require_stream_role(PeerMediaRole::StreamViewer, "set_video_receive_target")?;
+        let result = unsafe { mello_sys::mello_peer_video_set_receive_target(self.peer, bps) };
+        if result != mello_sys::MelloResult_MELLO_OK {
+            return Err(StreamError::SfuSendFailed(
+                "set_video_receive_target failed".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Snapshot native RTP video stats for stream peers.
+    pub fn video_stats(&self) -> Result<mello_sys::MelloRtpVideoStats, StreamError> {
+        let role = self
+            .media_role
+            .ok_or_else(|| StreamError::SfuProtocolError("video_stats before join".into()))?;
+        if !peer_media_role_is_stream(role) {
+            return Err(StreamError::SfuProtocolError(
+                "video_stats requires a stream peer".into(),
+            ));
+        }
+        let mut stats = unsafe { std::mem::zeroed::<mello_sys::MelloRtpVideoStats>() };
+        unsafe { mello_sys::mello_peer_video_get_stats(self.peer, &mut stats) };
+        Ok(stats)
+    }
+
     // -----------------------------------------------------------------------
     // Internal helpers
     // -----------------------------------------------------------------------
+
+    fn transport_ready(&self, role: PeerMediaRole) -> bool {
+        match role {
+            PeerMediaRole::Voice => self.is_media_channel_open() && self.is_control_channel_open(),
+            PeerMediaRole::StreamHost | PeerMediaRole::StreamViewer => {
+                self.is_control_channel_open() && self.is_video_track_open()
+            }
+        }
+    }
+
+    fn transport_timeout_message(&self, role: PeerMediaRole, ice_state: i32) -> String {
+        match role {
+            PeerMediaRole::Voice => format!(
+                "DataChannel open timeout (5s): media_open={} control_open={} ice_state={}",
+                self.is_media_channel_open(),
+                self.is_control_channel_open(),
+                ice_state
+            ),
+            PeerMediaRole::StreamHost | PeerMediaRole::StreamViewer => format!(
+                "stream transport open timeout (5s): control_open={} video_open={} ice_state={}",
+                self.is_control_channel_open(),
+                self.is_video_track_open(),
+                ice_state
+            ),
+        }
+    }
+
+    fn require_stream_role(
+        &self,
+        expected: PeerMediaRole,
+        operation: &str,
+    ) -> Result<(), StreamError> {
+        let role = self
+            .media_role
+            .ok_or_else(|| StreamError::SfuProtocolError(format!("{operation} before join")))?;
+        if role != expected {
+            return Err(StreamError::SfuProtocolError(format!(
+                "{operation} requires {expected:?}, connection is {role:?}"
+            )));
+        }
+        Ok(())
+    }
+
+    fn validate_peer_join(
+        peer: &PeerHandle,
+        join_type: &str,
+        signaling_role: Option<&str>,
+    ) -> Result<PeerMediaRole, StreamError> {
+        match join_type {
+            "join_voice" => {
+                if peer.media_role != PeerMediaRole::Voice {
+                    return Err(StreamError::SfuProtocolError(format!(
+                        "voice join requires a voice peer, got {:?}",
+                        peer.media_role
+                    )));
+                }
+                Ok(peer.media_role)
+            }
+            "join_stream" => {
+                if !peer_media_role_is_stream(peer.media_role) {
+                    return Err(StreamError::SfuProtocolError(format!(
+                        "stream join requires a stream peer, got {:?}",
+                        peer.media_role
+                    )));
+                }
+                let signaling_role = signaling_role.ok_or_else(|| {
+                    StreamError::SfuProtocolError("join_stream missing role".into())
+                })?;
+                let expected = StreamPeerRole::from_signaling(signaling_role)?.to_media_role();
+                if peer.media_role != expected {
+                    return Err(StreamError::SfuProtocolError(format!(
+                        "stream peer role {:?} does not match signaling role {:?}",
+                        peer.media_role, expected
+                    )));
+                }
+                Ok(peer.media_role)
+            }
+            other => Err(StreamError::SfuProtocolError(format!(
+                "unsupported join type: {other}"
+            ))),
+        }
+    }
 
     /// Shared implementation for join_stream / join_voice:
     /// 1. Send the join message
@@ -432,6 +748,17 @@ impl SfuConnection {
         join_msg: serde_json::Value,
         peer_handle: PeerHandle,
     ) -> Result<SessionInfo, StreamError> {
+        let join_type = join_msg
+            .get("type")
+            .and_then(|value| value.as_str())
+            .unwrap_or("");
+        let signaling_role = join_msg
+            .get("data")
+            .and_then(|data| data.get("role"))
+            .and_then(|value| value.as_str());
+        let media_role = Self::validate_peer_join(&peer_handle, join_type, signaling_role)?;
+        self.media_role = Some(media_role);
+
         let mut ws_rx = self.ws_rx.take().ok_or_else(|| {
             StreamError::SfuProtocolError("already joined (ws_rx consumed)".into())
         })?;
@@ -996,6 +1323,18 @@ fn now_millis() -> u64 {
         .unwrap_or(0)
 }
 
+fn rtp_peer_error_to_stream_error(err: RtpPeerError) -> StreamError {
+    match err {
+        RtpPeerError::RecvFailed => {
+            StreamError::SfuProtocolError("video access unit recv failed".into())
+        }
+        RtpPeerError::NullPeer | RtpPeerError::CreateFailed => {
+            StreamError::SfuConnectFailed(err.to_string())
+        }
+        other => StreamError::SfuProtocolError(other.to_string()),
+    }
+}
+
 /// # Safety
 /// `ctx_addr` and `peer_addr` must be valid pointers cast to usize.
 unsafe fn collect_client_stats(ctx_addr: usize, peer_addr: usize) -> serde_json::Value {
@@ -1020,4 +1359,99 @@ unsafe fn collect_client_stats(ctx_addr: usize, peer_addr: usize) -> serde_json:
         "send_audio_skips": send_skips,
         "recv_tracks": recv_tracks,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn voice_peer() -> PeerHandle {
+        PeerHandle {
+            peer: std::ptr::null_mut(),
+            peer_id_c: CString::new("sfu").expect("CString::new failed"),
+            media_role: PeerMediaRole::Voice,
+        }
+    }
+
+    fn stream_peer(role: PeerMediaRole) -> PeerHandle {
+        PeerHandle {
+            peer: std::ptr::null_mut(),
+            peer_id_c: CString::new("sfu").expect("CString::new failed"),
+            media_role: role,
+        }
+    }
+
+    #[test]
+    fn stream_peer_role_maps_signaling_strings() {
+        assert_eq!(
+            StreamPeerRole::from_signaling("host").expect("host"),
+            StreamPeerRole::Host
+        );
+        assert_eq!(
+            StreamPeerRole::from_signaling("viewer").expect("viewer"),
+            StreamPeerRole::Viewer
+        );
+        assert!(StreamPeerRole::from_signaling("spectator").is_err());
+    }
+
+    #[test]
+    fn voice_join_rejects_stream_peer() {
+        let err = SfuConnection::validate_peer_join(
+            &stream_peer(PeerMediaRole::StreamHost),
+            "join_voice",
+            None,
+        )
+        .expect_err("stream peer must not join voice");
+        assert!(err.to_string().contains("voice join requires a voice peer"));
+    }
+
+    #[test]
+    fn stream_join_rejects_voice_peer() {
+        let err = SfuConnection::validate_peer_join(&voice_peer(), "join_stream", Some("host"))
+            .expect_err("voice peer must not join stream");
+        assert!(err
+            .to_string()
+            .contains("stream join requires a stream peer"));
+    }
+
+    #[test]
+    fn stream_join_rejects_role_mismatch() {
+        let err = SfuConnection::validate_peer_join(
+            &stream_peer(PeerMediaRole::StreamHost),
+            "join_stream",
+            Some("viewer"),
+        )
+        .expect_err("host peer cannot join as viewer");
+        assert!(err.to_string().contains("does not match signaling role"));
+    }
+
+    #[test]
+    fn stream_join_accepts_matching_role() {
+        let role = SfuConnection::validate_peer_join(
+            &stream_peer(PeerMediaRole::StreamViewer),
+            "join_stream",
+            Some("viewer"),
+        )
+        .expect("viewer peer should join as viewer");
+        assert_eq!(role, PeerMediaRole::StreamViewer);
+    }
+
+    #[test]
+    fn stream_media_role_helper_matches_host_and_viewer() {
+        assert!(peer_media_role_is_stream(PeerMediaRole::StreamHost));
+        assert!(peer_media_role_is_stream(PeerMediaRole::StreamViewer));
+        assert!(!peer_media_role_is_stream(PeerMediaRole::Voice));
+    }
+
+    #[test]
+    fn stream_peer_role_converts_to_shared_media_role() {
+        assert_eq!(
+            StreamPeerRole::Host.to_media_role(),
+            PeerMediaRole::StreamHost
+        );
+        assert_eq!(
+            StreamPeerRole::Viewer.to_media_role(),
+            PeerMediaRole::StreamViewer
+        );
+    }
 }

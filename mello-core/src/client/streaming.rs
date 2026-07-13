@@ -1,21 +1,26 @@
 use std::ffi::{CStr, CString};
+use std::ptr::NonNull;
 use std::sync::Arc;
 use std::time::Instant;
 
 use crate::events::Event;
+use crate::stream::config::Codec;
+use crate::stream::congestion::ViewerCongestionController;
+use crate::stream::rtp_peer::{self, PeerMediaRole};
 use crate::stream::sink_p2p::P2PFanoutSink;
-use crate::stream::viewer::{ViewerAction, ViewerFeedResult};
+use crate::transport::sfu_connection::{SfuConnection, SfuEvent, StreamPeerRole};
 use crate::voice::{SignalEnvelope, SignalMessage, SignalPurpose};
 
 #[cfg(not(target_os = "windows"))]
 use super::stream_ffi::on_viewer_frame;
 use super::stream_ffi::{
-    flush_ice_buffer, on_viewer_native_frame, stream_ice_callback, stream_state_callback,
-    ChunkAssembler, FrameCallbackData, StreamHostHandle, StreamHostPeer, StreamIceCallbackData,
-    ViewerState,
+    flush_ice_buffer, log_viewer_native_stats, on_viewer_native_frame,
+    poll_p2p_viewer_access_units, poll_sfu_viewer_access_units, stream_ice_callback,
+    stream_state_callback, tick_viewer_congestion_p2p, tick_viewer_congestion_sfu,
+    FrameCallbackData, StreamHostHandle, StreamHostPeer, StreamIceCallbackData,
+    StreamPeerDisconnect, ViewerState,
 };
 use super::FRAME_STATE_PRESENTED;
-use super::VIEWER_RECV_BUF_SIZE;
 
 const STREAM_DEBUG_EVENT_INTERVAL_SECS: f32 = 1.0;
 const HOST_PACING_DEBUG_EVENT_INTERVAL_SECS: f32 = 1.0;
@@ -62,16 +67,11 @@ impl super::Client {
                     }
                 }
 
-                // Create peer for this viewer
-                let peer_id_c = match CString::new(from) {
-                    Ok(c) => c,
-                    Err(_) => return,
+                // Create stream-host peer for this viewer (native RTP egress).
+                let peer = match create_stream_p2p_peer(ctx, from, PeerMediaRole::StreamHost) {
+                    Some(peer) => peer.as_ptr(),
+                    None => return,
                 };
-                let peer = unsafe { mello_sys::mello_peer_create(ctx, peer_id_c.as_ptr()) };
-                if peer.is_null() {
-                    log::error!("Failed to create peer for stream viewer {}", from);
-                    return;
-                }
 
                 // Configure ICE servers
                 let ice_cstrings: Vec<CString> = self
@@ -95,6 +95,7 @@ impl super::Client {
                 let ice_cb_data = Box::into_raw(Box::new(StreamIceCallbackData {
                     peer_id: from.to_string(),
                     send_queue: Arc::clone(&self.stream_signal_queue),
+                    disconnect_queue: Arc::clone(&self.stream_disconnect_queue),
                     pending: std::sync::Mutex::new(Vec::new()),
                     flushed: std::sync::atomic::AtomicBool::new(false),
                 }));
@@ -146,6 +147,8 @@ impl super::Client {
                             purpose: SignalPurpose::Stream,
                             stream_width: if enc_w > 0 { Some(enc_w) } else { None },
                             stream_height: if enc_h > 0 { Some(enc_h) } else { None },
+                            stream_bitrate_kbps: (self.stream_bitrate_kbps > 0)
+                                .then_some(self.stream_bitrate_kbps),
                             message: SignalMessage::Answer { sdp: answer },
                         },
                     ));
@@ -156,7 +159,9 @@ impl super::Client {
 
                 // Add peer to P2PFanoutSink
                 if let Some(ref sink) = self.stream_sink {
-                    if let Err(e) = sink.add_viewer(from.to_string(), peer) {
+                    // SAFETY: `peer` was just created above and is destroyed
+                    // only after remove_viewer or session stop.
+                    if let Err(e) = unsafe { sink.add_viewer(from.to_string(), peer) } {
                         log::error!("Failed to add viewer {} to sink: {}", from, e);
                         unsafe {
                             mello_sys::mello_peer_destroy(peer);
@@ -255,16 +260,16 @@ impl super::Client {
     }
 
     fn handle_stream_signal_as_viewer(&mut self, from: &str, envelope: SignalEnvelope) {
-        let vs = match self.viewer_state.as_ref() {
-            Some(vs) => vs,
+        let (host_id, peer, viewer_is_none) = match self.viewer_state.as_ref() {
+            Some(vs) => (vs.host_id.clone(), vs.peer, vs.viewer.is_none()),
             None => return,
         };
 
-        if from != vs.host_id {
+        if from != host_id {
             log::warn!(
                 "Stream signal from {} but we're watching {} — ignoring",
                 from,
-                vs.host_id
+                host_id
             );
             return;
         }
@@ -275,14 +280,28 @@ impl super::Client {
                     Ok(c) => c,
                     Err(_) => return,
                 };
-                let peer = vs.peer;
                 unsafe {
                     mello_sys::mello_peer_set_remote_description(peer, sdp_c.as_ptr(), false);
                 }
                 log::info!("Set stream remote answer from host {}", from);
 
+                let configured_bitrate_kbps = envelope
+                    .stream_bitrate_kbps
+                    .filter(|bitrate| *bitrate > 0)
+                    .unwrap_or_else(|| {
+                        let fallback = crate::stream::StreamConfig::default().bitrate_kbps;
+                        log::warn!(
+                            "Legacy stream Answer omitted bitrate; using default receive target {} kbps",
+                            fallback
+                        );
+                        fallback
+                    });
+                if let Some(vs) = self.viewer_state.as_mut() {
+                    vs.congestion.set_ceiling_kbps(configured_bitrate_kbps);
+                }
+
                 // Initialize the decoder pipeline now that we know the host's resolution
-                if vs.viewer.is_none() {
+                if viewer_is_none {
                     let config = crate::stream::StreamConfig::default();
                     let (w, h) = match (envelope.stream_width, envelope.stream_height) {
                         (Some(sw), Some(sh)) if sw > 0 && sh > 0 => {
@@ -368,7 +387,7 @@ impl super::Client {
                     sdp_mline_index,
                 };
                 unsafe {
-                    mello_sys::mello_peer_add_ice_candidate(vs.peer, &ice);
+                    mello_sys::mello_peer_add_ice_candidate(peer, &ice);
                 }
                 log::debug!("Added stream ICE candidate from host {}", from);
             }
@@ -402,6 +421,8 @@ impl super::Client {
             }
         }
 
+        self.drain_stream_peer_disconnects();
+        self.poll_sfu_host_membership_events().await;
         self.emit_host_pacing_debug_stats().await;
 
         // 2. Poll viewer for incoming stream packets
@@ -416,146 +437,30 @@ impl super::Client {
             None => return, // Decoder not yet initialized (waiting for Answer)
         };
 
-        // Collect raw packets from the transport (SFU or P2P)
-        let packets: Vec<Vec<u8>> = if vs.mode == "sfu" {
-            // SFU path: chunked DataChannel messages -> reassemble
-            if let Some(ref conn) = vs.sfu_connection {
-                let mut reassembled = Vec::new();
-                for raw in conn.poll_recv() {
-                    if let Some(full_msg) = vs.chunk_assembler.feed(&raw) {
-                        reassembled.push(full_msg);
-                    }
-                }
-                reassembled
-            } else {
-                Vec::new()
-            }
-        } else {
-            // P2P path: chunked DataChannel messages → reassemble
-            let peer = vs.peer;
-            let mut reassembled = Vec::new();
-            for _ in 0..512 {
-                let size = unsafe {
-                    mello_sys::mello_peer_recv(
-                        peer,
-                        vs.recv_buf.as_mut_ptr(),
-                        vs.recv_buf.len() as i32,
-                    )
-                };
-                if size <= 0 {
-                    break;
-                }
-                if size as usize == vs.recv_buf.len() {
-                    vs.transport_truncations = vs.transport_truncations.saturating_add(1);
-                    if vs.transport_truncations <= 5 || vs.transport_truncations.is_multiple_of(100)
-                    {
-                        log::warn!(
-                            "Stream recv likely truncated: size={} buf={} truncations={}",
-                            size,
-                            vs.recv_buf.len(),
-                            vs.transport_truncations
-                        );
-                    }
-                }
-                let raw = &vs.recv_buf[..size as usize];
-                if let Some(full_msg) = vs.chunk_assembler.feed(raw) {
-                    reassembled.push(full_msg);
+        if vs.mode == "sfu" {
+            if let Some(conn) = vs.sfu_connection.clone() {
+                tick_viewer_congestion_sfu(vs, &conn);
+                let ingress = poll_sfu_viewer_access_units(vs, viewer, &conn);
+                if ingress.access_units_fed > 0 {
+                    log::debug!(
+                        "Stream SFU ingress: aus={} bytes={} buffer_grows={}",
+                        ingress.access_units_fed,
+                        ingress.bytes_fed,
+                        ingress.buffer_grows
+                    );
                 }
             }
-            reassembled
-        };
-
-        if !packets.is_empty() {
-            let mut bytes = 0usize;
-            for p in &packets {
-                bytes += p.len();
-            }
-            vs.transport_packets = vs.transport_packets.saturating_add(packets.len() as u64);
-            vs.transport_bytes = vs.transport_bytes.saturating_add(bytes as u64);
-            if vs.transport_packets <= 10 || vs.transport_packets.is_multiple_of(500) {
-                log::info!(
-                    "Stream ingress: mode={} packets={} bytes={} total_packets={} total_bytes={} truncations={}",
-                    vs.mode,
-                    packets.len(),
-                    bytes,
-                    vs.transport_packets,
-                    vs.transport_bytes,
-                    vs.transport_truncations
-                );
-            }
-        }
-
-        for data in &packets {
-            let results = vs.stream_viewer.feed_packet(data);
-
-            for result in results {
-                match result {
-                    ViewerFeedResult::VideoPayload {
-                        data: payload,
-                        is_keyframe,
-                    }
-                    | ViewerFeedResult::RecoveredVideoPayload {
-                        data: payload,
-                        is_keyframe,
-                    } => {
-                        if !vs.got_keyframe {
-                            if is_keyframe {
-                                vs.got_keyframe = true;
-                                log::info!("First keyframe received — stream decode starting");
-                            } else {
-                                continue;
-                            }
-                        }
-                        // Skip delta frames when the decode ring is completely full
-                        // to prevent latency accumulation. Keyframes always pass
-                        // through so the decoder can recover cleanly.
-                        if !is_keyframe {
-                            let depth = unsafe {
-                                mello_sys::mello_stream_viewer_decode_queue_depth(viewer)
-                            };
-                            if depth >= 3 {
-                                continue;
-                            }
-                        }
-                        let ok = unsafe {
-                            mello_sys::mello_stream_feed_packet(
-                                viewer,
-                                payload.as_ptr(),
-                                payload.len() as i32,
-                                is_keyframe,
-                            )
-                        };
-                        if !ok && is_keyframe {
-                            log::warn!("feed_packet failed for keyframe ({} bytes)", payload.len());
-                        }
-                    }
-                    ViewerFeedResult::AudioPayload(payload) => unsafe {
-                        mello_sys::mello_stream_feed_audio_packet(
-                            viewer,
-                            payload.as_ptr(),
-                            payload.len() as i32,
-                        );
-                    },
-                    ViewerFeedResult::Action(ViewerAction::SendControl(ctrl_data)) => {
-                        if vs.mode == "sfu" {
-                            if let Some(ref conn) = vs.sfu_connection {
-                                let _ = conn.send_control(&ctrl_data);
-                            }
-                        } else {
-                            let peer = vs.peer;
-                            let connected = unsafe { mello_sys::mello_peer_is_connected(peer) };
-                            if connected {
-                                unsafe {
-                                    mello_sys::mello_peer_send_reliable(
-                                        peer,
-                                        ctrl_data.as_ptr(),
-                                        ctrl_data.len() as i32,
-                                    );
-                                }
-                            }
-                        }
-                    }
-                    ViewerFeedResult::None => {}
+        } else if !vs.peer.is_null() {
+            if let Some(peer) = NonNull::new(vs.peer) {
+                tick_viewer_congestion_p2p(vs, peer);
+                let ingress = poll_p2p_viewer_access_units(vs, viewer, peer);
+                if ingress.access_units_fed > 0 {
+                    log::debug!(
+                        "Stream P2P ingress: aus={} bytes={} buffer_grows={}",
+                        ingress.access_units_fed,
+                        ingress.bytes_fed,
+                        ingress.buffer_grows
+                    );
                 }
             }
         }
@@ -580,14 +485,23 @@ impl super::Client {
             }
         }
 
-        // Poll SFU events to detect session_ended / host disconnect
+        // Poll SFU events for session lifecycle only — stream video uses native RTP.
         if let Some(ref conn) = vs.sfu_connection {
             for event in conn.poll_events() {
-                if let crate::transport::SfuEvent::Disconnected { reason } = event {
-                    log::info!("Stream SFU disconnected: {}", reason);
-                    let _ = self.event_tx.send(Event::StreamWatchingStopped);
-                    self.viewer_state.take();
-                    return;
+                match event {
+                    crate::transport::SfuEvent::Disconnected { reason } => {
+                        log::info!("Stream SFU disconnected: {}", reason);
+                        let _ = self.event_tx.send(Event::StreamWatchingStopped);
+                        self.viewer_state.take();
+                        return;
+                    }
+                    crate::transport::SfuEvent::MediaPacket { .. } => {
+                        log::debug!("Ignoring SFU MediaPacket — stream video uses native RTP");
+                    }
+                    crate::transport::SfuEvent::ControlPacket { .. }
+                    | crate::transport::SfuEvent::MemberJoined { .. }
+                    | crate::transport::SfuEvent::MemberLeft { .. }
+                    | crate::transport::SfuEvent::AudioTrackData { .. } => {}
                 }
             }
         }
@@ -619,11 +533,23 @@ impl super::Client {
                 mode: vs.mode.clone(),
                 transport_packets: vs.transport_packets,
                 transport_bytes: vs.transport_bytes,
-                transport_truncations: vs.transport_truncations,
+                transport_truncations: vs.au_buffer_grows,
                 frames_presented: vs.frames_presented,
                 present_fps,
                 ingress_kbps,
             });
+
+            if vs.mode == "sfu" {
+                if let Some(conn) = vs.sfu_connection.clone() {
+                    if let Ok(stats) = conn.video_stats() {
+                        log_viewer_native_stats(&vs.mode, &stats);
+                    }
+                }
+            } else if let Some(peer) = NonNull::new(vs.peer) {
+                if let Ok(stats) = video_stats_from_peer(peer) {
+                    log_viewer_native_stats("p2p", &stats);
+                }
+            }
 
             log::info!(
                 "Stream cadence: mode={} tick_hz={:.1} present_attempt_hz={:.1} present_fps={:.1} forced={} skipped_unconsumed={}",
@@ -643,6 +569,33 @@ impl super::Client {
             vs.debug_last_packets = vs.transport_packets;
             vs.debug_last_bytes = vs.transport_bytes;
             vs.debug_last_frames_presented = vs.frames_presented;
+        }
+    }
+
+    async fn poll_sfu_host_membership_events(&mut self) {
+        let Some(conn) = self.stream_sfu_connection.clone() else {
+            return;
+        };
+        let Some(sink) = self.stream_host_sink.clone() else {
+            return;
+        };
+
+        for event in conn.poll_events() {
+            match event {
+                SfuEvent::MemberJoined { user_id, role } => {
+                    if role == "viewer" {
+                        sink.on_viewer_joined(&user_id).await;
+                    }
+                }
+                SfuEvent::MemberLeft { user_id, .. } => {
+                    sink.on_viewer_left(&user_id).await;
+                }
+                SfuEvent::Disconnected { reason } => {
+                    log::warn!("Stream SFU host disconnected: {}", reason);
+                }
+                SfuEvent::MediaPacket { .. } | SfuEvent::ControlPacket { .. } => {}
+                SfuEvent::AudioTrackData { .. } => {}
+            }
         }
     }
 
@@ -918,6 +871,7 @@ impl super::Client {
             quality_preset,
             crate::stream::config::Codec::H264,
         );
+        let configured_bitrate_kbps = config.bitrate_kbps;
         let resp = match crate::stream::host::request_start_stream(
             &self.nakama,
             crew_id,
@@ -925,6 +879,7 @@ impl super::Client {
             false, // supports_av1
             config.width,
             config.height,
+            config.bitrate_kbps,
         )
         .await
         {
@@ -1023,47 +978,37 @@ impl super::Client {
         ) = if resp.mode == "sfu" {
             let endpoint = resp.sfu_endpoint.as_deref().unwrap_or_default();
             let token = resp.sfu_token.as_deref().unwrap_or_default();
+            let mut sfu_sink: Option<Arc<dyn crate::stream::sink::PacketSink>> = None;
             match crate::transport::SfuConnection::connect(endpoint, token).await {
                 Ok(mut conn) => {
                     let peer_handle = {
                         let ctx = self.voice.mello_ctx();
-                        unsafe { crate::transport::SfuConnection::create_peer(ctx) }
+                        unsafe { SfuConnection::create_stream_peer(ctx, StreamPeerRole::Host) }
                     };
                     match peer_handle {
                         Ok(ph) => match conn.join_stream(ph, &resp.session_id(), "host").await {
                             Ok(_session) => {
                                 if let Err(e) = conn.wait_for_datachannel_open().await {
-                                    log::error!(
-                                        "SFU DataChannel failed to open: {}, falling back to P2P",
-                                        e
-                                    );
-                                    let p2p = Arc::new(P2PFanoutSink::new());
-                                    (Arc::clone(&p2p) as _, Some(p2p))
+                                    log::error!("SFU stream transport failed: {}", e);
                                 } else {
                                     let conn = Arc::new(conn);
-                                    let sfu_sink =
-                                        Arc::new(crate::stream::sink_sfu::SfuSink::new(conn));
-                                    (sfu_sink as _, None)
+                                    self.stream_sfu_connection = Some(Arc::clone(&conn));
+                                    sfu_sink =
+                                        Some(Arc::new(crate::stream::sink_sfu::SfuSink::new(conn)));
                                 }
                             }
-                            Err(e) => {
-                                log::error!("SFU join_stream failed: {}, falling back to P2P", e);
-                                let p2p = Arc::new(P2PFanoutSink::new());
-                                (Arc::clone(&p2p) as _, Some(p2p))
-                            }
+                            Err(e) => log::error!("SFU join_stream failed: {}", e),
                         },
-                        Err(e) => {
-                            log::error!("SFU peer creation failed: {}, falling back to P2P", e);
-                            let p2p = Arc::new(P2PFanoutSink::new());
-                            (Arc::clone(&p2p) as _, Some(p2p))
-                        }
+                        Err(e) => log::error!("SFU stream peer creation failed: {}", e),
                     }
                 }
-                Err(e) => {
-                    log::error!("SFU connect failed: {}, falling back to P2P", e);
-                    let p2p = Arc::new(P2PFanoutSink::new());
-                    (Arc::clone(&p2p) as _, Some(p2p))
-                }
+                Err(e) => log::error!("SFU connect failed: {}", e),
+            }
+            if let Some(sink) = sfu_sink {
+                (sink, None)
+            } else {
+                let p2p = Arc::new(P2PFanoutSink::new());
+                (Arc::clone(&p2p) as _, Some(p2p))
             }
         } else {
             let p2p = Arc::new(P2PFanoutSink::new());
@@ -1082,6 +1027,7 @@ impl super::Client {
                 message: message.to_string(),
             });
             self.stream_host_sink = None;
+            self.stream_sfu_connection = None;
             self.stream_sink = None;
             return;
         }
@@ -1108,6 +1054,7 @@ impl super::Client {
                 self.stream_host_sink = Some(Arc::clone(&sink));
                 self.stream_sink = p2p_sink;
                 self.stream_session = Some(session);
+                self.stream_bitrate_kbps = configured_bitrate_kbps;
                 self.host_pacing_last = None;
                 self.host_pacing_last_at = Instant::now();
             }
@@ -1126,11 +1073,15 @@ impl super::Client {
     }
 
     pub(super) async fn handle_stop_stream(&mut self) {
-        if let Some(mut session) = self.stream_session.take() {
-            session.stop();
+        if let Some(session) = self.stream_session.take() {
+            session.stop_and_wait().await;
 
-            // Destroy all host-side stream peers
+            // The manager has exited. Remove every sink membership before
+            // destroying its native peer and callback state.
             for (id, hp) in self.stream_host_peers.drain() {
+                if let Some(ref sink) = self.stream_sink {
+                    sink.remove_viewer(&id);
+                }
                 unsafe {
                     mello_sys::mello_peer_destroy(hp.peer);
                     if !hp.ice_cb_data.is_null() {
@@ -1141,11 +1092,16 @@ impl super::Client {
             }
             self.stream_sink = None;
             self.stream_host_sink = None;
+            self.stream_sfu_connection = None;
             self.host_pacing_last = None;
             self.host_pacing_last_at = Instant::now();
             self.pending_remote_ice.clear();
+            if let Ok(mut queue) = self.stream_disconnect_queue.lock() {
+                queue.clear();
+            }
             self.stream_encode_width = 0;
             self.stream_encode_height = 0;
+            self.stream_bitrate_kbps = 0;
 
             if let Some(crew_id) = self.nakama.active_crew_id().map(String::from) {
                 let payload = serde_json::json!({ "crew_id": crew_id });
@@ -1153,6 +1109,54 @@ impl super::Client {
                     log::warn!("stop_stream RPC failed: {}", e);
                 }
                 let _ = self.event_tx.send(Event::StreamEnded { crew_id });
+            }
+        }
+    }
+
+    fn drain_stream_peer_disconnects(&mut self) {
+        let notices = self
+            .stream_disconnect_queue
+            .lock()
+            .map(|mut queue| queue.drain(..).collect::<Vec<_>>())
+            .unwrap_or_default();
+
+        for notice in notices {
+            let detached = detach_disconnected_host_peer(
+                &notice,
+                self.stream_sink.as_deref(),
+                &mut self.stream_host_peers,
+                |_| {},
+            );
+            if let Some(peer) = detached {
+                unsafe {
+                    mello_sys::mello_peer_destroy(peer.peer);
+                    if !peer.ice_cb_data.is_null() {
+                        drop(Box::from_raw(peer.ice_cb_data));
+                    }
+                }
+                log::info!("Cleaned up disconnected stream viewer {}", notice.peer_id);
+                let _ = self.event_tx.send(Event::StreamViewerLeft {
+                    viewer_id: notice.peer_id,
+                });
+                continue;
+            }
+
+            let viewer_matches = self.viewer_state.as_ref().is_some_and(|viewer| {
+                viewer.mode == "p2p"
+                    && viewer.host_id == notice.peer_id
+                    && viewer._ice_cb_data as usize == notice.callback_data
+            });
+            if viewer_matches {
+                if let Some(viewer) = self.viewer_state.take() {
+                    drop(viewer);
+                }
+                log::info!("P2P stream host disconnected while viewing");
+                let _ = self.event_tx.send(Event::StreamWatchingStopped);
+            } else {
+                log::debug!(
+                    "Ignoring stale stream disconnect notice for {}",
+                    notice.peer_id
+                );
             }
         }
     }
@@ -1179,34 +1183,33 @@ impl super::Client {
         }
 
         // Ask the backend which mode to use for viewing
-        let watch_resp = if !session_id.is_empty() {
-            match self.nakama.watch_stream(session_id).await {
-                Ok(r) => {
-                    log::info!("watch_stream RPC: mode={}", r.mode);
-                    Some(r)
-                }
-                Err(e) => {
-                    log::warn!("watch_stream RPC failed ({}), falling back to P2P", e);
-                    None
-                }
-            }
-        } else {
+        if session_id.is_empty() {
             log::info!("No session_id provided, using P2P viewer path");
-            None
+            self.watch_stream_p2p(host_id, stream_width, stream_height);
+            return;
+        }
+
+        let watch_resp = match self.nakama.watch_stream(session_id).await {
+            Ok(r) => {
+                log::info!("watch_stream RPC: mode={}", r.mode);
+                r
+            }
+            Err(e) => {
+                log::error!("watch_stream RPC failed: {}", e);
+                let _ = self.event_tx.send(Event::StreamError {
+                    message: e.to_string(),
+                });
+                return;
+            }
         };
 
-        let use_sfu = watch_resp
-            .as_ref()
-            .map(|r| r.mode == "sfu")
-            .unwrap_or(false);
-
-        if use_sfu {
+        if watch_resp.mode == "sfu" {
             self.watch_stream_sfu(
                 host_id,
                 session_id,
                 stream_width,
                 stream_height,
-                &watch_resp.unwrap(),
+                &watch_resp,
             )
             .await;
         } else {
@@ -1229,37 +1232,42 @@ impl super::Client {
         let mut conn = match crate::transport::SfuConnection::connect(endpoint, token).await {
             Ok(c) => c,
             Err(e) => {
-                log::error!("SFU viewer connect failed: {}, falling back to P2P", e);
-                self.watch_stream_p2p(host_id, stream_width, stream_height);
+                log::error!("SFU viewer connect failed: {}", e);
+                let _ = self.event_tx.send(Event::StreamError {
+                    message: format!("SFU viewer connect failed: {e}"),
+                });
                 return;
             }
         };
 
         let peer_handle = {
             let ctx = self.voice.mello_ctx();
-            unsafe { crate::transport::SfuConnection::create_peer(ctx) }
+            unsafe { SfuConnection::create_stream_peer(ctx, StreamPeerRole::Viewer) }
         };
         let ph = match peer_handle {
             Ok(ph) => ph,
             Err(e) => {
-                log::error!(
-                    "SFU viewer peer creation failed: {}, falling back to P2P",
-                    e
-                );
-                self.watch_stream_p2p(host_id, stream_width, stream_height);
+                log::error!("SFU viewer peer creation failed: {}", e);
+                let _ = self.event_tx.send(Event::StreamError {
+                    message: format!("SFU viewer peer creation failed: {e}"),
+                });
                 return;
             }
         };
 
         if let Err(e) = conn.join_stream(ph, session_id, "viewer").await {
-            log::error!("SFU viewer join_stream failed: {}, falling back to P2P", e);
-            self.watch_stream_p2p(host_id, stream_width, stream_height);
+            log::error!("SFU viewer join_stream failed: {}", e);
+            let _ = self.event_tx.send(Event::StreamError {
+                message: format!("SFU viewer join failed: {e}"),
+            });
             return;
         }
 
         if let Err(e) = conn.wait_for_datachannel_open().await {
-            log::error!("SFU viewer DataChannel failed: {}, falling back to P2P", e);
-            self.watch_stream_p2p(host_id, stream_width, stream_height);
+            log::error!("SFU viewer stream transport failed: {}", e);
+            let _ = self.event_tx.send(Event::StreamError {
+                message: format!("SFU viewer transport failed: {e}"),
+            });
             return;
         }
 
@@ -1352,6 +1360,15 @@ impl super::Client {
         });
 
         let config = crate::stream::StreamConfig::default();
+        let receive_bitrate_kbps = if resp.bitrate_kbps > 0 {
+            resp.bitrate_kbps
+        } else {
+            log::warn!(
+                "Legacy watch_stream response omitted bitrate; using default receive target {} kbps",
+                config.bitrate_kbps
+            );
+            config.bitrate_kbps
+        };
         self.viewer_state = Some(ViewerState {
             viewer: Some(viewer),
             peer: std::ptr::null_mut(),
@@ -1360,7 +1377,6 @@ impl super::Client {
             host_id: host_id.to_string(),
             _frame_cb_data: frame_cb_data,
             _ice_cb_data: std::ptr::null_mut(),
-            got_keyframe: false,
             frames_presented: 0,
             stream_tick_count: 0,
             present_attempts: 0,
@@ -1368,7 +1384,10 @@ impl super::Client {
             present_skipped_unconsumed: 0,
             transport_packets: 0,
             transport_bytes: 0,
-            transport_truncations: 0,
+            au_buffer_grows: 0,
+            au_poll_errors: 0,
+            au_feed_failures: 0,
+            congestion: ViewerCongestionController::new(receive_bitrate_kbps, Codec::H264),
             debug_last_emit: Instant::now(),
             debug_last_tick_count: 0,
             debug_last_present_attempts: 0,
@@ -1378,9 +1397,7 @@ impl super::Client {
             debug_last_bytes: 0,
             debug_last_frames_presented: 0,
             last_present_attempt: Instant::now(),
-            recv_buf: vec![0u8; VIEWER_RECV_BUF_SIZE],
-            stream_viewer: crate::stream::viewer::StreamViewer::new(config.fec_n),
-            chunk_assembler: ChunkAssembler::new(),
+            au_recv_buf: ViewerState::new_au_recv_buf(),
         });
     }
 
@@ -1388,18 +1405,15 @@ impl super::Client {
     fn watch_stream_p2p(&mut self, host_id: &str, stream_width: u32, stream_height: u32) {
         let ctx = self.voice.mello_ctx();
 
-        let peer_id_c = match CString::new(host_id) {
-            Ok(c) => c,
-            Err(_) => return,
+        let peer = match create_stream_p2p_peer(ctx, host_id, PeerMediaRole::StreamViewer) {
+            Some(peer) => peer.as_ptr(),
+            None => {
+                let _ = self.event_tx.send(Event::StreamError {
+                    message: "Failed to create peer connection".to_string(),
+                });
+                return;
+            }
         };
-        let peer = unsafe { mello_sys::mello_peer_create(ctx, peer_id_c.as_ptr()) };
-        if peer.is_null() {
-            log::error!("Failed to create peer connection for stream viewer");
-            let _ = self.event_tx.send(Event::StreamError {
-                message: "Failed to create peer connection".to_string(),
-            });
-            return;
-        }
 
         let ice_cstrings: Vec<CString> = self
             .ice_servers
@@ -1421,6 +1435,7 @@ impl super::Client {
         let ice_cb_data = Box::into_raw(Box::new(StreamIceCallbackData {
             peer_id: host_id.to_string(),
             send_queue: Arc::clone(&self.stream_signal_queue),
+            disconnect_queue: Arc::clone(&self.stream_disconnect_queue),
             pending: std::sync::Mutex::new(Vec::new()),
             flushed: std::sync::atomic::AtomicBool::new(false),
         }));
@@ -1461,6 +1476,7 @@ impl super::Client {
                     purpose: SignalPurpose::Stream,
                     stream_width: None,
                     stream_height: None,
+                    stream_bitrate_kbps: None,
                     message: SignalMessage::Offer { sdp },
                 },
             ));
@@ -1469,7 +1485,6 @@ impl super::Client {
             flush_ice_buffer(&*ice_cb_data);
         }
 
-        let config = crate::stream::StreamConfig::default();
         let frame_cb_data = Box::into_raw(Box::new(FrameCallbackData {
             frame_slot: self.frame_slot.clone(),
             native_frame_slot: self.native_frame_slot.clone(),
@@ -1486,6 +1501,7 @@ impl super::Client {
             height: stream_height,
         });
 
+        let config = crate::stream::StreamConfig::default();
         self.viewer_state = Some(ViewerState {
             viewer: None,
             peer,
@@ -1494,7 +1510,6 @@ impl super::Client {
             host_id: host_id.to_string(),
             _frame_cb_data: frame_cb_data,
             _ice_cb_data: ice_cb_data,
-            got_keyframe: false,
             frames_presented: 0,
             stream_tick_count: 0,
             present_attempts: 0,
@@ -1502,7 +1517,10 @@ impl super::Client {
             present_skipped_unconsumed: 0,
             transport_packets: 0,
             transport_bytes: 0,
-            transport_truncations: 0,
+            au_buffer_grows: 0,
+            au_poll_errors: 0,
+            au_feed_failures: 0,
+            congestion: ViewerCongestionController::new(config.bitrate_kbps, config.codec),
             debug_last_emit: Instant::now(),
             debug_last_tick_count: 0,
             debug_last_present_attempts: 0,
@@ -1512,9 +1530,7 @@ impl super::Client {
             debug_last_bytes: 0,
             debug_last_frames_presented: 0,
             last_present_attempt: Instant::now(),
-            recv_buf: vec![0u8; VIEWER_RECV_BUF_SIZE],
-            stream_viewer: crate::stream::viewer::StreamViewer::new(config.fec_n),
-            chunk_assembler: ChunkAssembler::new(),
+            au_recv_buf: ViewerState::new_au_recv_buf(),
         });
 
         log::info!(
@@ -1534,5 +1550,119 @@ impl super::Client {
                 .store(FRAME_STATE_PRESENTED, std::sync::atomic::Ordering::Release);
             let _ = self.event_tx.send(Event::StreamWatchingStopped);
         }
+    }
+}
+
+fn detach_disconnected_host_peer<F>(
+    notice: &StreamPeerDisconnect,
+    sink: Option<&P2PFanoutSink>,
+    peers: &mut std::collections::HashMap<String, StreamHostPeer>,
+    after_sink_remove: F,
+) -> Option<StreamHostPeer>
+where
+    F: FnOnce(bool),
+{
+    let owns_notice = peers
+        .get(&notice.peer_id)
+        .is_some_and(|peer| peer.ice_cb_data as usize == notice.callback_data);
+    if !owns_notice {
+        return None;
+    }
+
+    if let Some(sink) = sink {
+        sink.remove_viewer(&notice.peer_id);
+    }
+    after_sink_remove(peers.contains_key(&notice.peer_id));
+    peers.remove(&notice.peer_id)
+}
+
+fn create_stream_p2p_peer(
+    ctx: *mut mello_sys::MelloContext,
+    peer_id: &str,
+    role: PeerMediaRole,
+) -> Option<NonNull<mello_sys::MelloPeerConnection>> {
+    let ctx = NonNull::new(ctx)?;
+    match rtp_peer::create_peer_for_role(ctx, peer_id, role) {
+        Ok(peer) => Some(peer),
+        Err(e) => {
+            log::error!(
+                "Failed to create stream {:?} peer for {}: {}",
+                role,
+                peer_id,
+                e
+            );
+            None
+        }
+    }
+}
+
+fn video_stats_from_peer(
+    peer: NonNull<mello_sys::MelloPeerConnection>,
+) -> Result<mello_sys::MelloRtpVideoStats, ()> {
+    let mut stats = unsafe { std::mem::zeroed::<mello_sys::MelloRtpVideoStats>() };
+    unsafe { mello_sys::mello_peer_video_get_stats(peer.as_ptr(), &mut stats) };
+    Ok(stats)
+}
+
+#[cfg(test)]
+mod streaming_rtp_tests {
+    use std::collections::HashMap;
+
+    use super::{detach_disconnected_host_peer, StreamHostPeer, StreamPeerDisconnect};
+    use crate::stream::rtp_peer::PeerMediaRole;
+    use crate::stream::sink_p2p::P2PFanoutSink;
+    use crate::transport::sfu_connection::StreamPeerRole;
+
+    #[test]
+    fn sfu_and_p2p_topology_roles_map_to_native_media_roles() {
+        assert_eq!(
+            StreamPeerRole::Host.to_media_role(),
+            PeerMediaRole::StreamHost
+        );
+        assert_eq!(
+            StreamPeerRole::Viewer.to_media_role(),
+            PeerMediaRole::StreamViewer
+        );
+    }
+
+    #[test]
+    fn disconnected_peer_leaves_sink_before_client_drops_ownership() {
+        let sink = P2PFanoutSink::new();
+        let peer = std::ptr::dangling_mut::<mello_sys::MelloPeerConnection>();
+        sink.add_viewer_for_test("viewer-1", peer);
+        let callback_data = std::ptr::dangling_mut::<super::StreamIceCallbackData>();
+        let mut peers = HashMap::from([(
+            "viewer-1".to_string(),
+            StreamHostPeer {
+                peer,
+                ice_cb_data: callback_data,
+            },
+        )]);
+        let notice = StreamPeerDisconnect {
+            peer_id: "viewer-1".to_string(),
+            callback_data: callback_data as usize,
+        };
+        let mut observed_barrier = false;
+
+        let detached =
+            detach_disconnected_host_peer(&notice, Some(&sink), &mut peers, |still_owned| {
+                assert_eq!(sink.viewer_count(), 0);
+                assert!(still_owned);
+                observed_barrier = true;
+            });
+
+        assert!(observed_barrier);
+        assert!(detached.is_some());
+        assert!(!peers.contains_key("viewer-1"));
+    }
+
+    #[test]
+    fn sfu_host_membership_events_route_to_sink() {
+        let src = include_str!("streaming.rs");
+        assert!(src.contains("poll_sfu_host_membership_events"));
+        assert!(src.contains("SfuEvent::MemberJoined"));
+        assert!(src.contains("sink.on_viewer_joined"));
+        assert!(src.contains("sink.on_viewer_left"));
+        assert!(src.contains("stream_sfu_connection"));
     }
 }

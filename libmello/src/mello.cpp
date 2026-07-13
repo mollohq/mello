@@ -8,8 +8,10 @@
 #include "video/window_thumbnail.hpp"
 #include "audio/clip_encoder.hpp"
 #include "util/log.hpp"
+#include <climits>
 #include <cstring>
 #include <cstdlib>
+#include <memory>
 
 #ifdef _WIN32
 #define mello_stricmp _stricmp
@@ -28,6 +30,16 @@ static char* dup_str(const char* s) {
 
 static mello::Context* ctx_cast(MelloContext* ctx) {
     return reinterpret_cast<mello::Context*>(ctx);
+}
+
+struct MelloPeerConnection {
+    std::shared_ptr<mello::transport::PeerConnectionImpl> impl;
+};
+
+static mello::transport::PeerConnectionImpl* peer_cast(
+    MelloPeerConnection* peer
+) {
+    return peer && peer->impl ? peer->impl.get() : nullptr;
 }
 
 static mello::audio::NsMode to_ns_mode(MelloNsMode mode) {
@@ -431,10 +443,25 @@ MelloResult mello_clip_encode(const char* wav_path, const char* mp4_path, int bi
  * ============================================================================ */
 
 MelloPeerConnection* mello_peer_create(MelloContext* ctx, const char* peer_id) {
-    if (!ctx || !peer_id) return nullptr;
+    return mello_peer_create_for_role(ctx, peer_id, MELLO_PEER_MEDIA_ROLE_VOICE);
+}
+
+MelloPeerConnection* mello_peer_create_for_role(
+    MelloContext* ctx,
+    const char* peer_id,
+    MelloPeerMediaRole role
+) {
+    (void)ctx;
+    if (!peer_id) {
+        return nullptr;
+    }
     try {
-        auto* pc = new mello::transport::PeerConnectionImpl(peer_id);
-        return reinterpret_cast<MelloPeerConnection*>(pc);
+        return new MelloPeerConnection{
+            std::make_shared<mello::transport::PeerConnectionImpl>(
+                peer_id,
+                role
+            )
+        };
     } catch (...) {
         return nullptr;
     }
@@ -442,16 +469,14 @@ MelloPeerConnection* mello_peer_create(MelloContext* ctx, const char* peer_id) {
 
 void mello_peer_destroy(MelloPeerConnection* peer) {
     try {
-        if (peer) {
-            delete reinterpret_cast<mello::transport::PeerConnectionImpl*>(peer);
-        }
+        delete peer;
     } catch (...) {}
 }
 
 void mello_peer_set_ice_servers(MelloPeerConnection* peer, const char** urls, int count) {
     if (!peer) return;
     try {
-        auto* pc = reinterpret_cast<mello::transport::PeerConnectionImpl*>(peer);
+        auto* pc = peer_cast(peer);
         std::vector<std::string> servers;
         for (int i = 0; i < count; ++i) {
             if (urls && urls[i]) servers.emplace_back(urls[i]);
@@ -463,7 +488,7 @@ void mello_peer_set_ice_servers(MelloPeerConnection* peer, const char** urls, in
 const char* mello_peer_create_offer(MelloPeerConnection* peer) {
     if (!peer) return nullptr;
     try {
-        auto* pc = reinterpret_cast<mello::transport::PeerConnectionImpl*>(peer);
+        auto* pc = peer_cast(peer);
         return pc->create_offer();
     } catch (...) {
         return nullptr;
@@ -473,7 +498,7 @@ const char* mello_peer_create_offer(MelloPeerConnection* peer) {
 const char* mello_peer_create_answer(MelloPeerConnection* peer, const char* offer_sdp) {
     if (!peer || !offer_sdp) return nullptr;
     try {
-        auto* pc = reinterpret_cast<mello::transport::PeerConnectionImpl*>(peer);
+        auto* pc = peer_cast(peer);
         return pc->create_answer(offer_sdp);
     } catch (...) {
         return nullptr;
@@ -483,7 +508,7 @@ const char* mello_peer_create_answer(MelloPeerConnection* peer, const char* offe
 MelloResult mello_peer_set_remote_description(MelloPeerConnection* peer, const char* sdp, bool is_offer) {
     if (!peer || !sdp) return MELLO_ERROR_INVALID_PARAM;
     try {
-        auto* pc = reinterpret_cast<mello::transport::PeerConnectionImpl*>(peer);
+        auto* pc = peer_cast(peer);
         return pc->set_remote_description(sdp, is_offer) ? MELLO_OK : MELLO_ERROR_TRANSPORT_FAILED;
     } catch (...) {
         return MELLO_ERROR_TRANSPORT_FAILED;
@@ -493,7 +518,7 @@ MelloResult mello_peer_set_remote_description(MelloPeerConnection* peer, const c
 MelloResult mello_peer_add_ice_candidate(MelloPeerConnection* peer, const MelloIceCandidate* candidate) {
     if (!peer || !candidate || !candidate->candidate) return MELLO_ERROR_INVALID_PARAM;
     try {
-        auto* pc = reinterpret_cast<mello::transport::PeerConnectionImpl*>(peer);
+        auto* pc = peer_cast(peer);
         return pc->add_ice_candidate(candidate->candidate, candidate->sdp_mid ? candidate->sdp_mid : "",
                                      candidate->sdp_mline_index) ? MELLO_OK : MELLO_ERROR_TRANSPORT_FAILED;
     } catch (...) {
@@ -504,7 +529,7 @@ MelloResult mello_peer_add_ice_candidate(MelloPeerConnection* peer, const MelloI
 void mello_peer_set_ice_callback(MelloPeerConnection* peer, MelloIceCandidateCallback callback, void* user_data) {
     if (!peer) return;
     try {
-        auto* pc = reinterpret_cast<mello::transport::PeerConnectionImpl*>(peer);
+        auto* pc = peer_cast(peer);
         pc->set_ice_callback(callback, user_data);
     } catch (...) {}
 }
@@ -512,7 +537,7 @@ void mello_peer_set_ice_callback(MelloPeerConnection* peer, MelloIceCandidateCal
 void mello_peer_set_state_callback(MelloPeerConnection* peer, MelloPeerStateCallback callback, void* user_data) {
     if (!peer) return;
     try {
-        auto* pc = reinterpret_cast<mello::transport::PeerConnectionImpl*>(peer);
+        auto* pc = peer_cast(peer);
         pc->set_state_callback(callback, user_data);
     } catch (...) {}
 }
@@ -520,7 +545,7 @@ void mello_peer_set_state_callback(MelloPeerConnection* peer, MelloPeerStateCall
 void mello_peer_set_data_callback(MelloPeerConnection* peer, MelloPeerDataCallback callback, void* user_data) {
     if (!peer) return;
     try {
-        auto* pc = reinterpret_cast<mello::transport::PeerConnectionImpl*>(peer);
+        auto* pc = peer_cast(peer);
         pc->set_data_callback(callback, user_data);
     } catch (...) {}
 }
@@ -528,7 +553,7 @@ void mello_peer_set_data_callback(MelloPeerConnection* peer, MelloPeerDataCallba
 void mello_peer_set_audio_track_callback(MelloPeerConnection* peer, MelloAudioTrackCallback callback, void* user_data) {
     if (!peer) return;
     try {
-        auto* pc = reinterpret_cast<mello::transport::PeerConnectionImpl*>(peer);
+        auto* pc = peer_cast(peer);
         pc->set_audio_track_callback(callback, user_data);
     } catch (...) {}
 }
@@ -536,7 +561,7 @@ void mello_peer_set_audio_track_callback(MelloPeerConnection* peer, MelloAudioTr
 MelloResult mello_peer_send_unreliable(MelloPeerConnection* peer, const uint8_t* data, int size) {
     if (!peer || !data || size <= 0) return MELLO_ERROR_INVALID_PARAM;
     try {
-        auto* pc = reinterpret_cast<mello::transport::PeerConnectionImpl*>(peer);
+        auto* pc = peer_cast(peer);
         return pc->send_unreliable(data, size) ? MELLO_OK : MELLO_ERROR_TRANSPORT_FAILED;
     } catch (...) {
         return MELLO_ERROR_TRANSPORT_FAILED;
@@ -546,7 +571,7 @@ MelloResult mello_peer_send_unreliable(MelloPeerConnection* peer, const uint8_t*
 MelloResult mello_peer_send_reliable(MelloPeerConnection* peer, const uint8_t* data, int size) {
     if (!peer || !data || size <= 0) return MELLO_ERROR_INVALID_PARAM;
     try {
-        auto* pc = reinterpret_cast<mello::transport::PeerConnectionImpl*>(peer);
+        auto* pc = peer_cast(peer);
         return pc->send_reliable(data, size) ? MELLO_OK : MELLO_ERROR_TRANSPORT_FAILED;
     } catch (...) {
         return MELLO_ERROR_TRANSPORT_FAILED;
@@ -556,7 +581,7 @@ MelloResult mello_peer_send_reliable(MelloPeerConnection* peer, const uint8_t* d
 MelloResult mello_peer_send_audio(MelloPeerConnection* peer, const uint8_t* data, int size) {
     if (!peer || !data || size <= 0) return MELLO_ERROR_INVALID_PARAM;
     try {
-        auto* pc = reinterpret_cast<mello::transport::PeerConnectionImpl*>(peer);
+        auto* pc = peer_cast(peer);
         return pc->send_audio(data, size) ? MELLO_OK : MELLO_ERROR_TRANSPORT_FAILED;
     } catch (...) {
         return MELLO_ERROR_TRANSPORT_FAILED;
@@ -566,7 +591,7 @@ MelloResult mello_peer_send_audio(MelloPeerConnection* peer, const uint8_t* data
 const char* mello_peer_handle_remote_offer(MelloPeerConnection* peer, const char* offer_sdp) {
     if (!peer || !offer_sdp) return nullptr;
     try {
-        auto* pc = reinterpret_cast<mello::transport::PeerConnectionImpl*>(peer);
+        auto* pc = peer_cast(peer);
         return pc->handle_remote_offer(offer_sdp);
     } catch (...) {
         return nullptr;
@@ -576,7 +601,7 @@ const char* mello_peer_handle_remote_offer(MelloPeerConnection* peer, const char
 bool mello_peer_is_connected(MelloPeerConnection* peer) {
     if (!peer) return false;
     try {
-        auto* pc = reinterpret_cast<mello::transport::PeerConnectionImpl*>(peer);
+        auto* pc = peer_cast(peer);
         return pc->is_connected();
     } catch (...) {
         return false;
@@ -586,7 +611,7 @@ bool mello_peer_is_connected(MelloPeerConnection* peer) {
 bool mello_peer_is_unreliable_open(MelloPeerConnection* peer) {
     if (!peer) return false;
     try {
-        auto* pc = reinterpret_cast<mello::transport::PeerConnectionImpl*>(peer);
+        auto* pc = peer_cast(peer);
         return pc->is_unreliable_open();
     } catch (...) {
         return false;
@@ -596,7 +621,7 @@ bool mello_peer_is_unreliable_open(MelloPeerConnection* peer) {
 bool mello_peer_is_reliable_open(MelloPeerConnection* peer) {
     if (!peer) return false;
     try {
-        auto* pc = reinterpret_cast<mello::transport::PeerConnectionImpl*>(peer);
+        auto* pc = peer_cast(peer);
         return pc->is_reliable_open();
     } catch (...) {
         return false;
@@ -606,7 +631,7 @@ bool mello_peer_is_reliable_open(MelloPeerConnection* peer) {
 void mello_peer_send_ping(MelloPeerConnection* peer) {
     if (!peer) return;
     try {
-        auto* pc = reinterpret_cast<mello::transport::PeerConnectionImpl*>(peer);
+        auto* pc = peer_cast(peer);
         pc->send_ping();
     } catch (...) {}
 }
@@ -614,7 +639,7 @@ void mello_peer_send_ping(MelloPeerConnection* peer) {
 float mello_peer_rtt_ms(MelloPeerConnection* peer) {
     if (!peer) return 0.0f;
     try {
-        auto* pc = reinterpret_cast<mello::transport::PeerConnectionImpl*>(peer);
+        auto* pc = peer_cast(peer);
         return pc->rtt_ms();
     } catch (...) {
         return 0.0f;
@@ -624,7 +649,7 @@ float mello_peer_rtt_ms(MelloPeerConnection* peer) {
 int64_t mello_peer_pong_age_ms(MelloPeerConnection* peer) {
     if (!peer) return -1;
     try {
-        auto* pc = reinterpret_cast<mello::transport::PeerConnectionImpl*>(peer);
+        auto* pc = peer_cast(peer);
         return pc->pong_age_ms();
     } catch (...) {
         return -1;
@@ -634,7 +659,7 @@ int64_t mello_peer_pong_age_ms(MelloPeerConnection* peer) {
 int mello_peer_send_audio_skips(MelloPeerConnection* peer) {
     if (!peer) return 0;
     try {
-        auto* pc = reinterpret_cast<mello::transport::PeerConnectionImpl*>(peer);
+        auto* pc = peer_cast(peer);
         return pc->send_audio_skips();
     } catch (...) {
         return 0;
@@ -644,7 +669,7 @@ int mello_peer_send_audio_skips(MelloPeerConnection* peer) {
 int mello_peer_recv_track_count(MelloPeerConnection* peer) {
     if (!peer) return 0;
     try {
-        auto* pc = reinterpret_cast<mello::transport::PeerConnectionImpl*>(peer);
+        auto* pc = peer_cast(peer);
         return pc->recv_track_count();
     } catch (...) {
         return 0;
@@ -654,8 +679,135 @@ int mello_peer_recv_track_count(MelloPeerConnection* peer) {
 int mello_peer_recv(MelloPeerConnection* peer, uint8_t* buffer, int buffer_size) {
     if (!peer || !buffer || buffer_size <= 0) return 0;
     try {
-        auto* pc = reinterpret_cast<mello::transport::PeerConnectionImpl*>(peer);
+        auto* pc = peer_cast(peer);
         return pc->recv(buffer, buffer_size);
+    } catch (...) {
+        return 0;
+    }
+}
+
+MelloResult mello_peer_video_send_access_unit(
+    MelloPeerConnection* peer,
+    const uint8_t* data,
+    int size,
+    uint64_t capture_ts_us
+) {
+    if (!peer || !data || size <= 0) {
+        return MELLO_ERROR_INVALID_PARAM;
+    }
+    try {
+        auto* pc = peer_cast(peer);
+        return pc->video_send_access_unit(
+            data,
+            static_cast<size_t>(size),
+            capture_ts_us
+        ) ? MELLO_OK : MELLO_ERROR_TRANSPORT_FAILED;
+    } catch (...) {
+        return MELLO_ERROR_TRANSPORT_FAILED;
+    }
+}
+
+int mello_peer_video_recv_access_unit(
+    MelloPeerConnection* peer,
+    uint8_t* buffer,
+    int capacity,
+    MelloRtpVideoAccessUnitInfo* info
+) {
+    if (!peer || capacity < 0) {
+        if (info) {
+            memset(info, 0, sizeof(*info));
+        }
+        return MELLO_PEER_VIDEO_RECV_ERROR;
+    }
+    try {
+        auto* pc = peer_cast(peer);
+        if (!pc) {
+            return MELLO_PEER_VIDEO_RECV_ERROR;
+        }
+        return pc->video_recv_access_unit(
+            buffer,
+            static_cast<size_t>(capacity),
+            info
+        );
+    } catch (...) {
+        if (info) {
+            memset(info, 0, sizeof(*info));
+        }
+        return MELLO_PEER_VIDEO_RECV_ERROR;
+    }
+}
+
+uint8_t mello_peer_video_take_feedback(
+    MelloPeerConnection* peer,
+    MelloPeerVideoFeedback* feedback
+) {
+    if (!peer || !feedback) {
+        return 0;
+    }
+    try {
+        auto* pc = peer_cast(peer);
+        return pc->video_take_feedback(feedback) ? 1 : 0;
+    } catch (...) {
+        return 0;
+    }
+}
+
+MelloResult mello_peer_video_set_pacing_target(
+    MelloPeerConnection* peer,
+    uint64_t bps
+) {
+    if (!peer || bps == 0) {
+        return MELLO_ERROR_INVALID_PARAM;
+    }
+    try {
+        auto* pc = peer_cast(peer);
+        return pc->video_set_pacing_target(bps)
+            ? MELLO_OK
+            : MELLO_ERROR_TRANSPORT_FAILED;
+    } catch (...) {
+        return MELLO_ERROR_TRANSPORT_FAILED;
+    }
+}
+
+MelloResult mello_peer_video_set_receive_target(
+    MelloPeerConnection* peer,
+    uint32_t bps
+) {
+    if (!peer || bps == 0) {
+        return MELLO_ERROR_INVALID_PARAM;
+    }
+    try {
+        auto* pc = peer_cast(peer);
+        return pc->video_set_receive_target(bps)
+            ? MELLO_OK
+            : MELLO_ERROR_TRANSPORT_FAILED;
+    } catch (...) {
+        return MELLO_ERROR_TRANSPORT_FAILED;
+    }
+}
+
+void mello_peer_video_get_stats(
+    MelloPeerConnection* peer,
+    MelloRtpVideoStats* stats
+) {
+    if (!peer || !stats) {
+        return;
+    }
+    try {
+        auto* pc = peer_cast(peer);
+        pc->video_get_stats(stats);
+    } catch (...) {
+        memset(stats, 0, sizeof(MelloRtpVideoStats));
+    }
+}
+
+uint8_t mello_peer_video_is_open(MelloPeerConnection* peer) {
+    if (!peer) {
+        return 0;
+    }
+    try {
+        auto* pc = peer_cast(peer);
+        return pc->video_is_open() ? 1 : 0;
     } catch (...) {
         return 0;
     }

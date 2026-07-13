@@ -1,8 +1,8 @@
 # SFU Integration Specification
 
 > **Component:** mello-core (Rust) · Backend/Nakama (Go)  
-> **Status:** Ready to implement  
-> **Depends on:** [01-SFU.md](./01-SFU.md) (SFU server, already built), [12-STREAMING.md](./12-STREAMING.md), [13-VOICE-CHANNELS.md](./13-VOICE-CHANNELS.md)
+> **Status:** Implemented (RTP video + control-only DC on stream sessions)
+> **Depends on:** [01-SFU.md](../../mello-sfu/01-SFU.md) (canonical SFU contract), [12-STREAMING.md](./12-STREAMING.md), [13-VOICE-CHANNELS.md](./13-VOICE-CHANNELS.md)
 
 ---
 
@@ -14,26 +14,31 @@ This spec covers the integration work needed to connect the existing SFU server 
 
 | Component | Status |
 |---|---|
-| SFU server (Go, Pion WebRTC) | Built, Phase 1-3 complete |
-| `PacketSink` trait in mello-core | Exists ([12-STREAMING.md §8.1](./12-STREAMING.md)) |
-| `P2PFanoutSink` | Exists, working |
-| `SfuSink` | Stub that returns `Err(SfuNotImplemented)` |
-| `start_stream` RPC | Exists, P2P-only |
-| `voice_join` RPC | Exists, P2P-only, keyed by channel_id ([13-VOICE-CHANNELS.md](./13-VOICE-CHANNELS.md)) |
+| SFU server (Go, Pion WebRTC) | Built; stream video = H.264 RTP relay, voice = Opus RTP |
+| `PacketSink` trait in mello-core | RTP sinks ([12-STREAMING.md §6](./12-STREAMING.md)) |
+| `P2PFanoutSink` | Per-viewer native RTP senders |
+| `SfuSink` | Native host RTP AU sender + control/feedback through `SfuConnection` |
+| `SfuConnection` | Role-based peers; stream = control DC + RTP video track |
+| `start_stream` / `watch_stream` RPCs | SFU mode with endpoint + JWT for premium crews |
+| `voice_join` RPC | Crew-level SFU branch for premium crews |
 | TURN server (coturn) | Deployed on GCP, working |
 
-### What this spec adds
+### Completed integration record
+
+The table below records the completed integration. For current stream behavior
+(RTP video, control-only DataChannel, REMB/PLI relay), use
+[12-STREAMING.md](../12-STREAMING.md) and `mello-sfu/01-SFU.md`.
 
 | Component | Change |
 |---|---|
-| `SfuSink` | Replace stub with real WebSocket + WebRTC connection to SFU |
-| `SfuConnection` | New: manages WS signaling + PeerConnection + DataChannels to SFU |
-| `start_stream` RPC | Add SFU mode branch (premium crews get SFU endpoint + JWT) |
-| `watch_stream` RPC | New: viewers request their own SFU token |
-| `voice_join` RPC | Add crew-level mode check, return SFU endpoint + JWT when applicable |
-| `VoiceManager` | Add SFU branch in `join_channel()` |
-| JWT signing | New Nakama module: sign RS256 tokens for SFU auth |
-| SFU routing | New Nakama module: region selection |
+| `SfuSink` | `send_video_access_unit` over host RTP track; `send_control` on reliable DC |
+| `SfuConnection` | Stream peers: one `control` DC + H.264 RTP track (no stream `media` DC) |
+| `start_stream` RPC | SFU mode branch (premium crews get SFU endpoint + JWT) |
+| `watch_stream` RPC | Viewers request their own SFU token |
+| `voice_join` RPC | Crew-level mode check, return SFU endpoint + JWT when applicable |
+| `VoiceManager` | SFU branch in `join_channel()` |
+| JWT signing | Nakama module: sign RS256 tokens for SFU auth |
+| SFU routing | Nakama module: region selection |
 
 ---
 
@@ -609,14 +614,24 @@ func InitModule(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runti
 
 ---
 
-## 4. Client: New Files
+## 4. Client Integration (Historical Sketches)
+
+> **Do not implement from the code samples in §4–5.** They describe the
+> pre-RTP rollout shape and retain references to `StreamPacket`, `send_media`,
+> and a stream `media` DataChannel. Current wiring is:
+>
+> - `client/streaming.rs`: topology selection, SFU connect/join, fail-closed setup;
+> - `stream/sink_sfu.rs`: complete Annex-B AU send through native RTP;
+> - `transport/sfu_connection.rs`: WebSocket signaling, control DC, role-based RTP peer;
+> - `stream/rtp_peer.rs`: safe native RTP wrappers.
 
 ### 4.1 `sfu_connection.rs` - WebSocket + WebRTC to SFU
 
 This is the transport layer between the client and the SFU server. It manages:
 - WebSocket connection for signaling (JSON messages)
-- WebRTC PeerConnection via libdatachannel
-- Two DataChannels: `media` (unreliable) and `control` (reliable)
+- WebRTC PeerConnection via libdatachannel (role-based: `StreamHost`, `StreamViewer`, voice)
+- **Stream sessions:** one H.264 RTP video track + reliable `control` DataChannel (no stream `media` DC)
+- **Voice sessions:** unreliable `media` + reliable `control` DataChannels, plus Opus RTP tracks from SFU
 - Background tasks for ICE candidates and signaling messages
 
 ```rust
@@ -629,8 +644,9 @@ use tokio::sync::{mpsc, Mutex};
 pub struct SfuConnection {
     ws: Mutex<WebSocketStream>,               // tungstenite or tokio-tungstenite
     peer_connection: Arc<PeerConnection>,       // libdatachannel via mello-core-sys
-    media_channel: Arc<DataChannel>,            // unreliable, unordered
-    control_channel: Arc<DataChannel>,          // reliable, ordered
+    media_channel: Arc<DataChannel>,            // voice only (unreliable)
+    control_channel: Arc<DataChannel>,          // reliable (stream + voice)
+    // Stream host/viewer video uses native RTP track APIs, not media_channel
     event_tx: mpsc::Sender<SfuEvent>,
     event_rx: Mutex<mpsc::Receiver<SfuEvent>>,
     server_id: String,
@@ -641,9 +657,9 @@ pub struct SfuConnection {
 pub enum SfuEvent {
     MemberJoined { user_id: String, role: String },
     MemberLeft { user_id: String, reason: String },
-    MediaPacket { data: Vec<u8> },
-    ControlPacket { data: Vec<u8> },
+    ControlPacket { data: Vec<u8> },           // reliable control DC
     Disconnected { reason: String },
+    // Stream video arrives via poll_received_access_unit / RTP track, not SfuEvent
 }
 
 impl SfuConnection {
@@ -829,16 +845,14 @@ impl SfuSink {
 
 #[async_trait]
 impl PacketSink for SfuSink {
-    async fn send_video(&self, packet: &StreamPacket) -> Result<(), StreamError> {
-        self.connection.send_media(packet.as_bytes()).await
+    pub async fn send_video(&self, annex_b: &[u8], capture_timestamp_us: u64, _is_keyframe: bool) -> Result<(), StreamError> {
+        self.connection.send_video_access_unit(annex_b, capture_timestamp_us).await
     }
 
-    async fn send_audio(&self, packet: &StreamPacket) -> Result<(), StreamError> {
-        self.connection.send_media(packet.as_bytes()).await
-    }
+    pub async fn send_audio_stub(&self, byte_len: usize) { /* game audio not wired */ }
 
-    async fn send_control(&self, packet: &StreamPacket) -> Result<(), StreamError> {
-        self.connection.send_control(packet.as_bytes()).await
+    pub async fn send_control(&self, data: &[u8]) -> Result<(), StreamError> {
+        self.connection.send_control(data).await
     }
 
     async fn on_viewer_joined(&self, viewer_id: &str) {
@@ -855,7 +869,7 @@ impl PacketSink for SfuSink {
 
 ---
 
-## 5. Client: Modified Files
+## 5. Client Changes (Historical Sketches)
 
 ### 5.1 `stream/host.rs` - Updated `start_stream`
 
@@ -894,70 +908,18 @@ pub struct StartStreamResponse {
 }
 ```
 
-### 5.2 `stream/viewer.rs` - SFU Viewer Path
+### 5.2 SFU viewer path (implemented)
 
-The viewer needs to call `watch_stream` to get its own SFU token, then connect.
+Viewer RTP receive lives in `mello-core/src/client/streaming.rs`, `mello-core/src/stream/rtp_peer.rs`, and libmello `RtpVideoReceiverSession`. The probe tool is `tools/sfu-stream-viewer-probe` (`scripts/run-stream-viewer.ps1`). There is no separate `stream/viewer.rs`; video arrives on the negotiated H.264 RTP track, not via DataChannel `MediaPacket` events.
 
-```rust
-// mello-core/src/stream/viewer.rs
+<details>
+<summary>Legacy planning snippet (pre-RTP migration — do not implement)</summary>
 
-pub async fn watch_stream(
-    nakama: &NakamaClient,
-    session_id: &str,
-) -> Result<StreamViewSession, StreamError> {
-    let resp: WatchStreamResponse = nakama.rpc("watch_stream", &WatchStreamRequest {
-        session_id: session_id.to_string(),
-    }).await?;
+Obsolete sketch referenced `stream/viewer.rs` and `SfuEvent::MediaPacket` on DataChannel. Current code uses native RTP receive instead.
 
-    match resp.mode.as_str() {
-        "sfu" => {
-            let conn = SfuConnection::connect(
-                &resp.sfu_endpoint.unwrap(),
-                &resp.sfu_token.unwrap(),
-            ).await?;
+</details>
 
-            conn.join_stream(session_id, "viewer").await?;
-
-            // Spawn task to receive media packets from SFU and feed to decoder
-            let conn = Arc::new(conn);
-            let conn_clone = conn.clone();
-            tokio::spawn(async move {
-                loop {
-                    match conn_clone.recv_event().await {
-                        Some(SfuEvent::MediaPacket { data }) => {
-                            // Feed to StreamManager/decoder (same as P2P receive path)
-                            // The packet format is identical: 12-byte header + payload
-                        }
-                        Some(SfuEvent::ControlPacket { data }) => {
-                            // Handle control messages from host (via SFU)
-                        }
-                        Some(SfuEvent::Disconnected { reason }) => {
-                            log::warn!("SFU disconnected: {}", reason);
-                            break;
-                        }
-                        _ => {}
-                    }
-                }
-            });
-
-            Ok(StreamViewSession::Sfu { connection: conn })
-        }
-        _ => {
-            // Existing P2P viewer path
-            Ok(StreamViewSession::P2P { /* existing */ })
-        }
-    }
-}
-
-#[derive(Debug, Deserialize)]
-pub struct WatchStreamResponse {
-    pub mode: String,
-    pub sfu_endpoint: Option<String>,
-    pub sfu_token: Option<String>,
-}
-```
-
-### 5.3 `voice/manager.rs` - SFU Branch in `join_channel`
+### 5.3 `voice/mod.rs` - SFU Branch in `join_channel`
 
 The `VoiceManager` already tracks `connected_crew`, `connected_channel`, and `peers`. Add `mode` and `sfu_connection` fields, and branch in `join_channel()` based on the RPC response.
 
@@ -1159,17 +1121,26 @@ backend/nakama/data/modules/
   crews.go                 # Add SFUEnabled to CrewMetadata
 
 mello-core/src/
-  stream/sink_sfu.rs       # Replace stub with real SfuSink
-  stream/viewer.rs         # Add SFU viewer path (watch_stream RPC)
-  stream/mod.rs            # New StreamError variants
-  voice/manager.rs         # Add VoiceMode, SFU branch in join_channel
+  stream/sink_sfu.rs       # SfuSink — native RTP AU send + control DC
+  stream/rtp_peer.rs       # libmello RTP peer wrappers (host/viewer)
+  client/streaming.rs      # SFU viewer receive + presentation path
+  stream/mod.rs            # StreamError variants
+  voice/mod.rs             # VoiceManager and SFU branch
   transport/mod.rs         # Export sfu_connection
   nakama/types.rs          # Add sfu_endpoint, sfu_token to response types
+
+libmello/src/transport/
+  rtp_video_sender.cpp     # Host P2P/SFU RTP send with pacing + IDR gate
+  rtp_video_receiver_session.cpp  # Viewer AU assembly + decode feed
 ```
 
 ---
 
 ## 7. Testing Checklist
+
+> Historical implementation checklist. Current commands and release gates are
+> maintained in [`TESTING.md`](../../TESTING.md) and
+> `scripts/run-stream-certification.ps1`.
 
 ### Backend RPCs
 - [ ] `start_stream` on free crew -> returns `mode: "p2p"`
@@ -1185,11 +1156,11 @@ mello-core/src/
 ### Client SfuSink
 - [ ] `SfuSink::new()` connects to SFU WebSocket
 - [ ] WebRTC PeerConnection established (ICE-lite)
-- [ ] Both DataChannels open (media + control)
-- [ ] `send_video()` sends via media DataChannel
-- [ ] `send_audio()` sends via media DataChannel
+- [ ] Stream: control DC open + host RTP video track open
+- [ ] `send_video()` sends Annex-B AUs via RTP track
 - [ ] `send_control()` sends via control DataChannel
-- [ ] Viewer receives MediaPacket events from SFU
+- [ ] Viewer receives complete AUs via `poll_received_access_unit`
+- [ ] Host receives aggregated PLI/REMB via `poll_video_feedback`
 
 ### Client VoiceManager
 - [ ] P2P join still works (unchanged)
@@ -1199,9 +1170,9 @@ mello-core/src/
 - [ ] Leave: SFU connection closed, server notified
 
 ### End-to-End
-- [ ] Host streams via SFU, viewer receives video
-- [ ] Multiple viewers receive the same stream
-- [ ] Viewer loss reports reach host (ABR adjusts)
+- [ ] Host streams via SFU RTP, viewer decodes video
+- [ ] Multiple viewers receive the same RTP relay
+- [ ] Viewer REMB/PLI reaches host (bitrate adjusts, IDR on PLI)
 - [ ] Voice works through SFU (2+ members)
 - [ ] Disconnection handled cleanly (no orphaned sessions)
 
@@ -1219,7 +1190,7 @@ The original `SfuConnection` sketch above is augmented with liveness and lifecyc
 - **`SfuConnection` task lifecycle.** The signaling-listener and `client_stats`-reporter tasks are tracked and **aborted on `Drop`** so a replaced/stale connection's tasks stop immediately instead of ticking against a dead socket.
 - **Reconnect decoupled from Nakama.** A Nakama WS reconnect re-asserts roster membership only; SFU media rebuild is owned solely by the voice tick, so Nakama blips don't churn the SFU peer.
 - **Renegotiation-tolerant track reads.** The SFU raises/pauses its consecutive-EOF inbound-track cutoff during active renegotiation so transient read errors don't kill healthy audio tracks.
-- **Current join failure policy (known caveat).** The client still falls back to P2P when SFU connect/join/DC-open fails. This preserves call continuity but can cause "joined voice, wrong transport" confusion in mixed setups; a stricter fail-closed SFU policy is tracked separately.
+- **Join failure policy.** Stream sessions are fail-closed after `start_stream` / `watch_stream` returns SFU: connect, join, or control-channel failure surfaces a stream error. Voice retains its separately documented reconnect/fallback behavior. Before a stream RPC returns SFU, Nakama may select P2P if SFU auth/token creation is unavailable.
 - **Diagnostics.** The SFU logs `peer_close_called` (with a compact caller stack) and `pc_closed` at INFO so every peer teardown is attributable to a concrete cause.
 
 Reconcile-oracle (Nakama → SFU admin API) is covered in [04-BACKEND.md](../04-BACKEND.md). Soak/fault harnesses are in [`TESTING.md`](../../TESTING.md).

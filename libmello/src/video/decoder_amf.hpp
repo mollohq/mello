@@ -13,7 +13,7 @@ class AmfDecoder : public Decoder {
 public:
     bool             initialize(const GraphicsDevice& device, const DecoderConfig& config) override;
     void             shutdown() override;
-    bool             decode(const uint8_t* data, size_t size, bool is_keyframe) override;
+    DecodeFeedResult decode(const uint8_t* data, size_t size, bool is_keyframe) override;
     ID3D11Texture2D* get_frame() override;
     bool             supports_codec(VideoCodec codec) const override;
     const char*      name() const override { return "AMF-Decode"; }

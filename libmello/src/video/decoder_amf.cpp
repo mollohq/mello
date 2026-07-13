@@ -107,43 +107,74 @@ void AmfDecoder::shutdown() {
     if (dll_) { FreeLibrary(dll_); dll_ = nullptr; }
 }
 
-bool AmfDecoder::decode(const uint8_t* data, size_t size, bool is_keyframe) {
-    if (!decoder_) return false;
+DecodeFeedResult AmfDecoder::decode(const uint8_t* data, size_t size, bool is_keyframe) {
+    if (!decoder_ || !context_) return DecodeFeedResult::Error;
     (void)is_keyframe;
 
     // Create AMF buffer from encoded data
     amf::AMFBufferPtr buffer;
     AMF_RESULT res = context_->AllocBuffer(amf::AMF_MEMORY_HOST, size, &buffer);
-    if (res != AMF_OK) return false;
+    if (res != AMF_OK || !buffer) {
+        MELLO_LOG_ERROR(TAG, "AMF decode: AllocBuffer failed: %d", res);
+        return DecodeFeedResult::Error;
+    }
 
     memcpy(buffer->GetNative(), data, size);
 
+    bool frame_ready = false;
+    auto drain_output = [&]() -> bool {
+        while (true) {
+            amf::AMFDataPtr output;
+            AMF_RESULT query_res = decoder_->QueryOutput(&output);
+            if (query_res == AMF_REPEAT || (query_res == AMF_OK && !output)) return true;
+            if (query_res != AMF_OK) {
+                MELLO_LOG_ERROR(TAG, "AMF decode: QueryOutput failed: %d", query_res);
+                return false;
+            }
+
+            // Unwrap AMF surface to D3D11 texture
+            amf::AMFSurfacePtr surface(output);
+            if (!surface) {
+                MELLO_LOG_ERROR(TAG, "AMF decode: QueryOutput returned non-surface data");
+                return false;
+            }
+
+            amf::AMFPlane* plane = surface->GetPlane(amf::AMF_PLANE_Y);
+            if (!plane) {
+                MELLO_LOG_ERROR(TAG, "AMF decode: output surface has no Y plane");
+                return false;
+            }
+
+            // The AMF surface's native DX11 texture
+            ID3D11Texture2D* amf_tex = static_cast<ID3D11Texture2D*>(plane->GetNative());
+            if (!amf_tex) {
+                MELLO_LOG_ERROR(TAG, "AMF decode: output surface has no DX11 texture");
+                return false;
+            }
+
+            Microsoft::WRL::ComPtr<ID3D11DeviceContext> ctx;
+            device_->GetImmediateContext(&ctx);
+            ctx->CopyResource(frame_tex_.Get(), amf_tex);
+            frame_ready = true;
+        }
+    };
+
     res = decoder_->SubmitInput(buffer);
-    if (res != AMF_OK && res != AMF_DECODER_NO_FREE_SURFACES) {
+    if (res == AMF_DECODER_NO_FREE_SURFACES) {
+        if (!drain_output()) return DecodeFeedResult::Error;
+        res = decoder_->SubmitInput(buffer);
+    }
+    if (res == AMF_DECODER_NO_FREE_SURFACES) {
+        MELLO_LOG_ERROR(TAG, "AMF decode: no free surfaces after drain and retry");
+        return DecodeFeedResult::Error;
+    }
+    if (res != AMF_OK) {
         MELLO_LOG_ERROR(TAG, "AMF decode: SubmitInput failed: %d", res);
-        return false;
+        return DecodeFeedResult::Error;
     }
 
-    amf::AMFDataPtr output;
-    res = decoder_->QueryOutput(&output);
-    if (res != AMF_OK || !output) return false;
-
-    // Unwrap AMF surface to D3D11 texture
-    amf::AMFSurfacePtr surface(output);
-    if (!surface) return false;
-
-    amf::AMFPlane* plane = surface->GetPlane(amf::AMF_PLANE_Y);
-    if (!plane) return false;
-
-    // The AMF surface's native DX11 texture
-    ID3D11Texture2D* amf_tex = static_cast<ID3D11Texture2D*>(surface->GetPlaneAt(0)->GetNative());
-    if (amf_tex) {
-        Microsoft::WRL::ComPtr<ID3D11DeviceContext> ctx;
-        device_->GetImmediateContext(&ctx);
-        ctx->CopyResource(frame_tex_.Get(), amf_tex);
-    }
-
-    return true;
+    if (!drain_output()) return DecodeFeedResult::Error;
+    return frame_ready ? DecodeFeedResult::FrameReady : DecodeFeedResult::Accepted;
 }
 
 ID3D11Texture2D* AmfDecoder::get_frame() {

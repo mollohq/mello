@@ -1,0 +1,660 @@
+#include <gtest/gtest.h>
+
+#include "transport/rtp_h264_receiver.hpp"
+#include "transport/rtp_video_sender.hpp"
+
+#include <rtc/rtc.hpp>
+#include <rtc/rtp.hpp>
+
+#include <atomic>
+#include <chrono>
+#include <condition_variable>
+#include <cstdint>
+#include <cstring>
+#include <deque>
+#include <future>
+#include <initializer_list>
+#include <mutex>
+#include <optional>
+#include <stdexcept>
+#include <thread>
+#include <utility>
+#include <vector>
+
+using mello::transport::RtpH264Receiver;
+using mello::transport::RtpVideoSender;
+using mello::transport::RtpVideoSenderConfig;
+using mello::transport::RtpVideoSenderStats;
+
+namespace {
+
+using namespace std::chrono_literals;
+
+constexpr uint8_t kPayloadType = 96;
+constexpr uint32_t kSenderSsrc = 0x12345678;
+constexpr char kCname[] = "mello-rtp-test";
+
+std::atomic<uint16_t> g_next_port_base{50000};
+
+bool is_h264_format(const std::string& format) noexcept {
+    return format.size() == 4
+        && (format[0] == 'H' || format[0] == 'h')
+        && format[1] == '2'
+        && format[2] == '6'
+        && format[3] == '4';
+}
+
+std::vector<uint8_t> annex_b(std::initializer_list<std::vector<uint8_t>> nals) {
+    std::vector<uint8_t> bytes;
+    for (const auto& nal : nals) {
+        bytes.insert(bytes.end(), {0, 0, 0, 1});
+        bytes.insert(bytes.end(), nal.begin(), nal.end());
+    }
+    return bytes;
+}
+
+std::vector<uint8_t> make_idr_access_unit() {
+    return annex_b({{0x67, 0x42, 0x00, 0x1f},
+                    {0x68, 0xce, 0x38, 0x80},
+                    {0x65, 0x88, 0x84, 0x00}});
+}
+
+std::vector<uint8_t> make_delta_access_unit(uint8_t suffix) {
+    return annex_b({{0x61, suffix, 0x10, 0x20}});
+}
+
+std::vector<uint8_t> make_large_delta_access_unit(size_t nal_payload_bytes) {
+    std::vector<uint8_t> nal(nal_payload_bytes, 0x55);
+    nal[0] = 0x61;
+    return annex_b({nal});
+}
+
+struct ParsedRtpPacket {
+    uint16_t sequence = 0;
+    uint32_t timestamp = 0;
+    bool marker = false;
+    uint8_t payload_type = 0;
+    size_t payload_size = 0;
+    size_t wire_size = 0;
+    std::chrono::steady_clock::time_point received_at{};
+};
+
+std::optional<ParsedRtpPacket> parse_rtp_packet(
+    const uint8_t* data,
+    size_t size,
+    std::chrono::steady_clock::time_point received_at
+) {
+    if (data == nullptr || size < sizeof(rtc::RtpHeader)) {
+        return std::nullopt;
+    }
+
+    const auto* const header = reinterpret_cast<const rtc::RtpHeader*>(data);
+    if (header->version() != 2) {
+        return std::nullopt;
+    }
+
+    const size_t header_size = header->getSize();
+    if (header_size > size) {
+        return std::nullopt;
+    }
+
+    ParsedRtpPacket packet;
+    packet.sequence = header->seqNumber();
+    packet.timestamp = header->timestamp();
+    packet.marker = header->marker() != 0;
+    packet.payload_type = header->payloadType();
+    packet.payload_size = size - header_size;
+    packet.wire_size = size;
+    packet.received_at = received_at;
+    return packet;
+}
+
+rtc::Configuration make_loopback_config() {
+    rtc::Configuration config;
+    config.iceServers.clear();
+    config.forceMediaTransport = true;
+    config.bindAddress = "127.0.0.1";
+
+    const uint16_t base = g_next_port_base.fetch_add(
+        100,
+        std::memory_order_relaxed
+    );
+    config.portRangeBegin = base;
+    config.portRangeEnd = static_cast<uint16_t>(base + 99);
+    return config;
+}
+
+void wire_signaling(
+    const std::shared_ptr<rtc::PeerConnection>& local,
+    const std::shared_ptr<rtc::PeerConnection>& remote
+) {
+    local->onLocalDescription([remote](rtc::Description description) {
+        remote->setRemoteDescription(std::move(description));
+    });
+    local->onLocalCandidate([remote](rtc::Candidate candidate) {
+        remote->addRemoteCandidate(std::move(candidate));
+    });
+}
+
+template <typename Predicate>
+bool wait_until(
+    Predicate predicate,
+    std::chrono::milliseconds timeout
+) {
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    while (std::chrono::steady_clock::now() < deadline) {
+        if (predicate()) {
+            return true;
+        }
+        std::this_thread::sleep_for(5ms);
+    }
+    return predicate();
+}
+
+struct EmittedAccessUnit {
+    std::vector<uint8_t> bytes;
+    bool is_idr = false;
+    uint32_t timestamp = 0;
+};
+
+class LoopbackVideoLink {
+public:
+    LoopbackVideoLink() {
+        const auto config = make_loopback_config();
+
+        offerer_ = std::make_shared<rtc::PeerConnection>(config);
+        answerer_ = std::make_shared<rtc::PeerConnection>(config);
+        wire_signaling(offerer_, answerer_);
+        wire_signaling(answerer_, offerer_);
+
+        offerer_->onStateChange([this](rtc::PeerConnection::State state) {
+            if (state == rtc::PeerConnection::State::Connected) {
+                offerer_connected_.store(true, std::memory_order_release);
+            }
+        });
+        answerer_->onStateChange([this](rtc::PeerConnection::State state) {
+            if (state == rtc::PeerConnection::State::Connected) {
+                answerer_connected_.store(true, std::memory_order_release);
+            }
+        });
+
+        answerer_->onTrack([this](std::shared_ptr<rtc::Track> track) {
+            std::lock_guard<std::mutex> lock(mutex_);
+            receiver_track_ = std::move(track);
+            receiver_track_ready_ = true;
+            install_receiver_handler();
+            cv_.notify_all();
+        });
+
+        rtc::Description::Video video(
+            "video",
+            rtc::Description::Direction::SendOnly
+        );
+        video.addH264Codec(kPayloadType);
+        video.addSSRC(kSenderSsrc, kCname, "mello-stream", "mello-video");
+        sender_track_ = offerer_->addTrack(std::move(video));
+
+        sender_track_->onOpen([this]() {
+            sender_track_open_.store(true, std::memory_order_release);
+        });
+
+        offerer_->setLocalDescription();
+
+        if (!wait_until([this]() {
+                return offerer_connected_.load(std::memory_order_acquire)
+                    && answerer_connected_.load(std::memory_order_acquire)
+                    && receiver_track_ready_
+                    && sender_track_open_.load(std::memory_order_acquire);
+            },
+            10s)) {
+            throw std::runtime_error("loopback PeerConnection did not connect");
+        }
+
+        if (!receiver_track_ || !receiver_track_->isOpen()) {
+            throw std::runtime_error("receiver track did not open");
+        }
+        if (!sender_track_ || !sender_track_->isOpen()) {
+            throw std::runtime_error("sender track did not open");
+        }
+    }
+
+    ~LoopbackVideoLink() {
+        try {
+            if (receiver_track_) {
+                receiver_track_->onMessage(nullptr);
+            }
+            if (sender_track_) {
+                sender_track_->onMessage(nullptr);
+            }
+            if (offerer_) {
+                offerer_->resetCallbacks();
+                offerer_->close();
+            }
+            if (answerer_) {
+                answerer_->resetCallbacks();
+                answerer_->close();
+            }
+        } catch (...) {
+        }
+    }
+
+    std::shared_ptr<rtc::Track> sender_track() const { return sender_track_; }
+    std::shared_ptr<rtc::Track> receiver_track() const { return receiver_track_; }
+
+    RtpVideoSender make_sender(
+        uint64_t pacing_target_bps,
+        RtpVideoSender::PliCallback on_pli = {},
+        RtpVideoSender::RembCallback on_remb = {},
+        RtpVideoSender::LocalIdrNeededCallback on_local_idr_needed = {}
+    ) {
+        RtpVideoSenderConfig config;
+        config.ssrc = kSenderSsrc;
+        config.payload_type = kPayloadType;
+        config.cname = kCname;
+        config.pacing_target_bps = pacing_target_bps;
+        RtpVideoSender sender(
+            sender_track_,
+            config,
+            std::move(on_pli),
+            std::move(on_remb),
+            std::move(on_local_idr_needed)
+        );
+        if (!sender.is_open()) {
+            throw std::runtime_error("RtpVideoSender failed to attach");
+        }
+        return sender;
+    }
+
+    void drain_receiver() {
+        std::deque<std::pair<std::vector<uint8_t>, RtpH264Receiver::TimePoint>>
+            pending;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            pending.swap(ingress_queue_);
+        }
+
+        for (auto& entry : pending) {
+            receiver_.on_rtp_packet(
+                entry.first.data(),
+                entry.first.size(),
+                entry.second
+            );
+        }
+        receiver_.tick(RtpH264Receiver::TimePoint::clock::now());
+    }
+
+    bool wait_for_emitted_count(
+        size_t expected,
+        std::chrono::milliseconds timeout
+    ) {
+        return wait_until(
+            [this, expected]() {
+                drain_receiver();
+                std::lock_guard<std::mutex> lock(mutex_);
+                return emitted_.size() >= expected;
+            },
+            timeout
+        );
+    }
+
+    bool wait_for_captured_count(
+        size_t expected,
+        std::chrono::milliseconds timeout
+    ) {
+        return wait_until(
+            [this, expected]() {
+                drain_receiver();
+                std::lock_guard<std::mutex> lock(mutex_);
+                return captured_rtp_.size() >= expected;
+            },
+            timeout
+        );
+    }
+
+    bool wait_for_stats(
+        const std::function<bool(const RtpVideoSenderStats&)>& predicate,
+        const RtpVideoSender& sender,
+        std::chrono::milliseconds timeout
+    ) {
+        return wait_until(
+            [&]() {
+                drain_receiver();
+                return predicate(sender.stats());
+            },
+            timeout
+        );
+    }
+
+    std::vector<EmittedAccessUnit> emitted() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return emitted_;
+    }
+
+    bool wait_for_marker_packet(std::chrono::milliseconds timeout) {
+        return wait_until(
+            [this]() {
+                drain_receiver();
+                std::lock_guard<std::mutex> lock(mutex_);
+                for (const auto& packet : captured_rtp_) {
+                    if (packet.marker) {
+                        return true;
+                    }
+                }
+                return false;
+            },
+            timeout
+        );
+    }
+
+    std::vector<ParsedRtpPacket> captured_rtp() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return captured_rtp_;
+    }
+
+    void clear_captured_rtp() {
+        std::lock_guard<std::mutex> lock(mutex_);
+        captured_rtp_.clear();
+    }
+
+    RtpH264Receiver& receiver() { return receiver_; }
+
+private:
+    void install_receiver_handler() {
+        receiver_track_->onMessage([this](rtc::message_variant data) {
+            const auto* const binary = std::get_if<rtc::binary>(&data);
+            if (binary == nullptr || binary->empty()) {
+                return;
+            }
+            if (rtc::IsRtcp(*binary)) {
+                return;
+            }
+
+            const auto now = RtpH264Receiver::TimePoint::clock::now();
+            std::vector<uint8_t> packet;
+            packet.reserve(binary->size());
+            for (const auto byte : *binary) {
+                packet.push_back(static_cast<uint8_t>(byte));
+            }
+
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (const auto parsed = parse_rtp_packet(
+                    packet.data(),
+                    packet.size(),
+                    now)) {
+                captured_rtp_.push_back(*parsed);
+            }
+            ingress_queue_.emplace_back(std::move(packet), now);
+            cv_.notify_all();
+        });
+    }
+
+    std::shared_ptr<rtc::PeerConnection> offerer_;
+    std::shared_ptr<rtc::PeerConnection> answerer_;
+    std::shared_ptr<rtc::Track> sender_track_;
+    std::shared_ptr<rtc::Track> receiver_track_;
+
+    std::atomic<bool> offerer_connected_{false};
+    std::atomic<bool> answerer_connected_{false};
+    std::atomic<bool> sender_track_open_{false};
+    bool receiver_track_ready_ = false;
+
+    mutable std::mutex mutex_;
+    std::condition_variable cv_;
+    std::deque<std::pair<std::vector<uint8_t>, RtpH264Receiver::TimePoint>>
+        ingress_queue_;
+    std::vector<ParsedRtpPacket> captured_rtp_;
+    std::vector<EmittedAccessUnit> emitted_;
+
+    RtpH264Receiver receiver_{RtpH264Receiver::Callbacks{
+        [this](const std::vector<uint8_t>& bytes,
+               bool is_idr,
+               uint32_t timestamp) {
+            std::lock_guard<std::mutex> lock(mutex_);
+            emitted_.push_back({bytes, is_idr, timestamp});
+            cv_.notify_all();
+        },
+        {},
+        {},
+    }};
+};
+
+TEST(RtpVideoSenderNegotiationTest, NegotiatesH264Pt96SendRecvDirections) {
+    LoopbackVideoLink link;
+
+    const auto sender_desc = link.sender_track()->description();
+    ASSERT_EQ(sender_desc.type(), "video");
+    EXPECT_EQ(
+        sender_desc.direction(),
+        rtc::Description::Direction::SendOnly
+    );
+    ASSERT_TRUE(sender_desc.hasPayloadType(kPayloadType));
+    const auto* const sender_map = sender_desc.rtpMap(kPayloadType);
+    ASSERT_NE(sender_map, nullptr);
+    EXPECT_TRUE(is_h264_format(sender_map->format));
+    EXPECT_EQ(sender_map->clockRate, 90'000);
+
+    const auto receiver_desc = link.receiver_track()->description();
+    ASSERT_EQ(receiver_desc.type(), "video");
+    EXPECT_EQ(
+        receiver_desc.direction(),
+        rtc::Description::Direction::RecvOnly
+    );
+    ASSERT_TRUE(receiver_desc.hasPayloadType(kPayloadType));
+    const auto* const receiver_map = receiver_desc.rtpMap(kPayloadType);
+    ASSERT_NE(receiver_map, nullptr);
+    EXPECT_TRUE(is_h264_format(receiver_map->format));
+    EXPECT_EQ(receiver_map->clockRate, 90'000);
+}
+
+TEST(RtpVideoSenderPacketizationTest, FragmentsAccessUnitWithOneTimestampAndFinalMarker) {
+    LoopbackVideoLink link;
+    RtpVideoSender sender = link.make_sender(8'000'000);
+
+    const auto access_unit = make_large_delta_access_unit(24 * 1024);
+    ASSERT_TRUE(sender.send_access_unit(
+        access_unit.data(),
+        access_unit.size(),
+        1'000
+    ));
+    ASSERT_TRUE(link.wait_for_marker_packet(10s));
+
+    const auto all_packets = link.captured_rtp();
+    ASSERT_GT(all_packets.size(), 1u);
+
+    const uint32_t expected_timestamp = all_packets.front().timestamp;
+    std::vector<ParsedRtpPacket> packets;
+    packets.reserve(all_packets.size());
+    for (const auto& packet : all_packets) {
+        if (packet.timestamp == expected_timestamp) {
+            packets.push_back(packet);
+        }
+    }
+    ASSERT_GT(packets.size(), 1u);
+    size_t marker_count = 0;
+    for (const auto& packet : packets) {
+        EXPECT_EQ(packet.payload_type, kPayloadType);
+        EXPECT_LE(packet.payload_size, 1100u);
+        EXPECT_EQ(packet.timestamp, expected_timestamp);
+        if (packet.marker) {
+            ++marker_count;
+        }
+    }
+    EXPECT_EQ(marker_count, 1u);
+    EXPECT_TRUE(packets.back().marker);
+}
+
+TEST(RtpVideoSenderEndToEndTest, ReceiverReconstructsAnnexBAccessUnits) {
+    LoopbackVideoLink link;
+    RtpVideoSender sender = link.make_sender(8'000'000);
+
+    const auto idr = make_idr_access_unit();
+    const auto delta_a = make_delta_access_unit(0x11);
+    const auto delta_b = make_delta_access_unit(0x22);
+
+    ASSERT_TRUE(sender.send_access_unit(idr.data(), idr.size(), 0));
+    ASSERT_TRUE(sender.send_access_unit(delta_a.data(), delta_a.size(), 33'333));
+    ASSERT_TRUE(sender.send_access_unit(delta_b.data(), delta_b.size(), 66'666));
+
+    ASSERT_TRUE(link.wait_for_emitted_count(3, 10s));
+
+    const auto emitted = link.emitted();
+    ASSERT_EQ(emitted.size(), 3u);
+    EXPECT_EQ(emitted[0].bytes, idr);
+    EXPECT_TRUE(emitted[0].is_idr);
+    EXPECT_EQ(emitted[1].bytes, delta_a);
+    EXPECT_FALSE(emitted[1].is_idr);
+    EXPECT_EQ(emitted[2].bytes, delta_b);
+    EXPECT_FALSE(emitted[2].is_idr);
+}
+
+TEST(RtpVideoSenderTimestampTest, MapsCaptureClockTo90kRtpTimestamps) {
+    LoopbackVideoLink link;
+    RtpVideoSender sender = link.make_sender(8'000'000);
+
+    const auto idr = make_idr_access_unit();
+    const auto delta = make_delta_access_unit(0x33);
+    ASSERT_TRUE(sender.send_access_unit(idr.data(), idr.size(), 1'000'000));
+    ASSERT_TRUE(sender.send_access_unit(delta.data(), delta.size(), 1'033'333));
+
+    ASSERT_TRUE(link.wait_for_emitted_count(2, 10s));
+
+    const auto emitted = link.emitted();
+    ASSERT_EQ(emitted.size(), 2u);
+    const int32_t timestamp_delta = static_cast<int32_t>(
+        emitted[1].timestamp - emitted[0].timestamp
+    );
+    EXPECT_NEAR(timestamp_delta, 3'000, 2);
+}
+
+TEST(RtpVideoSenderPacingTest, AccessUnitFragmentsAreSentBackToBack) {
+    LoopbackVideoLink link;
+    RtpVideoSender sender = link.make_sender(200'000);
+
+    const auto access_unit = make_large_delta_access_unit(32 * 1024);
+    ASSERT_TRUE(sender.send_access_unit(
+        access_unit.data(),
+        access_unit.size(),
+        5'000'000
+    ));
+
+    ASSERT_TRUE(link.wait_for_captured_count(12, 15s));
+    const auto packets = link.captured_rtp();
+    ASSERT_GT(packets.size(), 1u);
+
+    const auto intra_au = std::chrono::duration_cast<std::chrono::milliseconds>(
+        packets.back().received_at - packets.front().received_at
+    );
+    // Per-packet pacing spread one AU over ~90ms and broke the 45ms receiver
+    // assembly deadline; fragments of a single AU must leave back-to-back.
+    EXPECT_LT(intra_au.count(), 15);
+}
+
+TEST(RtpVideoSenderPacingTest, PacingAppliesBetweenAccessUnits) {
+    LoopbackVideoLink link;
+    constexpr uint64_t pacing_bps = 200'000;
+    RtpVideoSender sender = link.make_sender(pacing_bps);
+
+    const auto first = make_large_delta_access_unit(32 * 1024);
+    const auto second = make_delta_access_unit(0x44);
+    ASSERT_TRUE(sender.send_access_unit(first.data(), first.size(), 0));
+    ASSERT_TRUE(link.wait_for_captured_count(12, 15s));
+
+    const auto first_packets = link.captured_rtp();
+    ASSERT_GT(first_packets.size(), 1u);
+    const auto first_batch_end = first_packets.back().received_at;
+    uint64_t first_wire_bytes = 0;
+    for (const auto& packet : first_packets) {
+        first_wire_bytes += packet.wire_size;
+    }
+    link.clear_captured_rtp();
+
+    ASSERT_TRUE(sender.send_access_unit(second.data(), second.size(), 33'333));
+    ASSERT_TRUE(link.wait_for_captured_count(1, 15s));
+
+    const auto second_packets = link.captured_rtp();
+    ASSERT_FALSE(second_packets.empty());
+    const auto second_batch_start = second_packets.front().received_at;
+    const auto inter_au = std::chrono::duration_cast<std::chrono::milliseconds>(
+        second_batch_start - first_batch_end
+    );
+
+    const auto theoretical_min_ms = std::chrono::milliseconds(
+        static_cast<int64_t>((first_wire_bytes * 8 * 1000) / pacing_bps)
+    );
+    EXPECT_GE(inter_au, theoretical_min_ms / 2);
+}
+
+TEST(RtpVideoSenderPacingTest, DynamicTargetUpdateIsObservedInStats) {
+    LoopbackVideoLink link;
+    RtpVideoSender sender = link.make_sender(200'000);
+
+    EXPECT_TRUE(sender.set_pacing_target_bps(1'500'000));
+    EXPECT_TRUE(link.wait_for_stats(
+        [](const RtpVideoSenderStats& stats) {
+            return stats.pacing_target_bps == 1'500'000;
+        },
+        sender,
+        2s
+    ));
+}
+
+TEST(RtpVideoSenderAdmissionTest, QueueOverflowEntersIdrGate) {
+    LoopbackVideoLink link;
+    std::atomic<int> idr_requests{0};
+    RtpVideoSender sender = link.make_sender(
+        20'000'000,
+        {},
+        {},
+        [&idr_requests]() { idr_requests.fetch_add(1, std::memory_order_relaxed); }
+    );
+
+    const auto idr = make_idr_access_unit();
+    ASSERT_TRUE(sender.send_access_unit(idr.data(), idr.size(), 0));
+
+    for (int index = 0; index < 16; ++index) {
+        const auto delta = make_delta_access_unit(static_cast<uint8_t>(index));
+        (void)sender.send_access_unit(
+            delta.data(),
+            delta.size(),
+            static_cast<uint64_t>((index + 1) * 33'333)
+        );
+    }
+
+    ASSERT_TRUE(link.wait_for_stats(
+        [](const RtpVideoSenderStats& stats) {
+            return stats.access_units_rejected > 0
+                && stats.local_idr_requests > 0;
+        },
+        sender,
+        10s
+    ));
+
+    const auto stats = sender.stats();
+    EXPECT_GT(stats.access_units_rejected, 0u);
+    EXPECT_GT(stats.local_idr_requests, 0u);
+    EXPECT_LE(stats.peak_queued_access_units, RtpVideoSender::kMaxQueuedAccessUnits);
+    EXPECT_LE(stats.peak_queued_bytes, RtpVideoSender::kMaxQueuedBytes);
+    EXPECT_GE(idr_requests.load(std::memory_order_relaxed), 1);
+}
+
+TEST(RtpVideoSenderLifetimeTest, DestroysCleanlyUnderLoad) {
+    auto completed = std::async(std::launch::async, []() -> bool {
+        LoopbackVideoLink link;
+        RtpVideoSender sender = link.make_sender(8'000'000);
+        const auto idr = make_idr_access_unit();
+        for (int index = 0; index < 6; ++index) {
+            if (!sender.send_access_unit(
+                    idr.data(),
+                    idr.size(),
+                    static_cast<uint64_t>(index * 33'333))) {
+                return false;
+            }
+        }
+        return link.wait_for_captured_count(3, 10s);
+    });
+
+    ASSERT_EQ(completed.wait_for(20s), std::future_status::ready);
+    EXPECT_TRUE(completed.get());
+}
+
+} // namespace

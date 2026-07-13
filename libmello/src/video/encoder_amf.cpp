@@ -2,6 +2,7 @@
 #include "encoder_amf.hpp"
 #include "../util/log.hpp"
 #include <Windows.h>
+#include <algorithm>
 #include <chrono>
 
 #include <AMF/core/Data.h>
@@ -79,14 +80,55 @@ bool AmfEncoder::initialize(const GraphicsDevice& device, const EncoderConfig& c
 
     // Configure for ultra-low latency
     if (codec_ == VideoCodec::H264) {
-        encoder_->SetProperty(AMF_VIDEO_ENCODER_USAGE, AMF_VIDEO_ENCODER_USAGE_ULTRA_LOW_LATENCY);
-        encoder_->SetProperty(AMF_VIDEO_ENCODER_TARGET_BITRATE, static_cast<amf_int64>(config.bitrate_kbps * 1000));
-        encoder_->SetProperty(AMF_VIDEO_ENCODER_PEAK_BITRATE, static_cast<amf_int64>(config.bitrate_kbps * 1000));
-        encoder_->SetProperty(AMF_VIDEO_ENCODER_RATE_CONTROL_METHOD, AMF_VIDEO_ENCODER_RATE_CONTROL_METHOD_CBR);
-        encoder_->SetProperty(AMF_VIDEO_ENCODER_FRAMERATE, AMFConstructRate(config.fps, 1));
-        encoder_->SetProperty(AMF_VIDEO_ENCODER_B_PIC_PATTERN, 0);
-        encoder_->SetProperty(AMF_VIDEO_ENCODER_IDR_PERIOD, static_cast<amf_int64>(config.keyframe_interval));
-        encoder_->SetProperty(AMF_VIDEO_ENCODER_VBV_BUFFER_SIZE, static_cast<amf_int64>(config.bitrate_kbps * 1000));
+        auto set_required = [&](const wchar_t* property, const auto& value, const char* label) {
+            const AMF_RESULT property_res = encoder_->SetProperty(property, value);
+            if (property_res != AMF_OK) {
+                MELLO_LOG_ERROR(TAG, "AMF: required property %s rejected: %d", label, property_res);
+                return false;
+            }
+            return true;
+        };
+
+        const uint32_t fps = config.fps > 0 ? config.fps : 60;
+        const amf_int64 bitrate_bps = static_cast<amf_int64>(config.bitrate_kbps * 1000);
+        const amf_int64 vbv_bits = std::max<amf_int64>(1, bitrate_bps / static_cast<amf_int64>(fps));
+
+        if (!set_required(AMF_VIDEO_ENCODER_USAGE,
+                          static_cast<amf_int64>(AMF_VIDEO_ENCODER_USAGE_ULTRA_LOW_LATENCY),
+                          "usage=ultra-low-latency") ||
+            !set_required(AMF_VIDEO_ENCODER_LOWLATENCY_MODE, true, "low-latency-mode") ||
+            !set_required(AMF_VIDEO_ENCODER_PREENCODE_ENABLE,
+                          static_cast<amf_int64>(AMF_VIDEO_ENCODER_PREENCODE_DISABLED),
+                          "preencode=disabled") ||
+            !set_required(AMF_VIDEO_ENCODER_PRE_ANALYSIS_ENABLE, false, "pre-analysis=disabled") ||
+            !set_required(AMF_VIDEO_ENCODER_PROFILE,
+                          static_cast<amf_int64>(AMF_VIDEO_ENCODER_PROFILE_MAIN),
+                          "profile=Main") ||
+            !set_required(AMF_VIDEO_ENCODER_PROFILE_LEVEL,
+                          static_cast<amf_int64>(AMF_H264_LEVEL__4_2),
+                          "level=4.2") ||
+            !set_required(AMF_VIDEO_ENCODER_B_PIC_PATTERN,
+                          static_cast<amf_int64>(0),
+                          "B-frames=disabled") ||
+            !set_required(AMF_VIDEO_ENCODER_B_REFERENCE_ENABLE, false, "B-ref=disabled") ||
+            !set_required(AMF_VIDEO_ENCODER_IDR_PERIOD,
+                          static_cast<amf_int64>(config.keyframe_interval),
+                          "IDR period") ||
+            !set_required(AMF_VIDEO_ENCODER_HEADER_INSERTION_SPACING,
+                          static_cast<amf_int64>(config.keyframe_interval),
+                          "SPS/PPS insertion spacing") ||
+            !set_required(AMF_VIDEO_ENCODER_TARGET_BITRATE, bitrate_bps, "target-bitrate") ||
+            !set_required(AMF_VIDEO_ENCODER_PEAK_BITRATE, bitrate_bps, "peak-bitrate") ||
+            !set_required(AMF_VIDEO_ENCODER_RATE_CONTROL_METHOD,
+                          static_cast<amf_int64>(AMF_VIDEO_ENCODER_RATE_CONTROL_METHOD_CBR),
+                          "rate-control=CBR") ||
+            !set_required(AMF_VIDEO_ENCODER_FRAMERATE, AMFConstructRate(config.fps, 1), "frame-rate") ||
+            !set_required(AMF_VIDEO_ENCODER_VBV_BUFFER_SIZE, vbv_bits, "VBV=1-frame")) {
+            encoder_.Release(); context_->Terminate(); context_.Release();
+            factory_ = nullptr;
+            FreeLibrary(dll_); dll_ = nullptr;
+            return false;
+        }
     }
 
     res = encoder_->Init(amf::AMF_SURFACE_NV12, config.width, config.height);
@@ -95,6 +137,33 @@ bool AmfEncoder::initialize(const GraphicsDevice& device, const EncoderConfig& c
         encoder_.Release(); context_->Terminate(); context_.Release();
         FreeLibrary(dll_); dll_ = nullptr;
         return false;
+    }
+
+    if (codec_ == VideoCodec::H264) {
+        amf_int64 actual_profile = AMF_VIDEO_ENCODER_PROFILE_UNKNOWN;
+        amf_int64 actual_level = 0;
+        const AMF_RESULT profile_res =
+            encoder_->GetProperty(AMF_VIDEO_ENCODER_PROFILE, &actual_profile);
+        const AMF_RESULT level_res =
+            encoder_->GetProperty(AMF_VIDEO_ENCODER_PROFILE_LEVEL, &actual_level);
+        if (profile_res != AMF_OK || level_res != AMF_OK ||
+            actual_profile != AMF_VIDEO_ENCODER_PROFILE_MAIN ||
+            actual_level != AMF_H264_LEVEL__4_2) {
+            MELLO_LOG_ERROR(TAG,
+                "AMF: effective H264 profile/level mismatch (profile status=%d value=%lld, level status=%d value=%lld; required Main/4.2)",
+                profile_res, static_cast<long long>(actual_profile),
+                level_res, static_cast<long long>(actual_level));
+            encoder_->Terminate(); encoder_.Release();
+            context_->Terminate(); context_.Release();
+            factory_ = nullptr;
+            FreeLibrary(dll_); dll_ = nullptr;
+            return false;
+        }
+        MELLO_LOG_INFO(TAG,
+            "AMF: effective H264 profile=Main level=4.2 usage=ULL low-latency=on preencode=off vbv=%lld B-frames=disabled",
+            static_cast<long long>(std::max<amf_int64>(
+                1, static_cast<amf_int64>(config.bitrate_kbps * 1000) /
+                   static_cast<amf_int64>(config.fps > 0 ? config.fps : 60))));
     }
 
     MELLO_LOG_DEBUG(TAG, "Probing AMF... ok");
@@ -124,8 +193,19 @@ bool AmfEncoder::encode(ID3D11Texture2D* nv12_texture, EncodedPacket& out) {
 
     if (force_idr_) {
         if (codec_ == VideoCodec::H264) {
-            surface->SetProperty(AMF_VIDEO_ENCODER_FORCE_PICTURE_TYPE,
-                                 AMF_VIDEO_ENCODER_PICTURE_TYPE_IDR);
+            const AMF_RESULT force_res = surface->SetProperty(
+                AMF_VIDEO_ENCODER_FORCE_PICTURE_TYPE,
+                static_cast<amf_int64>(AMF_VIDEO_ENCODER_PICTURE_TYPE_IDR));
+            const AMF_RESULT sps_res =
+                surface->SetProperty(AMF_VIDEO_ENCODER_INSERT_SPS, true);
+            const AMF_RESULT pps_res =
+                surface->SetProperty(AMF_VIDEO_ENCODER_INSERT_PPS, true);
+            if (force_res != AMF_OK || sps_res != AMF_OK || pps_res != AMF_OK) {
+                MELLO_LOG_ERROR(TAG,
+                    "AMF: forced IDR/SPS/PPS properties rejected (IDR=%d SPS=%d PPS=%d seq=%llu)",
+                    force_res, sps_res, pps_res, frame_seq_);
+                return false;
+            }
         }
         force_idr_ = false;
     }
@@ -182,8 +262,24 @@ void AmfEncoder::request_keyframe() {
 
 void AmfEncoder::set_bitrate(uint32_t kbps) {
     if (encoder_ && codec_ == VideoCodec::H264) {
-        encoder_->SetProperty(AMF_VIDEO_ENCODER_TARGET_BITRATE, static_cast<amf_int64>(kbps * 1000));
-        encoder_->SetProperty(AMF_VIDEO_ENCODER_PEAK_BITRATE, static_cast<amf_int64>(kbps * 1000));
+        const uint32_t fps = config_.fps > 0 ? config_.fps : 60;
+        const amf_int64 bitrate_bps = static_cast<amf_int64>(kbps * 1000);
+        const amf_int64 vbv_bits = std::max<amf_int64>(1, bitrate_bps / static_cast<amf_int64>(fps));
+        const AMF_RESULT target_res =
+            encoder_->SetProperty(AMF_VIDEO_ENCODER_TARGET_BITRATE, bitrate_bps);
+        const AMF_RESULT peak_res =
+            encoder_->SetProperty(AMF_VIDEO_ENCODER_PEAK_BITRATE, bitrate_bps);
+        const AMF_RESULT vbv_res =
+            encoder_->SetProperty(AMF_VIDEO_ENCODER_VBV_BUFFER_SIZE, vbv_bits);
+        if (target_res != AMF_OK || peak_res != AMF_OK || vbv_res != AMF_OK) {
+            MELLO_LOG_ERROR(TAG,
+                "AMF: bitrate reconfigure rejected (target=%d peak=%d vbv=%d kbps=%u)",
+                target_res, peak_res, vbv_res, kbps);
+        } else {
+            force_idr_ = true;
+            MELLO_LOG_DEBUG(TAG, "AMF: reconfigured bitrate=%ukbps vbv=%lld forceIDR=1",
+                kbps, static_cast<long long>(vbv_bits));
+        }
     }
     config_.bitrate_kbps = kbps;
 }
