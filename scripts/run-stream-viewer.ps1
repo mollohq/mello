@@ -1,24 +1,24 @@
 #!/usr/bin/env pwsh
 
 param(
-    [string]$NakamaHttpBase = $env:MELLO_NAKAMA_HTTP_BASE,
-    [string]$NakamaAuthToken = $env:MELLO_NAKAMA_AUTH_TOKEN,
+    [switch]$Remote,
+    [string]$NakamaHttpBase,
+    [string]$ServerKey,
+    [string]$NakamaAuthToken,
     [string]$Session = "auto",
     [string]$HostLog = "C:\temp\host.log",
     [string]$ViewerLog = "C:\temp\viewer.log",
     [string]$Role = "viewer",
     [int]$Width = 0,
     [int]$Height = 0,
-    [bool]$NativeMetrics = $true
+    [bool]$NativeMetrics = $false,
+    [int]$HoldSec = 0,
+    [switch]$RefreshAuth
 )
 
 $ErrorActionPreference = "Stop"
 
-function Assert-Required([string]$Name, [string]$Value) {
-    if ([string]::IsNullOrWhiteSpace($Value)) {
-        throw "Missing required value for $Name. Provide -$Name or set matching env var."
-    }
-}
+. (Join-Path $PSScriptRoot "stream-probe-common.ps1")
 
 function Get-LatestSessionFromHostLog([string]$Path) {
     if (-not (Test-Path $Path)) {
@@ -33,8 +33,12 @@ function Get-LatestSessionFromHostLog([string]$Path) {
     return $matches[-1].Matches[0].Groups[1].Value
 }
 
-Assert-Required "NakamaHttpBase" $NakamaHttpBase
-Assert-Required "NakamaAuthToken" $NakamaAuthToken
+$ctx = Initialize-StreamProbeViewerContext `
+    -Remote:$Remote `
+    -NakamaHttpBase $NakamaHttpBase `
+    -ServerKey $ServerKey `
+    -AuthToken $NakamaAuthToken `
+    -RefreshAuth:$RefreshAuth
 
 if ($Session -eq "auto") {
     $detectedSession = Get-LatestSessionFromHostLog -Path $HostLog
@@ -55,8 +59,8 @@ try {
     $cargoArgs = @(
         "run", "--release", "-p", "sfu-stream-viewer-probe", "--",
         "--watch-stream-print",
-        "--nakama-http-base", $NakamaHttpBase,
-        "--nakama-auth-token", $NakamaAuthToken,
+        "--nakama-http-base", $ctx.NakamaHttpBase,
+        "--nakama-auth-token", $ctx.AuthToken,
         "--session", $Session,
         "--role", $Role
     )
@@ -70,9 +74,13 @@ try {
     if ($NativeMetrics) {
         $cargoArgs += "--native-metrics"
     }
+    if ($HoldSec -gt 0) {
+        $cargoArgs += @("--hold-sec", $HoldSec)
+    }
 
     Write-Host ""
     Write-Host "Starting stream viewer probe..." -ForegroundColor Cyan
+    Write-Host "Profile:   $($ctx.ProfileName)" -ForegroundColor DarkGray
     Write-Host "Session:   $Session" -ForegroundColor DarkGray
     Write-Host "Viewer log: $ViewerLog" -ForegroundColor DarkGray
     Write-Host ""

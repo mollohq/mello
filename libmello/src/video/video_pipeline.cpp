@@ -483,7 +483,7 @@ bool VideoPipeline::start_viewer(const PipelineConfig& config, FrameCallback on_
     viewer_running_    = true;
     viewer_start_time_ = now_us();
     frames_decoded_    = 0;
-    frames_dropped_    = 0;
+    decode_errors_     = 0;
     last_present_us_   = 0;
     jitter_primed_     = false;
 
@@ -504,8 +504,8 @@ void VideoPipeline::stop_viewer() {
 
     uint64_t uptime_s = (now_us() - viewer_start_time_) / 1'000'000;
 
-    MELLO_LOG_INFO(TAG, "Viewer pipeline stopped: uptime=%llus frames_decoded=%llu frames_dropped=%llu",
-        uptime_s, frames_decoded_, frames_dropped_);
+    MELLO_LOG_INFO(TAG, "Viewer pipeline stopped: uptime=%llus frames_decoded=%llu decode_errors=%llu",
+        uptime_s, frames_decoded_, decode_errors_);
 
     if (decoder_) decoder_->shutdown();
 #ifdef _WIN32
@@ -532,44 +532,44 @@ void VideoPipeline::stop_viewer() {
 bool VideoPipeline::feed_packet(const uint8_t* data, size_t size, bool is_keyframe) {
     if (!viewer_running_.load() || !decoder_) return false;
 
+    DecodeFeedResult result = decoder_->decode(data, size, is_keyframe);
+    if (result == DecodeFeedResult::Error) {
+        decode_errors_++;
+        return false;
+    }
+    if (result == DecodeFeedResult::Accepted) return true;
+
 #ifdef _WIN32
-    if (!decoder_->decode(data, size, is_keyframe)) {
-        frames_dropped_++;
-        return false;
-    }
-
     ID3D11Texture2D* decoded = decoder_->get_frame();
-    if (decoded) push_decoded(decoded);
-
-    frames_decoded_++;
-
-    if (frames_decoded_ % 300 == 0) {
-        uint64_t uptime_s = (now_us() - viewer_start_time_) / 1'000'000;
-        MELLO_LOG_INFO(TAG, "viewer: uptime=%llus decoded=%llu dropped=%llu dec=%s ring=%zu",
-            uptime_s, frames_decoded_, frames_dropped_, decoder_->name(), decode_queue_depth());
-    }
-#elif defined(__APPLE__)
-    if (!decoder_->decode(data, size, is_keyframe)) {
-        frames_dropped_++;
+    if (!decoded) {
+        MELLO_LOG_ERROR(TAG, "Decoder %s reported a frame without a texture", decoder_->name());
+        decode_errors_++;
         return false;
     }
 
+    push_decoded(decoded);
+#elif defined(__APPLE__)
     void* decoded = decoder_->get_frame_buffer();
-    if (decoded) {
-        CVPixelBufferRetain((CVPixelBufferRef)decoded);
-        push_decoded(decoded);
+    if (!decoded) {
+        MELLO_LOG_ERROR(TAG, "Decoder %s reported a frame without a pixel buffer", decoder_->name());
+        decode_errors_++;
+        return false;
     }
 
-    frames_decoded_++;
-
-    if (frames_decoded_ % 300 == 0) {
-        uint64_t uptime_s = (now_us() - viewer_start_time_) / 1'000'000;
-        MELLO_LOG_INFO(TAG, "viewer: uptime=%llus decoded=%llu dropped=%llu dec=%s ring=%zu",
-            uptime_s, frames_decoded_, frames_dropped_, decoder_->name(), decode_queue_depth());
-    }
+    CVPixelBufferRetain((CVPixelBufferRef)decoded);
+    push_decoded(decoded);
 #else
     (void)data; (void)size; (void)is_keyframe;
+    return false;
 #endif
+
+    frames_decoded_++;
+
+    if (frames_decoded_ % 300 == 0) {
+        uint64_t uptime_s = (now_us() - viewer_start_time_) / 1'000'000;
+        MELLO_LOG_INFO(TAG, "viewer: uptime=%llus decoded=%llu decode_errors=%llu dec=%s ring=%zu",
+            uptime_s, frames_decoded_, decode_errors_, decoder_->name(), decode_queue_depth());
+    }
 
     return true;
 }

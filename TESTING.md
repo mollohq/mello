@@ -20,7 +20,11 @@ then jump to the section you need.
 | `dev_fault` RPC | Backend fault injection | Yes (live Nakama) | No (manual/integration) | RPC call, gated by `MELLO_ENABLE_DEV_FAULT=1` |
 | SFU `go test` | SFU server | No | ⚠️ not wired (run locally) | `cd mello-sfu && go test ./...` |
 | `voice-soak` | SFU load/churn/resilience | Yes (live SFU) | No (manual/integration) | `go run ./tools/voice-soak ...` |
-| `stream-soak` | SFU stream relay | Yes (live SFU) | No (manual/integration) | `go run ./tools/stream-soak ...` |
+| `stream-soak` | SFU H.264 RTP stream relay | Yes (live SFU) | No (manual/integration) | `go run ./tools/stream-soak ...` |
+| Stream certification | SFU soak + LAN client gates | Yes (local Nakama + SFU) | No (manual) | `scripts/run-stream-certification.ps1` |
+| `stream-host` probe | Client host RTP path + telemetry | Yes (live Nakama + SFU) | No (manual) | `scripts/run-stream-host.ps1` |
+| `sfu-stream-viewer-probe` | Client viewer RTP path + telemetry | Yes (live Nakama + SFU) | No (manual) | `scripts/run-stream-viewer.ps1` |
+| `mello_rtp_tests` | Native RTP AU send/receive + P2P roles | No | No (manual) | `scripts/run-p2p-stream-probe.ps1` |
 | `voice-test-client` (GUI) | Client DSP A/B | Yes (live backend) | No (manual) | `cargo run` in `tools/voice-test-client` |
 | `voice-test-client` (headless) | Client reconnect/resync E2E | Yes (live backend) | 🔧 integration job | `cargo run -- --scenario scenarios/<f>.json` |
 | `scripts/voice/voice-local-gate.sh` | Cross-repo local RED/GREEN gate + artifacts | Yes (local Nakama + SFU) | 🔧 integration job | `../scripts/voice/voice-local-gate.sh` |
@@ -95,6 +99,14 @@ cd libmello
 cmake -B build -S .          # first time / after CMake changes
 cmake --build build
 ctest --test-dir build --output-on-failure
+```
+
+RTP transport (sender, receiver, P2P peer roles) — release gate for stream PRs:
+
+```powershell
+cmake --build libmello/build --config Release --target mello_rtp_tests
+libmello/build/tests/Release/mello_rtp_tests.exe
+# or: .\scripts\run-p2p-stream-probe.ps1
 ```
 
 Run when you touch anything under `libmello/src/audio/` or `libmello/src/video/`
@@ -200,11 +212,70 @@ Resilience flags added for the robustness work:
 - `--idle-resume-ms` — idle (no RTP) for a while after connect, then resume
   sending RTP (requires `--negotiate-webrtc`).
 
-### `stream-soak` — stream relay / impairment matrix
+### `stream-soak` — SFU RTP stream relay / impairment matrix
 
-Same idea for the stream path (1 host + N viewers, DataChannel media). Profiles:
-`goodNetwork`, `typicalHome`, `roughHome`. See `mello-sfu/README.md` and
-`tools/stream-soak/run-1080-gate.sh`.
+Synthetic **H.264 RTP** host + N viewers against a live SFU (`transport=rtp` in output). Negotiates WebRTC (offer/answer + ICE + control DC + RTP video track). Profiles: `goodNetwork`, `typicalHome`, `roughHome`.
+
+```bash
+SFU_ADMIN_PASSWORD=devpass \
+go run ./tools/stream-soak \
+  --endpoint ws://127.0.0.1:8443/ws \
+  --admin-password devpass \
+  --viewers 12 \
+  --hold-ms 15000 \
+  --packets-per-frame 3 \
+  --profile-matrix goodNetwork,typicalHome
+```
+
+Single custom scenario (no matrix):
+
+```bash
+SFU_ADMIN_PASSWORD=devpass \
+go run ./tools/stream-soak \
+  --endpoint ws://127.0.0.1:8443/ws \
+  --admin-password devpass \
+  --viewers 12 \
+  --profile-matrix "" \
+  --sim-drop-pct 0.02 \
+  --sim-jitter-ms 12 \
+  --min-rx-ratio 0.90 \
+  --max-p95-ms 220
+```
+
+1080-style gate campaign: `./tools/stream-soak/run-1080-gate.sh` (see `mello-sfu/README.md`). Output includes `admin_rtp_*` counters for fan-out verification.
+
+### Stream probes (`stream-host` + `sfu-stream-viewer-probe`)
+
+End-to-end client RTP path through Nakama + SFU. Requires env: `MELLO_NAKAMA_HTTP_BASE`, `MELLO_NAKAMA_AUTH_TOKEN`, `MELLO_CREW_ID`.
+
+Host (SFU RTP via Nakama `start_stream` — default path):
+
+```powershell
+./scripts/run-stream-host.ps1 -CrewId "<crew-id>"
+# logs: host_probe_tick ... tx_aus_sent tx_rtp_packets tx_remb
+```
+
+Legacy UDP chunked mode is diagnostic-only: pass `--legacy-udp-chunks` to `stream-host` / `stream-viewer` binaries directly (not used by the probe scripts).
+
+Viewer (auto-detects session from host log):
+
+```powershell
+./scripts/run-stream-viewer.ps1
+# visual: minifb window (default)
+./scripts/run-stream-viewer.ps1 -NativeMetrics $true
+# headless: viewer_probe_tick + viewer_probe_native_rtp lines only
+```
+
+Merge timelines:
+
+```bash
+python scripts/coalesce_stream_timeline.py \
+  --session auto \
+  --host-log C:\temp\host.log \
+  --viewer-log C:\temp\viewer.log
+```
+
+Run automated Slice 9 gates with `.\scripts\run-stream-certification.ps1` (requires local Nakama + SFU, Heaven benchmark visible for LAN visual). Set `SFU_ADMIN_PASSWORD` when the SFU admin API is protected. Loss/WAN and product-client gates remain manual.
 
 ---
 
@@ -360,7 +431,7 @@ For AI-driven UI exploration in dev, `client-dev.sh` enables Slint 1.17 MCP
   `dev_fault` (`drop_next_push` / `ghost_member`) to prove self-healing.
 - **SFU capacity / churn / sleep-wake zombies:** `voice-soak` (+ `--half-open`,
   `--reuse-user-id`, `--idle-resume-ms`).
-- **Stream relay quality:** `stream-soak` profiles / 1080 gate.
+- **Stream relay quality:** `stream-soak` RTP profiles / 1080 gate; client probes for visual + `host_probe_tick` / `viewer_probe_native_rtp` logs.
 - **Audio DSP quality (A/B, NS modes, MOS):** `voice-test-client` GUI.
 - **Client CPU/RSS regression (after perf-sensitive changes):** `perf-harness` /
   `./scripts/perf/run.sh`.

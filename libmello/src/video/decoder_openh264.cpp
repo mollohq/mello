@@ -163,9 +163,9 @@ void OpenH264Decoder::shutdown() {
     nv12_buf_.clear();
 }
 
-bool OpenH264Decoder::decode(const uint8_t* data, size_t size, bool is_keyframe) {
+DecodeFeedResult OpenH264Decoder::decode(const uint8_t* data, size_t size, bool is_keyframe) {
     (void)is_keyframe;
-    if (!decoder_) return false;
+    if (!decoder_) return DecodeFeedResult::Error;
 
     unsigned char* yuv[3] = { nullptr, nullptr, nullptr };
     SBufferInfo buf_info{};
@@ -174,7 +174,15 @@ bool OpenH264Decoder::decode(const uint8_t* data, size_t size, bool is_keyframe)
     int rv = decoder_->pVtbl->DecodeFrameNoDelay(
         decoder_, data, static_cast<int>(size), yuv, &buf_info);
 
-    if (rv != 0 || buf_info.iBufferStatus != 1) return false;
+    if (rv != dsErrorFree) {
+        MELLO_LOG_ERROR(TAG, "OpenH264: DecodeFrameNoDelay failed: state=0x%X", rv);
+        return DecodeFeedResult::Error;
+    }
+    if (buf_info.iBufferStatus == 0) return DecodeFeedResult::Accepted;
+    if (buf_info.iBufferStatus != 1 || !yuv[0] || !yuv[1] || !yuv[2]) {
+        MELLO_LOG_ERROR(TAG, "OpenH264: invalid decoded frame status=%d", buf_info.iBufferStatus);
+        return DecodeFeedResult::Error;
+    }
 
     uint32_t w = config_.width;
     uint32_t h = config_.height;
@@ -208,7 +216,7 @@ bool OpenH264Decoder::decode(const uint8_t* data, size_t size, bool is_keyframe)
         nv12_buf_.data(), w,
         static_cast<UINT>(nv12_buf_.size()));
 
-    return true;
+    return DecodeFeedResult::FrameReady;
 }
 
 ID3D11Texture2D* OpenH264Decoder::get_frame() {

@@ -123,6 +123,13 @@ fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
     let args: Vec<String> = std::env::args().collect();
+    if !args.iter().any(|a| a == "--legacy-udp-chunks") {
+        eprintln!(
+            "ERROR: legacy UDP chunked video viewer removed from default probes. \
+Pass --legacy-udp-chunks for diagnostics, or use sfu-stream-viewer-probe for RTP."
+        );
+        std::process::exit(1);
+    }
     let port: u16 = parse_arg(&args, "--port").unwrap_or(DEFAULT_PORT);
     let native_metrics = args.iter().any(|a| a == "--native-metrics");
 

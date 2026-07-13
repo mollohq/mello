@@ -268,15 +268,19 @@ void NvdecDecoder::shutdown() {
     sequence_callback_count_ = 0;
 }
 
-bool NvdecDecoder::decode(const uint8_t* data, size_t size, bool is_keyframe) {
-    if (!parser_) return false;
-    (void)is_keyframe;
-
+DecodeFeedResult NvdecDecoder::decode(const uint8_t* data, size_t size, bool is_keyframe) {
     frame_ready_ = false;
+    if (!parser_) return DecodeFeedResult::Error;
+    (void)is_keyframe;
 
     // CUDA context must be current on the calling thread for decode callbacks
     // (cuvidCreateDecoder, cuvidDecodePicture, cuvidMapVideoFrame64).
-    if (cuCtxPush_ && cu_context_) cuCtxPush_(cu_context_);
+    bool context_pushed = false;
+    if (cuCtxPush_ && cu_context_ && cuCtxPush_(cu_context_) != CUDA_SUCCESS) {
+        MELLO_LOG_ERROR(TAG, "NVDEC: cuCtxPushCurrent failed");
+        return DecodeFeedResult::Error;
+    }
+    context_pushed = cuCtxPush_ && cu_context_;
 
     CUVIDSOURCEDATAPACKET packet{};
     packet.payload      = data;
@@ -287,20 +291,28 @@ bool NvdecDecoder::decode(const uint8_t* data, size_t size, bool is_keyframe) {
     auto cuvidParseVideoData_fn = reinterpret_cast<decltype(&cuvidParseVideoData)>(
         GetProcAddress(cuvid_dll_, "cuvidParseVideoData"));
     if (!cuvidParseVideoData_fn) {
-        if (cuCtxPop_ && cu_context_) { void* dummy = nullptr; cuCtxPop_(&dummy); }
-        return false;
+        if (context_pushed && cuCtxPop_) { void* dummy = nullptr; cuCtxPop_(&dummy); }
+        return DecodeFeedResult::Error;
     }
 
     CUresult res = cuvidParseVideoData_fn(parser_, &packet);
 
-    if (cuCtxPop_ && cu_context_) { void* dummy = nullptr; cuCtxPop_(&dummy); }
+    int pop_result = CUDA_SUCCESS;
+    if (context_pushed && cuCtxPop_) {
+        void* dummy = nullptr;
+        pop_result = cuCtxPop_(&dummy);
+    }
 
     if (res != CUDA_SUCCESS) {
         MELLO_LOG_ERROR(TAG, "NVDEC: cuvidParseVideoData failed: %d", res);
-        return false;
+        return DecodeFeedResult::Error;
+    }
+    if (pop_result != CUDA_SUCCESS) {
+        MELLO_LOG_ERROR(TAG, "NVDEC: cuCtxPopCurrent failed: %d", pop_result);
+        return DecodeFeedResult::Error;
     }
 
-    return frame_ready_;
+    return frame_ready_ ? DecodeFeedResult::FrameReady : DecodeFeedResult::Accepted;
 }
 
 int CUDAAPI NvdecDecoder::handle_video_sequence(void* user, CUVIDEOFORMAT* fmt) {
@@ -358,14 +370,14 @@ int CUDAAPI NvdecDecoder::handle_video_sequence(void* user, CUVIDEOFORMAT* fmt) 
 
     auto cuvidCreateDecoder_fn = reinterpret_cast<decltype(&cuvidCreateDecoder)>(
         GetProcAddress(self->cuvid_dll_, "cuvidCreateDecoder"));
-    if (cuvidCreateDecoder_fn) {
-        CUresult rc = cuvidCreateDecoder_fn(&self->decoder_, &create_info);
-        if (rc != CUDA_SUCCESS) {
-            MELLO_LOG_ERROR(TAG, "NVDEC: cuvidCreateDecoder failed: %d (coded=%ux%u)",
-                rc, fmt->coded_width, fmt->coded_height);
-            self->decoder_ = nullptr;
-            return 0;
-        }
+    if (!cuvidCreateDecoder_fn) return 0;
+
+    CUresult rc = cuvidCreateDecoder_fn(&self->decoder_, &create_info);
+    if (rc != CUDA_SUCCESS) {
+        MELLO_LOG_ERROR(TAG, "NVDEC: cuvidCreateDecoder failed: %d (coded=%ux%u)",
+            rc, fmt->coded_width, fmt->coded_height);
+        self->decoder_ = nullptr;
+        return 0;
     }
     self->decoder_coded_width_ = fmt->coded_width;
     self->decoder_coded_height_ = fmt->coded_height;
@@ -381,8 +393,12 @@ int CUDAAPI NvdecDecoder::handle_picture_decode(void* user, CUVIDPICPARAMS* pic)
 
     auto cuvidDecodePicture_fn = reinterpret_cast<decltype(&cuvidDecodePicture)>(
         GetProcAddress(self->cuvid_dll_, "cuvidDecodePicture"));
-    if (cuvidDecodePicture_fn) {
-        cuvidDecodePicture_fn(self->decoder_, pic);
+    if (!cuvidDecodePicture_fn) return 0;
+
+    CUresult res = cuvidDecodePicture_fn(self->decoder_, pic);
+    if (res != CUDA_SUCCESS) {
+        MELLO_LOG_ERROR(TAG, "NVDEC: cuvidDecodePicture failed: %d", res);
+        return 0;
     }
     return 1;
 }
@@ -411,6 +427,7 @@ int CUDAAPI NvdecDecoder::handle_picture_display(void* user, CUVIDPARSERDISPINFO
 
     uint32_t w = self->config_.width;
     uint32_t h = self->coded_height_; // macroblock-aligned height (UV plane offset)
+    bool copied = false;
 
     if (self->use_interop_) {
         auto cuGfxMap = reinterpret_cast<CuGfxMapResources_t>(
@@ -422,41 +439,44 @@ int CUDAAPI NvdecDecoder::handle_picture_display(void* user, CUVIDPARSERDISPINFO
         auto cuMemcpy2D_fn = reinterpret_cast<CuMemcpy2D_t>(
             GetProcAddress(self->cuda_dll_, "cuMemcpy2D_v2"));
 
-        if (cuGfxMap && cuGfxUnmap && cuGfxGetArray && cuMemcpy2D_fn) {
+        if (!cuGfxMap || !cuGfxUnmap || !cuGfxGetArray || !cuMemcpy2D_fn) {
+            MELLO_LOG_ERROR(TAG, "NVDEC: CUDA-D3D11 interop entry point missing");
+        } else {
             int rc_map = cuGfxMap(1, &self->cuda_gfx_resource_, nullptr);
             if (rc_map != 0) {
                 MELLO_LOG_ERROR(TAG, "cuGraphicsMapResources failed: %d", rc_map);
-            }
+            } else {
+                void* array = nullptr;
+                int rc_arr = cuGfxGetArray(&array, self->cuda_gfx_resource_, 0, 0);
+                if (rc_arr != 0 || !array) {
+                    MELLO_LOG_ERROR(TAG, "cuGraphicsSubResourceGetMappedArray failed: rc=%d array=%p", rc_arr, array);
+                } else {
+                    uint32_t copy_w = (w <= pitch) ? w : pitch;
+                    CudaMemcpy2D cp{};
+                    cp.srcMemoryType = 2; // CU_MEMORYTYPE_DEVICE
+                    cp.srcDevice     = dev_ptr;
+                    cp.srcPitch      = pitch;
+                    cp.dstMemoryType = 3; // CU_MEMORYTYPE_ARRAY
+                    cp.dstArray      = array;
+                    cp.WidthInBytes  = copy_w;
+                    cp.Height        = h + h / 2;
+                    int rc_cpy = cuMemcpy2D_fn(&cp);
+                    if (rc_cpy != 0) {
+                        MELLO_LOG_ERROR(TAG, "cuMemcpy2D failed: %d (copy_w=%u h=%u pitch=%u w=%u dev=0x%llX)",
+                            rc_cpy, copy_w, h + h / 2, pitch, w, dev_ptr);
+                    } else {
+                        copied = true;
+                    }
+                }
 
-            void* array = nullptr;
-            int rc_arr = cuGfxGetArray(&array, self->cuda_gfx_resource_, 0, 0);
-            if (rc_arr != 0 || !array) {
-                MELLO_LOG_ERROR(TAG, "cuGraphicsSubResourceGetMappedArray failed: rc=%d array=%p", rc_arr, array);
-            }
-
-            if (array) {
-                uint32_t copy_w = (w <= pitch) ? w : pitch;
-                CudaMemcpy2D cp{};
-                cp.srcMemoryType = 2; // CU_MEMORYTYPE_DEVICE
-                cp.srcDevice     = dev_ptr;
-                cp.srcPitch      = pitch;
-                cp.dstMemoryType = 3; // CU_MEMORYTYPE_ARRAY
-                cp.dstArray      = array;
-                cp.WidthInBytes  = copy_w;
-                cp.Height        = h + h / 2;
-                int rc_cpy = cuMemcpy2D_fn(&cp);
-                if (rc_cpy != 0) {
-                    MELLO_LOG_ERROR(TAG, "cuMemcpy2D failed: %d (copy_w=%u h=%u pitch=%u w=%u dev=0x%llX)",
-                        rc_cpy, copy_w, h + h / 2, pitch, w, dev_ptr);
+                int rc_unmap = cuGfxUnmap(1, &self->cuda_gfx_resource_, nullptr);
+                if (rc_unmap != 0) {
+                    MELLO_LOG_ERROR(TAG, "cuGraphicsUnmapResources failed: %d", rc_unmap);
+                    copied = false;
                 }
             }
 
-            int rc_unmap = cuGfxUnmap(1, &self->cuda_gfx_resource_, nullptr);
-            if (rc_unmap != 0) {
-                MELLO_LOG_ERROR(TAG, "cuGraphicsUnmapResources failed: %d", rc_unmap);
-            }
-
-            if (self->shared_frame_tex_) {
+            if (copied && self->shared_frame_tex_) {
                 self->context_->CopyResource(self->shared_frame_tex_.Get(), self->frame_tex_.Get());
             }
         }
@@ -475,15 +495,26 @@ int CUDAAPI NvdecDecoder::handle_picture_display(void* user, CUVIDPARSERDISPINFO
             cp.dstPitch      = w;
             cp.WidthInBytes  = copy_w;
             cp.Height        = h + h / 2;
-            cuMemcpy2D_fn(&cp);
-
-            self->context_->UpdateSubresource(
-                self->frame_tex_.Get(), 0, nullptr,
-                self->nv12_buf_.data(), w, 0);
+            int rc_cpy = cuMemcpy2D_fn(&cp);
+            if (rc_cpy != 0) {
+                MELLO_LOG_ERROR(TAG, "NVDEC: CUDA-to-host copy failed: %d", rc_cpy);
+            } else {
+                self->context_->UpdateSubresource(
+                    self->frame_tex_.Get(), 0, nullptr,
+                    self->nv12_buf_.data(), w, 0);
+                copied = true;
+            }
+        } else {
+            MELLO_LOG_ERROR(TAG, "NVDEC: cuMemcpy2D entry point missing");
         }
     }
 
-    cuvidUnmapVideoFrame_fn(self->decoder_, dev_ptr);
+    if (cuvidUnmapVideoFrame_fn(self->decoder_, dev_ptr) != CUDA_SUCCESS) {
+        MELLO_LOG_ERROR(TAG, "NVDEC: cuvidUnmapVideoFrame failed");
+        return 0;
+    }
+    if (!copied) return 0;
+
     self->frame_ready_ = true;
     return 1;
 }

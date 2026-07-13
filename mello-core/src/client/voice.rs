@@ -52,6 +52,7 @@ impl super::Client {
                 purpose: SignalPurpose::Voice,
                 stream_width: None,
                 stream_height: None,
+                stream_bitrate_kbps: None,
                 message: signal,
             };
             let payload = match serde_json::to_string(&envelope) {

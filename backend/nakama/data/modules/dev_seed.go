@@ -62,6 +62,14 @@ func DevSeedStateRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk 
 		return "", runtime.NewError("not all seed crews found — run seed.sh first", 9)
 	}
 
+	if sfuAuthEnabled() {
+		adminID := users["alice"].id
+		for crewName, crewID := range crewIDs {
+			enableSfuForCrew(ctx, nk, logger, adminID, crewID)
+			logger.Info("dev_seed: sfu_enabled for crew %s", crewName)
+		}
+	}
+
 	now := time.Now().UTC().Format(time.RFC3339)
 
 	// ── 1. presence ─────────────────────────────────────────────────

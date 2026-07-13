@@ -10,7 +10,9 @@ This directory contains the technical specifications for Mello.
 - `05-GETTING-STARTED.md` - Development setup guide
 - `10-AUDIO_PIPELINE.md` - End-to-end voice/audio pipeline and SFU voice lifecycle
 - `11-PRESENCE-CREW-STATE.md` - Presence, crew state, real-time push
+- `12-STREAMING.md` - Canonical H.264 RTP streaming architecture and release contract
 - `13-VOICE-CHANNELS.md` - Multi-channel voice within a crew
+- `14-VIDEO-PIPELINE.md` - Native capture, encode/decode, and GPU presentation details
 - `15-DEBUG-TELEMETRY.md` - Debug logging, telemetry, on-demand diagnostic capture
 - `features/SFU-INTEGRATION.md` - Client/backend integration with the SFU
 - `EXTERNAL-SFU.md` - Bring-your-own / self-hosted SFU

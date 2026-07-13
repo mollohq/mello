@@ -1,79 +1,138 @@
-use std::sync::Arc;
-
 use async_trait::async_trait;
 
 use super::error::StreamError;
 use super::pacer::PacingTelemetry;
-use super::packet::StreamPacket;
 
-/// Topology-agnostic packet sink. The stream manager sends encoded packets
-/// through this trait — it doesn't know whether they go to P2P peers or an SFU.
-#[async_trait]
-pub trait PacketSink: Send + Sync {
-    async fn send_video(&self, packet: &StreamPacket) -> Result<(), StreamError>;
-    async fn send_audio(&self, packet: &StreamPacket) -> Result<(), StreamError>;
-    async fn send_control(&self, packet: &StreamPacket) -> Result<(), StreamError>;
-    async fn set_pacing_kbps(&self, target_kbps: u32);
-    async fn pacing_telemetry(&self) -> Option<PacingTelemetry>;
-
-    /// Called when a new viewer joins mid-session (triggers keyframe request).
-    async fn on_viewer_joined(&self, viewer_id: &str);
-
-    /// Called when a viewer leaves.
-    async fn on_viewer_left(&self, viewer_id: &str);
+/// Host-side viewer feedback from native RTP (PLI, REMB, local IDR needed).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SinkVideoFeedbackKind {
+    Pli,
+    Remb { bitrate_bps: u32 },
+    LocalIdrNeeded,
 }
 
-/// Sends packets through both an SFU relay and direct P2P fanout.
-/// The SFU path is fire-and-forget; P2P errors are also ignored so one
-/// failing path doesn't stall the other.
-pub struct DualSink {
-    pub primary: Arc<dyn PacketSink>,
-    pub secondary: Arc<dyn PacketSink>,
+/// One polled feedback event with viewer identity preserved by the sink topology.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SinkVideoFeedback {
+    pub viewer_id: String,
+    pub kind: SinkVideoFeedbackKind,
 }
 
-#[async_trait]
-impl PacketSink for DualSink {
-    async fn send_video(&self, packet: &StreamPacket) -> Result<(), StreamError> {
-        let _ = self.primary.send_video(packet).await;
-        let _ = self.secondary.send_video(packet).await;
-        Ok(())
-    }
+/// Aggregated native RTP egress stats across sink peers.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NativeRtpTelemetry {
+    pub target_kbps: u32,
+    pub tx_access_units_sent: u64,
+    pub tx_access_units_dropped: u64,
+    pub tx_bytes_sent: u64,
+}
 
-    async fn send_audio(&self, packet: &StreamPacket) -> Result<(), StreamError> {
-        let _ = self.primary.send_audio(packet).await;
-        let _ = self.secondary.send_audio(packet).await;
-        Ok(())
-    }
-
-    async fn send_control(&self, packet: &StreamPacket) -> Result<(), StreamError> {
-        let _ = self.primary.send_control(packet).await;
-        let _ = self.secondary.send_control(packet).await;
-        Ok(())
-    }
-
-    async fn set_pacing_kbps(&self, target_kbps: u32) {
-        self.primary.set_pacing_kbps(target_kbps).await;
-        self.secondary.set_pacing_kbps(target_kbps).await;
-    }
-
-    async fn pacing_telemetry(&self) -> Option<PacingTelemetry> {
-        let p = self.primary.pacing_telemetry().await;
-        let s = self.secondary.pacing_telemetry().await;
-        match (p, s) {
-            (Some(a), Some(b)) => Some(a.aggregate(b)),
-            (Some(a), None) => Some(a),
-            (None, Some(b)) => Some(b),
-            (None, None) => None,
+impl NativeRtpTelemetry {
+    /// Map into the legacy pacing telemetry shape still consumed by streaming.rs.
+    pub fn to_pacing_telemetry(self) -> PacingTelemetry {
+        PacingTelemetry {
+            target_kbps: self.target_kbps,
+            paced_bytes: self.tx_bytes_sent,
+            sleep_count: 0,
+            sleep_ms_total: 0,
         }
     }
 
-    async fn on_viewer_joined(&self, viewer_id: &str) {
-        self.primary.on_viewer_joined(viewer_id).await;
-        self.secondary.on_viewer_joined(viewer_id).await;
+    pub(crate) fn aggregate(self, other: Self) -> Self {
+        Self {
+            target_kbps: self.target_kbps.max(other.target_kbps),
+            tx_access_units_sent: self
+                .tx_access_units_sent
+                .saturating_add(other.tx_access_units_sent),
+            tx_access_units_dropped: self
+                .tx_access_units_dropped
+                .saturating_add(other.tx_access_units_dropped),
+            tx_bytes_sent: self.tx_bytes_sent.saturating_add(other.tx_bytes_sent),
+        }
+    }
+}
+
+/// Topology-agnostic packet sink. The stream manager sends encoded Annex-B access
+/// units through this trait — it doesn't know whether they go to P2P peers or an SFU.
+#[async_trait]
+pub trait PacketSink: Send + Sync {
+    /// Send one complete encoded Annex-B access unit with its capture timestamp.
+    async fn send_video(
+        &self,
+        annex_b: &[u8],
+        capture_timestamp_us: u64,
+        is_keyframe: bool,
+    ) -> Result<(), StreamError>;
+
+    /// Stream game-audio transport is stubbed — account only, no wire send.
+    async fn send_audio_stub(&self, byte_len: usize);
+
+    /// Propagate the pacing target to each native RTP sender (bits/sec internally).
+    async fn set_pacing_kbps(&self, target_kbps: u32);
+
+    /// Aggregated native RTP egress stats for telemetry.
+    async fn native_rtp_telemetry(&self) -> Option<NativeRtpTelemetry>;
+
+    /// Legacy pacing telemetry adapter for existing host debug events.
+    async fn pacing_telemetry(&self) -> Option<PacingTelemetry> {
+        self.native_rtp_telemetry()
+            .await
+            .map(NativeRtpTelemetry::to_pacing_telemetry)
     }
 
-    async fn on_viewer_left(&self, viewer_id: &str) {
-        self.primary.on_viewer_left(viewer_id).await;
-        self.secondary.on_viewer_left(viewer_id).await;
+    /// Poll one queued native video feedback event, if any.
+    async fn poll_video_feedback(&self) -> Option<SinkVideoFeedback>;
+
+    /// Drain one viewer-join notification queued by the sink (e.g. P2P add_viewer).
+    async fn poll_viewer_joined(&self) -> Option<String>;
+
+    /// Drain one viewer-leave notification queued by the sink (e.g. P2P remove_viewer).
+    async fn poll_viewer_left(&self) -> Option<String>;
+
+    /// Called when a new viewer joins mid-session.
+    async fn on_viewer_joined(&self, viewer_id: &str);
+
+    /// Called when a viewer leaves; drops per-viewer feedback state.
+    async fn on_viewer_left(&self, viewer_id: &str);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn native_rtp_telemetry_maps_to_pacing_telemetry() {
+        let native = NativeRtpTelemetry {
+            target_kbps: 6_000,
+            tx_access_units_sent: 120,
+            tx_access_units_dropped: 2,
+            tx_bytes_sent: 900_000,
+        };
+        let pacing = native.to_pacing_telemetry();
+        assert_eq!(pacing.target_kbps, 6_000);
+        assert_eq!(pacing.paced_bytes, 900_000);
+        assert_eq!(pacing.sleep_count, 0);
+        assert_eq!(pacing.sleep_ms_total, 0);
+    }
+
+    #[test]
+    fn native_rtp_telemetry_aggregate_keeps_max_target_and_sums_traffic() {
+        let a = NativeRtpTelemetry {
+            target_kbps: 2_000,
+            tx_access_units_sent: 10,
+            tx_access_units_dropped: 1,
+            tx_bytes_sent: 50_000,
+        };
+        let b = NativeRtpTelemetry {
+            target_kbps: 3_000,
+            tx_access_units_sent: 20,
+            tx_access_units_dropped: 2,
+            tx_bytes_sent: 70_000,
+        };
+        let agg = a.aggregate(b);
+        assert_eq!(agg.target_kbps, 3_000);
+        assert_eq!(agg.tx_access_units_sent, 30);
+        assert_eq!(agg.tx_access_units_dropped, 3);
+        assert_eq!(agg.tx_bytes_sent, 120_000);
     }
 }

@@ -24,12 +24,15 @@ This spec covers the complete libmello video pipeline: screen capture, GPU-side 
 
 **Viewer pipeline:**
 ```
-┌──────────────┐     ┌──────────────┐     ┌──────────────┐     ┌──────────────┐
-│ Packet Queue │────▶│   HW Decode  │────▶│ Staging Tex  │────▶│  Slint RGBA  │
-│              │     │NVDEC/AMF/    │     │  Map() →CPU  │     │   (one copy) │
-│ From network │     │  D3D11VA     │     │              │     │   To UI      │
-└──────────────┘     └──────────────┘     └──────────────┘     └──────────────┘
+┌──────────────┐     ┌──────────────┐     ┌────────────────┐     ┌──────────────┐
+│ H.264 RTP AU │────▶│   HW Decode  │────▶│ Shared Texture │────▶│    DComp     │
+│ complete only│     │NVDEC/AMF/    │     │ latest-frame   │     │  Presenter   │
+│ NACK/PLI/REMB│     │  D3D11VA     │     │ wins           │     │  (Windows)   │
+└──────────────┘     └──────────────┘     └────────────────┘     └──────────────┘
 ```
+
+Transport, AU gating, and presentation ownership are normative in
+[12-STREAMING.md](./12-STREAMING.md); this document focuses on GPU pipeline details.
 
 ---
 

@@ -15,7 +15,7 @@ mello-core is the Rust crate that contains all application logic. It sits betwee
 - Nakama client (auth, presence, chat, groups, signaling, RPCs)
 - Crew lifecycle (create, join, select, leave, discover)
 - Voice mesh coordination via libmello FFI
-- Stream session management (host/viewer, ABR, FEC)
+- Stream session management (host/viewer, REMB congestion, native RTP)
 - Presence and crew state tracking
 
 ---
@@ -53,11 +53,14 @@ mello-core/src/
 ├── stream/
 │   ├── mod.rs
 │   ├── config.rs           # Presets (Potato/Low/Medium/High/Ultra)
-│   ├── packet.rs           # Binary packet format (video/audio/control)
-│   ├── fec.rs              # Forward error correction (XOR parity)
-│   ├── abr.rs              # Adaptive bitrate (loss-based step up/down)
+│   ├── congestion.rs       # Viewer REMB controller (native RTP stats)
+│   ├── rtp_peer.rs         # Native RTP send/recv FFI wrappers
+│   ├── pacer.rs            # Pacing target + telemetry
+│   ├── sink.rs             # PacketSink trait (RTP video + feedback)
+│   ├── sink_p2p.rs         # Per-viewer RTP fan-out
+│   ├── sink_sfu.rs         # SFU host RTP + control DC
 │   ├── host.rs             # Stream host pipeline
-│   └── viewer.rs           # Stream viewer pipeline
+│   └── manager.rs          # Host stream manager (REMB aggregate, keyframes)
 │
 ├── crew_state.rs           # Sidebar state, voice channel models
 ├── presence.rs             # PresenceStatus, Activity enums
@@ -177,7 +180,6 @@ Voice is managed by `VoiceManager` which wraps libmello's C FFI:
 
 - **Mesh topology (P2P):** Full mesh for ≤6 users. Each pair exchanges SDP offers/answers via Nakama channel messages. Lower user ID initiates the offer (deterministic).
 - **SFU topology:** For crews with SFU enabled, voice goes through the SFU server via **RTP audio tracks** (Opus, PT 111). The SFU creates per-sender `sendonly` tracks with `msid` = sender user_id, and renegotiates SDP when members join/leave. The client's `onTrack` callback (`setup_incoming_track`) receives each incoming track, extracts the sender_id from the `msid`, filters RTCP (PT != 111), parses the RTP header, strips it, and calls `feed_packet(sender_id, opus_payload)`. This routes audio to per-sender jitter buffers, Opus decoders, and per-peer ring buffers. A `mix_output` callback sums all peer buffers for playback. Phantom transceivers (from Pion's undeclared-SSRC handler) are filtered client-side by checking the sender_id format (UUIDs contain dashes, phantoms don't).
-- **Current SFU join fallback behavior:** If SFU connect/join/DataChannel open fails, the client currently falls back to P2P for media transport (with explicit error logs). A stricter fail-closed SFU policy is tracked separately.
 - **Audio pipeline:** Mic → CoreAudio/WASAPI capture → WebRTC APM → adaptive RMS/noise-floor gate → Silero VAD on candidate speech → RNNoise/Opus only during speech/pre-roll/hangover → send via RTP audio track (SFU) or unreliable DataChannel (P2P mesh). Receive path (SFU): `onTrack` → RTP parse → `feed_packet` → per-peer jitter buffer → Opus decode → per-peer ring buffer → `mix_output` render callback → speaker.
 - **Mute/Deafen:** `SetMute` stops sending audio (capture continues for local VAD). `SetDeafen` stops playback.
 - **VAD callbacks:** libmello fires speaking state changes via C callback; mello-core forwards these as `VoiceActivity` events to the UI.
@@ -187,12 +189,16 @@ Voice is managed by `VoiceManager` which wraps libmello's C FFI:
 
 ## 7. Stream System
 
-Streaming uses a host/viewer model over P2P connections:
+Streaming uses a host/viewer model over **native H.264 RTP** (P2P and SFU):
 
-- **Host pipeline:** DXGI capture → GPU color convert → hardware encode (NVENC/AMF/QSV) → packetize → send per-viewer via libdatachannel.
-- **Viewer pipeline:** Receive packets → FEC recovery → hardware decode → GPU color convert → RGBA frame → `StreamFrame` event → Slint `Image`.
-- **ABR:** Loss-based adaptive bitrate. Step down 25% if >5% loss; step up 10% if <1% loss for 10 seconds. Configurable presets from Potato (3Mbps) to Ultra (50Mbps).
-- **FEC:** XOR-based parity packets. One parity per N data packets (configurable). Recovers single-packet losses without retransmission.
+- **Host pipeline:** DXGI capture → GPU color convert → hardware encode (NVENC/AMF/QSV) → complete Annex-B access unit → `StreamManager` → per-viewer (P2P) or single (SFU) native RTP sender with bounded pacing.
+- **Viewer pipeline:** RTP receive → reorder/NACK/PLI/REMB (libmello) → complete-AU gate (**120 ms** assembly deadline) → hardware decode → native surface / DComp present.
+- **Congestion:** `ViewerCongestionController` drives REMB from native RTP stats; host `StreamManager` applies minimum fresh viewer target (SFU aggregates via relay under viewer id `sfu`).
+- **Transport:** Stream SFU peers use **control DataChannel only** for reliable metadata; video is always on the RTP track. No DataChannel video chunking or XOR FEC.
+- **Topology and failure policy:** Nakama chooses P2P or SFU in `start_stream` / `watch_stream`. It may return P2P when SFU auth/token creation is unavailable. Once it returns SFU, client connect/join/control-channel setup is fail-closed and surfaces an explicit stream error instead of switching that session to P2P.
+- **Reference-chain recovery:** Native queue overflow or a failed accepted AU enters an IDR gate, drops dependent deltas, and emits a rate-limited keyframe request. Sending resumes only after a complete IDR.
+
+**Shutdown order:** signal manager stop → wait for manager task (drains sinks/peers) → tear down libmello host/viewer pipelines. Do not drop `SfuConnection` while the manager may still send.
 
 See [12-STREAMING.md](./12-STREAMING.md) and [14-VIDEO-PIPELINE.md](./14-VIDEO-PIPELINE.md) for full details.
 

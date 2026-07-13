@@ -289,6 +289,9 @@ func InitModule(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runti
 	if err := initializer.RegisterRpc("dev_fault", DevFaultRPC); err != nil {
 		return err
 	}
+	if err := initializer.RegisterRpc("dev_enable_sfu_crew", DevEnableSfuCrewRPC); err != nil {
+		return err
+	}
 
 	// -----------------------------------------------------------------------
 	// Background goroutines

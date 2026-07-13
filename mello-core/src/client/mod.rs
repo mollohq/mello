@@ -28,17 +28,15 @@ use crate::stream::manager::StreamSession;
 use crate::stream::pacer::PacingTelemetry;
 use crate::stream::sink::PacketSink;
 use crate::stream::sink_p2p::P2PFanoutSink;
-use crate::telemetry::{AdapterRegistry, TelemetryListener, TELEMETRY_PORT};
+use crate::telemetry::{self, AdapterRegistry, TelemetryListener, TELEMETRY_PORT};
+use crate::transport::SfuConnection;
 use crate::voice::{SignalEnvelope, SignalMessage, SignalPurpose, VoiceManager};
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::time::Instant;
 
-use stream_ffi::{StreamHostPeer, ViewerState};
-
-/// Individual chunks are at most ~60KB + 6 byte header.
-const VIEWER_RECV_BUF_SIZE: usize = 64 * 1024;
+use stream_ffi::{StreamHostPeer, StreamPeerDisconnect, ViewerState};
 
 /// Shared single-slot buffer for decoded stream frames. The C++ callback
 /// overwrites the latest frame; the UI timer reads and takes it. This avoids
@@ -82,16 +80,20 @@ pub struct Client {
     surface_frame_seq: Arc<std::sync::atomic::AtomicU64>,
     stream_session: Option<StreamSession>,
     stream_host_sink: Option<Arc<dyn PacketSink>>,
+    stream_sfu_connection: Option<Arc<SfuConnection>>,
     stream_sink: Option<Arc<P2PFanoutSink>>,
     stream_host_peers: HashMap<String, StreamHostPeer>,
     viewer_state: Option<ViewerState>,
     stream_signal_queue: Arc<std::sync::Mutex<Vec<(String, SignalEnvelope)>>>,
+    /// Terminal P2P stream peer callbacks queued for main-loop cleanup.
+    stream_disconnect_queue: Arc<std::sync::Mutex<VecDeque<StreamPeerDisconnect>>>,
     /// ICE candidates received before the peer was created (host side).
     pending_remote_ice: HashMap<String, Vec<SignalMessage>>,
     ice_servers: Vec<String>,
     /// Actual encode resolution (set after host pipeline starts).
     stream_encode_width: u32,
     stream_encode_height: u32,
+    stream_bitrate_kbps: u32,
     /// Stop signal for the thumbnail refresh thread.
     thumbnail_stop: Option<Arc<std::sync::atomic::AtomicBool>>,
     /// Cached list of windows for thumbnail refresh.
@@ -206,12 +208,15 @@ impl Client {
             surface_frame_seq: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             stream_session: None,
             stream_host_sink: None,
+            stream_sfu_connection: None,
             stream_sink: None,
             stream_host_peers: HashMap::new(),
             viewer_state: None,
             stream_signal_queue: Arc::new(std::sync::Mutex::new(Vec::new())),
+            stream_disconnect_queue: Arc::new(std::sync::Mutex::new(VecDeque::new())),
             stream_encode_width: 0,
             stream_encode_height: 0,
+            stream_bitrate_kbps: 0,
             pending_remote_ice: HashMap::new(),
             ice_servers: Vec::new(),
             thumbnail_stop: None,

@@ -1,6 +1,9 @@
 package main
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
+)
 
 func storedSession(sessionID string, ts int64, snapshots int) StoredStreamSession {
 	urls := make([]string, snapshots)
@@ -84,5 +87,45 @@ func TestStreamSessionSkipsDurableUpsertWhenCurrent(t *testing.T) {
 	sessions := []StoredStreamSession{storedSession("a", 1, 5)}
 	if streamSessionNeedsDurableUpsert(sessions, "a_evt", "a", 5) {
 		t.Fatal("current durable session should not require upsert")
+	}
+}
+
+func TestStreamBitratePersistsInStoredMetadata(t *testing.T) {
+	const bitrateKbps uint32 = 4500
+
+	requestJSON, err := json.Marshal(StartStreamRequest{BitrateKbps: bitrateKbps})
+	if err != nil {
+		t.Fatalf("marshal start stream request: %v", err)
+	}
+	var request StartStreamRequest
+	if err := json.Unmarshal(requestJSON, &request); err != nil {
+		t.Fatalf("unmarshal start stream request: %v", err)
+	}
+	if request.BitrateKbps != bitrateKbps {
+		t.Fatalf("start request bitrate: got %d want %d", request.BitrateKbps, bitrateKbps)
+	}
+
+	activeJSON, err := json.Marshal(ActiveStream{BitrateKbps: bitrateKbps})
+	if err != nil {
+		t.Fatalf("marshal active stream: %v", err)
+	}
+	var active ActiveStream
+	if err := json.Unmarshal(activeJSON, &active); err != nil {
+		t.Fatalf("unmarshal active stream: %v", err)
+	}
+	if active.BitrateKbps != bitrateKbps {
+		t.Fatalf("active stream bitrate: got %d want %d", active.BitrateKbps, bitrateKbps)
+	}
+
+	metaJSON, err := json.Marshal(StreamMeta{BitrateKbps: bitrateKbps})
+	if err != nil {
+		t.Fatalf("marshal stream metadata: %v", err)
+	}
+	var meta StreamMeta
+	if err := json.Unmarshal(metaJSON, &meta); err != nil {
+		t.Fatalf("unmarshal stream metadata: %v", err)
+	}
+	if meta.BitrateKbps != bitrateKbps {
+		t.Fatalf("stream metadata bitrate: got %d want %d", meta.BitrateKbps, bitrateKbps)
 	}
 }
