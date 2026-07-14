@@ -20,6 +20,7 @@ pub mod nakama;
 pub mod oauth;
 pub mod presence;
 pub mod session;
+pub mod stats;
 pub mod stream;
 pub mod telemetry;
 pub mod transport;
@@ -33,6 +34,7 @@ pub use command::Command;
 pub use config::Config;
 pub use error::{Error, Result};
 pub use events::Event;
+pub use stats::MelloStats;
 pub use stream::{Codec, QualityPreset, StreamConfig, StreamError};
 pub use voice::{AudioDevice, NsMode};
 

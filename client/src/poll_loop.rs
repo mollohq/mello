@@ -2,14 +2,13 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use mello_core::{Command, Event};
-use slint::{ComponentHandle, Model};
+use slint::ComponentHandle;
 
 use crate::app_context::AppContext;
-use crate::converters::update_active_crew_card;
+use crate::converters::{set_member_speaking, set_voice_member_speaking};
 use crate::notifications;
 use crate::platform::{self, StatusItem, VoiceState};
 use crate::updater::UpdateEvent;
-use crate::VoiceChannelMember;
 
 const MAX_CORE_EVENTS_PER_POLL_TICK: usize = 128;
 
@@ -61,6 +60,7 @@ pub fn start(
         pending_deep_link: ctx.pending_deep_link.clone(),
         ipc_listener: ctx.ipc_listener.clone(),
         snapshot_loader: ctx.snapshot_loader.clone(),
+        stream_frame_timer: ctx.stream_frame_timer.clone(),
         #[cfg(target_os = "windows")]
         native_frame_slot: ctx.native_frame_slot.clone(),
         #[cfg(target_os = "windows")]
@@ -78,7 +78,7 @@ pub fn start(
     let timer = slint::Timer::default();
     timer.start(
         slint::TimerMode::Repeated,
-        Duration::from_millis(50),
+        Duration::from_millis(100),
         move || {
             // --- Update events ---
             while let Ok(ue) = update_event_rx.try_recv() {
@@ -376,43 +376,10 @@ pub fn start(
                     .cmd_tx
                     .send(Command::VoiceSpeaking { speaking: pressed });
 
-                // Update local UI speaking state
+                // Update local UI speaking state (single-row updates, no full model rebuild).
                 let my_id = poll_ctx.app.get_user_id();
-                let current = poll_ctx.app.get_members();
-                let members: Vec<crate::MemberData> = (0..current.row_count())
-                    .map(|i| {
-                        let mut m = current.row_data(i).unwrap();
-                        if m.id == my_id.as_str() {
-                            m.speaking = pressed;
-                        }
-                        m
-                    })
-                    .collect();
-                poll_ctx
-                    .app
-                    .set_members(Rc::new(slint::VecModel::from(members)).into());
-
-                let channels = poll_ctx.app.get_voice_channels();
-                let updated: Vec<crate::VoiceChannelData> = (0..channels.row_count())
-                    .map(|i| {
-                        let mut ch = channels.row_data(i).unwrap();
-                        let ch_members: Vec<VoiceChannelMember> = (0..ch.members.row_count())
-                            .map(|j| {
-                                let mut m = ch.members.row_data(j).unwrap();
-                                if m.id == my_id.as_str() {
-                                    m.speaking = pressed;
-                                }
-                                m
-                            })
-                            .collect();
-                        ch.members = Rc::new(slint::VecModel::from(ch_members)).into();
-                        ch
-                    })
-                    .collect();
-                poll_ctx
-                    .app
-                    .set_voice_channels(Rc::new(slint::VecModel::from(updated)).into());
-                update_active_crew_card(&poll_ctx.app);
+                set_member_speaking(&poll_ctx.app, my_id.as_str(), pressed);
+                set_voice_member_speaking(&poll_ctx.app, my_id.as_str(), pressed);
             }
 
             // --- HUD foreground monitor + state push ---

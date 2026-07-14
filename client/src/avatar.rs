@@ -1,4 +1,5 @@
 use rand::seq::SliceRandom;
+use slint::Model;
 use std::time::Duration;
 
 const AVATAR_WORKER_URL: &str = "https://avatar.m3llo.app";
@@ -9,7 +10,11 @@ const APPROVED_STYLES: &[&str] = &[
     "pixel-art",
     "thumbs",
 ];
-pub const RENDER_SIZE: u32 = 280; // 140px @ 2x for HiDPI
+pub const RENDER_SIZE: u32 = 280; // 140px @ 2x for onboarding / profile picker
+/// Sidebar, chat, voice — keep small; each cached avatar is cloned into many UI rows.
+pub const UI_CACHE_SIZE: u32 = 96; // 48px @ 2x
+
+pub const MAX_AVATAR_CACHE_ENTRIES: usize = 64;
 
 pub const EASTER_WORDS: &[&str] = &[
     "hey", "hey", "hey", "there,", "there,", "there,", "we", "we", "we", "love", "love", "love",
@@ -192,4 +197,56 @@ pub fn rasterize_svg(svg_data: &str) -> Option<Vec<u8>> {
 pub fn rgba_to_image(rgba: &[u8], w: u32, h: u32) -> slint::Image {
     let buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(rgba, w, h);
     slint::Image::from_rgba8(buffer)
+}
+
+/// Downscale avatars stored in the UI cache (sidebar, chat rows, voice tiles).
+pub fn downscale_for_ui(img: slint::Image) -> slint::Image {
+    let Some(buf) = img.to_rgba8() else {
+        return img;
+    };
+    let (w, h) = (buf.width(), buf.height());
+    if w <= UI_CACHE_SIZE && h <= UI_CACHE_SIZE {
+        return img;
+    }
+    let Some(dyn_img) = image::RgbaImage::from_raw(w, h, buf.as_bytes().to_vec()) else {
+        return img;
+    };
+    let resized = image::imageops::resize(
+        &dyn_img,
+        UI_CACHE_SIZE,
+        UI_CACHE_SIZE,
+        image::imageops::FilterType::Triangle,
+    );
+    rgba_to_image(resized.as_raw(), UI_CACHE_SIZE, UI_CACHE_SIZE)
+}
+
+pub fn cache_insert(
+    cache: &mut std::collections::HashMap<String, slint::Image>,
+    user_id: String,
+    img: slint::Image,
+) {
+    if cache.len() >= MAX_AVATAR_CACHE_ENTRIES && !cache.contains_key(&user_id) {
+        if let Some(evict) = cache.keys().next().cloned() {
+            cache.remove(&evict);
+        }
+    }
+    cache.insert(user_id, downscale_for_ui(img));
+}
+
+pub fn update_chat_avatars_for_sender(
+    app: &crate::MainWindow,
+    sender_id: &str,
+    img: &slint::Image,
+) {
+    let cached = downscale_for_ui(img.clone());
+    let model = app.get_messages();
+    for i in 0..model.row_count() {
+        if let Some(mut m) = model.row_data(i) {
+            if m.sender_id.as_str() == sender_id {
+                m.sender_avatar = cached.clone();
+                m.has_sender_avatar = true;
+                model.set_row_data(i, m);
+            }
+        }
+    }
 }

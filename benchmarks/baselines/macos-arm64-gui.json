@@ -1,0 +1,31 @@
+{
+  "platform": {
+    "os": "macos",
+    "arch": "aarch64"
+  },
+  "scenarios": {
+    "gui-idle": {
+      "footprint_mb": {
+        "p50": 214.36292,
+        "p95": 673.14417
+      },
+      "wakeups_per_s": 110.4496,
+      "cpu_pct": 0.05016846
+    },
+    "gui-voice": {
+      "footprint_mb": {
+        "p50": 196.28491,
+        "p95": 653.2224
+      },
+      "wakeups_per_s": 176.0127,
+      "cpu_pct": 0.15401399
+    }
+  },
+  "tolerances": {
+    "footprint_mb_p95_pct": 10.0,
+    "wakeups_per_s_pct": 25.0,
+    "wakeups_per_s_abs": 3.0,
+    "cpu_pct_pct": 30.0,
+    "cpu_pct_abs": 1.5
+  }
+}

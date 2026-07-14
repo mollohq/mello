@@ -1,0 +1,19 @@
+[package]
+name = "perf-harness"
+version = "0.0.0-DEV"
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+
+[[bin]]
+name = "perf-harness"
+path = "src/main.rs"
+
+[dependencies]
+mello-core = { path = "../../mello-core" }
+perf-scenarios = { path = "../perf-scenarios" }
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+log = "0.4"
+env_logger = "0.11"

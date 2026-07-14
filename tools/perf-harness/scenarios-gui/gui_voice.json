@@ -1,0 +1,12 @@
+{
+  "name": "gui-voice",
+  "comment": "In a voice call (the desktop app auto-joins on select_crew). Measures in-VC steady-state footprint/wakeups. This is the guard for Phase 2 (lazy audio must not regress the in-call path) and the real 'beat Discord in a call' gate.",
+  "steps": [
+    { "action": "login", "email": "${PERF_TEST_EMAIL}", "password": "${PERF_TEST_PASSWORD}" },
+    { "action": "expect_event", "event": "LoggedIn", "timeout_ms": 30000 },
+    { "action": "select_crew", "crew_id": "${PERF_TEST_CREW_ID}" },
+    { "action": "expect_event", "event": "CrewStateLoaded", "timeout_ms": 30000 },
+    { "action": "sleep", "ms": 6000 },
+    { "action": "sample", "duration_s": 30 }
+  ]
+}

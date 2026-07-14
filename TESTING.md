@@ -28,6 +28,7 @@ then jump to the section you need.
 | `voice-test-client` (GUI) | Client DSP A/B | Yes (live backend) | No (manual) | `cargo run` in `tools/voice-test-client` |
 | `voice-test-client` (headless) | Client reconnect/resync E2E | Yes (live backend) | 🔧 integration job | `cargo run -- --scenario scenarios/<f>.json` |
 | `scripts/voice/voice-local-gate.sh` | Cross-repo local RED/GREEN gate + artifacts | Yes (local Nakama + SFU) | 🔧 integration job | `../scripts/voice/voice-local-gate.sh` |
+| `perf-harness` | Client CPU/RSS regression (headless) | Partial (`idle` no; voice yes) | No (local/agent) | `./scripts/perf/run.sh` |
 | `sfu-test.html` | Browser voice/stream + robustness | Yes (live SFU) | No (manual) | open via `npm run dev` in `mello-site` |
 
 Legend: ✅ runs today · ⚠️ runnable, not yet in the PR workflow · 🔧 needs an
@@ -393,6 +394,33 @@ something or you want eyes-on stats.
 
 ---
 
+## Client — `perf-harness`
+
+Headless CPU/RSS regression harness (spec: `specs/20-PERF-HARNESS.md`).
+
+```bash
+# idle scenario only (no backend):
+cd mello && CI=true cargo run --release -p perf-harness -- run \
+  --scenario-dir tools/perf-harness/scenarios \
+  --output /tmp/perf-report.json
+
+# full gate + artifacts (voice scenarios need Nakama + fixtures):
+./scripts/perf/run.sh
+
+# capture baseline after intentional perf work:
+./scripts/perf/run.sh --write-baseline
+```
+
+Voice scenarios use the same env vars as `voice-test-client` headless
+(`PERF_TEST_EMAIL`, `PERF_TEST_PASSWORD`, `PERF_TEST_CREW_ID`,
+`PERF_TEST_CHANNEL_ID`, `PERF_TEST_WAV`). Use **`client-dev-release.sh`**
+(not `client-dev.sh`) when measuring the full Slint client manually.
+
+For AI-driven UI exploration in dev, `client-dev.sh` enables Slint 1.17 MCP
+(`http://localhost:8765/mcp`) — separate from regression baselines.
+
+---
+
 ## When to run what
 
 - **Every change / before pushing:** `cargo fmt` + `cargo clippy -D warnings` +
@@ -405,6 +433,8 @@ something or you want eyes-on stats.
   `--reuse-user-id`, `--idle-resume-ms`).
 - **Stream relay quality:** `stream-soak` RTP profiles / 1080 gate; client probes for visual + `host_probe_tick` / `viewer_probe_native_rtp` logs.
 - **Audio DSP quality (A/B, NS modes, MOS):** `voice-test-client` GUI.
+- **Client CPU/RSS regression (after perf-sensitive changes):** `perf-harness` /
+  `./scripts/perf/run.sh`.
 - **Interactive browser repro / live stats:** `sfu-test.html`.
 
 ## Suggested CI lanes

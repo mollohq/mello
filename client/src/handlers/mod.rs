@@ -169,6 +169,7 @@ pub fn handle_event(ctx: &AppContext, event: Event) {
             }
             ctx.app.set_diag_status(status.into());
         }
+        Event::StatsUpdated { .. } => {}
         Event::Error { message } => {
             log::error!("UI: error: {}", message);
         }

@@ -15,6 +15,8 @@ impl super::Client {
 
         self.check_protocol_version().await;
 
+        self.ensure_game_services();
+
         match self.nakama.get_ice_servers().await {
             Ok(urls) => {
                 log::info!("Fetched {} ICE server(s) from backend", urls.len());

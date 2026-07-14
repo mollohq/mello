@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use crate::game_db::GameDatabase;
 
-const GAME_SCAN_INTERVAL: Duration = Duration::from_secs(5);
+const GAME_SCAN_INTERVAL: Duration = Duration::from_secs(15);
 const MAX_PROCESSES: usize = 512;
 
 #[derive(Debug, Clone)]

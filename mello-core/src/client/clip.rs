@@ -196,7 +196,7 @@ impl super::Client {
         }
     }
 
-    pub(super) async fn handle_play_clip(&self, path: &str) {
+    pub(super) async fn handle_play_clip(&mut self, path: &str) {
         if path.starts_with("http://") || path.starts_with("https://") {
             self.play_clip_from_url(path).await;
         } else if path.ends_with(".mp4") {
@@ -204,7 +204,18 @@ impl super::Client {
         } else {
             self.play_local_wav(path);
         }
+        self.mark_clip_playback_active();
         self.emit_playback_started(path);
+    }
+
+    fn mark_clip_playback_active(&mut self) {
+        // Playback was just issued, so assume it is active. This keeps the voice
+        // tick scheduled (`needs_voice_tick`) so `clip_playback_tick` runs and
+        // flips this false on the first tick that observes playback has finished.
+        // Polling `mello_clip_is_playing` synchronously here races libmello's
+        // playback thread and can miss the start entirely, leaving the UI stuck
+        // in the "playing" state with no progress/finished events.
+        self.clip_was_playing = true;
     }
 
     fn emit_playback_started(&self, path: &str) {
@@ -286,19 +297,21 @@ impl super::Client {
         self.play_local_mp4(&path_str);
     }
 
-    pub(super) fn handle_stop_clip_playback(&self) {
+    pub(super) fn handle_stop_clip_playback(&mut self) {
         let result = unsafe { mello_sys::mello_clip_stop_playback(self.voice.mello_ctx()) };
         if result != mello_sys::MelloResult_MELLO_OK {
             log::warn!("stop_clip_playback failed: {}", result);
         }
+        self.clip_was_playing = false;
     }
 
     pub(super) fn handle_pause_clip(&self) {
         unsafe { mello_sys::mello_clip_pause(self.voice.mello_ctx()) };
     }
 
-    pub(super) fn handle_resume_clip(&self) {
+    pub(super) fn handle_resume_clip(&mut self) {
         unsafe { mello_sys::mello_clip_resume(self.voice.mello_ctx()) };
+        self.clip_was_playing = true;
     }
 
     pub(super) fn handle_seek_clip(&self, position_ms: u32) {

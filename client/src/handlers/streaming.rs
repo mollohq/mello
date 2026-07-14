@@ -115,6 +115,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
             log::info!("Stream ended: crew={}", crew_id);
             ctx.app.set_is_hosting(false);
             ctx.app.set_is_watching(false);
+            ctx.stream_frame_timer.set_watching(false);
             ctx.app.set_streamer_name("".into());
             ctx.app.set_stream_label("".into());
             ctx.app.set_stream_frame(slint::Image::default());
@@ -161,6 +162,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
         } => {
             log::info!("Watching stream from {} ({}x{})", host_id, width, height);
             ctx.app.set_is_watching(true);
+            ctx.stream_frame_timer.set_watching(true);
             ctx.app.set_streamer_name(host_id.into());
             #[cfg(target_os = "windows")]
             {
@@ -198,6 +200,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
         Event::StreamWatchingStopped => {
             log::info!("Stopped watching stream");
             ctx.app.set_is_watching(false);
+            ctx.stream_frame_timer.set_watching(false);
             ctx.app.set_streamer_name("".into());
             ctx.app.set_stream_label("".into());
             ctx.app.set_stream_frame(slint::Image::default());

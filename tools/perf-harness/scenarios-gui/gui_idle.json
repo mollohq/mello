@@ -1,0 +1,14 @@
+{
+  "name": "gui-idle",
+  "comment": "True idle-in-crew: the desktop app auto-joins voice on select_crew, so we explicitly leave and let it settle before sampling. Otherwise this measures in-VC, not idle.",
+  "steps": [
+    { "action": "login", "email": "${PERF_TEST_EMAIL}", "password": "${PERF_TEST_PASSWORD}" },
+    { "action": "expect_event", "event": "LoggedIn", "timeout_ms": 30000 },
+    { "action": "select_crew", "crew_id": "${PERF_TEST_CREW_ID}" },
+    { "action": "expect_event", "event": "CrewStateLoaded", "timeout_ms": 30000 },
+    { "action": "sleep", "ms": 4000 },
+    { "action": "leave_voice" },
+    { "action": "sleep", "ms": 4000 },
+    { "action": "sample", "duration_s": 30 }
+  ]
+}

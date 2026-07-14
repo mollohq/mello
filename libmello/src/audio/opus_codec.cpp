@@ -20,6 +20,10 @@ bool OpusEnc::initialize(int sample_rate, int channels, int bitrate) {
     opus_encoder_ctl(encoder_, OPUS_SET_INBAND_FEC(1));
     opus_encoder_ctl(encoder_, OPUS_SET_PACKET_LOSS_PERC(5));
     opus_encoder_ctl(encoder_, OPUS_SET_DTX(1));
+    // Default complexity is 10 (max). 8 cuts encode CPU substantially at
+    // effectively transparent quality for speech at our bitrates; profiling
+    // showed the encoder as the dominant while-talking CPU cost.
+    opus_encoder_ctl(encoder_, OPUS_SET_COMPLEXITY(8));
     return true;
 }
 

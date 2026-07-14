@@ -17,6 +17,7 @@ path = "src/main.rs"
 
 [dependencies]
 mello-core = { path = "../mello-core" }
+perf-scenarios = { path = "../tools/perf-scenarios" }
 slint = { version = "1.17", features = ["renderer-winit-skia", "renderer-winit-software"] }
 tokio = { workspace = true }
 log = { workspace = true }

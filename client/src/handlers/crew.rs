@@ -251,7 +251,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
                 w,
                 h,
             );
-            let slint_img = slint::Image::from_rgba8(buf);
+            let slint_img = crate::avatar::downscale_for_ui(slint::Image::from_rgba8(buf));
 
             let crews = ctx.app.get_crews();
             for i in 0..crews.row_count() {

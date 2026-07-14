@@ -171,6 +171,7 @@ pub fn run_scenario(path: &str, cfg: Config) -> Result<(), Box<dyn Error>> {
             frame_consumed,
             frame_lifecycle,
             false,
+            false,
         );
         client.run(cmd_rx).await;
     });
