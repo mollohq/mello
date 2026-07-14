@@ -28,7 +28,7 @@ use crate::stream::manager::StreamSession;
 use crate::stream::pacer::PacingTelemetry;
 use crate::stream::sink::PacketSink;
 use crate::stream::sink_p2p::P2PFanoutSink;
-use crate::telemetry::{self, AdapterRegistry, TelemetryListener, TELEMETRY_PORT};
+use crate::telemetry::{AdapterRegistry, TelemetryListener, TELEMETRY_PORT};
 use crate::transport::SfuConnection;
 use crate::voice::{SignalEnvelope, SignalMessage, SignalPurpose, VoiceManager};
 
