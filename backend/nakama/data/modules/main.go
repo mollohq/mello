@@ -100,6 +100,13 @@ func InitModule(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runti
 	}
 
 	// -----------------------------------------------------------------------
+	// RPCs — admin / ops dashboard (server-to-server via http_key)
+	// -----------------------------------------------------------------------
+	if err := initializer.RegisterRpc("admin_dashboard_stats", AdminDashboardStatsRPC); err != nil {
+		return err
+	}
+
+	// -----------------------------------------------------------------------
 	// RPCs — presence
 	// -----------------------------------------------------------------------
 	if err := initializer.RegisterRpc("presence_update", PresenceUpdateRPC); err != nil {
