@@ -50,6 +50,9 @@ pub struct AppContext {
     /// Games settings rows as last received from core; merged with the
     /// disabled set from Settings when pushed to the UI.
     pub games_integrations: Rc<RefCell<Vec<mello_core::events::GameIntegrationStatus>>>,
+    /// Unknown-game candidate currently shown in the "track it?" prompt
+    /// (exe, path, display name). Consumed on track/dismiss.
+    pub pending_unknown_game: Rc<RefCell<Option<(String, String, String)>>>,
     pub muted_before_deafen: Rc<Cell<bool>>,
     pub updater: Rc<RefCell<Option<Updater>>>,
     pub hotkey_mgr: Rc<RefCell<crate::platform::hotkeys::HotkeyManager>>,

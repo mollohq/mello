@@ -402,6 +402,16 @@ pub enum Command {
         #[serde(default)]
         draws: u32,
     },
+    /// Replace the set of user-confirmed custom games (seeded from settings
+    /// before `run()`, like `SetGameIntegrations`).
+    SetCustomGames {
+        games: Vec<crate::game_db::CustomGame>,
+    },
+    /// Add one user-confirmed custom game (the "track it?" confirm flow).
+    /// Takes effect on the next sensor scan.
+    AddCustomGame {
+        game: crate::game_db::CustomGame,
+    },
     /// Fetch the viewer's own per-game stats (for the personal "You strip").
     GetUserGameStats,
 

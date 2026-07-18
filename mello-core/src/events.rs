@@ -481,6 +481,14 @@ pub enum Event {
     },
     /// Post-game prompt timed out without interaction.
     PostGameTimeout,
+    /// A fullscreen/foreground process outside the game DB (debounced by the
+    /// sensor). Drives the one-tap "track it?" confirm prompt; nothing is
+    /// tracked or broadcast unless the user confirms.
+    UnknownGameCandidate {
+        exe: String,
+        path: String,
+        window_title: String,
+    },
     /// Telemetry for the running game needs a one-time user action (e.g.
     /// Dota 2's launch option). Shown as a hint in the "now playing" card.
     TelemetrySetupHint {
