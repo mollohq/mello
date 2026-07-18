@@ -1,5 +1,6 @@
 #[cfg(target_os = "windows")]
 pub mod crash_handler;
+pub mod exe_icon;
 pub mod exe_meta;
 pub mod hotkeys;
 #[cfg(target_os = "macos")]

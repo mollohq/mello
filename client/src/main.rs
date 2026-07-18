@@ -12,6 +12,7 @@ mod deep_link;
 mod diag_capture;
 mod emoji_font;
 mod foreground_monitor;
+mod game_icons;
 mod gif_animator;
 mod handlers;
 mod http;
@@ -549,6 +550,7 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
         gif_chat_anim,
         dbg_hist: Rc::new(RefCell::new(DebugHistory::new())),
         avatar_cache: Rc::new(RefCell::new(std::collections::HashMap::new())),
+        game_icon_cache: Rc::new(RefCell::new(std::collections::HashMap::new())),
         hud_manager: hud_mgr,
         fg_monitor,
         pending_deep_link: Rc::new(RefCell::new(pending_deep_link)),
