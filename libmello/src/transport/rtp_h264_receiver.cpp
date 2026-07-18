@@ -260,6 +260,7 @@ private:
         uint32_t timestamp = 0;
         std::map<int64_t, Packet> packets;
         TimePoint first_arrival{};
+        TimePoint last_arrival{};
         bool first_observed_was_marker = false;
         bool has_marker = false;
         int64_t marker_sequence = 0;
@@ -499,6 +500,8 @@ private:
             access_unit.marker_sequence = extended_sequence;
         }
 
+        access_unit.last_arrival = now;
+
         update_peaks();
     }
 
@@ -686,8 +689,14 @@ private:
                 continue;
             }
 
+            // Expire on stall (no fragment progress within the deadline) or
+            // on hitting the hard age cap. Sender pacing spreads an AU's
+            // fragments across its wire time, so a large AU legitimately
+            // needs longer than 120 ms end-to-end — but only while fragments
+            // keep arriving. A lost tail stops progress and expires quickly.
             const bool expired =
-                now - access_unit.first_arrival >= kAccessUnitDeadline;
+                now - access_unit.last_arrival >= kAccessUnitDeadline ||
+                now - access_unit.first_arrival >= kAccessUnitHardDeadline;
             if (!boundary_known) {
                 if (expired) {
                     drop_access_unit(index, now, false, true);

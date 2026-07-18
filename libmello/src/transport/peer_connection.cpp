@@ -1574,6 +1574,10 @@ void PeerConnectionImpl::video_get_stats(MelloRtpVideoStats* stats) const noexce
         stats->tx_pli_requests = tx.pli_requests;
         stats->tx_remb_reports = tx.remb_reports;
         stats->tx_latest_remb_bitrate_bps = tx.latest_remb_bitrate_bps;
+        stats->tx_rtx_requests = tx.rtx_requests;
+        stats->tx_rtx_sent = tx.rtx_sent;
+        stats->tx_rtx_cache_misses = tx.rtx_cache_misses;
+        stats->tx_rtx_queue_dropped = tx.rtx_queue_dropped;
         stats->tx_active = 1;
     }
 

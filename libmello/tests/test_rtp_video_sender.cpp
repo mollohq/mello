@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include "transport/rtp_h264_receiver.hpp"
+#include "transport/rtp_video_receiver_session.hpp"
 #include "transport/rtp_video_sender.hpp"
 
 #include <rtc/rtc.hpp>
@@ -526,7 +527,7 @@ TEST(RtpVideoSenderTimestampTest, MapsCaptureClockTo90kRtpTimestamps) {
     EXPECT_NEAR(timestamp_delta, 3'000, 2);
 }
 
-TEST(RtpVideoSenderPacingTest, AccessUnitFragmentsAreSentBackToBack) {
+TEST(RtpVideoSenderPacingTest, AccessUnitFragmentsArePacedAcrossWireTime) {
     LoopbackVideoLink link;
     RtpVideoSender sender = link.make_sender(200'000);
 
@@ -539,49 +540,118 @@ TEST(RtpVideoSenderPacingTest, AccessUnitFragmentsAreSentBackToBack) {
 
     ASSERT_TRUE(link.wait_for_captured_count(12, 15s));
     const auto packets = link.captured_rtp();
-    ASSERT_GT(packets.size(), 1u);
+    ASSERT_GE(packets.size(), 12u);
 
-    const auto intra_au = std::chrono::duration_cast<std::chrono::milliseconds>(
-        packets.back().received_at - packets.front().received_at
+    const auto spread = std::chrono::duration_cast<std::chrono::milliseconds>(
+        packets[11].received_at - packets[0].received_at
     );
-    // Per-packet pacing spread one AU over ~90ms and broke the 45ms receiver
-    // assembly deadline; fragments of a single AU must leave back-to-back.
-    EXPECT_LT(intra_au.count(), 15);
+    // ~1100-byte fragments at 200 kbps occupy a ~44 ms slot each, so 11
+    // slots span ~480 ms. The old whole-AU burst finished in <20 ms.
+    EXPECT_GE(spread.count(), 200);
+    EXPECT_LE(spread.count(), 1'500);
 }
 
-TEST(RtpVideoSenderPacingTest, PacingAppliesBetweenAccessUnits) {
+TEST(RtpVideoSenderPacingTest, AggregateSendRateTracksPacingTarget) {
     LoopbackVideoLink link;
     constexpr uint64_t pacing_bps = 200'000;
     RtpVideoSender sender = link.make_sender(pacing_bps);
 
-    const auto first = make_large_delta_access_unit(32 * 1024);
-    const auto second = make_delta_access_unit(0x44);
-    ASSERT_TRUE(sender.send_access_unit(first.data(), first.size(), 0));
-    ASSERT_TRUE(link.wait_for_captured_count(12, 15s));
+    const auto access_unit = make_large_delta_access_unit(32 * 1024);
+    ASSERT_TRUE(sender.send_access_unit(
+        access_unit.data(),
+        access_unit.size(),
+        0
+    ));
 
-    const auto first_packets = link.captured_rtp();
-    ASSERT_GT(first_packets.size(), 1u);
-    const auto first_batch_end = first_packets.back().received_at;
-    uint64_t first_wire_bytes = 0;
-    for (const auto& packet : first_packets) {
-        first_wire_bytes += packet.wire_size;
-    }
+    // 32 KiB NAL ≈ 30 fragments ≈ 33 KB on the wire ≈ 1.3 s at 200 kbps.
+    ASSERT_TRUE(link.wait_for_captured_count(29, 15s));
+    const auto packets = link.captured_rtp();
+    ASSERT_GE(packets.size(), 29u);
+
+    const auto total = std::chrono::duration_cast<std::chrono::milliseconds>(
+        packets[28].received_at - packets[0].received_at
+    );
+    EXPECT_GE(total.count(), 900);
+    EXPECT_LE(total.count(), 4'000);
+}
+
+TEST(RtpVideoSenderPacingTest, NextAccessUnitStartsAfterOnePacketSlot) {
+    LoopbackVideoLink link;
+    RtpVideoSender sender = link.make_sender(200'000);
+
+    const auto first = make_large_delta_access_unit(32 * 1024);
+    ASSERT_TRUE(sender.send_access_unit(first.data(), first.size(), 0));
+    ASSERT_TRUE(link.wait_for_captured_count(29, 15s));
+    const auto first_last = link.captured_rtp().back().received_at;
     link.clear_captured_rtp();
 
-    ASSERT_TRUE(sender.send_access_unit(second.data(), second.size(), 33'333));
+    ASSERT_TRUE(sender.send_access_unit(
+        make_delta_access_unit(0x44).data(),
+        make_delta_access_unit(0x44).size(),
+        33'333
+    ));
     ASSERT_TRUE(link.wait_for_captured_count(1, 15s));
 
-    const auto second_packets = link.captured_rtp();
-    ASSERT_FALSE(second_packets.empty());
-    const auto second_batch_start = second_packets.front().received_at;
-    const auto inter_au = std::chrono::duration_cast<std::chrono::milliseconds>(
-        second_batch_start - first_batch_end
+    const auto gap = std::chrono::duration_cast<std::chrono::milliseconds>(
+        link.captured_rtp().front().received_at - first_last
     );
+    // The next AU must start after roughly one packet slot (~44 ms), not
+    // after the previous AU's full wire time (the old AU-granular sleep).
+    EXPECT_GE(gap.count(), 5);
+    EXPECT_LE(gap.count(), 500);
+}
 
-    const auto theoretical_min_ms = std::chrono::milliseconds(
-        static_cast<int64_t>((first_wire_bytes * 8 * 1000) / pacing_bps)
+TEST(RtpVideoSenderRetransmitTest, NackRepairIsPacedAndCounted) {
+    LoopbackVideoLink link;
+    RtpVideoSender sender = link.make_sender(8'000'000);
+
+    const auto idr = make_idr_access_unit();
+    ASSERT_TRUE(sender.send_access_unit(idr.data(), idr.size(), 0));
+    for (int index = 0; index < 4; ++index) {
+        const auto delta = make_delta_access_unit(static_cast<uint8_t>(index));
+        ASSERT_TRUE(sender.send_access_unit(
+            delta.data(),
+            delta.size(),
+            static_cast<uint64_t>(index + 1) * 33'333
+        ));
+    }
+    ASSERT_TRUE(link.wait_for_captured_count(5, 10s));
+
+    const uint16_t lost_sequence = link.captured_rtp().front().sequence;
+
+    // One cached sequence (repair must succeed) and one sequence far outside
+    // the cache window (must be counted as a cache miss).
+    const auto nack = mello::transport::detail::make_generic_nack_packet(
+        0xfeedface,
+        kSenderSsrc,
+        {lost_sequence, static_cast<uint16_t>(lost_sequence + 5'000)}
     );
-    EXPECT_GE(inter_au, theoretical_min_ms / 2);
+    rtc::binary nack_message;
+    nack_message.reserve(nack.size());
+    for (const uint8_t byte : nack) {
+        nack_message.push_back(static_cast<std::byte>(byte));
+    }
+    ASSERT_TRUE(link.receiver_track()->send(std::move(nack_message)));
+
+    ASSERT_TRUE(link.wait_for_stats(
+        [](const RtpVideoSenderStats& stats) {
+            return stats.rtx_sent >= 1 && stats.rtx_cache_misses >= 1;
+        },
+        sender,
+        10s
+    ));
+
+    // Wire-level duplicate detection is not usable here: the loopback
+    // receiver already holds the packet, so the retransmitted copy is a
+    // genuine SRTP replay and is correctly dropped by the replay window.
+    // (In production, NACKs cover packets the receiver never saw, so repairs
+    // always pass SRTP replay protection.) Assert the sender-side contract.
+    const auto stats = sender.stats();
+    EXPECT_GE(stats.rtx_requests, 2u);
+    EXPECT_GE(stats.rtx_sent, 1u);
+    EXPECT_GE(stats.rtx_cache_misses, 1u);
+    EXPECT_EQ(stats.rtx_queue_dropped, 0u);
+    EXPECT_EQ(stats.send_failures, 0u);
 }
 
 TEST(RtpVideoSenderPacingTest, DynamicTargetUpdateIsObservedInStats) {

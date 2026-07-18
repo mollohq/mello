@@ -486,11 +486,11 @@ This reduces encoded pixel count significantly (e.g. 2036×1392 → 1920×1080 =
 
 Low-latency encode profile (mandatory for all hardware encoders):
 - No B-frames (`num_b_frames = 0`)
-- Rate control: VBR with moderate headroom (`max = avg × 1.25`, `vbv = avg × 1`)
+- Rate control: VBR with moderate headroom (`max = avg × 1.25`, `vbv = max × 0.5` with a floor of 4 frames of bits, `vbvInitialDelay = vbv / 2`)
 - Keyframe interval: 120 frames (2 seconds at 60fps) under normal conditions
 - Look-ahead: disabled
 
-The VBR headroom of 1.25× allows keyframes slightly more bits without large bandwidth spikes. The tight VBV (1× average bitrate) keeps rate control smooth for P2P links. This applies to both initial configuration and dynamic `set_bitrate()` reconfiguration.
+The VBR headroom of 1.25× allows keyframes slightly more bits without large bandwidth spikes. The half-second VBV keeps rate control tight for interactive latency while leaving IDRs enough room — a one-frame VBV visibly starves keyframes. This applies to both initial configuration and dynamic `set_bitrate()` reconfiguration.
 
 **Stretch goal: AV1** — activated only when `EncoderFactory` confirms AV1 support on the host GPU and `mello_get_decoders()` confirms AV1 decode on the viewer. Falls back to H.264 if either side can't support it. AV1 uses the same low-latency profile constraints.
 

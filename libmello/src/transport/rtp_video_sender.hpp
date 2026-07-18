@@ -39,6 +39,12 @@ struct RtpVideoSenderStats {
     uint64_t pli_requests = 0;
     uint64_t remb_reports = 0;
     uint32_t latest_remb_bitrate_bps = 0;
+    // NACK retransmission path: requested by receivers, repaired from the
+    // sender cache, or dropped (cache miss / queue overflow).
+    uint64_t rtx_requests = 0;
+    uint64_t rtx_sent = 0;
+    uint64_t rtx_cache_misses = 0;
+    uint64_t rtx_queue_dropped = 0;
 };
 
 // One producer thread may call send_access_unit(). It only copies accepted

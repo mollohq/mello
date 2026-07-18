@@ -257,9 +257,10 @@ impl StreamManager {
     async fn apply_remb_aggregate(&mut self, now: Instant) {
         self.expire_stale_remb(now);
         let Some(desired_kbps) = self.aggregate_remb_target_kbps(now) else {
-            if self.apply_bitrate_kbps(self.max_bitrate_kbps) {
-                self.refresh_pacing_target().await;
-            }
+            // No fresh estimates: receivers are quiet, REMBs were lost, or no
+            // viewers remain. Hold the current target — REMB rides unreliable
+            // RTCP, and restoring max on transient silence ramps the host
+            // back into the congestion that caused the silence (yo-yo).
             return;
         };
 
@@ -472,6 +473,15 @@ impl StreamManager {
     async fn handle_viewer_left(&mut self, viewer_id: &str) {
         self.viewer_remb.remove(viewer_id);
         self.sink.on_viewer_left(viewer_id).await;
+        if self.viewer_remb.is_empty() {
+            // No viewers remain: restore the configured ceiling so the next
+            // viewer starts at full quality. Distinct from stale-REMB hold:
+            // an empty map after an explicit leave is real, not packet loss.
+            if self.apply_bitrate_kbps(self.max_bitrate_kbps) {
+                self.refresh_pacing_target().await;
+            }
+            return;
+        }
         let _ = self.apply_remb_aggregate(Instant::now()).await;
     }
 
@@ -1183,6 +1193,44 @@ mod tests {
             sink.pacing_kbps.load(Ordering::Relaxed),
             StreamManager::calc_pacing_target_kbps(max_bitrate_kbps)
         );
+        std::mem::forget(mgr);
+    }
+
+    #[test]
+    fn stale_remb_entries_hold_bitrate_instead_of_restoring_max() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        let config = StreamConfig::from_preset(QualityPreset::High, Codec::H264);
+        let max_bitrate_kbps = config.bitrate_kbps;
+        let sink = Arc::new(FakeSink::new());
+        let (_video_tx, video_rx) = mpsc::channel(4);
+        let (_audio_tx, audio_rx) = mpsc::channel(4);
+        let mut mgr = StreamManager::new(
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            sink.clone(),
+            config,
+            video_rx,
+            audio_rx,
+        );
+        // A live viewer whose REMB heartbeats stopped arriving (lost RTCP):
+        // the entry is stale but no leave was signaled. The host must hold
+        // the current target rather than ramping back into congestion.
+        mgr.current_bitrate_kbps = 3_000;
+        mgr.viewer_remb.insert(
+            "quiet-viewer".to_string(),
+            ViewerRembState {
+                bitrate_bps: 3_000_000,
+                updated_at: Instant::now() - Duration::from_secs(REMB_STALE_SECS + 7),
+            },
+        );
+
+        rt.block_on(mgr.apply_remb_aggregate(Instant::now()));
+
+        assert_ne!(mgr.current_bitrate_kbps, max_bitrate_kbps);
+        assert_eq!(mgr.current_bitrate_kbps, 3_000);
         std::mem::forget(mgr);
     }
 

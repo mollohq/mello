@@ -247,6 +247,10 @@ typedef struct MelloRtpVideoStats {
     uint64_t tx_pli_requests;
     uint64_t tx_remb_reports;
     uint32_t tx_latest_remb_bitrate_bps;
+    uint64_t tx_rtx_requests;
+    uint64_t tx_rtx_sent;
+    uint64_t tx_rtx_cache_misses;
+    uint64_t tx_rtx_queue_dropped;
 
     uint64_t rx_ingress_packets;
     uint64_t rx_ingress_bytes;

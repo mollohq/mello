@@ -439,6 +439,12 @@ impl super::Client {
 
         if vs.mode == "sfu" {
             if let Some(conn) = vs.sfu_connection.clone() {
+                // ~2s control-channel ping: the stream path had no RTT signal
+                // at all (send_ping was only wired for voice), leaving rtt_ms
+                // dark in viewer telemetry.
+                if vs.stream_tick_count.is_multiple_of(125) {
+                    conn.send_ping();
+                }
                 tick_viewer_congestion_sfu(vs, &conn);
                 let ingress = poll_sfu_viewer_access_units(vs, viewer, &conn);
                 if ingress.access_units_fed > 0 {
@@ -551,14 +557,21 @@ impl super::Client {
                 }
             }
 
+            let rtt_ms = if vs.mode == "sfu" {
+                vs.sfu_connection.as_ref().map(|conn| conn.rtt_ms())
+            } else {
+                NonNull::new(vs.peer)
+                    .map(|peer| unsafe { mello_sys::mello_peer_rtt_ms(peer.as_ptr()) })
+            };
             log::info!(
-                "Stream cadence: mode={} tick_hz={:.1} present_attempt_hz={:.1} present_fps={:.1} forced={} skipped_unconsumed={}",
+                "Stream cadence: mode={} tick_hz={:.1} present_attempt_hz={:.1} present_fps={:.1} forced={} skipped_unconsumed={} rtt_ms={:.0}",
                 vs.mode,
                 stream_tick_hz,
                 present_attempt_hz,
                 present_fps,
                 delta_present_forced,
-                delta_present_skipped
+                delta_present_skipped,
+                rtt_ms.unwrap_or(-1.0)
             );
 
             vs.debug_last_emit = Instant::now();
@@ -579,6 +592,13 @@ impl super::Client {
         let Some(sink) = self.stream_host_sink.clone() else {
             return;
         };
+
+        // ~2s control-channel ping so the host measures its RTT to the SFU
+        // and the control round-trip stays observable (125 x 16ms ticks).
+        self.host_sfu_ping_ticks = self.host_sfu_ping_ticks.wrapping_add(1);
+        if self.host_sfu_ping_ticks.is_multiple_of(125) {
+            conn.send_ping();
+        }
 
         for event in conn.poll_events() {
             match event {

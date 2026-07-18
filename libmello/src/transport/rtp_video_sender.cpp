@@ -5,8 +5,8 @@
 #include <rtc/mediahandler.hpp>
 #include <rtc/plihandler.hpp>
 #include <rtc/rembhandler.hpp>
-#include <rtc/rtcpnackresponder.hpp>
 #include <rtc/rtcpsrreporter.hpp>
+#include <rtc/rtp.hpp>
 #include <rtc/track.hpp>
 
 #include <atomic>
@@ -16,6 +16,7 @@
 #include <mutex>
 #include <stdexcept>
 #include <thread>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -25,6 +26,12 @@ namespace {
 constexpr uint32_t kVideoClockRate = 90'000;
 constexpr size_t kMaxFragmentPayload = 1'100;
 constexpr size_t kNackCachePackets = 512;
+// Repairs older than this cannot make the receiver's AU deadline; evicting
+// them keeps the cache honest on high-RTT links instead of answering NACKs
+// with packets the receiver has already gated on.
+constexpr auto kNackCacheMaxAge = std::chrono::microseconds(1'000'000);
+// Bound on retransmits queued for the pacing worker.
+constexpr size_t kMaxRtxQueuePackets = 256;
 constexpr uint64_t kMicrosPerSecond = 1'000'000;
 constexpr uint64_t kRtpTimestampModulus = uint64_t{1} << 32;
 constexpr uint64_t kNanosPerSecond = 1'000'000'000;
@@ -231,6 +238,128 @@ private:
     CaptureCallback callback_;
 };
 
+// Caching NACK responder. Unlike rtc::RtcpNackResponder, which re-sends
+// cached packets directly from the RTCP thread (bypassing the pacing worker
+// and its bandwidth accounting), this handler queues retransmits onto the
+// sender's pacing worker so repairs are paced and interleave safely with
+// fresh access units. Cache is count- and age-bounded.
+class MelloNackResponder final : public rtc::MediaHandler {
+public:
+    using RtxCallback = std::function<void(rtc::message_ptr packet)>;
+    using StatsCallback =
+        std::function<void(uint64_t requests, uint64_t cache_misses)>;
+
+    MelloNackResponder(
+        size_t max_packets,
+        RtxCallback on_rtx,
+        StatsCallback on_stats
+    )
+        : max_packets_(max_packets),
+          on_rtx_(std::move(on_rtx)),
+          on_stats_(std::move(on_stats)) {}
+
+    void outgoing(
+        rtc::message_vector& messages,
+        const rtc::message_callback& /*send*/
+    ) override {
+        for (const auto& message : messages) {
+            if (!message || message->type == rtc::Message::Control
+                || message->size() < sizeof(rtc::RtpHeader)) {
+                continue;
+            }
+            const auto* rtp =
+                reinterpret_cast<const rtc::RtpHeader*>(message->data());
+            const uint16_t seq = rtp->seqNumber();
+            std::lock_guard<std::mutex> lock(cache_mutex_);
+            evict_expired_locked();
+            cache_order_.push_back(seq);
+            cache_.emplace(seq, CacheEntry{message, SteadyClock::now()});
+            while (cache_.size() > max_packets_) {
+                cache_.erase(cache_order_.front());
+                cache_order_.pop_front();
+            }
+        }
+    }
+
+    void incoming(
+        rtc::message_vector& messages,
+        const rtc::message_callback& /*send*/
+    ) override {
+        for (const auto& message : messages) {
+            if (!message || message->type != rtc::Message::Control) {
+                continue;
+            }
+            size_t offset = 0;
+            while (offset + sizeof(rtc::RtcpNack) <= message->size()) {
+                auto* nack =
+                    reinterpret_cast<rtc::RtcpNack*>(message->data() + offset);
+                offset += nack->header.header.lengthInBytes();
+                if (offset > message->size()) {
+                    break;
+                }
+                if (nack->header.header.payloadType() != 205
+                    || nack->header.header.reportCount() != 1) {
+                    continue;
+                }
+                handle_nack(*nack);
+            }
+        }
+    }
+
+private:
+    struct CacheEntry {
+        rtc::message_ptr packet;
+        SteadyClock::time_point stored_at;
+    };
+
+    void handle_nack(rtc::RtcpNack& nack) {
+        uint64_t requests = 0;
+        uint64_t misses = 0;
+        const unsigned int field_count = nack.getSeqNoCount();
+        for (unsigned int i = 0; i < field_count; ++i) {
+            for (const uint16_t seq : nack.parts[i].getSequenceNumbers()) {
+                ++requests;
+                rtc::message_ptr packet;
+                {
+                    std::lock_guard<std::mutex> lock(cache_mutex_);
+                    evict_expired_locked();
+                    const auto it = cache_.find(seq);
+                    if (it != cache_.end()) {
+                        packet = it->second.packet;
+                    }
+                }
+                if (packet) {
+                    on_rtx_(std::move(packet));
+                } else {
+                    ++misses;
+                }
+            }
+        }
+        if (on_stats_) {
+            on_stats_(requests, misses);
+        }
+    }
+
+    void evict_expired_locked() {
+        const auto cutoff = SteadyClock::now() - kNackCacheMaxAge;
+        while (!cache_order_.empty()) {
+            const auto it = cache_.find(cache_order_.front());
+            if (it == cache_.end() || it->second.stored_at >= cutoff) {
+                break;
+            }
+            cache_.erase(it);
+            cache_order_.pop_front();
+        }
+    }
+
+    const size_t max_packets_;
+    RtxCallback on_rtx_;
+    StatsCallback on_stats_;
+    std::mutex cache_mutex_;
+    std::unordered_map<uint16_t, CacheEntry> cache_;
+    std::deque<uint16_t> cache_order_;
+};
+
 } // namespace
 
 struct RtpVideoSender::State
@@ -358,8 +487,26 @@ struct RtpVideoSender::State
         if (batch_ready) {
             throw std::logic_error("RTP pacing batch is already occupied");
         }
+        send_callback = next_batch.send;
         paced_batch = std::move(next_batch);
         batch_ready = true;
+    }
+
+    void enqueue_rtx(rtc::message_ptr packet) {
+        {
+            std::lock_guard<std::mutex> lock(queue_mutex);
+            if (rtx_queue.size() >= kMaxRtxQueuePackets) {
+                rtx_queue.pop_front();
+                rtx_queue_dropped.fetch_add(1, std::memory_order_relaxed);
+            }
+            rtx_queue.push_back(std::move(packet));
+        }
+        queue_cv.notify_one();
+    }
+
+    void record_rtx_stats(uint64_t requests, uint64_t cache_misses) noexcept {
+        rtx_requests.fetch_add(requests, std::memory_order_relaxed);
+        rtx_cache_misses.fetch_add(cache_misses, std::memory_order_relaxed);
     }
 
     bool take_batch(PacedBatch& destination) noexcept {
@@ -379,11 +526,11 @@ struct RtpVideoSender::State
         batch_ready = false;
     }
 
-    bool wait_for_pacing_slot(
-        SteadyClock::time_point previous_send_time,
-        size_t previous_wire_bytes,
-        SteadyClock::time_point captured_at
-    ) noexcept {
+    // Per-packet leaky bucket: each packet waits for its own slot so a frame
+    // of fragments is spread across its wire time instead of bursting. A
+    // two-packet-interval lag allowance absorbs scheduler/timer granularity
+    // without letting bursts grow unbounded. Returns false when stopping.
+    bool wait_for_slot(uint64_t wire_bytes) noexcept {
         std::unique_lock<std::mutex> lock(pacing_mutex);
         for (;;) {
             if (stopping.load(std::memory_order_acquire)) {
@@ -392,20 +539,26 @@ struct RtpVideoSender::State
 
             const uint64_t observed_target =
                 pacing_target_bps.load(std::memory_order_relaxed);
-            const auto deadline = previous_send_time
-                + packet_interval(previous_wire_bytes, observed_target);
-            const uint64_t scheduled_delay =
-                elapsed_micros(deadline, captured_at);
-            current_pacing_delay_us.store(
-                scheduled_delay,
-                std::memory_order_relaxed
-            );
-            update_max(max_pacing_delay_us, scheduled_delay);
+            const auto interval =
+                packet_interval(static_cast<size_t>(wire_bytes), observed_target);
+            const auto now = SteadyClock::now();
 
-            if (SteadyClock::now() >= deadline) {
+            if (!has_next_slot) {
+                next_slot = now + interval;
+                has_next_slot = true;
                 return true;
             }
 
+            const auto max_lag = interval * 2;
+            if (next_slot + max_lag < now) {
+                next_slot = now - max_lag;
+            }
+            if (now >= next_slot) {
+                next_slot += interval;
+                return true;
+            }
+
+            const auto deadline = next_slot;
             pacing_cv.wait_until(lock, deadline, [this, observed_target]() {
                 return stopping.load(std::memory_order_acquire)
                     || pacing_target_bps.load(std::memory_order_relaxed)
@@ -416,12 +569,9 @@ struct RtpVideoSender::State
 
     bool pace_batch(PacedBatch& batch) noexcept {
         bool all_packets_sent = true;
-        size_t total_wire_bytes = 0;
-        SteadyClock::time_point batch_send_start = SteadyClock::now();
 
         for (const auto& packet : batch.packets) {
             if (stopping.load(std::memory_order_acquire)) {
-                current_pacing_delay_us.store(0, std::memory_order_relaxed);
                 return false;
             }
 
@@ -433,6 +583,9 @@ struct RtpVideoSender::State
 
             const uint64_t wire_bytes =
                 static_cast<uint64_t>(packet->size());
+            if (!wait_for_slot(wire_bytes)) {
+                return false;
+            }
             try {
                 batch.send(packet);
                 rtp_packets_sent.fetch_add(1, std::memory_order_relaxed);
@@ -440,50 +593,87 @@ struct RtpVideoSender::State
                     wire_bytes,
                     std::memory_order_relaxed
                 );
-                total_wire_bytes += static_cast<size_t>(wire_bytes);
             } catch (...) {
                 send_failures.fetch_add(1, std::memory_order_relaxed);
                 all_packets_sent = false;
             }
         }
 
-        if (total_wire_bytes != 0) {
-            const auto send_time = SteadyClock::now();
-            const uint64_t pacing_delay =
-                elapsed_micros(send_time, batch.captured_at);
-            current_pacing_delay_us.store(
-                pacing_delay,
-                std::memory_order_relaxed
-            );
-            update_max(max_pacing_delay_us, pacing_delay);
+        const uint64_t pacing_delay =
+            elapsed_micros(SteadyClock::now(), batch.captured_at);
+        current_pacing_delay_us.store(pacing_delay, std::memory_order_relaxed);
+        update_max(max_pacing_delay_us, pacing_delay);
+        return all_packets_sent;
+    }
 
-            // Pace between access units, not between RTP fragments of one AU.
-            // Inter-packet pacing exceeded the receiver assembly deadline and
-            // prevented IDR+SPS+PPS from completing on the viewer.
-            if (!wait_for_pacing_slot(
-                batch_send_start,
-                total_wire_bytes,
-                batch.captured_at)) {
-                current_pacing_delay_us.store(0, std::memory_order_relaxed);
-                return false;
+    // Retransmits are time-critical (receiver AU deadlines are short), so
+    // they drain ahead of fresh access units — but through the same pacing
+    // budget. Unpaced repair bursts amplify the congestion that caused the
+    // loss.
+    void send_pending_rtx() noexcept {
+        for (;;) {
+            rtc::message_ptr packet;
+            {
+                std::lock_guard<std::mutex> lock(queue_mutex);
+                if (rtx_queue.empty()) {
+                    return;
+                }
+                packet = std::move(rtx_queue.front());
+                rtx_queue.pop_front();
+            }
+            if (!packet) {
+                continue;
+            }
+            rtc::message_callback send;
+            {
+                std::lock_guard<std::mutex> lock(batch_mutex);
+                send = send_callback;
+            }
+            if (!send || !track_is_open()) {
+                send_failures.fetch_add(1, std::memory_order_relaxed);
+                continue;
+            }
+            const uint64_t wire_bytes =
+                static_cast<uint64_t>(packet->size());
+            if (!wait_for_slot(wire_bytes)) {
+                return;
+            }
+            try {
+                send(packet);
+                rtx_sent.fetch_add(1, std::memory_order_relaxed);
+                rtp_packets_sent.fetch_add(1, std::memory_order_relaxed);
+                rtp_wire_bytes_sent.fetch_add(
+                    wire_bytes,
+                    std::memory_order_relaxed
+                );
+            } catch (...) {
+                send_failures.fetch_add(1, std::memory_order_relaxed);
             }
         }
-
-        current_pacing_delay_us.store(0, std::memory_order_relaxed);
-        return all_packets_sent;
     }
 
     void worker_main() noexcept {
         for (;;) {
-            AccessUnit access_unit;
             {
                 std::unique_lock<std::mutex> lock(queue_mutex);
                 queue_cv.wait(lock, [this]() {
                     return stopping.load(std::memory_order_acquire)
-                        || !access_unit_queue.empty();
+                        || !access_unit_queue.empty()
+                        || !rtx_queue.empty();
                 });
-                if (stopping.load(std::memory_order_acquire)) {
-                    return;
+            }
+            if (stopping.load(std::memory_order_acquire)) {
+                return;
+            }
+
+            // Time-critical repairs drain ahead of fresh access units.
+            send_pending_rtx();
+
+            AccessUnit access_unit;
+            {
+                std::lock_guard<std::mutex> lock(queue_mutex);
+                if (access_unit_queue.empty()) {
+                    continue;
                 }
 
                 access_unit = std::move(access_unit_queue.front());
@@ -554,10 +744,18 @@ struct RtpVideoSender::State
     std::mutex batch_mutex;
     PacedBatch paced_batch;
     bool batch_ready = false;
+    // Transport send path captured from the packetizer chain; the pacing
+    // worker uses it to emit retransmits through the same socket as fresh
+    // access units.
+    rtc::message_callback send_callback;
 
     std::mutex pacing_mutex;
     std::condition_variable pacing_cv;
     std::atomic<uint64_t> pacing_target_bps{0};
+    // Per-packet leaky-bucket state (worker thread only, guarded by
+    // pacing_mutex because the target is updated cross-thread).
+    SteadyClock::time_point next_slot{};
+    bool has_next_slot = false;
 
     std::mutex shutdown_mutex;
     std::thread worker;
@@ -582,6 +780,14 @@ struct RtpVideoSender::State
     std::atomic<uint64_t> current_pacing_delay_us{0};
     std::atomic<uint64_t> max_pacing_delay_us{0};
     std::atomic<uint64_t> local_idr_requests{0};
+
+    // Retransmits requested by inbound NACKs, drained by the pacing worker
+    // ahead of fresh access units but through the same pacing budget.
+    std::deque<rtc::message_ptr> rtx_queue; // under queue_mutex
+    std::atomic<uint64_t> rtx_requests{0};
+    std::atomic<uint64_t> rtx_sent{0};
+    std::atomic<uint64_t> rtx_cache_misses{0};
+    std::atomic<uint64_t> rtx_queue_dropped{0};
     std::atomic<uint64_t> pli_requests{0};
     std::atomic<uint64_t> remb_reports{0};
     std::atomic<uint32_t> latest_remb_bitrate_bps{0};
@@ -628,11 +834,21 @@ RtpVideoSender::RtpVideoSender(
         packetizer->addToChain(
             std::make_shared<rtc::RtcpSrReporter>(rtp_config)
         );
-        packetizer->addToChain(
-            std::make_shared<rtc::RtcpNackResponder>(kNackCachePackets)
-        );
 
         const std::weak_ptr<State> weak_state = state;
+        packetizer->addToChain(std::make_shared<MelloNackResponder>(
+            kNackCachePackets,
+            [weak_state](rtc::message_ptr packet) {
+                if (const auto locked = weak_state.lock()) {
+                    locked->enqueue_rtx(std::move(packet));
+                }
+            },
+            [weak_state](uint64_t requests, uint64_t cache_misses) {
+                if (const auto locked = weak_state.lock()) {
+                    locked->record_rtx_stats(requests, cache_misses);
+                }
+            }
+        ));
         packetizer->addToChain(std::make_shared<rtc::PliHandler>(
             [weak_state]() {
                 if (const auto locked = weak_state.lock()) {
@@ -927,6 +1143,14 @@ RtpVideoSenderStats RtpVideoSender::stats() const noexcept {
         state->remb_reports.load(std::memory_order_relaxed);
     result.latest_remb_bitrate_bps =
         state->latest_remb_bitrate_bps.load(std::memory_order_relaxed);
+    result.rtx_requests =
+        state->rtx_requests.load(std::memory_order_relaxed);
+    result.rtx_sent =
+        state->rtx_sent.load(std::memory_order_relaxed);
+    result.rtx_cache_misses =
+        state->rtx_cache_misses.load(std::memory_order_relaxed);
+    result.rtx_queue_dropped =
+        state->rtx_queue_dropped.load(std::memory_order_relaxed);
     return result;
 }
 

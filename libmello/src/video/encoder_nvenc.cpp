@@ -8,6 +8,18 @@ namespace mello::video {
 
 static constexpr const char* TAG = "video/encoder";
 
+// VBV spans ~0.5s of the max rate, floored at 4 frames of bits. A one-frame
+// VBV (~17 KB at 8 Mbps/60 fps) starves IDRs and high-motion frames into
+// visible quality pumping; 0.5s keeps rate control tight for interactive
+// latency while giving keyframes room.
+static uint32_t compute_vbv_bits(uint32_t avg_bps, uint32_t max_bps, uint32_t fps) {
+    uint32_t frame_bits = fps > 0 ? avg_bps / fps : 1u;
+    if (frame_bits == 0) frame_bits = 1;
+    uint32_t vbv = max_bps / 2;
+    if (vbv < frame_bits * 4) vbv = frame_bits * 4;
+    return vbv;
+}
+
 typedef NVENCSTATUS(NVENCAPI* PFN_NvEncodeAPIGetMaxSupportedVersion)(uint32_t*);
 typedef NVENCSTATUS(NVENCAPI* PFN_NvEncodeAPICreateInstance)(NV_ENCODE_API_FUNCTION_LIST*);
 
@@ -148,16 +160,17 @@ bool NvencEncoder::initialize(const GraphicsDevice& device, const EncoderConfig&
     enc_config.rcParams.version = NV_ENC_RC_PARAMS_VER;
 
     // VBR with moderate headroom: 1.25x max lets keyframes get extra bits
-    // without large bandwidth spikes. Minimum safe VBV = one frame of bits.
+    // without large bandwidth spikes. VBV spans ~0.5s of the max rate (see
+    // compute_vbv_bits) so IDRs are not rate-starved.
     const uint32_t fps = config.fps > 0 ? config.fps : 60;
-    uint32_t avg = config.bitrate_kbps * 1000;
-    uint32_t max = avg + avg / 4;
-    uint32_t vbv = avg / fps;
-    if (vbv == 0) vbv = 1;
+    const uint32_t avg = config.bitrate_kbps * 1000;
+    const uint32_t max = avg + avg / 4;
+    const uint32_t vbv = compute_vbv_bits(avg, max, fps);
     enc_config.rcParams.rateControlMode = NV_ENC_PARAMS_RC_VBR;
     enc_config.rcParams.averageBitRate  = avg;
     enc_config.rcParams.maxBitRate      = max;
     enc_config.rcParams.vbvBufferSize   = vbv;
+    enc_config.rcParams.vbvInitialDelay = vbv / 2;
     enc_config.rcParams.enableLookahead   = 0;
     enc_config.rcParams.enableExtLookahead = 0;
     enc_config.rcParams.lookaheadDepth  = 0;
@@ -216,6 +229,7 @@ bool NvencEncoder::initialize(const GraphicsDevice& device, const EncoderConfig&
         FreeLibrary(dll_); dll_ = nullptr;
         return false;
     }
+    base_config_ = enc_config;
     MELLO_LOG_INFO(TAG,
         "NVENC: effective preset=%s RC=VBR avg=%u max=%u vbv=%u spatialAQ=8 B-frames=disabled lookahead=disabled",
         used_preset_label, avg, max, vbv);
@@ -387,8 +401,29 @@ bool NvencEncoder::encode(ID3D11Texture2D* nv12_texture, EncodedPacket& out) {
 
     frame_seq_++;
     stats_.bytes_sent += out.data.size();
-    stats_.fps_actual = config_.fps;
-    stats_.bitrate_kbps = config_.bitrate_kbps;
+
+    // Measured rolling stats: echoing the configured fps/bitrate here made
+    // every downstream consumer (telemetry, certification) read config, not
+    // reality.
+    stats_window_frames_++;
+    stats_window_bytes_ += out.data.size();
+    const auto stats_now = std::chrono::steady_clock::now();
+    if (stats_window_start_.time_since_epoch().count() == 0) {
+        stats_window_start_ = stats_now;
+    }
+    const auto stats_elapsed_us =
+        std::chrono::duration_cast<std::chrono::microseconds>(
+            stats_now - stats_window_start_).count();
+    if (stats_elapsed_us >= 1'000'000) {
+        stats_.fps_actual = static_cast<uint32_t>(
+            (static_cast<uint64_t>(stats_window_frames_) * 1'000'000)
+            / static_cast<uint64_t>(stats_elapsed_us));
+        stats_.bitrate_kbps = static_cast<uint32_t>(
+            (stats_window_bytes_ * 8) / static_cast<uint64_t>(stats_elapsed_us / 1'000));
+        stats_window_frames_ = 0;
+        stats_window_bytes_ = 0;
+        stats_window_start_ = stats_now;
+    }
     if (out.is_keyframe) {
         stats_.keyframes_sent++;
         MELLO_LOG_DEBUG(TAG, "Keyframe encoded (reason=%s seq=%llu)",
@@ -407,36 +442,52 @@ void NvencEncoder::request_keyframe() {
 void NvencEncoder::set_bitrate(uint32_t kbps) {
     if (encoder_) {
         const uint32_t fps = config_.fps > 0 ? config_.fps : 60;
-        uint32_t avg = kbps * 1000;
-        uint32_t max = avg + avg / 4;
-        uint32_t vbv = avg / fps;
-        if (vbv == 0) vbv = 1;
+        const uint32_t avg = kbps * 1000;
+        const uint32_t max = avg + avg / 4;
+        const uint32_t vbv = compute_vbv_bits(avg, max, fps);
 
-        NV_ENC_RECONFIGURE_PARAMS reconfig = {NV_ENC_RECONFIGURE_PARAMS_VER};
-        NV_ENC_CONFIG enc_config = {NV_ENC_CONFIG_VER};
+        // Reconfigure from the full init-time config: NVENC re-init does not
+        // merge with the live session config, so the previous sparse config
+        // silently zeroed GOP length, idrPeriod, and the H.264 profile.
+        NV_ENC_CONFIG enc_config = base_config_;
+        enc_config.version = NV_ENC_CONFIG_VER;
+        enc_config.rcParams.version = NV_ENC_RC_PARAMS_VER;
         enc_config.rcParams.rateControlMode = NV_ENC_PARAMS_RC_VBR;
         enc_config.rcParams.averageBitRate  = avg;
         enc_config.rcParams.maxBitRate      = max;
         enc_config.rcParams.vbvBufferSize   = vbv;
-        enc_config.rcParams.enableLookahead   = 0;
-        enc_config.rcParams.enableExtLookahead = 0;
-        enc_config.rcParams.lookaheadDepth  = 0;
-        enc_config.rcParams.enableTemporalAQ = 0;
-        enc_config.rcParams.enableAQ        = 1;
-        enc_config.rcParams.aqStrength      = 8;
+        enc_config.rcParams.vbvInitialDelay = vbv / 2;
 
-        NV_ENC_INITIALIZE_PARAMS init = {NV_ENC_INITIALIZE_PARAMS_VER};
-        init.encodeWidth  = config_.width;
-        init.encodeHeight = config_.height;
-        init.frameRateNum = config_.fps;
-        init.frameRateDen = 1;
-        init.encodeConfig = &enc_config;
+        NV_ENC_RECONFIGURE_PARAMS reconfig;
+        memset(&reconfig, 0, sizeof(reconfig));
+        reconfig.version = NV_ENC_RECONFIGURE_PARAMS_VER;
+        reconfig.reInitEncodeParams.version = NV_ENC_INITIALIZE_PARAMS_VER;
+        reconfig.reInitEncodeParams.encodeWidth  = config_.width;
+        reconfig.reInitEncodeParams.encodeHeight = config_.height;
+        reconfig.reInitEncodeParams.frameRateNum = config_.fps;
+        reconfig.reInitEncodeParams.frameRateDen = 1;
+        reconfig.reInitEncodeParams.encodeConfig = &enc_config;
+        // IDR only on large down-steps: congestion events can leave damaged
+        // reference chains, so a forced keyframe helps resync. Routine REMB
+        // adjustments must not keyframe-storm the stream.
+        const bool big_down_step =
+            config_.bitrate_kbps > 0 && kbps * 4 < config_.bitrate_kbps * 3;
+        reconfig.forceIDR = big_down_step ? 1 : 0;
 
-        reconfig.reInitEncodeParams = init;
-        reconfig.forceIDR = 1;
-        fn_.nvEncReconfigureEncoder(encoder_, &reconfig);
-        force_idr_ = true;
-        MELLO_LOG_DEBUG(TAG, "NVENC: reconfigured bitrate=%ukbps vbv=%u forceIDR=1", kbps, vbv);
+        const NVENCSTATUS reconfig_status =
+            fn_.nvEncReconfigureEncoder(encoder_, &reconfig);
+        if (reconfig_status != NV_ENC_SUCCESS) {
+            MELLO_LOG_ERROR(TAG,
+                "NVENC: nvEncReconfigureEncoder failed: %d (bitrate=%ukbps)",
+                reconfig_status, kbps);
+        } else {
+            if (big_down_step) {
+                force_idr_ = true;
+            }
+            MELLO_LOG_DEBUG(TAG,
+                "NVENC: reconfigured bitrate=%ukbps vbv=%u forceIDR=%d",
+                kbps, vbv, reconfig.forceIDR);
+        }
     }
     config_.bitrate_kbps = kbps;
 }

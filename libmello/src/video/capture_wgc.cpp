@@ -70,7 +70,14 @@ bool WgcCapture::initialize(const GraphicsDevice& device, const CaptureSourceDes
 
 bool WgcCapture::start(uint32_t target_fps, FrameCallback callback) {
     if (running_.load()) return false;
-    (void)target_fps; // WGC fires at compositor rate; we accept all frames
+
+    {
+        std::lock_guard<std::mutex> lock(throttle_mutex_);
+        target_fps_ = target_fps > 0 ? target_fps : 60;
+        frame_credit_us_ = 0.0;
+        last_frame_us_ = 0;
+        throttle_primed_ = false;
+    }
 
     callback_ = std::move(callback);
 
@@ -138,10 +145,33 @@ void WgcCapture::on_frame_arrived(
     HRESULT hr = access->GetInterface(IID_PPV_ARGS(&texture));
     if (FAILED(hr)) return;
 
+    // Throttle compositor-rate delivery down to target_fps. Without this the
+    // encode queue absorbs a permanent 2x+ arrival rate on high-refresh
+    // desktops and churns drop-oldest frames instead of encoding useful ones.
+    const uint64_t now = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count());
+    {
+        std::lock_guard<std::mutex> lock(throttle_mutex_);
+        const double target_interval_us = 1'000'000.0 / target_fps_;
+        if (!throttle_primed_) {
+            throttle_primed_ = true;
+        } else {
+            frame_credit_us_ += static_cast<double>(now - last_frame_us_);
+            if (frame_credit_us_ < target_interval_us) {
+                frame.Close();
+                return;
+            }
+            frame_credit_us_ -= target_interval_us;
+            // Clamp runaway credit after stalls so we never burst-catch-up.
+            const double max_credit = 2.0 * target_interval_us;
+            if (frame_credit_us_ > max_credit) frame_credit_us_ = max_credit;
+        }
+        last_frame_us_ = now;
+    }
+
     if (callback_) {
-        auto now = std::chrono::duration_cast<std::chrono::microseconds>(
-            std::chrono::steady_clock::now().time_since_epoch()).count();
-        callback_(texture.Get(), static_cast<uint64_t>(now));
+        callback_(texture.Get(), now);
     }
 
     frame.Close();

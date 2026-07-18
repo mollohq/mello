@@ -14,11 +14,43 @@
 #include <memory>
 
 #ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#include <timeapi.h>
+#include <atomic>
 #define mello_stricmp _stricmp
 #else
 #include <strings.h>
 #define mello_stricmp strcasecmp
 #endif
+
+// Streaming threads (RTP pacing worker, receiver tick, client tokio timers)
+// sleep at millisecond granularity. Windows' default scheduler resolution is
+// ~15.6 ms, which quantizes pacing sleeps into burst-then-gap delivery.
+// Raise the process timer resolution while any stream host/viewer is active.
+namespace {
+#ifdef _WIN32
+std::atomic<int> g_stream_timer_refs{0};
+#endif
+
+void stream_timer_resolution_acquire() {
+#ifdef _WIN32
+    if (g_stream_timer_refs.fetch_add(1, std::memory_order_acq_rel) == 0) {
+        timeBeginPeriod(1);
+    }
+#endif
+}
+
+void stream_timer_resolution_release() {
+#ifdef _WIN32
+    if (g_stream_timer_refs.fetch_sub(1, std::memory_order_acq_rel) == 1) {
+        timeEndPeriod(1);
+    }
+#endif
+}
+} // namespace
 
 static char* dup_str(const char* s) {
     if (!s) return nullptr;
@@ -1073,6 +1105,7 @@ MelloStreamHost* mello_stream_start_host(
             delete host;
             return nullptr;
         }
+        stream_timer_resolution_acquire();
         return host;
     } catch (...) { return nullptr; }
 }
@@ -1083,6 +1116,7 @@ void mello_stream_stop_host(MelloStreamHost* host) {
         host->ctx->video().stop_host();
         delete host;
     } catch (...) {}
+    stream_timer_resolution_release();
 }
 
 void mello_stream_get_host_resolution(MelloStreamHost* host, uint32_t* width, uint32_t* height) {
@@ -1153,6 +1187,7 @@ MelloStreamView* mello_stream_start_viewer(
             delete view;
             return nullptr;
         }
+        stream_timer_resolution_acquire();
         return view;
     } catch (...) { return nullptr; }
 }
@@ -1164,6 +1199,7 @@ void mello_stream_stop_viewer(MelloStreamView* view) {
         view->ctx->video().stop_viewer();
         delete view;
     } catch (...) {}
+    stream_timer_resolution_release();
 }
 
 bool mello_stream_feed_packet(MelloStreamView* view, const uint8_t* data, int size, bool is_keyframe) {

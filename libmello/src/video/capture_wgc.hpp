@@ -43,6 +43,15 @@ private:
 
     std::mutex   cursor_mutex_;
     CursorData   cursor_;
+
+    // Rate throttle: WGC fires at compositor rate (e.g. 144 Hz) regardless of
+    // the encode target. An interval accumulator delivers exactly target_fps
+    // on average while keeping phase jitter to one vsync quantum.
+    std::mutex   throttle_mutex_;
+    uint32_t     target_fps_ = 60;
+    double       frame_credit_us_ = 0.0;
+    uint64_t     last_frame_us_ = 0;
+    bool         throttle_primed_ = false;
 };
 
 } // namespace mello::video
