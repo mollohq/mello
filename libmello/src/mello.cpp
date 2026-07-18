@@ -991,10 +991,15 @@ int mello_enumerate_games(MelloContext* ctx, MelloGameProcess* out, int max_coun
         for (int i = 0; i < count; ++i) {
             out[i].pid = games[i].pid;
             out[i].is_fullscreen = games[i].is_fullscreen;
+            out[i].is_foreground = games[i].is_foreground;
             strncpy(out[i].name, games[i].name.c_str(), sizeof(out[i].name) - 1);
             out[i].name[sizeof(out[i].name) - 1] = '\0';
             strncpy(out[i].exe, games[i].exe.c_str(), sizeof(out[i].exe) - 1);
             out[i].exe[sizeof(out[i].exe) - 1] = '\0';
+            strncpy(out[i].path, games[i].path.c_str(), sizeof(out[i].path) - 1);
+            out[i].path[sizeof(out[i].path) - 1] = '\0';
+            strncpy(out[i].title, games[i].window_title.c_str(), sizeof(out[i].title) - 1);
+            out[i].title[sizeof(out[i].title) - 1] = '\0';
         }
         return count;
     } catch (...) { return 0; }

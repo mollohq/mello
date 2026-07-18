@@ -10,6 +10,7 @@
 #include <wrl/client.h>
 #include <algorithm>
 #include <cctype>
+#include <unordered_map>
 #pragma comment(lib, "dwmapi.lib")
 #pragma comment(lib, "dxgi.lib")
 using Microsoft::WRL::ComPtr;
@@ -61,8 +62,39 @@ std::vector<MonitorInfo> enumerate_monitors() {
     return result;
 }
 
+/// True when the window covers its monitor's full area — matches both
+/// borderless-windowed and exclusive fullscreen. Deliberately avoids the DXGI
+/// probe in capture_process.cpp, which needs a live D3D11 device and only
+/// detects exclusive mode.
+static bool window_is_fullscreen(HWND hwnd) {
+    RECT wr{};
+    if (!GetWindowRect(hwnd, &wr)) return false;
+    HMONITOR mon = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+    MONITORINFO mi{};
+    mi.cbSize = sizeof(mi);
+    if (!GetMonitorInfoW(mon, &mi)) return false;
+    return wr.left <= mi.rcMonitor.left && wr.top <= mi.rcMonitor.top &&
+           wr.right >= mi.rcMonitor.right && wr.bottom >= mi.rcMonitor.bottom;
+}
+
 std::vector<GameProcess> enumerate_game_processes() {
     std::vector<GameProcess> result;
+
+    // One window pass supplies per-pid title/path/fullscreen; the snapshot
+    // below still lists every process (windowless processes keep empty
+    // window fields). EnumWindows returns in z-order, so the first window
+    // seen for a pid is its topmost — treat it as the main window.
+    auto windows = enumerate_visible_windows();
+    std::unordered_map<uint32_t, const VisibleWindow*> window_by_pid;
+    window_by_pid.reserve(windows.size());
+    for (const auto& w : windows) {
+        window_by_pid.try_emplace(w.pid, &w);
+    }
+
+    DWORD fg_pid = 0;
+    if (HWND fg = GetForegroundWindow()) {
+        GetWindowThreadProcessId(fg, &fg_pid);
+    }
 
     HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
     if (snap == INVALID_HANDLE_VALUE) {
@@ -83,6 +115,13 @@ std::vector<GameProcess> enumerate_game_processes() {
             gp.name = exe_name;
             gp.exe  = exe_name;
             gp.is_fullscreen = false;
+            gp.is_foreground = (fg_pid != 0 && gp.pid == fg_pid);
+            if (auto it = window_by_pid.find(gp.pid); it != window_by_pid.end()) {
+                const VisibleWindow* w = it->second;
+                gp.window_title  = w->title;
+                gp.path          = w->path;
+                gp.is_fullscreen = window_is_fullscreen(static_cast<HWND>(w->hwnd));
+            }
             result.push_back(std::move(gp));
         } while (Process32NextW(snap, &pe));
     }
@@ -122,10 +161,14 @@ static BOOL CALLBACK enum_windows_cb(HWND hwnd, LPARAM lparam) {
     GetWindowThreadProcessId(hwnd, &pid);
 
     std::string exe_name;
+    std::string full_path;
     if (HANDLE proc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid)) {
         wchar_t exe_path[MAX_PATH]{};
         DWORD path_len = MAX_PATH;
         if (QueryFullProcessImageNameW(proc, 0, exe_path, &path_len)) {
+            char path_utf8[520]{};
+            WideCharToMultiByte(CP_UTF8, 0, exe_path, -1, path_utf8, sizeof(path_utf8), nullptr, nullptr);
+            full_path = path_utf8;
             const wchar_t* slash = wcsrchr(exe_path, L'\\');
             const wchar_t* fname = slash ? slash + 1 : exe_path;
             char fname_utf8[256]{};
@@ -139,6 +182,7 @@ static BOOL CALLBACK enum_windows_cb(HWND hwnd, LPARAM lparam) {
     vw.hwnd  = hwnd;
     vw.title = title_utf8;
     vw.exe   = std::move(exe_name);
+    vw.path  = std::move(full_path);
     vw.pid   = pid;
     result->push_back(std::move(vw));
 

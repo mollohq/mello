@@ -526,6 +526,12 @@ typedef struct MelloGameProcess {
     char     name[128];
     char     exe[260];
     bool     is_fullscreen;
+    /* Full executable path (UTF-8); empty when the process has no visible
+     * window (the path is only resolved for windowed processes). */
+    char     path[520];
+    /* Main window title (UTF-8); empty when the process has no visible window. */
+    char     title[256];
+    bool     is_foreground;
 } MelloGameProcess;
 
 /** List running processes matching the bundled game list. */

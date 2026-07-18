@@ -699,6 +699,9 @@ impl super::Client {
                 name: [0i8; 128],
                 exe: [0i8; 260],
                 is_fullscreen: false,
+                path: [0i8; 520],
+                title: [0i8; 256],
+                is_foreground: false,
             };
             32
         ];
