@@ -105,6 +105,10 @@ pub struct StreamManager {
     remb_increase_last_at: Instant,
     audio_seq: AtomicU16,
     last_queue_keyframe_request: Instant,
+    // Separate cooldown clocks per request class: a 2s queue-pressure
+    // request must not swallow a viewer's 500ms PLI/join keyframe (the
+    // viewer stays gated until an IDR actually arrives).
+    last_viewer_keyframe_request: Instant,
     last_pacing_telemetry: Option<PacingTelemetry>,
     last_pacing_sample_at: Instant,
     manager_video_packets_in_total: u64,
@@ -182,6 +186,8 @@ impl StreamManager {
             audio_seq: AtomicU16::new(0),
             last_queue_keyframe_request: Instant::now()
                 - Duration::from_secs(QUEUE_KEYFRAME_REQUEST_COOLDOWN_SECS),
+            last_viewer_keyframe_request: Instant::now()
+                - Duration::from_millis(VIEWER_KEYFRAME_REQUEST_COOLDOWN_MS),
             last_pacing_telemetry: None,
             last_pacing_sample_at: Instant::now(),
             manager_video_packets_in_total: 0,
@@ -535,26 +541,34 @@ impl StreamManager {
     }
 
     fn request_host_keyframe(&mut self, reason: &str) -> bool {
-        self.request_host_keyframe_with_cooldown(
-            reason,
-            Duration::from_secs(QUEUE_KEYFRAME_REQUEST_COOLDOWN_SECS),
-        )
+        if self.last_queue_keyframe_request.elapsed()
+            < Duration::from_secs(QUEUE_KEYFRAME_REQUEST_COOLDOWN_SECS)
+        {
+            return false;
+        }
+        self.fire_host_keyframe(reason, QUEUE_KEYFRAME_REQUEST_COOLDOWN_SECS * 1_000);
+        self.last_queue_keyframe_request = Instant::now();
+        true
     }
 
     fn request_host_keyframe_with_cooldown(&mut self, reason: &str, cooldown: Duration) -> bool {
-        if self.last_queue_keyframe_request.elapsed() < cooldown {
+        if self.last_viewer_keyframe_request.elapsed() < cooldown {
             return false;
         }
+        self.fire_host_keyframe(reason, cooldown.as_millis() as u64);
+        self.last_viewer_keyframe_request = Instant::now();
+        true
+    }
+
+    fn fire_host_keyframe(&mut self, reason: &str, cooldown_ms: u64) {
         unsafe {
             mello_sys::mello_stream_request_keyframe(self.host);
         }
-        self.last_queue_keyframe_request = Instant::now();
         log::warn!(
             "Stream manager keyframe request: reason={} cooldown_ms={}",
             reason,
-            cooldown.as_millis()
+            cooldown_ms
         );
-        true
     }
 
     async fn handle_video(&mut self, pkt: VideoPacket) {
@@ -751,6 +765,7 @@ mod tests {
     use super::{
         coalesce_video_packet, CoalesceOutcome, StreamManager, StreamSession, VideoPacket,
         ViewerRembState, MAX_VIDEO_COALESCE_DRAIN, REMB_STALE_SECS,
+        VIEWER_KEYFRAME_REQUEST_COOLDOWN_MS,
     };
     use crate::stream::config::{Codec, QualityPreset, StreamConfig};
     use crate::stream::error::StreamError;
@@ -1231,6 +1246,37 @@ mod tests {
 
         assert_ne!(mgr.current_bitrate_kbps, max_bitrate_kbps);
         assert_eq!(mgr.current_bitrate_kbps, 3_000);
+        std::mem::forget(mgr);
+    }
+
+    #[test]
+    fn viewer_keyframe_requests_use_a_separate_cooldown_clock() {
+        let config = StreamConfig::from_preset(QualityPreset::High, Codec::H264);
+        let sink = Arc::new(FakeSink::new());
+        let (_video_tx, video_rx) = mpsc::channel(4);
+        let (_audio_tx, audio_rx) = mpsc::channel(4);
+        let mut mgr = StreamManager::new(
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            sink,
+            config,
+            video_rx,
+            audio_rx,
+        );
+
+        // Queue-class request consumes the 2s queue cooldown...
+        assert!(mgr.request_host_keyframe("queue_pressure"));
+        assert!(!mgr.request_host_keyframe("queue_pressure"));
+        // ...but a viewer-class request (PLI/join) has its own 500ms clock
+        // and must not be swallowed by the recent queue-pressure request.
+        assert!(mgr.request_host_keyframe_with_cooldown(
+            "viewer_join",
+            Duration::from_millis(VIEWER_KEYFRAME_REQUEST_COOLDOWN_MS)
+        ));
+        assert!(!mgr.request_host_keyframe_with_cooldown(
+            "viewer_join",
+            Duration::from_millis(VIEWER_KEYFRAME_REQUEST_COOLDOWN_MS)
+        ));
         std::mem::forget(mgr);
     }
 
