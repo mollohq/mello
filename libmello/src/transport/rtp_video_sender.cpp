@@ -1,5 +1,7 @@
 #include "rtp_video_sender.hpp"
 
+#include "twcc.hpp"
+
 #include <rtc/frameinfo.hpp>
 #include <rtc/h264rtppacketizer.hpp>
 #include <rtc/mediahandler.hpp>
@@ -37,6 +39,15 @@ constexpr uint64_t kRtpTimestampModulus = uint64_t{1} << 32;
 constexpr uint64_t kNanosPerSecond = 1'000'000'000;
 
 using SteadyClock = std::chrono::steady_clock;
+
+uint16_t read_u16_be(const uint8_t* p) noexcept {
+    return static_cast<uint16_t>((static_cast<uint16_t>(p[0]) << 8) | p[1]);
+}
+
+int64_t steady_now_us() noexcept {
+    return std::chrono::duration_cast<std::chrono::microseconds>(
+        SteadyClock::now().time_since_epoch()).count();
+}
 
 bool is_send_direction(rtc::Description::Direction direction) noexcept {
     return direction == rtc::Description::Direction::SendOnly
@@ -238,25 +249,32 @@ private:
     CaptureCallback callback_;
 };
 
-// Caching NACK responder. Unlike rtc::RtcpNackResponder, which re-sends
-// cached packets directly from the RTCP thread (bypassing the pacing worker
-// and its bandwidth accounting), this handler queues retransmits onto the
-// sender's pacing worker so repairs are paced and interleave safely with
-// fresh access units. Cache is count- and age-bounded.
-class MelloNackResponder final : public rtc::MediaHandler {
+// Feedback handler for the sender's inbound RTCP. Two duties:
+//
+// - Generic NACK (PT=205, FMT=1): unlike rtc::RtcpNackResponder, which
+//   re-sends cached packets directly from the RTCP thread (bypassing the
+//   pacing worker and its bandwidth accounting), retransmits are queued onto
+//   the sender's pacing worker so repairs are paced and interleave safely
+//   with fresh access units. Cache is count- and age-bounded.
+// - TWCC (PT=205, FMT=15): parsed and forwarded to the delay-gradient
+//   estimator on the sender State.
+class MelloFeedbackHandler final : public rtc::MediaHandler {
 public:
     using RtxCallback = std::function<void(rtc::message_ptr packet)>;
     using StatsCallback =
         std::function<void(uint64_t requests, uint64_t cache_misses)>;
+    using TwccCallback = std::function<void(const TwccFeedback&)>;
 
-    MelloNackResponder(
+    MelloFeedbackHandler(
         size_t max_packets,
         RtxCallback on_rtx,
-        StatsCallback on_stats
+        StatsCallback on_stats,
+        TwccCallback on_twcc
     )
         : max_packets_(max_packets),
           on_rtx_(std::move(on_rtx)),
-          on_stats_(std::move(on_stats)) {}
+          on_stats_(std::move(on_stats)),
+          on_twcc_(std::move(on_twcc)) {}
 
     void outgoing(
         rtc::message_vector& messages,
@@ -290,18 +308,33 @@ public:
                 continue;
             }
             size_t offset = 0;
-            while (offset + sizeof(rtc::RtcpNack) <= message->size()) {
-                auto* nack =
-                    reinterpret_cast<rtc::RtcpNack*>(message->data() + offset);
-                offset += nack->header.header.lengthInBytes();
-                if (offset > message->size()) {
+            const uint8_t* data =
+                reinterpret_cast<const uint8_t*>(message->data());
+            while (offset + 4 <= message->size()) {
+                const uint8_t payload_type = data[offset + 1];
+                const uint8_t fmt = data[offset] & 0x1f;
+                const size_t packet_len =
+                    (static_cast<size_t>(read_u16_be(data + offset + 2)) + 1)
+                    * 4;
+                if (packet_len < 8 || offset + packet_len > message->size()) {
                     break;
                 }
-                if (nack->header.header.payloadType() != 205
-                    || nack->header.header.reportCount() != 1) {
-                    continue;
+                if (payload_type == 205 && fmt == 1
+                    && packet_len >= sizeof(rtc::RtcpNack)) {
+                    handle_nack(
+                        *reinterpret_cast<rtc::RtcpNack*>(
+                            message->data() + offset)
+                    );
+                } else if (payload_type == 205 && fmt == 15 && on_twcc_) {
+                    TwccFeedback feedback;
+                    if (parse_twcc_feedback(
+                            data + offset,
+                            packet_len,
+                            feedback)) {
+                        on_twcc_(feedback);
+                    }
                 }
-                handle_nack(*nack);
+                offset += packet_len;
             }
         }
     }
@@ -355,6 +388,7 @@ private:
     const size_t max_packets_;
     RtxCallback on_rtx_;
     StatsCallback on_stats_;
+    TwccCallback on_twcc_;
     std::mutex cache_mutex_;
     std::unordered_map<uint16_t, CacheEntry> cache_;
     std::deque<uint16_t> cache_order_;
@@ -380,12 +414,23 @@ struct RtpVideoSender::State
         uint64_t initial_pacing_target_bps,
         PliCallback pli_callback,
         RembCallback remb_callback,
-        LocalIdrNeededCallback local_idr_needed_callback
+        LocalIdrNeededCallback local_idr_needed_callback,
+        GccTargetCallback gcc_target_callback,
+        bool twcc_enabled
     )
         : pacing_target_bps(initial_pacing_target_bps),
           on_pli(std::move(pli_callback)),
           on_remb(std::move(remb_callback)),
-          on_local_idr_needed(std::move(local_idr_needed_callback)) {}
+          on_local_idr_needed(std::move(local_idr_needed_callback)),
+          on_gcc_target(std::move(gcc_target_callback)),
+          twcc_enabled(twcc_enabled) {
+        if (twcc_enabled) {
+            estimator = std::make_unique<GccEstimator>(
+                GccEstimator::Config{},
+                initial_pacing_target_bps
+            );
+        }
+    }
 
     ~State() {
         shutdown();
@@ -509,6 +554,88 @@ struct RtpVideoSender::State
         rtx_cache_misses.fetch_add(cache_misses, std::memory_order_relaxed);
     }
 
+    // Pacing budget: min(manager ceiling, estimator target) when TWCC is on.
+    uint64_t effective_target_bps() const noexcept {
+        const uint64_t manager_target =
+            pacing_target_bps.load(std::memory_order_relaxed);
+        if (!twcc_enabled) {
+            return manager_target;
+        }
+        const uint64_t gcc = gcc_target_bps.load(std::memory_order_relaxed);
+        return gcc > 0 && gcc < manager_target ? gcc : manager_target;
+    }
+
+    // Stamps a packet with a transport-wide sequence + send time. Returns a
+    // stamped copy (the input may be shared with the NACK cache); falls back
+    // to the original on failure or when TWCC is off. Worker thread only.
+    rtc::message_ptr stamp_outgoing(const rtc::message_ptr& packet) {
+        if (!twcc_enabled || !packet
+            || packet->type == rtc::Message::Control) {
+            return packet;
+        }
+        std::vector<uint8_t> bytes;
+        bytes.reserve(packet->size() + 8);
+        for (const std::byte b : *packet) {
+            bytes.push_back(static_cast<uint8_t>(b));
+        }
+        if (!stamper.stamp(bytes, steady_now_us())) {
+            return packet;
+        }
+        rtc::binary data;
+        data.reserve(bytes.size());
+        for (const uint8_t b : bytes) {
+            data.push_back(static_cast<std::byte>(b));
+        }
+        return std::make_shared<rtc::Message>(std::move(data), packet->type);
+    }
+
+    // RTCP thread: feed one parsed TWCC report into the estimator and
+    // publish significant target changes (pacer wake + Rust feedback).
+    void handle_twcc_feedback(const TwccFeedback& feedback) {
+        if (!estimator) {
+            return;
+        }
+        {
+            std::lock_guard<std::mutex> lock(estimator_mutex);
+            for (const auto& result : feedback.packets) {
+                int64_t send_time = -1;
+                if (result.received) {
+                    stamper.send_time_for(result.sequence, send_time);
+                }
+                estimator->on_packet(
+                    result.sequence,
+                    result.received,
+                    send_time,
+                    result.arrival_time_us
+                );
+            }
+        }
+        twcc_reports.fetch_add(1, std::memory_order_relaxed);
+
+        const uint64_t target = estimator->target_bps();
+        const uint64_t previous =
+            gcc_target_bps.load(std::memory_order_relaxed);
+        if (target == previous) {
+            return;
+        }
+        gcc_target_bps.store(target, std::memory_order_relaxed);
+        pacing_cv.notify_all();
+        // Forward to the host manager on the first estimate and on changes
+        // beyond ~3% — the manager applies GCC targets to the encoder.
+        if (previous == 0
+            || target > previous + previous / 32
+            || target + previous / 32 < previous) {
+            try {
+                std::lock_guard<std::mutex> lock(callback_mutex);
+                if (on_gcc_target) {
+                    on_gcc_target(static_cast<uint32_t>(
+                        std::min<uint64_t>(target, UINT32_MAX)));
+                }
+            } catch (...) {
+            }
+        }
+    }
+
     bool take_batch(PacedBatch& destination) noexcept {
         std::lock_guard<std::mutex> lock(batch_mutex);
         if (!batch_ready) {
@@ -537,8 +664,7 @@ struct RtpVideoSender::State
                 return false;
             }
 
-            const uint64_t observed_target =
-                pacing_target_bps.load(std::memory_order_relaxed);
+            const uint64_t observed_target = effective_target_bps();
             const auto interval =
                 packet_interval(static_cast<size_t>(wire_bytes), observed_target);
             const auto now = SteadyClock::now();
@@ -561,8 +687,7 @@ struct RtpVideoSender::State
             const auto deadline = next_slot;
             pacing_cv.wait_until(lock, deadline, [this, observed_target]() {
                 return stopping.load(std::memory_order_acquire)
-                    || pacing_target_bps.load(std::memory_order_relaxed)
-                        != observed_target;
+                    || effective_target_bps() != observed_target;
             });
         }
     }
@@ -587,7 +712,7 @@ struct RtpVideoSender::State
                 return false;
             }
             try {
-                batch.send(packet);
+                batch.send(stamp_outgoing(packet));
                 rtp_packets_sent.fetch_add(1, std::memory_order_relaxed);
                 rtp_wire_bytes_sent.fetch_add(
                     wire_bytes,
@@ -639,7 +764,9 @@ struct RtpVideoSender::State
                 return;
             }
             try {
-                send(packet);
+                // Retransmits are re-stamped with a fresh transport-wide
+                // sequence (send time = now), like WebRTC RTX.
+                send(stamp_outgoing(packet));
                 rtx_sent.fetch_add(1, std::memory_order_relaxed);
                 rtp_packets_sent.fetch_add(1, std::memory_order_relaxed);
                 rtp_wire_bytes_sent.fetch_add(
@@ -764,6 +891,16 @@ struct RtpVideoSender::State
     PliCallback on_pli;
     RembCallback on_remb;
     LocalIdrNeededCallback on_local_idr_needed;
+    GccTargetCallback on_gcc_target;
+
+    // TWCC: stamps egress (worker thread) and runs the delay-gradient
+    // estimator from feedback (RTCP thread, guarded by estimator_mutex).
+    const bool twcc_enabled = false;
+    TwccSendStamper stamper;
+    std::unique_ptr<GccEstimator> estimator;
+    std::mutex estimator_mutex;
+    std::atomic<uint64_t> gcc_target_bps{0};
+    std::atomic<uint64_t> twcc_reports{0};
 
     std::atomic<uint64_t> access_units_enqueued{0};
     std::atomic<uint64_t> access_units_sent{0};
@@ -798,14 +935,17 @@ RtpVideoSender::RtpVideoSender(
     RtpVideoSenderConfig config,
     PliCallback on_pli,
     RembCallback on_remb,
-    LocalIdrNeededCallback on_local_idr_needed
+    LocalIdrNeededCallback on_local_idr_needed,
+    GccTargetCallback on_gcc_target
 ) noexcept {
     try {
         auto state = std::make_shared<State>(
             config.pacing_target_bps,
             std::move(on_pli),
             std::move(on_remb),
-            std::move(on_local_idr_needed)
+            std::move(on_local_idr_needed),
+            std::move(on_gcc_target),
+            config.twcc_enabled
         );
         state_ = state;
 
@@ -836,7 +976,7 @@ RtpVideoSender::RtpVideoSender(
         );
 
         const std::weak_ptr<State> weak_state = state;
-        packetizer->addToChain(std::make_shared<MelloNackResponder>(
+        packetizer->addToChain(std::make_shared<MelloFeedbackHandler>(
             kNackCachePackets,
             [weak_state](rtc::message_ptr packet) {
                 if (const auto locked = weak_state.lock()) {
@@ -846,6 +986,11 @@ RtpVideoSender::RtpVideoSender(
             [weak_state](uint64_t requests, uint64_t cache_misses) {
                 if (const auto locked = weak_state.lock()) {
                     locked->record_rtx_stats(requests, cache_misses);
+                }
+            },
+            [weak_state](const TwccFeedback& feedback) {
+                if (const auto locked = weak_state.lock()) {
+                    locked->handle_twcc_feedback(feedback);
                 }
             }
         ));
@@ -1151,6 +1296,10 @@ RtpVideoSenderStats RtpVideoSender::stats() const noexcept {
         state->rtx_cache_misses.load(std::memory_order_relaxed);
     result.rtx_queue_dropped =
         state->rtx_queue_dropped.load(std::memory_order_relaxed);
+    result.twcc_reports =
+        state->twcc_reports.load(std::memory_order_relaxed);
+    result.gcc_target_bps =
+        state->gcc_target_bps.load(std::memory_order_relaxed);
     return result;
 }
 

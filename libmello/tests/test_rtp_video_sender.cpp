@@ -246,13 +246,15 @@ public:
         uint64_t pacing_target_bps,
         RtpVideoSender::PliCallback on_pli = {},
         RtpVideoSender::RembCallback on_remb = {},
-        RtpVideoSender::LocalIdrNeededCallback on_local_idr_needed = {}
+        RtpVideoSender::LocalIdrNeededCallback on_local_idr_needed = {},
+        bool twcc_enabled = false
     ) {
         RtpVideoSenderConfig config;
         config.ssrc = kSenderSsrc;
         config.payload_type = kPayloadType;
         config.cname = kCname;
         config.pacing_target_bps = pacing_target_bps;
+        config.twcc_enabled = twcc_enabled;
         RtpVideoSender sender(
             sender_track_,
             config,
@@ -652,6 +654,52 @@ TEST(RtpVideoSenderRetransmitTest, NackRepairIsPacedAndCounted) {
     EXPECT_GE(stats.rtx_cache_misses, 1u);
     EXPECT_EQ(stats.rtx_queue_dropped, 0u);
     EXPECT_EQ(stats.send_failures, 0u);
+}
+
+TEST(RtpVideoSenderTwccTest, ViewerFeedbackDrivesGccEstimate) {
+    LoopbackVideoLink link;
+    RtpVideoSender sender = link.make_sender(8'000'000, {}, {}, {}, true);
+
+    mello::transport::RtpVideoReceiverSessionConfig rx_config;
+    rx_config.payload_type = kPayloadType;
+    rx_config.twcc_enabled = true;
+    mello::transport::RtpVideoReceiverSession receiver(
+        link.receiver_track(),
+        rx_config
+    );
+    ASSERT_TRUE(receiver.is_open());
+
+    // Stream ~2s of AUs at 60fps: TWCC-stamped packets must still assemble
+    // into complete AUs, and feedback must drive the sender's estimator.
+    size_t popped = 0;
+    for (int index = 0; index < 120; ++index) {
+        const auto au = index == 0
+            ? make_idr_access_unit()
+            : make_delta_access_unit(static_cast<uint8_t>(index));
+        ASSERT_TRUE(sender.send_access_unit(
+            au.data(),
+            au.size(),
+            static_cast<uint64_t>(index) * 33'333
+        ));
+        while (auto unit = receiver.pop_access_unit()) {
+            ++popped;
+        }
+        std::this_thread::sleep_for(16ms);
+    }
+    // Drain whatever the session assembled during the final iterations.
+    for (int drain = 0; drain < 20; ++drain) {
+        while (auto unit = receiver.pop_access_unit()) {
+            ++popped;
+        }
+        std::this_thread::sleep_for(5ms);
+    }
+
+    const auto sender_stats = sender.stats();
+    EXPECT_GT(sender_stats.twcc_reports, 0u);
+    EXPECT_GT(sender_stats.gcc_target_bps, 0u);
+    const auto rx_stats = receiver.stats();
+    EXPECT_GT(rx_stats.twcc_packets_sent, 0u);
+    EXPECT_GT(popped, 30u);
 }
 
 TEST(RtpVideoSenderPacingTest, DynamicTargetUpdateIsObservedInStats) {

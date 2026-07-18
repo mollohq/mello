@@ -56,6 +56,9 @@ struct RtpVideoReceiverSessionConfig {
     // Zero generates a non-zero local feedback SSRC.
     uint32_t local_feedback_ssrc = 0;
     std::chrono::milliseconds receiver_report_interval{1000};
+    // TWCC was negotiated on this leg: record transport-wide arrival times
+    // and emit TWCC feedback reports (~50 ms cadence).
+    bool twcc_enabled = false;
 };
 
 struct RtpVideoReceiverSessionStats {
@@ -84,6 +87,7 @@ struct RtpVideoReceiverSessionStats {
     uint64_t pli_requests = 0;
     uint64_t pli_packets_sent = 0;
     uint64_t remb_packets_sent = 0;
+    uint64_t twcc_packets_sent = 0;
     uint64_t receiver_reports_sent = 0;
     uint64_t sender_reports_received = 0;
     uint64_t invalid_rtcp_packets = 0;

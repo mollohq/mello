@@ -17,6 +17,11 @@ struct RtpVideoSenderConfig {
     uint8_t payload_type = 96;
     std::string cname;
     uint64_t pacing_target_bps = 4'000'000;
+    // Transport-wide congestion control was negotiated for this leg: stamp
+    // egress with TWCC sequence numbers and run the delay-gradient estimator
+    // from feedback. The estimator's target gates pacing via min(manager,
+    // estimator) and is reported upward as GCC feedback.
+    bool twcc_enabled = false;
 };
 
 struct RtpVideoSenderStats {
@@ -45,6 +50,9 @@ struct RtpVideoSenderStats {
     uint64_t rtx_sent = 0;
     uint64_t rtx_cache_misses = 0;
     uint64_t rtx_queue_dropped = 0;
+    // TWCC: feedback reports processed and the estimator's current target.
+    uint64_t twcc_reports = 0;
+    uint64_t gcc_target_bps = 0;
 };
 
 // One producer thread may call send_access_unit(). It only copies accepted
@@ -56,6 +64,7 @@ public:
     using PliCallback = std::function<void()>;
     using RembCallback = std::function<void(uint32_t bitrate_bps)>;
     using LocalIdrNeededCallback = std::function<void()>;
+    using GccTargetCallback = std::function<void(uint32_t bitrate_bps)>;
 
     // ~133 ms at 60 fps — absorbs VBR bursts while the pacing worker drains.
     static constexpr size_t kMaxQueuedAccessUnits = 8;
@@ -66,7 +75,8 @@ public:
         RtpVideoSenderConfig config,
         PliCallback on_pli = {},
         RembCallback on_remb = {},
-        LocalIdrNeededCallback on_local_idr_needed = {}
+        LocalIdrNeededCallback on_local_idr_needed = {},
+        GccTargetCallback on_gcc_target = {}
     ) noexcept;
     ~RtpVideoSender();
 

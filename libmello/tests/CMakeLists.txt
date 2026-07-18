@@ -25,6 +25,7 @@ add_executable(mello_rtp_tests
     test_rtp_video_receiver_session.cpp
     test_rtp_video_sender.cpp
     test_peer_rtp_roles.cpp
+    test_twcc.cpp
 )
 
 target_link_libraries(mello_rtp_tests PRIVATE

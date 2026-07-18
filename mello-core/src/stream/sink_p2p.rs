@@ -123,6 +123,9 @@ impl P2PFanoutSink {
             VideoFeedback::Pli => SinkVideoFeedbackKind::Pli,
             VideoFeedback::Remb { bitrate_bps } => SinkVideoFeedbackKind::Remb { bitrate_bps },
             VideoFeedback::LocalIdrNeeded => SinkVideoFeedbackKind::LocalIdrNeeded,
+            VideoFeedback::GccTarget { bitrate_bps } => {
+                SinkVideoFeedbackKind::GccTarget { bitrate_bps }
+            }
         };
         SinkVideoFeedback {
             viewer_id: viewer_id.to_string(),

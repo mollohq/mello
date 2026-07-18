@@ -1,5 +1,7 @@
 #include "rtp_video_receiver_session.hpp"
 
+#include "twcc.hpp"
+
 #include <rtc/mediahandler.hpp>
 #include <rtc/message.hpp>
 #include <rtc/rtp.hpp>
@@ -26,6 +28,9 @@ using SteadyClock = std::chrono::steady_clock;
 
 constexpr auto kReceiverTickInterval = std::chrono::milliseconds(1);
 constexpr auto kPliCooldown = std::chrono::milliseconds(1000);
+// TWCC feedback cadence: ~50 ms keeps the estimator's delay signal fresh
+// without measurable RTCP overhead (~42 packets per report at 830 pps).
+constexpr auto kTwccReportInterval = std::chrono::milliseconds(50);
 constexpr uint32_t kRtcpUnitsPerSecond = 65'536;
 constexpr int64_t kMinSigned24 = -8'388'608;
 constexpr int64_t kMaxSigned24 = 8'388'607;
@@ -948,6 +953,17 @@ struct RtpVideoReceiverSession::State
         if (has_basic_header) {
             observe_accepted_rtp(sequence, ssrc, before, after);
         }
+
+        if (config.twcc_enabled) {
+            uint16_t twcc_sequence = 0;
+            if (extract_twcc_sequence(data, size, twcc_sequence)) {
+                const int64_t arrival_us =
+                    std::chrono::duration_cast<std::chrono::microseconds>(
+                        now.time_since_epoch())
+                        .count();
+                twcc_generator.on_packet(twcc_sequence, arrival_us);
+            }
+        }
     }
 
     RtpH264Receiver::Stats combined_core_stats() const noexcept {
@@ -983,6 +999,7 @@ struct RtpVideoReceiverSession::State
         auto next_tick = SteadyClock::now() + kReceiverTickInterval;
         auto next_report =
             SteadyClock::now() + config.receiver_report_interval;
+        auto next_twcc = SteadyClock::now() + kTwccReportInterval;
 
         try {
             reset_receiver(false);
@@ -992,7 +1009,9 @@ struct RtpVideoReceiverSession::State
                 bool recover = false;
                 {
                     std::unique_lock<std::mutex> lock(ingress_mutex);
-                    const auto wake_at = std::min(next_tick, next_report);
+                    const auto wake_at = config.twcc_enabled
+                        ? std::min({next_tick, next_report, next_twcc})
+                        : std::min(next_tick, next_report);
                     worker_cv.wait_until(lock, wake_at, [this,
                                                         handled_recovery_generation]() {
                         return stopping.load(std::memory_order_acquire)
@@ -1063,6 +1082,24 @@ struct RtpVideoReceiverSession::State
                     }
                 }
                 flush_pending_pli(now);
+
+                if (config.twcc_enabled && now >= next_twcc) {
+                    if (has_remote_media_ssrc
+                        && twcc_generator.pending() > 0) {
+                        const auto report = twcc_generator.build_feedback(
+                            local_feedback_ssrc,
+                            remote_media_ssrc
+                        );
+                        if (!report.empty()
+                            && send_control(report.data(), report.size(), false)) {
+                            twcc_packets_sent.fetch_add(
+                                1,
+                                std::memory_order_relaxed
+                            );
+                        }
+                    }
+                    next_twcc = now + kTwccReportInterval;
+                }
 
                 if (now >= next_report) {
                     send_receiver_report(now);
@@ -1179,6 +1216,10 @@ struct RtpVideoReceiverSession::State
 
     std::atomic<uint32_t> receive_target_bps{0};
     std::atomic<uint64_t> receive_target_generation{0};
+
+    // TWCC feedback generation (worker thread only).
+    TwccFeedbackGenerator twcc_generator;
+    std::atomic<uint64_t> twcc_packets_sent{0};
 
     std::atomic<uint64_t> ingress_packets{0};
     std::atomic<uint64_t> ingress_bytes{0};
@@ -1445,6 +1486,8 @@ RtpVideoReceiverSessionStats RtpVideoReceiverSession::stats() const noexcept {
         state->pli_packets_sent.load(std::memory_order_relaxed);
     result.remb_packets_sent =
         state->remb_packets_sent.load(std::memory_order_relaxed);
+    result.twcc_packets_sent =
+        state->twcc_packets_sent.load(std::memory_order_relaxed);
     result.receiver_reports_sent =
         state->receiver_reports_sent.load(std::memory_order_relaxed);
     result.sender_reports_received =

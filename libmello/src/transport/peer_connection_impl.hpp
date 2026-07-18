@@ -75,6 +75,7 @@ private:
         Pli = 0,
         Remb = 1,
         LocalIdrNeeded = 2,
+        GccTarget = 3,
     };
 
     struct QueuedVideoFeedback {
@@ -142,6 +143,8 @@ private:
     std::string video_cname_;
     uint64_t pacing_target_bps_ = 4'000'000;
     uint32_t receive_target_bps_ = 4'000'000;
+    // Remote SDP advertised the TWCC RTP header extension on stream video.
+    bool twcc_supported_ = false;
 
     std::string local_sdp_;
     std::mutex sdp_mutex_;

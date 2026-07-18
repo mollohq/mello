@@ -86,8 +86,15 @@ pub enum RtpPeerError {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VideoFeedback {
     Pli,
-    Remb { bitrate_bps: u32 },
+    Remb {
+        bitrate_bps: u32,
+    },
     LocalIdrNeeded,
+    /// Send-side delay-gradient (GCC) estimate from TWCC feedback. The
+    /// estimator smooths internally, so targets may be applied immediately.
+    GccTarget {
+        bitrate_bps: u32,
+    },
 }
 
 /// Metadata for one received Annex-B H.264 access unit.
@@ -114,6 +121,7 @@ pub struct RtpVideoStats {
     pub tx_latest_remb_bitrate_bps: u32,
     pub tx_rtx_sent: u64,
     pub tx_rtx_cache_misses: u64,
+    pub tx_gcc_target_bps: u64,
 }
 
 /// Create a peer for `role`. Caller must eventually call `mello_peer_destroy`.
@@ -299,6 +307,11 @@ fn video_feedback_from_ffi(feedback: &MelloPeerVideoFeedback) -> VideoFeedback {
         mello_sys::MelloPeerVideoFeedbackType_MELLO_PEER_VIDEO_FEEDBACK_LOCAL_IDR_NEEDED => {
             VideoFeedback::LocalIdrNeeded
         }
+        mello_sys::MelloPeerVideoFeedbackType_MELLO_PEER_VIDEO_FEEDBACK_GCC_TARGET => {
+            VideoFeedback::GccTarget {
+                bitrate_bps: feedback.remb_bitrate_bps,
+            }
+        }
         _ => VideoFeedback::Pli,
     }
 }
@@ -318,6 +331,7 @@ fn stats_from_native(stats: &MelloRtpVideoStats) -> RtpVideoStats {
         tx_latest_remb_bitrate_bps: stats.tx_latest_remb_bitrate_bps,
         tx_rtx_sent: stats.tx_rtx_sent,
         tx_rtx_cache_misses: stats.tx_rtx_cache_misses,
+        tx_gcc_target_bps: stats.tx_gcc_target_bps,
     }
 }
 

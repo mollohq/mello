@@ -100,6 +100,7 @@ pub enum VideoFeedbackKind {
     Pli,
     Remb,
     LocalIdrNeeded,
+    GccTarget,
 }
 
 // ---------------------------------------------------------------------------
@@ -606,6 +607,9 @@ impl SfuConnection {
                 }
                 mello_sys::MelloPeerVideoFeedbackType_MELLO_PEER_VIDEO_FEEDBACK_LOCAL_IDR_NEEDED => {
                     VideoFeedbackKind::LocalIdrNeeded
+                }
+                mello_sys::MelloPeerVideoFeedbackType_MELLO_PEER_VIDEO_FEEDBACK_GCC_TARGET => {
+                    VideoFeedbackKind::GccTarget
                 }
                 _ => VideoFeedbackKind::Pli,
             },

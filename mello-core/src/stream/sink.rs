@@ -3,12 +3,14 @@ use async_trait::async_trait;
 use super::error::StreamError;
 use super::pacer::PacingTelemetry;
 
-/// Host-side viewer feedback from native RTP (PLI, REMB, local IDR needed).
+/// Host-side viewer feedback from native RTP (PLI, REMB, local IDR needed,
+/// GCC send-side estimate).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SinkVideoFeedbackKind {
     Pli,
     Remb { bitrate_bps: u32 },
     LocalIdrNeeded,
+    GccTarget { bitrate_bps: u32 },
 }
 
 /// One polled feedback event with viewer identity preserved by the sink topology.

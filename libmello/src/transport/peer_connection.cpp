@@ -1,5 +1,7 @@
 #include "peer_connection_impl.hpp"
 
+#include "twcc.hpp"
+
 #include <chrono>
 #include <algorithm>
 #include <cstring>
@@ -118,6 +120,18 @@ const rtc::Description::Media* find_single_video_media(
         error = "remote offer must contain exactly one video media section";
     }
     return video;
+}
+
+// True when the remote video media section advertises the TWCC RTP header
+// extension (id is fixed on both ends; the URI is the match criterion).
+bool remote_media_supports_twcc(const rtc::Description::Media& media) {
+    try {
+        const auto* map = media.extMap(kTwccExtensionId);
+        return map != nullptr
+            && map->uri == kTwccExtensionUri;
+    } catch (...) {
+        return false;
+    }
 }
 
 int media_index_for_mid(
@@ -356,7 +370,12 @@ rtc::Description::Video PeerConnectionImpl::make_stream_video_description(
         map->addFeedback("nack");
         map->addFeedback("nack pli");
         map->addFeedback("goog-remb");
+        map->addFeedback("transport-cc");
     }
+    video.addExtMap(rtc::Description::Media::ExtMap(
+        kTwccExtensionId,
+        kTwccExtensionUri
+    ));
     if (direction_is_send(direction)) {
         const uint32_t ssrc = video_ssrc_ != 0 ? video_ssrc_ : generate_ssrc();
         const std::string cname = video_cname_.empty() ? generate_cname() : video_cname_;
@@ -566,6 +585,7 @@ void PeerConnectionImpl::try_start_video_pipeline(
         config.payload_type = kVideoPayloadType;
         config.cname = std::move(sender_cname);
         config.pacing_target_bps = pacing_target_bps;
+        config.twcc_enabled = twcc_supported_;
 
         const std::weak_ptr<PeerConnectionImpl> weak_self = weak_from_this();
         auto sender = std::make_unique<RtpVideoSender>(
@@ -602,6 +622,18 @@ void PeerConnectionImpl::try_start_video_pipeline(
                         VideoFeedbackType::LocalIdrNeeded
                     );
                 }
+            },
+            [weak_self, generation, track_generation](uint32_t bitrate_bps) {
+                const auto self = weak_self.lock();
+                if (self && self->is_current_pc_generation(generation)
+                    && self->video_track_generation_.load(
+                           std::memory_order_acquire
+                       ) == track_generation) {
+                    self->enqueue_video_feedback(
+                        VideoFeedbackType::GccTarget,
+                        bitrate_bps
+                    );
+                }
             }
         );
         if (!sender->is_open()) {
@@ -621,6 +653,7 @@ void PeerConnectionImpl::try_start_video_pipeline(
     if (role_ == MELLO_PEER_MEDIA_ROLE_STREAM_VIEWER) {
         RtpVideoReceiverSessionConfig config;
         config.payload_type = kVideoPayloadType;
+        config.twcc_enabled = twcc_supported_;
         auto receiver = std::make_unique<RtpVideoReceiverSession>(
             track,
             config
@@ -1229,6 +1262,17 @@ bool PeerConnectionImpl::set_remote_description(const char* sdp, bool is_offer) 
             return false;
         }
         pc->setRemoteDescription(desc);
+
+        // TWCC capability drives the sender's stamping/estimator on the
+        // stream video leg. Detected per remote description so renegotiation
+        // and PC replacement stay honest.
+        if (role_ == MELLO_PEER_MEDIA_ROLE_STREAM_HOST
+            || role_ == MELLO_PEER_MEDIA_ROLE_STREAM_VIEWER) {
+            std::string error;
+            if (const auto* video = find_single_video_media(desc, error)) {
+                twcc_supported_ = remote_media_supports_twcc(*video);
+            }
+        }
         return true;
     } catch (...) {
         return false;
@@ -1510,6 +1554,9 @@ bool PeerConnectionImpl::video_take_feedback(MelloPeerVideoFeedback* feedback) n
         case VideoFeedbackType::LocalIdrNeeded:
             feedback->type = MELLO_PEER_VIDEO_FEEDBACK_LOCAL_IDR_NEEDED;
             break;
+        case VideoFeedbackType::GccTarget:
+            feedback->type = MELLO_PEER_VIDEO_FEEDBACK_GCC_TARGET;
+            break;
         default:
             feedback->type = MELLO_PEER_VIDEO_FEEDBACK_PLI;
             break;
@@ -1578,6 +1625,8 @@ void PeerConnectionImpl::video_get_stats(MelloRtpVideoStats* stats) const noexce
         stats->tx_rtx_sent = tx.rtx_sent;
         stats->tx_rtx_cache_misses = tx.rtx_cache_misses;
         stats->tx_rtx_queue_dropped = tx.rtx_queue_dropped;
+        stats->tx_twcc_reports = tx.twcc_reports;
+        stats->tx_gcc_target_bps = tx.gcc_target_bps;
         stats->tx_active = 1;
     }
 
@@ -1609,6 +1658,7 @@ void PeerConnectionImpl::video_get_stats(MelloRtpVideoStats* stats) const noexce
         stats->rx_pli_requests = rx.pli_requests;
         stats->rx_pli_packets_sent = rx.pli_packets_sent;
         stats->rx_remb_packets_sent = rx.remb_packets_sent;
+        stats->rx_twcc_packets_sent = rx.twcc_packets_sent;
         stats->rx_receiver_reports_sent = rx.receiver_reports_sent;
         stats->rx_sender_reports_received = rx.sender_reports_received;
         stats->rx_invalid_rtcp_packets = rx.invalid_rtcp_packets;
