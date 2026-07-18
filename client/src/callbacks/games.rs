@@ -71,8 +71,10 @@ pub fn wire(ctx: &AppContext) {
         let s = ctx.settings.clone();
         let pending = ctx.pending_unknown_game.clone();
         let app_weak = ctx.app.as_weak();
+        let icon_cache = ctx.game_icon_cache.clone();
+        let rt = ctx.rt.clone();
         ctx.app.on_unknown_game_track_clicked(move || {
-            let Some((exe, _path, display_name)) = pending.borrow_mut().take() else {
+            let Some((exe, path, display_name)) = pending.borrow_mut().take() else {
                 return;
             };
             let game = mello_core::game_db::CustomGame {
@@ -97,7 +99,15 @@ pub fn wire(ctx: &AppContext) {
                     });
                 settings.save();
             }
-            let _ = cmd.send(Command::AddCustomGame { game });
+            let _ = cmd.send(Command::AddCustomGame { game: game.clone() });
+            // Grab the exe's icon for cards/badges and share it with the crew.
+            crate::game_icons::extract_and_cache(
+                icon_cache.clone(),
+                cmd.clone(),
+                rt.clone(),
+                game.id.clone(),
+                path,
+            );
             if let Some(app) = app_weak.upgrade() {
                 app.set_unknown_game_visible(false);
                 app.set_unknown_game_name("".into());

@@ -519,6 +519,13 @@ pub enum Event {
         /// Signed streak after this session: +N win streak, -N loss streak.
         streak_after: i32,
     },
+    /// A crew-shared game icon fetched from the backend (raw PNG bytes).
+    /// Skipped from serde: an in-process blob, not an FFI payload.
+    #[serde(skip)]
+    GameIconLoaded {
+        game_id: String,
+        png: Vec<u8>,
+    },
     /// The viewer's per-game personal stats loaded (backs the "You strip").
     UserGameStatsLoaded {
         games: Vec<crate::crew_events::UserGameStats>,

@@ -1018,6 +1018,36 @@ impl Client {
                 self.custom_games.push(game);
                 self.rebuild_game_db();
             }
+            Command::UploadGameIcon { game_id, png } => {
+                use base64::Engine as _;
+                let b64 = base64::engine::general_purpose::STANDARD.encode(&png);
+                match self.nakama.game_icon_set(&game_id, &b64).await {
+                    Ok(()) => log::info!(
+                        "[game-icon] uploaded icon for {game_id} ({} bytes)",
+                        png.len()
+                    ),
+                    // Best-effort: sharing failing must never break tracking.
+                    Err(e) => log::warn!("[game-icon] upload for {game_id} failed: {e}"),
+                }
+            }
+            Command::FetchGameIcon { game_id } => {
+                use base64::Engine as _;
+                match self.nakama.game_icon_get(&game_id).await {
+                    Ok(b64) if !b64.is_empty() => {
+                        match base64::engine::general_purpose::STANDARD.decode(&b64) {
+                            Ok(png) => {
+                                let _ = self.event_tx.send(Event::GameIconLoaded { game_id, png });
+                            }
+                            Err(e) => {
+                                log::warn!("[game-icon] bad icon payload for {game_id}: {e}")
+                            }
+                        }
+                    }
+                    // Not found (or empty) is the common quiet case.
+                    Ok(_) => {}
+                    Err(e) => log::debug!("[game-icon] fetch for {game_id}: {e}"),
+                }
+            }
             Command::GetUserGameStats => {
                 self.refresh_user_game_stats().await;
             }

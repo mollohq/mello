@@ -86,6 +86,18 @@ pub fn handle(ctx: &AppContext, event: Event) {
                 map
             );
         }
+        Event::GameIconLoaded { game_id, png } => {
+            // Crew-shared icon fetched: persist to the PNG cache and decode
+            // into the runtime cache; cards pick it up on the next refresh.
+            if crate::platform::exe_icon::store_fetched_icon_png(&game_id, &png).is_some() {
+                if let Some((rgba, w, h)) =
+                    crate::platform::exe_icon::load_cached_icon_rgba(&game_id)
+                {
+                    let img = crate::avatar::rgba_to_image(&rgba, w, h);
+                    ctx.game_icon_cache.borrow_mut().insert(game_id, img);
+                }
+            }
+        }
         Event::UnknownGameCandidate {
             exe,
             path,

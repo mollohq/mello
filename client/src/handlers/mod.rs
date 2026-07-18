@@ -127,6 +127,8 @@ pub fn handle_event(ctx: &AppContext, event: Event) {
         | Event::PostGameTimeout
         | Event::MatchEnded { .. }
         | Event::SessionSummary { .. }
+        | Event::UnknownGameCandidate { .. }
+        | Event::GameIconLoaded { .. }
         | Event::TelemetrySetupHint { .. } => game::handle(ctx, event),
 
         // Games settings + Riot account link
