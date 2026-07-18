@@ -758,24 +758,16 @@ component SessionCard inherits Rectangle {
             spacing: 8px;
             height: 36px;
 
-            Rectangle {
-                width: 32px;
-                height: 32px;
-                border-radius: 8px;
-                background: card.game-name == "Valorant" ? #ff4655 :
-                            card.game-name == "Counter-Strike 2" ? #de9b35 :
-                            Theme.accent;
-                y: (parent.height - self.height) / 2;
-
-                Text {
-                    text: card.game-name == "Valorant" ? "VAL" :
-                          card.game-name == "Counter-Strike 2" ? "CS2" :
-                          card.game-name != "" ? card.game-name : "VC";
-                    font-size: 10px;
-                    font-weight: 800;
-                    color: white;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
+            VerticalLayout {
+                alignment: center;
+                GameIcon {
+                    game-id: card.game-id;
+                    short-name: card.game-short-name != "" ? card.game-short-name :
+                                card.game-name != "" ? card.game-name : "VC";
+                    badge-color: card.game-has-color ? card.game-color : Theme.accent;
+                    runtime-icon: card.game-icon;
+                    has-runtime-icon: card.game-has-icon;
+                    size: 32px;
                 }
             }
 
@@ -822,10 +814,7 @@ component SessionCard inherits Rectangle {
 component GameSessionCard inherits Rectangle {
     in property <FeedCardData> card;
 
-    property <color> game-accent:
-        card.game-name == "Valorant" ? #ff4655 :
-        card.game-name == "Counter-Strike 2" ? #de9b35 :
-        Theme.accent;
+    property <color> game-accent: card.game-has-color ? card.game-color : Theme.accent;
     property <color> record-color: card.game-streak-positive ? #4ade80 : #f87171;
 
     background: Theme.card-bg;
@@ -848,10 +837,11 @@ component GameSessionCard inherits Rectangle {
                 alignment: center;
                 GameIcon {
                     game-id: card.game-id;
-                    short-name: card.game-name == "Valorant" ? "VAL" :
-                                card.game-name == "Counter-Strike 2" ? "CS2" :
+                    short-name: card.game-short-name != "" ? card.game-short-name :
                                 card.game-name != "" ? card.game-name : "GG";
                     badge-color: game-accent;
+                    runtime-icon: card.game-icon;
+                    has-runtime-icon: card.game-has-icon;
                     size: 40px;
                 }
             }

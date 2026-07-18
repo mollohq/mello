@@ -87,6 +87,9 @@ struct GamesEnvelope {
 pub struct GameDatabase {
     by_exe: HashMap<String, GameEntry>,
     by_id: HashMap<String, GameEntry>,
+    /// Lowercased display name → entry, for legacy events that carry only a
+    /// game name (e.g. stream sessions before game_id was recorded).
+    by_name: HashMap<String, GameEntry>,
 }
 
 impl GameDatabase {
@@ -100,13 +103,19 @@ impl GameDatabase {
     fn from_entries(entries: &[GameEntry]) -> Self {
         let mut by_exe = HashMap::new();
         let mut by_id = HashMap::new();
+        let mut by_name = HashMap::new();
         for entry in entries {
             for exe in &entry.exe {
                 by_exe.insert(exe.to_lowercase(), entry.clone());
             }
             by_id.insert(entry.id.clone(), entry.clone());
+            by_name.insert(entry.name.to_lowercase(), entry.clone());
         }
-        GameDatabase { by_exe, by_id }
+        GameDatabase {
+            by_exe,
+            by_id,
+            by_name,
+        }
     }
 
     /// Overlay user-confirmed games onto the DB. Bundled entries win on
@@ -116,6 +125,9 @@ impl GameDatabase {
             let entry = game.to_entry();
             self.by_exe
                 .entry(game.exe.to_lowercase())
+                .or_insert_with(|| entry.clone());
+            self.by_name
+                .entry(entry.name.to_lowercase())
                 .or_insert_with(|| entry.clone());
             self.by_id.entry(entry.id.clone()).or_insert(entry);
         }
@@ -129,6 +141,12 @@ impl GameDatabase {
     /// resolve display name/short-name/color for stats surfaces (spec 19).
     pub fn lookup_by_id(&self, id: &str) -> Option<&GameEntry> {
         self.by_id.get(id)
+    }
+
+    /// Case-insensitive lookup by display name, for events that carry only a
+    /// game name (stream sessions, legacy game sessions without an id).
+    pub fn lookup_by_name(&self, name: &str) -> Option<&GameEntry> {
+        self.by_name.get(&name.to_lowercase())
     }
 }
 
@@ -214,6 +232,31 @@ mod tests {
         // Case-insensitive
         let val2 = db.lookup_by_exe("valorant-win64-shipping.exe").unwrap();
         assert_eq!(val2.id, "valorant");
+    }
+
+    #[test]
+    fn lookup_by_name_case_insensitive_incl_custom() {
+        let mut db = GameDatabase::load_bundled();
+        assert_eq!(
+            db.lookup_by_name("counter-strike 2").unwrap().id,
+            "counter-strike-2"
+        );
+        assert_eq!(
+            db.lookup_by_name("Counter-Strike 2").unwrap().id,
+            "counter-strike-2"
+        );
+        assert!(db.lookup_by_name("No Such Game").is_none());
+
+        db.add_user_entries(&[CustomGame {
+            id: "custom-night-stones".into(),
+            name: "Night Stones".into(),
+            short_name: "NS".into(),
+            exe: "Night Stones.exe".into(),
+        }]);
+        assert_eq!(
+            db.lookup_by_name("night stones").unwrap().id,
+            "custom-night-stones"
+        );
     }
 
     #[test]

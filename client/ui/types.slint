@@ -72,7 +72,13 @@ export struct FeedCardData {
     actor-name: string,
     actor-initials: string,
     game-name: string,
-    game-id: string,       // games.json id for the bundled icon; "" on legacy events
+    game-id: string,       // games.json / custom id; resolved from name when absent
+    game-short-name: string, // badge text from the DB/custom entry; "" when unknown
+    game-color: color,       // badge color from the DB entry
+    game-has-color: bool,
+    // Runtime icon (exe-extracted / crew-shared) for games w/o bundled art.
+    game-icon: image,
+    game-has-icon: bool,
     participant-count: int,
     clip-count: int,
     clip-path: string,

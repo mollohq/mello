@@ -401,6 +401,44 @@ fn games_summary(data: &serde_json::Value) -> String {
     }
 }
 
+/// Resolve `(game_id, short_name, color_hex)` for a card: the bundled DB by
+/// id, then by display name (stream sessions and legacy events carry only a
+/// name), then the user's confirmed custom games. Unresolved names keep an
+/// empty id/short-name so the badge falls back to the raw name.
+fn resolve_game_meta(
+    ctx: &AppContext,
+    game_id: &str,
+    game_name: &str,
+) -> (String, String, Option<String>) {
+    thread_local! {
+        static BUNDLED: std::cell::OnceCell<mello_core::game_db::GameDatabase> =
+            const { std::cell::OnceCell::new() };
+    }
+    let bundled = BUNDLED.with(|db| {
+        let db = db.get_or_init(mello_core::game_db::GameDatabase::load_bundled);
+        let entry = if !game_id.is_empty() {
+            db.lookup_by_id(game_id)
+        } else if !game_name.is_empty() {
+            db.lookup_by_name(game_name)
+        } else {
+            None
+        };
+        entry.map(|e| (e.id.clone(), e.short_name.clone(), e.color.clone()))
+    });
+    if let Some(resolved) = bundled {
+        return resolved;
+    }
+    let settings = ctx.settings.borrow();
+    let custom = settings.custom_games.iter().find(|g| {
+        (!game_id.is_empty() && g.id == game_id)
+            || (!game_name.is_empty() && g.name.eq_ignore_ascii_case(game_name))
+    });
+    match custom {
+        Some(g) => (g.id.clone(), g.short_name.clone(), None),
+        None => (game_id.to_string(), String::new(), None),
+    }
+}
+
 // Build a feed card from a server feed entry. card_type is the server-provided
 // feed type; the backend type is recovered for copy extraction.
 fn build_feed_card(
@@ -470,12 +508,24 @@ fn build_feed_card(
         .unwrap_or("")
         .to_string();
 
-    // Stable id for the bundled game icon; empty on legacy events.
+    // Stable id for the game icon; empty on legacy events and stream
+    // sessions, where it is recovered from the game name below.
     let game_id = data
         .get("game_id")
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
+    let (game_id, game_short_name, game_color_hex) = resolve_game_meta(ctx, &game_id, &game);
+    let game_has_color = game_color_hex.is_some();
+    let game_color = slint::Color::from_argb_encoded(super::game::parse_hex_color(
+        game_color_hex.as_deref().unwrap_or("#2a2a30"),
+    ));
+    // Runtime icon (exe-extracted / crew-shared) for games without bundled
+    // art; a cache miss requests the crew copy once per run.
+    let (game_icon, game_has_icon) = match crate::game_icons::resolve_or_fetch_icon(ctx, &game_id) {
+        Some(img) => (img, true),
+        None => (slint::Image::default(), false),
+    };
 
     let clip_path = data
         .get("media_url")
@@ -620,6 +670,11 @@ fn build_feed_card(
         actor_initials: make_initials(&actor).into(),
         game_name: game.into(),
         game_id: game_id.into(),
+        game_short_name: game_short_name.into(),
+        game_color,
+        game_has_color,
+        game_icon,
+        game_has_icon,
         participant_count,
         clip_count,
         clip_path: clip_path.into(),
