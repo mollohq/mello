@@ -1,15 +1,31 @@
 # Stream Quality Roadmap — Path to Discord-Class Streaming
 
-> **Status:** Active. Phase 0 in progress.
+> **Status:** Phase 0 ✅ (branch `feat/stream-quality-phase0`, both repos) · Phase 1 ✅ (branch `feat/stream-twcc-phase1`, both repos) · Phase 2 in progress.
 > **Origin:** Senior WebRTC review of `mello/` client stack + `mello-sfu/` (July 2026).
 > **Specs touched:** 12-STREAMING, 14-VIDEO-PIPELINE, mello-sfu/01-SFU (updated per phase).
+
+## Phase 0 — Correctness ✅
+
+All items landed (see branch commits): paced RTX queue replacing unpaced libdatachannel retransmits, per-packet leaky-bucket pacing, receiver stall(120ms)/hard-cap(600ms) AU deadlines, `timeBeginPeriod(1)` while streaming, host REMB hold-on-empty, stream-path RTT ping, SFU per-viewer PLI + periodic min-REMB recompute, NVENC VBV 0.5s max-rate + full-config reconfigure + measured stats, WGC accumulator throttle, separate keyframe cooldown clocks.
+
+## Phase 1 — TWCC/GCC ✅
+
+- libmello `transport/twcc.{hpp,cpp}`: TWCC stamper (in-place RTX re-stamp), RFC 8888 parser, receiver feedback generator (50ms), GCC-style delay-gradient estimator (accumulated-delay trendline + overuse + AIMD + loss cap).
+- Sender: pacer stamps at emit; `min(manager, estimator)` pacing; `GCC_TARGET` feedback to Rust (per-viewer map, GCC > REMB, immediate application).
+- Receiver: TWCC seq extraction + feedback emission; RTT-adaptive NACK budget (2–8 by measured RTT).
+- SDP: extmap id=3 + `transport-cc`, per-leg negotiation detection.
+- SFU: `transport-cc` negotiated; host-leg feedback generation (Pion); per-viewer `gcc.SendSideBWE` from viewer TWCC; token-bucket egress pacer per viewer (~10ms burst bound); per-viewer estimates supersede client REMB in min-REMB synthesis; late-join IDR-AU cache replayed to new viewers; queue-full rescue (>5s backlog → drop + upstream PLI); viewer queue 256→64; RTCP read 8KiB.
+
+Deferred from Phase 1 (follow-ups, not blockers): chronic-queue viewer *ejection* (rescue implemented instead), SFU pacing driven off host-leg measurements.
+
+## Phase 2 — Encoder/decode quality (in progress)
 
 ## Verification constraints
 
 - Dev machine is macOS. Locally verifiable: transport C++ (`src/transport/*`, platform-neutral), mello-core Rust, mello-sfu Go.
 - Windows-only files (`encoder_nvenc.cpp`, `capture_dxgi.cpp`, `capture_wgc.cpp`, `dcomp_presenter.rs`) cannot be compile-checked locally — diffs there are kept minimal/mechanical and validated on the Windows box per `12-STREAMING.md §15`.
 
-## Phase 0 — Correctness (quality-per-effort)
+## Phase 0 — Correctness ✅ (done)
 
 | # | Fix | Files | Evidence |
 |---|-----|-------|----------|
@@ -26,7 +42,7 @@
 
 Exit gate: libmello ctest green (incl. new NACK/pacer unit tests), `CI=true cargo test --workspace` green, `go test ./...` green in mello-sfu, specs updated.
 
-## Phase 1 — Congestion-control modernization (Discord-parity core)
+## Phase 1 — Congestion-control modernization ✅ (done)
 
 1. **Spike:** verify libdatachannel 0.24 extmap/SDP handling for custom RTP header extensions (decides TWCC stamping point).
 2. **Host TWCC:** transport-wide sequence header extension stamped on egress (custom MediaHandler) + TWCC RTCP feedback parser.
