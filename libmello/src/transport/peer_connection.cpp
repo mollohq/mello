@@ -913,13 +913,7 @@ void PeerConnectionImpl::setup_dc_handlers(
                     ).count();
                     self->last_pong_ts_ms_.store(now_ms, std::memory_order_relaxed);
                     const float rtt = static_cast<float>(now_ms - sent_ts);
-                    if (rtt >= 0 && rtt < 10000) {
-                        const float prev =
-                            self->rtt_ms_.load(std::memory_order_relaxed);
-                        const float smoothed =
-                            (prev < 0.1f) ? rtt : prev * 0.7f + rtt * 0.3f;
-                        self->rtt_ms_.store(smoothed, std::memory_order_relaxed);
-                    }
+                    self->apply_rtt_sample(rtt);
                 }
             }
             return;
@@ -943,13 +937,7 @@ void PeerConnectionImpl::setup_dc_handlers(
                     ).count();
                     self->last_pong_ts_ms_.store(now_ms, std::memory_order_relaxed);
                     const float rtt = static_cast<float>(now_ms - sent_ts);
-                    if (rtt >= 0 && rtt < 10000) {
-                        const float prev =
-                            self->rtt_ms_.load(std::memory_order_relaxed);
-                        const float smoothed =
-                            (prev < 0.1f) ? rtt : prev * 0.7f + rtt * 0.3f;
-                        self->rtt_ms_.store(smoothed, std::memory_order_relaxed);
-                    }
+                    self->apply_rtt_sample(rtt);
                 }
             }
 
@@ -1456,6 +1444,22 @@ int64_t PeerConnectionImpl::pong_age_ms() const {
     ).count();
     const int64_t age = now_ms - last_pong_ms;
     return age < 0 ? 0 : age;
+}
+
+void PeerConnectionImpl::apply_rtt_sample(float rtt) noexcept {
+    if (rtt < 0 || rtt >= 10000) {
+        return;
+    }
+    const float prev = rtt_ms_.load(std::memory_order_relaxed);
+    const float smoothed = (prev < 0.1f) ? rtt : prev * 0.7f + rtt * 0.3f;
+    rtt_ms_.store(smoothed, std::memory_order_relaxed);
+    try {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (rtp_video_receiver_) {
+            rtp_video_receiver_->set_rtt_hint(smoothed);
+        }
+    } catch (...) {
+    }
 }
 
 bool PeerConnectionImpl::video_send_access_unit(

@@ -38,6 +38,11 @@ public:
     struct Config {
         uint8_t payload_type = 96;
         std::chrono::milliseconds pli_cooldown{1000};
+        // NACK retry budget per missing sequence. Zero selects the static
+        // default (kMaxNackAttempts); the session sets this from the
+        // measured RTT so high-RTT links get more repair chances within the
+        // AU stall deadline.
+        size_t nack_max_attempts = 0;
     };
 
     struct Stats {

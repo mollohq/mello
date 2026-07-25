@@ -610,4 +610,43 @@ TEST(RtpH264ReceiverBoundsTest, EnforcesAccessUnitPacketAndByteLimits) {
     EXPECT_GE(packet_stats.buffer_evictions, 1u);
 }
 
+TEST(RtpH264ReceiverConfigTest, AdaptiveNackBudgetAllowsMoreRetries) {
+    std::vector<std::vector<uint16_t>> nacks;
+    RtpH264Receiver::Config config;
+    config.nack_max_attempts = 5;
+    RtpH264Receiver receiver(
+        RtpH264Receiver::Callbacks{
+            [](const std::vector<uint8_t>&, bool, uint32_t) {},
+            [&nacks](const std::vector<uint16_t>& sequences) {
+                nacks.push_back(sequences);
+            },
+            []() {},
+        },
+        config
+    );
+
+    // Open the gate with an IDR AU, then leave sequence 12 missing.
+    deliver(receiver,
+            make_rtp(10,
+                     1000,
+                     true,
+                     make_stap({{0x67, 0x42}, {0x68, 0xce}, {0x65, 0xaa}})),
+            at(0));
+    receiver.tick(at(3));
+    deliver(receiver, make_rtp(11, 2000, false, {0x61, 0x11}), at(4));
+    deliver(receiver, make_rtp(13, 2000, true, {0x61, 0x13}), at(4));
+
+    receiver.tick(at(7));
+    receiver.tick(at(22));
+    receiver.tick(at(37));
+    receiver.tick(at(52));
+    receiver.tick(at(67));
+    receiver.tick(at(82));
+
+    // Default budget is 2 attempts; the configured budget allows 5.
+    EXPECT_EQ(nacks.size(), 5u);
+    EXPECT_EQ(receiver.stats().nacks, 5u);
+    EXPECT_EQ(receiver.stats().missing_sequences_detected, 1u);
+}
+
 } // namespace

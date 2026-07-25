@@ -145,6 +145,10 @@ public:
     // a remote SSRC and libdatachannel feedback callback are available.
     bool set_receive_target(uint32_t bitrate_bps) noexcept;
 
+    // Hint the NACK retry budget from the measured control-channel RTT.
+    // Applied on the next receiver-core (re)build; 0 restores the default.
+    void set_rtt_hint(float rtt_ms) noexcept;
+
     bool is_open() const noexcept;
     RtpVideoReceiverSessionStats stats() const noexcept;
 

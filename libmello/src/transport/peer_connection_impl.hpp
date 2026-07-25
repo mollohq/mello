@@ -121,6 +121,9 @@ private:
     void stop_video_pipeline() noexcept;
     void teardown_video() noexcept;
     void enqueue_video_feedback(VideoFeedbackType type, uint32_t remb_bps = 0) noexcept;
+    // Smooths a control-channel RTT sample and forwards it as the NACK
+    // retry-budget hint to the video receiver session.
+    void apply_rtt_sample(float rtt) noexcept;
     void apply_loopback_ice_config();
     void begin_local_sdp_wait(uint64_t generation);
     const char* wait_for_local_sdp(uint64_t generation);

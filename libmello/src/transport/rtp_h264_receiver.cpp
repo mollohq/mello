@@ -152,7 +152,10 @@ public:
         : callbacks_(std::move(callbacks)),
           payload_type_(config.payload_type & 0x7f),
           pli_cooldown_(std::max(config.pli_cooldown,
-                                 std::chrono::milliseconds::zero())) {}
+                                 std::chrono::milliseconds::zero())),
+          nack_max_attempts_(config.nack_max_attempts != 0
+                                 ? config.nack_max_attempts
+                                 : kMaxNackAttempts) {}
 
     void on_rtp_packet(const uint8_t* data, size_t size, TimePoint now) {
         ++stats_.packets;
@@ -418,7 +421,7 @@ private:
                 should_send =
                     now - missing.first_detected >= kReorderGrace ||
                     missing.newer_packets >= kNewerPacketGrace;
-            } else if (missing.attempts < kMaxNackAttempts) {
+            } else if (missing.attempts < nack_max_attempts_) {
                 should_send = now - missing.last_nack >= kNackRepeat;
             }
 
@@ -876,6 +879,7 @@ private:
     Callbacks callbacks_;
     uint8_t payload_type_ = 96;
     std::chrono::milliseconds pli_cooldown_{1000};
+    size_t nack_max_attempts_ = kMaxNackAttempts;
     Stats stats_;
 
     std::vector<AccessUnit> access_units_;

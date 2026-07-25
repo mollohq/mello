@@ -873,6 +873,15 @@ struct RtpVideoReceiverSession::State
 
         RtpH264Receiver::Config receiver_config;
         receiver_config.payload_type = config.payload_type;
+        // RTT-adaptive NACK budget: one attempt per ~20ms of RTT (bounded),
+        // so a 100ms link gets ~6 repair chances instead of the static 2
+        // (whose ~30ms repair window could never beat a 100ms RTT).
+        const uint32_t rtt_us = rtt_hint_us.load(std::memory_order_relaxed);
+        if (rtt_us != 0) {
+            const size_t attempts = static_cast<size_t>(
+                std::clamp((rtt_us + 10'000) / 20'000 + 1, 2u, 8u));
+            receiver_config.nack_max_attempts = attempts;
+        }
         receiver = std::make_unique<RtpH264Receiver>(
             std::move(callbacks),
             receiver_config
@@ -1217,6 +1226,10 @@ struct RtpVideoReceiverSession::State
     std::atomic<uint32_t> receive_target_bps{0};
     std::atomic<uint64_t> receive_target_generation{0};
 
+    // RTT hint in microseconds (0 = unmeasured): sizes the NACK retry budget
+    // so high-RTT links still get repairs inside the AU stall deadline.
+    std::atomic<uint32_t> rtt_hint_us{0};
+
     // TWCC feedback generation (worker thread only).
     TwccFeedbackGenerator twcc_generator;
     std::atomic<uint64_t> twcc_packets_sent{0};
@@ -1420,6 +1433,18 @@ bool RtpVideoReceiverSession::set_receive_target(
     state->receive_target_generation.fetch_add(1, std::memory_order_release);
     state->worker_cv.notify_one();
     return true;
+}
+
+void RtpVideoReceiverSession::set_rtt_hint(float rtt_ms) noexcept {
+    const auto state = state_;
+    if (!state) {
+        return;
+    }
+    const uint32_t micros =
+        (rtt_ms > 0.0f && rtt_ms < 10'000.0f)
+            ? static_cast<uint32_t>(rtt_ms * 1'000.0f)
+            : 0u;
+    state->rtt_hint_us.store(micros, std::memory_order_relaxed);
 }
 
 bool RtpVideoReceiverSession::is_open() const noexcept {
