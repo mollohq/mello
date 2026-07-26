@@ -5,6 +5,7 @@
 #include <atomic>
 #include <thread>
 #include <chrono>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 
@@ -21,6 +22,11 @@ protected:
     VideoPipeline pipeline;
 
     void SetUp() override {
+        // Hardware-dependent (GPU capture/encode): skipped under CI, same
+        // contract as `CI=true cargo test --workspace` for the Rust harness.
+        if (std::getenv("CI")) {
+            GTEST_SKIP() << "hardware-dependent test skipped under CI";
+        }
         if (!pipeline.init_device()) {
             GTEST_SKIP() << "No D3D11 device available";
         }
