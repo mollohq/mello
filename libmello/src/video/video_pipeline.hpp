@@ -11,6 +11,7 @@
 #include <array>
 #include <thread>
 #include <condition_variable>
+#include <deque>
 
 #ifdef _WIN32
 #include "video_preprocessor.hpp"
@@ -58,7 +59,15 @@ public:
     void stop_viewer();
     bool feed_packet(const uint8_t* data, size_t size, bool is_keyframe);
     bool present_frame();
+    // Decode input backlog: compressed jobs waiting for the decode thread.
+    // This is what the viewer backlog guard (via FFI
+    // mello_stream_viewer_decode_queue_depth) and probe telemetry want.
     size_t decode_queue_depth() const {
+        std::lock_guard<std::mutex> lock(decode_jobs_mutex_);
+        return decode_jobs_.size();
+    }
+    // Decoded frames waiting in the present ring (used by the present path).
+    size_t decoded_ring_depth() const {
         std::lock_guard<std::mutex> lock(decoded_ring_mutex_);
         return decoded_ring_count_;
     }
@@ -132,8 +141,10 @@ private:
     double   last_convert_ms_  = 0;
     double   last_encode_ms_   = 0;
     uint64_t viewer_start_time_ = 0;
-    uint64_t frames_decoded_   = 0;
-    uint64_t decode_errors_    = 0;
+    // Written on the decode thread, read on others (stop_viewer, present
+    // debug dumps) — atomic.
+    std::atomic<uint64_t> frames_decoded_{0};
+    std::atomic<uint64_t> decode_errors_{0};
 
     std::vector<uint8_t> rgba_buf_;
 
@@ -147,6 +158,20 @@ private:
     size_t decoded_ring_head_ = 0; // next write slot
     size_t decoded_ring_tail_ = 0; // next read slot
     size_t decoded_ring_count_ = 0;
+
+    // Async decode: feed_packet enqueues, decode_thread_ dequeues and runs
+    // decoder_->decode()/get_frame() — those may ONLY ever run on
+    // decode_thread_.
+    struct DecodeJob {
+        std::vector<uint8_t> bytes;
+        bool is_keyframe = false;
+    };
+    static constexpr size_t DECODE_QUEUE_CAP = 8;
+    mutable std::mutex decode_jobs_mutex_;
+    std::condition_variable decode_jobs_cv_;
+    std::deque<DecodeJob> decode_jobs_;
+    std::thread decode_thread_;
+    void decode_thread_func();
 
     // Continuous jitter regulator: present immediately when the ring holds
     // >= JITTER_TARGET frames (we are ahead), otherwise at frame cadence

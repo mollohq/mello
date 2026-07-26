@@ -102,8 +102,8 @@ bool AmfEncoder::initialize(const GraphicsDevice& device, const EncoderConfig& c
                           "preencode=disabled") ||
             !set_required(AMF_VIDEO_ENCODER_PRE_ANALYSIS_ENABLE, false, "pre-analysis=disabled") ||
             !set_required(AMF_VIDEO_ENCODER_PROFILE,
-                          static_cast<amf_int64>(AMF_VIDEO_ENCODER_PROFILE_MAIN),
-                          "profile=Main") ||
+                          static_cast<amf_int64>(AMF_VIDEO_ENCODER_PROFILE_HIGH),
+                          "profile=High") ||
             !set_required(AMF_VIDEO_ENCODER_PROFILE_LEVEL,
                           static_cast<amf_int64>(AMF_H264_LEVEL__4_2),
                           "level=4.2") ||
@@ -118,10 +118,11 @@ bool AmfEncoder::initialize(const GraphicsDevice& device, const EncoderConfig& c
                           static_cast<amf_int64>(config.keyframe_interval),
                           "SPS/PPS insertion spacing") ||
             !set_required(AMF_VIDEO_ENCODER_TARGET_BITRATE, bitrate_bps, "target-bitrate") ||
-            !set_required(AMF_VIDEO_ENCODER_PEAK_BITRATE, bitrate_bps, "peak-bitrate") ||
+            !set_required(AMF_VIDEO_ENCODER_PEAK_BITRATE,
+                          bitrate_bps + bitrate_bps / 4, "peak-bitrate") ||
             !set_required(AMF_VIDEO_ENCODER_RATE_CONTROL_METHOD,
-                          static_cast<amf_int64>(AMF_VIDEO_ENCODER_RATE_CONTROL_METHOD_CBR),
-                          "rate-control=CBR") ||
+                          static_cast<amf_int64>(AMF_VIDEO_ENCODER_RATE_CONTROL_METHOD_PEAK_CONSTRAINED_VBR),
+                          "rate-control=VBR-peak-constrained") ||
             !set_required(AMF_VIDEO_ENCODER_FRAMERATE, AMFConstructRate(config.fps, 1), "frame-rate") ||
             !set_required(AMF_VIDEO_ENCODER_VBV_BUFFER_SIZE, vbv_bits, "VBV=1-frame")) {
             encoder_.Release(); context_->Terminate(); context_.Release();
@@ -147,10 +148,10 @@ bool AmfEncoder::initialize(const GraphicsDevice& device, const EncoderConfig& c
         const AMF_RESULT level_res =
             encoder_->GetProperty(AMF_VIDEO_ENCODER_PROFILE_LEVEL, &actual_level);
         if (profile_res != AMF_OK || level_res != AMF_OK ||
-            actual_profile != AMF_VIDEO_ENCODER_PROFILE_MAIN ||
+            actual_profile != AMF_VIDEO_ENCODER_PROFILE_HIGH ||
             actual_level != AMF_H264_LEVEL__4_2) {
             MELLO_LOG_ERROR(TAG,
-                "AMF: effective H264 profile/level mismatch (profile status=%d value=%lld, level status=%d value=%lld; required Main/4.2)",
+                "AMF: effective H264 profile/level mismatch (profile status=%d value=%lld, level status=%d value=%lld; required High/4.2)",
                 profile_res, static_cast<long long>(actual_profile),
                 level_res, static_cast<long long>(actual_level));
             encoder_->Terminate(); encoder_.Release();
@@ -160,7 +161,7 @@ bool AmfEncoder::initialize(const GraphicsDevice& device, const EncoderConfig& c
             return false;
         }
         MELLO_LOG_INFO(TAG,
-            "AMF: effective H264 profile=Main level=4.2 usage=ULL low-latency=on preencode=off vbv=%lld B-frames=disabled",
+            "AMF: effective H264 profile=High level=4.2 usage=ULL low-latency=on preencode=off vbv=%lld B-frames=disabled",
             static_cast<long long>(std::max<amf_int64>(
                 1, static_cast<amf_int64>(config.bitrate_kbps * 1000) /
                    static_cast<amf_int64>(config.fps > 0 ? config.fps : 60))));
@@ -268,7 +269,8 @@ void AmfEncoder::set_bitrate(uint32_t kbps) {
         const AMF_RESULT target_res =
             encoder_->SetProperty(AMF_VIDEO_ENCODER_TARGET_BITRATE, bitrate_bps);
         const AMF_RESULT peak_res =
-            encoder_->SetProperty(AMF_VIDEO_ENCODER_PEAK_BITRATE, bitrate_bps);
+            encoder_->SetProperty(AMF_VIDEO_ENCODER_PEAK_BITRATE,
+                                  bitrate_bps + bitrate_bps / 4);
         const AMF_RESULT vbv_res =
             encoder_->SetProperty(AMF_VIDEO_ENCODER_VBV_BUFFER_SIZE, vbv_bits);
         if (target_res != AMF_OK || peak_res != AMF_OK || vbv_res != AMF_OK) {

@@ -174,7 +174,7 @@ bool NvencEncoder::initialize(const GraphicsDevice& device, const EncoderConfig&
     enc_config.rcParams.enableLookahead   = 0;
     enc_config.rcParams.enableExtLookahead = 0;
     enc_config.rcParams.lookaheadDepth  = 0;
-    enc_config.rcParams.enableTemporalAQ = 0;
+    enc_config.rcParams.enableTemporalAQ = 1;
     enc_config.rcParams.enableAQ        = 1;
     enc_config.rcParams.aqStrength      = 8;
     enc_config.rcParams.zeroReorderDelay = 1;
@@ -182,11 +182,25 @@ bool NvencEncoder::initialize(const GraphicsDevice& device, const EncoderConfig&
     enc_config.gopLength      = config.keyframe_interval;
 
     if (config.codec == VideoCodec::H264) {
-        enc_config.profileGUID = NV_ENC_H264_PROFILE_MAIN_GUID;
+        enc_config.profileGUID = NV_ENC_H264_PROFILE_HIGH_GUID;
         enc_config.encodeCodecConfig.h264Config.idrPeriod         = config.keyframe_interval;
         enc_config.encodeCodecConfig.h264Config.level             = NV_ENC_LEVEL_H264_42;
         enc_config.encodeCodecConfig.h264Config.enableIntraRefresh = 0;
         enc_config.encodeCodecConfig.h264Config.repeatSPSPPS      = 1;
+        // Signal BT.709 limited-range in the VUI: the conversion pipeline is
+        // BT.709 studio-range, and signaling it makes external decoders and
+        // recordings interpret colors correctly.
+        enc_config.encodeCodecConfig.h264Config.h264VUIParameters.videoSignalTypePresentFlag = 1;
+        enc_config.encodeCodecConfig.h264Config.h264VUIParameters.videoFormat = NV_ENC_VUI_VIDEO_FORMAT_UNSPECIFIED;
+        enc_config.encodeCodecConfig.h264Config.h264VUIParameters.videoFullRangeFlag = 0; // limited (studio) range
+        enc_config.encodeCodecConfig.h264Config.h264VUIParameters.colourDescriptionPresentFlag = 1;
+        enc_config.encodeCodecConfig.h264Config.h264VUIParameters.colourPrimaries = NV_ENC_VUI_COLOR_PRIMARIES_BT709;
+        enc_config.encodeCodecConfig.h264Config.h264VUIParameters.transferCharacteristics = NV_ENC_VUI_TRANSFER_CHARACTERISTIC_BT709;
+        enc_config.encodeCodecConfig.h264Config.h264VUIParameters.colourMatrix = NV_ENC_VUI_MATRIX_COEFFS_BT709;
+        // Full two-pass (multiPass lives in rcParams in this SDK; the full-res
+        // variant is NV_ENC_TWO_PASS_FULL_RESOLUTION — NV_ENC_MULTI_PASS_FULL
+        // does not exist). Improves quality at the same bitrate.
+        enc_config.rcParams.multiPass = NV_ENC_TWO_PASS_FULL_RESOLUTION;
     }
 
     NV_ENC_INITIALIZE_PARAMS init_params;
@@ -231,10 +245,10 @@ bool NvencEncoder::initialize(const GraphicsDevice& device, const EncoderConfig&
     }
     base_config_ = enc_config;
     MELLO_LOG_INFO(TAG,
-        "NVENC: effective preset=%s RC=VBR avg=%u max=%u vbv=%u spatialAQ=8 B-frames=disabled lookahead=disabled",
+        "NVENC: effective preset=%s RC=VBR avg=%u max=%u vbv=%u spatialAQ=8 temporalAQ=1 multipass=full profile=High B-frames=disabled lookahead=disabled",
         used_preset_label, avg, max, vbv);
     if (config.codec == VideoCodec::H264) {
-        MELLO_LOG_INFO(TAG, "NVENC: initialized H264 profile=Main level=4.2 repeatSPSPPS=enabled");
+        MELLO_LOG_INFO(TAG, "NVENC: initialized H264 profile=High level=4.2 repeatSPSPPS=enabled");
     }
 
     NV_ENC_CREATE_BITSTREAM_BUFFER bstream = {NV_ENC_CREATE_BITSTREAM_BUFFER_VER};
