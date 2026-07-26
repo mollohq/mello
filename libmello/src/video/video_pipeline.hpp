@@ -148,13 +148,14 @@ private:
     size_t decoded_ring_tail_ = 0; // next read slot
     size_t decoded_ring_count_ = 0;
 
-    // Jitter/pacing buffer: hold back presentation until ring depth >= target
-    // to absorb network timing jitter. Falls back after a deadline to avoid
-    // adding latency when frames arrive slowly.
+    // Continuous jitter regulator: present immediately when the ring holds
+    // >= JITTER_TARGET frames (we are ahead), otherwise at frame cadence
+    // (~90% of the configured frame interval since the last present). No
+    // one-shot priming latch — underflow recovers without a stall.
     static constexpr size_t JITTER_TARGET = 2;
-    static constexpr uint64_t JITTER_MAX_HOLD_US = 50'000; // 50ms max hold
     uint64_t last_present_us_ = 0;
-    bool     jitter_primed_   = false;
+
+    bool jitter_should_present(size_t depth, uint64_t now_us) const;
 
     void push_decoded(
 #ifdef _WIN32

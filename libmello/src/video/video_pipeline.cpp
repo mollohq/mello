@@ -485,7 +485,6 @@ bool VideoPipeline::start_viewer(const PipelineConfig& config, FrameCallback on_
     frames_decoded_    = 0;
     decode_errors_     = 0;
     last_present_us_   = 0;
-    jitter_primed_     = false;
 
     MELLO_LOG_INFO(TAG, "Viewer pipeline starting: decoder=%s codec=H264 res=%ux%u",
         decoder_ ? decoder_->name() : "none",
@@ -574,28 +573,23 @@ bool VideoPipeline::feed_packet(const uint8_t* data, size_t size, bool is_keyfra
     return true;
 }
 
+bool VideoPipeline::jitter_should_present(size_t depth, uint64_t now_us_value) const {
+    if (depth == 0) return false;
+    if (depth >= JITTER_TARGET) return true;
+    // depth == 1: present on cadence (~90% of frame interval since last
+    // present) so a steady stream keeps a one-frame cushion, and after an
+    // underrun the next frame is not artificially delayed.
+    if (last_present_us_ == 0) return true;
+    const uint32_t fps = config_.fps > 0 ? config_.fps : 60;
+    const uint64_t interval_us = 1'000'000ULL / fps;
+    return now_us_value - last_present_us_ >= interval_us * 9 / 10;
+}
+
 bool VideoPipeline::present_frame() {
 #ifdef _WIN32
     if (!viewer_running_.load()) return false;
 
-    // Jitter buffer: hold back until the ring has enough depth to smooth
-    // inter-frame timing jitter. Bypass the hold if we've waited too long
-    // (avoids adding latency when frame rate is genuinely low).
-    {
-        size_t depth = decode_queue_depth();
-        if (depth == 0) return false;
-
-        if (!jitter_primed_ && depth < JITTER_TARGET) {
-            uint64_t now = now_us();
-            if (last_present_us_ == 0) {
-                last_present_us_ = now;
-            }
-            if (now - last_present_us_ < JITTER_MAX_HOLD_US) {
-                return false; // hold — ring not full enough yet
-            }
-        }
-        jitter_primed_ = true;
-    }
+    if (!jitter_should_present(decode_queue_depth(), now_us())) return false;
 
     ID3D11Texture2D* frame = pop_decoded();
     if (!frame) return false;
@@ -670,15 +664,7 @@ bool VideoPipeline::present_frame() {
     if (!viewer_running_.load()) return false;
 
     {
-        size_t depth = decode_queue_depth();
-        if (depth == 0) return false;
-
-        if (!jitter_primed_ && depth < JITTER_TARGET) {
-            uint64_t now = now_us();
-            if (last_present_us_ == 0) last_present_us_ = now;
-            if (now - last_present_us_ < JITTER_MAX_HOLD_US) return false;
-        }
-        jitter_primed_ = true;
+        if (!jitter_should_present(decode_queue_depth(), now_us())) return false;
     }
 
     void* popped = pop_decoded();

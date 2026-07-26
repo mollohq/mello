@@ -20,6 +20,10 @@ pub(super) const MAX_AU_POLLS_PER_TICK: usize = 32;
 pub(super) const VIEWER_AU_RECV_BUF_INITIAL: usize = 256 * 1024;
 const MAX_PENDING_STREAM_DISCONNECTS: usize = 64;
 
+/// Decode-queue depth above which the viewer backlog guard (spec 12-STREAMING
+/// §7.7) drops incoming delta AUs instead of feeding them. Keyframes always feed.
+pub(super) const DECODE_QUEUE_BACKLOG_THRESHOLD: i32 = 4;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct StreamPeerDisconnect {
     pub peer_id: String,
@@ -62,6 +66,8 @@ pub(super) struct ViewerState {
     pub au_buffer_grows: u64,
     pub au_poll_errors: u64,
     pub au_feed_failures: u64,
+    /// Delta AUs dropped by the backlog guard (spec §7.7) this session.
+    pub backlog_guard_drops: u64,
     pub congestion: ViewerCongestionController,
     pub debug_last_emit: Instant,
     pub debug_last_tick_count: u64,
@@ -71,6 +77,7 @@ pub(super) struct ViewerState {
     pub debug_last_packets: u64,
     pub debug_last_bytes: u64,
     pub debug_last_frames_presented: u64,
+    pub debug_last_backlog_guard_drops: u64,
     pub last_present_attempt: Instant,
     pub au_recv_buf: Vec<u8>,
 }
@@ -234,11 +241,25 @@ pub(super) fn poll_sfu_viewer_access_units(
     tick
 }
 
+/// Backlog-guard drop decision (spec §7.7): shed delta AUs while the decode
+/// queue is backlogged so a sustained network burst can't bury the decoder;
+/// keyframes always feed so the reference chain can recover.
+fn should_drop_for_backlog(decode_queue_depth: i32, is_keyframe: bool) -> bool {
+    !is_keyframe && decode_queue_depth > DECODE_QUEUE_BACKLOG_THRESHOLD
+}
+
 fn feed_one_access_unit(
     vs: &mut ViewerState,
     viewer: *mut mello_sys::MelloStreamView,
     au: &ReceivedAccessUnit,
 ) -> bool {
+    // No viewer→host keyframe-request channel exists yet, so the guard only
+    // drops; the native receiver's automatic PLI remains the IDR trigger.
+    let decode_queue_depth = unsafe { mello_sys::mello_stream_viewer_decode_queue_depth(viewer) };
+    if should_drop_for_backlog(decode_queue_depth, au.is_idr) {
+        vs.backlog_guard_drops = vs.backlog_guard_drops.saturating_add(1);
+        return false;
+    }
     let ok = unsafe { feed_access_unit_to_decoder(viewer, &vs.au_recv_buf, au.is_idr) };
     if ok {
         vs.transport_packets = vs.transport_packets.saturating_add(1);
@@ -542,6 +563,34 @@ mod tests {
         let buf = ViewerState::new_au_recv_buf();
         assert_eq!(buf.len(), VIEWER_AU_RECV_BUF_INITIAL);
         assert!(buf.len() >= 64 * 1024);
+    }
+
+    #[test]
+    fn backlog_guard_drops_delta_above_threshold() {
+        assert!(should_drop_for_backlog(
+            DECODE_QUEUE_BACKLOG_THRESHOLD + 1,
+            false
+        ));
+        assert!(should_drop_for_backlog(i32::MAX, false));
+    }
+
+    #[test]
+    fn backlog_guard_feeds_delta_at_or_below_threshold() {
+        assert!(!should_drop_for_backlog(
+            DECODE_QUEUE_BACKLOG_THRESHOLD,
+            false
+        ));
+        assert!(!should_drop_for_backlog(0, false));
+        assert!(!should_drop_for_backlog(-1, false));
+    }
+
+    #[test]
+    fn backlog_guard_never_drops_keyframes() {
+        assert!(!should_drop_for_backlog(
+            DECODE_QUEUE_BACKLOG_THRESHOLD + 1,
+            true
+        ));
+        assert!(!should_drop_for_backlog(i32::MAX, true));
     }
 
     #[test]
