@@ -20,6 +20,22 @@ Deferred from Phase 1 (follow-ups, not blockers): chronic-queue viewer *ejection
 
 ## Phase 2 — Encoder/decode quality (in progress)
 
+Done so far (branch `feat/stream-quality-phase2`):
+- ✅ Viewer cadence trio: continuous jitter regulator (replaces one-shot `jitter_primed_` latch), spec §7.7 backlog guard (delta-drop > 4 decode-queue depth, keyframes always feed), async decode thread (feed_packet O(copy); `decode_queue_depth()` now reports decode input backlog).
+- ✅ Encoder quality batch: NVENC High profile + BT.709 VUI + temporal AQ + full-res two-pass (watch encode_ms on low-end GPUs in certification), AMF High + peak-constrained VBR 1.25×, QSV High + BALANCED + 2 refs, VideoToolbox High; Medium 4→5 Mbps, Low 2.5→3 Mbps.
+- ✅ DComp `OpenSharedResource1` caching (stable handle per stream).
+- Follow-up for Windows validation: cross-device sync between libmello write device and DComp presenter device (keyed mutex or fence — current code relies on D3D11 queue timing).
+
+Open:
+1. H.264 High profile + VUI BT.709 signalling (all encoder backends). ✅
+2. `enableTemporalAQ`, multipass evaluation (runtime-gated on GPU headroom). ✅ (headroom gate = validation item)
+3. AMF: VBR with 1.25× headroom (currently CBR peak=target). QSV: balanced usage + 2 refs. ✅
+4. D3D11VA decoder: proper implementation (pic params + NAL/slice parsing) — un-cripples Intel-iGPU viewers. **Deferred: large Windows-only effort, no local verification; candidates for its own focused PR on the Windows box.**
+5. ULPFEC (RFC 5109) at low loss rates, sender + receiver. (next)
+6. Viewer cadence: continuous PID-paced jitter buffer (replaces one-shot `jitter_primed_`), async decode thread, spec §7.7 backlog guard. ✅
+7. DComp: cache `OpenSharedResource1`, keyed-mutex/fence sync with libmello device. ✅ (sync → validation follow-up)
+8. Bitrate ladder retune (Medium 720p60 uplift) — config only. ✅
+
 ## Verification constraints
 
 - Dev machine is macOS. Locally verifiable: transport C++ (`src/transport/*`, platform-neutral), mello-core Rust, mello-sfu Go.

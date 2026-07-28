@@ -1,6 +1,7 @@
 #include "peer_connection_impl.hpp"
 
 #include "twcc.hpp"
+#include "ulpfec.hpp"
 
 #include <chrono>
 #include <algorithm>
@@ -129,6 +130,16 @@ bool remote_media_supports_twcc(const rtc::Description::Media& media) {
         const auto* map = media.extMap(kTwccExtensionId);
         return map != nullptr
             && map->uri == kTwccExtensionUri;
+    } catch (...) {
+        return false;
+    }
+}
+
+// True when the remote video media section advertises the ULPFEC payload
+// type (RFC 5109 XOR parity rides SSRC+1 with its own sequence counter).
+bool remote_media_supports_fec(const rtc::Description::Media& media) {
+    try {
+        return media.hasPayloadType(kUlpfecPayloadType);
     } catch (...) {
         return false;
     }
@@ -366,6 +377,12 @@ rtc::Description::Video PeerConnectionImpl::make_stream_video_description(
 ) const {
     rtc::Description::Video video(mid, direction);
     video.addH264Codec(kVideoPayloadType, kVideoFmtp);
+    // libdatachannel 0.24.1 has no addUlpfecCodec; mirror addH264Codec's
+    // mechanics (RtpMap from "PT format/rate", no rtcp-fb on the FEC PT).
+    video.addRtpMap(rtc::Description::Media::RtpMap(
+        std::to_string(kUlpfecPayloadType) + " " + kUlpfecFormatName
+        + "/90000"
+    ));
     if (auto* map = video.rtpMap(kVideoPayloadType)) {
         map->addFeedback("nack");
         map->addFeedback("nack pli");
@@ -586,6 +603,7 @@ void PeerConnectionImpl::try_start_video_pipeline(
         config.cname = std::move(sender_cname);
         config.pacing_target_bps = pacing_target_bps;
         config.twcc_enabled = twcc_supported_;
+        config.fec_enabled = fec_supported_;
 
         const std::weak_ptr<PeerConnectionImpl> weak_self = weak_from_this();
         auto sender = std::make_unique<RtpVideoSender>(
@@ -654,6 +672,7 @@ void PeerConnectionImpl::try_start_video_pipeline(
         RtpVideoReceiverSessionConfig config;
         config.payload_type = kVideoPayloadType;
         config.twcc_enabled = twcc_supported_;
+        config.fec_enabled = fec_supported_;
         auto receiver = std::make_unique<RtpVideoReceiverSession>(
             track,
             config
@@ -1259,6 +1278,7 @@ bool PeerConnectionImpl::set_remote_description(const char* sdp, bool is_offer) 
             std::string error;
             if (const auto* video = find_single_video_media(desc, error)) {
                 twcc_supported_ = remote_media_supports_twcc(*video);
+                fec_supported_ = remote_media_supports_fec(*video);
             }
         }
         return true;
@@ -1631,6 +1651,7 @@ void PeerConnectionImpl::video_get_stats(MelloRtpVideoStats* stats) const noexce
         stats->tx_rtx_queue_dropped = tx.rtx_queue_dropped;
         stats->tx_twcc_reports = tx.twcc_reports;
         stats->tx_gcc_target_bps = tx.gcc_target_bps;
+        stats->tx_fec_packets_sent = tx.fec_packets_sent;
         stats->tx_active = 1;
     }
 
@@ -1663,6 +1684,8 @@ void PeerConnectionImpl::video_get_stats(MelloRtpVideoStats* stats) const noexce
         stats->rx_pli_packets_sent = rx.pli_packets_sent;
         stats->rx_remb_packets_sent = rx.remb_packets_sent;
         stats->rx_twcc_packets_sent = rx.twcc_packets_sent;
+        stats->rx_fec_recovered = rx.rx_fec_recovered;
+        stats->rx_fec_unrecoverable = rx.rx_fec_unrecoverable;
         stats->rx_receiver_reports_sent = rx.receiver_reports_sent;
         stats->rx_sender_reports_received = rx.sender_reports_received;
         stats->rx_invalid_rtcp_packets = rx.invalid_rtcp_packets;

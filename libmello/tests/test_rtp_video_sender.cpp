@@ -3,10 +3,12 @@
 #include "transport/rtp_h264_receiver.hpp"
 #include "transport/rtp_video_receiver_session.hpp"
 #include "transport/rtp_video_sender.hpp"
+#include "transport/ulpfec.hpp"
 
 #include <rtc/rtc.hpp>
 #include <rtc/rtp.hpp>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -19,6 +21,7 @@
 #include <optional>
 #include <stdexcept>
 #include <thread>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -158,6 +161,56 @@ struct EmittedAccessUnit {
     uint32_t timestamp = 0;
 };
 
+// Drops every `period`th ORIGINAL media RTP packet (retransmits, FEC on
+// PT 127, and RTCP always pass; a retransmit reuses the original sequence
+// number, so the sequence set keeps the drop pattern deterministic).
+// Append at the END of a track's media-handler chain: incoming handlers run
+// deepest-first, so drops land before the session consumes the messages.
+class LossInjectingHandler final : public rtc::MediaHandler {
+public:
+    explicit LossInjectingHandler(size_t period) : period_(period) {}
+
+    void incoming(
+        rtc::message_vector& messages,
+        const rtc::message_callback& /*send*/
+    ) override {
+        rtc::message_vector kept;
+        kept.reserve(messages.size());
+        for (auto& message : messages) {
+            if (message && message->type == rtc::Message::Binary
+                && message->size() >= 12) {
+                const auto* const bytes =
+                    static_cast<const std::byte*>(message->data());
+                const uint8_t payload_type =
+                    static_cast<uint8_t>(bytes[1]) & 0x7fU;
+                if ((static_cast<uint8_t>(bytes[0]) >> 6) == 2
+                    && payload_type != mello::transport::kUlpfecPayloadType) {
+                    const uint16_t sequence =
+                        static_cast<uint16_t>(
+                            (static_cast<uint16_t>(bytes[2]) << 8)
+                            | static_cast<uint16_t>(bytes[3])
+                        );
+                    if (seen_sequences_.insert(sequence).second
+                        && ++original_seen_ % period_ == 0) {
+                        ++dropped_;
+                        continue;
+                    }
+                }
+            }
+            kept.push_back(std::move(message));
+        }
+        messages.swap(kept);
+    }
+
+    size_t dropped() const { return dropped_; }
+
+private:
+    const size_t period_;
+    size_t original_seen_ = 0;
+    size_t dropped_ = 0;
+    std::unordered_set<uint16_t> seen_sequences_;
+};
+
 class LoopbackVideoLink {
 public:
     LoopbackVideoLink() {
@@ -192,6 +245,11 @@ public:
             rtc::Description::Direction::SendOnly
         );
         video.addH264Codec(kPayloadType);
+        // Mirrors production SDP (PeerConnectionImpl::make_stream_video_description).
+        video.addRtpMap(rtc::Description::Media::RtpMap(
+            std::to_string(mello::transport::kUlpfecPayloadType)
+            + " " + mello::transport::kUlpfecFormatName + "/90000"
+        ));
         video.addSSRC(kSenderSsrc, kCname, "mello-stream", "mello-video");
         sender_track_ = offerer_->addTrack(std::move(video));
 
@@ -247,7 +305,8 @@ public:
         RtpVideoSender::PliCallback on_pli = {},
         RtpVideoSender::RembCallback on_remb = {},
         RtpVideoSender::LocalIdrNeededCallback on_local_idr_needed = {},
-        bool twcc_enabled = false
+        bool twcc_enabled = false,
+        bool fec_enabled = false
     ) {
         RtpVideoSenderConfig config;
         config.ssrc = kSenderSsrc;
@@ -255,6 +314,7 @@ public:
         config.cname = kCname;
         config.pacing_target_bps = pacing_target_bps;
         config.twcc_enabled = twcc_enabled;
+        config.fec_enabled = fec_enabled;
         RtpVideoSender sender(
             sender_track_,
             config,
@@ -700,6 +760,140 @@ TEST(RtpVideoSenderTwccTest, ViewerFeedbackDrivesGccEstimate) {
     const auto rx_stats = receiver.stats();
     EXPECT_GT(rx_stats.twcc_packets_sent, 0u);
     EXPECT_GT(popped, 30u);
+}
+
+TEST(RtpVideoSenderFecTest, ParityFecRepairsOneLossPerGroupWithoutPli) {
+    LoopbackVideoLink link;
+    RtpVideoSender sender = link.make_sender(200'000'000, {}, {}, {}, false, true);
+
+    mello::transport::RtpVideoReceiverSessionConfig rx_config;
+    rx_config.payload_type = kPayloadType;
+    rx_config.fec_enabled = true;
+    mello::transport::RtpVideoReceiverSession receiver(
+        link.receiver_track(),
+        rx_config
+    );
+    ASSERT_TRUE(receiver.is_open());
+
+    // Drop every 11th media packet before the session's track: with groups
+    // of 10 and drop period 11 (coprime), each parity group suffers exactly
+    // one loss — parity-repairable.
+    auto loss = std::make_shared<LossInjectingHandler>(11);
+    link.receiver_track()->chainMediaHandler(loss);
+
+    // 30 large AUs (~22 fragments each): a dropped fragment sits inside an
+    // INCOMPLETE access unit, so the release floor stays behind it and the
+    // parity repair lands within the AU deadline — the realistic FEC win.
+    // (Single-packet AUs complete their neighbor instantly and advance the
+    // release floor past any repair — by design, too-late frames are shed.)
+    size_t popped = 0;
+    std::vector<uint32_t> popped_timestamps;
+    for (int index = 0; index < 30; ++index) {
+        const auto au = index == 0
+            ? make_idr_access_unit()
+            : make_large_delta_access_unit(24 * 1024);
+        if (!sender.send_access_unit(
+                au.data(),
+                au.size(),
+                static_cast<uint64_t>(index) * 33'333
+            )) {
+            const auto debug_stats = sender.stats();
+            fprintf(
+                stderr,
+                "send_access_unit failed at index %d: enqueued=%llu "
+                "sent=%llu rejected=%llu dropped=%llu queued=%llu "
+                "peakq=%llu failures=%llu rtp=%llu fec=%llu\n",
+                index,
+                (unsigned long long)debug_stats.access_units_enqueued,
+                (unsigned long long)debug_stats.access_units_sent,
+                (unsigned long long)debug_stats.access_units_rejected,
+                (unsigned long long)debug_stats.access_units_dropped,
+                (unsigned long long)debug_stats.queued_access_units,
+                (unsigned long long)debug_stats.peak_queued_access_units,
+                (unsigned long long)debug_stats.send_failures,
+                (unsigned long long)debug_stats.rtp_packets_sent,
+                (unsigned long long)debug_stats.fec_packets_sent
+            );
+            FAIL();
+        }
+        std::this_thread::sleep_for(2ms);
+        while (auto unit = receiver.pop_access_unit()) {
+            popped_timestamps.push_back(unit->rtp_timestamp);
+            ++popped;
+        }
+    }
+
+    const bool drained = wait_until(
+        [&]() {
+            while (auto unit = receiver.pop_access_unit()) {
+                popped_timestamps.push_back(unit->rtp_timestamp);
+                ++popped;
+            }
+            return popped >= 30;
+        },
+        10s
+    );
+    if (!drained) {
+        std::sort(popped_timestamps.begin(), popped_timestamps.end());
+        fprintf(stderr, "missing AU before timestamps:");
+        for (size_t i = 1; i < popped_timestamps.size(); ++i) {
+            if (popped_timestamps[i] - popped_timestamps[i - 1] > 3'500) {
+                fprintf(stderr, " (after %u)", popped_timestamps[i - 1]);
+            }
+        }
+        fprintf(stderr, "\n");
+    }
+    {
+        const auto tx_debug = sender.stats();
+        const auto rx_debug = receiver.stats();
+        fprintf(
+            stderr,
+            "end: drained=%d popped=%zu dropped=%zu | tx fec=%llu rtp=%llu "
+            "rtx_req=%llu rtx_sent=%llu | rx ingress=%llu fec_rec=%llu "
+            "fec_unrec=%llu nack_seq=%llu core_acc=%llu core_missing=%llu "
+            "core_repaired=%llu core_complete=%llu core_incomplete=%llu "
+            "core_emitted=%llu aus_dropped=%llu pli=%llu restarts=%llu "
+            "wrong_ssrc=%llu inv_rtp=%llu inv_h264=%llu dup=%llu late=%llu "
+            "gate_entries=%llu gate_dropped=%llu\n",
+            drained,
+            popped,
+            loss->dropped(),
+            (unsigned long long)tx_debug.fec_packets_sent,
+            (unsigned long long)tx_debug.rtp_packets_sent,
+            (unsigned long long)tx_debug.rtx_requests,
+            (unsigned long long)tx_debug.rtx_sent,
+            (unsigned long long)rx_debug.ingress_packets,
+            (unsigned long long)rx_debug.rx_fec_recovered,
+            (unsigned long long)rx_debug.rx_fec_unrecoverable,
+            (unsigned long long)rx_debug.nack_sequences_sent,
+            (unsigned long long)rx_debug.core.accepted_packets,
+            (unsigned long long)rx_debug.core.missing_sequences_detected,
+            (unsigned long long)rx_debug.core.repaired_packets,
+            (unsigned long long)rx_debug.core.complete_access_units,
+            (unsigned long long)rx_debug.core.incomplete_access_units,
+            (unsigned long long)rx_debug.core.emitted_access_units,
+            (unsigned long long)rx_debug.access_units_dropped,
+            (unsigned long long)rx_debug.pli_requests,
+            (unsigned long long)rx_debug.core_restarts,
+            (unsigned long long)rx_debug.wrong_ssrc_packets_after_recovery,
+            (unsigned long long)rx_debug.core.invalid_rtp_packets,
+            (unsigned long long)rx_debug.core.invalid_h264_packets,
+            (unsigned long long)rx_debug.core.duplicates,
+            (unsigned long long)rx_debug.core.late_packets,
+            (unsigned long long)rx_debug.core.gate_entries,
+            (unsigned long long)rx_debug.core.gate_dropped_access_units
+        );
+    }
+    ASSERT_TRUE(drained);
+
+    const auto tx = sender.stats();
+    EXPECT_GE(tx.fec_packets_sent, 60u); // ~660 media packets = 66 groups of 10
+
+    const auto rx = receiver.stats();
+    EXPECT_EQ(popped, 30u);
+    EXPECT_GT(rx.rx_fec_recovered, 0u);
+    EXPECT_EQ(rx.pli_requests, 0u);
+    EXPECT_EQ(rx.pli_packets_sent, 0u);
 }
 
 TEST(RtpVideoSenderPacingTest, DynamicTargetUpdateIsObservedInStats) {

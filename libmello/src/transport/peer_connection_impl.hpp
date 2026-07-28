@@ -148,6 +148,8 @@ private:
     uint32_t receive_target_bps_ = 4'000'000;
     // Remote SDP advertised the TWCC RTP header extension on stream video.
     bool twcc_supported_ = false;
+    // Remote SDP advertised the ULPFEC payload type (127) on stream video.
+    bool fec_supported_ = false;
 
     std::string local_sdp_;
     std::mutex sdp_mutex_;

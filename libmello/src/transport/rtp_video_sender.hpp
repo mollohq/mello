@@ -22,6 +22,11 @@ struct RtpVideoSenderConfig {
     // from feedback. The estimator's target gates pacing via min(manager,
     // estimator) and is reported upward as GCC feedback.
     bool twcc_enabled = false;
+    // ULPFEC (XOR parity, ulpfec/90000 PT 127) was negotiated: XOR groups of
+    // consecutive media packets and emit one parity packet per group on
+    // SSRC+1 through the same pacing budget, giving the receiver a pre-NACK
+    // repair path for single losses.
+    bool fec_enabled = false;
 };
 
 struct RtpVideoSenderStats {
@@ -53,6 +58,8 @@ struct RtpVideoSenderStats {
     // TWCC: feedback reports processed and the estimator's current target.
     uint64_t twcc_reports = 0;
     uint64_t gcc_target_bps = 0;
+    // ULPFEC parity packets emitted (one per completed media group).
+    uint64_t fec_packets_sent = 0;
 };
 
 // One producer thread may call send_access_unit(). It only copies accepted

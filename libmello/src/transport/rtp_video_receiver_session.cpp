@@ -1,6 +1,7 @@
 #include "rtp_video_receiver_session.hpp"
 
 #include "twcc.hpp"
+#include "ulpfec.hpp"
 
 #include <rtc/mediahandler.hpp>
 #include <rtc/message.hpp>
@@ -574,21 +575,57 @@ struct RtpVideoReceiverSession::State
         }
 
         try {
+            std::vector<uint16_t> nack_sequences;
+            if (config.fec_enabled) {
+                // Parity repair runs ahead of NACK: a buffered FEC block can
+                // reconstruct a single loss per group without a network
+                // round trip. The receiver core forbids re-entrant
+                // callbacks, so recovered packets are injected by the worker
+                // loop once the current receiver call unwinds.
+                nack_sequences.reserve(sequences.size());
+                for (const uint16_t sequence : sequences) {
+                    std::vector<uint8_t> recovered;
+                    if (fec_recovery.recover(sequence, recovered)) {
+                        fec_recovered_injections.push_back(
+                            std::move(recovered)
+                        );
+                    } else {
+                        nack_sequences.push_back(sequence);
+                    }
+                }
+                sync_fec_stats();
+            } else {
+                nack_sequences = sequences;
+            }
+
+            if (nack_sequences.empty()) {
+                return;
+            }
             const auto packet = detail::make_generic_nack_packet(
                 local_feedback_ssrc,
                 remote_media_ssrc,
-                sequences
+                nack_sequences
             );
             if (send_control(packet.data(), packet.size(), true)) {
                 nack_packets_sent.fetch_add(1, std::memory_order_relaxed);
                 nack_sequences_sent.fetch_add(
-                    static_cast<uint64_t>(sequences.size()),
+                    static_cast<uint64_t>(nack_sequences.size()),
                     std::memory_order_relaxed
                 );
             }
         } catch (...) {
             feedback_send_failures.fetch_add(1, std::memory_order_relaxed);
         }
+    }
+
+    // Mirrors the recovery buffer's counters into the cross-thread atomics.
+    // Worker thread only.
+    void sync_fec_stats() noexcept {
+        uint64_t recovered = 0;
+        uint64_t unrecoverable = 0;
+        fec_recovery.stats(recovered, unrecoverable);
+        rx_fec_recovered.store(recovered, std::memory_order_relaxed);
+        rx_fec_unrecoverable.store(unrecoverable, std::memory_order_relaxed);
     }
 
     bool send_remb(uint32_t bitrate_bps) noexcept {
@@ -932,6 +969,47 @@ struct RtpVideoReceiverSession::State
         }
     }
 
+    void record_twcc_arrival(
+        const uint8_t* data,
+        size_t size,
+        SteadyClock::time_point now
+    ) noexcept {
+        if (!config.twcc_enabled) {
+            return;
+        }
+        uint16_t twcc_sequence = 0;
+        if (extract_twcc_sequence(data, size, twcc_sequence)) {
+            const int64_t arrival_us =
+                std::chrono::duration_cast<std::chrono::microseconds>(
+                    now.time_since_epoch())
+                    .count();
+            twcc_generator.on_packet(twcc_sequence, arrival_us);
+        }
+    }
+
+    // Eager parity repair: a freshly buffered FEC block can immediately
+    // rebuild any covered group member still missing from the media buffer,
+    // before the gap is even NACK-eligible. Runs on the worker thread at
+    // the top level of process_rtp (never inside a receiver call).
+    void try_eager_fec_recovery(SteadyClock::time_point now) noexcept {
+        try {
+            for (const uint16_t sequence :
+                 fec_recovery.uncovered_mask_sequences()) {
+                std::vector<uint8_t> recovered;
+                if (fec_recovery.recover(sequence, recovered)) {
+                    receiver->on_rtp_packet(
+                        recovered.data(),
+                        recovered.size(),
+                        now
+                    );
+                }
+            }
+            sync_fec_stats();
+        } catch (...) {
+            feedback_send_failures.fetch_add(1, std::memory_order_relaxed);
+        }
+    }
+
     void process_rtp(
         const uint8_t* data,
         size_t size,
@@ -939,11 +1017,24 @@ struct RtpVideoReceiverSession::State
     ) {
         uint16_t sequence = 0;
         uint32_t ssrc = 0;
+        uint8_t payload_type = 0;
         bool has_basic_header = false;
         if (data != nullptr && size >= 12 && (data[0] >> 6) == 2) {
             sequence = read_u16_be(data + 2);
+            payload_type = static_cast<uint8_t>(data[1] & 0x7fU);
             ssrc = read_u32_be(data + 8);
             has_basic_header = true;
+        }
+
+        // Parity packets ride their own SSRC (media + 1) and payload type;
+        // they feed the recovery buffer and never enter the H.264 core.
+        if (has_basic_header && config.fec_enabled && has_remote_media_ssrc
+            && ssrc == remote_media_ssrc + 1
+            && payload_type == kUlpfecPayloadType) {
+            fec_recovery.add_fec_packet(data, size);
+            record_twcc_arrival(data, size, now);
+            try_eager_fec_recovery(now);
+            return;
         }
 
         if (has_basic_header && has_remote_media_ssrc
@@ -962,17 +1053,10 @@ struct RtpVideoReceiverSession::State
         if (has_basic_header) {
             observe_accepted_rtp(sequence, ssrc, before, after);
         }
-
-        if (config.twcc_enabled) {
-            uint16_t twcc_sequence = 0;
-            if (extract_twcc_sequence(data, size, twcc_sequence)) {
-                const int64_t arrival_us =
-                    std::chrono::duration_cast<std::chrono::microseconds>(
-                        now.time_since_epoch())
-                        .count();
-                twcc_generator.on_packet(twcc_sequence, arrival_us);
-            }
+        if (config.fec_enabled) {
+            fec_recovery.add_media_packet(data, size);
         }
+        record_twcc_arrival(data, size, now);
     }
 
     RtpH264Receiver::Stats combined_core_stats() const noexcept {
@@ -1078,6 +1162,21 @@ struct RtpVideoReceiverSession::State
                     receiver->tick(now);
                     next_tick = now + kReceiverTickInterval;
                     publish_core_stats();
+                }
+
+                // FEC reconstructions queued by send_nack (which runs inside
+                // receiver callbacks) are injected only here, outside any
+                // receiver call, per the core's no-reentrancy contract.
+                if (!fec_recovered_injections.empty()) {
+                    std::vector<std::vector<uint8_t>> injections;
+                    injections.swap(fec_recovered_injections);
+                    for (const auto& injection : injections) {
+                        receiver->on_rtp_packet(
+                            injection.data(),
+                            injection.size(),
+                            now
+                        );
+                    }
                 }
 
                 const uint64_t requested_generation =
@@ -1233,6 +1332,15 @@ struct RtpVideoReceiverSession::State
     // TWCC feedback generation (worker thread only).
     TwccFeedbackGenerator twcc_generator;
     std::atomic<uint64_t> twcc_packets_sent{0};
+
+    // ULPFEC recovery (worker thread only): buffers media + parity packets
+    // and rebuilds single losses per group. Recovered packets queued from
+    // inside receiver callbacks wait in fec_recovered_injections for the
+    // worker loop to inject them outside any receiver call.
+    UlpfecRecovery fec_recovery;
+    std::vector<std::vector<uint8_t>> fec_recovered_injections;
+    std::atomic<uint64_t> rx_fec_recovered{0};
+    std::atomic<uint64_t> rx_fec_unrecoverable{0};
 
     std::atomic<uint64_t> ingress_packets{0};
     std::atomic<uint64_t> ingress_bytes{0};
@@ -1513,6 +1621,10 @@ RtpVideoReceiverSessionStats RtpVideoReceiverSession::stats() const noexcept {
         state->remb_packets_sent.load(std::memory_order_relaxed);
     result.twcc_packets_sent =
         state->twcc_packets_sent.load(std::memory_order_relaxed);
+    result.rx_fec_recovered =
+        state->rx_fec_recovered.load(std::memory_order_relaxed);
+    result.rx_fec_unrecoverable =
+        state->rx_fec_unrecoverable.load(std::memory_order_relaxed);
     result.receiver_reports_sent =
         state->receiver_reports_sent.load(std::memory_order_relaxed);
     result.sender_reports_received =

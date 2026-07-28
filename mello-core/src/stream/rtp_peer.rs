@@ -122,6 +122,9 @@ pub struct RtpVideoStats {
     pub tx_rtx_sent: u64,
     pub tx_rtx_cache_misses: u64,
     pub tx_gcc_target_bps: u64,
+    pub tx_fec_packets_sent: u64,
+    pub rx_fec_recovered: u64,
+    pub rx_fec_unrecoverable: u64,
 }
 
 /// Create a peer for `role`. Caller must eventually call `mello_peer_destroy`.
@@ -332,6 +335,9 @@ fn stats_from_native(stats: &MelloRtpVideoStats) -> RtpVideoStats {
         tx_rtx_sent: stats.tx_rtx_sent,
         tx_rtx_cache_misses: stats.tx_rtx_cache_misses,
         tx_gcc_target_bps: stats.tx_gcc_target_bps,
+        tx_fec_packets_sent: stats.tx_fec_packets_sent,
+        rx_fec_recovered: stats.rx_fec_recovered,
+        rx_fec_unrecoverable: stats.rx_fec_unrecoverable,
     }
 }
 

@@ -59,6 +59,10 @@ struct RtpVideoReceiverSessionConfig {
     // TWCC was negotiated on this leg: record transport-wide arrival times
     // and emit TWCC feedback reports (~50 ms cadence).
     bool twcc_enabled = false;
+    // ULPFEC (XOR parity, ulpfec/90000 PT 127) was negotiated: buffer parity
+    // packets arriving on the media SSRC + 1 and reconstruct single losses
+    // per group before NACK repair would be needed.
+    bool fec_enabled = false;
 };
 
 struct RtpVideoReceiverSessionStats {
@@ -88,6 +92,11 @@ struct RtpVideoReceiverSessionStats {
     uint64_t pli_packets_sent = 0;
     uint64_t remb_packets_sent = 0;
     uint64_t twcc_packets_sent = 0;
+    // ULPFEC repair: media packets reconstructed from parity (recovered) and
+    // recovery attempts that failed (no covering block yet, or 2+ losses in
+    // the group — those fall through to NACK as before).
+    uint64_t rx_fec_recovered = 0;
+    uint64_t rx_fec_unrecoverable = 0;
     uint64_t receiver_reports_sent = 0;
     uint64_t sender_reports_received = 0;
     uint64_t invalid_rtcp_packets = 0;

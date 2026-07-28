@@ -1,6 +1,7 @@
 #include "rtp_video_sender.hpp"
 
 #include "twcc.hpp"
+#include "ulpfec.hpp"
 
 #include <rtc/frameinfo.hpp>
 #include <rtc/h264rtppacketizer.hpp>
@@ -42,6 +43,13 @@ using SteadyClock = std::chrono::steady_clock;
 
 uint16_t read_u16_be(const uint8_t* p) noexcept {
     return static_cast<uint16_t>((static_cast<uint16_t>(p[0]) << 8) | p[1]);
+}
+
+uint32_t read_u32_be(const uint8_t* p) noexcept {
+    return (static_cast<uint32_t>(p[0]) << 24)
+        | (static_cast<uint32_t>(p[1]) << 16)
+        | (static_cast<uint32_t>(p[2]) << 8)
+        | static_cast<uint32_t>(p[3]);
 }
 
 int64_t steady_now_us() noexcept {
@@ -416,14 +424,18 @@ struct RtpVideoSender::State
         RembCallback remb_callback,
         LocalIdrNeededCallback local_idr_needed_callback,
         GccTargetCallback gcc_target_callback,
-        bool twcc_enabled
+        bool twcc_enabled,
+        bool fec_enabled,
+        uint32_t media_ssrc
     )
         : pacing_target_bps(initial_pacing_target_bps),
           on_pli(std::move(pli_callback)),
           on_remb(std::move(remb_callback)),
           on_local_idr_needed(std::move(local_idr_needed_callback)),
           on_gcc_target(std::move(gcc_target_callback)),
-          twcc_enabled(twcc_enabled) {
+          twcc_enabled(twcc_enabled),
+          fec_enabled(fec_enabled),
+          fec_media_ssrc(media_ssrc) {
         if (twcc_enabled) {
             estimator = std::make_unique<GccEstimator>(
                 GccEstimator::Config{},
@@ -692,6 +704,60 @@ struct RtpVideoSender::State
         }
     }
 
+    // Feeds one just-sent media packet (the ORIGINAL pre-TWCC-stamp bytes —
+    // the stamped copy only exists on the wire) into the parity generator.
+    // When the group closes, the FEC packet is paced through the same budget
+    // and sent down the same path as media, TWCC-stamped like any egress
+    // packet. Retransmits never reach this: they are not parity-protected.
+    // Worker thread only.
+    void feed_fec(
+        const rtc::message_ptr& packet,
+        const rtc::message_callback& send
+    ) noexcept {
+        try {
+            const auto* const bytes =
+                reinterpret_cast<const uint8_t*>(packet->data());
+            const size_t size = packet->size();
+            if (size >= 12) {
+                fec_last_rtp_timestamp = read_u32_be(bytes + 4);
+            }
+            fec_generator.add_packet(bytes, size);
+            if (fec_generator.pending() != 0) {
+                return;
+            }
+
+            const auto fec = fec_generator.build_packet(
+                fec_media_ssrc,
+                fec_last_rtp_timestamp
+            );
+            if (fec.empty()) {
+                // Non-contiguous group: discarded without emitting.
+                return;
+            }
+            if (!wait_for_slot(static_cast<uint64_t>(fec.size()))) {
+                return;
+            }
+
+            rtc::binary data;
+            data.reserve(fec.size());
+            for (const uint8_t byte : fec) {
+                data.push_back(static_cast<std::byte>(byte));
+            }
+            send(stamp_outgoing(std::make_shared<rtc::Message>(
+                std::move(data),
+                rtc::Message::Binary
+            )));
+            fec_packets_sent.fetch_add(1, std::memory_order_relaxed);
+            rtp_packets_sent.fetch_add(1, std::memory_order_relaxed);
+            rtp_wire_bytes_sent.fetch_add(
+                static_cast<uint64_t>(fec.size()),
+                std::memory_order_relaxed
+            );
+        } catch (...) {
+            send_failures.fetch_add(1, std::memory_order_relaxed);
+        }
+    }
+
     bool pace_batch(PacedBatch& batch) noexcept {
         bool all_packets_sent = true;
 
@@ -718,6 +784,9 @@ struct RtpVideoSender::State
                     wire_bytes,
                     std::memory_order_relaxed
                 );
+                if (fec_enabled) {
+                    feed_fec(packet, batch.send);
+                }
             } catch (...) {
                 send_failures.fetch_add(1, std::memory_order_relaxed);
                 all_packets_sent = false;
@@ -902,6 +971,14 @@ struct RtpVideoSender::State
     std::atomic<uint64_t> gcc_target_bps{0};
     std::atomic<uint64_t> twcc_reports{0};
 
+    // ULPFEC parity generation (worker thread only): one parity packet per
+    // completed group of kDefaultFecGroupSize media packets, on SSRC+1.
+    const bool fec_enabled = false;
+    const uint32_t fec_media_ssrc = 0;
+    UlpfecGenerator fec_generator;
+    uint32_t fec_last_rtp_timestamp = 0;
+    std::atomic<uint64_t> fec_packets_sent{0};
+
     std::atomic<uint64_t> access_units_enqueued{0};
     std::atomic<uint64_t> access_units_sent{0};
     std::atomic<uint64_t> access_units_dropped{0};
@@ -945,7 +1022,9 @@ RtpVideoSender::RtpVideoSender(
             std::move(on_remb),
             std::move(on_local_idr_needed),
             std::move(on_gcc_target),
-            config.twcc_enabled
+            config.twcc_enabled,
+            config.fec_enabled,
+            config.ssrc
         );
         state_ = state;
 
@@ -1300,6 +1379,8 @@ RtpVideoSenderStats RtpVideoSender::stats() const noexcept {
         state->twcc_reports.load(std::memory_order_relaxed);
     result.gcc_target_bps =
         state->gcc_target_bps.load(std::memory_order_relaxed);
+    result.fec_packets_sent =
+        state->fec_packets_sent.load(std::memory_order_relaxed);
     return result;
 }
 

@@ -254,6 +254,7 @@ typedef struct MelloRtpVideoStats {
     uint64_t tx_rtx_queue_dropped;
     uint64_t tx_twcc_reports;
     uint64_t tx_gcc_target_bps;
+    uint64_t tx_fec_packets_sent;
 
     uint64_t rx_ingress_packets;
     uint64_t rx_ingress_bytes;
@@ -279,6 +280,8 @@ typedef struct MelloRtpVideoStats {
     uint64_t rx_pli_packets_sent;
     uint64_t rx_remb_packets_sent;
     uint64_t rx_twcc_packets_sent;
+    uint64_t rx_fec_recovered;
+    uint64_t rx_fec_unrecoverable;
     uint64_t rx_receiver_reports_sent;
     uint64_t rx_sender_reports_received;
     uint64_t rx_invalid_rtcp_packets;
