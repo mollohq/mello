@@ -336,7 +336,7 @@ where
 /// Log a structured snapshot of native RTP video stats for viewer diagnostics.
 pub(super) fn log_viewer_native_stats(mode: &str, stats: &mello_sys::MelloRtpVideoStats) {
     log::info!(
-        "Stream native stats mode={} rx_complete={} rx_emitted={} rx_incomplete={} gate_dropped={} nacks={} pli={} jitter={} buffered_aus={} ingress_packets={} ingress_bytes={}",
+        "Stream native stats mode={} rx_complete={} rx_emitted={} rx_incomplete={} gate_dropped={} nacks={} pli={} jitter={} buffered_aus={} ingress_packets={} ingress_bytes={} fec_recovered={} fec_unrecoverable={}",
         mode,
         stats.rx_core_complete_access_units,
         stats.rx_core_emitted_access_units,
@@ -348,6 +348,8 @@ pub(super) fn log_viewer_native_stats(mode: &str, stats: &mello_sys::MelloRtpVid
         stats.rx_core_buffered_access_units,
         stats.rx_ingress_packets,
         stats.rx_ingress_bytes,
+        stats.rx_fec_recovered,
+        stats.rx_fec_unrecoverable,
     );
 }
 

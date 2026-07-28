@@ -3,6 +3,7 @@
 #include "transport/ulpfec.hpp"
 
 #include <cstdint>
+#include <initializer_list>
 #include <vector>
 
 using mello::transport::UlpfecGenerator;
@@ -55,7 +56,7 @@ TEST(UlpfecGeneratorTest, EmitsOnePacketPerCompleteGroup) {
 
     ASSERT_FALSE(fec.empty());
     EXPECT_EQ(fec[1] & 0x7f, kUlpfecPayloadType);
-    EXPECT_EQ(fec[1] & 0x80, 0x80u); // marker of last protected packet
+    EXPECT_EQ(static_cast<unsigned>(fec[1] & 0x80), 0x80u); // marker of last protected packet
     // SSRC = media + 1
     const uint32_t ssrc = (uint32_t{fec[8]} << 24) | (uint32_t{fec[9]} << 16)
         | (uint32_t{fec[10]} << 8) | fec[11];
@@ -136,7 +137,8 @@ TEST(UlpfecRecoveryTest, TwoLossesInOneGroupAreUnrecoverable) {
 
 TEST(UlpfecGeneratorTest, NonContiguousGroupEmitsNothing) {
     UlpfecGenerator generator(4);
-    for (uint16_t seq : {10, 11, 13, 14}) { // gap at 12
+    for (const uint16_t seq :
+         std::initializer_list<uint16_t>{10, 11, 13, 14}) { // gap at 12
         auto packet = make_media(seq, 10'000, false, 0x11, 100);
         generator.add_packet(packet.data(), packet.size());
     }

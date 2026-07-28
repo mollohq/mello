@@ -41,7 +41,10 @@ TEST(TwccStamperTest, InsertsExtensionBlockIntoPlainRtpPacket) {
 
     auto second = make_rtp_packet(101, 50);
     ASSERT_TRUE(stamper.stamp(second, 1'001'000));
-    EXPECT_EQ(second[17] << 8 | second[18], 1u); // second sequence = 1
+    EXPECT_EQ(
+        static_cast<unsigned>(second[17] << 8 | second[18]),
+        1u
+    ); // second sequence = 1
 
     int64_t send_time = -1;
     ASSERT_TRUE(stamper.send_time_for(0, send_time));
@@ -59,7 +62,10 @@ TEST(TwccStamperTest, RestampOverwritesSequenceInPlace) {
 
     ASSERT_TRUE(stamper.stamp(packet, 2'000'000));
     EXPECT_EQ(packet.size(), size_after_first);
-    EXPECT_EQ(packet[17] << 8 | packet[18], 1u); // re-stamped with seq 1
+    EXPECT_EQ(
+        static_cast<unsigned>(packet[17] << 8 | packet[18]),
+        1u
+    ); // re-stamped with seq 1
 }
 
 TEST(TwccFeedbackRoundTripTest, GeneratorOutputParsesBack) {
@@ -87,7 +93,7 @@ TEST(TwccFeedbackRoundTripTest, GeneratorOutputParsesBack) {
         const int64_t spacing =
             feedback.packets[i].arrival_time_us
             - feedback.packets[i - 1].arrival_time_us;
-        EXPECT_NEAR(spacing, 1'000, 500);
+        EXPECT_NEAR(static_cast<double>(spacing), 1000.0, 500.0);
     }
 }
 
