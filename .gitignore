@@ -31,6 +31,8 @@ Thumbs.db
 .env
 .env.local
 .cargo/config.toml
+backend/sfu_private.pem
+backend/sfu_public.pem
 
 # Nakama runtime artifacts
 backend/nakama/data/.cookie
