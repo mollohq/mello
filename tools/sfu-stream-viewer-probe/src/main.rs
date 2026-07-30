@@ -571,6 +571,8 @@ fn main() {
                 rx_gated,
                 rx_buffered_aus,
                 rx_receive_target_bps,
+                rx_fec_recovered,
+                rx_fec_unrecoverable,
             ) = if let Some(ref s) = stats {
                 (
                     s.rx_ingress_packets,
@@ -583,9 +585,11 @@ fn main() {
                     s.rx_core_gated,
                     s.rx_core_buffered_access_units,
                     s.rx_receive_target_bps,
+                    s.rx_fec_recovered,
+                    s.rx_fec_unrecoverable,
                 )
             } else {
-                (0, 0, 0, 0, 0, 0, 0, 0, 0, receive_target_bps)
+                (0, 0, 0, 0, 0, 0, 0, 0, 0, receive_target_bps, 0, 0)
             };
 
             let ingress_pps =
@@ -599,7 +603,7 @@ fn main() {
             let pli_hz = (rx_pli.saturating_sub(last_rx_pli)) as f32 / elapsed;
 
             let title = format!(
-                "SFU Probe | {}x{} dec={:.1}fps native={:.1}fps au={:.1}/{:.1}Hz queue={} present={:.1}Hz ingress={:.1}pps {:.0}kbps rtt={:.1}ms gated={}",
+                "SFU Probe | {}x{} dec={:.1}fps native={:.1}fps au={:.1}/{:.1}Hz queue={} present={:.1}Hz ingress={:.1}pps {:.0}kbps fec_rec={} rtt={:.1}ms gated={}",
                 width,
                 height,
                 dec_fps,
@@ -610,6 +614,7 @@ fn main() {
                 present_fps,
                 ingress_pps,
                 ingress_kbps,
+                rx_fec_recovered,
                 conn.rtt_ms(),
                 rx_gated,
             );
@@ -619,7 +624,7 @@ fn main() {
 
             let (wall_ms, mono_ms) = correlation_stamp(correlation_start);
             log::info!(
-                "viewer_probe_tick session={} wall_ms={} mono_ms={} au_received_hz={:.1} au_fed_hz={:.1} au_feed_fail_hz={:.1} au_poll_errors={} au_buffer_grows={} dec_fps={:.1} native_fps={:.1} present_fps={:.1} present_hz={:.1} decode_queue_depth={} decode_stall_ms={} rtt_ms={:.1} rx_ingress_packets={} rx_ingress_bytes={} rx_ingress_pps={:.1} rx_ingress_kbps={:.0} rx_missing_hz={:.1} rx_repaired_hz={:.1} rx_nacks_hz={:.1} rx_pli_hz={:.1} rx_jitter={} rx_gated={} rx_buffered_aus={} rx_receive_target_bps={}",
+                "viewer_probe_tick session={} wall_ms={} mono_ms={} au_received_hz={:.1} au_fed_hz={:.1} au_feed_fail_hz={:.1} au_poll_errors={} au_buffer_grows={} dec_fps={:.1} native_fps={:.1} present_fps={:.1} present_hz={:.1} decode_queue_depth={} decode_stall_ms={} rtt_ms={:.1} rx_ingress_packets={} rx_ingress_bytes={} rx_ingress_pps={:.1} rx_ingress_kbps={:.0} rx_missing_hz={:.1} rx_repaired_hz={:.1} rx_nacks_hz={:.1} rx_pli_hz={:.1} rx_fec_recovered={} rx_fec_unrecoverable={} rx_jitter={} rx_gated={} rx_buffered_aus={} rx_receive_target_bps={}",
                 session_id,
                 wall_ms,
                 mono_ms,
@@ -643,6 +648,8 @@ fn main() {
                 repaired_hz,
                 nacks_hz,
                 pli_hz,
+                rx_fec_recovered,
+                rx_fec_unrecoverable,
                 rx_jitter,
                 rx_gated,
                 rx_buffered_aus,
@@ -651,7 +658,7 @@ fn main() {
 
             if let Some(ref s) = stats {
                 log::info!(
-                    "viewer_probe_native_rtp session={} wall_ms={} mono_ms={} rx_complete={} rx_emitted={} rx_incomplete={} gate_dropped={} nacks={} pli={} jitter={} buffered_aus={} ingress_packets={} ingress_bytes={} missing={} repaired={} gate_state={} receive_target_bps={}",
+                    "viewer_probe_native_rtp session={} wall_ms={} mono_ms={} rx_complete={} rx_emitted={} rx_incomplete={} gate_dropped={} nacks={} pli={} jitter={} buffered_aus={} ingress_packets={} ingress_bytes={} missing={} repaired={} fec_recovered={} fec_unrecoverable={} gate_state={} receive_target_bps={}",
                     session_id,
                     wall_ms,
                     mono_ms,
@@ -667,6 +674,8 @@ fn main() {
                     s.rx_ingress_bytes,
                     s.rx_core_missing_sequences_detected,
                     s.rx_core_repaired_packets,
+                    s.rx_fec_recovered,
+                    s.rx_fec_unrecoverable,
                     s.rx_core_gated,
                     s.rx_receive_target_bps,
                 );
