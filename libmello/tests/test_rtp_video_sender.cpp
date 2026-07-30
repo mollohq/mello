@@ -816,7 +816,7 @@ TEST(RtpVideoSenderFecTest, ParityFecRepairsOneLossPerGroupWithoutPli) {
             );
             FAIL();
         }
-        std::this_thread::sleep_for(2ms);
+        std::this_thread::sleep_for(3ms);
         while (auto unit = receiver.pop_access_unit()) {
             popped_timestamps.push_back(unit->rtp_timestamp);
             ++popped;
@@ -890,9 +890,11 @@ TEST(RtpVideoSenderFecTest, ParityFecRepairsOneLossPerGroupWithoutPli) {
     EXPECT_GE(tx.fec_packets_sent, 60u); // ~660 media packets = 66 groups of 10
 
     const auto rx = receiver.stats();
-    // Level-0 ULPFEC cannot recover the RTP marker bit when the lost
-    // fragment is the access-unit tail but not the highest sequence in its
-    // parity group; the last AU under loss may need one PLI resync.
+    // Level-0 ULPFEC may miss the RTP marker when the lost fragment is the
+    // access-unit tail in a group whose highest sequence belongs to the next
+    // AU (different timestamp at the group edge). The last AU under loss may
+    // need one PLI resync; eager repair + marker inference cover the common
+    // within-AU case.
     EXPECT_GT(rx.rx_fec_recovered, 0u);
     EXPECT_EQ(rx.access_units_dropped, 0u);
     EXPECT_LE(rx.pli_requests, 1u);

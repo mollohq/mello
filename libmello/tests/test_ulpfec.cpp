@@ -14,6 +14,12 @@ namespace {
 
 constexpr uint32_t kMediaSsrc = 0x11223344;
 
+uint16_t read_u16_be(const uint8_t* data) {
+    return static_cast<uint16_t>(
+        (static_cast<uint16_t>(data[0]) << 8) | data[1]
+    );
+}
+
 std::vector<uint8_t> make_media(
     uint16_t sequence,
     uint32_t timestamp,
@@ -131,8 +137,39 @@ TEST(UlpfecRecoveryTest, TwoLossesInOneGroupAreUnrecoverable) {
 
     uint64_t recovered = 0;
     uint64_t unrecoverable = 0;
+    uint64_t pending = 0;
+    recovery.stats(recovered, unrecoverable, pending);
+    EXPECT_EQ(unrecoverable, 0u);
+    EXPECT_EQ(pending, 2u);
+}
+
+TEST(UlpfecRecoveryTest, RecoverIncrementsOncePerSequence) {
+    UlpfecGenerator generator(4);
+    for (uint16_t seq = 40; seq < 44; ++seq) {
+        auto packet = make_media(seq, 50'000, seq == 43, 0x55, 80);
+        generator.add_packet(packet.data(), packet.size());
+    }
+    const auto fec = generator.build_packet(kMediaSsrc, 50'000);
+
+    UlpfecRecovery recovery;
+    for (uint16_t seq = 40; seq < 44; ++seq) {
+        if (seq == 41) {
+            continue;
+        }
+        auto packet = make_media(seq, 50'000, seq == 43, 0x55, 80);
+        recovery.add_media_packet(packet.data(), packet.size());
+    }
+    recovery.add_fec_packet(fec.data(), fec.size());
+
+    std::vector<uint8_t> first;
+    std::vector<uint8_t> second;
+    ASSERT_TRUE(recovery.recover(41, first));
+    EXPECT_FALSE(recovery.recover(41, second));
+
+    uint64_t recovered = 0;
+    uint64_t unrecoverable = 0;
     recovery.stats(recovered, unrecoverable);
-    EXPECT_EQ(unrecoverable, 2u);
+    EXPECT_EQ(recovered, 1u);
 }
 
 TEST(UlpfecGeneratorTest, NonContiguousGroupEmitsNothing) {
@@ -172,6 +209,45 @@ TEST(UlpfecRecoveryTest, WorksAcrossGroupBoundary) {
     uint64_t unrecoverable = 0;
     recovery.stats(recovered, unrecoverable);
     EXPECT_EQ(recovered, 2u);
+}
+
+TEST(UlpfecRecoveryTest, RecoveredMarkerWhenTailIsNotHighestInGroup) {
+    UlpfecGenerator generator(4);
+    // AU tail at seq 102 (marker); seq 103 starts the next AU (new timestamp).
+    for (uint16_t seq = 100; seq <= 103; ++seq) {
+        const uint32_t timestamp = seq <= 102 ? 90'000u : 91'000u;
+        auto packet = make_media(
+            seq,
+            timestamp,
+            seq == 102,
+            static_cast<uint8_t>(seq),
+            64
+        );
+        generator.add_packet(packet.data(), packet.size());
+    }
+    const auto fec = generator.build_packet(kMediaSsrc, 91'000);
+
+    UlpfecRecovery recovery;
+    for (uint16_t seq = 100; seq <= 103; ++seq) {
+        if (seq == 102) {
+            continue;
+        }
+        const uint32_t timestamp = seq <= 102 ? 90'000u : 91'000u;
+        auto packet = make_media(
+            seq,
+            timestamp,
+            seq == 102,
+            static_cast<uint8_t>(seq),
+            64
+        );
+        recovery.add_media_packet(packet.data(), packet.size());
+    }
+    recovery.add_fec_packet(fec.data(), fec.size());
+
+    std::vector<uint8_t> out;
+    ASSERT_TRUE(recovery.recover(102, out));
+    EXPECT_NE(static_cast<unsigned>(out[1] & 0x80), 0u);
+    EXPECT_EQ(read_u16_be(out.data() + 2), 102u);
 }
 
 } // namespace

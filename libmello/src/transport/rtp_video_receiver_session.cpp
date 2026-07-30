@@ -987,26 +987,41 @@ struct RtpVideoReceiverSession::State
         }
     }
 
-    // Eager parity repair: a freshly buffered FEC block can immediately
-    // rebuild any covered group member still missing from the media buffer,
-    // before the gap is even NACK-eligible. Runs on the worker thread at
-    // the top level of process_rtp (never inside a receiver call).
-    void try_eager_fec_recovery(SteadyClock::time_point now) noexcept {
+    // Eager parity repair: a freshly buffered FEC block (or a sibling media
+    // packet that completes a group) can rebuild covered sequences still
+    // missing from the media buffer. Recovered packets are queued for
+    // injection outside any receiver callback.
+    void queue_eager_fec_recovery() noexcept {
         try {
             for (const uint16_t sequence :
                  fec_recovery.uncovered_mask_sequences()) {
                 std::vector<uint8_t> recovered;
                 if (fec_recovery.recover(sequence, recovered)) {
-                    receiver->on_rtp_packet(
-                        recovered.data(),
-                        recovered.size(),
-                        now
+                    fec_recovered_injections.push_back(
+                        std::move(recovered)
                     );
                 }
             }
             sync_fec_stats();
         } catch (...) {
             feedback_send_failures.fetch_add(1, std::memory_order_relaxed);
+        }
+    }
+
+    void inject_queued_fec_recoveries(
+        SteadyClock::time_point now
+    ) noexcept {
+        if (fec_recovered_injections.empty()) {
+            return;
+        }
+        std::vector<std::vector<uint8_t>> injections;
+        injections.swap(fec_recovered_injections);
+        for (const auto& injection : injections) {
+            receiver->on_rtp_packet(
+                injection.data(),
+                injection.size(),
+                now
+            );
         }
     }
 
@@ -1033,7 +1048,7 @@ struct RtpVideoReceiverSession::State
             && payload_type == kUlpfecPayloadType) {
             fec_recovery.add_fec_packet(data, size);
             record_twcc_arrival(data, size, now);
-            try_eager_fec_recovery(now);
+            queue_eager_fec_recovery();
             return;
         }
 
@@ -1148,6 +1163,9 @@ struct RtpVideoReceiverSession::State
                             packet.bytes.size(),
                             now
                         );
+                        if (config.fec_enabled) {
+                            queue_eager_fec_recovery();
+                        }
                     } else {
                         process_rtcp(
                             packet.bytes.data(),
@@ -1162,22 +1180,12 @@ struct RtpVideoReceiverSession::State
                     receiver->tick(now);
                     next_tick = now + kReceiverTickInterval;
                     publish_core_stats();
-                }
-
-                // FEC reconstructions queued by send_nack (which runs inside
-                // receiver callbacks) are injected only here, outside any
-                // receiver call, per the core's no-reentrancy contract.
-                if (!fec_recovered_injections.empty()) {
-                    std::vector<std::vector<uint8_t>> injections;
-                    injections.swap(fec_recovered_injections);
-                    for (const auto& injection : injections) {
-                        receiver->on_rtp_packet(
-                            injection.data(),
-                            injection.size(),
-                            now
-                        );
+                    if (config.fec_enabled) {
+                        queue_eager_fec_recovery();
                     }
                 }
+
+                inject_queued_fec_recoveries(now);
 
                 const uint64_t requested_generation =
                     receive_target_generation.load(std::memory_order_acquire);

@@ -235,6 +235,9 @@ bool UlpfecRecovery::recover(
     uint16_t sequence,
     std::vector<uint8_t>& out
 ) {
+    if (recovered_sequences_.count(sequence) != 0) {
+        return false;
+    }
     for (const FecBlock& block : fec_) {
         const int16_t index =
             static_cast<int16_t>(sequence - block.sn_base);
@@ -263,7 +266,7 @@ bool UlpfecRecovery::recover(
             || static_cast<uint16_t>(block.sn_base + missing_index)
                 != sequence) {
             if (missing > 1) {
-                ++unrecoverable_;
+                ++pending_;
             }
             continue;
         }
@@ -272,7 +275,6 @@ bool UlpfecRecovery::recover(
         uint32_t timestamp = block.ts_recovery;
         uint16_t length = block.length_recovery;
         std::vector<uint8_t> payload = block.recovery_payload;
-        bool marker = false;
         uint8_t payload_type = block.pt_recovery;
         size_t highest_index = 0;
         for (size_t i = 0; i < 16; ++i) {
@@ -304,8 +306,49 @@ bool UlpfecRecovery::recover(
             return false;
         }
         payload.resize(length);
+
+        bool marker = false;
         if (missing_index == highest_index) {
             marker = block.marker;
+        } else {
+            bool shares_timestamp_in_group = false;
+            bool higher_same_timestamp_in_group = false;
+            for (size_t i = 0; i < 16; ++i) {
+                if ((block.mask & (0x8000u >> i)) == 0
+                    || i == missing_index) {
+                    continue;
+                }
+                const uint16_t seq =
+                    static_cast<uint16_t>(block.sn_base + i);
+                const ParsedRtp present = parse_rtp(
+                    media_.at(seq).data(),
+                    media_.at(seq).size()
+                );
+                if (!present.valid
+                    || present.timestamp != timestamp) {
+                    continue;
+                }
+                shares_timestamp_in_group = true;
+                if (seq > sequence) {
+                    higher_same_timestamp_in_group = true;
+                }
+            }
+            bool higher_same_timestamp_globally = false;
+            for (const auto& entry : media_) {
+                const ParsedRtp present = parse_rtp(
+                    entry.second.data(),
+                    entry.second.size()
+                );
+                if (present.valid
+                    && present.timestamp == timestamp
+                    && entry.first > sequence) {
+                    higher_same_timestamp_globally = true;
+                    break;
+                }
+            }
+            marker = shares_timestamp_in_group
+                && !higher_same_timestamp_in_group
+                && !higher_same_timestamp_globally;
         }
 
         out.resize(12 + length);
@@ -319,6 +362,7 @@ bool UlpfecRecovery::recover(
         // Cache the reconstruction as received: the same sequence is never
         // rebuilt twice, and later mask scans no longer see it as missing.
         remember_media(sequence, out);
+        recovered_sequences_.insert(sequence);
         ++recovered_;
         return true;
     }

@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <deque>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace mello::transport {
@@ -79,6 +80,16 @@ public:
         unrecoverable = unrecoverable_;
     }
 
+    void stats(
+        uint64_t& recovered,
+        uint64_t& unrecoverable,
+        uint64_t& pending
+    ) const {
+        recovered = recovered_;
+        unrecoverable = unrecoverable_;
+        pending = pending_;
+    }
+
 private:
     struct FecBlock {
         uint16_t sn_base = 0;
@@ -99,9 +110,11 @@ private:
     std::deque<uint16_t> media_order_;
     std::deque<FecBlock> fec_;
     uint32_t media_ssrc_ = 0;
+    std::unordered_set<uint16_t> recovered_sequences_;
 
     uint64_t recovered_ = 0;
     uint64_t unrecoverable_ = 0;
+    uint64_t pending_ = 0;
 };
 
 } // namespace mello::transport
