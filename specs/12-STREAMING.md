@@ -111,22 +111,24 @@ The encode thread's `packet_cb_` fires with the encoded NALU bytes. This callbac
 
 ## 5. Video Transport (H.264 RTP)
 
-Video uses **H.264 RTP/RTCP only** — no custom `StreamPacket` framing, DataChannel chunking, or XOR FEC on the video path.
+Video uses **H.264 RTP/RTCP** for media — no custom `StreamPacket` framing or DataChannel chunking. **ULPFEC** (RFC 5109 XOR parity, PT 127) is optional when negotiated in SDP.
 
 | Parameter | Value |
 |-----------|-------|
-| Payload type | 96 |
+| Payload type | 96 (H.264 media) |
+| FEC payload type | 127 (`ulpfec/90000`, RFC 5109 level-0 XOR parity) |
+| FEC SSRC | `media_ssrc + 1` (parallel RTP stream; host offer includes `a=ssrc-group:FEC-FR`; SFU viewer leg uses separate FEC m-line/track) |
 | Clock rate | 90 kHz |
 | Packetization | RFC 6184 mode 1, max payload 1100 bytes |
 | Host output | Annex-B access units (SPS/PPS on every IDR, no B-frames) |
 | RTCP feedback | `nack`, `nack pli`, `goog-remb`, `transport-cc` |
 | Header extension | TWCC (`transport-wide-cc`, id 3) |
 
-**Sender (libmello):** bounded AU queue, per-packet leaky-bucket pacing (fragments of a frame are spread across their wire time, with a two-packet-interval lag allowance), a caching NACK responder whose retransmits drain through a priority RTX queue on the pacing worker (rate-accounted, 512-packet cache with 1 s TTL), PLI/REMB RTCP callbacks. Rust sets pacing ceilings via `PacketSink::set_pacing_kbps`.
+**Sender (libmello):** bounded AU queue, per-packet leaky-bucket pacing (fragments of a frame are spread across their wire time, with a two-packet-interval lag allowance), a caching NACK responder whose retransmits drain through a priority RTX queue on the pacing worker (rate-accounted, 512-packet cache with 1 s TTL), PLI/REMB RTCP callbacks. Rust sets pacing ceilings via `PacketSink::set_pacing_kbps`. When ULPFEC is negotiated (`ulpfec/90000` PT 127 in SDP), the sender emits one parity packet per group of 10 consecutive media RTP packets (XOR over pre-TWCC-stamp bytes; parity rides PT 127 on `media_ssrc + 1`). The host offer SDP advertises `a=ssrc-group:FEC-FR media_ssrc (media_ssrc+1)` so intermediaries (SFU/Pion) bind the repair SSRC.
 
 **TWCC congestion control:** when negotiated, egress packets carry transport-wide sequence numbers (stamped in the pacer at emit time; retransmits get fresh seqs). The receiver emits TWCC feedback every ~50 ms; the sender's delay-gradient estimator (GCC-style: accumulated-delay trendline, overuse detector, AIMD + loss cap) produces a send-side target. The pacer runs at `min(manager ceiling, estimator target)`; the estimator target is forwarded to Rust as `GCC_TARGET` feedback and applied to the encoder immediately (the estimator smooths internally — no 5 %/s REMB ramp). Per viewer, a fresh GCC estimate supersedes that viewer's REMB.
 
-**Receiver (libmello):** reorder buffer, NACK/PLI/RR/REMB/TWCC. NACK retry budget is RTT-adaptive (one attempt per ~20 ms of measured RTT, clamped 2–8). Access units expire on a 120 ms stall (no fragment progress) or a 600 ms hard age cap, so paced large AUs (e.g. IDRs at low bitrates) complete while lost tails fail fast — only repaired complete access units reach the decoder.
+**Receiver (libmello):** reorder buffer, NACK/PLI/RR/REMB/TWCC. NACK retry budget is RTT-adaptive (one attempt per ~20 ms of measured RTT, clamped 2–8). Access units expire on a 120 ms stall (no fragment progress) or a 600 ms hard age cap, so paced large AUs (e.g. IDRs at low bitrates) complete while lost tails fail fast — only repaired complete access units reach the decoder. When ULPFEC is negotiated, parity packets (`ssrc == remote_media_ssrc + 1`, PT 127) feed a recovery buffer; `send_nack` tries XOR reconstruction before emitting NACK; eager repair retries on FEC and media arrivals and on idle worker ticks when covered sequences remain missing. Recovered packets are injected outside receiver callbacks (no re-entrancy). Stats: `rx_fec_recovered`, `rx_fec_unrecoverable`.
 
 **Stream session DataChannel:** reliable `control` only (viewer PLI/loss metadata, cursor, ping/pong). There is no unreliable stream-video DataChannel. Host and viewer send a control-channel ping every ~2 s so both sides have a live RTT measurement (`rtt_ms` in telemetry).
 

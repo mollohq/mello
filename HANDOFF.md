@@ -27,10 +27,10 @@ Both repos have these branches; each phase's work is on its branch:
 | Branch | mello | mello-sfu | Status |
 |---|---|---|---|
 | `feat/stream-quality-phase0` | ✅ merged-set of commits | ✅ | **Phase 0 done** |
-| `feat/stream-twcc-phase1` | ✅ | ✅ | **Phase 1 done** |
-| `feat/stream-quality-phase2` | ✅ commits + **UNCOMMITTED ULPFEC work** | branch exists, no unique commits | **Phase 2 in progress** |
+| `feat/stream-twcc-phase1` | ✅ | ✅ (remote only; not checked out in all workspaces) | **Phase 1 done** |
+| `feat/stream-quality-phase2` | ✅ ULPFEC + fixes + probe telemetry | ✅ SFU FEC track + host FEC ingress | **Phase 2 in progress** (D3D11VA deferred) |
 
-`feat/stream-twcc-phase1` was cut from phase0; `feat/stream-quality-phase2` from phase1. Continue phase 2 on `feat/stream-quality-phase2`.
+`feat/stream-twcc-phase1` was cut from phase0; `feat/stream-quality-phase2` on **mello** was cut from phase1 (client TWCC/GCC + Phase 2 quality). On **mello-sfu**, `feat/stream-quality-phase2` was cut from **phase0 only** — it has the FEC viewer track + host FEC ingress but **not** Phase 1 SFU TWCC/GCC/pacer/IDR-cache. For full-stack Phase 1+2 SFU testing, merge `feat/stream-twcc-phase1` into mello-sfu phase2 (or run against a phase1 SFU build). Client-side TWCC/GCC still runs; SFU falls back to min-REMB synthesis from Phase 0.
 
 ### Phase 0 (done, committed) — correctness
 - libmello sender: custom `MelloFeedbackHandler` (was `MelloNackResponder`) — retransmits no longer bypass the pacer; they queue into a priority RTX queue on the pacing worker (count+TTL bounded cache 512pkts/1s, queue cap 256).
@@ -56,13 +56,17 @@ Committed on `feat/stream-quality-phase2` (mello):
 - DComp `OpenSharedResource1` caching (`client/src/dcomp_presenter.rs`).
 - Test housekeeping: neteq-aware `test_jitter_buffer.cpp` rewrite; `test_video_pipeline.cpp` skips under `CI`.
 
-**UNCOMMITTED in the mello tree right now: the ULPFEC implementation (see §3).**
+**ULPFEC (RFC 5109) — landed on `feat/stream-quality-phase2`:**
 
 Roadmap doc: `mello/plans/STREAM-QUALITY-ROADMAP.md` (kept current — update it when you finish items).
 
 ---
 
-## 3. IN-FLIGHT: ULPFEC (RFC 5109 XOR parity) — finish this first
+### ULPFEC status (Phase 2) — E2E relaxed, SFU ingress fixed
+
+E2E loopback (`ParityFecRepairsOneLossPerGroupWithoutPli`): **`popped >= 29`, `pli <= 1`, `aus_dropped == 0`** — sibling-retry via queued eager repair on FEC/media/tick; `pending` vs `unrecoverable` stat split; marker inference for AU-tail-not-highest-in-group.
+
+SFU parallel FEC track (PT 127, SSRC leg+1): landed in mello-sfu; viewer routing tests in `peer_test.go`. **Host-leg fix:** host SDP now advertises `ssrc-group:FEC-FR media media+1` so Pion binds parity SSRC; SFU also wires a dedicated `video/ulpfec` OnTrack ingress when Pion exposes it. Without this, live SFU tests logged `Incoming unhandled RTP ssrc(media+1)` and viewers never received PT 127.
 
 ### What exists and its state
 
@@ -82,40 +86,31 @@ Authorship note: the integration was started by a subagent (its diff was left un
 
 **Tests:** `libmello/tests/test_ulpfec.cpp` — 5/5 PASS (bit-exact recovery incl. group-boundary, mask/SN-base, non-contiguous discard, 2-loss unrecoverable). `test_rtp_video_sender.cpp::RtpVideoSenderFecTest.ParityFecRepairsOneLossPerGroupWithoutPli` — loopback with `LossInjectingHandler(11)` (drops every 11th original media packet, FEC/RTX exempt), 30 large AUs (~23 fragments each), 200 Mbps pacing, 2 ms cadence.
 
-### Current E2E status: 29/30 — ONE AU incomplete, ONE PLI
+### Current E2E status: relaxed bar green (29/30, pli ≤ 1)
 
-Last observed dump:
+Unit tests: `test_ulpfec.cpp` 5/5; `ParityFecRepairsOneLossPerGroupWithoutPli` asserts `popped >= 29`, `pli <= 1`, `rx_fec_recovered > 0`, `aus_dropped == 0`. Last AU under loss can still need one PLI when the marker fragment is not the group's highest mask index — acceptable product behavior.
+
+### Visual / probe testing (Windows)
+
+Scripts (`run-stream-viewer.ps1` first, then `run-stream-host.ps1`) are unchanged. **Rebuild probes** after pulling — tick logs now surface Phase 2 telemetry:
+
+| Probe line | New fields |
+|---|---|
+| `host_probe_tick` | `tx_fec_packets`, `tx_gcc_target_kbps`, `tx_rtx_sent` |
+| `viewer_probe_tick` | `rx_fec_recovered`, `rx_fec_unrecoverable` |
+| `viewer_probe_native_rtp` | `fec_recovered`, `fec_unrecoverable` |
+
+Suggested local run:
+```powershell
+$env:SFU_PUBLIC_IP = "127.0.0.1"
+# mello-sfu: go run ./cmd/sfu  (from mello-sfu repo, phase2 branch)
+.\mello\scripts\run-stream-viewer.ps1 -Session auto -ViewerLog C:\temp\viewer.log
+.\mello\scripts\run-stream-host.ps1 -Fps 30 -BitrateKbps 2000 -SourceIndex N -HostLog C:\temp\host.log
 ```
-popped=29 dropped=63 | tx fec=69 rtp=820 rtx_req=52 rtx_sent=52 |
-rx ingress=706 fec_rec=62 fec_unrec=468 nack_seq=52 core_acc=698
-core_missing=57 core_repaired=56 core_complete=29 core_incomplete=1
-core_emitted=29 aus_dropped=0 pli=1 restarts=0 inv_rtp=0 inv_h264=0 dup=0
-late=0 gate_entries=2 gate_dropped=0
-```
-Sorted-timestamp analysis shows the missing AU is the LAST one (index 29, seqs ~648–670). Everything else repairs perfectly: 62 FEC recoveries, 56 core repairs, zero output drops, zero gates except one PLI.
 
-**Hypotheses (check in this order):**
-1. **Eager-repair give-up bug**: `try_eager_fec_recovery` runs ONLY on FEC-packet arrivals. If `recover()` is attempted before all 9 sibling members of a group have arrived, it fails (`missing > 1` → unrecoverable++) and only retries when the NEXT FEC packet arrives. After the LAST FEC packet (group 67), no more FEC arrivals happen — a seq needing a late retry is stranded until the NACK path tries `recover` (which DOES retry, since NACKs re-fire on the worker tick). But NACK only fires for seqs marked missing — check whether the missing seq was (a) ever registered in `missing_` and (b) whether the NACK-path `recover` succeeded but the injection came after the AU already expired. Likely fix: run `try_eager_fec_recovery` ALSO on the worker tick (e.g., every 1ms tick when `fec_recovery` has uncovered seqs), not just on FEC arrivals. Keep it cheap (only when `uncovered_mask_sequences()` non-empty).
-2. **`unrecoverable` counter is misleading** (468): `recover()` increments it whenever a group has >1 missing at ATTEMPT time, including the benign "siblings haven't arrived yet" case. Split into `unrecoverable` (2+ truly lost — permanent) vs `pending` (not all members present — retryable). Don't gate logic on the counter, just fix the stat semantics.
-3. If the missing seq is the AU's marker (last fragment) and NOT the group's highest mask index: the marker can't be recovered by level-0 FEC → that AU can never complete via marker boundary (and for the LAST AU there's no next-timestamp boundary). If this is the case, the correct product behavior is: accept the PLI (it's exactly what PLI is for) and relax the test to `popped >= 29 && rx_fec_recovered > 0 && aus_dropped == 0 && pli <= 1` WITH A COMMENT explaining the boundary. Only do this after ruling out (1) and (2) — the intended bar is full repair for ≤1 loss/group.
+**Pass signals:** host `tx_fec_packets` increasing; viewer `rx_fec_recovered` ≥ 0 (nonzero under loss); no SFU `unhandled RTP ssrc(media+1)`; viewer `dec_fps` > 0 after `first_keyframe`. **Known separate issue:** NVDEC hang on first IDR after late join can leave `dec_fps=0` / black minifb — try `-NativeMetrics -HoldSec 60` to isolate decode from present, or start viewer before host.
 
-**Debug path:** print the unrepaired seq (add a getter to `UlpfecRecovery` that lists uncovered seqs at test end, or dump `missing_` contents via a test-only accessor on `RtpH264Receiver`). Confirm which of the 3 hypotheses it is, fix, keep `popped == 30 && pli == 0` if at all achievable.
-
-### CRITICAL merge blocker: SFU-mode FEC is broken without an SFU change
-
-Pion's `TrackLocalStaticRTP.writeRTP` rewrites `Header.SSRC` and `Header.PayloadType` to the binding's values **unconditionally** (`track_local_static.go:203-204`). On the current SFU, FEC packets leave toward viewers as **PT 96, SSRC = leg media SSRC** (not PT 127, not +1) — the viewer's FEC routing check (`ssrc == media+1 && PT == 127`) can never match, and the FEC packet lands in the H.264 core as garbage.
-
-**Required SFU change (mello-sfu):** add a parallel FEC track per viewer.
-- On viewer leg creation (`PrepareViewerVideo`/peer stream video wiring): negotiate a second `TrackLocalStaticRTP` with `webrtc.RTPCodecCapability{MimeType: "video/ulpfec", ClockRate: 90000}` PT 127 and SSRC = viewer leg SSRC + 1. MediaEngine must also register the ulpfec codec PT 127 (no RTCP feedback needed on it) so answers include it.
-- In the fanout (`fanOutVideoRTP` + `writeViewerVideoRTP`/`SendStreamVideoRTPFor`): route packets with `pkt.PayloadType == 127` to the viewer's FEC track; media to the video track. Per-viewer pacing applies to both (share the pacer budget).
-- The viewer's mello-side routing (`ssrc == remote_media_ssrc + 1 && PT == 127`) then works unchanged in SFU mode (host stamps FEC SSRC=media+1; SFU rewrites to legSSRC+1 — the invariant holds per hop).
-- Update `mello-sfu/01-SFU.md §6.1` (FEC track contract) and the SDP/negotiation tests. Check the m-line count implications: a second m-line per viewer or same m-line with a second PT — prefer same m-line second PT if Pion's TrackLocalStaticRTP binding allows per-PT writes without a second track (it does NOT: one PT per binding — so it must be a second m-line/track; verify with a Pion-level test in `mello-sfu/internal/server` similar to the existing negotiation tests).
-- Add a Go test: viewer leg gets FEC packets with PT preserved 127 and SSRC = legSSRC+1.
-
-P2P mode (max 5 viewers) works without this — but P2P is the fallback; SFU is the primary topology. Do not merge the ULPFEC commit series without the SFU part.
-
-### Telemetry for ULPFEC
-`tx_fec_packets_sent`, `rx_fec_recovered`, `rx_fec_unrecoverable` already flow into `MelloRtpVideoStats` + Rust `RtpVideoStats`. Wire the viewer-side fields into the mello-core viewer probe/debug log (`log_viewer_native_stats` in `mello-core/src/client/streaming.rs`) if not already — check and add.
+D3D11VA (§4) is **not** required on NVIDIA boxes (NVDEC path).
 
 ---
 
@@ -140,13 +135,13 @@ P2P mode (max 5 viewers) works without this — but P2P is the fallback; SFU is 
 ```bash
 # libmello (from /Users/bob/dev/m3llo-dev/mello/libmello)
 cmake --build build -j 8 2>&1 | tail -4
-./build/tests/mello_rtp_tests 2>&1 | tail -3          # 70 tests (currently 69 pass + 1 FEC E2E failing — your job §3)
-CI=true ctest --test-dir build 2>&1 | grep 'tests passed'   # 100% of 96
+./build/tests/mello_rtp_tests 2>&1 | tail -3          # 72 tests
+CI=true ctest --test-dir build 2>&1 | grep 'tests passed'   # 100% of 104
 
 # mello-core (from /Users/bob/dev/m3llo-dev/mello)
 cargo fmt --all -- --check
 cargo clippy -p mello-core --all-targets -- -D warnings
-CI=true cargo test -p mello-core --lib                # 228+ tests
+CI=true cargo test -p mello-core --lib                # 231+ tests
 
 # mello-sfu (from /Users/bob/dev/m3llo-dev/mello-sfu)
 go test ./...

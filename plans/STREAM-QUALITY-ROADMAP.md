@@ -20,6 +20,8 @@ Deferred from Phase 1 (follow-ups, not blockers): chronic-queue viewer *ejection
 
 ## Phase 2 — Encoder/decode quality (in progress)
 
+**Exit criteria:** ULPFEC E2E through SFU (host ingress + viewer egress) green in unit tests; libmello/Go/Rust gates pass; Windows visual validation deferred items (D3D11VA, DComp sync) tracked separately.
+
 Done so far (branch `feat/stream-quality-phase2`):
 - ✅ Viewer cadence trio: continuous jitter regulator (replaces one-shot `jitter_primed_` latch), spec §7.7 backlog guard (delta-drop > 4 decode-queue depth, keyframes always feed), async decode thread (feed_packet O(copy); `decode_queue_depth()` now reports decode input backlog).
 - ✅ Encoder quality batch: NVENC High profile + BT.709 VUI + temporal AQ + full-res two-pass (watch encode_ms on low-end GPUs in certification), AMF High + peak-constrained VBR 1.25×, QSV High + BALANCED + 2 refs, VideoToolbox High; Medium 4→5 Mbps, Low 2.5→3 Mbps.
@@ -31,7 +33,7 @@ Open:
 2. `enableTemporalAQ`, multipass evaluation (runtime-gated on GPU headroom). ✅ (headroom gate = validation item)
 3. AMF: VBR with 1.25× headroom (currently CBR peak=target). QSV: balanced usage + 2 refs. ✅
 4. D3D11VA decoder: proper implementation (pic params + NAL/slice parsing) — un-cripples Intel-iGPU viewers. **Deferred: large Windows-only effort, no local verification; candidates for its own focused PR on the Windows box.**
-5. ULPFEC (RFC 5109) at low loss rates, sender + receiver. (next)
+5. ULPFEC (RFC 5109) at low loss rates, sender + receiver + SFU parallel FEC track (PT 127, SSRC leg+1). ✅ (host FEC-FR SDP + SFU host ingress landed on phase2; mello-sfu phase1 TWCC/GCC merge deferred for full-stack CC testing)
 6. Viewer cadence: continuous PID-paced jitter buffer (replaces one-shot `jitter_primed_`), async decode thread, spec §7.7 backlog guard. ✅
 7. DComp: cache `OpenSharedResource1`, keyed-mutex/fence sync with libmello device. ✅ (sync → validation follow-up)
 8. Bitrate ladder retune (Medium 720p60 uplift) — config only. ✅
@@ -75,7 +77,7 @@ Exit gate: libmello ctest green (incl. new NACK/pacer unit tests), `CI=true carg
 2. `enableTemporalAQ`, multipass evaluation (runtime-gated on GPU headroom).
 3. AMF: VBR with 1.25× headroom (currently CBR peak=target). QSV: balanced usage + 2 refs.
 4. D3D11VA decoder: proper implementation (pic params + NAL/slice parsing) — un-cripples Intel-iGPU viewers.
-5. ULPFEC (RFC 5109) at low loss rates, sender + receiver.
+5. ULPFEC (RFC 5109) at low loss rates, sender + receiver + SFU parallel FEC track. ✅
 6. Viewer cadence: continuous PID-paced jitter buffer (replaces one-shot `jitter_primed_`), async decode thread, spec §7.7 backlog guard.
 7. DComp: cache `OpenSharedResource1`, keyed-mutex/fence sync with libmello device.
 8. Bitrate ladder retune (Medium 720p60 uplift) — config only.
