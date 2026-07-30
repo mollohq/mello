@@ -33,7 +33,7 @@ Open:
 2. `enableTemporalAQ`, multipass evaluation (runtime-gated on GPU headroom). ✅ (headroom gate = validation item)
 3. AMF: VBR with 1.25× headroom (currently CBR peak=target). QSV: balanced usage + 2 refs. ✅
 4. D3D11VA decoder: proper implementation (pic params + NAL/slice parsing) — un-cripples Intel-iGPU viewers. **Deferred: large Windows-only effort, no local verification; candidates for its own focused PR on the Windows box.**
-5. ULPFEC (RFC 5109) at low loss rates, sender + receiver + SFU parallel FEC track (PT 127, SSRC leg+1). ✅ (host FEC-FR SDP + SFU host ingress landed on phase2; mello-sfu phase1 TWCC/GCC merge deferred for full-stack CC testing)
+5. ULPFEC (RFC 5109) at low loss rates, sender + receiver + SFU parallel FEC track (PT 127, SSRC leg+1). ✅ (host FEC-FR SDP + SFU host ingress; mello-sfu Phase 1 TWCC/GCC merged into phase2)
 6. Viewer cadence: continuous PID-paced jitter buffer (replaces one-shot `jitter_primed_`), async decode thread, spec §7.7 backlog guard. ✅
 7. DComp: cache `OpenSharedResource1`, keyed-mutex/fence sync with libmello device. ✅ (sync → validation follow-up)
 8. Bitrate ladder retune (Medium 720p60 uplift) — config only. ✅

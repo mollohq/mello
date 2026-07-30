@@ -27,10 +27,10 @@ Both repos have these branches; each phase's work is on its branch:
 | Branch | mello | mello-sfu | Status |
 |---|---|---|---|
 | `feat/stream-quality-phase0` | ✅ merged-set of commits | ✅ | **Phase 0 done** |
-| `feat/stream-twcc-phase1` | ✅ | ✅ (remote only; not checked out in all workspaces) | **Phase 1 done** |
-| `feat/stream-quality-phase2` | ✅ ULPFEC + fixes + probe telemetry | ✅ SFU FEC track + host FEC ingress | **Phase 2 in progress** (D3D11VA deferred) |
+| `feat/stream-twcc-phase1` | ✅ | ✅ (implemented + merged into phase2) | **Phase 1 done** |
+| `feat/stream-quality-phase2` | ✅ ULPFEC + fixes + probe telemetry | ✅ FEC track + host ingress + Phase 1 merge | **Phase 2 in progress** (D3D11VA deferred) |
 
-`feat/stream-twcc-phase1` was cut from phase0; `feat/stream-quality-phase2` on **mello** was cut from phase1 (client TWCC/GCC + Phase 2 quality). On **mello-sfu**, `feat/stream-quality-phase2` was cut from **phase0 only** — it has the FEC viewer track + host FEC ingress but **not** Phase 1 SFU TWCC/GCC/pacer/IDR-cache. For full-stack Phase 1+2 SFU testing, merge `feat/stream-twcc-phase1` into mello-sfu phase2 (or run against a phase1 SFU build). Client-side TWCC/GCC still runs; SFU falls back to min-REMB synthesis from Phase 0.
+`feat/stream-twcc-phase1` was cut from phase0; `feat/stream-quality-phase2` on **mello** was cut from phase1 (client TWCC/GCC + Phase 2 quality). **mello-sfu** `feat/stream-twcc-phase1` was created from phase0 (branch did not exist remotely) and merged into `feat/stream-quality-phase2` — combined stack now has Phase 1 TWCC/GCC + Phase 2 ULPFEC/FEC ingress.
 
 ### Phase 0 (done, committed) — correctness
 - libmello sender: custom `MelloFeedbackHandler` (was `MelloNackResponder`) — retransmits no longer bypass the pacer; they queue into a priority RTX queue on the pacing worker (count+TTL bounded cache 512pkts/1s, queue cap 256).
