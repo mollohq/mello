@@ -10,11 +10,19 @@
 
 use std::path::PathBuf;
 
-/// Disk cache: `%LOCALAPPDATA%/Mello/game_icons/{game_id}.png` (same family
-/// as the telemetry token — durable, not temp).
+/// Disk cache dir for game icons — durable app data, not temp.
+///
+/// Windows: `%LOCALAPPDATA%/Mello/game_icons` (same family as the telemetry
+/// token). Elsewhere (macOS views crew-shared icons even though extraction is
+/// Windows-only): the `directories` app-data dir, matching the log-dir
+/// pattern in `main.rs`.
 pub fn icon_cache_dir() -> Option<PathBuf> {
-    let base = std::env::var_os("LOCALAPPDATA").map(PathBuf::from)?;
-    Some(base.join("Mello").join("game_icons"))
+    #[cfg(target_os = "windows")]
+    if let Some(base) = std::env::var_os("LOCALAPPDATA").map(PathBuf::from) {
+        return Some(base.join("Mello").join("game_icons"));
+    }
+    directories::ProjectDirs::from("app", "mello", "mello")
+        .map(|dirs| dirs.data_dir().join("game_icons"))
 }
 
 pub fn cached_icon_path(game_id: &str) -> Option<PathBuf> {
