@@ -9,6 +9,22 @@ then jump to the section you need.
 
 ---
 
+## The two commands
+
+```bash
+./scripts/check.sh        # ~90s — run before every push (also the pre-push hook)
+./scripts/check-full.sh   # ~10min+ — before a release, or when touching libmello/ or backend/
+```
+
+`check.sh` is the fast gate: fmt, clippy, the whole Rust workspace (including
+the headless UI flow tests and screen-state invariants), and the cross-language
+RPC contract check. No Docker, no backend, no devices.
+
+`check-full.sh` adds the two suites needing a native toolchain — libmello's C++
+gtest suite and the Nakama Go modules.
+
+---
+
 ## Quick reference
 
 | Tool / suite | Layer | Needs a backend? | Runs in PR CI? | Command (short) |
