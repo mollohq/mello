@@ -39,6 +39,10 @@ paste = "1"
 # Runtime is a no-op unless SLINT_MCP_PORT is set; never enabled in production builds.
 i-slint-backend-testing = { version = "1.17", optional = true, features = ["mcp"] }
 
+# Only pulled in by the `testkit` feature (integration tests); also a
+# dev-dependency below so in-crate `cfg(test)` builds get it without the feature.
+tempfile = { version = "3", optional = true }
+
 # Auto-updater
 velopack = "0.0.1298"
 semver = "1"
@@ -102,7 +106,7 @@ mcp = ["dep:i-slint-backend-testing"]
 # tests in client/tests/. Never enabled in shipped builds. Activates the
 # testing backend as a real (non-dev) dependency; note this does NOT turn on
 # mello-client's own `mcp` feature, so run() still won't start an MCP server.
-testkit = ["dep:i-slint-backend-testing"]
+testkit = ["dep:i-slint-backend-testing", "dep:tempfile"]
 
 [dev-dependencies]
 toml = "0.8"
