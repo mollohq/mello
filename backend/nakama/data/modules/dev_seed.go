@@ -359,6 +359,44 @@ func DevSeedStateRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk 
 		InvalidateCrewState(cid)
 	}
 
+	// ── 6b. reset accumulating stores ───────────────────────────────
+	// Everything above is keyed writes (overwrite in place), but the two
+	// stores below *append*: AppendCrewEvent mints a fresh event ID per call
+	// and UpdateUserGameStats adds to running totals. Without this reset a
+	// second run doubles every feed card and inflates every W/L record —
+	// which breaks the "idempotent" promise in this RPC's doc comment.
+	resetDeletes := make([]*runtime.StorageDelete, 0, len(crewIDs)+len(users)*8)
+	for _, cid := range crewIDs {
+		resetDeletes = append(resetDeletes, &runtime.StorageDelete{
+			Collection: CrewEventsCollection, Key: cid, UserID: SystemUserID,
+		})
+	}
+	// Every game id this seed writes stats for (plus the caller's own set).
+	seededGameIDs := []string{
+		"counter-strike-2", "league-of-legends", "valorant", "dota-2",
+		"rocket-league", "hearthstone", "starcraft-2", "custom-night-stones",
+	}
+	statsOwners := make([]string, 0, len(users)+1)
+	for _, u := range users {
+		statsOwners = append(statsOwners, u.id)
+	}
+	if callerID, ok := ctx.Value(runtime.RUNTIME_CTX_USER_ID).(string); ok && callerID != "" {
+		statsOwners = append(statsOwners, callerID)
+	}
+	for _, ownerID := range statsOwners {
+		for _, gameID := range seededGameIDs {
+			resetDeletes = append(resetDeletes, &runtime.StorageDelete{
+				Collection: UserGameStatsCollection, Key: gameID, UserID: ownerID,
+			})
+		}
+	}
+	if err := nk.StorageDelete(ctx, resetDeletes); err != nil {
+		// Deleting a non-existent object is fine (first run); log and continue.
+		logger.Debug("dev_seed: reset delete partial: %v", err)
+	}
+	logger.Info("dev_seed: reset %d ledgers + stats for %d users (idempotent re-seed)",
+		len(crewIDs), len(statsOwners))
+
 	// ── 7. crew event ledger + stale last_seen ─────────────────────
 	// Populate the event ledger for Gamers and Devs with a rich set of
 	// events covering every card type the crew feed can display:
@@ -479,6 +517,19 @@ func DevSeedStateRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk 
 				Data: MomentData{
 					Text: "first ace ever in ranked", Sentiment: "highlight",
 					GameName: "Valorant",
+				},
+			},
+
+			// ── MEMBER JOINED (catch-up card) ─────────────────
+			// Seeded explicitly: the equivalent hook events fire once when
+			// seed.sh/.ps1 joins users, and the idempotent ledger reset
+			// clears them, so re-runs would otherwise lose this card type.
+			{
+				ID: generateEventID(), CrewID: crewIDs["Gamers"],
+				Type: "member_joined", ActorID: users["diana"].id,
+				Timestamp: nowMs - 20*hour, Score: 15,
+				Data: MemberJoinedData{
+					Username: users["diana"].displayName, DisplayName: users["diana"].displayName,
 				},
 			},
 
@@ -791,6 +842,15 @@ func DevSeedStateRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk 
 					ParticipantIDs:   []string{users["diana"].id, users["bob"].id},
 					ParticipantNames: []string{users["diana"].displayName, users["bob"].displayName},
 					DurationMin:      18,
+				},
+			},
+			// Catch-up card alongside the voice variants.
+			{
+				ID: generateEventID(), CrewID: gid,
+				Type: "member_joined", ActorID: users["bob"].id,
+				Timestamp: nowMs - 44*hour, Score: 15,
+				Data: MemberJoinedData{
+					Username: users["bob"].displayName, DisplayName: users["bob"].displayName,
 				},
 			},
 		}
