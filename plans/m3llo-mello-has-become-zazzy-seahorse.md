@@ -1,5 +1,41 @@
 # Mello Test Harness — UI + Integration Safety Net
 
+## Status
+
+| Phase | State |
+|---|---|
+| 0 — Wake up dormant C++/Go tests in CI | **done** |
+| 1 — Client as a library crate | **done** |
+| 2 — Four production seams | **done** |
+| 3 — Headless UI harness | **done** |
+| 4 — Flow tests + screen invariants | **done** (core set; remaining journeys listed below) |
+| 5 — Reducers for all flows | **not started** (multi-week) |
+| 6a — RPC contract test | **done** |
+| 6b — Dockerised integration | **done** |
+| 6c — Release-artifact smoke gate | **done** (unverified on the self-hosted runners) |
+| 6d — Production canary | **done** (unverified against prod) |
+| 6e — Discovery error + retry | **done**; `users_new_24h == 0` alert **not started** |
+| 7 — Pixel snapshots | **not started** |
+
+**All three root causes of the signup outage are now covered**, each with a
+regression test verified to fail without its fix.
+
+Defects found and fixed along the way, none of which any prior test could catch:
+missing Create Crew card with zero crews; discovery failure rendering a blank
+window; `.expect()` on tray/hotkey creation aborting startup; compile rot in
+`test_jitter_buffer.cpp`; a `curl`-based Docker healthcheck that never ran
+because the Nakama image has no curl (both compose and the production
+Dockerfile); and `NakamaClient::channel_list` calling an unregistered RPC.
+
+Still open: the remaining Phase 4 journeys (crew create/join, deep links, chat
+send, streaming), `onboarding_retry_preserves_avatar` (the `.take()` on the
+avatar mutex), Phase 5, Phase 7, and the two macOS RTP test failures inherited
+from the stream PR.
+
+Two follow-ups were spun out as separate tasks: removing the dead
+`channel_list` method, and cleaning up the accounts the release smoke test
+leaves in production.
+
 ## Context
 
 Mello has grown past the point where the Human Operator can hold it in their head. Unit
