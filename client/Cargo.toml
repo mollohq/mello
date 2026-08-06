@@ -11,6 +11,10 @@ icon = ["assets/icons/mello.ico", "assets/icons/mello.icns"]
 short_description = "Hang out with your crew."
 osx_url_schemes = ["mello"]
 
+[lib]
+name = "mello_client"
+path = "src/lib.rs"
+
 [[bin]]
 name = "mello"
 path = "src/main.rs"
@@ -97,7 +101,9 @@ mcp = ["dep:i-slint-backend-testing"]
 
 [dev-dependencies]
 toml = "0.8"
-i-slint-backend-testing = "1.17"
+# Exact pin is mandatory: this crate explicitly does not follow semver and must
+# match the `slint` version. A patch bump can break compilation outright.
+i-slint-backend-testing = "=1.17.0"
 
 [build-dependencies]
 slint-build = "1.17"
