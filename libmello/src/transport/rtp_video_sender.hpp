@@ -12,6 +12,12 @@ class Track;
 
 namespace mello::transport {
 
+enum class SendAccessUnitResult {
+    Accepted,
+    Backpressure,
+    Failed,
+};
+
 struct RtpVideoSenderConfig {
     uint32_t ssrc = 0;
     uint8_t payload_type = 96;
@@ -73,8 +79,8 @@ public:
     using LocalIdrNeededCallback = std::function<void()>;
     using GccTargetCallback = std::function<void(uint32_t bitrate_bps)>;
 
-    // ~133 ms at 60 fps — absorbs VBR bursts while the pacing worker drains.
-    static constexpr size_t kMaxQueuedAccessUnits = 8;
+    // ~266 ms at 60 fps — absorbs VBR bursts while the pacing worker drains.
+    static constexpr size_t kMaxQueuedAccessUnits = 16;
     static constexpr size_t kMaxQueuedBytes = 4 * 1024 * 1024;
 
     RtpVideoSender(
@@ -94,7 +100,7 @@ public:
 
     // Each call must contain exactly one complete Annex-B H.264 access unit.
     // capture_timestamp_us is capture-clock time, not wall-clock time.
-    bool send_access_unit(
+    SendAccessUnitResult send_access_unit(
         const uint8_t* annex_b,
         size_t size,
         uint64_t capture_timestamp_us

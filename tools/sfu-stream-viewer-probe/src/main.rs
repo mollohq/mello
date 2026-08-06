@@ -7,8 +7,8 @@ use mello_core::nakama::WatchStreamResponse;
 use mello_core::transport::{SfuConnection, SfuEvent, StreamPeerRole};
 use minifb::{Key, Window, WindowOptions};
 
-const WINDOW_W: u32 = 1920;
-const WINDOW_H: u32 = 1080;
+const DEFAULT_WINDOW_W: u32 = 1280;
+const DEFAULT_WINDOW_H: u32 = 720;
 const MAX_AU_POLLS_PER_TICK: usize = 32;
 const VIEWER_AU_RECV_BUF_INITIAL: usize = 256 * 1024;
 const DEFAULT_RECEIVE_BITRATE_KBPS: u32 = 6000;
@@ -371,8 +371,8 @@ fn main() {
     } else {
         let mut window = Window::new(
             "SFU Probe - waiting for stream...",
-            WINDOW_W as usize,
-            WINDOW_H as usize,
+            DEFAULT_WINDOW_W as usize,
+            DEFAULT_WINDOW_H as usize,
             WindowOptions {
                 resize: true,
                 ..WindowOptions::default()
@@ -384,7 +384,7 @@ fn main() {
     };
 
     let mut display_buf = if window.is_some() {
-        vec![0u32; (WINDOW_W * WINDOW_H) as usize]
+        vec![0u32; (DEFAULT_WINDOW_W * DEFAULT_WINDOW_H) as usize]
     } else {
         Vec::new()
     };
@@ -526,22 +526,20 @@ fn main() {
             if let Ok(mut frame) = FRAME.lock() {
                 if let Some(ref mut fb) = *frame {
                     if fb.dirty {
-                        display_buf.fill(0);
-                        let ox = (WINDOW_W.saturating_sub(fb.width) / 2) as usize;
-                        let oy = (WINDOW_H.saturating_sub(fb.height) / 2) as usize;
-                        let src_w = fb.width.min(WINDOW_W) as usize;
-                        let src_h = fb.height.min(WINDOW_H) as usize;
-                        for row in 0..src_h {
-                            let dst_start = (oy + row) * WINDOW_W as usize + ox;
-                            let src_start = row * fb.width as usize;
-                            display_buf[dst_start..dst_start + src_w]
-                                .copy_from_slice(&fb.buf[src_start..src_start + src_w]);
+                        let (win_w, win_h) = window.get_size();
+                        let pixel_count = win_w.saturating_mul(win_h);
+                        if display_buf.len() != pixel_count {
+                            display_buf.resize(pixel_count, 0);
                         }
-                        let _ = window.update_with_buffer(
-                            &display_buf,
-                            WINDOW_W as usize,
-                            WINDOW_H as usize,
+                        blit_scaled_fit(
+                            &fb.buf,
+                            fb.width,
+                            fb.height,
+                            &mut display_buf,
+                            win_w as u32,
+                            win_h as u32,
                         );
+                        let _ = window.update_with_buffer(&display_buf, win_w, win_h);
                         fb.dirty = false;
                     } else {
                         drop(frame);
@@ -755,6 +753,30 @@ fn unix_time_ms() -> u128 {
         .as_millis()
 }
 
+/// Scale `src` to fit inside `dst_w`×`dst_h` preserving aspect ratio (letterbox).
+fn blit_scaled_fit(src: &[u32], src_w: u32, src_h: u32, dst: &mut [u32], dst_w: u32, dst_h: u32) {
+    dst.fill(0);
+    if src_w == 0 || src_h == 0 || dst_w == 0 || dst_h == 0 {
+        return;
+    }
+    let scale = (dst_w as f32 / src_w as f32).min(dst_h as f32 / src_h as f32);
+    let out_w = ((src_w as f32 * scale).floor() as u32).clamp(1, dst_w);
+    let out_h = ((src_h as f32 * scale).floor() as u32).clamp(1, dst_h);
+    let ox = (dst_w - out_w) / 2;
+    let oy = (dst_h - out_h) / 2;
+    let inv_scale_x = src_w as f32 / out_w as f32;
+    let inv_scale_y = src_h as f32 / out_h as f32;
+    for dy in 0..out_h {
+        let sy = ((dy as f32 * inv_scale_y) as u32).min(src_h - 1);
+        let dst_row = (oy + dy) as usize * dst_w as usize;
+        let src_row = sy as usize * src_w as usize;
+        for dx in 0..out_w {
+            let sx = ((dx as f32 * inv_scale_x) as u32).min(src_w - 1);
+            dst[dst_row + (ox + dx) as usize] = src[src_row + sx as usize];
+        }
+    }
+}
+
 fn request_watch_stream_via_nakama(
     http_base: &str,
     auth_token: &str,
@@ -804,6 +826,17 @@ fn request_watch_stream_via_nakama(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn blit_scaled_fit_letterboxes_wider_source() {
+        let src = vec![0x00FF00u32; 8 * 2]; // 8x2 green (wider than tall)
+        let mut dst = vec![0u32; 8 * 8]; // 8x8
+        blit_scaled_fit(&src, 8, 2, &mut dst, 8, 8);
+        // Letterboxed top/bottom: center row should be green, corners black.
+        assert_eq!(dst[8 * 3 + 4], 0x00FF00);
+        assert_eq!(dst[0], 0);
+        assert_eq!(dst[8 * 7], 0);
+    }
 
     #[test]
     fn default_mode_uses_cpu_window() {

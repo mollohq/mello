@@ -7,7 +7,8 @@ use async_trait::async_trait;
 
 use super::error::StreamError;
 use super::rtp_peer::{
-    poll_video_feedback, send_access_unit, set_pacing_target, snapshot_video_stats, VideoFeedback,
+    poll_video_feedback, send_access_unit, set_pacing_target, snapshot_video_stats, RtpPeerError,
+    VideoFeedback,
 };
 use super::sink::{NativeRtpTelemetry, PacketSink, SinkVideoFeedback, SinkVideoFeedbackKind};
 
@@ -170,6 +171,9 @@ impl PacketSink for P2PFanoutSink {
                 continue;
             };
             if let Err(e) = send_access_unit(peer, annex_b, capture_timestamp_us) {
+                if matches!(e, RtpPeerError::Backpressure) {
+                    continue;
+                }
                 log::warn!("P2P sink: RTP send failed for viewer: {}", e);
                 last_err = Some(StreamError::SendFailed(e.to_string()));
             }

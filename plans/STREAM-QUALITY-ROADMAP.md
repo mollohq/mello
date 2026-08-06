@@ -1,6 +1,6 @@
 # Stream Quality Roadmap — Path to Discord-Class Streaming
 
-> **Status:** Phase 0 ✅ (branch `feat/stream-quality-phase0`, both repos) · Phase 1 ✅ (branch `feat/stream-twcc-phase1`, both repos) · Phase 2 in progress.
+> **Status:** Phase 0 ✅ · Phase 1 ✅ · Phase 2 ✅ (branch `feat/stream-quality-phase2`, both repos). **Next:** Phase 3 (separate planning round).
 > **Origin:** Senior WebRTC review of `mello/` client stack + `mello-sfu/` (July 2026).
 > **Specs touched:** 12-STREAMING, 14-VIDEO-PIPELINE, mello-sfu/01-SFU (updated per phase).
 
@@ -18,25 +18,22 @@ All items landed (see branch commits): paced RTX queue replacing unpaced libdata
 
 Deferred from Phase 1 (follow-ups, not blockers): chronic-queue viewer *ejection* (rescue implemented instead), SFU pacing driven off host-leg measurements.
 
-## Phase 2 — Encoder/decode quality (in progress)
+## Phase 2 — Encoder/decode quality ✅
 
-**Exit criteria:** ULPFEC E2E through SFU (host ingress + viewer egress) green in unit tests; libmello/Go/Rust gates pass; Windows visual validation deferred items (D3D11VA, DComp sync) tracked separately.
+**Exit criteria met:** ULPFEC unit/E2E tests green; libmello/Go/Rust gates pass; Windows localhost probe validation (NVDEC async decode, ~50 fps dec/present, no `sfu_send_failed` recovery thrash). Deferred items tracked below — not Phase 2 blockers.
 
-Done so far (branch `feat/stream-quality-phase2`):
-- ✅ Viewer cadence trio: continuous jitter regulator (replaces one-shot `jitter_primed_` latch), spec §7.7 backlog guard (delta-drop > 4 decode-queue depth, keyframes always feed), async decode thread (feed_packet O(copy); `decode_queue_depth()` now reports decode input backlog).
-- ✅ Encoder quality batch: NVENC High profile + BT.709 VUI + temporal AQ + full-res two-pass (watch encode_ms on low-end GPUs in certification), AMF High + peak-constrained VBR 1.25×, QSV High + BALANCED + 2 refs, VideoToolbox High; Medium 4→5 Mbps, Low 2.5→3 Mbps.
-- ✅ DComp `OpenSharedResource1` caching (stable handle per stream).
-- Follow-up for Windows validation: cross-device sync between libmello write device and DComp presenter device (keyed mutex or fence — current code relies on D3D11 queue timing).
+Landed on `feat/stream-quality-phase2`:
+- ✅ Viewer cadence trio: continuous jitter regulator, spec §7.7 backlog guard, async decode thread + NVDEC `publish_d3d11_frame` (CUDA→host on worker; D3D11 upload on present thread).
+- ✅ Encoder quality batch: NVENC High + BT.709 VUI + temporal AQ + two-pass; AMF High + peak VBR 1.25×; QSV High + BALANCED + 2 refs; VideoToolbox High; ladder Medium 4→5 Mbps, Low 2.5→3 Mbps.
+- ✅ ULPFEC (RFC 5109): sender + receiver + SFU host ingress (FEC-FR SDP, dedicated ulpfec track).
+- ✅ DComp `OpenSharedResource1` caching.
+- ✅ RTP send backpressure: `MELLO_ERROR_TRANSPORT_BACKPRESSURE` — manager drops without recovery-mode keyframe thrash; queue depth 8→16; probe aspect-fit scaling.
 
-Open:
-1. H.264 High profile + VUI BT.709 signalling (all encoder backends). ✅
-2. `enableTemporalAQ`, multipass evaluation (runtime-gated on GPU headroom). ✅ (headroom gate = validation item)
-3. AMF: VBR with 1.25× headroom (currently CBR peak=target). QSV: balanced usage + 2 refs. ✅
-4. D3D11VA decoder: proper implementation (pic params + NAL/slice parsing) — un-cripples Intel-iGPU viewers. **Deferred: large Windows-only effort, no local verification; candidates for its own focused PR on the Windows box.**
-5. ULPFEC (RFC 5109) at low loss rates, sender + receiver + SFU parallel FEC track (PT 127, SSRC leg+1). ✅ (host FEC-FR SDP + SFU host ingress; mello-sfu Phase 1 TWCC/GCC merged into phase2)
-6. Viewer cadence: continuous PID-paced jitter buffer (replaces one-shot `jitter_primed_`), async decode thread, spec §7.7 backlog guard. ✅
-7. DComp: cache `OpenSharedResource1`, keyed-mutex/fence sync with libmello device. ✅ (sync → validation follow-up)
-8. Bitrate ladder retune (Medium 720p60 uplift) — config only. ✅
+**Deferred follow-ups (Phase 3 prep or separate PRs):**
+- D3D11VA decoder (2.4): proper DXVA pic params — Intel iGPU viewers; Windows-only, large effort.
+- DComp keyed-mutex/fence sync between libmello write device and presenter (validation item).
+- ULPFEC SFU viewer-leg fanout E2E under loss (host sends FEC; localhost shows zero recovery without injected loss).
+- NVENC two-pass encode_ms watch on low-end GPUs.
 
 ## Verification constraints
 
@@ -71,16 +68,17 @@ Exit gate: libmello ctest green (incl. new NACK/pacer unit tests), `CI=true carg
 7. **SFU per-viewer:** TWCC consumption per viewer leg, per-viewer egress pacer, queue shrink 256→~64, synthesized min-REMB to host from per-viewer estimates (keeps existing host plumbing).
 8. **Loss recovery tuning:** RTT-adaptive NACK retry, NACK cache TTL, per-viewer PLI (done in 0.7b), IDR/GOP cache for late-join fast-start, RTCP read buffer 1500→8 KiB, chronic-queue viewer ejection.
 
-## Phase 2 — Encoder/decode quality
+## Phase 2 — Encoder/decode quality ✅ (done)
 
-1. H.264 High profile + VUI BT.709 signalling (all encoder backends).
-2. `enableTemporalAQ`, multipass evaluation (runtime-gated on GPU headroom).
-3. AMF: VBR with 1.25× headroom (currently CBR peak=target). QSV: balanced usage + 2 refs.
-4. D3D11VA decoder: proper implementation (pic params + NAL/slice parsing) — un-cripples Intel-iGPU viewers.
-5. ULPFEC (RFC 5109) at low loss rates, sender + receiver + SFU parallel FEC track. ✅
-6. Viewer cadence: continuous PID-paced jitter buffer (replaces one-shot `jitter_primed_`), async decode thread, spec §7.7 backlog guard.
-7. DComp: cache `OpenSharedResource1`, keyed-mutex/fence sync with libmello device.
-8. Bitrate ladder retune (Medium 720p60 uplift) — config only.
+1. H.264 High profile + VUI BT.709 signalling (all encoder backends). ✅
+2. `enableTemporalAQ`, multipass evaluation (runtime-gated on GPU headroom). ✅
+3. AMF: VBR with 1.25× headroom. QSV: balanced usage + 2 refs. ✅
+4. D3D11VA decoder — **deferred** (separate Windows PR).
+5. ULPFEC (RFC 5109) sender + receiver + SFU host ingress. ✅
+6. Viewer cadence: jitter regulator, async decode, §7.7 backlog guard, NVDEC threading fix. ✅
+7. DComp: `OpenSharedResource1` cache. ✅ (keyed-mutex/fence sync deferred)
+8. Bitrate ladder retune. ✅
+9. RTP send backpressure (no recovery thrash on queue full). ✅
 
 ## Phase 3 — Experience features (each gets its own planning round)
 

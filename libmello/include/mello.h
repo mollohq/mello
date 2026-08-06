@@ -38,6 +38,8 @@ typedef enum MelloResult {
     MELLO_ERROR_ALREADY_STARTED = -3,
     MELLO_ERROR_FAILED = -4,
     MELLO_ERROR_TRANSPORT_FAILED = -5,
+    /** RTP sender queue full or awaiting IDR — producer should drop/coalesce. */
+    MELLO_ERROR_TRANSPORT_BACKPRESSURE = -6,
 } MelloResult;
 
 typedef struct MelloIceCandidate {

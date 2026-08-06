@@ -1490,14 +1490,14 @@ void PeerConnectionImpl::apply_rtt_sample(float rtt) noexcept {
     }
 }
 
-bool PeerConnectionImpl::video_send_access_unit(
+SendAccessUnitResult PeerConnectionImpl::video_send_access_unit(
     const uint8_t* data,
     size_t size,
     uint64_t capture_ts_us
 ) noexcept {
     std::lock_guard<std::mutex> lock(mutex_);
     if (!rtp_video_sender_) {
-        return false;
+        return SendAccessUnitResult::Failed;
     }
     return rtp_video_sender_->send_access_unit(data, size, capture_ts_us);
 }

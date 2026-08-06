@@ -729,11 +729,19 @@ MelloResult mello_peer_video_send_access_unit(
     }
     try {
         auto* pc = peer_cast(peer);
-        return pc->video_send_access_unit(
+        switch (pc->video_send_access_unit(
             data,
             static_cast<size_t>(size),
             capture_ts_us
-        ) ? MELLO_OK : MELLO_ERROR_TRANSPORT_FAILED;
+        )) {
+        case mello::transport::SendAccessUnitResult::Accepted:
+            return MELLO_OK;
+        case mello::transport::SendAccessUnitResult::Backpressure:
+            return MELLO_ERROR_TRANSPORT_BACKPRESSURE;
+        case mello::transport::SendAccessUnitResult::Failed:
+            return MELLO_ERROR_TRANSPORT_FAILED;
+        }
+        return MELLO_ERROR_TRANSPORT_FAILED;
     } catch (...) {
         return MELLO_ERROR_TRANSPORT_FAILED;
     }

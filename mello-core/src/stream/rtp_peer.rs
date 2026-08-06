@@ -80,6 +80,9 @@ pub enum RtpPeerError {
 
     #[error("native transport call failed")]
     TransportFailed,
+
+    #[error("RTP sender queue full or awaiting IDR")]
+    Backpressure,
 }
 
 /// One host-side viewer feedback event.
@@ -345,6 +348,9 @@ fn map_mello_result(result: mello_sys::MelloResult) -> Result<(), RtpPeerError> 
     match result {
         mello_sys::MelloResult_MELLO_OK => Ok(()),
         mello_sys::MelloResult_MELLO_ERROR_INVALID_PARAM => Err(RtpPeerError::InvalidParam),
+        mello_sys::MelloResult_MELLO_ERROR_TRANSPORT_BACKPRESSURE => {
+            Err(RtpPeerError::Backpressure)
+        }
         _ => Err(RtpPeerError::TransportFailed),
     }
 }
@@ -486,6 +492,10 @@ mod tests {
         assert_eq!(
             map_mello_result(mello_sys::MelloResult_MELLO_ERROR_TRANSPORT_FAILED),
             Err(RtpPeerError::TransportFailed)
+        );
+        assert_eq!(
+            map_mello_result(mello_sys::MelloResult_MELLO_ERROR_TRANSPORT_BACKPRESSURE),
+            Err(RtpPeerError::Backpressure)
         );
         assert_eq!(map_mello_result(mello_sys::MelloResult_MELLO_OK), Ok(()));
     }

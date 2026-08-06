@@ -547,6 +547,7 @@ struct RtpVideoSender::State
         send_callback = next_batch.send;
         paced_batch = std::move(next_batch);
         batch_ready = true;
+        batch_cv.notify_one();
     }
 
     void enqueue_rtx(rtc::message_ptr packet) {
@@ -658,7 +659,11 @@ struct RtpVideoSender::State
     }
 
     bool take_batch(PacedBatch& destination) noexcept {
-        std::lock_guard<std::mutex> lock(batch_mutex);
+        std::unique_lock<std::mutex> lock(batch_mutex);
+        batch_cv.wait_for(lock, std::chrono::milliseconds(250), [this]() {
+            return batch_ready
+                || stopping.load(std::memory_order_acquire);
+        });
         if (!batch_ready) {
             return false;
         }
@@ -947,6 +952,7 @@ struct RtpVideoSender::State
     bool awaiting_idr = false;
 
     std::mutex batch_mutex;
+    std::condition_variable batch_cv;
     PacedBatch paced_batch;
     bool batch_ready = false;
     // Transport send path captured from the packetizer chain; the pacing
@@ -1145,19 +1151,24 @@ RtpVideoSender& RtpVideoSender::operator=(RtpVideoSender&& other) noexcept {
     return *this;
 }
 
-bool RtpVideoSender::send_access_unit(
+SendAccessUnitResult RtpVideoSender::send_access_unit(
     const uint8_t* annex_b,
     size_t size,
     uint64_t capture_timestamp_us
 ) noexcept {
     const auto state = state_;
     if (!state) {
-        return false;
+        return SendAccessUnitResult::Failed;
     }
 
     const auto fail = [&state]() noexcept {
         state->send_failures.fetch_add(1, std::memory_order_relaxed);
-        return false;
+        return SendAccessUnitResult::Failed;
+    };
+
+    const auto backpressure = [&state]() noexcept {
+        state->access_units_rejected.fetch_add(1, std::memory_order_relaxed);
+        return SendAccessUnitResult::Backpressure;
     };
 
     if (!state->track_is_open()) {
@@ -1235,8 +1246,8 @@ bool RtpVideoSender::send_access_unit(
     };
 
     if (!access_unit_info.is_idr && state->awaiting_idr) {
-        state->access_units_rejected.fetch_add(1, std::memory_order_relaxed);
-        return false;
+        lock.unlock();
+        return backpressure();
     }
 
     if (!access_unit_info.is_idr) {
@@ -1244,26 +1255,24 @@ bool RtpVideoSender::send_access_unit(
             || size > kMaxQueuedBytes - state->queued_bytes_value) {
             drop_queued_deltas();
             enter_idr_gate();
-            state->access_units_rejected.fetch_add(1, std::memory_order_relaxed);
             update_queue_stats();
             lock.unlock();
             if (notify_local_idr_needed) {
                 state->record_local_idr_needed();
             }
-            return false;
+            return backpressure();
         }
     }
 
     if (size > kMaxQueuedBytes) {
         drop_queued_deltas();
         enter_idr_gate();
-        state->access_units_rejected.fetch_add(1, std::memory_order_relaxed);
         update_queue_stats();
         lock.unlock();
         if (notify_local_idr_needed) {
             state->record_local_idr_needed();
         }
-        return false;
+        return backpressure();
     }
 
     uint32_t rtp_timestamp = state->rtp_start_timestamp;
@@ -1305,7 +1314,7 @@ bool RtpVideoSender::send_access_unit(
     update_queue_stats();
     lock.unlock();
     state->queue_cv.notify_one();
-    return true;
+    return SendAccessUnitResult::Accepted;
 }
 
 bool RtpVideoSender::set_pacing_target_bps(

@@ -48,7 +48,7 @@ public:
 
     const char* handle_remote_offer(const char* sdp);
 
-    bool video_send_access_unit(
+    SendAccessUnitResult video_send_access_unit(
         const uint8_t* data,
         size_t size,
         uint64_t capture_ts_us

@@ -742,6 +742,11 @@ impl StreamManager {
                     .await
                 {
                     Ok(()) => {}
+                    Err(StreamError::SfuSendBackpressure(_)) => {
+                        // RTP sender queue full or awaiting IDR. LocalIdrNeeded
+                        // may already have fired; drop this AU without entering
+                        // recovery (avoids ~2s keyframe thrash and visible hitches).
+                    }
                     Err(e @ StreamError::SfuSendFailed(_)) => {
                         self.manager_video_send_fail_total =
                             self.manager_video_send_fail_total.saturating_add(1);

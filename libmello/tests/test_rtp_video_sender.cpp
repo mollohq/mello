@@ -29,10 +29,21 @@ using mello::transport::RtpH264Receiver;
 using mello::transport::RtpVideoSender;
 using mello::transport::RtpVideoSenderConfig;
 using mello::transport::RtpVideoSenderStats;
+using mello::transport::SendAccessUnitResult;
 
 namespace {
 
 using namespace std::chrono_literals;
+
+bool send_au_accepted(
+    RtpVideoSender& sender,
+    const uint8_t* data,
+    size_t size,
+    uint64_t capture_ts_us
+) {
+    return sender.send_access_unit(data, size, capture_ts_us)
+        == SendAccessUnitResult::Accepted;
+}
 
 constexpr uint8_t kPayloadType = 96;
 constexpr uint32_t kSenderSsrc = 0x12345678;
@@ -514,7 +525,7 @@ TEST(RtpVideoSenderPacketizationTest, FragmentsAccessUnitWithOneTimestampAndFina
     RtpVideoSender sender = link.make_sender(8'000'000);
 
     const auto access_unit = make_large_delta_access_unit(24 * 1024);
-    ASSERT_TRUE(sender.send_access_unit(
+    ASSERT_TRUE(send_au_accepted(sender,
         access_unit.data(),
         access_unit.size(),
         1'000
@@ -554,9 +565,9 @@ TEST(RtpVideoSenderEndToEndTest, ReceiverReconstructsAnnexBAccessUnits) {
     const auto delta_a = make_delta_access_unit(0x11);
     const auto delta_b = make_delta_access_unit(0x22);
 
-    ASSERT_TRUE(sender.send_access_unit(idr.data(), idr.size(), 0));
-    ASSERT_TRUE(sender.send_access_unit(delta_a.data(), delta_a.size(), 33'333));
-    ASSERT_TRUE(sender.send_access_unit(delta_b.data(), delta_b.size(), 66'666));
+    ASSERT_TRUE(send_au_accepted(sender,idr.data(), idr.size(), 0));
+    ASSERT_TRUE(send_au_accepted(sender,delta_a.data(), delta_a.size(), 33'333));
+    ASSERT_TRUE(send_au_accepted(sender,delta_b.data(), delta_b.size(), 66'666));
 
     ASSERT_TRUE(link.wait_for_emitted_count(3, 10s));
 
@@ -576,8 +587,8 @@ TEST(RtpVideoSenderTimestampTest, MapsCaptureClockTo90kRtpTimestamps) {
 
     const auto idr = make_idr_access_unit();
     const auto delta = make_delta_access_unit(0x33);
-    ASSERT_TRUE(sender.send_access_unit(idr.data(), idr.size(), 1'000'000));
-    ASSERT_TRUE(sender.send_access_unit(delta.data(), delta.size(), 1'033'333));
+    ASSERT_TRUE(send_au_accepted(sender,idr.data(), idr.size(), 1'000'000));
+    ASSERT_TRUE(send_au_accepted(sender,delta.data(), delta.size(), 1'033'333));
 
     ASSERT_TRUE(link.wait_for_emitted_count(2, 10s));
 
@@ -594,7 +605,7 @@ TEST(RtpVideoSenderPacingTest, AccessUnitFragmentsArePacedAcrossWireTime) {
     RtpVideoSender sender = link.make_sender(200'000);
 
     const auto access_unit = make_large_delta_access_unit(32 * 1024);
-    ASSERT_TRUE(sender.send_access_unit(
+    ASSERT_TRUE(send_au_accepted(sender,
         access_unit.data(),
         access_unit.size(),
         5'000'000
@@ -619,7 +630,7 @@ TEST(RtpVideoSenderPacingTest, AggregateSendRateTracksPacingTarget) {
     RtpVideoSender sender = link.make_sender(pacing_bps);
 
     const auto access_unit = make_large_delta_access_unit(32 * 1024);
-    ASSERT_TRUE(sender.send_access_unit(
+    ASSERT_TRUE(send_au_accepted(sender,
         access_unit.data(),
         access_unit.size(),
         0
@@ -642,12 +653,12 @@ TEST(RtpVideoSenderPacingTest, NextAccessUnitStartsAfterOnePacketSlot) {
     RtpVideoSender sender = link.make_sender(200'000);
 
     const auto first = make_large_delta_access_unit(32 * 1024);
-    ASSERT_TRUE(sender.send_access_unit(first.data(), first.size(), 0));
+    ASSERT_TRUE(send_au_accepted(sender,first.data(), first.size(), 0));
     ASSERT_TRUE(link.wait_for_captured_count(29, 15s));
     const auto first_last = link.captured_rtp().back().received_at;
     link.clear_captured_rtp();
 
-    ASSERT_TRUE(sender.send_access_unit(
+    ASSERT_TRUE(send_au_accepted(sender,
         make_delta_access_unit(0x44).data(),
         make_delta_access_unit(0x44).size(),
         33'333
@@ -668,10 +679,10 @@ TEST(RtpVideoSenderRetransmitTest, NackRepairIsPacedAndCounted) {
     RtpVideoSender sender = link.make_sender(8'000'000);
 
     const auto idr = make_idr_access_unit();
-    ASSERT_TRUE(sender.send_access_unit(idr.data(), idr.size(), 0));
+    ASSERT_TRUE(send_au_accepted(sender,idr.data(), idr.size(), 0));
     for (int index = 0; index < 4; ++index) {
         const auto delta = make_delta_access_unit(static_cast<uint8_t>(index));
-        ASSERT_TRUE(sender.send_access_unit(
+        ASSERT_TRUE(send_au_accepted(sender,
             delta.data(),
             delta.size(),
             static_cast<uint64_t>(index + 1) * 33'333
@@ -736,7 +747,7 @@ TEST(RtpVideoSenderTwccTest, ViewerFeedbackDrivesGccEstimate) {
         const auto au = index == 0
             ? make_idr_access_unit()
             : make_delta_access_unit(static_cast<uint8_t>(index));
-        ASSERT_TRUE(sender.send_access_unit(
+        ASSERT_TRUE(send_au_accepted(sender,
             au.data(),
             au.size(),
             static_cast<uint64_t>(index) * 33'333
@@ -792,7 +803,7 @@ TEST(RtpVideoSenderFecTest, ParityFecRepairsOneLossPerGroupWithoutPli) {
         const auto au = index == 0
             ? make_idr_access_unit()
             : make_large_delta_access_unit(24 * 1024);
-        if (!sender.send_access_unit(
+        if (!send_au_accepted(sender,
                 au.data(),
                 au.size(),
                 static_cast<uint64_t>(index) * 33'333
@@ -929,11 +940,11 @@ TEST(RtpVideoSenderAdmissionTest, QueueOverflowEntersIdrGate) {
     );
 
     const auto idr = make_idr_access_unit();
-    ASSERT_TRUE(sender.send_access_unit(idr.data(), idr.size(), 0));
+    ASSERT_TRUE(send_au_accepted(sender,idr.data(), idr.size(), 0));
 
     for (int index = 0; index < 16; ++index) {
         const auto delta = make_delta_access_unit(static_cast<uint8_t>(index));
-        (void)sender.send_access_unit(
+        (void)send_au_accepted(sender,
             delta.data(),
             delta.size(),
             static_cast<uint64_t>((index + 1) * 33'333)
@@ -963,7 +974,7 @@ TEST(RtpVideoSenderLifetimeTest, DestroysCleanlyUnderLoad) {
         RtpVideoSender sender = link.make_sender(8'000'000);
         const auto idr = make_idr_access_unit();
         for (int index = 0; index < 6; ++index) {
-            if (!sender.send_access_unit(
+            if (!send_au_accepted(sender,
                     idr.data(),
                     idr.size(),
                     static_cast<uint64_t>(index * 33'333))) {

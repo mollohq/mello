@@ -28,7 +28,7 @@ Both repos have these branches; each phase's work is on its branch:
 |---|---|---|---|
 | `feat/stream-quality-phase0` | ✅ merged-set of commits | ✅ | **Phase 0 done** |
 | `feat/stream-twcc-phase1` | ✅ | ✅ (implemented + merged into phase2) | **Phase 1 done** |
-| `feat/stream-quality-phase2` | ✅ ULPFEC + fixes + probe telemetry | ✅ FEC track + host ingress + Phase 1 merge | **Phase 2 in progress** (D3D11VA deferred) |
+| `feat/stream-quality-phase2` | ✅ complete | ✅ FEC + Phase 1 merge | **Phase 2 done** — Phase 3 next |
 
 `feat/stream-twcc-phase1` was cut from phase0; `feat/stream-quality-phase2` on **mello** was cut from phase1 (client TWCC/GCC + Phase 2 quality). **mello-sfu** `feat/stream-twcc-phase1` was created from phase0 (branch did not exist remotely) and merged into `feat/stream-quality-phase2` — combined stack now has Phase 1 TWCC/GCC + Phase 2 ULPFEC/FEC ingress.
 
@@ -47,7 +47,7 @@ Both repos have these branches; each phase's work is on its branch:
 - mello-core manager: per-viewer `viewer_gcc` map (3s staleness) supersedes that viewer's REMB; GCC applied immediately (no 5%/s ramp).
 - SFU: negotiates `transport-cc`; host-leg TWCC feedback generation (Pion `ConfigureTWCCSender`); per-viewer `gcc.SendSideBWE` (initial 8 Mbps, min 300k, max 25M) fed by viewer TWCC; token-bucket egress pacer per viewer (~10ms burst); per-viewer estimates supersede client REMB in min-REMB synthesis (1s tick); late-join IDR-AU cache replayed to new viewers; queue-full rescue (>5s backlog → drop backlog + upstream PLI); viewer queue 256→64; RTCP read 8 KiB.
 
-### Phase 2 (in progress) — encoder/decode quality
+### Phase 2 (done) — encoder/decode quality
 Committed on `feat/stream-quality-phase2` (mello):
 - Continuous jitter regulator (replaced one-shot `jitter_primed_` latch) in `video_pipeline.cpp` — `jitter_should_present(depth, now)`: present at ring depth ≥ 2, else at ~90% frame interval.
 - Spec §7.7 backlog guard in `mello-core/src/client/stream_ffi.rs`: drop delta AUs while decode input queue > 4; keyframes always feed; `backlog_guard_drops` in cadence log.
@@ -55,6 +55,11 @@ Committed on `feat/stream-quality-phase2` (mello):
 - Encoder quality batch (Windows files, needs Windows validation): NVENC High profile + BT.709 limited VUI + temporal AQ + full-res two-pass (`rcParams.multiPass`); AMF High + peak-constrained VBR 1.25×; QSV High + BALANCED + 2 refs; VideoToolbox High 4.2; ladder Medium 4→5 Mbps, Low 2.5→3 Mbps.
 - DComp `OpenSharedResource1` caching (`client/src/dcomp_presenter.rs`).
 - Test housekeeping: neteq-aware `test_jitter_buffer.cpp` rewrite; `test_video_pipeline.cpp` skips under `CI`.
+- NVDEC async decode: CUDA→host on decode worker; `publish_d3d11_frame()` on present thread (`decoder_nvdec.cpp`).
+- RTP send backpressure: `MELLO_ERROR_TRANSPORT_BACKPRESSURE` — stream manager drops without recovery-mode keyframe thrash; sender queue 8→16.
+- Viewer probe: aspect-fit letterbox scaling; host probe logs `tx_aus_rejected`.
+
+**Phase 2 complete.** Windows localhost validation (Aug 2026): viewer `dec_fps`/`present_fps` ~50–58, zero `sfu_send_failed`, `tx_aus_rejected` ≤2/session. Remaining micro-jitter on probe CPU-RGBA path is acceptable; production uses DComp.
 
 **ULPFEC (RFC 5109) — landed on `feat/stream-quality-phase2`:**
 
@@ -96,7 +101,7 @@ Scripts (`run-stream-viewer.ps1` first, then `run-stream-host.ps1`) are unchange
 
 | Probe line | New fields |
 |---|---|
-| `host_probe_tick` | `tx_fec_packets`, `tx_gcc_target_kbps`, `tx_rtx_sent` |
+| `host_probe_tick` | `tx_fec_packets`, `tx_gcc_target_kbps`, `tx_rtx_sent`, `tx_aus_rejected` |
 | `viewer_probe_tick` | `rx_fec_recovered`, `rx_fec_unrecoverable` |
 | `viewer_probe_native_rtp` | `fec_recovered`, `fec_unrecoverable` |
 
@@ -108,13 +113,13 @@ $env:SFU_PUBLIC_IP = "127.0.0.1"
 .\mello\scripts\run-stream-host.ps1 -Fps 30 -BitrateKbps 2000 -SourceIndex N -HostLog C:\temp\host.log
 ```
 
-**Pass signals:** host `tx_fec_packets` increasing; viewer `rx_fec_recovered` ≥ 0 (nonzero under loss); no SFU `unhandled RTP ssrc(media+1)`; viewer `dec_fps` > 0 after `first_keyframe`.
+**Pass signals:** host `tx_fec_packets` increasing; viewer `rx_fec_recovered` ≥ 0 (nonzero under loss); no SFU `unhandled RTP ssrc(media+1)`; viewer `dec_fps` > 0 after `first_keyframe`; **no** repeating `sfu_send_failed` / `recovery_mode=true` (occasional `tx_aus_rejected` under burst is OK).
 
 D3D11VA (§4 item 2.4) is **not** required on NVIDIA boxes (NVDEC path). **NVDEC + async decode:** D3D11 immediate-context work must run on the present thread (`publish_d3d11_frame`), not in CUDA display callbacks on the decode worker — see `decoder_nvdec.cpp`.
 
 ---
 
-## 4. Remaining Phase 2 items (after ULPFEC lands)
+## 4. Phase 2 follow-ups (deferred — not blockers; pick up in Phase 3 prep or separate PRs)
 
 - **2.4 D3D11VA decoder** (`libmello/src/video/decoder_d3d11va.cpp`): currently a stub that submits the whole AU as one bitstream buffer with no `DXVA_PicParams_H264`, no IQ matrix, no slice headers — cannot produce correct output; Intel-iGPU viewers fall to OpenH264 CPU decode. Implement properly (NAL/slice parsing → `DXVA_PicParams_H264` + `DXVA_Qmatrix_H264` + slice buffers per frame; reference frame management via the 4-slot decode texture array — currently always copies slice 0). Windows-only, can't verify locally → keep in a separate PR built+tested on the Windows box. Effort: large.
 - **Deferred follow-ups already noted**: cross-device sync between libmello write device and DComp presenter (keyed mutex or fence — current code relies on D3D11 queue timing; distinct from NVDEC decode-thread vs present-thread affinity, which is handled in `decoder_nvdec.cpp`); NVENC two-pass load watch on low-end GPUs (`encode_ms` in certification); chronic-queue viewer ejection (rescue implemented instead — re-evaluate after field data).

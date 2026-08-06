@@ -546,6 +546,11 @@ impl SfuConnection {
             )
         };
         if result != mello_sys::MelloResult_MELLO_OK {
+            if result == mello_sys::MelloResult_MELLO_ERROR_TRANSPORT_BACKPRESSURE {
+                return Err(StreamError::SfuSendBackpressure(
+                    "video access unit send backpressure".into(),
+                ));
+            }
             return Err(StreamError::SfuSendFailed(
                 "video access unit send failed".into(),
             ));
