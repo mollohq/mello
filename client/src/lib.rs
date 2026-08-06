@@ -27,6 +27,8 @@ mod settings;
 mod snapshot_cache;
 mod snapshot_loader;
 mod stream_frame_timer;
+#[cfg(any(test, feature = "testkit"))]
+pub mod testkit;
 mod updater;
 
 pub const APP_NAME: &str = "m3llo";
@@ -374,13 +376,21 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     // --- Tray / status item ---
-    let status_item = Rc::new(RefCell::new(
-        StatusItem::new().expect("failed to create tray icon"),
-    ));
+    // Degrade rather than abort: a missing tray icon costs the user a
+    // convenience, whereas panicking here means the app refuses to start at
+    // all. Same for the hotkey listener below, which additionally requires
+    // Accessibility permission on macOS that the user may not have granted.
+    let status_item = Rc::new(RefCell::new(StatusItem::new().unwrap_or_else(|e| {
+        log::warn!("Failed to create tray icon, continuing without it: {e}");
+        StatusItem::disabled()
+    })));
 
     // --- Global hotkey manager ---
     let hotkey_mgr = Rc::new(RefCell::new(
-        platform::hotkeys::HotkeyManager::new().expect("failed to init hotkey manager"),
+        platform::hotkeys::HotkeyManager::new().unwrap_or_else(|e| {
+            log::warn!("Failed to init hotkey manager, push-to-talk disabled: {e}");
+            platform::hotkeys::HotkeyManager::disabled()
+        }),
     ));
 
     // --- Close ÔåÆ tray ---
@@ -633,18 +643,7 @@ mod tests {
     use super::*;
     use std::cell::Cell;
 
-    fn init_test_backend() {
-        // `init_no_event_loop` installs a per-thread backend and panics if the
-        // thread already has one. The test harness normally gives each test its
-        // own thread, but that is not guaranteed (e.g. `--test-threads=1`), so
-        // guard rather than rely on it.
-        thread_local! {
-            static INIT: std::cell::OnceCell<()> = const { std::cell::OnceCell::new() };
-        }
-        INIT.with(|once| {
-            once.get_or_init(i_slint_backend_testing::init_no_event_loop);
-        });
-    }
+    use crate::testkit::init_test_backend;
 
     /// Guards `with_debug_info(..)` in `build.rs`.
     ///

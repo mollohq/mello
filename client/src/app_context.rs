@@ -81,6 +81,99 @@ pub struct AppContext {
     pub taskbar_toolbar: Rc<RefCell<Option<crate::platform::taskbar_toolbar::TaskbarToolbar>>>,
 }
 
+#[cfg(any(test, feature = "testkit"))]
+impl AppContext {
+    /// Build an `AppContext` that touches no OS resources.
+    ///
+    /// The caller owns the pieces a test needs to observe or drive:
+    /// - `app`: the `MainWindow` to assert against,
+    /// - `cmd_tx`: paired with a receiver the test drains to see what the UI
+    ///   asked core to do,
+    /// - `rt`: a runtime handle, since some components spawn onto it.
+    ///
+    /// Everything else is either an empty default or an explicitly disabled
+    /// variant (no tray icon, no global hotkey listener, no HUD overlay
+    /// thread), so this is safe to construct on a headless CI runner.
+    pub fn for_test(
+        app: crate::MainWindow,
+        cmd_tx: UnboundedSender<Command>,
+        rt: tokio::runtime::Handle,
+    ) -> Self {
+        use slint::ComponentHandle as _;
+
+        let frame_consumed = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let frame_lifecycle: mello_core::FrameLifecycleSlot =
+            Arc::new(std::sync::atomic::AtomicU8::new(0));
+        #[cfg(not(target_os = "windows"))]
+        let frame_slot: mello_core::FrameSlot = Arc::new(Mutex::new(None));
+        #[cfg(target_os = "windows")]
+        let native_frame_slot = mello_core::NativeFrameSlot::default();
+        #[cfg(target_os = "windows")]
+        let dcomp_presenter: Rc<RefCell<Option<crate::dcomp_presenter::DCompPresenter>>> =
+            Rc::new(RefCell::new(None));
+
+        let stream_frame_timer = Rc::new(crate::stream_frame_timer::StreamFrameTimer::new(
+            app.as_weak(),
+            #[cfg(not(target_os = "windows"))]
+            frame_slot,
+            frame_consumed,
+            frame_lifecycle.clone(),
+            #[cfg(target_os = "windows")]
+            native_frame_slot.clone(),
+            #[cfg(target_os = "windows")]
+            dcomp_presenter.clone(),
+        ));
+
+        Self {
+            app,
+            cmd_tx,
+            settings: Rc::new(RefCell::new(Settings::default())),
+            rt: rt.clone(),
+            active_voice_channel: Rc::new(RefCell::new(String::new())),
+            new_crew_avatar_b64: Arc::new(Mutex::new(None)),
+            crew_settings_avatar_b64: Arc::new(Mutex::new(None)),
+            invited_users: Rc::new(RefCell::new(Vec::new())),
+            discover_cursor: Rc::new(RefCell::new(None)),
+            discover_loading: Rc::new(RefCell::new(false)),
+            chat_messages: Rc::new(RefCell::new(Vec::new())),
+            chat_scroll: Rc::new(ChatScrollState::new()),
+            unread_tracker: Rc::new(RefCell::new(UnreadTracker::new())),
+            active_crew_id: Rc::new(RefCell::new(String::new())),
+            avatar_state: Arc::new(Mutex::new(crate::avatar::AvatarGridState::new())),
+            profile_avatar_state: Arc::new(Mutex::new(crate::avatar::AvatarGridState::new())),
+            avatar_shuffle_timer: Rc::new(RefCell::new(None)),
+            diag_autostop_timer: Rc::new(RefCell::new(None)),
+            post_game_timer: Rc::new(RefCell::new(None)),
+            riot_cta_pending: Rc::new(Cell::new(false)),
+            games_integrations: Rc::new(RefCell::new(Vec::new())),
+            muted_before_deafen: Rc::new(Cell::new(false)),
+            updater: Rc::new(RefCell::new(None)),
+            hotkey_mgr: Rc::new(RefCell::new(
+                crate::platform::hotkeys::HotkeyManager::disabled(),
+            )),
+            status_item: Rc::new(RefCell::new(crate::platform::StatusItem::disabled())),
+            gif_popover_anim: GifAnimator::new(50, None),
+            gif_chat_anim: GifAnimator::new(50, Some(2)),
+            dbg_hist: Rc::new(RefCell::new(crate::DebugHistory::new())),
+            avatar_cache: Rc::new(RefCell::new(HashMap::new())),
+            hud_manager: Rc::new(HudManager::start(false)),
+            fg_monitor: Rc::new(RefCell::new(ForegroundMonitor::new(false))),
+            pending_deep_link: Rc::new(RefCell::new(None)),
+            ipc_listener: Rc::new(RefCell::new(None)),
+            snapshot_loader: Rc::new(SnapshotLoader::new(rt)),
+            stream_frame_timer,
+            #[cfg(target_os = "windows")]
+            native_frame_slot,
+            #[cfg(target_os = "windows")]
+            frame_lifecycle,
+            #[cfg(target_os = "windows")]
+            dcomp_presenter,
+            #[cfg(target_os = "windows")]
+            taskbar_toolbar: Rc::new(RefCell::new(None)),
+        }
+    }
+}
+
 impl Clone for AppContext {
     fn clone(&self) -> Self {
         // Hand-written rather than derived: `MainWindow` is a Slint component,
@@ -130,5 +223,43 @@ impl Clone for AppContext {
             #[cfg(target_os = "windows")]
             taskbar_toolbar: self.taskbar_toolbar.clone(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The whole point of `for_test`: it must construct on a machine with no
+    /// tray, no accessibility permission and no display. If this ever starts
+    /// touching a real OS resource it will hang or panic on a CI runner, so
+    /// exercising it here keeps that honest.
+    #[test]
+    fn for_test_builds_without_os_resources() {
+        crate::testkit::init_test_backend();
+
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("runtime");
+        let app = crate::MainWindow::new().expect("window");
+        let (cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel();
+
+        let ctx = AppContext::for_test(app, cmd_tx, rt.handle().clone());
+
+        // Disabled subsystems must be inert rather than merely present.
+        assert!(!ctx.hud_manager.is_enabled(), "HUD overlay must stay off");
+        assert!(
+            ctx.hotkey_mgr.borrow().poll().is_none(),
+            "disabled hotkey manager must never yield events"
+        );
+        assert!(ctx.updater.borrow().is_none(), "no updater under test");
+
+        // Cloning is what poll_loop does every tick; it must share state, so a
+        // write through the clone is visible through the original.
+        let cloned = ctx.clone();
+        cloned.settings.borrow_mut().onboarding_step = 3;
+        assert_eq!(ctx.settings.borrow().onboarding_step, 3);
+
+        drop(cmd_rx);
     }
 }
