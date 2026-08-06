@@ -74,10 +74,17 @@ impl DebugHistory {
 
 fn nakama_config() -> Config {
     #[cfg(feature = "production")]
-    return Config::production();
+    let cfg = Config::production();
 
     #[cfg(not(feature = "production"))]
-    Config::development()
+    let cfg = Config::development();
+
+    // NAKAMA_* env overrides let a *built* binary be pointed at a local or
+    // staging server. Needed by the release-artifact smoke test, which has to
+    // exercise the real packaged binary — keys are baked in at compile time via
+    // `option_env!`, so nothing else can catch key drift between the build and
+    // the deployed server.
+    cfg.with_env_overrides()
 }
 
 fn init_logging() -> Option<std::path::PathBuf> {

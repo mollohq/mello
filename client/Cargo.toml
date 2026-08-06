@@ -101,6 +101,8 @@ mcp = ["dep:i-slint-backend-testing"]
 
 [dev-dependencies]
 toml = "0.8"
+# Isolated config dirs so tests never write the developer's real settings.
+tempfile = "3"
 # Exact pin is mandatory: this crate explicitly does not follow semver and must
 # match the `slint` version. A patch bump can break compilation outright.
 i-slint-backend-testing = "=1.17.0"
