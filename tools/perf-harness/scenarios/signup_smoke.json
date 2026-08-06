@@ -1,0 +1,23 @@
+{
+  "name": "signup_smoke",
+  "steps": [
+    {
+      "action": "discover_crews"
+    },
+    {
+      "action": "expect_event",
+      "event": "DiscoverCrewsLoaded",
+      "timeout_ms": 30000
+    },
+    {
+      "action": "finalize_onboarding",
+      "crew_name": "Canary Smoke ${MELLO_SMOKE_ID}",
+      "display_name": "Smoke Test"
+    },
+    {
+      "action": "expect_event",
+      "event": "OnboardingReady",
+      "timeout_ms": 45000
+    }
+  ]
+}

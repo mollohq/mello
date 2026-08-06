@@ -19,6 +19,21 @@ pub enum Step {
         email: String,
         password: String,
     },
+    /// Guest crew discovery — the first call a new user makes, authenticated
+    /// with the compile-time http_key rather than a session.
+    DiscoverCrews,
+    /// The whole signup transaction: create the account, then either join the
+    /// named crew or create one.
+    ///
+    /// `crew_name` without `crew_id` creates a fresh crew, which is what the
+    /// release smoke test uses so it never touches a real user's crew.
+    FinalizeOnboarding {
+        #[serde(default)]
+        crew_id: Option<String>,
+        #[serde(default)]
+        crew_name: Option<String>,
+        display_name: String,
+    },
     SelectCrew {
         crew_id: String,
     },
