@@ -115,7 +115,12 @@ services:
       - "7351:7351" # HTTP API / Admin Console
       - "7352:7352" # gRPC API (alternate)
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:7350/"]
+      # Use Nakama's own healthcheck subcommand: the image ships no curl (nor
+      # wget or nc), so the previous `curl -f ...` probe could never run and
+      # reported the container permanently unhealthy — "executable file not
+      # found in $PATH" — even while it served traffic fine. That made
+      # `docker compose up --wait` fail against a working stack.
+      test: ["CMD", "/nakama/nakama", "healthcheck"]
       interval: 10s
       timeout: 5s
       retries: 5

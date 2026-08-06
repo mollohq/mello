@@ -1,0 +1,16 @@
+[package]
+name = "e2e"
+version = "0.0.0-DEV"
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+
+# No binary: this crate exists only for its integration tests.
+[lib]
+path = "src/lib.rs"
+
+[dev-dependencies]
+mello-core = { path = "../../mello-core" }
+tokio = { workspace = true, features = ["rt", "macros", "time"] }
+serde_json = { workspace = true }
+rand = "0.8"

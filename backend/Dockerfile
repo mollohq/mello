@@ -11,8 +11,13 @@ COPY nakama/data/nakama.yml /nakama/data/nakama.yml
 
 EXPOSE 7350
 
+# The Nakama image ships no curl, so the previous `curl -f` probe always
+# failed with "executable file not found" and reported the container
+# permanently unhealthy. Nakama's own subcommand is built in and does the same
+# check. (Render additionally probes /healthcheck over HTTP via
+# healthCheckPath, which is why this going unnoticed was survivable.)
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD curl -f http://localhost:7350/healthcheck || exit 1
+    CMD ["/nakama/nakama", "healthcheck"]
 
 ENTRYPOINT ["/bin/sh", "-c", "\
     /nakama/nakama migrate up \
