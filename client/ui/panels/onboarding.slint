@@ -680,6 +680,22 @@ export component Onboarding inherits Rectangle {
                 VerticalLayout {
                     spacing: 20px;
 
+                    // Empty state: with no discoverable crews the bento loop
+                    // below never runs (bento-set-bases is empty), and the
+                    // Create Crew card is nested inside `discover-crews.length
+                    // > base`, so step 1 would offer nothing at all — no crew
+                    // to join and no way to create one. Creating a crew is the
+                    // only way forward here, so surface it directly.
+                    if discover-crews.length == 0: HorizontalLayout {
+                        height: 240px;
+                        spacing: 20px;
+
+                        CreateCrewCard {
+                            horizontal-stretch: 1;
+                            clicked => { root.create-crew-requested("New Crew"); }
+                        }
+                    }
+
                     for base in root.bento-set-bases: VerticalLayout {
                         spacing: 20px;
 

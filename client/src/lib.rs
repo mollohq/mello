@@ -9,6 +9,8 @@ pub mod dcomp_presenter;
 mod deep_link;
 mod diag_capture;
 mod emoji_font;
+#[cfg(test)]
+mod flow_tests;
 mod foreground_monitor;
 mod gif_animator;
 mod handlers;
