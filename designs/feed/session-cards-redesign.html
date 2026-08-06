@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>m3llo — Session Card Redesign</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    background: #1a1a1e;
+    color: #e8e6e3;
+    padding: 40px;
+  }
+  h1 { font-size: 20px; margin-bottom: 6px; }
+  .sub { color: #8a8a90; font-size: 13px; margin-bottom: 32px; }
+  h2 {
+    font-size: 11px; letter-spacing: 1.5px; text-transform: uppercase;
+    color: #8a8a90; margin: 36px 0 14px;
+  }
+  .row { display: flex; gap: 16px; flex-wrap: wrap; align-items: flex-start; }
+  .card {
+    width: 250px; min-height: 150px;
+    background: #1e1e22;
+    border: 1px solid #2a2a2e;
+    border-radius: 10px;
+    padding: 14px;
+    display: flex; flex-direction: column;
+  }
+  .tag {
+    font-size: 9px; font-weight: 700; letter-spacing: 1.2px;
+    color: #6a6a70; margin-bottom: 10px;
+    display: flex; align-items: center; gap: 6px;
+  }
+  .tag .dot { width: 6px; height: 6px; border-radius: 50%; }
+  .tag.stream { color: #EB4D5F; } .tag.stream .dot { background: #EB4D5F; }
+  .tag.voice  { color: #4a9eff; } .tag.voice  .dot { background: #4a9eff; }
+
+  .gicon {
+    width: 40px; height: 40px; border-radius: 8px; flex: none;
+    background: linear-gradient(135deg,#7ec8ff,#f9a8d4);
+    display: flex; align-items: center; justify-content: center; font-size: 20px;
+    position: relative;
+  }
+  .gicon.small { width: 32px; height: 32px; font-size: 16px; }
+  .av {
+    width: 22px; height: 22px; border-radius: 50%; flex: none;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 9px; font-weight: 700; color: #fff;
+    border: 2px solid #1e1e22;
+  }
+  .av.big { width: 28px; height: 28px; font-size: 11px; }
+  .av.a0 { background: #EB4D5F; } .av.a1 { background: #4a9eff; }
+  .av.a2 { background: #4ade80; color: #123; } .av.a3 { background: #a78bfa; }
+  .badge-av {
+    position: absolute; right: -6px; bottom: -6px;
+  }
+  .stack { display: flex; }
+  .stack .av + .av { margin-left: -7px; }
+
+  .who { font-size: 13px; font-weight: 600; color: #e8e6e3; }
+  .what { font-size: 12px; color: #a8a8ae; }
+  .meta { font-size: 11px; color: #6a6a70; margin-top: auto; padding-top: 10px; }
+  .you {
+    display: inline-block; font-size: 8px; font-weight: 800; letter-spacing: .8px;
+    background: #EB4D5F22; color: #EB4D5F; border: 1px solid #EB4D5F44;
+    padding: 1px 5px; border-radius: 4px; vertical-align: 1px; margin-left: 5px;
+  }
+  .peak { font-size: 11px; color: #8a8a90; margin-top: 8px; }
+  .label {
+    font-size: 11px; color: #55555a; margin: 8px 0 6px; width: 250px;
+  }
+  .note { font-size: 12px; color: #8a8a90; max-width: 640px; line-height: 1.5; margin-top: 8px; }
+  .hl { color: #e8e6e3; }
+</style>
+</head>
+<body>
+
+<h1>Session card redesign</h1>
+<div class="sub">Generic feed cards for voice + stream sessions (game sessions already have the rich card). designs/feed/session-cards-redesign.html</div>
+
+<h2>Today (for contrast)</h2>
+<div class="row">
+  <div>
+    <div class="card">
+      <div class="tag"><span>SESSION</span></div>
+      <div style="display:flex;gap:8px;align-items:center;">
+        <div class="gicon small">🎮</div>
+        <div>
+          <div class="who">Night Stones</div>
+          <div class="what">3:00</div>
+        </div>
+      </div>
+      <div class="meta">21d ago</div>
+    </div>
+    <div class="label">No actor, no type, "3:00" ambiguous (3 min? 3 h?)</div>
+  </div>
+</div>
+
+<h2>Option A — person-first</h2>
+<div class="row">
+  <div>
+    <div class="card">
+      <div class="tag stream"><span class="dot"></span><span>STREAM</span></div>
+      <div style="display:flex;gap:10px;align-items:center;">
+        <div class="av big a0">B</div>
+        <div>
+          <div class="who">b0bben <span class="you">YOU</span></div>
+          <div class="what">streamed Night Stones</div>
+        </div>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;margin-top:12px;">
+        <div class="gicon small">🎮</div>
+        <div class="what"><span class="hl">Night Stones</span> · 3m</div>
+      </div>
+      <div class="peak">👁 4 watched at peak</div>
+      <div class="meta">21d ago</div>
+    </div>
+    <div class="label">Stream: streamer leads, game row below</div>
+  </div>
+  <div>
+    <div class="card">
+      <div class="tag voice"><span class="dot"></span><span>VOICE</span></div>
+      <div style="display:flex;gap:10px;align-items:center;">
+        <div class="stack">
+          <div class="av big a1">O</div>
+          <div class="av big a0">B</div>
+          <div class="av big a2">W</div>
+        </div>
+        <div>
+          <div class="who">Ostkatt, b0bben +1 <span class="you">YOU</span></div>
+          <div class="what">hung out in General</div>
+        </div>
+      </div>
+      <div class="peak">🎙 3 at peak · 9h 7m</div>
+      <div class="meta">2 days ago</div>
+    </div>
+    <div class="label">Voice: stacked real avatars, channel + duration</div>
+  </div>
+</div>
+
+<h2>Option B — game-first (streams), avatar badged on the icon</h2>
+<div class="row">
+  <div>
+    <div class="card">
+      <div class="tag stream"><span class="dot"></span><span>STREAM</span></div>
+      <div style="display:flex;gap:10px;align-items:center;">
+        <div class="gicon">🎮
+          <div class="av a0 badge-av">B</div>
+        </div>
+        <div>
+          <div class="who">Night Stones</div>
+          <div class="what">by b0bben · 3m <span class="you">YOU</span></div>
+        </div>
+      </div>
+      <div class="peak">👁 4 watched at peak</div>
+      <div class="meta">21d ago</div>
+    </div>
+    <div class="label">Stream: game art leads, streamer avatar badged</div>
+  </div>
+  <div>
+    <div class="card">
+      <div class="tag voice"><span class="dot"></span><span>VOICE</span></div>
+      <div style="display:flex;gap:10px;align-items:center;">
+        <div class="gicon" style="background:#26262c;font-size:18px;">🎙</div>
+        <div>
+          <div class="who">General</div>
+          <div class="what">Ostkatt, b0bben +1 · 9h 7m</div>
+        </div>
+      </div>
+      <div style="display:flex;margin-top:10px;" class="stack">
+        <div class="av a1">O</div>
+        <div class="av a0">B</div>
+        <div class="av a2">W</div>
+      </div>
+      <div class="meta">2 days ago</div>
+    </div>
+    <div class="label">Voice: channel leads, avatars secondary</div>
+  </div>
+</div>
+
+<div class="note" style="margin-top:36px">
+  <strong>Both options share:</strong> typed header (<span style="color:#EB4D5F">STREAM</span> /
+  <span style="color:#4a9eff">VOICE</span> instead of "SESSION"), <span class="hl">real avatars</span>
+  (avatar cache already resolves them for recap MVPs), humanized durations
+  (<span class="hl">"3m" / "9h 7m"</span>, never "3:00"), peak stat, and a
+  <span class="hl">YOU chip</span> rendered locally when you were the streamer / a participant —
+  the feed data stays identical for everyone (spec 19), only your own client marks your presence.
+  All data already exists in the ledger payloads (streamer_name/viewer_ids, participant_names/peak_count).
+</div>
+
+</body>
+</html>

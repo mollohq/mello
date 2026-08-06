@@ -79,6 +79,17 @@ export struct FeedCardData {
     // Runtime icon (exe-extracted / crew-shared) for games w/o bundled art.
     game-icon: image,
     game-has-icon: bool,
+    // Session card redesign (voice/stream): typed content, pre-formatted.
+    session-kind: string,     // "stream" | "voice" | "" (non-session cards)
+    duration-human: string,   // "3m" / "9h 7m"
+    peak-count: int,          // stream: peak viewers; voice: peak participants
+    channel-name: string,     // voice channel display name
+    participants-line: string, // "Ostkatt, b0bben +1"
+    actor-avatar: image,      // streamer avatar (badge on the game icon)
+    actor-has-avatar: bool,
+    part0-initials: string, part0-avatar: image, part0-has-avatar: bool,
+    part1-initials: string, part1-avatar: image, part1-has-avatar: bool,
+    part2-initials: string, part2-avatar: image, part2-has-avatar: bool,
     participant-count: int,
     clip-count: int,
     clip-path: string,

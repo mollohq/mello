@@ -401,6 +401,21 @@ fn games_summary(data: &serde_json::Value) -> String {
     }
 }
 
+/// Humanized session length for the redesigned cards: "3m", "47m", "9h 7m".
+/// Sub-minute sessions round up to "1m" — "0:45" style strings read as
+/// ambiguous clock times (the exact complaint about the old card).
+fn humanize_duration(duration_secs: f64) -> String {
+    if duration_secs <= 0.0 {
+        return String::new();
+    }
+    let mins = ((duration_secs / 60.0).ceil() as u64).max(1);
+    if mins >= 60 {
+        format!("{}h {}m", mins / 60, mins % 60)
+    } else {
+        format!("{}m", mins)
+    }
+}
+
 /// Resolve `(game_id, short_name, color_hex)` for a card: the bundled DB by
 /// id, then by display name (stream sessions and legacy events carry only a
 /// name), then the user's confirmed custom games. Unresolved names keep an
@@ -642,6 +657,78 @@ fn build_feed_card(
             (String::new(), String::new(), true, String::new(), 0)
         };
 
+    // --- Session card redesign (voice/stream): typed, person-aware fields ---
+    let session_kind = if feed_type == "session" || feed_type == "session-preview" {
+        match backend_type {
+            "stream_session" => "stream",
+            "voice_session" => "voice",
+            _ => "",
+        }
+    } else {
+        ""
+    };
+    let duration_human = humanize_duration(duration_secs);
+    let peak_count = data
+        .get("peak_viewers")
+        .or_else(|| data.get("peak_count"))
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0) as i32;
+    let channel_name = data
+        .get("channel_name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let (actor_avatar, actor_has_avatar) = if session_kind == "stream" {
+        let streamer_id = data
+            .get("streamer_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        resolve_avatar(ctx, streamer_id)
+    } else {
+        (slint::Image::default(), false)
+    };
+    let participant_names: Vec<String> = data
+        .get("participant_names")
+        .and_then(|v| v.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+    let participants_line = match participant_names.len() {
+        0 => String::new(),
+        1 | 2 => participant_names.join(", "),
+        n => format!(
+            "{} +{}",
+            participant_names[..2].join(", "),
+            n.saturating_sub(2)
+        ),
+    };
+    let participant_ids: Vec<String> = data
+        .get("participant_ids")
+        .and_then(|v| v.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+    let part_slot = |i: usize| -> (slint::SharedString, slint::Image, bool) {
+        let initials = participant_names
+            .get(i)
+            .map(|n| make_initials(n))
+            .unwrap_or_default();
+        let (avatar, has) = participant_ids
+            .get(i)
+            .map(|id| resolve_avatar(ctx, id))
+            .unwrap_or((slint::Image::default(), false));
+        (initials.into(), avatar, has)
+    };
+    let (part0_initials, part0_avatar, part0_has_avatar) = part_slot(0);
+    let (part1_initials, part1_avatar, part1_has_avatar) = part_slot(1);
+    let (part2_initials, part2_avatar, part2_has_avatar) = part_slot(2);
+
     let (mvp_count, mvp0, mvp1, mvp2) = extract_mvps(&data, backend_type);
     let (mvp0_av, mvp0_has_av) = resolve_avatar(ctx, &mvp0.3);
     let (mvp1_av, mvp1_has_av) = resolve_avatar(ctx, &mvp1.3);
@@ -675,6 +762,22 @@ fn build_feed_card(
         game_has_color,
         game_icon,
         game_has_icon,
+        session_kind: session_kind.into(),
+        duration_human: duration_human.into(),
+        peak_count,
+        channel_name: channel_name.into(),
+        participants_line: participants_line.into(),
+        actor_avatar,
+        actor_has_avatar,
+        part0_initials,
+        part0_avatar,
+        part0_has_avatar,
+        part1_initials,
+        part1_avatar,
+        part1_has_avatar,
+        part2_initials,
+        part2_avatar,
+        part2_has_avatar,
         participant_count,
         clip_count,
         clip_path: clip_path.into(),

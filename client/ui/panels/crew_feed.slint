@@ -734,8 +734,15 @@ component RecapCard inherits Rectangle {
 }
 
 // Session card
+// Voice/stream session card, redesigned per designs/feed/
+// session-cards-redesign.html (Option B: game/channel-first). Typed header,
+// real avatars, humanized duration, peak stat — a card must answer "who did
+// what, for how long" at a glance.
 component SessionCard inherits Rectangle {
     in property <FeedCardData> card;
+
+    property <bool> is-stream: card.session-kind == "stream";
+    property <color> kind-color: is-stream ? Theme.accent : #4a9eff;
 
     background: Theme.card-bg;
     border-radius: 10px;
@@ -746,58 +753,136 @@ component SessionCard inherits Rectangle {
         padding: 14px;
         spacing: 8px;
 
-        Text {
-            text: "SESSION";
-            font-size: 10px;
-            font-weight: 600;
-            color: Theme.text-dim;
-            letter-spacing: 0.8px;
+        // Typed header: colored dot + STREAM / VOICE.
+        HorizontalLayout {
+            spacing: 6px;
+            Rectangle {
+                width: 6px;
+                Rectangle {
+                    width: 6px;
+                    height: 6px;
+                    border-radius: 3px;
+                    background: kind-color;
+                    y: (parent.height - self.height) / 2;
+                }
+            }
+            Text {
+                text: is-stream ? "STREAM" : card.session-kind == "voice" ? "VOICE" : "SESSION";
+                font-size: 10px;
+                font-weight: 600;
+                color: kind-color;
+                letter-spacing: 0.8px;
+            }
         }
 
+        // Identity row: game art (streamer avatar badged) or channel tile.
         HorizontalLayout {
-            spacing: 8px;
-            height: 36px;
+            spacing: 10px;
+            height: 44px;
 
-            VerticalLayout {
-                alignment: center;
-                GameIcon {
-                    game-id: card.game-id;
-                    short-name: card.game-short-name != "" ? card.game-short-name :
-                                card.game-name != "" ? card.game-name : "VC";
-                    badge-color: card.game-has-color ? card.game-color : Theme.accent;
-                    runtime-icon: card.game-icon;
-                    has-runtime-icon: card.game-has-icon;
-                    size: 32px;
+            Rectangle {
+                width: 40px;
+                Rectangle {
+                    width: 40px;
+                    height: 40px;
+                    y: (parent.height - self.height) / 2;
+
+                    if is-stream: GameIcon {
+                        game-id: card.game-id;
+                        short-name: card.game-short-name != "" ? card.game-short-name :
+                                    card.game-name != "" ? card.game-name : "GG";
+                        badge-color: card.game-has-color ? card.game-color : Theme.accent;
+                        runtime-icon: card.game-icon;
+                        has-runtime-icon: card.game-has-icon;
+                        size: 40px;
+                    }
+                    if !is-stream: Rectangle {
+                        width: 40px;
+                        height: 40px;
+                        border-radius: 8px;
+                        background: Theme.graphic-light;
+                        Image {
+                            source: @image-url("../icons/mic.svg");
+                            colorize: Theme.text-secondary;
+                            width: 18px;
+                            height: 18px;
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                        }
+                    }
+                    // Streamer avatar badged on the game icon corner.
+                    if is-stream && (card.actor-has-avatar || card.actor-initials != ""): RecapAvatar {
+                        initials: card.actor-initials;
+                        avatar: card.actor-avatar;
+                        has-avatar: card.actor-has-avatar;
+                        x: parent.width - self.width + 4px;
+                        y: parent.height - self.height + 4px;
+                    }
                 }
             }
 
             VerticalLayout {
                 alignment: center;
                 spacing: 2px;
+                horizontal-stretch: 1;
 
                 Text {
-                    text: card.game-name != "" ? card.game-name : card.title;
+                    text: is-stream
+                        ? (card.game-name != "" ? card.game-name : card.title)
+                        : (card.channel-name != "" ? card.channel-name : card.title);
                     font-size: 13px;
-                    font-weight: 500;
+                    font-weight: 600;
                     color: Theme.text-primary;
                     overflow: elide;
                 }
 
-                if card.duration != "": Text {
-                    text: card.duration;
+                Text {
+                    text: is-stream
+                        ? (card.actor-name != "" ? "by " + card.actor-name
+                            + (card.duration-human != "" ? " · " + card.duration-human : "")
+                            : card.duration-human)
+                        : (card.participants-line != "" ? card.participants-line
+                            + (card.duration-human != "" ? " · " + card.duration-human : "")
+                            : card.duration-human);
                     font-size: 11px;
                     color: Theme.text-sub;
+                    overflow: elide;
                 }
             }
         }
 
-        if card.participant-count > 0: HorizontalLayout {
+        // Voice: stacked real participant avatars.
+        if !is-stream && card.participant-count > 0: HorizontalLayout {
             spacing: -7px;
             height: 20px;
 
-            AvatarDot { initials: card.actor-initials; color-index: 0; }
-            if card.participant-count > 1: AvatarDot { initials: ""; color-index: 1; }
-            if card.participant-count > 2: AvatarDot { initials: ""; color-index: 2; }
+            RecapAvatar {
+                initials: card.part0-initials;
+                avatar: card.part0-avatar;
+                has-avatar: card.part0-has-avatar;
+                color-index: 0;
+            }
+            if card.participant-count > 1: RecapAvatar {
+                initials: card.part1-initials;
+                avatar: card.part1-avatar;
+                has-avatar: card.part1-has-avatar;
+                color-index: 1;
+            }
+            if card.participant-count > 2: RecapAvatar {
+                initials: card.part2-initials;
+                avatar: card.part2-avatar;
+                has-avatar: card.part2-has-avatar;
+                color-index: 2;
+            }
+        }
+
+        // Peak attendance/viewership, when the ledger recorded one.
+        if card.peak-count > 0: Text {
+            text: is-stream
+                ? "\{card.peak-count} watched at peak"
+                : "\{card.peak-count} at peak";
+            font-size: 11px;
+            color: Theme.text-sub;
         }
 
         Rectangle { vertical-stretch: 1; }
