@@ -656,6 +656,9 @@ bool VideoPipeline::present_frame() {
 
     ID3D11Texture2D* frame = pop_decoded();
     if (!frame) return false;
+    if (decoder_) {
+        decoder_->publish_d3d11_frame();
+    }
     last_present_us_ = now_us();
 
     // Native GPU presenter path: first try direct decoded-texture handoff.

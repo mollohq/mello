@@ -11,6 +11,7 @@ use super::error::StreamError;
 use super::input::{InputPassthrough, InputPassthroughStub};
 use super::pacer::{calc_stream_pacing_target_kbps, PacingTelemetry};
 use super::sink::{PacketSink, SinkVideoFeedback, SinkVideoFeedbackKind};
+use super::sink_sfu::SFU_CONTROL_VIEWER_ID;
 
 const PACING_TELEMETRY_INTERVAL_SECS: u64 = 2;
 const MANAGER_TELEMETRY_INTERVAL_SECS: u64 = 1;
@@ -592,6 +593,12 @@ impl StreamManager {
                 if bitrate_bps == 0 {
                     return;
                 }
+                // SFU mode: this is the host's local TWCC estimate for the
+                // host→SFU hop (already applied to RTP pacing in libmello).
+                // Viewer-path capacity is forwarded separately as REMB.
+                if feedback.viewer_id == SFU_CONTROL_VIEWER_ID {
+                    return;
+                }
                 self.viewer_gcc.insert(
                     feedback.viewer_id.clone(),
                     ViewerRembState {
@@ -842,6 +849,7 @@ mod tests {
     use crate::stream::sink::{
         NativeRtpTelemetry, PacketSink, SinkVideoFeedback, SinkVideoFeedbackKind,
     };
+    use crate::stream::sink_sfu::SFU_CONTROL_VIEWER_ID;
 
     struct FakeSink {
         video: Mutex<Vec<(Vec<u8>, u64, bool)>>,
@@ -1347,6 +1355,39 @@ mod tests {
             "viewer_join",
             Duration::from_millis(VIEWER_KEYFRAME_REQUEST_COOLDOWN_MS)
         ));
+        std::mem::forget(mgr);
+    }
+
+    #[test]
+    fn sfu_local_twcc_gcc_target_does_not_crush_encoder() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        let config = StreamConfig::from_preset(QualityPreset::High, Codec::H264);
+        let sink = Arc::new(FakeSink::new());
+        let (_video_tx, video_rx) = mpsc::channel(4);
+        let (_audio_tx, audio_rx) = mpsc::channel(4);
+        let mut mgr = StreamManager::new(
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            sink,
+            config,
+            video_rx,
+            audio_rx,
+        );
+        let now = Instant::now();
+        rt.block_on(mgr.handle_video_feedback(
+            &SinkVideoFeedback {
+                viewer_id: SFU_CONTROL_VIEWER_ID.to_string(),
+                kind: SinkVideoFeedbackKind::GccTarget {
+                    bitrate_bps: 300_000,
+                },
+            },
+            now,
+        ));
+        assert!(mgr.viewer_gcc.is_empty());
+        assert_eq!(mgr.current_bitrate_kbps, mgr.max_bitrate_kbps);
         std::mem::forget(mgr);
     }
 

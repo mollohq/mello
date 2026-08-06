@@ -423,6 +423,16 @@ impl SfuConnection {
         unsafe { mello_sys::mello_peer_is_connected(self.peer) }
     }
 
+    /// ICE connection state from the peer state callback (0=New … 5=Closed).
+    pub fn ice_connection_state(&self) -> i32 {
+        self.ice_state.load(Ordering::Acquire)
+    }
+
+    /// Whether ICE is connected and native RTP polling is expected to be safe.
+    pub fn is_ice_connected(&self) -> bool {
+        self.ice_connection_state() == 2
+    }
+
     /// Whether the unreliable/media DataChannel is open.
     pub fn is_media_channel_open(&self) -> bool {
         unsafe { mello_sys::mello_peer_is_unreliable_open(self.peer) }
@@ -1275,8 +1285,16 @@ impl Drop for SfuConnection {
         }
         if !self.peer.is_null() {
             unsafe {
+                mello_sys::mello_peer_set_ice_callback(self.peer, None, std::ptr::null_mut());
+                mello_sys::mello_peer_set_state_callback(self.peer, None, std::ptr::null_mut());
+                mello_sys::mello_peer_set_audio_track_callback(
+                    self.peer,
+                    None,
+                    std::ptr::null_mut(),
+                );
                 mello_sys::mello_peer_destroy(self.peer);
             }
+            self.peer = std::ptr::null_mut();
         }
         if !self.ice_cb_data.is_null() {
             unsafe {

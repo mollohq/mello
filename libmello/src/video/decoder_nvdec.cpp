@@ -38,11 +38,6 @@ struct CudaMemcpy2D {
 };
 
 typedef int (*CuMemcpy2D_t)(const CudaMemcpy2D*);
-typedef int (*CuGfxD3D11Register_t)(void** resource, void* d3dResource, unsigned int flags);
-typedef int (*CuGfxMapResources_t)(unsigned int count, void** resources, void* stream);
-typedef int (*CuGfxUnmapResources_t)(unsigned int count, void** resources, void* stream);
-typedef int (*CuGfxGetMappedArray_t)(void** array, void* resource, unsigned int arrayIndex, unsigned int mipLevel);
-typedef int (*CuGfxUnregister_t)(void* resource);
 
 bool NvdecDecoder::is_available() {
     HMODULE cuvid = load_nvcuvid_dll();
@@ -126,20 +121,17 @@ bool NvdecDecoder::initialize(const GraphicsDevice& device, const DecoderConfig&
         return false;
     }
 
-    // CUDA can't interop with NV12 planar textures. Instead, use R8_UNORM
-    // sized w × (h*3/2) — same memory layout as NV12 (Y then UV), but a
-    // single-plane format CUDA can register and copy to directly.
-    auto cuGfxRegister = reinterpret_cast<CuGfxD3D11Register_t>(
-        GetProcAddress(cuda_dll_, "cuGraphicsD3D11RegisterResource"));
-
-    // H.264 macroblock-aligned dimensions (16x16 blocks)
+    // R8_UNORM w × (h*3/2) matches NV12 memory layout (Y then UV) for the
+    // GPU convert path. Async decode copies CUDA→host on the worker; D3D11
+    // upload runs on the present thread (cuGraphicsMap on a registered texture
+    // deadlocks with the immediate context used for present/staging).
     uint32_t mb_height = ((config.height + 15) / 16) * 16;
     coded_height_ = mb_height;
 
-    if (cuGfxRegister) {
+    {
         D3D11_TEXTURE2D_DESC tex_desc{};
         tex_desc.Width  = config.width;
-        tex_desc.Height = mb_height + mb_height / 2; // Y + UV (macroblock-aligned)
+        tex_desc.Height = mb_height + mb_height / 2;
         tex_desc.MipLevels = 1;
         tex_desc.ArraySize = 1;
         tex_desc.Format = DXGI_FORMAT_R8_UNORM;
@@ -149,18 +141,13 @@ bool NvdecDecoder::initialize(const GraphicsDevice& device, const DecoderConfig&
 
         HRESULT hr = device_->CreateTexture2D(&tex_desc, nullptr, &frame_tex_);
         if (SUCCEEDED(hr)) {
-            int rc = cuGfxRegister(&cuda_gfx_resource_, frame_tex_.Get(), 0);
-            if (rc == 0 && cuda_gfx_resource_) {
-                use_interop_ = true;
-                MELLO_LOG_INFO(TAG, "NVDEC: CUDA-D3D11 interop enabled (zero-copy R8 %ux%u)",
-                    tex_desc.Width, tex_desc.Height);
-            } else {
-                MELLO_LOG_WARN(TAG, "NVDEC: cuGraphicsD3D11RegisterResource failed (%d), trying NV12 fallback", rc);
-                cuda_gfx_resource_ = nullptr;
-                frame_tex_.Reset();
-            }
+            use_interop_ = true;
+            host_r8_buf_.resize(static_cast<size_t>(config.width) * (mb_height + mb_height / 2));
+            MELLO_LOG_INFO(TAG, "NVDEC: R8 layout decode path (host upload %ux%u)",
+                tex_desc.Width, tex_desc.Height);
         } else {
             MELLO_LOG_WARN(TAG, "NVDEC: R8 texture creation failed (0x%08X), trying NV12 fallback", hr);
+            frame_tex_.Reset();
         }
     }
 
@@ -243,13 +230,6 @@ void NvdecDecoder::shutdown() {
         if (cuvidDestroyDecoder_fn) cuvidDestroyDecoder_fn(decoder_);
         decoder_ = nullptr;
     }
-    if (cuda_gfx_resource_) {
-        auto cuGfxUnreg = reinterpret_cast<CuGfxUnregister_t>(
-            GetProcAddress(cuda_dll_, "cuGraphicsUnregisterResource"));
-        if (cuGfxUnreg) cuGfxUnreg(cuda_gfx_resource_);
-        cuda_gfx_resource_ = nullptr;
-        use_interop_ = false;
-    }
     if (cu_context_) {
         auto cuCtxDestroy = reinterpret_cast<CuCtxDestroy_t>(GetProcAddress(cuda_dll_, "cuCtxDestroy_v2"));
         if (cuCtxDestroy) cuCtxDestroy(cu_context_);
@@ -260,12 +240,19 @@ void NvdecDecoder::shutdown() {
     frame_tex_.Reset();
     shared_frame_tex_.Reset();
     shared_frame_handle_ = nullptr;
+    host_r8_buf_.clear();
     nv12_buf_.clear();
     decoder_coded_width_ = 0;
     decoder_coded_height_ = 0;
     decoder_codec_ = -1;
     decoder_chroma_format_ = -1;
     sequence_callback_count_ = 0;
+    {
+        std::lock_guard<std::mutex> lock(publish_mutex_);
+        pending_shared_copy_ = false;
+        pending_r8_upload_ = false;
+        pending_nv12_upload_ = false;
+    }
 }
 
 DecodeFeedResult NvdecDecoder::decode(const uint8_t* data, size_t size, bool is_keyframe) {
@@ -430,58 +417,35 @@ int CUDAAPI NvdecDecoder::handle_picture_display(void* user, CUVIDPARSERDISPINFO
     bool copied = false;
 
     if (self->use_interop_) {
-        auto cuGfxMap = reinterpret_cast<CuGfxMapResources_t>(
-            GetProcAddress(self->cuda_dll_, "cuGraphicsMapResources"));
-        auto cuGfxUnmap = reinterpret_cast<CuGfxUnmapResources_t>(
-            GetProcAddress(self->cuda_dll_, "cuGraphicsUnmapResources"));
-        auto cuGfxGetArray = reinterpret_cast<CuGfxGetMappedArray_t>(
-            GetProcAddress(self->cuda_dll_, "cuGraphicsSubResourceGetMappedArray"));
         auto cuMemcpy2D_fn = reinterpret_cast<CuMemcpy2D_t>(
             GetProcAddress(self->cuda_dll_, "cuMemcpy2D_v2"));
-
-        if (!cuGfxMap || !cuGfxUnmap || !cuGfxGetArray || !cuMemcpy2D_fn) {
-            MELLO_LOG_ERROR(TAG, "NVDEC: CUDA-D3D11 interop entry point missing");
-        } else {
-            int rc_map = cuGfxMap(1, &self->cuda_gfx_resource_, nullptr);
-            if (rc_map != 0) {
-                MELLO_LOG_ERROR(TAG, "cuGraphicsMapResources failed: %d", rc_map);
+        if (cuMemcpy2D_fn && !self->host_r8_buf_.empty()) {
+            uint32_t copy_w = (w <= pitch) ? w : pitch;
+            CudaMemcpy2D cp{};
+            cp.srcMemoryType = 2; // CU_MEMORYTYPE_DEVICE
+            cp.srcDevice     = dev_ptr;
+            cp.srcPitch      = pitch;
+            cp.dstMemoryType = 1; // CU_MEMORYTYPE_HOST
+            cp.dstHost       = self->host_r8_buf_.data();
+            cp.dstPitch      = w;
+            cp.WidthInBytes  = copy_w;
+            cp.Height        = h + h / 2;
+            int rc_cpy = cuMemcpy2D_fn(&cp);
+            if (rc_cpy != 0) {
+                MELLO_LOG_ERROR(TAG, "NVDEC: CUDA-to-host R8 copy failed: %d", rc_cpy);
             } else {
-                void* array = nullptr;
-                int rc_arr = cuGfxGetArray(&array, self->cuda_gfx_resource_, 0, 0);
-                if (rc_arr != 0 || !array) {
-                    MELLO_LOG_ERROR(TAG, "cuGraphicsSubResourceGetMappedArray failed: rc=%d array=%p", rc_arr, array);
-                } else {
-                    uint32_t copy_w = (w <= pitch) ? w : pitch;
-                    CudaMemcpy2D cp{};
-                    cp.srcMemoryType = 2; // CU_MEMORYTYPE_DEVICE
-                    cp.srcDevice     = dev_ptr;
-                    cp.srcPitch      = pitch;
-                    cp.dstMemoryType = 3; // CU_MEMORYTYPE_ARRAY
-                    cp.dstArray      = array;
-                    cp.WidthInBytes  = copy_w;
-                    cp.Height        = h + h / 2;
-                    int rc_cpy = cuMemcpy2D_fn(&cp);
-                    if (rc_cpy != 0) {
-                        MELLO_LOG_ERROR(TAG, "cuMemcpy2D failed: %d (copy_w=%u h=%u pitch=%u w=%u dev=0x%llX)",
-                            rc_cpy, copy_w, h + h / 2, pitch, w, dev_ptr);
-                    } else {
-                        copied = true;
-                    }
+                std::lock_guard<std::mutex> lock(self->publish_mutex_);
+                self->pending_r8_upload_ = true;
+                if (self->shared_frame_tex_) {
+                    self->pending_shared_copy_ = true;
                 }
-
-                int rc_unmap = cuGfxUnmap(1, &self->cuda_gfx_resource_, nullptr);
-                if (rc_unmap != 0) {
-                    MELLO_LOG_ERROR(TAG, "cuGraphicsUnmapResources failed: %d", rc_unmap);
-                    copied = false;
-                }
+                copied = true;
             }
-
-            if (copied && self->shared_frame_tex_) {
-                self->context_->CopyResource(self->shared_frame_tex_.Get(), self->frame_tex_.Get());
-            }
+        } else {
+            MELLO_LOG_ERROR(TAG, "NVDEC: cuMemcpy2D entry point missing or host buffer empty");
         }
     } else {
-        // Fallback: CUDA → CPU → D3D11 (two PCIe crossings)
+        // Fallback: CUDA → CPU; D3D11 upload deferred to publish_d3d11_frame().
         auto cuMemcpy2D_fn = reinterpret_cast<CuMemcpy2D_t>(
             GetProcAddress(self->cuda_dll_, "cuMemcpy2D_v2"));
         if (cuMemcpy2D_fn) {
@@ -499,9 +463,8 @@ int CUDAAPI NvdecDecoder::handle_picture_display(void* user, CUVIDPARSERDISPINFO
             if (rc_cpy != 0) {
                 MELLO_LOG_ERROR(TAG, "NVDEC: CUDA-to-host copy failed: %d", rc_cpy);
             } else {
-                self->context_->UpdateSubresource(
-                    self->frame_tex_.Get(), 0, nullptr,
-                    self->nv12_buf_.data(), w, 0);
+                std::lock_guard<std::mutex> lock(self->publish_mutex_);
+                self->pending_nv12_upload_ = true;
                 copied = true;
             }
         } else {
@@ -537,6 +500,37 @@ DXGI_FORMAT NvdecDecoder::shared_frame_format() const {
 
 uint32_t NvdecDecoder::shared_frame_uv_offset() const {
     return use_interop_ ? coded_height_ : 0;
+}
+
+void NvdecDecoder::publish_d3d11_frame() {
+    if (!context_) return;
+
+    bool do_shared_copy = false;
+    bool do_r8_upload = false;
+    bool do_nv12_upload = false;
+    {
+        std::lock_guard<std::mutex> lock(publish_mutex_);
+        do_shared_copy = pending_shared_copy_;
+        do_r8_upload = pending_r8_upload_;
+        do_nv12_upload = pending_nv12_upload_;
+        pending_shared_copy_ = false;
+        pending_r8_upload_ = false;
+        pending_nv12_upload_ = false;
+    }
+
+    if (do_r8_upload && frame_tex_ && !host_r8_buf_.empty()) {
+        context_->UpdateSubresource(
+            frame_tex_.Get(), 0, nullptr,
+            host_r8_buf_.data(), config_.width, 0);
+    }
+    if (do_shared_copy && shared_frame_tex_ && frame_tex_) {
+        context_->CopyResource(shared_frame_tex_.Get(), frame_tex_.Get());
+    }
+    if (do_nv12_upload && frame_tex_ && !nv12_buf_.empty()) {
+        context_->UpdateSubresource(
+            frame_tex_.Get(), 0, nullptr,
+            nv12_buf_.data(), config_.width, 0);
+    }
 }
 
 bool NvdecDecoder::supports_codec(VideoCodec codec) const {

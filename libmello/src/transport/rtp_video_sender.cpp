@@ -574,7 +574,16 @@ struct RtpVideoSender::State
             return manager_target;
         }
         const uint64_t gcc = gcc_target_bps.load(std::memory_order_relaxed);
-        return gcc > 0 && gcc < manager_target ? gcc : manager_target;
+        if (gcc == 0 || gcc >= manager_target) {
+            return manager_target;
+        }
+        // When the estimator is pinned near its floor (startup false overuse
+        // on low-latency hops such as localhost host→SFU), keep the manager
+        // ceiling. Viewer-path REMB owns encoder adaptation upstream.
+        if (gcc <= manager_target / 4) {
+            return manager_target;
+        }
+        return gcc;
     }
 
     // Stamps a packet with a transport-wide sequence + send time. Returns a

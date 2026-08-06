@@ -415,6 +415,18 @@ fn main() {
         if shutdown_requested.load(Ordering::Relaxed) {
             break;
         }
+        let ice_state = conn.ice_connection_state();
+        if matches!(ice_state, 3 | 4 | 5) {
+            let (wall_ms, mono_ms) = correlation_stamp(correlation_start);
+            log::warn!(
+                "viewer_probe_event session={} wall_ms={} mono_ms={} event=ice_lost ice_state={}",
+                session_id,
+                wall_ms,
+                mono_ms,
+                ice_state
+            );
+            break;
+        }
         if run_until.is_some_and(|deadline| Instant::now() >= deadline) {
             log::info!(
                 "viewer_probe_event session={} event=hold_complete hold_sec={}",
@@ -482,6 +494,7 @@ fn main() {
             }
         }
 
+        let mut transport_lost = false;
         for ev in conn.poll_events() {
             match ev {
                 SfuEvent::Disconnected { reason } => {
@@ -493,10 +506,14 @@ fn main() {
                         mono_ms,
                         reason
                     );
+                    transport_lost = true;
                 }
                 SfuEvent::MediaPacket { .. } => {}
                 _ => {}
             }
+        }
+        if transport_lost {
+            break;
         }
 
         present_calls += 1;

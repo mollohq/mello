@@ -108,16 +108,16 @@ $env:SFU_PUBLIC_IP = "127.0.0.1"
 .\mello\scripts\run-stream-host.ps1 -Fps 30 -BitrateKbps 2000 -SourceIndex N -HostLog C:\temp\host.log
 ```
 
-**Pass signals:** host `tx_fec_packets` increasing; viewer `rx_fec_recovered` ≥ 0 (nonzero under loss); no SFU `unhandled RTP ssrc(media+1)`; viewer `dec_fps` > 0 after `first_keyframe`. **Known separate issue:** NVDEC hang on first IDR after late join can leave `dec_fps=0` / black minifb — try `-NativeMetrics -HoldSec 60` to isolate decode from present, or start viewer before host.
+**Pass signals:** host `tx_fec_packets` increasing; viewer `rx_fec_recovered` ≥ 0 (nonzero under loss); no SFU `unhandled RTP ssrc(media+1)`; viewer `dec_fps` > 0 after `first_keyframe`.
 
-D3D11VA (§4) is **not** required on NVIDIA boxes (NVDEC path).
+D3D11VA (§4 item 2.4) is **not** required on NVIDIA boxes (NVDEC path). **NVDEC + async decode:** D3D11 immediate-context work must run on the present thread (`publish_d3d11_frame`), not in CUDA display callbacks on the decode worker — see `decoder_nvdec.cpp`.
 
 ---
 
 ## 4. Remaining Phase 2 items (after ULPFEC lands)
 
 - **2.4 D3D11VA decoder** (`libmello/src/video/decoder_d3d11va.cpp`): currently a stub that submits the whole AU as one bitstream buffer with no `DXVA_PicParams_H264`, no IQ matrix, no slice headers — cannot produce correct output; Intel-iGPU viewers fall to OpenH264 CPU decode. Implement properly (NAL/slice parsing → `DXVA_PicParams_H264` + `DXVA_Qmatrix_H264` + slice buffers per frame; reference frame management via the 4-slot decode texture array — currently always copies slice 0). Windows-only, can't verify locally → keep in a separate PR built+tested on the Windows box. Effort: large.
-- **Deferred follow-ups already noted**: cross-device sync between libmello write device and DComp presenter (keyed mutex or fence — current code relies on D3D11 queue timing); NVENC two-pass load watch on low-end GPUs (`encode_ms` in certification); chronic-queue viewer ejection (rescue implemented instead — re-evaluate after field data).
+- **Deferred follow-ups already noted**: cross-device sync between libmello write device and DComp presenter (keyed mutex or fence — current code relies on D3D11 queue timing; distinct from NVDEC decode-thread vs present-thread affinity, which is handled in `decoder_nvdec.cpp`); NVENC two-pass load watch on low-end GPUs (`encode_ms` in certification); chronic-queue viewer ejection (rescue implemented instead — re-evaluate after field data).
 
 ---
 
