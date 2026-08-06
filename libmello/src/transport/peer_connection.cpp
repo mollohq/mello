@@ -1,5 +1,8 @@
 #include "peer_connection_impl.hpp"
 
+#include "twcc.hpp"
+#include "ulpfec.hpp"
+
 #include <chrono>
 #include <algorithm>
 #include <cstring>
@@ -118,6 +121,28 @@ const rtc::Description::Media* find_single_video_media(
         error = "remote offer must contain exactly one video media section";
     }
     return video;
+}
+
+// True when the remote video media section advertises the TWCC RTP header
+// extension (id is fixed on both ends; the URI is the match criterion).
+bool remote_media_supports_twcc(const rtc::Description::Media& media) {
+    try {
+        const auto* map = media.extMap(kTwccExtensionId);
+        return map != nullptr
+            && map->uri == kTwccExtensionUri;
+    } catch (...) {
+        return false;
+    }
+}
+
+// True when the remote video media section advertises the ULPFEC payload
+// type (RFC 5109 XOR parity rides SSRC+1 with its own sequence counter).
+bool remote_media_supports_fec(const rtc::Description::Media& media) {
+    try {
+        return media.hasPayloadType(kUlpfecPayloadType);
+    } catch (...) {
+        return false;
+    }
 }
 
 int media_index_for_mid(
@@ -352,15 +377,34 @@ rtc::Description::Video PeerConnectionImpl::make_stream_video_description(
 ) const {
     rtc::Description::Video video(mid, direction);
     video.addH264Codec(kVideoPayloadType, kVideoFmtp);
+    // libdatachannel 0.24.1 has no addUlpfecCodec; mirror addH264Codec's
+    // mechanics (RtpMap from "PT format/rate", no rtcp-fb on the FEC PT).
+    video.addRtpMap(rtc::Description::Media::RtpMap(
+        std::to_string(kUlpfecPayloadType) + " " + kUlpfecFormatName
+        + "/90000"
+    ));
     if (auto* map = video.rtpMap(kVideoPayloadType)) {
         map->addFeedback("nack");
         map->addFeedback("nack pli");
         map->addFeedback("goog-remb");
+        map->addFeedback("transport-cc");
     }
+    video.addExtMap(rtc::Description::Media::ExtMap(
+        kTwccExtensionId,
+        kTwccExtensionUri
+    ));
     if (direction_is_send(direction)) {
         const uint32_t ssrc = video_ssrc_ != 0 ? video_ssrc_ : generate_ssrc();
         const std::string cname = video_cname_.empty() ? generate_cname() : video_cname_;
         video.addSSRC(ssrc, cname, peer_id_, "video");
+        // ULPFEC parity uses SSRC+1 on the same m-line. Advertise FEC-FR so
+        // Pion (SFU) binds the repair SSRC instead of logging it as unhandled.
+        const uint32_t fec_ssrc = ssrc + 1;
+        video.addSSRC(fec_ssrc, cname, peer_id_, "video");
+        video.addAttribute(
+            "ssrc-group:FEC-FR " + std::to_string(ssrc) + " "
+            + std::to_string(fec_ssrc)
+        );
     }
     return video;
 }
@@ -566,6 +610,8 @@ void PeerConnectionImpl::try_start_video_pipeline(
         config.payload_type = kVideoPayloadType;
         config.cname = std::move(sender_cname);
         config.pacing_target_bps = pacing_target_bps;
+        config.twcc_enabled = twcc_supported_;
+        config.fec_enabled = fec_supported_;
 
         const std::weak_ptr<PeerConnectionImpl> weak_self = weak_from_this();
         auto sender = std::make_unique<RtpVideoSender>(
@@ -602,6 +648,18 @@ void PeerConnectionImpl::try_start_video_pipeline(
                         VideoFeedbackType::LocalIdrNeeded
                     );
                 }
+            },
+            [weak_self, generation, track_generation](uint32_t bitrate_bps) {
+                const auto self = weak_self.lock();
+                if (self && self->is_current_pc_generation(generation)
+                    && self->video_track_generation_.load(
+                           std::memory_order_acquire
+                       ) == track_generation) {
+                    self->enqueue_video_feedback(
+                        VideoFeedbackType::GccTarget,
+                        bitrate_bps
+                    );
+                }
             }
         );
         if (!sender->is_open()) {
@@ -621,6 +679,8 @@ void PeerConnectionImpl::try_start_video_pipeline(
     if (role_ == MELLO_PEER_MEDIA_ROLE_STREAM_VIEWER) {
         RtpVideoReceiverSessionConfig config;
         config.payload_type = kVideoPayloadType;
+        config.twcc_enabled = twcc_supported_;
+        config.fec_enabled = fec_supported_;
         auto receiver = std::make_unique<RtpVideoReceiverSession>(
             track,
             config
@@ -880,13 +940,7 @@ void PeerConnectionImpl::setup_dc_handlers(
                     ).count();
                     self->last_pong_ts_ms_.store(now_ms, std::memory_order_relaxed);
                     const float rtt = static_cast<float>(now_ms - sent_ts);
-                    if (rtt >= 0 && rtt < 10000) {
-                        const float prev =
-                            self->rtt_ms_.load(std::memory_order_relaxed);
-                        const float smoothed =
-                            (prev < 0.1f) ? rtt : prev * 0.7f + rtt * 0.3f;
-                        self->rtt_ms_.store(smoothed, std::memory_order_relaxed);
-                    }
+                    self->apply_rtt_sample(rtt);
                 }
             }
             return;
@@ -910,13 +964,7 @@ void PeerConnectionImpl::setup_dc_handlers(
                     ).count();
                     self->last_pong_ts_ms_.store(now_ms, std::memory_order_relaxed);
                     const float rtt = static_cast<float>(now_ms - sent_ts);
-                    if (rtt >= 0 && rtt < 10000) {
-                        const float prev =
-                            self->rtt_ms_.load(std::memory_order_relaxed);
-                        const float smoothed =
-                            (prev < 0.1f) ? rtt : prev * 0.7f + rtt * 0.3f;
-                        self->rtt_ms_.store(smoothed, std::memory_order_relaxed);
-                    }
+                    self->apply_rtt_sample(rtt);
                 }
             }
 
@@ -1229,6 +1277,18 @@ bool PeerConnectionImpl::set_remote_description(const char* sdp, bool is_offer) 
             return false;
         }
         pc->setRemoteDescription(desc);
+
+        // TWCC capability drives the sender's stamping/estimator on the
+        // stream video leg. Detected per remote description so renegotiation
+        // and PC replacement stay honest.
+        if (role_ == MELLO_PEER_MEDIA_ROLE_STREAM_HOST
+            || role_ == MELLO_PEER_MEDIA_ROLE_STREAM_VIEWER) {
+            std::string error;
+            if (const auto* video = find_single_video_media(desc, error)) {
+                twcc_supported_ = remote_media_supports_twcc(*video);
+                fec_supported_ = remote_media_supports_fec(*video);
+            }
+        }
         return true;
     } catch (...) {
         return false;
@@ -1414,14 +1474,30 @@ int64_t PeerConnectionImpl::pong_age_ms() const {
     return age < 0 ? 0 : age;
 }
 
-bool PeerConnectionImpl::video_send_access_unit(
+void PeerConnectionImpl::apply_rtt_sample(float rtt) noexcept {
+    if (rtt < 0 || rtt >= 10000) {
+        return;
+    }
+    const float prev = rtt_ms_.load(std::memory_order_relaxed);
+    const float smoothed = (prev < 0.1f) ? rtt : prev * 0.7f + rtt * 0.3f;
+    rtt_ms_.store(smoothed, std::memory_order_relaxed);
+    try {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (rtp_video_receiver_) {
+            rtp_video_receiver_->set_rtt_hint(smoothed);
+        }
+    } catch (...) {
+    }
+}
+
+SendAccessUnitResult PeerConnectionImpl::video_send_access_unit(
     const uint8_t* data,
     size_t size,
     uint64_t capture_ts_us
 ) noexcept {
     std::lock_guard<std::mutex> lock(mutex_);
     if (!rtp_video_sender_) {
-        return false;
+        return SendAccessUnitResult::Failed;
     }
     return rtp_video_sender_->send_access_unit(data, size, capture_ts_us);
 }
@@ -1510,6 +1586,9 @@ bool PeerConnectionImpl::video_take_feedback(MelloPeerVideoFeedback* feedback) n
         case VideoFeedbackType::LocalIdrNeeded:
             feedback->type = MELLO_PEER_VIDEO_FEEDBACK_LOCAL_IDR_NEEDED;
             break;
+        case VideoFeedbackType::GccTarget:
+            feedback->type = MELLO_PEER_VIDEO_FEEDBACK_GCC_TARGET;
+            break;
         default:
             feedback->type = MELLO_PEER_VIDEO_FEEDBACK_PLI;
             break;
@@ -1574,6 +1653,13 @@ void PeerConnectionImpl::video_get_stats(MelloRtpVideoStats* stats) const noexce
         stats->tx_pli_requests = tx.pli_requests;
         stats->tx_remb_reports = tx.remb_reports;
         stats->tx_latest_remb_bitrate_bps = tx.latest_remb_bitrate_bps;
+        stats->tx_rtx_requests = tx.rtx_requests;
+        stats->tx_rtx_sent = tx.rtx_sent;
+        stats->tx_rtx_cache_misses = tx.rtx_cache_misses;
+        stats->tx_rtx_queue_dropped = tx.rtx_queue_dropped;
+        stats->tx_twcc_reports = tx.twcc_reports;
+        stats->tx_gcc_target_bps = tx.gcc_target_bps;
+        stats->tx_fec_packets_sent = tx.fec_packets_sent;
         stats->tx_active = 1;
     }
 
@@ -1605,6 +1691,9 @@ void PeerConnectionImpl::video_get_stats(MelloRtpVideoStats* stats) const noexce
         stats->rx_pli_requests = rx.pli_requests;
         stats->rx_pli_packets_sent = rx.pli_packets_sent;
         stats->rx_remb_packets_sent = rx.remb_packets_sent;
+        stats->rx_twcc_packets_sent = rx.twcc_packets_sent;
+        stats->rx_fec_recovered = rx.rx_fec_recovered;
+        stats->rx_fec_unrecoverable = rx.rx_fec_unrecoverable;
         stats->rx_receiver_reports_sent = rx.receiver_reports_sent;
         stats->rx_sender_reports_received = rx.sender_reports_received;
         stats->rx_invalid_rtcp_packets = rx.invalid_rtcp_packets;

@@ -1,11 +1,14 @@
 #include <gtest/gtest.h>
 
 #include "transport/rtp_h264_receiver.hpp"
+#include "transport/rtp_video_receiver_session.hpp"
 #include "transport/rtp_video_sender.hpp"
+#include "transport/ulpfec.hpp"
 
 #include <rtc/rtc.hpp>
 #include <rtc/rtp.hpp>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -18,6 +21,7 @@
 #include <optional>
 #include <stdexcept>
 #include <thread>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -25,10 +29,21 @@ using mello::transport::RtpH264Receiver;
 using mello::transport::RtpVideoSender;
 using mello::transport::RtpVideoSenderConfig;
 using mello::transport::RtpVideoSenderStats;
+using mello::transport::SendAccessUnitResult;
 
 namespace {
 
 using namespace std::chrono_literals;
+
+bool send_au_accepted(
+    RtpVideoSender& sender,
+    const uint8_t* data,
+    size_t size,
+    uint64_t capture_ts_us
+) {
+    return sender.send_access_unit(data, size, capture_ts_us)
+        == SendAccessUnitResult::Accepted;
+}
 
 constexpr uint8_t kPayloadType = 96;
 constexpr uint32_t kSenderSsrc = 0x12345678;
@@ -157,6 +172,56 @@ struct EmittedAccessUnit {
     uint32_t timestamp = 0;
 };
 
+// Drops every `period`th ORIGINAL media RTP packet (retransmits, FEC on
+// PT 127, and RTCP always pass; a retransmit reuses the original sequence
+// number, so the sequence set keeps the drop pattern deterministic).
+// Append at the END of a track's media-handler chain: incoming handlers run
+// deepest-first, so drops land before the session consumes the messages.
+class LossInjectingHandler final : public rtc::MediaHandler {
+public:
+    explicit LossInjectingHandler(size_t period) : period_(period) {}
+
+    void incoming(
+        rtc::message_vector& messages,
+        const rtc::message_callback& /*send*/
+    ) override {
+        rtc::message_vector kept;
+        kept.reserve(messages.size());
+        for (auto& message : messages) {
+            if (message && message->type == rtc::Message::Binary
+                && message->size() >= 12) {
+                const auto* const bytes =
+                    static_cast<const std::byte*>(message->data());
+                const uint8_t payload_type =
+                    static_cast<uint8_t>(bytes[1]) & 0x7fU;
+                if ((static_cast<uint8_t>(bytes[0]) >> 6) == 2
+                    && payload_type != mello::transport::kUlpfecPayloadType) {
+                    const uint16_t sequence =
+                        static_cast<uint16_t>(
+                            (static_cast<uint16_t>(bytes[2]) << 8)
+                            | static_cast<uint16_t>(bytes[3])
+                        );
+                    if (seen_sequences_.insert(sequence).second
+                        && ++original_seen_ % period_ == 0) {
+                        ++dropped_;
+                        continue;
+                    }
+                }
+            }
+            kept.push_back(std::move(message));
+        }
+        messages.swap(kept);
+    }
+
+    size_t dropped() const { return dropped_; }
+
+private:
+    const size_t period_;
+    size_t original_seen_ = 0;
+    size_t dropped_ = 0;
+    std::unordered_set<uint16_t> seen_sequences_;
+};
+
 class LoopbackVideoLink {
 public:
     LoopbackVideoLink() {
@@ -191,6 +256,11 @@ public:
             rtc::Description::Direction::SendOnly
         );
         video.addH264Codec(kPayloadType);
+        // Mirrors production SDP (PeerConnectionImpl::make_stream_video_description).
+        video.addRtpMap(rtc::Description::Media::RtpMap(
+            std::to_string(mello::transport::kUlpfecPayloadType)
+            + " " + mello::transport::kUlpfecFormatName + "/90000"
+        ));
         video.addSSRC(kSenderSsrc, kCname, "mello-stream", "mello-video");
         sender_track_ = offerer_->addTrack(std::move(video));
 
@@ -245,13 +315,17 @@ public:
         uint64_t pacing_target_bps,
         RtpVideoSender::PliCallback on_pli = {},
         RtpVideoSender::RembCallback on_remb = {},
-        RtpVideoSender::LocalIdrNeededCallback on_local_idr_needed = {}
+        RtpVideoSender::LocalIdrNeededCallback on_local_idr_needed = {},
+        bool twcc_enabled = false,
+        bool fec_enabled = false
     ) {
         RtpVideoSenderConfig config;
         config.ssrc = kSenderSsrc;
         config.payload_type = kPayloadType;
         config.cname = kCname;
         config.pacing_target_bps = pacing_target_bps;
+        config.twcc_enabled = twcc_enabled;
+        config.fec_enabled = fec_enabled;
         RtpVideoSender sender(
             sender_track_,
             config,
@@ -451,7 +525,7 @@ TEST(RtpVideoSenderPacketizationTest, FragmentsAccessUnitWithOneTimestampAndFina
     RtpVideoSender sender = link.make_sender(8'000'000);
 
     const auto access_unit = make_large_delta_access_unit(24 * 1024);
-    ASSERT_TRUE(sender.send_access_unit(
+    ASSERT_TRUE(send_au_accepted(sender,
         access_unit.data(),
         access_unit.size(),
         1'000
@@ -491,9 +565,9 @@ TEST(RtpVideoSenderEndToEndTest, ReceiverReconstructsAnnexBAccessUnits) {
     const auto delta_a = make_delta_access_unit(0x11);
     const auto delta_b = make_delta_access_unit(0x22);
 
-    ASSERT_TRUE(sender.send_access_unit(idr.data(), idr.size(), 0));
-    ASSERT_TRUE(sender.send_access_unit(delta_a.data(), delta_a.size(), 33'333));
-    ASSERT_TRUE(sender.send_access_unit(delta_b.data(), delta_b.size(), 66'666));
+    ASSERT_TRUE(send_au_accepted(sender,idr.data(), idr.size(), 0));
+    ASSERT_TRUE(send_au_accepted(sender,delta_a.data(), delta_a.size(), 33'333));
+    ASSERT_TRUE(send_au_accepted(sender,delta_b.data(), delta_b.size(), 66'666));
 
     ASSERT_TRUE(link.wait_for_emitted_count(3, 10s));
 
@@ -513,8 +587,8 @@ TEST(RtpVideoSenderTimestampTest, MapsCaptureClockTo90kRtpTimestamps) {
 
     const auto idr = make_idr_access_unit();
     const auto delta = make_delta_access_unit(0x33);
-    ASSERT_TRUE(sender.send_access_unit(idr.data(), idr.size(), 1'000'000));
-    ASSERT_TRUE(sender.send_access_unit(delta.data(), delta.size(), 1'033'333));
+    ASSERT_TRUE(send_au_accepted(sender,idr.data(), idr.size(), 1'000'000));
+    ASSERT_TRUE(send_au_accepted(sender,delta.data(), delta.size(), 1'033'333));
 
     ASSERT_TRUE(link.wait_for_emitted_count(2, 10s));
 
@@ -526,12 +600,12 @@ TEST(RtpVideoSenderTimestampTest, MapsCaptureClockTo90kRtpTimestamps) {
     EXPECT_NEAR(timestamp_delta, 3'000, 2);
 }
 
-TEST(RtpVideoSenderPacingTest, AccessUnitFragmentsAreSentBackToBack) {
+TEST(RtpVideoSenderPacingTest, AccessUnitFragmentsArePacedAcrossWireTime) {
     LoopbackVideoLink link;
     RtpVideoSender sender = link.make_sender(200'000);
 
     const auto access_unit = make_large_delta_access_unit(32 * 1024);
-    ASSERT_TRUE(sender.send_access_unit(
+    ASSERT_TRUE(send_au_accepted(sender,
         access_unit.data(),
         access_unit.size(),
         5'000'000
@@ -539,49 +613,306 @@ TEST(RtpVideoSenderPacingTest, AccessUnitFragmentsAreSentBackToBack) {
 
     ASSERT_TRUE(link.wait_for_captured_count(12, 15s));
     const auto packets = link.captured_rtp();
-    ASSERT_GT(packets.size(), 1u);
+    ASSERT_GE(packets.size(), 12u);
 
-    const auto intra_au = std::chrono::duration_cast<std::chrono::milliseconds>(
-        packets.back().received_at - packets.front().received_at
+    const auto spread = std::chrono::duration_cast<std::chrono::milliseconds>(
+        packets[11].received_at - packets[0].received_at
     );
-    // Per-packet pacing spread one AU over ~90ms and broke the 45ms receiver
-    // assembly deadline; fragments of a single AU must leave back-to-back.
-    EXPECT_LT(intra_au.count(), 15);
+    // ~1100-byte fragments at 200 kbps occupy a ~44 ms slot each, so 11
+    // slots span ~480 ms. The old whole-AU burst finished in <20 ms.
+    EXPECT_GE(spread.count(), 200);
+    EXPECT_LE(spread.count(), 1'500);
 }
 
-TEST(RtpVideoSenderPacingTest, PacingAppliesBetweenAccessUnits) {
+TEST(RtpVideoSenderPacingTest, AggregateSendRateTracksPacingTarget) {
     LoopbackVideoLink link;
     constexpr uint64_t pacing_bps = 200'000;
     RtpVideoSender sender = link.make_sender(pacing_bps);
 
-    const auto first = make_large_delta_access_unit(32 * 1024);
-    const auto second = make_delta_access_unit(0x44);
-    ASSERT_TRUE(sender.send_access_unit(first.data(), first.size(), 0));
-    ASSERT_TRUE(link.wait_for_captured_count(12, 15s));
+    const auto access_unit = make_large_delta_access_unit(32 * 1024);
+    ASSERT_TRUE(send_au_accepted(sender,
+        access_unit.data(),
+        access_unit.size(),
+        0
+    ));
 
-    const auto first_packets = link.captured_rtp();
-    ASSERT_GT(first_packets.size(), 1u);
-    const auto first_batch_end = first_packets.back().received_at;
-    uint64_t first_wire_bytes = 0;
-    for (const auto& packet : first_packets) {
-        first_wire_bytes += packet.wire_size;
-    }
+    // 32 KiB NAL ≈ 30 fragments ≈ 33 KB on the wire ≈ 1.3 s at 200 kbps.
+    ASSERT_TRUE(link.wait_for_captured_count(29, 15s));
+    const auto packets = link.captured_rtp();
+    ASSERT_GE(packets.size(), 29u);
+
+    const auto total = std::chrono::duration_cast<std::chrono::milliseconds>(
+        packets[28].received_at - packets[0].received_at
+    );
+    EXPECT_GE(total.count(), 900);
+    EXPECT_LE(total.count(), 4'000);
+}
+
+TEST(RtpVideoSenderPacingTest, NextAccessUnitStartsAfterOnePacketSlot) {
+    LoopbackVideoLink link;
+    RtpVideoSender sender = link.make_sender(200'000);
+
+    const auto first = make_large_delta_access_unit(32 * 1024);
+    ASSERT_TRUE(send_au_accepted(sender,first.data(), first.size(), 0));
+    ASSERT_TRUE(link.wait_for_captured_count(29, 15s));
+    const auto first_last = link.captured_rtp().back().received_at;
     link.clear_captured_rtp();
 
-    ASSERT_TRUE(sender.send_access_unit(second.data(), second.size(), 33'333));
+    ASSERT_TRUE(send_au_accepted(sender,
+        make_delta_access_unit(0x44).data(),
+        make_delta_access_unit(0x44).size(),
+        33'333
+    ));
     ASSERT_TRUE(link.wait_for_captured_count(1, 15s));
 
-    const auto second_packets = link.captured_rtp();
-    ASSERT_FALSE(second_packets.empty());
-    const auto second_batch_start = second_packets.front().received_at;
-    const auto inter_au = std::chrono::duration_cast<std::chrono::milliseconds>(
-        second_batch_start - first_batch_end
+    const auto gap = std::chrono::duration_cast<std::chrono::milliseconds>(
+        link.captured_rtp().front().received_at - first_last
     );
+    // The next AU must start after roughly one packet slot (~44 ms), not
+    // after the previous AU's full wire time (the old AU-granular sleep).
+    EXPECT_GE(gap.count(), 5);
+    EXPECT_LE(gap.count(), 500);
+}
 
-    const auto theoretical_min_ms = std::chrono::milliseconds(
-        static_cast<int64_t>((first_wire_bytes * 8 * 1000) / pacing_bps)
+TEST(RtpVideoSenderRetransmitTest, NackRepairIsPacedAndCounted) {
+    LoopbackVideoLink link;
+    RtpVideoSender sender = link.make_sender(8'000'000);
+
+    const auto idr = make_idr_access_unit();
+    ASSERT_TRUE(send_au_accepted(sender,idr.data(), idr.size(), 0));
+    for (int index = 0; index < 4; ++index) {
+        const auto delta = make_delta_access_unit(static_cast<uint8_t>(index));
+        ASSERT_TRUE(send_au_accepted(sender,
+            delta.data(),
+            delta.size(),
+            static_cast<uint64_t>(index + 1) * 33'333
+        ));
+    }
+    ASSERT_TRUE(link.wait_for_captured_count(5, 10s));
+
+    const uint16_t lost_sequence = link.captured_rtp().front().sequence;
+
+    // One cached sequence (repair must succeed) and one sequence far outside
+    // the cache window (must be counted as a cache miss).
+    const auto nack = mello::transport::detail::make_generic_nack_packet(
+        0xfeedface,
+        kSenderSsrc,
+        {lost_sequence, static_cast<uint16_t>(lost_sequence + 5'000)}
     );
-    EXPECT_GE(inter_au, theoretical_min_ms / 2);
+    rtc::binary nack_message;
+    nack_message.reserve(nack.size());
+    for (const uint8_t byte : nack) {
+        nack_message.push_back(static_cast<std::byte>(byte));
+    }
+    ASSERT_TRUE(link.receiver_track()->send(std::move(nack_message)));
+
+    ASSERT_TRUE(link.wait_for_stats(
+        [](const RtpVideoSenderStats& stats) {
+            return stats.rtx_sent >= 1 && stats.rtx_cache_misses >= 1;
+        },
+        sender,
+        10s
+    ));
+
+    // Wire-level duplicate detection is not usable here: the loopback
+    // receiver already holds the packet, so the retransmitted copy is a
+    // genuine SRTP replay and is correctly dropped by the replay window.
+    // (In production, NACKs cover packets the receiver never saw, so repairs
+    // always pass SRTP replay protection.) Assert the sender-side contract.
+    const auto stats = sender.stats();
+    EXPECT_GE(stats.rtx_requests, 2u);
+    EXPECT_GE(stats.rtx_sent, 1u);
+    EXPECT_GE(stats.rtx_cache_misses, 1u);
+    EXPECT_EQ(stats.rtx_queue_dropped, 0u);
+    EXPECT_EQ(stats.send_failures, 0u);
+}
+
+TEST(RtpVideoSenderTwccTest, ViewerFeedbackDrivesGccEstimate) {
+    LoopbackVideoLink link;
+    RtpVideoSender sender = link.make_sender(8'000'000, {}, {}, {}, true);
+
+    mello::transport::RtpVideoReceiverSessionConfig rx_config;
+    rx_config.payload_type = kPayloadType;
+    rx_config.twcc_enabled = true;
+    mello::transport::RtpVideoReceiverSession receiver(
+        link.receiver_track(),
+        rx_config
+    );
+    ASSERT_TRUE(receiver.is_open());
+
+    // Stream ~2s of AUs at 60fps: TWCC-stamped packets must still assemble
+    // into complete AUs, and feedback must drive the sender's estimator.
+    size_t popped = 0;
+    for (int index = 0; index < 120; ++index) {
+        const auto au = index == 0
+            ? make_idr_access_unit()
+            : make_delta_access_unit(static_cast<uint8_t>(index));
+        ASSERT_TRUE(send_au_accepted(sender,
+            au.data(),
+            au.size(),
+            static_cast<uint64_t>(index) * 33'333
+        ));
+        while (auto unit = receiver.pop_access_unit()) {
+            ++popped;
+        }
+        std::this_thread::sleep_for(16ms);
+    }
+    // Drain whatever the session assembled during the final iterations.
+    for (int drain = 0; drain < 20; ++drain) {
+        while (auto unit = receiver.pop_access_unit()) {
+            ++popped;
+        }
+        std::this_thread::sleep_for(5ms);
+    }
+
+    const auto sender_stats = sender.stats();
+    EXPECT_GT(sender_stats.twcc_reports, 0u);
+    EXPECT_GT(sender_stats.gcc_target_bps, 0u);
+    const auto rx_stats = receiver.stats();
+    EXPECT_GT(rx_stats.twcc_packets_sent, 0u);
+    EXPECT_GT(popped, 30u);
+}
+
+TEST(RtpVideoSenderFecTest, ParityFecRepairsOneLossPerGroupWithoutPli) {
+    LoopbackVideoLink link;
+    RtpVideoSender sender = link.make_sender(200'000'000, {}, {}, {}, false, true);
+
+    mello::transport::RtpVideoReceiverSessionConfig rx_config;
+    rx_config.payload_type = kPayloadType;
+    rx_config.fec_enabled = true;
+    mello::transport::RtpVideoReceiverSession receiver(
+        link.receiver_track(),
+        rx_config
+    );
+    ASSERT_TRUE(receiver.is_open());
+
+    // Drop every 11th media packet before the session's track: with groups
+    // of 10 and drop period 11 (coprime), each parity group suffers exactly
+    // one loss — parity-repairable.
+    auto loss = std::make_shared<LossInjectingHandler>(11);
+    link.receiver_track()->chainMediaHandler(loss);
+
+    // 30 large AUs (~22 fragments each): a dropped fragment sits inside an
+    // INCOMPLETE access unit, so the release floor stays behind it and the
+    // parity repair lands within the AU deadline — the realistic FEC win.
+    // (Single-packet AUs complete their neighbor instantly and advance the
+    // release floor past any repair — by design, too-late frames are shed.)
+    size_t popped = 0;
+    std::vector<uint32_t> popped_timestamps;
+    for (int index = 0; index < 30; ++index) {
+        const auto au = index == 0
+            ? make_idr_access_unit()
+            : make_large_delta_access_unit(24 * 1024);
+        if (!send_au_accepted(sender,
+                au.data(),
+                au.size(),
+                static_cast<uint64_t>(index) * 33'333
+            )) {
+            const auto debug_stats = sender.stats();
+            fprintf(
+                stderr,
+                "send_access_unit failed at index %d: enqueued=%llu "
+                "sent=%llu rejected=%llu dropped=%llu queued=%llu "
+                "peakq=%llu failures=%llu rtp=%llu fec=%llu\n",
+                index,
+                (unsigned long long)debug_stats.access_units_enqueued,
+                (unsigned long long)debug_stats.access_units_sent,
+                (unsigned long long)debug_stats.access_units_rejected,
+                (unsigned long long)debug_stats.access_units_dropped,
+                (unsigned long long)debug_stats.queued_access_units,
+                (unsigned long long)debug_stats.peak_queued_access_units,
+                (unsigned long long)debug_stats.send_failures,
+                (unsigned long long)debug_stats.rtp_packets_sent,
+                (unsigned long long)debug_stats.fec_packets_sent
+            );
+            FAIL();
+        }
+        std::this_thread::sleep_for(3ms);
+        while (auto unit = receiver.pop_access_unit()) {
+            popped_timestamps.push_back(unit->rtp_timestamp);
+            ++popped;
+        }
+    }
+
+    const bool drained = wait_until(
+        [&]() {
+            while (auto unit = receiver.pop_access_unit()) {
+                popped_timestamps.push_back(unit->rtp_timestamp);
+                ++popped;
+            }
+            return popped >= 30;
+        },
+        10s
+    );
+    if (!drained) {
+        std::sort(popped_timestamps.begin(), popped_timestamps.end());
+        fprintf(stderr, "missing AU before timestamps:");
+        for (size_t i = 1; i < popped_timestamps.size(); ++i) {
+            if (popped_timestamps[i] - popped_timestamps[i - 1] > 3'500) {
+                fprintf(stderr, " (after %u)", popped_timestamps[i - 1]);
+            }
+        }
+        fprintf(stderr, "\n");
+    }
+    {
+        const auto tx_debug = sender.stats();
+        const auto rx_debug = receiver.stats();
+        fprintf(
+            stderr,
+            "end: drained=%d popped=%zu dropped=%zu | tx fec=%llu rtp=%llu "
+            "rtx_req=%llu rtx_sent=%llu | rx ingress=%llu fec_rec=%llu "
+            "fec_unrec=%llu nack_seq=%llu core_acc=%llu core_missing=%llu "
+            "core_repaired=%llu core_complete=%llu core_incomplete=%llu "
+            "core_emitted=%llu aus_dropped=%llu pli=%llu restarts=%llu "
+            "wrong_ssrc=%llu inv_rtp=%llu inv_h264=%llu dup=%llu late=%llu "
+            "gate_entries=%llu gate_dropped=%llu\n",
+            drained,
+            popped,
+            loss->dropped(),
+            (unsigned long long)tx_debug.fec_packets_sent,
+            (unsigned long long)tx_debug.rtp_packets_sent,
+            (unsigned long long)tx_debug.rtx_requests,
+            (unsigned long long)tx_debug.rtx_sent,
+            (unsigned long long)rx_debug.ingress_packets,
+            (unsigned long long)rx_debug.rx_fec_recovered,
+            (unsigned long long)rx_debug.rx_fec_unrecoverable,
+            (unsigned long long)rx_debug.nack_sequences_sent,
+            (unsigned long long)rx_debug.core.accepted_packets,
+            (unsigned long long)rx_debug.core.missing_sequences_detected,
+            (unsigned long long)rx_debug.core.repaired_packets,
+            (unsigned long long)rx_debug.core.complete_access_units,
+            (unsigned long long)rx_debug.core.incomplete_access_units,
+            (unsigned long long)rx_debug.core.emitted_access_units,
+            (unsigned long long)rx_debug.access_units_dropped,
+            (unsigned long long)rx_debug.pli_requests,
+            (unsigned long long)rx_debug.core_restarts,
+            (unsigned long long)rx_debug.wrong_ssrc_packets_after_recovery,
+            (unsigned long long)rx_debug.core.invalid_rtp_packets,
+            (unsigned long long)rx_debug.core.invalid_h264_packets,
+            (unsigned long long)rx_debug.core.duplicates,
+            (unsigned long long)rx_debug.core.late_packets,
+            (unsigned long long)rx_debug.core.gate_entries,
+            (unsigned long long)rx_debug.core.gate_dropped_access_units
+        );
+    }
+    ASSERT_GE(popped, 29u);
+
+    const auto tx = sender.stats();
+    EXPECT_GE(tx.fec_packets_sent, 60u); // ~660 media packets = 66 groups of 10
+
+    const auto rx = receiver.stats();
+    // Level-0 ULPFEC may miss the RTP marker when the lost fragment is the
+    // access-unit tail in a group whose highest sequence belongs to the next
+    // AU (different timestamp at the group edge). The last AU under loss may
+    // need one PLI resync; eager repair + marker inference cover the common
+    // within-AU case.
+    EXPECT_GT(rx.rx_fec_recovered, 0u);
+    EXPECT_EQ(rx.access_units_dropped, 0u);
+    EXPECT_LE(rx.pli_requests, 1u);
+    EXPECT_EQ(rx.pli_packets_sent, rx.pli_requests);
+    if (popped == 30u) {
+        EXPECT_EQ(rx.pli_requests, 0u);
+    }
 }
 
 TEST(RtpVideoSenderPacingTest, DynamicTargetUpdateIsObservedInStats) {
@@ -609,11 +940,11 @@ TEST(RtpVideoSenderAdmissionTest, QueueOverflowEntersIdrGate) {
     );
 
     const auto idr = make_idr_access_unit();
-    ASSERT_TRUE(sender.send_access_unit(idr.data(), idr.size(), 0));
+    ASSERT_TRUE(send_au_accepted(sender,idr.data(), idr.size(), 0));
 
     for (int index = 0; index < 16; ++index) {
         const auto delta = make_delta_access_unit(static_cast<uint8_t>(index));
-        (void)sender.send_access_unit(
+        (void)send_au_accepted(sender,
             delta.data(),
             delta.size(),
             static_cast<uint64_t>((index + 1) * 33'333)
@@ -643,7 +974,7 @@ TEST(RtpVideoSenderLifetimeTest, DestroysCleanlyUnderLoad) {
         RtpVideoSender sender = link.make_sender(8'000'000);
         const auto idr = make_idr_access_unit();
         for (int index = 0; index < 6; ++index) {
-            if (!sender.send_access_unit(
+            if (!send_au_accepted(sender,
                     idr.data(),
                     idr.size(),
                     static_cast<uint64_t>(index * 33'333))) {

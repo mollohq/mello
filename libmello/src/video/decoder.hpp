@@ -43,6 +43,10 @@ public:
     virtual void* shared_frame_handle() const { return nullptr; }
     virtual DXGI_FORMAT shared_frame_format() const { return DXGI_FORMAT_UNKNOWN; }
     virtual uint32_t shared_frame_uv_offset() const { return 0; }
+
+    /// Finalize D3D11 texture updates after CUDA/async decode. Must run on the
+    /// thread that owns the D3D11 immediate context (present/feed thread).
+    virtual void publish_d3d11_frame() {}
 #elif defined(__APPLE__)
     /// Returns the latest decoded frame as a CVPixelBufferRef (BGRA). Caller must NOT release it.
     /// Valid until the next call to decode().

@@ -4,6 +4,7 @@
 #ifdef _WIN32
 #include <wrl/client.h>
 #include <nvEncodeAPI.h>
+#include <chrono>
 #include <unordered_map>
 
 namespace mello::video {
@@ -42,6 +43,15 @@ private:
     EncoderConfig config_{};
     EncoderStats  stats_{};
     uint64_t      frame_seq_ = 0;
+
+    // Full init-time NVENC config. Reconfigure reuses it because the driver
+    // does not merge sparse configs on re-init (unset fields become zero).
+    NV_ENC_CONFIG base_config_{};
+
+    // Measured-stats window (fps/bitrate are computed, not echoed from cfg).
+    std::chrono::steady_clock::time_point stats_window_start_{};
+    uint32_t stats_window_frames_ = 0;
+    uint64_t stats_window_bytes_  = 0;
 
     Microsoft::WRL::ComPtr<ID3D11Device> device_;
 };

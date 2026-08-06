@@ -80,14 +80,24 @@ pub enum RtpPeerError {
 
     #[error("native transport call failed")]
     TransportFailed,
+
+    #[error("RTP sender queue full or awaiting IDR")]
+    Backpressure,
 }
 
 /// One host-side viewer feedback event.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VideoFeedback {
     Pli,
-    Remb { bitrate_bps: u32 },
+    Remb {
+        bitrate_bps: u32,
+    },
     LocalIdrNeeded,
+    /// Send-side delay-gradient (GCC) estimate from TWCC feedback. The
+    /// estimator smooths internally, so targets may be applied immediately.
+    GccTarget {
+        bitrate_bps: u32,
+    },
 }
 
 /// Metadata for one received Annex-B H.264 access unit.
@@ -112,6 +122,12 @@ pub struct RtpVideoStats {
     pub tx_pacing_target_bps: u64,
     pub rx_receive_target_bps: u32,
     pub tx_latest_remb_bitrate_bps: u32,
+    pub tx_rtx_sent: u64,
+    pub tx_rtx_cache_misses: u64,
+    pub tx_gcc_target_bps: u64,
+    pub tx_fec_packets_sent: u64,
+    pub rx_fec_recovered: u64,
+    pub rx_fec_unrecoverable: u64,
 }
 
 /// Create a peer for `role`. Caller must eventually call `mello_peer_destroy`.
@@ -297,6 +313,11 @@ fn video_feedback_from_ffi(feedback: &MelloPeerVideoFeedback) -> VideoFeedback {
         mello_sys::MelloPeerVideoFeedbackType_MELLO_PEER_VIDEO_FEEDBACK_LOCAL_IDR_NEEDED => {
             VideoFeedback::LocalIdrNeeded
         }
+        mello_sys::MelloPeerVideoFeedbackType_MELLO_PEER_VIDEO_FEEDBACK_GCC_TARGET => {
+            VideoFeedback::GccTarget {
+                bitrate_bps: feedback.remb_bitrate_bps,
+            }
+        }
         _ => VideoFeedback::Pli,
     }
 }
@@ -314,6 +335,12 @@ fn stats_from_native(stats: &MelloRtpVideoStats) -> RtpVideoStats {
         tx_pacing_target_bps: stats.tx_pacing_target_bps,
         rx_receive_target_bps: stats.rx_receive_target_bps,
         tx_latest_remb_bitrate_bps: stats.tx_latest_remb_bitrate_bps,
+        tx_rtx_sent: stats.tx_rtx_sent,
+        tx_rtx_cache_misses: stats.tx_rtx_cache_misses,
+        tx_gcc_target_bps: stats.tx_gcc_target_bps,
+        tx_fec_packets_sent: stats.tx_fec_packets_sent,
+        rx_fec_recovered: stats.rx_fec_recovered,
+        rx_fec_unrecoverable: stats.rx_fec_unrecoverable,
     }
 }
 
@@ -321,6 +348,9 @@ fn map_mello_result(result: mello_sys::MelloResult) -> Result<(), RtpPeerError> 
     match result {
         mello_sys::MelloResult_MELLO_OK => Ok(()),
         mello_sys::MelloResult_MELLO_ERROR_INVALID_PARAM => Err(RtpPeerError::InvalidParam),
+        mello_sys::MelloResult_MELLO_ERROR_TRANSPORT_BACKPRESSURE => {
+            Err(RtpPeerError::Backpressure)
+        }
         _ => Err(RtpPeerError::TransportFailed),
     }
 }
@@ -462,6 +492,10 @@ mod tests {
         assert_eq!(
             map_mello_result(mello_sys::MelloResult_MELLO_ERROR_TRANSPORT_FAILED),
             Err(RtpPeerError::TransportFailed)
+        );
+        assert_eq!(
+            map_mello_result(mello_sys::MelloResult_MELLO_ERROR_TRANSPORT_BACKPRESSURE),
+            Err(RtpPeerError::Backpressure)
         );
         assert_eq!(map_mello_result(mello_sys::MelloResult_MELLO_OK), Ok(()));
     }

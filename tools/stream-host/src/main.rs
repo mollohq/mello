@@ -732,7 +732,7 @@ fn run_sfu_mode(
             .video_stats()
             .unwrap_or_else(|_| unsafe { std::mem::zeroed() });
         log::info!(
-            "host_probe_tick session={} wall_ms={} mono_ms={} viewers={} video_open={} control_open={} rtt_ms={:.1} disconnect={} tx_aus_sent={} tx_aus_dropped={} tx_rtp_packets={} tx_rtp_bytes={} tx_queue_peak={} tx_pacing_target_kbps={} tx_pacing_delay_us={} tx_pli={} tx_remb={}",
+            "host_probe_tick session={} wall_ms={} mono_ms={} viewers={} video_open={} control_open={} rtt_ms={:.1} disconnect={} tx_aus_sent={} tx_aus_dropped={} tx_aus_rejected={} tx_rtp_packets={} tx_rtp_bytes={} tx_queue_peak={} tx_pacing_target_kbps={} tx_gcc_target_kbps={} tx_pacing_delay_us={} tx_fec_packets={} tx_rtx_sent={} tx_pli={} tx_remb={}",
             session_id,
             wall_ms,
             mono_ms,
@@ -743,22 +743,28 @@ fn run_sfu_mode(
             disconnect,
             stats_now.tx_access_units_sent,
             stats_now.tx_access_units_dropped,
+            stats_now.tx_access_units_rejected,
             stats_now.tx_rtp_packets_sent,
             stats_now.tx_rtp_wire_bytes_sent,
             stats_now.tx_peak_queued_access_units,
             stats_now.tx_pacing_target_bps / 1_000,
+            stats_now.tx_gcc_target_bps / 1_000,
             stats_now.tx_current_pacing_delay_us,
+            stats_now.tx_fec_packets_sent,
+            stats_now.tx_rtx_sent,
             stats_now.tx_pli_requests,
             stats_now.tx_remb_reports,
         );
         print!(
-            "\r[{:3}s] viewers={} video_open={} control_open={} tx_aus={} tx_drop={} rtt_ms={:.1} disconnect={}   ",
+            "\r[{:3}s] viewers={} video_open={} control_open={} tx_aus={} tx_drop={} tx_fec={} tx_gcc_kbps={} rtt_ms={:.1} disconnect={}   ",
             elapsed,
             joined_viewers,
             video_open,
             control_open,
             stats_now.tx_access_units_sent.saturating_sub(last_stats.tx_access_units_sent),
             stats_now.tx_access_units_dropped.saturating_sub(last_stats.tx_access_units_dropped),
+            stats_now.tx_fec_packets_sent.saturating_sub(last_stats.tx_fec_packets_sent),
+            stats_now.tx_gcc_target_bps / 1_000,
             conn.rtt_ms(),
             disconnect,
         );

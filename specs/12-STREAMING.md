@@ -74,11 +74,11 @@ A dedicated `encode_thread` pulls from a bounded ring queue (`ENCODE_QUEUE_CAP =
 
 ### 3.4 Hardware Encode
 
-NVENC with P1+ULL (Ultra Low Latency) preset by default. Fallback chain: P1+ULL → P1+LL → P4+ULL.
+NVENC tries P4+ULL (Ultra Low Latency) first, then P1+ULL, then P1+LL. The effective preset is logged at init.
 
 **Async mode:** The encoder initializes with `enableEncodeAsync = 1` and registers a Windows completion event. `nvEncEncodePicture` returns immediately while the GPU works; the encode thread waits on the event before calling `nvEncLockBitstream`. Falls back to synchronous mode if the driver doesn't support async.
 
-Rate control is VBR with 1.25× max headroom. Texture registration is cached per NV12 ring slot so `nvEncRegisterResource` runs once per slot, not per frame. `repeatSPSPPS = 1` ensures every keyframe is self-contained.
+Rate control is VBR with 1.25× max headroom. The VBV spans ~0.5 s of the max rate (floored at 4 frames of bits, `vbvInitialDelay = vbv/2`) so IDRs are not rate-starved. Bitrate reconfigures reuse the full init-time NVENC config (the driver does not merge sparse configs on re-init) and force an IDR only on down-steps > 25%. Texture registration is cached per NV12 ring slot so `nvEncRegisterResource` runs once per slot, not per frame. `repeatSPSPPS = 1` ensures every keyframe is self-contained.
 
 **Other encoder backends:** AMF (AMD), QSV/oneVPL (Intel), VideoToolbox (macOS) exist in the codebase but are less battle-tested than NVENC.
 
@@ -111,20 +111,26 @@ The encode thread's `packet_cb_` fires with the encoded NALU bytes. This callbac
 
 ## 5. Video Transport (H.264 RTP)
 
-Video uses **H.264 RTP/RTCP only** — no custom `StreamPacket` framing, DataChannel chunking, or XOR FEC on the video path.
+Video uses **H.264 RTP/RTCP** for media — no custom `StreamPacket` framing or DataChannel chunking. **ULPFEC** (RFC 5109 XOR parity, PT 127) is optional when negotiated in SDP.
 
 | Parameter | Value |
 |-----------|-------|
-| Payload type | 96 |
+| Payload type | 96 (H.264 media) |
+| FEC payload type | 127 (`ulpfec/90000`, RFC 5109 level-0 XOR parity) |
+| FEC SSRC | `media_ssrc + 1` (parallel RTP stream; host offer includes `a=ssrc-group:FEC-FR`; SFU viewer leg uses separate FEC m-line/track) |
 | Clock rate | 90 kHz |
 | Packetization | RFC 6184 mode 1, max payload 1100 bytes |
 | Host output | Annex-B access units (SPS/PPS on every IDR, no B-frames) |
+| RTCP feedback | `nack`, `nack pli`, `goog-remb`, `transport-cc` |
+| Header extension | TWCC (`transport-wide-cc`, id 3) |
 
-**Sender (libmello):** bounded pacing queue, hop-local NACK cache/respond, PLI/REMB RTCP callbacks. Rust sets pacing targets via `PacketSink::set_pacing_kbps`.
+**Sender (libmello):** bounded AU queue, per-packet leaky-bucket pacing (fragments of a frame are spread across their wire time, with a two-packet-interval lag allowance), a caching NACK responder whose retransmits drain through a priority RTX queue on the pacing worker (rate-accounted, 512-packet cache with 1 s TTL), PLI/REMB RTCP callbacks. Rust sets pacing ceilings via `PacketSink::set_pacing_kbps`. When ULPFEC is negotiated (`ulpfec/90000` PT 127 in SDP), the sender emits one parity packet per group of 10 consecutive media RTP packets (XOR over pre-TWCC-stamp bytes; parity rides PT 127 on `media_ssrc + 1`). The host offer SDP advertises `a=ssrc-group:FEC-FR media_ssrc (media_ssrc+1)` so intermediaries (SFU/Pion) bind the repair SSRC.
 
-**Receiver (libmello):** reorder buffer, NACK/PLI/RR/REMB, and a 120 ms complete-AU deadline — only repaired complete access units reach the decoder.
+**TWCC congestion control:** when negotiated, egress packets carry transport-wide sequence numbers (stamped in the pacer at emit time; retransmits get fresh seqs). The receiver emits TWCC feedback every ~50 ms; the sender's delay-gradient estimator (GCC-style: accumulated-delay trendline, overuse detector, AIMD + loss cap) produces a send-side target. The pacer runs at `min(manager ceiling, estimator target)`; the estimator target is forwarded to Rust as `GCC_TARGET` feedback and applied to the encoder immediately (the estimator smooths internally — no 5 %/s REMB ramp). Per viewer, a fresh GCC estimate supersedes that viewer's REMB.
 
-**Stream session DataChannel:** reliable `control` only (viewer PLI/loss metadata, cursor, ping/pong). There is no unreliable stream-video DataChannel.
+**Receiver (libmello):** reorder buffer, NACK/PLI/RR/REMB/TWCC. NACK retry budget is RTT-adaptive (one attempt per ~20 ms of measured RTT, clamped 2–8). Access units expire on a 120 ms stall (no fragment progress) or a 600 ms hard age cap, so paced large AUs (e.g. IDRs at low bitrates) complete while lost tails fail fast — only repaired complete access units reach the decoder. When ULPFEC is negotiated, parity packets (`ssrc == remote_media_ssrc + 1`, PT 127) feed a recovery buffer; `send_nack` tries XOR reconstruction before emitting NACK; eager repair retries on FEC and media arrivals and on idle worker ticks when covered sequences remain missing. Recovered packets are injected outside receiver callbacks (no re-entrancy). Stats: `rx_fec_recovered`, `rx_fec_unrecoverable`.
+
+**Stream session DataChannel:** reliable `control` only (viewer PLI/loss metadata, cursor, ping/pong). There is no unreliable stream-video DataChannel. Host and viewer send a control-channel ping every ~2 s so both sides have a live RTT measurement (`rtt_ms` in telemetry).
 
 Implementation: `libmello/src/transport/rtp_video_sender.cpp`, `rtp_video_receiver_session.cpp`; Rust wrappers in `mello-core/src/stream/rtp_peer.rs`.
 
@@ -175,7 +181,7 @@ RTP ingress → Access-unit poll → Pre-keyframe gate → Decode → NativeSurf
 
 ### 7.3 Hardware Decode
 
-NVDEC (CUDA↔D3D11 interop, zero-copy R8 layout), AMF, D3D11VA, OpenH264 on Windows. VideoToolbox on macOS. The decoder outputs to a GPU texture which goes into the decoded-frame ring.
+NVDEC (CUDA↔D3D11 interop, zero-copy R8 layout), AMF, D3D11VA, OpenH264 on Windows. VideoToolbox on macOS. The decoder outputs to a GPU texture which goes into the decoded-frame ring. With async decode (Phase 2), CUDA/NVDEC runs on the decode worker; any D3D11 immediate-context updates (`CopyResource`, `UpdateSubresource`) are deferred to `Decoder::publish_d3d11_frame()` on the present/feed thread.
 
 ### 7.4 Decoded-Frame Ring
 
@@ -243,9 +249,9 @@ Default is Medium. The host can select a preset before starting. The GPU preproc
 
 **Viewer (`ViewerCongestionController`):** Samples native RTP receiver stats every 500 ms. Severe loss (>5%), incomplete AUs, or gate pressure step the receive target down 25%; mild loss (2–5%) or jitter >20 ms steps down 15%; ten consecutive good samples increase by max(100 kbps, 5%). Emits REMB at significant changes or every 2 s heartbeat.
 
-**Host (`StreamManager`):** Applies the minimum fresh REMB target across active viewers (3 s stale expiry). Decreases apply immediately; increases are rate-limited to 5%/s. Bitrate changes trigger encoder reconfigure + IDR. Pacing target includes RTP header headroom via `calc_stream_pacing_target_kbps`.
+**Host (`StreamManager`):** Applies the minimum fresh REMB target across active viewers (3 s stale expiry). Decreases apply immediately; increases are rate-limited to 5%/s. Bitrate changes trigger encoder reconfigure (+ IDR on down-steps > 25%). When every estimate is stale or missing (lost RTCP), the host **holds** the current target — restoring max on transient REMB loss ramps the host back into the congestion that caused the silence. A last-viewer-leave is an explicit signal and does restore the configured ceiling for the next viewer. Pacing target includes RTP header headroom via `calc_stream_pacing_target_kbps`.
 
-In SFU mode all viewers share one encoded stream; the SFU forwards aggregated minimum REMB upstream to the host.
+In SFU mode all viewers share one encoded stream. The SFU terminates TWCC per hop: it generates TWCC feedback to the host (host→SFU leg), stamps per-leg transport-wide sequences toward viewers, and runs a per-viewer GCC estimator from each viewer's TWCC feedback. Each viewer leg has a token-bucket egress pacer tracking that estimate, and the aggregated minimum (GCC estimates, superseding client REMBs) is forwarded upstream as REMB on the ~1 s tick. The SFU also caches the last complete IDR access unit and replays it to newly wired viewers for instant late-join start.
 
 ---
 
@@ -372,7 +378,7 @@ DComp presenter diagnostics:
 
 | Gap | Impact | Effort |
 |-----|--------|--------|
-| WGC has no frame throttling (accepts compositor-rate) | Excess encode queue pressure for windowed games | Medium |
+| ~~WGC has no frame throttling~~ **Fixed (v0.4)** — accumulator throttle delivers exactly target_fps | — | — |
 | AMF/QSV encoders less tested | No smooth experience for AMD/Intel GPU users | Medium |
 | Viewer jitter buffer is simple depth-gate, not PID-paced | Residual cadence oscillation under varying network conditions | Medium |
 | Game audio not wired | No game sound on stream | Medium |

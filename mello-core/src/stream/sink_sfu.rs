@@ -100,6 +100,9 @@ impl PacketSink for SfuSink {
                 bitrate_bps: feedback.remb_bitrate_bps,
             },
             VideoFeedbackKind::LocalIdrNeeded => SinkVideoFeedbackKind::LocalIdrNeeded,
+            VideoFeedbackKind::GccTarget => SinkVideoFeedbackKind::GccTarget {
+                bitrate_bps: feedback.remb_bitrate_bps,
+            },
         };
         Some(SinkVideoFeedback {
             viewer_id: SFU_CONTROL_VIEWER_ID.to_string(),

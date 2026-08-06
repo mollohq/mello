@@ -38,6 +38,11 @@ public:
     struct Config {
         uint8_t payload_type = 96;
         std::chrono::milliseconds pli_cooldown{1000};
+        // NACK retry budget per missing sequence. Zero selects the static
+        // default (kMaxNackAttempts); the session sets this from the
+        // measured RTT so high-RTT links get more repair chances within the
+        // AU stall deadline.
+        size_t nack_max_attempts = 0;
     };
 
     struct Stats {
@@ -94,7 +99,14 @@ public:
     inline static constexpr size_t kMaxNackAttempts = 2;
     // Host RTP pacing and SFU per-viewer relay queues can spread one AU's
     // fragments over tens of ms; 45ms was too tight for local assembly.
+    // Applied to the time since the AU's last fragment (stall deadline):
+    // paced AUs may legitimately span longer than 120 ms end-to-end, but
+    // only while fragments keep arriving.
     inline static constexpr std::chrono::milliseconds kAccessUnitDeadline{120};
+    // Hard cap on total AU age regardless of progress. At 1.5 Mbps a 100 KB
+    // IDR takes ~530 ms on the wire; an AU older than this can never become
+    // useful and must be dropped so the gate/PLI recovery can proceed.
+    inline static constexpr std::chrono::milliseconds kAccessUnitHardDeadline{600};
 
     RtpH264Receiver();
     explicit RtpH264Receiver(Callbacks callbacks);

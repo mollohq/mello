@@ -100,9 +100,9 @@ bool QsvEncoder::initialize(const GraphicsDevice& device, const EncoderConfig& c
 
     memset(&video_params_, 0, sizeof(video_params_));
     video_params_.mfx.CodecId                  = MFX_CODEC_AVC;
-    video_params_.mfx.CodecProfile             = MFX_PROFILE_AVC_MAIN;
+    video_params_.mfx.CodecProfile             = MFX_PROFILE_AVC_HIGH;
     video_params_.mfx.CodecLevel               = MFX_LEVEL_AVC_42;
-    video_params_.mfx.TargetUsage              = MFX_TARGETUSAGE_BEST_SPEED;
+    video_params_.mfx.TargetUsage              = MFX_TARGETUSAGE_BALANCED;
     // VBR with moderate headroom (1.25x max) for smooth P2P bandwidth.
     video_params_.mfx.TargetKbps               = static_cast<mfxU16>(config.bitrate_kbps);
     video_params_.mfx.MaxKbps                  = static_cast<mfxU16>(config.bitrate_kbps + config.bitrate_kbps / 4);
@@ -122,7 +122,7 @@ bool QsvEncoder::initialize(const GraphicsDevice& device, const EncoderConfig& c
     video_params_.mfx.FrameInfo.CropH          = static_cast<mfxU16>(config.height);
     video_params_.mfx.GopPicSize               = static_cast<mfxU16>(config.keyframe_interval);
     video_params_.mfx.GopRefDist               = 1;
-    video_params_.mfx.NumRefFrame              = 1;
+    video_params_.mfx.NumRefFrame              = 2;
     video_params_.IOPattern                    = MFX_IOPATTERN_IN_VIDEO_MEMORY;
 
     mfxExtCodingOption2 opt2{};
@@ -157,11 +157,11 @@ bool QsvEncoder::initialize(const GraphicsDevice& device, const EncoderConfig& c
     mfxVideoParam actual_params{};
     const mfxStatus actual_sts = fn_.EncGetVideoParam(session_, &actual_params);
     if (actual_sts != MFX_ERR_NONE ||
-        actual_params.mfx.CodecProfile != MFX_PROFILE_AVC_MAIN ||
+        actual_params.mfx.CodecProfile != MFX_PROFILE_AVC_HIGH ||
         actual_params.mfx.CodecLevel != MFX_LEVEL_AVC_42 ||
         actual_params.mfx.GopRefDist != 1) {
         MELLO_LOG_ERROR(TAG,
-            "QSV: effective H264 profile/level/GOP mismatch (status=%d profile=%u level=%u gopRefDist=%u; required Main/4.2/GopRefDist=1)",
+            "QSV: effective H264 profile/level/GOP mismatch (status=%d profile=%u level=%u gopRefDist=%u; required High/4.2/GopRefDist=1)",
             actual_sts, actual_params.mfx.CodecProfile, actual_params.mfx.CodecLevel,
             actual_params.mfx.GopRefDist);
         fn_.EncClose(session_);
@@ -171,7 +171,7 @@ bool QsvEncoder::initialize(const GraphicsDevice& device, const EncoderConfig& c
         return false;
     }
     MELLO_LOG_INFO(TAG,
-        "QSV: effective H264 profile=Main level=4.2 RC=VBR vbv=%uKB target=%uKbps max=%uKbps "
+        "QSV: effective H264 profile=High level=4.2 RC=VBR vbv=%uKB target=%uKbps max=%uKbps "
         "lookahead=disabled lowDelayBRC=on B-frames=disabled",
         actual_params.mfx.BufferSizeInKB, actual_params.mfx.TargetKbps, actual_params.mfx.MaxKbps);
     uint32_t bs_size = actual_params.mfx.BufferSizeInKB * 1024;

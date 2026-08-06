@@ -56,6 +56,13 @@ struct RtpVideoReceiverSessionConfig {
     // Zero generates a non-zero local feedback SSRC.
     uint32_t local_feedback_ssrc = 0;
     std::chrono::milliseconds receiver_report_interval{1000};
+    // TWCC was negotiated on this leg: record transport-wide arrival times
+    // and emit TWCC feedback reports (~50 ms cadence).
+    bool twcc_enabled = false;
+    // ULPFEC (XOR parity, ulpfec/90000 PT 127) was negotiated: buffer parity
+    // packets arriving on the media SSRC + 1 and reconstruct single losses
+    // per group before NACK repair would be needed.
+    bool fec_enabled = false;
 };
 
 struct RtpVideoReceiverSessionStats {
@@ -84,6 +91,12 @@ struct RtpVideoReceiverSessionStats {
     uint64_t pli_requests = 0;
     uint64_t pli_packets_sent = 0;
     uint64_t remb_packets_sent = 0;
+    uint64_t twcc_packets_sent = 0;
+    // ULPFEC repair: media packets reconstructed from parity (recovered) and
+    // recovery attempts that failed (no covering block yet, or 2+ losses in
+    // the group — those fall through to NACK as before).
+    uint64_t rx_fec_recovered = 0;
+    uint64_t rx_fec_unrecoverable = 0;
     uint64_t receiver_reports_sent = 0;
     uint64_t sender_reports_received = 0;
     uint64_t invalid_rtcp_packets = 0;
@@ -140,6 +153,10 @@ public:
     // Queues a REMB update for the worker. The latest target is retained until
     // a remote SSRC and libdatachannel feedback callback are available.
     bool set_receive_target(uint32_t bitrate_bps) noexcept;
+
+    // Hint the NACK retry budget from the measured control-channel RTT.
+    // Applied on the next receiver-core (re)build; 0 restores the default.
+    void set_rtt_hint(float rtt_ms) noexcept;
 
     bool is_open() const noexcept;
     RtpVideoReceiverSessionStats stats() const noexcept;

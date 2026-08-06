@@ -38,6 +38,8 @@ typedef enum MelloResult {
     MELLO_ERROR_ALREADY_STARTED = -3,
     MELLO_ERROR_FAILED = -4,
     MELLO_ERROR_TRANSPORT_FAILED = -5,
+    /** RTP sender queue full or awaiting IDR — producer should drop/coalesce. */
+    MELLO_ERROR_TRANSPORT_BACKPRESSURE = -6,
 } MelloResult;
 
 typedef struct MelloIceCandidate {
@@ -205,6 +207,7 @@ typedef enum MelloPeerVideoFeedbackType {
     MELLO_PEER_VIDEO_FEEDBACK_PLI = 0,
     MELLO_PEER_VIDEO_FEEDBACK_REMB = 1,
     MELLO_PEER_VIDEO_FEEDBACK_LOCAL_IDR_NEEDED = 2,
+    MELLO_PEER_VIDEO_FEEDBACK_GCC_TARGET = 3,
 } MelloPeerVideoFeedbackType;
 
 typedef struct MelloPeerVideoFeedback {
@@ -247,6 +250,13 @@ typedef struct MelloRtpVideoStats {
     uint64_t tx_pli_requests;
     uint64_t tx_remb_reports;
     uint32_t tx_latest_remb_bitrate_bps;
+    uint64_t tx_rtx_requests;
+    uint64_t tx_rtx_sent;
+    uint64_t tx_rtx_cache_misses;
+    uint64_t tx_rtx_queue_dropped;
+    uint64_t tx_twcc_reports;
+    uint64_t tx_gcc_target_bps;
+    uint64_t tx_fec_packets_sent;
 
     uint64_t rx_ingress_packets;
     uint64_t rx_ingress_bytes;
@@ -271,6 +281,9 @@ typedef struct MelloRtpVideoStats {
     uint64_t rx_pli_requests;
     uint64_t rx_pli_packets_sent;
     uint64_t rx_remb_packets_sent;
+    uint64_t rx_twcc_packets_sent;
+    uint64_t rx_fec_recovered;
+    uint64_t rx_fec_unrecoverable;
     uint64_t rx_receiver_reports_sent;
     uint64_t rx_sender_reports_received;
     uint64_t rx_invalid_rtcp_packets;

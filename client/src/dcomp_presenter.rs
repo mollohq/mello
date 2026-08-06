@@ -32,6 +32,10 @@ pub struct DCompPresenter {
     stream_width: u32,
     stream_height: u32,
     presented_frames: u64,
+    // Shared texture is created once per stream by libmello, so the opened
+    // COM object is cached instead of re-opening the handle every frame.
+    cached_shared_handle: usize,
+    cached_shared_tex: Option<ID3D11Texture2D>,
 }
 
 impl DCompPresenter {
@@ -71,6 +75,8 @@ impl DCompPresenter {
             stream_width,
             stream_height,
             presented_frames: 0,
+            cached_shared_handle: 0,
+            cached_shared_tex: None,
         })
     }
 
@@ -299,12 +305,27 @@ impl DCompPresenter {
     }
 
     unsafe fn present_inner(&mut self, shared_handle: usize) -> Result<bool, String> {
-        let handle = HANDLE(shared_handle as *mut _);
-
-        let shared_tex: ID3D11Texture2D = self
-            .device1
-            .OpenSharedResource1(handle)
-            .map_err(|e| format!("OpenSharedResource1: {e}"))?;
+        // Open the shared texture only when the handle changes — it stays
+        // valid for the stream's lifetime, so re-opening every frame is waste.
+        if self.cached_shared_handle != shared_handle || self.cached_shared_tex.is_none() {
+            let handle = HANDLE(shared_handle as *mut _);
+            let opened: ID3D11Texture2D = match self.device1.OpenSharedResource1(handle) {
+                Ok(tex) => tex,
+                Err(e) => {
+                    // Clear the cache so a later frame retries a fresh open.
+                    self.cached_shared_tex = None;
+                    self.cached_shared_handle = 0;
+                    return Err(format!("OpenSharedResource1: {e}"));
+                }
+            };
+            self.cached_shared_tex = Some(opened);
+            self.cached_shared_handle = shared_handle;
+        }
+        let shared_tex = self
+            .cached_shared_tex
+            .as_ref()
+            .expect("cached above")
+            .clone();
 
         // Check if shared texture dimensions differ from swap chain.
         let mut tex_desc = Default::default();
@@ -348,6 +369,9 @@ impl DCompPresenter {
 
 impl Drop for DCompPresenter {
     fn drop(&mut self) {
+        // Release the cached shared texture before the D3D11/DComp fields
+        // are torn down (fields drop in declaration order after this runs).
+        self.cached_shared_tex = None;
         log::info!(
             "DComp presenter destroyed (presented {} frames)",
             self.presented_frames

@@ -134,6 +134,9 @@ pub struct Client {
     clip_tick_counter: u8,
     host_pacing_last: Option<PacingTelemetry>,
     host_pacing_last_at: Instant,
+    /// Stream-tick counter driving the ~2s control-channel ping on the SFU
+    /// host connection (125 ticks at the 16ms stream tick).
+    host_sfu_ping_ticks: u64,
     /// Realtime WS reconnect/liveness state machine (backoff, edge detection,
     /// sleep/wake gap, heartbeat cadence). Pure decision logic, unit-tested in
     /// `reconnect.rs`; `connection_tick` is its IO adapter.
@@ -241,6 +244,7 @@ impl Client {
             clip_tick_counter: 0,
             host_pacing_last: None,
             host_pacing_last_at: Instant::now(),
+            host_sfu_ping_ticks: 0,
             reconnect: reconnect::ReconnectSupervisor::new(),
         }
     }

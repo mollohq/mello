@@ -5,6 +5,7 @@
 #include <wrl/client.h>
 #include <nvcuvid.h>
 #include <cuviddec.h>
+#include <mutex>
 
 namespace mello::video {
 
@@ -19,6 +20,7 @@ public:
     void*            shared_frame_handle() const override;
     DXGI_FORMAT      shared_frame_format() const override;
     uint32_t         shared_frame_uv_offset() const override;
+    void             publish_d3d11_frame() override;
     bool             supports_codec(VideoCodec codec) const override;
     const char*      name() const override { return "NVDEC"; }
 
@@ -61,8 +63,15 @@ private:
     Microsoft::WRL::ComPtr<ID3D11Texture2D> shared_frame_tex_;
     void* shared_frame_handle_ = nullptr;
 
-    void* cuda_gfx_resource_ = nullptr; // CUgraphicsResource for frame_tex_ (interop only)
-    std::vector<uint8_t> nv12_buf_;    // fallback only (when interop unavailable)
+    std::vector<uint8_t> host_r8_buf_; // R8 NV12-layout staging (decode thread → host)
+    std::vector<uint8_t> nv12_buf_;    // NV12 fallback staging
+
+    // Deferred D3D11 work: CUDA callbacks run on the decode thread and must
+    // not touch D3D11 (including cuGraphicsMapResources on registered textures).
+    std::mutex publish_mutex_;
+    bool pending_shared_copy_ = false;
+    bool pending_r8_upload_ = false;
+    bool pending_nv12_upload_ = false;
 };
 
 } // namespace mello::video

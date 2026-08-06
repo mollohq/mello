@@ -8,6 +8,9 @@ pub enum StreamError {
     #[error("SFU connection failed: {0}")]
     SfuConnectFailed(String),
 
+    #[error("SFU send backpressure: {0}")]
+    SfuSendBackpressure(String),
+
     #[error("SFU send failed: {0}")]
     SfuSendFailed(String),
 

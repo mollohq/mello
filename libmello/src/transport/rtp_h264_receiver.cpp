@@ -152,7 +152,10 @@ public:
         : callbacks_(std::move(callbacks)),
           payload_type_(config.payload_type & 0x7f),
           pli_cooldown_(std::max(config.pli_cooldown,
-                                 std::chrono::milliseconds::zero())) {}
+                                 std::chrono::milliseconds::zero())),
+          nack_max_attempts_(config.nack_max_attempts != 0
+                                 ? config.nack_max_attempts
+                                 : kMaxNackAttempts) {}
 
     void on_rtp_packet(const uint8_t* data, size_t size, TimePoint now) {
         ++stats_.packets;
@@ -260,6 +263,7 @@ private:
         uint32_t timestamp = 0;
         std::map<int64_t, Packet> packets;
         TimePoint first_arrival{};
+        TimePoint last_arrival{};
         bool first_observed_was_marker = false;
         bool has_marker = false;
         int64_t marker_sequence = 0;
@@ -417,7 +421,7 @@ private:
                 should_send =
                     now - missing.first_detected >= kReorderGrace ||
                     missing.newer_packets >= kNewerPacketGrace;
-            } else if (missing.attempts < kMaxNackAttempts) {
+            } else if (missing.attempts < nack_max_attempts_) {
                 should_send = now - missing.last_nack >= kNackRepeat;
             }
 
@@ -498,6 +502,8 @@ private:
             access_unit.has_marker = true;
             access_unit.marker_sequence = extended_sequence;
         }
+
+        access_unit.last_arrival = now;
 
         update_peaks();
     }
@@ -686,8 +692,14 @@ private:
                 continue;
             }
 
+            // Expire on stall (no fragment progress within the deadline) or
+            // on hitting the hard age cap. Sender pacing spreads an AU's
+            // fragments across its wire time, so a large AU legitimately
+            // needs longer than 120 ms end-to-end — but only while fragments
+            // keep arriving. A lost tail stops progress and expires quickly.
             const bool expired =
-                now - access_unit.first_arrival >= kAccessUnitDeadline;
+                now - access_unit.last_arrival >= kAccessUnitDeadline ||
+                now - access_unit.first_arrival >= kAccessUnitHardDeadline;
             if (!boundary_known) {
                 if (expired) {
                     drop_access_unit(index, now, false, true);
@@ -867,6 +879,7 @@ private:
     Callbacks callbacks_;
     uint8_t payload_type_ = 96;
     std::chrono::milliseconds pli_cooldown_{1000};
+    size_t nack_max_attempts_ = kMaxNackAttempts;
     Stats stats_;
 
     std::vector<AccessUnit> access_units_;

@@ -46,7 +46,7 @@ impl QualityPreset {
                 height: 720,
                 fps: 60,
                 bitrate_kbps: match codec {
-                    Codec::H264 => 4_000,
+                    Codec::H264 => 5_000,
                     Codec::Av1 => 2_500,
                 },
                 fec_n: 4,
@@ -56,7 +56,7 @@ impl QualityPreset {
                 height: 720,
                 fps: 30,
                 bitrate_kbps: match codec {
-                    Codec::H264 => 2_500,
+                    Codec::H264 => 3_000,
                     Codec::Av1 => 1_500,
                 },
                 fec_n: 3,

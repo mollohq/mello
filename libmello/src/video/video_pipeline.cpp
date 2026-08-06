@@ -5,6 +5,7 @@
 #include <chrono>
 #include <cstring>
 #include <cstdio>
+#include <algorithm>
 
 #ifdef __APPLE__
 #include <CoreVideo/CoreVideo.h>
@@ -485,7 +486,17 @@ bool VideoPipeline::start_viewer(const PipelineConfig& config, FrameCallback on_
     frames_decoded_    = 0;
     decode_errors_     = 0;
     last_present_us_   = 0;
-    jitter_primed_     = false;
+
+    // Async decode: feed_packet only enqueues; decode_thread_ runs
+    // decoder_->decode()/get_frame(). Reset stale queue state from any
+    // previous run, then launch.
+    if (decoder_) {
+        {
+            std::lock_guard<std::mutex> lock(decode_jobs_mutex_);
+            decode_jobs_.clear();
+        }
+        decode_thread_ = std::thread([this] { decode_thread_func(); });
+    }
 
     MELLO_LOG_INFO(TAG, "Viewer pipeline starting: decoder=%s codec=H264 res=%ux%u",
         decoder_ ? decoder_->name() : "none",
@@ -502,10 +513,22 @@ void VideoPipeline::stop_viewer() {
     if (!viewer_running_.load()) return;
     viewer_running_ = false;
 
+    // Wake the decode thread and join it BEFORE shutting down the decoder —
+    // decoder_->decode()/get_frame() may only run on the decode thread.
+    decode_jobs_cv_.notify_all();
+    if (decode_thread_.joinable()) {
+        // stop_viewer is never called from the decode thread today, but
+        // guard against self-join anyway.
+        if (decode_thread_.get_id() == std::this_thread::get_id())
+            decode_thread_.detach();
+        else
+            decode_thread_.join();
+    }
+
     uint64_t uptime_s = (now_us() - viewer_start_time_) / 1'000'000;
 
     MELLO_LOG_INFO(TAG, "Viewer pipeline stopped: uptime=%llus frames_decoded=%llu decode_errors=%llu",
-        uptime_s, frames_decoded_, decode_errors_);
+        uptime_s, frames_decoded_.load(), decode_errors_.load());
 
     if (decoder_) decoder_->shutdown();
 #ifdef _WIN32
@@ -516,8 +539,14 @@ void VideoPipeline::stop_viewer() {
     staging_.reset();
 #endif
 
+    // Drop any jobs the decode thread did not consume
+    {
+        std::lock_guard<std::mutex> lock(decode_jobs_mutex_);
+        decode_jobs_.clear();
+    }
+
     // Drain any remaining frames in the ring buffer
-    while (decode_queue_depth() > 0) {
+    while (decoded_ring_depth() > 0) {
 #ifdef __APPLE__
         void* buf = pop_decoded();
         if (buf) CVPixelBufferRelease((CVPixelBufferRef)buf);
@@ -529,76 +558,107 @@ void VideoPipeline::stop_viewer() {
     rgba_buf_.clear();
 }
 
+// feed_packet runs on the caller's (client tick) thread and is O(copy):
+// it enqueues the packet and returns. Decode errors from the async decode
+// thread surface via the decode_errors_ counter only; the return value is
+// "accepted", matching how callers already treat it.
 bool VideoPipeline::feed_packet(const uint8_t* data, size_t size, bool is_keyframe) {
     if (!viewer_running_.load() || !decoder_) return false;
-
-    DecodeFeedResult result = decoder_->decode(data, size, is_keyframe);
-    if (result == DecodeFeedResult::Error) {
-        decode_errors_++;
-        return false;
+    {
+        std::lock_guard<std::mutex> lock(decode_jobs_mutex_);
+        if (decode_jobs_.size() >= DECODE_QUEUE_CAP) {
+            // Shed load: drop the oldest non-keyframe job (never the newest
+            // keyframe — it's the recovery point).
+            auto drop = std::find_if(decode_jobs_.begin(), decode_jobs_.end(),
+                [](const DecodeJob& j) { return !j.is_keyframe; });
+            if (drop != decode_jobs_.end()) {
+                decode_jobs_.erase(drop);
+            } else {
+                decode_jobs_.pop_front();
+            }
+        }
+        DecodeJob job;
+        job.bytes.assign(data, data + size);
+        job.is_keyframe = is_keyframe;
+        decode_jobs_.push_back(std::move(job));
     }
-    if (result == DecodeFeedResult::Accepted) return true;
+    decode_jobs_cv_.notify_one();
+    return true;
+}
+
+// Runs on decode_thread_ only. decoder_->decode() and get_frame()/
+// get_frame_buffer() must ONLY ever execute here.
+void VideoPipeline::decode_thread_func() {
+    for (;;) {
+        DecodeJob job;
+        {
+            std::unique_lock<std::mutex> lock(decode_jobs_mutex_);
+            decode_jobs_cv_.wait(lock, [this] {
+                return !decode_jobs_.empty() || !viewer_running_.load();
+            });
+            if (!viewer_running_.load() && decode_jobs_.empty()) return;
+            job = std::move(decode_jobs_.front());
+            decode_jobs_.pop_front();
+        }
+
+        DecodeFeedResult result = decoder_->decode(job.bytes.data(), job.bytes.size(), job.is_keyframe);
+        if (result == DecodeFeedResult::Error) {
+            decode_errors_++;
+            continue;
+        }
+        if (result == DecodeFeedResult::Accepted) continue;
 
 #ifdef _WIN32
-    ID3D11Texture2D* decoded = decoder_->get_frame();
-    if (!decoded) {
-        MELLO_LOG_ERROR(TAG, "Decoder %s reported a frame without a texture", decoder_->name());
-        decode_errors_++;
-        return false;
-    }
-
-    push_decoded(decoded);
+        ID3D11Texture2D* decoded = decoder_->get_frame();
+        if (!decoded) {
+            MELLO_LOG_ERROR(TAG, "Decoder %s reported a frame without a texture", decoder_->name());
+            decode_errors_++;
+            continue;
+        }
+        push_decoded(decoded);
 #elif defined(__APPLE__)
-    void* decoded = decoder_->get_frame_buffer();
-    if (!decoded) {
-        MELLO_LOG_ERROR(TAG, "Decoder %s reported a frame without a pixel buffer", decoder_->name());
-        decode_errors_++;
-        return false;
-    }
-
-    CVPixelBufferRetain((CVPixelBufferRef)decoded);
-    push_decoded(decoded);
-#else
-    (void)data; (void)size; (void)is_keyframe;
-    return false;
+        void* decoded = decoder_->get_frame_buffer();
+        if (!decoded) {
+            MELLO_LOG_ERROR(TAG, "Decoder %s reported a frame without a pixel buffer", decoder_->name());
+            decode_errors_++;
+            continue;
+        }
+        CVPixelBufferRetain((CVPixelBufferRef)decoded);
+        push_decoded(decoded);
 #endif
 
-    frames_decoded_++;
-
-    if (frames_decoded_ % 300 == 0) {
-        uint64_t uptime_s = (now_us() - viewer_start_time_) / 1'000'000;
-        MELLO_LOG_INFO(TAG, "viewer: uptime=%llus decoded=%llu decode_errors=%llu dec=%s ring=%zu",
-            uptime_s, frames_decoded_, decode_errors_, decoder_->name(), decode_queue_depth());
+        frames_decoded_++;
+        if (frames_decoded_.load() % 300 == 0) {
+            uint64_t uptime_s = (now_us() - viewer_start_time_) / 1'000'000;
+            MELLO_LOG_INFO(TAG, "viewer: uptime=%llus decoded=%llu decode_errors=%llu dec=%s ring=%zu",
+                uptime_s, frames_decoded_.load(), decode_errors_.load(), decoder_->name(), decoded_ring_depth());
+        }
     }
+}
 
-    return true;
+bool VideoPipeline::jitter_should_present(size_t depth, uint64_t now_us_value) const {
+    if (depth == 0) return false;
+    if (depth >= JITTER_TARGET) return true;
+    // depth == 1: present on cadence (~90% of frame interval since last
+    // present) so a steady stream keeps a one-frame cushion, and after an
+    // underrun the next frame is not artificially delayed.
+    if (last_present_us_ == 0) return true;
+    const uint32_t fps = config_.fps > 0 ? config_.fps : 60;
+    const uint64_t interval_us = 1'000'000ULL / fps;
+    return now_us_value - last_present_us_ >= interval_us * 9 / 10;
 }
 
 bool VideoPipeline::present_frame() {
 #ifdef _WIN32
     if (!viewer_running_.load()) return false;
 
-    // Jitter buffer: hold back until the ring has enough depth to smooth
-    // inter-frame timing jitter. Bypass the hold if we've waited too long
-    // (avoids adding latency when frame rate is genuinely low).
-    {
-        size_t depth = decode_queue_depth();
-        if (depth == 0) return false;
-
-        if (!jitter_primed_ && depth < JITTER_TARGET) {
-            uint64_t now = now_us();
-            if (last_present_us_ == 0) {
-                last_present_us_ = now;
-            }
-            if (now - last_present_us_ < JITTER_MAX_HOLD_US) {
-                return false; // hold — ring not full enough yet
-            }
-        }
-        jitter_primed_ = true;
-    }
+    if (!jitter_should_present(decoded_ring_depth(), now_us())) return false;
 
     ID3D11Texture2D* frame = pop_decoded();
     if (!frame) return false;
+    if (decoder_) {
+        decoder_->publish_d3d11_frame();
+    }
     last_present_us_ = now_us();
 
     // Native GPU presenter path: first try direct decoded-texture handoff.
@@ -655,9 +715,9 @@ bool VideoPipeline::present_frame() {
     staging_->copy_from(frame, true);
     staging_->read_rgba(rgba_buf_.data());
 
-    if (frames_decoded_ < 2 && getenv("MELLO_DUMP_FRAMES")) {
+    if (frames_decoded_.load() < 2 && getenv("MELLO_DUMP_FRAMES")) {
         char path[256];
-        snprintf(path, sizeof(path), "mello_viewer_frame_%llu.bmp", frames_decoded_);
+        snprintf(path, sizeof(path), "mello_viewer_frame_%llu.bmp", frames_decoded_.load());
         save_bmp_rgba(path, rgba_buf_.data(), config_.width, config_.height);
     }
 
@@ -670,15 +730,7 @@ bool VideoPipeline::present_frame() {
     if (!viewer_running_.load()) return false;
 
     {
-        size_t depth = decode_queue_depth();
-        if (depth == 0) return false;
-
-        if (!jitter_primed_ && depth < JITTER_TARGET) {
-            uint64_t now = now_us();
-            if (last_present_us_ == 0) last_present_us_ = now;
-            if (now - last_present_us_ < JITTER_MAX_HOLD_US) return false;
-        }
-        jitter_primed_ = true;
+        if (!jitter_should_present(decoded_ring_depth(), now_us())) return false;
     }
 
     void* popped = pop_decoded();
@@ -702,9 +754,9 @@ bool VideoPipeline::present_frame() {
         const uint8_t permuteMap[4] = {2, 1, 0, 3};
         vImagePermuteChannels_ARGB8888(&src, &dest, permuteMap, kvImageNoFlags);
 
-        if (frames_decoded_ <= 2 && getenv("MELLO_DUMP_FRAMES")) {
+        if (frames_decoded_.load() <= 2 && getenv("MELLO_DUMP_FRAMES")) {
             char path[256];
-            snprintf(path, sizeof(path), "mello_viewer_frame_%llu.bmp", frames_decoded_);
+            snprintf(path, sizeof(path), "mello_viewer_frame_%llu.bmp", frames_decoded_.load());
             save_bmp_rgba(path, rgba_buf_.data(), w, h);
         }
 

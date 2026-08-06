@@ -48,7 +48,7 @@ public:
 
     const char* handle_remote_offer(const char* sdp);
 
-    bool video_send_access_unit(
+    SendAccessUnitResult video_send_access_unit(
         const uint8_t* data,
         size_t size,
         uint64_t capture_ts_us
@@ -75,6 +75,7 @@ private:
         Pli = 0,
         Remb = 1,
         LocalIdrNeeded = 2,
+        GccTarget = 3,
     };
 
     struct QueuedVideoFeedback {
@@ -120,6 +121,9 @@ private:
     void stop_video_pipeline() noexcept;
     void teardown_video() noexcept;
     void enqueue_video_feedback(VideoFeedbackType type, uint32_t remb_bps = 0) noexcept;
+    // Smooths a control-channel RTT sample and forwards it as the NACK
+    // retry-budget hint to the video receiver session.
+    void apply_rtt_sample(float rtt) noexcept;
     void apply_loopback_ice_config();
     void begin_local_sdp_wait(uint64_t generation);
     const char* wait_for_local_sdp(uint64_t generation);
@@ -142,6 +146,10 @@ private:
     std::string video_cname_;
     uint64_t pacing_target_bps_ = 4'000'000;
     uint32_t receive_target_bps_ = 4'000'000;
+    // Remote SDP advertised the TWCC RTP header extension on stream video.
+    bool twcc_supported_ = false;
+    // Remote SDP advertised the ULPFEC payload type (127) on stream video.
+    bool fec_supported_ = false;
 
     std::string local_sdp_;
     std::mutex sdp_mutex_;
