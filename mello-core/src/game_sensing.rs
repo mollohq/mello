@@ -45,6 +45,17 @@ const UNKNOWN_DENYLIST: &[&str] = &[
     "teams.exe",
     "ms-teams.exe",
     "obs64.exe",
+    // terminals/editors/dev tools
+    "windowsterminal.exe",
+    "wt.exe",
+    "cmd.exe",
+    "powershell.exe",
+    "pwsh.exe",
+    "conhost.exe",
+    "code.exe",
+    "cursor.exe",
+    "devenv.exe",
+    "claude.exe",
     // system/self
     "explorer.exe",
     "taskmgr.exe",
@@ -187,17 +198,35 @@ fn scan_loop(ctx: &SendCtx, db: &Arc<RwLock<GameDatabase>>, tx: &Sender<GameEven
     log::info!("[game-sensor] scan loop ended");
 }
 
-/// A fullscreen/foreground windowed process that is not in the game DB and not
-/// on the denylist. Pure; debounce lives in [`UnknownTracker`].
+/// Install-location classes that are never games: system dirs, Store apps,
+/// and `%LOCALAPPDATA%\Programs` (the default Electron install target —
+/// Claude, VS Code, Discord forks, Slack all live there). Lowercase,
+/// matched as substrings of the full exe path.
+const UNKNOWN_PATH_DENYLIST: &[&str] = &[
+    "\\windows\\system32\\",
+    "\\windows\\systemapps\\",
+    "\\windowsapps\\",
+    "\\appdata\\local\\programs\\",
+];
+
+/// A fullscreen/foreground windowed process that is not in the game DB and
+/// not denied by exe name or install location. Merely-foreground candidates
+/// (games played windowed) are accepted, which is why the path denylist
+/// matters: any focused desktop app would otherwise qualify — the exact
+/// false positives seen in testing were claude.exe (Electron under
+/// AppData\Local\Programs) and WindowsTerminal.exe (a Store app).
+/// Pure; debounce lives in [`UnknownTracker`].
 fn pick_unknown_candidate(db: &GameDatabase, processes: &[RawGameProcess]) -> Option<GameEvent> {
     processes
         .iter()
         .filter(|p| {
+            let path = p.path.to_lowercase();
             (p.is_fullscreen || p.is_foreground)
                 && !p.window_title.is_empty()
                 && !p.path.is_empty()
                 && db.lookup_by_exe(&p.exe).is_none()
                 && !UNKNOWN_DENYLIST.contains(&p.exe.to_lowercase().as_str())
+                && !UNKNOWN_PATH_DENYLIST.iter().any(|d| path.contains(d))
         })
         // Fullscreen beats merely-foreground when both qualify.
         .max_by_key(|p| p.is_fullscreen)
@@ -422,6 +451,27 @@ mod tests {
         // Denylisted apps are never candidates, however game-like they look.
         assert!(pick_unknown_candidate(&db, &[unknown_proc("chrome.exe", true, true)]).is_none());
         assert!(pick_unknown_candidate(&db, &[unknown_proc("OBS64.exe", true, true)]).is_none());
+    }
+
+    #[test]
+    fn unknown_candidate_rejects_denied_install_locations() {
+        let db = test_db();
+        // The exact false positives from live testing: an Electron app under
+        // AppData\Local\Programs and a Store app under WindowsApps.
+        let mut electron = unknown_proc("someapp.exe", false, true);
+        electron.path = "C:\\Users\\bob\\AppData\\Local\\Programs\\SomeApp\\someapp.exe".into();
+        assert!(pick_unknown_candidate(&db, &[electron]).is_none());
+
+        let mut store_app = unknown_proc("terminal.exe", false, true);
+        store_app.path = "C:\\Program Files\\WindowsApps\\Microsoft.Terminal\\terminal.exe".into();
+        assert!(pick_unknown_candidate(&db, &[store_app]).is_none());
+
+        // A Steam-library exe stays eligible.
+        let mut steam_game = unknown_proc("night stones.exe", false, true);
+        steam_game.path =
+            "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Night Stones\\night stones.exe"
+                .into();
+        assert!(pick_unknown_candidate(&db, &[steam_game]).is_some());
     }
 
     #[test]
