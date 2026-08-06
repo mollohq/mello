@@ -240,6 +240,171 @@ fn sample_crews(n: usize) -> Vec<mello_core::crew::Crew> {
         .collect()
 }
 
+fn sample_user() -> mello_core::events::User {
+    mello_core::events::User {
+        id: "user-1".into(),
+        username: "tester".into(),
+        display_name: "Test User".into(),
+        tag: "#0001".into(),
+        created_at: None,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Auth / session
+// ---------------------------------------------------------------------------
+
+/// `OnboardingReady` lands the user on step **3**, not 4 — reaching "done"
+/// needs a separate later event (`EmailLinked` / `SocialLinked` / `LoggedIn`)
+/// or one of the local skip shortcuts. Pinned because it is surprising: an
+/// account exists and `logged-in` is true while onboarding is still on screen.
+#[test]
+fn onboarding_ready_logs_in_but_stays_on_step_three() {
+    let mut h = Harness::new();
+
+    h.emit(Event::OnboardingReady {
+        user: sample_user(),
+    });
+
+    assert!(h.app().get_logged_in(), "the account exists at this point");
+    assert_eq!(
+        h.app().get_onboarding_step(),
+        3,
+        "OnboardingReady deliberately stops at step 3, not 4"
+    );
+    assert_eq!(h.app().get_user_name().as_str(), "Test User");
+    assert_eq!(visible_screens(&h), vec![Screen::Onboarding]);
+
+    let cmds = h.commands();
+    assert!(
+        cmds.iter().any(|c| matches!(c, Command::LoadMyCrews)),
+        "expected LoadMyCrews after onboarding completes, got {cmds:?}"
+    );
+}
+
+/// A successful login must land on a usable app screen, not a dead state.
+#[test]
+fn login_success_shows_the_app() {
+    let mut h = Harness::new();
+
+    h.emit(Event::LoggedIn {
+        user: sample_user(),
+    });
+
+    assert!(h.app().get_logged_in());
+    assert!(
+        h.app().get_onboarding_step() > 3,
+        "a logged-in user must be past onboarding, else the app branch cannot match"
+    );
+    assert_eq!(visible_screens(&h), vec![Screen::App]);
+    h.assert_not_blank();
+}
+
+/// Reason-string-driven control flow: an **empty** reason means "session
+/// restore failed" and silently drops the user back to step 1, while a
+/// non-empty reason is a real login error that must surface to the user.
+///
+/// Pinned because the two paths are distinguished only by an empty string —
+/// a refactor that fills in a default message would silently disable the
+/// restore fallback.
+#[test]
+fn empty_login_failure_reason_means_restore_failed() {
+    let mut h = Harness::new();
+    h.app().set_onboarding_step(4);
+
+    h.emit(Event::LoginFailed {
+        reason: String::new(),
+    });
+
+    assert_eq!(
+        h.app().get_onboarding_step(),
+        1,
+        "an empty reason is the restore-failed path and returns to onboarding"
+    );
+    assert!(!h.app().get_logged_in());
+}
+
+#[test]
+fn real_login_failure_surfaces_an_error_and_stays_put() {
+    let mut h = Harness::new();
+    h.app().set_onboarding_step(4);
+
+    h.emit(Event::LoginFailed {
+        reason: "invalid credentials".into(),
+    });
+
+    assert_eq!(
+        h.app().get_login_error().as_str(),
+        "invalid credentials",
+        "a real failure must be shown to the user"
+    );
+    assert_eq!(
+        h.app().get_onboarding_step(),
+        4,
+        "a real failure must not silently restart onboarding"
+    );
+    assert!(!h.app().get_login_loading(), "the spinner must be cleared");
+}
+
+// ---------------------------------------------------------------------------
+// Voice
+// ---------------------------------------------------------------------------
+
+/// Deafening implies muting, and undeafening restores the *previous* mic state
+/// rather than blindly unmuting.
+#[test]
+fn deafen_mutes_and_undeafen_restores_previous_mic_state() {
+    let mut h = Harness::new();
+
+    // Deafen while unmuted: mic must be muted as a side effect.
+    h.app().invoke_deafen_toggle();
+    assert!(h.app().get_deafened());
+    assert!(h.app().get_mic_muted(), "deafening should mute the mic");
+
+    // Undeafen: mic returns to its pre-deafen state (unmuted).
+    h.app().invoke_deafen_toggle();
+    assert!(!h.app().get_deafened());
+    assert!(
+        !h.app().get_mic_muted(),
+        "undeafening should restore the mic to its pre-deafen state"
+    );
+
+    let cmds = h.commands();
+    assert!(
+        cmds.iter().any(|c| matches!(c, Command::SetDeafen { .. })),
+        "expected SetDeafen commands, got {cmds:?}"
+    );
+}
+
+/// Deafening while *already muted* must leave the mic muted afterwards.
+#[test]
+fn undeafen_keeps_mic_muted_when_it_was_muted_before() {
+    let h = Harness::new();
+
+    h.app().invoke_mic_toggle();
+    assert!(h.app().get_mic_muted());
+
+    h.app().invoke_deafen_toggle();
+    h.app().invoke_deafen_toggle();
+
+    assert!(
+        h.app().get_mic_muted(),
+        "the user muted deliberately; undeafening must not unmute them"
+    );
+}
+
+/// core → UI: voice state drives the in-call indicator.
+#[test]
+fn voice_state_change_updates_the_ui() {
+    let mut h = Harness::new();
+
+    h.emit(Event::VoiceStateChanged { in_call: true });
+    assert!(h.app().get_in_voice());
+
+    h.emit(Event::VoiceStateChanged { in_call: false });
+    assert!(!h.app().get_in_voice());
+}
+
 /// UI → core: the mute path, end to end through the real wiring.
 #[test]
 fn mute_toggle_emits_set_mute_and_broadcast() {
