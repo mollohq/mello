@@ -49,6 +49,9 @@
     border: 2px solid #1e1e22;
   }
   .av.big { width: 28px; height: 28px; font-size: 11px; }
+  .av.xl  { width: 40px; height: 40px; font-size: 14px; border-radius: 9px; }
+  .stack.xl .av + .av { margin-left: -10px; }
+  .av.more { background: #26262c; color: #a8a8ae; }
   .av.a0 { background: #EB4D5F; } .av.a1 { background: #4a9eff; }
   .av.a2 { background: #4ade80; color: #123; } .av.a3 { background: #a78bfa; }
   .badge-av {
@@ -180,21 +183,18 @@
   <div>
     <div class="card">
       <div class="tag voice"><span class="dot"></span><span>VOICE</span></div>
-      <div style="display:flex;gap:10px;align-items:center;">
-        <div class="gicon" style="background:#26262c;font-size:18px;">🎙</div>
-        <div>
-          <div class="who">General</div>
-          <div class="what">Ostkatt, b0bben +1 · 9h 7m</div>
-        </div>
+      <div class="who">General</div>
+      <div class="what">9h 7m · 4 in call</div>
+      <div style="display:flex;margin-top:10px;" class="stack xl">
+        <div class="av xl a1">O</div>
+        <div class="av xl a0">B</div>
+        <div class="av xl a2">W</div>
+        <div class="av xl more">+1</div>
       </div>
-      <div style="display:flex;margin-top:10px;" class="stack">
-        <div class="av a1">O</div>
-        <div class="av a0">B</div>
-        <div class="av a2">W</div>
-      </div>
+      <div class="what" style="margin-top:8px;">Ostkatt, b0bben +2</div>
       <div class="meta">2 days ago</div>
     </div>
-    <div class="label">Voice: channel leads, avatars secondary</div>
+    <div class="label">Voice: people are the content — 40px avatars + overflow chip</div>
   </div>
 </div>
 

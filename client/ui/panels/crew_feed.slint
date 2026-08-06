@@ -8,10 +8,11 @@ import { GameIcon } from "../components/game_icon.slint";
 component AvatarDot inherits Rectangle {
     in property <string> initials;
     in property <int> color-index: 0;
+    in property <length> size: 18px;
 
-    width: 18px;
-    height: 18px;
-    border-radius: 4px;
+    width: size;
+    height: size;
+    border-radius: max(4px, size / 4.5);
     border-width: 2px;
     border-color: Theme.card-bg;
     background: color-index == 0 ? #EB4D5F :
@@ -35,24 +36,30 @@ component RecapAvatar inherits Rectangle {
     in property <int> color-index: 0;
     in property <image> avatar;
     in property <bool> has-avatar: false;
+    /// Default matches the recap rows; session cards scale this up so the
+    /// people are the visual, not a footnote.
+    in property <length> size: 18px;
 
-    width: 18px;
-    height: 18px;
+    width: size;
+    height: size;
 
     if !has-avatar: AvatarDot {
         initials: root.initials;
         color-index: root.color-index;
+        size: root.size;
     }
 
     if has-avatar: Rectangle {
-        width: 18px;
-        height: 18px;
-        border-radius: 4px;
+        width: root.size;
+        height: root.size;
+        border-radius: max(4px, root.size / 4.5);
         clip: true;
+        border-width: root.size > 20px ? 2px : 0px;
+        border-color: Theme.card-bg;
         Image {
             source: root.avatar;
-            width: 18px;
-            height: 18px;
+            width: root.size;
+            height: root.size;
             image-fit: cover;
         }
     }
@@ -775,8 +782,8 @@ component SessionCard inherits Rectangle {
             }
         }
 
-        // Identity row: game art (streamer avatar badged) or channel tile.
-        HorizontalLayout {
+        // ── STREAM: game art leads, streamer avatar badged on its corner ──
+        if is-stream: HorizontalLayout {
             spacing: 10px;
             height: 44px;
 
@@ -787,7 +794,7 @@ component SessionCard inherits Rectangle {
                     height: 40px;
                     y: (parent.height - self.height) / 2;
 
-                    if is-stream: GameIcon {
+                    GameIcon {
                         game-id: card.game-id;
                         short-name: card.game-short-name != "" ? card.game-short-name :
                                     card.game-name != "" ? card.game-name : "GG";
@@ -796,22 +803,7 @@ component SessionCard inherits Rectangle {
                         has-runtime-icon: card.game-has-icon;
                         size: 40px;
                     }
-                    if !is-stream: Rectangle {
-                        width: 40px;
-                        height: 40px;
-                        border-radius: 8px;
-                        background: Theme.graphic-light;
-                        Image {
-                            source: @image-url("../icons/mic.svg");
-                            colorize: Theme.text-secondary;
-                            width: 18px;
-                            height: 18px;
-                            x: (parent.width - self.width) / 2;
-                            y: (parent.height - self.height) / 2;
-                        }
-                    }
-                    // Streamer avatar badged on the game icon corner.
-                    if is-stream && (card.actor-has-avatar || card.actor-initials != ""): RecapAvatar {
+                    if card.actor-has-avatar || card.actor-initials != "": RecapAvatar {
                         initials: card.actor-initials;
                         avatar: card.actor-avatar;
                         has-avatar: card.actor-has-avatar;
@@ -827,23 +819,16 @@ component SessionCard inherits Rectangle {
                 horizontal-stretch: 1;
 
                 Text {
-                    text: is-stream
-                        ? (card.game-name != "" ? card.game-name : card.title)
-                        : (card.channel-name != "" ? card.channel-name : card.title);
+                    text: card.game-name != "" ? card.game-name : card.title;
                     font-size: 13px;
                     font-weight: 600;
                     color: Theme.text-primary;
                     overflow: elide;
                 }
-
                 Text {
-                    text: is-stream
-                        ? (card.actor-name != "" ? "by " + card.actor-name
+                    text: card.actor-name != "" ? "by " + card.actor-name
                             + (card.duration-human != "" ? " · " + card.duration-human : "")
-                            : card.duration-human)
-                        : (card.participants-line != "" ? card.participants-line
-                            + (card.duration-human != "" ? " · " + card.duration-human : "")
-                            : card.duration-human);
+                        : card.duration-human;
                     font-size: 11px;
                     color: Theme.text-sub;
                     overflow: elide;
@@ -851,38 +836,85 @@ component SessionCard inherits Rectangle {
             }
         }
 
-        // Voice: stacked real participant avatars.
+        if is-stream && card.peak-count > 0: Text {
+            text: "\{card.peak-count} watched at peak";
+            font-size: 11px;
+            color: Theme.text-sub;
+        }
+
+        // ── VOICE: the people are the content, so they get the space ──
+        // Channel + meta as a compact heading, then a large avatar cluster
+        // that fills the card instead of an empty stretch gap.
+        if !is-stream: VerticalLayout {
+            spacing: 2px;
+            Text {
+                text: card.channel-name != "" ? card.channel-name : card.title;
+                font-size: 13px;
+                font-weight: 600;
+                color: Theme.text-primary;
+                overflow: elide;
+            }
+            Text {
+                text: card.duration-human
+                    + (card.peak-count > 0 ? " · \{card.peak-count} in call" : "");
+                font-size: 11px;
+                color: Theme.text-sub;
+                overflow: elide;
+            }
+        }
+
+        if !is-stream: Rectangle { height: 6px; }
+
         if !is-stream && card.participant-count > 0: HorizontalLayout {
-            spacing: -7px;
-            height: 20px;
+            spacing: -10px;
+            alignment: start;
+            height: 40px;
 
             RecapAvatar {
                 initials: card.part0-initials;
                 avatar: card.part0-avatar;
                 has-avatar: card.part0-has-avatar;
                 color-index: 0;
+                size: 40px;
             }
             if card.participant-count > 1: RecapAvatar {
                 initials: card.part1-initials;
                 avatar: card.part1-avatar;
                 has-avatar: card.part1-has-avatar;
                 color-index: 1;
+                size: 40px;
             }
             if card.participant-count > 2: RecapAvatar {
                 initials: card.part2-initials;
                 avatar: card.part2-avatar;
                 has-avatar: card.part2-has-avatar;
                 color-index: 2;
+                size: 40px;
+            }
+            // Overflow chip: the roster is wider than the three avatar slots.
+            if card.participant-count > 3: Rectangle {
+                width: 40px;
+                height: 40px;
+                border-radius: 9px;
+                border-width: 2px;
+                border-color: Theme.card-bg;
+                background: Theme.graphic-light;
+                Text {
+                    text: "+\{card.participant-count - 3}";
+                    font-size: 12px;
+                    font-weight: 600;
+                    color: Theme.text-secondary;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
             }
         }
 
-        // Peak attendance/viewership, when the ledger recorded one.
-        if card.peak-count > 0: Text {
-            text: is-stream
-                ? "\{card.peak-count} watched at peak"
-                : "\{card.peak-count} at peak";
+        if !is-stream && card.participants-line != "": Text {
+            text: card.participants-line;
             font-size: 11px;
             color: Theme.text-sub;
+            overflow: elide;
         }
 
         Rectangle { vertical-stretch: 1; }
