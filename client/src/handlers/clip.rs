@@ -678,17 +678,25 @@ fn build_feed_card(
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
-    let (actor_avatar, actor_has_avatar) = if session_kind == "stream" {
-        let streamer_id = data
-            .get("streamer_id")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-        resolve_avatar(ctx, streamer_id)
-    } else {
-        (slint::Image::default(), false)
+    // Actor avatar: the streamer for streams, the session owner for game
+    // sessions (badged on the icon / leading the footer stack).
+    let actor_avatar_id = match backend_type {
+        "stream_session" => data.get("streamer_id").and_then(|v| v.as_str()),
+        "game_session" => data
+            .get("player_ids")
+            .and_then(|v| v.as_array())
+            .and_then(|a| a.first())
+            .and_then(|v| v.as_str()),
+        _ => None,
     };
+    let (actor_avatar, actor_has_avatar) = match actor_avatar_id {
+        Some(id) if !id.is_empty() => resolve_avatar(ctx, id),
+        _ => (slint::Image::default(), false),
+    };
+    // Voice sessions carry participant_*; game sessions carry player_*.
     let participant_names: Vec<String> = data
         .get("participant_names")
+        .or_else(|| data.get("player_names"))
         .and_then(|v| v.as_array())
         .map(|a| {
             a.iter()
@@ -707,6 +715,7 @@ fn build_feed_card(
     };
     let participant_ids: Vec<String> = data
         .get("participant_ids")
+        .or_else(|| data.get("player_ids"))
         .and_then(|v| v.as_array())
         .map(|a| {
             a.iter()

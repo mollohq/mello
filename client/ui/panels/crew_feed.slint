@@ -1034,7 +1034,8 @@ component GameSessionCard inherits Rectangle {
 
         Rectangle { vertical-stretch: 1; }
 
-        // Footer: participants + duration
+        // Footer: real participant avatars + humanized duration (matches the
+        // voice/stream session cards; anonymous dots read as placeholders).
         HorizontalLayout {
             height: 20px;
 
@@ -1042,13 +1043,28 @@ component GameSessionCard inherits Rectangle {
                 spacing: -7px;
                 horizontal-stretch: 1;
                 alignment: start;
-                AvatarDot { initials: card.actor-initials; color-index: 0; }
-                if card.participant-count > 1: AvatarDot { initials: ""; color-index: 1; }
-                if card.participant-count > 2: AvatarDot { initials: ""; color-index: 2; }
+                RecapAvatar {
+                    initials: card.part0-initials != "" ? card.part0-initials : card.actor-initials;
+                    avatar: card.part0-has-avatar ? card.part0-avatar : card.actor-avatar;
+                    has-avatar: card.part0-has-avatar || card.actor-has-avatar;
+                    color-index: 0;
+                }
+                if card.participant-count > 1: RecapAvatar {
+                    initials: card.part1-initials;
+                    avatar: card.part1-avatar;
+                    has-avatar: card.part1-has-avatar;
+                    color-index: 1;
+                }
+                if card.participant-count > 2: RecapAvatar {
+                    initials: card.part2-initials;
+                    avatar: card.part2-avatar;
+                    has-avatar: card.part2-has-avatar;
+                    color-index: 2;
+                }
             }
 
-            if card.duration != "": Text {
-                text: card.duration;
+            if card.duration-human != "": Text {
+                text: card.duration-human;
                 font-size: 11px;
                 color: Theme.skel-text;
                 vertical-alignment: center;
