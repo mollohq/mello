@@ -208,6 +208,86 @@ fn onboarding_with_zero_crews_still_offers_a_way_forward() {
     );
 }
 
+/// ★ Regression: a failed discovery must not leave the user staring at nothing.
+///
+/// This is the exact shape of the signup outage. `handle_discover_crews` used
+/// to log its error and emit no event, so `onboarding_step` stayed at 0 —
+/// rendering neither the onboarding branch nor the app branch. The user opened
+/// the app, saw an empty window, and closed it. Nothing on the server recorded
+/// a failure, because the request that failed was the *first* one.
+#[test]
+fn discover_failure_shows_an_error_and_a_way_forward() {
+    let mut h = Harness::new();
+
+    h.emit(Event::DiscoverCrewsFailed {
+        reason: "HTTP 401 Unauthorized".into(),
+    });
+
+    // 1. Not blank.
+    h.assert_not_blank();
+    assert_eq!(visible_screens(&h), vec![Screen::Onboarding]);
+
+    // 2. The failure is visible rather than log-only.
+    assert_eq!(
+        h.app().get_discover_error().as_str(),
+        "HTTP 401 Unauthorized",
+        "the failure reason must reach the UI"
+    );
+
+    // 3. There is still a way in, even if discovery never recovers.
+    let create_cards = ElementHandle::find_by_element_type_name(h.app(), "CreateCrewCard").count();
+    assert!(
+        create_cards > 0,
+        "with discovery broken, creating a crew is the only route in and must \
+         still be offered"
+    );
+}
+
+/// The Retry button must actually re-issue the request and clear the error.
+#[test]
+fn retry_after_discover_failure_reissues_the_request() {
+    let mut h = Harness::new();
+    h.emit(Event::DiscoverCrewsFailed {
+        reason: "connection refused".into(),
+    });
+    let _ = h.commands();
+
+    h.app().invoke_retry_discover();
+
+    let cmds = h.commands();
+    assert!(
+        cmds.iter()
+            .any(|c| matches!(c, Command::DiscoverCrews { cursor: None })),
+        "Retry should re-issue DiscoverCrews, got {cmds:?}"
+    );
+    assert_eq!(
+        h.app().get_discover_error().as_str(),
+        "",
+        "the error must clear while the retry is in flight"
+    );
+}
+
+/// A later success must clear a previously shown error.
+#[test]
+fn successful_discover_clears_a_previous_error() {
+    let mut h = Harness::new();
+    h.emit(Event::DiscoverCrewsFailed {
+        reason: "timeout".into(),
+    });
+    assert_ne!(h.app().get_discover_error().as_str(), "");
+
+    h.emit(Event::DiscoverCrewsLoaded {
+        crews: sample_crews(2),
+        cursor: None,
+    });
+
+    assert_eq!(
+        h.app().get_discover_error().as_str(),
+        "",
+        "a successful load must clear the stale error banner"
+    );
+}
+
 /// The normal case must keep working: crews render, and the Create Crew card
 /// still appears exactly once alongside them.
 #[test]

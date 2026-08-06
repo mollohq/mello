@@ -92,6 +92,16 @@ pub enum Event {
         crews: Vec<Crew>,
         cursor: Option<String>,
     },
+    /// Crew discovery failed.
+    ///
+    /// Emitted so the UI can show an error and offer a retry. Previously the
+    /// failure path only logged, which left `onboarding_step` at 0 — a state
+    /// that renders neither the onboarding branch nor the app branch, i.e. a
+    /// blank window with no way forward. That is how a bad `http_key` took
+    /// signup down silently.
+    DiscoverCrewsFailed {
+        reason: String,
+    },
     OnboardingReady {
         user: User,
     },

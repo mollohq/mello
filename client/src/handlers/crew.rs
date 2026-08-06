@@ -12,10 +12,26 @@ use crate::{
 
 pub fn handle(ctx: &AppContext, event: Event) {
     match event {
+        Event::DiscoverCrewsFailed { reason } => {
+            log::warn!("[discover] failed: {}", reason);
+            *ctx.discover_loading.borrow_mut() = false;
+            ctx.app.set_discover_error(reason.into());
+
+            // Advance off step 0 even though discovery produced nothing.
+            // Step 0 with logged-in false renders neither the onboarding
+            // branch nor the app branch — a blank window. Step 1 shows the
+            // error, a Retry, and the Create Crew card, so the user can still
+            // get in even if discovery is permanently broken.
+            let step = ctx.app.get_onboarding_step();
+            if step == 0 {
+                ctx.app.set_onboarding_step(1);
+            }
+        }
         Event::DiscoverCrewsLoaded { crews, cursor } => {
             let is_append = *ctx.discover_loading.borrow();
             *ctx.discover_loading.borrow_mut() = false;
             *ctx.discover_cursor.borrow_mut() = cursor;
+            ctx.app.set_discover_error(slint::SharedString::new());
 
             log::info!(
                 "[discover] loaded {} crews, append={}, has_more={}",

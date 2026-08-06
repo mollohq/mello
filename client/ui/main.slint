@@ -62,6 +62,10 @@ export component MainWindow inherits Window {
     in-out property <int> onboarding-step: 0;
     in property <[CrewData]> discover-crews: [];
     in property <[int]> onboarding-bento-bases: [];
+    // Non-empty when crew discovery failed. Onboarding step 1 shows the
+    // message plus a Retry, so a discovery outage is visible and recoverable
+    // instead of leaving the user on a blank screen.
+    in property <string> discover-error: "";
     in property <string> link-error: "";
     in property <bool> is-returning-user: false;
     out property <string> onboarding-nickname;
@@ -566,6 +570,7 @@ export component MainWindow inherits Window {
 
     // --- Onboarding callbacks ---
     callback onboarding-crew-selected(string);
+    callback retry-discover();
     callback onboarding-create-crew(string);
     callback onboarding-continue(int);
     callback onboarding-login-requested();
@@ -598,6 +603,8 @@ export component MainWindow inherits Window {
         step: root.onboarding-step;
         discover-crews: root.discover-crews;
         bento-set-bases: root.onboarding-bento-bases;
+        discover-error: root.discover-error;
+        retry-discover => { root.retry-discover(); }
         link-error: root.link-error;
         device-user-name: root.user-name;
         device-user-initials: root.user-initials;

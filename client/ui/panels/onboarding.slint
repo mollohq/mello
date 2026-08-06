@@ -404,6 +404,9 @@ export component Onboarding inherits Rectangle {
     in property <[CrewData]> discover-crews: [];
     in property <[int]> bento-set-bases: [];
     in property <string> link-error: "";
+    // Non-empty when crew discovery failed; step 1 surfaces it with a retry.
+    in property <string> discover-error: "";
+    callback retry-discover();
 
     // Audio device props for Step 2
     in property <[AudioDeviceData]> capture-devices: [];
@@ -674,6 +677,64 @@ export component Onboarding inherits Rectangle {
 
                 Rectangle {
                     height: 56px;
+                }
+
+                // Discovery failed: say so and offer a retry. Without this the
+                // failure was invisible — the error arm only logged, so the
+                // user sat on an empty screen with no explanation.
+                if root.discover-error != "": Rectangle {
+                    height: 72px;
+                    background: Theme.card-bg;
+                    border-radius: 12px;
+                    border-width: 1px;
+                    border-color: Theme.accent-red;
+
+                    HorizontalLayout {
+                        padding-left: 20px;
+                        padding-right: 20px;
+                        spacing: 16px;
+                        cross-axis-alignment: center;
+
+                        VerticalLayout {
+                            horizontal-stretch: 1;
+                            spacing: 2px;
+
+                            Text {
+                                text: "Couldn't load crews";
+                                font-size: 15px;
+                                font-weight: 600;
+                                color: Theme.text-primary;
+                            }
+
+                            Text {
+                                text: "Check your connection, or create your own crew below.";
+                                font-size: 13px;
+                                color: Theme.text-secondary;
+                            }
+                        }
+
+                        Rectangle {
+                            width: 96px;
+                            height: 36px;
+                            horizontal-stretch: 0;
+                            background: retry-touch.has-hover ? Theme.surface-hover : Theme.surface;
+                            border-radius: 8px;
+                            border-width: 1px;
+                            border-color: Theme.card-border;
+                            opacity: retry-touch.pressed ? 0.7 : 1.0;
+
+                            Text {
+                                text: "Retry";
+                                font-size: 14px;
+                                font-weight: 600;
+                                color: Theme.text-primary;
+                            }
+
+                            retry-touch := TouchArea {
+                                clicked => { root.retry-discover(); }
+                            }
+                        }
+                    }
                 }
 
                 // Bento grid — repeating 5-item sets, 240px row heights

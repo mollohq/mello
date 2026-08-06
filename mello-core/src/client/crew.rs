@@ -16,6 +16,11 @@ impl super::Client {
             }
             Err(e) => {
                 log::error!("Failed to discover crews: {}", e);
+                // Must emit: without an event the UI stays on onboarding step
+                // 0, which renders nothing at all. See DiscoverCrewsFailed.
+                let _ = self.event_tx.send(Event::DiscoverCrewsFailed {
+                    reason: e.to_string(),
+                });
             }
         }
     }

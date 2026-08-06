@@ -12,6 +12,18 @@ use crate::app_context::AppContext;
 use crate::{avatar, MainWindow};
 
 pub fn wire(ctx: &AppContext) {
+    // --- Onboarding: retry crew discovery after a failure ---
+    {
+        let cmd = ctx.cmd_tx.clone();
+        let app_weak = ctx.app.as_weak();
+        ctx.app.on_retry_discover(move || {
+            if let Some(app) = app_weak.upgrade() {
+                app.set_discover_error(slint::SharedString::new());
+            }
+            let _ = cmd.send(Command::DiscoverCrews { cursor: None });
+        });
+    }
+
     // --- Onboarding: crew selected ---
     {
         let cmd = ctx.cmd_tx.clone();

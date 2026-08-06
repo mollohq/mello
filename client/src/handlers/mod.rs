@@ -37,6 +37,7 @@ pub fn handle_event(ctx: &AppContext, event: Event) {
         | Event::UserSearchResults { .. }
         | Event::CrewAvatarLoaded { .. }
         | Event::DiscoverCrewsLoaded { .. }
+        | Event::DiscoverCrewsFailed { .. }
         | Event::CrewInviteResolved { .. }
         | Event::CrewInviteResolveFailed { .. }
         | Event::InviteCodeCreated { .. }
