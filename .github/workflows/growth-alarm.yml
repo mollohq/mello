@@ -1,0 +1,140 @@
+name: Growth Alarm
+
+# Backstop to the signup canary.
+#
+# The canary proves signup *can* work by driving it directly. This asks a
+# different question: are real users actually getting through? It catches
+# failures the canary structurally cannot — a broken download link, an installer
+# that will not launch, a client-side crash before the first request, or an
+# outage on a platform the canary does not exercise.
+#
+# Deliberately a 7-day window, not 24 hours. At roughly ten signups a week a
+# quiet day is completely normal, so a 24h==0 alarm would fire on ordinary days
+# and train everyone to ignore it. Seven consecutive days with nobody signing up
+# is not noise.
+on:
+  schedule:
+    - cron: '0 9 * * *'   # once daily, 09:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check-growth:
+    name: Are new users still arriving?
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Query admin dashboard stats
+        id: stats
+        env:
+          NAKAMA_HTTP_KEY: ${{ secrets.NAKAMA_HTTP_KEY }}
+          NAKAMA_HOST: mello-api-1iiv.onrender.com
+        run: |
+          set -euo pipefail
+
+          # Server-to-server only: this RPC rejects client sessions and accepts
+          # the http_key alone.
+          response=$(curl -sf -X POST \
+            "https://${NAKAMA_HOST}/v2/rpc/admin_dashboard_stats?http_key=${NAKAMA_HTTP_KEY}" \
+            -H 'Content-Type: application/json' \
+            -d '""') || {
+              echo "::error::could not reach admin_dashboard_stats. Either the backend is down or NAKAMA_HTTP_KEY no longer matches the server."
+              exit 1
+            }
+
+          # Nakama wraps RPC results in {"payload": "<json string>"}.
+          payload=$(echo "$response" | jq -r '.payload // empty')
+          if [ -z "$payload" ]; then
+            echo "::error::unexpected response shape: $response"
+            exit 1
+          fi
+
+          new_7d=$(echo "$payload" | jq -r '.users_new_7d // "null"')
+          total=$(echo "$payload" | jq -r '.users_total // "null"')
+
+          if [ "$new_7d" = "null" ]; then
+            echo "::error::users_new_7d missing from the response; the stats shape changed: $payload"
+            exit 1
+          fi
+
+          echo "users_total=$total  users_new_7d=$new_7d"
+          echo "new_7d=$new_7d" >> "$GITHUB_OUTPUT"
+          echo "total=$total" >> "$GITHUB_OUTPUT"
+
+          if [ "$new_7d" -eq 0 ]; then
+            echo "::error::no new users in 7 days"
+            exit 1
+          fi
+
+      - name: Raise an issue on a flatline
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const run = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const existing = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'growth-alarm',
+            });
+            if (existing.data.length > 0) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: existing.data[0].number,
+                body: `Still flat as of ${new Date().toISOString()}. ${run}`,
+              });
+              return;
+            }
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: '📉 No new signups in 7 days',
+              body: [
+                'Nobody has signed up in the last seven days.',
+                '',
+                `Run: ${run}`,
+                '',
+                'If the signup canary is green, signup itself works and the',
+                'problem is upstream of the first API call. Check in order:',
+                '1. Is the download link on the site working?',
+                '2. Does a fresh install actually launch? (crash before the',
+                '   first request leaves no server-side trace at all)',
+                '3. Is the auto-updater serving a broken build?',
+                '4. Did marketing/traffic genuinely stop?',
+                '',
+                'If the canary is *also* failing, treat that as the root cause first.',
+              ].join('\n'),
+              labels: ['growth-alarm'],
+            });
+
+      - name: Close the alarm once signups resume
+        if: success()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const existing = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'growth-alarm',
+            });
+            for (const issue of existing.data) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                body: `Signups have resumed (${{ steps.stats.outputs.new_7d }} in the last 7 days).`,
+              });
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                state: 'closed',
+              });
+            }
