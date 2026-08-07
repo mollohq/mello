@@ -897,7 +897,7 @@ func DevSeedStateRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk 
 				Timestamp: nowMs - 28*hour, Score: 30,
 				Data: StreamSessionData{
 					StreamerID: users["charlie"].id, StreamerName: users["charlie"].displayName,
-					Title: "CRT calibration deep dive",
+					Title:       "CRT calibration deep dive",
 					DurationMin: 51, PeakViewers: 3,
 					ViewerIDs: []string{users["bob"].id, users["alice"].id},
 				},

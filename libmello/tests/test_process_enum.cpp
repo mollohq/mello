@@ -12,6 +12,11 @@ using mello::video::enumerate_game_processes;
 using mello::video::enumerate_visible_windows;
 
 TEST(ProcessEnum, EnumeratesProcesses) {
+#ifndef _WIN32
+    // process_enum.cpp only has a Windows implementation; the other branch
+    // returns an empty vector, so this can never pass elsewhere.
+    GTEST_SKIP() << "process enumeration is Windows-only";
+#else
     auto procs = enumerate_game_processes();
     ASSERT_FALSE(procs.empty());
     for (const auto& p : procs) {
@@ -19,6 +24,7 @@ TEST(ProcessEnum, EnumeratesProcesses) {
         // The exe field stays a bare filename (the game-DB matching key).
         EXPECT_EQ(p.exe.find('\\'), std::string::npos);
     }
+#endif
 }
 
 TEST(ProcessEnum, WindowedProcessesCarryPathAndTitle) {
