@@ -553,6 +553,128 @@ fn voice_state_change_updates_the_ui() {
     assert!(!h.app().get_in_voice());
 }
 
+// ---------------------------------------------------------------------------
+// Chat
+// ---------------------------------------------------------------------------
+
+/// The message the user typed must reach core intact.
+#[test]
+fn sending_a_message_carries_its_content() {
+    let mut h = Harness::new();
+
+    h.app().invoke_send_message("hello crew".into());
+
+    let cmds = h.commands();
+    let sent = cmds.iter().find_map(|c| match c {
+        Command::SendMessage { content, reply_to } => Some((content.clone(), reply_to.clone())),
+        _ => None,
+    });
+    assert_eq!(
+        sent,
+        Some(("hello crew".to_string(), None)),
+        "SendMessage must carry the typed text and no reply target, got {cmds:?}"
+    );
+}
+
+/// Replies must keep both the body and the message being replied to; losing
+/// either silently downgrades a reply into an ordinary message.
+#[test]
+fn replying_carries_both_body_and_parent() {
+    let mut h = Harness::new();
+
+    h.app()
+        .invoke_send_message_with_reply("me too".into(), "msg-123".into());
+
+    let cmds = h.commands();
+    let sent = cmds.iter().find_map(|c| match c {
+        Command::SendMessage { content, reply_to } => Some((content.clone(), reply_to.clone())),
+        _ => None,
+    });
+    assert_eq!(
+        sent,
+        Some(("me too".to_string(), Some("msg-123".to_string()))),
+        "a reply must carry both body and parent id, got {cmds:?}"
+    );
+}
+
+#[test]
+fn editing_and_deleting_messages_target_the_right_id() {
+    let mut h = Harness::new();
+
+    h.app().invoke_edit_message("msg-1".into(), "fixed".into());
+    h.app().invoke_delete_message("msg-2".into());
+
+    let cmds = h.commands();
+    assert!(
+        cmds.iter().any(|c| matches!(
+            c,
+            Command::EditMessage { message_id, new_body }
+                if message_id == "msg-1" && new_body == "fixed"
+        )),
+        "edit must target msg-1, got {cmds:?}"
+    );
+    assert!(
+        cmds.iter()
+            .any(|c| matches!(c, Command::DeleteMessage { message_id } if message_id == "msg-2")),
+        "delete must target msg-2, got {cmds:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Crew selection and joining
+// ---------------------------------------------------------------------------
+
+#[test]
+fn selecting_a_crew_sends_its_id() {
+    let mut h = Harness::new();
+
+    h.app().invoke_select_crew("crew-42".into());
+
+    let cmds = h.commands();
+    assert!(
+        cmds.iter()
+            .any(|c| matches!(c, Command::SelectCrew { crew_id } if crew_id == "crew-42")),
+        "SelectCrew must carry the chosen crew id, got {cmds:?}"
+    );
+}
+
+#[test]
+fn joining_from_discover_uses_the_crew_id_and_invite_code_paths() {
+    let mut h = Harness::new();
+
+    h.app().invoke_discover_join_crew("crew-7".into());
+    h.app().invoke_discover_join_invite("ABC123".into());
+
+    let cmds = h.commands();
+    assert!(
+        cmds.iter()
+            .any(|c| matches!(c, Command::JoinCrew { crew_id } if crew_id == "crew-7")),
+        "joining a listed crew must send JoinCrew, got {cmds:?}"
+    );
+    assert!(
+        cmds.iter()
+            .any(|c| matches!(c, Command::JoinByInviteCode { code } if code == "ABC123")),
+        "an invite code must go through JoinByInviteCode, got {cmds:?}"
+    );
+}
+
+/// core → UI: joining a crew must make the app screen usable rather than
+/// leaving the user in a half-populated state.
+#[test]
+fn crews_loaded_populates_the_sidebar() {
+    let mut h = Harness::new();
+    h.emit(Event::LoggedIn {
+        user: sample_user(),
+    });
+
+    h.emit(Event::CrewsLoaded {
+        crews: sample_crews(2),
+    });
+
+    assert_eq!(visible_screens(&h), vec![Screen::App]);
+    h.assert_not_blank();
+}
+
 /// UI → core: the mute path, end to end through the real wiring.
 #[test]
 fn mute_toggle_emits_set_mute_and_broadcast() {
