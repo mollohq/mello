@@ -40,7 +40,9 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Clippy
-        run: cargo clippy --all-targets -- -D warnings
+        # --workspace so crates under tools/ are linted too; they are not in
+        # default-members, so plain clippy silently skips them.
+        run: cargo clippy --workspace --all-targets -- -D warnings
 
       - name: Run tests
         run: cargo test --workspace
@@ -87,7 +89,9 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Clippy
-        run: cargo clippy --all-targets -- -D warnings
+        # --workspace so crates under tools/ are linted too; they are not in
+        # default-members, so plain clippy silently skips them.
+        run: cargo clippy --workspace --all-targets -- -D warnings
 
       - name: Run tests
         run: cargo test --workspace

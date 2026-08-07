@@ -35,7 +35,10 @@ step "fmt"
 run cargo fmt --all -- --check
 
 step "clippy"
-run cargo clippy --all-targets -- -D warnings
+# --workspace, not just the default members. Without it clippy skips every
+# crate under tools/, which is how a lint error reached release.yml (the only
+# place that used --workspace) and blocked a release.
+run cargo clippy --workspace --all-targets -- -D warnings
 
 step "tests (workspace + UI flows + RPC contract)"
 run cargo test --workspace

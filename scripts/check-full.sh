@@ -31,7 +31,7 @@ START=$(date +%s)
 
 step "rust: fmt / clippy / tests"
 run cargo fmt --all -- --check
-run cargo clippy --all-targets -- -D warnings
+run cargo clippy --workspace --all-targets -- -D warnings
 run cargo test --workspace
 
 # MELLO_BUILD_TESTS defaults to OFF: mello-sys/build.rs configures libmello on
