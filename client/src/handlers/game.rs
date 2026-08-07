@@ -86,6 +86,50 @@ pub fn handle(ctx: &AppContext, event: Event) {
                 map
             );
         }
+        Event::GameIconLoaded { game_id, png } => {
+            // Crew-shared icon fetched: persist to the PNG cache and decode
+            // into the runtime cache; cards pick it up on the next refresh.
+            if crate::platform::exe_icon::store_fetched_icon_png(&game_id, &png).is_some() {
+                if let Some((rgba, w, h)) =
+                    crate::platform::exe_icon::load_cached_icon_rgba(&game_id)
+                {
+                    let img = crate::avatar::rgba_to_image(&rgba, w, h);
+                    ctx.game_icon_cache.borrow_mut().insert(game_id, img);
+                }
+            }
+        }
+        Event::UnknownGameCandidate {
+            exe,
+            path,
+            window_title,
+        } => {
+            // Permanently dismissed exes never re-prompt.
+            if ctx
+                .settings
+                .borrow()
+                .unknown_game_dismissed
+                .contains(&exe.to_lowercase())
+            {
+                return;
+            }
+            // One prompt at a time; a new candidate waits for the next run.
+            if ctx.pending_unknown_game.borrow().is_some() {
+                return;
+            }
+            let display_name = crate::platform::exe_meta::exe_display_name(&path)
+                .filter(|n| !n.trim().is_empty())
+                .unwrap_or_else(|| {
+                    if window_title.trim().is_empty() {
+                        crate::platform::exe_meta::filename_stem(&exe)
+                    } else {
+                        window_title.clone()
+                    }
+                });
+            log::info!("[ui] unknown game prompt: {display_name} ({exe})");
+            *ctx.pending_unknown_game.borrow_mut() = Some((exe, path, display_name.clone()));
+            ctx.app.set_unknown_game_name(display_name.into());
+            ctx.app.set_unknown_game_visible(true);
+        }
         Event::SessionSummary {
             wins,
             losses,

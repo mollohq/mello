@@ -50,6 +50,9 @@ pub struct AppContext {
     /// Games settings rows as last received from core; merged with the
     /// disabled set from Settings when pushed to the UI.
     pub games_integrations: Rc<RefCell<Vec<mello_core::events::GameIntegrationStatus>>>,
+    /// Unknown-game candidate currently shown in the "track it?" prompt
+    /// (exe, path, display name). Consumed on track/dismiss.
+    pub pending_unknown_game: Rc<RefCell<Option<(String, String, String)>>>,
     pub muted_before_deafen: Rc<Cell<bool>>,
     pub updater: Rc<RefCell<Option<Updater>>>,
     pub hotkey_mgr: Rc<RefCell<crate::platform::hotkeys::HotkeyManager>>,
@@ -58,6 +61,10 @@ pub struct AppContext {
     pub gif_chat_anim: GifAnimator,
     pub dbg_hist: Rc<RefCell<crate::DebugHistory>>,
     pub avatar_cache: Rc<RefCell<HashMap<String, slint::Image>>>,
+    /// Runtime game icons (exe-extracted or crew-shared), keyed by game_id.
+    /// Populated from the disk cache on demand; misses are negative-cached
+    /// per run by the fetch glue.
+    pub game_icon_cache: Rc<RefCell<HashMap<String, slint::Image>>>,
     pub hud_manager: Rc<HudManager>,
     pub fg_monitor: Rc<RefCell<ForegroundMonitor>>,
     pub pending_deep_link: Rc<RefCell<Option<crate::deep_link::DeepLink>>>,

@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>m3llo — Session Cards</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    background: #1a1a1e;
+    color: #e8e6e3;
+    padding: 40px;
+  }
+  h1 { font-size: 20px; margin-bottom: 6px; }
+  .sub { color: #8a8a90; font-size: 13px; margin-bottom: 8px; }
+  h2 {
+    font-size: 11px; letter-spacing: 1.5px; text-transform: uppercase;
+    color: #8a8a90; margin: 38px 0 4px;
+  }
+  .h2note { font-size: 12px; color: #6a6a70; margin-bottom: 14px; max-width: 680px; line-height: 1.5; }
+  .rule { height: 1px; background: #2a2a2e; margin: 44px 0 0; }
+  .row { display: flex; gap: 16px; flex-wrap: wrap; align-items: flex-start; }
+
+  /* ── card shell (matches crew_feed.slint: 10px radius, 1px border, 14px pad) ── */
+  .card {
+    width: 250px; min-height: 190px;
+    background: #1e1e22;
+    border: 1px solid #2a2a2e;
+    border-radius: 10px;
+    padding: 14px;
+    display: flex; flex-direction: column;
+  }
+  .card.tall { min-height: 215px; }
+
+  /* ── typed header ── */
+  .tag {
+    font-size: 10px; font-weight: 600; letter-spacing: .8px;
+    color: #6a6a70; margin-bottom: 8px;
+    display: flex; align-items: center; gap: 6px;
+  }
+  .tag .dot { width: 6px; height: 6px; border-radius: 50%; }
+  .tag.stream { color: #EB4D5F; } .tag.stream .dot { background: #EB4D5F; }
+  .tag.voice  { color: #4a9eff; } .tag.voice  .dot { background: #4a9eff; }
+
+  /* ── text scale ── */
+  .who  { font-size: 13px; font-weight: 600; color: #e8e6e3; }
+  .what { font-size: 11px; color: #8a8a90; }
+  .meta { font-size: 11px; color: #55555a; margin-top: auto; padding-top: 10px; }
+
+  /* ── game icon / badge ── */
+  .gicon {
+    width: 40px; height: 40px; border-radius: 8px; flex: none;
+    display: flex; align-items: center; justify-content: center; font-size: 20px;
+    position: relative;
+  }
+  .gicon.art  { background: linear-gradient(135deg,#7ec8ff,#f9a8d4); }
+  .gicon.mc   { background: linear-gradient(135deg,#6d9b4a,#8b5a2b); }
+  .gicon.cs2  { background: #de9b35; font-size: 10px; font-weight: 800; color: #fff; }
+  .gicon.lol  { background: #c8aa6e; font-size: 10px; font-weight: 800; color: #fff; }
+  .gicon.dota { background: #a3241f; font-size: 10px; font-weight: 800; color: #fff; }
+  .gicon.badge-fallback { background: #2a2a2e; font-size: 9px; font-weight: 800; color: #e8e6e3; }
+  .gicon.none { background: #26262c; font-size: 18px; }
+
+  /* ── avatars ── */
+  .av {
+    border-radius: 4px; flex: none;
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 700; color: #fff; border: 2px solid #1e1e22;
+    width: 18px; height: 18px; font-size: 8px;
+  }
+  .av.xl { width: 40px; height: 40px; font-size: 14px; border-radius: 9px; }
+  .av.a0 { background: #EB4D5F; } .av.a1 { background: #4a9eff; }
+  .av.a2 { background: #4ade80; color: #123; } .av.a3 { background: #a78bfa; }
+  .av.more { background: #26262c; color: #a8a8ae; font-size: 12px; font-weight: 600; }
+  .badge-av { position: absolute; right: -6px; bottom: -6px; }
+  .stack { display: flex; }
+  .stack .av + .av { margin-left: -7px; }
+  .stack.xl .av + .av { margin-left: -10px; }
+
+  /* ── rich game card ── */
+  .record { font-size: 30px; font-weight: 700; margin-top: 14px; line-height: 1.1; }
+  .record.win  { color: #4ade80; }
+  .record.loss { color: #f87171; }
+  .record-sub { font-size: 11px; color: #6a6a70; }
+  .divider { height: 1px; background: #2a2a2e; margin: 12px 0 10px; }
+  .tiles { display: flex; gap: 10px; }
+  .tile { flex: 1; }
+  .tile .v { font-size: 16px; font-weight: 700; color: #e8e6e3; }
+  .tile .v.win  { color: #4ade80; }
+  .tile .v.loss { color: #f87171; }
+  .tile .k { font-size: 10px; color: #6a6a70; margin-top: 2px; }
+  .verified {
+    font-family: 'JetBrains Mono', 'Cascadia Code', monospace;
+    font-size: 9px; font-weight: 600; letter-spacing: 1px; color: #4ade80;
+    background: #1e2a1e; border: 1px solid #2d4a2d;
+    padding: 2px 6px; border-radius: 4px; align-self: center; flex: none;
+  }
+
+  .label { font-size: 11px; color: #55555a; margin: 8px 0 6px; width: 250px; line-height: 1.4; }
+  .note { font-size: 12px; color: #8a8a90; max-width: 700px; line-height: 1.6; margin-top: 10px; }
+  .hl { color: #e8e6e3; }
+  .old { opacity: .85; }
+</style>
+</head>
+<body>
+
+<h1>Session cards</h1>
+<div class="sub">
+  designs/feed/session-cards-redesign.html — the three card types the crew feed renders for sessions.
+  Section 1 is the current design; exploration history is kept at the bottom.
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════ -->
+<h2>1 · Voice sessions — current</h2>
+<div class="h2note">
+  Voice sessions are about <em>people</em>, so the roster is the visual: 40px overlapping avatars with a
+  <span class="hl">+N</span> chip past three. Peak is folded into the meta line, and the mic tile is gone —
+  the VOICE header already types the card.
+</div>
+<div class="row">
+  <div>
+    <div class="card">
+      <div class="tag voice"><span class="dot"></span><span>VOICE</span></div>
+      <div class="who">General</div>
+      <div class="what">9h 7m · 4 in call</div>
+      <div class="stack xl" style="margin-top:10px;">
+        <div class="av xl a1">O</div>
+        <div class="av xl a0">B</div>
+        <div class="av xl a2">W</div>
+        <div class="av xl more">+1</div>
+      </div>
+      <div class="what" style="margin-top:8px;">Ostkatt, b0bben +2</div>
+      <div class="meta">2h ago</div>
+    </div>
+    <div class="label">4 people → three faces + overflow chip</div>
+  </div>
+  <div>
+    <div class="card">
+      <div class="tag voice"><span class="dot"></span><span>VOICE</span></div>
+      <div class="who">Critique</div>
+      <div class="what">42m · 2 in call</div>
+      <div class="stack xl" style="margin-top:10px;">
+        <div class="av xl a1">AL</div>
+        <div class="av xl a3">DI</div>
+      </div>
+      <div class="what" style="margin-top:8px;">alice, diana</div>
+      <div class="meta">7h ago</div>
+    </div>
+    <div class="label">Pair — no overflow chip</div>
+  </div>
+  <div>
+    <div class="card">
+      <div class="tag voice"><span class="dot"></span><span>VOICE</span></div>
+      <div class="who">General</div>
+      <div class="what">1m · 2 in call</div>
+      <div class="stack xl" style="margin-top:10px;">
+        <div class="av xl a0">BO</div>
+        <div class="av xl a1">AL</div>
+      </div>
+      <div class="what" style="margin-top:8px;">bob, alice</div>
+      <div class="meta">2 days ago</div>
+    </div>
+    <div class="label">1-minute session — reads "1m", never "1:00"</div>
+  </div>
+  <div>
+    <div class="card">
+      <div class="tag voice"><span class="dot"></span><span>VOICE</span></div>
+      <div class="who">Critique</div>
+      <div class="what">18m</div>
+      <div class="stack xl" style="margin-top:10px;">
+        <div class="av xl a3">DI</div>
+        <div class="av xl a0">BO</div>
+      </div>
+      <div class="what" style="margin-top:8px;">diana, bob</div>
+      <div class="meta">2 days ago</div>
+    </div>
+    <div class="label">No peak recorded → that clause hides</div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════ -->
+<h2>2 · Stream sessions — current</h2>
+<div class="h2note">
+  Streams lead with the game art (the content), streamer avatar badged on its corner.
+  Icon precedence: bundled art → runtime icon (exe-extracted / crew-shared) → colored short-name badge.
+</div>
+<div class="row">
+  <div>
+    <div class="card">
+      <div class="tag stream"><span class="dot"></span><span>STREAM</span></div>
+      <div style="display:flex;gap:10px;align-items:center;">
+        <div class="gicon mc">⛏
+          <div class="av a0 badge-av">B</div>
+        </div>
+        <div style="min-width:0;">
+          <div class="who">Minecraft</div>
+          <div class="what">by b0bben · 2h 18m</div>
+        </div>
+      </div>
+      <div class="what" style="margin-top:10px;">4 watched at peak</div>
+      <div class="meta">3h ago</div>
+    </div>
+    <div class="label">Bundled game art + streamer badge</div>
+  </div>
+  <div>
+    <div class="card">
+      <div class="tag stream"><span class="dot"></span><span>STREAM</span></div>
+      <div style="display:flex;gap:10px;align-items:center;">
+        <div class="gicon badge-fallback">NS
+          <div class="av a3 badge-av">D</div>
+        </div>
+        <div style="min-width:0;">
+          <div class="who">Night Stones</div>
+          <div class="what">by diana · 1h 4m</div>
+        </div>
+      </div>
+      <div class="what" style="margin-top:10px;">2 watched at peak</div>
+      <div class="meta">11h ago</div>
+    </div>
+    <div class="label">Game outside the DB → short-name badge fallback</div>
+  </div>
+  <div>
+    <div class="card">
+      <div class="tag stream"><span class="dot"></span><span>STREAM</span></div>
+      <div style="display:flex;gap:10px;align-items:center;">
+        <div class="gicon none">🖥
+          <div class="av a2 badge-av">C</div>
+        </div>
+        <div style="min-width:0;">
+          <div class="who">CRT calibration deep dive</div>
+          <div class="what">by charlie · 51m</div>
+        </div>
+      </div>
+      <div class="what" style="margin-top:10px;">3 watched at peak</div>
+      <div class="meta">yesterday</div>
+    </div>
+    <div class="label">No game → the stream title leads</div>
+  </div>
+  <div>
+    <div class="card">
+      <div class="tag stream"><span class="dot"></span><span>STREAM</span></div>
+      <div style="display:flex;gap:10px;align-items:center;">
+        <div class="gicon dota">DOTA
+          <div class="av a1 badge-av">A</div>
+        </div>
+        <div style="min-width:0;">
+          <div class="who">Dota 2</div>
+          <div class="what">by alice · 1m</div>
+        </div>
+      </div>
+      <div class="meta">2 days ago</div>
+    </div>
+    <div class="label">Nobody watched → peak row hides</div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════ -->
+<h2>3 · Game sessions — the rich card (spec 19 B2)</h2>
+<div class="h2note">
+  Only <em>notable</em> sessions earn one (streak milestone, flawless/brutal night, big session);
+  routine play folds into the weekly recap. Footer matches the cards above — real avatars, humanized duration.
+</div>
+<div class="row">
+  <div>
+    <div class="card tall">
+      <div style="display:flex;gap:10px;align-items:center;">
+        <div class="gicon cs2">CS2</div>
+        <div style="flex:1;min-width:0;">
+          <div class="who" style="font-size:14px;">Counter-Strike 2</div>
+          <div class="what">b0bben · yesterday</div>
+        </div>
+      </div>
+      <div class="record win">5W–2L</div>
+      <div class="record-sub">this session</div>
+      <div class="divider"></div>
+      <div class="tiles">
+        <div class="tile"><div class="v win">W4</div><div class="k">streak</div></div>
+        <div class="tile"><div class="v">71%</div><div class="k">win rate</div></div>
+        <div class="tile"><div class="v">7</div><div class="k">matches</div></div>
+      </div>
+      <div class="meta" style="display:flex;align-items:center;">
+        <div class="stack" style="flex:1;">
+          <div class="av a0">B</div>
+          <div class="av a2">W</div>
+        </div>
+        <span>4h 12m</span>
+      </div>
+    </div>
+    <div class="label">Heater night — green record headline</div>
+  </div>
+  <div>
+    <div class="card tall">
+      <div style="display:flex;gap:10px;align-items:center;">
+        <div class="gicon lol">LOL</div>
+        <div style="flex:1;min-width:0;">
+          <div class="who" style="font-size:14px;">League of Legends</div>
+          <div class="what">Ostkatt · 2 days ago</div>
+        </div>
+        <div class="verified">✓ VERIFIED</div>
+      </div>
+      <div class="record loss">0W–2L</div>
+      <div class="record-sub">this session</div>
+      <div class="divider"></div>
+      <div class="tiles">
+        <div class="tile"><div class="v loss">L4</div><div class="k">streak</div></div>
+        <div class="tile"><div class="v">0%</div><div class="k">win rate</div></div>
+        <div class="tile"><div class="v">2</div><div class="k">matches</div></div>
+      </div>
+      <div class="meta" style="display:flex;align-items:center;">
+        <div class="stack" style="flex:1;">
+          <div class="av a1">O</div>
+        </div>
+        <span>1h 34m</span>
+      </div>
+    </div>
+    <div class="label">Skid night + Riot-verified badge (spec 18 §9)</div>
+  </div>
+  <div>
+    <div class="card tall">
+      <div style="display:flex;gap:10px;align-items:center;">
+        <div class="gicon badge-fallback">NS</div>
+        <div style="flex:1;min-width:0;">
+          <div class="who" style="font-size:14px;">Night Stones</div>
+          <div class="what">b0bben · 5h ago</div>
+        </div>
+      </div>
+      <div class="record win">4W–0L</div>
+      <div class="record-sub">this session</div>
+      <div class="divider"></div>
+      <div class="tiles">
+        <div class="tile"><div class="v win">W4</div><div class="k">streak</div></div>
+        <div class="tile"><div class="v">100%</div><div class="k">win rate</div></div>
+        <div class="tile"><div class="v">4</div><div class="k">matches</div></div>
+      </div>
+      <div class="meta" style="display:flex;align-items:center;">
+        <div class="stack" style="flex:1;">
+          <div class="av a0">B</div>
+          <div class="av a2">C</div>
+        </div>
+        <span>2h 8m</span>
+      </div>
+    </div>
+    <div class="label">User-confirmed custom game → badge fallback</div>
+  </div>
+</div>
+
+<div class="note">
+  <strong>Shared language across all three:</strong> typed header
+  (<span style="color:#EB4D5F">STREAM</span> / <span style="color:#4a9eff">VOICE</span>),
+  real crew avatars with initials only as fallback, humanized durations
+  (<span class="hl">1m</span> / <span class="hl">42m</span> / <span class="hl">9h 7m</span> — never a
+  clock-ambiguous "3:00"), and optional rows that hide rather than render empty.
+  Every variant above exists in the dev seed (Design = voice, Retro = streams + custom game).
+</div>
+
+<div class="rule"></div>
+
+<!-- ══════════════════════════════════════════════════════════════ -->
+<h2>Appendix · how we got here</h2>
+<div class="h2note">Kept for reference — not the current design.</div>
+<div class="row old">
+  <div>
+    <div class="card" style="min-height:150px;">
+      <div class="tag"><span>SESSION</span></div>
+      <div style="display:flex;gap:8px;align-items:center;">
+        <div class="gicon art" style="width:32px;height:32px;font-size:16px;">🎮</div>
+        <div>
+          <div class="who">Night Stones</div>
+          <div class="what">3:00</div>
+        </div>
+      </div>
+      <div class="meta">21d ago</div>
+    </div>
+    <div class="label"><strong>The original.</strong> No actor, no type, "3:00" ambiguous (3 min? 3 h?)</div>
+  </div>
+  <div>
+    <div class="card">
+      <div class="tag stream"><span class="dot"></span><span>STREAM</span></div>
+      <div style="display:flex;gap:10px;align-items:center;">
+        <div class="av xl a0" style="border-radius:50%;">B</div>
+        <div>
+          <div class="who">b0bben</div>
+          <div class="what">streamed Night Stones</div>
+        </div>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;margin-top:12px;">
+        <div class="gicon art" style="width:32px;height:32px;font-size:16px;">🎮</div>
+        <div class="what"><span class="hl">Night Stones</span> · 3m</div>
+      </div>
+      <div class="what" style="margin-top:8px;">👁 4 watched at peak</div>
+      <div class="meta">21d ago</div>
+    </div>
+    <div class="label"><strong>Option A (not taken)</strong> — person-first: avatar leads, game row below</div>
+  </div>
+</div>
+
+</body>
+</html>

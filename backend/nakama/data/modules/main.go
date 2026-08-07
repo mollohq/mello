@@ -163,6 +163,12 @@ func InitModule(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runti
 	if err := initializer.RegisterRpc("get_crew_avatar", GetCrewAvatarRPC); err != nil {
 		return err
 	}
+	if err := initializer.RegisterRpc("game_icon_set", GameIconSetRPC); err != nil {
+		return err
+	}
+	if err := initializer.RegisterRpc("game_icon_get", GameIconGetRPC); err != nil {
+		return err
+	}
 	if err := initializer.RegisterRpc("update_crew", UpdateCrewRPC); err != nil {
 		return err
 	}

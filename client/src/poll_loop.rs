@@ -55,6 +55,8 @@ pub fn start(
         gif_chat_anim: ctx.gif_chat_anim.clone(),
         dbg_hist: ctx.dbg_hist.clone(),
         avatar_cache: ctx.avatar_cache.clone(),
+        game_icon_cache: ctx.game_icon_cache.clone(),
+        pending_unknown_game: ctx.pending_unknown_game.clone(),
         hud_manager: ctx.hud_manager.clone(),
         fg_monitor: ctx.fg_monitor.clone(),
         pending_deep_link: ctx.pending_deep_link.clone(),

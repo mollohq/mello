@@ -9,6 +9,24 @@ add_executable(mello_tests
     test_video_pipeline.cpp
 )
 
+# Separate target: mello_tests currently fails to build (test_jitter_buffer.cpp
+# predates the JitterPopResult API change) — keep process-enum coverage running
+# until that suite is repaired.
+add_executable(mello_procenum_tests
+    test_process_enum.cpp
+)
+
+target_link_libraries(mello_procenum_tests PRIVATE
+    mello
+    GTest::gtest
+    GTest::gtest_main
+)
+
+target_include_directories(mello_procenum_tests PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src
+    ${CMAKE_CURRENT_SOURCE_DIR}/../include
+)
+
 target_link_libraries(mello_tests PRIVATE
     mello
     GTest::gtest
@@ -54,3 +72,4 @@ endif()
 include(GoogleTest)
 gtest_discover_tests(mello_tests)
 gtest_discover_tests(mello_rtp_tests)
+gtest_discover_tests(mello_procenum_tests)

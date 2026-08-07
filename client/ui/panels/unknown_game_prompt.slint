@@ -1,0 +1,102 @@
+import { Theme } from "../theme.slint";
+
+// One-tap confirm prompt for a detected game outside the game DB (spec 17
+// extension). Nothing is tracked or shared with the crew until "TRACK" is
+// tapped; "Not a game" permanently dismisses this exe.
+export component UnknownGamePrompt inherits Rectangle {
+    in property <bool> show: false;
+    in property <string> game-name: "";
+
+    callback track-clicked();
+    callback dismiss-clicked();
+
+    visible: show;
+    height: 64px;
+    background: Theme.surface;
+    border-color: Theme.graphic-med;
+    border-width: 1px;
+    border-radius: Theme.r-inner;
+    drop-shadow-blur: 32px;
+    drop-shadow-color: #00000066;
+    drop-shadow-offset-y: 8px;
+
+    HorizontalLayout {
+        padding-left: 16px;
+        padding-right: 12px;
+        spacing: 14px;
+        alignment: stretch;
+
+        VerticalLayout {
+            alignment: center;
+            spacing: 2px;
+
+            Text {
+                text: "Playing " + root.game-name + "?";
+                color: Theme.text-primary;
+                font-family: Theme.font-sans;
+                font-size: 12px;
+                font-weight: 600;
+                overflow: elide;
+            }
+
+            Text {
+                text: "Track it so sessions show up for your crew";
+                color: Theme.text-secondary;
+                font-family: Theme.font-sans;
+                font-size: Theme.font-xs;
+            }
+        }
+
+        VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: track-text.preferred-width + 24px;
+                height: 28px;
+                background: track-ta.has-hover ? #FF3D6E : Theme.accent;
+                border-radius: Theme.r-inner;
+                animate background { duration: 150ms; }
+
+                track-text := Text {
+                    text: "TRACK";
+                    color: white;
+                    font-family: Theme.font-mono;
+                    font-size: Theme.font-xs;
+                    font-weight: 600;
+                    letter-spacing: 0.06 * 1px;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+
+                track-ta := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { root.track-clicked(); }
+                }
+            }
+        }
+
+        VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: dismiss-text.preferred-width + 16px;
+                height: 28px;
+                background: dismiss-ta.has-hover ? Theme.graphic-light : transparent;
+                border-radius: Theme.r-inner;
+                animate background { duration: 150ms; }
+
+                dismiss-text := Text {
+                    text: "Not a game";
+                    color: Theme.text-secondary;
+                    font-family: Theme.font-sans;
+                    font-size: Theme.font-xs;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+
+                dismiss-ta := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { root.dismiss-clicked(); }
+                }
+            }
+        }
+    }
+}
