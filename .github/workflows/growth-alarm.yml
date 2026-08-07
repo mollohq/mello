@@ -111,6 +111,9 @@ jobs:
                 'If the canary is *also* failing, treat that as the root cause first.',
               ].join('\n'),
               labels: ['growth-alarm'],
+              // Assigned so GitHub Mobile pushes it: participation notifies
+              // reliably, whereas watched-repo activity often does not.
+              assignees: ['b0bben'],
             });
 
       - name: Close the alarm once signups resume

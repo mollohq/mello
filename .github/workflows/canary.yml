@@ -114,6 +114,9 @@ jobs:
                 title,
                 body,
                 labels: ['canary', 'urgent'],
+                // Assigned so GitHub Mobile pushes it: participation notifies
+                // reliably, whereas watched-repo activity often does not.
+                assignees: ['b0bben'],
               });
             }
 
@@ -159,6 +162,9 @@ jobs:
               title: '🔧 Signup canary will not build — monitoring is blind',
               body,
               labels: ['canary-build'],
+              // Assigned so GitHub Mobile pushes it: participation notifies
+              // reliably, whereas watched-repo activity often does not.
+              assignees: ['b0bben'],
             });
 
       - name: Close the alert if signup recovered
