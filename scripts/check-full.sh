@@ -58,17 +58,7 @@ run cmake --build libmello/build-ci
 # VideoPipelineTest does real monitor capture; its SetUp skips when CI is set.
 # Without that it dies with SIGTRAP on a machine lacking screen-recording
 # permission — a failure that has nothing to do with your change.
-case "$(uname -s)" in
-    Darwin)
-        # See .github/workflows/pr-checks.yml for why these two are skipped on
-        # macOS. Windows runs the full suite.
-        run ctest --test-dir libmello/build-ci --output-on-failure \
-            -E "QueueOverflowEntersIdrGate|BoundedBurstRequestsLocalIdrOnQueueOverflow"
-        ;;
-    *)
-        run ctest --test-dir libmello/build-ci --output-on-failure
-        ;;
-esac
+run ctest --test-dir libmello/build-ci --output-on-failure
 
 step "go: nakama modules"
 if command -v go >/dev/null 2>&1; then

@@ -236,6 +236,14 @@ std::vector<uint8_t> make_delta_access_unit(uint8_t suffix) {
     return annex_b({{0x61, suffix, 0x10, 0x20}});
 }
 
+/// A delta access unit of a chosen payload size, for tests that need to fill
+/// the sender queue by volume rather than by frame count.
+std::vector<uint8_t> make_large_delta_access_unit(size_t nal_payload_bytes) {
+    std::vector<uint8_t> nal(nal_payload_bytes, 0x55);
+    nal[0] = 0x61;
+    return annex_b({nal});
+}
+
 void expect_stream_sdp(const char* sdp, const char* expected_direction) {
     ASSERT_NE(sdp, nullptr);
     const std::string text(sdp);
@@ -832,8 +840,13 @@ TEST_F(PeerRtpRolesTest, BoundedBurstRequestsLocalIdrOnQueueOverflow) {
         MELLO_OK
     );
 
-    for (uint8_t index = 0; index < 16; ++index) {
-        const auto delta = make_delta_access_unit(index);
+    // Overflow by volume, not by frame count. This previously sent exactly
+    // kMaxQueuedAccessUnits (16) tiny frames, so reaching the bound depended on
+    // the burst outrunning the pacer — it passed or failed on scheduling luck.
+    // 24 x 512 KB is 12 MB against a 4 MB queue, so the bound is crossed even
+    // if most of the burst drains.
+    for (uint8_t index = 0; index < 24; ++index) {
+        const auto delta = make_large_delta_access_unit(512 * 1024);
         (void)mello_peer_video_send_access_unit(
             pair.host,
             delta.data(),
@@ -842,12 +855,22 @@ TEST_F(PeerRtpRolesTest, BoundedBurstRequestsLocalIdrOnQueueOverflow) {
         );
     }
 
+    // Drain the queue and look for the IDR request, rather than asserting on
+    // whichever feedback happens to be first. A burst this size also produces
+    // a REMB, and which lands first is not something the sender guarantees.
+    bool saw_local_idr_needed = false;
     MelloPeerVideoFeedback feedback{};
-    ASSERT_EQ(mello_peer_video_take_feedback(pair.host, &feedback), 1u);
-    EXPECT_EQ(
-        feedback.type,
-        MELLO_PEER_VIDEO_FEEDBACK_LOCAL_IDR_NEEDED
-    );
+    for (int drained = 0; drained < 32; ++drained) {
+        if (mello_peer_video_take_feedback(pair.host, &feedback) != 1u) {
+            break;
+        }
+        if (feedback.type == MELLO_PEER_VIDEO_FEEDBACK_LOCAL_IDR_NEEDED) {
+            saw_local_idr_needed = true;
+            break;
+        }
+    }
+    EXPECT_TRUE(saw_local_idr_needed)
+        << "a burst that overflows the send queue must request a local IDR";
 }
 
 TEST_F(PeerRtpRolesTest, StatsExposeSenderAndReceiverFields) {

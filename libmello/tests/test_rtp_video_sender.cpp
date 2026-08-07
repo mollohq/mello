@@ -932,8 +932,14 @@ TEST(RtpVideoSenderPacingTest, DynamicTargetUpdateIsObservedInStats) {
 TEST(RtpVideoSenderAdmissionTest, QueueOverflowEntersIdrGate) {
     LoopbackVideoLink link;
     std::atomic<int> idr_requests{0};
+    // Pace at 8 kbps so the queue cannot drain meaningfully while the burst
+    // below is enqueued. Previously this used 20 Mbps and pushed exactly
+    // kMaxQueuedAccessUnits tiny frames, so whether the queue ever reached its
+    // bound depended on the sender racing the pacer — the test passed or failed
+    // on scheduling luck (~25% failure rate in CI). Starving the pacer makes
+    // overflow arithmetic rather than a race.
     RtpVideoSender sender = link.make_sender(
-        20'000'000,
+        8'000,
         {},
         {},
         [&idr_requests]() { idr_requests.fetch_add(1, std::memory_order_relaxed); }
@@ -942,7 +948,9 @@ TEST(RtpVideoSenderAdmissionTest, QueueOverflowEntersIdrGate) {
     const auto idr = make_idr_access_unit();
     ASSERT_TRUE(send_au_accepted(sender,idr.data(), idr.size(), 0));
 
-    for (int index = 0; index < 16; ++index) {
+    // Comfortably more than kMaxQueuedAccessUnits (16) so the bound is crossed
+    // even if a frame or two does drain.
+    for (int index = 0; index < 48; ++index) {
         const auto delta = make_delta_access_unit(static_cast<uint8_t>(index));
         (void)send_au_accepted(sender,
             delta.data(),

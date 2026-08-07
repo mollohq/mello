@@ -101,22 +101,8 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release
           cmake --build libmello/build-ci
 
-      # Two RTP tests are excluded on macOS only; Windows runs the full suite.
-      # A named exclusion rather than continue-on-error, so every other C++
-      # test still gates and the exclusion is visible in the diff instead of
-      # silently swallowing whatever else breaks.
-      #
-      # QueueOverflowEntersIdrGate fails deterministically here: it provokes
-      # overflow by pushing 16 AUs at a queue that this hardware drains faster
-      # than they arrive, so the condition it waits for never occurs.
-      # BoundedBurstRequestsLocalIdrOnQueueOverflow is flaky — it passes in
-      # isolation and fails under full-suite contention.
-      #
-      # Remove this filter once both are fixed.
       - name: Run C++ tests
-        run: |
-          ctest --test-dir libmello/build-ci --output-on-failure \
-            -E "QueueOverflowEntersIdrGate|BoundedBurstRequestsLocalIdrOnQueueOverflow"
+        run: ctest --test-dir libmello/build-ci --output-on-failure
 
       - name: Cleanup build artifacts
         if: always()
