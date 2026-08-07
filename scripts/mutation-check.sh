@@ -82,6 +82,23 @@ echo "crew:"
 mut "select sends an empty crew id" \
     client/src/callbacks/crew.rs "crew_id: crew_id.to_string()" "crew_id: String::new()"
 
+echo "auth:"
+mut "login drops the password" \
+    client/src/callbacks/auth.rs "password: password.to_string()," "password: String::new(),"
+mut "the Google button signs in with Discord" \
+    client/src/callbacks/auth.rs "let _ = cmd.send(Command::AuthGoogle);" "let _ = cmd.send(Command::AuthDiscord);"
+# Anchored on the surrounding log line: set_login_loading(false) appears in
+# four branches, and an unanchored pattern silently mutates whichever comes
+# first rather than the one named here.
+mut "a failed login leaves the spinner running" \
+    client/src/handlers/auth.rs 'log::warn!("[auth] login-failed  reason={}", reason);
+            ctx.app.set_login_loading(false);' 'log::warn!("[auth] login-failed  reason={}", reason);
+            ctx.app.set_login_loading(true);'
+mut "a failed social link leaves the spinner running" \
+    client/src/handlers/auth.rs 'log::warn!("[auth] social-link-failed  reason={}", reason);
+            ctx.app.set_login_loading(false);' 'log::warn!("[auth] social-link-failed  reason={}", reason);
+            ctx.app.set_login_loading(true);'
+
 echo ""
 if [ "$FAIL" -eq 0 ]; then
     printf '\033[32m━━━ all %s mutations caught ━━━\033[0m\n' "$PASS"

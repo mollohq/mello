@@ -151,6 +151,69 @@ fn signup_and_crew_creation_round_trip() {
     });
 }
 
+/// Signing in with an unknown email must fail, not quietly create an account.
+///
+/// This used to send `create=true`, so a typo on the sign-in panel produced a
+/// brand-new account with no crew, nickname or avatar — the user saw an empty
+/// app and assumed their crews were gone. Asserted against a live server
+/// because the behaviour lives in a query parameter, where a unit test would
+/// only be re-reading the same string.
+#[test]
+fn signing_in_with_an_unknown_email_is_refused() {
+    if !e2e_enabled("signing_in_with_an_unknown_email_is_refused") {
+        return;
+    }
+
+    rt().block_on(async {
+        let mut client = NakamaClient::new(e2e_config());
+        let email = format!("nobody-{:032x}@example.invalid", rand::random::<u128>());
+
+        let result = client.login_email(&email, "irrelevant-password").await;
+
+        assert!(
+            result.is_err(),
+            "signing in with an address that has no account must fail; \
+             creating one here bypasses onboarding entirely"
+        );
+    });
+}
+
+/// ...and a real account can still sign in, so the above is not just breaking
+/// login outright.
+#[test]
+fn an_existing_email_identity_can_still_sign_in() {
+    if !e2e_enabled("an_existing_email_identity_can_still_sign_in") {
+        return;
+    }
+
+    rt().block_on(async {
+        let email = format!("e2e-{:032x}@example.invalid", rand::random::<u128>());
+        let password = "correct-horse-battery";
+
+        // Create the identity the way onboarding does: device account first,
+        // then link an email to it.
+        let mut client = NakamaClient::new(e2e_config());
+        client
+            .authenticate_device(&random_device_id())
+            .await
+            .expect("device auth");
+        client
+            .link_email(&email, password)
+            .await
+            .expect("link email to the device account");
+
+        // A fresh client, as a returning user on another launch.
+        let mut returning = NakamaClient::new(e2e_config());
+        let user = returning
+            .login_email(&email, password)
+            .await
+            .expect("a linked email identity must still sign in with create=false");
+        assert!(!user.id.is_empty());
+
+        let _ = client.delete_account().await;
+    });
+}
+
 /// `voice_join` decides SFU vs P2P, enforces capacity and signs an SFU token.
 /// None of that logic is covered by the Go unit tests at the RPC level.
 #[test]
