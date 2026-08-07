@@ -689,3 +689,62 @@ fn mute_toggle_emits_set_mute_and_broadcast() {
         "expected SetMute, got {cmds:?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Layout
+// ---------------------------------------------------------------------------
+
+/// An element can be present in the tree and still be invisible to the user if
+/// it collapses to zero size. Structural queries cannot tell the difference, so
+/// check the geometry of the controls a user must be able to hit.
+///
+/// Geometry is real under the headless backend: layout is computed even though
+/// nothing is rasterised.
+#[test]
+fn primary_onboarding_controls_have_a_visible_size() {
+    let mut h = Harness::new();
+    h.emit(Event::DiscoverCrewsLoaded {
+        crews: sample_crews(3),
+        cursor: None,
+    });
+
+    for type_name in ["CrewCard", "CreateCrewCard"] {
+        let elements: Vec<_> =
+            ElementHandle::find_by_element_type_name(h.app(), type_name).collect();
+        assert!(!elements.is_empty(), "expected at least one {type_name}");
+
+        for (i, element) in elements.iter().enumerate() {
+            let size = element.size();
+            assert!(
+                size.width > 1.0 && size.height > 1.0,
+                "{type_name} {i} is {}x{} — present in the tree but too small to \
+                 click, so the user cannot use it",
+                size.width,
+                size.height
+            );
+        }
+    }
+}
+
+/// The same check for the discovery-failure screen, where the Retry button is
+/// the user's only route back.
+#[test]
+fn discover_error_retry_control_has_a_visible_size() {
+    let mut h = Harness::new();
+    h.emit(Event::DiscoverCrewsFailed {
+        reason: "connection refused".into(),
+    });
+
+    let create: Vec<_> =
+        ElementHandle::find_by_element_type_name(h.app(), "CreateCrewCard").collect();
+    assert!(!create.is_empty(), "the way forward must still be present");
+    for element in &create {
+        let size = element.size();
+        assert!(
+            size.width > 1.0 && size.height > 1.0,
+            "CreateCrewCard collapsed to {}x{} on the error screen",
+            size.width,
+            size.height
+        );
+    }
+}
