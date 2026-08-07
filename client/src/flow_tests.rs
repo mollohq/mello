@@ -8,7 +8,7 @@
 use i_slint_backend_testing::ElementHandle;
 use mello_core::{Command, Event};
 
-use crate::testkit::Harness;
+use crate::testkit::{Harness, MainWindow};
 
 /// Which top-level screen the window is showing.
 ///
@@ -747,4 +747,205 @@ fn discover_error_retry_control_has_a_visible_size() {
             size.height
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// Auth entry points
+// ---------------------------------------------------------------------------
+
+/// Email sign-in must carry both fields, clear any previous error, and show
+/// the spinner. A dropped password reaches the server as an empty one.
+#[test]
+fn email_login_carries_credentials_and_sets_loading() {
+    let mut h = Harness::new();
+    h.app().set_login_error("previous failure".into());
+
+    h.app()
+        .invoke_login("user@example.com".into(), "hunter2".into());
+
+    assert!(h.app().get_login_loading(), "the spinner must appear");
+    assert_eq!(
+        h.app().get_login_error().as_str(),
+        "",
+        "a previous error must clear when retrying"
+    );
+
+    let cmds = h.commands();
+    let sent = cmds.iter().find_map(|c| match c {
+        Command::Login { email, password } => Some((email.clone(), password.clone())),
+        _ => None,
+    });
+    assert_eq!(
+        sent,
+        Some(("user@example.com".to_string(), "hunter2".to_string())),
+        "Login must carry both credentials, got {cmds:?}"
+    );
+}
+
+/// Each social button must emit its own provider's command. Wiring two buttons
+/// to the same command is an easy copy-paste slip and would send users to the
+/// wrong identity provider.
+#[test]
+fn each_social_button_emits_its_own_provider() {
+    /// (label, button to press, predicate matching that provider's command)
+    type SocialCase = (&'static str, fn(&MainWindow), fn(&Command) -> bool);
+
+    let cases: [SocialCase; 5] = [
+        (
+            "steam",
+            |a| a.invoke_signin_steam(),
+            |c| matches!(c, Command::AuthSteam),
+        ),
+        (
+            "google",
+            |a| a.invoke_signin_google(),
+            |c| matches!(c, Command::AuthGoogle),
+        ),
+        (
+            "twitch",
+            |a| a.invoke_signin_twitch(),
+            |c| matches!(c, Command::AuthTwitch),
+        ),
+        (
+            "discord",
+            |a| a.invoke_signin_discord(),
+            |c| matches!(c, Command::AuthDiscord),
+        ),
+        (
+            "apple",
+            |a| a.invoke_signin_apple(),
+            |c| matches!(c, Command::AuthApple { .. }),
+        ),
+    ];
+
+    for (name, invoke, expected) in cases {
+        let mut h = Harness::new();
+        invoke(h.app());
+        let cmds = h.commands();
+        assert!(
+            cmds.iter().any(expected),
+            "the {name} button did not emit its own provider command, got {cmds:?}"
+        );
+        // Exactly one auth command, so a button cannot fire two providers.
+        let auth_count = cmds
+            .iter()
+            .filter(|c| {
+                matches!(
+                    c,
+                    Command::AuthSteam
+                        | Command::AuthGoogle
+                        | Command::AuthTwitch
+                        | Command::AuthDiscord
+                        | Command::AuthApple { .. }
+                )
+            })
+            .count();
+        assert_eq!(auth_count, 1, "{name} emitted {auth_count} auth commands");
+    }
+}
+
+/// Social sign-in dismisses the panel, so the user is not left looking at a
+/// sign-in form while the provider flow runs.
+#[test]
+fn social_signin_dismisses_the_sign_in_panel() {
+    let h = Harness::new();
+    h.app().set_show_sign_in(true);
+
+    h.app().invoke_signin_google();
+
+    assert!(!h.app().get_show_sign_in());
+}
+
+/// Documented gap, not an endorsement: desktop has no native Apple flow, so
+/// the button sends an empty token the handler rejects as unsupported. Pinned
+/// so that when a real flow lands, this test fails and gets updated.
+#[test]
+fn apple_signin_currently_sends_an_empty_token() {
+    let mut h = Harness::new();
+    h.app().invoke_signin_apple();
+
+    let cmds = h.commands();
+    let token = cmds.iter().find_map(|c| match c {
+        Command::AuthApple { identity_token } => Some(identity_token.clone()),
+        _ => None,
+    });
+    assert_eq!(
+        token,
+        Some(String::new()),
+        "desktop has no native Apple flow yet; the handler reports unsupported"
+    );
+}
+
+/// Logging out must return the user to a usable screen, not a blank one.
+#[test]
+fn logout_returns_to_a_visible_screen() {
+    let mut h = Harness::new();
+    h.emit(Event::LoggedIn {
+        user: sample_user(),
+    });
+    assert_eq!(visible_screens(&h), vec![Screen::App]);
+
+    h.app().invoke_logout();
+
+    assert!(!h.app().get_logged_in());
+    h.assert_not_blank();
+    let cmds = h.commands();
+    assert!(
+        cmds.iter().any(|c| matches!(c, Command::Logout)),
+        "expected a Logout command, got {cmds:?}"
+    );
+}
+
+/// A failed social link must clear the spinner and surface the reason.
+/// Without this the user is left staring at a spinner that never resolves.
+#[test]
+fn failed_social_link_clears_the_spinner_and_shows_why() {
+    let mut h = Harness::new();
+    h.app().set_login_loading(true);
+
+    h.emit(Event::SocialLinkFailed {
+        reason: "provider rejected the token".into(),
+    });
+
+    assert!(
+        !h.app().get_login_loading(),
+        "a failed social link must stop the spinner"
+    );
+    assert_eq!(
+        h.app().get_link_error().as_str(),
+        "provider rejected the token"
+    );
+}
+
+/// Same for email linking during onboarding.
+#[test]
+fn failed_email_link_shows_why() {
+    let mut h = Harness::new();
+
+    h.emit(Event::EmailLinkFailed {
+        reason: "that email is already in use".into(),
+    });
+
+    assert_eq!(
+        h.app().get_link_error().as_str(),
+        "that email is already in use"
+    );
+}
+
+/// A successful login must also stop the spinner and dismiss the panel.
+#[test]
+fn successful_login_clears_the_spinner_and_panel() {
+    let mut h = Harness::new();
+    h.app().set_login_loading(true);
+    h.app().set_show_sign_in(true);
+
+    h.emit(Event::LoggedIn {
+        user: sample_user(),
+    });
+
+    assert!(!h.app().get_login_loading(), "the spinner must stop");
+    assert!(
+        !h.app().get_show_sign_in(),
+        "the sign-in panel must dismiss"
+    );
 }
