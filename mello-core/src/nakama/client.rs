@@ -107,9 +107,19 @@ impl NakamaClient {
 
     // --- Authentication ---
 
+    /// Sign in with an existing email identity.
+    ///
+    /// `create=false`, matching every social provider. With `create=true` a
+    /// typo'd address silently created a brand-new account — no crew, no
+    /// nickname, no avatar, onboarding bypassed — and the user concluded their
+    /// crews had vanished. Accounts are created by onboarding, which is the
+    /// only path that sets those up.
+    ///
+    /// Existing users are unaffected: anyone who previously got an account this
+    /// way still has that email identity, so sign-in still finds it.
     pub async fn login_email(&mut self, email: &str, password: &str) -> Result<User> {
         let url = format!(
-            "{}/v2/account/authenticate/email?create=true",
+            "{}/v2/account/authenticate/email?create=false",
             self.config.http_base()
         );
 

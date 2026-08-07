@@ -116,14 +116,21 @@ async fn run_canary() -> Result<Vec<Step>, String> {
         elapsed: t.elapsed(),
     });
 
-    // A successful-but-empty response is its own outage: onboarding step 1
-    // has nothing to join. There is now a Create Crew fallback, so this is a
-    // warning rather than a hard failure — but it still means the funnel is
-    // badly degraded.
+    // Discovery succeeding with few or no crews is its own kind of outage:
+    // onboarding step 1 has little or nothing to join. There is a Create Crew
+    // fallback, so this warns rather than fails — but the funnel is thin and
+    // worth knowing about before it bottoms out rather than after.
+    const THIN_CREW_FUNNEL: usize = 3;
     if crews.is_empty() {
         eprintln!(
             "  ! warning: discovery succeeded but returned zero crews. New users \
              can only proceed by creating their own."
+        );
+    } else if crews.len() < THIN_CREW_FUNNEL {
+        eprintln!(
+            "  ! warning: only {} discoverable crews. If these go invite-only or \
+             are deleted, new users have nothing to join.",
+            crews.len()
         );
     }
 
