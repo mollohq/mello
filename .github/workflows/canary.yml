@@ -44,10 +44,10 @@ jobs:
             target
           key: canary-cargo-${{ hashFiles('Cargo.lock') }}
 
-      # mello-core pulls in keyring, whose Linux backend needs D-Bus headers.
-      - name: Install Linux build dependencies
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq pkg-config libdbus-1-dev
-
+      # No system packages needed: the canary speaks HTTP directly rather than
+      # going through mello-core, so it builds on a stock Linux image in about
+      # 40 seconds. See tools/canary/src/main.rs for why.
+      #
       # Building is a separate step from running so the two failure modes stay
       # distinguishable. A build break is our problem; it says nothing about
       # whether signup works, and reporting it as "SIGNUP IS BROKEN" is exactly
