@@ -33,6 +33,7 @@ mod stream_frame_timer;
 #[cfg(any(test, feature = "testkit"))]
 pub mod testkit;
 mod updater;
+mod voice_state;
 
 pub const APP_NAME: &str = "m3llo";
 
