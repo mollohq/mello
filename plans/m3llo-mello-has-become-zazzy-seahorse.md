@@ -8,14 +8,30 @@
 | 1 — Client as a library crate | **done** |
 | 2 — Four production seams | **done** |
 | 3 — Headless UI harness | **done** |
-| 4 — Flow tests + screen invariants | **done** (core set; remaining journeys listed below) |
-| 5 — Reducers for all flows | **not started** (multi-week) |
+| 4 — Flow tests + screen invariants | **done** |
+| 5 — Reducers | **done** for onboarding and mute/deafen; others not justified by evidence |
 | 6a — RPC contract test | **done** |
 | 6b — Dockerised integration | **done** |
 | 6c — Release-artifact smoke gate | **done** (unverified on the self-hosted runners) |
 | 6d — Production canary | **done** (unverified against prod) |
-| 6e — Discovery error + retry | **done**; `users_new_24h == 0` alert **not started** |
-| 7 — Pixel snapshots | **not started** |
+| 6e — Discovery error + retry, growth alarm | **done** |
+| 7 — Pixel snapshots | **superseded** — see below |
+| — Mutation checking | **added** (not in the original plan) |
+
+Phase 5 was scoped to the two flows with demonstrated fragility. Onboarding's
+step was written from 16 sites, three of which skipped persistence; mute/deafen
+was duplicated across five entry points and had already diverged. Crew, chat and
+streaming show no equivalent problem, so reducers there would be churn.
+
+Phase 7 was replaced by layout assertions on element geometry. They catch the
+same failure that mattered — a control present in the tree but collapsed to zero
+size — deterministically, with no golden images, no `renderer-software` feature
+and no per-platform baselines. Pixel goldens remain possible if visual diffing
+is wanted later.
+
+`scripts/mutation-check.sh` was added after a sweep showed the suite passing on
+a deliberately broken chat callback. It introduces eight realistic regressions
+and asserts the suite goes red for each.
 
 **All three root causes of the signup outage are now covered**, each with a
 regression test verified to fail without its fix.
