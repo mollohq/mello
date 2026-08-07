@@ -9,6 +9,41 @@ then jump to the section you need.
 
 ---
 
+## Flaky tests
+
+A flaky test is a broken test. Fix the determinism or delete it — never add
+retries, and never `ctest --repeat until-pass`. A suite you re-run until it
+goes green tells you nothing, and the habit spreads.
+
+Every flaky test found in this codebase so far had the same cause: **the test
+asserted on a race it did not control.** Three examples, all in libmello RTP:
+
+| Test | The race | The fix |
+|---|---|---|
+| `QueueOverflowEntersIdrGate` | Needed the send queue to overflow; paced 20 Mbps against 16 tiny frames, so the pacer usually drained them first | Starve the pacer (8 kbps) and send 48 frames — overflow becomes arithmetic |
+| `BoundedBurst…QueueOverflow` | Same, but through a peer connection with no settable pacing | Overflow by volume instead: 24 × 512 KB against a 4 MB bound |
+| `ParityFecRepairs…WithoutPli` | Needed the queue *not* to overflow; a flat 3 ms sleep assumed the pacer kept up | Keep the sleep (the receiver needs it) and also wait for the queue to drain |
+
+The pattern to reach for: **make the condition true by construction**, not by
+hoping the machine cooperates. Starve a producer, exceed a bound by volume, or
+wait on the actual state instead of sleeping.
+
+Beware two traps seen while fixing these:
+
+- A sleep may be load-bearing for something other than what it looks like.
+  Removing the 3 ms above fixed the sender race and broke the receiver.
+- When mutating code to check a test catches a regression, restore with `touch`
+  afterwards. `cp`/`mv` restores an older mtime, so cargo reuses the artifact
+  built from the *mutated* source and every later result is wrong.
+
+To check the suite still catches regressions at all:
+
+```bash
+./scripts/mutation-check.sh
+```
+
+---
+
 ## The two commands
 
 ```bash
