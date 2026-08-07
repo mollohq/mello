@@ -25,8 +25,8 @@ type SFUTokenClaims struct {
 	UserID    string `json:"uid"`
 	Username  string `json:"username,omitempty"` // display name
 	SessionID string `json:"sid"`
-	Type      string `json:"type"`            // "stream" or "voice"
-	Role      string `json:"role"`            // "host", "viewer", "member"
+	Type      string `json:"type"` // "stream" or "voice"
+	Role      string `json:"role"` // "host", "viewer", "member"
 	CrewID    string `json:"crew_id"`
 	ChannelID string `json:"ch_id,omitempty"` // voice sessions only
 	Region    string `json:"region"`

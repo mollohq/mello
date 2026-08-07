@@ -288,12 +288,12 @@ func DevSeedStateRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk 
 	if gid, ok := crewIDs["Devs"]; ok {
 		streamID := fmt.Sprintf("stream_%s_seed", users["charlie"].id[:8])
 		meta := StreamMeta{
-			StreamID:        streamID,
-			CrewID:          gid,
-			StreamerID:      users["charlie"].id,
+			StreamID:         streamID,
+			CrewID:           gid,
+			StreamerID:       users["charlie"].id,
 			StreamerUsername: users["charlie"].displayName,
-			Title:           "Counter-Strike 2",
-			StartedAt:       now,
+			Title:            "Counter-Strike 2",
+			StartedAt:        now,
 		}
 		metaJSON, _ := json.Marshal(meta)
 		nk.StorageWrite(ctx, []*runtime.StorageWrite{{
@@ -487,24 +487,24 @@ func DevSeedStateRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk 
 				ID: generateEventID(), CrewID: crewIDs["Gamers"],
 				Type: "weekly_recap", ActorID: "",
 				Timestamp: nowMs - 12*hour, Score: 30,
-			Data: WeeklyRecapData{
-				CrewID:            crewIDs["Gamers"],
-				WeekStart:         weekStart,
-				WeekEnd:           nowMs,
-				TotalHangoutMin:   420,
-				TopGame:           "Counter-Strike 2",
-				LongestSession:    "bob, diana in General (93m)",
-				LongestSessionMin: 93,
-				ClipCount:         7,
-				MostActive:        users["bob"].displayName,
-				MostClipped:       users["alice"].displayName,
-				TopMembers: []RecapMember{
-					{DisplayName: users["bob"].displayName, HangoutMin: 185},
-					{DisplayName: users["alice"].displayName, HangoutMin: 142},
-					{DisplayName: users["diana"].displayName, HangoutMin: 93},
+				Data: WeeklyRecapData{
+					CrewID:            crewIDs["Gamers"],
+					WeekStart:         weekStart,
+					WeekEnd:           nowMs,
+					TotalHangoutMin:   420,
+					TopGame:           "Counter-Strike 2",
+					LongestSession:    "bob, diana in General (93m)",
+					LongestSessionMin: 93,
+					ClipCount:         7,
+					MostActive:        users["bob"].displayName,
+					MostClipped:       users["alice"].displayName,
+					TopMembers: []RecapMember{
+						{DisplayName: users["bob"].displayName, HangoutMin: 185},
+						{DisplayName: users["alice"].displayName, HangoutMin: 142},
+						{DisplayName: users["diana"].displayName, HangoutMin: 93},
+					},
+					GeneratedAt: nowMs - 12*hour,
 				},
-				GeneratedAt: nowMs - 12*hour,
-			},
 			},
 		},
 		"Devs": {
