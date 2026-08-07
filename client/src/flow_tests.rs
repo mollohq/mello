@@ -949,3 +949,73 @@ fn successful_login_clears_the_spinner_and_panel() {
         "the sign-in panel must dismiss"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Session restore
+// ---------------------------------------------------------------------------
+
+/// The full restore-succeeds path: spinner on, then the app.
+#[test]
+fn session_restore_success_ends_on_the_app_screen() {
+    let mut h = Harness::new();
+
+    h.emit(Event::Restoring);
+    assert!(
+        h.app().get_login_loading(),
+        "restoring should show progress rather than a dead screen"
+    );
+
+    h.emit(Event::LoggedIn {
+        user: sample_user(),
+    });
+
+    assert!(!h.app().get_login_loading());
+    assert!(h.app().get_logged_in());
+    assert_eq!(visible_screens(&h), vec![Screen::App]);
+}
+
+/// The full restore-fails path. `LoginFailed` with an *empty* reason is how
+/// core signals "restore failed" as opposed to "these credentials are wrong",
+/// and it must land somewhere the user can act, not on a blank screen.
+#[test]
+fn session_restore_failure_ends_somewhere_usable() {
+    let mut h = Harness::new();
+    h.app().set_onboarding_step(4);
+
+    h.emit(Event::Restoring);
+    h.emit(Event::LoginFailed {
+        reason: String::new(),
+    });
+
+    assert!(!h.app().get_logged_in());
+    assert_eq!(
+        h.app().get_onboarding_step(),
+        1,
+        "a failed restore returns to crew selection"
+    );
+    h.assert_not_blank();
+    assert_eq!(
+        h.app().get_login_error().as_str(),
+        "",
+        "restore failing silently is not an error to show the user; they were \
+         not trying to log in"
+    );
+}
+
+/// A restore that fails must not leave the spinner running forever.
+#[test]
+fn failed_restore_stops_the_spinner() {
+    let mut h = Harness::new();
+
+    h.emit(Event::Restoring);
+    assert!(h.app().get_login_loading());
+
+    h.emit(Event::LoginFailed {
+        reason: String::new(),
+    });
+
+    assert!(
+        !h.app().get_login_loading(),
+        "the restore spinner must stop when restore fails"
+    );
+}
