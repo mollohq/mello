@@ -320,6 +320,74 @@ fn sample_crews(n: usize) -> Vec<mello_core::crew::Crew> {
         .collect()
 }
 
+/// Drive the step-3 "continue" that fires `FinalizeOnboarding`.
+///
+/// The nickname is a Slint `out` property so Rust cannot set it; it is not
+/// what these tests are about.
+fn finalize(h: &Harness) {
+    h.app().invoke_onboarding_continue(3);
+}
+
+fn finalize_avatar(cmds: &[Command]) -> Option<Option<String>> {
+    cmds.iter().find_map(|c| match c {
+        Command::FinalizeOnboarding { crew_avatar, .. } => Some(crew_avatar.clone()),
+        _ => None,
+    })
+}
+
+/// ★ Regression: retrying after a failed finalize must still carry the avatar.
+///
+/// `FinalizeOnboarding` runs seven sequential network calls and any of them can
+/// fail, leaving the user on step 3 to try again. The pending crew avatar used
+/// to be `.take()`n when the command was built, so the retry silently sent
+/// none — a user who hit one transient error lost the avatar they had picked,
+/// with nothing to indicate why.
+#[test]
+fn retrying_finalize_after_failure_preserves_the_crew_avatar() {
+    let mut h = Harness::new();
+    *h.ctx().new_crew_avatar_b64.lock().unwrap() = Some("BASE64_AVATAR".into());
+
+    finalize(&h);
+    let first = finalize_avatar(&h.commands());
+    assert_eq!(
+        first,
+        Some(Some("BASE64_AVATAR".to_string())),
+        "the first attempt should carry the avatar"
+    );
+
+    // Any of the seven steps failing lands here.
+    h.emit(Event::OnboardingFailed {
+        reason: "Connection failed: timed out".into(),
+    });
+
+    finalize(&h);
+    let second = finalize_avatar(&h.commands());
+    assert_eq!(
+        second,
+        Some(Some("BASE64_AVATAR".to_string())),
+        "the retry must still carry the avatar the user picked; losing it here \
+         is silent data loss they cannot diagnose"
+    );
+}
+
+/// ...but a *successful* onboarding must release it, so the next crew the user
+/// creates does not inherit the previous avatar.
+#[test]
+fn successful_onboarding_clears_the_pending_crew_avatar() {
+    let mut h = Harness::new();
+    *h.ctx().new_crew_avatar_b64.lock().unwrap() = Some("BASE64_AVATAR".into());
+
+    h.emit(Event::OnboardingReady {
+        user: sample_user(),
+    });
+
+    assert!(
+        h.ctx().new_crew_avatar_b64.lock().unwrap().is_none(),
+        "a completed onboarding must release the pending avatar, or the next \
+         crew created would silently reuse it"
+    );
+}
+
 fn sample_user() -> mello_core::events::User {
     mello_core::events::User {
         id: "user-1".into(),

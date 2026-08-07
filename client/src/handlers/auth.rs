@@ -38,6 +38,10 @@ pub fn handle(ctx: &AppContext, event: Event) {
             ctx.app.set_user_tag(user.tag.into());
             ctx.app.set_logged_in(true);
             ctx.app.set_onboarding_step(3);
+            // Release the pending crew avatar only now that onboarding has
+            // actually succeeded. It is deliberately retained through a failed
+            // attempt so a retry still carries it.
+            *ctx.new_crew_avatar_b64.lock().unwrap() = None;
             let mut s = ctx.settings.borrow_mut();
             s.pending_crew_id = None;
             s.pending_crew_name = None;

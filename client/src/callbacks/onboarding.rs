@@ -167,7 +167,14 @@ pub fn wire(ctx: &AppContext) {
                     let crew_description = settings.pending_crew_description.clone();
                     let crew_open = settings.pending_crew_open;
                     drop(settings);
-                    let crew_avatar = avatar_b64.lock().unwrap().take();
+                    // clone, not take: FinalizeOnboarding performs seven
+                    // sequential network calls and any of them can fail,
+                    // leaving the user on step 3 to retry. Taking the avatar
+                    // here meant the retry silently sent none, so a user who
+                    // hit a transient error lost the crew avatar they picked
+                    // with no indication why. Cleared on success instead —
+                    // see the OnboardingReady handler.
+                    let crew_avatar = avatar_b64.lock().unwrap().clone();
 
                     let (avatar_data, avatar_format, avatar_style, avatar_seed) = {
                         let state = avatar_st.lock().unwrap();
