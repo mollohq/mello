@@ -169,6 +169,21 @@ pub fn send_access_unit(
     map_mello_result(result)
 }
 
+/// Send one Opus frame on a stream-host peer.
+pub fn send_audio(peer: NonNull<MelloPeerConnection>, opus: &[u8]) -> Result<(), RtpPeerError> {
+    if opus.is_empty() {
+        return Ok(());
+    }
+    let result = unsafe {
+        mello_sys::mello_peer_send_audio(
+            peer.as_ptr(),
+            opus.as_ptr(),
+            i32::try_from(opus.len()).map_err(|_| RtpPeerError::InvalidParam)?,
+        )
+    };
+    map_mello_result(result)
+}
+
 /// Poll one complete received access unit into `buffer`.
 ///
 /// Grows `buffer` in place when the queued unit is larger than the current

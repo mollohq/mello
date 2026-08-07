@@ -128,7 +128,9 @@ D3D11VA (§4 item 2.4) is **not** required on NVIDIA boxes (NVDEC path). **NVDEC
 
 ## 5. Phase 3 — experience features (each gets its own planning round; do NOT start without a plan)
 
-1. **Game audio**: WASAPI loopback capture (eRender + `AUDCLNT_STREAMFLAGS_LOOPBACK` — `libmello/src/audio/capture_wasapi.cpp` is mic-only today) → Opus → audio track on stream sessions (libmello has Opus + voice pipeline to crib from) → SFU stream-audio relay (new track type on stream sessions) → viewer playback. `mello_stream_start_audio`/`mello_stream_feed_audio_packet` are stubs (`mello.cpp:1116,1227`). macOS SCK already captures audio (`capture_screencapturekit.mm:236-241`).
+1. **Game audio** ✅ (Windows, Phase 3.1): WASAPI loopback (`capture_wasapi_loopback.cpp`) → `StreamAudioHostPipeline` (Opus stereo) → stream peer Opus m-line → `PacketSink::send_audio` → SFU `fanOutAudioRTP` / P2P fan-out → viewer `mello_stream_feed_audio_packet` + `StreamAudioPlayout`. **Validated Aug 2026:** `sfu-stream-viewer-probe` + `stream-host` smoke test — `audio_fed_hz≈50`, `viewer playout started`, zero `send_fail_audio_delta`.
+
+   **macOS follow-up (not in Phase 3.1):** `SCKCapture::set_audio_callback` already delivers float PCM at 48 kHz stereo (`capture_screencapturekit.mm:236-241`). Wire into `StreamAudioHostPipeline` on host start (same callback contract as loopback) and add CoreAudio playback for viewer playout. No new capture backend needed — hookup only.
 2. **Two-rendition ladder → simulcast**: NVENC dual-session (good/degraded) per host; SFU layer-based forwarding per viewer BWE (the per-viewer GCC from Phase 1 is the input). Check Pion simulcast helpers (`ConfigureSimulcastExtensionHeaders` exists in pion/webrtc v4.2.9).
 3. **AV1 activation**: `supports_av1` hardcoded `false` (`mello-core/src/client/streaming.rs:879`), codec hardcoded H264 (`:872`); NVENC AV1 branch + dav1d decoder exist. Wire capability exchange end-to-end.
 4. **macOS polish**: VT decoder session reuse on IDR (currently recreates per keyframe — `decoder_videotoolbox.mm:240-245`), native-surface present path (CA layer) instead of CPU RGBA FrameSlot.

@@ -7,8 +7,8 @@ use async_trait::async_trait;
 
 use super::error::StreamError;
 use super::rtp_peer::{
-    poll_video_feedback, send_access_unit, set_pacing_target, snapshot_video_stats, RtpPeerError,
-    VideoFeedback,
+    poll_video_feedback, send_access_unit, send_audio, set_pacing_target, snapshot_video_stats,
+    RtpPeerError, VideoFeedback,
 };
 use super::sink::{NativeRtpTelemetry, PacketSink, SinkVideoFeedback, SinkVideoFeedbackKind};
 
@@ -31,7 +31,6 @@ pub struct P2PFanoutSink {
     pacing_kbps: AtomicU32,
     pending_joins: RwLock<VecDeque<String>>,
     pending_leaves: RwLock<VecDeque<String>>,
-    audio_stub_bytes: AtomicU32,
 }
 
 impl Default for P2PFanoutSink {
@@ -47,7 +46,6 @@ impl P2PFanoutSink {
             pacing_kbps: AtomicU32::new(DEFAULT_SINK_PACING_KBPS),
             pending_joins: RwLock::new(VecDeque::new()),
             pending_leaves: RwLock::new(VecDeque::new()),
-            audio_stub_bytes: AtomicU32::new(0),
         }
     }
 
@@ -184,11 +182,32 @@ impl PacketSink for P2PFanoutSink {
         Ok(())
     }
 
-    async fn send_audio_stub(&self, byte_len: usize) {
-        self.audio_stub_bytes.fetch_add(
-            u32::try_from(byte_len).unwrap_or(u32::MAX),
-            Ordering::Relaxed,
-        );
+    async fn send_audio(&self, opus: &[u8]) -> Result<(), StreamError> {
+        if opus.is_empty() {
+            return Ok(());
+        }
+        let viewers = self
+            .viewers
+            .read()
+            .map_err(|_| StreamError::SendFailed("P2P viewer map lock poisoned".to_string()))?;
+
+        let mut last_err: Option<StreamError> = None;
+        for vp in viewers.values() {
+            if !unsafe { mello_sys::mello_peer_is_connected(vp.peer) } {
+                continue;
+            }
+            let Some(peer) = NonNull::new(vp.peer) else {
+                continue;
+            };
+            if let Err(e) = send_audio(peer, opus) {
+                log::warn!("P2P sink: audio send failed for viewer: {}", e);
+                last_err = Some(StreamError::SendFailed(e.to_string()));
+            }
+        }
+        if let Some(err) = last_err {
+            return Err(err);
+        }
+        Ok(())
     }
 
     async fn set_pacing_kbps(&self, target_kbps: u32) {
@@ -303,17 +322,17 @@ mod tests {
     }
 
     #[test]
-    fn audio_stub_accumulates_byte_len() {
+    fn audio_send_api_exists() {
         let sink = P2PFanoutSink::new();
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .expect("runtime");
         rt.block_on(async {
-            sink.send_audio_stub(128).await;
-            sink.send_audio_stub(64).await;
+            sink.send_audio(&[0xAB, 0xCD])
+                .await
+                .expect("empty fanout ok");
         });
-        assert_eq!(sink.audio_stub_bytes.load(Ordering::Relaxed), 192);
     }
 
     #[test]

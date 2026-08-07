@@ -1,12 +1,14 @@
 #include <gtest/gtest.h>
 
 #include "mello.h"
+#include "transport/incoming_audio_sender.hpp"
 
 #include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <cstring>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
 #include <vector>
@@ -253,8 +255,8 @@ void expect_stream_sdp(const char* sdp, const char* expected_direction) {
     EXPECT_NE(text.find("packetization-mode=1"), std::string::npos);
     EXPECT_NE(text.find("level-asymmetry-allowed=1"), std::string::npos);
     EXPECT_NE(text.find(expected_direction), std::string::npos);
-    EXPECT_EQ(text.find("m=audio"), std::string::npos);
-    EXPECT_EQ(text.find("opus/48000"), std::string::npos);
+    EXPECT_NE(text.find("m=audio"), std::string::npos);
+    EXPECT_NE(text.find("opus/48000"), std::string::npos);
 }
 
 size_t count_media_sections(const std::string& sdp, const std::string& type) {
@@ -312,6 +314,33 @@ std::string remove_video_section(const std::string& sdp) {
     std::string result = sdp;
     result.erase(begin, end - begin);
     return result;
+}
+
+std::optional<uint32_t> audio_ssrc_from_sdp(const std::string& sdp) {
+    const size_t audio_begin = sdp.find("m=audio");
+    if (audio_begin == std::string::npos) {
+        return std::nullopt;
+    }
+    const size_t next_media = sdp.find("\nm=", audio_begin + 1);
+    const size_t audio_end =
+        next_media == std::string::npos ? sdp.size() : next_media;
+    const std::string section = sdp.substr(audio_begin, audio_end - audio_begin);
+
+    const std::string prefix = "a=ssrc:";
+    size_t pos = 0;
+    while ((pos = section.find(prefix, pos)) != std::string::npos) {
+        pos += prefix.size();
+        uint32_t ssrc = 0;
+        size_t i = pos;
+        while (i < section.size() && section[i] >= '0' && section[i] <= '9') {
+            ssrc = ssrc * 10u + static_cast<uint32_t>(section[i] - '0');
+            ++i;
+        }
+        if (i > pos) {
+            return ssrc;
+        }
+    }
+    return std::nullopt;
 }
 
 bool wait_stream_video_ready(
@@ -971,6 +1000,27 @@ TEST_F(PeerRtpRolesTest, DestroyAfterFailedNegotiationIsSafe) {
     mello_peer_destroy(host);
 }
 
+TEST_F(PeerRtpRolesTest, StreamHostOfferIncludesExplicitAudioSSRC) {
+    // Regression guard for SFU/Pion interoperability: stream host SDP must
+    // advertise a stable audio SSRC that wire_opus_send_packetizer also uses.
+    auto* host = mello_peer_create_for_role(
+        nullptr,
+        "host",
+        MELLO_PEER_MEDIA_ROLE_STREAM_HOST
+    );
+    ASSERT_NE(host, nullptr);
+    mello_peer_set_ice_servers(host, nullptr, 0);
+
+    const char* offer_ptr = mello_peer_create_offer(host);
+    ASSERT_NE(offer_ptr, nullptr);
+    const std::string offer(offer_ptr);
+    const auto ssrc = audio_ssrc_from_sdp(offer);
+    ASSERT_TRUE(ssrc.has_value());
+    EXPECT_GT(*ssrc, 0u);
+
+    mello_peer_destroy(host);
+}
+
 TEST_F(PeerRtpRolesTest, DestroyAfterConnectedStreamIsSafe) {
     auto pair = negotiate_host_offer();
     ASSERT_NE(pair.host, nullptr);
@@ -985,6 +1035,33 @@ TEST_F(PeerRtpRolesTest, DestroyAfterConnectedStreamIsSafe) {
         static_cast<int>(idr.size()),
         30'000
     );
+}
+
+TEST(IncomingAudioSenderTest, AcceptsVoiceUuidAndStreamSessionMsid) {
+    using mello::transport::is_valid_incoming_audio_sender;
+
+    EXPECT_TRUE(is_valid_incoming_audio_sender(
+        MELLO_PEER_MEDIA_ROLE_VOICE,
+        "0890cdb5-7897-414a-bad2-2309c9ee4a83"));
+    EXPECT_FALSE(is_valid_incoming_audio_sender(
+        MELLO_PEER_MEDIA_ROLE_VOICE,
+        "stream_0890cdb5_1786101128579"));
+    EXPECT_FALSE(is_valid_incoming_audio_sender(
+        MELLO_PEER_MEDIA_ROLE_VOICE,
+        "1234567890"));
+
+    EXPECT_TRUE(is_valid_incoming_audio_sender(
+        MELLO_PEER_MEDIA_ROLE_STREAM_VIEWER,
+        "stream_0890cdb5_1786101128579"));
+    EXPECT_FALSE(is_valid_incoming_audio_sender(
+        MELLO_PEER_MEDIA_ROLE_STREAM_VIEWER,
+        "0890cdb5-7897-414a-bad2-2309c9ee4a83"));
+    EXPECT_FALSE(is_valid_incoming_audio_sender(
+        MELLO_PEER_MEDIA_ROLE_STREAM_VIEWER,
+        "unknown"));
+    EXPECT_FALSE(is_valid_incoming_audio_sender(
+        MELLO_PEER_MEDIA_ROLE_STREAM_VIEWER,
+        "1234567890"));
 }
 
 } // namespace

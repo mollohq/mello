@@ -53,6 +53,7 @@ pub(super) struct ViewerState {
     pub host_id: String,
     pub _frame_cb_data: *mut FrameCallbackData,
     pub _ice_cb_data: *mut StreamIceCallbackData,
+    pub _audio_cb_data: *mut StreamAudioCallbackData,
     pub frames_presented: u64,
     pub stream_tick_count: u64,
     pub present_attempts: u64,
@@ -80,6 +81,7 @@ pub(super) struct ViewerState {
     pub debug_last_backlog_guard_drops: u64,
     pub last_present_attempt: Instant,
     pub au_recv_buf: Vec<u8>,
+    pub audio_packets_received: u64,
 }
 
 unsafe impl Send for ViewerState {}
@@ -108,6 +110,9 @@ impl Drop for ViewerState {
             if !self._ice_cb_data.is_null() {
                 drop(Box::from_raw(self._ice_cb_data));
             }
+            if !self._audio_cb_data.is_null() {
+                drop(Box::from_raw(self._audio_cb_data));
+            }
         }
         // SfuConnection is Arc-dropped automatically; leave() is called in handle_stop_watching
     }
@@ -121,6 +126,49 @@ pub(super) struct StreamIceCallbackData {
     /// Once `flushed` is true, new candidates go straight to `send_queue`.
     pub pending: std::sync::Mutex<Vec<SignalEnvelope>>,
     pub flushed: std::sync::atomic::AtomicBool,
+}
+
+pub(super) struct StreamAudioCallbackData {
+    pub viewer_slot: std::sync::Mutex<Option<*mut mello_sys::MelloStreamView>>,
+    pub packets_received: std::sync::atomic::AtomicU64,
+}
+
+pub fn feed_viewer_audio_packet(viewer: *mut mello_sys::MelloStreamView, data: &[u8]) -> bool {
+    if viewer.is_null() || data.is_empty() {
+        return false;
+    }
+    let opus = if data.len() > 4 { &data[4..] } else { data };
+    if opus.is_empty() {
+        return false;
+    }
+    unsafe {
+        mello_sys::mello_stream_feed_audio_packet(
+            viewer,
+            opus.as_ptr(),
+            i32::try_from(opus.len()).unwrap_or(0),
+        ) == mello_sys::MelloResult_MELLO_OK
+    }
+}
+
+pub(super) unsafe extern "C" fn stream_audio_track_callback(
+    user_data: *mut std::ffi::c_void,
+    _sender_id: *const std::ffi::c_char,
+    data: *const u8,
+    size: i32,
+) {
+    if user_data.is_null() || data.is_null() || size <= 0 {
+        return;
+    }
+    let cb_data = &*(user_data as *const StreamAudioCallbackData);
+    let pkt = std::slice::from_raw_parts(data, size as usize);
+    let viewer = cb_data.viewer_slot.lock().ok().and_then(|slot| *slot);
+    if let Some(viewer) = viewer {
+        if feed_viewer_audio_packet(viewer, pkt) {
+            cb_data
+                .packets_received
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
 }
 
 pub(super) struct StreamHostPeer {

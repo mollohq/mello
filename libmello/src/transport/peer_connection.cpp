@@ -1,4 +1,5 @@
 #include "peer_connection_impl.hpp"
+#include "incoming_audio_sender.hpp"
 
 #include "twcc.hpp"
 #include "ulpfec.hpp"
@@ -12,6 +13,7 @@
 #if RTC_ENABLE_MEDIA
 #include <rtc/rtppacketizationconfig.hpp>
 #include <rtc/rtppacketizer.hpp>
+#include <rtc/rtcpreceivingsession.hpp>
 #include <rtc/rtcpsrreporter.hpp>
 #endif
 
@@ -19,7 +21,9 @@ namespace mello::transport {
 namespace {
 
 constexpr uint8_t kVideoPayloadType = 96;
+constexpr uint8_t kAudioPayloadType = 111;
 constexpr char kVideoMid[] = "video";
+constexpr char kAudioMid[] = "audio";
 constexpr char kVideoFmtp[] =
     "profile-level-id=4d002a;packetization-mode=1;level-asymmetry-allowed=1";
 
@@ -121,6 +125,29 @@ const rtc::Description::Media* find_single_video_media(
         error = "remote offer must contain exactly one video media section";
     }
     return video;
+}
+
+const rtc::Description::Media* find_single_audio_media(
+    const rtc::Description& description,
+    std::string& error
+) {
+    const rtc::Description::Media* audio = nullptr;
+    for (int index = 0; index < description.mediaCount(); ++index) {
+        const auto media = description.media(index);
+        if (const auto* entry = std::get_if<const rtc::Description::Media*>(&media)) {
+            if ((*entry)->type() == "audio") {
+                if (audio != nullptr) {
+                    error = "remote offer must contain exactly one audio media section";
+                    return nullptr;
+                }
+                audio = *entry;
+            }
+        }
+    }
+    if (audio == nullptr) {
+        error = "remote offer must contain exactly one audio media section";
+    }
+    return audio;
 }
 
 // True when the remote video media section advertises the TWCC RTP header
@@ -364,8 +391,11 @@ void PeerConnectionImpl::create_pc_locked() {
 
     pc->onTrack([weak_self, generation](std::shared_ptr<rtc::Track> track) {
         const auto self = weak_self.lock();
-        if (self && self->is_current_pc_generation(generation)
-            && self->role_ == MELLO_PEER_MEDIA_ROLE_VOICE) {
+        if (!self || !self->is_current_pc_generation(generation)) {
+            return;
+        }
+        if (self->role_ == MELLO_PEER_MEDIA_ROLE_VOICE
+            || self->role_ == MELLO_PEER_MEDIA_ROLE_STREAM_VIEWER) {
             self->setup_incoming_track(std::move(track), generation);
         }
     });
@@ -481,6 +511,146 @@ PeerConnectionImpl::prepare_video_for_answer(
         local_direction,
         remote_video->mid()
     );
+}
+
+rtc::Description::Audio PeerConnectionImpl::make_stream_audio_description(
+    rtc::Description::Direction direction,
+    const std::string& mid
+) const {
+    rtc::Description::Audio audio(mid, direction);
+    audio.addOpusCodec(kAudioPayloadType, "minptime=10;useinbandfec=1");
+    if (direction_is_send(direction)) {
+        const uint32_t ssrc = audio_ssrc_ != 0 ? audio_ssrc_ : generate_ssrc();
+        const std::string cname = audio_cname_.empty() ? generate_cname() : audio_cname_;
+        audio.addSSRC(ssrc, cname, peer_id_, "audio");
+    }
+    return audio;
+}
+
+bool PeerConnectionImpl::validate_remote_audio_media(
+    const rtc::Description::Media& media,
+    std::string& error
+) const {
+    if (!media.hasPayloadType(kAudioPayloadType)) {
+        error = "remote SDP missing Opus payload type 111";
+        return false;
+    }
+
+    const auto* map = media.rtpMap(kAudioPayloadType);
+    if (map == nullptr || map->format != "opus") {
+        error = "remote SDP payload type 111 is not Opus";
+        return false;
+    }
+    if (map->clockRate != 48'000) {
+        error = "remote SDP Opus clock rate must be 48000";
+        return false;
+    }
+    return true;
+}
+
+std::optional<rtc::Description::Audio>
+PeerConnectionImpl::prepare_audio_for_answer(
+    const rtc::Description& offer,
+    std::string& error
+) {
+    const auto* remote_audio = find_single_audio_media(offer, error);
+    if (remote_audio == nullptr) {
+        return std::nullopt;
+    }
+
+    const auto remote_direction = remote_audio->direction();
+    rtc::Description::Direction local_direction =
+        rtc::Description::Direction::Inactive;
+
+    if (role_ == MELLO_PEER_MEDIA_ROLE_STREAM_HOST) {
+        if (remote_direction != rtc::Description::Direction::RecvOnly) {
+            error = "stream host answer requires recvonly remote audio";
+            return std::nullopt;
+        }
+        local_direction = rtc::Description::Direction::SendOnly;
+        if (audio_ssrc_ == 0) {
+            audio_ssrc_ = generate_ssrc();
+        }
+        if (audio_cname_.empty()) {
+            audio_cname_ = generate_cname();
+        }
+    } else if (role_ == MELLO_PEER_MEDIA_ROLE_STREAM_VIEWER) {
+        if (remote_direction != rtc::Description::Direction::SendOnly) {
+            error = "stream viewer answer requires sendonly remote audio";
+            return std::nullopt;
+        }
+        local_direction = rtc::Description::Direction::RecvOnly;
+    } else {
+        error = "audio answer requested for non-stream role";
+        return std::nullopt;
+    }
+
+    if (!validate_remote_audio_media(*remote_audio, error)) {
+        return std::nullopt;
+    }
+
+    return make_stream_audio_description(
+        local_direction,
+        remote_audio->mid()
+    );
+}
+
+void PeerConnectionImpl::wire_opus_send_packetizer(
+    const std::shared_ptr<rtc::Track>& track
+) {
+#if RTC_ENABLE_MEDIA
+    if (!track) {
+        return;
+    }
+    if (audio_ssrc_ == 0) {
+        audio_ssrc_ = generate_ssrc();
+    }
+    if (audio_cname_.empty()) {
+        audio_cname_ = generate_cname();
+    }
+    const auto rtpConfig = std::make_shared<rtc::RtpPacketizationConfig>(
+        audio_ssrc_, audio_cname_, kAudioPayloadType,
+        rtc::OpusRtpPacketizer::DefaultClockRate);
+    const auto packetizer = std::make_shared<rtc::OpusRtpPacketizer>(rtpConfig);
+    packetizer->addToChain(std::make_shared<rtc::RtcpSrReporter>(rtpConfig));
+    track->setMediaHandler(packetizer);
+#else
+    (void)track;
+#endif
+}
+
+bool PeerConnectionImpl::replace_audio_track_for_answer(
+    rtc::Description::Audio audio
+) {
+    std::shared_ptr<rtc::PeerConnection> pc;
+    std::shared_ptr<rtc::Track> existing;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        pc = pc_;
+        existing = audio_track_;
+    }
+    if (!pc) {
+        return false;
+    }
+    if (existing && !existing->isClosed() && existing->mid() != audio.mid()) {
+        return false;
+    }
+
+    auto replacement = pc->addTrack(std::move(audio));
+    if (!replacement) {
+        return false;
+    }
+    if (direction_is_send(replacement->direction())) {
+        wire_opus_send_packetizer(replacement);
+    }
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (pc_ != pc) {
+            return false;
+        }
+        audio_track_ = replacement;
+    }
+    return true;
 }
 
 bool PeerConnectionImpl::replace_video_track_for_answer(
@@ -749,29 +919,24 @@ void PeerConnectionImpl::enqueue_video_feedback(
     }
 }
 
-void PeerConnectionImpl::setup_incoming_track(
-    std::shared_ptr<rtc::Track> track,
-    uint64_t generation
+void PeerConnectionImpl::wire_incoming_audio_track_callbacks(
+    const std::shared_ptr<rtc::Track>& track,
+    uint64_t generation,
+    const std::string& sender_id
 ) {
-    const auto mid = track->mid();
-    const auto desc = track->description();
-
-    std::string sender_id = "unknown";
-    for (const auto& attribute : desc.attributes()) {
-        if (attribute.rfind("msid:", 0) == 0) {
-            const auto space = attribute.find(' ', 5);
-            sender_id = (space != std::string::npos)
-                ? attribute.substr(5, space - 5)
-                : attribute.substr(5);
-            break;
-        }
-    }
-
-    const bool is_phantom = (sender_id.find('-') == std::string::npos);
-    if (is_phantom) {
+    if (!track) {
         return;
     }
 
+#if RTC_ENABLE_MEDIA
+    // Recvonly stream/offer tracks need an incoming RTP handler before
+    // onMessage delivers sustained media (libdatachannel media-receiver).
+    if (!track->getMediaHandler()) {
+        track->setMediaHandler(std::make_shared<rtc::RtcpReceivingSession>());
+    }
+#endif
+
+    const auto mid = track->mid();
     track->onOpen([mid]() {
         fprintf(stderr, "[mello-rtp] track OPEN: mid=%s\n", mid.c_str());
         fflush(stderr);
@@ -864,6 +1029,51 @@ void PeerConnectionImpl::setup_incoming_track(
             );
         }
     });
+}
+
+void PeerConnectionImpl::setup_incoming_track(
+    std::shared_ptr<rtc::Track> track,
+    uint64_t generation
+) {
+    const auto desc = track->description();
+
+    std::string sender_id = "unknown";
+    for (const auto& attribute : desc.attributes()) {
+        if (attribute.rfind("msid:", 0) == 0) {
+            const auto space = attribute.find(' ', 5);
+            sender_id = (space != std::string::npos)
+                ? attribute.substr(5, space - 5)
+                : attribute.substr(5);
+            break;
+        }
+    }
+
+    if (!is_valid_incoming_audio_sender(role_, sender_id)) {
+        return;
+    }
+
+    if (role_ == MELLO_PEER_MEDIA_ROLE_STREAM_VIEWER) {
+        std::shared_ptr<rtc::Track> local_audio;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            local_audio = audio_track_;
+        }
+        if (local_audio && track->mid() == local_audio->mid()
+            && local_audio.get() != track.get()) {
+            try {
+                local_audio->resetCallbacks();
+            } catch (...) {
+            }
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                if (is_current_pc_generation(generation)) {
+                    audio_track_ = track;
+                }
+            }
+        }
+    }
+
+    wire_incoming_audio_track_callbacks(track, generation, sender_id);
 
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -1049,6 +1259,8 @@ void PeerConnectionImpl::setup_stream_offer_channels() {
     if (role_ == MELLO_PEER_MEDIA_ROLE_STREAM_HOST) {
         video_ssrc_ = generate_ssrc();
         video_cname_ = generate_cname();
+        audio_ssrc_ = generate_ssrc();
+        audio_cname_ = generate_cname();
     }
 
     auto video = make_stream_video_description(direction, kVideoMid);
@@ -1058,6 +1270,20 @@ void PeerConnectionImpl::setup_stream_offer_channels() {
         video_track_ = video_track;
     }
     wire_video_track_callbacks(generation);
+
+#if RTC_ENABLE_MEDIA
+    auto audio = make_stream_audio_description(direction, kAudioMid);
+    auto audio_track = pc_->addTrack(std::move(audio));
+    if (direction_is_send(direction)) {
+        wire_opus_send_packetizer(audio_track);
+    } else if (role_ == MELLO_PEER_MEDIA_ROLE_STREAM_VIEWER) {
+        wire_incoming_audio_track_callbacks(audio_track, generation, peer_id_);
+    }
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        audio_track_ = audio_track;
+    }
+#endif
 
     auto reliable = pc_->createDataChannel("control");
     {
@@ -1145,10 +1371,15 @@ const char* PeerConnectionImpl::create_answer(const char* offer_sdp) {
     try {
         rtc::Description offer(offer_sdp, rtc::Description::Type::Offer);
         std::optional<rtc::Description::Video> prepared_video;
+        std::optional<rtc::Description::Audio> prepared_audio;
         if (is_stream_role(role_)) {
             std::string error;
             prepared_video = prepare_video_for_answer(offer, error);
             if (!prepared_video) {
+                return nullptr;
+            }
+            prepared_audio = prepare_audio_for_answer(offer, error);
+            if (!prepared_audio) {
                 return nullptr;
             }
         } else if (video_media_count(offer) != 0) {
@@ -1163,6 +1394,10 @@ const char* PeerConnectionImpl::create_answer(const char* offer_sdp) {
         if (is_stream_role(role_)) {
             setup_control_dc_answer_handlers();
             if (!replace_video_track_for_answer(std::move(*prepared_video))) {
+                close_pc_locked();
+                return nullptr;
+            }
+            if (!replace_audio_track_for_answer(std::move(*prepared_audio))) {
                 close_pc_locked();
                 return nullptr;
             }
@@ -1228,19 +1463,30 @@ const char* PeerConnectionImpl::handle_remote_offer(const char* sdp) {
 
         rtc::Description offer(sdp, rtc::Description::Type::Offer);
         std::optional<rtc::Description::Video> prepared_video;
+        std::optional<rtc::Description::Audio> prepared_audio;
         if (is_stream_role(role_)) {
             std::string error;
             prepared_video = prepare_video_for_answer(offer, error);
             if (!prepared_video) {
                 return nullptr;
             }
-            std::shared_ptr<rtc::Track> existing;
+            prepared_audio = prepare_audio_for_answer(offer, error);
+            if (!prepared_audio) {
+                return nullptr;
+            }
+            std::shared_ptr<rtc::Track> existing_video;
+            std::shared_ptr<rtc::Track> existing_audio;
             {
                 std::lock_guard<std::mutex> lock(mutex_);
-                existing = video_track_;
+                existing_video = video_track_;
+                existing_audio = audio_track_;
             }
-            if (existing && !existing->isClosed()
-                && existing->mid() != prepared_video->mid()) {
+            if (existing_video && !existing_video->isClosed()
+                && existing_video->mid() != prepared_video->mid()) {
+                return nullptr;
+            }
+            if (existing_audio && !existing_audio->isClosed()
+                && existing_audio->mid() != prepared_audio->mid()) {
                 return nullptr;
             }
         }
@@ -1250,6 +1496,10 @@ const char* PeerConnectionImpl::handle_remote_offer(const char* sdp) {
         begin_local_sdp_wait(generation);
         if (prepared_video
             && !replace_video_track_for_answer(std::move(*prepared_video))) {
+            return nullptr;
+        }
+        if (prepared_audio
+            && !replace_audio_track_for_answer(std::move(*prepared_audio))) {
             return nullptr;
         }
 
