@@ -13,7 +13,7 @@
 | 6a — RPC contract test | **done** |
 | 6b — Dockerised integration | **done** |
 | 6c — Release-artifact smoke gate | **done** (unverified on the self-hosted runners) |
-| 6d — Production canary | **done** (unverified against prod) |
+| 6d — Production canary | **done**, verified against prod 2026-08-07 (4 crews discoverable) |
 | 6e — Discovery error + retry, growth alarm | **done** |
 | 7 — Pixel snapshots | **superseded** — see below |
 | — Mutation checking | **added** (not in the original plan) |
