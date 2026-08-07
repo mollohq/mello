@@ -8,10 +8,11 @@ import { GameIcon } from "../components/game_icon.slint";
 component AvatarDot inherits Rectangle {
     in property <string> initials;
     in property <int> color-index: 0;
+    in property <length> size: 18px;
 
-    width: 18px;
-    height: 18px;
-    border-radius: 4px;
+    width: size;
+    height: size;
+    border-radius: max(4px, size / 4.5);
     border-width: 2px;
     border-color: Theme.card-bg;
     background: color-index == 0 ? #EB4D5F :
@@ -35,24 +36,30 @@ component RecapAvatar inherits Rectangle {
     in property <int> color-index: 0;
     in property <image> avatar;
     in property <bool> has-avatar: false;
+    /// Default matches the recap rows; session cards scale this up so the
+    /// people are the visual, not a footnote.
+    in property <length> size: 18px;
 
-    width: 18px;
-    height: 18px;
+    width: size;
+    height: size;
 
     if !has-avatar: AvatarDot {
         initials: root.initials;
         color-index: root.color-index;
+        size: root.size;
     }
 
     if has-avatar: Rectangle {
-        width: 18px;
-        height: 18px;
-        border-radius: 4px;
+        width: root.size;
+        height: root.size;
+        border-radius: max(4px, root.size / 4.5);
         clip: true;
+        border-width: root.size > 20px ? 2px : 0px;
+        border-color: Theme.card-bg;
         Image {
             source: root.avatar;
-            width: 18px;
-            height: 18px;
+            width: root.size;
+            height: root.size;
             image-fit: cover;
         }
     }
@@ -734,8 +741,15 @@ component RecapCard inherits Rectangle {
 }
 
 // Session card
+// Voice/stream session card, redesigned per designs/feed/
+// session-cards-redesign.html (Option B: game/channel-first). Typed header,
+// real avatars, humanized duration, peak stat — a card must answer "who did
+// what, for how long" at a glance.
 component SessionCard inherits Rectangle {
     in property <FeedCardData> card;
+
+    property <bool> is-stream: card.session-kind == "stream";
+    property <color> kind-color: is-stream ? Theme.accent : #4a9eff;
 
     background: Theme.card-bg;
     border-radius: 10px;
@@ -746,66 +760,161 @@ component SessionCard inherits Rectangle {
         padding: 14px;
         spacing: 8px;
 
-        Text {
-            text: "SESSION";
-            font-size: 10px;
-            font-weight: 600;
-            color: Theme.text-dim;
-            letter-spacing: 0.8px;
+        // Typed header: colored dot + STREAM / VOICE.
+        HorizontalLayout {
+            spacing: 6px;
+            Rectangle {
+                width: 6px;
+                Rectangle {
+                    width: 6px;
+                    height: 6px;
+                    border-radius: 3px;
+                    background: kind-color;
+                    y: (parent.height - self.height) / 2;
+                }
+            }
+            Text {
+                text: is-stream ? "STREAM" : card.session-kind == "voice" ? "VOICE" : "SESSION";
+                font-size: 10px;
+                font-weight: 600;
+                color: kind-color;
+                letter-spacing: 0.8px;
+            }
         }
 
-        HorizontalLayout {
-            spacing: 8px;
-            height: 36px;
+        // ── STREAM: game art leads, streamer avatar badged on its corner ──
+        if is-stream: HorizontalLayout {
+            spacing: 10px;
+            height: 44px;
 
             Rectangle {
-                width: 32px;
-                height: 32px;
-                border-radius: 8px;
-                background: card.game-name == "Valorant" ? #ff4655 :
-                            card.game-name == "Counter-Strike 2" ? #de9b35 :
-                            Theme.accent;
-                y: (parent.height - self.height) / 2;
+                width: 40px;
+                Rectangle {
+                    width: 40px;
+                    height: 40px;
+                    y: (parent.height - self.height) / 2;
 
-                Text {
-                    text: card.game-name == "Valorant" ? "VAL" :
-                          card.game-name == "Counter-Strike 2" ? "CS2" :
-                          card.game-name != "" ? card.game-name : "VC";
-                    font-size: 10px;
-                    font-weight: 800;
-                    color: white;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
+                    GameIcon {
+                        game-id: card.game-id;
+                        short-name: card.game-short-name != "" ? card.game-short-name :
+                                    card.game-name != "" ? card.game-name : "GG";
+                        badge-color: card.game-has-color ? card.game-color : Theme.accent;
+                        runtime-icon: card.game-icon;
+                        has-runtime-icon: card.game-has-icon;
+                        size: 40px;
+                    }
+                    if card.actor-has-avatar || card.actor-initials != "": RecapAvatar {
+                        initials: card.actor-initials;
+                        avatar: card.actor-avatar;
+                        has-avatar: card.actor-has-avatar;
+                        x: parent.width - self.width + 4px;
+                        y: parent.height - self.height + 4px;
+                    }
                 }
             }
 
             VerticalLayout {
                 alignment: center;
                 spacing: 2px;
+                horizontal-stretch: 1;
 
                 Text {
                     text: card.game-name != "" ? card.game-name : card.title;
                     font-size: 13px;
-                    font-weight: 500;
+                    font-weight: 600;
                     color: Theme.text-primary;
                     overflow: elide;
                 }
-
-                if card.duration != "": Text {
-                    text: card.duration;
+                Text {
+                    text: card.actor-name != "" ? "by " + card.actor-name
+                            + (card.duration-human != "" ? " · " + card.duration-human : "")
+                        : card.duration-human;
                     font-size: 11px;
                     color: Theme.text-sub;
+                    overflow: elide;
                 }
             }
         }
 
-        if card.participant-count > 0: HorizontalLayout {
-            spacing: -7px;
-            height: 20px;
+        if is-stream && card.peak-count > 0: Text {
+            text: "\{card.peak-count} watched at peak";
+            font-size: 11px;
+            color: Theme.text-sub;
+        }
 
-            AvatarDot { initials: card.actor-initials; color-index: 0; }
-            if card.participant-count > 1: AvatarDot { initials: ""; color-index: 1; }
-            if card.participant-count > 2: AvatarDot { initials: ""; color-index: 2; }
+        // ── VOICE: the people are the content, so they get the space ──
+        // Channel + meta as a compact heading, then a large avatar cluster
+        // that fills the card instead of an empty stretch gap.
+        if !is-stream: VerticalLayout {
+            spacing: 2px;
+            Text {
+                text: card.channel-name != "" ? card.channel-name : card.title;
+                font-size: 13px;
+                font-weight: 600;
+                color: Theme.text-primary;
+                overflow: elide;
+            }
+            Text {
+                text: card.duration-human
+                    + (card.peak-count > 0 ? " · \{card.peak-count} in call" : "");
+                font-size: 11px;
+                color: Theme.text-sub;
+                overflow: elide;
+            }
+        }
+
+        if !is-stream: Rectangle { height: 6px; }
+
+        if !is-stream && card.participant-count > 0: HorizontalLayout {
+            spacing: -10px;
+            alignment: start;
+            height: 40px;
+
+            RecapAvatar {
+                initials: card.part0-initials;
+                avatar: card.part0-avatar;
+                has-avatar: card.part0-has-avatar;
+                color-index: 0;
+                size: 40px;
+            }
+            if card.participant-count > 1: RecapAvatar {
+                initials: card.part1-initials;
+                avatar: card.part1-avatar;
+                has-avatar: card.part1-has-avatar;
+                color-index: 1;
+                size: 40px;
+            }
+            if card.participant-count > 2: RecapAvatar {
+                initials: card.part2-initials;
+                avatar: card.part2-avatar;
+                has-avatar: card.part2-has-avatar;
+                color-index: 2;
+                size: 40px;
+            }
+            // Overflow chip: the roster is wider than the three avatar slots.
+            if card.participant-count > 3: Rectangle {
+                width: 40px;
+                height: 40px;
+                border-radius: 9px;
+                border-width: 2px;
+                border-color: Theme.card-bg;
+                background: Theme.graphic-light;
+                Text {
+                    text: "+\{card.participant-count - 3}";
+                    font-size: 12px;
+                    font-weight: 600;
+                    color: Theme.text-secondary;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+        }
+
+        if !is-stream && card.participants-line != "": Text {
+            text: card.participants-line;
+            font-size: 11px;
+            color: Theme.text-sub;
+            overflow: elide;
         }
 
         Rectangle { vertical-stretch: 1; }
@@ -822,10 +931,7 @@ component SessionCard inherits Rectangle {
 component GameSessionCard inherits Rectangle {
     in property <FeedCardData> card;
 
-    property <color> game-accent:
-        card.game-name == "Valorant" ? #ff4655 :
-        card.game-name == "Counter-Strike 2" ? #de9b35 :
-        Theme.accent;
+    property <color> game-accent: card.game-has-color ? card.game-color : Theme.accent;
     property <color> record-color: card.game-streak-positive ? #4ade80 : #f87171;
 
     background: Theme.card-bg;
@@ -848,10 +954,11 @@ component GameSessionCard inherits Rectangle {
                 alignment: center;
                 GameIcon {
                     game-id: card.game-id;
-                    short-name: card.game-name == "Valorant" ? "VAL" :
-                                card.game-name == "Counter-Strike 2" ? "CS2" :
+                    short-name: card.game-short-name != "" ? card.game-short-name :
                                 card.game-name != "" ? card.game-name : "GG";
                     badge-color: game-accent;
+                    runtime-icon: card.game-icon;
+                    has-runtime-icon: card.game-has-icon;
                     size: 40px;
                 }
             }
@@ -959,7 +1066,8 @@ component GameSessionCard inherits Rectangle {
 
         Rectangle { vertical-stretch: 1; }
 
-        // Footer: participants + duration
+        // Footer: real participant avatars + humanized duration (matches the
+        // voice/stream session cards; anonymous dots read as placeholders).
         HorizontalLayout {
             height: 20px;
 
@@ -967,13 +1075,28 @@ component GameSessionCard inherits Rectangle {
                 spacing: -7px;
                 horizontal-stretch: 1;
                 alignment: start;
-                AvatarDot { initials: card.actor-initials; color-index: 0; }
-                if card.participant-count > 1: AvatarDot { initials: ""; color-index: 1; }
-                if card.participant-count > 2: AvatarDot { initials: ""; color-index: 2; }
+                RecapAvatar {
+                    initials: card.part0-initials != "" ? card.part0-initials : card.actor-initials;
+                    avatar: card.part0-has-avatar ? card.part0-avatar : card.actor-avatar;
+                    has-avatar: card.part0-has-avatar || card.actor-has-avatar;
+                    color-index: 0;
+                }
+                if card.participant-count > 1: RecapAvatar {
+                    initials: card.part1-initials;
+                    avatar: card.part1-avatar;
+                    has-avatar: card.part1-has-avatar;
+                    color-index: 1;
+                }
+                if card.participant-count > 2: RecapAvatar {
+                    initials: card.part2-initials;
+                    avatar: card.part2-avatar;
+                    has-avatar: card.part2-has-avatar;
+                    color-index: 2;
+                }
             }
 
-            if card.duration != "": Text {
-                text: card.duration;
+            if card.duration-human != "": Text {
+                text: card.duration-human;
                 font-size: 11px;
                 color: Theme.skel-text;
                 vertical-alignment: center;
@@ -2075,7 +2198,7 @@ export component CrewFeed inherits Rectangle {
                     spacing: 12px;
 
                     Text {
-                        text: "Memory";
+                        text: "Crew history";
                         font-size: 13px;
                         font-weight: 600;
                         color: Theme.text-sub;

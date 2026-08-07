@@ -402,6 +402,29 @@ pub enum Command {
         #[serde(default)]
         draws: u32,
     },
+    /// Replace the set of user-confirmed custom games (seeded from settings
+    /// before `run()`, like `SetGameIntegrations`).
+    SetCustomGames {
+        games: Vec<crate::game_db::CustomGame>,
+    },
+    /// Add one user-confirmed custom game (the "track it?" confirm flow).
+    /// Takes effect on the next sensor scan.
+    AddCustomGame {
+        game: crate::game_db::CustomGame,
+    },
+    /// Share an exe-extracted game icon with the crew (raw PNG bytes;
+    /// base64-encoded for the RPC). Best-effort; server keeps the first
+    /// upload per game id.
+    #[serde(skip)]
+    UploadGameIcon {
+        game_id: String,
+        png: Vec<u8>,
+    },
+    /// Fetch a crew-shared icon for a game id with no local art. Replies with
+    /// `Event::GameIconLoaded` on success; quiet when none exists.
+    FetchGameIcon {
+        game_id: String,
+    },
     /// Fetch the viewer's own per-game stats (for the personal "You strip").
     GetUserGameStats,
 

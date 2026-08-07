@@ -85,6 +85,8 @@ impl GameStateManager {
                     duration_min,
                 });
             }
+            // Handled by the client loop (confirm prompt); never reaches here.
+            GameEvent::UnknownCandidate { .. } => {}
         }
 
         (events, session_end)

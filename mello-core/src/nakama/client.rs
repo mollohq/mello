@@ -1320,6 +1320,28 @@ impl NakamaClient {
         Ok(parsed)
     }
 
+    /// Upload a crew-shared game icon (base64 PNG). First writer wins
+    /// server-side; duplicates are ack'd without replacing.
+    pub async fn game_icon_set(&self, game_id: &str, png_b64: &str) -> Result<()> {
+        let payload = serde_json::json!({ "game_id": game_id, "data": png_b64 });
+        self.rpc("game_icon_set", &payload).await?;
+        Ok(())
+    }
+
+    /// Fetch a crew-shared game icon. Returns the base64 PNG, or an error
+    /// (code 5) when none exists for the id.
+    pub async fn game_icon_get(&self, game_id: &str) -> Result<String> {
+        let payload = serde_json::json!({ "game_id": game_id });
+        let resp = self.rpc("game_icon_get", &payload).await?;
+        #[derive(serde::Deserialize, Default)]
+        struct IconResp {
+            #[serde(default)]
+            data: String,
+        }
+        let parsed: IconResp = serde_json::from_str(&resp).unwrap_or_default();
+        Ok(parsed.data)
+    }
+
     /// Fetch the caller's own per-game stats (owner-read), newest first.
     pub async fn user_game_stats_get(
         &self,

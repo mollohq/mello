@@ -110,6 +110,12 @@ pub struct Client {
     game_state: GameStateManager,
     #[allow(dead_code)]
     game_sensor: Option<GameSensor>,
+    /// Shared with the sensor thread so user-confirmed custom games apply
+    /// live without a restart.
+    game_db: Arc<std::sync::RwLock<GameDatabase>>,
+    /// User-confirmed games outside the bundled DB (settings-persisted client
+    /// side; the DB overlay is rebuilt from this list on every change).
+    custom_games: Vec<crate::game_db::CustomGame>,
     /// Keeps the telemetry listener thread alive for the client's lifetime.
     #[allow(dead_code)]
     telemetry_listener: Option<TelemetryListener>,
@@ -179,6 +185,22 @@ impl Client {
         self.disabled_integrations = ids.into_iter().collect();
     }
 
+    /// Seed user-confirmed custom games from persisted client settings.
+    /// Must be called before `run()` so the sensor recognizes them from the
+    /// first scan.
+    pub fn set_custom_games(&mut self, games: Vec<crate::game_db::CustomGame>) {
+        self.custom_games = games;
+        self.rebuild_game_db();
+    }
+
+    /// Rebuild the shared DB as bundled + custom overlay. Cheap (25 bundled
+    /// entries); runs only on seed/confirm, never in the scan loop.
+    fn rebuild_game_db(&self) {
+        let mut db = GameDatabase::load_bundled();
+        db.add_user_entries(&self.custom_games);
+        *self.game_db.write().expect("game db lock poisoned") = db;
+    }
+
     /// Shared frame lifecycle state used by stream_tick() and UI compositor.
     pub fn frame_lifecycle_slot(&self) -> FrameLifecycleSlot {
         self.frame_lifecycle.clone()
@@ -231,6 +253,8 @@ impl Client {
             voice_autojoin: true,
             game_state: GameStateManager::new(),
             game_sensor: None,
+            game_db: Arc::new(std::sync::RwLock::new(GameDatabase::load_bundled())),
+            custom_games: Vec::new(),
             telemetry_listener: None,
             telemetry_registry: Arc::new(AdapterRegistry::with_defaults()),
             disabled_integrations: std::collections::HashSet::new(),
@@ -279,6 +303,23 @@ impl Client {
 
         loop {
             for game_event in self.drain_game_events() {
+                // Unknown-game candidates go straight to the UI for the
+                // "track it?" confirm prompt; they never touch game state,
+                // presence, or the backend unless the user confirms.
+                if let crate::game_sensing::GameEvent::UnknownCandidate {
+                    exe,
+                    path,
+                    window_title,
+                } = game_event
+                {
+                    let _ = self.event_tx.send(Event::UnknownGameCandidate {
+                        exe,
+                        path,
+                        window_title,
+                    });
+                    continue;
+                }
+
                 // Telemetry adapter side-effects on game start/stop: install the
                 // game's config on first detection, and reset adapter state on exit.
                 match &game_event {
@@ -313,6 +354,8 @@ impl Client {
                             }
                         }
                     }
+                    // Forwarded to the UI above; unreachable here.
+                    crate::game_sensing::GameEvent::UnknownCandidate { .. } => {}
                 }
 
                 let (ui_events, session_end) = self.game_state.handle_event(game_event);
@@ -964,6 +1007,50 @@ impl Client {
                     draws,
                 )
                 .await;
+            }
+            Command::SetCustomGames { games } => {
+                self.custom_games = games;
+                self.rebuild_game_db();
+            }
+            Command::AddCustomGame { game } => {
+                log::info!(
+                    "[game-sensor] custom game confirmed: {} ({} -> {})",
+                    game.name,
+                    game.exe,
+                    game.id
+                );
+                self.custom_games.push(game);
+                self.rebuild_game_db();
+            }
+            Command::UploadGameIcon { game_id, png } => {
+                use base64::Engine as _;
+                let b64 = base64::engine::general_purpose::STANDARD.encode(&png);
+                match self.nakama.game_icon_set(&game_id, &b64).await {
+                    Ok(()) => log::info!(
+                        "[game-icon] uploaded icon for {game_id} ({} bytes)",
+                        png.len()
+                    ),
+                    // Best-effort: sharing failing must never break tracking.
+                    Err(e) => log::warn!("[game-icon] upload for {game_id} failed: {e}"),
+                }
+            }
+            Command::FetchGameIcon { game_id } => {
+                use base64::Engine as _;
+                match self.nakama.game_icon_get(&game_id).await {
+                    Ok(b64) if !b64.is_empty() => {
+                        match base64::engine::general_purpose::STANDARD.decode(&b64) {
+                            Ok(png) => {
+                                let _ = self.event_tx.send(Event::GameIconLoaded { game_id, png });
+                            }
+                            Err(e) => {
+                                log::warn!("[game-icon] bad icon payload for {game_id}: {e}")
+                            }
+                        }
+                    }
+                    // Not found (or empty) is the common quiet case.
+                    Ok(_) => {}
+                    Err(e) => log::debug!("[game-icon] fetch for {game_id}: {e}"),
+                }
             }
             Command::GetUserGameStats => {
                 self.refresh_user_game_stats().await;

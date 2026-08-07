@@ -33,6 +33,7 @@ import { DebugPanel } from "panels/debug_panel.slint";
 import { Onboarding } from "panels/onboarding.slint";
 import { SignInPanel } from "panels/sign_in.slint";
 import { UpdateToast } from "panels/update_banner.slint";
+import { UnknownGamePrompt } from "panels/unknown_game_prompt.slint";
 import { ForceUpdateWindow } from "panels/force_update_dialog.slint";
 import { DiscoverPanel } from "panels/discover_panel.slint";
 import { JoinCrewModal } from "panels/join_crew_modal.slint";
@@ -487,9 +488,15 @@ export component MainWindow inherits Window {
     in property <string> connection-warning: "";
     in-out property <string> audio-device-warning: "";
 
+    // --- Unknown-game "track it?" prompt ---
+    in property <bool> unknown-game-visible: false;
+    in property <string> unknown-game-name: "";
+
     // --- Callbacks ---
     callback update-now-clicked();
     callback update-dismiss-clicked();
+    callback unknown-game-track-clicked();
+    callback unknown-game-dismiss-clicked();
     callback login(string, string);
     callback logout();
     callback create-crew(/* name */ string, /* description */ string, /* is-private */ bool);
@@ -1087,6 +1094,21 @@ export component MainWindow inherits Window {
         }
         dismiss-clicked => {
             root.update-dismiss-clicked();
+        }
+    }
+
+    // ===================== UNKNOWN GAME PROMPT =====================
+    if logged-in && (onboarding-step == 0 || onboarding-step > 3): UnknownGamePrompt {
+        width: min(420px, root.width - 32px);
+        x: root.width - self.width - 16px;
+        y: root.height - self.height - 76px; // above the control bar
+        show: root.unknown-game-visible;
+        game-name: root.unknown-game-name;
+        track-clicked => {
+            root.unknown-game-track-clicked();
+        }
+        dismiss-clicked => {
+            root.unknown-game-dismiss-clicked();
         }
     }
 

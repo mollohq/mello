@@ -1,4 +1,3 @@
-use crate::game_db::GameDatabase;
 use crate::game_sensing::{GameEvent, GameSensor};
 use crate::telemetry::{self, TelemetryListener, TELEMETRY_PORT};
 
@@ -23,9 +22,8 @@ impl Client {
             return;
         }
 
-        let game_db = GameDatabase::load_bundled();
         let mello_ctx = self.voice.mello_ctx();
-        let (sensor, game_event_rx) = GameSensor::start(mello_ctx, game_db);
+        let (sensor, game_event_rx) = GameSensor::start(mello_ctx, self.game_db.clone());
         self.game_sensor = Some(sensor);
         *self.game_event_rx.lock().unwrap() = Some(game_event_rx);
         log::info!("Game sensor started (post-auth)");

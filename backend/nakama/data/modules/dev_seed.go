@@ -359,6 +359,44 @@ func DevSeedStateRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk 
 		InvalidateCrewState(cid)
 	}
 
+	// ── 6b. reset accumulating stores ───────────────────────────────
+	// Everything above is keyed writes (overwrite in place), but the two
+	// stores below *append*: AppendCrewEvent mints a fresh event ID per call
+	// and UpdateUserGameStats adds to running totals. Without this reset a
+	// second run doubles every feed card and inflates every W/L record —
+	// which breaks the "idempotent" promise in this RPC's doc comment.
+	resetDeletes := make([]*runtime.StorageDelete, 0, len(crewIDs)+len(users)*8)
+	for _, cid := range crewIDs {
+		resetDeletes = append(resetDeletes, &runtime.StorageDelete{
+			Collection: CrewEventsCollection, Key: cid, UserID: SystemUserID,
+		})
+	}
+	// Every game id this seed writes stats for (plus the caller's own set).
+	seededGameIDs := []string{
+		"counter-strike-2", "league-of-legends", "valorant", "dota-2",
+		"rocket-league", "hearthstone", "starcraft-2", "custom-night-stones",
+	}
+	statsOwners := make([]string, 0, len(users)+1)
+	for _, u := range users {
+		statsOwners = append(statsOwners, u.id)
+	}
+	if callerID, ok := ctx.Value(runtime.RUNTIME_CTX_USER_ID).(string); ok && callerID != "" {
+		statsOwners = append(statsOwners, callerID)
+	}
+	for _, ownerID := range statsOwners {
+		for _, gameID := range seededGameIDs {
+			resetDeletes = append(resetDeletes, &runtime.StorageDelete{
+				Collection: UserGameStatsCollection, Key: gameID, UserID: ownerID,
+			})
+		}
+	}
+	if err := nk.StorageDelete(ctx, resetDeletes); err != nil {
+		// Deleting a non-existent object is fine (first run); log and continue.
+		logger.Debug("dev_seed: reset delete partial: %v", err)
+	}
+	logger.Info("dev_seed: reset %d ledgers + stats for %d users (idempotent re-seed)",
+		len(crewIDs), len(statsOwners))
+
 	// ── 7. crew event ledger + stale last_seen ─────────────────────
 	// Populate the event ledger for Gamers and Devs with a rich set of
 	// events covering every card type the crew feed can display:
@@ -482,6 +520,19 @@ func DevSeedStateRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk 
 				},
 			},
 
+			// ── MEMBER JOINED (catch-up card) ─────────────────
+			// Seeded explicitly: the equivalent hook events fire once when
+			// seed.sh/.ps1 joins users, and the idempotent ledger reset
+			// clears them, so re-runs would otherwise lose this card type.
+			{
+				ID: generateEventID(), CrewID: crewIDs["Gamers"],
+				Type: "member_joined", ActorID: users["diana"].id,
+				Timestamp: nowMs - 20*hour, Score: 15,
+				Data: MemberJoinedData{
+					Username: users["diana"].displayName, DisplayName: users["diana"].displayName,
+				},
+			},
+
 			// ── WEEKLY RECAP ──────────────────────────────────
 			{
 				ID: generateEventID(), CrewID: crewIDs["Gamers"],
@@ -549,7 +600,8 @@ func DevSeedStateRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk 
 				Timestamp: nowMs - 5*hour, Score: 30,
 				Data: StreamSessionData{
 					StreamerID: users["charlie"].id, StreamerName: users["charlie"].displayName,
-					Title: "Counter-Strike 2", DurationMin: 120, PeakViewers: 3,
+					Title: "ranked grind", Game: "Counter-Strike 2",
+					DurationMin: 120, PeakViewers: 3,
 					ViewerIDs: []string{users["alice"].id, users["bob"].id},
 				},
 			},
@@ -731,6 +783,164 @@ func DevSeedStateRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk 
 		logger.Info("dev_seed: %d game sessions seeded (2 notable in budget, 1 pruned, 3 routine)", len(gameSessions))
 	}
 
+	// ── Session card variants (voice + stream redesign) ─────────────
+	// The busy crews (Gamers/Devs) are realistic but their filler budget hides
+	// most cards, so the quiet crews double as variant galleries: everything
+	// seeded here actually renders. Covers each branch of the redesigned
+	// SessionCard — typed header, icon vs badge vs channel tile, participants
+	// line overflow, humanized durations, peak stats.
+	//
+	// Design → VOICE variants.
+	if gid, ok := crewIDs["Design"]; ok {
+		voiceVariants := []CrewEvent{
+			// Marathon session → "9h 7m" (the case the old "3:00" format
+			// could not express) with a 4-person overflow line ("+2").
+			{
+				ID: generateEventID(), CrewID: gid,
+				Type: "voice_session", ActorID: "",
+				Timestamp: nowMs - 2*hour, Score: 20,
+				Data: VoiceSessionData{
+					ChannelName: "General",
+					ParticipantIDs: []string{users["alice"].id, users["bob"].id,
+						users["diana"].id, users["charlie"].id},
+					ParticipantNames: []string{users["alice"].displayName, users["bob"].displayName,
+						users["diana"].displayName, users["charlie"].displayName},
+					DurationMin: 547, PeakCount: 4,
+				},
+			},
+			// Two-person session, no overflow, ordinary duration.
+			{
+				ID: generateEventID(), CrewID: gid,
+				Type: "voice_session", ActorID: "",
+				Timestamp: nowMs - 7*hour, Score: 20,
+				Data: VoiceSessionData{
+					ChannelName:      "Critique",
+					ParticipantIDs:   []string{users["alice"].id, users["diana"].id},
+					ParticipantNames: []string{users["alice"].displayName, users["diana"].displayName},
+					DurationMin:      42, PeakCount: 2,
+				},
+			},
+			// Sub-hour edge: 1 minute — must read "1m", never "1:00".
+			{
+				ID: generateEventID(), CrewID: gid,
+				Type: "voice_session", ActorID: "",
+				Timestamp: nowMs - 26*hour, Score: 20,
+				Data: VoiceSessionData{
+					ChannelName:      "General",
+					ParticipantIDs:   []string{users["bob"].id, users["alice"].id},
+					ParticipantNames: []string{users["bob"].displayName, users["alice"].displayName},
+					DurationMin:      1, PeakCount: 2,
+				},
+			},
+			// No peak recorded (older event shape) → the peak row hides.
+			{
+				ID: generateEventID(), CrewID: gid,
+				Type: "voice_session", ActorID: "",
+				Timestamp: nowMs - 32*hour, Score: 20,
+				Data: VoiceSessionData{
+					ChannelName:      "Critique",
+					ParticipantIDs:   []string{users["diana"].id, users["bob"].id},
+					ParticipantNames: []string{users["diana"].displayName, users["bob"].displayName},
+					DurationMin:      18,
+				},
+			},
+			// Catch-up card alongside the voice variants.
+			{
+				ID: generateEventID(), CrewID: gid,
+				Type: "member_joined", ActorID: users["bob"].id,
+				Timestamp: nowMs - 44*hour, Score: 15,
+				Data: MemberJoinedData{
+					Username: users["bob"].displayName, DisplayName: users["bob"].displayName,
+				},
+			},
+		}
+		for _, ev := range voiceVariants {
+			if err := AppendCrewEvent(ctx, nk, gid, ev); err != nil {
+				logger.Warn("dev_seed: voice variant append failed: %v", err)
+			}
+		}
+		logger.Info("dev_seed: %d voice-session variants seeded in Design", len(voiceVariants))
+	}
+
+	// Retro → STREAM variants (game icon resolution is the interesting axis).
+	if gid, ok := crewIDs["Retro"]; ok {
+		streamVariants := []CrewEvent{
+			// Known game → bundled icon + streamer avatar badge + viewers.
+			{
+				ID: generateEventID(), CrewID: gid,
+				Type: "stream_session", ActorID: users["bob"].id,
+				Timestamp: nowMs - 3*hour, Score: 30,
+				Data: StreamSessionData{
+					StreamerID: users["bob"].id, StreamerName: users["bob"].displayName,
+					Title: "building a megabase", Game: "Minecraft",
+					DurationMin: 138, PeakViewers: 4,
+					ViewerIDs: []string{users["alice"].id, users["diana"].id, users["charlie"].id},
+				},
+			},
+			// Game outside the bundled DB → short-name badge fallback, and the
+			// crew-shared icon fetch path if someone uploaded one.
+			{
+				ID: generateEventID(), CrewID: gid,
+				Type: "stream_session", ActorID: users["diana"].id,
+				Timestamp: nowMs - 11*hour, Score: 30,
+				Data: StreamSessionData{
+					StreamerID: users["diana"].id, StreamerName: users["diana"].displayName,
+					Title: "indie night", Game: "Night Stones",
+					DurationMin: 64, PeakViewers: 2,
+					ViewerIDs: []string{users["alice"].id},
+				},
+			},
+			// No game at all (desktop/just-chatting stream) → title leads.
+			{
+				ID: generateEventID(), CrewID: gid,
+				Type: "stream_session", ActorID: users["charlie"].id,
+				Timestamp: nowMs - 28*hour, Score: 30,
+				Data: StreamSessionData{
+					StreamerID: users["charlie"].id, StreamerName: users["charlie"].displayName,
+					Title: "CRT calibration deep dive",
+					DurationMin: 51, PeakViewers: 3,
+					ViewerIDs: []string{users["bob"].id, users["alice"].id},
+				},
+			},
+			// Nobody watched → peak row hides; 1-minute humanization.
+			{
+				ID: generateEventID(), CrewID: gid,
+				Type: "stream_session", ActorID: users["alice"].id,
+				Timestamp: nowMs - 40*hour, Score: 30,
+				Data: StreamSessionData{
+					StreamerID: users["alice"].id, StreamerName: users["alice"].displayName,
+					Title: "oops wrong window", Game: "Dota 2",
+					DurationMin: 1,
+				},
+			},
+		}
+		// Notable session for a user-confirmed custom game: the rich card with
+		// no bundled art, so it exercises the runtime/crew-shared icon path and
+		// the short-name badge fallback. Also proves the dedicated game-session
+		// filler slot — it must survive alongside the four streams above.
+		customGame := CrewEvent{
+			ID: generateEventID(), CrewID: gid,
+			Type: "game_session", ActorID: users["bob"].id,
+			Timestamp: nowMs - 5*hour, Score: 30,
+			Data: GameSessionData{
+				GameName: "Night Stones", GameID: "custom-night-stones",
+				PlayerIDs:   []string{users["bob"].id, users["charlie"].id},
+				PlayerNames: []string{users["bob"].displayName, users["charlie"].displayName},
+				DurationMin: 128, Wins: 4, Losses: 0, Result: "win", StreakAfter: 4,
+			},
+		}
+		if err := AppendCrewEvent(ctx, nk, gid, customGame); err != nil {
+			logger.Warn("dev_seed: custom-game session append failed: %v", err)
+		}
+
+		for _, ev := range streamVariants {
+			if err := AppendCrewEvent(ctx, nk, gid, ev); err != nil {
+				logger.Warn("dev_seed: stream variant append failed: %v", err)
+			}
+		}
+		logger.Info("dev_seed: %d stream-session variants + 1 custom-game session seeded in Retro", len(streamVariants))
+	}
+
 	// Per-user stats (You strip + profile): multi-game histories with varied
 	// form so streaks, win rates, draws, and the "most recently played" pick
 	// all have something to show. Each entry is one session (w, l, d);
@@ -780,16 +990,19 @@ func DevSeedStateRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk 
 	logger.Info("dev_seed: user_game_stats seeded (bob, diana, alice, charlie, caller — multi-game)")
 
 	// Generate the weekly recap now so the game leaderboard + awards are visible
-	// immediately instead of waiting for the scheduled job.
-	for _, crewName := range []string{"Gamers", "Devs"} {
+	// immediately instead of waiting for the scheduled job. Design/Retro are
+	// included so their variant galleries also get a recap card (Retro's has a
+	// games section from the custom-game session; Design's is voice-only).
+	recapCrews := []string{"Gamers", "Devs", "Design", "Retro"}
+	for _, crewName := range recapCrews {
 		if cid, ok := crewIDs[crewName]; ok {
 			generateWeeklyRecap(ctx, nk, logger, cid)
 		}
 	}
-	logger.Info("dev_seed: weekly recaps generated (Gamers, Devs)")
+	logger.Info("dev_seed: weekly recaps generated (%d crews)", len(recapCrews))
 
 	// Set stale last_seen for all users in seeded crews so catch-up triggers
-	lastSeenCrews := []string{"Gamers", "Devs", "Music"}
+	lastSeenCrews := []string{"Gamers", "Devs", "Music", "Design", "Retro"}
 	for _, crewName := range lastSeenCrews {
 		cid, ok := crewIDs[crewName]
 		if !ok {

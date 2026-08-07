@@ -19,8 +19,11 @@ std::vector<MonitorInfo> enumerate_monitors();
 struct GameProcess {
     uint32_t    pid;
     std::string name;
-    std::string exe;
-    bool        is_fullscreen;
+    std::string exe;           // executable filename only (matching key)
+    bool        is_fullscreen; // main window covers its monitor (borderless or exclusive)
+    std::string path;          // full executable path; empty when windowless
+    std::string window_title;  // main window title; empty when windowless
+    bool        is_foreground = false;
 };
 
 /// Returns running processes that match the bundled game list (assets/games.json).
@@ -29,7 +32,8 @@ std::vector<GameProcess> enumerate_game_processes();
 struct VisibleWindow {
     void*       hwnd;
     std::string title;
-    std::string exe;
+    std::string exe;  // executable filename only
+    std::string path; // full executable path
     uint32_t    pid;
 };
 

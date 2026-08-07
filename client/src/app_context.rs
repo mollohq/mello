@@ -57,6 +57,9 @@ pub struct AppContext {
     /// Games settings rows as last received from core; merged with the
     /// disabled set from Settings when pushed to the UI.
     pub games_integrations: Rc<RefCell<Vec<mello_core::events::GameIntegrationStatus>>>,
+    /// Unknown-game candidate currently shown in the "track it?" prompt
+    /// (exe, path, display name). Consumed on track/dismiss.
+    pub pending_unknown_game: Rc<RefCell<Option<(String, String, String)>>>,
     pub muted_before_deafen: Rc<Cell<bool>>,
     pub updater: Rc<RefCell<Option<Updater>>>,
     pub hotkey_mgr: Rc<RefCell<crate::platform::hotkeys::HotkeyManager>>,
@@ -65,6 +68,10 @@ pub struct AppContext {
     pub gif_chat_anim: GifAnimator,
     pub dbg_hist: Rc<RefCell<crate::DebugHistory>>,
     pub avatar_cache: Rc<RefCell<HashMap<String, slint::Image>>>,
+    /// Runtime game icons (exe-extracted or crew-shared), keyed by game_id.
+    /// Populated from the disk cache on demand; misses are negative-cached
+    /// per run by the fetch glue.
+    pub game_icon_cache: Rc<RefCell<HashMap<String, slint::Image>>>,
     pub hud_manager: Rc<HudManager>,
     pub fg_monitor: Rc<RefCell<ForegroundMonitor>>,
     pub pending_deep_link: Rc<RefCell<Option<crate::deep_link::DeepLink>>>,
@@ -146,6 +153,7 @@ impl AppContext {
             post_game_timer: Rc::new(RefCell::new(None)),
             riot_cta_pending: Rc::new(Cell::new(false)),
             games_integrations: Rc::new(RefCell::new(Vec::new())),
+            pending_unknown_game: Rc::new(RefCell::new(None)),
             muted_before_deafen: Rc::new(Cell::new(false)),
             updater: Rc::new(RefCell::new(None)),
             hotkey_mgr: Rc::new(RefCell::new(
@@ -156,6 +164,7 @@ impl AppContext {
             gif_chat_anim: GifAnimator::new(50, Some(2)),
             dbg_hist: Rc::new(RefCell::new(crate::DebugHistory::new())),
             avatar_cache: Rc::new(RefCell::new(HashMap::new())),
+            game_icon_cache: Rc::new(RefCell::new(HashMap::new())),
             hud_manager: Rc::new(HudManager::start(false)),
             fg_monitor: Rc::new(RefCell::new(ForegroundMonitor::new(false))),
             pending_deep_link: Rc::new(RefCell::new(None)),
@@ -200,6 +209,7 @@ impl Clone for AppContext {
             post_game_timer: self.post_game_timer.clone(),
             riot_cta_pending: self.riot_cta_pending.clone(),
             games_integrations: self.games_integrations.clone(),
+            pending_unknown_game: self.pending_unknown_game.clone(),
             muted_before_deafen: self.muted_before_deafen.clone(),
             updater: self.updater.clone(),
             hotkey_mgr: self.hotkey_mgr.clone(),
@@ -208,6 +218,7 @@ impl Clone for AppContext {
             gif_chat_anim: self.gif_chat_anim.clone(),
             dbg_hist: self.dbg_hist.clone(),
             avatar_cache: self.avatar_cache.clone(),
+            game_icon_cache: self.game_icon_cache.clone(),
             hud_manager: self.hud_manager.clone(),
             fg_monitor: self.fg_monitor.clone(),
             pending_deep_link: self.pending_deep_link.clone(),
