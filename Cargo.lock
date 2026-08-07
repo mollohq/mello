@@ -955,8 +955,9 @@ version = "0.0.0-DEV"
 dependencies = [
  "env_logger",
  "log",
- "mello-core",
  "rand 0.8.5",
+ "reqwest",
+ "serde_json",
  "tokio",
 ]
 

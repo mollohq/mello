@@ -8,9 +8,10 @@ name: Signup Canary
 # would leave signup able to sit broken for days between them.
 on:
   schedule:
-    # Every 30 minutes. At ~10 signups/week the detection window matters far
-    # more than the sampling rate.
-    - cron: '*/30 * * * *'
+    # Every 2 hours. 30 minutes was more often than this needs to be: signup
+    # breaking is rare, and a tighter loop mostly burns CI minutes and makes any
+    # noise louder.
+    - cron: '0 */2 * * *'
   push:
     # Highest-value moment: right after a deploy to production.
     branches: [main]
@@ -43,8 +44,21 @@ jobs:
             target
           key: canary-cargo-${{ hashFiles('Cargo.lock') }}
 
-      # Built with the same keys as a release, so a drift between the shipped
-      # client and the server shows up here exactly as a user would hit it.
+      # No system packages needed: the canary speaks HTTP directly rather than
+      # going through mello-core, so it builds on a stock Linux image in about
+      # 40 seconds. See tools/canary/src/main.rs for why.
+      #
+      # Building is a separate step from running so the two failure modes stay
+      # distinguishable. A build break is our problem; it says nothing about
+      # whether signup works, and reporting it as "SIGNUP IS BROKEN" is exactly
+      # the false alarm that trains people to ignore the alert.
+      - name: Build canary
+        id: build
+        run: cargo build --release -p canary
+        env:
+          NAKAMA_SERVER_KEY: ${{ secrets.NAKAMA_SERVER_KEY }}
+          NAKAMA_HTTP_KEY: ${{ secrets.NAKAMA_HTTP_KEY }}
+
       - name: Run canary
         id: canary
         run: cargo run --release -p canary
@@ -52,8 +66,10 @@ jobs:
           NAKAMA_SERVER_KEY: ${{ secrets.NAKAMA_SERVER_KEY }}
           NAKAMA_HTTP_KEY: ${{ secrets.NAKAMA_HTTP_KEY }}
 
+      # Only when the canary actually ran and reported failure. If the build
+      # broke, this step is skipped and the one below reports it instead.
       - name: Open an issue if signup is broken
-        if: failure()
+        if: failure() && steps.canary.outcome == 'failure'
         uses: actions/github-script@v7
         with:
           script: |
@@ -98,8 +114,58 @@ jobs:
                 title,
                 body,
                 labels: ['canary', 'urgent'],
+                // Assigned so GitHub Mobile pushes it: participation notifies
+                // reliably, whereas watched-repo activity often does not.
+                assignees: ['b0bben'],
               });
             }
+
+      # A build break means the canary is blind, not that signup is down.
+      # Reported separately, with its own label, and never as an outage.
+      - name: Report a broken canary build
+        if: failure() && steps.build.outcome == 'failure'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const run = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const existing = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'canary-build',
+            });
+            const body = [
+              'The signup canary failed to **build**, so it did not run.',
+              '',
+              'This says nothing about whether signup works — but while it is',
+              'broken we have no signup monitoring at all.',
+              '',
+              `Run: ${run}`,
+              '',
+              'The canary depends on mello-core, which pulls in the full native',
+              'stack (keyring, and mello-sys which builds libmello via CMake and',
+              'vcpkg). That is a lot of surface for a monitor that only needs',
+              'HTTP. If this keeps breaking, decoupling it is the real fix.',
+            ].join('\n');
+            if (existing.data.length > 0) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: existing.data[0].number,
+                body: `Still failing to build as of ${new Date().toISOString()}. ${run}`,
+              });
+              return;
+            }
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: '🔧 Signup canary will not build — monitoring is blind',
+              body,
+              labels: ['canary-build'],
+              // Assigned so GitHub Mobile pushes it: participation notifies
+              // reliably, whereas watched-repo activity often does not.
+              assignees: ['b0bben'],
+            });
 
       - name: Close the alert if signup recovered
         if: success()

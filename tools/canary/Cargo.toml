@@ -5,9 +5,17 @@ edition = "2021"
 license = "Apache-2.0"
 publish = false
 
+# Deliberately does NOT depend on mello-core.
+#
+# mello-core pulls in keyring (D-Bus on Linux) and mello-sys, which builds
+# libmello through CMake and vcpkg and downloads ONNX Runtime. That is minutes
+# of native build and a long list of system packages for a monitor that makes
+# four HTTP calls — and when any of it breaks, production monitoring goes dark
+# for reasons unrelated to production. See issue #33.
 [dependencies]
-mello-core = { path = "../../mello-core" }
 tokio = { workspace = true, features = ["rt", "macros", "time"] }
+reqwest = { workspace = true, features = ["json"] }
+serde_json = { workspace = true }
 env_logger = "0.11"
 log = { workspace = true }
 rand = "0.8"

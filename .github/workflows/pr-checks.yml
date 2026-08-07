@@ -24,6 +24,10 @@ jobs:
   test-windows:
     name: Test (Windows)
     runs-on: [self-hosted, Windows]
+    # The full run is ~19 min. This bound exists for a wedged runner, not a slow
+    # one: a self-hosted machine that sleeps mid-job otherwise blocks the check
+    # indefinitely instead of failing.
+    timeout-minutes: 45
 
     steps:
       - name: Checkout repository
@@ -67,6 +71,8 @@ jobs:
   test-macos:
     name: Test (macOS)
     runs-on: [self-hosted, macOS]
+    # ~6 min in practice; see the Windows job for why the bound is generous.
+    timeout-minutes: 45
     env:
       MACOSX_DEPLOYMENT_TARGET: "15.0"
 
@@ -116,6 +122,7 @@ jobs:
   test-backend:
     name: Test (Backend / Go)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: backend/nakama/data/modules

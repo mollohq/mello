@@ -897,20 +897,28 @@ TEST_F(PeerRtpRolesTest, StatsExposeSenderAndReceiverFields) {
     EXPECT_EQ(host_stats.tx_active, 1u);
     EXPECT_GE(host_stats.tx_access_units_enqueued, 1u);
 
+    // Wait on the counter this test asserts, not merely on a successful
+    // receive. The two are not simultaneous: rx_core_emitted_access_units is
+    // published after the access unit is handed out, so waiting for the recv
+    // and then reading stats could observe 0 and fail — intermittently, and
+    // only under CI load.
+    MelloRtpVideoStats viewer_stats{};
     ASSERT_TRUE(wait_until(
         [&]() {
             std::vector<uint8_t> buffer(256 * 1024);
-            return mello_peer_video_recv_access_unit(
-                       pair.viewer,
-                       buffer.data(),
-                       static_cast<int>(buffer.size()),
-                       nullptr
-                   ) > 0;
+            (void)mello_peer_video_recv_access_unit(
+                pair.viewer,
+                buffer.data(),
+                static_cast<int>(buffer.size()),
+                nullptr
+            );
+            viewer_stats = MelloRtpVideoStats{};
+            mello_peer_video_get_stats(pair.viewer, &viewer_stats);
+            return viewer_stats.rx_core_emitted_access_units >= 1u;
         },
         5s
     ));
 
-    MelloRtpVideoStats viewer_stats{};
     mello_peer_video_get_stats(pair.viewer, &viewer_stats);
     EXPECT_EQ(viewer_stats.media_role, MELLO_PEER_MEDIA_ROLE_STREAM_VIEWER);
     EXPECT_EQ(viewer_stats.rx_active, 1u);
