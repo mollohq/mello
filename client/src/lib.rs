@@ -22,6 +22,7 @@ mod hud_state_builder;
 mod image_cache;
 mod ipc;
 mod notifications;
+mod onboarding;
 mod perf_mode;
 mod platform;
 mod poll_loop;

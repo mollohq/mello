@@ -29,7 +29,10 @@ mut() {
     desc="$1"; file="$2"; pat="$3"; rep="$4"
 
     cp "$file" "$BAK"
-    sed -i.tmp "s|$pat|$rep|" "$file" && rm -f "$file.tmp"
+    # perl with \Q..\E rather than sed: these patterns are real Rust source and
+    # routinely contain regex metacharacters and the | used in match arms,
+    # which silently corrupt a sed s|..|..| expression.
+    MUT_PAT="$pat" MUT_REP="$rep" perl -0pi -e 's/\Q$ENV{MUT_PAT}\E/$ENV{MUT_REP}/' "$file"
 
     if diff -q "$file" "$BAK" >/dev/null 2>&1; then
         printf '  \033[33m[STALE]\033[0m   %s\n' "$desc"
@@ -61,8 +64,11 @@ mut "OnboardingReady stops logging the user in" \
     client/src/handlers/auth.rs "ctx.app.set_logged_in(true);" "ctx.app.set_logged_in(false);"
 
 echo "onboarding:"
-mut "discovery no longer advances past step 0" \
-    client/src/handlers/crew.rs "ctx.app.set_onboarding_step(1);" "ctx.app.set_onboarding_step(0);"
+# The transition whose absence caused the blank-window outage.
+mut "discovery no longer moves the user off the blank Loading state" \
+    client/src/onboarding.rs "(Loading, DiscoverySettled) => PickCrew," "(Loading, DiscoverySettled) => Loading,"
+mut "a lost session drops the user into the blank Loading state" \
+    client/src/onboarding.rs "(_, RestoreFailed | LoggedOut) => PickCrew," "(_, RestoreFailed | LoggedOut) => Loading,"
 mut "retry loses the pending crew avatar" \
     client/src/callbacks/onboarding.rs "avatar_b64.lock().unwrap().clone()" "avatar_b64.lock().unwrap().take()"
 

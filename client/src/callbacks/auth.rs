@@ -37,12 +37,14 @@ pub fn wire(ctx: &AppContext) {
                 app.set_user_avatar(slint::Image::default());
                 app.set_has_user_avatar(false);
                 app.set_active_crew_id("".into());
-                app.set_onboarding_step(1);
+                crate::onboarding::advance_with(
+                    &app,
+                    &settings_ref,
+                    crate::onboarding::Input::LoggedOut,
+                );
             }
-            let mut s = settings_ref.borrow_mut();
-            s.onboarding_step = 1;
-            s.save();
-            log::info!("Logged out — returning to onboarding step 1");
+            let s = settings_ref.borrow();
+            log::info!("Logged out — returning to crew selection");
             if let Some(ref device_id) = s.device_id {
                 let _ = cmd.send(Command::DeviceAuth {
                     device_id: device_id.clone(),
