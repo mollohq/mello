@@ -827,7 +827,22 @@ TEST(RtpVideoSenderFecTest, ParityFecRepairsOneLossPerGroupWithoutPli) {
             );
             FAIL();
         }
+        // The 3ms spacing is deliberate: it gives the receiver time to
+        // reassemble each access unit, which this test depends on.
         std::this_thread::sleep_for(3ms);
+
+        // ...but 3ms alone is not enough on a loaded runner, where the queue
+        // climbed to kMaxQueuedAccessUnits (16) and the next send was rejected,
+        // failing the test for reasons unrelated to FEC. Wait for the sender to
+        // catch up as well, so the feed rate never outruns the drain.
+        const bool absorbed = wait_until(
+            [&]() { return sender.stats().queued_access_units < 8; },
+            5s
+        );
+        ASSERT_TRUE(absorbed)
+            << "sender did not drain below half the queue bound within 5s at index "
+            << index;
+
         while (auto unit = receiver.pop_access_unit()) {
             popped_timestamps.push_back(unit->rtp_timestamp);
             ++popped;
