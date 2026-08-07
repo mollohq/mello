@@ -94,6 +94,26 @@ fn run_scenario(
                     password: password.clone(),
                 },
             )?,
+            Step::DiscoverCrews => send(cmd_tx, Command::DiscoverCrews { cursor: None })?,
+            Step::FinalizeOnboarding {
+                crew_id,
+                crew_name,
+                display_name,
+            } => send(
+                cmd_tx,
+                Command::FinalizeOnboarding {
+                    crew_id: crew_id.clone(),
+                    crew_name: crew_name.clone(),
+                    crew_description: None,
+                    crew_open: Some(false),
+                    crew_avatar: None,
+                    display_name: display_name.clone(),
+                    avatar_data: None,
+                    avatar_format: None,
+                    avatar_style: None,
+                    avatar_seed: None,
+                },
+            )?,
             Step::SelectCrew { crew_id } => send(
                 cmd_tx,
                 Command::SelectCrew {

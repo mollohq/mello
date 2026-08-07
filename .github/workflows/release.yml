@@ -70,6 +70,18 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
+      # Drives the binary just built through a real signup against production.
+      # Keys are baked in at compile time via option_env!, so a build made with
+      # a stale NAKAMA_HTTP_KEY looks identical to a good one until a user tries
+      # to sign up. Nothing else in the pipeline can catch that.
+      #
+      # Needs an interactive desktop session on the runner (the client opens a
+      # window even in scenario mode). Leaves one throwaway account and one
+      # non-discoverable crew in production per release.
+      - name: Signup smoke test
+        shell: bash
+        run: ./scripts/run-signup-smoke.sh target/release/mello.exe
+
       - name: Assemble dist
         shell: pwsh
         run: |
@@ -196,6 +208,10 @@ jobs:
 
       - name: Clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      # See the Windows job for why this exists and what it leaves behind.
+      - name: Signup smoke test
+        run: ./scripts/run-signup-smoke.sh target/release/mello
 
       - name: Assemble dist
         run: |

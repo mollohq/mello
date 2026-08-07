@@ -37,13 +37,18 @@ pub fn handle(ctx: &AppContext, event: Event) {
             ctx.app.set_user_name(user.display_name.into());
             ctx.app.set_user_tag(user.tag.into());
             ctx.app.set_logged_in(true);
-            ctx.app.set_onboarding_step(3);
-            let mut s = ctx.settings.borrow_mut();
-            s.pending_crew_id = None;
-            s.pending_crew_name = None;
-            s.onboarding_step = 3;
-            s.save();
-            drop(s);
+            // Release the pending crew avatar only now that onboarding has
+            // actually succeeded. It is deliberately retained through a failed
+            // attempt so a retry still carries it.
+            *ctx.new_crew_avatar_b64.lock().unwrap() = None;
+            {
+                let mut s = ctx.settings.borrow_mut();
+                s.pending_crew_id = None;
+                s.pending_crew_name = None;
+            }
+            // The account exists, but identity linking is still offered — so
+            // this is LinkIdentity, not Done.
+            crate::onboarding::advance(ctx, crate::onboarding::Input::AccountReady);
             let _ = ctx.cmd_tx.send(Command::LoadMyCrews);
             dispatch_pending_deep_link(ctx);
         }
@@ -53,11 +58,8 @@ pub fn handle(ctx: &AppContext, event: Event) {
         }
         Event::EmailLinked => {
             log::info!("[auth] email linked — onboarding complete");
-            ctx.app.set_onboarding_step(4);
             ctx.app.set_logged_in(true);
-            let mut s = ctx.settings.borrow_mut();
-            s.onboarding_step = 4;
-            s.save();
+            crate::onboarding::advance(ctx, crate::onboarding::Input::IdentitySettled);
         }
         Event::EmailLinkFailed { reason } => {
             log::warn!("[auth] email-link-failed  reason={}", reason);
@@ -65,11 +67,8 @@ pub fn handle(ctx: &AppContext, event: Event) {
         }
         Event::SocialLinked => {
             log::info!("[auth] social identity linked — onboarding complete");
-            ctx.app.set_onboarding_step(4);
             ctx.app.set_logged_in(true);
-            let mut s = ctx.settings.borrow_mut();
-            s.onboarding_step = 4;
-            s.save();
+            crate::onboarding::advance(ctx, crate::onboarding::Input::IdentitySettled);
         }
         Event::SocialLinkFailed { reason } => {
             log::warn!("[auth] social-link-failed  reason={}", reason);
@@ -92,12 +91,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
                 .set_user_initials(make_initials(&user.display_name).into());
             ctx.app.set_user_name(user.display_name.into());
             ctx.app.set_user_tag(user.tag.into());
-            let mut s = ctx.settings.borrow_mut();
-            if s.onboarding_step < 4 {
-                ctx.app.set_onboarding_step(4);
-                s.onboarding_step = 4;
-                s.save();
-            }
+            crate::onboarding::advance(ctx, crate::onboarding::Input::SessionRestored);
             let _ = ctx.cmd_tx.send(Command::FetchUserAvatar { user_id: uid });
 
             dispatch_pending_deep_link(ctx);
@@ -110,10 +104,8 @@ pub fn handle(ctx: &AppContext, event: Event) {
 
             if reason.is_empty() {
                 log::info!("[auth] restore failed — falling back to device auth");
-                ctx.app.set_onboarding_step(1);
-                let mut s = ctx.settings.borrow_mut();
-                s.onboarding_step = 1;
-                s.save();
+                crate::onboarding::advance(ctx, crate::onboarding::Input::RestoreFailed);
+                let s = ctx.settings.borrow();
                 if let Some(ref device_id) = s.device_id {
                     let _ = ctx.cmd_tx.send(Command::DeviceAuth {
                         device_id: device_id.clone(),

@@ -13,6 +13,13 @@ concurrency:
 permissions:
   contents: read
 
+env:
+  # Hardware-dependent voice/video tests (e.g. host_to_viewer_loopback) block
+  # forever waiting on real capture devices unless CI is set. Set it explicitly
+  # rather than relying on GitHub's implicit value — mello-sys/tests/video_pipeline.rs
+  # is the only test that reads it, and a silent hang here costs a whole runner.
+  CI: "true"
+
 jobs:
   test-windows:
     name: Test (Windows)
@@ -34,13 +41,34 @@ jobs:
       - name: Run tests
         run: cargo test --workspace
 
+      # Runs after the Rust build so external/vcpkg is already bootstrapped and
+      # the vcpkg binary cache is warm. MELLO_BUILD_TESTS stays OFF by default
+      # (mello-sys/build.rs configures libmello on every cargo build, and we do
+      # not want 96 gtest cases compiled into every dev build) so CI must opt in.
+      - name: Build C++ tests
+        shell: pwsh
+        run: |
+          cmake -B libmello/build-ci -S libmello `
+            -DMELLO_BUILD_TESTS=ON `
+            -DCMAKE_TOOLCHAIN_FILE="${{ github.workspace }}/external/vcpkg/scripts/buildsystems/vcpkg.cmake" `
+            -DVCPKG_TARGET_TRIPLET=x64-windows-static-md
+          cmake --build libmello/build-ci --config Release
+
+      - name: Run C++ tests
+        run: ctest --test-dir libmello/build-ci -C Release --output-on-failure
+
       - name: Cleanup build artifacts
         if: always()
-        run: cargo clean
+        shell: pwsh
+        run: |
+          cargo clean
+          Remove-Item -Recurse -Force libmello/build-ci -ErrorAction SilentlyContinue
 
   test-macos:
     name: Test (macOS)
     runs-on: [self-hosted, macOS]
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "15.0"
 
     steps:
       - name: Checkout repository
@@ -58,6 +86,64 @@ jobs:
       - name: Run tests
         run: cargo test --workspace
 
+      # See the Windows job for why MELLO_BUILD_TESTS is opt-in. The arch and
+      # deployment-target flags mirror mello-sys/build.rs so the test binaries
+      # link against the same libmello configuration the Rust build produces.
+      - name: Build C++ tests
+        run: |
+          cmake -B libmello/build-ci -S libmello \
+            -DMELLO_BUILD_TESTS=ON \
+            -DCMAKE_TOOLCHAIN_FILE="${{ github.workspace }}/external/vcpkg/scripts/buildsystems/vcpkg.cmake" \
+            -DVCPKG_TARGET_TRIPLET=arm64-osx \
+            -DVCPKG_HOST_TRIPLET=arm64-osx \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0 \
+            -DCMAKE_BUILD_TYPE=Release
+          cmake --build libmello/build-ci
+
+      - name: Run C++ tests
+        run: ctest --test-dir libmello/build-ci --output-on-failure
+
       - name: Cleanup build artifacts
         if: always()
-        run: cargo clean
+        run: |
+          cargo clean
+          rm -rf libmello/build-ci
+
+  # Pure Go unit tests over the Nakama modules — no native deps, no Docker, no
+  # backend. Runs on GitHub-hosted Linux (already used by release.yml) rather
+  # than competing for the single self-hosted Windows/macOS runners.
+  test-backend:
+    name: Test (Backend / Go)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend/nakama/data/modules
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/nakama/data/modules/go.mod
+          cache-dependency-path: backend/nakama/data/modules/go.sum
+
+      # gofmt is currently unenforced anywhere in the repo; crews.go has drifted.
+      - name: Check formatting
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "::error::gofmt found unformatted files:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: Vet
+        run: go vet ./...
+
+      # These modules are a Nakama plugin, not a standalone binary — `go build`
+      # of main fails by design. `go vet` / `go test` are the static gates.
+      - name: Run tests
+        run: go test ./...

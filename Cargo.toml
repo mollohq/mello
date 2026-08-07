@@ -13,6 +13,8 @@ members = [
     "tools/voice-test-client",
     "tools/perf-harness",
     "tools/perf-scenarios",
+    "tools/canary",
+    "tools/e2e",
 ]
 default-members = [
     "client",

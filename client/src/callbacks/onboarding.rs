@@ -12,6 +12,18 @@ use crate::app_context::AppContext;
 use crate::{avatar, MainWindow};
 
 pub fn wire(ctx: &AppContext) {
+    // --- Onboarding: retry crew discovery after a failure ---
+    {
+        let cmd = ctx.cmd_tx.clone();
+        let app_weak = ctx.app.as_weak();
+        ctx.app.on_retry_discover(move || {
+            if let Some(app) = app_weak.upgrade() {
+                app.set_discover_error(slint::SharedString::new());
+            }
+            let _ = cmd.send(Command::DiscoverCrews { cursor: None });
+        });
+    }
+
     // --- Onboarding: crew selected ---
     {
         let cmd = ctx.cmd_tx.clone();
@@ -23,13 +35,12 @@ pub fn wire(ctx: &AppContext) {
         ctx.app.on_onboarding_crew_selected(move |crew_id| {
             let _ = cmd.send(Command::ListAudioDevices);
             if let Some(app) = app_weak.upgrade() {
-                app.set_onboarding_step(2);
-                let mut settings = s.borrow_mut();
-                settings.pending_crew_id = Some(crew_id.to_string());
-                settings.pending_crew_name = None;
-                settings.onboarding_step = 2;
-                settings.save();
-                drop(settings);
+                {
+                    let mut settings = s.borrow_mut();
+                    settings.pending_crew_id = Some(crew_id.to_string());
+                    settings.pending_crew_name = None;
+                }
+                crate::onboarding::advance_with(&app, &s, crate::onboarding::Input::CrewChosen);
                 log::info!(
                     "[onboarding] crew selected (stored locally): {} — loading avatars",
                     crew_id
@@ -155,7 +166,14 @@ pub fn wire(ctx: &AppContext) {
                     let crew_description = settings.pending_crew_description.clone();
                     let crew_open = settings.pending_crew_open;
                     drop(settings);
-                    let crew_avatar = avatar_b64.lock().unwrap().take();
+                    // clone, not take: FinalizeOnboarding performs seven
+                    // sequential network calls and any of them can fail,
+                    // leaving the user on step 3 to retry. Taking the avatar
+                    // here meant the retry silently sent none, so a user who
+                    // hit a transient error lost the crew avatar they picked
+                    // with no indication why. Cleared on success instead —
+                    // see the OnboardingReady handler.
+                    let crew_avatar = avatar_b64.lock().unwrap().clone();
 
                     let (avatar_data, avatar_format, avatar_style, avatar_seed) = {
                         let state = avatar_st.lock().unwrap();
@@ -205,10 +223,15 @@ pub fn wire(ctx: &AppContext) {
                     });
                     return;
                 }
-                app.set_onboarding_step(step);
-                let mut settings = s.borrow_mut();
-                settings.onboarding_step = step as u8;
-                settings.save();
+                // The step indicator; the reducer refuses forward jumps past
+                // work the user has not done.
+                crate::onboarding::advance_with(
+                    &app,
+                    &s,
+                    crate::onboarding::Input::GoBackTo(
+                        crate::onboarding::OnboardingState::from_step(step),
+                    ),
+                );
             }
         });
     }
@@ -222,10 +245,7 @@ pub fn wire(ctx: &AppContext) {
             if let Some(app) = app_weak.upgrade() {
                 log::info!("[auth] sign-in pill — entering app as device user");
                 app.set_logged_in(true);
-                app.set_onboarding_step(4);
-                let mut settings = s.borrow_mut();
-                settings.onboarding_step = 4;
-                settings.save();
+                crate::onboarding::apply_to(&app, &s, crate::onboarding::OnboardingState::Done);
                 let _ = cmd.send(Command::LoadMyCrews);
             }
         });
@@ -283,11 +303,12 @@ pub fn wire(ctx: &AppContext) {
         let s = ctx.settings.clone();
         ctx.app.on_onboarding_skip_identity(move || {
             if let Some(app) = app_weak.upgrade() {
-                app.set_onboarding_step(4);
                 app.set_logged_in(true);
-                let mut settings = s.borrow_mut();
-                settings.onboarding_step = 4;
-                settings.save();
+                crate::onboarding::advance_with(
+                    &app,
+                    &s,
+                    crate::onboarding::Input::IdentitySettled,
+                );
             }
         });
     }

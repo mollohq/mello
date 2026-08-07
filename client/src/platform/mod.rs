@@ -19,15 +19,34 @@ pub enum VoiceState {
     Muted,
 }
 
-pub struct StatusItem {
+/// Native tray handles. Absent when the tray could not be created, or when
+/// running headless (tests, CI) — the surrounding `StatusItem` degrades to
+/// no-ops rather than forcing every caller to handle an `Option`.
+struct TrayHandles {
     _tray: TrayIcon,
-    current_state: VoiceState,
     _menu: Menu,
     mute_item: CheckMenuItem,
     leave_item: MenuItem,
 }
 
+pub struct StatusItem {
+    tray: Option<TrayHandles>,
+    current_state: VoiceState,
+}
+
 impl StatusItem {
+    /// A `StatusItem` with no native tray. Every method becomes a no-op.
+    ///
+    /// Used headlessly by the test harness, and as the fallback when tray
+    /// creation fails at startup — a missing tray icon is a degraded
+    /// experience, not a reason to refuse to launch.
+    pub fn disabled() -> Self {
+        Self {
+            tray: None,
+            current_state: VoiceState::Inactive,
+        }
+    }
+
     pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
         let icon = Self::render_icon(VoiceState::Inactive);
 
@@ -63,11 +82,13 @@ impl StatusItem {
         let tray = builder.build()?;
 
         Ok(Self {
-            _tray: tray,
+            tray: Some(TrayHandles {
+                _tray: tray,
+                _menu: menu,
+                mute_item,
+                leave_item,
+            }),
             current_state: VoiceState::Inactive,
-            _menu: menu,
-            mute_item,
-            leave_item,
         })
     }
 
@@ -76,20 +97,26 @@ impl StatusItem {
             return;
         }
         self.current_state = state;
-        self._tray.set_icon(Some(Self::render_icon(state))).ok();
+
+        let Some(tray) = self.tray.as_ref() else {
+            return;
+        };
+        tray._tray.set_icon(Some(Self::render_icon(state))).ok();
 
         let in_voice = matches!(
             state,
             VoiceState::Connected | VoiceState::Speaking | VoiceState::Muted
         );
-        self.mute_item.set_enabled(in_voice);
-        self.leave_item.set_enabled(in_voice);
-        self.mute_item
+        tray.mute_item.set_enabled(in_voice);
+        tray.leave_item.set_enabled(in_voice);
+        tray.mute_item
             .set_checked(matches!(state, VoiceState::Muted));
     }
 
     pub fn set_mute_checked(&mut self, muted: bool) {
-        self.mute_item.set_checked(muted);
+        if let Some(tray) = self.tray.as_ref() {
+            tray.mute_item.set_checked(muted);
+        }
     }
 
     /// Poll for tray icon click events.

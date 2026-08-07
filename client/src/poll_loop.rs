@@ -9,79 +9,70 @@ use crate::converters::{set_member_speaking, set_voice_member_speaking};
 use crate::notifications;
 use crate::platform::{self, StatusItem, VoiceState};
 use crate::updater::UpdateEvent;
+use crate::voice_state::MuteAction;
+use crate::MainWindow;
 
 const MAX_CORE_EVENTS_PER_POLL_TICK: usize = 128;
 
-fn broadcast_mute_state(
-    cmd_tx: &tokio::sync::mpsc::UnboundedSender<Command>,
-    muted: bool,
-    deafened: bool,
-) {
-    let _ = cmd_tx.send(Command::BroadcastMuteState { muted, deafened });
+/// Everything one poll iteration needs, owned in one place.
+///
+/// Split out of the timer closure so tests can drive iterations synchronously
+/// via [`PollState::tick`] instead of waiting on a 100 ms `slint::Timer` —
+/// under the headless test backend timers do not fire at all.
+pub struct PollState {
+    ctx: AppContext,
+    event_rx: std::sync::mpsc::Receiver<Event>,
+    update_event_rx: std::sync::mpsc::Receiver<UpdateEvent>,
+    saved_timer: Rc<slint::Timer>,
+    saved_app_weak: slint::Weak<MainWindow>,
 }
 
+impl PollState {
+    pub fn new(
+        ctx: &AppContext,
+        event_rx: std::sync::mpsc::Receiver<Event>,
+        update_event_rx: std::sync::mpsc::Receiver<UpdateEvent>,
+    ) -> Self {
+        Self {
+            ctx: ctx.clone(),
+            event_rx,
+            update_event_rx,
+            saved_timer: Rc::new(slint::Timer::default()),
+            saved_app_weak: ctx.app.as_weak(),
+        }
+    }
+}
+
+/// Start the repeating 100 ms poll timer. Returns the timer, which must be kept
+/// alive for polling to continue.
 pub fn start(
     ctx: &AppContext,
     event_rx: std::sync::mpsc::Receiver<Event>,
     update_event_rx: std::sync::mpsc::Receiver<UpdateEvent>,
 ) -> slint::Timer {
-    let poll_ctx = AppContext {
-        app: ctx.app.clone_strong(),
-        cmd_tx: ctx.cmd_tx.clone(),
-        settings: ctx.settings.clone(),
-        rt: ctx.rt.clone(),
-        active_voice_channel: ctx.active_voice_channel.clone(),
-        new_crew_avatar_b64: ctx.new_crew_avatar_b64.clone(),
-        crew_settings_avatar_b64: ctx.crew_settings_avatar_b64.clone(),
-        invited_users: ctx.invited_users.clone(),
-        discover_cursor: ctx.discover_cursor.clone(),
-        discover_loading: ctx.discover_loading.clone(),
-        chat_messages: ctx.chat_messages.clone(),
-        chat_scroll: ctx.chat_scroll.clone(),
-        unread_tracker: ctx.unread_tracker.clone(),
-        active_crew_id: ctx.active_crew_id.clone(),
-        avatar_state: ctx.avatar_state.clone(),
-        profile_avatar_state: ctx.profile_avatar_state.clone(),
-        avatar_shuffle_timer: ctx.avatar_shuffle_timer.clone(),
-        diag_autostop_timer: ctx.diag_autostop_timer.clone(),
-        post_game_timer: ctx.post_game_timer.clone(),
-        riot_cta_pending: ctx.riot_cta_pending.clone(),
-        games_integrations: ctx.games_integrations.clone(),
-        muted_before_deafen: ctx.muted_before_deafen.clone(),
-        updater: ctx.updater.clone(),
-        hotkey_mgr: ctx.hotkey_mgr.clone(),
-        status_item: ctx.status_item.clone(),
-        gif_popover_anim: ctx.gif_popover_anim.clone(),
-        gif_chat_anim: ctx.gif_chat_anim.clone(),
-        dbg_hist: ctx.dbg_hist.clone(),
-        avatar_cache: ctx.avatar_cache.clone(),
-        game_icon_cache: ctx.game_icon_cache.clone(),
-        pending_unknown_game: ctx.pending_unknown_game.clone(),
-        hud_manager: ctx.hud_manager.clone(),
-        fg_monitor: ctx.fg_monitor.clone(),
-        pending_deep_link: ctx.pending_deep_link.clone(),
-        ipc_listener: ctx.ipc_listener.clone(),
-        snapshot_loader: ctx.snapshot_loader.clone(),
-        stream_frame_timer: ctx.stream_frame_timer.clone(),
-        #[cfg(target_os = "windows")]
-        native_frame_slot: ctx.native_frame_slot.clone(),
-        #[cfg(target_os = "windows")]
-        frame_lifecycle: ctx.frame_lifecycle.clone(),
-        #[cfg(target_os = "windows")]
-        dcomp_presenter: ctx.dcomp_presenter.clone(),
-        #[cfg(target_os = "windows")]
-        taskbar_toolbar: ctx.taskbar_toolbar.clone(),
-    };
-
-    let saved_timer = Rc::new(slint::Timer::default());
-    let saved_timer_ref = saved_timer.clone();
-    let saved_app_weak = ctx.app.as_weak();
+    let state = PollState::new(ctx, event_rx, update_event_rx);
 
     let timer = slint::Timer::default();
     timer.start(
         slint::TimerMode::Repeated,
         Duration::from_millis(100),
-        move || {
+        move || state.tick(),
+    );
+    timer
+}
+
+impl PollState {
+    /// Run exactly one poll iteration: drain core events, update events, IPC
+    /// deep links, tray/menu/hotkey/HUD input, and push resulting UI state.
+    pub fn tick(&self) {
+        let poll_ctx = &self.ctx;
+        let update_event_rx = &self.update_event_rx;
+        let event_rx = &self.event_rx;
+        let saved_timer_ref = &self.saved_timer;
+        // Owned clone, not a reference: `.clone()` on a `&Weak` would clone the
+        // reference and leave the inner `upgrade()` unable to infer its type.
+        let saved_app_weak = self.saved_app_weak.clone();
+        {
             // --- Update events ---
             while let Ok(ue) = update_event_rx.try_recv() {
                 match ue {
@@ -201,11 +192,11 @@ pub fn start(
                         | Event::CrewStateLoaded { .. }
                 );
 
-                crate::handlers::handle_event(&poll_ctx, event);
+                crate::handlers::handle_event(poll_ctx, event);
 
                 if should_push_hud && poll_ctx.hud_manager.is_enabled() {
                     let mode = poll_ctx.fg_monitor.borrow().current_mode();
-                    let state = crate::hud_state_builder::build_hud_state(&poll_ctx, mode);
+                    let state = crate::hud_state_builder::build_hud_state(poll_ctx, mode);
                     poll_ctx.hud_manager.push_state(state);
                 }
             }
@@ -234,18 +225,7 @@ pub fn start(
                         poll_ctx.app.show().ok();
                     }
                     "tray_mute" => {
-                        let new_muted = !poll_ctx.app.get_mic_muted();
-                        poll_ctx.app.set_mic_muted(new_muted);
-                        let _ = poll_ctx.cmd_tx.send(Command::SetMute { muted: new_muted });
-                        broadcast_mute_state(
-                            &poll_ctx.cmd_tx,
-                            new_muted,
-                            poll_ctx.app.get_deafened(),
-                        );
-                        poll_ctx
-                            .status_item
-                            .borrow_mut()
-                            .set_mute_checked(new_muted);
+                        crate::voice_state::dispatch(poll_ctx, MuteAction::ToggleMute);
                     }
                     "tray_leave" => {
                         let _ = poll_ctx.cmd_tx.send(Command::LeaveVoice);
@@ -314,39 +294,10 @@ pub fn start(
                                 poll_ctx.app.set_settings_open(true);
                             }
                             "mute" => {
-                                let new_muted = !poll_ctx.app.get_mic_muted();
-                                poll_ctx.app.set_mic_muted(new_muted);
-                                let _ = poll_ctx.cmd_tx.send(Command::SetMute { muted: new_muted });
-                                broadcast_mute_state(
-                                    &poll_ctx.cmd_tx,
-                                    new_muted,
-                                    poll_ctx.app.get_deafened(),
-                                );
+                                crate::voice_state::dispatch(poll_ctx, MuteAction::ToggleMute);
                             }
                             "deafen" => {
-                                let new_deafened = !poll_ctx.app.get_deafened();
-                                poll_ctx.app.set_deafened(new_deafened);
-                                let _ = poll_ctx.cmd_tx.send(Command::SetDeafen {
-                                    deafened: new_deafened,
-                                });
-                                if new_deafened {
-                                    poll_ctx
-                                        .muted_before_deafen
-                                        .set(poll_ctx.app.get_mic_muted());
-                                    if !poll_ctx.app.get_mic_muted() {
-                                        poll_ctx.app.set_mic_muted(true);
-                                        let _ =
-                                            poll_ctx.cmd_tx.send(Command::SetMute { muted: true });
-                                    }
-                                } else if !poll_ctx.muted_before_deafen.get() {
-                                    poll_ctx.app.set_mic_muted(false);
-                                    let _ = poll_ctx.cmd_tx.send(Command::SetMute { muted: false });
-                                }
-                                broadcast_mute_state(
-                                    &poll_ctx.cmd_tx,
-                                    poll_ctx.app.get_mic_muted(),
-                                    new_deafened,
-                                );
+                                crate::voice_state::dispatch(poll_ctx, MuteAction::ToggleDeafen);
                             }
                             "github" => {
                                 if let Err(e) = open::that("https://github.com/mollohq/mello") {
@@ -395,7 +346,7 @@ pub fn start(
                 let main_visible = poll_ctx.app.window().is_visible();
                 let mode_changed = poll_ctx.fg_monitor.borrow_mut().evaluate(main_visible);
                 if let Some(new_mode) = mode_changed {
-                    let state = crate::hud_state_builder::build_hud_state(&poll_ctx, new_mode);
+                    let state = crate::hud_state_builder::build_hud_state(poll_ctx, new_mode);
                     poll_ctx.hud_manager.push_state(state);
                 }
             }
@@ -405,18 +356,7 @@ pub fn start(
                 match action {
                     crate::hud_manager::HudAction::Action { action } => match action {
                         crate::hud_manager::HudActionKind::MuteToggle => {
-                            let new_muted = !poll_ctx.app.get_mic_muted();
-                            poll_ctx.app.set_mic_muted(new_muted);
-                            let _ = poll_ctx.cmd_tx.send(Command::SetMute { muted: new_muted });
-                            broadcast_mute_state(
-                                &poll_ctx.cmd_tx,
-                                new_muted,
-                                poll_ctx.app.get_deafened(),
-                            );
-                            poll_ctx
-                                .status_item
-                                .borrow_mut()
-                                .set_mute_checked(new_muted);
+                            crate::voice_state::dispatch(poll_ctx, MuteAction::ToggleMute);
                         }
                         crate::hud_manager::HudActionKind::LeaveVoice => {
                             let _ = poll_ctx.cmd_tx.send(Command::LeaveVoice);
@@ -430,32 +370,7 @@ pub fn start(
                             platform::bring_main_window_to_front();
                         }
                         crate::hud_manager::HudActionKind::DeafenToggle => {
-                            let new_deafened = !poll_ctx.app.get_deafened();
-                            poll_ctx.app.set_deafened(new_deafened);
-                            let _ = poll_ctx.cmd_tx.send(Command::SetDeafen {
-                                deafened: new_deafened,
-                            });
-                            if new_deafened {
-                                poll_ctx
-                                    .muted_before_deafen
-                                    .set(poll_ctx.app.get_mic_muted());
-                                if !poll_ctx.app.get_mic_muted() {
-                                    poll_ctx.app.set_mic_muted(true);
-                                    let _ = poll_ctx.cmd_tx.send(Command::SetMute { muted: true });
-                                }
-                            } else if !poll_ctx.muted_before_deafen.get() {
-                                poll_ctx.app.set_mic_muted(false);
-                                let _ = poll_ctx.cmd_tx.send(Command::SetMute { muted: false });
-                            }
-                            broadcast_mute_state(
-                                &poll_ctx.cmd_tx,
-                                poll_ctx.app.get_mic_muted(),
-                                new_deafened,
-                            );
-                            poll_ctx
-                                .status_item
-                                .borrow_mut()
-                                .set_mute_checked(poll_ctx.app.get_mic_muted());
+                            crate::voice_state::dispatch(poll_ctx, MuteAction::ToggleDeafen);
                         }
                         crate::hud_manager::HudActionKind::OpenSettings => {
                             poll_ctx.app.show().ok();
@@ -476,47 +391,10 @@ pub fn start(
                         use crate::platform::taskbar_toolbar::ThumbAction;
                         match action {
                             ThumbAction::MuteToggle => {
-                                let new_muted = !poll_ctx.app.get_mic_muted();
-                                poll_ctx.app.set_mic_muted(new_muted);
-                                let _ = poll_ctx.cmd_tx.send(Command::SetMute { muted: new_muted });
-                                broadcast_mute_state(
-                                    &poll_ctx.cmd_tx,
-                                    new_muted,
-                                    poll_ctx.app.get_deafened(),
-                                );
-                                poll_ctx
-                                    .status_item
-                                    .borrow_mut()
-                                    .set_mute_checked(new_muted);
+                                crate::voice_state::dispatch(poll_ctx, MuteAction::ToggleMute);
                             }
                             ThumbAction::DeafenToggle => {
-                                let new_deafened = !poll_ctx.app.get_deafened();
-                                poll_ctx.app.set_deafened(new_deafened);
-                                let _ = poll_ctx.cmd_tx.send(Command::SetDeafen {
-                                    deafened: new_deafened,
-                                });
-                                if new_deafened {
-                                    poll_ctx
-                                        .muted_before_deafen
-                                        .set(poll_ctx.app.get_mic_muted());
-                                    if !poll_ctx.app.get_mic_muted() {
-                                        poll_ctx.app.set_mic_muted(true);
-                                        let _ =
-                                            poll_ctx.cmd_tx.send(Command::SetMute { muted: true });
-                                    }
-                                } else if !poll_ctx.muted_before_deafen.get() {
-                                    poll_ctx.app.set_mic_muted(false);
-                                    let _ = poll_ctx.cmd_tx.send(Command::SetMute { muted: false });
-                                }
-                                broadcast_mute_state(
-                                    &poll_ctx.cmd_tx,
-                                    poll_ctx.app.get_mic_muted(),
-                                    new_deafened,
-                                );
-                                poll_ctx
-                                    .status_item
-                                    .borrow_mut()
-                                    .set_mute_checked(poll_ctx.app.get_mic_muted());
+                                crate::voice_state::dispatch(poll_ctx, MuteAction::ToggleDeafen);
                             }
                             ThumbAction::LeaveVoice => {
                                 let _ = poll_ctx.cmd_tx.send(Command::LeaveVoice);
@@ -545,7 +423,6 @@ pub fn start(
                     },
                 );
             }
-        },
-    );
-    timer
+        }
+    }
 }

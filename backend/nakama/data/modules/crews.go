@@ -344,9 +344,9 @@ func ChangeCrewRoleRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, n
 	}
 
 	var req struct {
-		CrewID   string `json:"crew_id"`
-		UserID   string `json:"user_id"`
-		NewRole  int    `json:"new_role"` // 1=admin, 2=member
+		CrewID  string `json:"crew_id"`
+		UserID  string `json:"user_id"`
+		NewRole int    `json:"new_role"` // 1=admin, 2=member
 	}
 	if err := json.Unmarshal([]byte(payload), &req); err != nil {
 		return "", runtime.NewError("invalid request", 3)

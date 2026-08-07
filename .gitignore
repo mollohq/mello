@@ -4,6 +4,7 @@ target/
 
 # C++
 build/
+build-ci/
 cmake-build-*/
 *.o
 *.a

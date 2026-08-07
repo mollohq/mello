@@ -950,6 +950,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "canary"
+version = "0.0.0-DEV"
+dependencies = [
+ "env_logger",
+ "log",
+ "mello-core",
+ "rand 0.8.5",
+ "tokio",
+]
+
+[[package]]
 name = "cc"
 version = "1.2.56"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1671,6 +1682,16 @@ checksum = "ecc8e1361066d91f5ffccff060a3c3be9c3ecde15be2959c1937595f7a82a9f8"
 dependencies = [
  "libc",
  "linux-raw-sys 0.9.4",
+]
+
+[[package]]
+name = "e2e"
+version = "0.0.0-DEV"
+dependencies = [
+ "mello-core",
+ "rand 0.8.5",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]
@@ -4085,6 +4106,7 @@ dependencies = [
  "single-instance",
  "slint",
  "slint-build",
+ "tempfile",
  "tokio",
  "toml 0.8.2",
  "tracing",

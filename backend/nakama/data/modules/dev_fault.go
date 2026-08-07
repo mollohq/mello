@@ -18,12 +18,13 @@ import (
 // can evict real users. Never enable in production.
 //
 // Payload: {"action": "...", "channel_id": "...", "crew_id": "...",
-//           "user_id": "...", "username": "...", "count": N}
+//
+//	"user_id": "...", "username": "...", "count": N}
 //
 // Actions:
 //   - ghost_member:   inject a member Nakama believes is present but the SFU
-//                     isn't (JoinedAt backdated past the reconcile grace so it
-//                     is immediately prunable). Requires channel_id, crew_id, user_id.
+//     isn't (JoinedAt backdated past the reconcile grace so it
+//     is immediately prunable). Requires channel_id, crew_id, user_id.
 //   - force_leave:    force a voice leave for user_id (simulates a missed leave).
 //   - clear_channel:  evict every member of channel_id.
 //   - drop_next_push: drop the next `count` voice_update pushes for crew_id.

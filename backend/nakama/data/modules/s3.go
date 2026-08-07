@@ -16,11 +16,11 @@ import (
 )
 
 var (
-	s3Once        sync.Once
-	s3Presigner   *s3.PresignClient
-	s3Bucket      string
-	s3PublicURL   string
-	s3Available   bool
+	s3Once      sync.Once
+	s3Presigner *s3.PresignClient
+	s3Bucket    string
+	s3PublicURL string
+	s3Available bool
 
 	snapshotsOnce      sync.Once
 	snapshotsClient    *s3.Client

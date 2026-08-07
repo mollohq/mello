@@ -12,10 +12,23 @@ use crate::{
 
 pub fn handle(ctx: &AppContext, event: Event) {
     match event {
+        Event::DiscoverCrewsFailed { reason } => {
+            log::warn!("[discover] failed: {}", reason);
+            *ctx.discover_loading.borrow_mut() = false;
+            ctx.app.set_discover_error(reason.into());
+
+            // Move off Loading even though discovery produced nothing: that
+            // state renders neither the onboarding branch nor the app branch,
+            // i.e. a blank window. PickCrew shows the error, a Retry and the
+            // Create Crew card, so the user can still get in even if discovery
+            // is permanently broken.
+            crate::onboarding::advance(ctx, crate::onboarding::Input::DiscoverySettled);
+        }
         Event::DiscoverCrewsLoaded { crews, cursor } => {
             let is_append = *ctx.discover_loading.borrow();
             *ctx.discover_loading.borrow_mut() = false;
             *ctx.discover_cursor.borrow_mut() = cursor;
+            ctx.app.set_discover_error(slint::SharedString::new());
 
             log::info!(
                 "[discover] loaded {} crews, append={}, has_more={}",
@@ -49,9 +62,11 @@ pub fn handle(ctx: &AppContext, event: Event) {
                 ctx.app.set_discover_crews(rc.into());
                 ctx.app
                     .set_onboarding_bento_bases(Rc::new(slint::VecModel::from(bases)).into());
-                if step == 0 || step == 1 {
-                    ctx.app.set_onboarding_step(1);
-                }
+                // Leaves the user where they are if they have already moved
+                // past crew selection, so a late response cannot yank them
+                // backwards. Persists, which the previous hand-written
+                // assignment did not.
+                crate::onboarding::advance(ctx, crate::onboarding::Input::DiscoverySettled);
             }
 
             if is_append {

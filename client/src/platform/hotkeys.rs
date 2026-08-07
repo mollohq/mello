@@ -27,6 +27,21 @@ pub struct HotkeyManager {
 }
 
 impl HotkeyManager {
+    /// A manager with no OS input listener. `poll()` always returns `None`.
+    ///
+    /// Used headlessly by the test harness, and as the fallback when the global
+    /// listener cannot start — losing push-to-talk is a degraded experience,
+    /// not a reason to refuse to launch. On macOS `start_listener` also needs
+    /// Accessibility permission, which a CI runner will not have granted.
+    pub fn disabled() -> Self {
+        let (_tx, event_rx) = mpsc::channel();
+        Self {
+            binding: Arc::new(Mutex::new(None)),
+            active: Arc::new(AtomicBool::new(false)),
+            event_rx,
+        }
+    }
+
     pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
         let binding: Arc<Mutex<Option<PttBinding>>> = Arc::new(Mutex::new(None));
         let active = Arc::new(AtomicBool::new(false));

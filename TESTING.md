@@ -9,14 +9,31 @@ then jump to the section you need.
 
 ---
 
+## The two commands
+
+```bash
+./scripts/check.sh        # ~90s — run before every push (also the pre-push hook)
+./scripts/check-full.sh   # ~10min+ — before a release, or when touching libmello/ or backend/
+```
+
+`check.sh` is the fast gate: fmt, clippy, the whole Rust workspace (including
+the headless UI flow tests and screen-state invariants), and the cross-language
+RPC contract check. No Docker, no backend, no devices.
+
+`check-full.sh` adds the two suites needing a native toolchain — libmello's C++
+gtest suite and the Nakama Go modules.
+
+---
+
 ## Quick reference
 
 | Tool / suite | Layer | Needs a backend? | Runs in PR CI? | Command (short) |
 |---|---|---|---|---|
 | `cargo test --workspace` | Rust (core, client, tools) | No | ✅ yes | `cargo test --workspace` |
 | `cargo fmt` / `cargo clippy` | Rust | No | ✅ yes | `cargo fmt --all -- --check` / `cargo clippy --all-targets -- -D warnings` |
-| libmello `ctest` | C++ audio/video DSP | No | ⚠️ not wired (run locally) | `cd libmello && cmake --build build && ctest --test-dir build` |
-| Nakama `go test` | Backend modules | No | ⚠️ not wired (run locally) | `cd backend/nakama/data/modules && go test ./...` |
+| libmello `ctest` | C++ audio/video DSP | No | ✅ yes | `ctest --test-dir libmello/build` (configure with `-DMELLO_BUILD_TESTS=ON` first) |
+| Nakama `go test` | Backend modules | No | ✅ yes | `cd backend/nakama/data/modules && go test ./...` |
+| Nakama `gofmt` / `go vet` | Backend modules | No | ✅ yes | `cd backend/nakama/data/modules && gofmt -l . && go vet ./...` |
 | `dev_fault` RPC | Backend fault injection | Yes (live Nakama) | No (manual/integration) | RPC call, gated by `MELLO_ENABLE_DEV_FAULT=1` |
 | SFU `go test` | SFU server | No | ⚠️ not wired (run locally) | `cd mello-sfu && go test ./...` |
 | `voice-soak` | SFU load/churn/resilience | Yes (live SFU) | No (manual/integration) | `go run ./tools/voice-soak ...` |
@@ -94,12 +111,33 @@ Highlights of what's covered:
 Unit tests live in `libmello/tests/` (echo canceller, VAD, Opus, jitter buffer,
 noise suppressor, video pipeline). Per CLAUDE.md:
 
+`MELLO_BUILD_TESTS` defaults to **OFF** — `mello-sys/build.rs` configures libmello
+on every `cargo build`, and we don't want the gtest suite compiled into every dev
+build. You must opt in explicitly, or `ctest` will report *"No tests were found"*.
+
+Run from the repo root. `CMAKE_TOOLCHAIN_FILE` **must be absolute** — CMake
+resolves a relative value against the build directory, not your shell's cwd, so
+a relative path fails with *"Could not find toolchain file"*.
+
 ```bash
-cd libmello
-cmake -B build -S .          # first time / after CMake changes
-cmake --build build
-ctest --test-dir build --output-on-failure
+cmake -B libmello/build -S libmello \
+  -DMELLO_BUILD_TESTS=ON \
+  -DCMAKE_TOOLCHAIN_FILE="$PWD/external/vcpkg/scripts/buildsystems/vcpkg.cmake" \
+  -DVCPKG_TARGET_TRIPLET=arm64-osx     # x64-windows-static-md on Windows
+cmake --build libmello/build
+CI=true ctest --test-dir libmello/build --output-on-failure
 ```
+
+**`CI=true` is required here for the same reason as `cargo test --workspace`.**
+`VideoPipelineTest` does real monitor capture + hardware encode; its `SetUp`
+(`libmello/tests/test_video_pipeline.cpp`) skips when `CI` is set. Without it,
+on a machine lacking screen-recording permission the capture path dies with
+**SIGTRAP** rather than failing cleanly — three tests "fail" for reasons that
+have nothing to do with your change.
+
+Expect **104 tests** across two binaries (`mello_tests`, `mello_rtp_tests`), with
+the 4 `VideoPipelineTest` cases skipped under `CI=true`. If you see 0 tests, the
+`-DMELLO_BUILD_TESTS=ON` flag didn't take.
 
 RTP transport (sender, receiver, P2P peer roles) — release gate for stream PRs:
 
@@ -437,11 +475,13 @@ For AI-driven UI exploration in dev, `client-dev.sh` enables Slint 1.17 MCP
   `./scripts/perf/run.sh`.
 - **Interactive browser repro / live stats:** `sfu-test.html`.
 
-## Suggested CI lanes
+## CI lanes
 
-1. **PR (fast, no backend) — exists:** Rust fmt/clippy/test. Add Go
-   `go test ./...` (backend + SFU) and libmello `ctest` here — all are
-   backend-free and fast.
+1. **PR (fast, no backend) — exists:** Rust fmt/clippy/test plus libmello
+   `ctest` (self-hosted Windows + macOS, after the Rust build so vcpkg is
+   already bootstrapped) and Nakama `gofmt`/`go vet`/`go test` on a
+   GitHub-hosted `ubuntu-latest` runner. SFU `go test` lives in the `mello-sfu`
+   repo and is still unwired here.
 2. **Integration (on demand / nightly):** `docker-compose up` the backend +
    `go run ./cmd/sfu`, seed a test account/crew/channel, then run
    `scenarios/smoke.json` (must pass) and `scenarios/reconnect.json`, plus a

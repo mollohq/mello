@@ -317,10 +317,10 @@ type CatchupRequest struct {
 
 type CatchupResponse struct {
 	CrewID      string         `json:"crew_id"`
-	CatchupText string        `json:"catchup_text"`
-	EventCount  int           `json:"event_count"`
+	CatchupText string         `json:"catchup_text"`
+	EventCount  int            `json:"event_count"`
 	TopEvents   []CatchupEvent `json:"top_events"`
-	HasEvents   bool          `json:"has_events"`
+	HasEvents   bool           `json:"has_events"`
 }
 
 type CatchupEvent struct {

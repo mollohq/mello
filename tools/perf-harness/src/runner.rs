@@ -77,6 +77,18 @@ pub fn run_scenario(path: &str, cfg: Config) -> Result<ScenarioRunOutput, Box<dy
                         password: password.clone(),
                     },
                 )?,
+                // Signup-only steps. This harness measures CPU/RSS of an
+                // already-authenticated client, so onboarding has no meaning
+                // here — the release smoke test runs them via perf_mode in the
+                // real GUI client instead. Rejected loudly rather than skipped,
+                // so a misdirected scenario is obvious.
+                Step::DiscoverCrews | Step::FinalizeOnboarding { .. } => {
+                    return Err(format!(
+                        "step {:?} is only supported by the GUI scenario runner \
+                         (MELLO_PERF_MODE=1); run it via scripts/run-signup-smoke.sh",
+                        step
+                    ));
+                }
                 Step::SelectCrew { crew_id } => send(
                     &cmd_tx,
                     Command::SelectCrew {

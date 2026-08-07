@@ -110,16 +110,15 @@ pub fn wire(ctx: &AppContext) {
                 };
 
                 if app.get_onboarding_step() < 4 {
-                    let mut settings = s.borrow_mut();
-                    settings.pending_crew_id = None;
-                    settings.pending_crew_name = Some(name.to_string());
-                    settings.pending_crew_description = Some(description.to_string());
-                    settings.pending_crew_open = Some(!is_private);
-                    settings.onboarding_step = 2;
-                    settings.save();
-                    drop(settings);
+                    {
+                        let mut settings = s.borrow_mut();
+                        settings.pending_crew_id = None;
+                        settings.pending_crew_name = Some(name.to_string());
+                        settings.pending_crew_description = Some(description.to_string());
+                        settings.pending_crew_open = Some(!is_private);
+                    }
                     app.set_new_crew_open(false);
-                    app.set_onboarding_step(2);
+                    crate::onboarding::advance_with(&app, &s, crate::onboarding::Input::CrewChosen);
                     log::info!(
                         "[onboarding] crew created locally: name={:?} open={} — loading avatars",
                         name.as_str(),

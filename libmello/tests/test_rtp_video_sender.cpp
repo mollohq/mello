@@ -827,7 +827,22 @@ TEST(RtpVideoSenderFecTest, ParityFecRepairsOneLossPerGroupWithoutPli) {
             );
             FAIL();
         }
+        // The 3ms spacing is deliberate: it gives the receiver time to
+        // reassemble each access unit, which this test depends on.
         std::this_thread::sleep_for(3ms);
+
+        // ...but 3ms alone is not enough on a loaded runner, where the queue
+        // climbed to kMaxQueuedAccessUnits (16) and the next send was rejected,
+        // failing the test for reasons unrelated to FEC. Wait for the sender to
+        // catch up as well, so the feed rate never outruns the drain.
+        const bool absorbed = wait_until(
+            [&]() { return sender.stats().queued_access_units < 8; },
+            5s
+        );
+        ASSERT_TRUE(absorbed)
+            << "sender did not drain below half the queue bound within 5s at index "
+            << index;
+
         while (auto unit = receiver.pop_access_unit()) {
             popped_timestamps.push_back(unit->rtp_timestamp);
             ++popped;
@@ -932,8 +947,14 @@ TEST(RtpVideoSenderPacingTest, DynamicTargetUpdateIsObservedInStats) {
 TEST(RtpVideoSenderAdmissionTest, QueueOverflowEntersIdrGate) {
     LoopbackVideoLink link;
     std::atomic<int> idr_requests{0};
+    // Pace at 8 kbps so the queue cannot drain meaningfully while the burst
+    // below is enqueued. Previously this used 20 Mbps and pushed exactly
+    // kMaxQueuedAccessUnits tiny frames, so whether the queue ever reached its
+    // bound depended on the sender racing the pacer — the test passed or failed
+    // on scheduling luck (~25% failure rate in CI). Starving the pacer makes
+    // overflow arithmetic rather than a race.
     RtpVideoSender sender = link.make_sender(
-        20'000'000,
+        8'000,
         {},
         {},
         [&idr_requests]() { idr_requests.fetch_add(1, std::memory_order_relaxed); }
@@ -942,7 +963,9 @@ TEST(RtpVideoSenderAdmissionTest, QueueOverflowEntersIdrGate) {
     const auto idr = make_idr_access_unit();
     ASSERT_TRUE(send_au_accepted(sender,idr.data(), idr.size(), 0));
 
-    for (int index = 0; index < 16; ++index) {
+    // Comfortably more than kMaxQueuedAccessUnits (16) so the bound is crossed
+    // even if a frame or two does drain.
+    for (int index = 0; index < 48; ++index) {
         const auto delta = make_delta_access_unit(static_cast<uint8_t>(index));
         (void)send_au_accepted(sender,
             delta.data(),

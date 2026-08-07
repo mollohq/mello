@@ -106,9 +106,35 @@ impl Default for Settings {
     }
 }
 
+/// Environment variable redirecting settings storage to a specific directory.
+///
+/// Onboarding calls [`Settings::save`] on nearly every step transition, so any
+/// test that drives onboarding would otherwise rewrite the developer's (or CI
+/// runner's) real config. Tests point this at a temp dir.
+pub const CONFIG_DIR_ENV: &str = "MELLO_CONFIG_DIR";
+
 impl Settings {
+    /// Settings file path for a given config-dir override value.
+    ///
+    /// Split from the environment lookup so the path composition is testable
+    /// without mutating process-global env state.
+    fn override_path(dir: Option<String>) -> Option<std::path::PathBuf> {
+        dir.filter(|v| !v.is_empty())
+            .map(|dir| std::path::PathBuf::from(dir).join(format!("{APP_NAME}.toml")))
+    }
+
+    /// `None` means "use confy's platform default location".
+    fn configured_path() -> Option<std::path::PathBuf> {
+        Self::override_path(std::env::var(CONFIG_DIR_ENV).ok())
+    }
+
     pub fn load() -> Self {
-        match confy::load::<Settings>(APP_NAME, None) {
+        let loaded = match Self::configured_path() {
+            Some(path) => confy::load_path::<Settings>(&path),
+            None => confy::load::<Settings>(APP_NAME, None),
+        };
+
+        match loaded {
             Ok(s) => {
                 log::info!("Settings loaded");
                 s
@@ -121,7 +147,12 @@ impl Settings {
     }
 
     pub fn save(&self) {
-        if let Err(e) = confy::store(APP_NAME, None, self) {
+        let stored = match Self::configured_path() {
+            Some(path) => confy::store_path(&path, self),
+            None => confy::store(APP_NAME, None, self),
+        };
+
+        if let Err(e) = stored {
             log::warn!("Failed to save settings: {}", e);
         }
     }
@@ -137,6 +168,49 @@ mod tests {
         assert!(s.capture_device_id.is_none());
         assert!(s.playback_device_id.is_none());
         assert!(s.dark_theme);
+    }
+
+    #[test]
+    fn config_dir_override_composes_settings_path() {
+        let path = Settings::override_path(Some("/tmp/mello-test".into()))
+            .expect("an override dir should yield a path");
+        assert_eq!(path, std::path::PathBuf::from("/tmp/mello-test/mello.toml"));
+    }
+
+    /// Unset or empty must fall through to confy's platform default rather than
+    /// resolving to a bare relative filename in the process's cwd.
+    #[test]
+    fn absent_or_empty_config_dir_uses_platform_default() {
+        assert!(Settings::override_path(None).is_none());
+        assert!(Settings::override_path(Some(String::new())).is_none());
+    }
+
+    /// Settings must survive a real write/read cycle through the override path.
+    /// Onboarding saves on nearly every step transition, so this is the
+    /// mechanism that keeps tests off the developer's real config file.
+    #[test]
+    fn settings_roundtrip_through_override_path() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = Settings::override_path(Some(dir.path().to_string_lossy().into_owned()))
+            .expect("override path");
+
+        let saved = Settings {
+            onboarding_step: 3,
+            pending_crew_id: Some("crew-42".into()),
+            dark_theme: false,
+            ..Default::default()
+        };
+        confy::store_path(&path, &saved).expect("store");
+
+        assert!(
+            path.exists(),
+            "settings file should exist at the override path"
+        );
+
+        let loaded: Settings = confy::load_path(&path).expect("load");
+        assert_eq!(loaded.onboarding_step, 3);
+        assert_eq!(loaded.pending_crew_id.as_deref(), Some("crew-42"));
+        assert!(!loaded.dark_theme);
     }
 
     #[test]

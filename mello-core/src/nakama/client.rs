@@ -794,6 +794,24 @@ impl NakamaClient {
         self.update_account_fields(Some(display_name), None).await
     }
 
+    /// Permanently delete the currently authenticated account.
+    ///
+    /// Added for the production signup canary, which creates a throwaway
+    /// device account each run and must not leave it behind. Not reachable
+    /// from the UI.
+    pub async fn delete_account(&self) -> Result<()> {
+        let token = self.bearer()?;
+        let url = format!("{}/v2/account", self.config.http_base());
+
+        let resp = self.http.delete(&url).bearer_auth(&token).send().await?;
+
+        if !resp.status().is_success() {
+            let err_text = resp.text().await.unwrap_or_default();
+            return Err(Error::Server(err_text));
+        }
+        Ok(())
+    }
+
     pub async fn update_account_fields(
         &self,
         display_name: Option<&str>,
