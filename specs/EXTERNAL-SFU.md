@@ -425,7 +425,9 @@ func (s *VoiceSession) WireAudioTrack(peer *Peer, track *webrtc.TrackRemote) {
 
 The client identifies each incoming track's sender via the `msid` SDP attribute (set to the sender's user_id). This eliminates the need for application-layer sender-id framing.
 
-**Phantom transceiver handling:** Pion's `SetHandleUndeclaredSSRCWithoutAnswer(true)` (needed because libdatachannel doesn't send `mid` RTP header extensions) can create implicit `sendrecv` transceivers that accumulate across renegotiations. `StopPhantomTransceivers()` runs before each `CreateOffer()` to stop any audio transceiver that is not an explicit outgoing track or the initial recvonly transceiver.
+**Voice SSRC declaration:** the client declares `a=ssrc` on its voice audio m-line (`setup_voice_channels()` calls `audio.addSSRC()` with the same SSRC and cname it gives the Opus packetizer). This is required, not cosmetic. Without it Pion cannot bind the incoming mic to the negotiated m-line — libdatachannel does not send `mid` RTP header extensions either — so it falls through to `handleUndeclaredSSRC` and synthesizes an implicit `sendrecv` transceiver to carry the audio.
+
+**Phantom transceiver handling:** Pion's `SetHandleUndeclaredSSRCWithoutAnswer(true)` can still create implicit `sendrecv` transceivers that accumulate across renegotiations. `StopPhantomTransceivers()` runs before each `CreateOffer()` to stop any audio transceiver that is not an explicit outgoing track, the initial recvonly transceiver, **or the transceiver currently feeding the peer's wired inbound track**. That last exclusion matters for clients that predate the `a=ssrc` fix: their mic arrives on an implicit `sendrecv` transceiver, and stopping it left the member permanently inaudible for the rest of the session.
 
 **RTT measurement:** The reliable DataChannel carries ping/pong messages (`{"type":"ping","ts":...}` / `{"type":"pong","ts":...}`) for voice latency estimation. The SFU echoes pings immediately; the client sends one every ~2 seconds and computes smoothed RTT.
 
