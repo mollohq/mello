@@ -416,7 +416,7 @@ fn main() {
             break;
         }
         let ice_state = conn.ice_connection_state();
-        if matches!(ice_state, 3 | 4 | 5) {
+        if matches!(ice_state, 3..=5) {
             let (wall_ms, mono_ms) = correlation_stamp(correlation_start);
             log::warn!(
                 "viewer_probe_event session={} wall_ms={} mono_ms={} event=ice_lost ice_state={}",
