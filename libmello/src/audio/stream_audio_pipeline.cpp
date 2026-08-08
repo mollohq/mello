@@ -88,6 +88,11 @@ void StreamAudioHostPipeline::on_pcm(const int16_t* samples, size_t count) {
             const uint64_t ts_us = frame_index_ * 20000;
             callback_(encode_buf_, encoded, ts_us);
             ++frame_index_;
+        } else if (encoded < 0) {
+            // encoded == 0 is Opus DTX ("nothing to transmit") and is normal.
+            // A negative value is a real encoder error; voice logs it the same
+            // way in audio_pipeline.cpp, and without this it is invisible.
+            MELLO_LOG_WARN("stream_audio", "opus encode error: %d", encoded);
         }
         pcm_accum_.erase(pcm_accum_.begin(),
                          pcm_accum_.begin() + static_cast<std::ptrdiff_t>(frame_samples));

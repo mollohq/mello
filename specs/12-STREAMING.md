@@ -272,6 +272,30 @@ Game audio is wired end-to-end on Windows:
 
 Host path: `mello_stream_start_audio` → `MelloAudioPacketCallback` → `StreamManager::handle_audio` → `PacketSink::send_audio` → `mello_peer_send_audio`. Viewer path (SFU): `AudioTrackData` events; P2P: `mello_peer_set_audio_track_callback` → same feed function. Stream viewer receive is wired on the offered recvonly audio track (not voice `onTrack`); if `onTrack` fires for the same `mid`, callbacks move to that track instance.
 
+### 9.1 Inbound audio framing
+
+Packets handed to Rust by an audio track callback are **not** raw Opus. After
+stripping the RTP header, `PeerConnectionImpl::wire_incoming_audio_track_callbacks`
+prepends four bytes:
+
+| Offset | Size | Field |
+|--------|------|-------|
+| 0 | 2 | RTP sequence number, little-endian |
+| 2 | 2 | Reserved, always zero |
+| 4 | n | Opus payload |
+
+Callers must skip those four bytes before decoding. A packet of four bytes or
+fewer carries no payload and is dropped.
+
+This framing is **shared with voice**, which strips it in `voice/mod.rs` before
+forwarding to the SFU; the stream path strips it in
+`client/stream_ffi.rs::feed_viewer_audio_packet` (`AUDIO_SEQ_HEADER_LEN`).
+
+The sequence number is currently unused by both paths — RTP already handles
+ordering and loss detection. It is carried because the receive handler has it
+cheaply to hand, and would be the input to Opus PLC concealment if packet-loss
+concealment is added later.
+
 **Windows smoke test (Aug 2026):** host `audio_out_hz≈50`, viewer `audio_fed_hz≈50`, `rx_audio_packets` climbing, `viewer playout started`. Same-machine host+viewer may loop back via WASAPI loopback — use headphones or separate machines for listen tests.
 
 **macOS:** not implemented — SCK audio capture hooks exist (`capture_screencapturekit.mm`) but are not connected to `StreamAudioHostPipeline`; host/viewer playout wiring is still needed.
