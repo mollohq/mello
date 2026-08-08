@@ -331,10 +331,6 @@ only part of each frame.
 
 **Windows smoke test (Aug 2026):** host `audio_out_hz≈50`, viewer `audio_fed_hz≈50`, `rx_audio_packets` climbing, `viewer playout started`. Same-machine host+viewer may loop back via WASAPI loopback — use headphones or separate machines for listen tests.
 
-**macOS (Aug 2026):** unit-tested only. The capture and playout paths build and
-their conversion logic is covered, but no host-macOS → viewer listen test has
-been run. Do that before treating macOS game audio as shipped.
-
 ---
 
 ## 10. Cursor Streaming
