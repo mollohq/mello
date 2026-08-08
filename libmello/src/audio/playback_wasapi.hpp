@@ -19,7 +19,7 @@ public:
     ~WasapiPlayback() override;
 
     void set_session(AudioSessionWin* session) { session_win_ = session; }
-    void set_input_channels(uint32_t channels) { input_channels_ = std::max<uint32_t>(1, channels); }
+    void set_input_channels(uint32_t channels) override { input_channels_ = std::max<uint32_t>(1, channels); }
 
     bool initialize(const char* device_id = nullptr) override;
     bool start() override;

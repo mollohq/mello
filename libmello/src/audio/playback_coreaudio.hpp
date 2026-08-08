@@ -20,6 +20,12 @@ public:
 
     size_t feed(const int16_t* samples, size_t count) override;
 
+    /// Must be called before `initialize()`; the channel count is baked into
+    /// the AudioUnit's stream format.
+    void set_input_channels(uint32_t channels) override {
+        input_channels_ = channels < 1 ? 1 : channels;
+    }
+
     uint32_t sample_rate() const override { return sample_rate_; }
 
 private:
@@ -36,9 +42,13 @@ private:
 
     uint32_t sample_rate_ = 48000;
     uint32_t device_channels_ = 2;
+    /// Interleaved channels in the samples handed to `feed`. Voice is mono;
+    /// stream game audio is stereo.
+    uint32_t input_channels_ = 1;
 
     std::atomic<bool> running_{false};
-    util::RingBuffer<int16_t> ring_{48000}; // ~1 second buffer at mono 48kHz
+    // ~1 second at stereo 48 kHz; mono uses half of it.
+    util::RingBuffer<int16_t> ring_{48000 * 2};
 };
 
 } // namespace mello::audio

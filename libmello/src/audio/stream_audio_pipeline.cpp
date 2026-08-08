@@ -107,12 +107,19 @@ StreamAudioPlayout::~StreamAudioPlayout() {
 
 bool StreamAudioPlayout::ensure_started() {
     if (started_) return true;
-#ifdef _WIN32
+
     if (!decoder_.initialize(STREAM_AUDIO_SAMPLE_RATE, STREAM_AUDIO_CHANNELS)) {
         MELLO_LOG_ERROR("stream_audio", "Opus decoder init failed");
         return false;
     }
-    playback_ = std::make_unique<WasapiPlayback>();
+
+    playback_ = create_audio_playback();
+    if (!playback_) {
+        MELLO_LOG_WARN("stream_audio", "no audio playback backend on this platform");
+        return false;
+    }
+    // Before initialize(): backends bake the channel count into their output
+    // format. Game audio is stereo; downmixing would lose the spatial mix.
     playback_->set_input_channels(STREAM_AUDIO_CHANNELS);
     if (!playback_->initialize() || !playback_->start()) {
         MELLO_LOG_ERROR("stream_audio", "playback init/start failed");
@@ -122,16 +129,12 @@ bool StreamAudioPlayout::ensure_started() {
     started_ = true;
     MELLO_LOG_INFO("stream_audio", "viewer playout started");
     return true;
-#else
-    return false;
-#endif
 }
 
 bool StreamAudioPlayout::feed_packet(const uint8_t* data, int size) {
     if (!data || size <= 0) return false;
     if (!ensure_started()) return false;
 
-#ifdef _WIN32
     decode_pcm_.resize(static_cast<size_t>(STREAM_AUDIO_FRAME_SAMPLES) * STREAM_AUDIO_CHANNELS);
     const int decoded = decoder_.decode(
         data,
@@ -150,20 +153,13 @@ bool StreamAudioPlayout::feed_packet(const uint8_t* data, int size) {
         ++underruns_;
     }
     return true;
-#else
-    (void)data;
-    (void)size;
-    return false;
-#endif
 }
 
 void StreamAudioPlayout::stop() {
-#ifdef _WIN32
     if (playback_) {
         playback_->stop();
         playback_.reset();
     }
-#endif
     started_ = false;
 }
 

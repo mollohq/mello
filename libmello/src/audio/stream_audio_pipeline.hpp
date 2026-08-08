@@ -1,5 +1,6 @@
 #pragma once
 
+#include "audio_playback.hpp"
 #include "opus_codec.hpp"
 #include <cstdint>
 #include <functional>
@@ -54,9 +55,10 @@ private:
     bool ensure_started();
 
     OpusDec decoder_;
-#ifdef _WIN32
-    std::unique_ptr<class WasapiPlayback> playback_;
-#endif
+    // Platform backend from create_audio_playback(): WASAPI on Windows,
+    // CoreAudio on macOS. Held by interface so the playout path is
+    // platform-neutral.
+    std::unique_ptr<AudioPlayback> playback_;
     std::vector<int16_t> decode_pcm_;
     bool started_ = false;
     uint64_t packets_fed_ = 0;
