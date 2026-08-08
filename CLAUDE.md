@@ -17,11 +17,47 @@ When the Human Operator corrects you or says "don't do that" / "we do it this wa
 Do not repeat a corrected mistake in the same session.
 
 ## Before Calling Something Done
-- Run `cargo fmt --all` then `CI=true cargo test --workspace` (Rust), `cd libmello && cmake --build build && ctest` (C++)
-- **`CI=true` is mandatory for `cargo test --workspace`** — without it, hardware-dependent voice/video/streaming tests (e.g. `host_to_viewer_loopback`) block forever waiting on real devices. Per-crate runs that don't touch that hardware (e.g. `cargo test -p mello-core --lib`) are fine without it.
+Run the gate. Do not hand-roll the individual commands — the script is what CI
+and the pre-push hook run, so anything else can disagree with them.
+
+```bash
+./scripts/check.sh        # ~60s: fmt, clippy, all Rust tests, RPC contract
+./scripts/check-full.sh   # adds libmello ctest and the Nakama Go modules
+```
+
+- `check.sh` also runs as the pre-push hook (`git config core.hooksPath .githooks`).
+- Run `check-full.sh` when you touch `libmello/` or `backend/`, and before a release.
+- **`CI=true` is mandatory** and the scripts set it. Without it, hardware-dependent
+  voice/video tests block forever waiting on real devices, or die with SIGTRAP on a
+  machine without screen-recording permission. Per-crate runs that avoid that
+  hardware (e.g. `cargo test -p mello-core --lib`) are fine without it.
+- **Clippy must be `--workspace`.** Plain `cargo clippy` only checks
+  `default-members` and silently skips every crate under `tools/`. A lint error
+  hid there until it blocked a release.
 - Fix all warnings — treat warnings as errors in this codebase.
 - Check for regressions in adjacent code you touched.
 - If you added behavior, add a test for it. Tests live next to the code they cover.
+
+## Testing
+Read `TESTING.md` before adding tests. In short:
+
+- **UI behavior** — use the headless harness in `client/src/testkit.rs`. It drives
+  the real `callbacks::wire_all` and `handlers::handle_event`, so tests fail when
+  production wiring changes. Inject an `Event` and assert on `MainWindow`; invoke a
+  callback and assert on the emitted `Command`s. Journey tests live in
+  `client/src/flow_tests.rs`.
+- **Assert structurally, not via accessibility.** These panels declare almost no
+  `accessible-role`, so `accessible_enabled()` reads as absent even on a healthy
+  screen. Query component type names instead.
+- **Prove a new regression test actually fails** without its fix. A test that
+  cannot fail is decoration. `./scripts/mutation-check.sh` checks the suite still
+  catches deliberate breakage.
+- **Flaky means broken.** Fix the determinism or delete the test. Never add
+  retries. Every flaky test found here waited on one thing and asserted on
+  another that lagged it.
+- **Never suppress a gate to make it green** — no `continue-on-error`, no
+  disabling a lane. If a check must be skipped, exclude the one named test and
+  leave the rest gating.
 
 ## Git & PRs
 - Commit often with clear messages: `feat(voice): add VAD threshold config`
