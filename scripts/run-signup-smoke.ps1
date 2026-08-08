@@ -17,7 +17,11 @@
 
 param(
     [Parameter(Mandatory = $true)]
-    [string]$Binary
+    [string]$Binary,
+
+    # Upper bound on the whole scenario. Without it a client that never reaches
+    # its last step would hold the release job until the job timeout.
+    [int]$TimeoutSeconds = 180
 )
 
 $ErrorActionPreference = 'Stop'
@@ -26,6 +30,7 @@ if (-not (Test-Path -LiteralPath $Binary)) {
     Write-Error "binary not found: $Binary"
     exit 2
 }
+$binaryPath = (Resolve-Path -LiteralPath $Binary).Path
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $scenario = Join-Path $repoRoot 'tools\perf-harness\scenarios\signup_smoke.json'
@@ -56,22 +61,25 @@ try {
     Write-Host "> signup smoke: $Binary"
     Write-Host "  scenario: $scenario"
 
-    # The client reports through done.json, not through its exit code, so a
-    # non-zero exit here must not abort the script before the result is read.
-    # PowerShell 7.3+ can turn a native command's non-zero exit into a
-    # terminating error depending on $PSNativeCommandUseErrorActionPreference,
-    # so both switches are relaxed around the call.
-    $prevEap = $ErrorActionPreference
-    $ErrorActionPreference = 'Continue'
-    $prevNative = $PSNativeCommandUseErrorActionPreference
-    $PSNativeCommandUseErrorActionPreference = $false
-    try {
-        & $Binary
-    } catch {
-        Write-Host "  note: client invocation raised: $_"
-    } finally {
-        $ErrorActionPreference = $prevEap
-        $PSNativeCommandUseErrorActionPreference = $prevNative
+    # Start-Process + WaitForExit, not `& $Binary`.
+    #
+    # Release builds set `windows_subsystem = "windows"` (client/src/main.rs),
+    # and PowerShell does not wait for a GUI-subsystem executable invoked with
+    # the call operator — it returns as soon as the process is launched. The
+    # script then read done.json before the client had written it and failed a
+    # run that was actually fine. Bash waits for any child regardless of
+    # subsystem, which is why the macOS twin never hit this.
+    #
+    # -NoNewWindow keeps the client's stdio on this console so its log still
+    # streams into the CI output. The path must be absolute: Start-Process
+    # resolves a relative one against the process working directory rather than
+    # PowerShell's current location, and CI passes target\release\mello.exe.
+    $proc = Start-Process -FilePath $binaryPath -NoNewWindow -PassThru
+
+    if (-not $proc.WaitForExit($TimeoutSeconds * 1000)) {
+        Write-Host "X signup smoke FAILED: client still running after $TimeoutSeconds s."
+        try { $proc.Kill($true) } catch { }
+        exit 1
     }
 
     $done = Join-Path $signalDir 'done.json'
