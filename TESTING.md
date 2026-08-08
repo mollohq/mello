@@ -9,6 +9,54 @@ then jump to the section you need.
 
 ---
 
+## The UI harness
+
+`client/src/testkit.rs` runs the real UI headlessly — no window, no network, no
+audio device. It drives the production `callbacks::wire_all` and
+`handlers::handle_event`, not copies, so a change to either shows up here.
+
+```rust
+let mut h = Harness::new();
+
+h.app().invoke_mic_toggle();                        // UI -> core
+assert!(h.commands().iter().any(|c| matches!(c, Command::SetMute { muted: true })));
+
+h.emit(Event::VoiceStateChanged { in_call: true }); // core -> UI
+assert!(h.app().get_in_voice());
+```
+
+Journey tests live in `client/src/flow_tests.rs` and run under plain
+`cargo test --workspace`. They are deliberately *not* in `client/tests/`: that
+would need `--features testkit`, and CI would silently skip them.
+
+Three things that are easy to get wrong:
+
+- **Assert structurally, not via accessibility.** These panels declare almost no
+  `accessible-role`, so `accessible_enabled()` returns `None` even on a healthy
+  screen. Measured: 3 crews renders 620 elements and **zero** with
+  `accessible_enabled == Some(true)`. Query component type names instead.
+- **Hidden elements are absent from queries.** There is no visibility predicate.
+  "The screen is blank" is expressed as "no screen root matched", which is what
+  `assert_not_blank()` does.
+- **`MainWindow`'s default state renders nothing.** `onboarding-step 0` with
+  `logged-in false` matches no branch in `main.slint`. Set a state before
+  asserting, or the test passes while testing nothing.
+
+## Does the suite actually catch bugs?
+
+```bash
+./scripts/mutation-check.sh
+```
+
+It breaks the code on purpose, one change at a time, and checks the suite goes
+red for each. A green suite proves nothing by itself — it can be green because
+the code works, or because the tests assert nothing, and the difference is
+invisible until an outage. A sweep once found the whole suite passing with the
+chat message body deleted.
+
+When adding a regression test, verify it fails without its fix. Every starred
+regression test in `flow_tests.rs` was checked that way.
+
 ## Flaky tests
 
 A flaky test is a broken test. Fix the determinism or delete it — never add
@@ -116,11 +164,19 @@ Notes:
 
 From the `mello/` repo root:
 
+Prefer `./scripts/check.sh`, which runs all of this with the right flags. The
+individual commands, if you need one in isolation:
+
 ```bash
 cargo fmt --all                 # format
-cargo clippy --all-targets -- -D warnings
+cargo clippy --workspace --all-targets -- -D warnings
 $env:CI='true'; cargo test --workspace      # PowerShell; bash: CI=true cargo test --workspace
 ```
+
+`--workspace` on clippy is not optional. Without it, only `default-members`
+(`client`, `hud`, `mello-core`, `mello-sys`) are linted and every crate under
+`tools/` is skipped. A lint error hid there until `release.yml` — the only place
+that used `--workspace` — failed and blocked a release.
 
 Useful filters:
 
@@ -496,9 +552,12 @@ For AI-driven UI exploration in dev, `client-dev.sh` enables Slint 1.17 MCP
 
 ## When to run what
 
-- **Every change / before pushing:** `cargo fmt` + `cargo clippy -D warnings` +
-  `cargo test --workspace`. If you touched C++: `ctest`. If you touched backend
-  or SFU Go: `go test ./...`.
+- **Every change / before pushing:** `./scripts/check.sh`. If you touched
+  `libmello/` or `backend/`: `./scripts/check-full.sh`.
+- **After adding tests:** `./scripts/mutation-check.sh`, to confirm the suite
+  still catches deliberate breakage.
+- **UI behaviour changes:** add a journey test in `client/src/flow_tests.rs`
+  using the harness, and verify it fails without your fix.
 - **Voice state / reconnect / presence logic:** add/extend a `reconnect.rs` unit
   test, then run `scenarios/reconnect.json` against the local stack with a
   `dev_fault` (`drop_next_push` / `ghost_member`) to prove self-healing.
