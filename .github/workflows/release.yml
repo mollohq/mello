@@ -78,9 +78,13 @@ jobs:
       # Needs an interactive desktop session on the runner (the client opens a
       # window even in scenario mode). Leaves one throwaway account and one
       # non-discoverable crew in production per release.
+      # pwsh, not bash: `shell: bash` on this runner resolves to WSL bash
+      # (C:\Windows\system32\bash.exe), which cannot read a Windows script path
+      # and fails before the script starts. Matches the .sh/.ps1 convention
+      # used elsewhere in scripts/.
       - name: Signup smoke test
-        shell: bash
-        run: ./scripts/run-signup-smoke.sh target/release/mello.exe
+        shell: pwsh
+        run: .\scripts\run-signup-smoke.ps1 target\release\mello.exe
 
       - name: Assemble dist
         shell: pwsh
