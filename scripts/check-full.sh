@@ -64,9 +64,27 @@ step "go: nakama modules"
 if command -v go >/dev/null 2>&1; then
     (
         cd backend/nakama/data/modules
-        unformatted=$(gofmt -l .)
+        # gofmt treats CRLF as unformatted, so on any checkout with
+        # core.autocrlf=true — the default for a Windows clone — a plain
+        # `gofmt -l .` flags every file here regardless of what you changed,
+        # and this step could never pass. Feed each file through with CR
+        # stripped: that is the content git stores and what CI sees. gofmt
+        # reading stdin only ever reports "<standard input>", so print the
+        # real path ourselves.
+        unformatted=$(
+            find . -name '*.go' -print | while IFS= read -r f; do
+                if [ -n "$(tr -d '\r' < "$f" | gofmt -l)" ]; then
+                    printf '%s\n' "$f"
+                fi
+            done
+        )
         if [ -n "$unformatted" ]; then
-            printf '\033[31m  ✗ gofmt: %s\033[0m\n' "$unformatted"
+            # One line per file. A single %s against a multi-line value prints
+            # only the first line, which reported a 50-file problem as one.
+            printf '\033[31m  ✗ gofmt:\033[0m\n'
+            printf '%s\n' "$unformatted" | while IFS= read -r f; do
+                printf '\033[31m      %s\033[0m\n' "$f"
+            done
             exit 1
         fi
         go vet ./...
