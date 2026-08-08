@@ -45,11 +45,28 @@ export MELLO_CONFIG_DIR
 echo "▸ signup smoke: $BINARY"
 echo "  scenario: $SCENARIO"
 
+# Bounded: a client that never reaches its last scenario step would otherwise
+# hold the release job open until the job timeout. Matches the PowerShell twin.
+TIMEOUT_SECONDS="${MELLO_SMOKE_TIMEOUT:-180}"
+
 MELLO_PERF_MODE=1 \
 MELLO_PERF_SCENARIO="$SCENARIO" \
 MELLO_PERF_SIGNAL_DIR="$SIGNAL_DIR" \
 RUST_LOG="${RUST_LOG:-info}" \
-    "$BINARY" || true
+    "$BINARY" &
+CLIENT_PID=$!
+
+WAITED=0
+while kill -0 "$CLIENT_PID" 2>/dev/null; do
+    if [ "$WAITED" -ge "$TIMEOUT_SECONDS" ]; then
+        echo "✗ signup smoke FAILED: client still running after ${TIMEOUT_SECONDS}s." >&2
+        kill -9 "$CLIENT_PID" 2>/dev/null || true
+        exit 1
+    fi
+    sleep 1
+    WAITED=$((WAITED + 1))
+done
+wait "$CLIENT_PID" 2>/dev/null || true
 
 DONE="$SIGNAL_DIR/done.json"
 if [ ! -f "$DONE" ]; then
