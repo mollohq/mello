@@ -347,6 +347,32 @@ TEST_F(PeerRtpRolesTest, VoiceWrapperCreatesVoiceRolePeer) {
     mello_peer_destroy(peer);
 }
 
+// The SFU (Pion) binds our microphone to the negotiated audio m-line via
+// a=ssrc. Without it the mic arrives on an implicitly created transceiver that
+// the SFU tears down on renegotiation, silencing this member for everyone.
+TEST_F(PeerRtpRolesTest, VoiceOfferDeclaresAudioSSRC) {
+    auto* peer = mello_peer_create(nullptr, "voice-peer");
+    ASSERT_NE(peer, nullptr);
+    mello_peer_set_ice_servers(peer, nullptr, 0);
+
+    const char* offer_ptr = mello_peer_create_offer(peer);
+    ASSERT_NE(offer_ptr, nullptr);
+    const std::string offer(offer_ptr);
+
+    const auto audio_pos = offer.find("m=audio");
+    ASSERT_NE(audio_pos, std::string::npos) << offer;
+    const std::string audio_section = offer.substr(audio_pos);
+
+    const auto ssrc_pos = audio_section.find("a=ssrc:");
+    ASSERT_NE(ssrc_pos, std::string::npos)
+        << "voice audio m-line must declare a=ssrc\n" << offer;
+
+    // cname must accompany the SSRC so RTCP sender reports correlate.
+    EXPECT_NE(audio_section.find("cname:"), std::string::npos) << offer;
+
+    mello_peer_destroy(peer);
+}
+
 TEST_F(PeerRtpRolesTest, StreamHostOfferContainsSendonlyH264) {
     auto* host = mello_peer_create_for_role(
         nullptr,

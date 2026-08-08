@@ -995,13 +995,23 @@ void PeerConnectionImpl::setup_voice_channels() {
     const uint64_t generation =
         pc_generation_.load(std::memory_order_acquire);
 #if RTC_ENABLE_MEDIA
+    // The SSRC must be declared in the m-line, exactly as the video path does.
+    // Without a=ssrc the SFU (Pion) cannot bind our microphone to this m-line
+    // and instead routes it through its undeclared-SSRC handler, which
+    // synthesizes a separate sendrecv transceiver to carry the audio. That
+    // transceiver is then indistinguishable from the ones the SFU garbage
+    // collects on renegotiation, so every join/leave tore down our mic.
+    const uint32_t ssrc = generate_ssrc();
+    const std::string cname = generate_cname();
+
     rtc::Description::Audio audio("audio", rtc::Description::Direction::SendRecv);
     audio.addOpusCodec(111, "minptime=10;useinbandfec=1");
+    audio.addSSRC(ssrc, cname, peer_id_, "audio");
     auto audio_track = pc_->addTrack(audio);
 
-    const auto ssrc = generate_ssrc();
+    // Same cname in the RTCP sender reports as in the SDP.
     const auto rtpConfig = std::make_shared<rtc::RtpPacketizationConfig>(
-        ssrc, "mello", 111, rtc::OpusRtpPacketizer::DefaultClockRate);
+        ssrc, cname, 111, rtc::OpusRtpPacketizer::DefaultClockRate);
     const auto packetizer = std::make_shared<rtc::OpusRtpPacketizer>(rtpConfig);
     packetizer->addToChain(std::make_shared<rtc::RtcpSrReporter>(rtpConfig));
     audio_track->setMediaHandler(packetizer);
