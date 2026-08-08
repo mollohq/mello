@@ -89,7 +89,9 @@ Install the Slint VS Code extension (`slint.slint`) for `.slint` file support an
 
 ## 4. libmello Setup (C++)
 
-libmello builds natively on Windows. macOS support is partial (no DXGI/WASAPI — those are Windows-only).
+libmello builds natively on Windows and macOS. Each platform has its own audio
+and video backends behind the same interfaces — DXGI/WASAPI/NVENC on Windows,
+ScreenCaptureKit/CoreAudio/VideoToolbox on macOS.
 
 ### Windows
 
@@ -111,11 +113,19 @@ Dependencies (via vcpkg or git submodules in `third_party/`):
 ### macOS
 
 ```bash
-cd libmello && mkdir build && cd build
-cmake .. && cmake --build .
+cmake -B libmello/build -S libmello -DMELLO_BUILD_TESTS=ON \
+    -DCMAKE_TOOLCHAIN_FILE="$PWD/external/vcpkg/scripts/buildsystems/vcpkg.cmake"
+cmake --build libmello/build
+CI=true ctest --test-dir libmello/build --output-on-failure
 ```
 
-Only transport and Opus codec build on macOS. Audio capture/playback and video capture/encode are Windows-only.
+The toolchain file must be absolute — CMake resolves a relative one against the
+build directory, not the source tree.
+
+Audio capture/playback (CoreAudio), screen capture (ScreenCaptureKit) and
+video encode/decode (VideoToolbox) all build on macOS. Windows-specific pieces
+— WASAPI loopback for game audio, `AudioSessionWin` ducking, DXGI — are
+compiled out.
 
 ### FFI bindings
 

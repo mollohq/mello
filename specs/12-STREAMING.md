@@ -335,8 +335,6 @@ only part of each frame.
 their conversion logic is covered, but no host-macOS → viewer listen test has
 been run. Do that before treating macOS game audio as shipped.
 
-**macOS:** not implemented — SCK audio capture hooks exist (`capture_screencapturekit.mm`) but are not connected to `StreamAudioHostPipeline`; host/viewer playout wiring is still needed.
-
 ---
 
 ## 10. Cursor Streaming

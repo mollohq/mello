@@ -253,7 +253,7 @@ Server mixes/forwards
 | Platform | Role | Status |
 |----------|------|--------|
 | Windows 10/11 | Host + View | Beta |
-| macOS | View | Beta |
+| macOS | Host + View | Beta |
 
 ### 7.2 Post-Beta
 
@@ -335,7 +335,7 @@ Server mixes/forwards
 
 ### In Scope
 
-- Windows client + macOS client (view-only streaming on macOS)
+- Windows client + macOS client, both host and view streams
 - Crews up to 6 people with voice channels
 - Voice chat (P2P mesh, RNNoise, Silero VAD)
 - Text chat (Nakama)
