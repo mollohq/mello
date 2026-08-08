@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <vector>
 
 namespace mello::audio {
@@ -24,6 +25,16 @@ public:
     bool start(PacketCallback callback);
     void stop();
 
+    /// Push interleaved float PCM captured elsewhere.
+    ///
+    /// macOS has no loopback device to open: ScreenCaptureKit hands game audio
+    /// to the same stream that carries video, so `mello.cpp` routes it here.
+    /// Windows opens its own WASAPI loopback capture and never calls this.
+    ///
+    /// Called on the capture backend's audio queue.
+    void feed_float_pcm(const float* samples, uint32_t frame_count,
+                        uint32_t channels, uint32_t sample_rate);
+
 private:
     void on_pcm(const int16_t* samples, size_t count);
 
@@ -38,6 +49,12 @@ private:
     std::vector<int16_t> pcm_accum_;
     uint8_t encode_buf_[MAX_PACKET_SIZE]{};
     uint64_t frame_index_ = 0;
+
+    // feed_float_pcm runs on the capture queue while stop() runs on the caller's
+    // thread; both touch callback_ and pcm_accum_.
+    std::mutex pcm_mutex_;
+    std::vector<int16_t> float_conv_;
+    bool warned_sample_rate_ = false;
 };
 
 class StreamAudioPlayout {

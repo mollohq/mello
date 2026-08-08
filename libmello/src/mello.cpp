@@ -103,6 +103,23 @@ struct MelloStreamHost {
     std::unique_ptr<mello::audio::StreamAudioHostPipeline> audio_pipeline;
 };
 
+/// Detach the capture audio callback, then destroy the pipeline.
+///
+/// Order is load-bearing: the callback holds a raw pointer to the pipeline and
+/// on macOS fires on ScreenCaptureKit's audio queue, so tearing down the
+/// pipeline first would leave that queue calling into freed memory.
+static void stream_audio_teardown(MelloStreamHost* host) {
+    if (host->ctx) {
+        if (auto* capture = host->ctx->video().capture()) {
+            capture->set_audio_callback(nullptr);
+        }
+    }
+    if (host->audio_pipeline) {
+        host->audio_pipeline->stop();
+        host->audio_pipeline.reset();
+    }
+}
+
 struct MelloStreamView {
     mello::Context*          ctx;
     MelloFrameCallback       callback;
@@ -1129,10 +1146,7 @@ MelloStreamHost* mello_stream_start_host(
 void mello_stream_stop_host(MelloStreamHost* host) {
     if (!host) return;
     try {
-        if (host->audio_pipeline) {
-            host->audio_pipeline->stop();
-            host->audio_pipeline.reset();
-        }
+        stream_audio_teardown(host);
         host->ctx->video().stop_host();
         delete host;
     } catch (...) {}
@@ -1185,6 +1199,19 @@ MelloResult mello_stream_start_audio(MelloStreamHost* host) {
             })) {
             return MELLO_ERROR_FAILED;
         }
+
+        // macOS has no loopback device: ScreenCaptureKit carries game audio on
+        // the capture stream that is already running for video, so the pipeline
+        // is fed from there instead of opening its own source. On Windows the
+        // capture backend ignores this and the WASAPI loopback drives it.
+        if (auto* capture = host->ctx->video().capture()) {
+            auto* raw = pipeline.get();
+            capture->set_audio_callback(
+                [raw](const float* s, uint32_t frames, uint32_t ch, uint32_t rate) {
+                    raw->feed_float_pcm(s, frames, ch, rate);
+                });
+        }
+
         host->audio_pipeline = std::move(pipeline);
         return MELLO_OK;
     } catch (...) {
@@ -1195,10 +1222,7 @@ MelloResult mello_stream_start_audio(MelloStreamHost* host) {
 void mello_stream_stop_audio(MelloStreamHost* host) {
     if (!host) return;
     try {
-        if (host->audio_pipeline) {
-            host->audio_pipeline->stop();
-            host->audio_pipeline.reset();
-        }
+        stream_audio_teardown(host);
     } catch (...) {}
 }
 

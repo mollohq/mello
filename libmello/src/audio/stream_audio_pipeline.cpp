@@ -1,6 +1,7 @@
 #include "stream_audio_pipeline.hpp"
 #include "../util/log.hpp"
 #include <chrono>
+#include <cmath>
 #include <cstring>
 
 #ifdef _WIN32
@@ -20,13 +21,23 @@ bool StreamAudioHostPipeline::start(PacketCallback callback) {
     if (!callback) return false;
     stop();
 
+#if !defined(_WIN32) && !defined(__APPLE__)
+    (void)callback;
+    MELLO_LOG_WARN("stream_audio", "host pipeline not implemented on this platform");
+    return false;
+#else
+
 #ifdef _WIN32
+    // Windows opens its own loopback device. macOS has none: ScreenCaptureKit
+    // delivers game audio on the video stream, and mello.cpp routes it into
+    // feed_float_pcm once this pipeline exists.
     capture_ = std::make_unique<WasapiLoopbackCapture>();
     if (!capture_->initialize()) {
         MELLO_LOG_ERROR("stream_audio", "loopback capture init failed");
         capture_.reset();
         return false;
     }
+#endif
 
     if (!encoder_.initialize(
             STREAM_AUDIO_SAMPLE_RATE,
@@ -34,29 +45,34 @@ bool StreamAudioHostPipeline::start(PacketCallback callback) {
             STREAM_AUDIO_BITRATE,
             OpusApplication::Audio)) {
         MELLO_LOG_ERROR("stream_audio", "Opus encoder init failed");
+#ifdef _WIN32
         capture_.reset();
+#endif
         return false;
     }
 
-    callback_ = std::move(callback);
-    pcm_accum_.clear();
+    {
+        std::lock_guard<std::mutex> lock(pcm_mutex_);
+        callback_ = std::move(callback);
+        pcm_accum_.clear();
+    }
     frame_index_ = 0;
+    warned_sample_rate_ = false;
 
+#ifdef _WIN32
     if (!capture_->start([this](const int16_t* samples, size_t count) {
             on_pcm(samples, count);
         })) {
         MELLO_LOG_ERROR("stream_audio", "loopback capture start failed");
+        std::lock_guard<std::mutex> lock(pcm_mutex_);
         callback_ = nullptr;
         capture_.reset();
         return false;
     }
+#endif
 
     MELLO_LOG_INFO("stream_audio", "host pipeline started");
     return true;
-#else
-    (void)callback;
-    MELLO_LOG_WARN("stream_audio", "host pipeline not implemented on this platform");
-    return false;
 #endif
 }
 
@@ -67,11 +83,49 @@ void StreamAudioHostPipeline::stop() {
         capture_.reset();
     }
 #endif
+    // Under the lock: on macOS the ScreenCaptureKit audio queue can still be
+    // inside feed_float_pcm while the caller stops the stream.
+    std::lock_guard<std::mutex> lock(pcm_mutex_);
     callback_ = nullptr;
     pcm_accum_.clear();
 }
 
+void StreamAudioHostPipeline::feed_float_pcm(const float* samples, uint32_t frame_count,
+                                             uint32_t channels, uint32_t sample_rate) {
+    if (!samples || frame_count == 0 || channels == 0) return;
+
+    // The encoder is fixed at 48 kHz and there is no resampler in libmello.
+    // ScreenCaptureKit is configured for 48 kHz, so a mismatch means the OS
+    // ignored the request — drop rather than emit pitch-shifted audio.
+    if (sample_rate != static_cast<uint32_t>(STREAM_AUDIO_SAMPLE_RATE)) {
+        if (!warned_sample_rate_) {
+            warned_sample_rate_ = true;
+            MELLO_LOG_WARN("stream_audio",
+                "game audio at %u Hz, expected %d — dropping",
+                sample_rate, STREAM_AUDIO_SAMPLE_RATE);
+        }
+        return;
+    }
+
+    // Map onto the encoder's stereo layout: mono duplicates across both sides,
+    // more than two channels keeps the front pair rather than downmixing.
+    float_conv_.resize(static_cast<size_t>(frame_count) * STREAM_AUDIO_CHANNELS);
+    for (uint32_t i = 0; i < frame_count; ++i) {
+        for (uint32_t ch = 0; ch < STREAM_AUDIO_CHANNELS; ++ch) {
+            const uint32_t src_ch = (channels == 1) ? 0 : ch;
+            float v = samples[static_cast<size_t>(i) * channels + src_ch];
+            if (v > 1.0f) v = 1.0f;
+            if (v < -1.0f) v = -1.0f;
+            float_conv_[static_cast<size_t>(i) * STREAM_AUDIO_CHANNELS + ch] =
+                static_cast<int16_t>(std::lrintf(v * 32767.0f));
+        }
+    }
+
+    on_pcm(float_conv_.data(), float_conv_.size());
+}
+
 void StreamAudioHostPipeline::on_pcm(const int16_t* samples, size_t count) {
+    std::lock_guard<std::mutex> lock(pcm_mutex_);
     if (!callback_ || count == 0) return;
 
     pcm_accum_.insert(pcm_accum_.end(), samples, samples + count);
