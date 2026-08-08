@@ -515,7 +515,10 @@ impl super::Client {
                     | crate::transport::SfuEvent::MemberLeft { .. } => {}
                     crate::transport::SfuEvent::AudioTrackData { data, .. } => {
                         if let Some(viewer) = vs.viewer {
-                            if feed_viewer_audio_packet(viewer, &data) {
+                            // SAFETY: `vs.viewer` is set only from a successful
+                            // viewer start and cleared on stop, so it is valid
+                            // for the lifetime of this ViewerState.
+                            if unsafe { feed_viewer_audio_packet(viewer, &data) } {
                                 vs.audio_packets_received =
                                     vs.audio_packets_received.saturating_add(1);
                             }

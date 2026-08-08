@@ -133,7 +133,23 @@ pub(super) struct StreamAudioCallbackData {
     pub packets_received: std::sync::atomic::AtomicU64,
 }
 
-pub fn feed_viewer_audio_packet(viewer: *mut mello_sys::MelloStreamView, data: &[u8]) -> bool {
+/// Feed one Opus packet to the native viewer for playout.
+///
+/// # Safety
+/// `viewer` must be a valid `MelloStreamView` pointer, or null.
+///
+/// Marked `unsafe` for the same reason as [`feed_access_unit_to_decoder`]: it
+/// dereferences a caller-supplied raw pointer, so a safe signature would let
+/// safe code cause undefined behaviour by passing a dangling pointer.
+//
+// TODO(audio): the 4-byte skip below is unexplained. Nothing in the send path
+// documents a 4-byte prefix, and when the payload is 4 bytes or shorter the
+// data is passed through *unstripped*, which cannot be right in both cases.
+// Confirm the wire framing and either document it or remove the skip.
+pub unsafe fn feed_viewer_audio_packet(
+    viewer: *mut mello_sys::MelloStreamView,
+    data: &[u8],
+) -> bool {
     if viewer.is_null() || data.is_empty() {
         return false;
     }

@@ -519,7 +519,9 @@ fn main() {
                 SfuEvent::MediaPacket { .. } => {}
                 SfuEvent::AudioTrackData { data, .. } => {
                     audio_received = audio_received.saturating_add(1);
-                    if feed_viewer_audio_packet(viewer, &data) {
+                    // SAFETY: `viewer` is the handle returned by the viewer
+                    // start call above and stays valid for this loop.
+                    if unsafe { feed_viewer_audio_packet(viewer, &data) } {
                         audio_fed = audio_fed.saturating_add(1);
                         if !logged_first_audio {
                             logged_first_audio = true;

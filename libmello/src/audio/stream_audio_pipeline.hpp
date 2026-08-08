@@ -26,7 +26,12 @@ public:
 private:
     void on_pcm(const int16_t* samples, size_t count);
 
+    // Windows-only: WasapiLoopbackCapture exists only under _WIN32, and a
+    // unique_ptr to an incomplete type cannot be destroyed, so the member
+    // itself must be gated rather than just its uses.
+#ifdef _WIN32
     std::unique_ptr<class WasapiLoopbackCapture> capture_;
+#endif
     OpusEnc encoder_;
     PacketCallback callback_;
     std::vector<int16_t> pcm_accum_;
@@ -49,7 +54,9 @@ private:
     bool ensure_started();
 
     OpusDec decoder_;
+#ifdef _WIN32
     std::unique_ptr<class WasapiPlayback> playback_;
+#endif
     std::vector<int16_t> decode_pcm_;
     bool started_ = false;
     uint64_t packets_fed_ = 0;
