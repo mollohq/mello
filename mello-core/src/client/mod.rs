@@ -500,6 +500,9 @@ impl Client {
             Command::Logout => {
                 self.handle_logout().await;
             }
+            Command::DeleteAccount => {
+                self.handle_delete_account().await;
+            }
 
             // Social auth
             Command::AuthSteam => {

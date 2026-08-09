@@ -82,7 +82,10 @@ pub fn run_scenario(path: &str, cfg: Config) -> Result<ScenarioRunOutput, Box<dy
                 // here — the release smoke test runs them via perf_mode in the
                 // real GUI client instead. Rejected loudly rather than skipped,
                 // so a misdirected scenario is obvious.
-                Step::DiscoverCrews | Step::FinalizeOnboarding { .. } => {
+                Step::DiscoverCrews
+                | Step::FinalizeOnboarding { .. }
+                | Step::DeleteCrew { .. }
+                | Step::DeleteAccount => {
                     return Err(format!(
                         "step {:?} is only supported by the GUI scenario runner \
                          (MELLO_PERF_MODE=1); run it via scripts/run-signup-smoke.sh",

@@ -26,7 +26,9 @@ pub fn handle_event(ctx: &AppContext, event: Event) {
         | Event::SocialLinked
         | Event::SocialLinkFailed { .. }
         | Event::OnboardingReady { .. }
-        | Event::OnboardingFailed { .. } => auth::handle(ctx, event),
+        | Event::OnboardingFailed { .. }
+        | Event::AccountDeleted
+        | Event::AccountDeleteFailed { .. } => auth::handle(ctx, event),
 
         // Crew
         Event::CrewsLoaded { .. }
