@@ -18,6 +18,22 @@
       "action": "expect_event",
       "event": "OnboardingReady",
       "timeout_ms": 45000
+    },
+    {
+      "action": "delete_crew"
+    },
+    {
+      "action": "expect_event",
+      "event": "CrewDeleted",
+      "timeout_ms": 30000
+    },
+    {
+      "action": "delete_account"
+    },
+    {
+      "action": "expect_event",
+      "event": "AccountDeleted",
+      "timeout_ms": 30000
     }
   ]
 }

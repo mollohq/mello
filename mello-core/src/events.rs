@@ -108,6 +108,12 @@ pub enum Event {
     OnboardingFailed {
         reason: String,
     },
+    /// The account was deleted server-side and the local session cleared.
+    AccountDeleted,
+    AccountDeleteFailed {
+        reason: String,
+    },
+
     EmailLinked,
     EmailLinkFailed {
         reason: String,

@@ -152,6 +152,32 @@ impl super::Client {
         log::info!("Logged out, session cleared");
     }
 
+    /// Delete the account server-side, then tear down the local session.
+    ///
+    /// Irreversible. The release smoke test drives this so each run removes the
+    /// throwaway account it created; without it every release leaves one behind
+    /// and `admin_dashboard_stats` slowly overstates `users_total`.
+    ///
+    /// On failure the session is left intact — the account still exists, so
+    /// clearing it locally would only hide the leak.
+    pub(super) async fn handle_delete_account(&mut self) {
+        if let Err(e) = self.nakama.delete_account().await {
+            log::error!("[auth] failed to delete account: {}", e);
+            let _ = self.event_tx.send(Event::AccountDeleteFailed {
+                reason: e.to_string(),
+            });
+            return;
+        }
+
+        // The account is gone; every socket and cached session below now refers
+        // to a user the server no longer knows. Reuse the logout teardown so
+        // the reconnect supervisor does not try to rebuild them.
+        self.handle_logout().await;
+
+        log::info!("[auth] account deleted");
+        let _ = self.event_tx.send(Event::AccountDeleted);
+    }
+
     pub(super) async fn handle_auth_google(&mut self) {
         let client_id = match self.nakama.config().google_client_id.clone() {
             Some(id) => id,

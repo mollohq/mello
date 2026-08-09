@@ -27,6 +27,12 @@ pub enum Command {
         password: String,
     },
     Logout,
+    /// Permanently delete the signed-in account, then clear the local session.
+    ///
+    /// Irreversible. Crews the account owns are **not** removed — send
+    /// [`Command::DeleteCrew`] first if they should go too, otherwise they
+    /// outlive the account as empty groups.
+    DeleteAccount,
 
     // Social auth (login screen — creates or logs into account)
     AuthSteam,

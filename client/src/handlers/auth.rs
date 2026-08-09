@@ -70,6 +70,16 @@ pub fn handle(ctx: &AppContext, event: Event) {
             ctx.app.set_logged_in(true);
             crate::onboarding::advance(ctx, crate::onboarding::Input::IdentitySettled);
         }
+        // No UI affordance deletes an account yet — `Command::DeleteAccount`
+        // exists for the release smoke test, which drives it from a scenario
+        // and asserts on the event rather than on the window. Log only; give
+        // these arms real UI behaviour when a delete-account setting lands.
+        Event::AccountDeleted => {
+            log::info!("[auth] account deleted — session cleared");
+        }
+        Event::AccountDeleteFailed { reason } => {
+            log::warn!("[auth] account-delete-failed  reason={}", reason);
+        }
         Event::SocialLinkFailed { reason } => {
             log::warn!("[auth] social-link-failed  reason={}", reason);
             ctx.app.set_login_loading(false);
