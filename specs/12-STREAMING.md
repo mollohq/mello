@@ -82,6 +82,30 @@ Rate control is VBR with 1.25× max headroom. The VBV spans ~0.5 s of the max ra
 
 **Other encoder backends:** AMF (AMD), QSV/oneVPL (Intel), VideoToolbox (macOS) exist in the codebase but are less battle-tested than NVENC.
 
+**Adaptive cost tiers.** Quality features that are free on a current GPU are not
+free on an older one, and the encode queue is two deep with newest-wins
+eviction — so an encoder that misses the frame budget does not produce a
+slightly worse picture, it silently drops frames. `Encoder::reduce_cost_tier()`
+gives features up one at a time when the pipeline measures that happening:
+
+| Tier | Configuration |
+|------|---------------|
+| 0 | two-pass full-resolution + temporal AQ + spatial AQ 8 (default) |
+| 1 | single-pass + temporal AQ + spatial AQ 8 |
+| 2 | single-pass, no temporal AQ, spatial AQ 4 |
+
+`VideoPipeline::encoder_is_overloaded` decides, from queue-drop ratio (>2% of
+offered frames — the direct symptom) or mean encode time (≥80% of the frame
+interval — the leading indicator), over a minimum 60-frame window so a startup
+hitch cannot permanently downgrade quality. Tiers are monotonic within a
+session: a GPU that could not keep up has not improved, and climbing back would
+oscillate against the load being escaped. Each step forces an IDR and persists
+into `base_config_`, so a later bitrate reconfigure does not resurrect the
+features that were given up.
+
+Driven by measurement rather than a GPU allowlist, so it covers hardware that
+has never been tested. Non-NVENC backends inherit a default no-op.
+
 ### 3.5 Encoded Packet Handoff
 
 The encode thread's `packet_cb_` fires with the encoded NALU bytes. This callback was set up by `mello-core` via `mello_stream_start_host` — it sends the bytes over an mpsc channel (capacity 32) to the Rust `StreamManager`.
@@ -245,6 +269,40 @@ If the decode queue depth exceeds a threshold, the viewer drops incoming delta f
 
 Default is Medium. The host can select a preset before starting. The GPU preprocessor downscales capture to the preset's target resolution. Preset `fec_n` fields remain in config for schema compatibility but are unused on the RTP path.
 
+### 8.1.1 Adaptive framerate ladder (Stage 1)
+
+The preset fixes geometry and framerate at stream start; §8.2 then moves only
+bitrate inside it. When throughput falls that starves the picture rather than
+simplifying it — 720p60 at 1.5 Mbps is ~0.027 bits per pixel per frame, about a
+third of what the format needs, which is how a stream reaches single-digit
+delivered fps. §1 already commits to the opposite: *favor visible quality loss
+over lag or stalling*.
+
+`FramerateLadder` (`stream/ladder.rs`) owns the encoder's framerate target and
+trades in **bits per pixel per frame**, `bitrate / (w × h × fps)` — preset-
+agnostic, so one threshold pair covers Ultra through Potato:
+
+| Transition | Condition | Dwell |
+|---|---|---|
+| full → half rate | bpp at full rate **< 0.055** | 2 s |
+| half → full rate | bpp at full rate **> 0.075** | 15 s |
+
+10 s cooldown between switches, and no rung below 30fps. Both directions are
+judged **at full framerate**: dropping to 30fps instantly doubles the measured
+bpp, so judging at the current rung would argue for climbing straight back into
+the starvation just escaped.
+
+Reduction is by **decimation before GPU colour conversion**
+(`VideoPipeline::set_output_fps`), so convert *and* encode cost fall and no
+capture backend needs reconfiguring. The encoder is retargeted too
+(`Encoder::set_framerate`) because rate control budgets bits per frame from the
+framerate — an encoder still told 60 while fed 30 hands out half the bits each
+frame deserves. Each switch forces an IDR.
+
+Stage 2 (geometry rungs: 540p/480p/360p) needs viewer-side work — mid-stream SPS
+geometry change and a `DCompPresenter` swap-chain resize — and is tracked in
+`plans/ADAPTIVE-QUALITY-LADDER.md`.
+
 ### 8.2 REMB congestion control
 
 **Viewer (`ViewerCongestionController`):** Samples native RTP receiver stats every 500 ms. Severe loss (>5%), incomplete AUs, or gate pressure step the receive target down 25%; mild loss (2–5%) or jitter >20 ms steps down 15%; ten consecutive good samples increase by max(100 kbps, 5%). Emits REMB at significant changes or every 2 s heartbeat.
@@ -382,6 +440,33 @@ Encoder periodic (every 300 frames): `convert_ms`, `encode_ms`, `eq_depth`, `eq_
 
 `viewer_probe_native_rtp`: `rx_complete`, `rx_emitted`, `rx_incomplete`, `gate_dropped`, `buffered_aus`, `receive_target_bps`.
 
+### 12.1 Remote diagnostics (`stream_client_stats`)
+
+Everything above lands in the *local* log. Field failures happen on machines we
+have no access to, so host and viewer additionally report to the SFU every 10 s
+over signaling (`stream_client_stats`, one per 5 s per peer, 2048-byte cap —
+`mello-sfu/01-SFU.md §5.3`). SFU mode only: P2P has no relay to report to.
+
+**Host:** `gpu`, `enc`, `cap_backend`, `cap_fps`, `cap_idle_ms`, `enc_fps`,
+`enc_ms`, `conv_ms`, `eq_depth`, `eq_drops`, `br_target`, `br_actual`,
+`pace_kbps`, `w`, `h`, `fps_cfg`, `recovery`, `vfail`, `vq`.
+
+**Viewer:** `freeze_n`, `freeze_ms`, `present_fps`, `rtt_ms`, `rx_complete`,
+`rx_incomplete`, `rx_missing`, `rx_repaired`, `rx_gated`, `rx_nacks`, `rx_pli`,
+`rx_jitter`, `rx_fec_ok`, `rx_fec_fail`, `bg_drops`.
+
+Two of these carry more weight than the rest:
+
+- **`cap_fps` vs `enc_fps`.** Capture arrivals are counted before any encode
+  work, so a stalled capture and a stalled encoder are finally distinguishable.
+  `video_in_hz` alone conflates them and cannot answer which one failed.
+- **`freeze_n` / `freeze_ms`.** A freeze is a present gap over 150 ms, counted
+  once per stall and extended rather than re-counted per tick. Every other
+  viewer metric is a proxy; this is the thing the user actually experiences.
+
+Payload keys are abbreviated to stay inside the cap as the field set grows; a
+unit test sizes the worst-case host payload against it.
+
 DComp presenter diagnostics:
 
 - `ui_render_fps` (DComp present cadence)
@@ -453,6 +538,7 @@ DComp presenter diagnostics:
 | ~~WGC has no frame throttling~~ **Fixed (v0.4)** — accumulator throttle delivers exactly target_fps | — | — |
 | AMF/QSV encoders less tested | No smooth experience for AMD/Intel GPU users | Medium |
 | Viewer jitter buffer is simple depth-gate, not PID-paced | Residual cadence oscillation under varying network conditions | Medium |
+| Ladder Stage 2 (geometry rungs) not implemented | Below ~1 Mbps even 30fps 720p starves; needs viewer SPS-change + DComp resize | Medium |
 | ~~Game audio not wired~~ **Fixed** — system audio capture (WASAPI loopback / ScreenCaptureKit) → Opus → SFU relay → viewer playout | — | — |
 | Input passthrough not implemented | No remote control | Large |
 | DComp visual uses overlay, not true underlay (`WS_EX_NOREDIRECTIONBITMAP` not set) | Video composites on top of Slint content; stream card badges moved to bottom bar as workaround | Medium |

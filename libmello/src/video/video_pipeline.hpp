@@ -52,7 +52,68 @@ public:
     void get_host_resolution(uint32_t& w, uint32_t& h) const;
     void request_keyframe();
     void set_bitrate(uint32_t kbps);
+    /// Evidence gathered over one observation window, used to decide whether the
+    /// encoder is failing to hold the frame budget.
+    struct EncoderLoadSample {
+        uint64_t frames_captured = 0;   // arrivals offered to the encoder
+        uint64_t queue_drops     = 0;   // frames evicted unencoded (newest-wins)
+        double   mean_encode_ms  = 0.0;
+        uint32_t target_fps      = 60;
+    };
+
+    /// True when the encoder should give up a quality feature to keep up.
+    ///
+    /// Pure so it can be tested without a GPU — the machines that trigger it are
+    /// exactly the ones we do not have. Two independent triggers:
+    ///
+    ///  - **Dropped frames.** The direct symptom. The encode queue evicts
+    ///    silently, so any sustained drop rate means frames are already being
+    ///    lost and no other signal will report it.
+    ///  - **Encode time against budget.** Leading indicator. Sitting at or above
+    ///    the frame interval means no headroom for a complex scene, and the
+    ///    drops are about to start.
+    ///
+    /// Requires a minimum sample so a single hitch during startup or a scene cut
+    /// cannot permanently downgrade quality.
+    static bool encoder_is_overloaded(const EncoderLoadSample& sample);
+
+    /// Retarget the encoded output framerate without restarting capture.
+    ///
+    /// Frames are decimated at the capture callback, before GPU colour
+    /// conversion, so both convert and encode cost fall — which is the point on
+    /// a host that cannot keep up. Capture itself keeps running at its own rate:
+    /// its cadence is driven by the display, and reconfiguring each backend's
+    /// throttle at runtime would be far more invasive for no extra saving.
+    ///
+    /// `fps` is clamped to the configured capture rate; 0 restores it.
+    void set_output_fps(uint32_t fps);
+    uint32_t output_fps() const { return output_fps_.load(std::memory_order_relaxed); }
+
+    /// True when a captured frame should be passed downstream under the current
+    /// decimation target. Static and pure so the cadence is testable without a
+    /// capture device.
+    /// `capture_fps` sizes the deadline tolerance; pass the configured capture
+    /// rate. 0 disables tolerance.
+    static bool decimation_accepts(uint64_t timestamp_us, uint64_t last_emitted_us,
+                                   uint32_t output_fps, uint32_t capture_fps);
+
     void get_stats(EncoderStats& out) const;
+
+    // Host-side diagnostics beyond the encoder's own contract. String members
+    // are borrowed and valid only while this pipeline lives; callers copy them
+    // out immediately.
+    struct HostTelemetry {
+        uint64_t    frames_captured     = 0;
+        uint32_t    capture_idle_ms     = 0;
+        uint32_t    encode_queue_depth  = 0;
+        uint64_t    encode_queue_drops  = 0;
+        float       convert_ms          = 0.0f;
+        float       encode_ms           = 0.0f;
+        const char* capture_backend     = "";
+        const char* encoder_name        = "";
+        const char* gpu_name            = "";
+    };
+    void get_host_telemetry(HostTelemetry& out) const;
 
     /// The active capture source, or nullptr when not hosting.
     /// Exposed so the stream audio pipeline can attach to backends that carry
@@ -135,14 +196,35 @@ private:
     size_t eq_tail_ = 0; // next read
     size_t eq_count_ = 0;
     uint64_t eq_drops_ = 0;
-    std::mutex eq_mutex_;
+    // mutable so the const telemetry getter can read the queue counters under
+    // the same lock the capture/encode threads use, rather than racing them.
+    mutable std::mutex eq_mutex_;
     std::condition_variable eq_cv_;
     std::thread encode_thread_;
     void encode_thread_func();
+#ifdef _WIN32
+    // Called on the encode thread after each encoded frame.
+    void maybe_reduce_encoder_cost();
+    uint64_t cost_window_start_captured_ = 0;
+    uint64_t cost_window_start_drops_    = 0;
+#endif
 
     // Stats
     uint64_t host_start_time_  = 0;
     uint64_t frames_encoded_   = 0;
+    // Capture arrivals, counted before any encode work so a stalled capture is
+    // distinguishable from a stalled encoder. Written on the capture thread and
+    // read from the stats caller — atomic. Rate/stall windows are derived by the
+    // caller; keeping the time math out of here avoids a second clock policy.
+    std::atomic<uint64_t> frames_captured_{0};
+    std::atomic<uint64_t> last_capture_us_{0};
+
+    // Decimation target. 0 means "no decimation" (encode every captured frame).
+    // Read on the capture thread, written from the control thread.
+    std::atomic<uint32_t> output_fps_{0};
+    // Capture timestamp of the last frame passed downstream, in the capture
+    // thread's own clock. Only touched on the capture thread.
+    uint64_t last_emitted_us_ = 0;
     double   last_convert_ms_  = 0;
     double   last_encode_ms_   = 0;
     uint64_t viewer_start_time_ = 0;

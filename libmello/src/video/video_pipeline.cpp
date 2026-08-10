@@ -190,6 +190,10 @@ bool VideoPipeline::start_host(const CaptureSourceDesc& source,
     eq_head_ = eq_tail_ = eq_count_ = 0;
     eq_drops_ = 0;
     last_convert_ms_ = last_encode_ms_ = 0;
+    frames_captured_.store(0, std::memory_order_relaxed);
+    last_capture_us_.store(host_start_time_, std::memory_order_relaxed);
+    output_fps_.store(0, std::memory_order_relaxed);
+    last_emitted_us_ = 0;
 
     encode_thread_ = std::thread(&VideoPipeline::encode_thread_func, this);
 
@@ -229,6 +233,10 @@ bool VideoPipeline::start_host(const CaptureSourceDesc& source,
     host_running_    = true;
     host_start_time_ = now_us();
     frames_encoded_  = 0;
+    frames_captured_.store(0, std::memory_order_relaxed);
+    last_capture_us_.store(host_start_time_, std::memory_order_relaxed);
+    output_fps_.store(0, std::memory_order_relaxed);
+    last_emitted_us_ = 0;
 
     auto self = this;
     if (!capture_->start(config.fps, [self](void* pixel_buffer, uint64_t ts) {
@@ -283,6 +291,16 @@ void VideoPipeline::stop_host() {
 void VideoPipeline::on_captured_frame(void* cv_pixel_buffer, uint64_t timestamp_us) {
     if (!host_running_.load()) return;
 
+    frames_captured_.fetch_add(1, std::memory_order_relaxed);
+    last_capture_us_.store(now_us(), std::memory_order_relaxed);
+
+    if (!decimation_accepts(timestamp_us, last_emitted_us_,
+                            output_fps_.load(std::memory_order_relaxed),
+                            config_.fps)) {
+        return;
+    }
+    last_emitted_us_ = timestamp_us;
+
     EncodedPacket packet{};
     if (encoder_->encode(cv_pixel_buffer, packet)) {
         frames_encoded_++;
@@ -333,6 +351,100 @@ void VideoPipeline::get_stats(EncoderStats& out) const {
     else memset(&out, 0, sizeof(out));
 }
 
+// Enough frames that one hitch cannot trip a downgrade. At 60fps this is ~1s.
+static constexpr uint64_t kEncoderLoadMinFrames = 60;
+// Above this share of offered frames being evicted, the encoder is measurably
+// failing — the viewer is already losing motion.
+static constexpr double kEncoderDropRatioLimit = 0.02;
+// Encode time at or above this share of the frame interval leaves no room for a
+// harder scene, and the queue is only two deep.
+static constexpr double kEncoderBudgetShareLimit = 0.80;
+
+void VideoPipeline::set_output_fps(uint32_t fps) {
+    const uint32_t capture_fps = config_.fps > 0 ? config_.fps : 60;
+    const uint32_t target = (fps == 0 || fps >= capture_fps) ? 0 : fps;
+    const uint32_t previous = output_fps_.exchange(target, std::memory_order_relaxed);
+    if (previous == target) {
+        return;
+    }
+
+    // Rate control budgets bits per frame from the framerate, so the encoder has
+    // to be told or a 30fps stream gets 60fps-sized frames.
+    if (encoder_) {
+        encoder_->set_framerate(target == 0 ? capture_fps : target);
+    }
+    MELLO_LOG_INFO(TAG, "output framerate %u -> %u fps (capture %u)",
+                   previous == 0 ? capture_fps : previous,
+                   target == 0 ? capture_fps : target,
+                   capture_fps);
+}
+
+// True when this captured frame should be passed downstream under the current
+// decimation target. Uses a half-interval tolerance for the same reason the DXGI
+// throttle does: capture lands on vsync boundaries, so demanding a full interval
+// would systematically reject the frame that is closest to the deadline and
+// deliver 20fps when 30 was asked for.
+bool VideoPipeline::decimation_accepts(uint64_t timestamp_us, uint64_t last_emitted_us,
+                                       uint32_t output_fps, uint32_t capture_fps) {
+    if (output_fps == 0) {
+        return true;
+    }
+    if (last_emitted_us == 0 || timestamp_us < last_emitted_us) {
+        return true; // first frame, or a clock reset
+    }
+
+    const uint64_t interval_us = 1'000'000ULL / output_fps;
+    // Tolerance is half a *source* interval, matching the DXGI throttle's
+    // `target_interval - half_vsync`. Half the *target* interval looks
+    // equivalent and is not: at 60->30 it equals a whole source frame, so every
+    // frame clears the deadline and no decimation happens at all.
+    const uint64_t tolerance_us =
+        capture_fps > 0 ? (1'000'000ULL / capture_fps) / 2 : 0;
+    const uint64_t deadline_us =
+        interval_us > tolerance_us ? interval_us - tolerance_us : 0;
+    return (timestamp_us - last_emitted_us) >= deadline_us;
+}
+
+bool VideoPipeline::encoder_is_overloaded(const EncoderLoadSample& sample) {
+    if (sample.frames_captured < kEncoderLoadMinFrames || sample.target_fps == 0) {
+        return false;
+    }
+
+    const double drop_ratio =
+        static_cast<double>(sample.queue_drops) / static_cast<double>(sample.frames_captured);
+    if (drop_ratio > kEncoderDropRatioLimit) {
+        return true;
+    }
+
+    const double budget_ms = 1000.0 / static_cast<double>(sample.target_fps);
+    return sample.mean_encode_ms >= budget_ms * kEncoderBudgetShareLimit;
+}
+
+void VideoPipeline::get_host_telemetry(HostTelemetry& out) const {
+    out = HostTelemetry{};
+
+    out.frames_captured = frames_captured_.load(std::memory_order_relaxed);
+    const uint64_t last_capture = last_capture_us_.load(std::memory_order_relaxed);
+    if (host_running_.load() && last_capture != 0) {
+        const uint64_t now = now_us();
+        out.capture_idle_ms = (now > last_capture)
+            ? static_cast<uint32_t>((now - last_capture) / 1000)
+            : 0;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(eq_mutex_);
+        out.encode_queue_depth = static_cast<uint32_t>(eq_count_);
+        out.encode_queue_drops = eq_drops_;
+        out.convert_ms = static_cast<float>(last_convert_ms_);
+        out.encode_ms  = static_cast<float>(last_encode_ms_);
+    }
+
+    if (capture_)  out.capture_backend = capture_->backend_name();
+    if (encoder_)  out.encoder_name    = encoder_->name();
+    out.gpu_name = device_.adapter_name;
+}
+
 bool VideoPipeline::encoder_available() const {
     if (!device_.handle) {
         auto* self = const_cast<VideoPipeline*>(this);
@@ -349,6 +461,18 @@ bool VideoPipeline::encoder_available() const {
 #ifdef _WIN32
 void VideoPipeline::on_captured_frame(ID3D11Texture2D* texture, uint64_t timestamp_us) {
     if (!host_running_.load()) return;
+
+    frames_captured_.fetch_add(1, std::memory_order_relaxed);
+    last_capture_us_.store(now_us(), std::memory_order_relaxed);
+
+    // Decimate before the colour convert: dropping here saves the GPU blit as
+    // well as the encode, which is the whole point on a host that is behind.
+    if (!decimation_accepts(timestamp_us, last_emitted_us_,
+                            output_fps_.load(std::memory_order_relaxed),
+                            config_.fps)) {
+        return;
+    }
+    last_emitted_us_ = timestamp_us;
 
     if (capture_ && capture_->consume_swap_event()) {
         MELLO_LOG_WARN(TAG, "Capture backend swap detected, forcing keyframe");
@@ -416,11 +540,48 @@ void VideoPipeline::encode_thread_func() {
                     last_convert_ms_, last_encode_ms_, eq_count_, eq_drops_);
             }
 
+            maybe_reduce_encoder_cost();
+
             if (packet_cb_) {
                 packet_cb_(packet.data.data(), packet.data.size(), packet.is_keyframe, job.timestamp_us);
             }
         }
     }
+}
+
+// Runs on the encode thread, immediately after a frame is encoded, so the
+// measurement and the reconfigure share one thread and no extra locking.
+void VideoPipeline::maybe_reduce_encoder_cost() {
+    if (!encoder_ || encoder_->cost_tier() >= 2) {
+        return;
+    }
+
+    const uint64_t captured = frames_captured_.load(std::memory_order_relaxed);
+    uint64_t drops = 0;
+    {
+        std::lock_guard<std::mutex> lock(eq_mutex_);
+        drops = eq_drops_;
+    }
+
+    const uint64_t window_frames = captured - cost_window_start_captured_;
+    EncoderLoadSample sample{};
+    sample.frames_captured = window_frames;
+    sample.queue_drops     = drops - cost_window_start_drops_;
+    sample.mean_encode_ms  = last_encode_ms_;
+    sample.target_fps      = config_.fps;
+
+    if (window_frames < 60) {
+        return;
+    }
+
+    if (encoder_is_overloaded(sample)) {
+        encoder_->reduce_cost_tier();
+    }
+    // Reset the window either way: after a downgrade so the next decision
+    // measures the new configuration, and after a healthy window so old drops
+    // cannot accumulate into a false positive later.
+    cost_window_start_captured_ = captured;
+    cost_window_start_drops_    = drops;
 }
 #endif
 

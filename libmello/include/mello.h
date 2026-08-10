@@ -634,6 +634,18 @@ MELLO_API void mello_stream_request_keyframe(MelloStreamHost* host);
 /** Hot-reconfigure encoder bitrate without restarting the session. */
 MELLO_API MelloResult mello_stream_set_bitrate(MelloStreamHost* host, uint32_t bitrate_kbps);
 
+/**
+ * Hot-reconfigure the encoded output framerate without restarting capture.
+ *
+ * Frames are decimated before GPU colour conversion, so both convert and encode
+ * cost fall. At a fixed bitrate, halving the framerate doubles the bits per
+ * frame — the difference between a starved 60fps picture and a clean 30fps one.
+ *
+ * Pass 0 (or a value at/above the configured capture rate) to encode every
+ * captured frame.
+ */
+MELLO_API MelloResult mello_stream_set_framerate(MelloStreamHost* host, uint32_t fps);
+
 /** Register callback for game-audio packets. Must be set before mello_stream_start_audio. */
 MELLO_API void mello_stream_set_audio_callback(
     MelloStreamHost*          host,
@@ -692,6 +704,18 @@ typedef struct MelloStreamStats {
     uint64_t bytes_sent;
     char     encoder_name[32];
     char     decoder_name[32];
+    /* Fields below are appended for remote diagnostics; existing offsets are
+     * unchanged. `fps_actual` is the *encode* rate — compare it against
+     * frames_captured to tell a stalled capture from a stalled encoder, which
+     * is otherwise indistinguishable in host telemetry. */
+    uint64_t frames_captured;
+    uint32_t capture_idle_ms;      /* since last captured frame; 0 when idle host */
+    uint32_t encode_queue_depth;
+    uint64_t encode_queue_drops;   /* newest-wins evictions: silent frame loss */
+    float    convert_ms;
+    float    encode_ms;
+    char     capture_backend[16];  /* "dxgi" / "wgc" / "sck" */
+    char     gpu_name[128];
 } MelloStreamStats;
 
 MELLO_API void mello_stream_get_stats(MelloStreamHost* host, MelloStreamStats* stats);

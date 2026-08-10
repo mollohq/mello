@@ -33,7 +33,30 @@ Landed on `feat/stream-quality-phase2`:
 - D3D11VA decoder (2.4): proper DXVA pic params — Intel iGPU viewers; Windows-only, large effort.
 - DComp keyed-mutex/fence sync between libmello write device and presenter (validation item).
 - ULPFEC SFU viewer-leg fanout E2E under loss (host sends FEC; localhost shows zero recovery without injected loss).
-- NVENC two-pass encode_ms watch on low-end GPUs.
+- ~~NVENC two-pass encode_ms watch on low-end GPUs~~ **Done** — see Correction below.
+
+## Correction (2026-08-09): Phase 2 item 2 was not gated
+
+Phase 2 item 2 was recorded as "multipass evaluation *(runtime-gated on GPU
+headroom)* ✅". No gate was ever implemented: `enableTemporalAQ`, `enableAQ`,
+`aqStrength = 8` and `multiPass = NV_ENC_TWO_PASS_FULL_RESOLUTION` were set
+unconditionally for every H.264 session on every GPU
+(`encoder_nvenc.cpp:177-203`), and shipped that way in v0.4.6 / v0.4.8.
+
+Two-pass full-resolution encodes every frame twice. On a current NVENC
+generation that is absorbed; on an older one it can exceed the frame budget, and
+the failure is silent — `ENCODE_QUEUE_CAP = 2` with newest-wins eviction drops
+frames and reports no error anywhere.
+
+Field evidence (2026-08-09, `stream_3d222414_1786300905208`): a GTX 1080 host
+delivered 40% ingress coefficient-of-variation with repeated collapses to
+single-digit fps, while an RTX 3080 Ti host on the same build and the same SFU
+held 12–15%. Not proof on its own — the host's own `enc_ms`/`eq_drops` are the
+confirmation, and they are now reported.
+
+The gate now exists as adaptive cost tiers (`Encoder::reduce_cost_tier`), driven
+by measured drops and encode time rather than a GPU allowlist, so it covers
+hardware we have never seen.
 
 ## Verification constraints
 

@@ -1171,6 +1171,14 @@ MelloResult mello_stream_set_bitrate(MelloStreamHost* host, uint32_t bitrate_kbp
     } catch (...) { return MELLO_ERROR_FAILED; }
 }
 
+MelloResult mello_stream_set_framerate(MelloStreamHost* host, uint32_t fps) {
+    if (!host) return MELLO_ERROR_INVALID_PARAM;
+    try {
+        host->ctx->video().set_output_fps(fps);
+        return MELLO_OK;
+    } catch (...) { return MELLO_ERROR_FAILED; }
+}
+
 void mello_stream_set_audio_callback(
     MelloStreamHost* host,
     MelloAudioPacketCallback callback,
@@ -1354,6 +1362,21 @@ void mello_stream_get_stats(MelloStreamHost* host, MelloStreamStats* stats) {
         stats->fps_actual    = es.fps_actual;
         stats->keyframes_sent = es.keyframes_sent;
         stats->bytes_sent    = es.bytes_sent;
+
+        mello::video::VideoPipeline::HostTelemetry ht{};
+        host->ctx->video().get_host_telemetry(ht);
+        stats->frames_captured    = ht.frames_captured;
+        stats->capture_idle_ms    = ht.capture_idle_ms;
+        stats->encode_queue_depth = ht.encode_queue_depth;
+        stats->encode_queue_drops = ht.encode_queue_drops;
+        stats->convert_ms         = ht.convert_ms;
+        stats->encode_ms          = ht.encode_ms;
+        // stats was memset above, so strncpy with size-1 always leaves a
+        // terminator. HostTelemetry's string members default to "" and are
+        // never null.
+        strncpy(stats->capture_backend, ht.capture_backend, sizeof(stats->capture_backend) - 1);
+        strncpy(stats->encoder_name, ht.encoder_name, sizeof(stats->encoder_name) - 1);
+        strncpy(stats->gpu_name, ht.gpu_name, sizeof(stats->gpu_name) - 1);
     } catch (...) {
         memset(stats, 0, sizeof(MelloStreamStats));
     }

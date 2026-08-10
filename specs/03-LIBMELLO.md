@@ -99,7 +99,7 @@ The entire library is exposed through a single C header (`mello.h`). This is the
 |-------|---------------|-------|
 | **Context** | `mello_init`, `mello_destroy`, `mello_get_error` | One context per app |
 | **Voice** | `mello_voice_start_capture`, `stop_capture`, `set_mute`, `set_deafen`, `is_speaking`, `set_vad_callback`, `get_packet`, `feed_packet` | Mute stops sending but capture continues for VAD |
-| **Stream Host** | `mello_stream_start_host`, `stop_host`, `get_video_packet`, `request_keyframe` | Config struct controls resolution/bitrate/encoder |
+| **Stream Host** | `mello_stream_start_host`, `stop_host`, `get_video_packet`, `request_keyframe`, `get_stats` | Config struct controls resolution/bitrate/encoder |
 | **Stream View** | `mello_stream_start_view`, `stop_view`, `feed_video_packet`, `get_frame`, `free_frame` | Caller must free frames after use |
 | **P2P Transport** | `mello_peer_create`, `destroy`, `set_ice_servers`, `create_offer`, `create_answer`, `set_remote_description`, `add_ice_candidate`, `send_unreliable`, `send_reliable`, `recv`, `send_ping`, `rtt_ms`, `pong_age_ms` | Two data channels per peer: reliable (control) + unreliable (media), plus control-plane liveness/RTT probes |
 | **Devices** | `mello_get_audio_inputs`, `get_audio_outputs`, `set_audio_input`, `set_audio_output`, `get_encoders` | Query/switch audio devices and video encoders at runtime |
@@ -117,6 +117,25 @@ The entire library is exposed through a single C header (`mello.h`). This is the
 - `mello_peer_rtt_ms` exposes smoothed control-path RTT derived from pong `ts`.
 - `mello_peer_pong_age_ms` exposes time since the last observed pong (`-1` if none yet).
 - Pong parsing accepts both text and binary control payloads so mixed client/server stacks do not lose liveness updates silently.
+
+### Host stream stats (`MelloStreamStats`)
+
+`mello_stream_get_stats` reports encoder rate/bitrate/keyframes/bytes plus the
+host diagnostics needed to debug a remote user's stream: `frames_captured`,
+`capture_idle_ms`, `encode_queue_depth`, `encode_queue_drops`, `convert_ms`,
+`encode_ms`, `capture_backend`, `encoder_name`, `gpu_name`.
+
+- **Capture arrivals are counted before any encode work** (`VideoPipeline::on_captured_frame`,
+  both the D3D11 and the CVPixelBuffer overload). Comparing `frames_captured`
+  against `fps_actual` is the only way to tell a stalled capture from a stalled
+  encoder — encode-side counters alone cannot.
+- **`encode_queue_drops` is silent frame loss.** The encode queue is
+  `ENCODE_QUEUE_CAP = 2` with newest-wins eviction, so an encoder that cannot
+  keep up discards frames and reports no error anywhere else.
+- Rates are deliberately not computed here. The struct exposes monotonic counters
+  and the caller derives windows, keeping a single clock policy in one place.
+- New fields are **appended**; existing offsets are unchanged. `mello-sys`
+  regenerates bindings via bindgen on build.
 
 ### Error handling
 

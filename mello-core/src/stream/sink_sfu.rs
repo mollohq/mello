@@ -143,6 +143,10 @@ impl PacketSink for SfuSink {
             }
         }
     }
+
+    async fn send_stats(&self, payload: &serde_json::Value) {
+        self.connection.send_stream_stats(payload).await;
+    }
 }
 
 #[cfg(test)]

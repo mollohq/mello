@@ -506,6 +506,126 @@ void NvencEncoder::set_bitrate(uint32_t kbps) {
     config_.bitrate_kbps = kbps;
 }
 
+void NvencEncoder::set_framerate(uint32_t fps) {
+    if (fps == 0 || fps == config_.fps) {
+        return;
+    }
+    const uint32_t previous = config_.fps;
+    config_.fps = fps;
+
+    if (!encoder_) {
+        return;
+    }
+
+    // Rebuild from the full init-time config for the same reason set_bitrate
+    // does: the driver does not merge sparse configs on re-init. The VBV is
+    // recomputed because it is expressed in bits and sized off the framerate —
+    // leaving it would hand a 30fps stream a 60fps buffer.
+    const uint32_t avg = config_.bitrate_kbps * 1000;
+    const uint32_t max = avg + avg / 4;
+    const uint32_t vbv = compute_vbv_bits(avg, max, fps);
+
+    NV_ENC_CONFIG enc_config = base_config_;
+    enc_config.version = NV_ENC_CONFIG_VER;
+    enc_config.rcParams.version = NV_ENC_RC_PARAMS_VER;
+    enc_config.rcParams.vbvBufferSize   = vbv;
+    enc_config.rcParams.vbvInitialDelay = vbv / 2;
+
+    NV_ENC_RECONFIGURE_PARAMS reconfig;
+    memset(&reconfig, 0, sizeof(reconfig));
+    reconfig.version = NV_ENC_RECONFIGURE_PARAMS_VER;
+    reconfig.reInitEncodeParams.version = NV_ENC_INITIALIZE_PARAMS_VER;
+    reconfig.reInitEncodeParams.encodeWidth  = config_.width;
+    reconfig.reInitEncodeParams.encodeHeight = config_.height;
+    reconfig.reInitEncodeParams.frameRateNum = fps;
+    reconfig.reInitEncodeParams.frameRateDen = 1;
+    reconfig.reInitEncodeParams.encodeConfig = &enc_config;
+    // Cadence change: start a clean GOP rather than leaving viewers on
+    // references timed against the old framerate.
+    reconfig.forceIDR = 1;
+
+    const NVENCSTATUS status = fn_.nvEncReconfigureEncoder(encoder_, &reconfig);
+    if (status != NV_ENC_SUCCESS) {
+        config_.fps = previous;
+        MELLO_LOG_ERROR(TAG, "NVENC: framerate %u->%u reconfigure failed: %d",
+                        previous, fps, status);
+        return;
+    }
+
+    base_config_ = enc_config;
+    force_idr_ = true;
+    MELLO_LOG_INFO(TAG, "NVENC: framerate %u -> %u fps (vbv=%u)", previous, fps, vbv);
+}
+
+// Tier 0 is the Phase-2 quality configuration. Each step removes the most
+// expensive remaining feature rather than degrading everything at once.
+//
+// Two-pass full-resolution goes first: it encodes every frame twice, so it is
+// by far the largest single cost, and on an older NVENC generation it is the
+// difference between holding 60fps and not. Temporal AQ goes second.
+void NvencEncoder::apply_cost_tier_locked(NV_ENC_CONFIG& cfg) const {
+    switch (cost_tier_) {
+        case 0:
+            break;
+        case 1:
+            cfg.rcParams.multiPass = NV_ENC_MULTI_PASS_DISABLED;
+            break;
+        default:
+            cfg.rcParams.multiPass        = NV_ENC_MULTI_PASS_DISABLED;
+            cfg.rcParams.enableTemporalAQ = 0;
+            cfg.rcParams.aqStrength       = 4;
+            break;
+    }
+}
+
+bool NvencEncoder::reduce_cost_tier() {
+    if (!encoder_ || cost_tier_ >= kMaxCostTier) {
+        return false;
+    }
+    const int previous = cost_tier_;
+    ++cost_tier_;
+
+    NV_ENC_CONFIG enc_config = base_config_;
+    enc_config.version = NV_ENC_CONFIG_VER;
+    enc_config.rcParams.version = NV_ENC_RC_PARAMS_VER;
+    apply_cost_tier_locked(enc_config);
+
+    NV_ENC_RECONFIGURE_PARAMS reconfig;
+    memset(&reconfig, 0, sizeof(reconfig));
+    reconfig.version = NV_ENC_RECONFIGURE_PARAMS_VER;
+    reconfig.reInitEncodeParams.version = NV_ENC_INITIALIZE_PARAMS_VER;
+    reconfig.reInitEncodeParams.encodeWidth  = config_.width;
+    reconfig.reInitEncodeParams.encodeHeight = config_.height;
+    reconfig.reInitEncodeParams.frameRateNum = config_.fps;
+    reconfig.reInitEncodeParams.frameRateDen = 1;
+    reconfig.reInitEncodeParams.encodeConfig = &enc_config;
+    // The rate-control model changes shape here, so start a clean GOP rather
+    // than leaving viewers on references produced under the old configuration.
+    reconfig.forceIDR = 1;
+
+    const NVENCSTATUS status = fn_.nvEncReconfigureEncoder(encoder_, &reconfig);
+    if (status != NV_ENC_SUCCESS) {
+        cost_tier_ = previous;
+        MELLO_LOG_ERROR(TAG,
+            "NVENC: cost tier %d->%d reconfigure failed: %d (keeping tier %d)",
+            previous, previous + 1, status, previous);
+        return false;
+    }
+
+    // Persist so a later set_bitrate reconfigure does not resurrect the
+    // features we just gave up — it rebuilds from base_config_.
+    base_config_ = enc_config;
+    force_idr_ = true;
+    MELLO_LOG_WARN(TAG,
+        "NVENC: encoder cannot hold the frame budget — cost tier %d -> %d "
+        "(multipass=%s temporalAQ=%u aqStrength=%u)",
+        previous, cost_tier_,
+        enc_config.rcParams.multiPass == NV_ENC_MULTI_PASS_DISABLED ? "off" : "full",
+        enc_config.rcParams.enableTemporalAQ,
+        enc_config.rcParams.aqStrength);
+    return true;
+}
+
 void NvencEncoder::get_stats(EncoderStats& out) const {
     out = stats_;
 }
