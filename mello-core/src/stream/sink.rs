@@ -66,8 +66,8 @@ pub trait PacketSink: Send + Sync {
         is_keyframe: bool,
     ) -> Result<(), StreamError>;
 
-    /// Stream game-audio transport is stubbed — account only, no wire send.
-    async fn send_audio_stub(&self, byte_len: usize);
+    /// Send one Opus-encoded game-audio packet.
+    async fn send_audio(&self, opus: &[u8]) -> Result<(), StreamError>;
 
     /// Propagate the pacing target to each native RTP sender (bits/sec internally).
     async fn set_pacing_kbps(&self, target_kbps: u32);

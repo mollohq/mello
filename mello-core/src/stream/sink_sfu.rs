@@ -19,7 +19,6 @@ pub struct SfuSink {
     pacing_kbps: AtomicU32,
     pending_joins: RwLock<VecDeque<String>>,
     pending_leaves: RwLock<VecDeque<String>>,
-    audio_stub_bytes: AtomicU32,
     /// Active viewer ids for REMB aggregation bookkeeping.
     viewers: RwLock<HashMap<String, ()>>,
 }
@@ -31,7 +30,6 @@ impl SfuSink {
             pacing_kbps: AtomicU32::new(DEFAULT_SINK_PACING_KBPS),
             pending_joins: RwLock::new(VecDeque::new()),
             pending_leaves: RwLock::new(VecDeque::new()),
-            audio_stub_bytes: AtomicU32::new(0),
             viewers: RwLock::new(HashMap::new()),
         }
     }
@@ -69,11 +67,11 @@ impl PacketSink for SfuSink {
             .send_video_access_unit(annex_b, capture_timestamp_us)
     }
 
-    async fn send_audio_stub(&self, byte_len: usize) {
-        self.audio_stub_bytes.fetch_add(
-            u32::try_from(byte_len).unwrap_or(u32::MAX),
-            Ordering::Relaxed,
-        );
+    async fn send_audio(&self, opus: &[u8]) -> Result<(), StreamError> {
+        if opus.is_empty() {
+            return Ok(());
+        }
+        self.connection.send_audio(opus)
     }
 
     async fn set_pacing_kbps(&self, target_kbps: u32) {

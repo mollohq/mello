@@ -40,6 +40,18 @@ fn round1(value: f32) -> f32 {
     (value * 10.0).round() / 10.0
 }
 
+/// Per-second rate of a monotonic counter since the last report, advancing the
+/// caller's baseline. Reported as rates rather than totals so one log line
+/// stands alone without differencing against the previous one.
+///
+/// Free function rather than a method: as `&self` it would collide with the
+/// `&mut self.baseline` argument at every call site.
+fn rate_since(total: u64, baseline: &mut u64) -> f32 {
+    let delta = total.saturating_sub(*baseline);
+    *baseline = total;
+    delta as f32 / STREAM_STATS_REPORT_INTERVAL_SECS as f32
+}
+
 /// Field set for the host telemetry payload, split from the manager so the wire
 /// shape can be size-tested without a live stream.
 pub(crate) struct HostStatsFields {
@@ -65,6 +77,11 @@ pub(crate) struct HostStatsFields {
     pub recovery: bool,
     pub video_send_fail: u64,
     pub video_queue_len: usize,
+    /// Game-audio capture and egress rates. Audio fails independently of video
+    /// and silently — a host can stream perfect picture with a dead loopback.
+    pub audio_in_hz: f32,
+    pub audio_out_hz: f32,
+    pub audio_send_fail: u64,
 }
 
 /// Build the host `stream_client_stats` payload.
@@ -94,6 +111,9 @@ pub(crate) fn host_stats_payload(f: HostStatsFields) -> serde_json::Value {
         "recovery": f.recovery,
         "vfail": f.video_send_fail,
         "vq": f.video_queue_len,
+        "aud_in": round1(f.audio_in_hz),
+        "aud_out": round1(f.audio_out_hz),
+        "aud_fail": f.audio_send_fail,
     })
 }
 
@@ -208,7 +228,8 @@ pub struct StreamManager {
     manager_video_dropped_for_recovery_total: u64,
     manager_video_chain_gap_total: u64,
     manager_video_send_fail_total: u64,
-    manager_audio_stub_total: u64,
+    manager_audio_sent_total: u64,
+    manager_audio_send_fail_total: u64,
     manager_max_video_queue_len: usize,
     manager_max_audio_queue_len: usize,
     /// Previous values of libmello's monotonic counters, so the reported figures
@@ -216,6 +237,8 @@ pub struct StreamManager {
     last_frames_captured: u64,
     last_encode_queue_drops: u64,
     last_stats_paced_bytes: u64,
+    last_stats_audio_in: u64,
+    last_stats_audio_sent: u64,
     /// Owns the encoder's framerate target. Congestion control feeds it the
     /// bitrate; it decides the cadence that bitrate can actually sustain.
     framerate_ladder: FramerateLadder,
@@ -237,7 +260,8 @@ struct ManagerTelemetrySnapshot {
     video_dropped_for_recovery_total: u64,
     video_chain_gap_total: u64,
     video_send_fail_total: u64,
-    audio_stub_total: u64,
+    audio_sent_total: u64,
+    audio_send_fail_total: u64,
 }
 
 unsafe impl Send for StreamManager {}
@@ -298,12 +322,15 @@ impl StreamManager {
             manager_video_dropped_for_recovery_total: 0,
             manager_video_chain_gap_total: 0,
             manager_video_send_fail_total: 0,
-            manager_audio_stub_total: 0,
+            manager_audio_sent_total: 0,
+            manager_audio_send_fail_total: 0,
             manager_max_video_queue_len: 0,
             manager_max_audio_queue_len: 0,
             last_frames_captured: 0,
             last_encode_queue_drops: 0,
             last_stats_paced_bytes: 0,
+            last_stats_audio_in: 0,
+            last_stats_audio_sent: 0,
             framerate_ladder: ladder,
             last_manager_sample: ManagerTelemetrySnapshot::default(),
             last_manager_sample_at: Instant::now(),
@@ -474,7 +501,8 @@ impl StreamManager {
             video_dropped_for_recovery_total: self.manager_video_dropped_for_recovery_total,
             video_chain_gap_total: self.manager_video_chain_gap_total,
             video_send_fail_total: self.manager_video_send_fail_total,
-            audio_stub_total: self.manager_audio_stub_total,
+            audio_sent_total: self.manager_audio_sent_total,
+            audio_send_fail_total: self.manager_audio_send_fail_total,
         }
     }
 
@@ -509,15 +537,23 @@ impl StreamManager {
             .video_send_fail_total
             .saturating_sub(prev.video_send_fail_total);
 
+        let d_audio_fail = now_snapshot
+            .audio_send_fail_total
+            .saturating_sub(prev.audio_send_fail_total);
+        let d_audio_out = now_snapshot
+            .audio_sent_total
+            .saturating_sub(prev.audio_sent_total);
+
         let video_queue_len = self.video_rx.len();
         let audio_queue_len = self.audio_rx.len();
         self.manager_max_video_queue_len = self.manager_max_video_queue_len.max(video_queue_len);
         self.manager_max_audio_queue_len = self.manager_max_audio_queue_len.max(audio_queue_len);
 
         log::info!(
-            "Stream manager diag: video_in_hz={:.1} audio_in_hz={:.1} coalesced_hz={:.1} coalesce_events_delta={} recovery_drop_hz={:.1} chain_gap_hz={:.1} recovery_mode={} keyframe_req_queue_total={} keyframe_req_recovery_total={} keyframe_req_viewer_total={} keyframe_req_feedback_total={} send_fail_video_delta={} audio_stub_total={} video_queue_len={} audio_queue_len={} video_queue_max={} audio_queue_max={} bitrate_kbps={}",
+            "Stream manager diag: video_in_hz={:.1} audio_in_hz={:.1} audio_out_hz={:.1} coalesced_hz={:.1} coalesce_events_delta={} recovery_drop_hz={:.1} chain_gap_hz={:.1} recovery_mode={} keyframe_req_queue_total={} keyframe_req_recovery_total={} keyframe_req_viewer_total={} keyframe_req_feedback_total={} send_fail_video_delta={} send_fail_audio_delta={} video_queue_len={} audio_queue_len={} video_queue_max={} audio_queue_max={} bitrate_kbps={}",
             d_video_in as f32 / elapsed_secs,
             d_audio_in as f32 / elapsed_secs,
+            d_audio_out as f32 / elapsed_secs,
             d_coalesced as f32 / elapsed_secs,
             d_coalesce_events,
             d_recovery_drops as f32 / elapsed_secs,
@@ -528,7 +564,7 @@ impl StreamManager {
             now_snapshot.keyframe_req_viewer_total,
             now_snapshot.keyframe_req_feedback_total,
             d_video_fail,
-            now_snapshot.audio_stub_total,
+            d_audio_fail,
             video_queue_len,
             audio_queue_len,
             self.manager_max_video_queue_len,
@@ -638,6 +674,15 @@ impl StreamManager {
             recovery: self.drop_delta_until_keyframe,
             video_send_fail: self.manager_video_send_fail_total,
             video_queue_len: self.video_rx.len(),
+            audio_in_hz: rate_since(
+                self.manager_audio_packets_in_total,
+                &mut self.last_stats_audio_in,
+            ),
+            audio_out_hz: rate_since(
+                self.manager_audio_sent_total,
+                &mut self.last_stats_audio_sent,
+            ),
+            audio_send_fail: self.manager_audio_send_fail_total,
         });
         self.sink.send_stats(&payload).await;
     }
@@ -983,8 +1028,19 @@ impl StreamManager {
     async fn handle_audio(&mut self, pkt: AudioPacket) {
         self.manager_audio_packets_in_total = self.manager_audio_packets_in_total.saturating_add(1);
         let _ = self.audio_seq.fetch_add(1, Ordering::Relaxed);
-        self.sink.send_audio_stub(pkt.data.len()).await;
-        self.manager_audio_stub_total = self.manager_audio_stub_total.saturating_add(1);
+        match self.sink.send_audio(&pkt.data).await {
+            Ok(()) => {
+                self.manager_audio_sent_total = self.manager_audio_sent_total.saturating_add(1);
+            }
+            Err(e) => {
+                self.manager_audio_send_fail_total =
+                    self.manager_audio_send_fail_total.saturating_add(1);
+                let n = self.manager_audio_send_fail_total;
+                if n <= 3 || n.is_multiple_of(120) {
+                    log::warn!("Stream manager failed to send audio packet: {}", e);
+                }
+            }
+        }
     }
 }
 
@@ -1067,6 +1123,9 @@ mod tests {
             recovery: true,
             video_send_fail: u64::MAX,
             video_queue_len: usize::MAX,
+            audio_in_hz: 9999.9,
+            audio_out_hz: 9999.9,
+            audio_send_fail: u64::MAX,
         });
         // Matches the envelope the connection actually sends.
         let envelope = serde_json::json!({
@@ -1106,7 +1165,7 @@ mod tests {
         pacing_kbps: AtomicU32,
         feedback: Mutex<Vec<SinkVideoFeedback>>,
         joins: Mutex<Vec<String>>,
-        audio_stub_bytes: AtomicU32,
+        audio_packets: Mutex<Vec<Vec<u8>>>,
     }
 
     impl FakeSink {
@@ -1116,7 +1175,7 @@ mod tests {
                 pacing_kbps: AtomicU32::new(0),
                 feedback: Mutex::new(Vec::new()),
                 joins: Mutex::new(Vec::new()),
-                audio_stub_bytes: AtomicU32::new(0),
+                audio_packets: Mutex::new(Vec::new()),
             }
         }
 
@@ -1141,11 +1200,9 @@ mod tests {
             Ok(())
         }
 
-        async fn send_audio_stub(&self, byte_len: usize) {
-            self.audio_stub_bytes.fetch_add(
-                u32::try_from(byte_len).unwrap_or(u32::MAX),
-                Ordering::Relaxed,
-            );
+        async fn send_audio(&self, opus: &[u8]) -> Result<(), StreamError> {
+            self.audio_packets.lock().expect("lock").push(opus.to_vec());
+            Ok(())
         }
 
         async fn set_pacing_kbps(&self, target_kbps: u32) {
@@ -1749,16 +1806,18 @@ mod tests {
     }
 
     #[test]
-    fn audio_is_stubbed_not_sent_on_stream_datachannel() {
+    fn audio_packets_route_through_sink() {
         let sink = Arc::new(FakeSink::new());
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .expect("runtime");
         rt.block_on(async {
-            sink.send_audio_stub(256).await;
+            sink.send_audio(&[1, 2, 3, 4]).await.expect("send");
         });
-        assert_eq!(sink.audio_stub_bytes.load(Ordering::Relaxed), 256);
+        let packets = sink.audio_packets.lock().expect("lock");
+        assert_eq!(packets.len(), 1);
+        assert_eq!(packets[0], vec![1, 2, 3, 4]);
         assert!(sink.video.lock().expect("lock").is_empty());
     }
 }

@@ -3,6 +3,7 @@
 #ifdef __APPLE__
 
 #include "../util/log.hpp"
+#include <vector>
 #import <ScreenCaptureKit/ScreenCaptureKit.h>
 #import <CoreMedia/CoreMedia.h>
 #import <CoreVideo/CoreVideo.h>
@@ -18,11 +19,16 @@ static constexpr const char* TAG = "video/capture-sck";
 // that don't exist on macOS 15. Methods are still dispatched by selector at runtime.
 @interface SCKDelegate : NSObject
 @property (nonatomic, assign) mello::video::CaptureSource::FrameCallback videoCallback;
-@property (nonatomic, assign) mello::video::SCKCapture::AudioCallback audioCallback;
+@property (nonatomic, assign) mello::video::SCKCapture* owner;
 @property (nonatomic, assign) std::atomic<bool>* running;
 @end
 
-@implementation SCKDelegate
+@implementation SCKDelegate {
+    // Scratch for de-planarising audio. Only ever touched on the serial audio
+    // sample queue, so it needs no lock.
+    std::vector<float> _interleaved;
+    bool               _loggedBadFormat;
+}
 
 - (void)stream:(SCStream*)stream didOutputSampleBuffer:(CMSampleBufferRef)buffer ofType:(SCStreamOutputType)type {
     if (!self.running || !self.running->load()) return;
@@ -33,20 +39,72 @@ static constexpr const char* TAG = "video/capture-sck";
         CMTime pts = CMSampleBufferGetPresentationTimeStamp(buffer);
         uint64_t ts_us = (uint64_t)(CMTimeGetSeconds(pts) * 1000000.0);
         self.videoCallback((void*)pixelBuffer, ts_us);
-    } else if (type == SCStreamOutputTypeAudio && self.audioCallback) {
-        CMBlockBufferRef blockBuffer = CMSampleBufferGetDataBuffer(buffer);
-        if (!blockBuffer) return;
-        size_t len = 0;
-        char* dataPtr = nullptr;
-        CMBlockBufferGetDataPointer(blockBuffer, 0, nullptr, &len, &dataPtr);
-        if (dataPtr && len > 0) {
-            CMAudioFormatDescriptionRef fmtDesc = CMSampleBufferGetFormatDescription(buffer);
-            const AudioStreamBasicDescription* asbd = CMAudioFormatDescriptionGetStreamBasicDescription(fmtDesc);
-            uint32_t channels = asbd ? (uint32_t)asbd->mChannelsPerFrame : 2;
-            uint32_t sampleRate = asbd ? (uint32_t)asbd->mSampleRate : 48000;
-            uint32_t frameCount = (uint32_t)(len / sizeof(float) / channels);
-            self.audioCallback((const float*)dataPtr, frameCount, channels, sampleRate);
+    } else if (type == SCStreamOutputTypeAudio && self.owner) {
+        CMAudioFormatDescriptionRef fmtDesc =
+            (CMAudioFormatDescriptionRef)CMSampleBufferGetFormatDescription(buffer);
+        if (!fmtDesc) return;
+        const AudioStreamBasicDescription* asbd =
+            CMAudioFormatDescriptionGetStreamBasicDescription(fmtDesc);
+        if (!asbd) return;
+
+        // ScreenCaptureKit documents 32-bit float PCM. Reinterpreting anything
+        // else as float would emit noise at full scale, so bail loudly instead.
+        if (asbd->mFormatID != kAudioFormatLinearPCM ||
+            !(asbd->mFormatFlags & kAudioFormatFlagIsFloat) ||
+            asbd->mBitsPerChannel != 32) {
+            if (!_loggedBadFormat) {
+                _loggedBadFormat = true;
+                MELLO_LOG_ERROR("video/capture-sck",
+                    "unsupported game-audio format: id=%u flags=%u bits=%u — audio disabled",
+                    (unsigned)asbd->mFormatID, (unsigned)asbd->mFormatFlags,
+                    (unsigned)asbd->mBitsPerChannel);
+            }
+            return;
         }
+
+        // SCK delivers non-interleaved (planar) float: one AudioBuffer per
+        // channel. Reading the block buffer as if it were interleaved — which
+        // is what a plain CMBlockBufferGetDataPointer invites — garbles it.
+        // Ask for the AudioBufferList so both layouts are handled.
+        constexpr size_t kMaxChannels = 16;
+        uint8_t ablStorage[sizeof(AudioBufferList) + (kMaxChannels - 1) * sizeof(AudioBuffer)];
+        AudioBufferList* abl = reinterpret_cast<AudioBufferList*>(ablStorage);
+        CMBlockBufferRef retained = nullptr;
+
+        OSStatus st = CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
+            buffer, nullptr, abl, sizeof(ablStorage), nullptr, nullptr, 0, &retained);
+        if (st != noErr || !retained) return;
+
+        const uint32_t sampleRate = (uint32_t)asbd->mSampleRate;
+        const float*   out        = nullptr;
+        uint32_t       channels   = 0;
+        uint32_t       frameCount = 0;
+
+        if (abl->mNumberBuffers == 1) {
+            // Already interleaved.
+            channels   = abl->mBuffers[0].mNumberChannels;
+            if (channels > 0) {
+                frameCount = abl->mBuffers[0].mDataByteSize / (sizeof(float) * channels);
+                out        = (const float*)abl->mBuffers[0].mData;
+            }
+        } else {
+            channels   = abl->mNumberBuffers;
+            frameCount = abl->mBuffers[0].mDataByteSize / sizeof(float);
+            _interleaved.resize((size_t)frameCount * channels);
+            for (uint32_t ch = 0; ch < channels; ++ch) {
+                const float* src = (const float*)abl->mBuffers[ch].mData;
+                if (!src) { frameCount = 0; break; }
+                for (uint32_t i = 0; i < frameCount; ++i) {
+                    _interleaved[(size_t)i * channels + ch] = src[i];
+                }
+            }
+            out = _interleaved.data();
+        }
+
+        if (out && channels > 0 && frameCount > 0) {
+            self.owner->deliver_audio(out, frameCount, channels, sampleRate);
+        }
+        CFRelease(retained);
     }
 }
 
@@ -202,8 +260,16 @@ bool SCKCapture::initialize(const GraphicsDevice& device, const CaptureSourceDes
 }
 
 void SCKCapture::set_audio_callback(AudioCallback cb) {
+    std::lock_guard<std::mutex> lock(audio_mutex_);
     audio_callback_ = std::move(cb);
-    audio_enabled_ = true;
+}
+
+void SCKCapture::deliver_audio(const float* samples, uint32_t frame_count,
+                               uint32_t channels, uint32_t sample_rate) {
+    std::lock_guard<std::mutex> lock(audio_mutex_);
+    if (audio_callback_) {
+        audio_callback_(samples, frame_count, channels, sample_rate);
+    }
 }
 
 bool SCKCapture::start(uint32_t target_fps, FrameCallback callback) {
@@ -215,9 +281,8 @@ bool SCKCapture::start(uint32_t target_fps, FrameCallback callback) {
     __block void* retained_delegate = nullptr;
 
     uint32_t w = width_, h = height_;
-    bool audio = audio_enabled_;
     FrameCallback vcb = callback_;
-    AudioCallback acb = audio_callback_;
+    SCKCapture* self_ptr = this;
     std::atomic<bool>* running_ptr = &running_;
     void* filt = filter_;
 
@@ -233,17 +298,19 @@ bool SCKCapture::start(uint32_t target_fps, FrameCallback callback) {
             config.showsCursor = NO;
             config.queueDepth  = 3;
 
-            if (audio) {
-                config.capturesAudio = YES;
-                config.excludesCurrentProcessAudio = YES;
-                config.channelCount = 2;
-                config.sampleRate = 48000;
-            }
+            // Always on: SCStream fixes capturesAudio at creation, but
+            // mello_stream_start_audio() runs after the host stream is already
+            // up. Enabling it later is impossible, so enable it always and let
+            // the audio callback decide whether the samples go anywhere.
+            config.capturesAudio = YES;
+            config.excludesCurrentProcessAudio = YES;
+            config.channelCount = 2;
+            config.sampleRate = 48000;
 
             MELLO_LOG_INFO(TAG, "[start:2] creating delegate + stream");
             SCKDelegate* del = [[SCKDelegate alloc] init];
             del.videoCallback = vcb;
-            del.audioCallback = acb;
+            del.owner    = self_ptr;
             del.running  = running_ptr;
             retained_delegate = (__bridge_retained void*)del;
 
@@ -261,13 +328,12 @@ bool SCKCapture::start(uint32_t target_fps, FrameCallback callback) {
                 return;
             }
 
-            if (audio) {
-                dispatch_queue_t aq = dispatch_queue_create("mello.capture.audio", DISPATCH_QUEUE_SERIAL);
-                [stream addStreamOutput:(id<SCStreamOutput>)del type:SCStreamOutputTypeAudio sampleHandlerQueue:aq error:&err];
-                if (err) {
-                    MELLO_LOG_WARN(TAG, "addStreamOutput(audio) failed: %s — continuing without game audio",
-                        [[err localizedDescription] UTF8String]);
-                }
+            dispatch_queue_t aq = dispatch_queue_create("mello.capture.audio", DISPATCH_QUEUE_SERIAL);
+            [stream addStreamOutput:(id<SCStreamOutput>)del type:SCStreamOutputTypeAudio sampleHandlerQueue:aq error:&err];
+            if (err) {
+                MELLO_LOG_WARN(TAG, "addStreamOutput(audio) failed: %s — continuing without game audio",
+                    [[err localizedDescription] UTF8String]);
+                err = nil;
             }
 
             MELLO_LOG_INFO(TAG, "[start:4] calling startCapture");

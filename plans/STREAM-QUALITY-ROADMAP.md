@@ -105,7 +105,7 @@ Exit gate: libmello ctest green (incl. new NACK/pacer unit tests), `CI=true carg
 
 ## Phase 3 — Experience features (each gets its own planning round)
 
-1. Game audio: WASAPI loopback capture → Opus → stream audio track → SFU stream-audio relay → viewer playback.
+1. Game audio ✅ (Windows): WASAPI loopback → Opus → stream audio track → SFU relay → viewer playback.
 2. Two-rendition ladder (NVENC dual session) → SFU simulcast forwarding.
 3. AV1 activation (`supports_av1` hardcoded false at `streaming.rs:879`; NVENC AV1 + dav1d exist).
 4. macOS: VT session reuse on IDR, native-surface present path.

@@ -3,6 +3,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use mello_core::client::feed_viewer_audio_packet;
 use mello_core::nakama::WatchStreamResponse;
 use mello_core::transport::{SfuConnection, SfuEvent, StreamPeerRole};
 use minifb::{Key, Window, WindowOptions};
@@ -410,6 +411,13 @@ fn main() {
     let mut last_rx_repaired: u64 = 0;
     let mut last_rx_nacks: u64 = 0;
     let mut last_rx_pli: u64 = 0;
+    let mut audio_received: u64 = 0;
+    let mut audio_fed: u64 = 0;
+    let mut audio_feed_failures: u64 = 0;
+    let mut last_audio_received: u64 = 0;
+    let mut last_audio_fed: u64 = 0;
+    let mut last_audio_feed_failures: u64 = 0;
+    let mut logged_first_audio = false;
 
     loop {
         if shutdown_requested.load(Ordering::Relaxed) {
@@ -509,6 +517,27 @@ fn main() {
                     transport_lost = true;
                 }
                 SfuEvent::MediaPacket { .. } => {}
+                SfuEvent::AudioTrackData { data, .. } => {
+                    audio_received = audio_received.saturating_add(1);
+                    // SAFETY: `viewer` is the handle returned by the viewer
+                    // start call above and stays valid for this loop.
+                    if unsafe { feed_viewer_audio_packet(viewer, &data) } {
+                        audio_fed = audio_fed.saturating_add(1);
+                        if !logged_first_audio {
+                            logged_first_audio = true;
+                            let (wall_ms, mono_ms) = correlation_stamp(correlation_start);
+                            log::info!(
+                                "viewer_probe_event session={} wall_ms={} mono_ms={} event=first_audio_packet bytes={}",
+                                session_id,
+                                wall_ms,
+                                mono_ms,
+                                data.len()
+                            );
+                        }
+                    } else {
+                        audio_feed_failures = audio_feed_failures.saturating_add(1);
+                    }
+                }
                 _ => {}
             }
         }
@@ -563,6 +592,10 @@ fn main() {
             let au_feed_fail_hz = (au_feed_failures - last_au_feed_failures) as f32 / elapsed;
             let present_hz = (present_calls - last_present_calls) as f32 / elapsed;
             let present_fps = (present_true - last_present_true) as f32 / elapsed;
+            let audio_received_hz = (audio_received - last_audio_received) as f32 / elapsed;
+            let audio_fed_hz = (audio_fed - last_audio_fed) as f32 / elapsed;
+            let audio_feed_fail_hz =
+                (audio_feed_failures - last_audio_feed_failures) as f32 / elapsed;
 
             let decode_queue_depth =
                 unsafe { mello_sys::mello_stream_viewer_decode_queue_depth(viewer) };
@@ -618,13 +651,15 @@ fn main() {
             let pli_hz = (rx_pli.saturating_sub(last_rx_pli)) as f32 / elapsed;
 
             let title = format!(
-                "SFU Probe | {}x{} dec={:.1}fps native={:.1}fps au={:.1}/{:.1}Hz queue={} present={:.1}Hz ingress={:.1}pps {:.0}kbps fec_rec={} rtt={:.1}ms gated={}",
+                "SFU Probe | {}x{} dec={:.1}fps native={:.1}fps au={:.1}/{:.1}Hz audio={:.1}/{:.1}Hz queue={} present={:.1}Hz ingress={:.1}pps {:.0}kbps fec_rec={} rtt={:.1}ms gated={}",
                 width,
                 height,
                 dec_fps,
                 native_fps,
                 au_fed_hz,
                 au_received_hz,
+                audio_fed_hz,
+                audio_received_hz,
                 decode_queue_depth,
                 present_fps,
                 ingress_pps,
@@ -639,7 +674,7 @@ fn main() {
 
             let (wall_ms, mono_ms) = correlation_stamp(correlation_start);
             log::info!(
-                "viewer_probe_tick session={} wall_ms={} mono_ms={} au_received_hz={:.1} au_fed_hz={:.1} au_feed_fail_hz={:.1} au_poll_errors={} au_buffer_grows={} dec_fps={:.1} native_fps={:.1} present_fps={:.1} present_hz={:.1} decode_queue_depth={} decode_stall_ms={} rtt_ms={:.1} rx_ingress_packets={} rx_ingress_bytes={} rx_ingress_pps={:.1} rx_ingress_kbps={:.0} rx_missing_hz={:.1} rx_repaired_hz={:.1} rx_nacks_hz={:.1} rx_pli_hz={:.1} rx_fec_recovered={} rx_fec_unrecoverable={} rx_jitter={} rx_gated={} rx_buffered_aus={} rx_receive_target_bps={}",
+                "viewer_probe_tick session={} wall_ms={} mono_ms={} au_received_hz={:.1} au_fed_hz={:.1} au_feed_fail_hz={:.1} au_poll_errors={} au_buffer_grows={} audio_received_hz={:.1} audio_fed_hz={:.1} audio_feed_fail_hz={:.1} rx_audio_packets={} rx_audio_fed={} rx_audio_feed_fail={} dec_fps={:.1} native_fps={:.1} present_fps={:.1} present_hz={:.1} decode_queue_depth={} decode_stall_ms={} rtt_ms={:.1} rx_ingress_packets={} rx_ingress_bytes={} rx_ingress_pps={:.1} rx_ingress_kbps={:.0} rx_missing_hz={:.1} rx_repaired_hz={:.1} rx_nacks_hz={:.1} rx_pli_hz={:.1} rx_fec_recovered={} rx_fec_unrecoverable={} rx_jitter={} rx_gated={} rx_buffered_aus={} rx_receive_target_bps={}",
                 session_id,
                 wall_ms,
                 mono_ms,
@@ -648,6 +683,12 @@ fn main() {
                 au_feed_fail_hz,
                 au_poll_errors,
                 au_buffer_grows,
+                audio_received_hz,
+                audio_fed_hz,
+                audio_feed_fail_hz,
+                audio_received,
+                audio_fed,
+                audio_feed_failures,
                 dec_fps,
                 native_fps,
                 present_fps,
@@ -710,6 +751,9 @@ fn main() {
             last_rx_repaired = rx_repaired;
             last_rx_nacks = rx_nacks;
             last_rx_pli = rx_pli;
+            last_audio_received = audio_received;
+            last_audio_fed = audio_fed;
+            last_audio_feed_failures = audio_feed_failures;
         }
 
         if native_metrics {

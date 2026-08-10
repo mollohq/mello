@@ -14,11 +14,11 @@ use crate::voice::{SignalEnvelope, SignalMessage, SignalPurpose};
 #[cfg(not(target_os = "windows"))]
 use super::stream_ffi::on_viewer_frame;
 use super::stream_ffi::{
-    flush_ice_buffer, log_viewer_native_stats, on_viewer_native_frame,
-    poll_p2p_viewer_access_units, poll_sfu_viewer_access_units, stream_ice_callback,
-    stream_state_callback, tick_viewer_congestion_p2p, tick_viewer_congestion_sfu,
-    FrameCallbackData, StreamHostHandle, StreamHostPeer, StreamIceCallbackData,
-    StreamPeerDisconnect, ViewerState,
+    feed_viewer_audio_packet, flush_ice_buffer, log_viewer_native_stats, on_viewer_native_frame,
+    poll_p2p_viewer_access_units, poll_sfu_viewer_access_units, stream_audio_track_callback,
+    stream_ice_callback, stream_state_callback, tick_viewer_congestion_p2p,
+    tick_viewer_congestion_sfu, FrameCallbackData, StreamAudioCallbackData, StreamHostHandle,
+    StreamHostPeer, StreamIceCallbackData, StreamPeerDisconnect, ViewerState,
 };
 use super::FRAME_STATE_PRESENTED;
 
@@ -368,6 +368,12 @@ impl super::Client {
                     log::info!("Viewer pipeline initialized at {}x{}", w, h);
                     if let Some(vs) = self.viewer_state.as_mut() {
                         vs.viewer = Some(viewer);
+                        if !vs._audio_cb_data.is_null() {
+                            let cb = unsafe { &*vs._audio_cb_data };
+                            if let Ok(mut slot) = cb.viewer_slot.lock() {
+                                *slot = Some(viewer);
+                            }
+                        }
                     }
                 }
             }
@@ -541,8 +547,18 @@ impl super::Client {
                     }
                     crate::transport::SfuEvent::ControlPacket { .. }
                     | crate::transport::SfuEvent::MemberJoined { .. }
-                    | crate::transport::SfuEvent::MemberLeft { .. }
-                    | crate::transport::SfuEvent::AudioTrackData { .. } => {}
+                    | crate::transport::SfuEvent::MemberLeft { .. } => {}
+                    crate::transport::SfuEvent::AudioTrackData { data, .. } => {
+                        if let Some(viewer) = vs.viewer {
+                            // SAFETY: `vs.viewer` is set only from a successful
+                            // viewer start and cleared on stop, so it is valid
+                            // for the lifetime of this ViewerState.
+                            if unsafe { feed_viewer_audio_packet(viewer, &data) } {
+                                vs.audio_packets_received =
+                                    vs.audio_packets_received.saturating_add(1);
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -1498,6 +1514,7 @@ impl super::Client {
             host_id: host_id.to_string(),
             _frame_cb_data: frame_cb_data,
             _ice_cb_data: std::ptr::null_mut(),
+            _audio_cb_data: std::ptr::null_mut(),
             frames_presented: 0,
             stream_tick_count: 0,
             present_attempts: 0,
@@ -1521,6 +1538,7 @@ impl super::Client {
             debug_last_backlog_guard_drops: 0,
             last_present_attempt: Instant::now(),
             au_recv_buf: ViewerState::new_au_recv_buf(),
+            audio_packets_received: 0,
             last_new_frame_at: Instant::now(),
             freeze_count: 0,
             freeze_ms_total: 0,
@@ -1571,6 +1589,10 @@ impl super::Client {
             pending: std::sync::Mutex::new(Vec::new()),
             flushed: std::sync::atomic::AtomicBool::new(false),
         }));
+        let audio_cb_data = Box::into_raw(Box::new(StreamAudioCallbackData {
+            viewer_slot: std::sync::Mutex::new(None),
+            packets_received: std::sync::atomic::AtomicU64::new(0),
+        }));
         unsafe {
             mello_sys::mello_peer_set_ice_callback(
                 peer,
@@ -1582,6 +1604,11 @@ impl super::Client {
                 Some(stream_state_callback),
                 ice_cb_data as *mut std::ffi::c_void,
             );
+            mello_sys::mello_peer_set_audio_track_callback(
+                peer,
+                Some(stream_audio_track_callback),
+                audio_cb_data as *mut std::ffi::c_void,
+            );
         }
 
         let sdp_ptr = unsafe { mello_sys::mello_peer_create_offer(peer) };
@@ -1590,6 +1617,7 @@ impl super::Client {
             unsafe {
                 mello_sys::mello_peer_destroy(peer);
                 drop(Box::from_raw(ice_cb_data));
+                drop(Box::from_raw(audio_cb_data));
             }
             let _ = self.event_tx.send(Event::StreamError {
                 message: "Failed to create stream offer".to_string(),
@@ -1642,6 +1670,7 @@ impl super::Client {
             host_id: host_id.to_string(),
             _frame_cb_data: frame_cb_data,
             _ice_cb_data: ice_cb_data,
+            _audio_cb_data: audio_cb_data,
             frames_presented: 0,
             stream_tick_count: 0,
             present_attempts: 0,
@@ -1665,6 +1694,7 @@ impl super::Client {
             debug_last_backlog_guard_drops: 0,
             last_present_attempt: Instant::now(),
             au_recv_buf: ViewerState::new_au_recv_buf(),
+            audio_packets_received: 0,
             last_new_frame_at: Instant::now(),
             freeze_count: 0,
             freeze_ms_total: 0,

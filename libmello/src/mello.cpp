@@ -7,6 +7,7 @@
 #include "video/process_enum.hpp"
 #include "video/window_thumbnail.hpp"
 #include "audio/clip_encoder.hpp"
+#include "audio/stream_audio_pipeline.hpp"
 #include "util/log.hpp"
 #include <climits>
 #include <cstring>
@@ -99,7 +100,25 @@ struct MelloStreamHost {
     void*                    user_data;
     MelloAudioPacketCallback audio_callback;
     void*                    audio_user_data;
+    std::unique_ptr<mello::audio::StreamAudioHostPipeline> audio_pipeline;
 };
+
+/// Detach the capture audio callback, then destroy the pipeline.
+///
+/// Order is load-bearing: the callback holds a raw pointer to the pipeline and
+/// on macOS fires on ScreenCaptureKit's audio queue, so tearing down the
+/// pipeline first would leave that queue calling into freed memory.
+static void stream_audio_teardown(MelloStreamHost* host) {
+    if (host->ctx) {
+        if (auto* capture = host->ctx->video().capture()) {
+            capture->set_audio_callback(nullptr);
+        }
+    }
+    if (host->audio_pipeline) {
+        host->audio_pipeline->stop();
+        host->audio_pipeline.reset();
+    }
+}
 
 struct MelloStreamView {
     mello::Context*          ctx;
@@ -107,6 +126,7 @@ struct MelloStreamView {
     void*                    user_data;
     MelloNativeFrameCallback native_callback;
     void*                    native_user_data;
+    std::unique_ptr<mello::audio::StreamAudioPlayout> audio_playout;
 };
 
 extern "C" {
@@ -1126,6 +1146,7 @@ MelloStreamHost* mello_stream_start_host(
 void mello_stream_stop_host(MelloStreamHost* host) {
     if (!host) return;
     try {
+        stream_audio_teardown(host);
         host->ctx->video().stop_host();
         delete host;
     } catch (...) {}
@@ -1170,13 +1191,47 @@ void mello_stream_set_audio_callback(
 
 MelloResult mello_stream_start_audio(MelloStreamHost* host) {
     if (!host) return MELLO_ERROR_INVALID_PARAM;
-    MELLO_LOG_WARN("stream", "mello_stream_start_audio: stub (loopback not yet implemented)");
-    return MELLO_OK;
+    if (!host->audio_callback) {
+        MELLO_LOG_WARN("stream", "mello_stream_start_audio: no audio callback registered");
+        return MELLO_ERROR_INVALID_PARAM;
+    }
+    try {
+        if (host->audio_pipeline) {
+            return MELLO_OK;
+        }
+        auto pipeline = std::make_unique<mello::audio::StreamAudioHostPipeline>();
+        MelloAudioPacketCallback cb = host->audio_callback;
+        void* ud = host->audio_user_data;
+        if (!pipeline->start([cb, ud](const uint8_t* data, int size, uint64_t ts_us) {
+                if (cb) cb(ud, data, size, ts_us);
+            })) {
+            return MELLO_ERROR_FAILED;
+        }
+
+        // macOS has no loopback device: ScreenCaptureKit carries game audio on
+        // the capture stream that is already running for video, so the pipeline
+        // is fed from there instead of opening its own source. On Windows the
+        // capture backend ignores this and the WASAPI loopback drives it.
+        if (auto* capture = host->ctx->video().capture()) {
+            auto* raw = pipeline.get();
+            capture->set_audio_callback(
+                [raw](const float* s, uint32_t frames, uint32_t ch, uint32_t rate) {
+                    raw->feed_float_pcm(s, frames, ch, rate);
+                });
+        }
+
+        host->audio_pipeline = std::move(pipeline);
+        return MELLO_OK;
+    } catch (...) {
+        return MELLO_ERROR_FAILED;
+    }
 }
 
 void mello_stream_stop_audio(MelloStreamHost* host) {
-    (void)host;
-    MELLO_LOG_INFO("stream", "mello_stream_stop_audio: stub");
+    if (!host) return;
+    try {
+        stream_audio_teardown(host);
+    } catch (...) {}
 }
 
 MelloStreamView* mello_stream_start_viewer(
@@ -1216,6 +1271,10 @@ MelloStreamView* mello_stream_start_viewer(
 void mello_stream_stop_viewer(MelloStreamView* view) {
     if (!view) return;
     try {
+        if (view->audio_playout) {
+            view->audio_playout->stop();
+            view->audio_playout.reset();
+        }
         view->ctx->video().set_native_frame_callback({});
         view->ctx->video().stop_viewer();
         delete view;
@@ -1282,9 +1341,15 @@ void mello_stream_set_native_frame_callback(
 }
 
 MelloResult mello_stream_feed_audio_packet(MelloStreamView* view, const uint8_t* data, int size) {
-    (void)view; (void)data; (void)size;
-    MELLO_LOG_DEBUG("stream", "mello_stream_feed_audio_packet: stub");
-    return MELLO_OK;
+    if (!view || !data || size <= 0) return MELLO_ERROR_INVALID_PARAM;
+    try {
+        if (!view->audio_playout) {
+            view->audio_playout = std::make_unique<mello::audio::StreamAudioPlayout>();
+        }
+        return view->audio_playout->feed_packet(data, size) ? MELLO_OK : MELLO_ERROR_FAILED;
+    } catch (...) {
+        return MELLO_ERROR_FAILED;
+    }
 }
 
 void mello_stream_get_stats(MelloStreamHost* host, MelloStreamStats* stats) {
