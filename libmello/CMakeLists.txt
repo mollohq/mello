@@ -205,6 +205,7 @@ set(MELLO_SOURCES
     src/audio/clip_buffer.cpp
     src/audio/clip_encoder.cpp
     src/audio/opus_codec.cpp
+    src/audio/stream_audio_pipeline.cpp
     src/audio/noise_suppressor.cpp
     src/audio/echo_canceller.cpp
     src/audio/jitter_buffer.cpp
@@ -225,6 +226,7 @@ set(MELLO_SOURCES
 if(WIN32)
     list(APPEND MELLO_SOURCES
         src/audio/capture_wasapi.cpp
+        src/audio/capture_wasapi_loopback.cpp
         src/audio/playback_wasapi.cpp
         src/audio/audio_backend_wasapi.cpp
         src/audio/audio_session_win.cpp

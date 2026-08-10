@@ -90,7 +90,7 @@ bool CoreAudioPlayback::initialize(const char* device_id) {
     format.mFormatID = kAudioFormatLinearPCM;
     format.mFormatFlags = kAudioFormatFlagIsSignedInteger | kAudioFormatFlagIsPacked;
     format.mBitsPerChannel = 16;
-    format.mChannelsPerFrame = 1;
+    format.mChannelsPerFrame = input_channels_;
     format.mFramesPerPacket = 1;
     format.mBytesPerFrame = format.mChannelsPerFrame * (format.mBitsPerChannel / 8);
     format.mBytesPerPacket = format.mBytesPerFrame * format.mFramesPerPacket;
@@ -117,7 +117,7 @@ bool CoreAudioPlayback::initialize(const char* device_id) {
         return false;
     }
     if (std::fabs(actual.mSampleRate - 48000.0) > 1.0 ||
-        actual.mChannelsPerFrame != 1 ||
+        actual.mChannelsPerFrame != input_channels_ ||
         actual.mBitsPerChannel != 16) {
         MELLO_LOG_ERROR(
             "playback",
@@ -195,15 +195,20 @@ OSStatus CoreAudioPlayback::render_callback(
     auto* self = static_cast<CoreAudioPlayback*>(inRefCon);
     int16_t* out = static_cast<int16_t*>(ioData->mBuffers[0].mData);
 
+    // The AudioUnit asks for frames; the ring holds interleaved samples, so a
+    // stereo stream needs two samples per frame.
+    const size_t wanted =
+        static_cast<size_t>(inNumberFrames) * static_cast<size_t>(self->input_channels_);
+
     size_t got = 0;
     if (self->render_source_) {
-        got = self->render_source_(out, inNumberFrames);
+        got = self->render_source_(out, wanted);
     } else {
-        got = self->ring_.read(out, inNumberFrames);
+        got = self->ring_.read(out, wanted);
     }
 
-    if (got < inNumberFrames) {
-        std::memset(out + got, 0, (inNumberFrames - got) * sizeof(int16_t));
+    if (got < wanted) {
+        std::memset(out + got, 0, (wanted - got) * sizeof(int16_t));
     }
 
     return noErr;

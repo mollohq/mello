@@ -98,8 +98,8 @@ The encode thread's `packet_cb_` fires with the encoded NALU bytes. This callbac
 2. **Send** complete access units via `PacketSink::send_video` (native RTP packetization in libmello).
 3. **Poll RTCP feedback** (PLI, REMB) from sinks and request host keyframes or adjust bitrate.
 4. **Aggregate REMB** — P2P: per-viewer minimum; SFU: single aggregated target from the SFU relay path.
-5. **Count audio stubs** — game audio capture is not wired; audio packets increment `audio_stub_total` only.
-6. **Emit telemetry** every second: `video_in_hz`, `send_fail_*_delta`, `recovery_mode`, queue depths, `bitrate_kbps`.
+5. **Send game audio** — Opus packets from loopback capture via `PacketSink::send_audio`.
+6. **Emit telemetry** every second: `video_in_hz`, `audio_in_hz`, `audio_out_hz`, `send_fail_*_delta`, `recovery_mode`, queue depths, `bitrate_kbps`.
 
 ### Recovery policy
 
@@ -181,7 +181,7 @@ RTP ingress → Access-unit poll → Pre-keyframe gate → Decode → NativeSurf
 
 ### 7.3 Hardware Decode
 
-NVDEC (CUDA↔D3D11 interop, zero-copy R8 layout), AMF, D3D11VA, OpenH264 on Windows. VideoToolbox on macOS. The decoder outputs to a GPU texture which goes into the decoded-frame ring. With async decode (Phase 2), CUDA/NVDEC runs on the decode worker; any D3D11 immediate-context updates (`CopyResource`, `UpdateSubresource`) are deferred to `Decoder::publish_d3d11_frame()` on the present/feed thread.
+NVDEC (CUDA↔D3D11 interop, zero-copy R8 layout), AMF, D3D11VA, OpenH264 on Windows. VideoToolbox on macOS. The decoder outputs to a GPU texture which goes into the decoded-frame ring. With async decode, CUDA/NVDEC runs on the decode worker; any D3D11 immediate-context updates (`CopyResource`, `UpdateSubresource`) are deferred to `Decoder::publish_d3d11_frame()` on the present/feed thread.
 
 ### 7.4 Decoded-Frame Ring
 
@@ -257,7 +257,79 @@ In SFU mode all viewers share one encoded stream. The SFU terminates TWCC per ho
 
 ## 9. Audio Streaming
 
-Game audio is **not implemented** on the stream path. WASAPI loopback capture and the C API (`mello_stream_start_audio`, `mello_stream_feed_audio_packet`) exist, but the host manager only counts stubbed audio packets (`audio_stub_total`) — nothing is sent to viewers.
+Game audio is wired end-to-end on Windows and macOS:
+
+| Parameter | Value |
+|-----------|-------|
+| Capture (Windows) | WASAPI loopback (`eRender` + `AUDCLNT_STREAMFLAGS_LOOPBACK`) |
+| Capture (macOS) | ScreenCaptureKit, on the SCStream that already captures video |
+| Encode | Opus stereo 48 kHz, 20 ms frames, `OPUS_APPLICATION_AUDIO`, ~96 kbps |
+| RTP payload type | 111 (Opus), same as voice but on a separate stream peer connection |
+| Host SDP | sendonly audio m-line alongside sendonly H.264 |
+| Viewer SDP | recvonly audio m-line alongside recvonly H.264 |
+| Viewer RTP receive | `RtcpReceivingSession` on the recvonly audio track before `onMessage` (libdatachannel media-receiver pattern) |
+| SFU relay | 1 host ingress → N viewer fan-out (`fanOutAudioRTP`), queue depth 32 |
+| Viewer playout | `mello_stream_feed_audio_packet` → Opus decode → `create_audio_playback()` (stereo: WASAPI on Windows, CoreAudio on macOS) |
+
+Host path: `mello_stream_start_audio` → `MelloAudioPacketCallback` → `StreamManager::handle_audio` → `PacketSink::send_audio` → `mello_peer_send_audio`. Viewer path (SFU): `AudioTrackData` events; P2P: `mello_peer_set_audio_track_callback` → same feed function. Stream viewer receive is wired on the offered recvonly audio track (not voice `onTrack`); if `onTrack` fires for the same `mid`, callbacks move to that track instance.
+
+### 9.1 Inbound audio framing
+
+Packets handed to Rust by an audio track callback are **not** raw Opus. After
+stripping the RTP header, `PeerConnectionImpl::wire_incoming_audio_track_callbacks`
+prepends four bytes:
+
+| Offset | Size | Field |
+|--------|------|-------|
+| 0 | 2 | RTP sequence number, little-endian |
+| 2 | 2 | Reserved, always zero |
+| 4 | n | Opus payload |
+
+Callers must skip those four bytes before decoding. A packet of four bytes or
+fewer carries no payload and is dropped.
+
+This framing is **shared with voice**, which strips it in `voice/mod.rs` before
+forwarding to the SFU; the stream path strips it in
+`client/stream_ffi.rs::feed_viewer_audio_packet` (`AUDIO_SEQ_HEADER_LEN`).
+
+The sequence number is currently unused by both paths — RTP already handles
+ordering and loss detection. It is carried because the receive handler has it
+cheaply to hand, and would be the input to Opus PLC concealment if packet-loss
+concealment is added later.
+
+### 9.2 macOS capture (ScreenCaptureKit)
+
+macOS has no loopback device. ScreenCaptureKit delivers system audio on the
+same `SCStream` that already captures video, so `StreamAudioHostPipeline` opens
+no source of its own: `mello.cpp` registers a `CaptureSource::set_audio_callback`
+that pushes into `feed_float_pcm`.
+
+Four constraints, none of which are visible from the call site:
+
+- **`capturesAudio` is always enabled when hosting.** `SCStream` fixes it at
+  *creation*, but `mello_stream_start_audio()` runs after
+  `mello_stream_start_host()`. Turning it on later is impossible, so it is
+  always on and the audio callback decides whether samples go anywhere.
+- **SCK delivers planar (non-interleaved) float.** Audio must be read through
+  `CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer`, one `AudioBuffer`
+  per channel. Reading the block buffer directly as interleaved — the shape
+  `CMBlockBufferGetDataPointer` invites — produces garbled audio with no error.
+  Formats that are not 32-bit float are rejected and logged, not reinterpreted.
+- **48 kHz only.** There is no resampler in libmello. SCK is configured for
+  48 kHz stereo; audio arriving at another rate is dropped with a warning rather
+  than encoded at the wrong pitch. Channel count *is* adapted — mono is
+  duplicated to both sides, more than two channels keeps the front pair.
+- **Detach before teardown.** The capture callback holds a raw pointer to the
+  pipeline and fires on SCK's own audio queue, so both `mello_stream_stop_audio`
+  and `mello_stream_stop_host` clear the callback before dropping the pipeline
+  (`stream_audio_teardown`).
+
+Covered by `libmello/tests/test_stream_audio_pipeline.cpp`, which decodes the
+emitted Opus and asserts on signal level per channel. Packet counts alone do not
+discriminate: the output buffer size drives them even when the conversion fills
+only part of each frame.
+
+**Windows smoke test (Aug 2026):** host `audio_out_hz≈50`, viewer `audio_fed_hz≈50`, `rx_audio_packets` climbing, `viewer playout started`. Same-machine host+viewer may loop back via WASAPI loopback — use headphones or separate machines for listen tests.
 
 ---
 
@@ -296,7 +368,7 @@ Host: signal `StreamSession::stop_and_wait` so the manager drains sinks before p
 
 ### Host-side (per second)
 
-`Stream manager diag`: `video_in_hz`, `audio_in_hz` (stub count), `coalesced_hz`, `recovery_mode`, `keyframe_req_*_total`, `send_fail_video_delta`, `audio_stub_total`, queue lengths/max, `bitrate_kbps`.
+`Stream manager diag`: `video_in_hz`, `audio_in_hz`, `audio_out_hz`, `coalesced_hz`, `recovery_mode`, `keyframe_req_*_total`, `send_fail_video_delta`, `send_fail_audio_delta`, queue lengths/max, `bitrate_kbps`.
 
 `Stream RTP pacing`: `target_kbps`, `out_kbps`, `tx_bytes_total` (from `PacketSink::pacing_telemetry`).
 
@@ -381,7 +453,7 @@ DComp presenter diagnostics:
 | ~~WGC has no frame throttling~~ **Fixed (v0.4)** — accumulator throttle delivers exactly target_fps | — | — |
 | AMF/QSV encoders less tested | No smooth experience for AMD/Intel GPU users | Medium |
 | Viewer jitter buffer is simple depth-gate, not PID-paced | Residual cadence oscillation under varying network conditions | Medium |
-| Game audio not wired | No game sound on stream | Medium |
+| ~~Game audio not wired~~ **Fixed** — system audio capture (WASAPI loopback / ScreenCaptureKit) → Opus → SFU relay → viewer playout | — | — |
 | Input passthrough not implemented | No remote control | Large |
 | DComp visual uses overlay, not true underlay (`WS_EX_NOREDIRECTIONBITMAP` not set) | Video composites on top of Slint content; stream card badges moved to bottom bar as workaround | Medium |
 | Adapter/device mismatch diagnostics are log-based only | Better in-UI error reasons still needed | Small |

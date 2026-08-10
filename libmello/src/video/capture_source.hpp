@@ -45,6 +45,11 @@ public:
     using FrameCallback = std::function<void(void* texture, uint64_t timestamp_us)>;
 #endif
 
+    /// Receives interleaved float PCM for system ("game") audio.
+    /// `frame_count` is frames, not samples: one frame holds `channels` values.
+    using AudioCallback = std::function<void(const float* samples, uint32_t frame_count,
+                                            uint32_t channels, uint32_t sample_rate)>;
+
     virtual ~CaptureSource() = default;
 
     virtual bool initialize(const GraphicsDevice& device, const CaptureSourceDesc& desc) = 0;
@@ -56,6 +61,14 @@ public:
     virtual const char* backend_name() const = 0;
 
     virtual bool get_cursor(CursorData& out) { (void)out; return false; }
+
+    /// Route system audio captured alongside video to `cb`, replacing any
+    /// previous callback. Safe to call before or after `start()`.
+    ///
+    /// Only backends that capture audio and video from one OS stream implement
+    /// this (ScreenCaptureKit). On Windows game audio comes from a separate
+    /// WASAPI loopback device, so the default is a no-op.
+    virtual void set_audio_callback(AudioCallback cb) { (void)cb; }
     // Backends with runtime source/backend switching can raise a swap event.
     // The pipeline consumes this to force a keyframe and accelerate recovery.
     virtual bool consume_swap_event() { return false; }

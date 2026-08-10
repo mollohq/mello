@@ -54,6 +54,11 @@ public:
     void set_bitrate(uint32_t kbps);
     void get_stats(EncoderStats& out) const;
 
+    /// The active capture source, or nullptr when not hosting.
+    /// Exposed so the stream audio pipeline can attach to backends that carry
+    /// system audio alongside video (ScreenCaptureKit). Valid until stop_host().
+    CaptureSource* capture() const { return capture_.get(); }
+
     // VIEWER SIDE
     bool start_viewer(const PipelineConfig& config, FrameCallback on_frame);
     void stop_viewer();

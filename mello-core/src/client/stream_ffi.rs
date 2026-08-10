@@ -24,6 +24,12 @@ const MAX_PENDING_STREAM_DISCONNECTS: usize = 64;
 /// §7.7) drops incoming delta AUs instead of feeding them. Keyframes always feed.
 pub(super) const DECODE_QUEUE_BACKLOG_THRESHOLD: i32 = 4;
 
+/// Bytes libmello prepends to each incoming audio packet: a little-endian RTP
+/// sequence number followed by two reserved zero bytes. Added by
+/// `PeerConnectionImpl::wire_incoming_audio_track_callbacks` once the RTP
+/// header has been stripped.
+const AUDIO_SEQ_HEADER_LEN: usize = 4;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct StreamPeerDisconnect {
     pub peer_id: String,
@@ -53,6 +59,7 @@ pub(super) struct ViewerState {
     pub host_id: String,
     pub _frame_cb_data: *mut FrameCallbackData,
     pub _ice_cb_data: *mut StreamIceCallbackData,
+    pub _audio_cb_data: *mut StreamAudioCallbackData,
     pub frames_presented: u64,
     pub stream_tick_count: u64,
     pub present_attempts: u64,
@@ -80,6 +87,7 @@ pub(super) struct ViewerState {
     pub debug_last_backlog_guard_drops: u64,
     pub last_present_attempt: Instant,
     pub au_recv_buf: Vec<u8>,
+    pub audio_packets_received: u64,
 }
 
 unsafe impl Send for ViewerState {}
@@ -108,6 +116,9 @@ impl Drop for ViewerState {
             if !self._ice_cb_data.is_null() {
                 drop(Box::from_raw(self._ice_cb_data));
             }
+            if !self._audio_cb_data.is_null() {
+                drop(Box::from_raw(self._audio_cb_data));
+            }
         }
         // SfuConnection is Arc-dropped automatically; leave() is called in handle_stop_watching
     }
@@ -121,6 +132,69 @@ pub(super) struct StreamIceCallbackData {
     /// Once `flushed` is true, new candidates go straight to `send_queue`.
     pub pending: std::sync::Mutex<Vec<SignalEnvelope>>,
     pub flushed: std::sync::atomic::AtomicBool,
+}
+
+pub(super) struct StreamAudioCallbackData {
+    pub viewer_slot: std::sync::Mutex<Option<*mut mello_sys::MelloStreamView>>,
+    pub packets_received: std::sync::atomic::AtomicU64,
+}
+
+/// Feed one Opus packet to the native viewer for playout.
+///
+/// # Safety
+/// `viewer` must be a valid `MelloStreamView` pointer, or null.
+///
+/// Marked `unsafe` for the same reason as [`feed_access_unit_to_decoder`]: it
+/// dereferences a caller-supplied raw pointer, so a safe signature would let
+/// safe code cause undefined behaviour by passing a dangling pointer.
+pub unsafe fn feed_viewer_audio_packet(
+    viewer: *mut mello_sys::MelloStreamView,
+    data: &[u8],
+) -> bool {
+    if viewer.is_null() || data.is_empty() {
+        return false;
+    }
+    // Strip the 4-byte LE sequence header that
+    // PeerConnectionImpl::wire_incoming_audio_track_callbacks prepends after
+    // removing the RTP header: [seq_lo, seq_hi, 0, 0, opus...]. The sequence
+    // number is unused here — RTP already handles ordering and loss. Same
+    // convention as the voice path (voice/mod.rs, "strip the 4-byte LE
+    // sequence header").
+    //
+    // A packet of 4 bytes or fewer carries a header and no payload, so there
+    // is nothing to decode.
+    if data.len() <= AUDIO_SEQ_HEADER_LEN {
+        return false;
+    }
+    let opus = &data[AUDIO_SEQ_HEADER_LEN..];
+    unsafe {
+        mello_sys::mello_stream_feed_audio_packet(
+            viewer,
+            opus.as_ptr(),
+            i32::try_from(opus.len()).unwrap_or(0),
+        ) == mello_sys::MelloResult_MELLO_OK
+    }
+}
+
+pub(super) unsafe extern "C" fn stream_audio_track_callback(
+    user_data: *mut std::ffi::c_void,
+    _sender_id: *const std::ffi::c_char,
+    data: *const u8,
+    size: i32,
+) {
+    if user_data.is_null() || data.is_null() || size <= 0 {
+        return;
+    }
+    let cb_data = &*(user_data as *const StreamAudioCallbackData);
+    let pkt = std::slice::from_raw_parts(data, size as usize);
+    let viewer = cb_data.viewer_slot.lock().ok().and_then(|slot| *slot);
+    if let Some(viewer) = viewer {
+        if feed_viewer_audio_packet(viewer, pkt) {
+            cb_data
+                .packets_received
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
 }
 
 pub(super) struct StreamHostPeer {
@@ -593,6 +667,33 @@ mod tests {
             true
         ));
         assert!(!should_drop_for_backlog(i32::MAX, true));
+    }
+
+    /// A packet carrying only the sequence header has no Opus payload, so it
+    /// must be rejected rather than passed on as if the header were audio.
+    #[test]
+    fn audio_packets_without_a_payload_are_rejected() {
+        let viewer = std::ptr::dangling_mut::<mello_sys::MelloStreamView>();
+        // Exactly the header, no payload.
+        let header_only = [0x01, 0x00, 0x00, 0x00];
+        assert!(!unsafe { feed_viewer_audio_packet(viewer, &header_only) });
+        // Shorter than the header.
+        assert!(!unsafe { feed_viewer_audio_packet(viewer, &[0x01, 0x00]) });
+        // Empty.
+        assert!(!unsafe { feed_viewer_audio_packet(viewer, &[]) });
+    }
+
+    #[test]
+    fn audio_packets_with_a_null_viewer_are_rejected() {
+        let pkt = [0x01, 0x00, 0x00, 0x00, 0xAA, 0xBB];
+        assert!(!unsafe { feed_viewer_audio_packet(std::ptr::null_mut(), &pkt) });
+    }
+
+    /// Documents the wire framing so it does not have to be re-derived from
+    /// libmello: [seq_lo, seq_hi, 0, 0, opus...].
+    #[test]
+    fn audio_seq_header_is_four_bytes() {
+        assert_eq!(AUDIO_SEQ_HEADER_LEN, 4);
     }
 
     #[test]

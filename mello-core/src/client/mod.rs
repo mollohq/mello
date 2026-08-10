@@ -36,6 +36,7 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::time::Instant;
 
+pub use stream_ffi::feed_viewer_audio_packet;
 use stream_ffi::{StreamHostPeer, StreamPeerDisconnect, ViewerState};
 
 /// Shared single-slot buffer for decoded stream frames. The C++ callback

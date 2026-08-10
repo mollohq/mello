@@ -99,8 +99,17 @@ private:
         std::shared_ptr<rtc::Track> track,
         uint64_t generation
     );
+    void wire_incoming_audio_track_callbacks(
+        const std::shared_ptr<rtc::Track>& track,
+        uint64_t generation,
+        const std::string& sender_id
+    );
 
     rtc::Description::Video make_stream_video_description(
+        rtc::Description::Direction direction,
+        const std::string& mid
+    ) const;
+    rtc::Description::Audio make_stream_audio_description(
         rtc::Description::Direction direction,
         const std::string& mid
     ) const;
@@ -108,11 +117,21 @@ private:
         const rtc::Description::Media& media,
         std::string& error
     ) const;
+    bool validate_remote_audio_media(
+        const rtc::Description::Media& media,
+        std::string& error
+    ) const;
     std::optional<rtc::Description::Video> prepare_video_for_answer(
         const rtc::Description& offer,
         std::string& error
     );
+    std::optional<rtc::Description::Audio> prepare_audio_for_answer(
+        const rtc::Description& offer,
+        std::string& error
+    );
     bool replace_video_track_for_answer(rtc::Description::Video video);
+    bool replace_audio_track_for_answer(rtc::Description::Audio audio);
+    void wire_opus_send_packetizer(const std::shared_ptr<rtc::Track>& track);
     void wire_video_track_callbacks(uint64_t generation);
     void try_start_video_pipeline(
         uint64_t expected_pc_generation = 0,
@@ -144,6 +163,8 @@ private:
 
     uint32_t video_ssrc_ = 0;
     std::string video_cname_;
+    uint32_t audio_ssrc_ = 0;
+    std::string audio_cname_;
     uint64_t pacing_target_bps_ = 4'000'000;
     uint32_t receive_target_bps_ = 4'000'000;
     // Remote SDP advertised the TWCC RTP header extension on stream video.

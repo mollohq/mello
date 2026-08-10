@@ -19,6 +19,7 @@ public:
     ~WasapiPlayback() override;
 
     void set_session(AudioSessionWin* session) { session_win_ = session; }
+    void set_input_channels(uint32_t channels) override { input_channels_ = std::max<uint32_t>(1, channels); }
 
     bool initialize(const char* device_id = nullptr) override;
     bool start() override;
@@ -39,6 +40,7 @@ private:
     HANDLE event_ = nullptr;
 
     uint32_t sample_rate_ = 48000; // internal contract rate
+    uint32_t input_channels_ = 1;
     uint32_t device_sample_rate_ = 48000;
     uint32_t device_channels_ = 2;
     bool device_float_format_ = true;

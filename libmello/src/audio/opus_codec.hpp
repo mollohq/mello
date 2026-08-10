@@ -5,6 +5,11 @@
 
 namespace mello::audio {
 
+enum class OpusApplication {
+    Voip,
+    Audio,
+};
+
 // 20ms at 48kHz mono = 960 samples
 static constexpr int FRAME_SIZE = 960;
 static constexpr int SAMPLE_RATE = 48000;
@@ -17,7 +22,12 @@ public:
     OpusEnc();
     ~OpusEnc();
 
-    bool initialize(int sample_rate = SAMPLE_RATE, int channels = CHANNELS, int bitrate = BITRATE);
+    bool initialize(
+        int sample_rate = SAMPLE_RATE,
+        int channels = CHANNELS,
+        int bitrate = BITRATE,
+        OpusApplication application = OpusApplication::Voip
+    );
 
     // Encode a frame of PCM samples. Returns encoded size, or negative on error.
     int encode(const int16_t* pcm, int frame_size, uint8_t* out, int max_out);
