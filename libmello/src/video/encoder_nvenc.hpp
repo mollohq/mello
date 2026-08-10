@@ -21,6 +21,7 @@ public:
     const char* name() const override { return "NVENC"; }
     bool        reduce_cost_tier() override;
     int         cost_tier() const override { return cost_tier_; }
+    void        set_framerate(uint32_t fps) override;
 
     static bool is_available();
 

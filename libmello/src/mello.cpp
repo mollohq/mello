@@ -1150,6 +1150,14 @@ MelloResult mello_stream_set_bitrate(MelloStreamHost* host, uint32_t bitrate_kbp
     } catch (...) { return MELLO_ERROR_FAILED; }
 }
 
+MelloResult mello_stream_set_framerate(MelloStreamHost* host, uint32_t fps) {
+    if (!host) return MELLO_ERROR_INVALID_PARAM;
+    try {
+        host->ctx->video().set_output_fps(fps);
+        return MELLO_OK;
+    } catch (...) { return MELLO_ERROR_FAILED; }
+}
+
 void mello_stream_set_audio_callback(
     MelloStreamHost* host,
     MelloAudioPacketCallback callback,

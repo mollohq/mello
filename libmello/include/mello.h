@@ -634,6 +634,18 @@ MELLO_API void mello_stream_request_keyframe(MelloStreamHost* host);
 /** Hot-reconfigure encoder bitrate without restarting the session. */
 MELLO_API MelloResult mello_stream_set_bitrate(MelloStreamHost* host, uint32_t bitrate_kbps);
 
+/**
+ * Hot-reconfigure the encoded output framerate without restarting capture.
+ *
+ * Frames are decimated before GPU colour conversion, so both convert and encode
+ * cost fall. At a fixed bitrate, halving the framerate doubles the bits per
+ * frame — the difference between a starved 60fps picture and a clean 30fps one.
+ *
+ * Pass 0 (or a value at/above the configured capture rate) to encode every
+ * captured frame.
+ */
+MELLO_API MelloResult mello_stream_set_framerate(MelloStreamHost* host, uint32_t fps);
+
 /** Register callback for game-audio packets. Must be set before mello_stream_start_audio. */
 MELLO_API void mello_stream_set_audio_callback(
     MelloStreamHost*          host,

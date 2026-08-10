@@ -77,6 +77,26 @@ public:
     /// cannot permanently downgrade quality.
     static bool encoder_is_overloaded(const EncoderLoadSample& sample);
 
+    /// Retarget the encoded output framerate without restarting capture.
+    ///
+    /// Frames are decimated at the capture callback, before GPU colour
+    /// conversion, so both convert and encode cost fall — which is the point on
+    /// a host that cannot keep up. Capture itself keeps running at its own rate:
+    /// its cadence is driven by the display, and reconfiguring each backend's
+    /// throttle at runtime would be far more invasive for no extra saving.
+    ///
+    /// `fps` is clamped to the configured capture rate; 0 restores it.
+    void set_output_fps(uint32_t fps);
+    uint32_t output_fps() const { return output_fps_.load(std::memory_order_relaxed); }
+
+    /// True when a captured frame should be passed downstream under the current
+    /// decimation target. Static and pure so the cadence is testable without a
+    /// capture device.
+    /// `capture_fps` sizes the deadline tolerance; pass the configured capture
+    /// rate. 0 disables tolerance.
+    static bool decimation_accepts(uint64_t timestamp_us, uint64_t last_emitted_us,
+                                   uint32_t output_fps, uint32_t capture_fps);
+
     void get_stats(EncoderStats& out) const;
 
     // Host-side diagnostics beyond the encoder's own contract. String members
@@ -193,6 +213,13 @@ private:
     // caller; keeping the time math out of here avoids a second clock policy.
     std::atomic<uint64_t> frames_captured_{0};
     std::atomic<uint64_t> last_capture_us_{0};
+
+    // Decimation target. 0 means "no decimation" (encode every captured frame).
+    // Read on the capture thread, written from the control thread.
+    std::atomic<uint32_t> output_fps_{0};
+    // Capture timestamp of the last frame passed downstream, in the capture
+    // thread's own clock. Only touched on the capture thread.
+    uint64_t last_emitted_us_ = 0;
     double   last_convert_ms_  = 0;
     double   last_encode_ms_   = 0;
     uint64_t viewer_start_time_ = 0;

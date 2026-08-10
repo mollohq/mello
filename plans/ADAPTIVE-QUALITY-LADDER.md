@@ -1,6 +1,7 @@
 # Adaptive Quality Ladder — Runtime Rung Switching
 
-> **Status:** Design, not yet implemented. Branch `feat/stream-adaptive-quality`.
+> **Status:** Stage 1 (framerate rungs) implemented on `feat/stream-adaptive-quality`.
+> Stage 2 (geometry rungs) still design-only — see §2.5.
 > **Origin:** 2026-08-09 field test. A host delivered a median 44 fps but spent 17% of
 > 10s windows under 20 fps, dipping to 5–7 fps, while Discord stayed fluid on the same
 > machine at the same time.
@@ -42,7 +43,7 @@ stable as geometry changes. The current presets do not:
 | Ultra | 1920×1080@60 | 8000 | 124.4 | **0.064** |
 | High | 1920×1080@30 | 4500 | 62.2 | **0.072** |
 | Medium | 1280×720@60 | 5000 | 55.3 | **0.090** |
-| Low | 1280×720@30 | 3000 | 27.6 | **0.108** |
+| Low | 1280×720@30 | 3000 | 27.6 | **0.109** |
 | Potato | 854×480@30 | 1500 | 12.3 | **0.122** |
 
 Ultra is the *least* well provisioned rung in the set — a user selecting "best quality"
@@ -113,7 +114,8 @@ cannot keep up just re-enters the stall.
 
 ### 2.5 Staging — framerate first
 
-**Stage 1 — framerate only.** Rungs that change fps but not geometry (0→1→2 above).
+**Stage 1 — framerate only. ✅ Implemented** (`stream/ladder.rs`, spec 12 §8.1.1).
+Rungs that change fps but not geometry (0→1→2 above).
 No SPS geometry change, no decoder re-init, no swap-chain resize, **no viewer-side
 change at all**. At fixed bitrate, halving fps doubles bits per frame — 720p30 at
 1.5 Mbps is watchable where 720p60 is not. This is low-risk and likely recovers most

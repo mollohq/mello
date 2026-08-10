@@ -9,6 +9,7 @@ use tokio::time::MissedTickBehavior;
 use super::config::StreamConfig;
 use super::error::StreamError;
 use super::input::{InputPassthrough, InputPassthroughStub};
+use super::ladder::FramerateLadder;
 use super::pacer::{calc_stream_pacing_target_kbps, PacingTelemetry};
 use super::sink::{PacketSink, SinkVideoFeedback, SinkVideoFeedbackKind};
 use super::sink_sfu::SFU_CONTROL_VIEWER_ID;
@@ -58,6 +59,9 @@ pub(crate) struct HostStatsFields {
     pub width: u32,
     pub height: u32,
     pub fps_cfg: u32,
+    /// Framerate the ladder is currently targeting; below fps_cfg means a rung
+    /// has been taken.
+    pub fps_out: u32,
     pub recovery: bool,
     pub video_send_fail: u64,
     pub video_queue_len: usize,
@@ -86,6 +90,7 @@ pub(crate) fn host_stats_payload(f: HostStatsFields) -> serde_json::Value {
         "w": f.width,
         "h": f.height,
         "fps_cfg": f.fps_cfg,
+        "fps_out": f.fps_out,
         "recovery": f.recovery,
         "vfail": f.video_send_fail,
         "vq": f.video_queue_len,
@@ -211,6 +216,9 @@ pub struct StreamManager {
     last_frames_captured: u64,
     last_encode_queue_drops: u64,
     last_stats_paced_bytes: u64,
+    /// Owns the encoder's framerate target. Congestion control feeds it the
+    /// bitrate; it decides the cadence that bitrate can actually sustain.
+    framerate_ladder: FramerateLadder,
     last_manager_sample: ManagerTelemetrySnapshot,
     last_manager_sample_at: Instant,
     drop_delta_until_keyframe: bool,
@@ -256,6 +264,8 @@ impl StreamManager {
     ) -> Self {
         let max_bitrate_kbps = config.bitrate_kbps;
         let min_bitrate_kbps = StreamConfig::min_bitrate_kbps(config.codec);
+        // Read before `config` is moved into the struct literal below.
+        let ladder = FramerateLadder::new(config.width, config.height, config.fps, Instant::now());
         Self {
             ctx,
             host,
@@ -294,6 +304,7 @@ impl StreamManager {
             last_frames_captured: 0,
             last_encode_queue_drops: 0,
             last_stats_paced_bytes: 0,
+            framerate_ladder: ladder,
             last_manager_sample: ManagerTelemetrySnapshot::default(),
             last_manager_sample_at: Instant::now(),
             drop_delta_until_keyframe: false,
@@ -533,6 +544,44 @@ impl StreamManager {
         &self.config
     }
 
+    /// Let the ladder judge whether the current bitrate can sustain the current
+    /// framerate, and retarget the encoder when it cannot.
+    ///
+    /// Fed the *applied* bitrate rather than the raw congestion estimate, so the
+    /// ladder reacts to what the encoder was actually told — including the
+    /// configured floor and ceiling — rather than to a target that was clamped
+    /// away before it ever reached the wire.
+    fn tick_framerate_ladder(&mut self) {
+        let Some(fps) = self
+            .framerate_ladder
+            .observe(self.current_bitrate_kbps, Instant::now())
+        else {
+            return;
+        };
+
+        if !self.host.is_null() {
+            unsafe {
+                mello_sys::mello_stream_set_framerate(self.host, fps);
+            }
+        }
+        log::info!(
+            "Stream framerate ladder: {} fps at {} kbps ({:.3} bpp at full rate) — {}",
+            fps,
+            self.current_bitrate_kbps,
+            super::ladder::bits_per_pixel(
+                self.current_bitrate_kbps,
+                self.config.width,
+                self.config.height,
+                self.config.fps
+            ),
+            if fps < self.config.fps {
+                "bitrate cannot sustain full cadence, halving"
+            } else {
+                "headroom recovered, restoring"
+            }
+        );
+    }
+
     /// Push host diagnostics to the relay so a remote user's stream can be
     /// debugged without their client log.
     ///
@@ -585,6 +634,7 @@ impl StreamManager {
             width: self.config.width,
             height: self.config.height,
             fps_cfg: self.config.fps,
+            fps_out: self.framerate_ladder.current_fps(),
             recovery: self.drop_delta_until_keyframe,
             video_send_fail: self.manager_video_send_fail_total,
             video_queue_len: self.video_rx.len(),
@@ -630,6 +680,7 @@ impl StreamManager {
                 }
                 _ = manager_tick.tick() => {
                     self.log_manager_telemetry().await;
+                    self.tick_framerate_ladder();
                 }
                 _ = stats_tick.tick() => {
                     self.report_stream_stats().await;
@@ -1012,6 +1063,7 @@ mod tests {
             width: u32::MAX,
             height: u32::MAX,
             fps_cfg: u32::MAX,
+            fps_out: u32::MAX,
             recovery: true,
             video_send_fail: u64::MAX,
             video_queue_len: usize::MAX,

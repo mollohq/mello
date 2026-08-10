@@ -269,6 +269,40 @@ If the decode queue depth exceeds a threshold, the viewer drops incoming delta f
 
 Default is Medium. The host can select a preset before starting. The GPU preprocessor downscales capture to the preset's target resolution. Preset `fec_n` fields remain in config for schema compatibility but are unused on the RTP path.
 
+### 8.1.1 Adaptive framerate ladder (Stage 1)
+
+The preset fixes geometry and framerate at stream start; §8.2 then moves only
+bitrate inside it. When throughput falls that starves the picture rather than
+simplifying it — 720p60 at 1.5 Mbps is ~0.027 bits per pixel per frame, about a
+third of what the format needs, which is how a stream reaches single-digit
+delivered fps. §1 already commits to the opposite: *favor visible quality loss
+over lag or stalling*.
+
+`FramerateLadder` (`stream/ladder.rs`) owns the encoder's framerate target and
+trades in **bits per pixel per frame**, `bitrate / (w × h × fps)` — preset-
+agnostic, so one threshold pair covers Ultra through Potato:
+
+| Transition | Condition | Dwell |
+|---|---|---|
+| full → half rate | bpp at full rate **< 0.055** | 2 s |
+| half → full rate | bpp at full rate **> 0.075** | 15 s |
+
+10 s cooldown between switches, and no rung below 30fps. Both directions are
+judged **at full framerate**: dropping to 30fps instantly doubles the measured
+bpp, so judging at the current rung would argue for climbing straight back into
+the starvation just escaped.
+
+Reduction is by **decimation before GPU colour conversion**
+(`VideoPipeline::set_output_fps`), so convert *and* encode cost fall and no
+capture backend needs reconfiguring. The encoder is retargeted too
+(`Encoder::set_framerate`) because rate control budgets bits per frame from the
+framerate — an encoder still told 60 while fed 30 hands out half the bits each
+frame deserves. Each switch forces an IDR.
+
+Stage 2 (geometry rungs: 540p/480p/360p) needs viewer-side work — mid-stream SPS
+geometry change and a `DCompPresenter` swap-chain resize — and is tracked in
+`plans/ADAPTIVE-QUALITY-LADDER.md`.
+
 ### 8.2 REMB congestion control
 
 **Viewer (`ViewerCongestionController`):** Samples native RTP receiver stats every 500 ms. Severe loss (>5%), incomplete AUs, or gate pressure step the receive target down 25%; mild loss (2–5%) or jitter >20 ms steps down 15%; ten consecutive good samples increase by max(100 kbps, 5%). Emits REMB at significant changes or every 2 s heartbeat.
@@ -432,6 +466,7 @@ DComp presenter diagnostics:
 | ~~WGC has no frame throttling~~ **Fixed (v0.4)** — accumulator throttle delivers exactly target_fps | — | — |
 | AMF/QSV encoders less tested | No smooth experience for AMD/Intel GPU users | Medium |
 | Viewer jitter buffer is simple depth-gate, not PID-paced | Residual cadence oscillation under varying network conditions | Medium |
+| Ladder Stage 2 (geometry rungs) not implemented | Below ~1 Mbps even 30fps 720p starves; needs viewer SPS-change + DComp resize | Medium |
 | Game audio not wired | No game sound on stream | Medium |
 | Input passthrough not implemented | No remote control | Large |
 | DComp visual uses overlay, not true underlay (`WS_EX_NOREDIRECTIONBITMAP` not set) | Video composites on top of Slint content; stream card badges moved to bottom bar as workaround | Medium |

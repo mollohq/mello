@@ -307,3 +307,54 @@ TEST(EncoderOverloadPolicy, ZeroTargetFpsIsNotTreatedAsOverload) {
     s.target_fps = 0; // guards a divide-by-zero on an unconfigured pipeline
     EXPECT_FALSE(VideoPipeline::encoder_is_overloaded(s));
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Framerate decimation cadence
+// ─────────────────────────────────────────────────────────────────────────────
+
+TEST(FramerateDecimation, ZeroTargetAcceptsEveryFrame) {
+    // 0 means "no decimation" — every captured frame is encoded.
+    EXPECT_TRUE(VideoPipeline::decimation_accepts(1000, 900, 0, 60));
+    EXPECT_TRUE(VideoPipeline::decimation_accepts(901, 900, 0, 60));
+}
+
+TEST(FramerateDecimation, FirstFrameIsAlwaysAccepted) {
+    EXPECT_TRUE(VideoPipeline::decimation_accepts(12345, 0, 30, 60));
+}
+
+TEST(FramerateDecimation, HalvesA60fpsSourceTo30) {
+    // 60fps source: frames every 16667us. Target 30fps: every other frame.
+    const uint32_t target = 30;
+    uint64_t last_emitted = 0;
+    int accepted = 0;
+    for (int i = 0; i < 60; ++i) {
+        const uint64_t ts = static_cast<uint64_t>(i) * 16667ULL;
+        if (VideoPipeline::decimation_accepts(ts, last_emitted, target, 60)) {
+            ++accepted;
+            last_emitted = ts;
+        }
+    }
+    // One second of 60fps input should yield ~30 encoded frames.
+    EXPECT_GE(accepted, 29);
+    EXPECT_LE(accepted, 31);
+}
+
+TEST(FramerateDecimation, TolerancePreventsUnderDelivery) {
+    // A frame arriving just short of a full interval must still be accepted:
+    // capture lands on vsync boundaries, so demanding the full interval would
+    // reject the closest frame every time and deliver 20fps instead of 30.
+    const uint64_t interval = 1'000'000ULL / 30;
+    EXPECT_TRUE(VideoPipeline::decimation_accepts(interval - 100, 1, 30, 60))
+        << "near-deadline frame rejected; cadence would collapse below target";
+}
+
+TEST(FramerateDecimation, RejectsFramesInsideTheInterval) {
+    // Well inside the interval — genuinely too early, must be dropped.
+    EXPECT_FALSE(VideoPipeline::decimation_accepts(1'000 + 1'000, 1'000, 30, 60));
+}
+
+TEST(FramerateDecimation, ClockResetDoesNotWedgeTheStream) {
+    // A backend hot-swap can restart timestamps. Accepting on a backwards jump
+    // keeps frames flowing instead of stalling until the old clock is passed.
+    EXPECT_TRUE(VideoPipeline::decimation_accepts(5, 9'000'000, 30, 60));
+}

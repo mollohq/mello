@@ -67,6 +67,15 @@ public:
 
     /// 0 = full quality. Higher means features have been given up.
     virtual int  cost_tier() const { return 0; }
+
+    /// Retarget rate control at a new output framerate.
+    ///
+    /// Required when the pipeline decimates frames: rate control derives its
+    /// per-frame bit budget from the framerate, so an encoder still told 60 while
+    /// being fed 30 hands out half the bits each frame actually deserves.
+    ///
+    /// Default no-op for backends without runtime framerate control.
+    virtual void set_framerate(uint32_t fps) { (void)fps; }
 };
 
 } // namespace mello::video
