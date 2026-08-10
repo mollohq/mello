@@ -80,6 +80,55 @@ pub(super) struct ViewerState {
     pub debug_last_backlog_guard_drops: u64,
     pub last_present_attempt: Instant,
     pub au_recv_buf: Vec<u8>,
+    /// Freeze accounting. Every other viewer metric is a proxy for what the user
+    /// perceives; a freeze is the thing itself — a visible stall in the picture.
+    /// A gap is counted once when it crosses the threshold, then extended, so a
+    /// single 4s stall reports as one freeze of 4000ms rather than many.
+    pub last_new_frame_at: Instant,
+    pub freeze_count: u64,
+    pub freeze_ms_total: u64,
+    pub in_freeze: bool,
+    /// How much of the current gap is already in `freeze_ms_total`, so a freeze
+    /// spanning many ticks accrues once rather than per tick.
+    pub freeze_accounted_ms: u64,
+    /// Baselines for the 10s SFU report, kept separate from the 1s debug-event
+    /// baselines so the two cadences do not consume each other's deltas.
+    pub stats_last_emit: Instant,
+    pub stats_last_frames_presented: u64,
+    pub stats_last_freeze_count: u64,
+    pub stats_last_freeze_ms: u64,
+}
+
+/// A present gap longer than this counts as a visible freeze. Two 60fps frame
+/// intervals (33ms) is normal jitter; 150ms is unambiguously perceptible and
+/// still well under the 600ms AU hard-age cap, so it fires before the receiver
+/// gives up on an access unit rather than after.
+pub(super) const FREEZE_THRESHOLD_MS: u64 = 150;
+
+/// Fold a present-loop observation into the freeze counters.
+///
+/// Split out from the tick so it is testable without a decoder: the tick has raw
+/// pointers and a live pipeline, this has arithmetic.
+pub(super) fn note_present_gap(
+    gap_ms: u64,
+    in_freeze: &mut bool,
+    freeze_count: &mut u64,
+    freeze_ms_total: &mut u64,
+    accounted_ms: &mut u64,
+) {
+    if gap_ms < FREEZE_THRESHOLD_MS {
+        return;
+    }
+    if !*in_freeze {
+        *in_freeze = true;
+        *freeze_count = freeze_count.saturating_add(1);
+        *accounted_ms = 0;
+    }
+    // Only the newly-elapsed portion, so a long freeze observed over many ticks
+    // is not counted once per tick.
+    let unaccounted = gap_ms.saturating_sub(*accounted_ms);
+    *freeze_ms_total = freeze_ms_total.saturating_add(unaccounted);
+    *accounted_ms = gap_ms;
 }
 
 unsafe impl Send for ViewerState {}
@@ -558,6 +607,49 @@ mod tests {
     #[test]
     fn max_au_polls_per_tick_is_bounded() {
         assert_eq!(MAX_AU_POLLS_PER_TICK, 32);
+    }
+
+    /// Normal inter-frame jitter must not register as a freeze, or the metric
+    /// reports a stall on every healthy stream and becomes unusable.
+    #[test]
+    fn gaps_below_the_threshold_are_not_freezes() {
+        let (mut in_freeze, mut count, mut total, mut accounted) = (false, 0u64, 0u64, 0u64);
+        for gap in [0, 16, 33, 90, FREEZE_THRESHOLD_MS - 1] {
+            note_present_gap(gap, &mut in_freeze, &mut count, &mut total, &mut accounted);
+        }
+        assert_eq!(count, 0);
+        assert_eq!(total, 0);
+        assert!(!in_freeze);
+    }
+
+    /// One stall observed across several ticks is one freeze, and its duration is
+    /// the elapsed gap — not the sum of every observation of it.
+    #[test]
+    fn a_freeze_spanning_ticks_counts_once_and_accrues_once() {
+        let (mut in_freeze, mut count, mut total, mut accounted) = (false, 0u64, 0u64, 0u64);
+        note_present_gap(200, &mut in_freeze, &mut count, &mut total, &mut accounted);
+        note_present_gap(400, &mut in_freeze, &mut count, &mut total, &mut accounted);
+        note_present_gap(900, &mut in_freeze, &mut count, &mut total, &mut accounted);
+        assert_eq!(count, 1, "one stall must be one freeze");
+        assert_eq!(
+            total, 900,
+            "duration is the gap, not the sum of observations"
+        );
+        assert!(in_freeze);
+    }
+
+    /// Recovering and stalling again is two freezes; the second must not inherit
+    /// the first one's accounted duration.
+    #[test]
+    fn separate_stalls_count_separately() {
+        let (mut in_freeze, mut count, mut total, mut accounted) = (false, 0u64, 0u64, 0u64);
+        note_present_gap(300, &mut in_freeze, &mut count, &mut total, &mut accounted);
+        // Frame arrives: the present loop clears the gap state.
+        in_freeze = false;
+        accounted = 0;
+        note_present_gap(500, &mut in_freeze, &mut count, &mut total, &mut accounted);
+        assert_eq!(count, 2);
+        assert_eq!(total, 800);
     }
 
     #[test]

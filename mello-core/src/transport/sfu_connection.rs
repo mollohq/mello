@@ -19,6 +19,11 @@ use crate::stream::StreamError;
 
 pub use crate::stream::rtp_peer::PeerMediaRole;
 
+/// Must stay in step with the SFU's `clientStatsMaxBytes`. Over-cap payloads are
+/// dropped server-side and counted as `stream_client_stats_oversized`, so the
+/// client checks first and logs locally rather than reporting into a void.
+const STREAM_STATS_MAX_BYTES: usize = 2048;
+
 fn peer_media_role_is_stream(role: PeerMediaRole) -> bool {
     matches!(
         role,
@@ -370,6 +375,36 @@ impl SfuConnection {
             return Err(StreamError::SfuSendFailed("audio track send failed".into()));
         }
         Ok(())
+    }
+
+    /// Report stream host/viewer diagnostics to the SFU over signaling.
+    ///
+    /// Stream sessions are the ones we cannot debug from the user's machine, so
+    /// this is the only view an operator gets of a remote host's capture and
+    /// encoder or a remote viewer's decode cadence and freeze time.
+    ///
+    /// Best-effort and non-fatal: telemetry must never disturb a working stream,
+    /// so a send failure is logged at debug and dropped. The SFU rate-limits to
+    /// one message per 5s per peer and caps the payload at 2048 bytes.
+    pub async fn send_stream_stats(&self, payload: &serde_json::Value) {
+        let msg = serde_json::json!({
+            "type": "stream_client_stats",
+            "seq": 0,
+            "data": payload,
+        });
+        let body = msg.to_string();
+        if body.len() > STREAM_STATS_MAX_BYTES {
+            log::warn!(
+                "SFU: stream_client_stats payload {} bytes exceeds {} — dropping",
+                body.len(),
+                STREAM_STATS_MAX_BYTES
+            );
+            return;
+        }
+        let mut tx = self.ws_tx.lock().await;
+        if let Err(e) = tx.send(Message::Text(body)).await {
+            log::debug!("SFU: stream_client_stats send failed: {}", e);
+        }
     }
 
     /// Send control data (loss reports, IDR requests) via the reliable DataChannel.

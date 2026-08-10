@@ -15,6 +15,83 @@ use super::sink_sfu::SFU_CONTROL_VIEWER_ID;
 
 const PACING_TELEMETRY_INTERVAL_SECS: u64 = 2;
 const MANAGER_TELEMETRY_INTERVAL_SECS: u64 = 1;
+/// Cadence for pushing host diagnostics to the relay. Local logs stay at 1s; this
+/// is the remote copy, and the SFU rate-limits anything under 5s.
+const STREAM_STATS_REPORT_INTERVAL_SECS: u64 = 10;
+
+/// Read a fixed-size NUL-terminated C field from `MelloStreamStats` as a string.
+///
+/// libmello zeroes the struct and `strncpy`s with `size - 1`, so a terminator is
+/// always present; the `take_while` is belt-and-braces against a future field
+/// that forgets to.
+fn cstr_field(raw: &[std::os::raw::c_char]) -> String {
+    let bytes: Vec<u8> = raw
+        .iter()
+        .take_while(|&&c| c != 0)
+        .map(|&c| c as u8)
+        .collect();
+    String::from_utf8_lossy(&bytes).into_owned()
+}
+
+/// One decimal place. JSON-encoded floats otherwise carry a dozen digits of noise
+/// that waste the payload budget without adding information.
+fn round1(value: f32) -> f32 {
+    (value * 10.0).round() / 10.0
+}
+
+/// Field set for the host telemetry payload, split from the manager so the wire
+/// shape can be size-tested without a live stream.
+pub(crate) struct HostStatsFields {
+    pub gpu: String,
+    pub encoder: String,
+    pub capture_backend: String,
+    pub capture_fps: f32,
+    pub capture_idle_ms: u32,
+    pub encode_fps: u32,
+    pub encode_ms: f32,
+    pub convert_ms: f32,
+    pub eq_depth: u32,
+    pub eq_drops: u64,
+    pub bitrate_target_kbps: u32,
+    pub bitrate_actual_kbps: u32,
+    pub pace_kbps: Option<u32>,
+    pub width: u32,
+    pub height: u32,
+    pub fps_cfg: u32,
+    pub recovery: bool,
+    pub video_send_fail: u64,
+    pub video_queue_len: usize,
+}
+
+/// Build the host `stream_client_stats` payload.
+///
+/// Keys are abbreviated because the SFU caps the message at 2048 bytes and the
+/// field set will keep growing; `host_stats_payload_fits_the_sfu_cap` guards it.
+pub(crate) fn host_stats_payload(f: HostStatsFields) -> serde_json::Value {
+    serde_json::json!({
+        "role": "host",
+        "gpu": f.gpu,
+        "enc": f.encoder,
+        "cap_backend": f.capture_backend,
+        "cap_fps": round1(f.capture_fps),
+        "cap_idle_ms": f.capture_idle_ms,
+        "enc_fps": f.encode_fps,
+        "enc_ms": round1(f.encode_ms),
+        "conv_ms": round1(f.convert_ms),
+        "eq_depth": f.eq_depth,
+        "eq_drops": f.eq_drops,
+        "br_target": f.bitrate_target_kbps,
+        "br_actual": f.bitrate_actual_kbps,
+        "pace_kbps": f.pace_kbps,
+        "w": f.width,
+        "h": f.height,
+        "fps_cfg": f.fps_cfg,
+        "recovery": f.recovery,
+        "vfail": f.video_send_fail,
+        "vq": f.video_queue_len,
+    })
+}
+
 const MAX_VIDEO_COALESCE_DRAIN: usize = 32;
 const QUEUE_KEYFRAME_COALESCE_THRESHOLD: usize = 2;
 const QUEUE_RECOVERY_COALESCE_THRESHOLD: usize = 10;
@@ -129,6 +206,11 @@ pub struct StreamManager {
     manager_audio_stub_total: u64,
     manager_max_video_queue_len: usize,
     manager_max_audio_queue_len: usize,
+    /// Previous values of libmello's monotonic counters, so the reported figures
+    /// are per-interval rates rather than since-start totals.
+    last_frames_captured: u64,
+    last_encode_queue_drops: u64,
+    last_stats_paced_bytes: u64,
     last_manager_sample: ManagerTelemetrySnapshot,
     last_manager_sample_at: Instant,
     drop_delta_until_keyframe: bool,
@@ -209,6 +291,9 @@ impl StreamManager {
             manager_audio_stub_total: 0,
             manager_max_video_queue_len: 0,
             manager_max_audio_queue_len: 0,
+            last_frames_captured: 0,
+            last_encode_queue_drops: 0,
+            last_stats_paced_bytes: 0,
             last_manager_sample: ManagerTelemetrySnapshot::default(),
             last_manager_sample_at: Instant::now(),
             drop_delta_until_keyframe: false,
@@ -448,6 +533,65 @@ impl StreamManager {
         &self.config
     }
 
+    /// Push host diagnostics to the relay so a remote user's stream can be
+    /// debugged without their client log.
+    ///
+    /// Keys are abbreviated deliberately: the SFU caps the payload at 2048 bytes
+    /// and this has to leave room for the field set to grow.
+    async fn report_stream_stats(&mut self) {
+        let mut stats: mello_sys::MelloStreamStats = unsafe { std::mem::zeroed() };
+        if !self.host.is_null() {
+            unsafe { mello_sys::mello_stream_get_stats(self.host, &mut stats) };
+        }
+
+        // Capture and encode rates are reported separately on purpose. A single
+        // "frames" number cannot distinguish a stalled capture from a stalled
+        // encoder, and telling those apart is the whole reason this exists.
+        let captured_delta = stats
+            .frames_captured
+            .saturating_sub(self.last_frames_captured);
+        self.last_frames_captured = stats.frames_captured;
+        let capture_fps = captured_delta as f32 / STREAM_STATS_REPORT_INTERVAL_SECS as f32;
+
+        let eq_drops_delta = stats
+            .encode_queue_drops
+            .saturating_sub(self.last_encode_queue_drops);
+        self.last_encode_queue_drops = stats.encode_queue_drops;
+
+        // Measured egress, derived the same way as the 1s pacing log but over
+        // this reporter's own interval — the two cadences must not share a
+        // baseline or each would consume the other's delta.
+        let pacing = self.sink.pacing_telemetry().await;
+        let pace_kbps = pacing.as_ref().map(|p| {
+            let delta = p.paced_bytes.saturating_sub(self.last_stats_paced_bytes);
+            self.last_stats_paced_bytes = p.paced_bytes;
+            ((delta as f32 * 8.0 / 1000.0) / STREAM_STATS_REPORT_INTERVAL_SECS as f32).round()
+                as u32
+        });
+        let payload = host_stats_payload(HostStatsFields {
+            gpu: cstr_field(&stats.gpu_name),
+            encoder: cstr_field(&stats.encoder_name),
+            capture_backend: cstr_field(&stats.capture_backend),
+            capture_fps,
+            capture_idle_ms: stats.capture_idle_ms,
+            encode_fps: stats.fps_actual,
+            encode_ms: stats.encode_ms,
+            convert_ms: stats.convert_ms,
+            eq_depth: stats.encode_queue_depth,
+            eq_drops: eq_drops_delta,
+            bitrate_target_kbps: self.current_bitrate_kbps,
+            bitrate_actual_kbps: stats.bitrate_kbps,
+            pace_kbps,
+            width: self.config.width,
+            height: self.config.height,
+            fps_cfg: self.config.fps,
+            recovery: self.drop_delta_until_keyframe,
+            video_send_fail: self.manager_video_send_fail_total,
+            video_queue_len: self.video_rx.len(),
+        });
+        self.sink.send_stats(&payload).await;
+    }
+
     /// Main run loop — called from a dedicated tokio task after stream start.
     pub async fn run(&mut self, mut stop: oneshot::Receiver<()>) {
         log::info!("Stream manager run loop started");
@@ -462,6 +606,9 @@ impl StreamManager {
         let mut feedback_tick =
             tokio::time::interval(Duration::from_millis(FEEDBACK_POLL_INTERVAL_MS));
         feedback_tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
+        let mut stats_tick =
+            tokio::time::interval(Duration::from_secs(STREAM_STATS_REPORT_INTERVAL_SECS));
+        stats_tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
         loop {
             tokio::select! {
@@ -483,6 +630,9 @@ impl StreamManager {
                 }
                 _ = manager_tick.tick() => {
                     self.log_manager_telemetry().await;
+                }
+                _ = stats_tick.tick() => {
+                    self.report_stream_stats().await;
                 }
                 else => {
                     log::info!("Stream manager: packet channels closed");
@@ -837,6 +987,49 @@ fn coalesce_video_packet(
 
 #[cfg(test)]
 mod tests {
+    /// The SFU drops any stream_client_stats message over 2048 bytes and counts
+    /// it as oversized, so an over-budget payload is silently invisible telemetry
+    /// — exactly the failure this whole feature exists to prevent. Sized here
+    /// against the widest values the C fields can carry.
+    #[test]
+    fn host_stats_payload_fits_the_sfu_cap() {
+        // gpu_name is char[128], encoder_name char[32], capture_backend char[16];
+        // fill each to capacity, then take the worst case for every number.
+        let payload = super::host_stats_payload(super::HostStatsFields {
+            gpu: "W".repeat(127),
+            encoder: "W".repeat(31),
+            capture_backend: "W".repeat(15),
+            capture_fps: 999.9,
+            capture_idle_ms: u32::MAX,
+            encode_fps: u32::MAX,
+            encode_ms: 9999.9,
+            convert_ms: 9999.9,
+            eq_depth: u32::MAX,
+            eq_drops: u64::MAX,
+            bitrate_target_kbps: u32::MAX,
+            bitrate_actual_kbps: u32::MAX,
+            pace_kbps: Some(u32::MAX),
+            width: u32::MAX,
+            height: u32::MAX,
+            fps_cfg: u32::MAX,
+            recovery: true,
+            video_send_fail: u64::MAX,
+            video_queue_len: usize::MAX,
+        });
+        // Matches the envelope the connection actually sends.
+        let envelope = serde_json::json!({
+            "type": "stream_client_stats",
+            "seq": 0,
+            "data": payload,
+        });
+        let encoded = envelope.to_string();
+        assert!(
+            encoded.len() <= 2048,
+            "host payload is {} bytes, over the SFU's 2048 cap",
+            encoded.len()
+        );
+    }
+
     use std::sync::atomic::{AtomicU32, Ordering};
     use std::sync::{Arc, Mutex};
     use std::time::{Duration, Instant};

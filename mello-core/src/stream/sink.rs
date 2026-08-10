@@ -96,6 +96,14 @@ pub trait PacketSink: Send + Sync {
 
     /// Called when a viewer leaves; drops per-viewer feedback state.
     async fn on_viewer_left(&self, viewer_id: &str);
+
+    /// Report host diagnostics to the relay, when the transport has one.
+    ///
+    /// Default no-op: P2P has no server to report to, and the manager should not
+    /// have to know which topology it is running on. Only `SfuSink` overrides it.
+    /// Telemetry is best-effort — a failure here must never disturb the media
+    /// path, so the result is deliberately discarded.
+    async fn send_stats(&self, _payload: &serde_json::Value) {}
 }
 
 #[cfg(test)]

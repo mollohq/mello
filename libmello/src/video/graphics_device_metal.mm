@@ -1,5 +1,6 @@
 #include "graphics_device.hpp"
 #include "../util/log.hpp"
+#include <cstdio>
 
 #ifdef __APPLE__
 
@@ -28,7 +29,11 @@ GraphicsDevice create_metal_device() {
 
         // Retain — caller owns the device, released in ~VideoPipeline
         void* handle = (__bridge_retained void*)device;
-        return {GraphicsBackend::Metal, handle};
+        GraphicsDevice result{GraphicsBackend::Metal, handle, {}};
+        if (const char* name = [[device name] UTF8String]) {
+            std::snprintf(result.adapter_name, sizeof(result.adapter_name), "%s", name);
+        }
+        return result;
     }
 }
 

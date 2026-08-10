@@ -23,6 +23,9 @@ use super::stream_ffi::{
 use super::FRAME_STATE_PRESENTED;
 
 const STREAM_DEBUG_EVENT_INTERVAL_SECS: f32 = 1.0;
+/// Viewer report cadence to the SFU. Above the server's 5s rate limit so a
+/// message is never dropped for arriving too soon.
+const VIEWER_STATS_INTERVAL_SECS: u64 = 10;
 const HOST_PACING_DEBUG_EVENT_INTERVAL_SECS: f32 = 1.0;
 
 impl super::Client {
@@ -483,12 +486,44 @@ impl super::Client {
             if presented {
                 vs.frames_presented += 1;
                 presented_this_tick += 1;
+                vs.last_new_frame_at = Instant::now();
+                vs.in_freeze = false;
+                vs.freeze_accounted_ms = 0;
                 if vs.frames_presented <= 3 || vs.frames_presented.is_multiple_of(300) {
                     log::info!("Stream frame presented #{}", vs.frames_presented);
                 }
             } else {
                 break; // ring buffer empty
             }
+        }
+
+        // Sampled every tick rather than only on recovery, so a freeze in
+        // progress is already visible in telemetry instead of appearing only
+        // once the picture comes back.
+        //
+        // Not counted before the first frame: pipeline init and the wait for the
+        // first IDR would otherwise register as a freeze on every session, and
+        // "startup took a while" is a different measurement from "the picture
+        // stalled" (the certification gate already times first-keyframe).
+        if vs.frames_presented > 0 {
+            let present_gap_ms = vs.last_new_frame_at.elapsed().as_millis() as u64;
+            let (mut in_freeze, mut count, mut total, mut accounted) = (
+                vs.in_freeze,
+                vs.freeze_count,
+                vs.freeze_ms_total,
+                vs.freeze_accounted_ms,
+            );
+            super::stream_ffi::note_present_gap(
+                present_gap_ms,
+                &mut in_freeze,
+                &mut count,
+                &mut total,
+                &mut accounted,
+            );
+            vs.in_freeze = in_freeze;
+            vs.freeze_count = count;
+            vs.freeze_ms_total = total;
+            vs.freeze_accounted_ms = accounted;
         }
 
         // Poll SFU events for session lifecycle only — stream video uses native RTP.
@@ -588,6 +623,64 @@ impl super::Client {
             vs.debug_last_frames_presented = vs.frames_presented;
             vs.debug_last_backlog_guard_drops = vs.backlog_guard_drops;
         }
+
+        self.report_viewer_stream_stats().await;
+    }
+
+    /// Push viewer diagnostics to the SFU every 10s.
+    ///
+    /// SFU mode only: P2P has no relay to report to, and the host is the peer we
+    /// would be reporting about. Freeze time leads the payload because it is the
+    /// only field that corresponds to what the user actually sees — the rest
+    /// explain *why* a freeze happened.
+    async fn report_viewer_stream_stats(&mut self) {
+        let Some(vs) = self.viewer_state.as_mut() else {
+            return;
+        };
+        if vs.mode != "sfu" {
+            return;
+        }
+        if vs.stats_last_emit.elapsed().as_secs() < VIEWER_STATS_INTERVAL_SECS {
+            return;
+        }
+        let elapsed = vs.stats_last_emit.elapsed().as_secs_f32().max(0.001);
+        vs.stats_last_emit = Instant::now();
+
+        let Some(conn) = vs.sfu_connection.clone() else {
+            return;
+        };
+
+        let present_fps = vs
+            .frames_presented
+            .saturating_sub(vs.stats_last_frames_presented) as f32
+            / elapsed;
+        vs.stats_last_frames_presented = vs.frames_presented;
+
+        let freeze_count = vs.freeze_count.saturating_sub(vs.stats_last_freeze_count);
+        vs.stats_last_freeze_count = vs.freeze_count;
+        let freeze_ms = vs.freeze_ms_total.saturating_sub(vs.stats_last_freeze_ms);
+        vs.stats_last_freeze_ms = vs.freeze_ms_total;
+
+        let native = conn.video_stats().ok();
+        let payload = serde_json::json!({
+            "role": "viewer",
+            "freeze_n": freeze_count,
+            "freeze_ms": freeze_ms,
+            "present_fps": (present_fps * 10.0).round() / 10.0,
+            "rtt_ms": conn.rtt_ms().round() as i32,
+            "rx_complete": native.as_ref().map(|s| s.rx_core_complete_access_units),
+            "rx_incomplete": native.as_ref().map(|s| s.rx_core_incomplete_access_units),
+            "rx_missing": native.as_ref().map(|s| s.rx_core_missing_sequences_detected),
+            "rx_repaired": native.as_ref().map(|s| s.rx_core_repaired_packets),
+            "rx_gated": native.as_ref().map(|s| s.rx_core_gated),
+            "rx_nacks": native.as_ref().map(|s| s.rx_nack_sequences_sent),
+            "rx_pli": native.as_ref().map(|s| s.rx_pli_requests),
+            "rx_jitter": native.as_ref().map(|s| s.rx_core_interarrival_jitter),
+            "rx_fec_ok": native.as_ref().map(|s| s.rx_fec_recovered),
+            "rx_fec_fail": native.as_ref().map(|s| s.rx_fec_unrecoverable),
+            "bg_drops": vs.backlog_guard_drops,
+        });
+        conn.send_stream_stats(&payload).await;
     }
 
     async fn poll_sfu_host_membership_events(&mut self) {
@@ -1428,6 +1521,15 @@ impl super::Client {
             debug_last_backlog_guard_drops: 0,
             last_present_attempt: Instant::now(),
             au_recv_buf: ViewerState::new_au_recv_buf(),
+            last_new_frame_at: Instant::now(),
+            freeze_count: 0,
+            freeze_ms_total: 0,
+            in_freeze: false,
+            freeze_accounted_ms: 0,
+            stats_last_emit: Instant::now(),
+            stats_last_frames_presented: 0,
+            stats_last_freeze_count: 0,
+            stats_last_freeze_ms: 0,
         });
     }
 
@@ -1563,6 +1665,15 @@ impl super::Client {
             debug_last_backlog_guard_drops: 0,
             last_present_attempt: Instant::now(),
             au_recv_buf: ViewerState::new_au_recv_buf(),
+            last_new_frame_at: Instant::now(),
+            freeze_count: 0,
+            freeze_ms_total: 0,
+            in_freeze: false,
+            freeze_accounted_ms: 0,
+            stats_last_emit: Instant::now(),
+            stats_last_frames_presented: 0,
+            stats_last_freeze_count: 0,
+            stats_last_freeze_ms: 0,
         });
 
         log::info!(

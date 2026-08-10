@@ -190,6 +190,8 @@ bool VideoPipeline::start_host(const CaptureSourceDesc& source,
     eq_head_ = eq_tail_ = eq_count_ = 0;
     eq_drops_ = 0;
     last_convert_ms_ = last_encode_ms_ = 0;
+    frames_captured_.store(0, std::memory_order_relaxed);
+    last_capture_us_.store(host_start_time_, std::memory_order_relaxed);
 
     encode_thread_ = std::thread(&VideoPipeline::encode_thread_func, this);
 
@@ -229,6 +231,8 @@ bool VideoPipeline::start_host(const CaptureSourceDesc& source,
     host_running_    = true;
     host_start_time_ = now_us();
     frames_encoded_  = 0;
+    frames_captured_.store(0, std::memory_order_relaxed);
+    last_capture_us_.store(host_start_time_, std::memory_order_relaxed);
 
     auto self = this;
     if (!capture_->start(config.fps, [self](void* pixel_buffer, uint64_t ts) {
@@ -283,6 +287,9 @@ void VideoPipeline::stop_host() {
 void VideoPipeline::on_captured_frame(void* cv_pixel_buffer, uint64_t timestamp_us) {
     if (!host_running_.load()) return;
 
+    frames_captured_.fetch_add(1, std::memory_order_relaxed);
+    last_capture_us_.store(now_us(), std::memory_order_relaxed);
+
     EncodedPacket packet{};
     if (encoder_->encode(cv_pixel_buffer, packet)) {
         frames_encoded_++;
@@ -333,6 +340,31 @@ void VideoPipeline::get_stats(EncoderStats& out) const {
     else memset(&out, 0, sizeof(out));
 }
 
+void VideoPipeline::get_host_telemetry(HostTelemetry& out) const {
+    out = HostTelemetry{};
+
+    out.frames_captured = frames_captured_.load(std::memory_order_relaxed);
+    const uint64_t last_capture = last_capture_us_.load(std::memory_order_relaxed);
+    if (host_running_.load() && last_capture != 0) {
+        const uint64_t now = now_us();
+        out.capture_idle_ms = (now > last_capture)
+            ? static_cast<uint32_t>((now - last_capture) / 1000)
+            : 0;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(eq_mutex_);
+        out.encode_queue_depth = static_cast<uint32_t>(eq_count_);
+        out.encode_queue_drops = eq_drops_;
+        out.convert_ms = static_cast<float>(last_convert_ms_);
+        out.encode_ms  = static_cast<float>(last_encode_ms_);
+    }
+
+    if (capture_)  out.capture_backend = capture_->backend_name();
+    if (encoder_)  out.encoder_name    = encoder_->name();
+    out.gpu_name = device_.adapter_name;
+}
+
 bool VideoPipeline::encoder_available() const {
     if (!device_.handle) {
         auto* self = const_cast<VideoPipeline*>(this);
@@ -349,6 +381,9 @@ bool VideoPipeline::encoder_available() const {
 #ifdef _WIN32
 void VideoPipeline::on_captured_frame(ID3D11Texture2D* texture, uint64_t timestamp_us) {
     if (!host_running_.load()) return;
+
+    frames_captured_.fetch_add(1, std::memory_order_relaxed);
+    last_capture_us_.store(now_us(), std::memory_order_relaxed);
 
     if (capture_ && capture_->consume_swap_event()) {
         MELLO_LOG_WARN(TAG, "Capture backend swap detected, forcing keyframe");

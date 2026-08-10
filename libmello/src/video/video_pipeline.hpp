@@ -54,6 +54,22 @@ public:
     void set_bitrate(uint32_t kbps);
     void get_stats(EncoderStats& out) const;
 
+    // Host-side diagnostics beyond the encoder's own contract. String members
+    // are borrowed and valid only while this pipeline lives; callers copy them
+    // out immediately.
+    struct HostTelemetry {
+        uint64_t    frames_captured     = 0;
+        uint32_t    capture_idle_ms     = 0;
+        uint32_t    encode_queue_depth  = 0;
+        uint64_t    encode_queue_drops  = 0;
+        float       convert_ms          = 0.0f;
+        float       encode_ms           = 0.0f;
+        const char* capture_backend     = "";
+        const char* encoder_name        = "";
+        const char* gpu_name            = "";
+    };
+    void get_host_telemetry(HostTelemetry& out) const;
+
     // VIEWER SIDE
     bool start_viewer(const PipelineConfig& config, FrameCallback on_frame);
     void stop_viewer();
@@ -130,7 +146,9 @@ private:
     size_t eq_tail_ = 0; // next read
     size_t eq_count_ = 0;
     uint64_t eq_drops_ = 0;
-    std::mutex eq_mutex_;
+    // mutable so the const telemetry getter can read the queue counters under
+    // the same lock the capture/encode threads use, rather than racing them.
+    mutable std::mutex eq_mutex_;
     std::condition_variable eq_cv_;
     std::thread encode_thread_;
     void encode_thread_func();
@@ -138,6 +156,12 @@ private:
     // Stats
     uint64_t host_start_time_  = 0;
     uint64_t frames_encoded_   = 0;
+    // Capture arrivals, counted before any encode work so a stalled capture is
+    // distinguishable from a stalled encoder. Written on the capture thread and
+    // read from the stats caller — atomic. Rate/stall windows are derived by the
+    // caller; keeping the time math out of here avoids a second clock policy.
+    std::atomic<uint64_t> frames_captured_{0};
+    std::atomic<uint64_t> last_capture_us_{0};
     double   last_convert_ms_  = 0;
     double   last_encode_ms_   = 0;
     uint64_t viewer_start_time_ = 0;

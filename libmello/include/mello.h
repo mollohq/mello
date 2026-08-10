@@ -692,6 +692,18 @@ typedef struct MelloStreamStats {
     uint64_t bytes_sent;
     char     encoder_name[32];
     char     decoder_name[32];
+    /* Fields below are appended for remote diagnostics; existing offsets are
+     * unchanged. `fps_actual` is the *encode* rate — compare it against
+     * frames_captured to tell a stalled capture from a stalled encoder, which
+     * is otherwise indistinguishable in host telemetry. */
+    uint64_t frames_captured;
+    uint32_t capture_idle_ms;      /* since last captured frame; 0 when idle host */
+    uint32_t encode_queue_depth;
+    uint64_t encode_queue_drops;   /* newest-wins evictions: silent frame loss */
+    float    convert_ms;
+    float    encode_ms;
+    char     capture_backend[16];  /* "dxgi" / "wgc" / "sck" */
+    char     gpu_name[128];
 } MelloStreamStats;
 
 MELLO_API void mello_stream_get_stats(MelloStreamHost* host, MelloStreamStats* stats);

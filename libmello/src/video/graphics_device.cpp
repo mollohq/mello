@@ -87,16 +87,19 @@ GraphicsDevice create_d3d11_device() {
         return {GraphicsBackend::D3D11, nullptr};
     }
 
-    char adapter_name[128]{};
-    WideCharToMultiByte(CP_UTF8, 0, best_desc.Description, -1, adapter_name, sizeof(adapter_name), nullptr, nullptr);
+    GraphicsDevice result{GraphicsBackend::D3D11, nullptr, {}};
+    WideCharToMultiByte(CP_UTF8, 0, best_desc.Description, -1,
+                        result.adapter_name, sizeof(result.adapter_name), nullptr, nullptr);
+    result.adapter_name[sizeof(result.adapter_name) - 1] = '\0';
 
     MELLO_LOG_INFO(TAG, "D3D11 device created: adapter=\"%s\" vram=%lluMB feature_level=0x%04X",
-        adapter_name,
+        result.adapter_name,
         best_desc.DedicatedVideoMemory / (1024 * 1024),
         achieved_level);
 
     device->AddRef();
-    return {GraphicsBackend::D3D11, device.Get()};
+    result.handle = device.Get();
+    return result;
 }
 
 #endif

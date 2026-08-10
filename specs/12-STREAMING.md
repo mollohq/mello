@@ -310,6 +310,33 @@ Encoder periodic (every 300 frames): `convert_ms`, `encode_ms`, `eq_depth`, `eq_
 
 `viewer_probe_native_rtp`: `rx_complete`, `rx_emitted`, `rx_incomplete`, `gate_dropped`, `buffered_aus`, `receive_target_bps`.
 
+### 12.1 Remote diagnostics (`stream_client_stats`)
+
+Everything above lands in the *local* log. Field failures happen on machines we
+have no access to, so host and viewer additionally report to the SFU every 10 s
+over signaling (`stream_client_stats`, one per 5 s per peer, 2048-byte cap —
+`mello-sfu/01-SFU.md §5.3`). SFU mode only: P2P has no relay to report to.
+
+**Host:** `gpu`, `enc`, `cap_backend`, `cap_fps`, `cap_idle_ms`, `enc_fps`,
+`enc_ms`, `conv_ms`, `eq_depth`, `eq_drops`, `br_target`, `br_actual`,
+`pace_kbps`, `w`, `h`, `fps_cfg`, `recovery`, `vfail`, `vq`.
+
+**Viewer:** `freeze_n`, `freeze_ms`, `present_fps`, `rtt_ms`, `rx_complete`,
+`rx_incomplete`, `rx_missing`, `rx_repaired`, `rx_gated`, `rx_nacks`, `rx_pli`,
+`rx_jitter`, `rx_fec_ok`, `rx_fec_fail`, `bg_drops`.
+
+Two of these carry more weight than the rest:
+
+- **`cap_fps` vs `enc_fps`.** Capture arrivals are counted before any encode
+  work, so a stalled capture and a stalled encoder are finally distinguishable.
+  `video_in_hz` alone conflates them and cannot answer which one failed.
+- **`freeze_n` / `freeze_ms`.** A freeze is a present gap over 150 ms, counted
+  once per stall and extended rather than re-counted per tick. Every other
+  viewer metric is a proxy; this is the thing the user actually experiences.
+
+Payload keys are abbreviated to stay inside the cap as the field set grows; a
+unit test sizes the worst-case host payload against it.
+
 DComp presenter diagnostics:
 
 - `ui_render_fps` (DComp present cadence)
