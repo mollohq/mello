@@ -340,6 +340,30 @@ void VideoPipeline::get_stats(EncoderStats& out) const {
     else memset(&out, 0, sizeof(out));
 }
 
+// Enough frames that one hitch cannot trip a downgrade. At 60fps this is ~1s.
+static constexpr uint64_t kEncoderLoadMinFrames = 60;
+// Above this share of offered frames being evicted, the encoder is measurably
+// failing — the viewer is already losing motion.
+static constexpr double kEncoderDropRatioLimit = 0.02;
+// Encode time at or above this share of the frame interval leaves no room for a
+// harder scene, and the queue is only two deep.
+static constexpr double kEncoderBudgetShareLimit = 0.80;
+
+bool VideoPipeline::encoder_is_overloaded(const EncoderLoadSample& sample) {
+    if (sample.frames_captured < kEncoderLoadMinFrames || sample.target_fps == 0) {
+        return false;
+    }
+
+    const double drop_ratio =
+        static_cast<double>(sample.queue_drops) / static_cast<double>(sample.frames_captured);
+    if (drop_ratio > kEncoderDropRatioLimit) {
+        return true;
+    }
+
+    const double budget_ms = 1000.0 / static_cast<double>(sample.target_fps);
+    return sample.mean_encode_ms >= budget_ms * kEncoderBudgetShareLimit;
+}
+
 void VideoPipeline::get_host_telemetry(HostTelemetry& out) const {
     out = HostTelemetry{};
 
@@ -451,11 +475,48 @@ void VideoPipeline::encode_thread_func() {
                     last_convert_ms_, last_encode_ms_, eq_count_, eq_drops_);
             }
 
+            maybe_reduce_encoder_cost();
+
             if (packet_cb_) {
                 packet_cb_(packet.data.data(), packet.data.size(), packet.is_keyframe, job.timestamp_us);
             }
         }
     }
+}
+
+// Runs on the encode thread, immediately after a frame is encoded, so the
+// measurement and the reconfigure share one thread and no extra locking.
+void VideoPipeline::maybe_reduce_encoder_cost() {
+    if (!encoder_ || encoder_->cost_tier() >= 2) {
+        return;
+    }
+
+    const uint64_t captured = frames_captured_.load(std::memory_order_relaxed);
+    uint64_t drops = 0;
+    {
+        std::lock_guard<std::mutex> lock(eq_mutex_);
+        drops = eq_drops_;
+    }
+
+    const uint64_t window_frames = captured - cost_window_start_captured_;
+    EncoderLoadSample sample{};
+    sample.frames_captured = window_frames;
+    sample.queue_drops     = drops - cost_window_start_drops_;
+    sample.mean_encode_ms  = last_encode_ms_;
+    sample.target_fps      = config_.fps;
+
+    if (window_frames < 60) {
+        return;
+    }
+
+    if (encoder_is_overloaded(sample)) {
+        encoder_->reduce_cost_tier();
+    }
+    // Reset the window either way: after a downgrade so the next decision
+    // measures the new configuration, and after a healthy window so old drops
+    // cannot accumulate into a false positive later.
+    cost_window_start_captured_ = captured;
+    cost_window_start_drops_    = drops;
 }
 #endif
 

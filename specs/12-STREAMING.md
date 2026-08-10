@@ -82,6 +82,30 @@ Rate control is VBR with 1.25× max headroom. The VBV spans ~0.5 s of the max ra
 
 **Other encoder backends:** AMF (AMD), QSV/oneVPL (Intel), VideoToolbox (macOS) exist in the codebase but are less battle-tested than NVENC.
 
+**Adaptive cost tiers.** Quality features that are free on a current GPU are not
+free on an older one, and the encode queue is two deep with newest-wins
+eviction — so an encoder that misses the frame budget does not produce a
+slightly worse picture, it silently drops frames. `Encoder::reduce_cost_tier()`
+gives features up one at a time when the pipeline measures that happening:
+
+| Tier | Configuration |
+|------|---------------|
+| 0 | two-pass full-resolution + temporal AQ + spatial AQ 8 (default) |
+| 1 | single-pass + temporal AQ + spatial AQ 8 |
+| 2 | single-pass, no temporal AQ, spatial AQ 4 |
+
+`VideoPipeline::encoder_is_overloaded` decides, from queue-drop ratio (>2% of
+offered frames — the direct symptom) or mean encode time (≥80% of the frame
+interval — the leading indicator), over a minimum 60-frame window so a startup
+hitch cannot permanently downgrade quality. Tiers are monotonic within a
+session: a GPU that could not keep up has not improved, and climbing back would
+oscillate against the load being escaped. Each step forces an IDR and persists
+into `base_config_`, so a later bitrate reconfigure does not resurrect the
+features that were given up.
+
+Driven by measurement rather than a GPU allowlist, so it covers hardware that
+has never been tested. Non-NVENC backends inherit a default no-op.
+
 ### 3.5 Encoded Packet Handoff
 
 The encode thread's `packet_cb_` fires with the encoded NALU bytes. This callback was set up by `mello-core` via `mello_stream_start_host` — it sends the bytes over an mpsc channel (capacity 32) to the Rust `StreamManager`.

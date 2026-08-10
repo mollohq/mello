@@ -19,6 +19,8 @@ public:
     void        get_stats(EncoderStats& out) const override;
     bool        supports_codec(VideoCodec codec) const override;
     const char* name() const override { return "NVENC"; }
+    bool        reduce_cost_tier() override;
+    int         cost_tier() const override { return cost_tier_; }
 
     static bool is_available();
 
@@ -47,6 +49,13 @@ private:
     // Full init-time NVENC config. Reconfigure reuses it because the driver
     // does not merge sparse configs on re-init (unset fields become zero).
     NV_ENC_CONFIG base_config_{};
+
+    // Quality features given up to hold the frame budget. Monotonic within a
+    // session: a GPU that could not keep up a moment ago will not have improved,
+    // and climbing back would oscillate against the very load being escaped.
+    int cost_tier_ = 0;
+    static constexpr int kMaxCostTier = 2;
+    void apply_cost_tier_locked(NV_ENC_CONFIG& cfg) const;
 
     // Measured-stats window (fps/bitrate are computed, not echoed from cfg).
     std::chrono::steady_clock::time_point stats_window_start_{};

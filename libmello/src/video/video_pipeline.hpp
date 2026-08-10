@@ -52,6 +52,31 @@ public:
     void get_host_resolution(uint32_t& w, uint32_t& h) const;
     void request_keyframe();
     void set_bitrate(uint32_t kbps);
+    /// Evidence gathered over one observation window, used to decide whether the
+    /// encoder is failing to hold the frame budget.
+    struct EncoderLoadSample {
+        uint64_t frames_captured = 0;   // arrivals offered to the encoder
+        uint64_t queue_drops     = 0;   // frames evicted unencoded (newest-wins)
+        double   mean_encode_ms  = 0.0;
+        uint32_t target_fps      = 60;
+    };
+
+    /// True when the encoder should give up a quality feature to keep up.
+    ///
+    /// Pure so it can be tested without a GPU — the machines that trigger it are
+    /// exactly the ones we do not have. Two independent triggers:
+    ///
+    ///  - **Dropped frames.** The direct symptom. The encode queue evicts
+    ///    silently, so any sustained drop rate means frames are already being
+    ///    lost and no other signal will report it.
+    ///  - **Encode time against budget.** Leading indicator. Sitting at or above
+    ///    the frame interval means no headroom for a complex scene, and the
+    ///    drops are about to start.
+    ///
+    /// Requires a minimum sample so a single hitch during startup or a scene cut
+    /// cannot permanently downgrade quality.
+    static bool encoder_is_overloaded(const EncoderLoadSample& sample);
+
     void get_stats(EncoderStats& out) const;
 
     // Host-side diagnostics beyond the encoder's own contract. String members
@@ -152,6 +177,12 @@ private:
     std::condition_variable eq_cv_;
     std::thread encode_thread_;
     void encode_thread_func();
+#ifdef _WIN32
+    // Called on the encode thread after each encoded frame.
+    void maybe_reduce_encoder_cost();
+    uint64_t cost_window_start_captured_ = 0;
+    uint64_t cost_window_start_drops_    = 0;
+#endif
 
     // Stats
     uint64_t host_start_time_  = 0;

@@ -244,3 +244,66 @@ TEST_F(VideoPipelineTest, SaveDecodedFrame) {
     std::cout << "[SaveDecodedFrame] Wrote " << saved_w << "x" << saved_h
               << " frame to " << path << "\n";
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Encoder overload policy
+//
+// These run everywhere, deliberately: the GPUs that trigger a downgrade are the
+// ones we do not have on the bench, so the decision has to be provable without
+// one. No device, no encoder, no capture — pure arithmetic.
+// ─────────────────────────────────────────────────────────────────────────────
+
+namespace {
+
+VideoPipeline::EncoderLoadSample healthy_sample() {
+    VideoPipeline::EncoderLoadSample s{};
+    s.frames_captured = 600;   // ~10s at 60fps
+    s.queue_drops     = 0;
+    s.mean_encode_ms  = 6.0;   // comfortable inside a 16.7ms budget
+    s.target_fps      = 60;
+    return s;
+}
+
+} // namespace
+
+TEST(EncoderOverloadPolicy, HealthyEncoderIsNotDowngraded) {
+    EXPECT_FALSE(VideoPipeline::encoder_is_overloaded(healthy_sample()));
+}
+
+TEST(EncoderOverloadPolicy, SustainedQueueDropsTriggerDowngrade) {
+    auto s = healthy_sample();
+    s.queue_drops = 30; // 5% of offered frames evicted unencoded
+    EXPECT_TRUE(VideoPipeline::encoder_is_overloaded(s));
+}
+
+TEST(EncoderOverloadPolicy, EncodeTimeNearFrameBudgetTriggersDowngrade) {
+    auto s = healthy_sample();
+    // 14ms against a 16.7ms budget: no headroom left for a harder scene, and
+    // the encode queue is only two deep.
+    s.mean_encode_ms = 14.0;
+    EXPECT_TRUE(VideoPipeline::encoder_is_overloaded(s));
+}
+
+TEST(EncoderOverloadPolicy, BudgetScalesWithTargetFramerate) {
+    auto s = healthy_sample();
+    s.mean_encode_ms = 20.0;
+    s.target_fps     = 60; // 16.7ms budget — over
+    EXPECT_TRUE(VideoPipeline::encoder_is_overloaded(s));
+    s.target_fps     = 30; // 33.3ms budget — comfortable
+    EXPECT_FALSE(VideoPipeline::encoder_is_overloaded(s));
+}
+
+TEST(EncoderOverloadPolicy, ShortWindowsCannotTriggerDowngrade) {
+    auto s = healthy_sample();
+    s.frames_captured = 10;
+    s.queue_drops     = 10;   // everything dropped, but far too few samples
+    s.mean_encode_ms  = 100.0;
+    EXPECT_FALSE(VideoPipeline::encoder_is_overloaded(s))
+        << "a startup hitch must not permanently downgrade quality";
+}
+
+TEST(EncoderOverloadPolicy, ZeroTargetFpsIsNotTreatedAsOverload) {
+    auto s = healthy_sample();
+    s.target_fps = 0; // guards a divide-by-zero on an unconfigured pipeline
+    EXPECT_FALSE(VideoPipeline::encoder_is_overloaded(s));
+}
