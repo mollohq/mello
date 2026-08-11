@@ -92,10 +92,26 @@ public:
     /// True when a captured frame should be passed downstream under the current
     /// decimation target. Static and pure so the cadence is testable without a
     /// capture device.
-    /// `capture_fps` sizes the deadline tolerance; pass the configured capture
-    /// rate. 0 disables tolerance.
-    static bool decimation_accepts(uint64_t timestamp_us, uint64_t last_emitted_us,
-                                   uint32_t output_fps, uint32_t capture_fps);
+    /// `next_deadline_us` is advanced by exactly one output interval per accepted
+    /// frame — never reset to the arrival time, which is what collapses the
+    /// output rate back onto the source's quantisation. 0 starts a fresh cadence.
+    static bool decimation_accepts(uint64_t timestamp_us, uint64_t& next_deadline_us,
+                                   uint32_t output_fps);
+
+    /// The rate frames are actually emitted at: the ladder's target when it has
+    /// dropped a rung, otherwise the configured rate.
+    ///
+    /// Always a real number rather than "0 = unlimited". Capture backends deliver
+    /// at the display's refresh rate and their own throttles have been measured
+    /// over-delivering (83fps against a 60fps target on a real host), which the
+    /// encoder then faithfully encodes — overshooting the bitrate by exactly the
+    /// same ratio, because rate control budgets bits per frame from the framerate
+    /// it was configured with. Clamping here does not depend on any backend
+    /// throttle being correct.
+    uint32_t effective_output_fps() const {
+        const uint32_t ladder = output_fps_.load(std::memory_order_relaxed);
+        return ladder != 0 ? ladder : config_.fps;
+    }
 
     void get_stats(EncoderStats& out) const;
 
@@ -112,6 +128,14 @@ public:
         const char* capture_backend     = "";
         const char* encoder_name        = "";
         const char* gpu_name            = "";
+        // Rolling mean over the recent window, not the last sample: encode time
+        // swings by an order of magnitude frame to frame, so a single reading
+        // says nothing about whether the encoder is keeping up.
+        float       encode_ms_mean      = 0.0f;
+        float       encode_submit_ms    = 0.0f;
+        float       encode_wait_ms      = 0.0f;
+        float       encode_lock_ms      = 0.0f;
+        int         encoder_cost_tier   = 0;
     };
     void get_host_telemetry(HostTelemetry& out) const;
 
@@ -222,9 +246,14 @@ private:
     // Decimation target. 0 means "no decimation" (encode every captured frame).
     // Read on the capture thread, written from the control thread.
     std::atomic<uint32_t> output_fps_{0};
-    // Capture timestamp of the last frame passed downstream, in the capture
-    // thread's own clock. Only touched on the capture thread.
-    uint64_t last_emitted_us_ = 0;
+
+    // Rolling encode-time mean. Written on the encode thread, read by the stats
+    // caller; a plain double is fine because a torn read of a diagnostic mean is
+    // harmless and locking the encode path for telemetry is not.
+    std::atomic<double> encode_ms_mean_{0.0};
+    // When the next frame is due, in the capture thread's own clock. Advanced by
+    // one output interval per emitted frame. Only touched on the capture thread.
+    uint64_t next_emit_deadline_us_ = 0;
     double   last_convert_ms_  = 0;
     double   last_encode_ms_   = 0;
     uint64_t viewer_start_time_ = 0;

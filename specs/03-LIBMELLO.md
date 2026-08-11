@@ -123,7 +123,9 @@ The entire library is exposed through a single C header (`mello.h`). This is the
 `mello_stream_get_stats` reports encoder rate/bitrate/keyframes/bytes plus the
 host diagnostics needed to debug a remote user's stream: `frames_captured`,
 `capture_idle_ms`, `encode_queue_depth`, `encode_queue_drops`, `convert_ms`,
-`encode_ms`, `capture_backend`, `encoder_name`, `gpu_name`.
+`encode_ms`, `encode_ms_mean`, `encode_submit_ms`, `encode_wait_ms`,
+`encode_lock_ms`, `encoder_cost_tier`, `capture_backend`, `encoder_name`,
+`gpu_name`.
 
 - **Capture arrivals are counted before any encode work** (`VideoPipeline::on_captured_frame`,
   both the D3D11 and the CVPixelBuffer overload). Comparing `frames_captured`
@@ -132,6 +134,11 @@ host diagnostics needed to debug a remote user's stream: `frames_captured`,
 - **`encode_queue_drops` is silent frame loss.** The encode queue is
   `ENCODE_QUEUE_CAP = 2` with newest-wins eviction, so an encoder that cannot
   keep up discards frames and reports no error anywhere else.
+- **Encode time is split by phase.** `encode_ms` wraps submit + async completion
+  wait + bitstream lock. Fused, a busy encoder block and a stalled VRAM readback
+  are indistinguishable; split, they name their own cause. `encode_ms_mean` is
+  an exponential mean (~1 s at 60 fps) because the per-frame figure is far too
+  noisy to act on — the overload policy consumes the mean, not the last sample.
 - Rates are deliberately not computed here. The struct exposes monotonic counters
   and the caller derives windows, keeping a single clock policy in one place.
 - New fields are **appended**; existing offsets are unchanged. `mello-sys`

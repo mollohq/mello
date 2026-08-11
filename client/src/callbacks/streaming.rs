@@ -26,9 +26,13 @@ fn resolve_stream_source_name(
     source_id: &str,
     source_mode: &str,
 ) -> Option<String> {
+    // "process" is what the source list actually tags games with; "game" was the
+    // only spelling matched here, so every game fell through to the fallback
+    // chain below — which tries monitors first and would mislabel a game as a
+    // display if their ids ever collided.
     let by_mode = match source_mode {
         "monitor" => source_name_from_model(app.get_stream_monitors(), source_id),
-        "game" => source_name_from_model(app.get_stream_games(), source_id),
+        "process" | "game" => source_name_from_model(app.get_stream_games(), source_id),
         "window" => source_name_from_model(app.get_stream_windows(), source_id),
         _ => None,
     };

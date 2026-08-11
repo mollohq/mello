@@ -82,6 +82,16 @@ pub(crate) struct HostStatsFields {
     pub audio_in_hz: f32,
     pub audio_out_hz: f32,
     pub audio_send_fail: u64,
+    /// What the host is actually capturing. A wrong selection and a dead
+    /// capture look identical without it.
+    pub capture_desc: String,
+    /// Phase breakdown plus the tier the encoder has fallen back to. Without the
+    /// tier we cannot tell whether the adaptive downgrade fired at all.
+    pub encode_ms_mean: f32,
+    pub encode_submit_ms: f32,
+    pub encode_wait_ms: f32,
+    pub encode_lock_ms: f32,
+    pub encoder_cost_tier: i32,
 }
 
 /// Build the host `stream_client_stats` payload.
@@ -114,6 +124,12 @@ pub(crate) fn host_stats_payload(f: HostStatsFields) -> serde_json::Value {
         "aud_in": round1(f.audio_in_hz),
         "aud_out": round1(f.audio_out_hz),
         "aud_fail": f.audio_send_fail,
+        "src": f.capture_desc,
+        "enc_ms_avg": round1(f.encode_ms_mean),
+        "enc_submit_ms": round1(f.encode_submit_ms),
+        "enc_wait_ms": round1(f.encode_wait_ms),
+        "enc_lock_ms": round1(f.encode_lock_ms),
+        "enc_tier": f.encoder_cost_tier,
     })
 }
 
@@ -683,6 +699,12 @@ impl StreamManager {
                 &mut self.last_stats_audio_sent,
             ),
             audio_send_fail: self.manager_audio_send_fail_total,
+            capture_desc: self.config.capture_desc.clone(),
+            encode_ms_mean: stats.encode_ms_mean,
+            encode_submit_ms: stats.encode_submit_ms,
+            encode_wait_ms: stats.encode_wait_ms,
+            encode_lock_ms: stats.encode_lock_ms,
+            encoder_cost_tier: stats.encoder_cost_tier,
         });
         self.sink.send_stats(&payload).await;
     }
@@ -1126,6 +1148,12 @@ mod tests {
             audio_in_hz: 9999.9,
             audio_out_hz: 9999.9,
             audio_send_fail: u64::MAX,
+            capture_desc: "W".repeat(48),
+            encode_ms_mean: 9999.9,
+            encode_submit_ms: 9999.9,
+            encode_wait_ms: 9999.9,
+            encode_lock_ms: 9999.9,
+            encoder_cost_tier: i32::MAX,
         });
         // Matches the envelope the connection actually sends.
         let envelope = serde_json::json!({

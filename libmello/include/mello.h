@@ -716,6 +716,16 @@ typedef struct MelloStreamStats {
     float    encode_ms;
     char     capture_backend[16];  /* "dxgi" / "wgc" / "sck" */
     char     gpu_name[128];
+    /* Rolling mean, not the last sample: encode time swings by an order of
+     * magnitude frame to frame. */
+    float    encode_ms_mean;
+    /* Phase breakdown of the last encode. encode_ms alone cannot separate a
+     * busy encoder block from a stalled bitstream readback. */
+    float    encode_submit_ms;
+    float    encode_wait_ms;
+    float    encode_lock_ms;
+    /* Quality features given up to hold the frame budget; 0 = full quality. */
+    int32_t  encoder_cost_tier;
 } MelloStreamStats;
 
 MELLO_API void mello_stream_get_stats(MelloStreamHost* host, MelloStreamStats* stats);

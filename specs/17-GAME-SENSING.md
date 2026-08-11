@@ -124,6 +124,24 @@ pub enum GameEvent {
 }
 ```
 
+### 2.1b The stream picker uses the same database
+
+`enumerate_game_processes()` returns the **whole process table** by design — the
+database decides what is a game, not libmello. Any consumer that skips the
+`lookup_by_exe` step is therefore listing raw processes. The stream source picker
+did exactly that, and additionally truncated the enumeration buffer at 32
+entries, which cut the list off in *boot order*: System, smss, csrss, wininit,
+services, lsass, svchost. Games start last and never appeared at all.
+
+The picker now enumerates with a process-table-sized buffer and presents two
+tiers: database matches first, carrying the catalogue's display name, then any
+other process owning a visible window. The second tier matters — a game the
+database has never heard of (indie, beta, private build) stays streamable
+instead of vanishing from the picker. Windowless processes are dropped (they
+cannot be captured) as is Mello's own process. Within each tier the foreground
+process leads, then alphabetical, so the list does not reshuffle between
+openings the way process-table order does.
+
 ### 2.2 Primary Game Selection
 
 When multiple games are running simultaneously (rare but possible), pick the one with the most recent start time. If start times are unavailable, prefer the game whose process was created most recently.

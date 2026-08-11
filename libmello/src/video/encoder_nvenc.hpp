@@ -22,6 +22,7 @@ public:
     bool        reduce_cost_tier() override;
     int         cost_tier() const override { return cost_tier_; }
     void        set_framerate(uint32_t fps) override;
+    void        get_phase_timing(EncodePhaseTiming& out) const override;
 
     static bool is_available();
 
@@ -51,10 +52,22 @@ private:
     // does not merge sparse configs on re-init (unset fields become zero).
     NV_ENC_CONFIG base_config_{};
 
+    // Wall time of each phase of the last encode. A single fused figure cannot
+    // tell a busy NVENC block from a stalled bitstream readback, and those have
+    // different causes and different fixes.
+    double last_submit_ms_ = 0.0;
+    double last_wait_ms_   = 0.0;
+    double last_lock_ms_   = 0.0;
+
     // Quality features given up to hold the frame budget. Monotonic within a
     // session: a GPU that could not keep up a moment ago will not have improved,
     // and climbing back would oscillate against the very load being escaped.
     int cost_tier_ = 0;
+    // Set when the driver refuses a downgrade. Retrying cannot succeed — the
+    // configuration is as incompatible the second time — and the overload that
+    // triggered it persists, so an unlatched retry floods the log for the whole
+    // session at roughly one error per second.
+    bool cost_tier_unavailable_ = false;
     static constexpr int kMaxCostTier = 2;
     void apply_cost_tier_locked(NV_ENC_CONFIG& cfg) const;
 

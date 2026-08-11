@@ -49,7 +49,7 @@ static BOOL CALLBACK enum_window_proc(HWND hwnd, LPARAM lParam) {
 
     int64_t area = get_restored_area(hwnd);
 
-    MELLO_LOG_INFO(TAG, "find_main_window: pid=%u hwnd=%p restored_area=%lld visible=%d "
+    MELLO_LOG_DEBUG(TAG, "find_main_window: pid=%u hwnd=%p restored_area=%lld visible=%d "
         "exstyle=0x%08X title=\"%.60s\"",
         data->pid, hwnd, (long long)area,
         (int)IsWindowVisible(hwnd), (unsigned)ex_style, title);
@@ -64,13 +64,17 @@ static BOOL CALLBACK enum_window_proc(HWND hwnd, LPARAM lParam) {
 HWND find_main_window(uint32_t pid) {
     EnumWindowData data{pid, nullptr, 0};
     EnumWindows(enum_window_proc, reinterpret_cast<LPARAM>(&data));
+    static std::atomic<HWND> last_selected{nullptr};
     if (data.result) {
-        int64_t area = get_restored_area(data.result);
-        char title[128] = {};
-        GetWindowTextA(data.result, title, sizeof(title));
-        MELLO_LOG_INFO(TAG, "find_main_window: pid=%u selected hwnd=%p restored_area=%lld title=\"%.60s\"",
-            pid, data.result, (long long)area, title);
-    } else {
+        if (last_selected.exchange(data.result) != data.result) {
+            int64_t area = get_restored_area(data.result);
+            char title[128] = {};
+            GetWindowTextA(data.result, title, sizeof(title));
+            MELLO_LOG_INFO(TAG,
+                "find_main_window: pid=%u selected hwnd=%p restored_area=%lld title=\"%.60s\"",
+                pid, data.result, (long long)area, title);
+        }
+    } else if (last_selected.exchange(nullptr) != nullptr) {
         MELLO_LOG_WARN(TAG, "find_main_window: pid=%u no suitable window found", pid);
     }
     return data.result;
@@ -104,7 +108,7 @@ static bool is_likely_fullscreen(HWND hwnd, HMONITOR mon) {
     LONG style = GetWindowLong(hwnd, GWL_STYLE);
     bool no_chrome = (style & WS_OVERLAPPEDWINDOW) == 0;
 
-    MELLO_LOG_INFO(TAG, "is_likely_fullscreen: hwnd=%p mon=%dx%d win=%dx%d "
+    MELLO_LOG_DEBUG(TAG, "is_likely_fullscreen: hwnd=%p mon=%dx%d win=%dx%d "
         "covers=%d no_chrome=%d minimized=%d",
         hwnd, (int)mon_w, (int)mon_h, (int)win_w, (int)win_h,
         (int)covers_monitor, (int)no_chrome,
@@ -347,6 +351,21 @@ bool ProcessCapture::swap_to_wgc() {
     HWND hwnd = find_main_window(pid_);
     if (!hwnd) {
         MELLO_LOG_WARN(TAG, "Hot-swap skipped for pid=%u: no window found for WGC", pid_);
+        return false;
+    }
+
+    // A minimized window has no real surface — WGC hands back the ~160x28 iconic
+    // size, which is below the encoder minimum and produces a stream that
+    // connects and then sends nothing. Initial start already refuses this
+    // (see initialize); the swap path has to as well, because the common route
+    // here is a fullscreen game exiting to the desktop, which minimizes it.
+    // Returning false leaves the current backend alone and lets the monitor
+    // thread retry once the window comes back.
+    WINDOWPLACEMENT wp{};
+    wp.length = sizeof(wp);
+    if (GetWindowPlacement(hwnd, &wp) && wp.showCmd == SW_SHOWMINIMIZED) {
+        MELLO_LOG_WARN(TAG,
+            "Hot-swap skipped for pid=%u: target window is minimized, waiting for restore", pid_);
         return false;
     }
 

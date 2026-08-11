@@ -60,6 +60,41 @@ Two backends, selected automatically per-process:
 
 **Deferred start:** If the target window is minimized at stream start (user tabbed out to launch the stream), capture waits. The monitor thread polls until the window is restored, then initializes the backend. Width/height return restored dimensions during the wait so the encoder can pre-initialize. This matches Discord's behaviour.
 
+**Output rate is clamped at the pipeline, not trusted from the backend.** Capture
+backends deliver at the *display's* refresh rate — there is no "give me 60" knob
+in Desktop Duplication or WGC — so every backend carries its own throttle, and
+those throttles have been measured over-delivering (83 fps against a 60 fps
+target on a 165 Hz host). The encoder then faithfully encodes all of them and
+overshoots its bitrate by exactly that ratio, because rate control budgets bits
+per frame from the framerate it was configured with:
+
+> 5000 kbps x (83/60) = 6900 kbps — matching the 6697 kbps observed in the field.
+
+`VideoPipeline::decimation_accepts` therefore clamps unconditionally to the
+configured rate. It is an **accumulator**: the deadline advances by exactly one
+output interval per accepted frame and is never reset to the arrival time.
+Resetting is what collapses the output onto the source's quantisation — with a
+12 ms source and a 16.7 ms target the naive form can only emit every source
+frame or every other one, never the 60-of-83 that actually equals 60 fps. No
+tolerance value fixes that; the formula cannot express the answer. A small fixed
+tolerance (1/8 of the *target* interval) absorbs arrival jitter, and a stall
+resyncs the deadline rather than emitting a catch-up burst into a 2-deep encode
+queue.
+
+Skipped frames are released before the GPU colour conversion, so a decimated
+frame costs essentially nothing — which is the whole reason to drop at capture
+rather than at the encode queue, where an over-fed queue evicts frames you
+wanted.
+
+**Minimum encodable size.** Hardware encoders reject frames below ~145x49
+(NVENC H.264) with a generic unsupported-parameter error, which surfaces as
+"no hardware encoder available" and reads as a broken GPU. `start_host` refuses
+earlier and names the actual size. The usual cause is a capture target that is
+not what the user thinks it is: a minimized window, where WGC returns the ~160x28
+iconic size, or an auxiliary window sharing the game's title. The WGC hot-swap
+path refuses a minimized target for the same reason and waits for restore —
+a fullscreen game exiting to the desktop minimizes it, so that path is common.
+
 **Adaptive DXGI throttle:** DXGI delivers at the monitor's refresh rate (60–360 Hz). We only want `target_fps` (typically 60). On startup, we calibrate the monitor's vsync interval from the first two acquired frames, then set a deadline of `target_interval - half_vsync`. This ensures we accept the closest vsync that satisfies the target on any refresh rate, without over- or under-delivering.
 
 **macOS:** `ScreenCaptureKit` (SCK) backend exists for macOS capture.
@@ -319,7 +354,7 @@ Game audio is wired end-to-end on Windows and macOS:
 
 | Parameter | Value |
 |-----------|-------|
-| Capture (Windows) | WASAPI loopback (`eRender` + `AUDCLNT_STREAMFLAGS_LOOPBACK`) |
+| Capture (Windows) | WASAPI **process** loopback (`AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK`), endpoint loopback as fallback |
 | Capture (macOS) | ScreenCaptureKit, on the SCStream that already captures video |
 | Encode | Opus stereo 48 kHz, 20 ms frames, `OPUS_APPLICATION_AUDIO`, ~96 kbps |
 | RTP payload type | 111 (Opus), same as voice but on a separate stream peer connection |
@@ -330,6 +365,32 @@ Game audio is wired end-to-end on Windows and macOS:
 | Viewer playout | `mello_stream_feed_audio_packet` → Opus decode → `create_audio_playback()` (stereo: WASAPI on Windows, CoreAudio on macOS) |
 
 Host path: `mello_stream_start_audio` → `MelloAudioPacketCallback` → `StreamManager::handle_audio` → `PacketSink::send_audio` → `mello_peer_send_audio`. Viewer path (SFU): `AudioTrackData` events; P2P: `mello_peer_set_audio_track_callback` → same feed function. Stream viewer receive is wired on the offered recvonly audio track (not voice `onTrack`); if `onTrack` fires for the same `mid`, callbacks move to that track instance.
+
+### 9.0 Capture scope (Windows)
+
+Endpoint loopback captures the entire system mix. That includes Mello's own
+voice playback, so the viewer hears *their own voice* echoed back out of the
+streamer's speakers, plus notifications and any other application. Windows 10
+2004+ can scope loopback to a process tree, which fixes all three at once:
+
+| Streaming | Scope | Target |
+|---|---|---|
+| a game (process capture) | `PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE` | the game's pid |
+| a monitor or window | `PROCESS_LOOPBACK_MODE_EXCLUDE_TARGET_PROCESS_TREE` | **our own** pid |
+
+The exclude case matters as much as the include case: a desktop stream should
+still carry the desktop's sound, just not the voice chat mixed into it.
+
+Activation goes through `ActivateAudioInterfaceAsync` against
+`VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK`, which is asynchronous, so
+`WasapiLoopbackCapture` waits (bounded, 3 s) on a completion handler rather than
+letting stream start hang. The virtual device has **no mix format to query**, so
+the format is chosen rather than negotiated: 48 kHz stereo int16, matching the
+internal contract exactly and removing the resample path.
+
+On older Windows, activation fails and capture falls back to endpoint loopback —
+logged at WARN naming the consequence, because "you can hear yourself" is the
+symptom users report and it must be attributable.
 
 ### 9.1 Inbound audio framing
 
@@ -447,15 +508,29 @@ have no access to, so host and viewer additionally report to the SFU every 10 s
 over signaling (`stream_client_stats`, one per 5 s per peer, 2048-byte cap —
 `mello-sfu/01-SFU.md §5.3`). SFU mode only: P2P has no relay to report to.
 
-**Host:** `gpu`, `enc`, `cap_backend`, `cap_fps`, `cap_idle_ms`, `enc_fps`,
-`enc_ms`, `conv_ms`, `eq_depth`, `eq_drops`, `br_target`, `br_actual`,
-`pace_kbps`, `w`, `h`, `fps_cfg`, `recovery`, `vfail`, `vq`.
+**Host:** `src`, `gpu`, `enc`, `enc_tier`, `cap_backend`, `cap_fps`,
+`cap_idle_ms`, `enc_fps`, `enc_ms`, `enc_ms_avg`, `enc_submit_ms`,
+`enc_wait_ms`, `enc_lock_ms`, `conv_ms`, `eq_depth`, `eq_drops`, `br_target`,
+`br_actual`, `pace_kbps`, `w`, `h`, `fps_cfg`, `fps_out`, `recovery`, `vfail`,
+`vq`, `aud_in`, `aud_out`, `aud_fail`.
 
 **Viewer:** `freeze_n`, `freeze_ms`, `present_fps`, `rtt_ms`, `rx_complete`,
 `rx_incomplete`, `rx_missing`, `rx_repaired`, `rx_gated`, `rx_nacks`, `rx_pli`,
 `rx_jitter`, `rx_fec_ok`, `rx_fec_fail`, `bg_drops`.
 
-Two of these carry more weight than the rest:
+Four of these carry more weight than the rest:
+
+- **`src`.** What is actually being captured (`process pid=1234`,
+  `monitor index=0`). A stream of the wrong source and a stream of nothing look
+  identical without it, and the UI label is not evidence.
+- **`enc_submit_ms` / `enc_wait_ms` / `enc_lock_ms`.** A single fused encode
+  time cannot separate a busy encoder block (another NVENC session competing —
+  ShadowPlay, OBS) from a stalled bitstream readback (memory bandwidth). Those
+  have different causes and different fixes. `enc_ms_avg` is a rolling mean
+  because per-frame encode time swings by an order of magnitude.
+- **`enc_tier`.** Whether the adaptive cost downgrade (§3.4) actually fired.
+  Without it the mechanism is unobservable in the field.
+
 
 - **`cap_fps` vs `enc_fps`.** Capture arrivals are counted before any encode
   work, so a stalled capture and a stalled encoder are finally distinguishable.

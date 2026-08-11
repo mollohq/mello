@@ -4,6 +4,7 @@
 #include <dxgi1_2.h>
 #include <chrono>
 #include <cassert>
+#include <thread>
 
 namespace mello::video {
 
@@ -14,6 +15,21 @@ bool DxgiCapture::initialize(const GraphicsDevice& device, const CaptureSourceDe
 
     device_ = device.d3d11();
     device_->GetImmediateContext(&context_);
+    monitor_index_ = desc.monitor_index;
+
+    if (!recreate_duplication()) {
+        return false;
+    }
+
+    MELLO_LOG_INFO(TAG, "Source: Monitor(%u) backend=DXGI-DDI resolution=%ux%u",
+        monitor_index_, width_, height_);
+    return true;
+}
+
+bool DxgiCapture::recreate_duplication() {
+    duplication_.Reset();
+    const uint32_t previous_w = width_;
+    const uint32_t previous_h = height_;
 
     ComPtr<IDXGIDevice> dxgi_device;
     HRESULT hr = device_->QueryInterface(IID_PPV_ARGS(&dxgi_device));
@@ -30,9 +46,9 @@ bool DxgiCapture::initialize(const GraphicsDevice& device, const CaptureSourceDe
     }
 
     ComPtr<IDXGIOutput> output;
-    hr = adapter->EnumOutputs(desc.monitor_index, &output);
+    hr = adapter->EnumOutputs(monitor_index_, &output);
     if (FAILED(hr)) {
-        MELLO_LOG_ERROR(TAG, "EnumOutputs(%u) failed: hr=0x%08X", desc.monitor_index, hr);
+        MELLO_LOG_ERROR(TAG, "EnumOutputs(%u) failed: hr=0x%08X", monitor_index_, hr);
         return false;
     }
 
@@ -48,14 +64,26 @@ bool DxgiCapture::initialize(const GraphicsDevice& device, const CaptureSourceDe
         return false;
     }
 
+    // A display-mode change also revokes duplication, so a rebuild can come back
+    // with different dimensions. The preprocessor and encoder were sized at
+    // start_host and cannot be retargeted mid-stream, so feeding them the new
+    // size would be worse than stopping. Refuse, loudly — the previous silent
+    // death is what this whole change exists to remove.
+    if (previous_w != 0 && previous_h != 0 && (width_ != previous_w || height_ != previous_h)) {
+        MELLO_LOG_ERROR(TAG,
+            "Display %u changed resolution %ux%u -> %ux%u mid-stream; "
+            "capture cannot retarget, restart the stream",
+            monitor_index_, previous_w, previous_h, width_, height_);
+        width_ = previous_w;
+        height_ = previous_h;
+        return false;
+    }
+
     hr = output1->DuplicateOutput(device_.Get(), &duplication_);
     if (FAILED(hr)) {
         MELLO_LOG_ERROR(TAG, "DuplicateOutput failed: hr=0x%08X", hr);
         return false;
     }
-
-    MELLO_LOG_INFO(TAG, "Source: Monitor(%u) backend=DXGI-DDI resolution=%ux%u",
-        desc.monitor_index, width_, height_);
     return true;
 }
 
@@ -79,8 +107,20 @@ bool DxgiCapture::get_cursor(CursorData& out) {
     return true;
 }
 
+// Long enough that an idle desktop does not churn duplication, short enough that
+// a viewer is not staring at a frozen picture. A rebuild costs one IDR.
+static constexpr auto kStallRecoverAfter = std::chrono::seconds(3);
+// Brief pause when a rebuild fails, so a mid-transition output is not spun on.
+static constexpr auto kAccessLostRetryDelay = std::chrono::milliseconds(250);
+// ~10s of retries at the delay above before declaring the output unusable.
+static constexpr int kMaxRebuildAttempts = 40;
+
 void DxgiCapture::capture_thread() {
     using clock = std::chrono::steady_clock;
+
+    // Watchdog anchor: last time a frame was actually acquired.
+    auto last_frame_tp = clock::now();
+    int  rebuild_failures = 0;
 
     UINT timeout_ms = std::max(1000u / target_fps_ * 2, 34u);
 
@@ -101,23 +141,67 @@ void DxgiCapture::capture_thread() {
     auto     stat_start  = clock::now();
 
     while (running_.load()) {
+        // A rebuild can fail (output mid-transition, resolution changed), which
+        // leaves duplication_ null. Re-arm here rather than dereferencing it.
+        if (!duplication_) {
+            if (!recreate_duplication()) {
+                // Bounded: a transient transition clears in a few attempts, but a
+                // permanent condition (resolution changed mid-stream) must not
+                // spin and spam. Give up loudly rather than quietly.
+                if (++rebuild_failures > kMaxRebuildAttempts) {
+                    MELLO_LOG_ERROR(TAG,
+                        "Duplication rebuild failed %d times, giving up on monitor %u",
+                        rebuild_failures, monitor_index_);
+                    running_ = false;
+                    break;
+                }
+                std::this_thread::sleep_for(kAccessLostRetryDelay);
+                continue;
+            }
+            rebuild_failures = 0;
+            MELLO_LOG_INFO(TAG, "Duplication rebuilt, capture resuming");
+            last_frame_tp = clock::now();
+        }
+
         ComPtr<IDXGIResource> resource;
         DXGI_OUTDUPL_FRAME_INFO frame_info{};
         HRESULT hr = duplication_->AcquireNextFrame(timeout_ms, &frame_info, &resource);
 
         if (hr == DXGI_ERROR_WAIT_TIMEOUT) {
+            // No desktop update. Normal on a static screen — but also exactly
+            // what an exclusive-fullscreen app looks like, because it bypasses
+            // the compositor and duplication of that output goes silent with no
+            // error at all. Indistinguishable here, so recover on a timer: if
+            // nothing arrives for long enough, rebuild the duplication, which is
+            // the documented way back after a fullscreen transition.
+            if (clock::now() - last_frame_tp >= kStallRecoverAfter) {
+                MELLO_LOG_WARN(TAG,
+                    "No frame for %llds — rebuilding duplication (fullscreen transition?)",
+                    static_cast<long long>(
+                        std::chrono::duration_cast<std::chrono::seconds>(kStallRecoverAfter)
+                            .count()));
+                duplication_.Reset();  // top of loop rebuilds
+                last_frame_tp = clock::now();
+            }
             continue;
         }
 
         if (FAILED(hr)) {
-            if (hr == DXGI_ERROR_ACCESS_LOST) {
-                MELLO_LOG_WARN(TAG, "DXGI access lost, capture will need re-init");
-            } else {
-                MELLO_LOG_ERROR(TAG, "AcquireNextFrame failed: hr=0x%08X", hr);
+            // ACCESS_LOST is expected, not fatal: Windows revokes duplication on
+            // desktop switches, mode changes, driver resets and exclusive
+            // fullscreen. Dying here left the stream black for the rest of the
+            // session with only a warning to show for it.
+            if (hr == DXGI_ERROR_ACCESS_LOST || hr == DXGI_ERROR_INVALID_CALL) {
+                MELLO_LOG_WARN(TAG, "DXGI access lost (hr=0x%08X), rebuilding duplication", hr);
+                duplication_.Reset();  // top of loop rebuilds
+                last_frame_tp = clock::now();
+                continue;
             }
+            MELLO_LOG_ERROR(TAG, "AcquireNextFrame failed: hr=0x%08X", hr);
             running_ = false;
             break;
         }
+        last_frame_tp = clock::now();
 
         // Extract cursor info before releasing the frame
         if (frame_info.LastMouseUpdateTime.QuadPart != 0) {

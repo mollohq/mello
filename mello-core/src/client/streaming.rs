@@ -13,6 +13,15 @@ use crate::voice::{SignalEnvelope, SignalMessage, SignalPurpose};
 
 #[cfg(not(target_os = "windows"))]
 use super::stream_ffi::on_viewer_frame;
+
+/// The bundled game catalogue, parsed once.
+///
+/// The picker re-enumerates on every open and the catalogue is static for the
+/// life of the process, so re-parsing it per call is pure waste.
+fn game_database() -> &'static crate::game_db::GameDatabase {
+    static DB: std::sync::OnceLock<crate::game_db::GameDatabase> = std::sync::OnceLock::new();
+    DB.get_or_init(crate::game_db::GameDatabase::load_bundled)
+}
 use super::stream_ffi::{
     feed_viewer_audio_packet, flush_ice_buffer, log_viewer_native_stats, on_viewer_native_frame,
     poll_p2p_viewer_access_units, poll_sfu_viewer_access_units, stream_audio_track_callback,
@@ -455,28 +464,17 @@ impl super::Client {
                     conn.send_ping();
                 }
                 tick_viewer_congestion_sfu(vs, &conn);
-                let ingress = poll_sfu_viewer_access_units(vs, viewer, &conn);
-                if ingress.access_units_fed > 0 {
-                    log::debug!(
-                        "Stream SFU ingress: aus={} bytes={} buffer_grows={}",
-                        ingress.access_units_fed,
-                        ingress.bytes_fed,
-                        ingress.buffer_grows
-                    );
-                }
+                // Deliberately not logged per access unit: at 60fps that is 60
+                // lines a second, and every field is already accumulated into
+                // transport_packets / transport_bytes / au_buffer_grows and
+                // reported once a second by `Stream cadence`.
+                let _ = poll_sfu_viewer_access_units(vs, viewer, &conn);
             }
         } else if !vs.peer.is_null() {
             if let Some(peer) = NonNull::new(vs.peer) {
                 tick_viewer_congestion_p2p(vs, peer);
-                let ingress = poll_p2p_viewer_access_units(vs, viewer, peer);
-                if ingress.access_units_fed > 0 {
-                    log::debug!(
-                        "Stream P2P ingress: aus={} bytes={} buffer_grows={}",
-                        ingress.access_units_fed,
-                        ingress.bytes_fed,
-                        ingress.buffer_grows
-                    );
-                }
+                // Same reasoning as the SFU path above.
+                let _ = poll_p2p_viewer_access_units(vs, viewer, peer);
             }
         }
 
@@ -827,6 +825,12 @@ impl super::Client {
             });
         }
 
+        // libmello's enumerator returns the whole process table by design — the
+        // game database decides what is a game (spec 17 §2.1), not libmello. The
+        // buffer therefore has to fit a real process table: at 32 entries it
+        // truncated in *boot order*, so the list was System, smss, csrss, wininit,
+        // services, lsass, svchost... and never reached a game.
+        const MAX_PROCESSES: usize = 512;
         let mut games_raw = vec![
             mello_sys::MelloGameProcess {
                 pid: 0,
@@ -837,19 +841,46 @@ impl super::Client {
                 title: [0i8; 256],
                 is_foreground: false,
             };
-            32
+            MAX_PROCESSES
         ];
-        let game_count =
-            unsafe { mello_sys::mello_enumerate_games(ctx, games_raw.as_mut_ptr(), 32) };
-        let mut games = Vec::new();
+        let game_count = unsafe {
+            mello_sys::mello_enumerate_games(ctx, games_raw.as_mut_ptr(), MAX_PROCESSES as i32)
+        };
+
+        let db = game_database();
+        let own_pid = std::process::id();
+
+        // Two tiers. Database matches are what the user is almost always after,
+        // so they come first and carry the catalogue's display name. Everything
+        // else that owns a visible window follows, so a game the database has
+        // never heard of — an indie title, a beta, a private build — is still
+        // streamable instead of disappearing from the picker entirely.
+        let mut known = Vec::new();
+        let mut other = Vec::new();
         for game in games_raw.iter().take(game_count as usize) {
-            let name = unsafe { std::ffi::CStr::from_ptr(game.name.as_ptr()) }
-                .to_string_lossy()
-                .to_string();
+            if game.pid == own_pid {
+                continue;
+            }
             let exe = unsafe { std::ffi::CStr::from_ptr(game.exe.as_ptr()) }
                 .to_string_lossy()
                 .to_string();
-            games.push(crate::events::CaptureSource {
+            let title = unsafe { std::ffi::CStr::from_ptr(game.title.as_ptr()) }
+                .to_string_lossy()
+                .to_string();
+            let entry = db.lookup_by_exe(&exe);
+            // A process with no window cannot be captured, so it has no business
+            // in a capture picker regardless of which tier it would land in.
+            if entry.is_none() && title.is_empty() {
+                continue;
+            }
+            let name = match entry {
+                Some(e) => e.name.clone(),
+                None if !title.is_empty() => title,
+                None => unsafe { std::ffi::CStr::from_ptr(game.name.as_ptr()) }
+                    .to_string_lossy()
+                    .to_string(),
+            };
+            let source = crate::events::CaptureSource {
                 id: format!("game-{}", game.pid),
                 name,
                 mode: "process".to_string(),
@@ -859,8 +890,25 @@ impl super::Client {
                 exe,
                 is_fullscreen: game.is_fullscreen,
                 resolution: String::new(),
-            });
+            };
+            if entry.is_some() {
+                known.push((game.is_foreground, source));
+            } else {
+                other.push((game.is_foreground, source));
+            }
         }
+        // Whatever the user is currently in is the likeliest pick, so it leads
+        // its tier; the rest sort by name so the list does not reshuffle between
+        // openings the way process-table order would.
+        for tier in [&mut known, &mut other] {
+            tier.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.name.cmp(&b.1.name)));
+        }
+        let known_count = known.len();
+        let games: Vec<crate::events::CaptureSource> = known
+            .into_iter()
+            .chain(other)
+            .map(|(_, source)| source)
+            .collect();
 
         let mut windows_raw = vec![
             mello_sys::MelloWindow {
@@ -902,9 +950,10 @@ impl super::Client {
             .collect();
 
         log::info!(
-            "Enumerated capture sources: {} monitors, {} games, {} windows",
+            "Enumerated capture sources: {} monitors, {} games ({} from game db), {} windows",
             monitors.len(),
             games.len(),
+            known_count,
             windows.len()
         );
         let _ = self.event_tx.send(Event::CaptureSourcesListed {
@@ -1003,11 +1052,38 @@ impl super::Client {
         };
         log::info!("Starting stream with preset: {:?}", quality_preset);
 
+        // Resolve the capture target before anything else, and refuse to guess.
+        // A stream that captures the wrong thing is indistinguishable from one
+        // that captures nothing, so this must fail here rather than fall back.
+        let target = match crate::stream::config::CaptureTarget::resolve(
+            capture_mode,
+            monitor_index,
+            hwnd,
+            pid,
+        ) {
+            Ok(t) => t,
+            Err(e) => {
+                log::error!("Stream start rejected: {}", e);
+                let _ = self.event_tx.send(Event::StreamError { message: e });
+                return;
+            }
+        };
+        log::info!(
+            "Capture target resolved: {} (requested mode={:?} monitor={:?} hwnd={:?} pid={:?}, title={:?})",
+            target.describe(),
+            capture_mode,
+            monitor_index,
+            hwnd,
+            pid,
+            title
+        );
+
         // Step 1: async RPC call (no raw pointers held across await)
-        let config = crate::stream::StreamConfig::from_preset(
+        let mut config = crate::stream::StreamConfig::from_preset(
             quality_preset,
             crate::stream::config::Codec::H264,
         );
+        config.capture_desc = target.describe();
         let configured_bitrate_kbps = config.bitrate_kbps;
         let resp = match crate::stream::host::request_start_stream(
             &self.nakama,
@@ -1052,25 +1128,31 @@ impl super::Client {
                 bitrate_kbps: config.bitrate_kbps,
             };
 
-            let source = match capture_mode {
-                "window" => mello_sys::MelloCaptureSource {
-                    mode: mello_sys::MelloCaptureMode_MELLO_CAPTURE_WINDOW,
-                    monitor_index: 0,
-                    hwnd: hwnd.unwrap_or(0) as *mut std::ffi::c_void,
-                    pid: 0,
-                },
-                "process" => mello_sys::MelloCaptureSource {
-                    mode: mello_sys::MelloCaptureMode_MELLO_CAPTURE_PROCESS,
-                    monitor_index: 0,
-                    hwnd: std::ptr::null_mut(),
-                    pid: pid.unwrap_or(0),
-                },
-                _ => mello_sys::MelloCaptureSource {
-                    mode: mello_sys::MelloCaptureMode_MELLO_CAPTURE_MONITOR,
-                    monitor_index: monitor_index.unwrap_or(0),
-                    hwnd: std::ptr::null_mut(),
-                    pid: 0,
-                },
+            let source = match target {
+                crate::stream::config::CaptureTarget::Window { hwnd } => {
+                    mello_sys::MelloCaptureSource {
+                        mode: mello_sys::MelloCaptureMode_MELLO_CAPTURE_WINDOW,
+                        monitor_index: 0,
+                        hwnd: hwnd as *mut std::ffi::c_void,
+                        pid: 0,
+                    }
+                }
+                crate::stream::config::CaptureTarget::Process { pid } => {
+                    mello_sys::MelloCaptureSource {
+                        mode: mello_sys::MelloCaptureMode_MELLO_CAPTURE_PROCESS,
+                        monitor_index: 0,
+                        hwnd: std::ptr::null_mut(),
+                        pid,
+                    }
+                }
+                crate::stream::config::CaptureTarget::Monitor { index } => {
+                    mello_sys::MelloCaptureSource {
+                        mode: mello_sys::MelloCaptureMode_MELLO_CAPTURE_MONITOR,
+                        monitor_index: index,
+                        hwnd: std::ptr::null_mut(),
+                        pid: 0,
+                    }
+                }
             };
 
             let (host, video_rx, audio_rx, resources) =
