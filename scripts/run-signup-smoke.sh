@@ -49,11 +49,41 @@ echo "  scenario: $SCENARIO"
 # hold the release job open until the job timeout. Matches the PowerShell twin.
 TIMEOUT_SECONDS="${MELLO_SMOKE_TIMEOUT:-180}"
 
+# Run under a private single-instance identity.
+#
+# The client is single-instance: without this it sees the developer's own Mello
+# on the build machine, prints "Mello is already running.", and exits 0 before
+# the scenario runs — which the release then reports as a signup failure. The
+# release runners double as development machines, so that is not rare.
+#
+# `--instance` gives this run its own lock file *and* its own IPC endpoint
+# (app.mello.desktop.smoke), so the two coexist and the developer's client is
+# left alone. Combined with MELLO_CONFIG_DIR above, the smoke run shares no
+# state with it.
+SMOKE_INSTANCE="${MELLO_SMOKE_INSTANCE:-smoke}"
+
+# Reap a smoke client left behind by an earlier run — it would hold the lock
+# above and reproduce the very failure this avoids.
+#
+# Matched on the full argument list, which is safe *because* it is the private
+# instance name: a plain "mello" match would also hit the developer's client,
+# the checkout path, and the Actions runner, all of which have "mello" in their
+# command line.
+STALE=$(pgrep -f -- "--instance $SMOKE_INSTANCE" 2>/dev/null || true)
+if [ -n "$STALE" ]; then
+    echo "  reaping stale smoke client(s): $(echo "$STALE" | tr '\n' ' ')"
+    # shellcheck disable=SC2086
+    kill $STALE 2>/dev/null || true
+    sleep 1
+    # shellcheck disable=SC2086
+    kill -9 $STALE 2>/dev/null || true
+fi
+
 MELLO_PERF_MODE=1 \
 MELLO_PERF_SCENARIO="$SCENARIO" \
 MELLO_PERF_SIGNAL_DIR="$SIGNAL_DIR" \
 RUST_LOG="${RUST_LOG:-info}" \
-    "$BINARY" &
+    "$BINARY" --instance "$SMOKE_INSTANCE" &
 CLIENT_PID=$!
 
 WAITED=0
@@ -72,6 +102,8 @@ DONE="$SIGNAL_DIR/done.json"
 if [ ! -f "$DONE" ]; then
     echo "✗ signup smoke FAILED: the client exited without reporting a result." >&2
     echo "  It likely crashed or quit before the scenario finished." >&2
+    echo "  If the log says \"Mello is already running.\", another client holds the" >&2
+    echo "  --instance $SMOKE_INSTANCE lock; this run should have reaped it." >&2
     exit 1
 fi
 

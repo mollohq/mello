@@ -61,6 +61,31 @@ try {
     Write-Host "> signup smoke: $Binary"
     Write-Host "  scenario: $scenario"
 
+    # Run under a private single-instance identity.
+    #
+    # The client is single-instance: without this it sees the developer's own
+    # Mello on the build machine, prints "Mello is already running.", and exits
+    # 0 before the scenario runs — which the release then reports as a signup
+    # failure. The release runners double as development machines, so that is
+    # not rare.
+    #
+    # `--instance` gives this run its own mutex *and* its own named pipe
+    # (app.mello.desktop.smoke), so the two coexist and the developer's client
+    # is left alone. Combined with MELLO_CONFIG_DIR above, the smoke run shares
+    # no state with it.
+    $smokeInstance = if ($env:MELLO_SMOKE_INSTANCE) { $env:MELLO_SMOKE_INSTANCE } else { 'smoke' }
+
+    # Reap a smoke client left behind by an earlier run — it would hold the
+    # mutex above and reproduce the very failure this avoids. Matched on the
+    # private instance name in the command line, so the developer's own client
+    # is never a candidate.
+    Get-CimInstance Win32_Process -Filter "Name = 'mello.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -and $_.CommandLine -match "--instance\s+$smokeInstance\b" } |
+        ForEach-Object {
+            Write-Host "  reaping stale smoke client: PID $($_.ProcessId)"
+            try { Stop-Process -Id $_.ProcessId -Force -ErrorAction Stop } catch { }
+        }
+
     # Start-Process + WaitForExit, not `& $Binary`.
     #
     # Release builds set `windows_subsystem = "windows"` (client/src/main.rs),
@@ -74,7 +99,8 @@ try {
     # streams into the CI output. The path must be absolute: Start-Process
     # resolves a relative one against the process working directory rather than
     # PowerShell's current location, and CI passes target\release\mello.exe.
-    $proc = Start-Process -FilePath $binaryPath -NoNewWindow -PassThru
+    $proc = Start-Process -FilePath $binaryPath -NoNewWindow -PassThru `
+        -ArgumentList '--instance', $smokeInstance
 
     if (-not $proc.WaitForExit($TimeoutSeconds * 1000)) {
         Write-Host "X signup smoke FAILED: client still running after $TimeoutSeconds s."
@@ -86,6 +112,8 @@ try {
     if (-not (Test-Path -LiteralPath $done)) {
         Write-Host "X signup smoke FAILED: the client exited without reporting a result."
         Write-Host "  It likely crashed or quit before the scenario finished."
+        Write-Host "  If the log says 'Mello is already running.', another client holds the"
+        Write-Host "  --instance $smokeInstance lock; this run should have reaped it."
         exit 1
     }
 
