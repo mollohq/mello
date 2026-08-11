@@ -455,28 +455,17 @@ impl super::Client {
                     conn.send_ping();
                 }
                 tick_viewer_congestion_sfu(vs, &conn);
-                let ingress = poll_sfu_viewer_access_units(vs, viewer, &conn);
-                if ingress.access_units_fed > 0 {
-                    log::debug!(
-                        "Stream SFU ingress: aus={} bytes={} buffer_grows={}",
-                        ingress.access_units_fed,
-                        ingress.bytes_fed,
-                        ingress.buffer_grows
-                    );
-                }
+                // Deliberately not logged per access unit: at 60fps that is 60
+                // lines a second, and every field is already accumulated into
+                // transport_packets / transport_bytes / au_buffer_grows and
+                // reported once a second by `Stream cadence`.
+                let _ = poll_sfu_viewer_access_units(vs, viewer, &conn);
             }
         } else if !vs.peer.is_null() {
             if let Some(peer) = NonNull::new(vs.peer) {
                 tick_viewer_congestion_p2p(vs, peer);
-                let ingress = poll_p2p_viewer_access_units(vs, viewer, peer);
-                if ingress.access_units_fed > 0 {
-                    log::debug!(
-                        "Stream P2P ingress: aus={} bytes={} buffer_grows={}",
-                        ingress.access_units_fed,
-                        ingress.bytes_fed,
-                        ingress.buffer_grows
-                    );
-                }
+                // Same reasoning as the SFU path above.
+                let _ = poll_p2p_viewer_access_units(vs, viewer, peer);
             }
         }
 
@@ -1003,11 +992,38 @@ impl super::Client {
         };
         log::info!("Starting stream with preset: {:?}", quality_preset);
 
+        // Resolve the capture target before anything else, and refuse to guess.
+        // A stream that captures the wrong thing is indistinguishable from one
+        // that captures nothing, so this must fail here rather than fall back.
+        let target = match crate::stream::config::CaptureTarget::resolve(
+            capture_mode,
+            monitor_index,
+            hwnd,
+            pid,
+        ) {
+            Ok(t) => t,
+            Err(e) => {
+                log::error!("Stream start rejected: {}", e);
+                let _ = self.event_tx.send(Event::StreamError { message: e });
+                return;
+            }
+        };
+        log::info!(
+            "Capture target resolved: {} (requested mode={:?} monitor={:?} hwnd={:?} pid={:?}, title={:?})",
+            target.describe(),
+            capture_mode,
+            monitor_index,
+            hwnd,
+            pid,
+            title
+        );
+
         // Step 1: async RPC call (no raw pointers held across await)
-        let config = crate::stream::StreamConfig::from_preset(
+        let mut config = crate::stream::StreamConfig::from_preset(
             quality_preset,
             crate::stream::config::Codec::H264,
         );
+        config.capture_desc = target.describe();
         let configured_bitrate_kbps = config.bitrate_kbps;
         let resp = match crate::stream::host::request_start_stream(
             &self.nakama,
@@ -1052,25 +1068,31 @@ impl super::Client {
                 bitrate_kbps: config.bitrate_kbps,
             };
 
-            let source = match capture_mode {
-                "window" => mello_sys::MelloCaptureSource {
-                    mode: mello_sys::MelloCaptureMode_MELLO_CAPTURE_WINDOW,
-                    monitor_index: 0,
-                    hwnd: hwnd.unwrap_or(0) as *mut std::ffi::c_void,
-                    pid: 0,
-                },
-                "process" => mello_sys::MelloCaptureSource {
-                    mode: mello_sys::MelloCaptureMode_MELLO_CAPTURE_PROCESS,
-                    monitor_index: 0,
-                    hwnd: std::ptr::null_mut(),
-                    pid: pid.unwrap_or(0),
-                },
-                _ => mello_sys::MelloCaptureSource {
-                    mode: mello_sys::MelloCaptureMode_MELLO_CAPTURE_MONITOR,
-                    monitor_index: monitor_index.unwrap_or(0),
-                    hwnd: std::ptr::null_mut(),
-                    pid: 0,
-                },
+            let source = match target {
+                crate::stream::config::CaptureTarget::Window { hwnd } => {
+                    mello_sys::MelloCaptureSource {
+                        mode: mello_sys::MelloCaptureMode_MELLO_CAPTURE_WINDOW,
+                        monitor_index: 0,
+                        hwnd: hwnd as *mut std::ffi::c_void,
+                        pid: 0,
+                    }
+                }
+                crate::stream::config::CaptureTarget::Process { pid } => {
+                    mello_sys::MelloCaptureSource {
+                        mode: mello_sys::MelloCaptureMode_MELLO_CAPTURE_PROCESS,
+                        monitor_index: 0,
+                        hwnd: std::ptr::null_mut(),
+                        pid,
+                    }
+                }
+                crate::stream::config::CaptureTarget::Monitor { index } => {
+                    mello_sys::MelloCaptureSource {
+                        mode: mello_sys::MelloCaptureMode_MELLO_CAPTURE_MONITOR,
+                        monitor_index: index,
+                        hwnd: std::ptr::null_mut(),
+                        pid: 0,
+                    }
+                }
             };
 
             let (host, video_rx, audio_rx, resources) =

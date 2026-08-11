@@ -112,6 +112,14 @@ public:
         const char* capture_backend     = "";
         const char* encoder_name        = "";
         const char* gpu_name            = "";
+        // Rolling mean over the recent window, not the last sample: encode time
+        // swings by an order of magnitude frame to frame, so a single reading
+        // says nothing about whether the encoder is keeping up.
+        float       encode_ms_mean      = 0.0f;
+        float       encode_submit_ms    = 0.0f;
+        float       encode_wait_ms      = 0.0f;
+        float       encode_lock_ms      = 0.0f;
+        int         encoder_cost_tier   = 0;
     };
     void get_host_telemetry(HostTelemetry& out) const;
 
@@ -222,6 +230,11 @@ private:
     // Decimation target. 0 means "no decimation" (encode every captured frame).
     // Read on the capture thread, written from the control thread.
     std::atomic<uint32_t> output_fps_{0};
+
+    // Rolling encode-time mean. Written on the encode thread, read by the stats
+    // caller; a plain double is fine because a torn read of a diagnostic mean is
+    // harmless and locking the encode path for telemetry is not.
+    std::atomic<double> encode_ms_mean_{0.0};
     // Capture timestamp of the last frame passed downstream, in the capture
     // thread's own clock. Only touched on the capture thread.
     uint64_t last_emitted_us_ = 0;

@@ -27,10 +27,20 @@ public:
 private:
     void capture_thread();
 
+    /// (Re)create the output duplication for `monitor_index_`.
+    ///
+    /// Duplication is not a durable handle. Windows revokes it on desktop
+    /// switches, mode changes, driver resets, and whenever an application takes
+    /// exclusive fullscreen — which is precisely when a game stream starts. The
+    /// documented recovery is to recreate it, so this is split out and callable
+    /// from the capture thread rather than only at init.
+    bool recreate_duplication();
+
     ComPtr<ID3D11Device>           device_;
     ComPtr<ID3D11DeviceContext>    context_;
     ComPtr<IDXGIOutputDuplication> duplication_;
 
+    uint32_t           monitor_index_ = 0;
     uint32_t           width_      = 0;
     uint32_t           height_     = 0;
     uint32_t           target_fps_ = 60;

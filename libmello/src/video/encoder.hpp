@@ -26,6 +26,21 @@ struct EncodedPacket {
     bool                 is_keyframe;
 };
 
+/// Where the time inside one encode call actually went.
+///
+/// `enc_ms` fuses all three, which makes two very different failures look
+/// identical: NVENC silicon busy (another encoder session competing) versus the
+/// bitstream readback stalling on memory bandwidth. Splitting them is the
+/// difference between "check ShadowPlay" and "the GPU is saturated".
+struct EncodePhaseTiming {
+    /// nvEncEncodePicture — submission only; returns immediately when async.
+    double submit_ms = 0.0;
+    /// Waiting on the completion event. High here means the encoder block is busy.
+    double wait_ms = 0.0;
+    /// nvEncLockBitstream — VRAM to system memory. High here means bandwidth.
+    double lock_ms = 0.0;
+};
+
 struct EncoderStats {
     uint32_t bitrate_kbps;
     uint32_t fps_actual;
@@ -67,6 +82,10 @@ public:
 
     /// 0 = full quality. Higher means features have been given up.
     virtual int  cost_tier() const { return 0; }
+
+    /// Phase breakdown of the most recent encode. Default zeroed for backends
+    /// that do not instrument it.
+    virtual void get_phase_timing(EncodePhaseTiming& out) const { out = {}; }
 
     /// Retarget rate control at a new output framerate.
     ///

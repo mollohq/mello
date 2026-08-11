@@ -101,6 +101,10 @@ struct MelloStreamHost {
     MelloAudioPacketCallback audio_callback;
     void*                    audio_user_data;
     std::unique_ptr<mello::audio::StreamAudioHostPipeline> audio_pipeline;
+    /// Pid of the captured process, 0 when capturing a monitor or window.
+    /// Audio scoping needs it: capturing a game means capturing that game's
+    /// audio, not the whole system mix.
+    uint32_t capture_pid;
 };
 
 /// Detach the capture audio callback, then destroy the pipeline.
@@ -1128,7 +1132,10 @@ MelloStreamHost* mello_stream_start_host(
         pc.bitrate_kbps = config->bitrate_kbps;
         pc.low_latency  = true;
 
-        auto* host = new MelloStreamHost{c, on_packet, user_data, nullptr, nullptr};
+        const uint32_t capture_pid =
+            (source->mode == MELLO_CAPTURE_PROCESS) ? source->pid : 0;
+        auto* host =
+            new MelloStreamHost{c, on_packet, user_data, nullptr, nullptr, nullptr, capture_pid};
 
         auto cb = [host](const uint8_t* data, size_t size, bool is_keyframe, uint64_t ts) {
             host->callback(host->user_data, data, static_cast<int>(size), is_keyframe, ts);
@@ -1202,9 +1209,11 @@ MelloResult mello_stream_start_audio(MelloStreamHost* host) {
         auto pipeline = std::make_unique<mello::audio::StreamAudioHostPipeline>();
         MelloAudioPacketCallback cb = host->audio_callback;
         void* ud = host->audio_user_data;
-        if (!pipeline->start([cb, ud](const uint8_t* data, int size, uint64_t ts_us) {
-                if (cb) cb(ud, data, size, ts_us);
-            })) {
+        if (!pipeline->start(
+                [cb, ud](const uint8_t* data, int size, uint64_t ts_us) {
+                    if (cb) cb(ud, data, size, ts_us);
+                },
+                host->capture_pid)) {
             return MELLO_ERROR_FAILED;
         }
 
@@ -1371,6 +1380,11 @@ void mello_stream_get_stats(MelloStreamHost* host, MelloStreamStats* stats) {
         stats->encode_queue_drops = ht.encode_queue_drops;
         stats->convert_ms         = ht.convert_ms;
         stats->encode_ms          = ht.encode_ms;
+        stats->encode_ms_mean     = ht.encode_ms_mean;
+        stats->encode_submit_ms   = ht.encode_submit_ms;
+        stats->encode_wait_ms     = ht.encode_wait_ms;
+        stats->encode_lock_ms     = ht.encode_lock_ms;
+        stats->encoder_cost_tier  = ht.encoder_cost_tier;
         // stats was memset above, so strncpy with size-1 always leaves a
         // terminator. HostTelemetry's string members default to "" and are
         // never null.

@@ -370,7 +370,12 @@ bool NvencEncoder::encode(ID3D11Texture2D* nv12_texture, EncodedPacket& out) {
         force_idr_ = false;
     }
 
+    const auto t_submit_start = std::chrono::steady_clock::now();
     status = fn_.nvEncEncodePicture(encoder_, &pic);
+    last_submit_ms_ = std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - t_submit_start).count();
+    // Not async: nothing waits, so the wait phase is zero rather than stale.
+    last_wait_ms_ = 0.0;
     if (status != NV_ENC_SUCCESS && status != NV_ENC_ERR_NEED_MORE_INPUT) {
         MELLO_LOG_ERROR(TAG, "NVENC: nvEncEncodePicture failed: %d (seq=%llu)", status, frame_seq_);
         fn_.nvEncUnmapInputResource(encoder_, mapped_input_);
@@ -381,7 +386,10 @@ bool NvencEncoder::encode(ID3D11Texture2D* nv12_texture, EncodedPacket& out) {
     // In async mode, wait for the GPU to signal completion before locking.
     // This frees the CPU during the actual GPU encode work.
     if (async_mode_) {
+        const auto t_wait_start = std::chrono::steady_clock::now();
         DWORD wait_result = WaitForSingleObject(completion_event_, 500);
+        last_wait_ms_ = std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - t_wait_start).count();
         if (wait_result != WAIT_OBJECT_0) {
             MELLO_LOG_ERROR(TAG, "NVENC: async completion event timeout (seq=%llu wait=%lu)", frame_seq_, wait_result);
             fn_.nvEncUnmapInputResource(encoder_, mapped_input_);
@@ -393,7 +401,10 @@ bool NvencEncoder::encode(ID3D11Texture2D* nv12_texture, EncodedPacket& out) {
     NV_ENC_LOCK_BITSTREAM lock = {NV_ENC_LOCK_BITSTREAM_VER};
     lock.outputBitstream = out_buf_;
 
+    const auto t_lock_start = std::chrono::steady_clock::now();
     status = fn_.nvEncLockBitstream(encoder_, &lock);
+    last_lock_ms_ = std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - t_lock_start).count();
     if (status != NV_ENC_SUCCESS) {
         MELLO_LOG_ERROR(TAG, "NVENC: nvEncLockBitstream failed: %d (seq=%llu)", status, frame_seq_);
         fn_.nvEncUnmapInputResource(encoder_, mapped_input_);
@@ -624,6 +635,12 @@ bool NvencEncoder::reduce_cost_tier() {
         enc_config.rcParams.enableTemporalAQ,
         enc_config.rcParams.aqStrength);
     return true;
+}
+
+void NvencEncoder::get_phase_timing(EncodePhaseTiming& out) const {
+    out.submit_ms = last_submit_ms_;
+    out.wait_ms   = last_wait_ms_;
+    out.lock_ms   = last_lock_ms_;
 }
 
 void NvencEncoder::get_stats(EncoderStats& out) const {

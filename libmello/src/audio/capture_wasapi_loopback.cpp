@@ -1,6 +1,8 @@
 #ifdef _WIN32
 #include "capture_wasapi_loopback.hpp"
 #include "../util/log.hpp"
+#include <audioclientactivationparams.h>
+#include <mmdeviceapi.h>
 #include <functiondiscoverykeys_devpkey.h>
 #include <combaseapi.h>
 #include <vector>
@@ -26,6 +28,82 @@ static bool is_float_format(const WAVEFORMATEX* fmt) {
     }
     return false;
 }
+
+namespace {
+
+/// Completion handler for ActivateAudioInterfaceAsync.
+///
+/// The API is asynchronous even though every caller wants it synchronously, so
+/// this signals an event and the caller waits. Heap-allocated with a real
+/// refcount because the async operation holds a reference past our stack frame.
+class ProcessLoopbackActivation : public IActivateAudioInterfaceCompletionHandler,
+                                  public IAgileObject {
+public:
+    ProcessLoopbackActivation()
+        : done_(CreateEventW(nullptr, TRUE, FALSE, nullptr)) {}
+
+    HANDLE done() const { return done_; }
+    HRESULT result() const { return result_; }
+    /// Ownership transfers to the caller.
+    IAudioClient* take_client() {
+        IAudioClient* c = client_;
+        client_ = nullptr;
+        return c;
+    }
+
+    // IUnknown
+    STDMETHODIMP QueryInterface(REFIID riid, void** ppv) override {
+        if (!ppv) return E_POINTER;
+        if (riid == __uuidof(IUnknown) ||
+            riid == __uuidof(IActivateAudioInterfaceCompletionHandler)) {
+            *ppv = static_cast<IActivateAudioInterfaceCompletionHandler*>(this);
+        } else if (riid == __uuidof(IAgileObject)) {
+            *ppv = static_cast<IAgileObject*>(this);
+        } else {
+            *ppv = nullptr;
+            return E_NOINTERFACE;
+        }
+        AddRef();
+        return S_OK;
+    }
+    STDMETHODIMP_(ULONG) AddRef() override {
+        return static_cast<ULONG>(InterlockedIncrement(&ref_));
+    }
+    STDMETHODIMP_(ULONG) Release() override {
+        const LONG n = InterlockedDecrement(&ref_);
+        if (n == 0) delete this;
+        return static_cast<ULONG>(n);
+    }
+
+    STDMETHODIMP ActivateCompleted(IActivateAudioInterfaceAsyncOperation* op) override {
+        HRESULT activate_hr = E_UNEXPECTED;
+        IUnknown* unknown = nullptr;
+        HRESULT hr = op->GetActivateResult(&activate_hr, &unknown);
+        if (SUCCEEDED(hr) && SUCCEEDED(activate_hr) && unknown) {
+            hr = unknown->QueryInterface(__uuidof(IAudioClient),
+                                         reinterpret_cast<void**>(&client_));
+            result_ = hr;
+        } else {
+            result_ = FAILED(hr) ? hr : activate_hr;
+        }
+        if (unknown) unknown->Release();
+        SetEvent(done_);
+        return S_OK;
+    }
+
+private:
+    ~ProcessLoopbackActivation() {
+        if (client_) client_->Release();
+        if (done_) CloseHandle(done_);
+    }
+
+    LONG ref_ = 1;
+    HANDLE done_ = nullptr;
+    HRESULT result_ = E_FAIL;
+    IAudioClient* client_ = nullptr;
+};
+
+} // namespace
 
 WasapiLoopbackCapture::WasapiLoopbackCapture() = default;
 
@@ -104,18 +182,22 @@ bool WasapiLoopbackCapture::initialize(const char* device_id) {
     sample_rate_ = 48000;
     channels_ = 2;
 
+    const bool ok = finish_client_init(mix_fmt);
+    CoTaskMemFree(mix_fmt);
+    return ok;
+}
+
+bool WasapiLoopbackCapture::finish_client_init(const WAVEFORMATEX* fmt) {
     event_ = CreateEventW(nullptr, FALSE, FALSE, nullptr);
     if (!event_) {
-        CoTaskMemFree(mix_fmt);
         return false;
     }
 
     REFERENCE_TIME duration = 200000;
-    hr = audio_client_->Initialize(
+    HRESULT hr = audio_client_->Initialize(
         AUDCLNT_SHAREMODE_SHARED,
         AUDCLNT_STREAMFLAGS_LOOPBACK | AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
-        duration, 0, mix_fmt, nullptr);
-    CoTaskMemFree(mix_fmt);
+        duration, 0, const_cast<WAVEFORMATEX*>(fmt), nullptr);
     if (FAILED(hr)) {
         MELLO_LOG_ERROR("loopback", "Initialize failed hr=0x%08lx", hr);
         return false;
@@ -136,7 +218,9 @@ bool WasapiLoopbackCapture::initialize(const char* device_id) {
 
     MELLO_LOG_INFO(
         "loopback",
-        "initialized: device_rate=%u device_ch=%u fmt=%s -> internal_rate=%u internal_ch=%u buf=%u",
+        "initialized: scope=%s device_rate=%u device_ch=%u fmt=%s -> internal_rate=%u internal_ch=%u buf=%u",
+        scope_ == LoopbackScope::Endpoint ? "endpoint"
+            : (scope_ == LoopbackScope::IncludeProcessTree ? "process-include" : "process-exclude"),
         device_sample_rate_,
         device_channels_,
         device_float_format_ ? "f32" : "i16",
@@ -144,6 +228,95 @@ bool WasapiLoopbackCapture::initialize(const char* device_id) {
         channels_,
         buffer_frames_);
     return true;
+}
+
+bool WasapiLoopbackCapture::activate_process_loopback(uint32_t pid, bool include_tree) {
+    if (!init_com()) {
+        return false;
+    }
+
+    AUDIOCLIENT_ACTIVATION_PARAMS params{};
+    params.ActivationType = AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK;
+    params.ProcessLoopbackParams.TargetProcessId = pid;
+    params.ProcessLoopbackParams.ProcessLoopbackMode =
+        include_tree ? PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE
+                     : PROCESS_LOOPBACK_MODE_EXCLUDE_TARGET_PROCESS_TREE;
+
+    PROPVARIANT activate_params{};
+    activate_params.vt = VT_BLOB;
+    activate_params.blob.cbSize = sizeof(params);
+    activate_params.blob.pBlobData = reinterpret_cast<BYTE*>(&params);
+
+    auto* handler = new ProcessLoopbackActivation();
+    IActivateAudioInterfaceAsyncOperation* op = nullptr;
+    HRESULT hr = ActivateAudioInterfaceAsync(
+        VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK,
+        __uuidof(IAudioClient),
+        &activate_params,
+        handler,
+        &op);
+    if (FAILED(hr)) {
+        // Expected on Windows older than 10 2004 — the caller falls back.
+        MELLO_LOG_WARN("loopback",
+                       "process loopback unavailable (hr=0x%08lx), pid=%u", hr, pid);
+        handler->Release();
+        return false;
+    }
+
+    // Bounded wait: activation is local and fast, but must not hang stream start.
+    const DWORD waited = WaitForSingleObject(handler->done(), 3000);
+    if (op) op->Release();
+    if (waited != WAIT_OBJECT_0 || FAILED(handler->result())) {
+        MELLO_LOG_WARN("loopback",
+                       "process loopback activation failed (wait=%lu hr=0x%08lx) pid=%u",
+                       waited, handler->result(), pid);
+        handler->Release();
+        return false;
+    }
+
+    audio_client_ = handler->take_client();
+    handler->Release();
+    if (!audio_client_) {
+        return false;
+    }
+
+    // The process-loopback virtual device has no mix format to query, so the
+    // format is ours to choose. Pick the internal contract exactly — 48 kHz
+    // stereo int16 — which also removes the resample path entirely.
+    WAVEFORMATEX fmt{};
+    fmt.wFormatTag = WAVE_FORMAT_PCM;
+    fmt.nChannels = 2;
+    fmt.nSamplesPerSec = 48000;
+    fmt.wBitsPerSample = 16;
+    fmt.nBlockAlign = static_cast<WORD>(fmt.nChannels * fmt.wBitsPerSample / 8);
+    fmt.nAvgBytesPerSec = fmt.nSamplesPerSec * fmt.nBlockAlign;
+    fmt.cbSize = 0;
+
+    device_sample_rate_ = fmt.nSamplesPerSec;
+    device_channels_ = fmt.nChannels;
+    device_float_format_ = false;
+    device_bits_per_sample_ = fmt.wBitsPerSample;
+    sample_rate_ = 48000;
+    channels_ = 2;
+
+    return finish_client_init(&fmt);
+}
+
+bool WasapiLoopbackCapture::initialize_scoped(LoopbackScope scope, uint32_t pid) {
+    scope_ = scope;
+    if (scope != LoopbackScope::Endpoint && pid != 0) {
+        if (activate_process_loopback(pid, scope == LoopbackScope::IncludeProcessTree)) {
+            return true;
+        }
+        // Falling back means the viewer will hear the whole system mix again,
+        // including their own voice. Say so plainly rather than degrading
+        // silently — this is the difference users actually notice.
+        MELLO_LOG_WARN("loopback",
+                       "falling back to endpoint loopback: stream audio will include "
+                       "all system sound, including voice chat playback");
+        scope_ = LoopbackScope::Endpoint;
+    }
+    return initialize(nullptr);
 }
 
 bool WasapiLoopbackCapture::start(Callback callback) {

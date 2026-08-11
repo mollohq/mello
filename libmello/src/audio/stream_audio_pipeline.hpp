@@ -22,7 +22,10 @@ public:
     StreamAudioHostPipeline();
     ~StreamAudioHostPipeline();
 
-    bool start(PacketCallback callback);
+    /// `capture_pid` is the streamed process when capturing a game, 0 otherwise.
+    /// Non-zero scopes capture to that process tree; zero scopes it to everything
+    /// *except* our own process, so a desktop stream still excludes voice chat.
+    bool start(PacketCallback callback, uint32_t capture_pid = 0);
     void stop();
 
     /// Push interleaved float PCM captured elsewhere.

@@ -192,6 +192,7 @@ bool VideoPipeline::start_host(const CaptureSourceDesc& source,
     last_convert_ms_ = last_encode_ms_ = 0;
     frames_captured_.store(0, std::memory_order_relaxed);
     last_capture_us_.store(host_start_time_, std::memory_order_relaxed);
+    encode_ms_mean_.store(0.0, std::memory_order_relaxed);
     output_fps_.store(0, std::memory_order_relaxed);
     last_emitted_us_ = 0;
 
@@ -235,6 +236,7 @@ bool VideoPipeline::start_host(const CaptureSourceDesc& source,
     frames_encoded_  = 0;
     frames_captured_.store(0, std::memory_order_relaxed);
     last_capture_us_.store(host_start_time_, std::memory_order_relaxed);
+    encode_ms_mean_.store(0.0, std::memory_order_relaxed);
     output_fps_.store(0, std::memory_order_relaxed);
     last_emitted_us_ = 0;
 
@@ -441,7 +443,16 @@ void VideoPipeline::get_host_telemetry(HostTelemetry& out) const {
     }
 
     if (capture_)  out.capture_backend = capture_->backend_name();
-    if (encoder_)  out.encoder_name    = encoder_->name();
+    if (encoder_) {
+        out.encoder_name = encoder_->name();
+        out.encoder_cost_tier = encoder_->cost_tier();
+        EncodePhaseTiming phases{};
+        encoder_->get_phase_timing(phases);
+        out.encode_submit_ms = static_cast<float>(phases.submit_ms);
+        out.encode_wait_ms   = static_cast<float>(phases.wait_ms);
+        out.encode_lock_ms   = static_cast<float>(phases.lock_ms);
+    }
+    out.encode_ms_mean = static_cast<float>(encode_ms_mean_.load(std::memory_order_relaxed));
     out.gpu_name = device_.adapter_name;
 }
 
@@ -523,6 +534,12 @@ void VideoPipeline::encode_thread_func() {
         if (encoder_->encode(job.texture, packet)) {
             auto t1 = std::chrono::steady_clock::now();
             last_encode_ms_ = std::chrono::duration<double, std::milli>(t1 - t0).count();
+            // Exponential mean, ~1s of history at 60fps. Cheap, and unlike the
+            // last sample it actually tracks whether the encoder is keeping up.
+            constexpr double kAlpha = 1.0 / 60.0;
+            const double prev_mean = encode_ms_mean_.load(std::memory_order_relaxed);
+            encode_ms_mean_.store(prev_mean + kAlpha * (last_encode_ms_ - prev_mean),
+                                  std::memory_order_relaxed);
             frames_encoded_++;
 
             if (frames_encoded_ <= 3) {
@@ -567,7 +584,7 @@ void VideoPipeline::maybe_reduce_encoder_cost() {
     EncoderLoadSample sample{};
     sample.frames_captured = window_frames;
     sample.queue_drops     = drops - cost_window_start_drops_;
-    sample.mean_encode_ms  = last_encode_ms_;
+    sample.mean_encode_ms  = encode_ms_mean_.load(std::memory_order_relaxed);
     sample.target_fps      = config_.fps;
 
     if (window_frames < 60) {

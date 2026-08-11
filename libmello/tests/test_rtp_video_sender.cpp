@@ -246,7 +246,6 @@ public:
         answerer_->onTrack([this](std::shared_ptr<rtc::Track> track) {
             std::lock_guard<std::mutex> lock(mutex_);
             receiver_track_ = std::move(track);
-            receiver_track_ready_ = true;
             install_receiver_handler();
             cv_.notify_all();
         });
@@ -270,11 +269,23 @@ public:
 
         offerer_->setLocalDescription();
 
+        // Wait on exactly what is asserted below. onTrack fires when the track is
+        // negotiated, which is strictly earlier than the track being open, so
+        // waiting on a "track arrived" flag and then requiring isOpen() leaves a
+        // window where the wait succeeds and the next line fails. That window is
+        // small — one observed failure landed 39 ms in — but it is real, and it
+        // is the flake this harness kept producing.
+        //
+        // Reading receiver_track_ under the mutex also removes the unsynchronised
+        // access: wait_until polls without holding it, while onTrack writes under it.
         if (!wait_until([this]() {
-                return offerer_connected_.load(std::memory_order_acquire)
-                    && answerer_connected_.load(std::memory_order_acquire)
-                    && receiver_track_ready_
-                    && sender_track_open_.load(std::memory_order_acquire);
+                if (!offerer_connected_.load(std::memory_order_acquire)
+                    || !answerer_connected_.load(std::memory_order_acquire)
+                    || !sender_track_open_.load(std::memory_order_acquire)) {
+                    return false;
+                }
+                std::lock_guard<std::mutex> lock(mutex_);
+                return receiver_track_ != nullptr && receiver_track_->isOpen();
             },
             10s)) {
             throw std::runtime_error("loopback PeerConnection did not connect");
@@ -470,7 +481,6 @@ private:
     std::atomic<bool> offerer_connected_{false};
     std::atomic<bool> answerer_connected_{false};
     std::atomic<bool> sender_track_open_{false};
-    bool receiver_track_ready_ = false;
 
     mutable std::mutex mutex_;
     std::condition_variable cv_;

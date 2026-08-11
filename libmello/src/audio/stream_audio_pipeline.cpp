@@ -17,7 +17,7 @@ StreamAudioHostPipeline::~StreamAudioHostPipeline() {
     stop();
 }
 
-bool StreamAudioHostPipeline::start(PacketCallback callback) {
+bool StreamAudioHostPipeline::start(PacketCallback callback, uint32_t capture_pid) {
     if (!callback) return false;
     stop();
 
@@ -32,7 +32,15 @@ bool StreamAudioHostPipeline::start(PacketCallback callback) {
     // delivers game audio on the video stream, and mello.cpp routes it into
     // feed_float_pcm once this pipeline exists.
     capture_ = std::make_unique<WasapiLoopbackCapture>();
-    if (!capture_->initialize()) {
+    // Scope the capture so the viewer hears the stream, not the streamer's whole
+    // desktop. Capturing a game: that game's process tree. Capturing a monitor:
+    // everything except us, so our own voice playback is not fed back to the
+    // person speaking.
+    const LoopbackScope scope = capture_pid != 0 ? LoopbackScope::IncludeProcessTree
+                                                 : LoopbackScope::ExcludeProcessTree;
+    const uint32_t target_pid =
+        capture_pid != 0 ? capture_pid : static_cast<uint32_t>(GetCurrentProcessId());
+    if (!capture_->initialize_scoped(scope, target_pid)) {
         MELLO_LOG_ERROR("stream_audio", "loopback capture init failed");
         capture_.reset();
         return false;

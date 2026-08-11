@@ -319,7 +319,7 @@ Game audio is wired end-to-end on Windows and macOS:
 
 | Parameter | Value |
 |-----------|-------|
-| Capture (Windows) | WASAPI loopback (`eRender` + `AUDCLNT_STREAMFLAGS_LOOPBACK`) |
+| Capture (Windows) | WASAPI **process** loopback (`AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK`), endpoint loopback as fallback |
 | Capture (macOS) | ScreenCaptureKit, on the SCStream that already captures video |
 | Encode | Opus stereo 48 kHz, 20 ms frames, `OPUS_APPLICATION_AUDIO`, ~96 kbps |
 | RTP payload type | 111 (Opus), same as voice but on a separate stream peer connection |
@@ -330,6 +330,32 @@ Game audio is wired end-to-end on Windows and macOS:
 | Viewer playout | `mello_stream_feed_audio_packet` → Opus decode → `create_audio_playback()` (stereo: WASAPI on Windows, CoreAudio on macOS) |
 
 Host path: `mello_stream_start_audio` → `MelloAudioPacketCallback` → `StreamManager::handle_audio` → `PacketSink::send_audio` → `mello_peer_send_audio`. Viewer path (SFU): `AudioTrackData` events; P2P: `mello_peer_set_audio_track_callback` → same feed function. Stream viewer receive is wired on the offered recvonly audio track (not voice `onTrack`); if `onTrack` fires for the same `mid`, callbacks move to that track instance.
+
+### 9.0 Capture scope (Windows)
+
+Endpoint loopback captures the entire system mix. That includes Mello's own
+voice playback, so the viewer hears *their own voice* echoed back out of the
+streamer's speakers, plus notifications and any other application. Windows 10
+2004+ can scope loopback to a process tree, which fixes all three at once:
+
+| Streaming | Scope | Target |
+|---|---|---|
+| a game (process capture) | `PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE` | the game's pid |
+| a monitor or window | `PROCESS_LOOPBACK_MODE_EXCLUDE_TARGET_PROCESS_TREE` | **our own** pid |
+
+The exclude case matters as much as the include case: a desktop stream should
+still carry the desktop's sound, just not the voice chat mixed into it.
+
+Activation goes through `ActivateAudioInterfaceAsync` against
+`VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK`, which is asynchronous, so
+`WasapiLoopbackCapture` waits (bounded, 3 s) on a completion handler rather than
+letting stream start hang. The virtual device has **no mix format to query**, so
+the format is chosen rather than negotiated: 48 kHz stereo int16, matching the
+internal contract exactly and removing the resample path.
+
+On older Windows, activation fails and capture falls back to endpoint loopback —
+logged at WARN naming the consequence, because "you can hear yourself" is the
+symptom users report and it must be attributable.
 
 ### 9.1 Inbound audio framing
 
@@ -447,15 +473,29 @@ have no access to, so host and viewer additionally report to the SFU every 10 s
 over signaling (`stream_client_stats`, one per 5 s per peer, 2048-byte cap —
 `mello-sfu/01-SFU.md §5.3`). SFU mode only: P2P has no relay to report to.
 
-**Host:** `gpu`, `enc`, `cap_backend`, `cap_fps`, `cap_idle_ms`, `enc_fps`,
-`enc_ms`, `conv_ms`, `eq_depth`, `eq_drops`, `br_target`, `br_actual`,
-`pace_kbps`, `w`, `h`, `fps_cfg`, `recovery`, `vfail`, `vq`.
+**Host:** `src`, `gpu`, `enc`, `enc_tier`, `cap_backend`, `cap_fps`,
+`cap_idle_ms`, `enc_fps`, `enc_ms`, `enc_ms_avg`, `enc_submit_ms`,
+`enc_wait_ms`, `enc_lock_ms`, `conv_ms`, `eq_depth`, `eq_drops`, `br_target`,
+`br_actual`, `pace_kbps`, `w`, `h`, `fps_cfg`, `fps_out`, `recovery`, `vfail`,
+`vq`, `aud_in`, `aud_out`, `aud_fail`.
 
 **Viewer:** `freeze_n`, `freeze_ms`, `present_fps`, `rtt_ms`, `rx_complete`,
 `rx_incomplete`, `rx_missing`, `rx_repaired`, `rx_gated`, `rx_nacks`, `rx_pli`,
 `rx_jitter`, `rx_fec_ok`, `rx_fec_fail`, `bg_drops`.
 
-Two of these carry more weight than the rest:
+Four of these carry more weight than the rest:
+
+- **`src`.** What is actually being captured (`process pid=1234`,
+  `monitor index=0`). A stream of the wrong source and a stream of nothing look
+  identical without it, and the UI label is not evidence.
+- **`enc_submit_ms` / `enc_wait_ms` / `enc_lock_ms`.** A single fused encode
+  time cannot separate a busy encoder block (another NVENC session competing —
+  ShadowPlay, OBS) from a stalled bitstream readback (memory bandwidth). Those
+  have different causes and different fixes. `enc_ms_avg` is a rolling mean
+  because per-frame encode time swings by an order of magnitude.
+- **`enc_tier`.** Whether the adaptive cost downgrade (§3.4) actually fired.
+  Without it the mechanism is unobservable in the field.
+
 
 - **`cap_fps` vs `enc_fps`.** Capture arrivals are counted before any encode
   work, so a stalled capture and a stalled encoder are finally distinguishable.
