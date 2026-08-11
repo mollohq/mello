@@ -63,6 +63,11 @@ private:
     // session: a GPU that could not keep up a moment ago will not have improved,
     // and climbing back would oscillate against the very load being escaped.
     int cost_tier_ = 0;
+    // Set when the driver refuses a downgrade. Retrying cannot succeed — the
+    // configuration is as incompatible the second time — and the overload that
+    // triggered it persists, so an unlatched retry floods the log for the whole
+    // session at roughly one error per second.
+    bool cost_tier_unavailable_ = false;
     static constexpr int kMaxCostTier = 2;
     void apply_cost_tier_locked(NV_ENC_CONFIG& cfg) const;
 

@@ -60,6 +60,41 @@ Two backends, selected automatically per-process:
 
 **Deferred start:** If the target window is minimized at stream start (user tabbed out to launch the stream), capture waits. The monitor thread polls until the window is restored, then initializes the backend. Width/height return restored dimensions during the wait so the encoder can pre-initialize. This matches Discord's behaviour.
 
+**Output rate is clamped at the pipeline, not trusted from the backend.** Capture
+backends deliver at the *display's* refresh rate — there is no "give me 60" knob
+in Desktop Duplication or WGC — so every backend carries its own throttle, and
+those throttles have been measured over-delivering (83 fps against a 60 fps
+target on a 165 Hz host). The encoder then faithfully encodes all of them and
+overshoots its bitrate by exactly that ratio, because rate control budgets bits
+per frame from the framerate it was configured with:
+
+> 5000 kbps x (83/60) = 6900 kbps — matching the 6697 kbps observed in the field.
+
+`VideoPipeline::decimation_accepts` therefore clamps unconditionally to the
+configured rate. It is an **accumulator**: the deadline advances by exactly one
+output interval per accepted frame and is never reset to the arrival time.
+Resetting is what collapses the output onto the source's quantisation — with a
+12 ms source and a 16.7 ms target the naive form can only emit every source
+frame or every other one, never the 60-of-83 that actually equals 60 fps. No
+tolerance value fixes that; the formula cannot express the answer. A small fixed
+tolerance (1/8 of the *target* interval) absorbs arrival jitter, and a stall
+resyncs the deadline rather than emitting a catch-up burst into a 2-deep encode
+queue.
+
+Skipped frames are released before the GPU colour conversion, so a decimated
+frame costs essentially nothing — which is the whole reason to drop at capture
+rather than at the encode queue, where an over-fed queue evicts frames you
+wanted.
+
+**Minimum encodable size.** Hardware encoders reject frames below ~145x49
+(NVENC H.264) with a generic unsupported-parameter error, which surfaces as
+"no hardware encoder available" and reads as a broken GPU. `start_host` refuses
+earlier and names the actual size. The usual cause is a capture target that is
+not what the user thinks it is: a minimized window, where WGC returns the ~160x28
+iconic size, or an auxiliary window sharing the game's title. The WGC hot-swap
+path refuses a minimized target for the same reason and waits for restore —
+a fullscreen game exiting to the desktop minimizes it, so that path is common.
+
 **Adaptive DXGI throttle:** DXGI delivers at the monitor's refresh rate (60–360 Hz). We only want `target_fps` (typically 60). On startup, we calibrate the monitor's vsync interval from the first two acquired frames, then set a deadline of `target_interval - half_vsync`. This ensures we accept the closest vsync that satisfies the target on any refresh rate, without over- or under-delivering.
 
 **macOS:** `ScreenCaptureKit` (SCK) backend exists for macOS capture.

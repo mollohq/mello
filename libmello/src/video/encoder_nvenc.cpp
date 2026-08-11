@@ -590,7 +590,7 @@ void NvencEncoder::apply_cost_tier_locked(NV_ENC_CONFIG& cfg) const {
 }
 
 bool NvencEncoder::reduce_cost_tier() {
-    if (!encoder_ || cost_tier_ >= kMaxCostTier) {
+    if (!encoder_ || cost_tier_ >= kMaxCostTier || cost_tier_unavailable_) {
         return false;
     }
     const int previous = cost_tier_;
@@ -613,12 +613,19 @@ bool NvencEncoder::reduce_cost_tier() {
     // The rate-control model changes shape here, so start a clean GOP rather
     // than leaving viewers on references produced under the old configuration.
     reconfig.forceIDR = 1;
+    // multiPass and temporalAQ are not rate-control knobs — they change the
+    // encoder's internal setup, and the driver rejects that as an incompatible
+    // reconfiguration (NV_ENC_ERR_UNSUPPORTED_PARAM) unless the encoder state is
+    // reset with it. Without this the downgrade silently never happens, which is
+    // exactly what it did: every attempt failed and the tier reverted.
+    reconfig.resetEncoder = 1;
 
     const NVENCSTATUS status = fn_.nvEncReconfigureEncoder(encoder_, &reconfig);
     if (status != NV_ENC_SUCCESS) {
         cost_tier_ = previous;
+        cost_tier_unavailable_ = true;
         MELLO_LOG_ERROR(TAG,
-            "NVENC: cost tier %d->%d reconfigure failed: %d (keeping tier %d)",
+            "NVENC: cost tier %d->%d reconfigure failed: %d (keeping tier %d, quality downgrade unavailable for this session)",
             previous, previous + 1, status, previous);
         return false;
     }

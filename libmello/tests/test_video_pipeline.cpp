@@ -312,49 +312,92 @@ TEST(EncoderOverloadPolicy, ZeroTargetFpsIsNotTreatedAsOverload) {
 // Framerate decimation cadence
 // ─────────────────────────────────────────────────────────────────────────────
 
+namespace {
+
+// Runs `frames` arrivals at `source_fps` through the decimator and returns how
+// many were accepted. Synthetic clock — no capture device involved.
+int decimated_count(uint32_t source_fps, uint32_t target_fps, int frames) {
+    uint64_t deadline = 0;
+    int accepted = 0;
+    for (int i = 0; i < frames; ++i) {
+        const uint64_t ts =
+            static_cast<uint64_t>(i) * (1'000'000ULL / source_fps);
+        if (VideoPipeline::decimation_accepts(ts, deadline, target_fps)) {
+            ++accepted;
+        }
+    }
+    return accepted;
+}
+
+} // namespace
+
 TEST(FramerateDecimation, ZeroTargetAcceptsEveryFrame) {
     // 0 means "no decimation" — every captured frame is encoded.
-    EXPECT_TRUE(VideoPipeline::decimation_accepts(1000, 900, 0, 60));
-    EXPECT_TRUE(VideoPipeline::decimation_accepts(901, 900, 0, 60));
+    uint64_t deadline = 500;
+    EXPECT_TRUE(VideoPipeline::decimation_accepts(1000, deadline, 0));
+    EXPECT_TRUE(VideoPipeline::decimation_accepts(901, deadline, 0));
 }
 
 TEST(FramerateDecimation, FirstFrameIsAlwaysAccepted) {
-    EXPECT_TRUE(VideoPipeline::decimation_accepts(12345, 0, 30, 60));
+    uint64_t deadline = 0;
+    EXPECT_TRUE(VideoPipeline::decimation_accepts(12345, deadline, 30));
+    EXPECT_GT(deadline, 12345u) << "deadline must be armed off the first frame";
 }
 
 TEST(FramerateDecimation, HalvesA60fpsSourceTo30) {
-    // 60fps source: frames every 16667us. Target 30fps: every other frame.
-    const uint32_t target = 30;
-    uint64_t last_emitted = 0;
-    int accepted = 0;
-    for (int i = 0; i < 60; ++i) {
-        const uint64_t ts = static_cast<uint64_t>(i) * 16667ULL;
-        if (VideoPipeline::decimation_accepts(ts, last_emitted, target, 60)) {
-            ++accepted;
-            last_emitted = ts;
-        }
-    }
-    // One second of 60fps input should yield ~30 encoded frames.
+    const int accepted = decimated_count(60, 30, 60);
     EXPECT_GE(accepted, 29);
     EXPECT_LE(accepted, 31);
 }
 
-TEST(FramerateDecimation, TolerancePreventsUnderDelivery) {
-    // A frame arriving just short of a full interval must still be accepted:
-    // capture lands on vsync boundaries, so demanding the full interval would
-    // reject the closest frame every time and deliver 20fps instead of 30.
-    const uint64_t interval = 1'000'000ULL / 30;
-    EXPECT_TRUE(VideoPipeline::decimation_accepts(interval - 100, 1, 30, 60))
-        << "near-deadline frame rejected; cadence would collapse below target";
+TEST(FramerateDecimation, HoldsTargetWhenSourceIsNotAMultiple) {
+    // The regression this whole mechanism exists for. A 165Hz display delivering
+    // ~83fps into a 60fps target is not an integer ratio, so a naive
+    // "interval minus tolerance" deadline cannot express the answer: too small a
+    // tolerance emits every other frame (41fps), too large emits every frame
+    // (83fps). A real host was measured doing exactly the latter, and the
+    // encoder — configured for 60 — overshot its bitrate by 83/60.
+    const int accepted = decimated_count(83, 60, 83);
+    EXPECT_GE(accepted, 58) << "under-delivering: cadence collapsed onto the source rate";
+    EXPECT_LE(accepted, 62) << "over-delivering: tolerance swallowed a whole interval";
+}
+
+TEST(FramerateDecimation, HoldsTargetFromAVeryFastSource) {
+    // 240Hz source, 60fps target — every fourth frame.
+    const int accepted = decimated_count(240, 60, 240);
+    EXPECT_GE(accepted, 59);
+    EXPECT_LE(accepted, 61);
+}
+
+TEST(FramerateDecimation, PassesEverythingWhenSourceMatchesTarget) {
+    // Equal rates must not decimate: dropping here would be a visible stutter
+    // on the overwhelmingly common 60Hz/60fps case.
+    const int accepted = decimated_count(60, 60, 60);
+    EXPECT_GE(accepted, 59);
 }
 
 TEST(FramerateDecimation, RejectsFramesInsideTheInterval) {
     // Well inside the interval — genuinely too early, must be dropped.
-    EXPECT_FALSE(VideoPipeline::decimation_accepts(1'000 + 1'000, 1'000, 30, 60));
+    uint64_t deadline = 0;
+    EXPECT_TRUE(VideoPipeline::decimation_accepts(1'000, deadline, 30));
+    EXPECT_FALSE(VideoPipeline::decimation_accepts(2'000, deadline, 30));
+}
+
+TEST(FramerateDecimation, StallDoesNotProduceACatchUpBurst) {
+    // After a long capture gap the deadline is many intervals in the past.
+    // Emitting one frame per missed interval would dump a burst into an encode
+    // queue two deep, evicting live frames to encode stale ones.
+    uint64_t deadline = 0;
+    EXPECT_TRUE(VideoPipeline::decimation_accepts(0, deadline, 60));
+    const uint64_t after_stall = 5'000'000;  // 5s gap
+    EXPECT_TRUE(VideoPipeline::decimation_accepts(after_stall, deadline, 60));
+    EXPECT_GT(deadline, after_stall) << "deadline left in the past; next frames would all pass";
+    EXPECT_FALSE(VideoPipeline::decimation_accepts(after_stall + 1'000, deadline, 60));
 }
 
 TEST(FramerateDecimation, ClockResetDoesNotWedgeTheStream) {
     // A backend hot-swap can restart timestamps. Accepting on a backwards jump
     // keeps frames flowing instead of stalling until the old clock is passed.
-    EXPECT_TRUE(VideoPipeline::decimation_accepts(5, 9'000'000, 30, 60));
+    uint64_t deadline = 9'000'000;
+    EXPECT_TRUE(VideoPipeline::decimation_accepts(5, deadline, 30));
 }

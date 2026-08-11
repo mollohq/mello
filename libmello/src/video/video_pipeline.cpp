@@ -22,6 +22,13 @@ std::unique_ptr<CaptureSource> create_capture_source(const CaptureSourceDesc&) {
 
 static constexpr const char* TAG = "video/pipeline";
 
+// Smallest frame the hardware encoders will accept. NVENC H.264's documented
+// minimum is 145x49; AMF and QSV are comparable. Below this the encoder rejects
+// initialization outright, so catching it here turns a misleading
+// "no hardware encoder" into a statement of what is actually wrong.
+static constexpr uint32_t kMinEncodeWidth  = 145;
+static constexpr uint32_t kMinEncodeHeight = 49;
+
 // Ring-buffer helpers for decoded frames ─────────────────────────────────────
 
 #ifdef _WIN32
@@ -161,6 +168,23 @@ bool VideoPipeline::start_host(const CaptureSourceDesc& source,
     uint32_t enc_w = encode_w_;
     uint32_t enc_h = encode_h_;
 
+    // Refuse a source too small to encode, naming the actual size.
+    //
+    // Hardware encoders have a minimum frame size (NVENC H.264 is 145x49) and
+    // reject anything under it with a generic unsupported-parameter error. That
+    // surfaces as "no hardware encoder available", which reads as a broken GPU
+    // and sends debugging in entirely the wrong direction — it cost a live test
+    // session. The usual cause is a capture target that is not what the user
+    // thinks it is: a minimized window (WGC hands back the ~160x28 iconic size)
+    // or an auxiliary window that happens to share the game's title.
+    if (enc_w < kMinEncodeWidth || enc_h < kMinEncodeHeight) {
+        MELLO_LOG_ERROR(TAG,
+            "Capture source is %ux%u, below the encoder minimum of %ux%u — refusing to "
+            "start. The target is probably minimized or is not the window you meant.",
+            enc_w, enc_h, kMinEncodeWidth, kMinEncodeHeight);
+        return false;
+    }
+
     // 2. Video preprocessor: BGRA→NV12 color conversion + GPU downscale
     preprocessor_ = std::make_unique<VideoPreprocessor>();
     if (!preprocessor_->initialize(device_, cap_w, cap_h, enc_w, enc_h)) {
@@ -194,7 +218,7 @@ bool VideoPipeline::start_host(const CaptureSourceDesc& source,
     last_capture_us_.store(host_start_time_, std::memory_order_relaxed);
     encode_ms_mean_.store(0.0, std::memory_order_relaxed);
     output_fps_.store(0, std::memory_order_relaxed);
-    last_emitted_us_ = 0;
+    next_emit_deadline_us_ = 0;
 
     encode_thread_ = std::thread(&VideoPipeline::encode_thread_func, this);
 
@@ -238,7 +262,7 @@ bool VideoPipeline::start_host(const CaptureSourceDesc& source,
     last_capture_us_.store(host_start_time_, std::memory_order_relaxed);
     encode_ms_mean_.store(0.0, std::memory_order_relaxed);
     output_fps_.store(0, std::memory_order_relaxed);
-    last_emitted_us_ = 0;
+    next_emit_deadline_us_ = 0;
 
     auto self = this;
     if (!capture_->start(config.fps, [self](void* pixel_buffer, uint64_t ts) {
@@ -296,12 +320,9 @@ void VideoPipeline::on_captured_frame(void* cv_pixel_buffer, uint64_t timestamp_
     frames_captured_.fetch_add(1, std::memory_order_relaxed);
     last_capture_us_.store(now_us(), std::memory_order_relaxed);
 
-    if (!decimation_accepts(timestamp_us, last_emitted_us_,
-                            output_fps_.load(std::memory_order_relaxed),
-                            config_.fps)) {
+    if (!decimation_accepts(timestamp_us, next_emit_deadline_us_, effective_output_fps())) {
         return;
     }
-    last_emitted_us_ = timestamp_us;
 
     EncodedPacket packet{};
     if (encoder_->encode(cv_pixel_buffer, packet)) {
@@ -386,25 +407,42 @@ void VideoPipeline::set_output_fps(uint32_t fps) {
 // throttle does: capture lands on vsync boundaries, so demanding a full interval
 // would systematically reject the frame that is closest to the deadline and
 // deliver 20fps when 30 was asked for.
-bool VideoPipeline::decimation_accepts(uint64_t timestamp_us, uint64_t last_emitted_us,
-                                       uint32_t output_fps, uint32_t capture_fps) {
+bool VideoPipeline::decimation_accepts(uint64_t timestamp_us,
+                                       uint64_t& next_deadline_us,
+                                       uint32_t output_fps) {
     if (output_fps == 0) {
         return true;
     }
-    if (last_emitted_us == 0 || timestamp_us < last_emitted_us) {
-        return true; // first frame, or a clock reset
-    }
 
     const uint64_t interval_us = 1'000'000ULL / output_fps;
-    // Tolerance is half a *source* interval, matching the DXGI throttle's
-    // `target_interval - half_vsync`. Half the *target* interval looks
-    // equivalent and is not: at 60->30 it equals a whole source frame, so every
-    // frame clears the deadline and no decimation happens at all.
-    const uint64_t tolerance_us =
-        capture_fps > 0 ? (1'000'000ULL / capture_fps) / 2 : 0;
-    const uint64_t deadline_us =
-        interval_us > tolerance_us ? interval_us - tolerance_us : 0;
-    return (timestamp_us - last_emitted_us) >= deadline_us;
+
+    if (next_deadline_us == 0 || timestamp_us + interval_us < next_deadline_us) {
+        // First frame, or the clock went backwards. Start a fresh cadence here.
+        next_deadline_us = timestamp_us + interval_us;
+        return true;
+    }
+
+    // Small tolerance so an arrival landing a hair before the deadline still
+    // counts. It is a fixed fraction of the *target* interval, deliberately: an
+    // earlier version used half a *source* interval, and when the source rate
+    // approached twice the target that tolerance swallowed an entire target
+    // interval, so every frame cleared the deadline and nothing was decimated.
+    const uint64_t tolerance_us = interval_us / 8;
+    if (timestamp_us + tolerance_us < next_deadline_us) {
+        return false;
+    }
+
+    // Advance by exactly one interval rather than resetting to now. Resetting is
+    // what collapses the output back onto the source's quantisation — with a
+    // 12 ms source and a 16.7 ms target it can only ever emit every source frame
+    // or every other one, never the 60 of 83 that actually equals 60fps.
+    next_deadline_us += interval_us;
+    // If capture stalled we may be many intervals behind; catching up would emit
+    // a burst the encoder and pacer then have to absorb. Resync instead.
+    if (next_deadline_us < timestamp_us) {
+        next_deadline_us = timestamp_us + interval_us;
+    }
+    return true;
 }
 
 bool VideoPipeline::encoder_is_overloaded(const EncoderLoadSample& sample) {
@@ -478,12 +516,9 @@ void VideoPipeline::on_captured_frame(ID3D11Texture2D* texture, uint64_t timesta
 
     // Decimate before the colour convert: dropping here saves the GPU blit as
     // well as the encode, which is the whole point on a host that is behind.
-    if (!decimation_accepts(timestamp_us, last_emitted_us_,
-                            output_fps_.load(std::memory_order_relaxed),
-                            config_.fps)) {
+    if (!decimation_accepts(timestamp_us, next_emit_deadline_us_, effective_output_fps())) {
         return;
     }
-    last_emitted_us_ = timestamp_us;
 
     if (capture_ && capture_->consume_swap_event()) {
         MELLO_LOG_WARN(TAG, "Capture backend swap detected, forcing keyframe");
