@@ -721,6 +721,7 @@ impl super::Client {
     #[allow(clippy::too_many_arguments)]
     pub(super) async fn handle_finalize_onboarding(
         &mut self,
+        device_id: &str,
         crew_id: Option<String>,
         crew_name: Option<String>,
         crew_description: Option<String>,
@@ -732,20 +733,12 @@ impl super::Client {
         avatar_style: Option<String>,
         avatar_seed: Option<String>,
     ) {
-        let device_id = {
-            use rand::Rng;
-            let bytes: [u8; 16] = rand::thread_rng().gen();
-            bytes
-                .iter()
-                .map(|b| format!("{:02x}", b))
-                .collect::<String>()
-        };
         log::info!(
             "[onboarding] finalizing — device auth with id={}",
             device_id
         );
 
-        let (user, _created) = match self.nakama.authenticate_device(&device_id).await {
+        let (user, _created) = match self.nakama.authenticate_device(device_id).await {
             Ok(pair) => pair,
             Err(e) => {
                 log::error!("[onboarding] device auth failed: {}", e);

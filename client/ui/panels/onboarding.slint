@@ -499,6 +499,9 @@ export component Onboarding inherits Rectangle {
 
     callback crew-selected(string);
     callback create-crew-requested(string);
+    /// Set while onboarding is finalizing; disables the Continue button so a
+    /// second click cannot start a second signup.
+    in property <bool> busy: false;
     callback continue-to-step(int);
     callback login-requested();
     callback open-sign-in();
@@ -1256,8 +1259,8 @@ export component Onboarding inherits Rectangle {
 
                 AccentButton {
                     width: 200px;
-                    label: "Continue";
-                    enabled: nickname != "" && root.selected-avatar >= 0;
+                    label: root.busy ? "Setting up…" : "Continue";
+                    enabled: nickname != "" && root.selected-avatar >= 0 && !root.busy;
                     clicked => {
                         root.continue-to-step(3);
                     }

@@ -648,7 +648,13 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
     ctx.app.show()?;
     log::info!("[startup] window shown");
     if let Some(perf_rx) = perf_event_rx {
-        perf_mode::start(ctx.cmd_tx.clone(), perf_rx);
+        // Resolve the device id here, on the app's own Settings instance. The
+        // scenario thread cannot hold it (Rc is not Send), and loading a second
+        // instance there would race: whichever saves last wins, and the app's
+        // copy — which would not know about the id — persists onboarding_step
+        // throughout the run.
+        let device_id = ctx.settings.borrow_mut().device_id_or_create();
+        perf_mode::start(ctx.cmd_tx.clone(), perf_rx, device_id);
     }
     slint::run_event_loop_until_quit()?;
     log::info!("[exit] event loop ended");

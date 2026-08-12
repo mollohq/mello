@@ -82,6 +82,10 @@ pub enum Command {
         cursor: Option<String>,
     },
     FinalizeOnboarding {
+        /// Stable per-install device identity. **Must** be the same value on
+        /// every attempt: it is what makes finalize idempotent. A fresh id here
+        /// authenticates as a new device and Nakama creates another account.
+        device_id: String,
         crew_id: Option<String>,
         crew_name: Option<String>,
         #[serde(default)]
@@ -168,12 +172,6 @@ pub enum Command {
         channel_id: String,
     },
     LeaveVoice,
-    /// Enable/disable auto-joining a crew's voice channel on `SelectCrew`.
-    /// Defaults to enabled (desktop). iOS disables it so voice (and the mic
-    /// permission prompt) only starts on an explicit join.
-    SetVoiceAutoJoin {
-        enabled: bool,
-    },
     VoiceSpeaking {
         speaking: bool,
     },

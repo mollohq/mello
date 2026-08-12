@@ -156,6 +156,34 @@ impl Settings {
             log::warn!("Failed to save settings: {}", e);
         }
     }
+
+    /// The stable device identity for Nakama device auth, creating and
+    /// persisting one on first use.
+    ///
+    /// This must be stable across attempts and across restarts. Onboarding used
+    /// to mint a fresh random id inside every `FinalizeOnboarding`, and
+    /// `device_id` was never written, so each attempt authenticated as a *new*
+    /// device and Nakama duly created a *new* account (`create=true`). Any
+    /// retry — or any restart before onboarding was marked complete — left
+    /// another orphan user behind. Production users accumulated five or six
+    /// accounts each this way.
+    ///
+    /// Reusing the id makes finalize idempotent: a second attempt authenticates
+    /// back into the same account instead of creating another.
+    pub fn device_id_or_create(&mut self) -> String {
+        if let Some(existing) = self.device_id.as_ref().filter(|id| !id.is_empty()) {
+            return existing.clone();
+        }
+
+        use rand::Rng;
+        let bytes: [u8; 16] = rand::thread_rng().gen();
+        let id: String = bytes.iter().map(|b| format!("{:02x}", b)).collect();
+
+        self.device_id = Some(id.clone());
+        self.save();
+        log::info!("[auth] generated device id for this install");
+        id
+    }
 }
 
 #[cfg(test)]

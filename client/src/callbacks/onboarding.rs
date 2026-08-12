@@ -126,6 +126,17 @@ pub fn wire(ctx: &AppContext) {
                     return;
                 }
                 if step == 3 {
+                    // Authoritative re-entrancy guard. The button is disabled
+                    // while busy, but the step indicator can also reach here,
+                    // and a click that lands before the property propagates
+                    // would otherwise start a second signup. Each one used to
+                    // create its own account.
+                    if app.get_onboarding_busy() {
+                        log::info!("[onboarding] finalize already in flight — ignoring");
+                        return;
+                    }
+                    app.set_onboarding_busy(true);
+
                     stop_ambient_shuffle(&shuffle_timer);
 
                     {
@@ -160,6 +171,8 @@ pub fn wire(ctx: &AppContext) {
                     }
 
                     let nickname = app.get_onboarding_nickname().to_string();
+                    // Stable across attempts — see Settings::device_id_or_create.
+                    let device_id = s.borrow_mut().device_id_or_create();
                     let settings = s.borrow();
                     let crew_id = settings.pending_crew_id.clone();
                     let crew_name = settings.pending_crew_name.clone();
@@ -210,6 +223,7 @@ pub fn wire(ctx: &AppContext) {
                         avatar_data.is_some(),
                     );
                     let _ = cmd.send(Command::FinalizeOnboarding {
+                        device_id,
                         crew_id,
                         crew_name,
                         crew_description,

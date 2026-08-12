@@ -328,6 +328,86 @@ fn finalize(h: &Harness) {
     h.app().invoke_onboarding_continue(3);
 }
 
+fn finalize_device_ids(cmds: &[Command]) -> Vec<String> {
+    cmds.iter()
+        .filter_map(|c| match c {
+            Command::FinalizeOnboarding { device_id, .. } => Some(device_id.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// ★ Regression: every finalize attempt must reuse one device identity.
+///
+/// Onboarding used to mint a fresh random device id inside each attempt, and
+/// never persisted it. Since device auth runs with `create=true`, a retry — or
+/// a restart before onboarding was marked complete — authenticated as a new
+/// device and Nakama created a *new account*. Production users ended up with
+/// five or six each, and the second attempt then failed with "group name in
+/// use" because the first had already created their crew.
+#[test]
+fn retrying_finalize_reuses_the_same_device_id() {
+    let mut h = Harness::new();
+
+    finalize(&h);
+    let first = finalize_device_ids(&h.commands());
+    assert_eq!(first.len(), 1, "one attempt should emit one finalize");
+    assert!(!first[0].is_empty(), "device id must not be empty");
+
+    h.emit(Event::OnboardingFailed {
+        reason: "Connection failed: timed out".into(),
+    });
+
+    finalize(&h);
+    let second = finalize_device_ids(&h.commands());
+    assert_eq!(second.len(), 1);
+    assert_eq!(
+        first[0], second[0],
+        "the retry must reuse the device id; a fresh one authenticates as a new \
+         device and Nakama creates a second account for the same person"
+    );
+}
+
+/// ★ Regression: a second click while finalize is in flight must be ignored.
+///
+/// The step-2 Continue button fires seven sequential network calls with no
+/// visible progress. Users clicked it repeatedly — one production user six
+/// times in 22 seconds — and each click started another signup.
+#[test]
+fn clicking_continue_twice_only_finalizes_once() {
+    let mut h = Harness::new();
+
+    finalize(&h);
+    finalize(&h);
+
+    let ids = finalize_device_ids(&h.commands());
+    assert_eq!(
+        ids.len(),
+        1,
+        "a second click while the first is in flight must be dropped, got {ids:?}"
+    );
+}
+
+/// ...and once the attempt resolves, the user must be able to try again.
+#[test]
+fn the_finalize_guard_releases_after_a_failure() {
+    let mut h = Harness::new();
+
+    finalize(&h);
+    assert_eq!(finalize_device_ids(&h.commands()).len(), 1);
+
+    h.emit(Event::OnboardingFailed {
+        reason: "Failed to create crew".into(),
+    });
+
+    finalize(&h);
+    assert_eq!(
+        finalize_device_ids(&h.commands()).len(),
+        1,
+        "after a failure the user is still on the same step and must be able to retry"
+    );
+}
+
 fn finalize_avatar(cmds: &[Command]) -> Option<Option<String>> {
     cmds.iter().find_map(|c| match c {
         Command::FinalizeOnboarding { crew_avatar, .. } => Some(crew_avatar.clone()),
