@@ -1,7 +1,7 @@
 mod app_context;
 mod autolaunch;
 mod avatar;
-mod callbacks;
+pub(crate) mod callbacks;
 mod chat_ui;
 mod converters;
 #[cfg(target_os = "windows")]
@@ -472,26 +472,6 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    // Decide startup path
-    {
-        let s = settings.borrow();
-        if perf_mode {
-            log::info!("[perf] scenario drives auth — skipping restore");
-            app.set_onboarding_step(4);
-        } else {
-            log::info!("[auth] startup  onboarding_step={}", s.onboarding_step);
-            if s.onboarding_step > 3 {
-                log::info!("[auth] onboarding done ÔÇö attempting session restore");
-                let _ = cmd_tx.send(Command::TryRestore);
-            } else {
-                log::info!("[auth] onboarding in progress ÔÇö fetching crews (no auth)");
-                let _ = cmd_tx.send(Command::DiscoverCrews { cursor: None });
-            }
-            app.set_onboarding_step(s.onboarding_step as i32);
-        }
-        let _ = cmd_tx.send(Command::CheckMicPermission);
-    }
-
     // --- HUD manager ---
     let hud_enabled = settings.borrow().hud_enabled;
     let hud_mgr = Rc::new(hud_manager::HudManager::start(hud_enabled));
@@ -594,6 +574,32 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
     callbacks::wire_all(&ctx);
     log::info!("[startup] callbacks wired");
 
+    // Decide the startup path.
+    //
+    // Runs after wire_all so the effects a resumed state kicks off have their
+    // handlers in place, and goes through `onboarding::resume` rather than
+    // setting the step property directly. Setting it raw is what left a
+    // resumed step 2 with an empty avatar grid and no audio devices: the data
+    // was loaded by the crew-selected callback, which a restart never runs.
+    {
+        let step = ctx.settings.borrow().onboarding_step;
+        if perf_mode {
+            log::info!("[perf] scenario drives auth — skipping restore");
+            ctx.app.set_onboarding_step(4);
+        } else {
+            log::info!("[auth] startup  onboarding_step={step}");
+            let state = crate::onboarding::OnboardingState::from_step(step as i32);
+            if step > 3 {
+                log::info!("[auth] onboarding done — attempting session restore");
+                let _ = ctx.cmd_tx.send(Command::TryRestore);
+            } else {
+                log::info!("[auth] onboarding in progress — resuming {state:?}");
+            }
+            crate::onboarding::resume(&ctx, state);
+        }
+        let _ = ctx.cmd_tx.send(Command::CheckMicPermission);
+    }
+
     // --- Wire DComp geometry callback (Slint → Rust, synchronous) ---
     #[cfg(target_os = "windows")]
     {
@@ -648,7 +654,13 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
     ctx.app.show()?;
     log::info!("[startup] window shown");
     if let Some(perf_rx) = perf_event_rx {
-        perf_mode::start(ctx.cmd_tx.clone(), perf_rx);
+        // Resolve the device id here, on the app's own Settings instance. The
+        // scenario thread cannot hold it (Rc is not Send), and loading a second
+        // instance there would race: whichever saves last wins, and the app's
+        // copy — which would not know about the id — persists onboarding_step
+        // throughout the run.
+        let device_id = ctx.settings.borrow_mut().device_id_or_create();
+        perf_mode::start(ctx.cmd_tx.clone(), perf_rx, device_id);
     }
     slint::run_event_loop_until_quit()?;
     log::info!("[exit] event loop ended");

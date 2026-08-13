@@ -4,8 +4,7 @@ use mello_core::Command;
 use slint::{ComponentHandle, Model};
 
 use crate::app_context::AppContext;
-use crate::callbacks::onboarding::{load_avatar_grid, start_ambient_shuffle};
-use crate::{avatar, SearchUserData};
+use crate::SearchUserData;
 
 pub fn wire(ctx: &AppContext) {
     // --- Crew selection ---
@@ -100,9 +99,7 @@ pub fn wire(ctx: &AppContext) {
         let invited = ctx.invited_users.clone();
         let app_weak = ctx.app.as_weak();
         let s = ctx.settings.clone();
-        let avatar_st = ctx.avatar_state.clone();
-        let shuffle_timer = ctx.avatar_shuffle_timer.clone();
-        let rt_handle = ctx.rt.clone();
+        let fx = crate::onboarding::EffectCtx::from_ctx(ctx);
         ctx.app
             .on_create_crew(move |name, description, is_private| {
                 let Some(app) = app_weak.upgrade() else {
@@ -118,33 +115,20 @@ pub fn wire(ctx: &AppContext) {
                         settings.pending_crew_open = Some(!is_private);
                     }
                     app.set_new_crew_open(false);
-                    crate::onboarding::advance_with(&app, &s, crate::onboarding::Input::CrewChosen);
                     log::info!(
-                        "[onboarding] crew created locally: name={:?} open={} — loading avatars",
+                        "[onboarding] crew created locally: name={:?} open={}",
                         name.as_str(),
                         !is_private,
                     );
-
-                    *avatar_st.lock().unwrap() = avatar::AvatarGridState::new();
-                    load_avatar_grid(app.as_weak(), &avatar_st, &rt_handle);
-                    let shuffle_timer2 = shuffle_timer.clone();
-                    let avatar_st2 = avatar_st.clone();
-                    let app_weak2 = app.as_weak();
-                    let rt_h = rt_handle.clone();
-                    let delay_timer = slint::Timer::default();
-                    delay_timer.start(
-                        slint::TimerMode::SingleShot,
-                        std::time::Duration::from_millis(7 * 60 + 500),
-                        move || {
-                            start_ambient_shuffle(
-                                app_weak2.clone(),
-                                &avatar_st2,
-                                &shuffle_timer2,
-                                &rt_h,
-                            );
-                        },
+                    // Avatars and audio devices arrive as PickAvatar's entry
+                    // effects; this used to hand-roll them, and the copy here
+                    // and in callbacks/onboarding.rs had to stay in step.
+                    crate::onboarding::advance_with(
+                        &app,
+                        &s,
+                        &fx,
+                        crate::onboarding::Input::CrewChosen,
                     );
-                    std::mem::forget(delay_timer);
                     return;
                 }
 

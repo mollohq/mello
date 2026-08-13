@@ -333,36 +333,14 @@ impl super::Client {
         self.refresh_user_game_stats().await;
 
         // Tell the server this is our active crew (registers subscription + returns state)
-        let local_user_id = self
-            .nakama
-            .current_user_id()
-            .map(String::from)
-            .unwrap_or_default();
-        let voice_channel_id = match self.nakama.set_active_crew(crew_id).await {
+        match self.nakama.set_active_crew(crew_id).await {
             Ok(state) => {
-                // Check if user is already in a channel (server remembers from last session)
-                let already_in = state
-                    .voice_channels
-                    .iter()
-                    .find(|ch| ch.members.iter().any(|m| m.user_id == local_user_id))
-                    .map(|ch| ch.id.clone());
-                // Fall back to default channel
-                let target = already_in.or_else(|| {
-                    state
-                        .voice_channels
-                        .iter()
-                        .find(|ch| ch.is_default)
-                        .or_else(|| state.voice_channels.first())
-                        .map(|ch| ch.id.clone())
-                });
                 let _ = self.event_tx.send(Event::CrewStateLoaded { state });
-                target
             }
             Err(e) => {
                 log::warn!("set_active_crew RPC failed: {}", e);
-                None
             }
-        };
+        }
 
         // Fetch members first so the display name cache is populated for chat messages
         if let Ok(members) = self.nakama.list_group_users(crew_id).await {
@@ -374,14 +352,15 @@ impl super::Client {
 
         self.load_initial_chat_history(crew_id).await;
 
-        // Auto-join voice (last-used channel, or default if first time). iOS
-        // disables this (SetVoiceAutoJoin) so voice + the mic permission prompt
-        // only start on an explicit join.
-        if self.voice_autojoin {
-            if let Some(ch_id) = &voice_channel_id {
-                self.handle_join_voice(ch_id).await;
-            }
-        }
+        // Deliberately does not join voice.
+        //
+        // Selecting a crew used to drop the user straight into a voice channel,
+        // both on crew switch and at the end of onboarding. Two problems: users
+        // did not ask to be in a call, and it made the mic the *first* hardware
+        // Mello touches — during signup, before onboarding is marked complete.
+        // A failure there put the user back on the last onboarding step. iOS
+        // already opted out of this for the permission-prompt half of the
+        // problem. Voice now starts only when the user asks for it.
     }
 
     /// Fetch the caller's per-game stats and emit `UserGameStatsLoaded`

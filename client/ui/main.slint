@@ -61,6 +61,10 @@ export component MainWindow inherits Window {
 
     // --- Onboarding (0 = show onboarding, 1-3 = step, 4+ = done) ---
     in-out property <int> onboarding-step: 0;
+    // True while FinalizeOnboarding is in flight. Gates the step-2 Continue
+    // button: it fires seven sequential network calls, and every extra click
+    // used to start another one — each creating its own account.
+    in-out property <bool> onboarding-busy: false;
     in property <[CrewData]> discover-crews: [];
     in property <[int]> onboarding-bento-bases: [];
     // Non-empty when crew discovery failed. Onboarding step 1 shows the
@@ -608,6 +612,7 @@ export component MainWindow inherits Window {
     // ===================== ONBOARDING =====================
     if onboarding-step >= 1 && onboarding-step <= 3 && !show-sign-in: Onboarding {
         step: root.onboarding-step;
+        busy: root.onboarding-busy;
         discover-crews: root.discover-crews;
         bento-set-bases: root.onboarding-bento-bases;
         discover-error: root.discover-error;

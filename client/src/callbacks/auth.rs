@@ -25,6 +25,7 @@ pub fn wire(ctx: &AppContext) {
         let cmd = ctx.cmd_tx.clone();
         let app_weak = ctx.app.as_weak();
         let settings_ref = ctx.settings.clone();
+        let fx = crate::onboarding::EffectCtx::from_ctx(ctx);
         let avatar_cache_ref = ctx.avatar_cache.clone();
         ctx.app.on_logout(move || {
             avatar_cache_ref.borrow_mut().clear();
@@ -40,6 +41,7 @@ pub fn wire(ctx: &AppContext) {
                 crate::onboarding::advance_with(
                     &app,
                     &settings_ref,
+                    &fx,
                     crate::onboarding::Input::LoggedOut,
                 );
             }

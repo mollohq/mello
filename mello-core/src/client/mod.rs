@@ -105,9 +105,6 @@ pub struct Client {
     sfu_voice_reconnect: Option<(tokio::time::Instant, String, u32)>,
     /// Last voice channel we joined (for reconnection)
     last_voice_channel: Option<String>,
-    /// Auto-join a crew's voice channel on `SelectCrew` (default true; iOS turns
-    /// this off so voice + the mic prompt only start on an explicit join).
-    voice_autojoin: bool,
     game_state: GameStateManager,
     #[allow(dead_code)]
     game_sensor: Option<GameSensor>,
@@ -251,7 +248,6 @@ impl Client {
             giphy: GiphyClient::new(),
             sfu_voice_reconnect: None,
             last_voice_channel: None,
-            voice_autojoin: true,
             game_state: GameStateManager::new(),
             game_sensor: None,
             game_db: Arc::new(std::sync::RwLock::new(GameDatabase::load_bundled())),
@@ -540,6 +536,14 @@ impl Client {
                 log::info!("[auth] Google link requested");
                 self.handle_link_google().await;
             }
+            Command::LinkSteam => {
+                log::info!("[auth] Steam link requested");
+                self.handle_link_steam().await;
+            }
+            Command::LinkTwitch => {
+                log::info!("[auth] Twitch link requested");
+                self.handle_link_twitch().await;
+            }
             Command::LinkDiscord => {
                 log::info!("[auth] Discord link requested");
                 self.handle_link_discord().await;
@@ -560,6 +564,7 @@ impl Client {
                 self.handle_discover_crews(cursor.as_deref()).await;
             }
             Command::FinalizeOnboarding {
+                device_id,
                 crew_id,
                 crew_name,
                 crew_description,
@@ -572,6 +577,7 @@ impl Client {
                 avatar_seed,
             } => {
                 self.handle_finalize_onboarding(
+                    &device_id,
                     crew_id,
                     crew_name,
                     crew_description,
@@ -661,9 +667,6 @@ impl Client {
             }
             Command::JoinVoice { channel_id } => {
                 self.handle_join_voice(&channel_id).await;
-            }
-            Command::SetVoiceAutoJoin { enabled } => {
-                self.voice_autojoin = enabled;
             }
             Command::LeaveVoice => {
                 self.handle_leave_voice().await;

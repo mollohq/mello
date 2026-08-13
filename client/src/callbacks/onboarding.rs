@@ -26,56 +26,33 @@ pub fn wire(ctx: &AppContext) {
 
     // --- Onboarding: crew selected ---
     {
-        let cmd = ctx.cmd_tx.clone();
         let app_weak = ctx.app.as_weak();
         let s = ctx.settings.clone();
-        let avatar_st = ctx.avatar_state.clone();
-        let shuffle_timer = ctx.avatar_shuffle_timer.clone();
-        let rt_handle = ctx.rt.clone();
+        let fx = crate::onboarding::EffectCtx::from_ctx(ctx);
         ctx.app.on_onboarding_crew_selected(move |crew_id| {
-            let _ = cmd.send(Command::ListAudioDevices);
             if let Some(app) = app_weak.upgrade() {
                 {
                     let mut settings = s.borrow_mut();
                     settings.pending_crew_id = Some(crew_id.to_string());
                     settings.pending_crew_name = None;
                 }
-                crate::onboarding::advance_with(&app, &s, crate::onboarding::Input::CrewChosen);
-                log::info!(
-                    "[onboarding] crew selected (stored locally): {} — loading avatars",
-                    crew_id
+                log::info!("[onboarding] crew selected (stored locally): {}", crew_id);
+                // Avatars and audio devices load as PickAvatar's entry effects,
+                // so this path is no different from resuming or navigating back.
+                crate::onboarding::advance_with(
+                    &app,
+                    &s,
+                    &fx,
+                    crate::onboarding::Input::CrewChosen,
                 );
-
-                *avatar_st.lock().unwrap() = avatar::AvatarGridState::new();
-                load_avatar_grid(app.as_weak(), &avatar_st, &rt_handle);
-                let shuffle_timer2 = shuffle_timer.clone();
-                let avatar_st2 = avatar_st.clone();
-                let app_weak2 = app.as_weak();
-                let rt_h = rt_handle.clone();
-                let delay_timer = slint::Timer::default();
-                delay_timer.start(
-                    slint::TimerMode::SingleShot,
-                    Duration::from_millis(7 * 60 + 500),
-                    move || {
-                        start_ambient_shuffle(
-                            app_weak2.clone(),
-                            &avatar_st2,
-                            &shuffle_timer2,
-                            &rt_h,
-                        );
-                    },
-                );
-                std::mem::forget(delay_timer);
             }
         });
     }
 
     // --- Onboarding: create crew ---
     {
-        let cmd = ctx.cmd_tx.clone();
         let app_weak = ctx.app.as_weak();
         ctx.app.on_onboarding_create_crew(move |_name| {
-            let _ = cmd.send(Command::ListAudioDevices);
             if let Some(app) = app_weak.upgrade() {
                 app.set_new_crew_has_avatar(false);
                 app.set_new_crew_created(false);
@@ -93,39 +70,21 @@ pub fn wire(ctx: &AppContext) {
         let avatar_b64 = ctx.new_crew_avatar_b64.clone();
         let avatar_st = ctx.avatar_state.clone();
         let shuffle_timer = ctx.avatar_shuffle_timer.clone();
-        let rt_handle = ctx.rt.clone();
+        let fx = crate::onboarding::EffectCtx::from_ctx(ctx);
         ctx.app.on_onboarding_continue(move |step| {
             if let Some(app) = app_weak.upgrade() {
-                if step == 2 {
-                    log::info!("[avatar] entering step 2 — resetting grid and loading avatars");
-                    app.set_onboarding_step(step);
-                    let mut settings = s.borrow_mut();
-                    settings.onboarding_step = step as u8;
-                    settings.save();
-                    drop(settings);
-                    *avatar_st.lock().unwrap() = avatar::AvatarGridState::new();
-                    load_avatar_grid(app.as_weak(), &avatar_st, &rt_handle);
-                    let shuffle_timer2 = shuffle_timer.clone();
-                    let avatar_st2 = avatar_st.clone();
-                    let app_weak2 = app.as_weak();
-                    let rt_h = rt_handle.clone();
-                    let delay_timer = slint::Timer::default();
-                    delay_timer.start(
-                        slint::TimerMode::SingleShot,
-                        Duration::from_millis(7 * 60 + 500),
-                        move || {
-                            start_ambient_shuffle(
-                                app_weak2.clone(),
-                                &avatar_st2,
-                                &shuffle_timer2,
-                                &rt_h,
-                            );
-                        },
-                    );
-                    std::mem::forget(delay_timer);
-                    return;
-                }
                 if step == 3 {
+                    // Authoritative re-entrancy guard. The button is disabled
+                    // while busy, but the step indicator can also reach here,
+                    // and a click that lands before the property propagates
+                    // would otherwise start a second signup. Each one used to
+                    // create its own account.
+                    if app.get_onboarding_busy() {
+                        log::info!("[onboarding] finalize already in flight — ignoring");
+                        return;
+                    }
+                    app.set_onboarding_busy(true);
+
                     stop_ambient_shuffle(&shuffle_timer);
 
                     {
@@ -160,6 +119,8 @@ pub fn wire(ctx: &AppContext) {
                     }
 
                     let nickname = app.get_onboarding_nickname().to_string();
+                    // Stable across attempts — see Settings::device_id_or_create.
+                    let device_id = s.borrow_mut().device_id_or_create();
                     let settings = s.borrow();
                     let crew_id = settings.pending_crew_id.clone();
                     let crew_name = settings.pending_crew_name.clone();
@@ -210,6 +171,7 @@ pub fn wire(ctx: &AppContext) {
                         avatar_data.is_some(),
                     );
                     let _ = cmd.send(Command::FinalizeOnboarding {
+                        device_id,
                         crew_id,
                         crew_name,
                         crew_description,
@@ -228,6 +190,7 @@ pub fn wire(ctx: &AppContext) {
                 crate::onboarding::advance_with(
                     &app,
                     &s,
+                    &fx,
                     crate::onboarding::Input::GoBackTo(
                         crate::onboarding::OnboardingState::from_step(step),
                     ),
@@ -241,11 +204,17 @@ pub fn wire(ctx: &AppContext) {
         let app_weak = ctx.app.as_weak();
         let s = ctx.settings.clone();
         let cmd = ctx.cmd_tx.clone();
+        let fx = crate::onboarding::EffectCtx::from_ctx(ctx);
         ctx.app.on_onboarding_login_requested(move || {
             if let Some(app) = app_weak.upgrade() {
                 log::info!("[auth] sign-in pill — entering app as device user");
                 app.set_logged_in(true);
-                crate::onboarding::apply_to(&app, &s, crate::onboarding::OnboardingState::Done);
+                crate::onboarding::apply_to(
+                    &app,
+                    &s,
+                    &fx,
+                    crate::onboarding::OnboardingState::Done,
+                );
                 let _ = cmd.send(Command::LoadMyCrews);
             }
         });
@@ -255,7 +224,11 @@ pub fn wire(ctx: &AppContext) {
     {
         let cmd = ctx.cmd_tx.clone();
         ctx.app.on_onboarding_auth_steam(move || {
-            let _ = cmd.send(Command::AuthSteam);
+            // Link, not sign in: the user already has a device account by this
+            // step. AuthSteam authenticates with create=false and fails with
+            // "User account not found" for anyone linking Steam for the first
+            // time — which is everyone, on this screen.
+            let _ = cmd.send(Command::LinkSteam);
         });
     }
     {
@@ -267,7 +240,7 @@ pub fn wire(ctx: &AppContext) {
     {
         let cmd = ctx.cmd_tx.clone();
         ctx.app.on_onboarding_auth_twitch(move || {
-            let _ = cmd.send(Command::AuthTwitch);
+            let _ = cmd.send(Command::LinkTwitch);
         });
     }
     {
@@ -301,12 +274,14 @@ pub fn wire(ctx: &AppContext) {
     {
         let app_weak = ctx.app.as_weak();
         let s = ctx.settings.clone();
+        let fx = crate::onboarding::EffectCtx::from_ctx(ctx);
         ctx.app.on_onboarding_skip_identity(move || {
             if let Some(app) = app_weak.upgrade() {
                 app.set_logged_in(true);
                 crate::onboarding::advance_with(
                     &app,
                     &s,
+                    &fx,
                     crate::onboarding::Input::IdentitySettled,
                 );
             }
@@ -806,6 +781,32 @@ pub fn load_avatar_grid(
         });
         std::mem::forget(timer);
     }
+}
+
+/// Start the ambient avatar shuffle once the grid has had time to populate.
+///
+/// The delay matches the staggered fetches in `load_avatar_grid`; starting the
+/// shuffle immediately would rotate empty slots. Extracted so every entry into
+/// step 2 behaves the same — it used to live inline in the crew-selected
+/// callback, so a resumed or backward-navigated step 2 never shuffled.
+pub fn start_ambient_shuffle_after_load(
+    app_weak: slint::Weak<MainWindow>,
+    state: &Arc<Mutex<avatar::AvatarGridState>>,
+    timer_holder: &Rc<RefCell<Option<slint::Timer>>>,
+    rt: &tokio::runtime::Handle,
+) {
+    let state = state.clone();
+    let timer_holder = timer_holder.clone();
+    let rt = rt.clone();
+    let delay_timer = slint::Timer::default();
+    delay_timer.start(
+        slint::TimerMode::SingleShot,
+        Duration::from_millis(7 * 60 + 500),
+        move || {
+            start_ambient_shuffle(app_weak.clone(), &state, &timer_holder, &rt);
+        },
+    );
+    std::mem::forget(delay_timer);
 }
 
 pub fn start_ambient_shuffle(

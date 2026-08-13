@@ -53,6 +53,12 @@ try {
     New-Item -ItemType Directory -Path $configDir -Force | Out-Null
     $env:MELLO_CONFIG_DIR = $configDir
 
+    # Isolate the keyring too. The refresh token lives in the machine-wide
+    # credential store, which MELLO_CONFIG_DIR does not cover, and this run ends
+    # in delete_account — i.e. session::clear(). Without a private key it signs
+    # the developer out of Mello on the build machine.
+    $env:MELLO_SESSION_KEY = 'smoke'
+
     $env:MELLO_PERF_MODE = '1'
     $env:MELLO_PERF_SCENARIO = $scenario
     $env:MELLO_PERF_SIGNAL_DIR = $signalDir

@@ -1,11 +1,11 @@
-mod auth;
+pub(crate) mod auth;
 mod chat;
 mod clip;
-mod crew;
+pub(crate) mod crew;
 mod crew_settings;
 mod game;
 mod games;
-mod onboarding;
+pub(crate) mod onboarding;
 mod settings;
 mod streaming;
 mod voice;

@@ -328,6 +328,86 @@ fn finalize(h: &Harness) {
     h.app().invoke_onboarding_continue(3);
 }
 
+fn finalize_device_ids(cmds: &[Command]) -> Vec<String> {
+    cmds.iter()
+        .filter_map(|c| match c {
+            Command::FinalizeOnboarding { device_id, .. } => Some(device_id.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// ★ Regression: every finalize attempt must reuse one device identity.
+///
+/// Onboarding used to mint a fresh random device id inside each attempt, and
+/// never persisted it. Since device auth runs with `create=true`, a retry — or
+/// a restart before onboarding was marked complete — authenticated as a new
+/// device and Nakama created a *new account*. Production users ended up with
+/// five or six each, and the second attempt then failed with "group name in
+/// use" because the first had already created their crew.
+#[test]
+fn retrying_finalize_reuses_the_same_device_id() {
+    let mut h = Harness::new();
+
+    finalize(&h);
+    let first = finalize_device_ids(&h.commands());
+    assert_eq!(first.len(), 1, "one attempt should emit one finalize");
+    assert!(!first[0].is_empty(), "device id must not be empty");
+
+    h.emit(Event::OnboardingFailed {
+        reason: "Connection failed: timed out".into(),
+    });
+
+    finalize(&h);
+    let second = finalize_device_ids(&h.commands());
+    assert_eq!(second.len(), 1);
+    assert_eq!(
+        first[0], second[0],
+        "the retry must reuse the device id; a fresh one authenticates as a new \
+         device and Nakama creates a second account for the same person"
+    );
+}
+
+/// ★ Regression: a second click while finalize is in flight must be ignored.
+///
+/// The step-2 Continue button fires seven sequential network calls with no
+/// visible progress. Users clicked it repeatedly — one production user six
+/// times in 22 seconds — and each click started another signup.
+#[test]
+fn clicking_continue_twice_only_finalizes_once() {
+    let mut h = Harness::new();
+
+    finalize(&h);
+    finalize(&h);
+
+    let ids = finalize_device_ids(&h.commands());
+    assert_eq!(
+        ids.len(),
+        1,
+        "a second click while the first is in flight must be dropped, got {ids:?}"
+    );
+}
+
+/// ...and once the attempt resolves, the user must be able to try again.
+#[test]
+fn the_finalize_guard_releases_after_a_failure() {
+    let mut h = Harness::new();
+
+    finalize(&h);
+    assert_eq!(finalize_device_ids(&h.commands()).len(), 1);
+
+    h.emit(Event::OnboardingFailed {
+        reason: "Failed to create crew".into(),
+    });
+
+    finalize(&h);
+    assert_eq!(
+        finalize_device_ids(&h.commands()).len(),
+        1,
+        "after a failure the user is still on the same step and must be able to retry"
+    );
+}
+
 fn finalize_avatar(cmds: &[Command]) -> Option<Option<String>> {
     cmds.iter().find_map(|c| match c {
         Command::FinalizeOnboarding { crew_avatar, .. } => Some(crew_avatar.clone()),
@@ -1018,4 +1098,212 @@ fn failed_restore_stops_the_spinner() {
         !h.app().get_login_loading(),
         "the restore spinner must stop when restore fails"
     );
+}
+
+// ── Entering a state is the same however you got there ─────────────────────
+//
+// `PickAvatar` has three entry paths and only one of them used to load the
+// avatar grid and audio devices. The other two — resuming the persisted step
+// after a restart, and the step indicator jumping back from step 3 — rendered a
+// complete, correct-looking step 2 whose Continue button could never enable,
+// because it requires a selected avatar and there were none to select.
+//
+// These assert on `ListAudioDevices`, which is observable as a Command. The
+// avatar grid is covered by the reducer test in onboarding.rs, since loading it
+// is a direct call rather than a command.
+
+use crate::onboarding::{advance, resume, Input, OnboardingState};
+
+fn listed_audio_devices(cmds: &[Command]) -> bool {
+    cmds.iter().any(|c| matches!(c, Command::ListAudioDevices))
+}
+
+#[test]
+fn entering_step_2_by_choosing_a_crew_loads_its_data() {
+    let mut h = Harness::new();
+    resume(h.ctx(), OnboardingState::PickCrew);
+    let _ = h.commands();
+
+    advance(h.ctx(), Input::CrewChosen);
+
+    assert!(
+        listed_audio_devices(&h.commands()),
+        "the happy path must load step 2's audio devices"
+    );
+}
+
+/// ★ Regression: a restart mid-onboarding used to resume into an empty step 2.
+#[test]
+fn resuming_into_step_2_loads_its_data() {
+    let mut h = Harness::new();
+
+    resume(h.ctx(), OnboardingState::PickAvatar);
+
+    assert!(
+        listed_audio_devices(&h.commands()),
+        "resuming the persisted step must load the same data the click path \
+         does; without it step 2 renders with no avatars and no devices, and \
+         its Continue button can never enable"
+    );
+}
+
+/// ★ Regression: the step indicator could walk a user back into an empty step 2
+/// with no crash and no restart involved.
+#[test]
+fn navigating_back_into_step_2_loads_its_data() {
+    let mut h = Harness::new();
+    resume(h.ctx(), OnboardingState::LinkIdentity);
+    let _ = h.commands();
+
+    advance(h.ctx(), Input::GoBackTo(OnboardingState::PickAvatar));
+
+    assert!(
+        listed_audio_devices(&h.commands()),
+        "stepping back into step 2 must reload its data"
+    );
+}
+
+/// ★ Regression: a fresh install must ask for the crew list.
+///
+/// `Loading` renders nothing and only leaves on the discovery response. When
+/// entry effects were introduced this nearly regressed, because the startup
+/// state matched the property's default and the effect was skipped.
+#[test]
+fn a_fresh_install_requests_the_crew_list() {
+    let mut h = Harness::new();
+
+    resume(h.ctx(), OnboardingState::Loading);
+
+    assert!(
+        h.commands()
+            .iter()
+            .any(|c| matches!(c, Command::DiscoverCrews { .. })),
+        "a fresh install sits in Loading, which renders nothing; without a \
+         DiscoverCrews request it never leaves and the user sees a blank window"
+    );
+}
+
+// ── A full crew must not be offered ────────────────────────────────────────
+//
+// `join_group` rejects a full crew with "Group is full", and onboarding only
+// calls it at finalize — after the account has been created. A production user
+// hit exactly that and was left on step 2 with a crew they could never join.
+// The capacity was in the RPC response all along; it was dropped in the handler
+// and absent from the Slint model, so the card had no way to know.
+
+fn discover_crew_capacities(h: &Harness) -> Vec<(i32, i32)> {
+    use slint::Model;
+    h.app()
+        .get_discover_crews()
+        .iter()
+        .map(|c| (c.member_count, c.max_members))
+        .collect()
+}
+
+/// ★ Regression: capacity must survive the trip into the model.
+#[test]
+fn discovered_crews_carry_their_capacity() {
+    let mut h = Harness::new();
+
+    let mut crews = sample_crews(2);
+    crews[0].member_count = 6;
+    crews[0].max_members = 6; // full
+    crews[1].member_count = 2;
+    crews[1].max_members = 6; // room
+
+    h.emit(Event::DiscoverCrewsLoaded {
+        crews,
+        cursor: None,
+    });
+
+    assert_eq!(
+        discover_crew_capacities(&h),
+        vec![(6, 6), (2, 6)],
+        "max_members must reach the card; without it a full crew looks joinable \
+         and only fails at finalize, after the account exists"
+    );
+}
+
+/// Capacity of zero means "unknown", not "full" — an older server, or a crew
+/// type without a cap, must not have every card greyed out.
+#[test]
+fn unknown_capacity_does_not_read_as_full() {
+    let mut h = Harness::new();
+
+    let mut crews = sample_crews(1);
+    crews[0].member_count = 3;
+    crews[0].max_members = 0;
+
+    h.emit(Event::DiscoverCrewsLoaded {
+        crews,
+        cursor: None,
+    });
+
+    assert_eq!(
+        discover_crew_capacities(&h),
+        vec![(3, 0)],
+        "an unknown capacity must pass through as 0 so the card treats it as \
+         joinable rather than full"
+    );
+}
+
+/// ★ Regression: onboarding's social buttons must *link*, never sign in.
+///
+/// By step 3 the user already has a device account. `AuthSteam` and friends
+/// authenticate with `create=false`, so for someone linking that provider for
+/// the first time — everyone, on this screen — Nakama answers "User account not
+/// found" and the button simply fails. If the identity *did* already exist, it
+/// was worse: the user was silently switched to that account, abandoning the
+/// one and the crew they had just made.
+///
+/// Steam and Twitch had no link command at all, so they fell through to the
+/// sign-in path. Google and Discord were already correct; this pins all four.
+#[test]
+fn onboarding_social_buttons_link_rather_than_sign_in() {
+    type LinkCase = (&'static str, fn(&MainWindow), fn(&Command) -> bool);
+
+    let cases: [LinkCase; 4] = [
+        (
+            "steam",
+            |a| a.invoke_onboarding_auth_steam(),
+            |c| matches!(c, Command::LinkSteam),
+        ),
+        (
+            "twitch",
+            |a| a.invoke_onboarding_auth_twitch(),
+            |c| matches!(c, Command::LinkTwitch),
+        ),
+        (
+            "google",
+            |a| a.invoke_onboarding_auth_google(),
+            |c| matches!(c, Command::LinkGoogle),
+        ),
+        (
+            "discord",
+            |a| a.invoke_onboarding_auth_discord(),
+            |c| matches!(c, Command::LinkDiscord),
+        ),
+    ];
+
+    for (label, press, is_expected_link) in cases {
+        let mut h = Harness::new();
+        press(h.app());
+        let cmds = h.commands();
+
+        assert!(
+            cmds.iter().any(is_expected_link),
+            "onboarding {label} must emit its Link command, got {cmds:?}"
+        );
+        assert!(
+            !cmds.iter().any(|c| matches!(
+                c,
+                Command::AuthSteam
+                    | Command::AuthTwitch
+                    | Command::AuthGoogle
+                    | Command::AuthDiscord
+            )),
+            "onboarding {label} must not sign in: that abandons the account the \
+             user just created, and fails outright for a first-time link"
+        );
+    }
 }

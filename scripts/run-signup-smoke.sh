@@ -42,6 +42,13 @@ MELLO_CONFIG_DIR="$SIGNAL_DIR/config"
 mkdir -p "$MELLO_CONFIG_DIR"
 export MELLO_CONFIG_DIR
 
+# Isolate the keyring too. The refresh token lives in the machine-wide keyring,
+# which MELLO_CONFIG_DIR does not cover, and this run ends in delete_account —
+# i.e. session::clear(). Without a private key it signs the developer out of
+# Mello on the build machine.
+MELLO_SESSION_KEY="smoke"
+export MELLO_SESSION_KEY
+
 echo "▸ signup smoke: $BINARY"
 echo "  scenario: $SCENARIO"
 

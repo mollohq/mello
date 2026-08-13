@@ -59,7 +59,7 @@ pub fn scenario_path() -> Option<PathBuf> {
     std::env::var("MELLO_PERF_SCENARIO").ok().map(PathBuf::from)
 }
 
-pub fn start(cmd_tx: UnboundedSender<Command>, event_rx: mpsc::Receiver<Event>) {
+pub fn start(cmd_tx: UnboundedSender<Command>, event_rx: mpsc::Receiver<Event>, device_id: String) {
     let Some(path) = scenario_path() else {
         log::error!("[perf] MELLO_PERF_SCENARIO not set");
         return;
@@ -80,7 +80,7 @@ pub fn start(cmd_tx: UnboundedSender<Command>, event_rx: mpsc::Receiver<Event>) 
     );
 
     std::thread::spawn(move || {
-        let result = run_scenario(&path, &cmd_tx, &event_rx, &signal_dir);
+        let result = run_scenario(&path, &cmd_tx, &event_rx, &signal_dir, &device_id);
         write_done(&signal_dir, &result);
         if let Err(e) = slint::invoke_from_event_loop(|| {
             slint::quit_event_loop().ok();
@@ -95,6 +95,7 @@ fn run_scenario(
     cmd_tx: &UnboundedSender<Command>,
     event_rx: &mpsc::Receiver<Event>,
     signal_dir: &Path,
+    device_id: &str,
 ) -> Result<(), String> {
     let scenario = load_scenario(path.to_str().unwrap_or_default()).map_err(|e| e.to_string())?;
     let mut state = RunState::default();
@@ -120,21 +121,27 @@ fn run_scenario(
                 crew_id,
                 crew_name,
                 display_name,
-            } => send(
-                cmd_tx,
-                Command::FinalizeOnboarding {
-                    crew_id: crew_id.clone(),
-                    crew_name: crew_name.clone(),
-                    crew_description: None,
-                    crew_open: Some(false),
-                    crew_avatar: None,
-                    display_name: display_name.clone(),
-                    avatar_data: None,
-                    avatar_format: None,
-                    avatar_style: None,
-                    avatar_seed: None,
-                },
-            )?,
+            } => {
+                // Same persisted identity the real button uses, so a scenario
+                // that finalizes twice re-authenticates instead of creating a
+                // second account — which is exactly what we want it to prove.
+                send(
+                    cmd_tx,
+                    Command::FinalizeOnboarding {
+                        device_id: device_id.to_string(),
+                        crew_id: crew_id.clone(),
+                        crew_name: crew_name.clone(),
+                        crew_description: None,
+                        crew_open: Some(false),
+                        crew_avatar: None,
+                        display_name: display_name.clone(),
+                        avatar_data: None,
+                        avatar_format: None,
+                        avatar_style: None,
+                        avatar_seed: None,
+                    },
+                )?
+            }
             Step::DeleteCrew { crew_id } => {
                 let target = crew_id
                     .clone()

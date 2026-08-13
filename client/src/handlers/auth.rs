@@ -26,6 +26,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
             ctx.app.set_is_returning_user(!created);
         }
         Event::OnboardingReady { user } => {
+            ctx.app.set_onboarding_busy(false);
             log::info!(
                 "[onboarding] ready — user_id={} name={}",
                 user.id,
@@ -53,6 +54,9 @@ pub fn handle(ctx: &AppContext, event: Event) {
             dispatch_pending_deep_link(ctx);
         }
         Event::OnboardingFailed { reason } => {
+            // Release the guard: the user is still on the same step and must be
+            // able to retry.
+            ctx.app.set_onboarding_busy(false);
             log::error!("[onboarding] finalization failed: {}", reason);
             ctx.app.set_link_error(reason.into());
         }

@@ -59,6 +59,15 @@ pub enum Command {
     // Social link (onboarding step 3 — links identity to existing device account)
     LinkGoogle,
     LinkDiscord,
+    /// Link a Steam identity (OpenID) to the current device account.
+    ///
+    /// Distinct from [`Command::AuthSteam`], which *signs in* with `create=false`
+    /// and therefore fails for anyone who has not linked Steam before. Onboarding
+    /// sent that one because this did not exist.
+    LinkSteam,
+    /// Link a Twitch identity (OAuth) to the current device account. Same gap as
+    /// [`Command::LinkSteam`].
+    LinkTwitch,
     /// Link an Apple identity (native identity token) onto the current session.
     LinkApple {
         identity_token: String,
@@ -82,6 +91,10 @@ pub enum Command {
         cursor: Option<String>,
     },
     FinalizeOnboarding {
+        /// Stable per-install device identity. **Must** be the same value on
+        /// every attempt: it is what makes finalize idempotent. A fresh id here
+        /// authenticates as a new device and Nakama creates another account.
+        device_id: String,
         crew_id: Option<String>,
         crew_name: Option<String>,
         #[serde(default)]
@@ -168,12 +181,6 @@ pub enum Command {
         channel_id: String,
     },
     LeaveVoice,
-    /// Enable/disable auto-joining a crew's voice channel on `SelectCrew`.
-    /// Defaults to enabled (desktop). iOS disables it so voice (and the mic
-    /// permission prompt) only starts on an explicit join.
-    SetVoiceAutoJoin {
-        enabled: bool,
-    },
     VoiceSpeaking {
         speaking: bool,
     },
