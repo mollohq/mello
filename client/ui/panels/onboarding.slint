@@ -9,18 +9,28 @@ component CrewCard inherits Rectangle {
     in property <string> crew-name;
     in property <string> crew-description;
     in property <int> member-count;
+    in property <int> max-members;
     in property <int> online-count;
     in property <bool> featured: false;
     in property <image> crew-avatar;
     in property <bool> has-avatar: false;
     callback clicked();
 
+    // A full crew cannot be joined: the server rejects it with "Group is full"
+    // at finalize, by which point the account already exists and the user is
+    // stranded on step 2. Refuse it here instead. max-members == 0 means the
+    // capacity is unknown, which must not read as full.
+    property <bool> is-full: root.max-members > 0 && root.member-count >= root.max-members;
+
     background: Theme.surface;
     border-radius: Theme.r-outer;
     border-width: 1px;
-    border-color: card-touch.has-hover ? Theme.accent : Theme.graphic-light;
+    border-color: card-touch.has-hover && !root.is-full ? Theme.accent : Theme.graphic-light;
+    opacity: root.is-full ? 0.55 : 1.0;
 
     card-touch := TouchArea {
+        enabled: !root.is-full;
+        mouse-cursor: root.is-full ? MouseCursor.not-allowed : MouseCursor.pointer;
         clicked => {
             root.clicked();
         }
@@ -125,11 +135,15 @@ component CrewCard inherits Rectangle {
             Rectangle {
                 width: 80px;
                 Text {
-                    text: card-touch.has-hover ? "CONNECT →" : "JOIN";
+                    text: root.is-full
+                        ? "FULL"
+                        : (card-touch.has-hover ? "CONNECT →" : "JOIN");
                     font-family: Theme.font-mono;
                     font-size: 12px;
                     font-weight: 500;
-                    color: card-touch.has-hover ? Theme.accent : Theme.text-tertiary;
+                    color: card-touch.has-hover && !root.is-full
+                        ? Theme.accent
+                        : Theme.text-tertiary;
                     vertical-alignment: center;
                     horizontal-alignment: right;
                 }
@@ -774,6 +788,7 @@ export component Onboarding inherits Rectangle {
                                 crew-name: discover-crews[base].name;
                                 crew-description: discover-crews[base].description;
                                 member-count: discover-crews[base].member-count;
+                                max-members: discover-crews[base].max-members;
                                 online-count: discover-crews[base].online-count;
                                 crew-avatar: discover-crews[base].avatar;
                                 has-avatar: discover-crews[base].has-avatar;
@@ -790,6 +805,7 @@ export component Onboarding inherits Rectangle {
                                 crew-name: discover-crews.length > base + 1 ? discover-crews[base + 1].name : "";
                                 crew-description: discover-crews.length > base + 1 ? discover-crews[base + 1].description : "";
                                 member-count: discover-crews.length > base + 1 ? discover-crews[base + 1].member-count : 0;
+                                max-members: discover-crews.length > base + 1 ? discover-crews[base + 1].max-members : 0;
                                 online-count: discover-crews.length > base + 1 ? discover-crews[base + 1].online-count : 0;
                                 crew-avatar: discover-crews.length > base + 1 ? discover-crews[base + 1].avatar : @image-url("");
                                 has-avatar: discover-crews.length > base + 1 ? discover-crews[base + 1].has-avatar : false;
@@ -804,6 +820,7 @@ export component Onboarding inherits Rectangle {
                                 crew-name: discover-crews.length > base + 1 ? discover-crews[base + 1].name : "";
                                 crew-description: discover-crews.length > base + 1 ? discover-crews[base + 1].description : "";
                                 member-count: discover-crews.length > base + 1 ? discover-crews[base + 1].member-count : 0;
+                                max-members: discover-crews.length > base + 1 ? discover-crews[base + 1].max-members : 0;
                                 online-count: discover-crews.length > base + 1 ? discover-crews[base + 1].online-count : 0;
                                 crew-avatar: discover-crews.length > base + 1 ? discover-crews[base + 1].avatar : @image-url("");
                                 has-avatar: discover-crews.length > base + 1 ? discover-crews[base + 1].has-avatar : false;
@@ -824,6 +841,7 @@ export component Onboarding inherits Rectangle {
                                 crew-name: discover-crews[base + 2].name;
                                 crew-description: discover-crews[base + 2].description;
                                 member-count: discover-crews[base + 2].member-count;
+                                max-members: discover-crews[base + 2].max-members;
                                 online-count: discover-crews[base + 2].online-count;
                                 crew-avatar: discover-crews[base + 2].avatar;
                                 has-avatar: discover-crews[base + 2].has-avatar;
@@ -836,6 +854,7 @@ export component Onboarding inherits Rectangle {
                                 crew-name: discover-crews.length > base + 3 ? discover-crews[base + 3].name : "";
                                 crew-description: discover-crews.length > base + 3 ? discover-crews[base + 3].description : "";
                                 member-count: discover-crews.length > base + 3 ? discover-crews[base + 3].member-count : 0;
+                                max-members: discover-crews.length > base + 3 ? discover-crews[base + 3].max-members : 0;
                                 online-count: discover-crews.length > base + 3 ? discover-crews[base + 3].online-count : 0;
                                 crew-avatar: discover-crews.length > base + 3 ? discover-crews[base + 3].avatar : @image-url("");
                                 has-avatar: discover-crews.length > base + 3 ? discover-crews[base + 3].has-avatar : false;
@@ -850,6 +869,7 @@ export component Onboarding inherits Rectangle {
                                 crew-name: discover-crews.length > base + 4 ? discover-crews[base + 4].name : "";
                                 crew-description: discover-crews.length > base + 4 ? discover-crews[base + 4].description : "";
                                 member-count: discover-crews.length > base + 4 ? discover-crews[base + 4].member-count : 0;
+                                max-members: discover-crews.length > base + 4 ? discover-crews[base + 4].max-members : 0;
                                 online-count: discover-crews.length > base + 4 ? discover-crews[base + 4].online-count : 0;
                                 crew-avatar: discover-crews.length > base + 4 ? discover-crews[base + 4].avatar : @image-url("");
                                 has-avatar: discover-crews.length > base + 4 ? discover-crews[base + 4].has-avatar : false;

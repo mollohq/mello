@@ -3,6 +3,10 @@ export struct CrewData {
     name: string,
     description: string,
     member-count: int,
+    // Capacity, so the UI can tell a full crew from a joinable one. Dropping
+    // this is how onboarding let a user pick a full crew and only discover it
+    // at finalize, with "Group is full" — after their account already existed.
+    max-members: int,
     online-count: int,
 
     avatar: image,
@@ -307,6 +311,7 @@ export struct DiscoverCrewData {
     name: string,
     description: string,
     member-count: int,
+    max-members: int,
     online-count: int,
     open: bool,
     avatar: image,

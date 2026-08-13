@@ -536,6 +536,14 @@ impl Client {
                 log::info!("[auth] Google link requested");
                 self.handle_link_google().await;
             }
+            Command::LinkSteam => {
+                log::info!("[auth] Steam link requested");
+                self.handle_link_steam().await;
+            }
+            Command::LinkTwitch => {
+                log::info!("[auth] Twitch link requested");
+                self.handle_link_twitch().await;
+            }
             Command::LinkDiscord => {
                 log::info!("[auth] Discord link requested");
                 self.handle_link_discord().await;

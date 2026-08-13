@@ -609,6 +609,115 @@ impl super::Client {
         }
     }
 
+    /// Link a Steam identity to the current device account.
+    ///
+    /// Onboarding step 3 used to send `AuthSteam` here, because no link command
+    /// existed. That path calls `authenticate_custom` with `create=false`, so a
+    /// new user — who by definition has no Steam-linked account yet — got
+    /// "User account not found" and could not link Steam at all. Worse, a user
+    /// who *did* have one would have been silently switched to it, abandoning
+    /// the account and crew they had just created.
+    pub(super) async fn handle_link_steam(&mut self) {
+        let openid_result =
+            tokio::task::spawn_blocking(crate::auth_steam::SteamAuth::authenticate).await;
+
+        let openid = match openid_result {
+            Ok(Ok(id)) => id,
+            Ok(Err(e)) => {
+                log::error!("[auth] Steam OpenID flow failed: {}", e);
+                let _ = self.event_tx.send(Event::SocialLinkFailed {
+                    reason: format!("Steam sign-in failed: {}", e),
+                });
+                return;
+            }
+            Err(e) => {
+                log::error!("[auth] Steam OpenID task panicked: {}", e);
+                let _ = self.event_tx.send(Event::SocialLinkFailed {
+                    reason: "Steam sign-in failed unexpectedly".into(),
+                });
+                return;
+            }
+        };
+
+        self.link_or_switch(&openid, "steam", "Steam").await;
+    }
+
+    /// Link a Twitch identity to the current device account. Same gap as Steam:
+    /// onboarding sent the sign-in command because no link command existed.
+    pub(super) async fn handle_link_twitch(&mut self) {
+        let client_id = match self.nakama.config().twitch_client_id.clone() {
+            Some(id) => id,
+            None => {
+                log::warn!("[auth] TWITCH_CLIENT_ID not configured");
+                let _ = self.event_tx.send(Event::SocialLinkFailed {
+                    reason: "Twitch login not configured".into(),
+                });
+                return;
+            }
+        };
+
+        let oauth_result = tokio::task::spawn_blocking(move || {
+            crate::auth_twitch::TwitchAuth::authenticate(&client_id)
+        })
+        .await;
+
+        let token = match oauth_result {
+            Ok(Ok(t)) => t,
+            Ok(Err(e)) => {
+                log::error!("[auth] Twitch OAuth flow failed: {}", e);
+                let _ = self.event_tx.send(Event::SocialLinkFailed {
+                    reason: format!("Twitch sign-in failed: {}", e),
+                });
+                return;
+            }
+            Err(e) => {
+                log::error!("[auth] Twitch OAuth task panicked: {}", e);
+                let _ = self.event_tx.send(Event::SocialLinkFailed {
+                    reason: "Twitch sign-in failed unexpectedly".into(),
+                });
+                return;
+            }
+        };
+
+        self.link_or_switch(&token, "twitch", "Twitch").await;
+    }
+
+    /// Attach a custom-provider identity to the current account, falling back to
+    /// signing in when that identity already belongs to another account.
+    ///
+    /// Shared by Steam and Twitch; mirrors what `handle_link_discord` does
+    /// inline. The fallback matters: without it a returning user who reinstalled
+    /// would be told their own identity is "already in use" and be stuck.
+    async fn link_or_switch(&mut self, token: &str, provider: &str, label: &str) {
+        match self.nakama.link_custom(token, provider).await {
+            Ok(()) => {
+                log::info!("[auth] {} identity linked to device account", label);
+                let _ = self.event_tx.send(Event::SocialLinked);
+            }
+            Err(e) if e.to_string().contains("already in use") => {
+                log::info!(
+                    "[auth] {} already linked elsewhere, falling back to authenticate",
+                    label
+                );
+                match self.nakama.authenticate_custom(token, provider).await {
+                    Ok(user) => self.on_social_login(user).await,
+                    Err(e2) => {
+                        log::error!("[auth] {} authenticate fallback failed: {}", label, e2);
+                        let _ = self.event_tx.send(Event::SocialLinkFailed {
+                            reason: e2.to_string(),
+                        });
+                    }
+                }
+            }
+            Err(e) => {
+                log::error!("[auth] {} link failed: {}", label, e);
+                let _ = self.event_tx.send(Event::SocialLinkFailed {
+                    reason: e.to_string(),
+                });
+            }
+        }
+    }
+
     /// Link an Apple identity (native token) to the current session. Falls back to
     /// authenticate if the identity is already attached to another account — same
     /// shape as Google/Discord linking.

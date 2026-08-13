@@ -53,6 +53,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
                         name: c.name.clone().into(),
                         description: c.description.clone().into(),
                         member_count: c.member_count,
+                        max_members: c.max_members,
                         online_count: 0,
                         ..Default::default()
                     })
@@ -80,6 +81,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
                         name: c.name.clone().into(),
                         description: c.description.clone().into(),
                         member_count: c.member_count,
+                        max_members: c.max_members,
                         online_count: 0,
                         open: true,
                         ..Default::default()
@@ -99,6 +101,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
                         name: c.name.clone().into(),
                         description: c.description.clone().into(),
                         member_count: c.member_count,
+                        max_members: c.max_members,
                         online_count: 0,
                         open: true,
                         ..Default::default()
