@@ -17,6 +17,7 @@ pub mod game_db;
 pub mod game_sensing;
 pub mod game_state;
 pub mod giphy;
+pub mod library;
 pub mod nakama;
 pub mod oauth;
 pub mod presence;

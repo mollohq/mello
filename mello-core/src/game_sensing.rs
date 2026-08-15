@@ -4,9 +4,14 @@ use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use crate::game_db::GameDatabase;
+use crate::library::LibraryIndex;
 use crate::session_store;
 
 const GAME_SCAN_INTERVAL: Duration = Duration::from_secs(15);
+/// Rescan installed libraries every this many process scans (~5 minutes).
+/// Reading a few hundred small manifests is cheap but not free, and a game
+/// installed mid-session only has to be noticed eventually.
+const LIBRARY_RESCAN_SCANS: u32 = 20;
 const MAX_PROCESSES: usize = 512;
 /// An unknown-game candidate must appear in this many consecutive scans
 /// before it is surfaced (filters transient fullscreen apps like installers).
@@ -155,6 +160,8 @@ fn scan_loop(ctx: &SendCtx, db: &Arc<RwLock<GameDatabase>>, tx: &Sender<GameEven
     let mut active: HashMap<u32, ActiveGame> = HashMap::new();
     let mut primary: Option<u32> = None;
     let mut unknown = UnknownTracker::default();
+    let mut library = LibraryIndex::scan();
+    let mut scans_since_library_refresh = 0u32;
     let mut orphans = session_store::take();
     if !orphans.is_empty() {
         log::info!(
@@ -176,7 +183,7 @@ fn scan_loop(ctx: &SendCtx, db: &Arc<RwLock<GameDatabase>>, tx: &Sender<GameEven
 
         let (detected, candidate) = {
             let db = db.read().expect("game db lock poisoned");
-            let detected = detect_games(&db, &processes, now);
+            let detected = detect_games(&db, &library, &processes, now);
             // Unknown-game candidates only matter while no DB game is active.
             let candidate = if detected.is_empty() {
                 pick_unknown_candidate(&db, &processes)
@@ -316,6 +323,12 @@ fn scan_loop(ctx: &SendCtx, db: &Arc<RwLock<GameDatabase>>, tx: &Sender<GameEven
 
         persist(&active, now);
 
+        scans_since_library_refresh += 1;
+        if scans_since_library_refresh >= LIBRARY_RESCAN_SCANS {
+            scans_since_library_refresh = 0;
+            library = LibraryIndex::scan();
+        }
+
         std::thread::sleep(GAME_SCAN_INTERVAL);
     }
 
@@ -426,6 +439,7 @@ impl UnknownTracker {
     }
 }
 
+#[derive(Clone)]
 pub(crate) struct RawGameProcess {
     pub(crate) pid: u32,
     #[allow(dead_code)]
@@ -517,12 +531,14 @@ struct Matched {
 
 /// The resolution ladder (plans/GAME-SENSING-V2.md §5.2), first hit wins.
 ///
-/// Rung 0 is the curated exe table, checked first precisely because it is
-/// launcher-independent — it catches Hearthstone whether Battle.net installed
-/// it to the default location or not. Rung 2 is the legacy bundled/custom
-/// database, which still carries the user's own confirmed games.
+/// 0. **Curated exe table** — launcher-independent, so it catches Hearthstone
+///    whether Battle.net installed it to the default location or not.
+/// 1. **Installed library** — the process path sits under a known install
+///    directory. Exact, needs no per-game mapping, and covers the whole tail.
+/// 2. **Legacy database** — the user's own confirmed custom games.
 fn resolve_process(
     head: Option<&'static crate::catalogue::Head>,
+    library: &LibraryIndex,
     db: &GameDatabase,
     p: &RawGameProcess,
 ) -> Option<Matched> {
@@ -535,6 +551,18 @@ fn resolve_process(
             // icon the primary asset, so the coloured badge is a last resort.
             color: "#888888".to_string(),
             igdb_id: Some(entry.igdb_id),
+        });
+    }
+    if let Some(entry) = library.resolve(&p.path) {
+        return Some(Matched {
+            game_id: entry.game_id(),
+            game_name: entry.name.clone(),
+            short_name: entry.short_name(),
+            color: "#888888".to_string(),
+            // The Steam appid identifies the game precisely and identically
+            // for every user; mapping it onto an IGDB id is enrichment that
+            // arrives with the backend resolve endpoint.
+            igdb_id: None,
         });
     }
     let entry = db.lookup_by_exe(&p.exe)?;
@@ -552,12 +580,17 @@ fn resolve_process(
 /// v1 returned only one, so a second game running alongside was invisible and
 /// alt-tabbing between two looked like the first had exited. `now` is passed in
 /// rather than read here so a single scan timestamps consistently.
-fn detect_games(db: &GameDatabase, processes: &[RawGameProcess], now: i64) -> Vec<ActiveGame> {
+fn detect_games(
+    db: &GameDatabase,
+    library: &LibraryIndex,
+    processes: &[RawGameProcess],
+    now: i64,
+) -> Vec<ActiveGame> {
     let head = catalogue_head();
     processes
         .iter()
         .filter_map(|p| {
-            let matched = resolve_process(head, db, p)?;
+            let matched = resolve_process(head, library, db, p)?;
             Some(ActiveGame {
                 game_id: matched.game_id,
                 game_name: matched.game_name,
@@ -612,14 +645,14 @@ mod tests {
     #[test]
     fn detect_no_processes() {
         let db = test_db();
-        assert!(detect_games(&db, &[], NOW).is_empty());
+        assert!(detect_games(&db, &LibraryIndex::default(), &[], NOW).is_empty());
     }
 
     #[test]
     fn detect_single_match() {
         let db = test_db();
         let procs = vec![make_process("cs2.exe", 1234, false)];
-        let found = detect_games(&db, &procs, NOW);
+        let found = detect_games(&db, &LibraryIndex::default(), &procs, NOW);
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].game_id, "counter-strike-2");
     }
@@ -628,7 +661,7 @@ mod tests {
     fn detect_unknown_exe_filtered() {
         let db = test_db();
         let procs = vec![make_process("notepad.exe", 999, false)];
-        assert!(detect_games(&db, &procs, NOW).is_empty());
+        assert!(detect_games(&db, &LibraryIndex::default(), &procs, NOW).is_empty());
     }
 
     #[test]
@@ -640,7 +673,7 @@ mod tests {
             make_process("cs2.exe", 1234, false),
             make_process("dota2.exe", 5678, true),
         ];
-        let found = detect_games(&db, &procs, NOW);
+        let found = detect_games(&db, &LibraryIndex::default(), &procs, NOW);
         assert_eq!(found.len(), 2);
         let mut ids: Vec<&str> = found.iter().map(|g| g.game_id.as_str()).collect();
         ids.sort_unstable();
@@ -652,7 +685,7 @@ mod tests {
         let db = test_db();
         let mut proc = make_process("cs2.exe", 1234, false);
         proc.started_at_ms = NOW - 3 * 3_600_000; // running for three hours
-        let found = detect_games(&db, &[proc], NOW);
+        let found = detect_games(&db, &LibraryIndex::default(), &[proc], NOW);
         // The session must date from when the game started, not from the scan
         // that first noticed it — this is the "played 4hrs" honesty fix.
         assert_eq!(found[0].started_at, NOW - 3 * 3_600_000);
@@ -663,7 +696,7 @@ mod tests {
     fn detect_falls_back_to_scan_time_when_start_unknown() {
         let db = test_db();
         let proc = make_process("cs2.exe", 1234, false); // started_at_ms = 0
-        let found = detect_games(&db, &[proc], NOW);
+        let found = detect_games(&db, &LibraryIndex::default(), &[proc], NOW);
         // Never 0 — that would date the session to 1970 and report a 55-year
         // session. The scan time is the honest floor.
         assert_eq!(found[0].started_at, NOW);
@@ -679,7 +712,7 @@ mod tests {
         focused.is_foreground = true;
         focused.started_at_ms = NOW - 500;
         let procs = vec![fullscreen, focused];
-        let active = active_map(detect_games(&db, &procs, NOW));
+        let active = active_map(detect_games(&db, &LibraryIndex::default(), &procs, NOW));
         // v1 sorted on is_fullscreen only and ignored is_foreground entirely,
         // so the game you were actually looking at lost to a backgrounded one.
         assert_eq!(pick_primary(&active, &procs), Some(1234));
@@ -692,7 +725,7 @@ mod tests {
             make_process("cs2.exe", 1234, false),
             make_process("dota2.exe", 5678, true),
         ];
-        let active = active_map(detect_games(&db, &procs, NOW));
+        let active = active_map(detect_games(&db, &LibraryIndex::default(), &procs, NOW));
         assert_eq!(pick_primary(&active, &procs), Some(5678));
 
         // Neither focused nor fullscreen: the longest-running wins, and the
@@ -701,12 +734,82 @@ mod tests {
             make_process("cs2.exe", 1234, false),
             make_process("dota2.exe", 5678, false),
         ];
-        let mut games = detect_games(&db, &plain, NOW);
+        let mut games = detect_games(&db, &LibraryIndex::default(), &plain, NOW);
         games[0].started_at = NOW - 10_000;
         games[1].started_at = NOW - 90_000;
         let active = active_map(games);
         assert_eq!(pick_primary(&active, &plain), Some(5678));
         assert_eq!(pick_primary(&active, &plain), Some(5678));
+    }
+
+    #[test]
+    fn library_resolves_games_the_curated_table_never_heard_of() {
+        // The tail mechanism: no exe mapping exists for this game anywhere,
+        // yet it resolves — with a real name — purely from the install path.
+        let db = test_db();
+        let library = LibraryIndex::from_entries(vec![crate::library::LibraryEntry {
+            appid: 1145360,
+            name: "Hades".to_string(),
+            install_dir: std::path::PathBuf::from(r"D:\SteamLibrary\steamapps\common\Hades"),
+        }]);
+        let mut p = make_process("Hades.exe", 4242, true);
+        p.path = r"D:\SteamLibrary\steamapps\common\Hades\x64\Hades.exe".into();
+
+        assert!(
+            detect_games(&db, &LibraryIndex::default(), &[p.clone()], NOW).is_empty(),
+            "without the library index this game is invisible"
+        );
+        let found = detect_games(&db, &library, &[p], NOW);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].game_id, "steam-1145360");
+        assert_eq!(found[0].game_name, "Hades");
+    }
+
+    #[test]
+    fn curated_mapping_outranks_the_library() {
+        // Both rungs can claim the same process. The curated entry wins because
+        // it carries the stable game_id that telemetry and stored stats key on;
+        // resolving CS2 as "steam-730" would orphan them.
+        let db = test_db();
+        let library = LibraryIndex::from_entries(vec![crate::library::LibraryEntry {
+            appid: 730,
+            name: "Counter-Strike 2".to_string(),
+            install_dir: std::path::PathBuf::from(
+                r"C:\Steam\steamapps\common\Counter-Strike Global Offensive",
+            ),
+        }]);
+        let mut p = make_process("cs2.exe", 1234, true);
+        p.path =
+            r"C:\Steam\steamapps\common\Counter-Strike Global Offensive\game\bin\cs2.exe".into();
+
+        let found = detect_games(&db, &library, &[p], NOW);
+        assert_eq!(found[0].game_id, "counter-strike-2");
+        assert_eq!(found[0].igdb_id, Some(242408));
+    }
+
+    /// Live check against whatever Steam is actually installed on this machine.
+    /// Ignored by default — it asserts nothing about a specific game because
+    /// CI has no Steam, but run locally it is the fastest way to confirm the
+    /// manifest parsing works against real files:
+    ///   cargo test -p mello-core --lib scan_real_steam_library -- --ignored --nocapture
+    #[test]
+    #[ignore = "requires a real Steam install"]
+    fn scan_real_steam_library() {
+        let index = LibraryIndex::scan();
+        println!("installed games found: {}", index.len());
+        for e in index.iter() {
+            println!(
+                "  {:<10} {:<38} {:<10} {}",
+                e.game_id(),
+                e.name,
+                e.short_name(),
+                e.install_dir.display()
+            );
+        }
+        assert!(
+            !index.is_empty(),
+            "no games found — is Steam installed with at least one game?"
+        );
     }
 
     #[test]
