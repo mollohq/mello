@@ -48,6 +48,37 @@ pub fn resolve_or_fetch_icon(ctx: &AppContext, game_id: &str) -> Option<slint::I
     None
 }
 
+/// Make sure a detected game has art, extracting the executable's own icon if
+/// we have not already cached one.
+///
+/// Rung 1 of the icon ladder (assets §8.2). Runs for *every* detected game
+/// rather than only user-confirmed ones, which is what lets an indie title the
+/// catalogue has never heard of look exactly as good as Counter-Strike.
+/// Cheap and idempotent: a cached id returns immediately.
+pub fn ensure_icon(ctx: &AppContext, game_id: &str, exe_path: &str) {
+    if game_id.is_empty() || exe_path.is_empty() {
+        return;
+    }
+    if ctx.game_icon_cache.borrow().contains_key(game_id)
+        || crate::platform::exe_icon::cached_icon_path(game_id).is_some_and(|p| p.exists())
+    {
+        return;
+    }
+    // A shared runtime's icon is the runtime's, not the game's — Java's coffee
+    // cup on a Minecraft card reads as a bug. The badge is the better answer.
+    if !crate::platform::exe_icon::icon_is_representative(exe_path) {
+        log::debug!("[game-icon] {game_id}: {exe_path} is a generic host, keeping the badge");
+        return;
+    }
+    extract_and_cache(
+        ctx.game_icon_cache.clone(),
+        ctx.cmd_tx.clone(),
+        ctx.rt.clone(),
+        game_id.to_string(),
+        exe_path.to_string(),
+    );
+}
+
 /// Extract the exe's icon on a worker thread, write the PNG disk cache, then
 /// decode it into the memory cache on the UI thread. Runs on custom-game
 /// confirm; the crew upload is triggered from the same worker once the PNG

@@ -487,6 +487,10 @@ pub enum Event {
         short_name: String,
         color: String,
         pid: u32,
+        /// Full path to the running executable, so the UI can extract the
+        /// game's own icon (spec: assets §8.2 — the exe icon is what the user
+        /// already recognises, and it needs no catalogue entry or network).
+        exe_path: String,
     },
     /// A game process exited.
     GameEnded {

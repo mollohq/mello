@@ -49,6 +49,7 @@ impl GameStateManager {
                     short_name: game.short_name.clone(),
                     color: game.color.clone(),
                     pid,
+                    exe_path: game.exe_path.clone(),
                 });
                 self.sessions.insert(
                     pid,
@@ -240,6 +241,7 @@ mod tests {
             short_name: "G".into(),
             color: "#DE9B35".into(),
             exe: format!("{game_id}.exe"),
+            exe_path: format!(r"C:\Games\{game_id}.exe"),
             pid,
             igdb_id: None,
             started_at,
@@ -255,6 +257,7 @@ mod tests {
             short_name: "CS2".into(),
             color: "#DE9B35".into(),
             exe: "cs2.exe".into(),
+            exe_path: r"C:\Steam\cs2.exe".into(),
             pid: 1234,
             igdb_id: Some(242408),
             started_at: START,

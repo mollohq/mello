@@ -86,6 +86,9 @@ pub struct ActiveGame {
     pub short_name: String,
     pub color: String,
     pub exe: String,
+    /// Full path to the running executable. Carried so the client can extract
+    /// the game's own icon, which §8.2 makes the primary art source.
+    pub exe_path: String,
     pub pid: u32,
     /// IGDB id when the catalogue resolved this game; `None` for a user's own
     /// custom entry the catalogue has never heard of.
@@ -245,6 +248,7 @@ fn scan_loop(ctx: &SendCtx, db: &Arc<RwLock<GameDatabase>>, tx: &Sender<GameEven
                             short_name: orphan.short_name,
                             color: orphan.color,
                             exe: orphan.exe,
+                            exe_path: orphan.exe_path,
                             pid: orphan.pid,
                             // Restart recovery only knows what the previous run
                             // persisted; the id is re-resolved on next detect.
@@ -374,6 +378,7 @@ fn persist(active: &HashMap<u32, ActiveGame>, now: i64) {
             short_name: g.short_name.clone(),
             color: g.color.clone(),
             exe: g.exe.clone(),
+            exe_path: g.exe_path.clone(),
             last_seen_ms: now,
             foreground_ms: g.foreground_ms,
         })
@@ -795,6 +800,7 @@ fn detect_games(
                 color: matched.color,
                 igdb_id: matched.igdb_id,
                 exe: p.exe.clone(),
+                exe_path: p.path.clone(),
                 pid: p.pid,
                 // The real process start when we have it. Falling back to the
                 // scan time is what v1 always did, and it is why a game

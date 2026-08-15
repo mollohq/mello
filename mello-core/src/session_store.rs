@@ -29,6 +29,9 @@ pub struct PersistedSession {
     pub short_name: String,
     pub color: String,
     pub exe: String,
+    /// Full executable path; empty in stores written before icons needed it.
+    #[serde(default)]
+    pub exe_path: String,
     /// Wall-clock time of the last scan that saw this process alive. Used as
     /// the end timestamp when the process is gone by the time we restart.
     pub last_seen_ms: i64,
@@ -115,6 +118,7 @@ mod tests {
             short_name: "CS2".into(),
             color: "#DE9B35".into(),
             exe: "cs2.exe".into(),
+            exe_path: r"C:\Steam\cs2.exe".into(),
             last_seen_ms: 1_000,
             foreground_ms: 0,
         }
