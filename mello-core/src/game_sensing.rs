@@ -72,6 +72,9 @@ pub struct ActiveGame {
     pub color: String,
     pub exe: String,
     pub pid: u32,
+    /// IGDB id when the catalogue resolved this game; `None` for a user's own
+    /// custom entry the catalogue has never heard of.
+    pub igdb_id: Option<u32>,
     /// When the *game process* started, not when we noticed it (Unix ms).
     /// Falls back to the first scan that saw it when libmello could not read
     /// the creation time, so a session is never dated from the future.
@@ -221,6 +224,9 @@ fn scan_loop(ctx: &SendCtx, db: &Arc<RwLock<GameDatabase>>, tx: &Sender<GameEven
                             color: orphan.color,
                             exe: orphan.exe,
                             pid: orphan.pid,
+                            // Restart recovery only knows what the previous run
+                            // persisted; the id is re-resolved on next detect.
+                            igdb_id: None,
                             started_at: orphan.started_at_ms,
                             started_at_ms: orphan.started_at_ms,
                             foreground_ms: orphan.foreground_ms,
@@ -482,21 +488,82 @@ fn now_ms() -> i64 {
         .as_millis() as i64
 }
 
+/// The compiled-in catalogue head, parsed once.
+fn catalogue_head() -> Option<&'static crate::catalogue::Head> {
+    static HEAD: std::sync::OnceLock<Option<crate::catalogue::Head>> = std::sync::OnceLock::new();
+    HEAD.get_or_init(|| {
+        let head = crate::catalogue::Head::bundled();
+        match &head {
+            Some(h) => log::info!(
+                "[game-sensor] catalogue loaded: {} games, {} curated executables",
+                h.len(),
+                h.exe_count()
+            ),
+            None => log::error!("[game-sensor] bundled catalogue failed to parse"),
+        }
+        head
+    })
+    .as_ref()
+}
+
+/// What a process resolved to, and how.
+struct Matched {
+    game_id: String,
+    game_name: String,
+    short_name: String,
+    color: String,
+    igdb_id: Option<u32>,
+}
+
+/// The resolution ladder (plans/GAME-SENSING-V2.md §5.2), first hit wins.
+///
+/// Rung 0 is the curated exe table, checked first precisely because it is
+/// launcher-independent — it catches Hearthstone whether Battle.net installed
+/// it to the default location or not. Rung 2 is the legacy bundled/custom
+/// database, which still carries the user's own confirmed games.
+fn resolve_process(
+    head: Option<&'static crate::catalogue::Head>,
+    db: &GameDatabase,
+    p: &RawGameProcess,
+) -> Option<Matched> {
+    if let Some(entry) = head.and_then(|h| h.lookup_exe(&p.exe, &p.path)) {
+        return Some(Matched {
+            game_id: entry.game_id.to_string(),
+            game_name: entry.name.to_string(),
+            short_name: entry.short_name.to_string(),
+            // Accent colours are not in the artifact: §8.2 made the exe's own
+            // icon the primary asset, so the coloured badge is a last resort.
+            color: "#888888".to_string(),
+            igdb_id: Some(entry.igdb_id),
+        });
+    }
+    let entry = db.lookup_by_exe(&p.exe)?;
+    Some(Matched {
+        game_id: entry.id.clone(),
+        game_name: entry.name.clone(),
+        short_name: entry.short_name.clone(),
+        color: entry.color.clone().unwrap_or_else(|| "#888888".into()),
+        igdb_id: entry.igdb_id.and_then(|id| u32::try_from(id).ok()),
+    })
+}
+
 /// Every running process the database recognises as a game.
 ///
 /// v1 returned only one, so a second game running alongside was invisible and
 /// alt-tabbing between two looked like the first had exited. `now` is passed in
 /// rather than read here so a single scan timestamps consistently.
 fn detect_games(db: &GameDatabase, processes: &[RawGameProcess], now: i64) -> Vec<ActiveGame> {
+    let head = catalogue_head();
     processes
         .iter()
         .filter_map(|p| {
-            let entry = db.lookup_by_exe(&p.exe)?;
+            let matched = resolve_process(head, db, p)?;
             Some(ActiveGame {
-                game_id: entry.id.clone(),
-                game_name: entry.name.clone(),
-                short_name: entry.short_name.clone(),
-                color: entry.color.clone().unwrap_or_else(|| "#888888".into()),
+                game_id: matched.game_id,
+                game_name: matched.game_name,
+                short_name: matched.short_name,
+                color: matched.color,
+                igdb_id: matched.igdb_id,
                 exe: p.exe.clone(),
                 pid: p.pid,
                 // The real process start when we have it. Falling back to the

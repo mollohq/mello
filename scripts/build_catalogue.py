@@ -77,7 +77,7 @@ ENDPOINTS = [
     "platforms",
 ]
 
-MAGIC_HEAD = b"MHD1"
+MAGIC_HEAD = b"MHD2"
 MAGIC_INDEX = b"MAI1"
 
 # Hand-picked short names win over derivation. Seeded from the 25 curated
@@ -274,35 +274,98 @@ class StringBlob:
         return entry
 
 
-def build_head(games, covers, popularity, size):
-    """head.bin — the N most-played games with full display metadata.
+def load_exe_mappings():
+    path = os.path.join(HERE, "exe_mappings.json")
+    with open(path, encoding="utf-8") as f:
+        return json.load(f)["mappings"]
+
+
+def resolve_mappings(mappings, slug_to_id, alt_names):
+    """Turn curated igdb_slugs into ids. An unresolved slug is a build failure,
+    not a warning: shipping it would leave a top-50 game undetectable, which is
+    exactly the gap the curated list exists to close."""
+    resolved, missing = [], []
+    for m in mappings:
+        slug = m["igdb_slug"]
+        gid = slug_to_id.get(slug) or alt_names.get(slug.replace("-", " ").lower())
+        if gid is None:
+            missing.append((m["game_id"], slug))
+            continue
+        resolved.append((m, gid))
+    if missing:
+        print("\nUnresolved igdb_slug values in exe_mappings.json:", file=sys.stderr)
+        for game_id, slug in missing:
+            print(f"  {game_id:<24} -> {slug}", file=sys.stderr)
+        sys.exit(
+            "Every curated mapping must resolve. Check the slug on igdb.com — "
+            "canonical names rarely match intuition."
+        )
+    return resolved
+
+
+def build_head(games, covers, popularity, size, mappings):
+    """head.bin — the most-played games with display metadata, plus the curated
+    exe table that resolves them regardless of which launcher installed them.
 
     Layout (little-endian):
-        magic "MHD1" | count u32 | strings_off u32
-        count x 24-byte record, sorted by igdb_id for binary search:
+        magic "MHD2" | count u32 | strings_off u32 | exe_count u32
+        count x 28-byte record, sorted by igdb_id for binary search:
             igdb_id u32, name_off u32, slug_off u32, short_off u32,
-            cover_off u32, name_len u8, slug_len u8, short_len u8, cover_len u8
-        string blob (offsets are relative to strings_off)
+            cover_off u32, gameid_off u32,
+            name_len u8, slug_len u8, short_len u8, cover_len u8
+        exe_count x 16-byte entry (linear; the table is tiny):
+            exe_off u32, shape_off u32, record_idx u32,
+            exe_len u8, shape_len u8, pad u16
+        string blob (all offsets are relative to strings_off)
+
+    Curated games are force-included regardless of popularity rank — the whole
+    point is that they resolve, and a few sit outside the top N.
     """
     ranked = sorted(games, key=lambda g: popularity.get(g, 0), reverse=True)[:size]
-    ranked.sort(key=int)  # binary-searchable by igdb_id
+    curated_ids = {str(gid) for _m, gid in mappings}
+    included = sorted(set(ranked) | (curated_ids & set(games)), key=int)
 
     blob = StringBlob()
+    # game_id defaults to the IGDB slug and is overridden by the curated table,
+    # which is what keeps spec-18 adapter ids ("minecraft", "starcraft-2")
+    # stable even where IGDB names the game differently.
+    game_ids = {str(gid): m["game_id"] for m, gid in mappings}
+
     records = bytearray()
-    for gid in ranked:
+    index_of = {}
+    for i, gid in enumerate(included):
         name, slug = games[gid]
+        index_of[gid] = i
         n_off, n_len = blob.add(name)
         s_off, s_len = blob.add(slug)
         sh_off, sh_len = blob.add(derive_short_name(name, slug))
         c_off, c_len = blob.add(covers.get(gid, ""))
+        gi_off, gi_len = blob.add(game_ids.get(gid, slug))
+        # 32 bytes: 6 offsets, 5 lengths, 3 pad. Fixed-width keeps the record
+        # table binary-searchable without parsing the string blob.
         records.extend(
             struct.pack(
-                "<IIIIIBBBB", int(gid), n_off, s_off, sh_off, c_off, n_len, s_len, sh_len, c_len
+                "<IIIIIIBBBBBxxx",
+                int(gid), n_off, s_off, sh_off, c_off, gi_off,
+                n_len, s_len, sh_len, c_len, gi_len,
             )
         )
 
-    header = MAGIC_HEAD + struct.pack("<II", len(ranked), 12 + len(records))
-    return header + bytes(records) + bytes(blob.buf), len(ranked)
+    exe_entries = bytearray()
+    exe_count = 0
+    for m, gid in mappings:
+        idx = index_of[str(gid)]
+        shape_off, shape_len = blob.add((m.get("path_contains") or "").lower())
+        for exe in m["exe"]:
+            e_off, e_len = blob.add(exe.lower())
+            exe_entries.extend(
+                struct.pack("<IIIBBH", e_off, shape_off, idx, e_len, shape_len, 0)
+            )
+            exe_count += 1
+
+    strings_off = 16 + len(records) + len(exe_entries)
+    header = MAGIC_HEAD + struct.pack("<III", len(included), strings_off, exe_count)
+    return header + bytes(records) + bytes(exe_entries) + bytes(blob.buf), len(included), exe_count
 
 
 def build_appid_index(steam):
@@ -367,7 +430,18 @@ def main():
 
     os.makedirs(OUT_DIR, exist_ok=True)
 
-    head, head_count = build_head(games, covers, popularity, args.head_size)
+    print("Resolving curated exe mappings ...")
+    slug_to_id = {slug: gid for gid, (_n, slug) in games.items()}
+    alt_names = {}
+    for a in rows("alternative_names"):
+        if a.get("game") in games and a.get("name"):
+            alt_names.setdefault(a["name"].lower(), a["game"])
+    mappings = resolve_mappings(load_exe_mappings(), slug_to_id, alt_names)
+    print(f"  {len(mappings)} games, {sum(len(m['exe']) for m, _ in mappings)} executables")
+
+    head, head_count, exe_count = build_head(
+        games, covers, popularity, args.head_size, mappings
+    )
     head_path = os.path.join(OUT_DIR, "head.bin")
     with open(head_path, "wb") as f:
         f.write(head)
@@ -383,6 +457,7 @@ def main():
         "built_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "schema_versions": versions,
         "head_count": head_count,
+        "exe_mapping_count": exe_count,
         "index_count": index_count,
         "head_bytes": len(head),
         "index_bytes": len(index),

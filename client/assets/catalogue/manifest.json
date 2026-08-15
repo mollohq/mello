@@ -1,6 +1,7 @@
 {
-  "built_at": "2026-08-15T14:22:40Z",
-  "head_bytes": 139291,
+  "built_at": "2026-08-15T16:10:10Z",
+  "exe_mapping_count": 66,
+  "head_bytes": 157455,
   "head_count": 2000,
   "index_bytes": 1098552,
   "index_count": 137318,
