@@ -103,6 +103,23 @@ func DiscoverCrewsRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk
 	return string(resp), nil
 }
 
+// newCrewMetadata builds the group metadata stored on a newly created crew.
+//
+// sfu_enabled must be set here. It is the flag hasPremiumCrew reads to decide
+// whether voice and streaming use the SFU, and when it is absent both silently
+// fall back to P2P — no error, no log, and the crew still reports members as
+// connected. Every crew created before this was set ran P2P without anyone
+// noticing, so keep this in sync with sfu_entitlement.go.
+func newCrewMetadata(userID string, inviteOnly bool) map[string]interface{} {
+	return map[string]interface{}{
+		"max_members":    MaxCrewMembers,
+		"invite_only":    inviteOnly,
+		"created_by":     userID,
+		"stream_enabled": true,
+		"sfu_enabled":    true,
+	}
+}
+
 func CreateCrewRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, payload string) (string, error) {
 	userID, ok := ctx.Value(runtime.RUNTIME_CTX_USER_ID).(string)
 	if !ok {
@@ -126,12 +143,7 @@ func CreateCrewRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk ru
 		return "", runtime.NewError("maximum crews reached", 9)
 	}
 
-	metadata := map[string]interface{}{
-		"max_members":    MaxCrewMembers,
-		"invite_only":    req.InviteOnly,
-		"created_by":     userID,
-		"stream_enabled": true,
-	}
+	metadata := newCrewMetadata(userID, req.InviteOnly)
 
 	logger.Info("Creating crew name=%q avatar_len=%d invite_count=%d by user=%s", req.Name, len(req.Avatar), len(req.InviteUserIDs), userID)
 
