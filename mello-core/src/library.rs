@@ -19,12 +19,34 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+/// Which launcher an installed game came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LibrarySource {
+    Steam,
+    Epic,
+    Gog,
+}
+
+impl LibrarySource {
+    /// Prefix for the stable game id. `steam` must never change: sessions and
+    /// stats are already recorded under `steam-<appid>` keys.
+    pub fn prefix(self) -> &'static str {
+        match self {
+            LibrarySource::Steam => "steam",
+            LibrarySource::Epic => "epic",
+            LibrarySource::Gog => "gog",
+        }
+    }
+}
+
 /// One installed game, as the launcher describes it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LibraryEntry {
-    /// Steam application id — a precise, stable, cross-user identity even
-    /// before we know IGDB's number for the game.
-    pub appid: u32,
+    pub source: LibrarySource,
+    /// The launcher's own id for the game — a Steam appid, an Epic catalog
+    /// item, a GOG product id. Precise, stable, and identical for every user
+    /// who owns the game, even before we know IGDB's number for it.
+    pub external_id: String,
     /// The launcher's own display name, e.g. "Counter-Strike 2". Free and
     /// authoritative, which is why this module needs no network to name a
     /// game it finds.
@@ -36,12 +58,12 @@ pub struct LibraryEntry {
 impl LibraryEntry {
     /// Stable id for the ledger and stats.
     ///
-    /// Deliberately not an IGDB slug: the appid *is* correct identity, it is
-    /// identical for every user who owns the game, and it needs no lookup. It
-    /// upgrades to a richer id later without the recorded sessions changing
-    /// meaning.
+    /// Deliberately not an IGDB slug: the launcher's id *is* correct identity,
+    /// it needs no lookup, and it upgrades to a richer id later without the
+    /// recorded sessions changing meaning. Namespaced by launcher because the
+    /// same number means different games on different stores.
     pub fn game_id(&self) -> String {
-        format!("steam-{}", self.appid)
+        format!("{}-{}", self.source.prefix(), self.external_id)
     }
 
     /// Badge label. Mirrors the build-time derivation in
@@ -108,8 +130,13 @@ impl LibraryIndex {
     /// launcher just contributes nothing, because sensing must keep working
     /// for someone who has no Steam install at all.
     pub fn scan() -> Self {
-        let entries = scan_steam();
-        log::info!("[library] {} installed game(s) found", entries.len());
+        let mut entries = scan_steam();
+        entries.extend(scan_epic());
+        entries.extend(scan_gog());
+        log::info!(
+            "[library] {} installed game(s) found (steam+epic+gog)",
+            entries.len()
+        );
         Self::from_entries(entries)
     }
 
@@ -296,10 +323,155 @@ fn parse_app_manifest(contents: &str, steamapps: &Path) -> Option<LibraryEntry> 
         return None;
     }
     Some(LibraryEntry {
-        appid,
+        source: LibrarySource::Steam,
+        external_id: appid.to_string(),
         name,
         install_dir: steamapps.join("common").join(installdir),
     })
+}
+
+// ---------------------------------------------------------------------- Epic
+
+/// Epic writes one JSON manifest per installed game into a shared ProgramData
+/// directory — no registry, no per-user path, and readable without the
+/// launcher running.
+#[cfg(windows)]
+fn epic_manifest_dir() -> Option<PathBuf> {
+    let programdata = std::env::var_os("PROGRAMDATA")?;
+    Some(
+        PathBuf::from(programdata)
+            .join("Epic")
+            .join("EpicGamesLauncher")
+            .join("Data")
+            .join("Manifests"),
+    )
+}
+
+#[cfg(target_os = "macos")]
+fn epic_manifest_dir() -> Option<PathBuf> {
+    Some(PathBuf::from(
+        "/Users/Shared/Epic/EpicGamesLauncher/Data/Manifests",
+    ))
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
+fn epic_manifest_dir() -> Option<PathBuf> {
+    None
+}
+
+fn scan_epic() -> Vec<LibraryEntry> {
+    let Some(dir) = epic_manifest_dir() else {
+        return Vec::new();
+    };
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("item"))
+        .filter_map(|e| std::fs::read_to_string(e.path()).ok())
+        .filter_map(|body| parse_epic_manifest(&body))
+        .collect()
+}
+
+/// Pull display name, install location and catalog id out of an Epic `.item`.
+///
+/// Parsed with `serde_json` rather than a hand-rolled reader because these are
+/// real JSON documents with dozens of fields; only four matter.
+fn parse_epic_manifest(body: &str) -> Option<LibraryEntry> {
+    #[derive(serde::Deserialize)]
+    struct EpicManifest {
+        #[serde(default)]
+        display_name: String,
+        #[serde(default)]
+        install_location: String,
+        #[serde(default)]
+        catalog_item_id: String,
+        #[serde(default)]
+        app_name: String,
+    }
+    // Epic uses PascalCase keys.
+    let raw: serde_json::Value = serde_json::from_str(body).ok()?;
+    let get = |k: &str| {
+        raw.get(k)
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string()
+    };
+    let m = EpicManifest {
+        display_name: get("DisplayName"),
+        install_location: get("InstallLocation"),
+        catalog_item_id: get("CatalogItemId"),
+        app_name: get("AppName"),
+    };
+
+    if m.display_name.trim().is_empty() || m.install_location.trim().is_empty() {
+        return None;
+    }
+    // CatalogItemId is the durable product id; AppName is the per-artifact one
+    // and changes between editions, so prefer the former.
+    let id = if m.catalog_item_id.is_empty() {
+        m.app_name
+    } else {
+        m.catalog_item_id
+    };
+    if id.is_empty() {
+        return None;
+    }
+    Some(LibraryEntry {
+        source: LibrarySource::Epic,
+        external_id: id,
+        name: m.display_name.trim().to_string(),
+        install_dir: PathBuf::from(m.install_location.trim()),
+    })
+}
+
+// ----------------------------------------------------------------------- GOG
+
+/// GOG Galaxy records each install under its own registry key. Games installed
+/// without Galaxy still land here — the installer writes the key regardless,
+/// which is why this catches offline-installer users too.
+#[cfg(windows)]
+fn scan_gog() -> Vec<LibraryEntry> {
+    use winreg::enums::HKEY_LOCAL_MACHINE;
+    use winreg::RegKey;
+
+    let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
+    // 32-bit view first (where GOG writes on 64-bit Windows), then native.
+    let roots = [
+        "SOFTWARE\\WOW6432Node\\GOG.com\\Games",
+        "SOFTWARE\\GOG.com\\Games",
+    ];
+    let mut out = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+
+    for root in roots {
+        let Ok(games) = hklm.open_subkey(root) else {
+            continue;
+        };
+        for id in games.enum_keys().flatten() {
+            let Ok(key) = games.open_subkey(&id) else {
+                continue;
+            };
+            let name: String = key.get_value("gameName").unwrap_or_default();
+            let path: String = key.get_value("path").unwrap_or_default();
+            if name.trim().is_empty() || path.trim().is_empty() || !seen.insert(id.clone()) {
+                continue;
+            }
+            out.push(LibraryEntry {
+                source: LibrarySource::Gog,
+                external_id: id,
+                name: name.trim().to_string(),
+                install_dir: PathBuf::from(path.trim()),
+            });
+        }
+    }
+    out
+}
+
+#[cfg(not(windows))]
+fn scan_gog() -> Vec<LibraryEntry> {
+    Vec::new()
 }
 
 #[cfg(test)]
@@ -325,7 +497,7 @@ mod tests {
     #[test]
     fn parses_an_app_manifest() {
         let e = parse_app_manifest(MANIFEST, &steamapps()).expect("valid manifest");
-        assert_eq!(e.appid, 730);
+        assert_eq!(e.external_id, "730");
         assert_eq!(e.name, "Counter-Strike 2");
         assert_eq!(
             e.install_dir,
@@ -346,6 +518,65 @@ mod tests {
         )
         .is_none());
         assert!(parse_app_manifest("garbage", &steamapps()).is_none());
+    }
+
+    const EPIC_MANIFEST: &str = r#"{
+        "FormatVersion": 0,
+        "AppName": "Fortnite",
+        "CatalogItemId": "4fe75bbc5a674f4f9b356b5c90567da5",
+        "DisplayName": "Fortnite",
+        "InstallLocation": "C:\\Program Files\\Epic Games\\Fortnite",
+        "LaunchExecutable": "FortniteGame/Binaries/Win64/FortniteClient-Win64-Shipping.exe"
+    }"#;
+
+    #[test]
+    fn parses_an_epic_manifest() {
+        let e = parse_epic_manifest(EPIC_MANIFEST).expect("valid manifest");
+        assert_eq!(e.source, LibrarySource::Epic);
+        assert_eq!(e.name, "Fortnite");
+        assert_eq!(e.game_id(), "epic-4fe75bbc5a674f4f9b356b5c90567da5");
+        assert_eq!(
+            e.install_dir,
+            PathBuf::from(r"C:\Program Files\Epic Games\Fortnite")
+        );
+    }
+
+    #[test]
+    fn epic_manifest_falls_back_to_app_name() {
+        // Some manifests omit CatalogItemId; AppName is less durable across
+        // editions but is better than dropping the game entirely.
+        let body = r#"{"AppName":"Rocket League","DisplayName":"Rocket League",
+            "InstallLocation":"D:\\Epic\\rocketleague"}"#;
+        let e = parse_epic_manifest(body).expect("valid manifest");
+        assert_eq!(e.game_id(), "epic-Rocket League");
+    }
+
+    #[test]
+    fn epic_manifests_without_a_location_are_skipped() {
+        // Owned-but-not-installed entries have no install path, and a game we
+        // cannot locate can never be matched to a running process.
+        assert!(parse_epic_manifest(r#"{"DisplayName":"X","CatalogItemId":"a"}"#).is_none());
+        assert!(
+            parse_epic_manifest(r#"{"InstallLocation":"C:\\X","CatalogItemId":"a"}"#).is_none()
+        );
+        assert!(parse_epic_manifest("not json").is_none());
+    }
+
+    #[test]
+    fn game_ids_are_namespaced_per_launcher() {
+        // The same number means different games on different stores, so ids
+        // must not collide. `steam-` in particular can never change: sessions
+        // and stats are already recorded under it.
+        let steam = entry(730, "Counter-Strike 2", r"C:\a");
+        let epic = LibraryEntry {
+            source: LibrarySource::Epic,
+            external_id: "730".into(),
+            name: "Something Else".into(),
+            install_dir: PathBuf::from(r"C:\b"),
+        };
+        assert_eq!(steam.game_id(), "steam-730");
+        assert_eq!(epic.game_id(), "epic-730");
+        assert_ne!(steam.game_id(), epic.game_id());
     }
 
     #[test]
@@ -399,7 +630,8 @@ mod tests {
 
     fn entry(appid: u32, name: &str, dir: &str) -> LibraryEntry {
         LibraryEntry {
-            appid,
+            source: LibrarySource::Steam,
+            external_id: appid.to_string(),
             name: name.to_string(),
             install_dir: PathBuf::from(dir),
         }
@@ -420,7 +652,7 @@ mod tests {
             r"d:\steamlibrary\steamapps\common\elden ring\game\eldenring.exe",
         ] {
             let e = idx.resolve(exe).unwrap_or_else(|| panic!("{exe}"));
-            assert_eq!(e.appid, 1245620);
+            assert_eq!(e.external_id, "1245620");
         }
     }
 
@@ -442,14 +674,14 @@ mod tests {
         assert_eq!(
             idx.resolve(r"C:\Steam\common\Portal 2\bin\portal2.exe")
                 .unwrap()
-                .appid,
-            620
+                .game_id(),
+            "steam-620"
         );
         assert_eq!(
             idx.resolve(r"C:\Steam\common\Portal\bin\portal.exe")
                 .unwrap()
-                .appid,
-            400
+                .game_id(),
+            "steam-400"
         );
     }
 
@@ -462,10 +694,13 @@ mod tests {
         assert_eq!(
             idx.resolve(r"C:\Games\Outer\Mods\Inner\inner.exe")
                 .unwrap()
-                .appid,
-            2
+                .game_id(),
+            "steam-2"
         );
-        assert_eq!(idx.resolve(r"C:\Games\Outer\outer.exe").unwrap().appid, 1);
+        assert_eq!(
+            idx.resolve(r"C:\Games\Outer\outer.exe").unwrap().game_id(),
+            "steam-1"
+        );
     }
 
     #[test]

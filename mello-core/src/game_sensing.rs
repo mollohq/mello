@@ -951,7 +951,8 @@ mod tests {
         // yet it resolves — with a real name — purely from the install path.
         let db = test_db();
         let library = LibraryIndex::from_entries(vec![crate::library::LibraryEntry {
-            appid: 1145360,
+            source: crate::library::LibrarySource::Steam,
+            external_id: "1145360".to_string(),
             name: "Hades".to_string(),
             install_dir: std::path::PathBuf::from(r"D:\SteamLibrary\steamapps\common\Hades"),
         }]);
@@ -979,7 +980,8 @@ mod tests {
         // resolving CS2 as "steam-730" would orphan them.
         let db = test_db();
         let library = LibraryIndex::from_entries(vec![crate::library::LibraryEntry {
-            appid: 730,
+            source: crate::library::LibrarySource::Steam,
+            external_id: "730".to_string(),
             name: "Counter-Strike 2".to_string(),
             install_dir: std::path::PathBuf::from(
                 r"C:\Steam\steamapps\common\Counter-Strike Global Offensive",
