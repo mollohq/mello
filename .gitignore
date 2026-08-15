@@ -72,3 +72,12 @@ client-dev.sh
 client-prod.sh
 client-dev.ps1
 client-prod.ps1
+
+# Game catalogue build (scripts/build_catalogue.py)
+scripts/igdb_credentials.json
+scripts/.catalogue_work/
+# head.bin is committed (compiled into the binary via include_bytes!).
+# The appid index is served to clients at runtime and rebuilt daily from the
+# IGDB dumps, so a 1MB binary blob has no business in git history.
+client/assets/catalogue/appid_index.bin
+client/assets/catalogue/appid_index.bin.gz
