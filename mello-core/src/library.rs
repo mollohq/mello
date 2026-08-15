@@ -53,7 +53,7 @@ impl LibraryEntry {
 
 const STOPWORDS: &[&str] = &["of", "the", "and", "a", "an", "de", "la"];
 
-fn derive_short_name(name: &str) -> String {
+pub(crate) fn derive_short_name(name: &str) -> String {
     if name.chars().count() <= 7 {
         return name.to_string();
     }

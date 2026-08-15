@@ -85,6 +85,11 @@ struct GamesEnvelope {
 
 #[derive(Clone)]
 pub struct GameDatabase {
+    /// Executables the user has explicitly said are not games. Lowercased.
+    /// Held here because this is already the structure shared with the sensor
+    /// thread, and a dismissal has to suppress *tracking*, not just the
+    /// prompt — otherwise "not a game" still files sessions for it.
+    dismissed_exes: std::collections::HashSet<String>,
     by_exe: HashMap<String, GameEntry>,
     by_id: HashMap<String, GameEntry>,
     /// Lowercased display name → entry, for legacy events that carry only a
@@ -112,6 +117,7 @@ impl GameDatabase {
             by_name.insert(entry.name.to_lowercase(), entry.clone());
         }
         GameDatabase {
+            dismissed_exes: std::collections::HashSet::new(),
             by_exe,
             by_id,
             by_name,
@@ -131,6 +137,16 @@ impl GameDatabase {
                 .or_insert_with(|| entry.clone());
             self.by_id.entry(entry.id.clone()).or_insert(entry);
         }
+    }
+
+    /// Replace the user's "not a game" list.
+    pub fn set_dismissed_exes(&mut self, exes: &[String]) {
+        self.dismissed_exes = exes.iter().map(|e| e.to_lowercase()).collect();
+    }
+
+    /// Has the user said this executable is not a game?
+    pub fn is_dismissed(&self, exe: &str) -> bool {
+        self.dismissed_exes.contains(&exe.to_lowercase())
     }
 
     pub fn lookup_by_exe(&self, exe: &str) -> Option<&GameEntry> {

@@ -117,6 +117,9 @@ pub struct Client {
     /// User-confirmed games outside the bundled DB (settings-persisted client
     /// side; the DB overlay is rebuilt from this list on every change).
     custom_games: Vec<crate::game_db::CustomGame>,
+    /// Executables the user has marked "not a game"; suppresses provisional
+    /// tracking as well as the confirm prompt.
+    dismissed_games: Vec<String>,
     /// Keeps the telemetry listener thread alive for the client's lifetime.
     #[allow(dead_code)]
     telemetry_listener: Option<TelemetryListener>,
@@ -194,11 +197,20 @@ impl Client {
         self.rebuild_game_db();
     }
 
+    /// Seed the "not a game" list from persisted client settings. Must be set
+    /// before `run()`: a dismissal suppresses provisional *tracking*, so a
+    /// late seed would file a session for something the user already rejected.
+    pub fn set_dismissed_games(&mut self, exes: Vec<String>) {
+        self.dismissed_games = exes;
+        self.rebuild_game_db();
+    }
+
     /// Rebuild the shared DB as bundled + custom overlay. Cheap (25 bundled
     /// entries); runs only on seed/confirm, never in the scan loop.
     fn rebuild_game_db(&self) {
         let mut db = GameDatabase::load_bundled();
         db.add_user_entries(&self.custom_games);
+        db.set_dismissed_exes(&self.dismissed_games);
         *self.game_db.write().expect("game db lock poisoned") = db;
     }
 
@@ -256,6 +268,7 @@ impl Client {
             game_sensor: None,
             game_db: Arc::new(std::sync::RwLock::new(GameDatabase::load_bundled())),
             custom_games: Vec::new(),
+            dismissed_games: Vec::new(),
             telemetry_listener: None,
             telemetry_registry: Arc::new(AdapterRegistry::with_defaults()),
             disabled_integrations: std::collections::HashSet::new(),
