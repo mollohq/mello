@@ -387,6 +387,8 @@ impl Client {
                             &summary.game_name,
                             &summary.game_id,
                             summary.duration_min,
+                            summary.active_min,
+                            summary.igdb_id,
                             summary.wins,
                             summary.losses,
                             summary.draws,
@@ -1030,6 +1032,10 @@ impl Client {
                     &game_name,
                     &game_id,
                     duration_min,
+                    // A manually-reported session (the post-game card) carries
+                    // no foreground accounting or catalogue identity.
+                    0,
+                    0,
                     wins,
                     losses,
                     draws,

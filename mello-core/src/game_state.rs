@@ -101,6 +101,8 @@ impl GameStateManager {
                         game_name: session.game.game_name.clone(),
                         game_id: session.game.game_id.clone(),
                         duration_min,
+                        active_min: (session.game.foreground_ms / 60_000) as u32,
+                        igdb_id: session.game.igdb_id.unwrap_or(0),
                         wins,
                         losses,
                         draws,
@@ -188,6 +190,10 @@ pub struct SessionSummary {
     pub game_name: String,
     pub game_id: String,
     pub duration_min: u32,
+    /// Minutes this game actually held the foreground.
+    pub active_min: u32,
+    /// IGDB id when the catalogue resolved the game.
+    pub igdb_id: u32,
     /// Decisive (streak-eligible) wins/losses this session.
     pub wins: u32,
     pub losses: u32,
