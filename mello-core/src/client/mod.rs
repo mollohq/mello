@@ -106,6 +106,9 @@ pub struct Client {
     /// Last voice channel we joined (for reconnection)
     last_voice_channel: Option<String>,
     game_state: GameStateManager,
+    /// Last game published to presence, so a 15s scan tick that changes
+    /// nothing does not re-broadcast to every crew member.
+    published_game: Option<crate::presence::GamePresence>,
     #[allow(dead_code)]
     game_sensor: Option<GameSensor>,
     /// Shared with the sensor thread so user-confirmed custom games apply
@@ -249,6 +252,7 @@ impl Client {
             sfu_voice_reconnect: None,
             last_voice_channel: None,
             game_state: GameStateManager::new(),
+            published_game: None,
             game_sensor: None,
             game_db: Arc::new(std::sync::RwLock::new(GameDatabase::load_bundled())),
             custom_games: Vec::new(),
@@ -338,7 +342,7 @@ impl Client {
                             });
                         }
                     }
-                    crate::game_sensing::GameEvent::Stopped(game) => {
+                    crate::game_sensing::GameEvent::Stopped { game, .. } => {
                         if let Some(adapter) = self.telemetry_registry.get(&game.game_id) {
                             adapter.reset();
                             // reset() may flush a final result (file-based
@@ -351,6 +355,9 @@ impl Client {
                             }
                         }
                     }
+                    // Focus changes carry no telemetry side-effects; the state
+                    // manager handles them below.
+                    crate::game_sensing::GameEvent::PrimaryChanged { .. } => {}
                     // Forwarded to the UI above; unreachable here.
                     crate::game_sensing::GameEvent::UnknownCandidate { .. } => {}
                 }
@@ -359,6 +366,7 @@ impl Client {
                 for ev in ui_events {
                     let _ = self.event_tx.send(ev);
                 }
+                self.sync_game_presence().await;
                 if let Some(summary) = session_end {
                     if let Some(crew_id) = self.nakama.active_crew_id().map(String::from) {
                         self.handle_game_session_end(

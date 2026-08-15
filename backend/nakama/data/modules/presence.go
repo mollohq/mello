@@ -127,19 +127,62 @@ func ReadPresence(ctx context.Context, nk runtime.NakamaModule, userID string) (
 // RPCs
 // ---------------------------------------------------------------------------
 
+// PresenceUpdateRequest is the presence_update payload. Every field is
+// optional: an omitted one means "leave it as it is", so callers can update
+// one facet of presence without knowing or clobbering the others.
+type PresenceUpdateRequest struct {
+	Status   string        `json:"status"`
+	Activity *Activity     `json:"activity,omitempty"`
+	Game     *GamePresence `json:"game,omitempty"`
+	// When true, clear the game field (explicit null handling).
+	ClearGame bool `json:"clear_game,omitempty"`
+	// When true, reset activity to "none". Needed because an omitted
+	// `activity` means "leave it alone" so that a game-only update cannot wipe
+	// an in_voice activity (spec 17 §5.2 — game and voice coexist).
+	// Connect/logout pass this to get the reset behaviour they want.
+	ClearActivity bool `json:"clear_activity,omitempty"`
+}
+
+// mergePresenceUpdate folds a partial update onto the stored presence.
+// Pure (no I/O) so the merge rules are unit-testable — the same reason
+// applySessionOutcome is factored out of GameSessionEndRPC.
+func mergePresenceUpdate(existing *UserPresence, req *PresenceUpdateRequest, userID, now string) *UserPresence {
+	p := &UserPresence{
+		UserID:    userID,
+		Status:    req.Status,
+		LastSeen:  now,
+		Activity:  req.Activity,
+		UpdatedAt: now,
+	}
+	if p.Status == "" && existing != nil {
+		p.Status = existing.Status
+	}
+	if p.Status == "" {
+		p.Status = StatusOnline
+	}
+	// An omitted activity preserves whatever is stored, mirroring how Status
+	// already behaves, so a partial update (e.g. game-only) is non-destructive.
+	if p.Activity == nil && !req.ClearActivity && existing != nil {
+		p.Activity = existing.Activity
+	}
+	if p.Activity == nil {
+		p.Activity = &Activity{Type: ActivityNone}
+	}
+	if req.Game != nil {
+		p.Game = req.Game
+	} else if !req.ClearGame && existing != nil {
+		p.Game = existing.Game
+	}
+	return p
+}
+
 func PresenceUpdateRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, payload string) (string, error) {
 	userID, ok := ctx.Value(runtime.RUNTIME_CTX_USER_ID).(string)
 	if !ok {
 		return "", runtime.NewError("authentication required", 16)
 	}
 
-	var req struct {
-		Status   string        `json:"status"`
-		Activity *Activity     `json:"activity,omitempty"`
-		Game     *GamePresence `json:"game,omitempty"`
-		// When true, clear the game field (explicit null handling).
-		ClearGame bool `json:"clear_game,omitempty"`
-	}
+	var req PresenceUpdateRequest
 	if err := json.Unmarshal([]byte(payload), &req); err != nil {
 		return "", runtime.NewError("invalid request", 3)
 	}
@@ -154,28 +197,7 @@ func PresenceUpdateRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, n
 	now := time.Now().UTC().Format(time.RFC3339)
 
 	existing, _ := ReadPresence(ctx, nk, userID)
-
-	p := &UserPresence{
-		UserID:    userID,
-		Status:    req.Status,
-		LastSeen:  now,
-		Activity:  req.Activity,
-		UpdatedAt: now,
-	}
-	if p.Status == "" && existing != nil {
-		p.Status = existing.Status
-	}
-	if p.Status == "" {
-		p.Status = StatusOnline
-	}
-	if p.Activity == nil {
-		p.Activity = &Activity{Type: ActivityNone}
-	}
-	if req.Game != nil {
-		p.Game = req.Game
-	} else if !req.ClearGame && existing != nil {
-		p.Game = existing.Game
-	}
+	p := mergePresenceUpdate(existing, &req, userID, now)
 
 	if err := WritePresence(ctx, nk, p); err != nil {
 		logger.Error("failed to write presence: %v", err)

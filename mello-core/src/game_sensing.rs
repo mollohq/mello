@@ -4,6 +4,7 @@ use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use crate::game_db::GameDatabase;
+use crate::session_store;
 
 const GAME_SCAN_INTERVAL: Duration = Duration::from_secs(15);
 const MAX_PROCESSES: usize = 512;
@@ -71,13 +72,32 @@ pub struct ActiveGame {
     pub color: String,
     pub exe: String,
     pub pid: u32,
+    /// When the *game process* started, not when we noticed it (Unix ms).
+    /// Falls back to the first scan that saw it when libmello could not read
+    /// the creation time, so a session is never dated from the future.
     pub started_at: i64,
+    /// Process creation time exactly as libmello reported it (0 = unknown).
+    /// Kept separate from `started_at` because only an unfudged value can
+    /// identify the process across a restart.
+    pub started_at_ms: i64,
+    /// Milliseconds this game has held the foreground, accumulated per scan.
+    pub foreground_ms: i64,
 }
 
 #[derive(Debug, Clone)]
 pub enum GameEvent {
     Started(ActiveGame),
-    Stopped(ActiveGame),
+    /// A game exited. `ended_at` is when it was last seen alive, which is not
+    /// "now" for sessions recovered after a client restart.
+    Stopped {
+        game: Box<ActiveGame>,
+        ended_at: i64,
+    },
+    /// The game the user is actually looking at changed. Drives presence and
+    /// the NOW PLAYING bar; `None` when no game holds focus.
+    PrimaryChanged {
+        pid: Option<u32>,
+    },
     /// A fullscreen/foreground process outside the game DB, surfaced (after
     /// debounce) for the one-tap "track it?" confirm flow. Purely local —
     /// nothing is tracked or broadcast unless the user confirms.
@@ -126,28 +146,96 @@ impl GameSensor {
 }
 
 fn scan_loop(ctx: &SendCtx, db: &Arc<RwLock<GameDatabase>>, tx: &Sender<GameEvent>) {
-    let mut previous: Option<ActiveGame> = None;
+    // Every game currently running, keyed by pid. v1 tracked a single
+    // Option<ActiveGame>, which made alt-tabbing between two games look like a
+    // stop/start pair and silently discarded the background game's session.
+    let mut active: HashMap<u32, ActiveGame> = HashMap::new();
+    let mut primary: Option<u32> = None;
     let mut unknown = UnknownTracker::default();
+    let mut orphans = session_store::take();
+    if !orphans.is_empty() {
+        log::info!(
+            "[game-sensor] {} session(s) open when the client last exited",
+            orphans.len()
+        );
+    }
+
     log::info!(
         "[game-sensor] scan loop started (interval={:?})",
         GAME_SCAN_INTERVAL
     );
 
     loop {
-        std::thread::sleep(GAME_SCAN_INTERVAL);
-
+        // Scan first, sleep after: the reconciliation below must run at
+        // startup, not one interval late.
         let processes = enumerate_game_processes(ctx.0);
+        let now = now_ms();
+
         let (detected, candidate) = {
             let db = db.read().expect("game db lock poisoned");
-            let detected = pick_primary_game(&db, &processes);
+            let detected = detect_games(&db, &processes, now);
             // Unknown-game candidates only matter while no DB game is active.
-            let candidate = if detected.is_none() {
+            let candidate = if detected.is_empty() {
                 pick_unknown_candidate(&db, &processes)
             } else {
                 None
             };
             (detected, candidate)
         };
+
+        // Restart recovery, first scan only. A session whose process is still
+        // alive resumes with its original start time; one whose process is
+        // gone is closed out at the last time we saw it, so the night is
+        // recorded instead of vanishing.
+        if !orphans.is_empty() {
+            for orphan in std::mem::take(&mut orphans) {
+                match detected
+                    .iter()
+                    .find(|g| session_store::resume_matches(&orphan, g.pid, g.started_at_ms))
+                {
+                    Some(live) => {
+                        log::info!(
+                            "[game-sensor] resuming session: {} (pid={}, running since {})",
+                            orphan.game_name,
+                            orphan.pid,
+                            orphan.started_at_ms
+                        );
+                        let mut resumed = live.clone();
+                        resumed.foreground_ms = orphan.foreground_ms;
+                        active.insert(resumed.pid, resumed.clone());
+                        if tx.send(GameEvent::Started(resumed)).is_err() {
+                            return;
+                        }
+                    }
+                    None => {
+                        log::info!(
+                            "[game-sensor] closing orphaned session: {} (ended by {})",
+                            orphan.game_name,
+                            orphan.last_seen_ms
+                        );
+                        let ended_at = orphan.last_seen_ms;
+                        let game = ActiveGame {
+                            game_id: orphan.game_id,
+                            game_name: orphan.game_name,
+                            short_name: orphan.short_name,
+                            color: orphan.color,
+                            exe: orphan.exe,
+                            pid: orphan.pid,
+                            started_at: orphan.started_at_ms,
+                            started_at_ms: orphan.started_at_ms,
+                            foreground_ms: orphan.foreground_ms,
+                        };
+                        let stopped = GameEvent::Stopped {
+                            game: Box::new(game),
+                            ended_at,
+                        };
+                        if tx.send(stopped).is_err() {
+                            return;
+                        }
+                    }
+                }
+            }
+        }
 
         if let Some(cand) = unknown.observe(candidate) {
             if let GameEvent::UnknownCandidate {
@@ -161,41 +249,105 @@ fn scan_loop(ctx: &SendCtx, db: &Arc<RwLock<GameDatabase>>, tx: &Sender<GameEven
             }
         }
 
-        match (&previous, &detected) {
-            (None, Some(game)) => {
-                log::info!(
-                    "[game-sensor] game started: {} (pid={})",
-                    game.game_name,
-                    game.pid
-                );
+        // --- diff the live set against what we were tracking ---
+        let live: HashMap<u32, ActiveGame> = detected.into_iter().map(|g| (g.pid, g)).collect();
+
+        for (pid, game) in &live {
+            if !active.contains_key(pid) {
+                log::info!("[game-sensor] game started: {} (pid={pid})", game.game_name);
                 if tx.send(GameEvent::Started(game.clone())).is_err() {
-                    break;
+                    return;
                 }
             }
-            (Some(prev), None) => {
-                log::info!("[game-sensor] game stopped: {}", prev.game_name);
-                if tx.send(GameEvent::Stopped(prev.clone())).is_err() {
-                    break;
-                }
-            }
-            (Some(prev), Some(game)) if prev.pid != game.pid => {
-                log::info!(
-                    "[game-sensor] game switched: {} -> {}",
-                    prev.game_name,
-                    game.game_name
-                );
-                let _ = tx.send(GameEvent::Stopped(prev.clone()));
-                if tx.send(GameEvent::Started(game.clone())).is_err() {
-                    break;
-                }
-            }
-            _ => {}
         }
 
-        previous = detected;
+        let gone: Vec<u32> = active
+            .keys()
+            .copied()
+            .filter(|p| !live.contains_key(p))
+            .collect();
+        for pid in gone {
+            if let Some(game) = active.remove(&pid) {
+                log::info!("[game-sensor] game stopped: {} (pid={pid})", game.game_name);
+                let stopped = GameEvent::Stopped {
+                    game: Box::new(game),
+                    ended_at: now,
+                };
+                if tx.send(stopped).is_err() {
+                    return;
+                }
+            }
+        }
+
+        // Carry accumulated foreground time forward onto the fresh scan data.
+        let interval_ms = GAME_SCAN_INTERVAL.as_millis() as i64;
+        for (pid, mut game) in live {
+            let carried = active.get(&pid).map_or(0, |prev| prev.foreground_ms);
+            let is_fg = processes
+                .iter()
+                .any(|p| p.pid == pid && (p.is_foreground || p.is_fullscreen));
+            game.foreground_ms = carried + if is_fg { interval_ms } else { 0 };
+            // A resumed session keeps the start time we recovered.
+            if let Some(prev) = active.get(&pid) {
+                game.started_at = prev.started_at;
+            }
+            active.insert(pid, game);
+        }
+
+        let next_primary = pick_primary(&active, &processes);
+        if next_primary != primary {
+            log::info!(
+                "[game-sensor] primary game: {}",
+                next_primary
+                    .and_then(|p| active.get(&p))
+                    .map_or("none", |g| g.game_name.as_str())
+            );
+            primary = next_primary;
+            if tx.send(GameEvent::PrimaryChanged { pid: primary }).is_err() {
+                return;
+            }
+        }
+
+        persist(&active, now);
+
+        std::thread::sleep(GAME_SCAN_INTERVAL);
     }
 
     log::info!("[game-sensor] scan loop ended");
+}
+
+fn persist(active: &HashMap<u32, ActiveGame>, now: i64) {
+    let sessions: Vec<session_store::PersistedSession> = active
+        .values()
+        .map(|g| session_store::PersistedSession {
+            pid: g.pid,
+            started_at_ms: g.started_at_ms,
+            game_id: g.game_id.clone(),
+            game_name: g.game_name.clone(),
+            short_name: g.short_name.clone(),
+            color: g.color.clone(),
+            exe: g.exe.clone(),
+            last_seen_ms: now,
+            foreground_ms: g.foreground_ms,
+        })
+        .collect();
+    session_store::save(&sessions);
+}
+
+/// The game the user is actually looking at: the focused one, else the
+/// fullscreen one, else the longest-running. Ties break on pid so the choice
+/// does not flap between scans.
+fn pick_primary(active: &HashMap<u32, ActiveGame>, processes: &[RawGameProcess]) -> Option<u32> {
+    let rank = |pid: u32| -> (u8, i64, u32) {
+        let p = processes.iter().find(|p| p.pid == pid);
+        let tier = match p {
+            Some(p) if p.is_foreground => 0,
+            Some(p) if p.is_fullscreen => 1,
+            _ => 2,
+        };
+        (tier, active.get(&pid).map_or(0, |g| g.started_at), pid)
+    };
+    active.keys().copied().min_by_key(|&pid| rank(pid))
 }
 
 /// Install-location classes that are never games: system dirs, Store apps,
@@ -279,6 +431,8 @@ pub(crate) struct RawGameProcess {
     /// Main window title; empty for windowless processes.
     pub(crate) window_title: String,
     pub(crate) is_foreground: bool,
+    /// Process creation time in Unix ms; 0 when libmello could not read it.
+    pub(crate) started_at_ms: i64,
 }
 
 fn enumerate_game_processes(ctx: *mut mello_sys::MelloContext) -> Vec<RawGameProcess> {
@@ -291,6 +445,7 @@ fn enumerate_game_processes(ctx: *mut mello_sys::MelloContext) -> Vec<RawGamePro
             path: [0i8; 520],
             title: [0i8; 256],
             is_foreground: false,
+            started_at_ms: 0,
         };
         MAX_PROCESSES
     ];
@@ -314,6 +469,7 @@ fn enumerate_game_processes(ctx: *mut mello_sys::MelloContext) -> Vec<RawGamePro
             path: cstr(&gp.path),
             window_title: cstr(&gp.title),
             is_foreground: gp.is_foreground,
+            started_at_ms: gp.started_at_ms,
         });
     }
     out
@@ -326,29 +482,37 @@ fn now_ms() -> i64 {
         .as_millis() as i64
 }
 
-fn pick_primary_game(db: &GameDatabase, processes: &[RawGameProcess]) -> Option<ActiveGame> {
-    let mut matches: Vec<(ActiveGame, bool)> = processes
+/// Every running process the database recognises as a game.
+///
+/// v1 returned only one, so a second game running alongside was invisible and
+/// alt-tabbing between two looked like the first had exited. `now` is passed in
+/// rather than read here so a single scan timestamps consistently.
+fn detect_games(db: &GameDatabase, processes: &[RawGameProcess], now: i64) -> Vec<ActiveGame> {
+    processes
         .iter()
         .filter_map(|p| {
             let entry = db.lookup_by_exe(&p.exe)?;
-            Some((
-                ActiveGame {
-                    game_id: entry.id.clone(),
-                    game_name: entry.name.clone(),
-                    short_name: entry.short_name.clone(),
-                    color: entry.color.clone().unwrap_or_else(|| "#888888".into()),
-                    exe: p.exe.clone(),
-                    pid: p.pid,
-                    started_at: now_ms(),
+            Some(ActiveGame {
+                game_id: entry.id.clone(),
+                game_name: entry.name.clone(),
+                short_name: entry.short_name.clone(),
+                color: entry.color.clone().unwrap_or_else(|| "#888888".into()),
+                exe: p.exe.clone(),
+                pid: p.pid,
+                // The real process start when we have it. Falling back to the
+                // scan time is what v1 always did, and it is why a game
+                // already running at client launch reported minutes instead of
+                // hours — but a bogus 0 would report 1970, which is worse.
+                started_at: if p.started_at_ms > 0 {
+                    p.started_at_ms
+                } else {
+                    now
                 },
-                p.is_fullscreen,
-            ))
+                started_at_ms: p.started_at_ms,
+                foreground_ms: 0,
+            })
         })
-        .collect();
-
-    // Prefer fullscreen games (likely the active one)
-    matches.sort_by(|a, b| b.1.cmp(&a.1));
-    matches.into_iter().next().map(|(game, _)| game)
+        .collect()
 }
 
 #[cfg(test)]
@@ -364,6 +528,7 @@ mod tests {
             path: format!("C:\\Games\\{exe}"),
             window_title: exe.trim_end_matches(".exe").to_string(),
             is_foreground: false,
+            started_at_ms: 0,
         }
     }
 
@@ -371,38 +536,115 @@ mod tests {
         GameDatabase::load_bundled()
     }
 
-    #[test]
-    fn pick_primary_no_processes() {
-        let db = test_db();
-        assert!(pick_primary_game(&db, &[]).is_none());
+    const NOW: i64 = 1_700_000_000_000;
+
+    fn active_map(games: Vec<ActiveGame>) -> HashMap<u32, ActiveGame> {
+        games.into_iter().map(|g| (g.pid, g)).collect()
     }
 
     #[test]
-    fn pick_primary_single_match() {
+    fn detect_no_processes() {
+        let db = test_db();
+        assert!(detect_games(&db, &[], NOW).is_empty());
+    }
+
+    #[test]
+    fn detect_single_match() {
         let db = test_db();
         let procs = vec![make_process("cs2.exe", 1234, false)];
-        let result = pick_primary_game(&db, &procs);
-        assert!(result.is_some());
-        assert_eq!(result.unwrap().game_id, "counter-strike-2");
+        let found = detect_games(&db, &procs, NOW);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].game_id, "counter-strike-2");
     }
 
     #[test]
-    fn pick_primary_prefers_fullscreen() {
+    fn detect_unknown_exe_filtered() {
+        let db = test_db();
+        let procs = vec![make_process("notepad.exe", 999, false)];
+        assert!(detect_games(&db, &procs, NOW).is_empty());
+    }
+
+    #[test]
+    fn detect_returns_every_running_game() {
+        // v1 returned Option and lost the second game entirely; both sessions
+        // must now be tracked.
         let db = test_db();
         let procs = vec![
             make_process("cs2.exe", 1234, false),
             make_process("dota2.exe", 5678, true),
         ];
-        let result = pick_primary_game(&db, &procs);
-        assert!(result.is_some());
-        assert_eq!(result.unwrap().game_id, "dota-2");
+        let found = detect_games(&db, &procs, NOW);
+        assert_eq!(found.len(), 2);
+        let mut ids: Vec<&str> = found.iter().map(|g| g.game_id.as_str()).collect();
+        ids.sort_unstable();
+        assert_eq!(ids, ["counter-strike-2", "dota-2"]);
     }
 
     #[test]
-    fn pick_primary_unknown_exe_filtered() {
+    fn detect_uses_real_process_start_time() {
         let db = test_db();
-        let procs = vec![make_process("notepad.exe", 999, false)];
-        assert!(pick_primary_game(&db, &procs).is_none());
+        let mut proc = make_process("cs2.exe", 1234, false);
+        proc.started_at_ms = NOW - 3 * 3_600_000; // running for three hours
+        let found = detect_games(&db, &[proc], NOW);
+        // The session must date from when the game started, not from the scan
+        // that first noticed it — this is the "played 4hrs" honesty fix.
+        assert_eq!(found[0].started_at, NOW - 3 * 3_600_000);
+        assert_eq!(found[0].started_at_ms, NOW - 3 * 3_600_000);
+    }
+
+    #[test]
+    fn detect_falls_back_to_scan_time_when_start_unknown() {
+        let db = test_db();
+        let proc = make_process("cs2.exe", 1234, false); // started_at_ms = 0
+        let found = detect_games(&db, &[proc], NOW);
+        // Never 0 — that would date the session to 1970 and report a 55-year
+        // session. The scan time is the honest floor.
+        assert_eq!(found[0].started_at, NOW);
+        assert_eq!(found[0].started_at_ms, 0);
+    }
+
+    #[test]
+    fn primary_prefers_foreground_over_fullscreen() {
+        let db = test_db();
+        let mut fullscreen = make_process("dota2.exe", 5678, true);
+        fullscreen.started_at_ms = NOW - 1000;
+        let mut focused = make_process("cs2.exe", 1234, false);
+        focused.is_foreground = true;
+        focused.started_at_ms = NOW - 500;
+        let procs = vec![fullscreen, focused];
+        let active = active_map(detect_games(&db, &procs, NOW));
+        // v1 sorted on is_fullscreen only and ignored is_foreground entirely,
+        // so the game you were actually looking at lost to a backgrounded one.
+        assert_eq!(pick_primary(&active, &procs), Some(1234));
+    }
+
+    #[test]
+    fn primary_falls_back_to_fullscreen_then_oldest() {
+        let db = test_db();
+        let procs = vec![
+            make_process("cs2.exe", 1234, false),
+            make_process("dota2.exe", 5678, true),
+        ];
+        let active = active_map(detect_games(&db, &procs, NOW));
+        assert_eq!(pick_primary(&active, &procs), Some(5678));
+
+        // Neither focused nor fullscreen: the longest-running wins, and the
+        // answer is stable across calls rather than hash-order dependent.
+        let plain = vec![
+            make_process("cs2.exe", 1234, false),
+            make_process("dota2.exe", 5678, false),
+        ];
+        let mut games = detect_games(&db, &plain, NOW);
+        games[0].started_at = NOW - 10_000;
+        games[1].started_at = NOW - 90_000;
+        let active = active_map(games);
+        assert_eq!(pick_primary(&active, &plain), Some(5678));
+        assert_eq!(pick_primary(&active, &plain), Some(5678));
+    }
+
+    #[test]
+    fn primary_is_none_without_games() {
+        assert_eq!(pick_primary(&HashMap::new(), &[]), None);
     }
 
     // ------------------------------------------------------------------
@@ -418,6 +660,7 @@ mod tests {
             path: format!("C:\\Games\\{exe}"),
             window_title: exe.trim_end_matches(".exe").to_string(),
             is_foreground: foreground,
+            started_at_ms: 0,
         }
     }
 

@@ -326,6 +326,7 @@ fn enumerate_sources(
             path: [0i8; 520],
             title: [0i8; 256],
             is_foreground: false,
+            started_at_ms: 0,
         };
         16
     ];

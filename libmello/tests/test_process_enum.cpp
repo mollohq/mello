@@ -6,6 +6,8 @@
 
 #include <gtest/gtest.h>
 
+#include <chrono>
+
 #include "video/process_enum.hpp"
 
 using mello::video::enumerate_game_processes;
@@ -60,6 +62,36 @@ TEST(ProcessEnum, AtMostOneForegroundProcess) {
         if (p.is_foreground) ++fg;
     }
     EXPECT_LE(fg, 1);
+}
+
+// Sessions are dated from the process creation time, so a game already running
+// when Mello launches reports the hours it actually ran rather than the minutes
+// we happened to watch. A wrong value here silently corrupts every duration.
+TEST(ProcessEnum, ProcessesCarryACreationTime) {
+#ifndef _WIN32
+    GTEST_SKIP() << "process enumeration is Windows-only";
+#else
+    auto procs = enumerate_game_processes();
+    ASSERT_FALSE(procs.empty());
+
+    // Wall clock now, in the same units the field uses.
+    const int64_t now_ms =
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch())
+            .count();
+
+    int with_time = 0;
+    for (const auto& p : procs) {
+        if (p.started_at_ms == 0) continue;  // protected/system process
+        ++with_time;
+        // Sanity-bound rather than exact: a creation time in the future or
+        // before Windows existed means the FILETIME conversion is wrong.
+        EXPECT_GT(p.started_at_ms, 946684800000LL) << p.exe;  // > year 2000
+        EXPECT_LE(p.started_at_ms, now_ms + 1000) << p.exe;   // not in the future
+    }
+    // This process is ours, so at least one creation time must be readable.
+    EXPECT_GT(with_time, 0);
+#endif
 }
 
 TEST(ProcessEnum, VisibleWindowsExposeFullPath) {

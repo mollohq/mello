@@ -20,6 +20,7 @@ pub mod nakama;
 pub mod oauth;
 pub mod presence;
 pub mod session;
+pub mod session_store;
 pub mod stats;
 pub mod stream;
 pub mod telemetry;
