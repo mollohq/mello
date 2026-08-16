@@ -3,9 +3,9 @@ use std::sync::mpsc::Sender;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
-use crate::game_db::GameDatabase;
 use crate::library::LibraryIndex;
 use crate::session_store;
+use crate::user_games::UserGames;
 
 /// Idle cadence. Low enough to be cheap, high enough that a game start can
 /// sit unnoticed for a quarter minute — which is why it tightens after any
@@ -145,7 +145,7 @@ impl GameSensor {
     /// apply live (Command::AddCustomGame writes through the same lock).
     pub fn start(
         ctx: *mut mello_sys::MelloContext,
-        db: Arc<RwLock<GameDatabase>>,
+        db: Arc<RwLock<UserGames>>,
     ) -> (Self, std::sync::mpsc::Receiver<GameEvent>) {
         let (tx, rx) = std::sync::mpsc::channel();
         let send_ctx = SendCtx(ctx);
@@ -166,7 +166,7 @@ impl GameSensor {
     }
 }
 
-fn scan_loop(ctx: &SendCtx, db: &Arc<RwLock<GameDatabase>>, tx: &Sender<GameEvent>) {
+fn scan_loop(ctx: &SendCtx, db: &Arc<RwLock<UserGames>>, tx: &Sender<GameEvent>) {
     // Every game currently running, keyed by pid. v1 tracked a single
     // Option<ActiveGame>, which made alt-tabbing between two games look like a
     // stop/start pair and silently discarded the background game's session.
@@ -207,7 +207,12 @@ fn scan_loop(ctx: &SendCtx, db: &Arc<RwLock<GameDatabase>>, tx: &Sender<GameEven
                 .filter(|g| g.game_id.starts_with("local-"))
                 .map(|g| g.exe.as_str())
                 .collect();
-            let candidate = pick_unknown_candidate(&db, &processes, &provisional);
+            let named: HashSet<&str> = detected
+                .iter()
+                .filter(|g| !g.game_id.starts_with("local-"))
+                .map(|g| g.exe.as_str())
+                .collect();
+            let candidate = pick_unknown_candidate(&db, &processes, &provisional, &named);
             (detected, candidate)
         };
 
@@ -421,9 +426,10 @@ const UNKNOWN_PATH_DENYLIST: &[&str] = &[
 /// AppData\Local\Programs) and WindowsTerminal.exe (a Store app).
 /// Pure; debounce lives in [`UnknownTracker`].
 fn pick_unknown_candidate(
-    db: &GameDatabase,
+    db: &UserGames,
     processes: &[RawGameProcess],
     provisional: &HashSet<&str>,
+    named: &HashSet<&str>,
 ) -> Option<GameEvent> {
     processes
         .iter()
@@ -431,9 +437,11 @@ fn pick_unknown_candidate(
             let path = p.path.to_lowercase();
             // A game already being tracked provisionally is the *main* reason
             // to prompt now — we are recording sessions under a guessed name
-            // and want it confirmed. Anything else must still look game-like.
+            // and want it confirmed. Anything a named rung resolved is never
+            // asked about: we already know what it is, and prompting "is this
+            // a game?" over Counter-Strike would be absurd.
             let worth_asking = provisional.contains(p.exe.as_str())
-                || ((p.is_fullscreen || p.is_foreground) && db.lookup_by_exe(&p.exe).is_none());
+                || (!named.contains(p.exe.as_str()) && (p.is_fullscreen || p.is_foreground));
             worth_asking
                 && !p.window_title.is_empty()
                 && !p.path.is_empty()
@@ -778,7 +786,7 @@ fn provisional_name(p: &RawGameProcess) -> String {
 fn resolve_process(
     head: Option<&'static crate::catalogue::Head>,
     library: &LibraryIndex,
-    db: &GameDatabase,
+    db: &UserGames,
     p: &RawGameProcess,
 ) -> Option<Matched> {
     if let Some(entry) = head.and_then(|h| h.lookup_exe(&p.exe, &p.path)) {
@@ -809,8 +817,10 @@ fn resolve_process(
             game_id: entry.id.clone(),
             game_name: entry.name.clone(),
             short_name: entry.short_name.clone(),
-            color: entry.color.clone().unwrap_or_else(|| "#888888".into()),
-            igdb_id: entry.igdb_id.and_then(|id| u32::try_from(id).ok()),
+            color: "#888888".to_string(),
+            // A hand-confirmed game is one the catalogue has never heard of,
+            // so there is no IGDB id to carry.
+            igdb_id: None,
         });
     }
     // Rung 4: nothing named it, but it looks like a game build. Record the
@@ -837,7 +847,7 @@ fn resolve_process(
 /// alt-tabbing between two looked like the first had exited. `now` is passed in
 /// rather than read here so a single scan timestamps consistently.
 fn detect_games(
-    db: &GameDatabase,
+    db: &UserGames,
     library: &LibraryIndex,
     processes: &[RawGameProcess],
     now: i64,
@@ -889,8 +899,8 @@ mod tests {
         }
     }
 
-    fn test_db() -> GameDatabase {
-        GameDatabase::load_bundled()
+    fn test_db() -> UserGames {
+        UserGames::new()
     }
 
     const NOW: i64 = 1_700_000_000_000;
@@ -1349,7 +1359,7 @@ mod tests {
         let db = test_db();
         let proc = game_like("night stones.exe");
         let provisional: HashSet<&str> = ["night stones.exe"].into_iter().collect();
-        let candidate = pick_unknown_candidate(&db, &[proc], &provisional);
+        let candidate = pick_unknown_candidate(&db, &[proc], &provisional, &HashSet::new());
         assert!(matches!(
             candidate,
             Some(GameEvent::UnknownCandidate { ref exe, .. }) if exe == "night stones.exe"
@@ -1361,7 +1371,7 @@ mod tests {
         let mut db = test_db();
         db.set_dismissed_exes(&["night stones.exe".to_string()]);
         let proc = game_like("night stones.exe");
-        assert!(pick_unknown_candidate(&db, &[proc], &HashSet::new()).is_none());
+        assert!(pick_unknown_candidate(&db, &[proc], &HashSet::new(), &HashSet::new()).is_none());
     }
 
     #[test]
@@ -1399,12 +1409,14 @@ mod tests {
         assert!(pick_unknown_candidate(
             &db,
             &[unknown_proc("night stones.exe", false, false)],
-            &HashSet::new()
+            &HashSet::new(),
+            &HashSet::new(),
         )
         .is_none());
         let c = pick_unknown_candidate(
             &db,
             &[unknown_proc("night stones.exe", true, false)],
+            &HashSet::new(),
             &HashSet::new(),
         )
         .expect("fullscreen unknown exe qualifies");
@@ -1412,32 +1424,39 @@ mod tests {
         assert!(pick_unknown_candidate(
             &db,
             &[unknown_proc("night stones.exe", false, true)],
-            &HashSet::new()
+            &HashSet::new(),
+            &HashSet::new(),
         )
         .is_some());
     }
 
     #[test]
-    fn unknown_candidate_skips_db_games_and_denylist() {
-        let db = GameDatabase::load_bundled();
-        // A DB game is never an unknown candidate.
+    fn unknown_candidate_skips_named_games_and_denylist() {
+        let db = UserGames::new();
+        // A game a named rung already resolved is never asked about — with the
+        // bundled DB gone, this has to come from the caller's `named` set
+        // rather than from a lookup, or the prompt would fire over CS2.
+        let named: HashSet<&str> = ["cs2.exe"].into_iter().collect();
         assert!(pick_unknown_candidate(
             &db,
             &[unknown_proc("cs2.exe", true, true)],
-            &HashSet::new()
+            &HashSet::new(),
+            &named,
         )
         .is_none());
         // Denylisted apps are never candidates, however game-like they look.
         assert!(pick_unknown_candidate(
             &db,
             &[unknown_proc("chrome.exe", true, true)],
-            &HashSet::new()
+            &HashSet::new(),
+            &HashSet::new(),
         )
         .is_none());
         assert!(pick_unknown_candidate(
             &db,
             &[unknown_proc("OBS64.exe", true, true)],
-            &HashSet::new()
+            &HashSet::new(),
+            &HashSet::new(),
         )
         .is_none());
     }
@@ -1449,18 +1468,24 @@ mod tests {
         // AppData\Local\Programs and a Store app under WindowsApps.
         let mut electron = unknown_proc("someapp.exe", false, true);
         electron.path = "C:\\Users\\bob\\AppData\\Local\\Programs\\SomeApp\\someapp.exe".into();
-        assert!(pick_unknown_candidate(&db, &[electron], &HashSet::new()).is_none());
+        assert!(
+            pick_unknown_candidate(&db, &[electron], &HashSet::new(), &HashSet::new()).is_none()
+        );
 
         let mut store_app = unknown_proc("terminal.exe", false, true);
         store_app.path = "C:\\Program Files\\WindowsApps\\Microsoft.Terminal\\terminal.exe".into();
-        assert!(pick_unknown_candidate(&db, &[store_app], &HashSet::new()).is_none());
+        assert!(
+            pick_unknown_candidate(&db, &[store_app], &HashSet::new(), &HashSet::new()).is_none()
+        );
 
         // A Steam-library exe stays eligible.
         let mut steam_game = unknown_proc("night stones.exe", false, true);
         steam_game.path =
             "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Night Stones\\night stones.exe"
                 .into();
-        assert!(pick_unknown_candidate(&db, &[steam_game], &HashSet::new()).is_some());
+        assert!(
+            pick_unknown_candidate(&db, &[steam_game], &HashSet::new(), &HashSet::new()).is_some()
+        );
     }
 
     #[test]
@@ -1468,11 +1493,15 @@ mod tests {
         let db = test_db();
         let mut no_title = unknown_proc("mystery.exe", true, true);
         no_title.window_title = String::new();
-        assert!(pick_unknown_candidate(&db, &[no_title], &HashSet::new()).is_none());
+        assert!(
+            pick_unknown_candidate(&db, &[no_title], &HashSet::new(), &HashSet::new()).is_none()
+        );
 
         let mut no_path = unknown_proc("mystery.exe", true, true);
         no_path.path = String::new();
-        assert!(pick_unknown_candidate(&db, &[no_path], &HashSet::new()).is_none());
+        assert!(
+            pick_unknown_candidate(&db, &[no_path], &HashSet::new(), &HashSet::new()).is_none()
+        );
     }
 
     #[test]
@@ -1484,6 +1513,7 @@ mod tests {
                 unknown_proc("fg-only.exe", false, true),
                 unknown_proc("fullscreen.exe", true, false),
             ],
+            &HashSet::new(),
             &HashSet::new(),
         )
         .unwrap();
@@ -1498,6 +1528,7 @@ mod tests {
             pick_unknown_candidate(
                 &db,
                 &[unknown_proc("night stones.exe", true, true)],
+                &HashSet::new(),
                 &HashSet::new(),
             )
         };
@@ -1515,10 +1546,22 @@ mod tests {
     fn tracker_resets_on_gap_or_different_candidate() {
         let db = test_db();
         let mut tracker = UnknownTracker::default();
-        let a =
-            || pick_unknown_candidate(&db, &[unknown_proc("aaa.exe", true, true)], &HashSet::new());
-        let b =
-            || pick_unknown_candidate(&db, &[unknown_proc("bbb.exe", true, true)], &HashSet::new());
+        let a = || {
+            pick_unknown_candidate(
+                &db,
+                &[unknown_proc("aaa.exe", true, true)],
+                &HashSet::new(),
+                &HashSet::new(),
+            )
+        };
+        let b = || {
+            pick_unknown_candidate(
+                &db,
+                &[unknown_proc("bbb.exe", true, true)],
+                &HashSet::new(),
+                &HashSet::new(),
+            )
+        };
 
         assert!(tracker.observe(a()).is_none());
         // Gap (no candidate) resets the streak.

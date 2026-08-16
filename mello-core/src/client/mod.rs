@@ -18,7 +18,6 @@ use tokio::sync::mpsc;
 use crate::command::Command;
 use crate::config::Config;
 use crate::events::Event;
-use crate::game_db::GameDatabase;
 use crate::game_sensing::GameSensor;
 use crate::game_state::GameStateManager;
 use crate::giphy::GiphyClient;
@@ -30,6 +29,7 @@ use crate::stream::sink::PacketSink;
 use crate::stream::sink_p2p::P2PFanoutSink;
 use crate::telemetry::{AdapterRegistry, TelemetryListener, TELEMETRY_PORT};
 use crate::transport::SfuConnection;
+use crate::user_games::UserGames;
 use crate::voice::{SignalEnvelope, SignalMessage, SignalPurpose, VoiceManager};
 
 use std::collections::{HashMap, VecDeque};
@@ -111,12 +111,12 @@ pub struct Client {
     published_game: Option<crate::presence::GamePresence>,
     #[allow(dead_code)]
     game_sensor: Option<GameSensor>,
-    /// Shared with the sensor thread so user-confirmed custom games apply
-    /// live without a restart.
-    game_db: Arc<std::sync::RwLock<GameDatabase>>,
-    /// User-confirmed games outside the bundled DB (settings-persisted client
-    /// side; the DB overlay is rebuilt from this list on every change).
-    custom_games: Vec<crate::game_db::CustomGame>,
+    /// Shared with the sensor thread so a confirmation or dismissal applies
+    /// from the next scan without a restart.
+    user_games: Arc<std::sync::RwLock<UserGames>>,
+    /// The user's own confirmed games (settings-persisted client side; the
+    /// shared store is rebuilt from this list on every change).
+    custom_games: Vec<crate::user_games::CustomGame>,
     /// Executables the user has marked "not a game"; suppresses provisional
     /// tracking as well as the confirm prompt.
     dismissed_games: Vec<String>,
@@ -192,9 +192,9 @@ impl Client {
     /// Seed user-confirmed custom games from persisted client settings.
     /// Must be called before `run()` so the sensor recognizes them from the
     /// first scan.
-    pub fn set_custom_games(&mut self, games: Vec<crate::game_db::CustomGame>) {
+    pub fn set_custom_games(&mut self, games: Vec<crate::user_games::CustomGame>) {
         self.custom_games = games;
-        self.rebuild_game_db();
+        self.rebuild_user_games();
     }
 
     /// Seed the "not a game" list from persisted client settings. Must be set
@@ -202,16 +202,16 @@ impl Client {
     /// late seed would file a session for something the user already rejected.
     pub fn set_dismissed_games(&mut self, exes: Vec<String>) {
         self.dismissed_games = exes;
-        self.rebuild_game_db();
+        self.rebuild_user_games();
     }
 
-    /// Rebuild the shared DB as bundled + custom overlay. Cheap (25 bundled
-    /// entries); runs only on seed/confirm, never in the scan loop.
-    fn rebuild_game_db(&self) {
-        let mut db = GameDatabase::load_bundled();
-        db.add_user_entries(&self.custom_games);
-        db.set_dismissed_exes(&self.dismissed_games);
-        *self.game_db.write().expect("game db lock poisoned") = db;
+    /// Rebuild the shared store from settings. Tiny; runs only on
+    /// seed/confirm/dismiss, never in the scan loop.
+    fn rebuild_user_games(&self) {
+        let mut store = UserGames::new();
+        store.set_games(&self.custom_games);
+        store.set_dismissed_exes(&self.dismissed_games);
+        *self.user_games.write().expect("user games lock poisoned") = store;
     }
 
     /// Shared frame lifecycle state used by stream_tick() and UI compositor.
@@ -266,7 +266,7 @@ impl Client {
             game_state: GameStateManager::new(),
             published_game: None,
             game_sensor: None,
-            game_db: Arc::new(std::sync::RwLock::new(GameDatabase::load_bundled())),
+            user_games: Arc::new(std::sync::RwLock::new(UserGames::new())),
             custom_games: Vec::new(),
             dismissed_games: Vec::new(),
             telemetry_listener: None,
@@ -1044,7 +1044,7 @@ impl Client {
             }
             Command::SetCustomGames { games } => {
                 self.custom_games = games;
-                self.rebuild_game_db();
+                self.rebuild_user_games();
             }
             Command::AddCustomGame { game } => {
                 log::info!(
@@ -1054,7 +1054,7 @@ impl Client {
                     game.id
                 );
                 self.custom_games.push(game);
-                self.rebuild_game_db();
+                self.rebuild_user_games();
             }
             Command::UploadGameIcon { game_id, png } => {
                 use base64::Engine as _;
@@ -1095,22 +1095,27 @@ impl Client {
                 let registry = self.telemetry_registry.clone();
                 let event_tx = self.event_tx.clone();
                 tokio::task::spawn_blocking(move || {
-                    let game_db = GameDatabase::load_bundled();
+                    let head = crate::catalogue::Head::bundled();
                     let games = registry
                         .all()
                         .iter()
                         .map(|adapter| {
                             let info = adapter.info();
-                            // Badge styling comes from the game DB entry so the
+                            // Badge styling comes from the catalogue so the
                             // settings rows match the now-playing card.
-                            let db_entry = game_db.lookup_by_id(adapter.game_id());
+                            let db_entry =
+                                head.as_ref().and_then(|h| h.by_game_id(adapter.game_id()));
                             crate::events::GameIntegrationStatus {
                                 game_id: adapter.game_id().to_string(),
                                 name: info.game_name.to_string(),
                                 short_name: db_entry
-                                    .map(|e| e.short_name.clone())
+                                    .as_ref()
+                                    .map(|e| e.short_name.to_string())
                                     .unwrap_or_else(|| info.game_name.to_string()),
-                                color: db_entry.and_then(|e| e.color.clone()).unwrap_or_default(),
+                                // Accent colours left the catalogue when the
+                                // exe's own icon became the primary art; the
+                                // badge is now a last resort.
+                                color: String::new(),
                                 installed: adapter.detect_install(),
                                 writes_files: info.writes_files,
                                 note: info.note.to_string(),

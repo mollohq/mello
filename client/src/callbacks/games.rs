@@ -77,8 +77,8 @@ pub fn wire(ctx: &AppContext) {
             let Some((exe, path, display_name)) = pending.borrow_mut().take() else {
                 return;
             };
-            let game = mello_core::game_db::CustomGame {
-                id: mello_core::game_db::custom_game_id(&exe),
+            let game = mello_core::user_games::CustomGame {
+                id: mello_core::user_games::custom_game_id(&exe),
                 name: display_name.clone(),
                 short_name: crate::converters::make_initials(&display_name),
                 exe: exe.clone(),

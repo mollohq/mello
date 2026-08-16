@@ -333,11 +333,11 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
     // installs honor the user's per-game consent; shared with AppContext below.
     let settings = Rc::new(RefCell::new(Settings::load()));
     let disabled_integrations = settings.borrow().disabled_game_integrations.clone();
-    let custom_games: Vec<mello_core::game_db::CustomGame> = settings
+    let custom_games: Vec<mello_core::user_games::CustomGame> = settings
         .borrow()
         .custom_games
         .iter()
-        .map(|g| mello_core::game_db::CustomGame {
+        .map(|g| mello_core::user_games::CustomGame {
             id: g.id.clone(),
             name: g.name.clone(),
             short_name: g.short_name.clone(),

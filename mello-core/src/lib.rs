@@ -13,7 +13,6 @@ pub mod crew_state;
 pub mod emoji;
 pub mod error;
 pub mod events;
-pub mod game_db;
 pub mod game_sensing;
 pub mod game_state;
 pub mod giphy;
@@ -27,6 +26,7 @@ pub mod stats;
 pub mod stream;
 pub mod telemetry;
 pub mod transport;
+pub mod user_games;
 pub mod voice;
 
 pub use client::{

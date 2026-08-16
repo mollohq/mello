@@ -53,7 +53,7 @@ pub struct Settings {
 }
 
 /// Persisted form of a user-confirmed custom game (mirrors
-/// `mello_core::game_db::CustomGame`).
+/// `mello_core::user_games::CustomGame`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CustomGameSetting {
     pub id: String,

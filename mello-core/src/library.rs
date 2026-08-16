@@ -75,7 +75,9 @@ impl LibraryEntry {
 
 const STOPWORDS: &[&str] = &["of", "the", "and", "a", "an", "de", "la"];
 
-pub(crate) fn derive_short_name(name: &str) -> String {
+/// Badge label from a display name. Public because every surface that shows a
+/// game needs one, including for games the catalogue has never heard of.
+pub fn derive_short_name(name: &str) -> String {
     if name.chars().count() <= 7 {
         return name.to_string();
     }

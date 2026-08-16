@@ -175,6 +175,30 @@ impl Head {
         self.exe_count
     }
 
+    /// Look up by the stable `game_id` carried on ledger events and stats.
+    ///
+    /// Linear over the records, which is fine for a few thousand and avoids a
+    /// second index; callers hit this once per card render, not per frame.
+    pub fn by_game_id(&self, game_id: &str) -> Option<CatalogueEntry<'_>> {
+        if game_id.is_empty() {
+            return None;
+        }
+        (0..self.count)
+            .filter_map(|i| self.entry_at(i))
+            .find(|e| e.game_id == game_id)
+    }
+
+    /// Case-insensitive lookup by display name, for legacy events that carry
+    /// only a name (stream sessions, pre-`game_id` game sessions).
+    pub fn by_name(&self, name: &str) -> Option<CatalogueEntry<'_>> {
+        if name.is_empty() {
+            return None;
+        }
+        (0..self.count)
+            .filter_map(|i| self.entry_at(i))
+            .find(|e| e.name.eq_ignore_ascii_case(name))
+    }
+
     pub fn len(&self) -> usize {
         self.count
     }
@@ -392,7 +416,7 @@ mod tests {
     fn shared_runtime_hosts_need_the_path_guard() {
         // javaw.exe is Minecraft only under a Minecraft install. Without the
         // guard, every Java desktop application reports as Minecraft — which
-        // is exactly what the v1 games.json did.
+        // is exactly what the old hand-mapped catalogue did.
         let h = head();
         let mc = h
             .lookup_exe(
@@ -466,6 +490,44 @@ mod tests {
             .lookup_exe("notepad.exe", r"C:\Windows\notepad.exe")
             .is_none());
         assert!(h.lookup_exe("", "").is_none());
+    }
+
+    #[test]
+    fn resolves_by_stable_game_id() {
+        // Ledger events and stats rows carry game_id, not igdb_id, so every
+        // surface that renders one needs this lookup.
+        let h = head();
+        let cs2 = h.by_game_id("counter-strike-2").expect("CS2");
+        assert_eq!(cs2.short_name, "CS2");
+        assert_eq!(cs2.igdb_id, 242408);
+
+        // The curated override, not the IGDB slug.
+        let mc = h.by_game_id("minecraft").expect("Minecraft");
+        assert_eq!(mc.slug, "minecraft-java-edition");
+    }
+
+    #[test]
+    fn discovered_game_ids_are_not_in_the_catalogue() {
+        // steam-/epic-/local- ids are real sessions the catalogue has never
+        // heard of. Callers must derive a badge rather than render a blank —
+        // this returning None is the trigger for that fallback.
+        let h = head();
+        assert!(h.by_game_id("steam-1145360").is_none());
+        assert!(h.by_game_id("local-night-stones").is_none());
+        assert!(h.by_game_id("").is_none());
+    }
+
+    #[test]
+    fn resolves_by_display_name_for_legacy_events() {
+        let h = head();
+        let e = h.by_name("Counter-Strike 2").expect("by name");
+        assert_eq!(e.game_id, "counter-strike-2");
+        assert_eq!(
+            h.by_name("counter-strike 2").map(|e| e.game_id),
+            Some("counter-strike-2"),
+            "name matching must be case-insensitive"
+        );
+        assert!(h.by_name("").is_none());
     }
 
     #[test]

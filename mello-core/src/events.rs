@@ -59,9 +59,10 @@ pub struct UserSearchResult {
 pub struct GameIntegrationStatus {
     pub game_id: String,
     pub name: String,
-    /// Badge text from games.json (e.g. "CS2"); falls back to the name.
+    /// Badge text from the catalogue (e.g. "CS2"); falls back to the name.
     pub short_name: String,
-    /// Badge hex color from games.json (e.g. "#DE9B35").
+    /// Badge hex colour; the exe icon is the primary art, so this is a
+    /// last-resort tint for the initials badge.
     pub color: String,
     /// Whether the game looks installed on this machine; None = unknown.
     pub installed: Option<bool>,
