@@ -7,13 +7,14 @@ with a derived build over IGDB's daily CSV dumps. Two artifacts come out, split
 by how often they change and how they reach the client (plans/GAME-SENSING-V2.md
 §2.2):
 
-  head.bin          ~2k most-played games, full metadata. Committed to the repo
-                    and include_bytes!'d — the installer grows by ~57KB and
-                    popular games resolve instantly, offline, with no network.
+  head.bin          ~2k most-played games, full metadata. ~154KB.
 
-  appid_index.bin   steam_appid -> igdb_id for every game IGDB knows (~135k).
-                    Served by the backend and fetched at runtime, so catalogue
-                    freshness is decoupled from app releases.
+  appid_index.bin   steam_appid -> igdb_id for every game IGDB knows (~137k),
+                    delta-encoded to ~537KB.
+
+Both are committed and include_bytes!'d into the client, so every Steam game
+resolves to IGDB identity offline from first launch with no download path to
+build or operate. Rerun this script to refresh them.
 
 Usage:
     python build_catalogue.py                # build both artifacts
@@ -78,7 +79,7 @@ ENDPOINTS = [
 ]
 
 MAGIC_HEAD = b"MHD2"
-MAGIC_INDEX = b"MAI1"
+MAGIC_INDEX = b"MAI2"
 
 # Hand-picked short names win over derivation. Seeded from the 25 curated
 # entries in the v1 games.json — derivation cannot know that League of Legends
@@ -368,17 +369,36 @@ def build_head(games, covers, popularity, size, mappings):
     return header + bytes(records) + bytes(exe_entries) + bytes(blob.buf), len(included), exe_count
 
 
+def _varint(n):
+    """LEB128-style unsigned varint."""
+    out = bytearray()
+    while True:
+        byte = n & 0x7F
+        n >>= 7
+        out.append(byte | 0x80 if n else byte)
+        if not n:
+            return bytes(out)
+
+
 def build_appid_index(steam):
-    """appid_index.bin — steam_appid -> igdb_id, sorted for binary search.
+    """appid_index.bin — steam_appid -> igdb_id for every game IGDB knows.
 
-    Layout: magic "MAI1" | count u32 | count x (appid u32, igdb_id u32)
+    Layout: magic "MAI2" | count u32 | count x (delta_appid varint, igdb_id varint)
 
-    Flat rather than delta-encoded so the client can binary-search the file as
-    it sits; the gzipped copy alongside is what goes over the wire.
+    Delta-encoded because this ships inside the installer and the flat form is
+    twice the size: appids sorted ascending have small gaps, so the deltas cost
+    one or two bytes instead of four. The client expands it to sorted
+    (u32, u32) pairs once at load, which is what binary search needs — decoding
+    137k varints is sub-millisecond and happens once.
     """
     pairs = sorted(steam.items())
-    body = b"".join(struct.pack("<II", appid, gid) for appid, gid in pairs)
-    return MAGIC_INDEX + struct.pack("<I", len(pairs)) + body, len(pairs)
+    body = bytearray()
+    prev = 0
+    for appid, gid in pairs:
+        body += _varint(appid - prev)
+        body += _varint(gid)
+        prev = appid
+    return MAGIC_INDEX + struct.pack("<I", len(pairs)) + bytes(body), len(pairs)
 
 
 # ---------------------------------------------------------------------- main
@@ -450,8 +470,6 @@ def main():
     index_path = os.path.join(OUT_DIR, "appid_index.bin")
     with open(index_path, "wb") as f:
         f.write(index)
-    with open(index_path + ".gz", "wb") as f:
-        f.write(gzip.compress(index, 9))
 
     manifest = {
         "built_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),

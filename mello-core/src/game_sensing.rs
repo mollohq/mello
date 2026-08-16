@@ -552,6 +552,22 @@ fn now_ms() -> i64 {
         .as_millis() as i64
 }
 
+/// The compiled-in Steam appid index, decoded once.
+fn appid_index() -> Option<&'static crate::catalogue::AppIdIndex> {
+    static INDEX: std::sync::OnceLock<Option<crate::catalogue::AppIdIndex>> =
+        std::sync::OnceLock::new();
+    INDEX
+        .get_or_init(|| {
+            let index = crate::catalogue::AppIdIndex::bundled();
+            match &index {
+                Some(i) => log::info!("[game-sensor] appid index loaded: {} entries", i.len()),
+                None => log::error!("[game-sensor] bundled appid index failed to parse"),
+            }
+            index
+        })
+        .as_ref()
+}
+
 /// The compiled-in catalogue head, parsed once.
 fn catalogue_head() -> Option<&'static crate::catalogue::Head> {
     static HEAD: std::sync::OnceLock<Option<crate::catalogue::Head>> = std::sync::OnceLock::new();
@@ -801,15 +817,31 @@ fn resolve_process(
         });
     }
     if let Some(entry) = library.resolve(&p.path) {
+        // A Steam appid maps to an IGDB id through the bundled index, which
+        // upgrades a library-discovered game to full catalogue identity —
+        // cover art, and the same id whichever launcher it came from. Epic and
+        // GOG ids have no such mapping yet, and fall back to the launcher's own
+        // name, which is authoritative anyway.
+        let igdb_id = (entry.source == crate::library::LibrarySource::Steam)
+            .then(|| entry.external_id.parse::<u32>().ok())
+            .flatten()
+            .and_then(|appid| appid_index()?.igdb_id(appid));
+
+        if let Some(catalogued) = igdb_id.and_then(|id| head.and_then(|h| h.get(id))) {
+            return Some(Matched {
+                game_id: catalogued.game_id.to_string(),
+                game_name: catalogued.name.to_string(),
+                short_name: catalogued.short_name.to_string(),
+                color: "#888888".to_string(),
+                igdb_id: Some(catalogued.igdb_id),
+            });
+        }
         return Some(Matched {
             game_id: entry.game_id(),
             game_name: entry.name.clone(),
             short_name: entry.short_name(),
             color: "#888888".to_string(),
-            // The Steam appid identifies the game precisely and identically
-            // for every user; mapping it onto an IGDB id is enrichment that
-            // arrives with the backend resolve endpoint.
-            igdb_id: None,
+            igdb_id,
         });
     }
     if let Some(entry) = db.lookup_by_exe(&p.exe) {
@@ -1030,11 +1062,22 @@ mod tests {
         assert_eq!(guessed.len(), 1);
         assert_eq!(guessed[0].game_id, "local-hades");
 
-        // With the index it upgrades to the real appid and Steam's own name.
+        // With the library index the Steam appid is known, and the bundled
+        // appid index maps it onto IGDB — so the game arrives with full
+        // catalogue identity rather than a launcher-scoped id.
         let found = detect_games(&db, &library, &[p], NOW);
         assert_eq!(found.len(), 1);
-        assert_eq!(found[0].game_id, "steam-1145360");
         assert_eq!(found[0].game_name, "Hades");
+        assert_eq!(
+            found[0].igdb_id,
+            Some(113112),
+            "a Steam appid must resolve to its IGDB id through the bundled index"
+        );
+        assert!(
+            !found[0].game_id.starts_with("steam-"),
+            "a catalogued game keeps its catalogue id, not the launcher's: {}",
+            found[0].game_id
+        );
     }
 
     #[test]

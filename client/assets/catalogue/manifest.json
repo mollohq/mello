@@ -1,10 +1,10 @@
 {
-  "built_at": "2026-08-15T16:10:10Z",
+  "built_at": "2026-08-16T20:15:04Z",
   "exe_mapping_count": 66,
-  "head_bytes": 157455,
+  "head_bytes": 157530,
   "head_count": 2000,
-  "index_bytes": 1098552,
-  "index_count": 137318,
+  "index_bytes": 549784,
+  "index_count": 137344,
   "schema_versions": {
     "alternative_names": "1700060400",
     "covers": "1784008800",
