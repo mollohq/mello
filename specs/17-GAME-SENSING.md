@@ -1,10 +1,23 @@
 # MELLO Game Sensing Specification
 
-> **Component:** Game Detection, Game Database, Game Presence  
-> **Version:** 0.1  
-> **Status:** Planned  
+> **Component:** Game Detection, Game Catalogue, Game Presence  
+> **Version:** 0.2  
+> **Status:** Implemented — §2 and §3 are superseded, see below  
 > **Parent:** [00-ARCHITECTURE.md](./00-ARCHITECTURE.md)  
 > **Related:** [02-MELLO-CORE.md](./02-MELLO-CORE.md), [03-LIBMELLO.md](./03-LIBMELLO.md), [11-PRESENCE-CREW-STATE.md](./11-PRESENCE-CREW-STATE.md), [14-VIDEO-PIPELINE.md](./14-VIDEO-PIPELINE.md), [16-CREW-EVENT-LEDGER.md](./16-CREW-EVENT-LEDGER.md), [18-GAME-TELEMETRY.md](./18-GAME-TELEMETRY.md)
+
+> **SUPERSEDED (§2 Process Scanner, §3 Game Database).** Detection was rebuilt
+> on the IGDB catalogue: a curated executable table, an installed-library scan
+> keyed on install path, and provisional tracking for games nothing can name.
+> Sessions now date from real process creation time, several games are tracked
+> at once, and presence is published. The design and rationale live in
+> [../plans/GAME-SENSING-V2.md](../plans/GAME-SENSING-V2.md); this spec's §2–§3
+> describe the previous `games.json` design and are kept only as history until
+> they are rewritten. §4–§11 still hold.
+>
+> **UI sections (§6 sidebar, §7 bottom bar, §9 Slint components) belong in
+> [19-FEED-CURATION-PERSONAL-STATS.md](./19-FEED-CURATION-PERSONAL-STATS.md)**,
+> which owns surfacing. They predate spec 19 and are pending relocation.
 
 > **Amendment (spec 18 — Game Telemetry):** this spec covers *process-level* detection only (which game, session start/stop, duration). In-game outcomes (win/loss, score, streaks) are a separate, pluggable layer **above** the process sensor — the `GameSensor` keeps emitting `Started`/`Stopped` unchanged. When a detected game has a registered telemetry adapter (CS2 GSI first), the adapter's config is installed and a loopback listener routes that game's state into the post-game flow. Games without an adapter keep the manual win/loss/highlight tap described in §7.2. See [18-GAME-TELEMETRY.md](./18-GAME-TELEMETRY.md).
 

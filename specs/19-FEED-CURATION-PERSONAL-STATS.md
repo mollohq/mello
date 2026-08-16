@@ -1,8 +1,10 @@
 # MELLO Feed Curation & Personal Stats Specification
 
 > **Component:** Personal Stats Surface, Crew Feed Curation for Game Sessions
-> **Version:** 0.1
-> **Status:** Planned
+> **Version:** 0.2
+> **Status:** Partially implemented — the You strip, `user_game_stats_get`,
+> the notability gate and the feed budget are shipped; the rich session card
+> and the deep profile view are not
 > **Parent:** [00-ARCHITECTURE.md](./00-ARCHITECTURE.md)
 > **Related:** [18-GAME-TELEMETRY.md](./18-GAME-TELEMETRY.md), [16-CREW-EVENT-LEDGER.md](./16-CREW-EVENT-LEDGER.md), [04-BACKEND.md](./04-BACKEND.md), [11-PRESENCE-CREW-STATE.md](./11-PRESENCE-CREW-STATE.md)
 
@@ -78,7 +80,7 @@ user_game_stats_get   →   { "games": [ UserGameStats, ... ] }  // sorted by la
 ```
 Authenticated; returns only the caller's own stats across all games. Owner-read enforced by storage permissions.
 
-### 2.3 You strip (Phase A1)
+### 2.3 You strip
 
 A compact card pinned at the **top of the crew feed**, showing the viewer's top/active game:
 
@@ -92,7 +94,7 @@ A compact card pinned at the **top of the crew feed**, showing the viewer's top/
 - Tappable → profile.
 - Always present (even at zero crew activity); shows an empty/encouraging state if no games tracked.
 
-### 2.4 Profile / "Me" view (Phase A2)
+### 2.4 Profile / "Me" view
 
 A dedicated stats view, deeper than the strip:
 - Per-game cards: streak (current/longest), W/L/D record, win-rate, recent-form sparkline.

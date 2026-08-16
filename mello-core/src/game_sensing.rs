@@ -959,7 +959,7 @@ mod tests {
         let mut p = make_process("Hades.exe", 4242, true);
         p.path = r"D:\SteamLibrary\steamapps\common\Hades\x64\Hades.exe".into();
 
-        // Without the library index the game is still recorded — phase 4's
+        // Without the library index the game is still recorded — the
         // provisional rung guarantees a session — but only under a guessed id
         // and whatever the window happened to be called.
         let guessed = detect_games(&db, &LibraryIndex::default(), &[p.clone()], NOW);
@@ -1022,7 +1022,7 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
-    // Classifier + provisional tracking (phase 4)
+    // Classifier + provisional tracking for unrecognised games
     // ------------------------------------------------------------------
 
     /// A fullscreen, windowed process from a plausible game install.
@@ -1163,8 +1163,8 @@ mod tests {
     #[test]
     fn provisional_games_are_offered_for_confirmation() {
         // Rung 4 records the session under a guessed name; the prompt is how
-        // the user corrects it. Before phase 4 the prompt only fired when
-        // *nothing* was detected, so a provisional game could never be named.
+        // the user corrects it. The prompt used to fire only when *nothing*
+        // was detected, so a provisional game could never be named.
         let db = test_db();
         let proc = game_like("night stones.exe");
         let provisional: HashSet<&str> = ["night stones.exe"].into_iter().collect();

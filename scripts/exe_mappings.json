@@ -3,7 +3,7 @@
     "Curated executable -> game mappings (plans/GAME-SENSING-V2.md §2.4).",
     "",
     "This covers the HEAD of the play distribution, which is a different job",
-    "from the tail. The Steam library scan (phase 3) resolves ~137k titles by",
+    "from the tail. The Steam library scan resolves ~137k titles by",
     "install path with no per-game effort, but it only sees Steam installs.",
     "The most-played games on PC include League, Valorant, Fortnite,",
     "Hearthstone, WoW, Overwatch 2, Roblox and Genshin, none of which a Steam",

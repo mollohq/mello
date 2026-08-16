@@ -87,9 +87,9 @@ That splits cleanly into three tiers:
 
 | Tier | Contents | Size | Delivery |
 |---|---|---|---|
-| **1. Curated head** | ~2,000 most-played games: name, slug, cover hash, short name, accent colour | **57 KB gz** | bundled in the binary (`include_bytes!`) — metadata only, no images |
-| **2. Identity index** | `steam_appid → igdb_id` for **all 134,989** | **399 KB gz** → 1.03 MB on disk, mmap'd | downloaded from the backend, refreshed on version change |
-| **3. Metadata** | name + cover for anything outside the head | a few hundred bytes each | lazy per-game on first sight, cached to disk forever |
+| **Curated head** | ~2,000 most-played games: name, slug, cover hash, short name, accent colour | **57 KB gz** | bundled in the binary (`include_bytes!`) — metadata only, no images |
+| **Identity index** | `steam_appid → igdb_id` for **all 134,989** | **399 KB gz** → 1.03 MB on disk, mmap'd | downloaded from the backend, refreshed on version change |
+| **Metadata** | name + cover for anything outside the head | a few hundred bytes each | lazy per-game on first sight, cached to disk forever |
 
 **Installer grows by ~57 KB.** The 1.03MB index is fetched at runtime, so it never
 enters the installer at all. Measured encodings for tier 2:
@@ -112,7 +112,7 @@ Full-metadata alternatives, for the record — all rejected against the 102MB
 reality: everything (5.2 MB gz), popularity > 0 / 16,933 games (517 KB), top
 25,000 (763 KB), top 10,000 (301 KB).
 
-### 2.3 Breadth is not play — the number that actually decides phasing
+### 2.3 Breadth is not play — the number that actually decides priority
 
 Steam is 77% of the *catalogue*. That is a fact about how many titles exist, and
 it says almost nothing about what a crew plays on a Tuesday night. Weighted by
@@ -574,26 +574,28 @@ surface, and getting it wrong is a trust problem, not a bug. Requirements:
 
 ## 10. Build order
 
-Each phase is independently shippable and leaves the product better than it found it.
+Each step is independently shippable and leaves the product better than it
+found it. Named, not numbered — the ordering matters, the numbering does not.
 
-| Phase | Scope | Payoff |
+| Step | Scope | Payoff |
 |---|---|---|
-| **0. Foundations** | Wire game presence; real process start times (libmello + FFI); session persistence across restarts; multi-game sessions | Sidebar goes live; durations become honest. No new infrastructure, no dependency on the rest. |
-| **1. Catalogue pipeline** | Dump ingestion job + `schema_version` guard, Postgres tables, `catalogue.bin` packer, publish through the auto-updater | A daily-fresh 172k-game catalogue in the client |
-| **2. Curated head** | ~50 hand-mapped `exe_mappings` for the popular **non-Steam** titles (Riot, Battle.net, Epic, Roblox, HoYoPlay, Mojang), seeded from the existing 25 in `games.json` | **The top 50 played games resolve on day one**, launcher-independent — including all five telemetry adapters a Steam scan would miss |
-| **3. Steam library index** | Steam scanner, cached index, path-prefix resolution against `catalogue.bin` | The long tail: 133k titles resolve exactly, with zero per-game effort |
-| **4. Sensor rewrite** | Classifier, unresolved-but-tracked, event-driven detection | "ALL games we know about" becomes true |
-| **5. Assets** | Exe-icon-first ladder (§8.2), 256px extraction, macOS `.app` icons, canonical crew icon, drop the embedded PNG set | Every game looks right — including ones the catalogue has never heard of |
-| **6. Surfaces** | Nightly session rollup card, co-play correlation, T0 stats in recap/profile | The crew-feel payoff |
-| **7. Long tail** | Epic/GOG/Xbox/Battle.net/Riot scanners; crowd mappings with promotion thresholds and review queue | Better install paths and display names; then coverage compounds on its own |
-| **8. Spec consolidation** | Rewrite specs 16–19 to describe what was actually built, and split them along the layer boundary (§13) | Cold AI sessions read one correct spec per concern instead of three overlapping drafts |
+| **Foundations** | Wire game presence; real process start times (libmello + FFI); session persistence across restarts; multi-game sessions | Sidebar goes live; durations become honest. No new infrastructure, no dependency on the rest. |
+| **Catalogue pipeline** | Dump ingestion job + `schema_version` guard, Postgres tables, `catalogue.bin` packer, publish through the auto-updater | A daily-fresh 172k-game catalogue in the client |
+| **Curated head** | ~50 hand-mapped `exe_mappings` for the popular **non-Steam** titles (Riot, Battle.net, Epic, Roblox, HoYoPlay, Mojang), seeded from the existing 25 in `games.json` | **The top 50 played games resolve on day one**, launcher-independent — including all five telemetry adapters a Steam scan would miss |
+| **Steam library index** | Steam scanner, cached index, path-prefix resolution against `catalogue.bin` | The long tail: 133k titles resolve exactly, with zero per-game effort |
+| **Sensor rewrite** | Classifier, unresolved-but-tracked, event-driven detection | "ALL games we know about" becomes true |
+| **Assets** | Exe-icon-first ladder (§8.2), 256px extraction, macOS `.app` icons, canonical crew icon, drop the embedded PNG set | Every game looks right — including ones the catalogue has never heard of |
+| **Surfaces** | Nightly session rollup card, co-play correlation, T0 stats in recap/profile | The crew-feel payoff |
+| **Long tail** | Epic/GOG/Xbox/Battle.net/Riot scanners; crowd mappings with promotion thresholds and review queue | Better install paths and display names; then coverage compounds on its own |
+| **Spec consolidation** | Rewrite specs 16–19 to describe what was actually built, and split them along the layer boundary (§13) | Cold AI sessions read one correct spec per concern instead of three overlapping drafts |
 
-**Phase 2 before Phase 3 is the correction from §2.3.** Curated mappings cover the
+**Curating the head before scanning the tail is the correction from §2.3.** Curated mappings cover the
 head cheaply and launcher-agnostically; the Steam scan covers the tail at scale.
 Doing them the other way round would have shipped 133,000 obscure titles while
 failing to detect Hearthstone.
 
-Phases 0–4 deliver the vision. 5–7 make it feel like the product in the tagline.
+Everything down to the sensor rewrite delivers the vision; the rest makes it
+feel like the product in the tagline.
 
 ---
 
@@ -625,13 +627,13 @@ happened," and no competitor has those signals to work with.
 | Classifier false positives prompt users about non-games | Prompting is gated hard (denylists + engine fingerprints + debounce); tracking is not gated, so a wrong classification costs a card, not a prompt |
 | Library scan I/O on slow disks | Background thread, post-auth, cached with mtime invalidation; never on the <3s startup path |
 | Crowd mapping poisoning | Distinct-user thresholds, curated override, rate limits, `blocked` state |
-| Install-size budget (already 2MB over) | Installer grows ~57KB, not 5.8MB (§2.3). The 1MB index is fetched at runtime. Phase 5 *reclaims* space by deleting the embedded PNG set. The 86MB `mello.exe` is a separate problem this plan does not create or solve. |
+| Install-size budget (already 2MB over) | Installer grows ~57KB, not 5.8MB (§2.3). The 1MB index is fetched at runtime. The assets step *reclaims* space by deleting the embedded PNG set. The 86MB `mello.exe` is a separate problem this plan does not create or solve. |
 | Catalogue staleness | The index is version-checked on startup and refreshed independently of app releases; `game_resolve` covers anything newer still. A miss is a round-trip, not a failure. |
 | macOS launcher coverage is thinner than Windows | Bundle-id scanning of `/Applications` compensates: a stable `CFBundleIdentifier` is a better key than an exe name, and needs no launcher manifest |
 
 ---
 
-## 13. Phase 8 — spec consolidation (do this last)
+## 13. Spec consolidation (do this last)
 
 Specs 16–19 currently describe the same screens in three places, because 17 and 18
 were both written before 19 existed and each grew its own UI section. The fix is
@@ -672,7 +674,7 @@ strip, feed curation and the unknown-game prompt are shipped and running. That
 actively misleads a cold session into distrusting or re-implementing working code.
 
 Correcting the header block is metadata-only and costs minutes, so it should land
-**before** phase 0 rather than waiting for phase 8 — otherwise every intervening
+**first**, rather than waiting for the consolidation pass — otherwise every intervening
 agent session reads the same wrong thing. Each spec gets an accurate `Status`, a
 bumped `Version`, and where superseded, a one-line pointer to this plan.
 

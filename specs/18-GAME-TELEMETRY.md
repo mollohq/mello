@@ -1,10 +1,15 @@
 # MELLO Game Telemetry Specification
 
 > **Component:** Game Telemetry Adapters, Match Outcomes, Streak Stats
-> **Version:** 0.1
-> **Status:** Planned
+> **Version:** 0.2
+> **Status:** Implemented — nine adapters shipped (CS2, Dota 2, LoL, Rocket
+> League, LoR, Hearthstone, Minecraft, Path of Exile, StarCraft II)
 > **Parent:** [00-ARCHITECTURE.md](./00-ARCHITECTURE.md)
 > **Related:** [16-CREW-EVENT-LEDGER.md](./16-CREW-EVENT-LEDGER.md), [17-GAME-SENSING.md](./17-GAME-SENSING.md), [11-PRESENCE-CREW-STATE.md](./11-PRESENCE-CREW-STATE.md), [02-MELLO-CORE.md](./02-MELLO-CORE.md), [19-FEED-CURATION-PERSONAL-STATS.md](./19-FEED-CURATION-PERSONAL-STATS.md)
+>
+> **§6 "Crew-First Surfacing" belongs in
+> [19-FEED-CURATION-PERSONAL-STATS.md](./19-FEED-CURATION-PERSONAL-STATS.md)**,
+> which owns surfacing. It predates spec 19 and is pending relocation.
 >
 > **Note:** this spec covers *producing* outcome/streak data. How it's *surfaced* — the personal "my streaks" view (You strip + profile) and crew feed curation (notability gate, adaptive threshold, games digest) — is its own spec, [19-FEED-CURATION-PERSONAL-STATS.md](./19-FEED-CURATION-PERSONAL-STATS.md).
 

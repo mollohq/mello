@@ -3,7 +3,7 @@ package main
 import "testing"
 
 // ---------------------------------------------------------------------------
-// Co-play attribution (plans/GAME-SENSING-V2.md phase 6, data half).
+// Co-play attribution: who else was in the game at the same time.
 // ---------------------------------------------------------------------------
 
 func win(user, game string, startMs, endMs int64) sessionWindow {
