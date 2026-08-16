@@ -22,6 +22,10 @@ type VoiceMemberState struct {
 	Muted    bool   `json:"muted"`
 	Deafened bool   `json:"deafened"`
 	JoinedAt int64  `json:"joined_at"` // Unix millis
+	// IsGuest marks a browser participant who joined from an invite link and is
+	// not a crew member. Clients badge these so members can see that the voice
+	// they hear belongs to someone who hasn't installed m3llo.
+	IsGuest bool `json:"is_guest,omitempty"`
 }
 
 type VoiceRoom struct {
@@ -126,7 +130,7 @@ func GetVoiceSnapshot(crewID string) *VoiceSnapshot {
 // channel->crew reverse map consistent. Used by the idempotent same-channel
 // rejoin path (e.g. reconnects) so a member's roster entry is never recreated.
 // Returns true if the member already existed.
-func upsertVoiceMember(channelID, crewID, userID, username string) bool {
+func upsertVoiceMember(channelID, crewID, userID, username string, isGuest bool) bool {
 	voiceRoomsMu.Lock()
 	room, exists := voiceRooms[channelID]
 	if !exists {
@@ -140,11 +144,13 @@ func upsertVoiceMember(channelID, crewID, userID, username string) bool {
 	m, existed := room.Members[userID]
 	if existed {
 		m.Username = username
+		m.IsGuest = isGuest
 	} else {
 		room.Members[userID] = &VoiceMemberState{
 			UserID:   userID,
 			Username: username,
 			JoinedAt: time.Now().UnixMilli(),
+			IsGuest:  isGuest,
 		}
 	}
 	voiceRoomsMu.Unlock()
@@ -218,6 +224,19 @@ type voiceJoinParams struct {
 	UserID      string
 	Username    string
 	MaxMembers  int
+	// IsGuest marks a browser participant joining from an invite link.
+	IsGuest bool
+}
+
+// recordLedgerSession opens or extends the crew's ledger voice session for a
+// participant. Guests are deliberately excluded: the ledger feeds the weekly
+// recap, and a visitor who sat in voice for 40 minutes must not turn up as the
+// crew's most active member.
+func recordLedgerSession(p voiceJoinParams) {
+	if p.IsGuest {
+		return
+	}
+	voiceSessionOnJoin(p.ChannelID, p.CrewID, p.ChannelName, p.UserID, p.Username)
 }
 
 // joinVoiceRoom seats a participant in a voice room, updates presence and the
@@ -249,7 +268,7 @@ func joinVoiceRoom(ctx context.Context, logger runtime.Logger, nk runtime.Nakama
 
 	if sameChannelRejoin {
 		// Ensure the member entry exists, preserve JoinedAt, refresh username.
-		upsertVoiceMember(p.ChannelID, p.CrewID, p.UserID, p.Username)
+		upsertVoiceMember(p.ChannelID, p.CrewID, p.UserID, p.Username, p.IsGuest)
 		logger.Info("Voice re-join (idempotent): user=%s crew=%s channel=%s", p.UserID, p.CrewID, p.ChannelID)
 	} else {
 		// First join or channel switch: leave any prior room, then add.
@@ -269,6 +288,7 @@ func joinVoiceRoom(ctx context.Context, logger runtime.Logger, nk runtime.Nakama
 			UserID:   p.UserID,
 			Username: p.Username,
 			JoinedAt: time.Now().UnixMilli(),
+			IsGuest:  p.IsGuest,
 		}
 		voiceRoomsMu.Unlock()
 
@@ -280,12 +300,14 @@ func joinVoiceRoom(ctx context.Context, logger runtime.Logger, nk runtime.Nakama
 		voiceChannelCrew[p.ChannelID] = p.CrewID
 		voiceChannelCrewMu.Unlock()
 
-		// Track voice session for event ledger
-		voiceSessionOnJoin(p.ChannelID, p.CrewID, p.ChannelName, p.UserID, p.Username)
+		recordLedgerSession(p)
 	}
 
-	// Update last-seen for event ledger catch-up
-	updateLastSeen(ctx, nk, p.UserID, p.CrewID)
+	// Update last-seen for event ledger catch-up. Guests have nothing to catch up
+	// on — they cannot read the feed history — so skip the write.
+	if !p.IsGuest {
+		updateLastSeen(ctx, nk, p.UserID, p.CrewID)
+	}
 
 	// Update user presence activity (also corrects any drift after a reconnect)
 	now := time.Now().UTC().Format(time.RFC3339)

@@ -233,6 +233,7 @@ func UpdateCrewRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk ru
 		Avatar       string  `json:"avatar,omitempty"`
 		Open         *bool   `json:"open,omitempty"`
 		InvitePolicy *string `json:"invite_policy,omitempty"`
+		GuestPolicy  *string `json:"guest_policy,omitempty"`
 	}
 	if err := json.Unmarshal([]byte(payload), &req); err != nil {
 		return "", runtime.NewError("invalid request", 3)
@@ -284,18 +285,33 @@ func UpdateCrewRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk ru
 		avatarURL = fmt.Sprintf("/v2/storage/%s/%s/%s", CrewAvatarCollection, SystemUserID, req.CrewID)
 	}
 
-	// Update metadata if invite_policy changed
+	// Update metadata if a policy changed. Load the existing metadata once so
+	// setting one policy never drops the other.
 	var metadata map[string]interface{}
-	if req.InvitePolicy != nil {
-		p := *req.InvitePolicy
-		if p != "admins" && p != "everyone" {
-			return "", runtime.NewError("invite_policy must be 'admins' or 'everyone'", 3)
+	loadMetadata := func() {
+		if metadata != nil {
+			return
 		}
 		metadata = map[string]interface{}{}
 		if group.GetMetadata() != "" {
 			_ = json.Unmarshal([]byte(group.GetMetadata()), &metadata)
 		}
+	}
+	if req.InvitePolicy != nil {
+		p := *req.InvitePolicy
+		if p != "admins" && p != "everyone" {
+			return "", runtime.NewError("invite_policy must be 'admins' or 'everyone'", 3)
+		}
+		loadMetadata()
 		metadata["invite_policy"] = p
+	}
+	if req.GuestPolicy != nil {
+		p := *req.GuestPolicy
+		if p != GuestPolicyOpen && p != GuestPolicyOff {
+			return "", runtime.NewError("guest_policy must be 'open' or 'off'", 3)
+		}
+		loadMetadata()
+		metadata["guest_policy"] = p
 	}
 
 	if err := nk.GroupUpdate(ctx, req.CrewID, userID, name, "", "", description, avatarURL, open, metadata, 0); err != nil {

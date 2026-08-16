@@ -116,6 +116,9 @@ func StartVoiceReconcile(ctx context.Context, nk runtime.NakamaModule, logger ru
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			// Guests hold a time-boxed session and a closed browser tab never
+			// sends a leave, so expire them before pruning SFU ghosts.
+			ExpireGuestSessions(ctx, logger, nk)
 			reconcileVoiceRooms(ctx, logger, nk)
 		}
 	}
