@@ -199,8 +199,8 @@ func TestParseGuestPolicy(t *testing.T) {
 // Feed projection — the guarantee that playable media never reaches a guest
 // ---------------------------------------------------------------------------
 
-func TestProjectGuestClips_WithholdsMedia(t *testing.T) {
-	clips := []StoredClip{
+func TestCollectGuestClips_WithholdsMedia(t *testing.T) {
+	doc := &CrewClipsDoc{Clips: []StoredClip{
 		{
 			ClipID:          "c1",
 			ClipType:        "voice",
@@ -211,11 +211,11 @@ func TestProjectGuestClips_WithholdsMedia(t *testing.T) {
 			LocalPath:       "/Users/alice/clips/secret.mp4",
 			ActorID:         "user-uuid-alice",
 		},
-	}
+	}}
 
-	out := projectGuestClips(clips, 6)
-	if len(out) != 1 {
-		t.Fatalf("expected 1 clip, got %d", len(out))
+	out, total := collectGuestClips(doc, nil, 6)
+	if len(out) != 1 || total != 1 {
+		t.Fatalf("expected 1 clip, got %d (total %d)", len(out), total)
 	}
 	if out[0].ClipperName != "alice" || out[0].DurationSeconds != 18.5 {
 		t.Errorf("metadata lost in projection: %+v", out[0])
@@ -233,18 +233,55 @@ func TestProjectGuestClips_WithholdsMedia(t *testing.T) {
 	}
 }
 
-func TestProjectGuestClips_NewestFirstAndLimited(t *testing.T) {
-	clips := []StoredClip{
-		{ClipperName: "oldest"},
-		{ClipperName: "middle"},
-		{ClipperName: "newest"},
-	}
-	out := projectGuestClips(clips, 2)
+func TestCollectGuestClips_NewestFirstAndLimited(t *testing.T) {
+	doc := &CrewClipsDoc{Clips: []StoredClip{
+		{ClipID: "a", ClipperName: "oldest", Ts: 100},
+		{ClipID: "b", ClipperName: "middle", Ts: 200},
+		{ClipID: "c", ClipperName: "newest", Ts: 300},
+	}}
+	out, total := collectGuestClips(doc, nil, 2)
 	if len(out) != 2 {
 		t.Fatalf("expected the limit to apply, got %d", len(out))
 	}
+	if total != 3 {
+		t.Errorf("expected the total to count every clip, got %d", total)
+	}
 	if out[0].ClipperName != "newest" || out[1].ClipperName != "middle" {
 		t.Errorf("expected newest first, got %q then %q", out[0].ClipperName, out[1].ClipperName)
+	}
+}
+
+// Clips live in two places. Reading only the durable document silently
+// under-reports for crews whose clips are still in the event ledger — which is
+// what the dev seed produces.
+func TestCollectGuestClips_MergesLedgerAndDocument(t *testing.T) {
+	doc := &CrewClipsDoc{Clips: []StoredClip{
+		{ClipID: "durable", ClipperName: "alice", Ts: 100},
+	}}
+	ledger := &CrewEventLedger{Events: []CrewEvent{
+		{Type: "clip", Timestamp: 300, Data: ClipData{ClipID: "ledgered", ClipperName: "charlie"}},
+		{Type: "stream_session", Timestamp: 400, Data: StreamSessionData{StreamerName: "ignored"}},
+	}}
+
+	out, total := collectGuestClips(doc, ledger, 6)
+	if total != 2 {
+		t.Fatalf("expected clips from both sources, got %d", total)
+	}
+	if out[0].ClipperName != "charlie" || out[1].ClipperName != "alice" {
+		t.Errorf("expected newest first across sources, got %q then %q", out[0].ClipperName, out[1].ClipperName)
+	}
+}
+
+func TestCollectGuestClips_DeduplicatesByClipID(t *testing.T) {
+	// The same clip can be in the ledger and the durable document at once.
+	doc := &CrewClipsDoc{Clips: []StoredClip{{ClipID: "same", ClipperName: "alice", Ts: 100}}}
+	ledger := &CrewEventLedger{Events: []CrewEvent{
+		{Type: "clip", Timestamp: 100, Data: ClipData{ClipID: "same", ClipperName: "alice"}},
+	}}
+
+	out, total := collectGuestClips(doc, ledger, 6)
+	if total != 1 || len(out) != 1 {
+		t.Errorf("expected the duplicate to collapse, got %d (total %d)", len(out), total)
 	}
 }
 

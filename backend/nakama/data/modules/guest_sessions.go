@@ -16,6 +16,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -386,30 +387,80 @@ func GuestCrewFeedRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk
 	resp.Recap = recap
 
 	clipsDoc, _ := readClipsDoc(ctx, nk, crewID)
-	resp.ClipCount = len(clipsDoc.Clips)
-	resp.Clips = projectGuestClips(clipsDoc.Clips, guestFeedClipLimit)
+	resp.Clips, resp.ClipCount = collectGuestClips(clipsDoc, ledger, guestFeedClipLimit)
 	resp.Sessions = projectGuestSessions(ledger, guestFeedSessionCap)
 
 	out, _ := json.Marshal(resp)
 	return string(out), nil
 }
 
-// projectGuestClips converts stored clips into the guest-visible shape, newest
-// first. StoredClip carries MediaURL and LocalPath; guestClip has neither field,
-// so playable media cannot leak through this projection even by accident.
-func projectGuestClips(clips []StoredClip, limit int) []guestClip {
-	out := make([]guestClip, 0, limit)
-	for i := len(clips) - 1; i >= 0 && len(out) < limit; i-- {
-		c := clips[i]
-		out = append(out, guestClip{
-			ClipType:        c.ClipType,
-			ClipperName:     c.ClipperName,
-			DurationSeconds: c.DurationSeconds,
-			Game:            c.Game,
-			Ts:              c.Ts,
-		})
+// collectGuestClips merges the two places a crew's clips live: the durable
+// crew_clips document and "clip" events still in the event ledger. Reading only
+// one under-reports — the same split resolve_crew_invite and crew_feed handle.
+// Returns the projected page plus the total unique count.
+func collectGuestClips(doc *CrewClipsDoc, ledger *CrewEventLedger, limit int) ([]guestClip, int) {
+	type dated struct {
+		clip guestClip
+		id   string
 	}
-	return out
+	var all []dated
+	seen := make(map[string]bool)
+
+	add := func(id string, c guestClip) {
+		if id != "" {
+			if seen[id] {
+				return
+			}
+			seen[id] = true
+		}
+		all = append(all, dated{clip: c, id: id})
+	}
+
+	if doc != nil {
+		for _, c := range doc.Clips {
+			add(c.ClipID, guestClip{
+				ClipType:        c.ClipType,
+				ClipperName:     c.ClipperName,
+				DurationSeconds: c.DurationSeconds,
+				Game:            c.Game,
+				Ts:              c.Ts,
+			})
+		}
+	}
+
+	if ledger != nil {
+		for _, ev := range ledger.Events {
+			if ev.Type != "clip" {
+				continue
+			}
+			dataBytes, err := json.Marshal(ev.Data)
+			if err != nil {
+				continue
+			}
+			var cd ClipData
+			if json.Unmarshal(dataBytes, &cd) != nil {
+				continue
+			}
+			add(cd.ClipID, guestClip{
+				ClipType:        cd.ClipType,
+				ClipperName:     cd.ClipperName,
+				DurationSeconds: cd.DurationSeconds,
+				Game:            cd.Game,
+				Ts:              ev.Timestamp,
+			})
+		}
+	}
+
+	sort.SliceStable(all, func(i, j int) bool { return all[i].clip.Ts > all[j].clip.Ts })
+
+	out := make([]guestClip, 0, limit)
+	for _, d := range all {
+		if len(out) >= limit {
+			break
+		}
+		out = append(out, d.clip)
+	}
+	return out, len(all)
 }
 
 // projectGuestSessions summarises past streams, newest first. Snapshot URLs are
