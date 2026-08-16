@@ -588,6 +588,57 @@ const ENGINE_MARKER_FILES: &[&str] = &[
     "d3d12core.dll",
 ];
 
+/// Suffixes marking a binary that ships *with* a game but is not the game.
+///
+/// The engine-marker check is directory-scoped, so every executable beside a
+/// Unity or Unreal build inherits that build's signature. Running against a
+/// real Hearthstone install, that made `Hearthstone Beta Launcher.exe` its own
+/// tracked game sitting next to the real one.
+///
+/// Matched as suffixes of the stem rather than substrings, so a game whose
+/// name merely contains one of these words is unaffected — `agent47.exe` ends
+/// in "47", not "agent".
+const AUXILIARY_SUFFIXES: &[&str] = &[
+    "launcher",
+    "updater",
+    "update",
+    "patcher",
+    "setup",
+    "installer",
+    "uninstall",
+    "crashhandler",
+    "crashreporter",
+    "crashpad",
+    "errorreporter",
+    "helper",
+    "service",
+    "services",
+    "daemon",
+    "server",
+    "config",
+    "settings",
+    "benchmark",
+];
+
+/// Is this a launcher, updater or similar companion rather than the game?
+fn is_auxiliary_binary(exe_lower: &str) -> bool {
+    let stem = exe_lower.trim_end_matches(".exe");
+    // Normalise separators so "crash_handler" and "Crash Handler" both match.
+    let mut squashed: String = stem.chars().filter(|c| c.is_ascii_alphanumeric()).collect();
+    // Architecture suffixes hide the real ending: "LeagueCrashHandler64"
+    // does not end with "crashhandler" until the 64 comes off.
+    let had_digits = squashed.ends_with(|c: char| c.is_ascii_digit());
+    while squashed.ends_with(|c: char| c.is_ascii_digit()) {
+        squashed.pop();
+    }
+    if had_digits && squashed.ends_with('x') {
+        squashed.pop();
+    }
+    AUXILIARY_SUFFIXES
+        .iter()
+        .any(|suffix| squashed.ends_with(suffix))
+}
+
 /// True when the process looks like a game build we have never heard of.
 ///
 /// This gates **provisional tracking**, not just prompting. An earlier draft
@@ -604,6 +655,9 @@ fn looks_like_a_game(p: &RawGameProcess) -> bool {
     if UNKNOWN_DENYLIST.contains(&exe.as_str())
         || UNKNOWN_PATH_DENYLIST.iter().any(|d| path.contains(d))
     {
+        return false;
+    }
+    if is_auxiliary_binary(&exe) {
         return false;
     }
     // Unreal's shipping binaries are self-describing.
@@ -1001,6 +1055,92 @@ mod tests {
     /// CI has no Steam, but run locally it is the fastest way to confirm the
     /// manifest parsing works against real files:
     ///   cargo test -p mello-core --lib scan_real_steam_library -- --ignored --nocapture
+    /// Resolution report for whatever is actually installed on this machine.
+    ///
+    /// Ignored by default (CI has no launchers). Run it after installing a
+    /// game to check the ladder resolves it — the curated exe names were
+    /// written from knowledge, and a wrong one fails *silently*: the game
+    /// simply never resolves, with no error anywhere.
+    ///
+    ///   cargo test -p mello-core --lib resolution_report -- --ignored --nocapture
+    #[test]
+    #[ignore = "requires real game installs"]
+    fn resolution_report() {
+        let db = test_db();
+        let library = LibraryIndex::scan();
+        let head = catalogue_head().expect("bundled catalogue");
+
+        // Launcher roots worth probing. Steam is covered by the library scan;
+        // these are the ones curated mappings have to carry alone.
+        let roots = [
+            r"C:\Program Files (x86)\Hearthstone",
+            r"C:\Program Files (x86)\World of Warcraft",
+            r"C:\Program Files (x86)\Overwatch",
+            r"C:\Program Files (x86)\Diablo IV",
+            r"C:\Program Files (x86)\StarCraft II",
+            r"C:\Riot Games",
+            r"C:\Program Files\Epic Games",
+            r"C:\Program Files\Rockstar Games",
+        ];
+
+        println!("\n--- installed libraries ---");
+        for e in library.iter() {
+            println!("  {:<28} {}", e.game_id(), e.name);
+        }
+
+        println!("\n--- executables under known launcher roots ---");
+        let mut probed = 0;
+        for root in roots {
+            let path = std::path::Path::new(root);
+            if !path.exists() {
+                continue;
+            }
+            for exe in find_executables(path, 4) {
+                let name = exe
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_default();
+                let full = exe.to_string_lossy().to_string();
+                let p = RawGameProcess {
+                    pid: 0,
+                    name: name.clone(),
+                    exe: name.clone(),
+                    is_fullscreen: false,
+                    path: full.clone(),
+                    window_title: name.clone(),
+                    is_foreground: false,
+                    started_at_ms: 0,
+                };
+                if let Some(m) = resolve_process(Some(head), &library, &db, &p) {
+                    probed += 1;
+                    println!("  {:<38} -> {} ({})", name, m.game_id, m.game_name);
+                }
+            }
+        }
+        println!("\n{probed} executable(s) resolved under launcher roots");
+    }
+
+    /// Shallow recursive executable search, bounded so a deep game install
+    /// cannot turn a diagnostic into a full-disk walk.
+    fn find_executables(dir: &std::path::Path, depth: usize) -> Vec<std::path::PathBuf> {
+        if depth == 0 {
+            return Vec::new();
+        }
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                out.extend(find_executables(&path, depth - 1));
+            } else if path.extension().and_then(|e| e.to_str()) == Some("exe") {
+                out.push(path);
+            }
+        }
+        out
+    }
+
     #[test]
     #[ignore = "requires a real Steam install"]
     fn scan_real_steam_library() {
@@ -1098,6 +1238,47 @@ mod tests {
         let mut pathless = game_like("mystery.exe");
         pathless.path = String::new();
         assert!(!looks_like_a_game(&pathless));
+    }
+
+    #[test]
+    fn launchers_beside_a_game_are_not_themselves_games() {
+        // Found against a real Hearthstone install: the engine-marker check is
+        // directory-scoped, so every companion binary inherits the game's Unity
+        // signature. Without this guard, "Hearthstone Beta Launcher.exe" became
+        // its own tracked game alongside the real one.
+        for exe in [
+            "Hearthstone Beta Launcher.exe",
+            "Battle.net Launcher.exe",
+            "EpicGamesLauncher.exe",
+            "GameUpdater.exe",
+            "LeagueCrashHandler64.exe",
+            "RiotClientServices.exe",
+            "UnityCrashHandler64.exe",
+            "vc_redist_setup.exe",
+            "DedicatedServer.exe",
+            "crash_handler.exe",
+        ] {
+            let mut p = game_like(exe);
+            p.is_fullscreen = true; // even fullscreen must not save it
+            assert!(
+                !looks_like_a_game(&p),
+                "{exe} is a companion binary, not a game"
+            );
+        }
+    }
+
+    #[test]
+    fn a_game_whose_name_contains_an_auxiliary_word_still_qualifies() {
+        // Suffix matching, not substring: these must survive the guard.
+        for exe in [
+            "agent47.exe",        // contains "agent"
+            "serverfarm.exe",     // starts with "server"
+            "configurator5.exe",  // contains "config"
+            "TheUpdaterGame.exe", // contains "updater" mid-name
+        ] {
+            let p = game_like(exe);
+            assert!(looks_like_a_game(&p), "{exe} should still be a candidate");
+        }
     }
 
     #[test]
