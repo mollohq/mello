@@ -15,13 +15,13 @@ That is not a bigger `games.json`. It is a different system:
 
 | | v1 | v2 |
 |---|---|---|
-| Catalogue | 25 hand-mapped exes, `include_str!` into the binary | ~2,000 curated games bundled (57KB) + a 135k-entry appid→igdb_id index fetched at runtime (399KB) |
-| Identity | exact case-insensitive exe basename | resolution ladder: launcher manifest → crowd mapping → PE metadata → user confirm → unresolved-but-tracked |
-| Coverage source | maintainer effort | the user's installed library + other users' confirmations |
+| Catalogue | 25 hand-mapped exes, `include_str!` into the binary | ~2,000 curated games (154KB) + a 137k-entry appid→igdb_id index (537KB), both bundled |
+| Identity | exact case-insensitive exe basename | resolution ladder: curated exe table → installed library → user confirm → tracked provisionally |
+| Coverage source | maintainer effort | the user's installed library, plus curation driven by what actually goes unresolved |
 | Unknown game | ignored until manually tracked | **always recorded**, named/iconed as best we can, identity backfilled later |
 | Concurrency | one game at a time | a set of active sessions |
 | Session start | first scan that saw the process | real process creation time, persisted across client restarts |
-| Icons/colors | 24 PNGs embedded at compile time, hand-picked hex colors | **the exe's own icon first** (local, instant, what the user recognises), then crew-shared / SteamGridDB / cover; colors derived at ingest |
+| Icons/colors | 24 PNGs embedded at compile time, hand-picked hex colors | **the exe's own icon first** (local, instant, what the user recognises), then crew-shared, then a derived badge |
 
 ### Locked decisions
 
@@ -30,9 +30,9 @@ That is not a bigger `games.json`. It is a different system:
 | Head coverage | **Curated exe mappings** for the popular non-Steam titles | Launcher-independent; ~50 entries buys the whole top-50 (§2.3) |
 | Tail coverage | **Full scan** of installed launcher manifests, Steam first | Exact `install_path → igdb_id` before anything runs; kills exe-name guessing at scale |
 | IGDB access | **Data dumps**, not the live API | Daily CSVs, 469MB, fetched in <60s. The live API is capped at 4 req/s — a full backfill would take ~a day and any re-derivation would be a multi-day job |
-| Catalogue location | **Split: head bundled, index fetched, metadata lazy** (§2.2) | Installer grows ~57KB against an install already 2MB over budget. Identity still resolves offline; only display names need the network, once per game |
-| Backend role | Ingestion, index hosting, lazy metadata, crowd mappings, asset proxy | Catalogue delivery is decoupled from app releases — no updater involvement, survives replacing Velopack |
-| Crowd mappings | **Shared server table**, threshold-promoted | Coverage compounds with users, not with maintenance |
+| Catalogue location | **Both artifacts bundled** (§2.2) | 701KB total against an install already 2MB over budget. Every game resolves offline from first launch, with no delivery path to build or operate |
+| Backend role | Cover-art proxy only | Identity is entirely client-side, so the backend is off the detection path altogether |
+| Unnamed games | **Log locally, curate by hand** | An unresolved game already gets a session, a stable id, a name and an icon — only the display name varies between users. A shared submission table buys that one thing for a moderation burden and a way for one person to mislabel a game for every crew. |
 | Unresolved games | **Tracked anyway** | "ALL games they play we know about" — never drop a session for lack of a name |
 | Telemetry (spec 18) | **Unchanged** | Adapters key on `game_id`; v2 preserves those ids |
 
@@ -88,25 +88,19 @@ That splits cleanly into three tiers:
 | Tier | Contents | Size | Delivery |
 |---|---|---|---|
 | **Curated head** | ~2,000 most-played games: name, slug, cover hash, short name, accent colour | **57 KB gz** | bundled in the binary (`include_bytes!`) — metadata only, no images |
-| **Identity index** | `steam_appid → igdb_id` for **all 134,989** | **399 KB gz** → 1.03 MB on disk, mmap'd | downloaded from the backend, refreshed on version change |
-| **Metadata** | name + cover for anything outside the head | a few hundred bytes each | lazy per-game on first sight, cached to disk forever |
+| **Identity index** | `steam_appid → igdb_id` for **all 137,344** | **537 KB** delta-encoded | bundled; expanded to searchable pairs at load |
 
-**Installer grows by ~57 KB.** The 1.03MB index is fetched at runtime, so it never
-enters the installer at all. Measured encodings for tier 2:
+**Installer grows by ~701 KB** — both artifacts, no download path.
 
-| Encoding | On disk | Transferred |
-|---|---|---|
-| Flat `(u32, u32)` pairs | 1.03 MB | 602 KB gz |
-| **Delta + varint** | 528 KB | **399 KB gz** |
+Delta encoding is what makes bundling the index affordable: appids sorted
+ascending have small gaps, so `(delta, igdb_id)` as varints costs 537 KB against
+1.07 MB flat. The client expands it to sorted `(u32, u32)` pairs once at load,
+which is what binary search needs; decoding 137k varints is sub-millisecond.
 
-Ship the delta form over the wire, expand to the flat form on disk so it stays
-binary-searchable in place under `mmap` — resident cost is page cache only.
-
-**What the tail costs.** A game in the index but not the head resolves to the
-correct igdb_id *instantly and offline*, so the session and stats keys are right
-even with no network. Only the display name and cover need one lazy fetch, cached
-permanently. A game in neither falls through to rungs 3–5 of §5.2, exactly as
-before. Nothing about "we know every game they play" weakens.
+An earlier draft had the index fetched from the backend to keep the installer
+lean. At half a megabyte that trade stopped making sense: shipping it removes a
+delivery path to build and operate, and removes the network from identity
+resolution entirely.
 
 Full-metadata alternatives, for the record — all rejected against the 102MB
 reality: everything (5.2 MB gz), popularity > 0 / 16,933 games (517 KB), top
@@ -172,8 +166,7 @@ people actually play.
 ## 3. Architecture
 
 Identity resolution is **entirely local**. The network is only involved for things
-that must be live: crowd mappings, cover images, and games newer than the shipped
-catalogue.
+that must be live: cover images. Identity resolves entirely on the client.
 
 ```
 ┌──────────────────────────── CLIENT ─────────────────────────────┐
@@ -202,7 +195,7 @@ catalogue.
 │                        NAKAMA BACKEND                           │
 │  ingestion job ──▶ head.bin (repo) + appid_index.bin (served)   │
 │  game_meta (lazy name/cover)  ·  game_asset proxy (covers)      │
-│  exe_mappings (crowd, live)   ·  game_resolve fallback          │
+│                                                                 │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -220,8 +213,7 @@ Nakama Go modules already receive `db *sql.DB` on every RPC, so custom tables li
 the same Postgres instance. No new infrastructure.
 
 The backend does **not** serve identity lookups — the client already has the answer
-locally. Its three jobs are: build the shipped artifact, host the live crowd
-mappings, and proxy cover images.
+locally. Its jobs are: build the shipped artifacts, and proxy cover images.
 
 ### 4.1 Ingestion
 
@@ -314,26 +306,17 @@ CREATE TABLE external_id_index (        -- the golden key
     PRIMARY KEY (platform, external_id)
 );
 
-CREATE TABLE exe_mappings (             -- crowd + curated
-    exe_name       TEXT NOT NULL,       -- lowercased basename
-    path_shape     TEXT NOT NULL,       -- normalized parent-dir signature, '' = any
-    igdb_id        BIGINT NOT NULL REFERENCES game_catalog,
-    source         TEXT NOT NULL,       -- 'curated' | 'crowd'
-    confirmations  INT NOT NULL DEFAULT 0,
-    rejections     INT NOT NULL DEFAULT 0,
-    status         TEXT NOT NULL,       -- 'active' | 'pending' | 'blocked'
-    PRIMARY KEY (exe_name, path_shape)
-);
 ```
 
 `path_shape` prevents a generic basename from claiming every install: `javaw.exe`
 under `…/steamapps/common/Minecraft/` is Minecraft, `javaw.exe` under
-`…/Program Files/Eclipse/` is not. Curated rows always win over crowd rows.
+`…/Program Files/Eclipse/` is not.
 
-**Abuse handling:** crowd rows land as `pending` and need N distinct-user
-confirmations (start at N=3) before promotion to `active`. A row whose rejections
-outweigh confirmations flips to `blocked`. Curated overrides are the escape hatch.
-Rate-limit submissions per user.
+**How the list grows.** The client records executables it could not name into a
+local tally (`unresolved_games.json`, picked up by the diagnostic capture
+bundle). Frequent entries are curated by hand into `exe_mappings.json`, so the
+list grows from evidence rather than guesses — and a wrong row is caught by a
+human before it reaches anyone, rather than after.
 
 ### 4.5 RPCs
 
@@ -343,8 +326,6 @@ All four are **off the hot path** — a game starting resolves locally against
 | RPC | Purpose | Called when |
 |---|---|---|
 | `game_asset` | Cover proxy: `(igdb_id, size)` → PNG, cached server-side. Clients never hit the IGDB CDN directly. | first time a game's art is displayed |
-| `exe_mappings_sync` | Delta-fetch `active` crowd rows since a cursor. Keeps the local mapping cache current between catalogue releases. | periodically, background |
-| `game_mapping_submit` | A user's confirm/reject of an exe→game mapping. Feeds `exe_mappings`. | user taps TRACK or "not this game" |
 | `game_resolve` | Fallback for a launcher id absent from the shipped artifact — i.e. a game released since the last catalogue build. Also serves fuzzy name search for the PE-metadata rung. | library scan finds an unknown appid |
 
 `game_resolve` is a genuine fallback, not the workhorse it was in the previous
@@ -411,7 +392,7 @@ First hit wins:
 
 0. **Curated exe mapping** — the ~50 hand-mapped popular non-Steam titles (§2.4). Checked first precisely *because* it is launcher-independent: it catches Hearthstone whether it came from Battle.net, and League whether the Riot client installed it to a non-standard drive. Exact, tiny, shipped in the artifact.
 1. **Library index → `catalogue.bin`** — process path has a prefix in the index → Steam appid (or other launcher id) → binary-search the resident appid index → name, cover hash, slug. Exact, offline, sub-millisecond, and handles a game's many shipping executables for free. This is the **tail** mechanism: 133k Steam titles at zero per-game cost.
-2. **Crowd exe mapping cache** — local copy of `active` crowd rows, synced in the background.
+2. *(removed — see the note on unnamed games in §1.)*
 3. **PE version metadata** — `FileDescription` / `ProductName` from the exe → `game_resolve` fuzzy search → auto-accept on a confident single match. Measurement supports leaning on this: only 1.98% of PC game names are ambiguous, and 16 of the top 5,000.
 4. **User confirm** — the existing one-tap prompt ([callbacks/games.rs:76](../client/src/callbacks/games.rs)), now offering ranked candidates instead of just the exe's own name. Confirmation submits to `game_mapping_submit`.
 5. **Unresolved-but-tracked** — the session is recorded regardless, under a provisional local id, named from PE metadata or window title, iconed from the extracted exe icon — which under §8.2 is the *primary* icon source anyway, so an unresolved game looks no worse than a resolved one.
@@ -568,7 +549,7 @@ surface, and getting it wrong is a trust problem, not a bug. Requirements:
 - **First-run consent**, separate for (a) library scanning and (b) sharing sessions with crews. Sensing works with either disabled.
 - **Per-game hide** — excluded from presence, feed, and ledger; still counted in your own private stats. Discoverable from the game's own card, not buried in settings.
 - **Invisible session** — a global "don't share what I'm playing right now" toggle.
-- **Data minimization** — the library index never leaves the device. Resolution sends platform ids, not paths. Crowd mapping submissions send `exe_name` + a normalized `path_shape`, never a full user path (which can contain a username).
+- **Data minimization** — the library index never leaves the device. Resolution sends platform ids, not paths. The unresolved-game tally stays on disk and records only the executable name and its install folder's leaf name — never a full path, which would carry the user's home directory into a file we ask people to send us.
 
 ---
 
@@ -586,7 +567,7 @@ found it. Named, not numbered — the ordering matters, the numbering does not.
 | **Sensor rewrite** | Classifier, unresolved-but-tracked, event-driven detection | "ALL games we know about" becomes true |
 | **Assets** | Exe-icon-first ladder (§8.2), 256px extraction, macOS `.app` icons, canonical crew icon, drop the embedded PNG set | Every game looks right — including ones the catalogue has never heard of |
 | **Surfaces** | Nightly session rollup card, co-play correlation, T0 stats in recap/profile | The crew-feel payoff |
-| **Long tail** | Epic/GOG/Xbox/Battle.net/Riot scanners; crowd mappings with promotion thresholds and review queue | Better install paths and display names; then coverage compounds on its own |
+| **Long tail** | Epic/GOG scanners; unresolved-game logging feeding hand curation | Better install paths and display names; the curated list grows from evidence rather than guesses |
 | **Spec consolidation** | Rewrite specs 16–19 to describe what was actually built, and split them along the layer boundary (§13) | Cold AI sessions read one correct spec per concern instead of three overlapping drafts |
 
 **Curating the head before scanning the tail is the correction from §2.3.** Curated mappings cover the
@@ -626,7 +607,6 @@ happened," and no competitor has those signals to work with.
 | Data Partner access lapses | The artifact is built from dumps but *shipped* to clients — an access gap degrades freshness, not function. Existing installs keep working. |
 | Classifier false positives prompt users about non-games | Prompting is gated hard (denylists + engine fingerprints + debounce); tracking is not gated, so a wrong classification costs a card, not a prompt |
 | Library scan I/O on slow disks | Background thread, post-auth, cached with mtime invalidation; never on the <3s startup path |
-| Crowd mapping poisoning | Distinct-user thresholds, curated override, rate limits, `blocked` state |
 | Install-size budget (already 2MB over) | Installer grows ~57KB, not 5.8MB (§2.3). The 1MB index is fetched at runtime. The assets step *reclaims* space by deleting the embedded PNG set. The 86MB `mello.exe` is a separate problem this plan does not create or solve. |
 | Catalogue staleness | The index is version-checked on startup and refreshed independently of app releases; `game_resolve` covers anything newer still. A miss is a round-trip, not a failure. |
 | macOS launcher coverage is thinner than Windows | Bundle-id scanning of `/Applications` compensates: a stable `CFBundleIdentifier` is a better key than an exe name, and needs no launcher manifest |

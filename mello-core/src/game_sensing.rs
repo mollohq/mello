@@ -731,6 +731,27 @@ fn has_engine_marker(exe_path: &std::path::Path) -> bool {
     found
 }
 
+/// Tally an unresolved game once per executable per run.
+///
+/// These are the rows worth curating into `scripts/exe_mappings.json`, and
+/// this is how we learn which ones actually matter rather than guessing. Once
+/// per run because the sensor re-resolves the same process every scan.
+fn note_unresolved(exe: &str, exe_path: &str, name: &str) {
+    use std::sync::Mutex;
+    static SEEN: Mutex<Option<HashSet<String>>> = Mutex::new(None);
+
+    let key = exe.to_lowercase();
+    let first_time = match SEEN.lock() {
+        Ok(mut guard) => guard.get_or_insert_with(HashSet::new).insert(key),
+        Err(_) => false,
+    };
+    if !first_time {
+        return;
+    }
+    log::info!("[game-sensor] unresolved game: {exe} ({name}) — tracked provisionally");
+    crate::unresolved::record(exe, exe_path, name, now_ms());
+}
+
 /// Stable id for a game no rung could name.
 ///
 /// Derived from the executable so two crew members running the same unknown
@@ -862,6 +883,7 @@ fn resolve_process(
     // the user confirms.
     if !db.is_dismissed(&p.exe) && looks_like_a_game(p) {
         let name = provisional_name(p);
+        note_unresolved(&p.exe, &p.path, &name);
         return Some(Matched {
             game_id: provisional_game_id(&p.exe),
             short_name: crate::library::derive_short_name(&name),
