@@ -61,30 +61,15 @@ pub fn load_cached_icon_rgba(game_id: &str) -> Option<(Vec<u8>, u32, u32)> {
     Some((img.into_raw(), w, h))
 }
 
-/// PNG bytes for the crew-shared upload, downscaled to 128px.
+/// PNG bytes of a cached icon, for the crew-shared upload.
 ///
-/// The disk cache keeps the full 256px rendition for HiDPI cards, but a 256px
-/// PNG runs ~84KB and the backend caps a shared icon at 48KB. Crew-shared
-/// copies are only ever drawn small, so the wire copy is re-encoded rather than
-/// the limit raised — that keeps every existing client working and needs no
-/// backend deploy.
-pub const SHARED_ICON_PX: u32 = 128;
-
+/// Shared at full resolution. A crewmate viewing a game they do not own should
+/// see the same icon as the person who owns it, including on a HiDPI display —
+/// the backend cap is sized for 256px rather than the icon being shrunk to fit
+/// it. Keep `gameIconMaxBytes` in `backend/.../game_icons.go` in step with the
+/// extraction size.
 pub fn cached_icon_png_bytes(game_id: &str) -> Option<Vec<u8>> {
-    let path = cached_icon_path(game_id)?;
-    let img = image::open(&path).ok()?;
-    let small = if img.width() > SHARED_ICON_PX || img.height() > SHARED_ICON_PX {
-        img.resize(
-            SHARED_ICON_PX,
-            SHARED_ICON_PX,
-            image::imageops::FilterType::Lanczos3,
-        )
-    } else {
-        img
-    };
-    let mut out = std::io::Cursor::new(Vec::new());
-    small.write_to(&mut out, image::ImageFormat::Png).ok()?;
-    Some(out.into_inner())
+    std::fs::read(cached_icon_path(game_id)?).ok()
 }
 
 /// Store PNG bytes fetched from the backend into the local cache. Validates
@@ -351,13 +336,13 @@ pub fn icon_is_representative(exe_path: &str) -> bool {
 mod tests {
     use super::*;
 
-    /// The backend caps a shared icon at 48KB (`gameIconMaxBytes`). Extraction
-    /// moved to 256px, which produces ~84KB and silently broke every crew
-    /// upload with "icon too large". The wire copy is downscaled to keep it
-    /// under the cap while the disk cache stays sharp.
+    /// The shared copy is the full 256px icon, so the backend cap must be big
+    /// enough for the worst one. Extraction moved to 256px against a 48KB cap
+    /// and silently broke every crew upload with "icon too large"; this pins
+    /// the two sides together. Keep it in step with `gameIconMaxBytes`.
     #[test]
-    fn the_shared_copy_fits_the_backend_limit() {
-        const BACKEND_LIMIT: usize = 48 * 1024;
+    fn a_worst_case_256px_icon_fits_the_backend_limit() {
+        const BACKEND_LIMIT: usize = 256 * 1024;
 
         // A 256px icon of the worst kind: full-colour noise, which is the
         // least compressible thing a real icon can be.
@@ -372,26 +357,21 @@ mod tests {
         }
         let dyn_img = image::DynamicImage::ImageRgba8(img);
 
-        let mut full = std::io::Cursor::new(Vec::new());
-        dyn_img
-            .write_to(&mut full, image::ImageFormat::Png)
-            .unwrap();
-        assert!(
-            full.get_ref().len() > BACKEND_LIMIT,
-            "the 256px original should exceed the cap, else this test proves nothing"
-        );
-
-        let small = dyn_img.resize(
-            SHARED_ICON_PX,
-            SHARED_ICON_PX,
-            image::imageops::FilterType::Lanczos3,
-        );
         let mut wire = std::io::Cursor::new(Vec::new());
-        small.write_to(&mut wire, image::ImageFormat::Png).unwrap();
+        dyn_img
+            .write_to(&mut wire, image::ImageFormat::Png)
+            .unwrap();
+        let size = wire.get_ref().len();
+
         assert!(
-            wire.get_ref().len() <= BACKEND_LIMIT,
-            "shared copy is {} bytes, over the {BACKEND_LIMIT} cap",
-            wire.get_ref().len()
+            size <= BACKEND_LIMIT,
+            "a worst-case 256px icon is {size} bytes, over the {BACKEND_LIMIT} cap"
+        );
+        // Noise is the least compressible thing a real icon can be, so a real
+        // one is smaller. Assert genuine headroom, not a near miss.
+        assert!(
+            size * 2 <= BACKEND_LIMIT,
+            "only {size} bytes against a {BACKEND_LIMIT} cap leaves no margin"
         );
     }
 
