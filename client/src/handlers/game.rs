@@ -40,6 +40,10 @@ pub fn handle(ctx: &AppContext, event: Event) {
             // taskbar. Every detected game gets one, not just custom-confirmed
             // ones, which is what gives unresolved games first-class art.
             crate::game_icons::ensure_icon(ctx, &game_id_for_icon, &exe_path);
+            // Already cached from an earlier session: show it immediately.
+            // A first-ever launch has nothing yet, and extract_and_cache
+            // pushes it in when extraction finishes a moment later.
+            crate::game_icons::push_bar_icon(ctx, &game_id_for_icon);
         }
         Event::GameEnded {
             game_id,
@@ -65,6 +69,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
         }
         Event::PostGameTimeout => {
             log::info!("[ui] post-game timeout");
+            ctx.app.set_game_has_runtime_icon(false);
             ctx.app.set_game_active(false);
             ctx.app.set_can_stream(false);
             ctx.app.set_game_summary("".into());

@@ -105,6 +105,7 @@ pub fn wire(ctx: &AppContext) {
                 icon_cache.clone(),
                 cmd.clone(),
                 rt.clone(),
+                app_weak.clone(),
                 game.id.clone(),
                 path,
             );

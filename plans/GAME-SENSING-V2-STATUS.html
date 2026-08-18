@@ -1,0 +1,314 @@
+<title>Game Sensing v2</title>
+<style>
+  :root{
+    --ground:#F6F7F9; --raised:#FFFFFF; --sunken:#EDEFF3;
+    --ink:#1A1D23; --ink-soft:#4A515C; --ink-faint:#79818E;
+    --rule:#DDE1E8; --rule-soft:#E7EAEF;
+    --copper:#A84A31; --copper-soft:#F3E4DF; --copper-line:#D9B4A8;
+    --teal:#2F6D7D; --teal-soft:#DDEBEE; --teal-line:#A7CAD3;
+    --shadow:0 1px 2px rgba(20,23,28,.05),0 8px 24px -12px rgba(20,23,28,.14);
+  }
+  @media (prefers-color-scheme:dark){
+    :root:not([data-theme="light"]){
+      --ground:#14171C; --raised:#1B1F26; --sunken:#101317;
+      --ink:#E6E9EF; --ink-soft:#A8B0BC; --ink-faint:#78818F;
+      --rule:#2B313A; --rule-soft:#232932;
+      --copper:#D98467; --copper-soft:#33231D; --copper-line:#6B4335;
+      --teal:#6FB3C4; --teal-soft:#17282D; --teal-line:#3A5C66;
+      --shadow:0 1px 2px rgba(0,0,0,.4),0 10px 28px -14px rgba(0,0,0,.6);
+    }
+  }
+  :root[data-theme="dark"]{
+    --ground:#14171C; --raised:#1B1F26; --sunken:#101317;
+    --ink:#E6E9EF; --ink-soft:#A8B0BC; --ink-faint:#78818F;
+    --rule:#2B313A; --rule-soft:#232932;
+    --copper:#D98467; --copper-soft:#33231D; --copper-line:#6B4335;
+    --teal:#6FB3C4; --teal-soft:#17282D; --teal-line:#3A5C66;
+    --shadow:0 1px 2px rgba(0,0,0,.4),0 10px 28px -14px rgba(0,0,0,.6);
+  }
+
+  *{box-sizing:border-box}
+  body{
+    background:var(--ground); color:var(--ink);
+    font:16px/1.62 -apple-system,"Segoe UI",Roboto,system-ui,sans-serif;
+    margin:0; padding:0 24px 96px;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:1080px;margin:0 auto}
+  .prose{max-width:68ch}
+
+  h1,h2,h3{font-family:Georgia,"Iowan Old Style",ui-serif,serif;font-weight:600;text-wrap:balance;margin:0}
+  h1{font-size:clamp(2.1rem,4.6vw,3rem);line-height:1.08;letter-spacing:-.015em}
+  h2{font-size:1.6rem;line-height:1.2;margin:0 0 .5rem}
+  h3{font-size:1.075rem;line-height:1.3;margin:0 0 .35rem}
+  p{margin:0 0 1rem}
+  code,.mono{font-family:ui-monospace,"Cascadia Code",Consolas,monospace;font-size:.885em}
+  code{background:var(--sunken);border:1px solid var(--rule-soft);border-radius:4px;padding:.08em .34em}
+
+  .eyebrow{
+    font-family:ui-monospace,"Cascadia Code",Consolas,monospace;
+    font-size:.7rem;letter-spacing:.14em;text-transform:uppercase;
+    color:var(--ink-faint);margin:0 0 .75rem
+  }
+
+  header{padding:72px 0 40px;border-bottom:1px solid var(--rule)}
+  .lede{font-size:1.16rem;line-height:1.55;color:var(--ink-soft);max-width:60ch;margin:1.1rem 0 0}
+
+  .stats{display:flex;flex-wrap:wrap;gap:0;margin:36px 0 0;border:1px solid var(--rule);border-radius:10px;background:var(--raised);box-shadow:var(--shadow);overflow:hidden}
+  .stat{flex:1 1 150px;padding:16px 20px;border-right:1px solid var(--rule-soft)}
+  .stat:last-child{border-right:0}
+  .stat b{display:block;font-family:ui-monospace,"Cascadia Code",Consolas,monospace;font-size:1.45rem;font-variant-numeric:tabular-nums;letter-spacing:-.02em}
+  .stat span{display:block;font-size:.735rem;letter-spacing:.07em;text-transform:uppercase;color:var(--ink-faint);margin-top:3px}
+
+  section{padding:52px 0 0}
+  .fig{margin:28px 0;padding:24px;background:var(--raised);border:1px solid var(--rule);border-radius:10px;overflow-x:auto;box-shadow:var(--shadow)}
+  .fig svg{display:block;min-width:680px;width:100%;height:auto}
+  .cap{font-size:.83rem;color:var(--ink-faint);margin:14px 0 0;max-width:64ch}
+
+  table{width:100%;border-collapse:collapse;margin:20px 0;font-size:.92rem}
+  th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--rule-soft);vertical-align:top}
+  th{font-size:.71rem;letter-spacing:.09em;text-transform:uppercase;color:var(--ink-faint);font-weight:600;border-bottom:1px solid var(--rule)}
+  .scroll{overflow-x:auto}
+
+  .pill{display:inline-block;font-family:ui-monospace,Consolas,monospace;font-size:.7rem;letter-spacing:.05em;padding:.16em .55em;border-radius:20px;white-space:nowrap}
+  .done{background:var(--teal-soft);color:var(--teal);border:1px solid var(--teal-line)}
+  .open{background:var(--copper-soft);color:var(--copper);border:1px solid var(--copper-line)}
+
+  .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(258px,1fr));gap:14px;margin:22px 0}
+  .card{padding:18px;background:var(--raised);border:1px solid var(--rule);border-radius:10px}
+  .card h3{margin-bottom:.3rem}
+  .card p{font-size:.9rem;color:var(--ink-soft);margin:0}
+
+  .note{border-left:3px solid var(--copper);background:var(--raised);padding:16px 20px;border-radius:0 8px 8px 0;margin:22px 0}
+  .note p:last-child{margin:0}
+  .note strong{color:var(--copper)}
+
+  ol.steps{list-style:none;counter-reset:s;padding:0;margin:22px 0}
+  ol.steps li{counter-increment:s;position:relative;padding:0 0 20px 46px;border-left:1px solid var(--rule);margin-left:13px}
+  ol.steps li:last-child{border-left-color:transparent;padding-bottom:0}
+  ol.steps li::before{
+    content:counter(s);position:absolute;left:-13px;top:-2px;width:26px;height:26px;border-radius:50%;
+    background:var(--raised);border:1px solid var(--rule);color:var(--ink-faint);
+    font-family:ui-monospace,Consolas,monospace;font-size:.76rem;display:grid;place-items:center
+  }
+  ol.steps h3{margin-bottom:.2rem}
+  ol.steps p{font-size:.92rem;color:var(--ink-soft);margin:0}
+
+  ul.tight{margin:0 0 1rem;padding-left:1.15rem;max-width:68ch}
+  ul.tight li{margin-bottom:.5rem}
+
+  footer{margin-top:64px;padding-top:24px;border-top:1px solid var(--rule);font-size:.85rem;color:var(--ink-faint)}
+  @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+
+<div class="wrap">
+
+<header>
+  <p class="eyebrow">m3llo &middot; branch feat/gamesense-v2 &middot; not pushed</p>
+  <h1>Game Sensing v2</h1>
+  <p class="lede">Detection changed from &ldquo;is this one of my 25 games?&rdquo; to &ldquo;is this a game, and which one?&rdquo; Every game a person runs now makes a session with an honest duration, a real name, and an icon they recognise.</p>
+
+  <div class="stats">
+    <div class="stat"><b>13</b><span>commits</span></div>
+    <div class="stat"><b>+5,698</b><span>lines added</span></div>
+    <div class="stat"><b>&minus;1,133</b><span>lines removed</span></div>
+    <div class="stat"><b>335</b><span>tests pass</span></div>
+    <div class="stat"><b>701 KB</b><span>added to installer</span></div>
+  </div>
+</header>
+
+<section>
+  <p class="eyebrow">01 &mdash; The core change</p>
+  <h2>Identity comes from the install path, not the file name</h2>
+  <div class="prose">
+    <p>v1 compared executable names against a list of 25 games. The list could not grow quickly enough. It also made errors it could not detect: it mapped <code>javaw.exe</code> to Minecraft, so every Java application on the machine reported as Minecraft.</p>
+    <p>v2 asks the launcher. Steam records that appid 730 is in <code>&hellip;/steamapps/common/Counter-Strike Global Offensive</code>. Any process below that directory is that game. This includes every shipping binary, launcher and helper, with no entry per game. Name ambiguity becomes impossible on that rung.</p>
+  </div>
+
+  <div class="fig">
+    <svg viewBox="0 0 900 400" role="img" aria-label="The resolution ladder: four rungs, from curated mappings down to provisional tracking">
+      <defs>
+        <marker id="ar" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+          <path d="M0,0 L8,4 L0,8 Z" fill="var(--ink-faint)"/>
+        </marker>
+      </defs>
+      <text x="0" y="14" font-family="ui-monospace,Consolas,monospace" font-size="11" letter-spacing="1.4" fill="var(--ink-faint)">A RUNNING PROCESS</text>
+
+      <rect x="0" y="30" width="600" height="66" rx="8" fill="var(--teal-soft)" stroke="var(--teal)" stroke-width="1.5"/>
+      <text x="18" y="53" font-family="ui-monospace,Consolas,monospace" font-size="11" fill="var(--teal)">RUNG 0 &#183; CURATED EXE TABLE</text>
+      <text x="18" y="74" font-family="Georgia,serif" font-size="15" fill="var(--ink)">54 games, 66 executables &mdash; independent of launcher</text>
+      <text x="18" y="90" font-size="12" fill="var(--ink-soft)">Finds Hearthstone on Battle.net, League on Riot, Fortnite on Epic</text>
+      <text x="620" y="62" font-family="ui-monospace,Consolas,monospace" font-size="12" fill="var(--teal)">counter-strike-2</text>
+      <text x="620" y="80" font-size="11" fill="var(--ink-faint)">stable id, igdb_id, cover</text>
+
+      <rect x="0" y="108" width="600" height="66" rx="8" fill="var(--teal-soft)" stroke="var(--teal)" stroke-width="1.5"/>
+      <text x="18" y="131" font-family="ui-monospace,Consolas,monospace" font-size="11" fill="var(--teal)">RUNG 1 &#183; INSTALLED LIBRARY (STEAM, EPIC, GOG)</text>
+      <text x="18" y="152" font-family="Georgia,serif" font-size="15" fill="var(--ink)">137,344 games, found by install path</text>
+      <text x="18" y="168" font-size="12" fill="var(--ink-soft)">Steam appid becomes an IGDB id through the bundled index, offline</text>
+      <text x="620" y="140" font-family="ui-monospace,Consolas,monospace" font-size="12" fill="var(--teal)">hades--1</text>
+      <text x="620" y="158" font-size="11" fill="var(--ink-faint)">upgraded from steam-1145360</text>
+
+      <rect x="0" y="186" width="600" height="58" rx="8" fill="var(--raised)" stroke="var(--rule)" stroke-width="1.5"/>
+      <text x="18" y="208" font-family="ui-monospace,Consolas,monospace" font-size="11" fill="var(--ink-faint)">RUNG 2 &#183; THE PERSON CONFIRMED IT</text>
+      <text x="18" y="230" font-family="Georgia,serif" font-size="15" fill="var(--ink)">One tap on the &ldquo;is this a game?&rdquo; prompt</text>
+      <text x="620" y="220" font-family="ui-monospace,Consolas,monospace" font-size="12" fill="var(--ink-soft)">custom-night-stones</text>
+
+      <rect x="0" y="256" width="600" height="76" rx="8" fill="var(--copper-soft)" stroke="var(--copper)" stroke-width="1.5"/>
+      <text x="18" y="279" font-family="ui-monospace,Consolas,monospace" font-size="11" fill="var(--copper)">RUNG 3 &#183; TRACKED ANYWAY</text>
+      <text x="18" y="300" font-family="Georgia,serif" font-size="15" fill="var(--ink)">Looks like a game build, but nothing can name it</text>
+      <text x="18" y="316" font-size="12" fill="var(--ink-soft)">An Unreal binary, or fullscreen, or beside Unity files</text>
+      <text x="620" y="288" font-family="ui-monospace,Consolas,monospace" font-size="12" fill="var(--copper)">local-night-stones</text>
+      <text x="620" y="306" font-size="11" fill="var(--ink-faint)">name from the window title</text>
+      <text x="620" y="322" font-size="11" fill="var(--ink-faint)">icon from the .exe</text>
+
+      <path d="M300,96 L300,106" stroke="var(--ink-faint)" stroke-width="1.2" marker-end="url(#ar)"/>
+      <path d="M300,174 L300,184" stroke="var(--ink-faint)" stroke-width="1.2" marker-end="url(#ar)"/>
+      <path d="M300,244 L300,254" stroke="var(--ink-faint)" stroke-width="1.2" marker-end="url(#ar)"/>
+
+      <rect x="0" y="352" width="900" height="40" rx="8" fill="var(--sunken)" stroke="var(--rule-soft)"/>
+      <text x="18" y="377" font-size="13" fill="var(--ink-soft)">There is no &ldquo;not detected&rdquo; result. Every rung makes a session. Only the confidence in the name changes.</text>
+    </svg>
+    <p class="cap">The first match wins. The curated table is checked before the library scan because it holds the stable <code>game_id</code> that telemetry and stored statistics use as their key. To resolve CS2 as <code>steam-730</code> would orphan them.</p>
+  </div>
+</section>
+
+<section>
+  <p class="eyebrow">02 &mdash; Where this sits</p>
+  <h2>Four specs, one pipeline, one direction</h2>
+  <div class="prose">
+    <p>Specs 16 to 19 describe one pipeline. They were easy to confuse. Each one now answers a single question, and data moves in one direction. The rule is short: <strong>if it renders, it belongs to spec 19. If it detects or records, it belongs to 16, 17 or 18.</strong></p>
+  </div>
+
+  <div class="fig">
+    <svg viewBox="0 0 900 330" role="img" aria-label="Layer map: sense, then record, then present">
+      <text x="0" y="12" font-family="ui-monospace,Consolas,monospace" font-size="10.5" letter-spacing="1.4" fill="var(--ink-faint)">SENSE &mdash; MAKE THE FACTS</text>
+      <rect x="0" y="22" width="300" height="72" rx="8" fill="var(--raised)" stroke="var(--teal)" stroke-width="1.5"/>
+      <text x="16" y="46" font-family="Georgia,serif" font-size="15" fill="var(--ink)">Spec 17 &#183; Game Sensing</text>
+      <text x="16" y="66" font-size="12.5" fill="var(--ink-soft)">Which game, and for how long?</text>
+      <text x="16" y="85" font-family="ui-monospace,Consolas,monospace" font-size="10.5" fill="var(--teal)">REBUILT</text>
+
+      <rect x="330" y="22" width="300" height="72" rx="8" fill="var(--raised)" stroke="var(--rule)" stroke-width="1.5"/>
+      <text x="346" y="46" font-family="Georgia,serif" font-size="15" fill="var(--ink)">Spec 18 &#183; Game Telemetry</text>
+      <text x="346" y="66" font-size="12.5" fill="var(--ink-soft)">How did it go? Nine adapters.</text>
+      <text x="346" y="85" font-family="ui-monospace,Consolas,monospace" font-size="10.5" fill="var(--ink-faint)">NOT CHANGED</text>
+
+      <rect x="660" y="22" width="240" height="72" rx="8" fill="var(--sunken)" stroke="var(--rule-soft)" stroke-width="1.5" stroke-dasharray="4 3"/>
+      <text x="676" y="46" font-family="Georgia,serif" font-size="15" fill="var(--ink)">Spec 11 &#183; Presence</text>
+      <text x="676" y="66" font-size="12.5" fill="var(--ink-soft)">Live. Never stored.</text>
+      <text x="676" y="85" font-family="ui-monospace,Consolas,monospace" font-size="10.5" fill="var(--teal)">NOW PUBLISHED</text>
+
+      <path d="M300,58 L328,58" stroke="var(--ink-faint)" stroke-width="1.2" marker-end="url(#ar)"/>
+      <path d="M630,58 L658,58" stroke="var(--ink-faint)" stroke-width="1.2" marker-end="url(#ar)"/>
+      <path d="M150,94 L150,134" stroke="var(--ink-faint)" stroke-width="1.2" marker-end="url(#ar)"/>
+      <text x="162" y="120" font-family="ui-monospace,Consolas,monospace" font-size="10.5" fill="var(--ink-faint)">one game_session at each session end</text>
+
+      <text x="0" y="154" font-family="ui-monospace,Consolas,monospace" font-size="10.5" letter-spacing="1.4" fill="var(--ink-faint)">RECORD &mdash; MAKE IT DURABLE</text>
+      <rect x="0" y="164" width="430" height="74" rx="8" fill="var(--raised)" stroke="var(--rule)" stroke-width="1.5"/>
+      <text x="16" y="188" font-family="Georgia,serif" font-size="15" fill="var(--ink)">Spec 16 &#183; Crew Event Ledger</text>
+      <text x="16" y="207" font-size="12.5" fill="var(--ink-soft)">Shared. Seven days. One per crew.</text>
+      <text x="16" y="227" font-family="ui-monospace,Consolas,monospace" font-size="10.5" fill="var(--ink-faint)">+ igdb_id   + active_min   + real player_ids</text>
+
+      <rect x="460" y="164" width="440" height="74" rx="8" fill="var(--raised)" stroke="var(--rule)" stroke-width="1.5"/>
+      <text x="476" y="188" font-family="Georgia,serif" font-size="15" fill="var(--ink)">user_game_stats</text>
+      <text x="476" y="207" font-size="12.5" fill="var(--ink-soft)">Private. Kept forever. One per person.</text>
+      <text x="476" y="227" font-family="ui-monospace,Consolas,monospace" font-size="10.5" fill="var(--ink-faint)">only streak_after enters the public ledger</text>
+
+      <path d="M215,238 L215,268" stroke="var(--ink-faint)" stroke-width="1.2" marker-end="url(#ar)"/>
+      <path d="M680,238 L680,268" stroke="var(--ink-faint)" stroke-width="1.2" marker-end="url(#ar)"/>
+
+      <text x="0" y="288" font-family="ui-monospace,Consolas,monospace" font-size="10.5" letter-spacing="1.4" fill="var(--ink-faint)">PRESENT &mdash; DECIDE WHAT TO SHOW</text>
+      <rect x="0" y="296" width="900" height="34" rx="8" fill="var(--copper-soft)" stroke="var(--copper)" stroke-width="1.5"/>
+      <text x="16" y="318" font-family="Georgia,serif" font-size="14.5" fill="var(--ink)">Spec 19 &#183; Feed Curation and Personal Stats &mdash; not changed by this work, and deliberately so</text>
+    </svg>
+    <p class="cap">Nothing in 17 or 18 knows that a feed card exists. Nothing in 19 knows how a game was detected. That boundary is the reason this work changed no surfaces.</p>
+  </div>
+</section>
+
+<section>
+  <p class="eyebrow">03 &mdash; Against the plan</p>
+  <h2>What shipped, and what the plan got wrong</h2>
+  <div class="scroll">
+    <table>
+      <thead><tr><th>Step</th><th>State</th><th>Result</th></tr></thead>
+      <tbody>
+        <tr><td>Foundations</td><td><span class="pill done">done</span></td><td>Real process start times. Sessions continue after a restart. Several games at once. Presence published.</td></tr>
+        <tr><td>Catalogue pipeline</td><td><span class="pill done">done</span></td><td>IGDB dumps make two bundled artifacts. A guard stops a changed schema.</td></tr>
+        <tr><td>Curated head</td><td><span class="pill done">done</span></td><td>54 games, 66 executables, independent of launcher</td></tr>
+        <tr><td>Steam library scan</td><td><span class="pill done">done</span></td><td>Path-prefix identity for the full tail</td></tr>
+        <tr><td>Sensor rewrite</td><td><span class="pill done">done</span></td><td>Classifier, provisional tracking, adaptive scan rate</td></tr>
+        <tr><td>Assets</td><td><span class="pill done">done</span></td><td>The icon of the game is now the primary art</td></tr>
+        <tr><td>Surfaces (data only)</td><td><span class="pill done">done</span></td><td>Co-play attribution, <code>active_min</code>, <code>igdb_id</code> in the ledger</td></tr>
+        <tr><td>Long tail</td><td><span class="pill done">done</span></td><td>Epic and GOG scanners. A log of games that do not resolve.</td></tr>
+        <tr><td>Spec consolidation</td><td><span class="pill done">done</span></td><td>Correct status headers. A layer map in <code>specs/README.md</code>.</td></tr>
+        <tr><td>Rich session card, rollup</td><td><span class="pill open">spec 19</span></td><td>Not decided here. Surfaces are the decision of spec 19.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3 style="margin-top:28px">Three plan decisions that the measurements reversed</h3>
+  <div class="cards">
+    <div class="card">
+      <h3>Where the catalogue lives</h3>
+      <p>I said that 350k titles cannot fit the install budget. This is true of the raw dump and false of the derived catalogue, which packs to 701 KB. Both artifacts now ship in the installer. Identity resolves offline, and there is no delivery path to operate.</p>
+    </div>
+    <div class="card">
+      <h3>Launcher priority</h3>
+      <p>Steam is 77% of the catalogue, so I put the other launchers last. Breadth is not play: 13 of the 50 most-played games cannot be found by a Steam scan. The curated head came first instead.</p>
+    </div>
+    <div class="card">
+      <h3>Crowd mappings</h3>
+      <p>Removed, not delayed. A game with no name already gets a session, a shared id, a name and an icon. A submission table with moderation bought only the display name. A local log plus hand curation gives the same result.</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <p class="eyebrow">04 &mdash; Next</p>
+  <h2>Test, validate, release</h2>
+
+  <ol class="steps">
+    <li>
+      <h3>Run the full gate</h3>
+      <p><code>./scripts/check-full.sh</code> has not run since the catalogue consolidation. That change touched 18 files and removed a module. The full gate adds the C++ ctest and Go lanes that <code>check.sh</code> does not run. Do this first.</p>
+    </li>
+    <li>
+      <h3>Run the client and watch one real session</h3>
+      <p>Start a game. Confirm that <code>[game-sensor] game started:</code> gives the correct name. Then quit the game and confirm that the duration agrees with the clock. Nothing has driven the full path from end to end yet.</p>
+    </li>
+    <li>
+      <h3>Confirm the executable names that are not yet verified</h3>
+      <p>Roblox, WoW, Diablo IV, PUBG, War Thunder and the HoYoPlay games come from knowledge, not observation. Each one fails safely, because the game does not resolve. Each failure is therefore silent until a person looks.</p>
+    </li>
+    <li>
+      <h3>Measure the install before you release</h3>
+      <p>The install was 102 MB before this work, against a target of 100 MB. This work adds 701 KB and removes the embedded icon set. The 86 MB <code>mello.exe</code> is a different problem. A background task is open for it.</p>
+    </li>
+    <li>
+      <h3>Then open the pull request</h3>
+      <p>There are 13 commits. You can review each one on its own. I have pushed nothing.</p>
+    </li>
+  </ol>
+</section>
+
+<section>
+  <p class="eyebrow">05 &mdash; Worth knowing</p>
+  <h2>Things the diff will not show you</h2>
+
+  <div class="note">
+    <p><strong>Tests against real installs found bugs that unit tests could not.</strong> A scan of your Steam library found every game two times, because <code>libraryfolders.vdf</code> writes the install root with a different spelling than the registry. A probe of your Hearthstone install found <code>Hearthstone Beta Launcher.exe</code> tracked as its own game, because the engine-marker test looks at the directory. Both are corrected. Continue to use <code>cargo test -p mello-core --lib resolution_report -- --ignored --nocapture</code>.</p>
+  </div>
+
+  <ul class="tight">
+    <li><strong>Two silent bugs are now corrected.</strong> <code>javaw.exe</code> mapped every Java application to Minecraft. Feed cards showed an empty badge for any game outside the bundled 25, which after this work would be almost all of them.</li>
+    <li><strong>I moved away from the plan one time, on purpose.</strong> The plan said the classifier must gate the prompt but never the tracking. That rule would have written &ldquo;played Notepad for 4 hours&rdquo; to the crew feed. The classifier now gates tracking also.</li>
+    <li><strong>The stability of <code>game_id</code> is load-bearing.</strong> IGDB calls Minecraft <code>minecraft-java-edition</code>, and divides StarCraft II into three entries. The telemetry adapters and all stored statistics use the old ids as their key, so the curated table holds them.</li>
+    <li><strong>Spec 19 keeps the open question:</strong> one rollup card, or one card for each session. The data supports both.</li>
+    <li><strong>The macOS code is written but not run.</strong> Bundle icon extraction and launcher paths are complete. No part of it has executed on a Mac.</li>
+  </ul>
+</section>
+
+<footer>
+  <p>Branch <code>feat/gamesense-v2</code> &middot; 13 commits &middot; nothing pushed &middot; design and reasons in <code>plans/GAME-SENSING-V2.md</code></p>
+</footer>
+
+</div>

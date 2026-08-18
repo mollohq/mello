@@ -61,9 +61,30 @@ pub fn load_cached_icon_rgba(game_id: &str) -> Option<(Vec<u8>, u32, u32)> {
     Some((img.into_raw(), w, h))
 }
 
-/// Raw PNG bytes of a cached icon (for the crew-shared upload).
+/// PNG bytes for the crew-shared upload, downscaled to 128px.
+///
+/// The disk cache keeps the full 256px rendition for HiDPI cards, but a 256px
+/// PNG runs ~84KB and the backend caps a shared icon at 48KB. Crew-shared
+/// copies are only ever drawn small, so the wire copy is re-encoded rather than
+/// the limit raised — that keeps every existing client working and needs no
+/// backend deploy.
+pub const SHARED_ICON_PX: u32 = 128;
+
 pub fn cached_icon_png_bytes(game_id: &str) -> Option<Vec<u8>> {
-    std::fs::read(cached_icon_path(game_id)?).ok()
+    let path = cached_icon_path(game_id)?;
+    let img = image::open(&path).ok()?;
+    let small = if img.width() > SHARED_ICON_PX || img.height() > SHARED_ICON_PX {
+        img.resize(
+            SHARED_ICON_PX,
+            SHARED_ICON_PX,
+            image::imageops::FilterType::Lanczos3,
+        )
+    } else {
+        img
+    };
+    let mut out = std::io::Cursor::new(Vec::new());
+    small.write_to(&mut out, image::ImageFormat::Png).ok()?;
+    Some(out.into_inner())
 }
 
 /// Store PNG bytes fetched from the backend into the local cache. Validates
@@ -329,6 +350,50 @@ pub fn icon_is_representative(exe_path: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The backend caps a shared icon at 48KB (`gameIconMaxBytes`). Extraction
+    /// moved to 256px, which produces ~84KB and silently broke every crew
+    /// upload with "icon too large". The wire copy is downscaled to keep it
+    /// under the cap while the disk cache stays sharp.
+    #[test]
+    fn the_shared_copy_fits_the_backend_limit() {
+        const BACKEND_LIMIT: usize = 48 * 1024;
+
+        // A 256px icon of the worst kind: full-colour noise, which is the
+        // least compressible thing a real icon can be.
+        let mut img = image::RgbaImage::new(256, 256);
+        for (x, y, px) in img.enumerate_pixels_mut() {
+            *px = image::Rgba([
+                (x * 7 % 256) as u8,
+                (y * 13 % 256) as u8,
+                ((x + y) % 256) as u8,
+                255,
+            ]);
+        }
+        let dyn_img = image::DynamicImage::ImageRgba8(img);
+
+        let mut full = std::io::Cursor::new(Vec::new());
+        dyn_img
+            .write_to(&mut full, image::ImageFormat::Png)
+            .unwrap();
+        assert!(
+            full.get_ref().len() > BACKEND_LIMIT,
+            "the 256px original should exceed the cap, else this test proves nothing"
+        );
+
+        let small = dyn_img.resize(
+            SHARED_ICON_PX,
+            SHARED_ICON_PX,
+            image::imageops::FilterType::Lanczos3,
+        );
+        let mut wire = std::io::Cursor::new(Vec::new());
+        small.write_to(&mut wire, image::ImageFormat::Png).unwrap();
+        assert!(
+            wire.get_ref().len() <= BACKEND_LIMIT,
+            "shared copy is {} bytes, over the {BACKEND_LIMIT} cap",
+            wire.get_ref().len()
+        );
+    }
 
     #[test]
     fn generic_runtime_hosts_do_not_supply_game_art() {
