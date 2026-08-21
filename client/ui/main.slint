@@ -15,6 +15,7 @@ import {
     FeedCardData,
     RecapLbRow,
     RecapAwardRow,
+    GameRollupLine,
     StreamCardData,
     YouStripData,
     GameStatsCardData,
@@ -43,7 +44,7 @@ import { RiotLinkModal } from "panels/riot_link_modal.slint";
 import { StatsProfileModal } from "panels/stats_profile_modal.slint";
 
 
-export { CrewData, MemberData, ChatMessageData, AudioDeviceData, VoiceChannelData, VoiceChannelMember, CaptureSourceData, DiscoverCrewData, SearchUserData, FeedCardData, RecapLbRow, RecapAwardRow, StreamCardData, YouStripData, GameStatsCardData, GameIntegrationData, Theme, VideoRect, ForceUpdateWindow }
+export { CrewData, MemberData, ChatMessageData, AudioDeviceData, VoiceChannelData, VoiceChannelMember, CaptureSourceData, DiscoverCrewData, SearchUserData, FeedCardData, RecapLbRow, RecapAwardRow, GameRollupLine, StreamCardData, YouStripData, GameStatsCardData, GameIntegrationData, Theme, VideoRect, ForceUpdateWindow }
 
 export component MainWindow inherits Window {
     title: "Mello";
@@ -74,6 +75,7 @@ export component MainWindow inherits Window {
     in property <string> link-error: "";
     in property <bool> is-returning-user: false;
     out property <string> onboarding-nickname;
+    in-out property <bool> onboarding-share-game-activity: true;
     in-out property <int> selected-avatar: -1;
     in-out property <bool> show-sign-in: false;
 
@@ -233,10 +235,12 @@ export component MainWindow inherits Window {
     in-out property <bool> settings-hud-clip-toasts: true;
     // Games settings
     in property <[GameIntegrationData]> games-list: [];
+    in-out property <bool> settings-share-game-activity: true;
     in property <bool> riot-available: false;
     in property <bool> riot-linked: false;
     in property <string> riot-id: "";
     callback games-integration-toggled(string /* game-id */, bool);
+    callback setting-changed-share-game-activity(bool);
     callback riot-connect-clicked();
     callback riot-disconnect-clicked();
     // Riot link dialog
@@ -633,6 +637,7 @@ export component MainWindow inherits Window {
         selected-capture-name <=> root.selected-capture-name;
         selected-playback-name <=> root.selected-playback-name;
         nickname <=> root.onboarding-nickname;
+        share-game-activity <=> root.onboarding-share-game-activity;
         selected-avatar <=> root.selected-avatar;
         avatar-img-0: root.avatar-img-0;
         avatar-img-1: root.avatar-img-1;
@@ -1496,12 +1501,17 @@ export component MainWindow inherits Window {
         settings-hud-clip-toasts <=> root.settings-hud-clip-toasts;
         // Games
         games-list: root.games-list;
+        settings-share-game-activity <=> root.settings-share-game-activity;
         riot-available: root.riot-available;
         riot-linked: root.riot-linked;
         riot-id: root.riot-id;
         games-integration-toggled(id, v) => {
             root.settings-show-saved = true;
             root.games-integration-toggled(id, v);
+        }
+        setting-changed-share-game-activity(v) => {
+            root.settings-show-saved = true;
+            root.setting-changed-share-game-activity(v);
         }
         riot-connect-clicked => {
             root.riot-dialog-error = "";

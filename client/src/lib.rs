@@ -333,6 +333,7 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
     // installs honor the user's per-game consent; shared with AppContext below.
     let settings = Rc::new(RefCell::new(Settings::load()));
     let disabled_integrations = settings.borrow().disabled_game_integrations.clone();
+    let share_game_activity = settings.borrow().share_game_activity;
     let custom_games: Vec<mello_core::user_games::CustomGame> = settings
         .borrow()
         .custom_games
@@ -359,6 +360,7 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
             frame_lifecycle_for_client,
         );
         client.set_disabled_integrations(disabled_integrations);
+        client.set_share_game_activity(share_game_activity);
         client.set_custom_games(custom_games);
         client.set_dismissed_games(dismissed_games);
         client.run(cmd_rx).await;
@@ -433,6 +435,8 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     app.global::<Theme>().set_dark(settings.borrow().dark_theme);
+    app.set_onboarding_share_game_activity(settings.borrow().share_game_activity);
+    app.set_settings_share_game_activity(settings.borrow().share_game_activity);
 
     // Apply saved audio device and processing settings
     {

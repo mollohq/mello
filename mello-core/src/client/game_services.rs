@@ -4,6 +4,23 @@ use crate::telemetry::{self, TelemetryListener, TELEMETRY_PORT};
 
 use super::Client;
 
+/// Presence published to crews when activity sharing is enabled; cleared otherwise.
+pub fn game_presence_to_publish(
+    share_enabled: bool,
+    current: Option<GamePresence>,
+) -> Option<GamePresence> {
+    if share_enabled {
+        current
+    } else {
+        None
+    }
+}
+
+/// Whether a finished session should be reported to the crew via `game_session_end`.
+pub fn should_emit_game_session_end(share_enabled: bool) -> bool {
+    share_enabled
+}
+
 impl Client {
     /// Start game process scanning and telemetry listener after auth.
     /// No-op when game sensing is disabled or already started.
@@ -66,11 +83,12 @@ impl Client {
     /// re-broadcasting identical presence would fan out to every crew member
     /// on a 15s heartbeat for no reason.
     pub(super) async fn sync_game_presence(&mut self) {
-        let current = self.game_state.current_game().map(|g| GamePresence {
+        let raw = self.game_state.current_game().map(|g| GamePresence {
             game_name: g.game_name.clone(),
             game_id: g.game_id.clone(),
             started_at: crate::presence::to_rfc3339(g.started_at),
         });
+        let current = game_presence_to_publish(self.share_game_activity, raw);
 
         let changed = match (&self.published_game, &current) {
             (None, None) => false,
@@ -122,5 +140,37 @@ impl Client {
             out.push(ev);
         }
         out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_presence() -> GamePresence {
+        GamePresence {
+            game_name: "Valorant".into(),
+            game_id: "valorant".into(),
+            started_at: "2026-08-21T12:00:00Z".into(),
+        }
+    }
+
+    #[test]
+    fn game_presence_cleared_when_sharing_disabled() {
+        let p = sample_presence();
+        assert!(game_presence_to_publish(false, Some(p.clone())).is_none());
+        assert_eq!(
+            game_presence_to_publish(true, Some(p))
+                .as_ref()
+                .map(|g| g.game_id.as_str()),
+            Some("valorant")
+        );
+        assert!(game_presence_to_publish(false, None).is_none());
+    }
+
+    #[test]
+    fn session_end_skipped_when_sharing_disabled() {
+        assert!(!should_emit_game_session_end(false));
+        assert!(should_emit_game_session_end(true));
     }
 }

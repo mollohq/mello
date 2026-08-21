@@ -59,6 +59,7 @@ pub fn wire(ctx: &AppContext) {
                 app.set_settings_hud_enabled(settings.hud_enabled);
                 app.set_settings_hud_overlay_opacity(settings.hud_overlay_opacity);
                 app.set_settings_hud_clip_toasts(settings.hud_show_clip_toasts);
+                app.set_settings_share_game_activity(settings.share_game_activity);
                 let ptt_label: slint::SharedString = if let Some(ref key_str) = settings.ptt_key {
                     platform::hotkeys::parse_ptt_string(key_str)
                         .map(|(_, label)| label)
