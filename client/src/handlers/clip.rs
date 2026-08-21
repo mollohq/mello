@@ -6,7 +6,7 @@ use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
 use crate::app_context::AppContext;
 use crate::converters::make_initials;
-use crate::{FeedCardData, RecapAwardRow, RecapLbRow};
+use crate::{FeedCardData, GameRollupLine, RecapAwardRow, RecapLbRow};
 
 fn normalized_entry_data(raw: &serde_json::Value) -> serde_json::Value {
     if raw.is_object() {
@@ -54,6 +54,7 @@ fn derive_backend_type(feed_type: &str, data: &serde_json::Value) -> &'static st
                 "member_joined"
             }
         }
+        "rollup" => "game_rollup",
         _ => "",
     }
 }
@@ -424,6 +425,26 @@ fn humanize_duration_min(mins: i64) -> String {
     }
 }
 
+fn extract_rollup_lines(data: &serde_json::Value) -> Vec<GameRollupLine> {
+    data.get("lines")
+        .and_then(|v| v.as_array())
+        .map(|rows| {
+            rows.iter()
+                .filter_map(|row| {
+                    let player_name = row.get("player_name")?.as_str()?;
+                    let game_name = row.get("game_name")?.as_str()?;
+                    let total_min = row.get("total_min").and_then(|v| v.as_i64()).unwrap_or(0);
+                    Some(GameRollupLine {
+                        player_name: player_name.into(),
+                        game_name: game_name.into(),
+                        duration_human: humanize_duration_min(total_min).into(),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// Wall-time duration for game sessions; uses active time when wall time is
 /// inflated (left running overnight). GAME-SURFACING §4.
 fn game_session_duration_display(duration_min: i64, active_min: i64) -> String {
@@ -653,10 +674,35 @@ fn build_feed_card(
     // Rich game-session card fields (spec 19 B2). Retype game sessions so the
     // feed dispatches them to the rich GameSessionCard instead of SessionCard.
     let is_game_session = backend_type == "game_session";
-    let card_type = if is_game_session {
+    let is_rollup = feed_type == "rollup";
+    let card_type = if is_rollup {
+        "rollup"
+    } else if is_game_session {
         "game-session"
     } else {
         feed_type
+    };
+    let (title, subtitle) = if is_rollup {
+        let session_count = data
+            .get("session_count")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
+        let total_min = data.get("total_min").and_then(|v| v.as_i64()).unwrap_or(0);
+        (
+            "CREW PLAY".to_string(),
+            format!(
+                "{} sessions · {}",
+                session_count,
+                humanize_duration_min(total_min)
+            ),
+        )
+    } else {
+        (title, subtitle)
+    };
+    let rollup_lines = if is_rollup {
+        extract_rollup_lines(&data)
+    } else {
+        Vec::new()
     };
     let game_verified = is_game_session
         && data
@@ -874,6 +920,7 @@ fn build_feed_card(
         game_winrate: game_winrate.into(),
         game_matches,
         game_verified,
+        rollup_lines: ModelRc::new(VecModel::from(rollup_lines)),
         snapshot_loading: feed_type == "session-preview" && has_snapshots,
         snapshot_poster_ready: false,
         snapshot_error: false,

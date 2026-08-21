@@ -63,6 +63,13 @@ export struct RecapAwardRow {
     detail: string,
 }
 
+// Per-actor row on the crew play rollup card (GAME-SURFACING B1).
+export struct GameRollupLine {
+    player-name: string,
+    game-name: string,
+    duration-human: string,
+}
+
 export struct FeedCardData {
     id: string,
     card-type: string,
@@ -131,6 +138,9 @@ export struct FeedCardData {
     // Result confirmed server-side against an official post-match API
     // (Riot match-v5/TFT) rather than client-reported telemetry.
     game-verified: bool,
+
+    // Crew play rollup (GAME-SURFACING B1).
+    rollup-lines: [GameRollupLine],
 }
 
 // One per-game card in the personal stats profile (spec 19 A2).

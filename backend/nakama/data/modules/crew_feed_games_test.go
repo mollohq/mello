@@ -118,13 +118,16 @@ func TestPruneGameSessions_CapsAndDropsRoutine(t *testing.T) {
 		gsCard("big", 4, 4, 2, 1),
 		{id: "voice1", backendType: "voice_session"},
 	}
-	out := pruneGameSessions(cards)
+	out, pruned := pruneGameSessions(cards)
 
 	if !feedCardsContain(out, "clip1") || !feedCardsContain(out, "voice1") {
 		t.Fatalf("non-game cards were dropped")
 	}
 	if feedCardsContain(out, "routine1") || feedCardsContain(out, "routine2") {
 		t.Fatalf("routine game sessions were kept")
+	}
+	if len(pruned) < 2 {
+		t.Fatalf("expected pruned routine sessions, got %d", len(pruned))
 	}
 
 	gameCount := 0
@@ -145,7 +148,7 @@ func TestPruneGameSessions_LongSoloSurvivesQuietWeek(t *testing.T) {
 		gsCardT0("long-solo", 240, nil, 0, 0, 0, 0),
 		{id: "clip1", backendType: "clip"},
 	}
-	out := pruneGameSessions(cards)
+	out, _ := pruneGameSessions(cards)
 	if !feedCardsContain(out, "long-solo") {
 		t.Fatal("4h solo no-telemetry session should survive in a quiet week (floor 10, score 40)")
 	}
@@ -157,7 +160,7 @@ func TestPruneGameSessions_LongSoloPrunedLoudWeek(t *testing.T) {
 	for i := 0; i < 16; i++ {
 		cards = append(cards, gsCard("heater"+string(rune('a'+i)), 5, 0, 0, 5))
 	}
-	out := pruneGameSessions(cards)
+	out, _ := pruneGameSessions(cards)
 	if feedCardsContain(out, "long-solo") {
 		t.Fatal("4h solo session should be pruned when 16+ higher-scoring sessions exist (floor 50, cap 2)")
 	}
@@ -198,4 +201,125 @@ func feedCardsContain(cards []feedCard, id string) bool {
 		}
 	}
 	return false
+}
+
+func gsCardNamed(id, game string, durationMin int, playerID, playerName string, ts int64) feedCard {
+	return feedCard{
+		id:          id,
+		feedType:    "session",
+		backendType: "game_session",
+		ts:          ts,
+		data: GameSessionData{
+			GameName:    game,
+			DurationMin: durationMin,
+			PlayerIDs:   []string{playerID},
+			PlayerNames: []string{playerName},
+		},
+	}
+}
+
+func TestBuildGameRollup_TooFewPruned(t *testing.T) {
+	pruned := []feedCard{
+		gsCardT0("a", 60, []string{"u1"}, 0, 0, 0, 0),
+		gsCardT0("b", 60, []string{"u2"}, 0, 0, 0, 0),
+	}
+	if _, ok := buildGameRollup(pruned); ok {
+		t.Fatal("expected no rollup for <3 pruned sessions")
+	}
+}
+
+func TestBuildGameRollup_Aggregation(t *testing.T) {
+	pruned := []feedCard{
+		gsCardNamed("s1", "Valorant", 100, "u1", "ostkatt", 10),
+		gsCardNamed("s2", "Counter-Strike 2", 50, "u1", "ostkatt", 20),
+		gsCardNamed("s3", "Minecraft", 200, "u2", "bob", 30),
+		gsCardNamed("s4", "Valorant", 30, "u3", "kim", 40),
+	}
+	card, ok := buildGameRollup(pruned)
+	if !ok {
+		t.Fatal("expected rollup for 4 pruned sessions")
+	}
+	if card.feedType != "rollup" || card.backendType != "game_rollup" || card.id != "game_rollup" {
+		t.Fatalf("rollup card meta: type=%q backend=%q id=%q", card.feedType, card.backendType, card.id)
+	}
+	if card.ts != 40 {
+		t.Fatalf("rollup ts = %d, want max pruned ts 40", card.ts)
+	}
+	data, ok := card.data.(GameRollupData)
+	if !ok {
+		t.Fatalf("rollup data type %T", card.data)
+	}
+	if data.SessionCount != 4 || data.TotalMin != 380 {
+		t.Fatalf("rollup totals: sessions=%d min=%d, want 4 / 380", data.SessionCount, data.TotalMin)
+	}
+	if len(data.Lines) != 3 {
+		t.Fatalf("rollup lines: got %d want 3", len(data.Lines))
+	}
+	if data.Lines[0].PlayerName != "bob" || data.Lines[0].GameName != "Minecraft" || data.Lines[0].TotalMin != 200 {
+		t.Fatalf("top line: %+v, want bob/Minecraft/200", data.Lines[0])
+	}
+	if data.Lines[1].PlayerName != "ostkatt" || data.Lines[1].GameName != "Valorant" || data.Lines[1].TotalMin != 150 || data.Lines[1].Sessions != 2 {
+		t.Fatalf("second line: %+v, want ostkatt/Valorant/150/2 sessions", data.Lines[1])
+	}
+	if data.Lines[2].PlayerName != "kim" {
+		t.Fatalf("third line: %+v, want kim", data.Lines[2])
+	}
+}
+
+func TestBuildGameRollup_CapsLinesAtFive(t *testing.T) {
+	pruned := make([]feedCard, 0, 8)
+	for i := 0; i < 8; i++ {
+		pruned = append(pruned, gsCardNamed(
+			"p"+string(rune('a'+i)),
+			"Game",
+			10*(i+1),
+			"u"+string(rune('a'+i)),
+			"player"+string(rune('a'+i)),
+			int64(i+1),
+		))
+	}
+	card, ok := buildGameRollup(pruned)
+	if !ok {
+		t.Fatal("expected rollup")
+	}
+	data := card.data.(GameRollupData)
+	if len(data.Lines) != 5 {
+		t.Fatalf("rollup lines capped at 5, got %d", len(data.Lines))
+	}
+}
+
+func TestBuildThisWeek_LoudWeekIncludesRollup(t *testing.T) {
+	cards := make([]feedCard, 0, 20)
+	for i := 0; i < 16; i++ {
+		cards = append(cards, gsCard("heater"+string(rune('a'+i)), 5, 0, 0, 5))
+	}
+	for i := 0; i < 4; i++ {
+		cards = append(cards, gsCardT0("routine"+string(rune('a'+i)), 30, []string{"solo"}, 0, 0, 0, 0))
+	}
+	entries := buildThisWeek(cards)
+	var rollup *FeedEntry
+	for i := range entries {
+		if entries[i].Type == "rollup" {
+			rollup = &entries[i]
+			break
+		}
+	}
+	if rollup == nil {
+		t.Fatal("expected a rollup entry in a loud week with 4+ pruned routine sessions")
+	}
+	if rollup.ID != "game_rollup" || rollup.Role != "standard" {
+		t.Fatalf("rollup entry meta: id=%q role=%q", rollup.ID, rollup.Role)
+	}
+}
+
+func TestFillerPriority_RollupBeatsWeakSession(t *testing.T) {
+	rollup := feedCard{feedType: "rollup", backendType: "game_rollup"}
+	weak := gsCardT0("weak", 10, nil, 0, 0, 0, 0)
+	strong := gsCard("strong", 5, 0, 0, 5)
+	if fillerPriority(rollup) <= fillerPriority(weak) {
+		t.Fatalf("rollup priority %d should beat weak session %d", fillerPriority(rollup), fillerPriority(weak))
+	}
+	if fillerPriority(strong) <= fillerPriority(rollup) {
+		t.Fatalf("strong session priority %d should beat rollup %d", fillerPriority(strong), fillerPriority(rollup))
+	}
 }

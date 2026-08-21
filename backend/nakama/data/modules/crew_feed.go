@@ -56,11 +56,26 @@ type FeedRequest struct {
 
 type FeedEntry struct {
 	ID   string      `json:"id"`
-	Type string      `json:"type"` // clip | recap | session-preview | session | catchup
+	Type string      `json:"type"` // clip | recap | session-preview | session | catchup | rollup
 	Role string      `json:"role"` // hero | standard | quiet | recap | locked
 	Size string      `json:"size"` // sm | md | lg
 	Ts   int64       `json:"ts"`
 	Data interface{} `json:"data"`
+}
+
+// GameRollupLine is one per-actor row in a pruned-session rollup card.
+type GameRollupLine struct {
+	PlayerName string `json:"player_name"`
+	GameName   string `json:"game_name"`
+	TotalMin   int    `json:"total_min"`
+	Sessions   int    `json:"sessions"`
+}
+
+// GameRollupData aggregates routine game_session cards pruned from this_week.
+type GameRollupData struct {
+	Lines        []GameRollupLine `json:"lines"`
+	SessionCount int              `json:"session_count"`
+	TotalMin     int              `json:"total_min"`
 }
 
 type FeedSection struct {
@@ -265,8 +280,9 @@ func gameSessionQuality(c feedCard) int {
 
 // pruneGameSessions drops low-scoring game_session cards and keeps only the
 // most notable ones (above an adaptive floor, capped by volume). Non-game cards
-// pass through untouched and in order. Pure, so the budget is testable.
-func pruneGameSessions(cards []feedCard) []feedCard {
+// pass through untouched and in order. Successfully decoded pruned sessions are
+// returned separately for rollup synthesis. Pure, so the budget is testable.
+func pruneGameSessions(cards []feedCard) (remaining []feedCard, pruned []feedCard) {
 	gameSessionCount := 0
 	for _, c := range cards {
 		if c.backendType == "game_session" {
@@ -295,10 +311,117 @@ func pruneGameSessions(cards []feedCard) []feedCard {
 	if len(notable) > cap {
 		notable = notable[:cap]
 	}
+	kept := make(map[string]bool, len(notable))
 	for _, s := range notable {
+		kept[s.card.id] = true
 		out = append(out, s.card)
 	}
-	return out
+	for _, c := range cards {
+		if c.backendType != "game_session" || kept[c.id] {
+			continue
+		}
+		if _, ok := decodeGameSessionData(c.data); ok {
+			pruned = append(pruned, c)
+		}
+	}
+	return out, pruned
+}
+
+// buildGameRollup synthesizes one rollup card from pruned routine sessions.
+// Returns false when fewer than three sessions were pruned.
+func buildGameRollup(pruned []feedCard) (feedCard, bool) {
+	if len(pruned) < 3 {
+		return feedCard{}, false
+	}
+
+	type actorAgg struct {
+		name     string
+		gameMins map[string]int
+		totalMin int
+		sessions int
+	}
+	actors := make(map[string]*actorAgg)
+	var maxTs int64
+	totalMin := 0
+
+	for _, c := range pruned {
+		d, ok := decodeGameSessionData(c.data)
+		if !ok {
+			continue
+		}
+		if c.ts > maxTs {
+			maxTs = c.ts
+		}
+		totalMin += d.DurationMin
+
+		key := ""
+		if len(d.PlayerIDs) > 0 {
+			key = d.PlayerIDs[0]
+		} else if len(d.PlayerNames) > 0 {
+			key = d.PlayerNames[0]
+		}
+		if key == "" {
+			key = c.id
+		}
+		name := ""
+		if len(d.PlayerNames) > 0 {
+			name = d.PlayerNames[0]
+		}
+		agg, exists := actors[key]
+		if !exists {
+			agg = &actorAgg{name: name, gameMins: make(map[string]int)}
+			actors[key] = agg
+		}
+		if agg.name == "" && name != "" {
+			agg.name = name
+		}
+		game := d.GameName
+		if game == "" {
+			game = "a game"
+		}
+		agg.gameMins[game] += d.DurationMin
+		agg.totalMin += d.DurationMin
+		agg.sessions++
+	}
+
+	lines := make([]GameRollupLine, 0, len(actors))
+	for _, agg := range actors {
+		topGame := ""
+		topMins := -1
+		for game, mins := range agg.gameMins {
+			if mins > topMins {
+				topGame = game
+				topMins = mins
+			}
+		}
+		lines = append(lines, GameRollupLine{
+			PlayerName: agg.name,
+			GameName:   topGame,
+			TotalMin:   agg.totalMin,
+			Sessions:   agg.sessions,
+		})
+	}
+	sort.Slice(lines, func(i, j int) bool {
+		if lines[i].TotalMin != lines[j].TotalMin {
+			return lines[i].TotalMin > lines[j].TotalMin
+		}
+		return lines[i].PlayerName < lines[j].PlayerName
+	})
+	if len(lines) > 5 {
+		lines = lines[:5]
+	}
+
+	return feedCard{
+		id:          "game_rollup",
+		feedType:    "rollup",
+		backendType: "game_rollup",
+		ts:          maxTs,
+		data: GameRollupData{
+			Lines:        lines,
+			SessionCount: len(pruned),
+			TotalMin:     totalMin,
+		},
+	}, true
 }
 
 func fillerPriority(c feedCard) int {
@@ -321,6 +444,8 @@ func fillerPriority(c feedCard) int {
 		return 100
 	case "catchup":
 		return 10
+	case "rollup":
+		return 150
 	default:
 		return 0
 	}
@@ -431,6 +556,9 @@ func feedEntryFromCard(c feedCard, role, size string) FeedEntry {
 // short/weak session-previews. Everything else (clips, strong previews,
 // moments) is standard.
 func fillerRole(c feedCard) string {
+	if c.feedType == "rollup" {
+		return "standard"
+	}
 	if feedQuietBackendTypes[c.backendType] {
 		return "quiet"
 	}
@@ -455,7 +583,11 @@ func fillerRole(c feedCard) string {
 // separate multi-stream PR. Clients keep showing live streams from crew_state.
 func buildThisWeek(cards []feedCard) []FeedEntry {
 	// Budget game sessions first: adaptive floor/cap decides which earn a card.
-	cards = pruneGameSessions(cards)
+	var pruned []feedCard
+	cards, pruned = pruneGameSessions(cards)
+	if rollup, ok := buildGameRollup(pruned); ok {
+		cards = append(cards, rollup)
+	}
 
 	used := make([]bool, len(cards))
 	entries := make([]FeedEntry, 0, feedFillerSlots+2)

@@ -1226,6 +1226,59 @@ component GameSessionCard inherits Rectangle {
     }
 }
 
+// Crew play rollup — routine sessions collapsed for loud crews (GAME-SURFACING B1).
+component GameRollupLineRow inherits Rectangle {
+    in property <string> line-text: "";
+
+    height: 18px;
+
+    Text {
+        text: line-text;
+        font-size: 12px;
+        color: Theme.text-value;
+        overflow: elide;
+    }
+}
+
+component GameRollupCard inherits Rectangle {
+    in property <FeedCardData> card;
+
+    background: Theme.card-bg;
+    border-radius: 10px;
+    border-width: 1px;
+    border-color: Theme.card-border;
+    clip: true;
+
+    VerticalLayout {
+        padding: 14px;
+        spacing: 8px;
+        alignment: start;
+
+        Text {
+            text: "CREW PLAY";
+            font-size: 10px;
+            font-weight: 700;
+            color: Theme.accent;
+            letter-spacing: 1.2px;
+        }
+
+        Text {
+            text: card.subtitle;
+            font-size: 11px;
+            color: Theme.text-sub;
+        }
+
+        Rectangle { height: 1px; background: Theme.card-border; }
+
+        VerticalLayout {
+            spacing: 6px;
+            for line in card.rollup-lines: GameRollupLineRow {
+                line-text: line.player-name + " · " + line.game-name + " · " + line.duration-human;
+            }
+        }
+    }
+}
+
 // Catch-up card
 component CatchupCard inherits Rectangle {
     in property <FeedCardData> card;
@@ -1937,6 +1990,9 @@ component FeedSlot inherits Rectangle {
         width: parent.width; height: parent.height; card: root.card;
     }
     if card.card-type == "game-session": GameSessionCard {
+        width: parent.width; height: parent.height; card: root.card;
+    }
+    if card.card-type == "rollup": GameRollupCard {
         width: parent.width; height: parent.height; card: root.card;
     }
     if card.card-type == "catchup": CatchupCard {

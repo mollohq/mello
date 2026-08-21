@@ -1383,3 +1383,73 @@ fn zero_telemetry_game_session_renders_compact_card_without_record() {
         "zero-telemetry sessions must not render W/L record stat slots"
     );
 }
+
+fn game_rollup_feed() -> mello_core::crew_events::FeedResponse {
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+    mello_core::crew_events::FeedResponse {
+        crew_id: "crew-0".into(),
+        sections: vec![mello_core::crew_events::FeedSection {
+            id: "this_week".into(),
+            entries: vec![mello_core::crew_events::FeedEntry {
+                id: "game_rollup".into(),
+                entry_type: "rollup".into(),
+                role: "standard".into(),
+                size: "md".into(),
+                ts,
+                data: serde_json::json!({
+                    "session_count": 5,
+                    "total_min": 720,
+                    "lines": [
+                        {
+                            "player_name": "ostkatt",
+                            "game_name": "Valorant",
+                            "total_min": 300,
+                            "sessions": 2
+                        },
+                        {
+                            "player_name": "bob",
+                            "game_name": "Minecraft",
+                            "total_min": 240,
+                            "sessions": 1
+                        },
+                        {
+                            "player_name": "kim",
+                            "game_name": "Counter-Strike 2",
+                            "total_min": 180,
+                            "sessions": 1
+                        }
+                    ]
+                }),
+            }],
+        }],
+    }
+}
+
+/// Pruned routine play renders as a crew play rollup card with per-actor lines.
+#[test]
+fn game_rollup_renders_card_with_lines() {
+    let mut h = Harness::new();
+    logged_in_app(&mut h);
+
+    h.emit(Event::FeedLoaded {
+        response: game_rollup_feed(),
+    });
+
+    let cards: Vec<_> =
+        ElementHandle::find_by_element_type_name(h.app(), "GameRollupCard").collect();
+    assert!(
+        !cards.is_empty(),
+        "expected a GameRollupCard in the feed for a rollup entry"
+    );
+
+    let lines: Vec<_> =
+        ElementHandle::find_by_element_type_name(h.app(), "GameRollupLineRow").collect();
+    assert_eq!(
+        lines.len(),
+        3,
+        "rollup card should render one line row per actor"
+    );
+}
