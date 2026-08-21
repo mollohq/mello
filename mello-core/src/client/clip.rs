@@ -1,6 +1,7 @@
+use crate::client::waveform;
 use crate::crew_events::{ClipUploadCompleteRequest, ClipUploadURLRequest, PostClipRequest};
 use crate::events::Event;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 fn generate_clip_id() -> String {
@@ -69,10 +70,13 @@ impl super::Client {
             seconds,
             path_str
         );
+        let waveform =
+            waveform::compute_clip_waveform_b64(Path::new(&output_path)).unwrap_or_default();
         let _ = self.event_tx.send(Event::ClipCaptured {
             clip_id,
             path: path_str,
             duration_seconds: seconds,
+            waveform,
         });
     }
 
@@ -82,6 +86,7 @@ impl super::Client {
         clip_id: &str,
         duration_seconds: f64,
         local_path: &str,
+        waveform: &str,
     ) {
         let req = PostClipRequest {
             crew_id: crew_id.to_string(),
@@ -91,6 +96,7 @@ impl super::Client {
             participants: Vec::new(),
             game: String::new(),
             local_path: local_path.to_string(),
+            waveform: waveform.to_string(),
         };
         match self.nakama.post_clip(&req).await {
             Ok(resp) => {

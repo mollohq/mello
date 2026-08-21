@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"math/big"
@@ -25,10 +26,11 @@ const (
 	CrewClipsCollection = "crew_clips"
 	// CrewClipsMaxRetained caps the per-crew clips document. Clips live in a
 	// single Nakama storage object which is hard-limited to 256KB. A StoredClip
-	// with participant arrays serializes to roughly 400-600 bytes, so 250
-	// entries keeps a safe margin under the limit. Older clips are trimmed;
-	// unbounded history is future m3llo+ work.
+	// with participant arrays and a waveform serializes to roughly 500-700
+	// bytes, so 250 entries keeps a safe margin under the limit (~175KB worst
+	// case). Older clips are trimmed; unbounded history is future m3llo+ work.
 	CrewClipsMaxRetained = 250
+	clipWaveformBytes    = 64
 )
 
 // ---------------------------------------------------------------------------
@@ -65,6 +67,7 @@ type StoredClip struct {
 	Game             string   `json:"game,omitempty"`
 	LocalPath        string   `json:"local_path,omitempty"`
 	MediaURL         string   `json:"media_url,omitempty"`
+	Waveform         string   `json:"waveform,omitempty"`
 }
 
 type CrewClipsDoc struct {
@@ -133,6 +136,23 @@ func AppendClip(ctx context.Context, nk runtime.NakamaModule, crewID string, cli
 	return fmt.Errorf("crew_clips write failed after 3 retries for crew %s", crewID)
 }
 
+// validateClipWaveform checks an optional base64-encoded peak waveform.
+// Empty is allowed for older clients. When present it must decode to exactly
+// clipWaveformBytes u8 peaks. Returns a non-empty error string on failure.
+func validateClipWaveform(waveform string) string {
+	if waveform == "" {
+		return ""
+	}
+	raw, err := base64.StdEncoding.DecodeString(waveform)
+	if err != nil {
+		return "invalid waveform"
+	}
+	if len(raw) != clipWaveformBytes {
+		return "waveform must be 64 bytes"
+	}
+	return ""
+}
+
 // ---------------------------------------------------------------------------
 // PostClip RPC — store clip metadata in the crew event ledger
 // ---------------------------------------------------------------------------
@@ -145,6 +165,7 @@ type PostClipRequest struct {
 	Participants    []string `json:"participants,omitempty"`
 	Game            string   `json:"game,omitempty"`
 	LocalPath       string   `json:"local_path,omitempty"`
+	Waveform        string   `json:"waveform,omitempty"`
 }
 
 func PostClipRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, payload string) (string, error) {
@@ -165,6 +186,9 @@ func PostClipRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runt
 	}
 	if req.DurationSeconds <= 0 || req.DurationSeconds > ClipMaxDurationSec {
 		return "", runtime.NewError(fmt.Sprintf("duration must be 0-%d seconds", ClipMaxDurationSec), 3)
+	}
+	if errStr := validateClipWaveform(req.Waveform); errStr != "" {
+		return "", runtime.NewError(errStr, 3)
 	}
 	if !isCrewMember(ctx, nk, req.CrewID, userID) {
 		return "", runtime.NewError("not a crew member", 7)
@@ -205,6 +229,7 @@ func PostClipRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runt
 		ParticipantNames: participantNames,
 		Game:             req.Game,
 		LocalPath:        req.LocalPath,
+		Waveform:         req.Waveform,
 	}
 
 	if err := AppendClip(ctx, nk, req.CrewID, clip); err != nil {

@@ -65,62 +65,217 @@ component RecapAvatar inherits Rectangle {
     }
 }
 
-component ClipBadge inherits Rectangle {
-    in property <bool> small: false;
-
-    width: small ? 42px : 52px;
-    height: small ? 20px : 22px;
-    border-radius: small ? 4px : 5px;
-    background: Theme.clip-amber;
-
-    HorizontalLayout {
-        alignment: center;
-        spacing: 3px;
-
-        Image {
-            source: @image-url("../icons/scissors.svg");
-            colorize: white;
-            width: small ? 9px : 10px;
-            height: small ? 9px : 10px;
-            y: (parent.height - self.height) / 2;
-        }
-
-        Text {
-            text: "CLIP";
-            font-size: small ? 9px : 10px;
-            font-weight: 700;
-            color: white;
-            letter-spacing: 0.5px;
-            vertical-alignment: center;
-        }
-    }
-}
-
-component PlayButton inherits Rectangle {
+component ClipPlayRing inherits Rectangle {
     in property <bool> small: false;
     in property <bool> is-playing: false;
     in property <bool> is-paused: false;
 
-    width: small ? 32px : 52px;
-    height: small ? 32px : 52px;
-    border-radius: small ? 16px : 26px;
-    background: is-playing && !is-paused ? Theme.clip-amber : #00000055;
+    width: small ? 24px : 44px;
+    height: small ? 24px : 44px;
+    border-radius: self.width / 2;
+    border-width: 1.5px;
+    border-color: Theme.clip-amber;
+    background: ring-hover.has-hover ? #F59E0B1F : transparent;
+    animate background { duration: 150ms; easing: ease-out; }
 
-    if !is-playing || is-paused: Text {
-        text: "▶";
-        font-size: small ? 12px : 18px;
-        color: is-playing ? Theme.clip-amber : white;
-        horizontal-alignment: center;
-        vertical-alignment: center;
+    if !is-playing || is-paused: Image {
+        source: @image-url("../icons/play.svg");
+        colorize: Theme.clip-amber;
+        width: small ? 8px : 14px;
+        height: small ? 8px : 14px;
+        opacity: is-playing ? 0.0 : 1.0;
+        animate opacity { duration: 150ms; easing: ease-out; }
+        x: small ? 9px : 16px;
+        y: (parent.height - self.height) / 2;
     }
 
     if is-playing && !is-paused: Image {
         source: @image-url("../icons/pause.svg");
-        colorize: Theme.dark ? #000000 : #000000;
-        width: small ? 12px : 18px;
-        height: small ? 12px : 18px;
+        colorize: Theme.clip-amber;
+        width: small ? 7px : 12px;
+        height: small ? 7px : 12px;
+        opacity: 1.0;
+        animate opacity { duration: 150ms; easing: ease-out; }
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
+    }
+
+    ring-hover := TouchArea {}
+}
+
+component DotWaveform inherits Rectangle {
+    in property <[float]> peaks: [];
+    in property <float> progress: 0.0;
+    in property <bool> is-playing: false;
+    in property <bool> is-paused: false;
+    in property <int> rows: 15;
+    in property <length> dot-size: 3px;
+    in property <length> row-pitch: 5px;
+    in property <int> duration-ms: 30000;
+    callback seek(float);
+    callback play-at(float);
+
+    property <int> cols: 64;
+    property <bool> use-placeholder: peaks.length == 0;
+    property <bool> scrubbing: touch.pressed;
+    property <bool> hovering: touch.has-hover && !scrubbing;
+    property <float> col-pitch-f: self.width / 1px / cols;
+    property <int> scrub-col: Math.min(cols - 1, Math.max(0, Math.floor((touch.mouse-x / 1px) / col-pitch-f)));
+    property <float> scrub-progress: scrub-col / (cols - 1);
+    property <float> display-progress: scrubbing ? scrub-progress : progress;
+    property <int> play-col: Math.min(cols - 1, Math.max(0, Math.round(display-progress * (cols - 1))));
+    property <bool> show-two-tone: is-playing || is-paused || scrubbing;
+    property <int> hover-col: Math.min(cols - 1, Math.max(0, Math.floor((touch.mouse-x / 1px) / col-pitch-f)));
+    property <int> press-mode: 0;
+    property <length> hairline-x: Math.floor(play-col * col-pitch-f + col-pitch-f / 2) * 1px;
+    property <length> ghost-x: Math.floor(hover-col * col-pitch-f + col-pitch-f / 2) * 1px;
+    property <int> chip-col: scrubbing ? scrub-col : hover-col;
+    property <length> chip-x: Math.min(self.width - 8px, Math.max(8px, Math.floor(chip-col * col-pitch-f + col-pitch-f / 2) * 1px));
+    property <int> chip-ms: Math.round(chip-col / (cols - 1) * duration-ms);
+    property <int> chip-secs: Math.max(0, chip-ms / 1000);
+    property <int> chip-min-part: Math.floor(chip-secs / 60);
+    property <int> chip-sec-part: Math.mod(chip-secs, 60);
+    property <string> chip-sec-text: chip-sec-part < 10 ? "0" + chip-sec-part : chip-sec-part;
+    property <string> chip-time: chip-min-part + ":" + chip-sec-text;
+
+    property <[float]> placeholder-peaks: [
+        0.02, 0.03, 0.01, 0.04, 0.02, 0.03, 0.01, 0.02,
+        0.55, 0.72, 0.88, 0.95, 0.82, 0.76, 0.91, 0.68, 0.74, 0.85, 0.62, 0.58,
+        0.04, 0.06, 0.03, 0.05, 0.02, 0.04,
+        0.78, 0.92, 0.86, 0.71, 0.88, 0.94, 0.79, 0.83, 0.67, 0.75, 0.90, 0.84,
+        0.03, 0.05, 0.02, 0.06,
+        0.52, 0.61, 0.48,
+        0.02, 0.04, 0.03,
+        0.65, 0.80, 0.93, 0.87, 0.76, 0.91, 0.85, 0.70, 0.88, 0.96, 0.82,
+        0.04, 0.03, 0.06,
+        0.58, 0.71
+    ];
+
+    background: Theme.card-bg-inset;
+    border-radius: 4px;
+    clip: true;
+
+    for col[c] in cols: Rectangle {
+        property <float> peak-val: root.use-placeholder ? root.placeholder-peaks[c] : peaks[c];
+        property <int> lit-count: 1 + Math.round(peak-val * (root.rows - 1));
+        property <float> col-pitch-f: parent.width / 1px / root.cols;
+        property <length> col-x: Math.floor(c * col-pitch-f + (col-pitch-f - root.dot-size / 1px) / 2) * 1px;
+        property <bool> col-remaining: root.show-two-tone && c >= root.play-col;
+        property <bool> is-snap-col: root.show-two-tone && c == root.play-col;
+
+        for row[r] in lit-count: Rectangle {
+            property <int> row-from-base: lit-count - 1 - r;
+            property <bool> silent-col: lit-count == 1;
+            property <float> rest-opacity: silent-col && row-from-base == 0
+                ? 0.25
+                : 0.9 - (row-from-base / (root.rows - 1)) * 0.45;
+            property <float> dot-opacity: root.use-placeholder
+                ? 0.3 * rest-opacity
+                : (col-remaining ? 0.45 : (is-snap-col ? 1.0 : rest-opacity));
+
+            width: root.dot-size;
+            height: root.dot-size;
+            x: col-x;
+            y: Math.floor((parent.height / 1px) - (root.row-pitch / 1px) - (root.dot-size / 1px) - row-from-base * (root.row-pitch / 1px)) * 1px;
+            background: is-snap-col ? white : (col-remaining ? Theme.text-dim : Theme.clip-amber);
+            opacity: dot-opacity;
+            animate opacity { duration: 120ms; easing: ease-out; }
+            animate background { duration: 120ms; easing: ease-out; }
+        }
+    }
+
+  // Ghost hairline (hover preview at rest / paused)
+    if hovering && !scrubbing && (!is-playing || is-paused): Rectangle {
+        x: 0;
+        width: parent.width;
+        height: parent.height;
+        clip: true;
+
+        Rectangle {
+            x: ghost-x;
+            width: 1px;
+            height: parent.height;
+            background: white;
+            opacity: 0.3;
+        }
+    }
+
+  // Playhead hairline
+    if show-two-tone: Rectangle {
+        x: 0;
+        width: parent.width;
+        height: parent.height;
+        clip: true;
+
+        playhead-hairline := Rectangle {
+            x: hairline-x;
+            width: 1px;
+            height: parent.height;
+            background: white;
+            opacity: 1.0;
+            animate x {
+                duration: scrubbing ? 0ms : (is-playing && !is-paused ? 80ms : 0ms);
+                easing: linear;
+            }
+            states [
+                breathing when is-paused && !scrubbing: {
+                    opacity: 0.35;
+                    in {
+                        animate opacity {
+                            duration: 700ms;
+                            easing: ease-in-out;
+                            iteration-count: -1;
+                            direction: alternate;
+                        }
+                    }
+                }
+            ]
+        }
+    }
+
+  // Hover / scrub time chip
+    if scrubbing || (hovering && !is-playing && !is-paused): Rectangle {
+        x: 0;
+        width: parent.width;
+        height: parent.height;
+        clip: true;
+
+        chip-bg := Rectangle {
+            x: chip-x - (chip-text.preferred-width + 10px) / 2;
+            y: 2px;
+            width: chip-text.preferred-width + 10px;
+            height: chip-text.preferred-height + 4px;
+            border-radius: 3px;
+            background: #000000cc;
+
+            chip-text := Text {
+                text: chip-time;
+                font-family: Theme.font-mono;
+                font-size: 10px;
+                color: Theme.clip-amber;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+            }
+        }
+    }
+
+    touch := TouchArea {
+        mouse-cursor: crosshair;
+
+        changed pressed => {
+            if (self.pressed) {
+                root.press-mode = root.is-playing && !root.is-paused ? 1 : (root.is-paused ? 2 : 0);
+            } else {
+                root.seek(root.scrub-progress);
+                if (root.press-mode == 0) {
+                    root.play-at(root.scrub-progress);
+                }
+            }
+        }
+
+        clicked => { /* scrub release handles seek; block card-face toggle */ }
     }
 }
 
@@ -140,55 +295,15 @@ component NewBadge inherits Rectangle {
     }
 }
 
-component PlayingBadge inherits Rectangle {
-    in property <bool> paused: false;
-
-    width: paused ? 72px : 80px;
-    height: 22px;
-    border-radius: 5px;
-    background: Theme.dark ? #F59E0B1A : #F59E0B22;
-    border-width: 1px;
-    border-color: Theme.dark ? #F59E0B4D : #F59E0B33;
-
-    HorizontalLayout {
-        alignment: center;
-        spacing: 4px;
-
-        if !paused: Image {
-            source: @image-url("../icons/speaker.svg");
-            colorize: Theme.clip-amber;
-            width: 10px;
-            height: 10px;
-            y: (parent.height - self.height) / 2;
-        }
-
-        if paused: Image {
-            source: @image-url("../icons/pause.svg");
-            colorize: Theme.clip-amber;
-            width: 10px;
-            height: 10px;
-            y: (parent.height - self.height) / 2;
-        }
-
-        Text {
-            text: paused ? "PAUSED" : "PLAYING";
-            font-size: 10px;
-            font-weight: 700;
-            color: Theme.clip-amber;
-            vertical-alignment: center;
-        }
-    }
-}
-
 // Hero clip card (2x wide)
 component HeroClipCard inherits Rectangle {
     in property <FeedCardData> card;
     in property <bool> is-playing: false;
     in property <bool> is-paused: false;
     in property <float> progress: 0.0;
-    in property <float> anim-tick: 0.0;
     in property <string> position-text: "";
     in property <string> duration-text: "";
+    in property <int> clip-duration-ms: 0;
     callback play-clicked(string);
     callback seek(float);
 
@@ -198,152 +313,125 @@ component HeroClipCard inherits Rectangle {
     border-color: card.is-new ? Theme.clip-amber :
                   is-playing ? Theme.clip-amber :
                   card-hover.has-hover ? Theme.graphic-med : Theme.card-border;
-    opacity: card.is-new || is-playing ? 1.0 : (card-hover.has-hover ? 1.0 : 1.0);
     clip: true;
 
     VerticalLayout {
-        // Thumbnail area
+        padding: 14px;
+        padding-left: 16px;
+        padding-right: 16px;
+        spacing: 0px;
+
+        // Header: micro-label + timecode
         Rectangle {
-            vertical-stretch: 3;
-            min-height: 180px;
-            background: is-playing
-                ? (Theme.dark
-                    ? @linear-gradient(135deg, #1a1400 0%, #1a1000 40%, #151515 100%)
-                    : @linear-gradient(135deg, #fef6e4 0%, #fef0d4 40%, #f0f0f0 100%))
-                : (Theme.dark
-                    ? @linear-gradient(135deg, #0d1a0d 0%, #0a1520 40%, #151525 100%)
-                    : @linear-gradient(135deg, #e8ece8 0%, #dde8f0 40%, #e0e0ea 100%));
+            height: 16px;
 
-            // Game watermark
-            Text {
-                text: card.game-name != "" ? card.game-name : "";
-                font-size: 48px;
-                font-weight: 800;
-                color: #ffffff06;
-                letter-spacing: 6px;
-                horizontal-alignment: center;
-                vertical-alignment: center;
-            }
-
-            // Animated waveform bars (playing) or static (default)
             HorizontalLayout {
-                alignment: center;
-                spacing: 3px;
-                padding-left: 20px;
-                padding-right: 20px;
-                y: parent.height - 76px - 4px;
-                height: 72px;
-                width: parent.width;
+                spacing: 0px;
 
-                for entry in [
-                    {h: 0.20, i: 0.0}, {h: 0.35, i: 1.0}, {h: 0.60, i: 2.0}, {h: 0.85, i: 3.0},
-                    {h: 1.00, i: 4.0}, {h: 0.75, i: 5.0}, {h: 0.45, i: 6.0}, {h: 0.25, i: 7.0},
-                    {h: 0.50, i: 8.0}, {h: 0.80, i: 9.0}, {h: 0.95, i: 10.0}, {h: 0.65, i: 11.0},
-                    {h: 0.30, i: 12.0}, {h: 0.70, i: 13.0}, {h: 0.55, i: 14.0}, {h: 0.90, i: 15.0},
-                    {h: 0.40, i: 16.0}, {h: 0.60, i: 17.0}, {h: 0.35, i: 18.0}, {h: 0.50, i: 19.0}
-                ]: Rectangle {
-                    width: 3px;
+                if !is-playing: HorizontalLayout {
+                    spacing: 5px;
+                    horizontal-stretch: 0;
 
-                    Rectangle {
-                        property <float> wave-h: is-playing && !is-paused
-                            ? 0.5 + 0.5 * sin((anim-tick + entry.i * 0.5) * 360deg)
-                            : entry.h;
-                        property <float> bar-progress: entry.i / 20.0;
-
-                        width: parent.width;
-                        height: 50px * wave-h;
+                    Image {
+                        source: @image-url("../icons/scissors.svg");
+                        colorize: Theme.clip-amber;
+                        width: 10px;
+                        height: 10px;
                         y: (parent.height - self.height) / 2;
-                        border-radius: 2px;
-                        background: is-playing
-                            ? (is-paused
-                                ? (bar-progress <= progress ? Theme.clip-amber : Theme.text-dim)
-                                : Theme.clip-amber)
-                            : Theme.clip-amber;
-                        opacity: is-playing && !is-paused
-                            ? 0.6 + 0.4 * wave-h
-                            : (is-paused ? (bar-progress <= progress ? 0.8 : 0.3) : 0.5 + entry.h * 0.5);
                     }
+
+                    Text {
+                        text: "VOICE CLIP";
+                        font-size: 10px;
+                        font-weight: 700;
+                        color: Theme.clip-amber;
+                        letter-spacing: 1.5px;
+                        vertical-alignment: center;
+                    }
+                }
+
+                if is-playing: HorizontalLayout {
+                    spacing: 4px;
+                    horizontal-stretch: 0;
+
+                    if !is-paused: Image {
+                        source: @image-url("../icons/speaker.svg");
+                        colorize: Theme.clip-amber;
+                        width: 10px;
+                        height: 10px;
+                        y: (parent.height - self.height) / 2;
+                    }
+
+                    if is-paused: Image {
+                        source: @image-url("../icons/pause.svg");
+                        colorize: Theme.clip-amber;
+                        width: 10px;
+                        height: 10px;
+                        y: (parent.height - self.height) / 2;
+                    }
+
+                    Text {
+                        text: is-paused ? "PAUSED" : "PLAYING";
+                        font-size: 10px;
+                        font-weight: 700;
+                        color: Theme.clip-amber;
+                        letter-spacing: 1.5px;
+                        vertical-alignment: center;
+                    }
+                }
+
+                Rectangle { horizontal-stretch: 1; }
+
+                Text {
+                    text: is-playing ? position-text + " / " + duration-text : card.duration;
+                    font-family: Theme.font-mono;
+                    font-size: 11px;
+                    color: Theme.text-sub;
+                    vertical-alignment: center;
+                    horizontal-stretch: 0;
                 }
             }
 
             if card.is-new: NewBadge {
-                x: 12px;
-                y: 12px;
+                x: 0px;
+                y: 0px;
             }
+        }
 
-            if !card.is-new && !is-playing: ClipBadge {
-                x: 12px;
-                y: 12px;
-            }
+        Rectangle { height: 10px; }
 
-            if is-playing: PlayingBadge {
-                paused: is-paused;
-                x: 12px;
-                y: 12px;
-            }
+        // Wave row: play ring + dot-matrix band
+        HorizontalLayout {
+            spacing: 12px;
 
-            PlayButton {
+            play-ring := ClipPlayRing {
                 is-playing: root.is-playing;
                 is-paused: root.is-paused;
-                x: (parent.width - self.width) / 2;
-                y: (parent.height - self.height) / 2;
             }
 
-            Rectangle {
-                x: parent.width - self.width - 10px;
-                y: parent.height - self.height - 10px;
-                width: dur-text.preferred-width + 16px;
-                height: 22px;
-                border-radius: 4px;
-                background: #000000aa;
-
-                dur-text := Text {
-                    text: is-playing ? position-text + " / " + duration-text : card.duration;
-                    font-size: 11px;
-                    color: is-playing ? Theme.clip-amber : white;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
+            DotWaveform {
+                height: 78px;
+                horizontal-stretch: 1;
+                peaks: card.waveform;
+                progress: root.progress;
+                is-playing: root.is-playing;
+                is-paused: root.is-paused;
+                rows: 15;
+                dot-size: 3px;
+                row-pitch: 5px;
+                duration-ms: root.is-playing ? root.clip-duration-ms : card.duration-ms;
+                seek(f) => { root.seek(f); }
+                play-at(f) => {
+                    root.play-clicked(card.clip-path);
+                    root.seek(f);
                 }
             }
         }
 
-        // Scrub bar (only when playing/paused)
-        if is-playing: Rectangle {
-            height: 6px;
-            background: Theme.card-bg-inset;
-
-            Rectangle {
-                x: 0;
-                width: parent.width * progress;
-                height: parent.height;
-                background: Theme.clip-amber;
-                border-radius: 0px;
-            }
-
-            // Scrub knob
-            Rectangle {
-                x: parent.width * progress - 4px;
-                y: (parent.height - self.height) / 2;
-                width: 8px;
-                height: 8px;
-                border-radius: 4px;
-                background: white;
-                visible: scrub-area.has-hover || scrub-area.pressed;
-            }
-
-            scrub-area := TouchArea {
-                mouse-cursor: pointer;
-                clicked => {
-                    root.seek(self.mouse-x / self.width);
-                }
-            }
-        }
+        Rectangle { height: 12px; }
 
         // Card body
         VerticalLayout {
-            padding: 12px;
-            padding-left: 14px;
-            padding-right: 14px;
             spacing: 6px;
             vertical-stretch: 0;
 
@@ -403,10 +491,11 @@ component ClipCard inherits Rectangle {
     in property <bool> is-playing: false;
     in property <bool> is-paused: false;
     in property <float> progress: 0.0;
-    in property <float> anim-tick: 0.0;
     in property <string> position-text: "";
     in property <string> duration-text: "";
+    in property <int> clip-duration-ms: 0;
     callback play-clicked(string);
+    callback seek(float);
 
     background: clip-hover.has-hover ? Theme.card-bg-hover : Theme.card-bg;
     border-radius: 10px;
@@ -417,121 +506,133 @@ component ClipCard inherits Rectangle {
     clip: true;
 
     VerticalLayout {
-        // Waveform area
+        padding: 12px;
+        spacing: 0px;
+
+        // Header
         Rectangle {
-            vertical-stretch: 1;
-            min-height: 60px;
-            background: is-playing
-                ? (Theme.dark ? #1a14001A : #fef6e41A)
-                : Theme.card-bg-inset;
-            border-radius: 4px;
+            height: 16px;
 
             HorizontalLayout {
-                alignment: center;
-                spacing: 2px;
-                padding-left: 12px;
-                padding-right: 12px;
+                if !is-playing: HorizontalLayout {
+                    spacing: 5px;
+                    horizontal-stretch: 0;
 
-                for entry in [
-                    {h: 0.35, i: 0.0}, {h: 0.70, i: 1.0}, {h: 1.00, i: 2.0}, {h: 0.50, i: 3.0},
-                    {h: 0.90, i: 4.0}, {h: 0.40, i: 5.0}, {h: 0.80, i: 6.0}, {h: 0.25, i: 7.0},
-                    {h: 0.65, i: 8.0}, {h: 1.00, i: 9.0}, {h: 0.45, i: 10.0}, {h: 0.75, i: 11.0},
-                    {h: 0.30, i: 12.0}
-                ]: Rectangle {
-                    width: 2px;
-
-                    Rectangle {
-                        property <float> wave-h: is-playing && !is-paused
-                            ? 0.5 + 0.5 * sin((anim-tick + entry.i * 0.5) * 360deg)
-                            : entry.h;
-                        property <float> bar-progress: entry.i / 13.0;
-
-                        width: parent.width;
-                        height: 30px * wave-h;
+                    Image {
+                        source: @image-url("../icons/scissors.svg");
+                        colorize: Theme.clip-amber;
+                        width: 10px;
+                        height: 10px;
                         y: (parent.height - self.height) / 2;
-                        border-radius: 1px;
-                        background: is-playing
-                            ? (is-paused
-                                ? (bar-progress <= progress ? Theme.clip-amber : Theme.text-dim)
-                                : Theme.clip-amber)
-                            : Theme.clip-amber;
-                        opacity: is-playing && !is-paused
-                            ? 0.6 + 0.4 * wave-h
-                            : (is-paused ? (bar-progress <= progress ? 0.8 : 0.3) : 0.5 + entry.h * 0.5);
                     }
+
+                    Text {
+                        text: "VOICE CLIP";
+                        font-size: 10px;
+                        font-weight: 700;
+                        color: Theme.clip-amber;
+                        letter-spacing: 1.5px;
+                        vertical-alignment: center;
+                    }
+                }
+
+                if is-playing: HorizontalLayout {
+                    spacing: 4px;
+                    horizontal-stretch: 0;
+
+                    if !is-paused: Image {
+                        source: @image-url("../icons/speaker.svg");
+                        colorize: Theme.clip-amber;
+                        width: 10px;
+                        height: 10px;
+                        y: (parent.height - self.height) / 2;
+                    }
+
+                    if is-paused: Image {
+                        source: @image-url("../icons/pause.svg");
+                        colorize: Theme.clip-amber;
+                        width: 10px;
+                        height: 10px;
+                        y: (parent.height - self.height) / 2;
+                    }
+
+                    Text {
+                        text: is-paused ? "PAUSED" : "PLAYING";
+                        font-size: 10px;
+                        font-weight: 700;
+                        color: Theme.clip-amber;
+                        letter-spacing: 1.5px;
+                        vertical-alignment: center;
+                    }
+                }
+
+                Rectangle { horizontal-stretch: 1; }
+
+                Text {
+                    text: is-playing ? position-text + " / " + duration-text : card.duration;
+                    font-family: Theme.font-mono;
+                    font-size: 11px;
+                    color: Theme.text-sub;
+                    vertical-alignment: center;
+                    horizontal-stretch: 0;
                 }
             }
 
             if card.is-new: NewBadge {
-                x: 8px;
-                y: 8px;
-            }
-
-            if !card.is-new && !is-playing: ClipBadge {
-                small: true;
-                x: 8px;
-                y: 8px;
-            }
-
-            if is-playing: PlayingBadge {
-                paused: is-paused;
-                x: 8px;
-                y: 8px;
-            }
-
-            PlayButton {
-                small: true;
-                is-playing: root.is-playing;
-                is-paused: root.is-paused;
-                x: (parent.width - self.width) / 2;
-                y: (parent.height - self.height) / 2;
+                x: 0px;
+                y: 0px;
             }
         }
 
-        // Card body
-        VerticalLayout {
-            padding: 10px;
-            padding-left: 12px;
-            padding-right: 12px;
-            spacing: 4px;
-            vertical-stretch: 0;
+        Rectangle { height: 8px; }
 
-            HorizontalLayout {
-                spacing: 4px;
-                height: 14px;
+        // Wave band with corner play ring
+        Rectangle {
+            height: 38px;
 
-                Image {
-                    source: @image-url("../icons/scissors.svg");
-                    colorize: Theme.clip-amber;
-                    width: 10px;
-                    height: 10px;
-                    y: (parent.height - self.height) / 2;
-                }
-
-                Text {
-                    text: is-playing
-                        ? position-text + " / " + duration-text
-                        : "VOICE CLIP · " + card.duration;
-                    font-size: 10px;
-                    font-weight: 700;
-                    color: Theme.clip-amber;
-                    vertical-alignment: center;
+            DotWaveform {
+                width: parent.width;
+                height: parent.height;
+                peaks: card.waveform;
+                progress: root.progress;
+                is-playing: root.is-playing;
+                is-paused: root.is-paused;
+                rows: 9;
+                dot-size: 2px;
+                row-pitch: 4px;
+                duration-ms: root.is-playing ? root.clip-duration-ms : card.duration-ms;
+                seek(f) => { root.seek(f); }
+                play-at(f) => {
+                    root.play-clicked(card.clip-path);
+                    root.seek(f);
                 }
             }
 
-            Text {
-                text: card.title != "" ? card.title : card.actor-name + " clipped that";
-                font-size: 13px;
-                font-weight: 500;
-                color: Theme.text-primary;
-                overflow: elide;
+            std-play := ClipPlayRing {
+                small: true;
+                is-playing: root.is-playing;
+                is-paused: root.is-paused;
+                x: parent.width - self.width - 4px;
+                y: 4px;
             }
+        }
 
-            Text {
-                text: card.timestamp + (card.game-name != "" ? " · " + card.game-name : "");
-                font-size: 11px;
-                color: Theme.text-sub;
-            }
+        Rectangle { height: 10px; }
+
+        Text {
+            text: card.title != "" ? card.title : card.actor-name + " clipped that";
+            font-size: 13px;
+            font-weight: 500;
+            color: Theme.text-primary;
+            overflow: elide;
+        }
+
+        Rectangle { height: 6px; }
+
+        Text {
+            text: card.timestamp + (card.game-name != "" ? " · " + card.game-name : "");
+            font-size: 11px;
+            color: Theme.text-sub;
         }
     }
 
@@ -1756,6 +1857,7 @@ component FeedSlot inherits Rectangle {
     in property <float> clip-anim-tick: 0.0;
     in property <string> clip-position-text: "";
     in property <string> clip-duration-text: "";
+    in property <int> clip-duration-ms: 0;
     callback play-clicked(string);
     callback seek-clip(float);
     callback invite-clicked();
@@ -1769,9 +1871,9 @@ component FeedSlot inherits Rectangle {
         is-playing: root.card.clip-path != "" && root.card.clip-path == root.playing-path;
         is-paused: root.clip-paused;
         progress: root.clip-progress;
-        anim-tick: root.clip-anim-tick;
         position-text: root.clip-position-text;
         duration-text: root.clip-duration-text;
+        clip-duration-ms: root.clip-duration-ms;
         play-clicked(id) => { root.play-clicked(id); }
         seek(v) => { root.seek-clip(v); }
     }
@@ -1780,10 +1882,11 @@ component FeedSlot inherits Rectangle {
         is-playing: root.card.clip-path != "" && root.card.clip-path == root.playing-path;
         is-paused: root.clip-paused;
         progress: root.clip-progress;
-        anim-tick: root.clip-anim-tick;
         position-text: root.clip-position-text;
         duration-text: root.clip-duration-text;
+        clip-duration-ms: root.clip-duration-ms;
         play-clicked(id) => { root.play-clicked(id); }
+        seek(v) => { root.seek-clip(v); }
     }
     if card.card-type == "recap": RecapCard {
         width: parent.width; height: parent.height; card: root.card;
@@ -1881,6 +1984,7 @@ export component CrewFeed inherits Rectangle {
     in property <float> clip-anim-tick: 0.0;
     in property <string> clip-position-text: "";
     in property <string> clip-duration-text: "";
+    in property <int> clip-duration-ms: 0;
 
     callback card-clicked(string);
     callback invite-clicked();
@@ -2008,6 +2112,7 @@ export component CrewFeed inherits Rectangle {
                         clip-anim-tick: root.clip-anim-tick;
                         clip-position-text: root.clip-position-text;
                         clip-duration-text: root.clip-duration-text;
+                        clip-duration-ms: root.clip-duration-ms;
                         play-clicked(id) => { root.card-clicked(id); }
                         seek-clip(v) => { root.seek-clip(v); }
                         invite-clicked => { root.invite-clicked(); }
@@ -2075,6 +2180,7 @@ export component CrewFeed inherits Rectangle {
                         clip-anim-tick: root.clip-anim-tick;
                         clip-position-text: root.clip-position-text;
                         clip-duration-text: root.clip-duration-text;
+                        clip-duration-ms: root.clip-duration-ms;
                         play-clicked(id) => { root.card-clicked(id); }
                         seek-clip(v) => { root.seek-clip(v); }
                         invite-clicked => { root.invite-clicked(); }
@@ -2092,6 +2198,7 @@ export component CrewFeed inherits Rectangle {
                         clip-anim-tick: root.clip-anim-tick;
                         clip-position-text: root.clip-position-text;
                         clip-duration-text: root.clip-duration-text;
+                        clip-duration-ms: root.clip-duration-ms;
                         play-clicked(id) => { root.card-clicked(id); }
                         seek-clip(v) => { root.seek-clip(v); }
                         invite-clicked => { root.invite-clicked(); }
@@ -2117,6 +2224,7 @@ export component CrewFeed inherits Rectangle {
                         clip-anim-tick: root.clip-anim-tick;
                         clip-position-text: root.clip-position-text;
                         clip-duration-text: root.clip-duration-text;
+                        clip-duration-ms: root.clip-duration-ms;
                         play-clicked(id) => { root.card-clicked(id); }
                         seek-clip(v) => { root.seek-clip(v); }
                         invite-clicked => { root.invite-clicked(); }
@@ -2140,6 +2248,7 @@ export component CrewFeed inherits Rectangle {
                         clip-anim-tick: root.clip-anim-tick;
                         clip-position-text: root.clip-position-text;
                         clip-duration-text: root.clip-duration-text;
+                        clip-duration-ms: root.clip-duration-ms;
                         play-clicked(id) => { root.card-clicked(id); }
                         seek-clip(v) => { root.seek-clip(v); }
                         invite-clicked => { root.invite-clicked(); }
@@ -2157,6 +2266,7 @@ export component CrewFeed inherits Rectangle {
                         clip-anim-tick: root.clip-anim-tick;
                         clip-position-text: root.clip-position-text;
                         clip-duration-text: root.clip-duration-text;
+                        clip-duration-ms: root.clip-duration-ms;
                         play-clicked(id) => { root.card-clicked(id); }
                         seek-clip(v) => { root.seek-clip(v); }
                         invite-clicked => { root.invite-clicked(); }
@@ -2182,6 +2292,7 @@ export component CrewFeed inherits Rectangle {
                         clip-anim-tick: root.clip-anim-tick;
                         clip-position-text: root.clip-position-text;
                         clip-duration-text: root.clip-duration-text;
+                        clip-duration-ms: root.clip-duration-ms;
                         play-clicked(id) => { root.card-clicked(id); }
                         seek-clip(v) => { root.seek-clip(v); }
                         invite-clicked => { root.invite-clicked(); }
@@ -2224,6 +2335,7 @@ export component CrewFeed inherits Rectangle {
                             clip-anim-tick: root.clip-anim-tick;
                             clip-position-text: root.clip-position-text;
                             clip-duration-text: root.clip-duration-text;
+                            clip-duration-ms: root.clip-duration-ms;
                             play-clicked(id) => { root.card-clicked(id); }
                             seek-clip(v) => { root.seek-clip(v); }
                             session-seen(id) => { root.session-seen(id); }

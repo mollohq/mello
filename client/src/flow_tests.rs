@@ -5,10 +5,14 @@
 //! wiring, so they fail when a change alters what the UI asks core to do or how
 //! it reacts to core events.
 
+use base64::Engine as _;
 use i_slint_backend_testing::ElementHandle;
-use mello_core::{Command, Event};
+use mello_core::crew_events::{FeedEntry, FeedResponse, FeedSection};
+use mello_core::{decode_clip_waveform, Command, Event};
+use slint::Model;
 
 use crate::testkit::{Harness, MainWindow};
+use crate::FeedCardData;
 
 /// Which top-level screen the window is showing.
 ///
@@ -1306,4 +1310,115 @@ fn onboarding_social_buttons_link_rather_than_sign_in() {
              user just created, and fails outright for a first-time link"
         );
     }
+}
+
+fn waveform_peaks(model: &slint::ModelRc<f32>) -> Vec<f32> {
+    (0..model.row_count())
+        .filter_map(|i| model.row_data(i))
+        .collect()
+}
+
+fn find_clip_card(cards: &slint::ModelRc<FeedCardData>) -> Option<FeedCardData> {
+    for i in 0..cards.row_count() {
+        if let Some(c) = cards.row_data(i) {
+            if c.card_type == "clip" {
+                return Some(c);
+            }
+        }
+    }
+    None
+}
+
+fn sample_waveform_b64() -> (String, Vec<f32>) {
+    let bytes: Vec<u8> = (0..64).map(|i| (i * 4) as u8).collect();
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+    let peaks = decode_clip_waveform(&b64);
+    (b64, peaks)
+}
+
+/// ★ Regression: optimistic clip card carries decoded waveform peaks.
+#[test]
+fn clip_captured_populates_feed_card_waveform() {
+    let mut h = Harness::new();
+    let (b64, expected) = sample_waveform_b64();
+
+    h.emit(Event::ClipCaptured {
+        clip_id: "clip-opt".into(),
+        path: "/tmp/clip.wav".into(),
+        duration_seconds: 30.0,
+        waveform: b64,
+    });
+
+    let card = find_clip_card(&h.app().get_feed_cards()).expect("clip card in feed");
+    let peaks = waveform_peaks(&card.waveform);
+    assert_eq!(peaks.len(), 64);
+    assert_eq!(peaks, expected);
+}
+
+/// ★ Regression: crew feed clip entries decode base64 waveform metadata.
+#[test]
+fn feed_loaded_decodes_clip_waveform() {
+    let mut h = Harness::new();
+    let (b64, expected) = sample_waveform_b64();
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64;
+
+    h.emit(Event::FeedLoaded {
+        response: FeedResponse {
+            crew_id: "crew-1".into(),
+            sections: vec![FeedSection {
+                id: "this_week".into(),
+                entries: vec![FeedEntry {
+                    id: "feed-clip-1".into(),
+                    entry_type: "clip".into(),
+                    role: "standard".into(),
+                    size: "md".into(),
+                    ts: now_ms,
+                    data: serde_json::json!({
+                        "waveform": b64,
+                        "duration_seconds": 30.0,
+                        "media_url": "/clips/test.wav",
+                        "clipper_name": "alice",
+                    }),
+                }],
+            }],
+        },
+    });
+
+    let card = find_clip_card(&h.app().get_feed_cards()).expect("clip card from feed");
+    let peaks = waveform_peaks(&card.waveform);
+    assert_eq!(peaks.len(), 64);
+    assert_eq!(peaks, expected);
+}
+
+/// ★ Regression: pause/resume callbacks sync clip-paused UI state.
+#[test]
+fn pause_and_resume_clip_toggle_paused_property() {
+    let h = Harness::new();
+
+    h.app().invoke_pause_clip();
+    assert!(h.app().get_clip_paused(), "pause-clip must set clip-paused");
+
+    h.app().invoke_resume_clip();
+    assert!(
+        !h.app().get_clip_paused(),
+        "resume-clip must clear clip-paused"
+    );
+}
+
+/// ★ Regression: seek uses clip-duration-ms for exact position_ms.
+#[test]
+fn seek_clip_uses_duration_ms_for_position() {
+    let mut h = Harness::new();
+    h.app().set_clip_duration_ms(30_000);
+    h.app().invoke_seek_clip(0.5);
+
+    let cmds = h.commands();
+    assert!(
+        cmds.iter()
+            .any(|c| matches!(c, Command::SeekClip { position_ms: 15000 })),
+        "expected SeekClip at 15000ms, got {cmds:?}"
+    );
 }

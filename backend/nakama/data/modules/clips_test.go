@@ -1,6 +1,67 @@
 package main
 
-import "testing"
+import (
+	"encoding/base64"
+	"encoding/json"
+	"testing"
+)
+
+func clipWaveformBase64(t *testing.T, nbytes int) string {
+	t.Helper()
+	raw := make([]byte, nbytes)
+	for i := range raw {
+		raw[i] = byte(i)
+	}
+	return base64.StdEncoding.EncodeToString(raw)
+}
+
+func TestValidateClipWaveform_AcceptsEmpty(t *testing.T) {
+	if errStr := validateClipWaveform(""); errStr != "" {
+		t.Fatalf("empty waveform should be accepted, got %q", errStr)
+	}
+}
+
+func TestValidateClipWaveform_Accepts64Bytes(t *testing.T) {
+	data := clipWaveformBase64(t, clipWaveformBytes)
+	if errStr := validateClipWaveform(data); errStr != "" {
+		t.Fatalf("valid waveform rejected: %s", errStr)
+	}
+}
+
+func TestValidateClipWaveform_RejectsBadBase64(t *testing.T) {
+	if errStr := validateClipWaveform("not-base64!!"); errStr != "invalid waveform" {
+		t.Fatalf("expected invalid waveform, got %q", errStr)
+	}
+}
+
+func TestValidateClipWaveform_RejectsWrongLength(t *testing.T) {
+	for _, n := range []int{1, 63, 65} {
+		data := clipWaveformBase64(t, n)
+		if errStr := validateClipWaveform(data); errStr != "waveform must be 64 bytes" {
+			t.Fatalf("len %d: expected length rejection, got %q", n, errStr)
+		}
+	}
+}
+
+func TestStoredClipWaveformRoundTripsJSON(t *testing.T) {
+	waveform := clipWaveformBase64(t, clipWaveformBytes)
+	clip := StoredClip{
+		EventID:  "evt_1",
+		ClipID:   "clip_1",
+		Waveform: waveform,
+	}
+	data, err := json.Marshal(clip)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var got StoredClip
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got.Waveform != waveform {
+		t.Fatalf("waveform not preserved: got %q want %q", got.Waveform, waveform)
+	}
+}
 
 func TestCapClipsBelowCapIsNoOp(t *testing.T) {
 	clips := []StoredClip{

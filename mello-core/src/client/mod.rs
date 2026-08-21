@@ -12,6 +12,7 @@ mod stream_ffi;
 mod streaming;
 mod tick_gating;
 mod voice;
+pub mod waveform;
 
 use tokio::sync::mpsc;
 
@@ -948,8 +949,9 @@ impl Client {
                 clip_id,
                 duration_seconds,
                 local_path,
+                waveform,
             } => {
-                self.handle_post_clip(&crew_id, &clip_id, duration_seconds, &local_path)
+                self.handle_post_clip(&crew_id, &clip_id, duration_seconds, &local_path, &waveform)
                     .await;
             }
             Command::UploadClip {
