@@ -1,6 +1,6 @@
 # Game Surfacing — spec 19 follow-up (the PR after gamesense-v2)
 
-> **Status:** Draft for review
+> **Status:** All work items implemented on `feat/game-surfacing` (2026-08-21). See §5 for per-item state.
 > **Depends on:** `feat/gamesense-v2` merged (honest sessions, co-play `player_ids`, `active_min`, `igdb_id`, presence published)
 > **Amends:** [19-FEED-CURATION-PERSONAL-STATS.md](../specs/19-FEED-CURATION-PERSONAL-STATS.md) §1 locked decision on routine sessions (see §2 below)
 
@@ -94,13 +94,29 @@ in Settings. Per-game hide is out of scope for now.
 
 ## 5. Build order — each step shippable, ordered by visible value
 
-1. **B0 + C1** — the dream sentence appears in the feed for typical crews. One
-   backend scorer change + one card variant. Fastest visible win.
-2. **C2** — member presence line; Discord parity in the sidebar.
-3. **B1** — daily rollup; scales the feed to loud crews.
-4. **B2** — truthful co-play copy ("you and kim played 2h of CS2").
-5. **A1** — T0 hours in You strip/profile; every game gets stats, not just the
+All items are implemented on `feat/game-surfacing`, in this order:
+
+1. **B0 + C1** — done. The dream sentence appears in the feed for typical crews.
+2. **C2** — done. Member presence line; Discord parity in the sidebar.
+3. **B1** — done. Daily rollup; scales the feed to loud crews.
+4. **B2** — done, as data only. `player_overlap_min` is computed and stored on
+   the `game_session` event, but no surface renders together-time copy yet. That
+   copy is still unwritten, and when it is written it must read `overlap_min` —
+   see the rule in §4.
+5. **A1** — done. T0 hours in the You strip; every game gets stats, not just the
    nine telemetry titles.
+
+The §4 overnight guard now has three implementations that must stay in step:
+`game_session_duration_display` (per session, clip.rs), `weekly_time_text` (per
+week, stats.rs) and `reportableMinutes` (rollup aggregation, crew_feed.go). The
+rollup originally summed raw wall time, which contradicted the very cards it
+summarized.
+
+### Not yet verified on real hardware
+
+The surfaces above are covered by pure-Go and testkit tests, but the feed cards,
+the member line and the consent toggle have not been exercised against a live
+backend with real crew traffic.
 
 ## 6. Out of scope
 
