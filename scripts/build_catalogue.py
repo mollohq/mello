@@ -310,7 +310,7 @@ def build_head(games, covers, popularity, size, mappings):
 
     Layout (little-endian):
         magic "MHD2" | count u32 | strings_off u32 | exe_count u32
-        count x 28-byte record, sorted by igdb_id for binary search:
+        count x 32-byte record, sorted by igdb_id for binary search:
             igdb_id u32, name_off u32, slug_off u32, short_off u32,
             cover_off u32, gameid_off u32,
             name_len u8, slug_len u8, short_len u8, cover_len u8
@@ -486,7 +486,7 @@ def main():
     gz = len(gzip.compress(head, 9))
     print(f"\nhead.bin        {head_count:>7,} games   {len(head)/1024:>8.1f} KB  ({gz/1024:.1f} KB gz, bundled)")
     print(f"appid_index.bin {index_count:>7,} appids  {len(index)/1024:>8.1f} KB  "
-          f"({len(gzip.compress(index,9))/1024:.1f} KB gz, served)")
+          f"({len(gzip.compress(index,9))/1024:.1f} KB gz, bundled)")
     print(f"\nWrote {OUT_DIR}")
 
 

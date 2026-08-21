@@ -76,7 +76,7 @@
     { "game_id": "dead-by-daylight", "igdb_slug": "dead-by-daylight", "exe": ["DeadByDaylight-Win64-Shipping.exe"] },
     { "game_id": "helldivers-2", "igdb_slug": "helldivers-ii", "exe": ["helldivers2.exe"] },
     { "game_id": "marvel-rivals", "igdb_slug": "marvel-rivals", "exe": ["MarvelRivals-Win64-Shipping.exe"] },
-    { "game_id": "the-finals", "igdb_slug": "the-finals", "exe": ["Discovery.exe"] },
+    { "game_id": "the-finals", "igdb_slug": "the-finals", "exe": ["Discovery.exe"], "path_contains": "finals" },
     { "game_id": "elden-ring", "igdb_slug": "elden-ring", "exe": ["eldenring.exe"] },
     { "game_id": "baldurs-gate-3", "igdb_slug": "baldurs-gate-iii", "exe": ["bg3.exe", "bg3_dx11.exe"] },
     { "game_id": "lost-ark", "igdb_slug": "lost-ark", "exe": ["LostArk.exe"] },

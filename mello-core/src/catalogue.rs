@@ -1,14 +1,15 @@
 //! The game catalogue: IGDB identity and display metadata, derived from the
 //! daily data dumps by `scripts/build_catalogue.py`.
 //!
-//! Two artifacts, split by how often they change and how they reach the client
-//! (see `plans/GAME-SENSING-V2.md` §2.2):
+//! Two artifacts, split by how much metadata each carries (see
+//! `plans/GAME-SENSING-V2.md` §2.2). Both are compile-time bundled via
+//! `include_bytes!` and validated on load:
 //!
-//! * **head** — the ~2,000 most-played games with full display metadata,
-//!   compiled into the binary. Popular games resolve instantly and offline.
+//! * **head** — the ~2,000 most-played games with full display metadata.
+//!   Popular games resolve instantly and offline.
 //! * **appid index** — `steam_appid -> igdb_id` for every game IGDB knows
-//!   (~137k). Fetched at runtime and cached on disk, so catalogue freshness is
-//!   decoupled from app releases.
+//!   (~137k). Every Steam game resolves to an IGDB id offline from first
+//!   launch.
 //!
 //! The split exists because the client does not need *names* for 183k games —
 //! it needs to know **which game** an install is, since the igdb_id keys
