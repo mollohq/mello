@@ -26,19 +26,19 @@ const (
 	// feedMinQuality mirrors the Rust i32::MIN/2 sentinel for non-preview cards.
 	feedMinQuality = -(1 << 30)
 
-	// Game-session budget (spec 19): only *notable* sessions earn a feed card;
-	// routine play lives in the weekly recap. Keeps the feed from being buried
-	// when many crew members play throughout the week.
-	feedGameSessionMaxCards   = 2  // cap on notable game_session cards in this_week
-	feedGameSessionNotableMin = 50 // gameSessionQuality floor to count as notable
+	// Game-session budget (spec 19 + game-surfacing B0): adaptive floor and cap
+	// scale with how many game_session cards are in the input week. Quiet crews
+	// may surface compact T0 cards for routine play; loud crews keep only the
+	// most notable sessions. The weekly recap remains the durable aggregate.
+	feedGameSessionMaxCards   = 2  // default cap when input has >5 game sessions
+	feedGameSessionNotableMin = 50 // default floor when input has >15 game sessions
 )
 
 // feedQuietBackendTypes are the low-signal pulse events rendered as quiet rows
 // (ports isQuietRow from Timeline.swift plus the desktop priority). Moments and
 // clips are full cards and are intentionally absent here.
-// game_session is intentionally NOT quiet: routine sessions are pruned by the
-// budget (pruneGameSessions), so the ones that reach the feed are notable and
-// earn the rich GameSessionCard at standard size (spec 19 B2).
+// game_session is not in this map: T0-only sessions render compact (quiet);
+// telemetry-backed sessions that survive pruning use standard size (spec 19 B2).
 var feedQuietBackendTypes = map[string]bool{
 	"voice_session": true,
 	"member_joined": true,
@@ -181,9 +181,50 @@ func decodeGameSessionData(raw interface{}) (GameSessionData, bool) {
 	return d, true
 }
 
-// gameSessionQuality scores a game_session card's notability (spec 19). Routine
-// sessions score below feedGameSessionNotableMin and never earn a feed card —
-// they're represented in the weekly recap instead.
+// gameSessionT0Score awards duration and co-play signals that need no telemetry.
+func gameSessionT0Score(d GameSessionData) int {
+	score := 0
+	switch {
+	case d.DurationMin >= 240:
+		score += 40
+	case d.DurationMin >= 120:
+		score += 25
+	case d.DurationMin >= 30:
+		score += 10
+	}
+	coBonus := 0
+	if n := len(d.PlayerIDs); n > 0 {
+		coBonus = (n - 1) * 20
+		if coBonus > 60 {
+			coBonus = 60
+		}
+	}
+	return score + coBonus
+}
+
+// gameSessionNotableFloor returns the quality floor for game_session pruning
+// based on how many game_session cards are in the input week.
+func gameSessionNotableFloor(gameSessionCount int) int {
+	switch {
+	case gameSessionCount <= 5:
+		return 10
+	case gameSessionCount <= 15:
+		return 30
+	default:
+		return feedGameSessionNotableMin
+	}
+}
+
+// gameSessionCardCap returns how many game_session cards may survive pruning.
+func gameSessionCardCap(gameSessionCount int) int {
+	if gameSessionCount <= 5 {
+		return 4
+	}
+	return feedGameSessionMaxCards
+}
+
+// gameSessionQuality scores a game_session card's notability (spec 19 + B0).
+// Every session gets a T0 base; telemetry bonuses stack on top when present.
 func gameSessionQuality(c feedCard) int {
 	if c.backendType != "game_session" {
 		return feedMinQuality
@@ -192,11 +233,11 @@ func gameSessionQuality(c feedCard) int {
 	if !ok {
 		return 0
 	}
+	score := gameSessionT0Score(d)
 	matches := d.Wins + d.Losses + d.Draws
 	if matches == 0 {
-		return 0 // no telemetry outcomes → never notable
+		return score
 	}
-	score := 0
 	streak := d.StreakAfter
 	if streak < 0 {
 		streak = -streak
@@ -222,10 +263,19 @@ func gameSessionQuality(c feedCard) int {
 	return score
 }
 
-// pruneGameSessions drops routine game_session cards and keeps only the most
-// notable ones (above the floor, capped at feedGameSessionMaxCards). Non-game
-// cards pass through untouched and in order. Pure, so the budget is testable.
+// pruneGameSessions drops low-scoring game_session cards and keeps only the
+// most notable ones (above an adaptive floor, capped by volume). Non-game cards
+// pass through untouched and in order. Pure, so the budget is testable.
 func pruneGameSessions(cards []feedCard) []feedCard {
+	gameSessionCount := 0
+	for _, c := range cards {
+		if c.backendType == "game_session" {
+			gameSessionCount++
+		}
+	}
+	floor := gameSessionNotableFloor(gameSessionCount)
+	cap := gameSessionCardCap(gameSessionCount)
+
 	type scored struct {
 		card feedCard
 		q    int
@@ -237,13 +287,13 @@ func pruneGameSessions(cards []feedCard) []feedCard {
 			out = append(out, c)
 			continue
 		}
-		if q := gameSessionQuality(c); q >= feedGameSessionNotableMin {
+		if q := gameSessionQuality(c); q >= floor {
 			notable = append(notable, scored{c, q})
 		}
 	}
 	sort.SliceStable(notable, func(a, b int) bool { return notable[a].q > notable[b].q })
-	if len(notable) > feedGameSessionMaxCards {
-		notable = notable[:feedGameSessionMaxCards]
+	if len(notable) > cap {
+		notable = notable[:cap]
 	}
 	for _, s := range notable {
 		out = append(out, s.card)
@@ -258,6 +308,16 @@ func fillerPriority(c feedCard) int {
 	case "session-preview":
 		return sessionPreviewQuality(c)
 	case "session":
+		if c.backendType == "game_session" {
+			q := gameSessionQuality(c)
+			if q < 0 {
+				q = 0
+			}
+			if q > 100 {
+				q = 100
+			}
+			return 100 + q
+		}
 		return 100
 	case "catchup":
 		return 10
@@ -374,6 +434,13 @@ func fillerRole(c feedCard) string {
 	if feedQuietBackendTypes[c.backendType] {
 		return "quiet"
 	}
+	if c.backendType == "game_session" {
+		if d, ok := decodeGameSessionData(c.data); ok {
+			if d.Wins+d.Losses+d.Draws == 0 {
+				return "quiet"
+			}
+		}
+	}
 	if c.feedType == "session-preview" && sessionPreviewQuality(c) < 0 {
 		return "quiet"
 	}
@@ -387,8 +454,7 @@ func fillerRole(c feedCard) string {
 // A live stream is not surfaced here yet; the live-stream hero is owned by the
 // separate multi-stream PR. Clients keep showing live streams from crew_state.
 func buildThisWeek(cards []feedCard) []FeedEntry {
-	// Budget game sessions first: only notable ones earn a card; routine play
-	// lives in the weekly recap (spec 19).
+	// Budget game sessions first: adaptive floor/cap decides which earn a card.
 	cards = pruneGameSessions(cards)
 
 	used := make([]bool, len(cards))
