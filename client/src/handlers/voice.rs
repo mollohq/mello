@@ -5,7 +5,7 @@ use slint::Model;
 
 use crate::app_context::AppContext;
 use crate::converters::{
-    channel_to_ui, channels_to_ui, set_level_history, set_member_speaking,
+    channel_to_ui, channels_to_ui, game_lines_from_members, set_level_history, set_member_speaking,
     set_voice_member_speaking, update_active_crew_card, voice_members_to_ui, VoiceUiCtx,
 };
 use crate::{AudioDeviceData, MemberData, VoiceChannelData, VoiceChannelMember};
@@ -222,6 +222,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
                         if is_joined {
                             ch.expanded = true;
                             let uav = ctx.app.get_user_avatar();
+                            let game_lines = game_lines_from_members(&ctx.app.get_members());
                             let vctx = VoiceUiCtx {
                                 local_user_id: &my_id,
                                 user_avatar: &uav,
@@ -229,6 +230,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
                                 cache: &ctx.avatar_cache.borrow(),
                                 local_muted: ctx.app.get_mic_muted(),
                                 local_deafened: ctx.app.get_deafened(),
+                                game_lines: &game_lines,
                             };
                             let ch_members = voice_members_to_ui(&voice_members, &vctx);
                             ch.member_count = ch_members.len() as i32;
@@ -292,6 +294,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
                         let mut ch = current_channels.row_data(i).unwrap();
                         if ch.id == channel_id.as_str() {
                             let uav = ctx.app.get_user_avatar();
+                            let game_lines = game_lines_from_members(&ctx.app.get_members());
                             let vctx = VoiceUiCtx {
                                 local_user_id: &local_id,
                                 user_avatar: &uav,
@@ -299,6 +302,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
                                 cache: &ctx.avatar_cache.borrow(),
                                 local_muted: ctx.app.get_mic_muted(),
                                 local_deafened: ctx.app.get_deafened(),
+                                game_lines: &game_lines,
                             };
                             let ch_members = voice_members_to_ui(&voice_members, &vctx);
                             ch.member_count = ch_members.len() as i32;
@@ -322,6 +326,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
                 let avc_id = ctx.active_voice_channel.borrow().clone();
                 let local_id = ctx.app.get_user_id();
                 let uav = ctx.app.get_user_avatar();
+                let game_lines = game_lines_from_members(&ctx.app.get_members());
                 let vctx = VoiceUiCtx {
                     local_user_id: &local_id,
                     user_avatar: &uav,
@@ -329,6 +334,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
                     cache: &ctx.avatar_cache.borrow(),
                     local_muted: ctx.app.get_mic_muted(),
                     local_deafened: ctx.app.get_deafened(),
+                    game_lines: &game_lines,
                 };
                 let vc_data = channels_to_ui(&channels, &avc_id, &vctx);
                 ctx.app
@@ -349,6 +355,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
                     .collect();
                 let local_id = ctx.app.get_user_id();
                 let uav = ctx.app.get_user_avatar();
+                let game_lines = game_lines_from_members(&ctx.app.get_members());
                 let vctx = VoiceUiCtx {
                     local_user_id: &local_id,
                     user_avatar: &uav,
@@ -356,6 +363,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
                     cache: &ctx.avatar_cache.borrow(),
                     local_muted: ctx.app.get_mic_muted(),
                     local_deafened: ctx.app.get_deafened(),
+                    game_lines: &game_lines,
                 };
                 channels.push(channel_to_ui(
                     &channel,
