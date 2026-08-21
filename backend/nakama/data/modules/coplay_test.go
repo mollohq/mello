@@ -1,6 +1,9 @@
 package main
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 // ---------------------------------------------------------------------------
 // Co-play attribution: who else was in the game at the same time.
@@ -109,5 +112,52 @@ func TestLedgerWindowsRespectTheCutoff(t *testing.T) {
 func TestNilLedgerIsSafe(t *testing.T) {
 	if got := ledgerWindows(nil, 0); got != nil {
 		t.Errorf("a missing ledger must not panic or invent windows: %+v", got)
+	}
+}
+
+func TestPresenceCountsAsCoPlay(t *testing.T) {
+	window := win("me", "counter-strike-2", hour, 2*hour) // [hour, 2*hour)
+
+	cases := []struct {
+		name        string
+		gameID      string
+		startedAtMs int64
+		want        bool
+	}{
+		{"same game started during session", "counter-strike-2", hour + hour/2, true},
+		{"same game started just before session end", "counter-strike-2", 2*hour - 1, true},
+		{"different game", "dota-2", hour, false},
+		{"missing start time", "counter-strike-2", 0, false},
+		{"negative start time", "counter-strike-2", -1, false},
+		{"started exactly at session end", "counter-strike-2", 2 * hour, false},
+		{"started after session ended", "counter-strike-2", 3 * hour, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := presenceCountsAsCoPlay(c.gameID, c.startedAtMs, window); got != c.want {
+				t.Fatalf("presenceCountsAsCoPlay(%q, %d, ...) = %v, want %v",
+					c.gameID, c.startedAtMs, got, c.want)
+			}
+		})
+	}
+}
+
+func TestGamePresenceStartedAtMs(t *testing.T) {
+	if got := gamePresenceStartedAtMs(nil); got != 0 {
+		t.Fatalf("nil presence should parse as 0, got %d", got)
+	}
+	if got := gamePresenceStartedAtMs(&GamePresence{StartedAt: ""}); got != 0 {
+		t.Fatalf("empty started_at should parse as 0, got %d", got)
+	}
+	if got := gamePresenceStartedAtMs(&GamePresence{StartedAt: "not-a-timestamp"}); got != 0 {
+		t.Fatalf("invalid started_at should parse as 0, got %d", got)
+	}
+	p := &GamePresence{StartedAt: "2026-08-15T20:00:00Z"}
+	tm, err := time.Parse(time.RFC3339, p.StartedAt)
+	if err != nil {
+		t.Fatalf("test setup parse: %v", err)
+	}
+	if got := gamePresenceStartedAtMs(p); got != tm.UnixMilli() {
+		t.Fatalf("RFC3339 parse = %d, want %d", got, tm.UnixMilli())
 	}
 }

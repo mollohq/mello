@@ -731,6 +731,38 @@ func clampSessionOutcome(n int) int {
 	return n
 }
 
+const maxSessionDurationMin = 1440 // 24h wall-clock cap
+
+// clampSessionDurationMin bounds client-reported wall minutes to [0, maxSessionDurationMin].
+func clampSessionDurationMin(n int) int {
+	if n < 0 {
+		return 0
+	}
+	if n > maxSessionDurationMin {
+		return maxSessionDurationMin
+	}
+	return n
+}
+
+// clampSessionActiveMin bounds foreground minutes to [0, durationMin].
+func clampSessionActiveMin(activeMin, durationMin int) int {
+	if activeMin < 0 {
+		return 0
+	}
+	if activeMin > durationMin {
+		return durationMin
+	}
+	return activeMin
+}
+
+// clampGameSessionDurations sanitises client-reported session lengths before
+// they feed co-play windows or ledger storage.
+func clampGameSessionDurations(durationMin, activeMin int) (int, int) {
+	durationMin = clampSessionDurationMin(durationMin)
+	activeMin = clampSessionActiveMin(activeMin, durationMin)
+	return durationMin, activeMin
+}
+
 const gameSessionDedupCollection = "game_session_dedup"
 
 // isDuplicateGameSession records session_id for the user (create-only write) and
@@ -781,6 +813,7 @@ func GameSessionEndRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, n
 	req.Wins = clampSessionOutcome(req.Wins)
 	req.Losses = clampSessionOutcome(req.Losses)
 	req.Draws = clampSessionOutcome(req.Draws)
+	req.DurationMin, req.ActiveMin = clampGameSessionDurations(req.DurationMin, req.ActiveMin)
 
 	if !isCrewMember(ctx, nk, req.CrewID, userID) {
 		return "", runtime.NewError("not a crew member", 7)

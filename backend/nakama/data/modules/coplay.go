@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"time"
 
 	"github.com/heroiclabs/nakama-common/runtime"
 )
@@ -112,6 +113,34 @@ func ledgerWindows(ledger *CrewEventLedger, sinceMs int64) []sessionWindow {
 	return out
 }
 
+// gamePresenceStartedAtMs parses a live game presence start time to Unix ms.
+// Unparseable or missing values return 0 so stale presences are ignored.
+func gamePresenceStartedAtMs(p *GamePresence) int64 {
+	if p == nil || p.StartedAt == "" {
+		return 0
+	}
+	t, err := time.Parse(time.RFC3339, p.StartedAt)
+	if err != nil {
+		return 0
+	}
+	return t.UnixMilli()
+}
+
+// presenceCountsAsCoPlay reports whether a crewmate's live game presence should
+// attribute them as co-playing in window.
+//
+// Pure so the freshness rules are unit-testable; the Nakama read happens in
+// collectCoPlayers.
+func presenceCountsAsCoPlay(gameID string, startedAtMs int64, window sessionWindow) bool {
+	if gameID != window.GameID {
+		return false
+	}
+	if startedAtMs <= 0 || startedAtMs >= window.EndMs {
+		return false
+	}
+	return true
+}
+
 // collectCoPlayers unions the two sources and resolves usernames.
 //
 // Best-effort throughout: co-play is an enrichment, and a storage hiccup must
@@ -151,7 +180,7 @@ func collectCoPlayers(
 			if err != nil || presence == nil || presence.Game == nil {
 				continue
 			}
-			if presence.Game.GameID == window.GameID {
+			if presenceCountsAsCoPlay(presence.Game.GameID, gamePresenceStartedAtMs(presence.Game), window) {
 				seen[id] = true
 				ids = append(ids, id)
 			}
