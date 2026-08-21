@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, RwLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::library::LibraryIndex;
 use crate::session_store;
@@ -176,6 +176,8 @@ fn scan_loop(ctx: &SendCtx, db: &Arc<RwLock<UserGames>>, tx: &Sender<GameEvent>)
     let mut library = LibraryIndex::scan();
     let mut scans_since_library_refresh = 0u32;
     let mut fast_scans_left = ACTIVE_CADENCE_SCANS;
+    let mut shadow: HashMap<u32, String> = HashMap::new();
+    let mut last_scan_at: Option<Instant> = None;
     let mut orphans = session_store::take();
     if !orphans.is_empty() {
         log::info!(
@@ -190,6 +192,12 @@ fn scan_loop(ctx: &SendCtx, db: &Arc<RwLock<UserGames>>, tx: &Sender<GameEvent>)
     );
 
     loop {
+        let scan_instant = Instant::now();
+        let elapsed_ms = last_scan_at
+            .map(|prev| scan_instant.duration_since(prev).as_millis() as i64)
+            .unwrap_or(0);
+        last_scan_at = Some(scan_instant);
+
         // Scan first, sleep after: the reconciliation below must run at
         // startup, not one interval late.
         let processes = enumerate_game_processes(ctx.0);
@@ -289,49 +297,42 @@ fn scan_loop(ctx: &SendCtx, db: &Arc<RwLock<UserGames>>, tx: &Sender<GameEvent>)
         // --- diff the live set against what we were tracking ---
         let live: HashMap<u32, ActiveGame> = detected.into_iter().map(|g| (g.pid, g)).collect();
         let mut changed = false;
-
-        for (pid, game) in &live {
-            if !active.contains_key(pid) {
-                changed = true;
-                log::info!("[game-sensor] game started: {} (pid={pid})", game.game_name);
-                if tx.send(GameEvent::Started(game.clone())).is_err() {
-                    return;
-                }
+        let (start_events, starts_changed) = coalesce_starts(&mut active, &mut shadow, &live);
+        for ev in start_events {
+            if let GameEvent::Started(ref game) = ev {
+                log::info!(
+                    "[game-sensor] game started: {} (pid={})",
+                    game.game_name,
+                    game.pid
+                );
+            }
+            changed |= starts_changed;
+            if tx.send(ev).is_err() {
+                return;
             }
         }
 
-        let gone: Vec<u32> = active
-            .keys()
-            .copied()
-            .filter(|p| !live.contains_key(p))
-            .collect();
-        for pid in gone {
-            if let Some(game) = active.remove(&pid) {
-                changed = true;
-                log::info!("[game-sensor] game stopped: {} (pid={pid})", game.game_name);
-                let stopped = GameEvent::Stopped {
-                    game: Box::new(game),
-                    ended_at: now,
-                };
-                if tx.send(stopped).is_err() {
-                    return;
-                }
+        let (stop_events, stops_changed) =
+            coalesce_stops(&mut active, &mut shadow, &live, now, &mut primary);
+        for ev in stop_events {
+            if let GameEvent::Stopped { ref game, .. } = ev {
+                log::info!(
+                    "[game-sensor] game stopped: {} (pid={})",
+                    game.game_name,
+                    game.pid
+                );
+            }
+            changed |= stops_changed;
+            if tx.send(ev).is_err() {
+                return;
             }
         }
 
-        // Carry accumulated foreground time forward onto the fresh scan data.
-        let interval_ms = GAME_SCAN_INTERVAL.as_millis() as i64;
-        for (pid, mut game) in live {
-            let carried = active.get(&pid).map_or(0, |prev| prev.foreground_ms);
-            let is_fg = processes
-                .iter()
-                .any(|p| p.pid == pid && (p.is_foreground || p.is_fullscreen));
-            game.foreground_ms = carried + if is_fg { interval_ms } else { 0 };
-            // A resumed session keeps the start time we recovered.
-            if let Some(prev) = active.get(&pid) {
-                game.started_at = prev.started_at;
-            }
-            active.insert(pid, game);
+        // Carry accumulated foreground time forward onto session representatives.
+        for session in active.values_mut() {
+            let is_fg = any_foreground_for_game(&session.game_id, &live, &processes);
+            session.foreground_ms =
+                accumulate_foreground_ms(session.foreground_ms, is_fg, elapsed_ms);
         }
 
         let next_primary = pick_primary(&active, &processes);
@@ -370,6 +371,160 @@ fn scan_loop(ctx: &SendCtx, db: &Arc<RwLock<UserGames>>, tx: &Sender<GameEvent>)
     }
 
     log::info!("[game-sensor] scan loop ended");
+}
+
+/// Foreground time for a scan tick. Elapsed is zero on the first tick so we
+/// never credit a full interval before any wall time has passed.
+fn accumulate_foreground_ms(carried_ms: i64, is_foreground: bool, elapsed_ms: i64) -> i64 {
+    carried_ms + if is_foreground { elapsed_ms } else { 0 }
+}
+
+fn any_foreground_for_game(
+    game_id: &str,
+    live: &HashMap<u32, ActiveGame>,
+    processes: &[RawGameProcess],
+) -> bool {
+    live.iter()
+        .filter(|(_, g)| g.game_id == game_id)
+        .any(|(pid, _)| {
+            processes
+                .iter()
+                .any(|p| p.pid == *pid && (p.is_foreground || p.is_fullscreen))
+        })
+}
+
+fn representative_pid(active: &HashMap<u32, ActiveGame>, game_id: &str) -> Option<u32> {
+    active
+        .iter()
+        .find(|(_, g)| g.game_id == game_id)
+        .map(|(pid, _)| *pid)
+}
+
+fn representative_rank(game: &ActiveGame) -> (u8, u32) {
+    (
+        is_auxiliary_binary(&game.exe.to_ascii_lowercase()) as u8,
+        game.pid,
+    )
+}
+
+fn should_upgrade_representative(rep: &ActiveGame, candidate: &ActiveGame) -> bool {
+    let rep_aux = is_auxiliary_binary(&rep.exe.to_ascii_lowercase());
+    let cand_aux = is_auxiliary_binary(&candidate.exe.to_ascii_lowercase());
+    rep_aux && !cand_aux
+}
+
+fn upgrade_representative(
+    active: &mut HashMap<u32, ActiveGame>,
+    shadow: &mut HashMap<u32, String>,
+    old_pid: u32,
+    new_pid: u32,
+    candidate: &ActiveGame,
+) {
+    let mut upgraded = candidate.clone();
+    if let Some(old) = active.remove(&old_pid) {
+        upgraded.foreground_ms = old.foreground_ms;
+        upgraded.started_at = old.started_at;
+        upgraded.started_at_ms = old.started_at_ms;
+        shadow.insert(old_pid, upgraded.game_id.clone());
+    }
+    active.insert(new_pid, upgraded);
+}
+
+/// Open sessions for newly seen processes. A second pid with the same `game_id`
+/// is tracked silently so helper binaries under one install cannot duplicate
+/// ledger rows.
+fn coalesce_starts(
+    active: &mut HashMap<u32, ActiveGame>,
+    shadow: &mut HashMap<u32, String>,
+    live: &HashMap<u32, ActiveGame>,
+) -> (Vec<GameEvent>, bool) {
+    let mut events = Vec::new();
+    let mut changed = false;
+
+    let mut newcomers: Vec<(u32, ActiveGame)> = live
+        .iter()
+        .filter(|(pid, _)| !active.contains_key(pid) && !shadow.contains_key(pid))
+        .map(|(pid, game)| (*pid, game.clone()))
+        .collect();
+    newcomers.sort_by_key(|(_, g)| representative_rank(g));
+
+    let mut opened: HashSet<String> = HashSet::new();
+    for (pid, game) in newcomers {
+        if let Some(rep_pid) = representative_pid(active, &game.game_id) {
+            let rep = active.get(&rep_pid).expect("representative exists");
+            if should_upgrade_representative(rep, &game) {
+                upgrade_representative(active, shadow, rep_pid, pid, &game);
+            } else {
+                shadow.insert(pid, game.game_id);
+            }
+            continue;
+        }
+        if opened.contains(&game.game_id) {
+            shadow.insert(pid, game.game_id);
+            continue;
+        }
+        changed = true;
+        opened.insert(game.game_id.clone());
+        active.insert(pid, game.clone());
+        events.push(GameEvent::Started(game));
+    }
+
+    (events, changed)
+}
+
+/// Close sessions only when every pid for a `game_id` has exited. A surviving
+/// sibling promotes in place without a stop/start pair.
+fn coalesce_stops(
+    active: &mut HashMap<u32, ActiveGame>,
+    shadow: &mut HashMap<u32, String>,
+    live: &HashMap<u32, ActiveGame>,
+    now: i64,
+    primary: &mut Option<u32>,
+) -> (Vec<GameEvent>, bool) {
+    let mut events = Vec::new();
+    let mut changed = false;
+
+    shadow.retain(|pid, _| live.contains_key(pid));
+
+    let gone_reps: Vec<u32> = active
+        .keys()
+        .copied()
+        .filter(|pid| !live.contains_key(pid))
+        .collect();
+    for rep_pid in gone_reps {
+        let Some(session) = active.remove(&rep_pid) else {
+            continue;
+        };
+        let game_id = session.game_id.clone();
+
+        if let Some((new_pid, new_game)) = live
+            .iter()
+            .filter(|(_, g)| g.game_id == game_id)
+            .min_by_key(|(_, g)| representative_rank(g))
+        {
+            let mut promoted = new_game.clone();
+            promoted.foreground_ms = session.foreground_ms;
+            promoted.started_at = session.started_at;
+            promoted.started_at_ms = session.started_at_ms;
+            active.insert(*new_pid, promoted);
+            shadow.remove(new_pid);
+            if *primary == Some(rep_pid) {
+                *primary = Some(*new_pid);
+            }
+            continue;
+        }
+
+        changed = true;
+        if *primary == Some(rep_pid) {
+            *primary = active.keys().copied().next();
+        }
+        events.push(GameEvent::Stopped {
+            game: Box::new(session),
+            ended_at: now,
+        });
+    }
+
+    (events, changed)
 }
 
 fn persist(active: &HashMap<u32, ActiveGame>, now: i64) {
@@ -1636,5 +1791,72 @@ mod tests {
         assert!(tracker.observe(b()).is_none());
         assert!(tracker.observe(a()).is_none());
         assert!(tracker.observe(a()).is_some());
+    }
+
+    #[test]
+    fn foreground_accumulation_uses_elapsed_not_scan_interval() {
+        assert_eq!(accumulate_foreground_ms(1_000, true, 4_000), 5_000);
+        assert_eq!(accumulate_foreground_ms(1_000, true, 0), 1_000);
+        assert_eq!(accumulate_foreground_ms(1_000, false, 15_000), 1_000);
+    }
+
+    #[test]
+    fn companion_binaries_under_one_install_share_one_session() {
+        let db = test_db();
+        let library = LibraryIndex::from_entries(vec![crate::library::LibraryEntry {
+            source: crate::library::LibrarySource::Steam,
+            external_id: "1245620".to_string(),
+            name: "ELDEN RING".to_string(),
+            install_dir: std::path::PathBuf::from(r"D:\SteamLibrary\steamapps\common\ELDEN RING"),
+        }]);
+        let mut main = make_process("eldenring.exe", 100, true);
+        main.path = r"D:\SteamLibrary\steamapps\common\ELDEN RING\Game\eldenring.exe".into();
+        let mut crash = make_process("FooCrashHandler64.exe", 200, false);
+        crash.path =
+            r"D:\SteamLibrary\steamapps\common\ELDEN RING\Game\FooCrashHandler64.exe".into();
+
+        let live = active_map(detect_games(
+            &db,
+            &library,
+            &[main.clone(), crash.clone()],
+            NOW,
+        ));
+        assert_eq!(live.len(), 2);
+        assert_eq!(
+            live[&100].game_id, live[&200].game_id,
+            "both binaries must resolve to the same install"
+        );
+
+        let mut active = HashMap::new();
+        let mut shadow = HashMap::new();
+        let (starts, _) = coalesce_starts(&mut active, &mut shadow, &live);
+        assert_eq!(starts.len(), 1);
+        assert!(
+            matches!(&starts[0], GameEvent::Started(g) if g.pid == 100),
+            "the main binary should own the session"
+        );
+        assert_eq!(active.len(), 1);
+        assert_eq!(shadow.len(), 1);
+
+        let (more_starts, _) = coalesce_starts(&mut active, &mut shadow, &live);
+        assert!(more_starts.is_empty());
+
+        let mut primary = Some(100);
+        let live_main_only: HashMap<u32, ActiveGame> = live
+            .iter()
+            .filter(|(pid, _)| **pid != 200)
+            .map(|(pid, game)| (*pid, game.clone()))
+            .collect();
+        let (stops, _) =
+            coalesce_stops(&mut active, &mut shadow, &live_main_only, NOW, &mut primary);
+        assert!(
+            stops.is_empty(),
+            "losing a shadow pid must not end the session"
+        );
+
+        let (stops, _) =
+            coalesce_stops(&mut active, &mut shadow, &HashMap::new(), NOW, &mut primary);
+        assert_eq!(stops.len(), 1);
+        assert!(matches!(&stops[0], GameEvent::Stopped { game, .. } if game.pid == 100));
     }
 }

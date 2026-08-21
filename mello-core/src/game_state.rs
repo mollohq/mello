@@ -77,6 +77,10 @@ impl GameStateManager {
                     self.primary = self.sessions.keys().copied().next();
                 }
 
+                // The sensor accumulates foreground time on its scan loop and
+                // ships the live total on stop; Started only carries a snapshot.
+                session.game.foreground_ms = session.game.foreground_ms.max(game.foreground_ms);
+
                 // Duration spans the real process lifetime, not the window we
                 // happened to be watching. `ended_at` is when it was last seen
                 // alive — for a session recovered after a restart that is well
@@ -514,5 +518,20 @@ mod tests {
         const { assert!(MIN_SESSION_POSTGAME_MIN > MIN_SESSION_LEDGER_MIN) };
         assert_eq!(MIN_SESSION_POSTGAME_MIN, 5);
         assert_eq!(MIN_SESSION_LEDGER_MIN, 2);
+    }
+
+    #[test]
+    fn stop_uses_event_foreground_ms_for_active_min() {
+        let mut mgr = GameStateManager::new();
+        let game = test_game();
+        mgr.handle_event(GameEvent::Started(game.clone()));
+
+        let mut stopped = game.clone();
+        stopped.foreground_ms = 5 * 60_000;
+        let (_events, summary) = mgr.handle_event(GameEvent::Stopped {
+            game: Box::new(stopped),
+            ended_at: game.started_at + 30 * 60_000,
+        });
+        assert_eq!(summary.expect("ledger-worthy").active_min, 5);
     }
 }
