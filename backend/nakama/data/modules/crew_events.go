@@ -874,16 +874,16 @@ func GameSessionEndRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, n
 		data.Verified = true
 	}
 
-	// Telemetry outcomes: update the actor's private per-game stats and bridge
-	// only the resulting streak into this public event. Decisive sessions score
-	// higher so heaters/skids surface in the catch-up card.
+	// Per-game stats: every session updates play time (T0); telemetry outcomes
+	// are folded in when present and only the resulting streak bridges into
+	// this public event.
 	streakAfter := 0
-	if req.GameID != "" && (req.Wins > 0 || req.Losses > 0 || req.Draws > 0) {
-		stats, result, err := UpdateUserGameStats(ctx, nk, userID, req.GameID, req.Wins, req.Losses, req.Draws)
+	if req.GameID != "" {
+		stats, result, err := UpdateUserGameStatsForSession(ctx, nk, userID, req.GameID, req.DurationMin, req.ActiveMin, req.Wins, req.Losses, req.Draws)
 		if err != nil {
-			// Non-fatal: still record the session, just without the streak.
+			// Non-fatal: still record the session, just without stats enrichment.
 			logger.Warn("user_game_stats update failed for %s/%s: %v", userID, req.GameID, err)
-		} else {
+		} else if req.Wins > 0 || req.Losses > 0 || req.Draws > 0 {
 			streakAfter = stats.CurrentStreak
 			data.Wins = req.Wins
 			data.Losses = req.Losses

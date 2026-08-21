@@ -167,10 +167,12 @@ export struct YouStripData {
     game-name: string,
     short-name: string,
     game-color: color,
+    has-record: bool,       // true → W/L stats; false → weekly hours only
     streak-text: string,    // "W4" / "L2" / "—"
     streak-positive: bool,
     record-text: string,    // "12W 5L"
     win-rate-text: string,  // "62%"
+    weekly-time-text: string, // "4h 12m this week" (pre-formatted in Rust)
     recent-form: [string],  // each "W" | "L" | "D", newest last
 }
 
