@@ -62,11 +62,17 @@ fn store_path() -> Option<PathBuf> {
 /// Returning only the leaf keeps usernames and drive layouts out of the file:
 /// `C:\Users\bob\Games\Night Stones\ns.exe` yields `Night Stones`.
 pub fn folder_of(exe_path: &str) -> String {
-    std::path::Path::new(exe_path)
-        .parent()
-        .and_then(|p| p.file_name())
-        .map(|n| n.to_string_lossy().to_string())
+    // Split on both separators rather than using `std::path`, which treats a
+    // backslash as one only on Windows. Two reasons: a macOS build must still
+    // parse a path that was recorded on Windows, and the separators genuinely
+    // mix in the wild — Steam reports its own root with forward slashes
+    // (`c:/program files (x86)/steam`), which is why `library::normalize`
+    // handles both as well.
+    exe_path
+        .rsplit(['\\', '/'])
+        .nth(1)
         .unwrap_or_default()
+        .to_string()
 }
 
 /// Note that `exe` could not be resolved. Best-effort and cheap: called once
@@ -139,6 +145,27 @@ mod tests {
             "Night Stones"
         );
         assert_eq!(folder_of("/home/bob/games/hades/hades"), "hades");
+    }
+
+    #[test]
+    fn folder_parsing_does_not_depend_on_the_host_platform() {
+        // This passed on Windows and failed on macOS, because `std::path`
+        // treats a backslash as a separator only on Windows. Both spellings
+        // must parse the same way everywhere.
+        assert_eq!(
+            folder_of(r"D:\Steam\common\Portal 2\portal2.exe"),
+            "Portal 2"
+        );
+        assert_eq!(
+            folder_of("D:/Steam/common/Portal 2/portal2.exe"),
+            "Portal 2"
+        );
+        // Steam reports its own root with forward slashes on Windows, so a
+        // path that mixes both is not hypothetical.
+        assert_eq!(
+            folder_of(r"c:/program files/steam\common\Rust\rust.exe"),
+            "Rust"
+        );
     }
 
     #[test]
