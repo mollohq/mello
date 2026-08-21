@@ -409,10 +409,34 @@ fn humanize_duration(duration_secs: f64) -> String {
         return String::new();
     }
     let mins = ((duration_secs / 60.0).ceil() as u64).max(1);
+    humanize_duration_min(mins as i64)
+}
+
+fn humanize_duration_min(mins: i64) -> String {
+    if mins <= 0 {
+        return String::new();
+    }
+    let mins = mins.max(1);
     if mins >= 60 {
         format!("{}h {}m", mins / 60, mins % 60)
     } else {
         format!("{}m", mins)
+    }
+}
+
+/// Wall-time duration for game sessions; uses active time when wall time is
+/// inflated (left running overnight). GAME-SURFACING §4.
+fn game_session_duration_display(duration_min: i64, active_min: i64) -> String {
+    let use_active = active_min > 0 && active_min * 3 < duration_min;
+    let display_min = if use_active { active_min } else { duration_min };
+    let body = humanize_duration_min(display_min);
+    if body.is_empty() {
+        return body;
+    }
+    if use_active {
+        format!("~{body}")
+    } else {
+        body
     }
 }
 
@@ -648,10 +672,15 @@ fn build_feed_card(
                 .get("streak_after")
                 .and_then(|v| v.as_i64())
                 .unwrap_or(0);
-            let record = if d > 0 {
-                format!("{}W\u{2013}{}L\u{2013}{}D", w, l, d)
+            let matches = w + l + d;
+            let record = if matches > 0 {
+                if d > 0 {
+                    format!("{}W\u{2013}{}L\u{2013}{}D", w, l, d)
+                } else {
+                    format!("{}W\u{2013}{}L", w, l)
+                }
             } else {
-                format!("{}W\u{2013}{}L", w, l)
+                String::new()
             };
             let streak_text = if streak > 0 {
                 format!("W{streak}")
@@ -666,13 +695,7 @@ fn build_feed_card(
             } else {
                 "—".to_string()
             };
-            (
-                record,
-                streak_text,
-                streak >= 0,
-                winrate,
-                (w + l + d) as i32,
-            )
+            (record, streak_text, streak >= 0, winrate, matches as i32)
         } else {
             (String::new(), String::new(), true, String::new(), 0)
         };
@@ -687,7 +710,12 @@ fn build_feed_card(
     } else {
         ""
     };
-    let duration_human = humanize_duration(duration_secs);
+    let duration_human = if is_game_session {
+        let active_min = data.get("active_min").and_then(|v| v.as_i64()).unwrap_or(0);
+        game_session_duration_display(duration_min as i64, active_min)
+    } else {
+        humanize_duration(duration_secs)
+    };
     let peak_count = data
         .get("peak_viewers")
         .or_else(|| data.get("peak_count"))
@@ -1105,5 +1133,27 @@ pub fn handle(ctx: &AppContext, event: Event) {
             ctx.app.set_clip_duration_text("".into());
         }
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn game_session_duration_uses_wall_time_by_default() {
+        assert_eq!(game_session_duration_display(252, 0), "4h 12m");
+        assert_eq!(game_session_duration_display(45, 0), "45m");
+    }
+
+    #[test]
+    fn game_session_duration_uses_active_when_wall_inflated() {
+        assert_eq!(game_session_duration_display(252, 65), "~1h 5m");
+    }
+
+    #[test]
+    fn game_session_duration_keeps_wall_when_active_not_under_third() {
+        // active * 3 must be strictly less than wall time.
+        assert_eq!(game_session_duration_display(60, 20), "1h 0m");
     }
 }

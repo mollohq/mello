@@ -927,10 +927,170 @@ component SessionCard inherits Rectangle {
     }
 }
 
-// Rich game-session card for notable sessions (spec 19 B2)
+// Telemetry-backed W/L block for notable game sessions (spec 19 B2).
+component GameSessionRecordPanel inherits VerticalLayout {
+    in property <FeedCardData> card;
+    in property <color> record-color;
+
+    spacing: 0px;
+
+    // Headline record
+    Text {
+        text: card.game-record;
+        font-size: 30px;
+        font-weight: 700;
+        color: record-color;
+    }
+    Text {
+        text: "this session";
+        font-size: 11px;
+        color: Theme.text-sub;
+    }
+
+    Rectangle { height: 12px; }
+    Rectangle { height: 1px; background: Theme.card-border; }
+    Rectangle { height: 10px; }
+
+    // Stat tiles: streak · win rate · matches
+    HorizontalLayout {
+        spacing: 10px;
+
+        VerticalLayout {
+            spacing: 2px;
+            horizontal-stretch: 1;
+            Text {
+                text: card.game-streak-text;
+                font-size: 16px;
+                font-weight: 700;
+                color: card.game-streak-positive ? #4ade80 : #f87171;
+            }
+            Text { text: "streak"; font-size: 10px; color: Theme.text-sub; }
+        }
+        VerticalLayout {
+            spacing: 2px;
+            horizontal-stretch: 1;
+            Text {
+                text: card.game-winrate;
+                font-size: 16px;
+                font-weight: 700;
+                color: Theme.text-primary;
+            }
+            Text { text: "win rate"; font-size: 10px; color: Theme.text-sub; }
+        }
+        VerticalLayout {
+            spacing: 2px;
+            horizontal-stretch: 1;
+            Text {
+                text: "\{card.game-matches}";
+                font-size: 16px;
+                font-weight: 700;
+                color: Theme.text-primary;
+            }
+            Text { text: "matches"; font-size: 10px; color: Theme.text-sub; }
+        }
+    }
+}
+
+// Zero-telemetry session: icon + "X played Y" + duration, no empty stat slots.
+component GameSessionCompactBody inherits VerticalLayout {
+    in property <FeedCardData> card;
+    in property <color> game-accent;
+    in property <bool> quiet: false;
+
+    spacing: quiet ? 6px : 8px;
+    alignment: start;
+
+    HorizontalLayout {
+        spacing: 10px;
+        cross-axis-alignment: center;
+
+        GameIcon {
+            game-id: card.game-id;
+            short-name: card.game-short-name != "" ? card.game-short-name :
+                        card.game-name != "" ? card.game-name : "GG";
+            badge-color: game-accent;
+            runtime-icon: card.game-icon;
+            has-runtime-icon: card.game-has-icon;
+            size: quiet ? 32px : 36px;
+        }
+
+        VerticalLayout {
+            spacing: 2px;
+            horizontal-stretch: 1;
+            alignment: start;
+
+            Text {
+                text: card.title != "" ? card.title : card.game-name;
+                font-size: quiet ? 12px : 13px;
+                font-weight: 600;
+                color: Theme.text-primary;
+                overflow: elide;
+            }
+            if card.duration-human != "": Text {
+                text: card.duration-human;
+                font-size: quiet ? 16px : 20px;
+                font-weight: 700;
+                color: Theme.text-primary;
+            }
+        }
+    }
+
+    if card.participant-count > 1: HorizontalLayout {
+        spacing: 6px;
+        cross-axis-alignment: center;
+        height: 20px;
+
+        HorizontalLayout {
+            spacing: -6px;
+            alignment: start;
+            RecapAvatar {
+                initials: card.part0-initials != "" ? card.part0-initials : card.actor-initials;
+                avatar: card.part0-has-avatar ? card.part0-avatar : card.actor-avatar;
+                has-avatar: card.part0-has-avatar || card.actor-has-avatar;
+                color-index: 0;
+                size: 20px;
+            }
+            if card.participant-count > 1: RecapAvatar {
+                initials: card.part1-initials;
+                avatar: card.part1-avatar;
+                has-avatar: card.part1-has-avatar;
+                color-index: 1;
+                size: 20px;
+            }
+            if card.participant-count > 2: RecapAvatar {
+                initials: card.part2-initials;
+                avatar: card.part2-avatar;
+                has-avatar: card.part2-has-avatar;
+                color-index: 2;
+                size: 20px;
+            }
+        }
+
+        if card.participants-line != "": Text {
+            text: card.participants-line;
+            font-size: 11px;
+            color: Theme.text-sub;
+            overflow: elide;
+            horizontal-stretch: 1;
+        }
+    }
+
+    Rectangle { vertical-stretch: 1; }
+
+    Text {
+        text: card.timestamp;
+        font-size: 11px;
+        color: Theme.skel-text;
+    }
+}
+
+// Rich game-session card for notable sessions (spec 19 B2); compact T0 variant
+// when the session has no W/L record (GAME-SURFACING C1).
 component GameSessionCard inherits Rectangle {
     in property <FeedCardData> card;
 
+    property <bool> has-record: card.game-matches > 0;
+    property <bool> is-quiet: card.role == "quiet" || card.size == "sm";
     property <color> game-accent: card.game-has-color ? card.game-color : Theme.accent;
     property <color> record-color: card.game-streak-positive ? #4ade80 : #f87171;
 
@@ -940,7 +1100,19 @@ component GameSessionCard inherits Rectangle {
     border-color: Theme.card-border;
     clip: true;
 
-    VerticalLayout {
+    if !has-record: VerticalLayout {
+        padding: is-quiet ? 10px : 12px;
+        spacing: 0px;
+        alignment: start;
+
+        GameSessionCompactBody {
+            card: root.card;
+            game-accent: root.game-accent;
+            quiet: is-quiet;
+        }
+    }
+
+    if has-record: VerticalLayout {
         padding: 14px;
         spacing: 0px;
         alignment: start;
@@ -1008,60 +1180,9 @@ component GameSessionCard inherits Rectangle {
 
         Rectangle { height: 14px; }
 
-        // Headline record
-        Text {
-            text: card.game-record;
-            font-size: 30px;
-            font-weight: 700;
-            color: record-color;
-        }
-        Text {
-            text: "this session";
-            font-size: 11px;
-            color: Theme.text-sub;
-        }
-
-        Rectangle { height: 12px; }
-        Rectangle { height: 1px; background: Theme.card-border; }
-        Rectangle { height: 10px; }
-
-        // Stat tiles: streak · win rate · matches
-        HorizontalLayout {
-            spacing: 10px;
-
-            VerticalLayout {
-                spacing: 2px;
-                horizontal-stretch: 1;
-                Text {
-                    text: card.game-streak-text;
-                    font-size: 16px;
-                    font-weight: 700;
-                    color: card.game-streak-positive ? #4ade80 : #f87171;
-                }
-                Text { text: "streak"; font-size: 10px; color: Theme.text-sub; }
-            }
-            VerticalLayout {
-                spacing: 2px;
-                horizontal-stretch: 1;
-                Text {
-                    text: card.game-winrate;
-                    font-size: 16px;
-                    font-weight: 700;
-                    color: Theme.text-primary;
-                }
-                Text { text: "win rate"; font-size: 10px; color: Theme.text-sub; }
-            }
-            VerticalLayout {
-                spacing: 2px;
-                horizontal-stretch: 1;
-                Text {
-                    text: "\{card.game-matches}";
-                    font-size: 16px;
-                    font-weight: 700;
-                    color: Theme.text-primary;
-                }
-                Text { text: "matches"; font-size: 10px; color: Theme.text-sub; }
-            }
+        GameSessionRecordPanel {
+            card: root.card;
+            record-color: record-color;
         }
 
         Rectangle { vertical-stretch: 1; }
