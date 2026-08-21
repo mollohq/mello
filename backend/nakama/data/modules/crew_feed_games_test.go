@@ -266,6 +266,54 @@ func TestBuildGameRollup_Aggregation(t *testing.T) {
 	}
 }
 
+func TestReportableMinutes_OvernightGuard(t *testing.T) {
+	cases := []struct {
+		name           string
+		duration, want int
+		active         int
+	}{
+		{"no active figure keeps wall time", 600, 600, 0},
+		{"active close to wall keeps wall time", 120, 120, 100},
+		{"active at exactly a third keeps wall time", 120, 120, 40},
+		{"overnight session reports active time", 600, 40, 40},
+	}
+	for _, c := range cases {
+		if got := reportableMinutes(c.duration, c.active); got != c.want {
+			t.Errorf("%s: reportableMinutes(%d, %d) = %d, want %d",
+				c.name, c.duration, c.active, got, c.want)
+		}
+	}
+}
+
+// A session left running overnight must not inflate the rollup it appears in.
+// The session's own card already shows the active figure, so a rollup summing
+// wall time would contradict the cards directly below it.
+func TestBuildGameRollup_OvernightSessionDoesNotInflateTotals(t *testing.T) {
+	overnight := gsCardNamed("s1", "Valorant", 600, "u1", "ostkatt", 10)
+	data := overnight.data.(GameSessionData)
+	data.ActiveMin = 40
+	overnight.data = data
+
+	pruned := []feedCard{
+		overnight,
+		gsCardNamed("s2", "Valorant", 60, "u2", "bob", 20),
+		gsCardNamed("s3", "Valorant", 30, "u3", "kim", 30),
+	}
+	card, ok := buildGameRollup(pruned)
+	if !ok {
+		t.Fatal("expected rollup for 3 pruned sessions")
+	}
+	rollup := card.data.(GameRollupData)
+	if rollup.TotalMin != 130 {
+		t.Fatalf("crew total = %d, want 130 (40 active + 60 + 30), not the 690 wall-time sum", rollup.TotalMin)
+	}
+	for _, line := range rollup.Lines {
+		if line.PlayerName == "ostkatt" && line.TotalMin != 40 {
+			t.Fatalf("ostkatt line = %dm, want the 40m active figure, not 600m wall", line.TotalMin)
+		}
+	}
+}
+
 func TestBuildGameRollup_CapsLinesAtFive(t *testing.T) {
 	pruned := make([]feedCard, 0, 8)
 	for i := 0; i < 8; i++ {

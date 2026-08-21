@@ -327,6 +327,23 @@ func pruneGameSessions(cards []feedCard) (remaining []feedCard, pruned []feedCar
 	return out, pruned
 }
 
+// reportableMinutes picks the play figure a surface may claim, applying the
+// overnight guard from plans/GAME-SURFACING.md §4: wall time normally, active
+// time when wall time is inflated far past it.
+//
+// A game left open overnight has honest wall time and near-zero active time.
+// Claiming the wall figure is the one number a crewmate can trivially disprove,
+// and the whole "proof it happened" pitch rests on not doing that. The client
+// applies the same rule per session (game_session_duration_display in
+// clip.rs) and per week (weekly_time_text in stats.rs) — keep the three in
+// step, or a rollup will contradict the very cards it summarizes.
+func reportableMinutes(durationMin, activeMin int) int {
+	if activeMin > 0 && activeMin*3 < durationMin {
+		return activeMin
+	}
+	return durationMin
+}
+
 // buildGameRollup synthesizes one rollup card from pruned routine sessions.
 // Returns false when fewer than three sessions were pruned.
 func buildGameRollup(pruned []feedCard) (feedCard, bool) {
@@ -352,7 +369,7 @@ func buildGameRollup(pruned []feedCard) (feedCard, bool) {
 		if c.ts > maxTs {
 			maxTs = c.ts
 		}
-		totalMin += d.DurationMin
+		totalMin += reportableMinutes(d.DurationMin, d.ActiveMin)
 
 		key := ""
 		if len(d.PlayerIDs) > 0 {
@@ -379,8 +396,9 @@ func buildGameRollup(pruned []feedCard) (feedCard, bool) {
 		if game == "" {
 			game = "a game"
 		}
-		agg.gameMins[game] += d.DurationMin
-		agg.totalMin += d.DurationMin
+		mins := reportableMinutes(d.DurationMin, d.ActiveMin)
+		agg.gameMins[game] += mins
+		agg.totalMin += mins
 		agg.sessions++
 	}
 
