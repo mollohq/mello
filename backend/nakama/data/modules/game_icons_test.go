@@ -47,8 +47,9 @@ func TestValidateGameIconUpload_RejectsNonPNGAndBadBase64(t *testing.T) {
 }
 
 func TestValidateGameIconUpload_RejectsOversize(t *testing.T) {
-	// A large noisy PNG comfortably above the 48 KB cap.
-	img := image.NewRGBA(image.Rect(0, 0, 512, 512))
+	// A large noisy PNG comfortably above the cap. Noise is used because it
+	// barely compresses; a flat image of the same dimensions would not.
+	img := image.NewRGBA(image.Rect(0, 0, 1024, 1024))
 	for i := range img.Pix {
 		img.Pix[i] = byte(i * 31)
 	}

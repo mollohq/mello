@@ -130,6 +130,8 @@ export component ControlBar inherits Rectangle {
     in property <string> game-name: "";
     in property <string> game-short-name: "";
     in property <color> game-color: #2a2a30;
+    in property <image> game-runtime-icon;
+    in property <bool> game-has-runtime-icon: false;
     // Pre-filled post-game record from telemetry (e.g. "5W–3L · 2-win streak").
     // Empty when no telemetry result; the card falls back to "How'd it go?".
     in property <string> game-summary: "";
@@ -446,6 +448,8 @@ export component ControlBar inherits Rectangle {
                         game-id: game-id;
                         short-name: game-short-name;
                         badge-color: game-color;
+                        runtime-icon: game-runtime-icon;
+                        has-runtime-icon: game-has-runtime-icon;
                         size: 32px;
                         y: (parent.height - self.height) / 2;
                     }
@@ -518,6 +522,8 @@ export component ControlBar inherits Rectangle {
                     game-id: game-id;
                     short-name: game-short-name;
                     badge-color: game-color;
+                    runtime-icon: game-runtime-icon;
+                    has-runtime-icon: game-has-runtime-icon;
                     size: 32px;
                 }
 

@@ -1,0 +1,17 @@
+{
+  "built_at": "2026-08-21T12:38:04Z",
+  "exe_mapping_count": 66,
+  "head_bytes": 157597,
+  "head_count": 2000,
+  "index_bytes": 551204,
+  "index_count": 137688,
+  "schema_versions": {
+    "alternative_names": "1700060400",
+    "covers": "1784008800",
+    "external_game_sources": "1739944800",
+    "external_games": "1739944800",
+    "game_types": "1739944800",
+    "games": "1739944800",
+    "platforms": "1739944800"
+  }
+}

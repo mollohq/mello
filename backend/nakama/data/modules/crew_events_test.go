@@ -92,3 +92,24 @@ func TestClampSessionOutcome(t *testing.T) {
 		}
 	}
 }
+
+func TestClampGameSessionDurations(t *testing.T) {
+	cases := []struct {
+		duration, active, wantDuration, wantActive int
+	}{
+		{-10, -5, 0, 0},
+		{0, 0, 0, 0},
+		{90, 60, 90, 60},
+		{1440, 1440, 1440, 1440},
+		{1441, 2000, 1440, 1440},
+		{60, 90, 60, 60},
+		{1000000, 500000, 1440, 1440},
+	}
+	for _, c := range cases {
+		gotDuration, gotActive := clampGameSessionDurations(c.duration, c.active)
+		if gotDuration != c.wantDuration || gotActive != c.wantActive {
+			t.Fatalf("clampGameSessionDurations(%d, %d) = (%d, %d), want (%d, %d)",
+				c.duration, c.active, gotDuration, gotActive, c.wantDuration, c.wantActive)
+		}
+	}
+}

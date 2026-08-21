@@ -59,9 +59,10 @@ pub struct UserSearchResult {
 pub struct GameIntegrationStatus {
     pub game_id: String,
     pub name: String,
-    /// Badge text from games.json (e.g. "CS2"); falls back to the name.
+    /// Badge text from the catalogue (e.g. "CS2"); falls back to the name.
     pub short_name: String,
-    /// Badge hex color from games.json (e.g. "#DE9B35").
+    /// Badge hex colour; the exe icon is the primary art, so this is a
+    /// last-resort tint for the initials badge.
     pub color: String,
     /// Whether the game looks installed on this machine; None = unknown.
     pub installed: Option<bool>,
@@ -487,6 +488,10 @@ pub enum Event {
         short_name: String,
         color: String,
         pid: u32,
+        /// Full path to the running executable, so the UI can extract the
+        /// game's own icon (spec: assets §8.2 — the exe icon is what the user
+        /// already recognises, and it needs no catalogue entry or network).
+        exe_path: String,
     },
     /// A game process exited.
     GameEnded {

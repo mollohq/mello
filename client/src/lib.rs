@@ -333,17 +333,20 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
     // installs honor the user's per-game consent; shared with AppContext below.
     let settings = Rc::new(RefCell::new(Settings::load()));
     let disabled_integrations = settings.borrow().disabled_game_integrations.clone();
-    let custom_games: Vec<mello_core::game_db::CustomGame> = settings
+    let custom_games: Vec<mello_core::user_games::CustomGame> = settings
         .borrow()
         .custom_games
         .iter()
-        .map(|g| mello_core::game_db::CustomGame {
+        .map(|g| mello_core::user_games::CustomGame {
             id: g.id.clone(),
             name: g.name.clone(),
             short_name: g.short_name.clone(),
             exe: g.exe.clone(),
         })
         .collect();
+    // Cloned out before the task takes ownership: `settings` is Rc-owned on
+    // the UI thread and cannot cross into the spawned future.
+    let dismissed_games = settings.borrow().unknown_game_dismissed.clone();
 
     rt.spawn(async move {
         let mut client = Client::new(
@@ -357,6 +360,7 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
         );
         client.set_disabled_integrations(disabled_integrations);
         client.set_custom_games(custom_games);
+        client.set_dismissed_games(dismissed_games);
         client.run(cmd_rx).await;
     });
 

@@ -1,4 +1,5 @@
 use crate::game_sensing::{GameEvent, GameSensor};
+use crate::presence::GamePresence;
 use crate::telemetry::{self, TelemetryListener, TELEMETRY_PORT};
 
 use super::Client;
@@ -23,7 +24,7 @@ impl Client {
         }
 
         let mello_ctx = self.voice.mello_ctx();
-        let (sensor, game_event_rx) = GameSensor::start(mello_ctx, self.game_db.clone());
+        let (sensor, game_event_rx) = GameSensor::start(mello_ctx, self.user_games.clone());
         self.game_sensor = Some(sensor);
         *self.game_event_rx.lock().unwrap() = Some(game_event_rx);
         log::info!("Game sensor started (post-auth)");
@@ -55,6 +56,43 @@ impl Client {
                     );
                 }
             });
+        }
+    }
+
+    /// Push the currently-primary game into presence, so crewmates see what
+    /// you are playing and `crew_state.active_games` can be computed.
+    ///
+    /// Only fires on change: the sensor emits an event every scan, and
+    /// re-broadcasting identical presence would fan out to every crew member
+    /// on a 15s heartbeat for no reason.
+    pub(super) async fn sync_game_presence(&mut self) {
+        let current = self.game_state.current_game().map(|g| GamePresence {
+            game_name: g.game_name.clone(),
+            game_id: g.game_id.clone(),
+            started_at: crate::presence::to_rfc3339(g.started_at),
+        });
+
+        let changed = match (&self.published_game, &current) {
+            (None, None) => false,
+            (Some(a), Some(b)) => a.game_id != b.game_id,
+            _ => true,
+        };
+        if !changed {
+            return;
+        }
+
+        match self.nakama.presence_set_game(current.as_ref()).await {
+            Ok(()) => {
+                log::info!(
+                    "[game-presence] published: {}",
+                    current.as_ref().map_or("cleared", |g| g.game_name.as_str())
+                );
+                self.published_game = current;
+            }
+            Err(e) => {
+                // Leave `published_game` alone so the next scan retries.
+                log::warn!("[game-presence] failed to publish: {e}");
+            }
         }
     }
 

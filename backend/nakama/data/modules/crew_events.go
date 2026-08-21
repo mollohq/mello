@@ -77,8 +77,16 @@ type GameSessionData struct {
 	GameName string `json:"game_name"`
 	// Stable games.json id (e.g. "counter-strike-2"); empty on legacy events.
 	// The client uses it for the bundled game icon.
-	GameID      string   `json:"game_id,omitempty"`
-	GameIGDBID  int      `json:"game_igdb_id"`
+	GameID string `json:"game_id,omitempty"`
+	// IGDB id when the catalogue resolved the game. Lets surfaces fetch cover
+	// art and lets a game be recognised across launchers. 0 when unresolved —
+	// a Steam-discovered or provisionally-tracked game is still a real
+	// session, it just has no IGDB number yet.
+	GameIGDBID int `json:"game_igdb_id"`
+	// Foreground minutes, where DurationMin is wall time. A game left open
+	// overnight has honest wall time and near-zero active time, and only the
+	// surface can decide which number to show.
+	ActiveMin   int      `json:"active_min,omitempty"`
 	PlayerIDs   []string `json:"player_ids"`
 	PlayerNames []string `json:"player_names"`
 	DurationMin int      `json:"duration_min"`
@@ -697,6 +705,8 @@ type GameSessionEndRequest struct {
 	GameName    string `json:"game_name"`
 	GameID      string `json:"game_id"` // stable id, key for per-user stats; empty if no telemetry
 	DurationMin int    `json:"duration_min"`
+	ActiveMin   int    `json:"active_min"`
+	IgdbID      int    `json:"igdb_id"`
 	Wins        int    `json:"wins"`
 	Losses      int    `json:"losses"`
 	Draws       int    `json:"draws"`
@@ -719,6 +729,38 @@ func clampSessionOutcome(n int) int {
 		return maxSessionOutcomes
 	}
 	return n
+}
+
+const maxSessionDurationMin = 1440 // 24h wall-clock cap
+
+// clampSessionDurationMin bounds client-reported wall minutes to [0, maxSessionDurationMin].
+func clampSessionDurationMin(n int) int {
+	if n < 0 {
+		return 0
+	}
+	if n > maxSessionDurationMin {
+		return maxSessionDurationMin
+	}
+	return n
+}
+
+// clampSessionActiveMin bounds foreground minutes to [0, durationMin].
+func clampSessionActiveMin(activeMin, durationMin int) int {
+	if activeMin < 0 {
+		return 0
+	}
+	if activeMin > durationMin {
+		return durationMin
+	}
+	return activeMin
+}
+
+// clampGameSessionDurations sanitises client-reported session lengths before
+// they feed co-play windows or ledger storage.
+func clampGameSessionDurations(durationMin, activeMin int) (int, int) {
+	durationMin = clampSessionDurationMin(durationMin)
+	activeMin = clampSessionActiveMin(activeMin, durationMin)
+	return durationMin, activeMin
 }
 
 const gameSessionDedupCollection = "game_session_dedup"
@@ -771,6 +813,7 @@ func GameSessionEndRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, n
 	req.Wins = clampSessionOutcome(req.Wins)
 	req.Losses = clampSessionOutcome(req.Losses)
 	req.Draws = clampSessionOutcome(req.Draws)
+	req.DurationMin, req.ActiveMin = clampGameSessionDurations(req.DurationMin, req.ActiveMin)
 
 	if !isCrewMember(ctx, nk, req.CrewID, userID) {
 		return "", runtime.NewError("not a crew member", 7)
@@ -791,12 +834,27 @@ func GameSessionEndRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, n
 
 	username := resolveUsername(ctx, nk, userID)
 
+	// Who else in the crew was in this game at the same time. Best-effort:
+	// enrichment, never a reason to lose the session.
+	ledger, _ := readLedger(ctx, nk, req.CrewID)
+	window := sessionWindow{
+		UserID:  userID,
+		GameID:  req.GameID,
+		StartMs: time.Now().UnixMilli() - int64(req.DurationMin)*60_000,
+		EndMs:   time.Now().UnixMilli(),
+	}
+	playerIDs, playerNames := []string{userID}, []string{username}
+	if req.GameID != "" {
+		playerIDs, playerNames = collectCoPlayers(ctx, logger, nk, req.CrewID, window, ledger)
+	}
+
 	data := GameSessionData{
 		GameName:    req.GameName,
 		GameID:      req.GameID,
-		GameIGDBID:  0,
-		PlayerIDs:   []string{userID},
-		PlayerNames: []string{username},
+		GameIGDBID:  req.IgdbID,
+		ActiveMin:   req.ActiveMin,
+		PlayerIDs:   playerIDs,
+		PlayerNames: playerNames,
 		DurationMin: req.DurationMin,
 	}
 	score := 10

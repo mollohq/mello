@@ -1,7 +1,7 @@
 # MELLO Crew Event Ledger Specification
 
 > **Component:** Crew Event Ledger  
-> **Version:** 0.1  
+> **Version:** 0.2  
 > **Status:** Implemented  
 > **Parent:** [00-ARCHITECTURE.md](./00-ARCHITECTURE.md)  
 > **Related:** [04-BACKEND.md](./04-BACKEND.md), [11-PRESENCE-CREW-STATE.md](./11-PRESENCE-CREW-STATE.md), [13-VOICE-CHANNELS.md](./13-VOICE-CHANNELS.md)
@@ -113,15 +113,23 @@ Written when a detected game session ends for a user in this crew. Requires game
     "score": 10,
     "data": {
         "game_name": "Counter-Strike 2",
-        "game_igdb_id": 0,
+        "game_id": "counter-strike-2",
+        "game_igdb_id": 242408,
         "player_ids": ["user_a", "user_b"],
         "player_names": ["ash", "koji"],
-        "duration_min": 45
+        "duration_min": 45,
+        "active_min": 41
     }
 }
 ```
 
-**Note:** `game_igdb_id` is 0 until IGDB integration is implemented. The `game_name` comes from the client's process-detected game name.
+**Field notes.**
+
+- `game_id` is the stable key for stats and telemetry adapters. It is an IGDB slug for catalogued games, `steam-<appid>` / `epic-<id>` / `gog-<id>` for a game discovered in an installed library, and `local-<exe-slug>` for one nothing could name. It never changes for a given game — stored `user_game_stats` are keyed on it.
+- `game_igdb_id` carries the catalogue's id when the game resolved to one, and `0` otherwise. Zero is not an error: a library-discovered or provisionally-tracked game is a real session that simply has no IGDB number yet.
+- `duration_min` is wall time, from the **process creation time** — not from when Mello noticed the game. A title already running when the client starts reports the hours it actually ran.
+- `active_min` is the time the game held the foreground. A game left open overnight has honest wall time and near-zero active time; which one a surface shows is that surface's decision, so both are recorded.
+- `player_ids` lists everyone in the crew who was in that game at the same time, unioned from overlapping ledger sessions and from live presence. It is not just the actor.
 
 **Amendment (spec 18 — Game Telemetry):** when the client has a telemetry adapter for the game (e.g. CS2 GSI), this event's `data` is enriched with additive fields `wins`, `losses`, `result` (`"win"`/`"loss"`/`"even"`), and `streak_after` (signed: +N win streak, −N loss streak). These are backward compatible — older clients omit them. The `streak_after` value is derived server-side from the actor's private `user_game_stats` store and copied into this public event so crew surfaces can show streaks without exposing raw per-user history. See [18-GAME-TELEMETRY.md](./18-GAME-TELEMETRY.md) §5.
 

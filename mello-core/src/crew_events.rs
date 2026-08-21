@@ -52,6 +52,13 @@ pub struct GameSessionEndRequest {
     pub game_id: String,
     #[serde(default)]
     pub duration_min: u32,
+    /// Foreground minutes; `duration_min` is wall time. Sent so surfaces can
+    /// choose which to show for a game left open in the background.
+    #[serde(default)]
+    pub active_min: u32,
+    /// IGDB id when the catalogue resolved the game, 0 otherwise.
+    #[serde(default)]
+    pub igdb_id: u32,
     /// Decisive (streak-eligible) wins/losses this session, from telemetry.
     #[serde(default)]
     pub wins: u32,

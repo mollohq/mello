@@ -1,8 +1,12 @@
-//! Extract a game's icon from its executable (Windows resource extraction)
-//! and cache it as PNG under the app data dir.
+//! Extract a game's icon from its executable and cache it as PNG under the app
+//! data dir. This is the *primary* art source for a game (assets §8.2): it is
+//! what the user already recognises from their taskbar, it needs no catalogue
+//! entry, and it works offline — so a game nobody has catalogued looks exactly
+//! as good as a curated one.
 //!
-//! Pipeline: `SHDefExtractIconW` (requesting 128 px, falls back to
-//! `ExtractIconExW`) → `HICON` → `GetDIBits` → RGBA. The GDI plumbing is the
+//! Pipeline: `SHDefExtractIconW` (256 px, then 128, falling back to
+//! `ExtractIconExW`) → `HICON` → `GetDIBits` → RGBA. On macOS the bundle's
+//! `.icns` is read directly and its largest embedded PNG decoded. The GDI plumbing is the
 //! inverse of `taskbar_toolbar.rs::create_icon_from_rgba` and mirrors its
 //! DC/bitmap lifecycle. Extraction is blocking (file IO + GDI) — call it from
 //! a worker thread; `slint::Image` construction happens elsewhere on the UI
@@ -57,7 +61,13 @@ pub fn load_cached_icon_rgba(game_id: &str) -> Option<(Vec<u8>, u32, u32)> {
     Some((img.into_raw(), w, h))
 }
 
-/// Raw PNG bytes of a cached icon (for the crew-shared upload).
+/// PNG bytes of a cached icon, for the crew-shared upload.
+///
+/// Shared at full resolution. A crewmate viewing a game they do not own should
+/// see the same icon as the person who owns it, including on a HiDPI display —
+/// the backend cap is sized for 256px rather than the icon being shrunk to fit
+/// it. Keep `gameIconMaxBytes` in `backend/.../game_icons.go` in step with the
+/// extraction size.
 pub fn cached_icon_png_bytes(game_id: &str) -> Option<Vec<u8>> {
     std::fs::read(cached_icon_path(game_id)?).ok()
 }
@@ -86,12 +96,20 @@ pub fn extract_exe_icon_rgba(path: &str) -> Option<(Vec<u8>, u32, u32)> {
     let wide: Vec<u16> = path.encode_utf16().chain(std::iter::once(0)).collect();
 
     unsafe {
-        // Preferred: ask the shell for a 128 px rendition (scales down well
-        // for cards/badges; most games ship 256 px icons).
+        // Ask the shell for 256 px, which is what modern games actually ship.
+        // The icon is now the primary art for a game (assets §8.2), shown on
+        // cards and on HiDPI displays, so requesting the largest available
+        // rendition matters more than it did when this was a fallback.
         let mut icon = HICON::default();
-        let got = SHDefExtractIconW(PCWSTR(wide.as_ptr()), 0, 0, Some(&mut icon), None, 128)
+        let mut got = SHDefExtractIconW(PCWSTR(wide.as_ptr()), 0, 0, Some(&mut icon), None, 256)
             .is_ok()
             && !icon.is_invalid();
+        if !got {
+            // Older or minimal executables may only carry 128 px.
+            got = SHDefExtractIconW(PCWSTR(wide.as_ptr()), 0, 0, Some(&mut icon), None, 128)
+                .is_ok()
+                && !icon.is_invalid();
+        }
 
         let icon = if got {
             icon
@@ -204,14 +222,178 @@ unsafe fn hicon_to_rgba(
     Some((buf, w as u32, h as u32))
 }
 
-#[cfg(not(target_os = "windows"))]
+/// macOS: the app bundle's icon, which is higher quality than the Windows
+/// equivalent — `.icns` carries up to 1024 px and every app has one.
+/// `path` may point at the binary inside the bundle, so walk up to the `.app`.
+#[cfg(target_os = "macos")]
+pub fn extract_exe_icon_rgba(path: &str) -> Option<(Vec<u8>, u32, u32)> {
+    let bundle = bundle_root(path)?;
+    let icns = largest_icns(&bundle)?;
+    decode_icns_png(&std::fs::read(icns).ok()?)
+}
+
+/// The biggest `.icns` in the bundle's Resources.
+///
+/// Reading `CFBundleIconFile` from Info.plist would be more precise, but that
+/// means parsing binary plists for no practical gain: bundles almost always
+/// ship exactly one app icon, and the largest is it.
+#[cfg(target_os = "macos")]
+fn largest_icns(bundle: &str) -> Option<std::path::PathBuf> {
+    let resources = std::path::Path::new(bundle)
+        .join("Contents")
+        .join("Resources");
+    std::fs::read_dir(resources)
+        .ok()?
+        .flatten()
+        .filter(|e| {
+            e.path()
+                .extension()
+                .and_then(|x| x.to_str())
+                .map(|x| x.eq_ignore_ascii_case("icns"))
+                == Some(true)
+        })
+        .max_by_key(|e| e.metadata().map(|m| m.len()).unwrap_or(0))
+        .map(|e| e.path())
+}
+
+/// Pull the largest PNG out of an ICNS container.
+///
+/// ICNS is a flat sequence of `[4-byte type][4-byte big-endian length][data]`
+/// chunks after an 8-byte header. Since OS X 10.7 the large renditions
+/// (`ic07`–`ic14`) hold PNG data verbatim, so the biggest PNG chunk is the
+/// best available icon — no new dependency, and `image` already decodes PNG.
+#[cfg(target_os = "macos")]
+fn decode_icns_png(data: &[u8]) -> Option<(Vec<u8>, u32, u32)> {
+    const PNG_MAGIC: &[u8] = &[0x89, b'P', b'N', b'G'];
+    if data.len() < 8 || &data[0..4] != b"icns" {
+        return None;
+    }
+    let mut best: Option<&[u8]> = None;
+    let mut off = 8usize;
+    while off + 8 <= data.len() {
+        let len = u32::from_be_bytes(data[off + 4..off + 8].try_into().ok()?) as usize;
+        // A zero or overlong length means a malformed file; stop rather than loop.
+        if len < 8 || off + len > data.len() {
+            break;
+        }
+        let payload = &data[off + 8..off + len];
+        if payload.starts_with(PNG_MAGIC) && best.is_none_or(|b| payload.len() > b.len()) {
+            best = Some(payload);
+        }
+        off += len;
+    }
+    let png = best?;
+    let img = image::load_from_memory(png).ok()?.to_rgba8();
+    let (w, h) = img.dimensions();
+    Some((img.into_raw(), w, h))
+}
+
+/// The enclosing `.app` directory for a path, or the path itself when it is
+/// already one.
+#[cfg(target_os = "macos")]
+fn bundle_root(path: &str) -> Option<String> {
+    let mut p = std::path::Path::new(path);
+    loop {
+        if p.extension().and_then(|e| e.to_str()) == Some("app") {
+            return Some(p.to_string_lossy().to_string());
+        }
+        p = p.parent()?;
+    }
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
 pub fn extract_exe_icon_rgba(_path: &str) -> Option<(Vec<u8>, u32, u32)> {
     None
+}
+
+/// Executables whose icon is the *runtime's*, not the game's.
+///
+/// A shared host renders as Java's coffee cup or a generic Electron shell,
+/// which is worse than showing the coloured initials badge: a wrong-but-real
+/// icon reads as a bug, a badge reads as "no art yet".
+const GENERIC_ICON_HOSTS: &[&str] = &[
+    "javaw.exe",
+    "java.exe",
+    "python.exe",
+    "pythonw.exe",
+    "node.exe",
+    "electron.exe",
+    "love.exe",
+    "nw.exe",
+];
+
+/// Should we use this executable's own icon as the game's art?
+pub fn icon_is_representative(exe_path: &str) -> bool {
+    let file = exe_path
+        .rsplit(['\\', '/'])
+        .next()
+        .unwrap_or(exe_path)
+        .to_ascii_lowercase();
+    !GENERIC_ICON_HOSTS.contains(&file.as_str())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The shared copy is the full 256px icon, so the backend cap must be big
+    /// enough for the worst one. Extraction moved to 256px against a 48KB cap
+    /// and silently broke every crew upload with "icon too large"; this pins
+    /// the two sides together. Keep it in step with `gameIconMaxBytes`.
+    #[test]
+    fn a_worst_case_256px_icon_fits_the_backend_limit() {
+        const BACKEND_LIMIT: usize = 256 * 1024;
+
+        // A 256px icon of the worst kind: full-colour noise, which is the
+        // least compressible thing a real icon can be.
+        let mut img = image::RgbaImage::new(256, 256);
+        for (x, y, px) in img.enumerate_pixels_mut() {
+            *px = image::Rgba([
+                (x * 7 % 256) as u8,
+                (y * 13 % 256) as u8,
+                ((x + y) % 256) as u8,
+                255,
+            ]);
+        }
+        let dyn_img = image::DynamicImage::ImageRgba8(img);
+
+        let mut wire = std::io::Cursor::new(Vec::new());
+        dyn_img
+            .write_to(&mut wire, image::ImageFormat::Png)
+            .unwrap();
+        let size = wire.get_ref().len();
+
+        assert!(
+            size <= BACKEND_LIMIT,
+            "a worst-case 256px icon is {size} bytes, over the {BACKEND_LIMIT} cap"
+        );
+        // Noise is the least compressible thing a real icon can be, so a real
+        // one is smaller. Assert genuine headroom, not a near miss.
+        assert!(
+            size * 2 <= BACKEND_LIMIT,
+            "only {size} bytes against a {BACKEND_LIMIT} cap leaves no margin"
+        );
+    }
+
+    #[test]
+    fn generic_runtime_hosts_do_not_supply_game_art() {
+        // Java's coffee cup on a Minecraft card reads as a bug; the coloured
+        // badge reads as "no art yet", which is the better failure.
+        assert!(!icon_is_representative(
+            r"C:\Program Files\Javain\javaw.exe"
+        ));
+        assert!(!icon_is_representative("/usr/bin/python.exe"));
+        assert!(!icon_is_representative("JAVAW.EXE"));
+    }
+
+    #[test]
+    fn real_game_executables_supply_their_own_art() {
+        assert!(icon_is_representative(
+            r"C:\Steam\steamapps\common\CSGO\gamein\cs2.exe"
+        ));
+        assert!(icon_is_representative("eldenring.exe"));
+        assert!(icon_is_representative(""));
+    }
 
     #[test]
     fn cached_icon_path_rejects_pathish_ids() {

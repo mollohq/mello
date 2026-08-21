@@ -24,8 +24,15 @@ import (
 
 const (
 	GameIconCollection = "game_icons"
-	// Decoded PNG size cap. Exe icons are 128px or smaller — tens of KB.
-	gameIconMaxBytes = 48 * 1024
+	// Decoded PNG size cap.
+	//
+	// Sized for 256px icons, which is what games actually ship and what the
+	// client now extracts: a typical one is 20-100 KB and a worst-case noisy
+	// one about 150 KB. The old 48 KB cap assumed 128px and rejected every
+	// upload once extraction moved up. 256 KB leaves headroom without letting
+	// an arbitrary file through — the PNG decode below still bounds what this
+	// can be.
+	gameIconMaxBytes = 256 * 1024
 )
 
 var gameIconIDPattern = regexp.MustCompile(`^[a-z0-9-]{1,64}$`)

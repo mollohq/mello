@@ -18,6 +18,47 @@ This directory contains the technical specifications for Mello.
 - `EXTERNAL-SFU.md` - Bring-your-own / self-hosted SFU
 - Additional feature specs under `features/`
 
+## The game stack: 16, 17, 18, 19
+
+These four describe one pipeline and are easy to confuse. Each answers exactly
+one question:
+
+| Spec | Question |
+|------|----------|
+| **17** Game Sensing | *Which game, and for how long?* |
+| **18** Game Telemetry | *How did it go?* |
+| **16** Crew Event Ledger | *How is that stored and moved?* |
+| **19** Feed Curation & Personal Stats | *What do we show you about it?* |
+
+Data flows one way, and the boundary is worth stating plainly:
+
+```
+SENSE (17, 18) ──▶ RECORD (16 ledger, user_game_stats) ──▶ PRESENT (19)
+```
+
+**If it renders, it belongs to 19. If it detects or records, it belongs to
+16/17/18.** Nothing in 17 or 18 should know a feed card exists; nothing in 19
+should care how a game was detected. Sections that violate this are flagged in
+17 and 18 and are pending relocation — they were written before 19 existed.
+
+The seams between them:
+
+| From → To | Payload |
+|---|---|
+| 17 → presence (11) | `game { igdb_id, name, started_at }` — live, never stored |
+| 17 → 18 | `Started`/`Stopped { game_id }` — wakes the right adapter |
+| 18 → 17 | `MatchResult[]` — accumulates into the open session |
+| 17+18 → 16 | one `game_session` event when the game exits |
+| 18 → `user_game_stats` | private streak store; only `streak_after` crosses into the public ledger |
+
+Then **16 + `user_game_stats` → 19** is the only thing spec 19 reads.
+
+Current detection design (catalogue, resolution ladder, installed-library scan)
+lives in [../plans/GAME-SENSING-V2.md](../plans/GAME-SENSING-V2.md); spec 17
+§2–§3 still describe the older `games.json` approach.
+
+---
+
 **Voice state robustness (v0.3)** — resilience across sleep/wake, long sessions, dropped events, and reconnects — is documented across `02-MELLO-CORE.md`, `04-BACKEND.md`, `11-PRESENCE-CREW-STATE.md`, `10-AUDIO_PIPELINE.md`, `15-DEBUG-TELEMETRY.md`, and `features/SFU-INTEGRATION.md`. Test/diagnostic harnesses live in [`../TESTING.md`](../TESTING.md).
 
 See each file for detailed specifications.

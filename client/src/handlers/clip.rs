@@ -426,32 +426,52 @@ fn resolve_game_meta(
     game_name: &str,
 ) -> (String, String, Option<String>) {
     thread_local! {
-        static BUNDLED: std::cell::OnceCell<mello_core::game_db::GameDatabase> =
+        static CATALOGUE: std::cell::OnceCell<Option<mello_core::catalogue::Head>> =
             const { std::cell::OnceCell::new() };
     }
-    let bundled = BUNDLED.with(|db| {
-        let db = db.get_or_init(mello_core::game_db::GameDatabase::load_bundled);
+    let catalogued = CATALOGUE.with(|head| {
+        let head = head.get_or_init(mello_core::catalogue::Head::bundled);
+        let head = head.as_ref()?;
         let entry = if !game_id.is_empty() {
-            db.lookup_by_id(game_id)
-        } else if !game_name.is_empty() {
-            db.lookup_by_name(game_name)
+            head.by_game_id(game_id)
         } else {
             None
-        };
-        entry.map(|e| (e.id.clone(), e.short_name.clone(), e.color.clone()))
+        }
+        .or_else(|| {
+            // Stream sessions and pre-`game_id` events carry only a name.
+            (!game_name.is_empty())
+                .then(|| head.by_name(game_name))
+                .flatten()
+        })?;
+        Some((
+            entry.game_id.to_string(),
+            entry.short_name.to_string(),
+            None,
+        ))
     });
-    if let Some(resolved) = bundled {
+    if let Some(resolved) = catalogued {
         return resolved;
     }
+
     let settings = ctx.settings.borrow();
     let custom = settings.custom_games.iter().find(|g| {
         (!game_id.is_empty() && g.id == game_id)
             || (!game_name.is_empty() && g.name.eq_ignore_ascii_case(game_name))
     });
-    match custom {
-        Some(g) => (g.id.clone(), g.short_name.clone(), None),
-        None => (game_id.to_string(), String::new(), None),
+    if let Some(g) = custom {
+        return (g.id.clone(), g.short_name.clone(), None);
     }
+
+    // Everything the catalogue has never heard of — a game discovered in an
+    // installed library, or one nothing could name — still needs a badge.
+    // Deriving from the display name is what stops those cards rendering a
+    // blank square, which is what happened while this fell back to "".
+    let short = if game_name.is_empty() {
+        String::new()
+    } else {
+        mello_core::library::derive_short_name(game_name)
+    };
+    (game_id.to_string(), short, None)
 }
 
 // Build a feed card from a server feed entry. card_type is the server-provided

@@ -179,6 +179,11 @@ export component MainWindow inherits Window {
     in property <string> game-name: "";
     in property <string> game-short-name: "";
     in property <color> game-color: #2a2a30;
+    // The game's own icon, extracted from its executable. Set once extraction
+    // finishes, which is shortly after detection on first play and immediate
+    // on every play after that.
+    in property <image> game-runtime-icon;
+    in property <bool> game-has-runtime-icon: false;
     // Pre-filled post-game record from telemetry (e.g. "5W–3L · 2-win streak").
     in property <string> game-summary: "";
     in property <string> telemetry-hint: "";
@@ -937,6 +942,8 @@ export component MainWindow inherits Window {
                         game-name: root.game-name;
                         game-short-name: root.game-short-name;
                         game-color: root.game-color;
+                        game-runtime-icon: root.game-runtime-icon;
+                        game-has-runtime-icon: root.game-has-runtime-icon;
                         game-summary: root.game-summary;
                         telemetry-hint: root.telemetry-hint;
                         can-stream: root.can-stream;

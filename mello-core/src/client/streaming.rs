@@ -14,13 +14,13 @@ use crate::voice::{SignalEnvelope, SignalMessage, SignalPurpose};
 #[cfg(not(target_os = "windows"))]
 use super::stream_ffi::on_viewer_frame;
 
-/// The bundled game catalogue, parsed once.
+/// The bundled catalogue, parsed once.
 ///
 /// The picker re-enumerates on every open and the catalogue is static for the
 /// life of the process, so re-parsing it per call is pure waste.
-fn game_database() -> &'static crate::game_db::GameDatabase {
-    static DB: std::sync::OnceLock<crate::game_db::GameDatabase> = std::sync::OnceLock::new();
-    DB.get_or_init(crate::game_db::GameDatabase::load_bundled)
+fn catalogue() -> Option<&'static crate::catalogue::Head> {
+    static HEAD: std::sync::OnceLock<Option<crate::catalogue::Head>> = std::sync::OnceLock::new();
+    HEAD.get_or_init(crate::catalogue::Head::bundled).as_ref()
 }
 use super::stream_ffi::{
     feed_viewer_audio_packet, flush_ice_buffer, log_viewer_native_stats, on_viewer_native_frame,
@@ -840,6 +840,7 @@ impl super::Client {
                 path: [0i8; 520],
                 title: [0i8; 256],
                 is_foreground: false,
+                started_at_ms: 0,
             };
             MAX_PROCESSES
         ];
@@ -847,7 +848,7 @@ impl super::Client {
             mello_sys::mello_enumerate_games(ctx, games_raw.as_mut_ptr(), MAX_PROCESSES as i32)
         };
 
-        let db = game_database();
+        let head = catalogue();
         let own_pid = std::process::id();
 
         // Two tiers. Database matches are what the user is almost always after,
@@ -867,14 +868,17 @@ impl super::Client {
             let title = unsafe { std::ffi::CStr::from_ptr(game.title.as_ptr()) }
                 .to_string_lossy()
                 .to_string();
-            let entry = db.lookup_by_exe(&exe);
+            let path = unsafe { std::ffi::CStr::from_ptr(game.path.as_ptr()) }
+                .to_string_lossy()
+                .to_string();
+            let entry = head.and_then(|h| h.lookup_exe(&exe, &path));
             // A process with no window cannot be captured, so it has no business
             // in a capture picker regardless of which tier it would land in.
             if entry.is_none() && title.is_empty() {
                 continue;
             }
-            let name = match entry {
-                Some(e) => e.name.clone(),
+            let name = match &entry {
+                Some(e) => e.name.to_string(),
                 None if !title.is_empty() => title,
                 None => unsafe { std::ffi::CStr::from_ptr(game.name.as_ptr()) }
                     .to_string_lossy()

@@ -1,16 +1,22 @@
-import { GameIconsDb } from "game_icons_gen.slint";
 import { GameBadge } from "game_badge.slint";
 
-/// Square game tile. Precedence: bundled SteamGridDB icon → runtime icon
-/// (exe-extracted / crew-shared, supplied by the converter layer) → colored
-/// short-name badge.
+/// Square game tile.
+///
+/// Precedence (assets §8.2): the game's own icon — extracted from its
+/// executable, or fetched from whichever crewmate uploaded theirs — then the
+/// coloured short-name badge.
+///
+/// The executable's icon leads because it is what the user already recognises
+/// from their taskbar, it needs no catalogue entry, and it is available
+/// instantly and offline. That also means a game nobody has ever catalogued
+/// looks exactly as good as a curated one.
 export component GameIcon inherits Rectangle {
     in property <string> game-id;
     in property <string> short-name;
     in property <color> badge-color: #2a2a30;
     in property <length> size: 36px;
-    /// Runtime icon for games without bundled art (defaults keep existing
-    /// call sites unchanged).
+    /// Icon resolved by the converter layer: exe-extracted first, then the
+    /// crew-shared copy.
     in property <image> runtime-icon;
     in property <bool> has-runtime-icon: false;
 
@@ -19,19 +25,13 @@ export component GameIcon inherits Rectangle {
     border-radius: 8px;
     clip: true;
 
-    if GameIconsDb.has(game-id): Image {
-        source: GameIconsDb.icon(game-id);
-        width: parent.width;
-        height: parent.height;
-        image-fit: cover;
-    }
-    if !GameIconsDb.has(game-id) && has-runtime-icon: Image {
+    if has-runtime-icon: Image {
         source: runtime-icon;
         width: parent.width;
         height: parent.height;
         image-fit: cover;
     }
-    if !GameIconsDb.has(game-id) && !has-runtime-icon: GameBadge {
+    if !has-runtime-icon: GameBadge {
         short-name: short-name;
         bg-color: badge-color;
         size: size;

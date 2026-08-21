@@ -14,7 +14,7 @@ use super::{
     TelemetryEvent,
 };
 
-/// Game DB id (matches `client/assets/games.json`).
+/// Stable game id (matches `scripts/exe_mappings.json`).
 const GAME_ID: &str = "counter-strike-2";
 
 /// CS2/CS:GO share Steam app id 730.

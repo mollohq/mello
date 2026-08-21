@@ -1,5 +1,4 @@
 use mello_core::crew_events::UserGameStats;
-use mello_core::game_db::GameDatabase;
 use mello_core::Event;
 use slint::{Color, ModelRc, SharedString, VecModel};
 
@@ -15,18 +14,25 @@ pub fn handle(ctx: &AppContext, event: Event) {
     }
 }
 
-/// Resolve display name / short name / badge color from the bundled game DB,
-/// falling back to the raw id for unknown games.
-fn display_info(db: &GameDatabase, game_id: &str) -> (String, String, Color) {
-    match db.lookup_by_id(game_id) {
+/// Resolve display name / short name / badge colour for a stats row.
+///
+/// The catalogue covers curated and popular games. Anything else — a title
+/// discovered in an installed library, or one nothing could name — falls back
+/// to the raw id, which at least renders something legible rather than a blank
+/// badge.
+fn display_info(
+    head: Option<&mello_core::catalogue::Head>,
+    game_id: &str,
+) -> (String, String, Color) {
+    match head.and_then(|h| h.by_game_id(game_id)) {
         Some(e) => (
-            e.name.clone(),
-            e.short_name.clone(),
-            parse_hex_color(e.color.as_deref().unwrap_or("#888888")),
+            e.name.to_string(),
+            e.short_name.to_string(),
+            parse_hex_color("#888888"),
         ),
         None => (
             game_id.to_string(),
-            game_id.to_string(),
+            mello_core::library::derive_short_name(game_id),
             parse_hex_color("#888888"),
         ),
     }
@@ -91,8 +97,8 @@ fn build_you_strip(games: &[UserGameStats]) -> YouStripData {
         return empty_strip();
     };
 
-    let db = GameDatabase::load_bundled();
-    let (name, short, color) = display_info(&db, &g.game_id);
+    let head = mello_core::catalogue::Head::bundled();
+    let (name, short, color) = display_info(head.as_ref(), &g.game_id);
 
     YouStripData {
         has_stats: true,
@@ -111,12 +117,12 @@ fn build_you_strip(games: &[UserGameStats]) -> YouStripData {
 /// Per-game cards for the stats profile (spec 19 A2), one per tracked game,
 /// in the backend's newest-played-first order.
 fn build_profile_cards(games: &[UserGameStats]) -> Vec<GameStatsCardData> {
-    let db = GameDatabase::load_bundled();
+    let head = mello_core::catalogue::Head::bundled();
     games
         .iter()
         .filter(|g| g.wins + g.losses + g.draws > 0)
         .map(|g| {
-            let (name, short, color) = display_info(&db, &g.game_id);
+            let (name, short, color) = display_info(head.as_ref(), &g.game_id);
 
             let best = match (g.longest_win_streak, g.longest_loss_streak) {
                 (0, 0) => String::new(),
