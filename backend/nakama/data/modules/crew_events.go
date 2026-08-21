@@ -89,7 +89,11 @@ type GameSessionData struct {
 	ActiveMin   int      `json:"active_min,omitempty"`
 	PlayerIDs   []string `json:"player_ids"`
 	PlayerNames []string `json:"player_names"`
-	DurationMin int      `json:"duration_min"`
+	// Minutes the actor overlapped each PlayerIDs entry (index-aligned). Index 0
+	// is the actor's own clamped session duration. Co-play copy must use these
+	// values, never the actor's DurationMin.
+	PlayerOverlapMin []int `json:"player_overlap_min,omitempty"`
+	DurationMin      int   `json:"duration_min"`
 	// Telemetry-derived outcome fields (spec 18). Omitted for games without a
 	// telemetry adapter. StreakAfter is the privacy bridge: the actor's signed
 	// streak (from the private user_game_stats store) copied into this public event.
@@ -844,18 +848,20 @@ func GameSessionEndRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, n
 		EndMs:   time.Now().UnixMilli(),
 	}
 	playerIDs, playerNames := []string{userID}, []string{username}
+	playerOverlapMin := []int{req.DurationMin}
 	if req.GameID != "" {
-		playerIDs, playerNames = collectCoPlayers(ctx, logger, nk, req.CrewID, window, ledger)
+		playerIDs, playerNames, playerOverlapMin = collectCoPlayers(ctx, logger, nk, req.CrewID, window, req.DurationMin, ledger)
 	}
 
 	data := GameSessionData{
-		GameName:    req.GameName,
-		GameID:      req.GameID,
-		GameIGDBID:  req.IgdbID,
-		ActiveMin:   req.ActiveMin,
-		PlayerIDs:   playerIDs,
-		PlayerNames: playerNames,
-		DurationMin: req.DurationMin,
+		GameName:         req.GameName,
+		GameID:           req.GameID,
+		GameIGDBID:       req.IgdbID,
+		ActiveMin:        req.ActiveMin,
+		PlayerIDs:        playerIDs,
+		PlayerNames:      playerNames,
+		PlayerOverlapMin: playerOverlapMin,
+		DurationMin:      req.DurationMin,
 	}
 	score := 10
 

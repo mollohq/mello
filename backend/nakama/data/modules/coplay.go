@@ -64,24 +64,47 @@ func overlaps(a, b sessionWindow) bool {
 	return a.StartMs < b.EndMs && b.StartMs < a.EndMs
 }
 
+// overlapMinutes reports how many full minutes two half-open windows intersect.
+//
+// Touching endpoints and sub-minute overlap both yield 0, consistent with
+// overlaps.
+func overlapMinutes(a, b sessionWindow) int {
+	start := a.StartMs
+	if b.StartMs > start {
+		start = b.StartMs
+	}
+	end := a.EndMs
+	if b.EndMs < end {
+		end = b.EndMs
+	}
+	overlapMs := end - start
+	if overlapMs <= 0 {
+		return 0
+	}
+	return int(overlapMs / 60_000)
+}
+
 // coPlayersFromLedger returns the distinct users whose recorded sessions of the
-// same game overlapped `window`, excluding the actor.
+// same game overlapped `window`, excluding the actor, plus aligned overlap
+// minutes for each.
 //
 // Pure so the interval logic is unit-testable; the Nakama read happens in
 // collectCoPlayers.
-func coPlayersFromLedger(window sessionWindow, others []sessionWindow) []string {
+func coPlayersFromLedger(window sessionWindow, others []sessionWindow) ([]string, []int) {
 	seen := map[string]bool{window.UserID: true}
-	var out []string
+	var ids []string
+	var overlapMins []int
 	for _, other := range others {
 		if other.GameID != window.GameID || seen[other.UserID] {
 			continue
 		}
 		if overlaps(window, other) {
 			seen[other.UserID] = true
-			out = append(out, other.UserID)
+			ids = append(ids, other.UserID)
+			overlapMins = append(overlapMins, overlapMinutes(window, other))
 		}
 	}
-	return out
+	return ids, overlapMins
 }
 
 // ledgerWindows extracts play windows from a crew's game_session events.
@@ -151,15 +174,19 @@ func collectCoPlayers(
 	nk runtime.NakamaModule,
 	crewID string,
 	window sessionWindow,
+	actorDurationMin int,
 	ledger *CrewEventLedger,
-) ([]string, []string) {
+) ([]string, []string, []int) {
 	seen := map[string]bool{window.UserID: true}
 	ids := []string{window.UserID}
+	overlapMins := []int{actorDurationMin}
 
-	for _, id := range coPlayersFromLedger(window, ledgerWindows(ledger, window.StartMs)) {
+	ledgerIDs, ledgerOverlaps := coPlayersFromLedger(window, ledgerWindows(ledger, window.StartMs))
+	for i, id := range ledgerIDs {
 		if !seen[id] {
 			seen[id] = true
 			ids = append(ids, id)
+			overlapMins = append(overlapMins, ledgerOverlaps[i])
 		}
 	}
 
@@ -180,9 +207,14 @@ func collectCoPlayers(
 			if err != nil || presence == nil || presence.Game == nil {
 				continue
 			}
-			if presenceCountsAsCoPlay(presence.Game.GameID, gamePresenceStartedAtMs(presence.Game), window) {
+			startedAtMs := gamePresenceStartedAtMs(presence.Game)
+			if presenceCountsAsCoPlay(presence.Game.GameID, startedAtMs, window) {
 				seen[id] = true
 				ids = append(ids, id)
+				overlapMins = append(overlapMins, overlapMinutes(window, sessionWindow{
+					StartMs: startedAtMs,
+					EndMs:   window.EndMs,
+				}))
 			}
 		}
 	}
@@ -191,5 +223,5 @@ func collectCoPlayers(
 	for _, id := range ids {
 		names = append(names, resolveUsername(ctx, nk, id))
 	}
-	return ids, names
+	return ids, names, overlapMins
 }

@@ -15,31 +15,100 @@ func win(user, game string, startMs, endMs int64) sessionWindow {
 
 const hour = int64(3_600_000)
 
+func TestOverlapMinutes(t *testing.T) {
+	cases := []struct {
+		name string
+		a, b sessionWindow
+		want int
+	}{
+		{
+			name: "no overlap",
+			a:    win("a", "g", 0, hour),
+			b:    win("b", "g", 2*hour, 3*hour),
+			want: 0,
+		},
+		{
+			name: "touching endpoints",
+			a:    win("a", "g", 0, hour),
+			b:    win("b", "g", hour, 2*hour),
+			want: 0,
+		},
+		{
+			name: "partial overlap",
+			a:    win("a", "g", 0, 2*hour),
+			b:    win("b", "g", hour, 3*hour),
+			want: 60,
+		},
+		{
+			name: "containment",
+			a:    win("a", "g", 0, 4*hour),
+			b:    win("b", "g", hour, 2*hour),
+			want: 60,
+		},
+		{
+			name: "sub-minute overlap floors to zero",
+			a:    win("a", "g", 0, hour),
+			b:    win("b", "g", hour-30_000, 2*hour),
+			want: 0,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := overlapMinutes(c.a, c.b); got != c.want {
+				t.Fatalf("overlapMinutes(...) = %d, want %d", got, c.want)
+			}
+		})
+	}
+}
+
+func TestPresenceOverlapUsesStartedAtThroughSessionEnd(t *testing.T) {
+	window := win("me", "counter-strike-2", hour, 3*hour) // [1h, 3h) = 120m session
+	startedAtMs := hour + hour/2                          // joined 30m into actor session
+	got := overlapMinutes(window, sessionWindow{StartMs: startedAtMs, EndMs: window.EndMs})
+	if got != 90 {
+		t.Fatalf("presence overlap = %d, want 90", got)
+	}
+}
+
 func TestOverlappingSessionsAreCoPlay(t *testing.T) {
 	me := win("me", "counter-strike-2", 0, 2*hour)
 	others := []sessionWindow{
 		win("kim", "counter-strike-2", hour, 3*hour),  // overlaps the back half
 		win("ash", "counter-strike-2", -hour, hour/2), // overlaps the front
 	}
-	got := coPlayersFromLedger(me, others)
+	got, overlaps := coPlayersFromLedger(me, others)
 	if len(got) != 2 {
 		t.Fatalf("expected both crewmates, got %v", got)
+	}
+	if len(overlaps) != 2 {
+		t.Fatalf("overlap list must align with ids: got %v", overlaps)
+	}
+	if overlaps[0] != 60 || overlaps[1] != 30 {
+		t.Errorf("overlap minutes = %v, want [60, 30]", overlaps)
 	}
 }
 
 func TestDifferentGameIsNotCoPlay(t *testing.T) {
 	me := win("me", "counter-strike-2", 0, 2*hour)
 	others := []sessionWindow{win("kim", "dota-2", 0, 2*hour)}
-	if got := coPlayersFromLedger(me, others); len(got) != 0 {
+	got, overlaps := coPlayersFromLedger(me, others)
+	if len(got) != 0 {
 		t.Errorf("playing a different game at the same time is not together: %v", got)
+	}
+	if len(overlaps) != 0 {
+		t.Errorf("expected no overlap minutes, got %v", overlaps)
 	}
 }
 
 func TestNonOverlappingSessionIsNotCoPlay(t *testing.T) {
 	me := win("me", "counter-strike-2", 0, hour)
 	others := []sessionWindow{win("kim", "counter-strike-2", 2*hour, 3*hour)}
-	if got := coPlayersFromLedger(me, others); len(got) != 0 {
+	got, overlaps := coPlayersFromLedger(me, others)
+	if len(got) != 0 {
 		t.Errorf("same game hours apart is not together: %v", got)
+	}
+	if len(overlaps) != 0 {
+		t.Errorf("expected no overlap minutes, got %v", overlaps)
 	}
 }
 
@@ -47,8 +116,12 @@ func TestTouchingSessionsAreAHandoffNotCompany(t *testing.T) {
 	// kim quits exactly as I start. We were never in the game together.
 	me := win("me", "counter-strike-2", hour, 2*hour)
 	others := []sessionWindow{win("kim", "counter-strike-2", 0, hour)}
-	if got := coPlayersFromLedger(me, others); len(got) != 0 {
+	got, overlaps := coPlayersFromLedger(me, others)
+	if len(got) != 0 {
 		t.Errorf("touching endpoints are not an overlap: %v", got)
+	}
+	if len(overlaps) != 0 {
+		t.Errorf("expected no overlap minutes, got %v", overlaps)
 	}
 }
 
@@ -56,8 +129,12 @@ func TestActorIsNeverTheirOwnCoPlayer(t *testing.T) {
 	me := win("me", "counter-strike-2", 0, 2*hour)
 	// The actor's own earlier session of the same game overlaps trivially.
 	others := []sessionWindow{win("me", "counter-strike-2", 0, 2*hour)}
-	if got := coPlayersFromLedger(me, others); len(got) != 0 {
+	got, overlaps := coPlayersFromLedger(me, others)
+	if len(got) != 0 {
 		t.Errorf("expected no self-attribution, got %v", got)
+	}
+	if len(overlaps) != 0 {
+		t.Errorf("expected no overlap minutes, got %v", overlaps)
 	}
 }
 
@@ -68,9 +145,12 @@ func TestEachCoPlayerCountedOnce(t *testing.T) {
 		win("kim", "counter-strike-2", 0, hour),
 		win("kim", "counter-strike-2", 2*hour, 3*hour),
 	}
-	got := coPlayersFromLedger(me, others)
+	got, overlaps := coPlayersFromLedger(me, others)
 	if len(got) != 1 || got[0] != "kim" {
 		t.Errorf("expected kim once, got %v", got)
+	}
+	if len(overlaps) != 1 || overlaps[0] != 60 {
+		t.Errorf("expected one overlap minute entry for kim (first session), got %v", overlaps)
 	}
 }
 
