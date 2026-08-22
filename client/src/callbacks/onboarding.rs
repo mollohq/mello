@@ -119,6 +119,15 @@ pub fn wire(ctx: &AppContext) {
                     }
 
                     let nickname = app.get_onboarding_nickname().to_string();
+                    let share_game_activity = app.get_onboarding_share_game_activity();
+                    {
+                        let mut settings = s.borrow_mut();
+                        settings.share_game_activity = share_game_activity;
+                        settings.save();
+                    }
+                    let _ = cmd.send(Command::SetShareGameActivity {
+                        enabled: share_game_activity,
+                    });
                     // Stable across attempts — see Settings::device_id_or_create.
                     let device_id = s.borrow_mut().device_id_or_create();
                     let settings = s.borrow();

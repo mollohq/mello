@@ -4,6 +4,20 @@ use slint::ComponentHandle;
 use crate::app_context::AppContext;
 
 pub fn wire(ctx: &AppContext) {
+    // Activity-sharing consent (Games settings tab).
+    {
+        let cmd = ctx.cmd_tx.clone();
+        let s = ctx.settings.clone();
+        ctx.app
+            .on_setting_changed_share_game_activity(move |enabled| {
+                let mut settings = s.borrow_mut();
+                settings.share_game_activity = enabled;
+                settings.save();
+                let _ = cmd.send(Command::SetShareGameActivity { enabled });
+                log::info!("[settings] share_game_activity = {}", enabled);
+            });
+    }
+
     // Per-game integration consent toggle (Games settings tab).
     {
         let cmd = ctx.cmd_tx.clone();

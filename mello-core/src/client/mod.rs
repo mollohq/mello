@@ -127,6 +127,8 @@ pub struct Client {
     /// Game integrations the user switched off (Games settings page). Disabled
     /// ids skip config installs and active transports.
     disabled_integrations: std::collections::HashSet<String>,
+    /// When false, sensed play stays local — no crew presence or session-end RPCs.
+    share_game_activity: bool,
     enable_game_sensor: bool,
     emit_process_stats: bool,
     game_event_rx:
@@ -187,6 +189,12 @@ impl Client {
     /// Must be called before `run()` so the startup config installs honor it.
     pub fn set_disabled_integrations(&mut self, ids: impl IntoIterator<Item = String>) {
         self.disabled_integrations = ids.into_iter().collect();
+    }
+
+    /// Seed activity-sharing consent from persisted client settings. Must be
+    /// called before `run()` so the first presence sync honors it.
+    pub fn set_share_game_activity(&mut self, enabled: bool) {
+        self.share_game_activity = enabled;
     }
 
     /// Seed user-confirmed custom games from persisted client settings.
@@ -272,6 +280,7 @@ impl Client {
             telemetry_listener: None,
             telemetry_registry: Arc::new(AdapterRegistry::with_defaults()),
             disabled_integrations: std::collections::HashSet::new(),
+            share_game_activity: true,
             enable_game_sensor,
             emit_process_stats,
             game_event_rx: std::sync::Mutex::new(None),
@@ -381,19 +390,21 @@ impl Client {
                 }
                 self.sync_game_presence().await;
                 if let Some(summary) = session_end {
-                    if let Some(crew_id) = self.nakama.active_crew_id().map(String::from) {
-                        self.handle_game_session_end(
-                            &crew_id,
-                            &summary.game_name,
-                            &summary.game_id,
-                            summary.duration_min,
-                            summary.active_min,
-                            summary.igdb_id,
-                            summary.wins,
-                            summary.losses,
-                            summary.draws,
-                        )
-                        .await;
+                    if game_services::should_emit_game_session_end(self.share_game_activity) {
+                        if let Some(crew_id) = self.nakama.active_crew_id().map(String::from) {
+                            self.handle_game_session_end(
+                                &crew_id,
+                                &summary.game_name,
+                                &summary.game_id,
+                                summary.duration_min,
+                                summary.active_min,
+                                summary.igdb_id,
+                                summary.wins,
+                                summary.losses,
+                                summary.draws,
+                            )
+                            .await;
+                        }
                     }
                 }
             }
@@ -1027,20 +1038,22 @@ impl Client {
                 losses,
                 draws,
             } => {
-                self.handle_game_session_end(
-                    &crew_id,
-                    &game_name,
-                    &game_id,
-                    duration_min,
-                    // A manually-reported session (the post-game card) carries
-                    // no foreground accounting or catalogue identity.
-                    0,
-                    0,
-                    wins,
-                    losses,
-                    draws,
-                )
-                .await;
+                if game_services::should_emit_game_session_end(self.share_game_activity) {
+                    self.handle_game_session_end(
+                        &crew_id,
+                        &game_name,
+                        &game_id,
+                        duration_min,
+                        // A manually-reported session (the post-game card) carries
+                        // no foreground accounting or catalogue identity.
+                        0,
+                        0,
+                        wins,
+                        losses,
+                        draws,
+                    )
+                    .await;
+                }
             }
             Command::SetCustomGames { games } => {
                 self.custom_games = games;
@@ -1130,6 +1143,14 @@ impl Client {
             Command::SetGameIntegrations { disabled } => {
                 log::info!("[telemetry] disabled integrations set to {disabled:?}");
                 self.disabled_integrations = disabled.into_iter().collect();
+            }
+            Command::SetShareGameActivity { enabled } => {
+                let changed = self.share_game_activity != enabled;
+                self.share_game_activity = enabled;
+                log::info!("[game-sharing] share_game_activity = {enabled}");
+                if changed {
+                    self.sync_game_presence().await;
+                }
             }
             Command::RiotLink { riot_id, region } => {
                 match self.nakama.riot_link(&riot_id, &region).await {

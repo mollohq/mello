@@ -451,6 +451,10 @@ pub enum Command {
         #[serde(default)]
         disabled: Vec<String>,
     },
+    /// Toggle whether sensed play is shared with crews (presence + session-end).
+    SetShareGameActivity {
+        enabled: bool,
+    },
     /// Link the user's Riot ID ("GameName#TAG") for server-verified results.
     RiotLink {
         riot_id: String,

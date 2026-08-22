@@ -54,6 +54,13 @@ pub fn to_rfc3339(unix_ms: i64) -> String {
         .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
 }
 
+/// Parse an RFC 3339 timestamp (as used on presence `started_at`) to Unix ms.
+pub fn from_rfc3339_ms(s: &str) -> Option<i64> {
+    chrono::DateTime::parse_from_rfc3339(s)
+        .ok()
+        .map(|dt| dt.timestamp_millis())
+}
+
 /// Orthogonal game presence — can coexist with any activity type.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct GamePresence {

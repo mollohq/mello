@@ -89,7 +89,11 @@ type GameSessionData struct {
 	ActiveMin   int      `json:"active_min,omitempty"`
 	PlayerIDs   []string `json:"player_ids"`
 	PlayerNames []string `json:"player_names"`
-	DurationMin int      `json:"duration_min"`
+	// Minutes the actor overlapped each PlayerIDs entry (index-aligned). Index 0
+	// is the actor's own clamped session duration. Co-play copy must use these
+	// values, never the actor's DurationMin.
+	PlayerOverlapMin []int `json:"player_overlap_min,omitempty"`
+	DurationMin      int   `json:"duration_min"`
 	// Telemetry-derived outcome fields (spec 18). Omitted for games without a
 	// telemetry adapter. StreakAfter is the privacy bridge: the actor's signed
 	// streak (from the private user_game_stats store) copied into this public event.
@@ -844,18 +848,20 @@ func GameSessionEndRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, n
 		EndMs:   time.Now().UnixMilli(),
 	}
 	playerIDs, playerNames := []string{userID}, []string{username}
+	playerOverlapMin := []int{req.DurationMin}
 	if req.GameID != "" {
-		playerIDs, playerNames = collectCoPlayers(ctx, logger, nk, req.CrewID, window, ledger)
+		playerIDs, playerNames, playerOverlapMin = collectCoPlayers(ctx, logger, nk, req.CrewID, window, req.DurationMin, ledger)
 	}
 
 	data := GameSessionData{
-		GameName:    req.GameName,
-		GameID:      req.GameID,
-		GameIGDBID:  req.IgdbID,
-		ActiveMin:   req.ActiveMin,
-		PlayerIDs:   playerIDs,
-		PlayerNames: playerNames,
-		DurationMin: req.DurationMin,
+		GameName:         req.GameName,
+		GameID:           req.GameID,
+		GameIGDBID:       req.IgdbID,
+		ActiveMin:        req.ActiveMin,
+		PlayerIDs:        playerIDs,
+		PlayerNames:      playerNames,
+		PlayerOverlapMin: playerOverlapMin,
+		DurationMin:      req.DurationMin,
 	}
 	score := 10
 
@@ -868,16 +874,16 @@ func GameSessionEndRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, n
 		data.Verified = true
 	}
 
-	// Telemetry outcomes: update the actor's private per-game stats and bridge
-	// only the resulting streak into this public event. Decisive sessions score
-	// higher so heaters/skids surface in the catch-up card.
+	// Per-game stats: every session updates play time (T0); telemetry outcomes
+	// are folded in when present and only the resulting streak bridges into
+	// this public event.
 	streakAfter := 0
-	if req.GameID != "" && (req.Wins > 0 || req.Losses > 0 || req.Draws > 0) {
-		stats, result, err := UpdateUserGameStats(ctx, nk, userID, req.GameID, req.Wins, req.Losses, req.Draws)
+	if req.GameID != "" {
+		stats, result, err := UpdateUserGameStatsForSession(ctx, nk, userID, req.GameID, req.DurationMin, req.ActiveMin, req.Wins, req.Losses, req.Draws)
 		if err != nil {
-			// Non-fatal: still record the session, just without the streak.
+			// Non-fatal: still record the session, just without stats enrichment.
 			logger.Warn("user_game_stats update failed for %s/%s: %v", userID, req.GameID, err)
-		} else {
+		} else if req.Wins > 0 || req.Losses > 0 || req.Draws > 0 {
 			streakAfter = stats.CurrentStreak
 			data.Wins = req.Wins
 			data.Losses = req.Losses

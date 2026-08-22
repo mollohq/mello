@@ -6,7 +6,10 @@ use slint::Model;
 
 use super::stream_cards::sync_active_stream_cards;
 use crate::app_context::AppContext;
-use crate::converters::{channels_to_ui, make_initials, update_active_crew_card, VoiceUiCtx};
+use crate::converters::{
+    channels_to_ui, current_time_ms, game_line_from_presence, make_initials,
+    set_voice_member_game_line, update_active_crew_card, VoiceUiCtx,
+};
 use crate::{avatar, CrewData, MemberData};
 
 pub fn handle(ctx: &AppContext, event: Event) {
@@ -124,6 +127,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
                 online: true,
                 speaking: false,
                 role: 2,
+                game_line: "".into(),
             };
             let mut members: Vec<MemberData> = (0..current.row_count())
                 .map(|i| current.row_data(i).unwrap())
@@ -175,17 +179,21 @@ pub fn handle(ctx: &AppContext, event: Event) {
                 let current = ctx.app.get_members();
                 let is_online =
                     change.presence.status != mello_core::presence::PresenceStatus::Offline;
+                let now_ms = current_time_ms();
+                let game_line = game_line_from_presence(change.presence.game.as_ref(), now_ms);
                 let members: Vec<MemberData> = (0..current.row_count())
                     .map(|i| {
                         let mut m = current.row_data(i).unwrap();
                         if m.id == change.user_id.as_str() {
                             m.online = is_online;
+                            m.game_line = game_line.clone().into();
                         }
                         m
                     })
                     .collect();
                 ctx.app
                     .set_members(Rc::new(slint::VecModel::from(members)).into());
+                set_voice_member_game_line(&ctx.app, change.user_id.as_str(), &game_line);
                 update_active_crew_card(&ctx.app);
             }
         }
@@ -386,6 +394,26 @@ pub fn handle(ctx: &AppContext, event: Event) {
             }
 
             if ctx.app.get_active_crew_id() == state.crew_id.as_str() {
+                let now_ms = current_time_ms();
+                let game_lines: std::collections::HashMap<String, String> = state
+                    .members
+                    .as_ref()
+                    .map(|members| {
+                        members
+                            .iter()
+                            .map(|cm| {
+                                (
+                                    cm.user_id.clone(),
+                                    game_line_from_presence(
+                                        cm.presence.as_ref().and_then(|p| p.game.as_ref()),
+                                        now_ms,
+                                    ),
+                                )
+                            })
+                            .filter(|(_, line)| !line.is_empty())
+                            .collect()
+                    })
+                    .unwrap_or_default();
                 let avc_id = if ctx.app.get_in_voice() {
                     let current_avc = ctx.active_voice_channel.borrow().clone();
                     if current_avc.is_empty() {
@@ -413,6 +441,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
                     cache: &ctx.avatar_cache.borrow(),
                     local_muted: ctx.app.get_mic_muted(),
                     local_deafened: ctx.app.get_deafened(),
+                    game_lines: &game_lines,
                 };
                 let vc_data = channels_to_ui(&state.voice_channels, &avc_id, &vctx);
                 ctx.app
@@ -475,6 +504,11 @@ pub fn handle(ctx: &AppContext, event: Event) {
                                 online: is_online,
                                 speaking: false,
                                 role: cm.role,
+                                game_line: game_lines
+                                    .get(&cm.user_id)
+                                    .cloned()
+                                    .unwrap_or_default()
+                                    .into(),
                             }
                         })
                         .collect();

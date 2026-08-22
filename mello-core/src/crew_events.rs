@@ -86,6 +86,17 @@ pub struct GameSessionEndResponse {
 /// Per-game personal stats (mirrors the backend `user_game_stats` store).
 /// Backs the personal "You strip" + profile (spec 19).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RecentDayEntry {
+    pub date: String,
+    #[serde(default)]
+    pub wall_min: u32,
+    #[serde(default)]
+    pub active_min: u32,
+}
+
+/// Per-game personal stats (mirrors the backend `user_game_stats` store).
+/// Backs the personal "You strip" + profile (spec 19).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct UserGameStats {
     pub game_id: String,
     #[serde(default)]
@@ -110,6 +121,12 @@ pub struct UserGameStats {
     pub last_played: i64,
     #[serde(default)]
     pub updated_at: i64,
+    #[serde(default)]
+    pub played_min_total: u32,
+    #[serde(default)]
+    pub active_min_total: u32,
+    #[serde(default)]
+    pub recent_days: Vec<RecentDayEntry>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

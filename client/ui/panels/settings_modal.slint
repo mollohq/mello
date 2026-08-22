@@ -144,7 +144,7 @@ component VuBar inherits Rectangle {
 }
 
 // ─── Toggle Switch ─────────────────────────────────────────────────────────
-component SettingsToggle inherits Rectangle {
+export component SettingsToggle inherits Rectangle {
     in-out property <bool> checked: false;
     callback toggled(bool);
 
@@ -1651,13 +1651,29 @@ component GamesTab inherits VerticalLayout {
     spacing: 48px;
 
     in property <[GameIntegrationData]> games: [];
+    in-out property <bool> share-game-activity: true;
     in property <bool> riot-available: false;
     in property <bool> riot-linked: false;
     in property <string> riot-id: "";
 
     callback integration-toggled(string /* game-id */, bool);
+    callback share-game-activity-toggled(bool);
     callback riot-connect-clicked();
     callback riot-disconnect-clicked();
+
+    // ACTIVITY SHARING
+    VerticalLayout {
+        spacing: 24px;
+
+        SectionHeader { title: "ACTIVITY SHARING"; }
+
+        ToggleRow {
+            title: "Show crew what I'm playing";
+            description: "Let crewmates see what game you're in and record play sessions to the crew feed.";
+            checked <=> root.share-game-activity;
+            toggled(v) => { root.share-game-activity-toggled(v); }
+        }
+    }
 
     // GAME INTEGRATIONS
     VerticalLayout {
@@ -1882,6 +1898,8 @@ export component SettingsModal inherits Rectangle {
 
     // Games callbacks
     callback games-integration-toggled(string /* game-id */, bool);
+    in-out property <bool> settings-share-game-activity: true;
+    callback setting-changed-share-game-activity(bool);
     callback riot-connect-clicked();
     callback riot-disconnect-clicked();
 
@@ -2359,10 +2377,12 @@ export component SettingsModal inherits Rectangle {
                             visible: active-tab == 3;
                             width: parent.width;
                             games: root.games-list;
+                            share-game-activity <=> root.settings-share-game-activity;
                             riot-available: root.riot-available;
                             riot-linked: root.riot-linked;
                             riot-id: root.riot-id;
                             integration-toggled(id, v) => { root.games-integration-toggled(id, v); }
+                            share-game-activity-toggled(v) => { root.setting-changed-share-game-activity(v); }
                             riot-connect-clicked => { root.riot-connect-clicked(); }
                             riot-disconnect-clicked => { root.riot-disconnect-clicked(); }
                         }
