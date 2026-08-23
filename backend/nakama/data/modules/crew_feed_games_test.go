@@ -1,6 +1,9 @@
 package main
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func gsCard(id string, wins, losses, draws, streak int) feedCard {
 	return feedCard{
@@ -344,7 +347,7 @@ func TestBuildThisWeek_LoudWeekIncludesRollup(t *testing.T) {
 	for i := 0; i < 4; i++ {
 		cards = append(cards, gsCardT0("routine"+string(rune('a'+i)), 30, []string{"solo"}, 0, 0, 0, 0))
 	}
-	entries := buildThisWeek(cards)
+	entries := buildThisWeek(cards, time.Now().UnixMilli())
 	var rollup *FeedEntry
 	for i := range entries {
 		if entries[i].Type == "rollup" {

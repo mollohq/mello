@@ -384,6 +384,7 @@ export component MainWindow inherits Window {
     in property <float> clip-anim-tick: 0.0;
     in property <string> clip-position-text: "";
     in property <string> clip-duration-text: "";
+    in property <int> clip-duration-ms: 0;
 
     // --- Presence (0=online, 1=idle, 2=dnd, 3=invisible) ---
     in-out property <int> presence-status: 0;
@@ -581,7 +582,7 @@ export component MainWindow inherits Window {
     callback play-clip(string);
     callback pause-clip();
     callback resume-clip();
-    callback seek-clip(float);
+    callback seek-clip-ms(int);
 
     // --- Onboarding callbacks ---
     callback onboarding-crew-selected(string);
@@ -880,6 +881,7 @@ export component MainWindow inherits Window {
                             clip-anim-tick: root.clip-anim-tick;
                             clip-position-text: root.clip-position-text;
                             clip-duration-text: root.clip-duration-text;
+                            clip-duration-ms: root.clip-duration-ms;
                             stop-stream-clicked => {
                                 root.stop-stream();
                             }
@@ -902,8 +904,8 @@ export component MainWindow inherits Window {
                                     }
                                 }
                             }
-                            seek-clip(v) => {
-                                root.seek-clip(v);
+                            seek-clip-ms(m) => {
+                                root.seek-clip-ms(m);
                             }
                             invite-clicked => {
                                 root.invite-share-requested();

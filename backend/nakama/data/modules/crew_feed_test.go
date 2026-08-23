@@ -1,6 +1,15 @@
 package main
 
-import "testing"
+import (
+	"fmt"
+	"testing"
+)
+
+const feedTestNowMs int64 = 1_700_000_000_000
+
+func clipCard(id string, ts int64) feedCard {
+	return feedCard{id: id, feedType: "clip", backendType: "clip", ts: ts}
+}
 
 func previewCard(id string, durationMin, snapshots int) feedCard {
 	return feedCard{
@@ -14,6 +23,10 @@ func previewCard(id string, durationMin, snapshots int) feedCard {
 
 func typedCard(id, feedType, backendType string) feedCard {
 	return feedCard{id: id, feedType: feedType, backendType: backendType}
+}
+
+func typedCardAt(id, feedType, backendType string, ts int64) feedCard {
+	return feedCard{id: id, feedType: feedType, backendType: backendType, ts: ts}
 }
 
 func findEntry(entries []FeedEntry, id string) *FeedEntry {
@@ -43,7 +56,7 @@ func TestHeroPrefersStrongSessionPreviewOverClip(t *testing.T) {
 		typedCard("voice", "session", "voice_session"),
 		previewCard("long", 21, 50),
 	}
-	entries := buildThisWeek(cards)
+	entries := buildThisWeek(cards, feedTestNowMs)
 	if entries[0].Type != "session-preview" {
 		t.Fatalf("hero type: got %q want session-preview", entries[0].Type)
 	}
@@ -66,7 +79,7 @@ func TestIncludesOneOfEachTypeWhenPresent(t *testing.T) {
 		previewCard("p2", 21, 30),
 		typedCard("catch", "catchup", "chat_activity"),
 	}
-	entries := buildThisWeek(cards)
+	entries := buildThisWeek(cards, feedTestNowMs)
 
 	counts := map[string]int{}
 	for _, e := range entries {
@@ -99,7 +112,7 @@ func TestLongPreviewSurvivesNoiseSessions(t *testing.T) {
 		previewCard("short", 1, 2),
 		previewCard("long", 21, 40),
 	}
-	entries := buildThisWeek(cards)
+	entries := buildThisWeek(cards, feedTestNowMs)
 	if entries[0].ID != "long" {
 		t.Fatalf("hero id: got %q want long", entries[0].ID)
 	}
@@ -116,7 +129,7 @@ func TestBestPreviewIsHeroWithoutLiveStream(t *testing.T) {
 		previewCard("long", 21, 50),
 		typedCard("clip", "clip", "clip"),
 	}
-	entries := buildThisWeek(cards)
+	entries := buildThisWeek(cards, feedTestNowMs)
 	if entries[0].ID != "long" || entries[0].Role != "hero" {
 		t.Fatalf("hero: got id=%q role=%q want long/hero", entries[0].ID, entries[0].Role)
 	}
@@ -154,7 +167,7 @@ func TestUnknownBackendTypeSkipped(t *testing.T) {
 
 func TestTextlessMomentIsStandard(t *testing.T) {
 	cards := []feedCard{typedCard("m", "catchup", "moment")}
-	entries := buildThisWeek(cards)
+	entries := buildThisWeek(cards, feedTestNowMs)
 	e := findEntry(entries, "m")
 	if e == nil {
 		t.Fatal("moment entry missing")
@@ -196,7 +209,7 @@ func TestLowSignalFillersAreQuiet(t *testing.T) {
 		typedCard("clip", "clip", "clip"),
 		typedCard("voice", "session", "voice_session"),
 	}
-	entries := buildThisWeek(cards)
+	entries := buildThisWeek(cards, feedTestNowMs)
 
 	voice := findEntry(entries, "voice")
 	if voice == nil {
@@ -221,7 +234,7 @@ func TestWideSlotGetsLargeSize(t *testing.T) {
 	for i := 0; i < 6; i++ {
 		cards = append(cards, typedCard("clip"+string(rune('0'+i)), "clip", "clip"))
 	}
-	entries := buildThisWeek(cards)
+	entries := buildThisWeek(cards, feedTestNowMs)
 
 	large := 0
 	for _, e := range entries {
@@ -234,5 +247,143 @@ func TestWideSlotGetsLargeSize(t *testing.T) {
 	}
 	if large != 1 {
 		t.Fatalf("expected exactly one lg (wide) filler, got %d", large)
+	}
+}
+
+func TestFreshClipIsHero(t *testing.T) {
+	now := feedTestNowMs
+	cards := []feedCard{
+		clipCard("fresh", now-1_000),
+		previewCard("long", 21, 50),
+		typedCardAt("voice", "session", "voice_session", now-500),
+	}
+	entries := buildThisWeek(cards, now)
+	if entries[0].ID != "fresh" || entries[0].Role != "hero" || entries[0].Size != "lg" {
+		t.Fatalf("hero: got id=%q role=%q size=%q want fresh/hero/lg", entries[0].ID, entries[0].Role, entries[0].Size)
+	}
+	for _, e := range entries {
+		if e.Role == "hero" && e.Type == "session-preview" {
+			t.Fatalf("session-preview should not be hero when a fresh clip qualifies: %q", e.ID)
+		}
+	}
+	preview := findEntry(entries, "long")
+	if preview == nil {
+		t.Fatal("strong preview missing from fillers")
+	}
+	if preview.Role == "hero" {
+		t.Fatalf("preview role: got %q want non-hero filler", preview.Role)
+	}
+}
+
+func TestStaleClipFallsBackToPreviewHero(t *testing.T) {
+	now := feedTestNowMs
+	cards := []feedCard{
+		clipCard("stale", now-feedClipHeroMaxAgeMs-1),
+		previewCard("long", 21, 50),
+	}
+	entries := buildThisWeek(cards, now)
+	if entries[0].ID != "long" || entries[0].Role != "hero" {
+		t.Fatalf("hero: got id=%q role=%q want long/hero", entries[0].ID, entries[0].Role)
+	}
+	clip := findEntry(entries, "stale")
+	if clip == nil {
+		t.Fatal("stale clip missing from fillers")
+	}
+	if clip.Role != "standard" {
+		t.Fatalf("stale clip role: got %q want standard", clip.Role)
+	}
+}
+
+func TestBuriedClipNotHero(t *testing.T) {
+	now := feedTestNowMs
+	clipTs := now - 1_000
+	cards := []feedCard{
+		clipCard("buried", clipTs),
+		typedCardAt("n1", "catchup", "chat_activity", clipTs+1),
+		typedCardAt("n2", "catchup", "moment", clipTs+2),
+		typedCardAt("n3", "session", "voice_session", clipTs+3),
+		typedCardAt("n4", "catchup", "member_joined", clipTs+4),
+		previewCard("long", 21, 50),
+	}
+	entries := buildThisWeek(cards, now)
+	if entries[0].ID != "long" || entries[0].Role != "hero" {
+		t.Fatalf("hero: got id=%q role=%q want long/hero", entries[0].ID, entries[0].Role)
+	}
+	clip := findEntry(entries, "buried")
+	if clip == nil {
+		t.Fatal("buried clip missing from fillers")
+	}
+	if clip.Role == "hero" {
+		t.Fatal("buried clip should not be hero")
+	}
+}
+
+func TestNoClipsKeepsPreviewHero(t *testing.T) {
+	now := feedTestNowMs
+	cards := []feedCard{
+		typedCard("recap", "recap", "weekly_recap"),
+		previewCard("long", 21, 50),
+		typedCard("voice", "session", "voice_session"),
+	}
+	entries := buildThisWeek(cards, now)
+	if entries[0].ID != "long" || entries[0].Role != "hero" {
+		t.Fatalf("hero: got id=%q role=%q want long/hero", entries[0].ID, entries[0].Role)
+	}
+}
+
+func TestFreshClipBeatsStrongPreview(t *testing.T) {
+	now := feedTestNowMs
+	cards := []feedCard{
+		clipCard("fresh", now-500),
+		previewCard("long", 21, 50),
+	}
+	entries := buildThisWeek(cards, now)
+	if entries[0].ID != "fresh" || entries[0].Type != "clip" {
+		t.Fatalf("hero: got id=%q type=%q want fresh/clip", entries[0].ID, entries[0].Type)
+	}
+	if findEntry(entries, "long") == nil {
+		t.Fatal("strong preview should still appear among fillers")
+	}
+}
+
+func TestFreshClipHeroBoundaries(t *testing.T) {
+	now := feedTestNowMs
+	clipTs := now - feedClipHeroMaxAgeMs
+
+	// Exactly max age → still premieres.
+	atAge := buildThisWeek([]feedCard{clipCard("edge-age", clipTs)}, now)
+	if atAge[0].Role != "hero" {
+		t.Fatalf("clip at max age should hero, got role=%q", atAge[0].Role)
+	}
+
+	// One millisecond older → demoted.
+	overAge := buildThisWeek([]feedCard{clipCard("over-age", clipTs-1)}, now)
+	if overAge[0].Role == "hero" && overAge[0].Type == "clip" {
+		t.Fatal("clip past max age should not hero")
+	}
+
+	// Exactly max-newer - 1 newer cards → still premieres.
+	almostBuried := []feedCard{clipCard("almost", clipTs+1_000)}
+	for i := 0; i < feedClipHeroMaxNewer-1; i++ {
+		almostBuried = append(almostBuried, typedCardAt(
+			fmt.Sprintf("n%d", i), "catchup", "chat_activity", clipTs+1_000+int64(i+1),
+		))
+	}
+	abEntries := buildThisWeek(almostBuried, now)
+	if abEntries[0].ID != "almost" || abEntries[0].Role != "hero" {
+		t.Fatalf("clip with %d newer cards should hero, got id=%q role=%q",
+			feedClipHeroMaxNewer-1, abEntries[0].ID, abEntries[0].Role)
+	}
+
+	// Exactly max-newer newer cards → buried.
+	buried := []feedCard{clipCard("exact-buried", clipTs+1_000)}
+	for i := 0; i < feedClipHeroMaxNewer; i++ {
+		buried = append(buried, typedCardAt(
+			fmt.Sprintf("b%d", i), "catchup", "chat_activity", clipTs+1_000+int64(i+1),
+		))
+	}
+	bEntries := buildThisWeek(buried, now)
+	if bEntries[0].Role == "hero" && bEntries[0].Type == "clip" {
+		t.Fatal("clip with exactly max-newer newer cards should not hero")
 	}
 }

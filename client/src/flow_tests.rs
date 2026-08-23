@@ -5,10 +5,16 @@
 //! wiring, so they fail when a change alters what the UI asks core to do or how
 //! it reacts to core events.
 
+use std::ops::ControlFlow;
+
+use base64::Engine as _;
 use i_slint_backend_testing::ElementHandle;
-use mello_core::{Command, Event};
+use mello_core::crew_events::{FeedEntry, FeedResponse, FeedSection};
+use mello_core::{decode_clip_waveform, Command, Event};
+use slint::Model;
 
 use crate::testkit::{Harness, MainWindow};
+use crate::FeedCardData;
 
 /// Which top-level screen the window is showing.
 ///
@@ -1306,6 +1312,305 @@ fn onboarding_social_buttons_link_rather_than_sign_in() {
              user just created, and fails outright for a first-time link"
         );
     }
+}
+
+fn waveform_peaks(model: &slint::ModelRc<f32>) -> Vec<f32> {
+    (0..model.row_count())
+        .filter_map(|i| model.row_data(i))
+        .collect()
+}
+
+fn find_clip_card(cards: &slint::ModelRc<FeedCardData>) -> Option<FeedCardData> {
+    for i in 0..cards.row_count() {
+        if let Some(c) = cards.row_data(i) {
+            if c.card_type == "clip" {
+                return Some(c);
+            }
+        }
+    }
+    None
+}
+
+fn sample_waveform_b64() -> (String, Vec<f32>) {
+    let bytes: Vec<u8> = (0..64).map(|i| (i * 4) as u8).collect();
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+    let peaks = decode_clip_waveform(&b64);
+    (b64, peaks)
+}
+
+/// ★ Regression: optimistic clip card carries decoded waveform peaks.
+#[test]
+fn clip_captured_populates_feed_card_waveform() {
+    let mut h = Harness::new();
+    let (b64, expected) = sample_waveform_b64();
+
+    h.emit(Event::ClipCaptured {
+        clip_id: "clip-opt".into(),
+        path: "/tmp/clip.wav".into(),
+        duration_seconds: 30.0,
+        waveform: b64,
+    });
+
+    let card = find_clip_card(&h.app().get_feed_cards()).expect("clip card in feed");
+    let peaks = waveform_peaks(&card.waveform);
+    assert_eq!(peaks.len(), 64);
+    assert_eq!(peaks, expected);
+}
+
+/// ★ Regression: crew feed clip entries decode base64 waveform metadata.
+#[test]
+fn feed_loaded_decodes_clip_waveform() {
+    let mut h = Harness::new();
+    let (b64, expected) = sample_waveform_b64();
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64;
+
+    h.emit(Event::FeedLoaded {
+        response: FeedResponse {
+            crew_id: "crew-1".into(),
+            sections: vec![FeedSection {
+                id: "this_week".into(),
+                entries: vec![FeedEntry {
+                    id: "feed-clip-1".into(),
+                    entry_type: "clip".into(),
+                    role: "standard".into(),
+                    size: "md".into(),
+                    ts: now_ms,
+                    data: serde_json::json!({
+                        "waveform": b64,
+                        "duration_seconds": 30.0,
+                        "media_url": "/clips/test.wav",
+                        "clipper_name": "alice",
+                    }),
+                }],
+            }],
+        },
+    });
+
+    let card = find_clip_card(&h.app().get_feed_cards()).expect("clip card from feed");
+    let peaks = waveform_peaks(&card.waveform);
+    assert_eq!(peaks.len(), 64);
+    assert_eq!(peaks, expected);
+}
+
+/// ★ Regression: pause/resume callbacks sync clip-paused UI state.
+#[test]
+fn pause_and_resume_clip_toggle_paused_property() {
+    let h = Harness::new();
+
+    h.app().invoke_pause_clip();
+    assert!(h.app().get_clip_paused(), "pause-clip must set clip-paused");
+
+    h.app().invoke_resume_clip();
+    assert!(
+        !h.app().get_clip_paused(),
+        "resume-clip must clear clip-paused"
+    );
+}
+
+/// ★ Regression: seek passes absolute milliseconds straight to the command.
+/// The waveform computes position from its own duration input, so the value
+/// must not be re-scaled against the (finish-reset) global clip-duration-ms.
+#[test]
+fn seek_clip_forwards_absolute_position_ms() {
+    let mut h = Harness::new();
+    // Global duration deliberately zeroed, as ClipPlaybackFinished leaves it:
+    // seeks must stay correct when scrubbing an idle card anyway.
+    h.app().set_clip_duration_ms(0);
+    h.app().invoke_seek_clip_ms(15_000);
+
+    let cmds = h.commands();
+    assert!(
+        cmds.iter()
+            .any(|c| matches!(c, Command::SeekClip { position_ms: 15000 })),
+        "expected SeekClip at 15000ms, got {cmds:?}"
+    );
+}
+
+fn setup_crew_feed(h: &mut Harness, cards: Vec<FeedCardData>) {
+    h.app().set_logged_in(true);
+    h.app().set_onboarding_step(0);
+    h.app().set_show_discover(false);
+    h.app().set_active_crew_id("crew-1".into());
+    h.app()
+        .set_feed_cards(slint::ModelRc::new(slint::VecModel::from(cards)));
+    h.pump();
+}
+
+/// ★ Regression: `alignment: start` on ClipCard's VerticalLayout disabled
+/// `vertical-stretch`, leaving a void below the body in 204px side cells.
+#[test]
+fn clip_card_wave_band_fills_tall_side_cell() {
+    let mut h = Harness::new();
+    setup_crew_feed(
+        &mut h,
+        vec![
+            FeedCardData {
+                id: "hero".into(),
+                card_type: "session-preview".into(),
+                is_hero: true,
+                title: "alice streamed Counter-Strike 2".into(),
+                actor_name: "alice".into(),
+                actor_initials: "al".into(),
+                duration: "1h 2m".into(),
+                duration_min: 62,
+                timestamp: "2 days ago".into(),
+                ..Default::default()
+            },
+            FeedCardData {
+                id: "side-clip".into(),
+                card_type: "clip".into(),
+                title: "bobbi_twitch_1 clipped that".into(),
+                actor_name: "bob".into(),
+                actor_initials: "bo".into(),
+                duration: "0:30".into(),
+                duration_ms: 30_000,
+                timestamp: "12m ago".into(),
+                ..Default::default()
+            },
+        ],
+    );
+
+    let clip_cards: Vec<_> =
+        ElementHandle::find_by_element_type_name(h.app(), "ClipCard").collect();
+    assert_eq!(
+        clip_cards.len(),
+        1,
+        "expected one ClipCard in the hero side stack"
+    );
+
+    let card = &clip_cards[0];
+    let card_bottom = card.absolute_position().y + card.size().height;
+    assert!(
+        card.size().height >= 180.0,
+        "side ClipCard should render tall (~204px), got {}",
+        card.size().height
+    );
+
+    let mut wave_height = 0.0f32;
+    let mut lowest_text_bottom = 0.0f32;
+    card.visit_descendants(|el| {
+        if el.type_name().as_deref() == Some("DotWaveform") {
+            wave_height = wave_height.max(el.size().height);
+        }
+        if el.type_name().as_deref() == Some("Text") {
+            let pos = el.absolute_position();
+            let size = el.size();
+            if size.height > 0.0 {
+                lowest_text_bottom = lowest_text_bottom.max(pos.y + size.height);
+            }
+        }
+        ControlFlow::<()>::Continue(())
+    });
+
+    assert!(
+        wave_height >= 80.0,
+        "wave band should absorb slack (height {wave_height} in {}px cell)",
+        card.size().height
+    );
+    assert!(
+        card_bottom - lowest_text_bottom <= 20.0,
+        "body should sit near card bottom (gap {:.1}px)",
+        card_bottom - lowest_text_bottom
+    );
+}
+
+/// ★ Regression: full-width hero clip row uses the same stretch composition.
+#[test]
+fn hero_clip_card_wave_band_fills_full_width_row() {
+    let mut h = Harness::new();
+    setup_crew_feed(
+        &mut h,
+        vec![FeedCardData {
+            id: "hero-clip".into(),
+            card_type: "clip".into(),
+            is_hero: true,
+            title: "ostkatt clutch ace".into(),
+            actor_name: "ostkatt".into(),
+            actor_initials: "os".into(),
+            duration: "0:30".into(),
+            duration_ms: 30_000,
+            timestamp: "2 hours ago".into(),
+            ..Default::default()
+        }],
+    );
+
+    let heroes: Vec<_> =
+        ElementHandle::find_by_element_type_name(h.app(), "HeroClipCard").collect();
+    assert_eq!(heroes.len(), 1, "expected one HeroClipCard");
+
+    let card = &heroes[0];
+    assert!(
+        card.size().height >= 220.0,
+        "hero clip row should be ~240px, got {}",
+        card.size().height
+    );
+
+    let mut wave_height = 0.0f32;
+    card.visit_descendants(|el| {
+        if el.type_name().as_deref() == Some("DotWaveform") {
+            wave_height = wave_height.max(el.size().height);
+        }
+        ControlFlow::<()>::Continue(())
+    });
+
+    assert!(
+        wave_height >= 100.0,
+        "hero wave band should grow in 240px row (height {wave_height})"
+    );
+}
+
+/// ★ Regression: the hero play ring declared no explicit `x`, so Slint's
+/// default (children narrower than their parent are horizontally centered)
+/// dropped it mid-waveform instead of pinning it left of the band.
+#[test]
+fn hero_clip_play_ring_sits_left_of_wave_band() {
+    let mut h = Harness::new();
+    setup_crew_feed(
+        &mut h,
+        vec![FeedCardData {
+            id: "hero-clip".into(),
+            card_type: "clip".into(),
+            is_hero: true,
+            title: "ostkatt clutch ace".into(),
+            actor_name: "ostkatt".into(),
+            actor_initials: "os".into(),
+            duration: "0:30".into(),
+            duration_ms: 30_000,
+            timestamp: "2 hours ago".into(),
+            ..Default::default()
+        }],
+    );
+
+    let heroes: Vec<_> =
+        ElementHandle::find_by_element_type_name(h.app(), "HeroClipCard").collect();
+    assert_eq!(heroes.len(), 1, "expected one HeroClipCard");
+
+    // The ring must sit entirely LEFT of the wave band, like the mockup's
+    // wave-row ([play button][wave]) — not floating over the dots.
+    let card = &heroes[0];
+    let mut ring_right_edge = 0.0f32;
+    let mut wave_left_edge = f32::MAX;
+    card.visit_descendants(|el| {
+        match el.type_name().as_deref() {
+            Some("ClipPlayRing") => {
+                let pos = el.absolute_position();
+                ring_right_edge = pos.x + el.size().width;
+            }
+            Some("DotWaveform") => {
+                wave_left_edge = wave_left_edge.min(el.absolute_position().x);
+            }
+            _ => {}
+        }
+        ControlFlow::<()>::Continue(())
+    });
+
+    assert!(
+        ring_right_edge <= wave_left_edge,
+        "play ring right edge ({ring_right_edge}) must be <= wave band left edge ({wave_left_edge})"
+    );
 }
 
 // ---------------------------------------------------------------------------

@@ -1,7 +1,7 @@
 use std::rc::Rc;
 
 use base64::Engine as _;
-use mello_core::{Command, Event};
+use mello_core::{decode_clip_waveform, Command, Event};
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
 use crate::app_context::AppContext;
@@ -227,6 +227,15 @@ fn extract_subtitle(data: &serde_json::Value, backend_type: &str) -> String {
         }
         _ => String::new(),
     }
+}
+
+fn waveform_from_data(data: &serde_json::Value) -> ModelRc<f32> {
+    let peaks = data
+        .get("waveform")
+        .and_then(|v| v.as_str())
+        .map(decode_clip_waveform)
+        .unwrap_or_default();
+    ModelRc::new(slint::VecModel::from(peaks))
 }
 
 fn skeleton_card(card_type: &str) -> FeedCardData {
@@ -837,6 +846,13 @@ fn build_feed_card(
         .iter()
         .any(|s| s == id);
 
+    let duration_ms = (duration_secs * 1000.0).round() as i32;
+    let waveform = if backend_type == "clip" {
+        waveform_from_data(&data)
+    } else {
+        ModelRc::new(slint::VecModel::from(Vec::<f32>::new()))
+    };
+
     FeedCardData {
         id: id.into(),
         card_type: card_type.into(),
@@ -875,6 +891,8 @@ fn build_feed_card(
         participant_count,
         clip_count,
         clip_path: clip_path.into(),
+        waveform,
+        duration_ms,
         is_hero: role == "hero",
         is_skeleton: false,
         snapshot_urls: Rc::new(slint::VecModel::from(
@@ -933,6 +951,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
             clip_id,
             path,
             duration_seconds,
+            waveform,
         } => {
             log::info!(
                 "clip captured: id={} path={} duration={:.1}s",
@@ -944,6 +963,8 @@ pub fn handle(ctx: &AppContext, event: Event) {
             // Insert an optimistic "NEW" clip card into the feed immediately
             let secs = duration_seconds as u32;
             let dur_str = format!("{}:{:02}", secs / 60, secs % 60);
+            let waveform_model: ModelRc<f32> =
+                ModelRc::new(slint::VecModel::from(decode_clip_waveform(&waveform)));
             let new_card = FeedCardData {
                 id: clip_id.clone().into(),
                 card_type: "clip".into(),
@@ -953,12 +974,14 @@ pub fn handle(ctx: &AppContext, event: Event) {
                 subtitle: "".into(),
                 timestamp: "just now".into(),
                 duration: dur_str.into(),
+                duration_ms: (duration_seconds * 1000.0).round() as i32,
                 actor_name: "You".into(),
                 actor_initials: "Y".into(),
                 game_name: "".into(),
                 participant_count: 1,
                 clip_count: 0,
                 clip_path: path.clone().into(),
+                waveform: waveform_model,
                 is_hero: false,
                 is_skeleton: false,
                 is_new: true,
@@ -992,6 +1015,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
                     clip_id: clip_id.clone(),
                     duration_seconds: duration_seconds as f64,
                     local_path: path.clone(),
+                    waveform: waveform.clone(),
                 });
                 let _ = ctx.cmd_tx.send(Command::UploadClip {
                     crew_id,
@@ -1143,6 +1167,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
             ctx.app.set_clip_position_text("0:00".into());
             let dur_text = format!("{}:{:02}", duration_ms / 60000, (duration_ms / 1000) % 60);
             ctx.app.set_clip_duration_text(dur_text.as_str().into());
+            ctx.app.set_clip_duration_ms(duration_ms as i32);
         }
         Event::ClipPlaybackProgress {
             position_ms,
@@ -1169,6 +1194,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
             ctx.app.set_clip_anim_tick(0.0);
             ctx.app.set_clip_position_text("".into());
             ctx.app.set_clip_duration_text("".into());
+            ctx.app.set_clip_duration_ms(0);
         }
         _ => {}
     }

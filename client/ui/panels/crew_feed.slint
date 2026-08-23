@@ -65,62 +65,237 @@ component RecapAvatar inherits Rectangle {
     }
 }
 
-component ClipBadge inherits Rectangle {
-    in property <bool> small: false;
-
-    width: small ? 42px : 52px;
-    height: small ? 20px : 22px;
-    border-radius: small ? 4px : 5px;
-    background: Theme.clip-amber;
-
-    HorizontalLayout {
-        alignment: center;
-        spacing: 3px;
-
-        Image {
-            source: @image-url("../icons/scissors.svg");
-            colorize: white;
-            width: small ? 9px : 10px;
-            height: small ? 9px : 10px;
-            y: (parent.height - self.height) / 2;
-        }
-
-        Text {
-            text: "CLIP";
-            font-size: small ? 9px : 10px;
-            font-weight: 700;
-            color: white;
-            letter-spacing: 0.5px;
-            vertical-alignment: center;
-        }
-    }
-}
-
-component PlayButton inherits Rectangle {
+// Play/pause ring for clip cards. Declared as a component so both hero and
+// standard cards share geometry, hover fill, and click forwarding.
+component ClipPlayRing inherits Rectangle {
     in property <bool> small: false;
     in property <bool> is-playing: false;
     in property <bool> is-paused: false;
 
-    width: small ? 32px : 52px;
-    height: small ? 32px : 52px;
-    border-radius: small ? 16px : 26px;
-    background: is-playing && !is-paused ? Theme.clip-amber : #00000055;
+    // Clicks on the ring must reach card-level play toggle: without this
+    // forward the ring's own TouchArea would swallow the event silently.
+    callback ring-clicked();
 
-    if !is-playing || is-paused: Text {
-        text: "▶";
-        font-size: small ? 12px : 18px;
-        color: is-playing ? Theme.clip-amber : white;
-        horizontal-alignment: center;
-        vertical-alignment: center;
+    width: small ? 24px : 44px;
+    height: small ? 24px : 44px;
+    border-radius: self.width / 2;
+    border-width: 1.5px;
+    border-color: Theme.clip-amber;
+    background: ring-hover.has-hover ? #F59E0B1F : transparent;
+    animate background { duration: 150ms; easing: ease-out; }
+
+    if !is-playing || is-paused: Image {
+        source: @image-url("../icons/play.svg");
+        colorize: Theme.clip-amber;
+        width: small ? 8px : 14px;
+        height: small ? 8px : 14px;
+        opacity: 1.0;
+        animate opacity { duration: 150ms; easing: ease-out; }
+        x: small ? 9px : 16px;
+        y: (parent.height - self.height) / 2;
     }
 
     if is-playing && !is-paused: Image {
         source: @image-url("../icons/pause.svg");
-        colorize: Theme.dark ? #000000 : #000000;
-        width: small ? 12px : 18px;
-        height: small ? 12px : 18px;
+        colorize: Theme.clip-amber;
+        width: small ? 7px : 12px;
+        height: small ? 7px : 12px;
+        opacity: 1.0;
+        animate opacity { duration: 150ms; easing: ease-out; }
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
+    }
+
+    ring-hover := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.ring-clicked(); }
+    }
+}
+
+component DotWaveform inherits Rectangle {
+    in property <[float]> peaks: [];
+    in property <float> progress: 0.0;
+    in property <bool> is-playing: false;
+    in property <bool> is-paused: false;
+    in property <int> rows: 15;
+    in property <length> dot-size: 3px;
+    in property <length> row-pitch: 5px;
+    in property <int> duration-ms: 30000;
+    callback seek-ms(int);
+    callback play-at-ms(int);
+
+    property <int> cols: 64;
+    property <bool> use-placeholder: peaks.length == 0;
+    property <bool> scrubbing: touch.pressed;
+    property <bool> hovering: touch.has-hover && !scrubbing;
+    property <float> col-pitch-f: self.width / 1px / cols;
+    property <int> scrub-col: Math.min(cols - 1, Math.max(0, Math.floor((touch.mouse-x / 1px) / col-pitch-f)));
+    property <float> scrub-progress: scrub-col / (cols - 1);
+    property <float> display-progress: scrubbing ? scrub-progress : progress;
+    property <int> play-col: Math.min(cols - 1, Math.max(0, Math.round(display-progress * (cols - 1))));
+    property <bool> show-two-tone: is-playing || is-paused || scrubbing;
+    property <int> hover-col: Math.min(cols - 1, Math.max(0, Math.floor((touch.mouse-x / 1px) / col-pitch-f)));
+    property <int> press-mode: 0;
+    property <length> hairline-x: Math.floor(play-col * col-pitch-f + col-pitch-f / 2) * 1px;
+    // Absolute ms for the released scrub position. Duration comes from the
+    // component's duration-ms input (card metadata while idle, real duration
+    // during playback) — NOT from the global clip-duration-ms, which is
+    // zeroed on playback finish and would collapse every idle seek to 0ms.
+    property <int> release-pos-ms: Math.round(root.scrub-col / (root.cols - 1) * root.duration-ms);
+    property <length> ghost-x: Math.floor(hover-col * col-pitch-f + col-pitch-f / 2) * 1px;
+    property <int> chip-col: scrubbing ? scrub-col : hover-col;
+    property <length> chip-x: Math.min(self.width - 8px, Math.max(8px, Math.floor(chip-col * col-pitch-f + col-pitch-f / 2) * 1px));
+    property <int> chip-ms: Math.round(chip-col / (cols - 1) * duration-ms);
+    property <int> chip-secs: Math.max(0, chip-ms / 1000);
+    property <int> chip-min-part: Math.floor(chip-secs / 60);
+    property <int> chip-sec-part: Math.mod(chip-secs, 60);
+    property <string> chip-sec-text: chip-sec-part < 10 ? "0" + chip-sec-part : chip-sec-part;
+    property <string> chip-time: chip-min-part + ":" + chip-sec-text;
+
+    property <[float]> placeholder-peaks: [
+        0.02, 0.03, 0.01, 0.04, 0.02, 0.03, 0.01, 0.02,
+        0.55, 0.72, 0.88, 0.95, 0.82, 0.76, 0.91, 0.68, 0.74, 0.85, 0.62, 0.58,
+        0.04, 0.06, 0.03, 0.05, 0.02, 0.04,
+        0.78, 0.92, 0.86, 0.71, 0.88, 0.94, 0.79, 0.83, 0.67, 0.75, 0.90, 0.84,
+        0.03, 0.05, 0.02, 0.06,
+        0.52, 0.61, 0.48,
+        0.02, 0.04, 0.03,
+        0.65, 0.80, 0.93, 0.87, 0.76, 0.91, 0.85, 0.70, 0.88, 0.96, 0.82,
+        0.04, 0.03, 0.06,
+        0.58, 0.71
+    ];
+
+    background: Theme.card-bg-inset;
+    border-radius: 4px;
+    clip: true;
+
+    for col[c] in cols: Rectangle {
+        property <float> peak-val: root.use-placeholder ? root.placeholder-peaks[c] : peaks[c];
+        property <int> lit-count: 1 + Math.round(peak-val * (root.rows - 1));
+        property <float> col-pitch-f: parent.width / 1px / root.cols;
+        property <length> col-x: Math.min(
+            Math.floor(c * col-pitch-f + (col-pitch-f - root.dot-size / 1px) / 2) * 1px,
+            parent.width - root.dot-size);
+        property <bool> col-remaining: root.show-two-tone && c >= root.play-col;
+        property <bool> is-snap-col: root.show-two-tone && c == root.play-col;
+
+        for row[r] in lit-count: Rectangle {
+            property <int> row-from-base: lit-count - 1 - r;
+            property <bool> silent-col: lit-count == 1;
+            property <float> rest-opacity: silent-col && row-from-base == 0
+                ? 0.25
+                : 0.9 - (row-from-base / (root.rows - 1)) * 0.45;
+            property <float> dot-opacity: root.use-placeholder
+                ? 0.3 * rest-opacity
+                : (col-remaining ? 0.45 : (is-snap-col ? 1.0 : rest-opacity));
+
+            width: root.dot-size;
+            height: root.dot-size;
+            x: col-x;
+            y: Math.floor((parent.height / 1px) - (root.row-pitch / 1px) - (root.dot-size / 1px) - row-from-base * (root.row-pitch / 1px)) * 1px;
+            background: is-snap-col ? white : (col-remaining ? Theme.text-dim : Theme.clip-amber);
+            opacity: dot-opacity;
+            animate opacity { duration: 120ms; easing: ease-out; }
+            animate background { duration: 120ms; easing: ease-out; }
+        }
+    }
+
+  // Ghost hairline (hover preview at rest / paused)
+    if hovering && !scrubbing && (!is-playing || is-paused): Rectangle {
+        x: 0;
+        width: parent.width;
+        height: parent.height;
+        clip: true;
+
+        Rectangle {
+            x: ghost-x;
+            width: 1px;
+            height: parent.height;
+            background: white;
+            opacity: 0.3;
+        }
+    }
+
+  // Playhead hairline
+    if show-two-tone: Rectangle {
+        x: 0;
+        width: parent.width;
+        height: parent.height;
+        clip: true;
+
+        playhead-hairline := Rectangle {
+            x: hairline-x;
+            width: 1px;
+            height: parent.height;
+            background: white;
+            opacity: 1.0;
+            animate x {
+                duration: scrubbing ? 0ms : (is-playing && !is-paused ? 80ms : 0ms);
+                easing: linear;
+            }
+            states [
+                breathing when is-paused && !scrubbing: {
+                    opacity: 0.35;
+                    in {
+                        animate opacity {
+                            duration: 700ms;
+                            easing: ease-in-out;
+                            iteration-count: -1;
+                            direction: alternate;
+                        }
+                    }
+                }
+            ]
+        }
+    }
+
+  // Hover / scrub time chip
+    if scrubbing || (hovering && !is-playing && !is-paused): Rectangle {
+        x: 0;
+        width: parent.width;
+        height: parent.height;
+        clip: true;
+
+        chip-bg := Rectangle {
+            x: chip-x - (chip-text.preferred-width + 10px) / 2;
+            y: 2px;
+            width: chip-text.preferred-width + 10px;
+            height: chip-text.preferred-height + 4px;
+            border-radius: 3px;
+            background: #000000cc;
+
+            chip-text := Text {
+                text: chip-time;
+                font-family: Theme.font-mono;
+                font-size: 10px;
+                color: Theme.clip-amber;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+            }
+        }
+    }
+
+    touch := TouchArea {
+        mouse-cursor: crosshair;
+
+        changed pressed => {
+            if (self.pressed) {
+                root.press-mode = root.is-playing && !root.is-paused ? 1 : (root.is-paused ? 2 : 0);
+            } else {
+                // Mode 0 (idle): play-at-ms plays then seeks — a bare seek
+                // here would target the previously loaded clip.
+                if (root.press-mode != 0) {
+                    root.seek-ms(root.release-pos-ms);
+                }
+                if (root.press-mode == 0) {
+                    root.play-at-ms(root.release-pos-ms);
+                }
+            }
+        }
+
+        clicked => { /* scrub release handles seek; block card-face toggle */ }
     }
 }
 
@@ -140,57 +315,17 @@ component NewBadge inherits Rectangle {
     }
 }
 
-component PlayingBadge inherits Rectangle {
-    in property <bool> paused: false;
-
-    width: paused ? 72px : 80px;
-    height: 22px;
-    border-radius: 5px;
-    background: Theme.dark ? #F59E0B1A : #F59E0B22;
-    border-width: 1px;
-    border-color: Theme.dark ? #F59E0B4D : #F59E0B33;
-
-    HorizontalLayout {
-        alignment: center;
-        spacing: 4px;
-
-        if !paused: Image {
-            source: @image-url("../icons/speaker.svg");
-            colorize: Theme.clip-amber;
-            width: 10px;
-            height: 10px;
-            y: (parent.height - self.height) / 2;
-        }
-
-        if paused: Image {
-            source: @image-url("../icons/pause.svg");
-            colorize: Theme.clip-amber;
-            width: 10px;
-            height: 10px;
-            y: (parent.height - self.height) / 2;
-        }
-
-        Text {
-            text: paused ? "PAUSED" : "PLAYING";
-            font-size: 10px;
-            font-weight: 700;
-            color: Theme.clip-amber;
-            vertical-alignment: center;
-        }
-    }
-}
-
 // Hero clip card (2x wide)
 component HeroClipCard inherits Rectangle {
     in property <FeedCardData> card;
     in property <bool> is-playing: false;
     in property <bool> is-paused: false;
     in property <float> progress: 0.0;
-    in property <float> anim-tick: 0.0;
     in property <string> position-text: "";
     in property <string> duration-text: "";
+    in property <int> clip-duration-ms: 0;
     callback play-clicked(string);
-    callback seek(float);
+    callback seek-ms(int);
 
     background: card-hover.has-hover ? Theme.card-bg-hover : Theme.card-bg;
     border-radius: 10px;
@@ -198,152 +333,142 @@ component HeroClipCard inherits Rectangle {
     border-color: card.is-new ? Theme.clip-amber :
                   is-playing ? Theme.clip-amber :
                   card-hover.has-hover ? Theme.graphic-med : Theme.card-border;
-    opacity: card.is-new || is-playing ? 1.0 : (card-hover.has-hover ? 1.0 : 1.0);
     clip: true;
 
+    // Declared BEFORE the content so embedded touch areas (waveform scrub,
+    // play ring) sit on top and receive their own pointer events — a full-card
+    // touch declared after the content would swallow every click.
+    card-hover := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { play-clicked(card.clip-path); }
+    }
+
     VerticalLayout {
-        // Thumbnail area
+        width: parent.width;
+        height: parent.height;
+        padding: 14px;
+        padding-left: 16px;
+        padding-right: 16px;
+        spacing: 8px;
+
+        // Header: micro-label + timecode
         Rectangle {
-            vertical-stretch: 3;
-            min-height: 180px;
-            background: is-playing
-                ? (Theme.dark
-                    ? @linear-gradient(135deg, #1a1400 0%, #1a1000 40%, #151515 100%)
-                    : @linear-gradient(135deg, #fef6e4 0%, #fef0d4 40%, #f0f0f0 100%))
-                : (Theme.dark
-                    ? @linear-gradient(135deg, #0d1a0d 0%, #0a1520 40%, #151525 100%)
-                    : @linear-gradient(135deg, #e8ece8 0%, #dde8f0 40%, #e0e0ea 100%));
+            height: 16px;
+            vertical-stretch: 0;
 
-            // Game watermark
-            Text {
-                text: card.game-name != "" ? card.game-name : "";
-                font-size: 48px;
-                font-weight: 800;
-                color: #ffffff06;
-                letter-spacing: 6px;
-                horizontal-alignment: center;
-                vertical-alignment: center;
-            }
-
-            // Animated waveform bars (playing) or static (default)
             HorizontalLayout {
-                alignment: center;
-                spacing: 3px;
-                padding-left: 20px;
-                padding-right: 20px;
-                y: parent.height - 76px - 4px;
-                height: 72px;
-                width: parent.width;
+                spacing: 0px;
 
-                for entry in [
-                    {h: 0.20, i: 0.0}, {h: 0.35, i: 1.0}, {h: 0.60, i: 2.0}, {h: 0.85, i: 3.0},
-                    {h: 1.00, i: 4.0}, {h: 0.75, i: 5.0}, {h: 0.45, i: 6.0}, {h: 0.25, i: 7.0},
-                    {h: 0.50, i: 8.0}, {h: 0.80, i: 9.0}, {h: 0.95, i: 10.0}, {h: 0.65, i: 11.0},
-                    {h: 0.30, i: 12.0}, {h: 0.70, i: 13.0}, {h: 0.55, i: 14.0}, {h: 0.90, i: 15.0},
-                    {h: 0.40, i: 16.0}, {h: 0.60, i: 17.0}, {h: 0.35, i: 18.0}, {h: 0.50, i: 19.0}
-                ]: Rectangle {
-                    width: 3px;
+                if !is-playing: HorizontalLayout {
+                    spacing: 5px;
+                    horizontal-stretch: 0;
+                    // CLAUDE.md: HorizontalLayout forces y:0 on children —
+                    // center via the cross axis instead of per-child y.
+                    cross-axis-alignment: center;
 
-                    Rectangle {
-                        property <float> wave-h: is-playing && !is-paused
-                            ? 0.5 + 0.5 * sin((anim-tick + entry.i * 0.5) * 360deg)
-                            : entry.h;
-                        property <float> bar-progress: entry.i / 20.0;
-
-                        width: parent.width;
-                        height: 50px * wave-h;
-                        y: (parent.height - self.height) / 2;
-                        border-radius: 2px;
-                        background: is-playing
-                            ? (is-paused
-                                ? (bar-progress <= progress ? Theme.clip-amber : Theme.text-dim)
-                                : Theme.clip-amber)
-                            : Theme.clip-amber;
-                        opacity: is-playing && !is-paused
-                            ? 0.6 + 0.4 * wave-h
-                            : (is-paused ? (bar-progress <= progress ? 0.8 : 0.3) : 0.5 + entry.h * 0.5);
+                    Image {
+                        source: @image-url("../icons/scissors.svg");
+                        colorize: Theme.clip-amber;
+                        width: 10px;
+                        height: 10px;
                     }
+
+                    Text {
+                        text: "VOICE CLIP";
+                        font-size: 10px;
+                        font-weight: 700;
+                        color: Theme.clip-amber;
+                        letter-spacing: 1.5px;
+                        vertical-alignment: center;
+                    }
+                }
+
+                if is-playing: HorizontalLayout {
+                    spacing: 4px;
+                    horizontal-stretch: 0;
+                    // CLAUDE.md: y is silently forced to 0 in layouts — use
+                    // the cross axis to center the icon with its label.
+                    cross-axis-alignment: center;
+
+                    if !is-paused: Image {
+                        source: @image-url("../icons/speaker.svg");
+                        colorize: Theme.clip-amber;
+                        width: 10px;
+                        height: 10px;
+                    }
+
+                    if is-paused: Image {
+                        source: @image-url("../icons/pause.svg");
+                        colorize: Theme.clip-amber;
+                        width: 10px;
+                        height: 10px;
+                    }
+
+                    Text {
+                        text: is-paused ? "PAUSED" : "PLAYING";
+                        font-size: 10px;
+                        font-weight: 700;
+                        color: Theme.clip-amber;
+                        letter-spacing: 1.5px;
+                        vertical-alignment: center;
+                    }
+                }
+
+                Rectangle { horizontal-stretch: 1; }
+
+                Text {
+                    text: is-playing ? position-text + " / " + duration-text : card.duration;
+                    font-family: Theme.font-mono;
+                    font-size: 11px;
+                    color: Theme.text-sub;
+                    vertical-alignment: center;
+                    horizontal-stretch: 0;
                 }
             }
 
             if card.is-new: NewBadge {
-                x: 12px;
-                y: 12px;
+                x: 0px;
+                y: 0px;
             }
+        }
 
-            if !card.is-new && !is-playing: ClipBadge {
-                x: 12px;
-                y: 12px;
-            }
+        // Wave row: play ring + dot-matrix band (absorbs vertical slack)
+        Rectangle {
+            vertical-stretch: 1;
+            min-height: 78px;
 
-            if is-playing: PlayingBadge {
-                paused: is-paused;
-                x: 12px;
-                y: 12px;
-            }
-
-            PlayButton {
+            DotWaveform {
+                x: play-ring.width + 12px;
+                width: parent.width - play-ring.width - 12px;
+                height: parent.height;
+                peaks: card.waveform;
+                progress: root.progress;
                 is-playing: root.is-playing;
                 is-paused: root.is-paused;
-                x: (parent.width - self.width) / 2;
-                y: (parent.height - self.height) / 2;
-            }
-
-            Rectangle {
-                x: parent.width - self.width - 10px;
-                y: parent.height - self.height - 10px;
-                width: dur-text.preferred-width + 16px;
-                height: 22px;
-                border-radius: 4px;
-                background: #000000aa;
-
-                dur-text := Text {
-                    text: is-playing ? position-text + " / " + duration-text : card.duration;
-                    font-size: 11px;
-                    color: is-playing ? Theme.clip-amber : white;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
+                rows: 15;
+                dot-size: 3px;
+                row-pitch: 5px;
+                duration-ms: root.is-playing ? root.clip-duration-ms : card.duration-ms;
+                seek-ms(m) => { root.seek-ms(m); }
+                play-at-ms(m) => {
+                    root.play-clicked(card.clip-path);
+                    root.seek-ms(m);
                 }
             }
-        }
 
-        // Scrub bar (only when playing/paused)
-        if is-playing: Rectangle {
-            height: 6px;
-            background: Theme.card-bg-inset;
-
-            Rectangle {
+            // x must be explicit: Slint horizontally centers children
+            // narrower than their parent by default (CLAUDE.md fill-bar rule).
+            play-ring := ClipPlayRing {
                 x: 0;
-                width: parent.width * progress;
-                height: parent.height;
-                background: Theme.clip-amber;
-                border-radius: 0px;
-            }
-
-            // Scrub knob
-            Rectangle {
-                x: parent.width * progress - 4px;
+                is-playing: root.is-playing;
+                is-paused: root.is-paused;
                 y: (parent.height - self.height) / 2;
-                width: 8px;
-                height: 8px;
-                border-radius: 4px;
-                background: white;
-                visible: scrub-area.has-hover || scrub-area.pressed;
-            }
-
-            scrub-area := TouchArea {
-                mouse-cursor: pointer;
-                clicked => {
-                    root.seek(self.mouse-x / self.width);
-                }
+                ring-clicked => { root.play-clicked(card.clip-path); }
             }
         }
 
-        // Card body
+        // Card body pinned below the wave band
         VerticalLayout {
-            padding: 12px;
-            padding-left: 14px;
-            padding-right: 14px;
             spacing: 6px;
             vertical-stretch: 0;
 
@@ -391,10 +516,6 @@ component HeroClipCard inherits Rectangle {
         }
     }
 
-    card-hover := TouchArea {
-        mouse-cursor: pointer;
-        clicked => { play-clicked(card.clip-path); }
-    }
 }
 
 // Standard clip card (1x)
@@ -403,10 +524,11 @@ component ClipCard inherits Rectangle {
     in property <bool> is-playing: false;
     in property <bool> is-paused: false;
     in property <float> progress: 0.0;
-    in property <float> anim-tick: 0.0;
     in property <string> position-text: "";
     in property <string> duration-text: "";
+    in property <int> clip-duration-ms: 0;
     callback play-clicked(string);
+    callback seek-ms(int);
 
     background: clip-hover.has-hover ? Theme.card-bg-hover : Theme.card-bg;
     border-radius: 10px;
@@ -416,108 +538,134 @@ component ClipCard inherits Rectangle {
                   clip-hover.has-hover ? Theme.graphic-med : Theme.card-border;
     clip: true;
 
+    // Same ordering rule as HeroClipCard: content touches must win.
+    clip-hover := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { play-clicked(card.clip-path); }
+    }
+
     VerticalLayout {
-        // Waveform area
+        width: parent.width;
+        height: parent.height;
+        padding: 12px;
+        spacing: 8px;
+
+        // Header
         Rectangle {
-            vertical-stretch: 1;
-            min-height: 60px;
-            background: is-playing
-                ? (Theme.dark ? #1a14001A : #fef6e41A)
-                : Theme.card-bg-inset;
-            border-radius: 4px;
+            height: 16px;
+            vertical-stretch: 0;
 
             HorizontalLayout {
-                alignment: center;
-                spacing: 2px;
-                padding-left: 12px;
-                padding-right: 12px;
+                if !is-playing: HorizontalLayout {
+                    spacing: 5px;
+                    horizontal-stretch: 0;
+                    // CLAUDE.md: HorizontalLayout forces y:0 on children —
+                    // center via the cross axis instead of per-child y.
+                    cross-axis-alignment: center;
 
-                for entry in [
-                    {h: 0.35, i: 0.0}, {h: 0.70, i: 1.0}, {h: 1.00, i: 2.0}, {h: 0.50, i: 3.0},
-                    {h: 0.90, i: 4.0}, {h: 0.40, i: 5.0}, {h: 0.80, i: 6.0}, {h: 0.25, i: 7.0},
-                    {h: 0.65, i: 8.0}, {h: 1.00, i: 9.0}, {h: 0.45, i: 10.0}, {h: 0.75, i: 11.0},
-                    {h: 0.30, i: 12.0}
-                ]: Rectangle {
-                    width: 2px;
-
-                    Rectangle {
-                        property <float> wave-h: is-playing && !is-paused
-                            ? 0.5 + 0.5 * sin((anim-tick + entry.i * 0.5) * 360deg)
-                            : entry.h;
-                        property <float> bar-progress: entry.i / 13.0;
-
-                        width: parent.width;
-                        height: 30px * wave-h;
-                        y: (parent.height - self.height) / 2;
-                        border-radius: 1px;
-                        background: is-playing
-                            ? (is-paused
-                                ? (bar-progress <= progress ? Theme.clip-amber : Theme.text-dim)
-                                : Theme.clip-amber)
-                            : Theme.clip-amber;
-                        opacity: is-playing && !is-paused
-                            ? 0.6 + 0.4 * wave-h
-                            : (is-paused ? (bar-progress <= progress ? 0.8 : 0.3) : 0.5 + entry.h * 0.5);
+                    Image {
+                        source: @image-url("../icons/scissors.svg");
+                        colorize: Theme.clip-amber;
+                        width: 10px;
+                        height: 10px;
                     }
+
+                    Text {
+                        text: "VOICE CLIP";
+                        font-size: 10px;
+                        font-weight: 700;
+                        color: Theme.clip-amber;
+                        letter-spacing: 1.5px;
+                        vertical-alignment: center;
+                    }
+                }
+
+                if is-playing: HorizontalLayout {
+                    spacing: 4px;
+                    horizontal-stretch: 0;
+                    // CLAUDE.md: y is silently forced to 0 in layouts — use
+                    // the cross axis to center the icon with its label.
+                    cross-axis-alignment: center;
+
+                    if !is-paused: Image {
+                        source: @image-url("../icons/speaker.svg");
+                        colorize: Theme.clip-amber;
+                        width: 10px;
+                        height: 10px;
+                    }
+
+                    if is-paused: Image {
+                        source: @image-url("../icons/pause.svg");
+                        colorize: Theme.clip-amber;
+                        width: 10px;
+                        height: 10px;
+                    }
+
+                    Text {
+                        text: is-paused ? "PAUSED" : "PLAYING";
+                        font-size: 10px;
+                        font-weight: 700;
+                        color: Theme.clip-amber;
+                        letter-spacing: 1.5px;
+                        vertical-alignment: center;
+                    }
+                }
+
+                Rectangle { horizontal-stretch: 1; }
+
+                Text {
+                    text: is-playing ? position-text + " / " + duration-text : card.duration;
+                    font-family: Theme.font-mono;
+                    font-size: 11px;
+                    color: Theme.text-sub;
+                    vertical-alignment: center;
+                    horizontal-stretch: 0;
                 }
             }
 
             if card.is-new: NewBadge {
-                x: 8px;
-                y: 8px;
-            }
-
-            if !card.is-new && !is-playing: ClipBadge {
-                small: true;
-                x: 8px;
-                y: 8px;
-            }
-
-            if is-playing: PlayingBadge {
-                paused: is-paused;
-                x: 8px;
-                y: 8px;
-            }
-
-            PlayButton {
-                small: true;
-                is-playing: root.is-playing;
-                is-paused: root.is-paused;
-                x: (parent.width - self.width) / 2;
-                y: (parent.height - self.height) / 2;
+                x: 0px;
+                y: 0px;
             }
         }
 
-        // Card body
-        VerticalLayout {
-            padding: 10px;
-            padding-left: 12px;
-            padding-right: 12px;
-            spacing: 4px;
-            vertical-stretch: 0;
+        // Wave band with corner play ring (absorbs vertical slack)
+        Rectangle {
+            vertical-stretch: 1;
+            min-height: 38px;
 
-            HorizontalLayout {
-                spacing: 4px;
-                height: 14px;
-
-                Image {
-                    source: @image-url("../icons/scissors.svg");
-                    colorize: Theme.clip-amber;
-                    width: 10px;
-                    height: 10px;
-                    y: (parent.height - self.height) / 2;
-                }
-
-                Text {
-                    text: is-playing
-                        ? position-text + " / " + duration-text
-                        : "VOICE CLIP · " + card.duration;
-                    font-size: 10px;
-                    font-weight: 700;
-                    color: Theme.clip-amber;
-                    vertical-alignment: center;
+            DotWaveform {
+                width: parent.width;
+                height: parent.height;
+                peaks: card.waveform;
+                progress: root.progress;
+                is-playing: root.is-playing;
+                is-paused: root.is-paused;
+                rows: 9;
+                dot-size: 2px;
+                row-pitch: 4px;
+                duration-ms: root.is-playing ? root.clip-duration-ms : card.duration-ms;
+                seek-ms(m) => { root.seek-ms(m); }
+                play-at-ms(m) => {
+                    root.play-clicked(card.clip-path);
+                    root.seek-ms(m);
                 }
             }
+
+            ClipPlayRing {
+                small: true;
+                is-playing: root.is-playing;
+                is-paused: root.is-paused;
+                x: parent.width - self.width - 4px;
+                y: 4px;
+                ring-clicked => { root.play-clicked(card.clip-path); }
+            }
+        }
+
+        // Body pinned at the bottom — title + meta, no dead gap
+        VerticalLayout {
+            spacing: 4px;
+            vertical-stretch: 0;
 
             Text {
                 text: card.title != "" ? card.title : card.actor-name + " clipped that";
@@ -535,10 +683,6 @@ component ClipCard inherits Rectangle {
         }
     }
 
-    clip-hover := TouchArea {
-        mouse-cursor: pointer;
-        clicked => { play-clicked(card.clip-path); }
-    }
 }
 
 // Weekly recap card
@@ -1930,8 +2074,9 @@ component FeedSlot inherits Rectangle {
     in property <float> clip-anim-tick: 0.0;
     in property <string> clip-position-text: "";
     in property <string> clip-duration-text: "";
+    in property <int> clip-duration-ms: 0;
     callback play-clicked(string);
-    callback seek-clip(float);
+    callback seek-clip-ms(int);
     callback invite-clicked();
     callback hide-invite-clicked();
     callback session-seen(string);
@@ -1941,23 +2086,26 @@ component FeedSlot inherits Rectangle {
     if card.card-type == "clip" && card.is-hero: HeroClipCard {
         width: parent.width; height: parent.height; card: root.card;
         is-playing: root.card.clip-path != "" && root.card.clip-path == root.playing-path;
-        is-paused: root.clip-paused;
+        is-paused: root.clip-paused && root.card.clip-path != ""
+            && root.card.clip-path == root.playing-path;
         progress: root.clip-progress;
-        anim-tick: root.clip-anim-tick;
         position-text: root.clip-position-text;
         duration-text: root.clip-duration-text;
+        clip-duration-ms: root.clip-duration-ms;
         play-clicked(id) => { root.play-clicked(id); }
-        seek(v) => { root.seek-clip(v); }
+        seek-ms(m) => { root.seek-clip-ms(m); }
     }
     if card.card-type == "clip" && !card.is-hero: ClipCard {
         width: parent.width; height: parent.height; card: root.card;
         is-playing: root.card.clip-path != "" && root.card.clip-path == root.playing-path;
-        is-paused: root.clip-paused;
+        is-paused: root.clip-paused && root.card.clip-path != ""
+            && root.card.clip-path == root.playing-path;
         progress: root.clip-progress;
-        anim-tick: root.clip-anim-tick;
         position-text: root.clip-position-text;
         duration-text: root.clip-duration-text;
+        clip-duration-ms: root.clip-duration-ms;
         play-clicked(id) => { root.play-clicked(id); }
+        seek-ms(m) => { root.seek-clip-ms(m); }
     }
     if card.card-type == "recap": RecapCard {
         width: parent.width; height: parent.height; card: root.card;
@@ -2058,13 +2206,14 @@ export component CrewFeed inherits Rectangle {
     in property <float> clip-anim-tick: 0.0;
     in property <string> clip-position-text: "";
     in property <string> clip-duration-text: "";
+    in property <int> clip-duration-ms: 0;
 
     callback card-clicked(string);
     callback invite-clicked();
     callback hide-invite-clicked();
     callback pause-clip();
     callback resume-clip();
-    callback seek-clip(float);
+    callback seek-clip-ms(int);
     callback watch-stream-clicked(string, string, int, int);
     callback stop-stream-clicked();
     callback stop-watching-clicked();
@@ -2073,7 +2222,16 @@ export component CrewFeed inherits Rectangle {
     callback feed-show-more-clicked();
     callback you-strip-clicked();
 
-    property <int> feed-start-index: stream-cards.length == 1 && cards.length > 0 ? 1 : 0;
+    property <int> stream-side-consumed: stream-cards.length == 1 && cards.length > 0
+        ? Math.min(2, cards.length) : 0;
+    property <int> feed-start-index: stream-side-consumed;
+    property <bool> hero-is-clip: cards.length > feed-start-index
+        && cards[feed-start-index].card-type == "clip"
+        && cards[feed-start-index].is-hero;
+    property <int> row1-consumed: cards.length <= feed-start-index ? 0
+        : hero-is-clip ? 1
+        : Math.min(3, cards.length - feed-start-index);
+    property <int> row2-base: feed-start-index + row1-consumed;
 
     background: transparent;
 
@@ -2176,21 +2334,46 @@ export component CrewFeed inherits Rectangle {
                         }
                     }
 
-                    FeedSlot {
+                    VerticalLayout {
                         horizontal-stretch: 1;
-                        card: cards[0];
-                        playing-path: root.clip-playing-path;
-                        clip-progress: root.clip-progress;
-                        clip-paused: root.clip-paused;
-                        clip-anim-tick: root.clip-anim-tick;
-                        clip-position-text: root.clip-position-text;
-                        clip-duration-text: root.clip-duration-text;
-                        play-clicked(id) => { root.card-clicked(id); }
-                        seek-clip(v) => { root.seek-clip(v); }
-                        invite-clicked => { root.invite-clicked(); }
-                        hide-invite-clicked => { root.hide-invite-clicked(); }
-                        session-seen(id) => { root.session-seen(id); }
-                        session-preview-request-frame(sid, idx) => { root.session-preview-request-frame(sid, idx); }
+                        height: parent.height;
+                        spacing: 12px;
+
+                        if cards.length > 0: FeedSlot {
+                            height: 204px;
+                            card: cards[0];
+                            playing-path: root.clip-playing-path;
+                            clip-progress: root.clip-progress;
+                            clip-paused: root.clip-paused;
+                            clip-anim-tick: root.clip-anim-tick;
+                            clip-position-text: root.clip-position-text;
+                            clip-duration-text: root.clip-duration-text;
+                            clip-duration-ms: root.clip-duration-ms;
+                            play-clicked(id) => { root.card-clicked(id); }
+                            seek-clip-ms(m) => { root.seek-clip-ms(m); }
+                            invite-clicked => { root.invite-clicked(); }
+                            hide-invite-clicked => { root.hide-invite-clicked(); }
+                            session-seen(id) => { root.session-seen(id); }
+                            session-preview-request-frame(sid, idx) => { root.session-preview-request-frame(sid, idx); }
+                        }
+
+                        if cards.length > 1: FeedSlot {
+                            height: 204px;
+                            card: cards[1];
+                            playing-path: root.clip-playing-path;
+                            clip-progress: root.clip-progress;
+                            clip-paused: root.clip-paused;
+                            clip-anim-tick: root.clip-anim-tick;
+                            clip-position-text: root.clip-position-text;
+                            clip-duration-text: root.clip-duration-text;
+                            clip-duration-ms: root.clip-duration-ms;
+                            play-clicked(id) => { root.card-clicked(id); }
+                            seek-clip-ms(m) => { root.seek-clip-ms(m); }
+                            invite-clicked => { root.invite-clicked(); }
+                            hide-invite-clicked => { root.hide-invite-clicked(); }
+                            session-seen(id) => { root.session-seen(id); }
+                            session-preview-request-frame(sid, idx) => { root.session-preview-request-frame(sid, idx); }
+                        }
                     }
                 }
 
@@ -2238,8 +2421,26 @@ export component CrewFeed inherits Rectangle {
                     }
                 }
 
-                // Row 1: Hero (2x) + top-right card (1x)
-                if cards.length > root.feed-start-index: HorizontalLayout {
+                // Row 1: full-width hero clip OR 2:1 hero + stacked side column
+                if hero-is-clip && cards.length > root.feed-start-index: FeedSlot {
+                    height: 240px;
+                    card: cards[root.feed-start-index];
+                    playing-path: root.clip-playing-path;
+                    clip-progress: root.clip-progress;
+                    clip-paused: root.clip-paused;
+                    clip-anim-tick: root.clip-anim-tick;
+                    clip-position-text: root.clip-position-text;
+                    clip-duration-text: root.clip-duration-text;
+                    clip-duration-ms: root.clip-duration-ms;
+                    play-clicked(id) => { root.card-clicked(id); }
+                    seek-clip-ms(m) => { root.seek-clip-ms(m); }
+                    invite-clicked => { root.invite-clicked(); }
+                    hide-invite-clicked => { root.hide-invite-clicked(); }
+                    session-seen(id) => { root.session-seen(id); }
+                    session-preview-request-frame(sid, idx) => { root.session-preview-request-frame(sid, idx); }
+                }
+
+                if !hero-is-clip && cards.length > root.feed-start-index: HorizontalLayout {
                     height: 420px;
                     spacing: 12px;
 
@@ -2252,39 +2453,65 @@ export component CrewFeed inherits Rectangle {
                         clip-anim-tick: root.clip-anim-tick;
                         clip-position-text: root.clip-position-text;
                         clip-duration-text: root.clip-duration-text;
+                        clip-duration-ms: root.clip-duration-ms;
                         play-clicked(id) => { root.card-clicked(id); }
-                        seek-clip(v) => { root.seek-clip(v); }
+                        seek-clip-ms(m) => { root.seek-clip-ms(m); }
                         invite-clicked => { root.invite-clicked(); }
                         hide-invite-clicked => { root.hide-invite-clicked(); }
                         session-seen(id) => { root.session-seen(id); }
                         session-preview-request-frame(sid, idx) => { root.session-preview-request-frame(sid, idx); }
                     }
 
-                    if cards.length > root.feed-start-index + 1: FeedSlot {
+                    VerticalLayout {
                         horizontal-stretch: 1;
-                        card: cards[root.feed-start-index + 1];
-                        playing-path: root.clip-playing-path;
-                        clip-progress: root.clip-progress;
-                        clip-paused: root.clip-paused;
-                        clip-anim-tick: root.clip-anim-tick;
-                        clip-position-text: root.clip-position-text;
-                        clip-duration-text: root.clip-duration-text;
-                        play-clicked(id) => { root.card-clicked(id); }
-                        seek-clip(v) => { root.seek-clip(v); }
-                        invite-clicked => { root.invite-clicked(); }
-                        hide-invite-clicked => { root.hide-invite-clicked(); }
-                        session-seen(id) => { root.session-seen(id); }
-                        session-preview-request-frame(sid, idx) => { root.session-preview-request-frame(sid, idx); }
+                        height: parent.height;
+                        spacing: 12px;
+
+                        if cards.length > root.feed-start-index + 1: FeedSlot {
+                            height: 204px;
+                            card: cards[root.feed-start-index + 1];
+                            playing-path: root.clip-playing-path;
+                            clip-progress: root.clip-progress;
+                            clip-paused: root.clip-paused;
+                            clip-anim-tick: root.clip-anim-tick;
+                            clip-position-text: root.clip-position-text;
+                            clip-duration-text: root.clip-duration-text;
+                            clip-duration-ms: root.clip-duration-ms;
+                            play-clicked(id) => { root.card-clicked(id); }
+                            seek-clip-ms(m) => { root.seek-clip-ms(m); }
+                            invite-clicked => { root.invite-clicked(); }
+                            hide-invite-clicked => { root.hide-invite-clicked(); }
+                            session-seen(id) => { root.session-seen(id); }
+                            session-preview-request-frame(sid, idx) => { root.session-preview-request-frame(sid, idx); }
+                        }
+
+                        if cards.length > root.feed-start-index + 2: FeedSlot {
+                            height: 204px;
+                            card: cards[root.feed-start-index + 2];
+                            playing-path: root.clip-playing-path;
+                            clip-progress: root.clip-progress;
+                            clip-paused: root.clip-paused;
+                            clip-anim-tick: root.clip-anim-tick;
+                            clip-position-text: root.clip-position-text;
+                            clip-duration-text: root.clip-duration-text;
+                            clip-duration-ms: root.clip-duration-ms;
+                            play-clicked(id) => { root.card-clicked(id); }
+                            seek-clip-ms(m) => { root.seek-clip-ms(m); }
+                            invite-clicked => { root.invite-clicked(); }
+                            hide-invite-clicked => { root.hide-invite-clicked(); }
+                            session-seen(id) => { root.session-seen(id); }
+                            session-preview-request-frame(sid, idx) => { root.session-preview-request-frame(sid, idx); }
+                        }
                     }
                 }
 
                 // Row 2: Three 1x cards
-                if cards.length > root.feed-start-index + 2: HorizontalLayout {
+                if cards.length > root.row2-base: HorizontalLayout {
                     height: 210px;
                     spacing: 12px;
 
                     for rel-idx in [0, 1, 2]: FeedSlot {
-                        property <int> card-idx: root.feed-start-index + 2 + rel-idx;
+                        property <int> card-idx: root.row2-base + rel-idx;
                         visible: cards.length > card-idx;
                         horizontal-stretch: 1;
                         card: cards.length > card-idx ? cards[card-idx] : { card-type: "" };
@@ -2294,8 +2521,9 @@ export component CrewFeed inherits Rectangle {
                         clip-anim-tick: root.clip-anim-tick;
                         clip-position-text: root.clip-position-text;
                         clip-duration-text: root.clip-duration-text;
+                        clip-duration-ms: root.clip-duration-ms;
                         play-clicked(id) => { root.card-clicked(id); }
-                        seek-clip(v) => { root.seek-clip(v); }
+                        seek-clip-ms(m) => { root.seek-clip-ms(m); }
                         invite-clicked => { root.invite-clicked(); }
                         hide-invite-clicked => { root.hide-invite-clicked(); }
                         session-seen(id) => { root.session-seen(id); }
@@ -2304,38 +2532,40 @@ export component CrewFeed inherits Rectangle {
                 }
 
                 // Row 3: card (1x) + wide card (2x)
-                if cards.length > root.feed-start-index + 5: HorizontalLayout {
+                if cards.length > root.row2-base + 3: HorizontalLayout {
                     height: 210px;
                     spacing: 12px;
 
                     FeedSlot {
                         horizontal-stretch: 1;
-                        card: cards[root.feed-start-index + 5];
+                        card: cards[root.row2-base + 3];
                         playing-path: root.clip-playing-path;
                         clip-progress: root.clip-progress;
                         clip-paused: root.clip-paused;
                         clip-anim-tick: root.clip-anim-tick;
                         clip-position-text: root.clip-position-text;
                         clip-duration-text: root.clip-duration-text;
+                        clip-duration-ms: root.clip-duration-ms;
                         play-clicked(id) => { root.card-clicked(id); }
-                        seek-clip(v) => { root.seek-clip(v); }
+                        seek-clip-ms(m) => { root.seek-clip-ms(m); }
                         invite-clicked => { root.invite-clicked(); }
                         hide-invite-clicked => { root.hide-invite-clicked(); }
                         session-seen(id) => { root.session-seen(id); }
                         session-preview-request-frame(sid, idx) => { root.session-preview-request-frame(sid, idx); }
                     }
 
-                    if cards.length > root.feed-start-index + 6: FeedSlot {
+                    if cards.length > root.row2-base + 4: FeedSlot {
                         horizontal-stretch: 2;
-                        card: cards[root.feed-start-index + 6];
+                        card: cards[root.row2-base + 4];
                         playing-path: root.clip-playing-path;
                         clip-progress: root.clip-progress;
                         clip-paused: root.clip-paused;
                         clip-anim-tick: root.clip-anim-tick;
                         clip-position-text: root.clip-position-text;
                         clip-duration-text: root.clip-duration-text;
+                        clip-duration-ms: root.clip-duration-ms;
                         play-clicked(id) => { root.card-clicked(id); }
-                        seek-clip(v) => { root.seek-clip(v); }
+                        seek-clip-ms(m) => { root.seek-clip-ms(m); }
                         invite-clicked => { root.invite-clicked(); }
                         hide-invite-clicked => { root.hide-invite-clicked(); }
                         session-seen(id) => { root.session-seen(id); }
@@ -2344,12 +2574,12 @@ export component CrewFeed inherits Rectangle {
                 }
 
                 // Row 4+ for extra cards (cold start has 9 slots)
-                if cards.length > root.feed-start-index + 7: HorizontalLayout {
+                if cards.length > root.row2-base + 5: HorizontalLayout {
                     height: 210px;
                     spacing: 12px;
 
                     for rel-idx in [0, 1]: FeedSlot {
-                        property <int> card-idx: root.feed-start-index + 7 + rel-idx;
+                        property <int> card-idx: root.row2-base + 5 + rel-idx;
                         visible: cards.length > card-idx;
                         horizontal-stretch: 1;
                         card: cards.length > card-idx ? cards[card-idx] : { card-type: "" };
@@ -2359,8 +2589,9 @@ export component CrewFeed inherits Rectangle {
                         clip-anim-tick: root.clip-anim-tick;
                         clip-position-text: root.clip-position-text;
                         clip-duration-text: root.clip-duration-text;
+                        clip-duration-ms: root.clip-duration-ms;
                         play-clicked(id) => { root.card-clicked(id); }
-                        seek-clip(v) => { root.seek-clip(v); }
+                        seek-clip-ms(m) => { root.seek-clip-ms(m); }
                         invite-clicked => { root.invite-clicked(); }
                         hide-invite-clicked => { root.hide-invite-clicked(); }
                         session-seen(id) => { root.session-seen(id); }
@@ -2401,8 +2632,9 @@ export component CrewFeed inherits Rectangle {
                             clip-anim-tick: root.clip-anim-tick;
                             clip-position-text: root.clip-position-text;
                             clip-duration-text: root.clip-duration-text;
+                            clip-duration-ms: root.clip-duration-ms;
                             play-clicked(id) => { root.card-clicked(id); }
-                            seek-clip(v) => { root.seek-clip(v); }
+                            seek-clip-ms(m) => { root.seek-clip-ms(m); }
                             session-seen(id) => { root.session-seen(id); }
                             session-preview-request-frame(sid, idx) => { root.session-preview-request-frame(sid, idx); }
                         }
@@ -2455,7 +2687,7 @@ export component Preview inherits Rectangle {
     // Preview controls:
     // - stream-count: 0..3 (clamped)
     // - preview-watching: show selected watching state on the first stream card
-    in-out property <int> stream-count: 1;
+    in-out property <int> stream-count: 0;
     in-out property <bool> preview-watching: false;
     in-out property <bool> preview-hosting: false;
     property <int> preview-stream-count: max(0, min(stream-count, 3));
@@ -2741,6 +2973,77 @@ export component Preview inherits Rectangle {
             },
             {
                 id: "9", card-type: "skeleton-recent-games", is-hero: false, is-skeleton: true,
+            },
+        ];
+    }
+}
+
+// Session-preview hero: 420px 2:1 row with stacked side column (no stream)
+export component PreviewSessionHero inherits Rectangle {
+    width: 760px;
+    height: 920px;
+    background: Theme.bg-app;
+
+    CrewFeed {
+        width: parent.width;
+        height: parent.height;
+        stream-cards: [];
+        clip-count: 8;
+        is-cold-start: false;
+        cards: [
+            {
+                id: "hero", card-type: "session-preview", is-hero: true, is-skeleton: false,
+                title: "alice streamed Counter-Strike 2",
+                subtitle: "",
+                actor-name: "alice", actor-initials: "al",
+                game-name: "Counter-Strike 2",
+                duration: "2h 15m", duration-min: 135, timestamp: "Yesterday",
+                participant-count: 6, clip-count: 4, clip-path: "",
+            },
+            {
+                id: "side-a", card-type: "recap", is-hero: false, is-skeleton: false,
+                title: "14.5h", subtitle: "12",
+                actor-name: "FaiL", actor-initials: "Fa",
+                game-name: "Valorant", duration: "5h 12m", timestamp: "This week",
+                participant-count: 0, clip-path: "",
+                mvp-count: 2,
+                mvp0-name: "b0bben", mvp0-initials: "b0", mvp0-stat: "3.1h",
+                mvp1-name: "FaiL", mvp1-initials: "Fa", mvp1-stat: "2.4h",
+            },
+            {
+                id: "side-b", card-type: "clip", is-hero: false, is-skeleton: false,
+                title: "FaiL raging at ranked matchmaking",
+                subtitle: "",
+                actor-name: "FaiL", actor-initials: "Fa",
+                game-name: "Valorant",
+                duration: "0:30", timestamp: "just now",
+                participant-count: 2, clip-path: "", is-new: true,
+            },
+            {
+                id: "r2-a", card-type: "clip", is-hero: false, is-skeleton: false,
+                title: "b0bben 1v3 retake on Ascent",
+                subtitle: "",
+                actor-name: "b0bben", actor-initials: "b0",
+                game-name: "Valorant",
+                duration: "0:30", timestamp: "3 days ago",
+                participant-count: 1, clip-path: "",
+            },
+            {
+                id: "r2-b", card-type: "catchup", is-hero: false, is-skeleton: false,
+                title: "ostkatt and FaiL hung out in General for 45m",
+                subtitle: "",
+                actor-name: "ostkatt", actor-initials: "os",
+                game-name: "", duration: "", timestamp: "6 hours ago",
+                participant-count: 0, clip-path: "",
+            },
+            {
+                id: "r2-c", card-type: "session-preview", is-hero: false, is-skeleton: false,
+                title: "b0bben streamed League of Legends",
+                subtitle: "",
+                actor-name: "b0bben", actor-initials: "b0",
+                game-name: "League of Legends",
+                duration: "1h 40m", duration-min: 100, timestamp: "Friday",
+                participant-count: 3, clip-count: 1, clip-path: "",
             },
         ];
     }

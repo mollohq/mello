@@ -430,6 +430,8 @@ pub enum Event {
         clip_id: String,
         path: String,
         duration_seconds: f32,
+        #[serde(default)]
+        waveform: String,
     },
     /// Clip capture failed.
     ClipCaptureFailed {

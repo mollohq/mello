@@ -1,0 +1,809 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>m3llo — Clip card dot-matrix waveform</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    background: #181818;
+    color: #ececec;
+    padding: 40px 48px 64px;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  h1 { font-size: 20px; font-weight: 600; margin-bottom: 6px; }
+  .page-sub { color: #888; font-size: 13px; margin-bottom: 40px; max-width: 640px; line-height: 1.5; }
+
+  h2 {
+    font-size: 11px; font-weight: 700; letter-spacing: 1.5px; text-transform: uppercase;
+    color: #666; margin: 0 0 4px;
+  }
+  .section-note { font-size: 12px; color: #666; margin-bottom: 16px; max-width: 680px; line-height: 1.5; }
+  .section { margin-bottom: 48px; }
+  .row { display: flex; gap: 24px; flex-wrap: wrap; align-items: flex-start; }
+
+  /* ── card shell ── */
+  .clip-card {
+    background: #222226;
+    border: 1px solid #2e2e33;
+    border-radius: 10px;
+    padding: 14px 16px 14px;
+    display: flex;
+    flex-direction: column;
+    transition: background 120ms ease-out, border-color 120ms ease-out;
+  }
+  .clip-card.hero { width: 560px; }
+  .clip-card.standard { width: 260px; padding: 12px; }
+  .clip-card.is-hover { background: #2a2a2e; }
+  .clip-card.is-playing { border-color: #F59E0B; }
+  .clip-card.is-static { pointer-events: none; }
+
+  .card-header {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 10px; min-height: 16px;
+  }
+  .clip-card.standard .card-header { margin-bottom: 8px; }
+
+  .label-row {
+    display: flex; align-items: center; gap: 5px;
+    font-size: 10px; font-weight: 700; letter-spacing: 1.5px;
+    color: #F59E0B; text-transform: uppercase;
+  }
+  .label-row svg { width: 10px; height: 10px; flex-shrink: 0; }
+
+  .timecode {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px; font-weight: 400; color: #888;
+    font-variant-numeric: tabular-nums;
+  }
+  .clip-card.is-playing .timecode,
+  .clip-card.is-paused .timecode { color: #888; }
+
+  /* ── wave row ── */
+  .wave-row {
+    display: flex; align-items: center; gap: 12px;
+    margin-bottom: 12px;
+  }
+  .clip-card.standard .wave-row { margin-bottom: 10px; }
+
+  .play-btn {
+    flex-shrink: 0;
+    border-radius: 50%;
+    border: 1.5px solid #F59E0B;
+    background: transparent;
+    cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    transition: background 120ms ease-out;
+    position: relative;
+  }
+  .play-btn.hero-size { width: 44px; height: 44px; }
+  .play-btn.std-size { width: 24px; height: 24px; }
+  .play-btn:hover { background: rgba(245, 158, 11, 0.12); }
+  .play-btn svg { display: block; }
+  .play-btn .icon-play,
+  .play-btn .icon-pause {
+    position: absolute; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+    transition: opacity 150ms ease-out;
+  }
+  .play-btn .icon-pause { opacity: 0; }
+  .play-btn.is-playing .icon-play { opacity: 0; }
+  .play-btn.is-playing .icon-pause { opacity: 1; }
+
+  .wave-wrap {
+    flex: 1; min-width: 0; position: relative;
+  }
+  .clip-card.standard .wave-wrap { position: relative; }
+
+  .wave-inset {
+    background: #19191d;
+    border-radius: 4px;
+    position: relative;
+    overflow: hidden;
+  }
+  .wave-inset.hero-band { height: 78px; }
+  .wave-inset.std-band { height: 38px; }
+
+  .wave-grid {
+    position: absolute;
+    left: 0;
+    width: 100%;
+    top: 0;
+    height: 100%;
+  }
+
+  .dot {
+    position: absolute;
+    background: #F59E0B;
+    transform: translateZ(0);
+    transition: background-color 120ms ease-out, opacity 120ms ease-out;
+  }
+  .dot.dim { background: #666; }
+  .dot.white { background: #fff; }
+
+  .hairline {
+    position: absolute;
+    top: 0; bottom: 0;
+    width: 1px;
+    background: #fff;
+    pointer-events: none;
+    transform: translateZ(0);
+    z-index: 4;
+  }
+  .hairline.playhead { z-index: 5; }
+  .hairline.ghost { opacity: 0.3; z-index: 3; transition: none; }
+
+  .hairline.playhead.smooth { transition: left 80ms linear; }
+  .hairline.playhead.scrubbing { transition: none; }
+
+  .hairline.playhead.paused-breathe {
+    animation: hairline-breathe 1.4s ease-in-out infinite;
+  }
+
+  @keyframes hairline-breathe {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.35; }
+  }
+
+  .time-chip {
+    position: absolute;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px; font-weight: 400;
+    color: #F59E0B;
+    background: rgba(0, 0, 0, 0.8);
+    border-radius: 3px;
+    padding: 2px 5px;
+    pointer-events: none;
+    white-space: nowrap;
+    z-index: 6;
+    transform: translateX(-50%) translateZ(0);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .std-play-corner {
+    position: absolute;
+    top: 4px; right: 4px;
+    z-index: 7;
+  }
+
+  .wave-touch {
+    position: absolute;
+    inset: 0;
+    cursor: crosshair;
+    z-index: 8;
+  }
+
+  /* ── body ── */
+  .card-title {
+    font-size: 14px; font-weight: 500; color: #f0f0f0;
+    margin-bottom: 8px; line-height: 1.35;
+  }
+  .clip-card.standard .card-title { font-size: 13px; margin-bottom: 6px; }
+
+  .card-meta {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 11px; color: #888;
+  }
+
+  .avatar-stack { display: flex; align-items: center; }
+  .avatar-stack .av {
+    width: 18px; height: 18px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 7px; font-weight: 700; color: #fff;
+    border: 1.5px solid #222226;
+    margin-left: -5px;
+  }
+  .avatar-stack .av:first-child { margin-left: 0; }
+  .av.a0 { background: #FF1E56; }
+  .av.a1 { background: #6366f1; }
+  .av.a2 { background: #22c55e; color: #123; }
+
+  /* ── gallery labels ── */
+  .gallery-item { display: flex; flex-direction: column; gap: 8px; }
+  .gallery-label {
+    font-size: 10px; font-weight: 600; letter-spacing: 1px;
+    text-transform: uppercase; color: #666;
+  }
+</style>
+</head>
+<body>
+
+<h1>Clip card — dot-matrix waveform</h1>
+<p class="page-sub">Dot-matrix peak display with mechanical scrubbing. Interactive cards below simulate 30-second playback and 1:1 column-snapped seek.</p>
+
+<section class="section">
+  <h2>Interactive</h2>
+  <p class="section-note">Click play or the card to toggle. Hover the waveform for ghost preview; drag to scrub. Scrubbing while idle starts playback from that column.</p>
+  <div class="row" id="interactive-row"></div>
+</section>
+
+<section class="section">
+  <h2>State gallery</h2>
+  <p class="section-note">Static hero-card snapshots — rest, hover, playing, paused, scrubbing.</p>
+  <div class="row" id="gallery-row"></div>
+</section>
+
+<script>
+(function () {
+  'use strict';
+
+  const DURATION_MS = 30000;
+  const AMBER = '#F59E0B';
+  const DIM = '#666';
+
+  // Hand-tuned 64-peak speech pattern: 3–4 talk bursts, silence gaps, one short interjection
+  const PEAKS = [
+    0.02, 0.03, 0.01, 0.04, 0.02, 0.03, 0.01, 0.02,
+    0.55, 0.72, 0.88, 0.95, 0.82, 0.76, 0.91, 0.68, 0.74, 0.85, 0.62, 0.58,
+    0.04, 0.06, 0.03, 0.05, 0.02, 0.04,
+    0.78, 0.92, 0.86, 0.71, 0.88, 0.94, 0.79, 0.83, 0.67, 0.75, 0.90, 0.84,
+    0.03, 0.05, 0.02, 0.06,
+    0.52, 0.61, 0.48,
+    0.02, 0.04, 0.03,
+    0.65, 0.80, 0.93, 0.87, 0.76, 0.91, 0.85, 0.70, 0.88, 0.96, 0.82,
+    0.04, 0.03, 0.06,
+    0.58, 0.71
+  ];
+
+  const SCISSORS_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="#F59E0B" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><line x1="20" y1="4" x2="8.12" y2="15.88"/><line x1="14.47" y1="14.48" x2="20" y2="20"/><line x1="8.12" y1="8.12" x2="12" y2="12"/></svg>';
+
+  function formatTime(ms) {
+    const totalSec = Math.max(0, Math.floor(ms / 1000));
+    const m = Math.floor(totalSec / 60);
+    const s = totalSec % 60;
+    return m + ':' + String(s).padStart(2, '0');
+  }
+
+  function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+
+  function restOpacity(rowFromBaseline, falloffDiv) {
+    return 0.9 - (rowFromBaseline / falloffDiv) * 0.45;
+  }
+
+  function litDotCount(peak, peakMul, maxRows) {
+    return clamp(1 + Math.round(peak * peakMul), 1, maxRows);
+  }
+
+  function dotTop(rowFromBaseline, cfg) {
+    return cfg.bandH - cfg.bottomInset - cfg.dotSize - rowFromBaseline * cfg.rowPitch;
+  }
+
+  function progressToColumn(progress, cols) {
+    return clamp(Math.round(progress * (cols - 1)), 0, cols - 1);
+  }
+
+  function columnToProgress(col, cols) {
+    return col / (cols - 1);
+  }
+
+  function columnX(col, colPitch, dotSize) {
+    return Math.round(col * colPitch + (colPitch - dotSize) / 2);
+  }
+
+  function createPlayIcons(hero) {
+    const triSize = hero ? 14 : 8;
+    const triLeft = hero ? 16 : 9;
+    const barW = hero ? 3 : 2;
+    const barH = hero ? 12 : 7;
+    const gap = hero ? 4 : 2;
+    return {
+      play: '<svg width="' + (triSize + 4) + '" height="' + triSize + '" viewBox="0 0 18 18"><polygon points="5,2 16,9 5,16" fill="#F59E0B"/></svg>',
+      pause: '<svg width="' + (barW * 2 + gap) + '" height="' + barH + '" viewBox="0 0 ' + (barW * 2 + gap) + ' ' + barH + '"><rect x="0" y="0" width="' + barW + '" height="' + barH + '" fill="#F59E0B"/><rect x="' + (barW + gap) + '" y="0" width="' + barW + '" height="' + barH + '" fill="#F59E0B"/></svg>'
+    };
+  }
+
+  function buildWaveDots(gridEl, cfg, state) {
+    gridEl.innerHTML = '';
+    const cols = 64;
+    const bandW = gridEl.clientWidth;
+    if (bandW <= 0) return { colPitch: 0, dots: [] };
+
+    const colPitch = bandW / cols;
+    const dots = [];
+
+    for (let c = 0; c < cols; c++) {
+      const peak = PEAKS[c];
+      const litCount = litDotCount(peak, cfg.peakMul, cfg.rows);
+      const silent = litCount === 1;
+      const isPlayed = state.mode === 'playing' || state.mode === 'paused';
+      const colRemaining = isPlayed && c >= state.playCol;
+      const isSnapCol = isPlayed && c === state.playCol;
+
+      for (let ri = 0; ri < litCount; ri++) {
+        const dot = document.createElement('div');
+        dot.className = 'dot';
+        dot.style.width = cfg.dotSize + 'px';
+        dot.style.height = cfg.dotSize + 'px';
+        dot.style.left = columnX(c, colPitch, cfg.dotSize) + 'px';
+        dot.style.top = dotTop(ri, cfg) + 'px';
+
+        let opacity;
+        if (silent && ri === 0) {
+          opacity = 0.25;
+        } else {
+          opacity = restOpacity(ri, cfg.falloffDiv);
+        }
+
+        if (colRemaining) {
+          dot.classList.add('dim');
+          dot.style.opacity = '0.45';
+        } else if (isSnapCol && (state.mode === 'playing' || state.mode === 'paused')) {
+          dot.classList.add('white');
+          dot.style.opacity = '1';
+        } else {
+          dot.style.opacity = String(opacity);
+        }
+
+        dot.dataset.col = c;
+        dot.dataset.row = ri;
+        gridEl.appendChild(dot);
+        dots.push({ el: dot, col: c, rowFromBaseline: ri, silent });
+      }
+    }
+
+    return { colPitch, dots };
+  }
+
+  function updateDots(dots, cfg, state) {
+    const playCol = state.playCol;
+    const isPlayed = state.mode === 'playing' || state.mode === 'paused';
+
+    for (const d of dots) {
+      const c = d.col;
+      const colRemaining = isPlayed && c >= playCol;
+      const isSnapCol = isPlayed && c === playCol;
+
+      d.el.classList.remove('dim', 'white');
+
+      let opacity;
+      if (d.silent && d.rowFromBaseline === 0) {
+        opacity = 0.25;
+      } else {
+        opacity = restOpacity(d.rowFromBaseline, cfg.falloffDiv);
+      }
+
+      if (colRemaining) {
+        d.el.classList.add('dim');
+        d.el.style.opacity = '0.45';
+      } else if (isSnapCol) {
+        d.el.classList.add('white');
+        d.el.style.opacity = '1';
+      } else {
+        d.el.style.opacity = String(opacity);
+      }
+    }
+  }
+
+  function hairlineLeft(progress, bandW, colPitch) {
+    const col = progressToColumn(progress, 64);
+    return Math.round(col * colPitch + colPitch / 2);
+  }
+
+  function createClipCard(options) {
+    const hero = options.variant === 'hero';
+    const cfg = hero
+      ? { rows: 15, dotSize: 3, rowPitch: 5, peakMul: 14, falloffDiv: 14, bottomInset: 5, bandH: 78 }
+      : { rows: 9, dotSize: 2, rowPitch: 4, peakMul: 8, falloffDiv: 8, bottomInset: 4, bandH: 38 };
+
+    const card = document.createElement('article');
+    card.className = 'clip-card ' + (hero ? 'hero' : 'standard');
+    if (!options.interactive) card.classList.add('is-static');
+
+    const labelText = document.createElement('span');
+    labelText.textContent = 'VOICE CLIP';
+
+    const labelRow = document.createElement('div');
+    labelRow.className = 'label-row';
+    labelRow.innerHTML = SCISSORS_SVG;
+    labelRow.appendChild(labelText);
+
+    const timecode = document.createElement('span');
+    timecode.className = 'timecode';
+    timecode.textContent = '0:30';
+
+    const header = document.createElement('div');
+    header.className = 'card-header';
+    header.appendChild(labelRow);
+    header.appendChild(timecode);
+
+    const icons = createPlayIcons(hero);
+    const playBtn = document.createElement('button');
+    playBtn.type = 'button';
+    playBtn.className = 'play-btn ' + (hero ? 'hero-size' : 'std-size');
+    playBtn.setAttribute('aria-label', 'Play');
+    playBtn.innerHTML = '<span class="icon-play">' + icons.play + '</span><span class="icon-pause">' + icons.pause + '</span>';
+
+    const waveGrid = document.createElement('div');
+    waveGrid.className = 'wave-grid';
+
+    const playhead = document.createElement('div');
+    playhead.className = 'hairline playhead';
+    playhead.style.display = 'none';
+
+    const ghost = document.createElement('div');
+    ghost.className = 'hairline ghost';
+    ghost.style.display = 'none';
+
+    const chip = document.createElement('div');
+    chip.className = 'time-chip';
+    chip.style.display = 'none';
+
+    const waveInset = document.createElement('div');
+    waveInset.className = 'wave-inset ' + (hero ? 'hero-band' : 'std-band');
+    waveInset.appendChild(waveGrid);
+    waveInset.appendChild(ghost);
+    waveInset.appendChild(playhead);
+    waveInset.appendChild(chip);
+
+    const touch = document.createElement('div');
+    touch.className = 'wave-touch';
+    waveInset.appendChild(touch);
+
+    const waveWrap = document.createElement('div');
+    waveWrap.className = 'wave-wrap';
+    waveWrap.appendChild(waveInset);
+
+    if (!hero) {
+      playBtn.classList.add('std-play-corner');
+      waveInset.appendChild(playBtn);
+    }
+
+    const waveRow = document.createElement('div');
+    waveRow.className = 'wave-row';
+    if (hero) waveRow.appendChild(playBtn);
+    waveRow.appendChild(waveWrap);
+
+    const title = document.createElement('div');
+    title.className = 'card-title';
+    title.textContent = 'ostkatt clipped that';
+
+    const meta = document.createElement('div');
+    meta.className = 'card-meta';
+    meta.innerHTML = '<div class="avatar-stack"><span class="av a0">os</span><span class="av a1">mk</span><span class="av a2">jr</span></div><span>2h ago · Valorant</span>';
+
+    card.appendChild(header);
+    card.appendChild(waveRow);
+    card.appendChild(title);
+    card.appendChild(meta);
+
+    let state = {
+      mode: 'rest',
+      progress: 0,
+      playCol: 0,
+      scrubbing: false,
+      hovering: false,
+      hoverCol: 0
+    };
+
+    let dots = [];
+    let colPitch = 0;
+    let rafId = null;
+    let playStart = 0;
+    let playFrom = 0;
+    let modeBeforeScrub = 'rest';
+
+    function bandWidth() { return waveGrid.clientWidth; }
+
+    function setLabel(mode) {
+      if (mode === 'playing') labelText.textContent = 'PLAYING';
+      else if (mode === 'paused') labelText.textContent = 'PAUSED';
+      else labelText.textContent = 'VOICE CLIP';
+    }
+
+    function setTimecode() {
+      if (state.mode === 'playing') {
+        timecode.textContent = formatTime(state.progress * DURATION_MS) + ' / 0:30';
+      } else if (state.mode === 'paused') {
+        timecode.textContent = formatTime(state.progress * DURATION_MS) + ' / 0:30';
+      } else {
+        timecode.textContent = '0:30';
+      }
+    }
+
+    function applyChrome() {
+      card.classList.toggle('is-playing', state.mode === 'playing');
+      card.classList.toggle('is-paused', state.mode === 'paused');
+      playBtn.classList.toggle('is-playing', state.mode === 'playing');
+      setLabel(state.mode);
+      setTimecode();
+    }
+
+    function syncHairlines() {
+      const w = bandWidth();
+      if (w <= 0) return;
+      colPitch = w / 64;
+
+      const showPlayhead = state.mode === 'playing' || state.mode === 'paused' || state.scrubbing;
+      playhead.style.display = showPlayhead ? 'block' : 'none';
+      playhead.style.left = hairlineLeft(state.progress, w, colPitch) + 'px';
+      playhead.classList.toggle('scrubbing', state.scrubbing);
+      playhead.classList.toggle('smooth', state.mode === 'playing' && !state.scrubbing);
+      playhead.classList.toggle('paused-breathe', state.mode === 'paused' && !state.scrubbing);
+
+      const showGhost = !state.scrubbing && state.hovering &&
+        (state.mode === 'rest' || state.mode === 'paused');
+      if (showGhost) {
+        ghost.style.display = 'block';
+        ghost.style.left = Math.round(state.hoverCol * colPitch + colPitch / 2) + 'px';
+      } else {
+        ghost.style.display = 'none';
+      }
+
+      const showChip = state.scrubbing ||
+        (state.hovering && state.mode === 'rest') ||
+        (options.forceState && options.forceState.showChip);
+      if (showChip) {
+        chip.style.display = 'block';
+        let chipCol;
+        if (state.scrubbing || (options.forceState && options.forceState.scrubbing)) {
+          chipCol = progressToColumn(state.progress, 64);
+        } else if (state.hovering || (options.forceState && options.forceState.hovering)) {
+          chipCol = state.hoverCol;
+        } else {
+          chipCol = progressToColumn(state.progress, 64);
+        }
+        chip.style.left = clamp(Math.round(chipCol * colPitch + colPitch / 2), 8, w - 8) + 'px';
+        chip.style.top = '2px';
+        chip.textContent = formatTime(columnToProgress(chipCol, 64) * DURATION_MS);
+      } else {
+        chip.style.display = 'none';
+      }
+    }
+
+    function renderDots() {
+      state.playCol = progressToColumn(state.progress, 64);
+      if (dots.length === 0) {
+        const built = buildWaveDots(waveGrid, cfg, state);
+        colPitch = built.colPitch;
+        dots = built.dots;
+      } else {
+        updateDots(dots, cfg, state);
+      }
+      syncHairlines();
+      applyChrome();
+    }
+
+    function stopRaf() {
+      if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
+    }
+
+    function resetToRest() {
+      stopRaf();
+      state.mode = 'rest';
+      state.progress = 0;
+      state.playCol = 0;
+      state.scrubbing = false;
+      renderDots();
+    }
+
+    function tick(now) {
+      const elapsed = now - playStart;
+      state.progress = clamp((playFrom + elapsed) / DURATION_MS, 0, 1);
+      if (state.progress >= 1) {
+        resetToRest();
+        return;
+      }
+      renderDots();
+      rafId = requestAnimationFrame(tick);
+    }
+
+    function startPlayback(fromProgress) {
+      stopRaf();
+      state.mode = 'playing';
+      state.progress = fromProgress || 0;
+      playFrom = state.progress * DURATION_MS;
+      playStart = performance.now();
+      renderDots();
+      rafId = requestAnimationFrame(tick);
+    }
+
+    function pausePlayback() {
+      stopRaf();
+      state.mode = 'paused';
+      renderDots();
+    }
+
+    function resumePlayback() {
+      startPlayback(state.progress);
+    }
+
+    function togglePlay() {
+      if (state.mode === 'rest') startPlayback(0);
+      else if (state.mode === 'playing') pausePlayback();
+      else if (state.mode === 'paused') resumePlayback();
+    }
+
+    function pointerToCol(clientX) {
+      const rect = waveInset.getBoundingClientRect();
+      const x = clamp(clientX - rect.left, 0, rect.width - 1);
+      const col = clamp(Math.floor(x / (rect.width / 64)), 0, 63);
+      return col;
+    }
+
+    function seekToCol(col, andPlay) {
+      state.progress = columnToProgress(col, 64);
+      state.playCol = col;
+      if (andPlay) startPlayback(state.progress);
+      else { renderDots(); }
+    }
+
+    if (options.forceState) {
+      const fs = options.forceState;
+      state.mode = fs.mode || 'rest';
+      state.progress = fs.progress != null ? fs.progress : 0;
+      state.playCol = progressToColumn(state.progress, 64);
+      state.hovering = !!fs.hovering;
+      state.hoverCol = fs.hoverCol != null ? fs.hoverCol : progressToColumn(state.progress, 64);
+      if (fs.cardHover) card.classList.add('is-hover');
+      if (fs.mode === 'playing') {
+        playBtn.classList.add('is-playing');
+        card.classList.add('is-playing');
+      }
+      if (fs.scrubbing) state.scrubbing = true;
+      if (fs.showGhost) {
+        ghost.style.display = 'block';
+      }
+      if (fs.showChip) {
+        chip.style.display = 'block';
+        chip.textContent = formatTime(state.progress * DURATION_MS);
+      }
+    }
+
+    function initLayout() {
+      renderDots();
+      if (options.forceState) {
+        const fs = options.forceState;
+        const w = bandWidth();
+        if (w > 0) {
+          colPitch = w / 64;
+          if (fs.showGhost || fs.hovering) {
+            const gCol = fs.hoverCol != null ? fs.hoverCol : progressToColumn(state.progress, 64);
+            ghost.style.display = 'block';
+            ghost.style.left = Math.round(gCol * colPitch + colPitch / 2) + 'px';
+          }
+          if (fs.mode === 'playing' || fs.mode === 'paused' || fs.scrubbing) {
+            playhead.style.display = 'block';
+            playhead.style.left = hairlineLeft(state.progress, w, colPitch) + 'px';
+            playhead.classList.toggle('paused-breathe', fs.mode === 'paused' && !fs.scrubbing);
+            playhead.classList.toggle('scrubbing', !!fs.scrubbing);
+          }
+          if (fs.showChip) {
+            let chipCol;
+            if (fs.scrubbing) chipCol = progressToColumn(state.progress, 64);
+            else if (fs.hovering) chipCol = state.hoverCol;
+            else chipCol = progressToColumn(state.progress, 64);
+            chip.style.left = clamp(Math.round(chipCol * colPitch + colPitch / 2), 8, w - 8) + 'px';
+            chip.style.top = '2px';
+            chip.textContent = formatTime(columnToProgress(chipCol, 64) * DURATION_MS);
+          }
+        }
+        setLabel(state.mode);
+        setTimecode();
+      }
+    }
+
+    if (options.interactive) {
+      playBtn.addEventListener('click', function (e) {
+        e.stopPropagation();
+        togglePlay();
+      });
+
+      card.addEventListener('click', function (e) {
+        if (e.target.closest('.wave-touch') || e.target.closest('.play-btn')) return;
+        togglePlay();
+      });
+
+      card.addEventListener('mouseenter', function () {
+        if (state.mode === 'rest') card.classList.add('is-hover');
+      });
+      card.addEventListener('mouseleave', function () {
+        card.classList.remove('is-hover');
+        if (!state.scrubbing) {
+          state.hovering = false;
+          syncHairlines();
+        }
+      });
+
+      touch.addEventListener('mousemove', function (e) {
+        state.hoverCol = pointerToCol(e.clientX);
+        state.hovering = true;
+        if (state.mode === 'rest' || state.mode === 'paused') syncHairlines();
+      });
+
+      touch.addEventListener('mouseleave', function () {
+        if (!state.scrubbing) {
+          state.hovering = false;
+          syncHairlines();
+        }
+      });
+
+      touch.addEventListener('mousedown', function (e) {
+        e.preventDefault();
+        modeBeforeScrub = state.mode;
+        if (state.mode === 'playing') {
+          stopRaf();
+          state.mode = 'paused';
+        }
+        state.scrubbing = true;
+        const col = pointerToCol(e.clientX);
+        state.progress = columnToProgress(col, 64);
+        state.playCol = col;
+        renderDots();
+      });
+
+      window.addEventListener('mousemove', function (e) {
+        if (!state.scrubbing) return;
+        const col = pointerToCol(e.clientX);
+        state.progress = columnToProgress(col, 64);
+        state.playCol = col;
+        renderDots();
+      });
+
+      window.addEventListener('mouseup', function () {
+        if (!state.scrubbing) return;
+        state.scrubbing = false;
+        if (modeBeforeScrub === 'rest') {
+          startPlayback(state.progress);
+        } else if (modeBeforeScrub === 'playing') {
+          startPlayback(state.progress);
+        } else {
+          state.mode = 'paused';
+          renderDots();
+        }
+      });
+
+      touch.addEventListener('click', function (e) {
+        e.stopPropagation();
+      });
+    }
+
+    requestAnimationFrame(function () {
+      initLayout();
+      requestAnimationFrame(initLayout);
+    });
+
+    const ro = new ResizeObserver(function () {
+      dots = [];
+      initLayout();
+    });
+    ro.observe(waveGrid);
+
+    return card;
+  }
+
+  // ── mount interactive ──
+  const interactiveRow = document.getElementById('interactive-row');
+  interactiveRow.appendChild(createClipCard({ variant: 'hero', interactive: true }));
+  interactiveRow.appendChild(createClipCard({ variant: 'standard', interactive: true }));
+
+  // ── mount gallery ──
+  const gallerySpecs = [
+    { label: 'Rest', forceState: { mode: 'rest', progress: 0 } },
+    { label: 'Hover', forceState: { mode: 'rest', progress: 0, hovering: true, hoverCol: 38, showGhost: true, showChip: true, cardHover: true } },
+    { label: 'Playing', forceState: { mode: 'playing', progress: 0.4 } },
+    { label: 'Paused', forceState: { mode: 'paused', progress: 0.4 } },
+    { label: 'Scrubbing', forceState: { mode: 'rest', progress: 0.55, scrubbing: true, showChip: true } }
+  ];
+
+  const galleryRow = document.getElementById('gallery-row');
+  gallerySpecs.forEach(function (spec) {
+    const wrap = document.createElement('div');
+    wrap.className = 'gallery-item';
+    const lbl = document.createElement('div');
+    lbl.className = 'gallery-label';
+    lbl.textContent = spec.label;
+    wrap.appendChild(lbl);
+    const card = createClipCard({ variant: 'hero', interactive: false, forceState: spec.forceState });
+    wrap.appendChild(card);
+    galleryRow.appendChild(wrap);
+  });
+})();
+</script>
+</body>
+</html>

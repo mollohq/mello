@@ -212,6 +212,8 @@ pub struct PostClipRequest {
     pub game: String,
     #[serde(default)]
     pub local_path: String,
+    #[serde(default)]
+    pub waveform: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

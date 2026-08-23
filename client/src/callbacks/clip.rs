@@ -58,33 +58,35 @@ pub fn wire(ctx: &AppContext) {
     });
 
     let cmd = ctx.cmd_tx.clone();
+    let app_weak: slint::Weak<MainWindow> = ctx.app.as_weak();
     ctx.app.on_pause_clip(move || {
         log::info!("UI: pause clip");
+        if let Some(app) = app_weak.upgrade() {
+            app.set_clip_paused(true);
+        }
         let _ = cmd.send(Command::PauseClip);
     });
 
     let cmd = ctx.cmd_tx.clone();
+    let app_weak: slint::Weak<MainWindow> = ctx.app.as_weak();
     ctx.app.on_resume_clip(move || {
         log::info!("UI: resume clip");
+        if let Some(app) = app_weak.upgrade() {
+            app.set_clip_paused(false);
+        }
         let _ = cmd.send(Command::ResumeClip);
     });
 
     let cmd = ctx.cmd_tx.clone();
-    let app_weak: slint::Weak<MainWindow> = ctx.app.as_weak();
-    ctx.app.on_seek_clip(move |normalized| {
-        if let Some(app) = app_weak.upgrade() {
-            let dur_text = app.get_clip_duration_text().to_string();
-            let parts: Vec<&str> = dur_text.split(':').collect();
-            let duration_ms = if parts.len() == 2 {
-                let mins: u32 = parts[0].parse().unwrap_or(0);
-                let secs: u32 = parts[1].parse().unwrap_or(0);
-                (mins * 60 + secs) * 1000
-            } else {
-                0
-            };
-            let position_ms = (normalized * duration_ms as f32) as u32;
+    ctx.app.on_seek_clip_ms(move |position_ms| {
+        // Absolute milliseconds arrive from the waveform, which knows the
+        // per-card duration — the global clip-duration-ms is zeroed when
+        // playback finishes and would break seeks from idle.
+        if position_ms >= 0 {
             log::info!("UI: seek clip to {}ms", position_ms);
-            let _ = cmd.send(Command::SeekClip { position_ms });
+            let _ = cmd.send(Command::SeekClip {
+                position_ms: position_ms as u32,
+            });
         }
     });
 }

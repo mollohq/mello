@@ -361,6 +361,8 @@ pub enum Command {
         duration_seconds: f64,
         #[serde(default)]
         local_path: String,
+        #[serde(default)]
+        waveform: String,
     },
     UploadClip {
         crew_id: String,

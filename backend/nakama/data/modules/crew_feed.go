@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"time"
 
 	"github.com/heroiclabs/nakama-common/runtime"
 )
@@ -32,6 +33,12 @@ const (
 	// most notable sessions. The weekly recap remains the durable aggregate.
 	feedGameSessionMaxCards   = 2  // default cap when input has >5 game sessions
 	feedGameSessionNotableMin = 50 // default floor when input has >15 game sessions
+
+	// Fresh-clip premiere (spec CLIPS §12 v1): the newest clip earns hero while
+	// it is still young and the feed has not moved on. Session-previews still
+	// compete for fillers and the wide slot; they only lead when no clip qualifies.
+	feedClipHeroMaxAgeMs = 24 * 60 * 60 * 1000 // premiere window after capture
+	feedClipHeroMaxNewer = 4                   // buried once this many newer cards exist
 )
 
 // feedQuietBackendTypes are the low-signal pulse events rendered as quiet rows
@@ -593,13 +600,46 @@ func fillerRole(c feedCard) string {
 	return "standard"
 }
 
-// buildThisWeek curates the recent feed: hero (best session-preview), the
-// latest recap, then diversity+priority fillers capped at feedFillerSlots with
-// the wide-slot promotion. Pure given its inputs.
+// freshClipHeroIndex returns the index of the newest clip that qualifies for a
+// premiere hero slot, or -1. A clip premieres while it is younger than
+// feedClipHeroMaxAgeMs and fewer than feedClipHeroMaxNewer pruned cards are
+// newer than it. Pure so premiere/demotion rules are unit-testable.
+func freshClipHeroIndex(cards []feedCard, nowMs int64) int {
+	best := -1
+	for i, c := range cards {
+		if c.feedType != "clip" {
+			continue
+		}
+		if best == -1 || c.ts > cards[best].ts {
+			best = i
+		}
+	}
+	if best == -1 {
+		return -1
+	}
+	clip := cards[best]
+	if nowMs-clip.ts > feedClipHeroMaxAgeMs {
+		return -1
+	}
+	newer := 0
+	for _, c := range cards {
+		if c.ts > clip.ts {
+			newer++
+		}
+	}
+	if newer >= feedClipHeroMaxNewer {
+		return -1
+	}
+	return best
+}
+
+// buildThisWeek curates the recent feed: hero (fresh clip premiere, else best
+// session-preview), the latest recap, then diversity+priority fillers capped
+// at feedFillerSlots with the wide-slot promotion. Pure given its inputs.
 //
 // A live stream is not surfaced here yet; the live-stream hero is owned by the
 // separate multi-stream PR. Clients keep showing live streams from crew_state.
-func buildThisWeek(cards []feedCard) []FeedEntry {
+func buildThisWeek(cards []feedCard, nowMs int64) []FeedEntry {
 	// Budget game sessions first: adaptive floor/cap decides which earn a card.
 	var pruned []feedCard
 	cards, pruned = pruneGameSessions(cards)
@@ -610,7 +650,10 @@ func buildThisWeek(cards []feedCard) []FeedEntry {
 	used := make([]bool, len(cards))
 	entries := make([]FeedEntry, 0, feedFillerSlots+2)
 
-	if hi := feedBestIndex(cards, used, "session-preview", sessionPreviewQuality); hi >= 0 {
+	if hi := freshClipHeroIndex(cards, nowMs); hi >= 0 {
+		used[hi] = true
+		entries = append(entries, feedEntryFromCard(cards[hi], "hero", "lg"))
+	} else if hi := feedBestIndex(cards, used, "session-preview", sessionPreviewQuality); hi >= 0 {
 		used[hi] = true
 		entries = append(entries, feedEntryFromCard(cards[hi], "hero", "lg"))
 	}
@@ -660,7 +703,7 @@ func CrewFeedRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runt
 
 	// this_week: curated recent feed.
 	cards := mergedToCards(buildMergedTimeline(ctx, nk, req.CrewID))
-	thisWeek := buildThisWeek(cards)
+	thisWeek := buildThisWeek(cards, time.Now().UnixMilli())
 
 	// Items shown in this_week are excluded from the memory spine.
 	shownClipIDs := map[string]bool{}

@@ -29,6 +29,7 @@ pub mod transport;
 pub mod unresolved;
 pub mod voice;
 
+pub use client::waveform::{compute_clip_waveform_b64, decode_clip_waveform};
 pub use client::{
     Client, FrameLifecycleSlot, FrameSlot, NativeFrameSlot, NativeSurfaceFrame, FRAME_STATE_IDLE,
     FRAME_STATE_LATCHED, FRAME_STATE_PRESENTED, FRAME_STATE_READY,

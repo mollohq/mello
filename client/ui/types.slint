@@ -104,6 +104,9 @@ export struct FeedCardData {
     participant-count: int,
     clip-count: int,
     clip-path: string,
+  // Normalized 0.0–1.0 peak buckets (64 entries); empty when unknown.
+    waveform: [float],
+    duration-ms: int,
     is-hero: bool,
     is-skeleton: bool,
     snapshot-urls: [string],
