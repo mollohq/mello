@@ -5,19 +5,18 @@
 > **Status:** Implemented — nine adapters shipped (CS2, Dota 2, LoL, Rocket
 > League, LoR, Hearthstone, Minecraft, Path of Exile, StarCraft II)
 > **Parent:** [00-ARCHITECTURE.md](./00-ARCHITECTURE.md)
-> **Related:** [16-CREW-EVENT-LEDGER.md](./16-CREW-EVENT-LEDGER.md), [17-GAME-SENSING.md](./17-GAME-SENSING.md), [11-PRESENCE-CREW-STATE.md](./11-PRESENCE-CREW-STATE.md), [02-MELLO-CORE.md](./02-MELLO-CORE.md), [19-FEED-CURATION-PERSONAL-STATS.md](./19-FEED-CURATION-PERSONAL-STATS.md), [20-GAME-UI-SURFACES.md](./20-GAME-UI-SURFACES.md)
+> **Related:** [16-CREW-EVENT-LEDGER.md](./16-CREW-EVENT-LEDGER.md), [17-GAME-SENSING.md](./17-GAME-SENSING.md), [11-PRESENCE-CREW-STATE.md](./11-PRESENCE-CREW-STATE.md), [02-MELLO-CORE.md](./02-MELLO-CORE.md), [19-FEED-CURATION-PERSONAL-STATS.md](./19-FEED-CURATION-PERSONAL-STATS.md), [22-GAME-UI-SURFACES.md](./22-GAME-UI-SURFACES.md)
 >
 > **Scope.** This spec covers *producing* outcome and streak data: adapters,
 > the normalized outcome model, and persistence. It does not cover how any of
 > it is drawn. Which sessions reach a feed is
 > [19-FEED-CURATION-PERSONAL-STATS.md](./19-FEED-CURATION-PERSONAL-STATS.md);
 > what the surfaces look like is
-> [20-GAME-UI-SURFACES.md](./20-GAME-UI-SURFACES.md).
+> [22-GAME-UI-SURFACES.md](./22-GAME-UI-SURFACES.md).
 >
-> **Coverage reality.** Nine adapters exist against a catalogue of thousands of
-> games, so the overwhelming majority of sessions carry no W/L record at all.
-> Every surface must therefore treat outcome data as absent by default — see
-> spec 19 §3.5.
+> **Coverage.** Nine adapters cover a catalogue of thousands of games. Most
+> sessions therefore carry no W/L record. Every surface must treat outcome data
+> as absent by default. See spec 19 section 3.6.
 
 ---
 
@@ -431,15 +430,16 @@ The one place a web API beats local telemetry: Riot's post-match data can *verif
 
 ## 6. Games Settings & Consent
 
-> Surfacing moved out. The table that used to sit here (post-game card, catch-up
-> fragment, feed card, sidebar badge, weekly recap, HUD) described how telemetry
-> is *drawn*, which is [19-FEED-CURATION-PERSONAL-STATS.md](./19-FEED-CURATION-PERSONAL-STATS.md)
-> for curation and [20-GAME-UI-SURFACES.md](./20-GAME-UI-SURFACES.md) for
-> rendering. What remains below is adapter consent and account linking, which
-> genuinely belong to telemetry.
+> The surfacing table moved out of this spec. It listed the post-game card, the
+> catch-up fragment, the feed card, the sidebar badge, the weekly recap and the
+> HUD. Curation is now [19-FEED-CURATION-PERSONAL-STATS.md](./19-FEED-CURATION-PERSONAL-STATS.md).
+> Appearance is now [22-GAME-UI-SURFACES.md](./22-GAME-UI-SURFACES.md).
+>
+> This section keeps adapter consent and account linking. Both belong to
+> telemetry.
 
-A standalone personal stats page was once listed as out of scope here. It is now
-spec 19's Lane A and is shipped.
+An earlier version listed a personal stats page as out of scope. That page is
+Lane A of spec 19 and is implemented.
 
 ### 6.1 Adapter consent
 

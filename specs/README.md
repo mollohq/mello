@@ -15,13 +15,13 @@ This directory contains the technical specifications for Mello.
 - `14-VIDEO-PIPELINE.md` - Native capture, encode/decode, and GPU presentation details
 - `15-DEBUG-TELEMETRY.md` - Debug logging, telemetry, on-demand diagnostic capture
 - `16-CREW-EVENT-LEDGER.md`, `17-GAME-SENSING.md`, `18-GAME-TELEMETRY.md`,
-  `19-FEED-CURATION-PERSONAL-STATS.md`, `20-GAME-UI-SURFACES.md` - the game
+  `19-FEED-CURATION-PERSONAL-STATS.md`, `22-GAME-UI-SURFACES.md` - the game
   stack; read the section below before any of them
 - `features/SFU-INTEGRATION.md` - Client/backend integration with the SFU
 - `EXTERNAL-SFU.md` - Bring-your-own / self-hosted SFU
 - Additional feature specs under `features/`
 
-## The game stack: 16, 17, 18, 19, 20
+## The game stack: 16, 17, 18, 19, 22
 
 These five describe one pipeline and are easy to confuse. Each answers exactly
 one question:
@@ -31,23 +31,27 @@ one question:
 | **17** Game Sensing | *Which game, and for how long?* |
 | **18** Game Telemetry | *How did it go?* |
 | **16** Crew Event Ledger | *How is that stored and moved?* |
-| **19** Feed Curation & Personal Stats | *Which of it is worth showing?* |
-| **20** Game UI Surfaces | *What does it look like?* |
+| **19** Feed Curation & Personal Stats | *Which sessions do we show?* |
+| **22** Game UI Surfaces | *What does it look like?* |
 
-Data flows one way, and the boundary is worth stating plainly:
+Data flows in one direction:
 
 ```
-SENSE (17, 18) ──▶ RECORD (16 ledger, user_game_stats) ──▶ CURATE (19) ──▶ PRESENT (20)
+SENSE (17, 18) ──▶ RECORD (16 ledger, user_game_stats) ──▶ CURATE (19) ──▶ PRESENT (22)
 ```
 
-**If it detects or records, it belongs to 16/17/18. If it decides what survives,
-it belongs to 19. If it draws, it belongs to 20.** Nothing in 17 or 18 should
-know a feed card exists; nothing in 19 should care how a game was detected.
+Use this rule to place a change:
 
-This separation is now executed, not just declared. Spec 17's sidebar, bottom
-bar and Slint sections, and spec 18's surfacing table, were marked "pending
-relocation" for several versions — they moved into 20, and 17 shrank from 958
-lines to 567 as a result.
+| The code | The spec |
+|---|---|
+| Detects or records | 16, 17, 18 |
+| Selects what survives | 19 |
+| Draws | 22 |
+
+Nothing in 17 or 18 refers to a feed card. Nothing in 19 refers to detection.
+
+Spec 17 sections 6, 7 and 9, and the spec 18 surfacing table, moved into spec
+22. Spec 17 went from 958 lines to 565.
 
 The seams between them:
 
@@ -63,21 +67,23 @@ The seams between them:
 
 ### Two rules that cut across all five
 
-Both exist because a number a crewmate can disprove destroys the product's
-premise, and both have bitten already:
+A surface must not show a play time that a crew member can disprove. Two rules
+follow from this.
 
-- **The overnight guard.** Play time uses wall time, unless active time is under
-  a third of it. Three implementations must stay in step — see 20 §4.3.
-- **Co-play duration comes only from `player_overlap_min`**, never the actor's
-  `duration_min`. See 16 §2.
+- **The overnight guard.** Show wall time. Show active time instead when active
+  time is below one third of wall time. Three implementations apply this rule.
+  Keep them in step. See spec 22 section 4.3.
+- **Co-play duration.** Use `player_overlap_min` only. Do not use the actor's
+  `duration_min`. See spec 16 section 2.
 
 ### Where the design rationale lives
 
-Detection design (catalogue build, resolution ladder, installed-library scan) is
-specified in **17 §2–§3**. The longer narrative of why it was built that way is
-in [../plans/GAME-SENSING-V2.md](../plans/GAME-SENSING-V2.md), and the surfacing
-work in [../plans/GAME-SURFACING.md](../plans/GAME-SURFACING.md). The specs are
-authoritative; the plans are history.
+Spec 17 sections 2 and 3 define the detection design. That design covers the
+catalogue build, the resolution ladder and the installed-library scan.
+
+[../plans/GAME-SENSING-V2.md](../plans/GAME-SENSING-V2.md) and
+[../plans/GAME-SURFACING.md](../plans/GAME-SURFACING.md) record why the work was
+done that way. The specs are authoritative. The plans are history.
 
 ---
 

@@ -16,6 +16,22 @@ When the Human Operator corrects you or says "don't do that" / "we do it this wa
 2. If it's a pattern, say: "Should I add this to CLAUDE.md?" and wait for a yes/no.
 Do not repeat a corrected mistake in the same session.
 
+## Writing Standards: Simplified Technical English
+
+Use **ASD-STE100 Simplified Technical English (STE)** in all specs, and in all
+agent communication with the Human Operator.
+
+- One idea per sentence. Maximum 20 words for an instruction, 25 for a description.
+- Active voice. Present tense. Keep the articles (`the`, `a`).
+- One word, one meaning. Do not use synonyms for variety.
+- No metaphors, no idioms, no figurative language.
+- No editorializing: drop `honestly`, `genuinely`, `deliberately`, `worth noting`,
+  `the one thing that`, `it is worth stating`. State the fact and stop.
+- Do not narrate the writing. Do not praise or dramatize the content.
+- Keep paragraphs short. Prefer a table or a list over prose.
+
+Write what the reader must know. Delete the rest.
+
 ## Before Calling Something Done
 Run the gate. Do not hand-roll the individual commands — the script is what CI
 and the pre-push hook run, so anything else can disagree with them.
