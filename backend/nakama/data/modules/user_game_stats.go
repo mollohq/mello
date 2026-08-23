@@ -34,18 +34,31 @@ const UserGameStatsCollection = "user_game_stats"
 // recentFormCap bounds the rolling per-session form list (newest last).
 const recentFormCap = 10
 
+// recentDaysCap bounds the rolling daily play-time window (oldest first).
+const recentDaysCap = 8
+
+// RecentDayEntry is one UTC calendar day's accumulated session minutes.
+type RecentDayEntry struct {
+	Date      string `json:"date"` // "YYYY-MM-DD" (UTC)
+	WallMin   int    `json:"wall_min"`
+	ActiveMin int    `json:"active_min"`
+}
+
 type UserGameStats struct {
-	GameID            string   `json:"game_id"`
-	Wins              int      `json:"wins"`
-	Losses            int      `json:"losses"`
-	Draws             int      `json:"draws"`
-	CurrentStreak     int      `json:"current_streak"` // signed: +wins, -losses (sessions)
-	LongestWinStreak  int      `json:"longest_win_streak"`
-	LongestLossStreak int      `json:"longest_loss_streak"`
-	RecentForm        []string `json:"recent_form"` // per-session "W"|"L"|"D", newest last, capped
-	LastResult        string   `json:"last_result"` // "win" | "loss" | "even" | ""
-	LastPlayed        int64    `json:"last_played"`
-	UpdatedAt         int64    `json:"updated_at"`
+	GameID            string           `json:"game_id"`
+	Wins              int              `json:"wins"`
+	Losses            int              `json:"losses"`
+	Draws             int              `json:"draws"`
+	CurrentStreak     int              `json:"current_streak"` // signed: +wins, -losses (sessions)
+	LongestWinStreak  int              `json:"longest_win_streak"`
+	LongestLossStreak int              `json:"longest_loss_streak"`
+	RecentForm        []string         `json:"recent_form"` // per-session "W"|"L"|"D", newest last, capped
+	LastResult        string           `json:"last_result"` // "win" | "loss" | "even" | ""
+	LastPlayed        int64            `json:"last_played"`
+	UpdatedAt         int64            `json:"updated_at"`
+	PlayedMinTotal    int              `json:"played_min_total"` // lifetime wall minutes
+	ActiveMinTotal    int              `json:"active_min_total"`
+	RecentDays        []RecentDayEntry `json:"recent_days"` // oldest first, capped at recentDaysCap
 }
 
 func readUserGameStats(ctx context.Context, nk runtime.NakamaModule, userID, gameID string) (*UserGameStats, string) {
@@ -134,9 +147,38 @@ func applySessionOutcome(s *UserGameStats, wins, losses, draws int) string {
 	return result
 }
 
+// applySessionPlayTime folds wall/active minutes into lifetime totals and the
+// rolling daily window. Pure (no I/O) so the cap/prune logic is unit-testable.
+func applySessionPlayTime(s *UserGameStats, durationMin, activeMin int, now time.Time) {
+	s.PlayedMinTotal += durationMin
+	s.ActiveMinTotal += activeMin
+
+	if durationMin == 0 && activeMin == 0 {
+		return
+	}
+
+	dateStr := now.UTC().Format("2006-01-02")
+	for i := range s.RecentDays {
+		if s.RecentDays[i].Date == dateStr {
+			s.RecentDays[i].WallMin += durationMin
+			s.RecentDays[i].ActiveMin += activeMin
+			return
+		}
+	}
+	s.RecentDays = append(s.RecentDays, RecentDayEntry{
+		Date:      dateStr,
+		WallMin:   durationMin,
+		ActiveMin: activeMin,
+	})
+	if len(s.RecentDays) > recentDaysCap {
+		s.RecentDays = s.RecentDays[len(s.RecentDays)-recentDaysCap:]
+	}
+}
+
 // UpdateUserGameStats reads, applies the session outcome, and writes with
 // optimistic-concurrency retry. Returns the updated stats and the session
-// result ("win"/"loss"/"even").
+// result ("win"/"loss"/"even"). Outcome-only — used by dev_seed; play-time
+// fields are untouched.
 func UpdateUserGameStats(ctx context.Context, nk runtime.NakamaModule, userID, gameID string, wins, losses, draws int) (*UserGameStats, string, error) {
 	for attempt := 0; attempt < 3; attempt++ {
 		s, version := readUserGameStats(ctx, nk, userID, gameID)
@@ -144,6 +186,32 @@ func UpdateUserGameStats(ctx context.Context, nk runtime.NakamaModule, userID, g
 		now := time.Now().UnixMilli()
 		s.UpdatedAt = now
 		s.LastPlayed = now
+		if err := writeUserGameStats(ctx, nk, userID, s, version); err == nil {
+			return s, result, nil
+		}
+		jitter, _ := rand.Int(rand.Reader, big.NewInt(50))
+		time.Sleep(time.Duration(50*(attempt+1)+int(jitter.Int64())) * time.Millisecond)
+	}
+	return nil, "", fmt.Errorf("user_game_stats write failed after 3 retries for user %s game %s", userID, gameID)
+}
+
+// UpdateUserGameStatsForSession records play time for every session and applies
+// telemetry outcomes when present. Returns the session result only when
+// wins+losses+draws > 0 (otherwise "").
+func UpdateUserGameStatsForSession(ctx context.Context, nk runtime.NakamaModule, userID, gameID string, durationMin, activeMin, wins, losses, draws int) (*UserGameStats, string, error) {
+	for attempt := 0; attempt < 3; attempt++ {
+		s, version := readUserGameStats(ctx, nk, userID, gameID)
+		now := time.Now()
+		applySessionPlayTime(s, durationMin, activeMin, now)
+
+		result := ""
+		if wins > 0 || losses > 0 || draws > 0 {
+			result = applySessionOutcome(s, wins, losses, draws)
+		}
+
+		nowMs := now.UnixMilli()
+		s.UpdatedAt = nowMs
+		s.LastPlayed = nowMs
 		if err := writeUserGameStats(ctx, nk, userID, s, version); err == nil {
 			return s, result, nil
 		}

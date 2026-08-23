@@ -24,6 +24,10 @@ struct GameProcess {
     std::string path;          // full executable path; empty when windowless
     std::string window_title;  // main window title; empty when windowless
     bool        is_foreground = false;
+    // Process creation time in Unix epoch ms; 0 when unavailable. Pairs with
+    // `pid` to identify a process across client restarts — pids are recycled,
+    // (pid, started_at_ms) is not.
+    int64_t     started_at_ms = 0;
 };
 
 /// Returns running processes that match the bundled game list (assets/games.json).

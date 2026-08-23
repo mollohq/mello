@@ -45,6 +45,22 @@ pub enum Activity {
     },
 }
 
+/// Format a Unix-ms timestamp as RFC 3339 UTC, the shape presence uses on the
+/// wire. Falls back to the epoch for a nonsense timestamp rather than failing
+/// a presence update over a formatting detail.
+pub fn to_rfc3339(unix_ms: i64) -> String {
+    chrono::DateTime::from_timestamp_millis(unix_ms)
+        .unwrap_or_else(|| chrono::DateTime::from_timestamp_millis(0).expect("epoch is valid"))
+        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+}
+
+/// Parse an RFC 3339 timestamp (as used on presence `started_at`) to Unix ms.
+pub fn from_rfc3339_ms(s: &str) -> Option<i64> {
+    chrono::DateTime::parse_from_rfc3339(s)
+        .ok()
+        .map(|dt| dt.timestamp_millis())
+}
+
 /// Orthogonal game presence — can coexist with any activity type.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct GamePresence {

@@ -52,6 +52,13 @@ pub struct GameSessionEndRequest {
     pub game_id: String,
     #[serde(default)]
     pub duration_min: u32,
+    /// Foreground minutes; `duration_min` is wall time. Sent so surfaces can
+    /// choose which to show for a game left open in the background.
+    #[serde(default)]
+    pub active_min: u32,
+    /// IGDB id when the catalogue resolved the game, 0 otherwise.
+    #[serde(default)]
+    pub igdb_id: u32,
     /// Decisive (streak-eligible) wins/losses this session, from telemetry.
     #[serde(default)]
     pub wins: u32,
@@ -74,6 +81,17 @@ pub struct GameSessionEndResponse {
     /// Defaults to 0 against older servers that don't return it.
     #[serde(default)]
     pub streak_after: i32,
+}
+
+/// Per-game personal stats (mirrors the backend `user_game_stats` store).
+/// Backs the personal "You strip" + profile (spec 19).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RecentDayEntry {
+    pub date: String,
+    #[serde(default)]
+    pub wall_min: u32,
+    #[serde(default)]
+    pub active_min: u32,
 }
 
 /// Per-game personal stats (mirrors the backend `user_game_stats` store).
@@ -103,6 +121,12 @@ pub struct UserGameStats {
     pub last_played: i64,
     #[serde(default)]
     pub updated_at: i64,
+    #[serde(default)]
+    pub played_min_total: u32,
+    #[serde(default)]
+    pub active_min_total: u32,
+    #[serde(default)]
+    pub recent_days: Vec<RecentDayEntry>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

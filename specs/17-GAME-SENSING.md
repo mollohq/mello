@@ -1,412 +1,322 @@
 # MELLO Game Sensing Specification
 
-> **Component:** Game Detection, Game Database, Game Presence  
-> **Version:** 0.1  
-> **Status:** Planned  
-> **Parent:** [00-ARCHITECTURE.md](./00-ARCHITECTURE.md)  
-> **Related:** [02-MELLO-CORE.md](./02-MELLO-CORE.md), [03-LIBMELLO.md](./03-LIBMELLO.md), [11-PRESENCE-CREW-STATE.md](./11-PRESENCE-CREW-STATE.md), [14-VIDEO-PIPELINE.md](./14-VIDEO-PIPELINE.md), [16-CREW-EVENT-LEDGER.md](./16-CREW-EVENT-LEDGER.md), [18-GAME-TELEMETRY.md](./18-GAME-TELEMETRY.md)
-
-> **Amendment (spec 18 — Game Telemetry):** this spec covers *process-level* detection only (which game, session start/stop, duration). In-game outcomes (win/loss, score, streaks) are a separate, pluggable layer **above** the process sensor — the `GameSensor` keeps emitting `Started`/`Stopped` unchanged. When a detected game has a registered telemetry adapter (CS2 GSI first), the adapter's config is installed and a loopback listener routes that game's state into the post-game flow. Games without an adapter keep the manual win/loss/highlight tap described in §7.2. See [18-GAME-TELEMETRY.md](./18-GAME-TELEMETRY.md).
+> **Component:** Game Detection, Game Catalogue, Game Presence
+> **Version:** 0.3
+> **Status:** Implemented on Windows. The macOS paths compile and pass CI, but have never run on a Mac. These are process enumeration, ICNS icon extraction and launcher locations.
+> **Parent:** [00-ARCHITECTURE.md](./00-ARCHITECTURE.md)
+> **Related:** [02-MELLO-CORE.md](./02-MELLO-CORE.md), [03-LIBMELLO.md](./03-LIBMELLO.md), [11-PRESENCE-CREW-STATE.md](./11-PRESENCE-CREW-STATE.md), [16-CREW-EVENT-LEDGER.md](./16-CREW-EVENT-LEDGER.md), [18-GAME-TELEMETRY.md](./18-GAME-TELEMETRY.md), [22-GAME-UI-SURFACES.md](./22-GAME-UI-SURFACES.md)
 
 ---
 
 ## 1. Overview
 
-Game sensing detects what games the user is running, surfaces that information across the UI, and feeds the presence system, crew sidebar game list, and post-game moment flow.
+Game sensing answers one question: which game does the user play, and for how
+long. It does not select what to show. It does not draw anything.
 
 ```
-┌────────────────────────────────────────────────────────────────────┐
-│                        GAME SENSING                                │
-│                                                                    │
-│  ┌──────────────┐    ┌──────────────┐    ┌──────────────────────┐  │
-│  │  Process      │───▶│  Game DB     │───▶│  Game State Manager  │  │
-│  │  Scanner      │    │  (local)     │    │  (mello-core)        │  │
-│  │  (libmello)   │    │              │    │                      │  │
-│  └──────────────┘    └──────────────┘    └──────────┬───────────┘  │
-│                                                      │             │
-│                    ┌─────────────────┬────────────────┼──────┐     │
-│                    ▼                 ▼                ▼      ▼     │
-│              ┌───────────┐   ┌────────────┐  ┌───────┐ ┌───────┐  │
-│              │ Presence  │   │ Bottom Bar │  │ Crew  │ │ Event │  │
-│              │ Update    │   │ NOW PLAYING│  │Sidebar│ │Ledger │  │
-│              └───────────┘   └────────────┘  └───────┘ └───────┘  │
-│                                                                    │
-└────────────────────────────────────────────────────────────────────┘
+  SENSE (this spec)          RECORD             CURATE         PRESENT
+  ┌───────────────────┐    ┌────────────┐    ┌──────────┐   ┌──────────┐
+  │ 17 Game Sensing   │───▶│ 16 Ledger  │───▶│ 19 Feed  │──▶│ 22 Game  │
+  │    which game     │    │            │    │ Curation │   │    UI    │
+  │    how long       │    │ game_      │    │          │   │          │
+  │                   │    │ session    │    │          │   │          │
+  │ 18 Telemetry      │───▶│ user_game_ │───▶│          │   │          │
+  │    W/L, streaks   │    │ stats      │    │          │   │          │
+  └───────────────────┘    └────────────┘    └──────────┘   └──────────┘
 ```
 
-### Key Decisions
+UI that this spec once defined now lives in
+[22-GAME-UI-SURFACES.md](./22-GAME-UI-SURFACES.md). That UI is the crew sidebar
+game list, the bottom bar states and the Slint component reference.
 
-| Decision | Choice | Rationale |
-|----------|--------|-----------|
-| Scan interval | 5 seconds (const, tunable) | Fast enough for responsive UI, low CPU cost |
-| Game database | Bundled JSON, seeded from IGDB | No live API calls during detection; offline-capable |
-| Matching strategy | Executable name lookup | Simple, reliable, cross-platform |
-| Presence scope | All crews see game activity | Useful for sidebar game lists everywhere |
-| Crew game list | Persistent (last 7 days) + live overlay | Games don't vanish when no one is playing |
-| Platform support | Windows first, macOS/Linux follow | Game detection is OS-specific |
+### Key decisions
 
-### What Changes (Spec 11 Amendment)
+| Decision | Reason |
+|---|---|
+| Identity comes from the install path, not the filename | Two games can ship `game.exe`. No two occupy the same directory. The library scan uses a path prefix for this reason |
+| Every game produces a session | A game that nothing can name is tracked as provisional. Spec 19 decides what reaches a feed |
+| A session starts at the process creation time | A game that runs before the client starts reports the full time it ran |
+| Several games are tracked at once | The active set is a map. One entry is selected as primary for presence |
 
-The presence activity model gains a new `playing` type:
+### Amendment (spec 18 — Game Telemetry)
 
-| Type | Fields | Description |
-|------|--------|-------------|
-| `playing` | `game_name`, `game_id`, `started_at` | Playing a detected game |
-
-This type can coexist with voice/streaming. A user can be `in_voice` AND `playing` simultaneously. See section 5 for how this is handled.
-
-### What Changes (Spec 14 Amendment)
-
-The existing `enumerate_game_processes()` in libmello (spec 14, section 4.6) is reused. The bundled `assets/games.json` is expanded with richer metadata (section 3). No changes to the C++ interface.
+This spec covers process-level detection only. In-game outcomes are a separate
+layer above the process sensor. Those outcomes are win, loss, score and streak.
+The `GameSensor` continues to emit `Started` and `Stopped` without change. See
+[18-GAME-TELEMETRY.md](./18-GAME-TELEMETRY.md).
 
 ---
 
-## 2. Process Scanner
+## 2. Detection
 
-### 2.1 Detection Loop
+File: `mello-core/src/game_sensing.rs`.
 
-The detection loop runs in mello-core (Rust), calling into libmello's existing `enumerate_game_processes()` C API every `GAME_SCAN_INTERVAL` seconds.
+### 2.1 Scan loop and cadence
 
-```rust
-// mello-core/src/game_sensing.rs
+libmello supplies the process list through `mello_enumerate_games`. It fills
+`MelloGameProcess` records. Each record holds the pid, the executable name, the
+full path, the window title, the fullscreen flag, the foreground flag and the
+process creation time.
 
-const GAME_SCAN_INTERVAL: Duration = Duration::from_secs(5);
+The loop runs at two rates.
 
-pub struct GameSensor {
-    game_db: GameDatabase,
-    current_game: Option<ActiveGame>,
-    scan_handle: Option<JoinHandle<()>>,
-}
+| Constant | Value | Condition |
+|---|---|---|
+| `GAME_SCAN_INTERVAL` | 15s | No game is tracked |
+| `GAME_SCAN_INTERVAL_ACTIVE` | 4s | A game is active |
 
-pub struct ActiveGame {
-    pub game_id: String,       // From game DB (IGDB slug or internal ID)
-    pub game_name: String,     // Display name
-    pub exe: String,           // Matched executable
-    pub pid: u32,
-    pub started_at: i64,       // Unix ms
-}
+The loop compares each scan against a `HashMap<u32, ActiveGame>` keyed by pid.
+This tracks several concurrent games.
 
-impl GameSensor {
-    pub fn start(&mut self, event_tx: Sender<GameEvent>) {
-        let db = self.game_db.clone();
-        self.scan_handle = Some(std::thread::spawn(move || {
-            let mut previous: Option<ActiveGame> = None;
-            loop {
-                std::thread::sleep(GAME_SCAN_INTERVAL);
+`started_at_ms` holds the OS process creation time. On Windows this comes from
+`GetProcessTimes`, converted from FILETIME to Unix milliseconds. The field is
+`0` when the OS does not supply the value. The session then uses the first-seen
+time.
 
-                let processes = libmello::enumerate_game_processes();
-                let detected = pick_primary_game(&db, &processes);
+### 2.2 Resolution ladder
 
-                match (&previous, &detected) {
-                    (None, Some(game)) => {
-                        let _ = event_tx.send(GameEvent::Started(game.clone()));
-                    }
-                    (Some(prev), None) => {
-                        let _ = event_tx.send(GameEvent::Stopped(prev.clone()));
-                    }
-                    (Some(prev), Some(game)) if prev.pid != game.pid => {
-                        let _ = event_tx.send(GameEvent::Stopped(prev.clone()));
-                        let _ = event_tx.send(GameEvent::Started(game.clone()));
-                    }
-                    _ => {} // No change
-                }
+Each process goes through three rungs in order. The first match wins.
 
-                previous = detected;
-            }
-        }));
-    }
-}
+| Rung | Source | Coverage |
+|---|---|---|
+| 1 | Curated executable table in `head.bin` | Games that no library scan finds, such as Valorant, League of Legends and Hearthstone |
+| 2 | Installed library scan, by path prefix | Games installed through Steam, Epic or GOG |
+| 3 | Provisional tracking | A game that no rung above can name |
 
-#[derive(Debug, Clone)]
-pub enum GameEvent {
-    Started(ActiveGame),
-    Stopped(ActiveGame),
-}
+**A rung answers which game a process is. It does not answer whether that game
+is being played.** See section 2.4.
+
+#### Identity reconciliation
+
+One game must answer to one id, whichever rung named it. Rung 2 therefore tries
+three sources in order:
+
+1. `appid_index.bin` maps the Steam appid to an IGDB id, then the head supplies
+   the catalogue entry.
+2. Otherwise the head is searched by the launcher's display name.
+3. Otherwise the launcher id stands: `steam-<appid>`, `epic-<id>`, `gog-<id>`.
+
+Step 2 exists because Epic and GOG have no id map. Without it Fortnite answered
+to `fortnite` through the curated table and to
+`epic-4fe75bbc5a674f4f9b356b5c90567da5` through this scan, and its hours split
+across two `user_game_stats` keys depending on which of its processes was seen.
+
+**Step 2 accepts an unambiguous name only.** The head holds 2000 games under
+1983 distinct names: 17 names carry two entries each, because a remake and its
+original share one. `prey`, `overwatch`, `dead space`, `tomb raider`,
+`system shock`, `resident evil 2` and `resident evil 4` are among them. Filing
+a session under the wrong half of a pair is worse than keeping the launcher id,
+which is exact even though it is not catalogue-linked. `Head::all_by_name`
+exists for this; `by_name` cannot express the difference between one match and
+several.
+
+### 2.3 What counts as a game
+
+`looks_like_a_game` controls provisional tracking, which is rung 3. An earlier
+design used it only to decide whether to ask the user. That design recorded
+every focused window as a session.
+
+The gate applies these rules in order.
+
+1. Reject an empty path or an empty window title.
+2. Reject any entry in `UNKNOWN_DENYLIST` (executable) or `UNKNOWN_PATH_DENYLIST`
+   (path).
+3. Reject auxiliary binaries. See section 2.5.
+4. Accept an Unreal shipping binary. The name `*-Win64-Shipping.exe` identifies
+   it.
+5. Otherwise require one of two conditions: the process is fullscreen, or an
+   engine marker file is in the same directory.
+
+Engine markers include `unityplayer.dll`, `gameassembly.dll`, `steam_api64.dll`,
+a `*_Data` directory and a `.pck` file.
+
+Rule 5 rejects windowed launchers. It is also the narrowest rule. A launcher
+that is windowed and has an engine marker in its directory passes the gate.
+`LeagueClientUx.exe` has the window title "League of Legends". Its directory
+holds no engine marker, so the gate rejects it. See section 8.
+
+### 2.4 A resolved process is not a running game
+
+Resolution matches on identity. It does not know whether the game is presenting
+anything. Three symptoms came from that one gap:
+
+| Process | Behaviour | Effect before the fix |
+|---|---|---|
+| `RobloxPlayerBeta.exe` | Quitting Roblox drops it to the tray. It stays alive with no window | The session never ended |
+| `FortniteClient-Win64-Shipping_EAC_EOS.exe` | Starts with a readable path, then anti-cheat hardens it | Opened a second session that closed at 0 minutes |
+| `VALORANT.exe` | A 0.2 MB stub that runs for the whole session | Would have been a second Valorant |
+
+**The window is the signal.** Every process observed while genuinely being
+played carried a title: `Fortnite`, `VALORANT`, `Counter-Strike 2`,
+`League of Legends (TM) Client`. Every lingering companion carried none.
+
+`drop_windowless` removes a resolved game whose process has shown no window for
+`WINDOWLESS_GRACE_SCANS` consecutive scans. The count resets when a window
+returns, and is pruned as processes exit.
+
+The grace period is deliberate. Acting on a single scan means one bad title read
+closes and reopens the session, and one night is recorded as two. Ending a few
+seconds late is the better failure.
+
+### 2.5 Auxiliary binaries
+
+The engine-marker check applies to a directory. Every executable beside a Unity
+or Unreal build gets that signature. On a Hearthstone install, this made
+`Hearthstone Beta Launcher.exe` a tracked game beside the real game.
+
+`AUXILIARY_SUFFIXES` matches a suffix of the executable stem. It does not match
+a substring. A game whose name contains one of these words is not affected.
+`agent47.exe` ends in "47", not in "agent".
+
+```
+launcher, updater, update, patcher, setup, installer, uninstall,
+crashhandler, crashreporter, crashpad, errorreporter, helper,
+service, services, daemon, server, config, settings, benchmark
 ```
 
-### 2.1b The stream picker uses the same database
+The check removes trailing architecture digits first. `LeagueCrashHandler64`
+becomes `leaguecrashhandler` and then matches.
 
-`enumerate_game_processes()` returns the **whole process table** by design — the
-database decides what is a game, not libmello. Any consumer that skips the
-`lookup_by_exe` step is therefore listing raw processes. The stream source picker
-did exactly that, and additionally truncated the enumeration buffer at 32
-entries, which cut the list off in *boot order*: System, smss, csrss, wininit,
-services, lsass, svchost. Games start last and never appeared at all.
+### 2.6 Primary game selection
 
-The picker now enumerates with a process-table-sized buffer and presents two
-tiers: database matches first, carrying the catalogue's display name, then any
-other process owning a visible window. The second tier matters — a game the
-database has never heard of (indie, beta, private build) stays streamable
-instead of vanishing from the picker. Windowless processes are dropped (they
-cannot be captured) as is Mello's own process. Within each tier the foreground
-process leads, then alphabetical, so the list does not reshuffle between
-openings the way process-table order does.
+`pick_primary` selects the game to publish to presence. A fullscreen or
+foreground process wins over a background process.
 
-### 2.2 Primary Game Selection
+### 2.7 Restart recovery
 
-When multiple games are running simultaneously (rare but possible), pick the one with the most recent start time. If start times are unavailable, prefer the game whose process was created most recently.
+`session_store.rs` stores sessions that are in progress. A client restart then
+keeps them. A stored session resumes only when both the pid and `started_at_ms`
+match. The OS reuses a pid, so the pid alone is not sufficient.
 
-```rust
-fn pick_primary_game(db: &GameDatabase, processes: &[GameProcess]) -> Option<ActiveGame> {
-    // Filter to processes that match the game DB
-    let mut matches: Vec<ActiveGame> = processes
-        .iter()
-        .filter_map(|p| db.lookup_by_exe(&p.exe).map(|entry| ActiveGame {
-            game_id: entry.id.clone(),
-            game_name: entry.name.clone(),
-            exe: p.exe.clone(),
-            pid: p.pid,
-            started_at: now_ms(),
-        }))
-        .collect();
+### 2.8 Unresolved telemetry
 
-    // Prefer fullscreen games (likely the "active" one)
-    matches.sort_by(|a, b| {
-        let a_fs = processes.iter().find(|p| p.pid == a.pid).map_or(false, |p| p.is_fullscreen);
-        let b_fs = processes.iter().find(|p| p.pid == b.pid).map_or(false, |p| p.is_fullscreen);
-        b_fs.cmp(&a_fs)
-    });
+`unresolved.rs` counts each unresolved executable one time per run. Section 3.4
+covers what the counts are for.
 
-    matches.into_iter().next()
-}
-```
-
-### 2.3 Platform-Specific Process Enumeration
-
-Spec 14 defines the libmello C++ side for Windows. The C API surface:
-
-```c
-// Already in libmello C API (spec 14, section 4.6)
-typedef struct {
-    uint32_t    pid;
-    const char* name;           // Game display name
-    const char* exe;            // Executable filename
-    bool        is_fullscreen;
-} mello_game_process;
-
-uint32_t mello_enumerate_game_processes(mello_game_process* out, uint32_t max_count);
-```
-
-**macOS:** Use `NSWorkspace.runningApplications` to list processes, match against game DB by bundle identifier or executable name.
-
-**Linux:** Read `/proc/*/comm` or `/proc/*/exe` symlinks, match against game DB.
-
-These platform backends are behind the same C API. The detection loop in mello-core is platform-agnostic.
+`folder_of` splits on both separators. It does not use `std::path`, which treats
+a backslash as a separator on Windows only. There are two reasons. A macOS build
+must parse a path that was recorded on Windows. Steam also reports its own root
+with forward slashes.
 
 ---
 
-## 3. Game Database
+## 3. Catalogue and Resolution Sources
 
-### 3.1 Schema
+### 3.1 Bundled artifacts
 
-Bundled as `assets/games.json` (replaces the simpler version from spec 14):
+`scripts/build_catalogue.py` builds these files from IGDB data dumps. The
+installer ships them. IGDB prefers dump consumption over live API calls. The
+live API allows 4 requests per second and 8 concurrent connections, which is too
+slow for runtime resolution.
 
-```json
-[
-    {
-        "id": "counter-strike-2",
-        "igdb_id": 131800,
-        "name": "Counter-Strike 2",
-        "short_name": "CS2",
-        "exe": [
-            "cs2.exe",
-            "csgo.exe"
-        ],
-        "icon_url": "https://images.igdb.com/igdb/image/upload/t_logo_med/cs2.png",
-        "cover_url": "https://images.igdb.com/igdb/image/upload/t_cover_big/co5vst.png",
-        "color": "#DE9B35",
-        "category": "fps"
-    },
-    {
-        "id": "valorant",
-        "igdb_id": 126459,
-        "name": "Valorant",
-        "short_name": "Valorant",
-        "exe": [
-            "VALORANT-Win64-Shipping.exe"
-        ],
-        "icon_url": "https://images.igdb.com/igdb/image/upload/t_logo_med/valorant.png",
-        "cover_url": "https://images.igdb.com/igdb/image/upload/t_cover_big/co2mvt.png",
-        "color": "#FF4655",
-        "category": "fps"
-    },
-    {
-        "id": "league-of-legends",
-        "igdb_id": 115,
-        "name": "League of Legends",
-        "short_name": "League",
-        "exe": [
-            "League of Legends.exe",
-            "LeagueClient.exe"
-        ],
-        "icon_url": "https://images.igdb.com/igdb/image/upload/t_logo_med/lol.png",
-        "cover_url": "https://images.igdb.com/igdb/image/upload/t_cover_big/co49wj.png",
-        "color": "#C8AA6E",
-        "category": "moba"
-    }
-]
-```
+| Artifact | Magic | Size | Contents |
+|---|---|---|---|
+| `client/assets/catalogue/head.bin` | `MHD2` | 154 KB | 2,000 game records, 66 curated executables, 64 KB string blob |
+| `client/assets/catalogue/appid_index.bin` | `MAI2` | 538 KB | 137,688 Steam appid to IGDB id pairs, delta and varint encoded |
 
-### 3.2 Field Reference
+`head.bin` holds the most-played games, not every released title. The library
+scan reaches the remaining titles.
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `id` | string | Yes | Stable identifier, IGDB slug when available |
-| `igdb_id` | number | No | IGDB game ID for future API enrichment |
-| `name` | string | Yes | Full display name |
-| `short_name` | string | Yes | Abbreviated name for tight UI spaces (sidebar pills, bottom bar) |
-| `exe` | string[] | Yes | Executable filenames to match (case-insensitive) |
-| `icon_url` | string | No | Square icon/logo URL (cached locally on first load) |
-| `cover_url` | string | No | Cover art URL (cached locally on first load) |
-| `color` | string | No | Brand color hex for UI accents (game badge background) |
-| `category` | string | No | Genre tag: `fps`, `moba`, `br`, `mmo`, `rpg`, `racing`, `sports`, `sandbox`, `strategy`, `other` |
+`catalogue.rs` supplies `lookup_exe`, `by_game_id`, `by_name` and `get`.
+`AppIdIndex::bundled()` decodes the varint pairs.
 
-### 3.3 Lookup
+The build filters games with a denylist of non-launchable IGDB types. It does
+not use an allowlist of `game_type = "Main Game"`. The allowlist removed
+Minecraft (Port), Resident Evil 2 (Remake) and Half-Life 2: Episode Two
+(Standalone Expansion). The denylist recovered 9,538 games.
 
-```rust
-// mello-core/src/game_db.rs
+### 3.2 Curated executable table
 
-use std::collections::HashMap;
+File: `scripts/exe_mappings.json`. It holds 54 games and 66 executables.
 
-#[derive(Debug, Clone, serde::Deserialize)]
-pub struct GameEntry {
-    pub id: String,
-    pub igdb_id: Option<u64>,
-    pub name: String,
-    pub short_name: String,
-    pub exe: Vec<String>,
-    pub icon_url: Option<String>,
-    pub cover_url: Option<String>,
-    pub color: Option<String>,
-    pub category: Option<String>,
-}
+This table covers games that no library scan finds. Their launchers keep no
+machine-readable install index. Riot and Battle.net are examples.
 
-#[derive(Clone)]
-pub struct GameDatabase {
-    by_exe: HashMap<String, GameEntry>, // lowercase exe -> entry
-}
+| Game | Executable | State |
+|---|---|---|
+| Valorant | `VALORANT-Win64-Shipping.exe` | Verified against a real install |
+| League of Legends | `League of Legends.exe` | Verified against a real install |
+| Hearthstone | `Hearthstone.exe` | Verified against a real install |
+| World of Warcraft, Diablo IV, Overwatch 2, PUBG, War Thunder, Roblox, HoYoPlay set | various | Not verified |
 
-impl GameDatabase {
-    pub fn load_bundled() -> Self {
-        let json = include_str!("../assets/games.json");
-        let entries: Vec<GameEntry> = serde_json::from_str(json).expect("invalid games.json");
-        let mut by_exe = HashMap::new();
-        for entry in &entries {
-            for exe in &entry.exe {
-                by_exe.insert(exe.to_lowercase(), entry.clone());
-            }
-        }
-        GameDatabase { by_exe }
-    }
+An incorrect name in this table is a bug. It is the most probable cause of a
+"my game is not detected" report.
 
-    pub fn lookup_by_exe(&self, exe: &str) -> Option<&GameEntry> {
-        self.by_exe.get(&exe.to_lowercase())
-    }
-}
-```
+### 3.3 Installed library scan
 
-### 3.4 Database Seeding (Development)
+File: `mello-core/src/library.rs`. `LibraryIndex::scan()` reads each launcher.
+It resolves an entry by the longest path prefix. A game installed inside another
+game's directory wins over the parent directory.
 
-During development, seed `games.json` with the top 20 games by calling the IGDB API:
+| Source | Mechanism |
+|---|---|
+| Steam | `libraryfolders.vdf`, then each `appmanifest_*.acf` |
+| Epic | `.item` JSON manifests |
+| GOG | Registry keys |
 
-```
-POST https://api.igdb.com/v4/games
-fields name, slug, cover.url, category;
-where platforms = (6) & total_rating_count > 100;
-sort total_rating_count desc;
-limit 20;
-```
+`game_id` has the form `<prefix>-<external_id>`. The id stays stable across a
+launcher reinstall and across a library move to another disk.
 
-Map executable names manually for the initial set. The full IGDB database dump (available on request from IGDB/Twitch) will replace this for production, with an automated pipeline to extract exe mappings from known game metadata.
+The scan handles two conditions that occur on real machines.
 
-### 3.5 Image Caching
+| Condition | Handling |
+|---|---|
+| Duplicate libraries. `libraryfolders.vdf` and the registry spell the Steam root differently, for example `c:/program files (x86)/steam` against `C:\Program Files (x86)\Steam`. This produced 16 entries for 8 games | `dedup_paths` normalises the paths |
+| Non-games. Steamworks Common Redistributables is an installed appid, but not a game | `NON_GAME_APPIDS` excludes it |
 
-Icon and cover images are downloaded on first access and cached to disk:
+### 3.4 Curation from observed misses
 
-```
-~/.mello/cache/games/icons/{game_id}.png
-~/.mello/cache/games/covers/{game_id}.png
-```
+`unresolved.rs` counts each executable that looked like a game and that no rung
+could name, keeps the top 200, and ships in the diagnostic capture bundle
+(spec 15 section 8). Entries for `scripts/exe_mappings.json` come from there.
 
-Cache is populated lazily (when a game first appears in the sidebar or bottom bar). Stale entries are refreshed when the game DB updates via the auto-updater.
+Two designs were considered and rejected:
 
-### 3.6 Database Updates
+| Rejected | Reason |
+|---|---|
+| Crowd-sourced mappings submitted by users | A moderation burden, and one person could mislabel a game for every crew. An unnamed game already gets a session, a stable id, a name and an icon; only the display name varies |
+| An in-client "is this a game?" prompt | Its gate accepted any foreground window, so it fired on the Riot Client and on ordinary desktop applications. It also earned little when correct, for the same reason |
 
-The game DB ships with the client binary. Updates are delivered through the existing auto-updater (spec 07). The DB file is versioned:
-
-```json
-{
-    "version": 1,
-    "updated_at": "2026-04-01T00:00:00Z",
-    "games": [ ... ]
-}
-```
-
-The auto-updater can push a new `games.json` without requiring a full client update. The client checks the version number on startup and hot-reloads if the file has changed.
+Removing the prompt removed the only writer to the user-confirmed rung, so
+`user_games.rs`, `Command::SetCustomGames`, `Command::AddCustomGame` and the
+`custom_games` client setting went with it.
 
 ---
 
 ## 4. Game State Manager
 
-The game state manager in mello-core consumes `GameEvent`s from the scanner and orchestrates all downstream effects.
+The game state manager in `mello-core/src/game_state.rs` consumes `GameEvent`s
+from the sensor and drives presence, the UI and the `game_session_end` RPC.
+
+### 4.1 Sessions are keyed by game, not by process
 
 ```rust
-// mello-core/src/game_state.rs
-
 pub struct GameStateManager {
-    current_game: Option<ActiveGame>,
-    session_start: Option<i64>,
-}
-
-impl GameStateManager {
-    pub fn handle_event(&mut self, event: GameEvent, ctx: &AppContext) {
-        match event {
-            GameEvent::Started(game) => {
-                self.current_game = Some(game.clone());
-                self.session_start = Some(now_ms());
-
-                // 1. Update presence
-                ctx.presence.update_activity(Activity::Playing {
-                    game_name: game.game_name.clone(),
-                    game_id: game.game_id.clone(),
-                    started_at: game.started_at,
-                });
-
-                // 2. Update bottom bar UI
-                ctx.ui.show_now_playing(&game);
-            }
-
-            GameEvent::Stopped(game) => {
-                let duration_min = self.session_start
-                    .map(|s| ((now_ms() - s) / 60_000) as u32)
-                    .unwrap_or(0);
-
-                self.current_game = None;
-                self.session_start = None;
-
-                // 1. Clear presence game activity
-                ctx.presence.clear_game_activity();
-
-                // 2. Report game session to backend (feeds event ledger)
-                if duration_min >= 2 {
-                    ctx.backend.call_rpc("game_session_end", GameSessionEndRequest {
-                        crew_id: ctx.active_crew_id(),
-                        game_name: game.game_name.clone(),
-                        duration_min,
-                    });
-                }
-
-                // 3. Trigger post-game UI flow
-                if duration_min >= 5 {
-                    ctx.ui.show_post_game(&game, duration_min);
-                }
-            }
-        }
-    }
+    /// Every open session, keyed by `game_id`.
+    sessions: HashMap<String, GameSession>,
+    /// The game the user is looking at; drives presence and the bar.
+    primary: Option<String>,
 }
 ```
 
-### 4.1 Minimum Session Thresholds
+Two games can run at once, so this is a map rather than one slot. The key is the
+`game_id` and not a pid, for a reason that is easy to get wrong:
+
+**The sensor promises one `Started` and one `Stopped` per `game_id`. It does not
+promise the same pid in both.** `coalesce_starts` and `coalesce_stops` collapse a
+title's processes to a single representative, and `upgrade_representative` swaps
+which process holds that role whenever a better one appears — silently, with no
+event. Matching a stop on its pid dropped the event, and NOW PLAYING never
+cleared.
+
+For the same reason `GameEvent::PrimaryChanged` carries a `game_id`, not a pid.
+Outside the scan loop a pid is not a stable handle for a game.
+
+Do not re-implement process coalescing here. The sensor owns it. An earlier
+attempt held a set of live pids in this struct, which duplicated
+`coalesce_stops` and disagreed with it.
+
+### 4.2 Minimum Session Thresholds
 
 | Threshold | Value | Purpose |
 |-----------|-------|---------|
@@ -525,160 +435,11 @@ The crew state (spec 11, section 2.2) gains a new field in the aggregated state:
 
 ---
 
-## 6. Crew Sidebar Game List
-
-The crew sidebar game list (as shown in the mockups) combines two data sources:
-
-### 6.1 Data Sources
-
-| Source | Data | Purpose |
-|--------|------|---------|
-| Crew state `active_games` (live) | Who is playing what right now | Green dots, player count, "live" indicator |
-| Event ledger `game_session` events (persistent) | Who played what in the last 7 days | Persistent game entries even when no one is online |
-
-### 6.2 Merged View
-
-```rust
-pub struct SidebarGameEntry {
-    pub game_id: String,
-    pub game_name: String,
-    pub short_name: String,
-    pub color: Option<String>,
-    pub icon_url: Option<String>,
-    pub live_players: Vec<PlayerInfo>,    // From presence (playing right now)
-    pub recent_players: Vec<PlayerInfo>,  // From ledger (played in last 7 days, not live)
-    pub is_live: bool,                    // At least one live player
-}
-```
-
-The client builds this merged list:
-
-```
-1. Start with live games from crew state active_games
-2. Merge in recent games from catch-up data (event ledger)
-3. Deduplicate by game_id
-4. Sort: live games first (sorted by player count desc), then recent games (sorted by most recent session)
-5. Cap at 8 entries to prevent sidebar bloat
-```
-
-### 6.3 Sidebar Item Rendering
-
-Each game entry in the sidebar shows:
-
-```
-┌──────────────────────────────────────────────────┐
-│  [CS]  Counter-Strike 2                     3    │
-│        ●● ●                                      │
-└──────────────────────────────────────────────────┘
-```
-
-- Game badge: `short_name` on a colored background (`color` field)
-- Full game name
-- Player dots: green for live players, gray for recent-only players
-- Player count (total unique across live + recent)
-
-When a game has only recent players (no one live), the entry appears dimmed:
-
-```
-┌──────────────────────────────────────────────────┐
-│  [R]   Rocket League                        1    │
-│        ○                                         │
-└──────────────────────────────────────────────────┘
-```
-
-### 6.4 Recent Games Data
-
-The client already has catch-up data from the `crew_catchup` RPC (spec 16). To build the recent games list without an extra RPC, extend the catch-up response:
-
-```json
-{
-    "crew_id": "crew_xyz",
-    "catchup_text": "...",
-    "top_events": [ ... ],
-    "has_events": true,
-    "recent_games": [
-        {
-            "game_id": "counter-strike-2",
-            "game_name": "Counter-Strike 2",
-            "short_name": "CS2",
-            "color": "#DE9B35",
-            "player_ids": ["user_a", "user_b", "user_c"],
-            "player_names": ["ash", "koji", "nav"],
-            "session_count": 7,
-            "last_played": 1711400000000
-        }
-    ]
-}
-```
-
-The server computes `recent_games` by aggregating `game_session` events from the ledger, grouped by game, over the 7-day window.
-
-Alternatively, expose a dedicated RPC:
-
-```go
-initializer.RegisterRpc("crew_recent_games", CrewRecentGamesRPC)
-```
-
-This is called once when the sidebar loads (or when the user switches to a crew), not polled. Live updates come through presence.
-
 ---
 
-## 7. Bottom Bar UI
+## 6. Backend RPCs
 
-### 7.1 Now Playing State
-
-When a game is detected, the bottom bar center content shows:
-
-```
-[game badge]  NOW PLAYING          [STREAM]
-              Counter-Strike 2
-```
-
-The game badge uses the `short_name` and `color` from the game DB. The STREAM button is shown only if the user has streaming capability (hardware encoder detected).
-
-### 7.2 Post-Game State
-
-When the game exits (and session was >= 5 minutes), the center content morphs:
-
-```
-[game badge]  How'd it go?   [trophy] [skull] [star]
-```
-
-This triggers the post-game flow defined in spec 16:
-- Trophy tap: posts a `moment` with sentiment `win`
-- Skull tap: posts a `moment` with sentiment `loss`
-- Star tap: shows text input, posts a `moment` with sentiment `highlight`
-- 30-second timeout: dismiss, log `game_session_end` only
-
-### 7.3 Idle State
-
-When no game is detected:
-
-```
-[avatar]  Navigator    [voice controls]
-          #001
-```
-
-Standard bottom bar with no game info.
-
-### 7.4 State Transitions
-
-```
-Idle ──[game detected]──▶ Now Playing
-                              │
-                        [game exits, >= 5 min]
-                              │
-                              ▼
-                         Post-Game ──[tap or 30s timeout]──▶ Idle
-
-Now Playing ──[game exits, < 5 min]──▶ Idle (skip post-game)
-```
-
----
-
-## 8. Backend RPCs
-
-### 8.1 Game Session End (Spec 16, already defined)
+### 6.1 Game Session End (Spec 16, already defined)
 
 ```go
 // game_session_end RPC — already in crew_events.go (spec 16)
@@ -687,7 +448,7 @@ Now Playing ──[game exits, < 5 min]──▶ Idle (skip post-game)
 
 No new backend RPCs needed for game sensing. The existing `presence_update`, `crew_catchup`, and `game_session_end` RPCs handle everything.
 
-### 8.2 Crew Recent Games (new, optional)
+### 6.2 Crew Recent Games (new, optional)
 
 If the catch-up response extension (section 6.4) is insufficient, add a dedicated RPC:
 
@@ -740,206 +501,102 @@ func CrewRecentGamesRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, 
 
 ---
 
-## 9. Slint UI Components
-
-### 9.1 Game Badge
-
-Reusable component for the game icon in sidebar and bottom bar:
-
-```slint
-component GameBadge inherits Rectangle {
-    in property <string> short_name;
-    in property <color> bg_color: #2a2a30;
-    in property <length> size: 32px;
-
-    width: size;
-    height: size;
-    border-radius: 8px;
-    background: bg_color;
-
-    Text {
-        text: short_name;
-        font-size: 11px;
-        font-weight: 700;
-        color: white;
-        horizontal-alignment: center;
-        vertical-alignment: center;
-    }
-}
-```
-
-### 9.2 Now Playing Bar Segment
-
-```slint
-component NowPlayingBar inherits HorizontalLayout {
-    in property <string> game_name;
-    in property <string> game_short_name;
-    in property <color> game_color;
-    in property <bool> can_stream;
-
-    spacing: 10px;
-    alignment: center;
-
-    GameBadge {
-        short_name: game_short_name;
-        bg_color: game_color;
-    }
-
-    VerticalLayout {
-        spacing: 2px;
-        Text {
-            text: "NOW PLAYING";
-            font-size: 10px;
-            color: #666666;
-            letter-spacing: 1px;
-        }
-        Text {
-            text: game_name;
-            font-size: 13px;
-            color: #cccccc;
-            font-weight: 500;
-        }
-    }
-
-    if can_stream: Rectangle {
-        width: 80px;
-        height: 28px;
-        border-radius: 8px;
-        background: #e8364e;
-
-        Text {
-            text: "STREAM";
-            font-size: 11px;
-            font-weight: 700;
-            color: white;
-            horizontal-alignment: center;
-            vertical-alignment: center;
-        }
-
-        TouchArea {
-            clicked => { /* start stream flow */ }
-        }
-    }
-}
-```
-
-### 9.3 Sidebar Game Entry
-
-```slint
-component SidebarGameEntry inherits Rectangle {
-    in property <string> game_name;
-    in property <string> game_short_name;
-    in property <color> game_color;
-    in property <int> live_count;
-    in property <int> recent_count;
-    in property <bool> is_live;
-
-    height: 56px;
-    background: transparent;
-    border-radius: 8px;
-
-    HorizontalLayout {
-        padding: 8px;
-        spacing: 10px;
-        alignment: start;
-
-        GameBadge {
-            short_name: game_short_name;
-            bg_color: is_live ? game_color : #2a2a30;
-            size: 40px;
-        }
-
-        VerticalLayout {
-            alignment: center;
-            spacing: 4px;
-
-            Text {
-                text: game_name;
-                font-size: 13px;
-                color: is_live ? #e8e8e8 : #666666;
-                font-weight: 500;
-            }
-
-            HorizontalLayout {
-                spacing: 4px;
-                // Player dots rendered here
-            }
-        }
-
-        // Player count on the right
-        Text {
-            text: live_count + recent_count;
-            font-size: 13px;
-            color: is_live ? #e8364e : #666666;
-            vertical-alignment: center;
-        }
-    }
-}
-```
+---
 
 ---
 
-## 10. File Structure
+## 7. File Structure
 
-### 10.1 New Files
+### 7.1 Sensing modules
 
 ```
 mello-core/src/
-├── game_sensing.rs      # Process scanner loop, GameEvent enum
-├── game_db.rs           # GameDatabase, GameEntry, lookup
-└── game_state.rs        # GameStateManager, event handling, UI/presence coordination
+├── game_sensing.rs     # Scan loop, resolution ladder, GameEvent enum
+├── catalogue.rs        # head.bin / appid_index.bin readers
+├── library.rs          # Steam / Epic / GOG install scan
+├── unresolved.rs       # Unresolved-executable count, feeds curation
+├── session_store.rs    # Restart recovery for sessions in progress
+├── game_state.rs       # GameStateManager, UI and presence coordination
+└── presence.rs         # GamePresence, activity types
 
-assets/
-└── games.json           # Bundled game database (expanded from spec 14)
+client/assets/catalogue/
+├── head.bin            # 2,000 games, 66 curated executables
+└── appid_index.bin     # 137,688 Steam appid to IGDB pairs
 
-client/ui/components/
-├── game_badge.slint     # Reusable game icon badge
-├── now_playing.slint    # Bottom bar now-playing segment
-├── post_game.slint      # Bottom bar post-game prompt
-└── sidebar_game.slint   # Sidebar game entry row
+scripts/
+├── build_catalogue.py  # IGDB dump to binary artifacts
+└── exe_mappings.json   # Curated executable table, 54 games
 ```
 
-### 10.2 Modified Files
+`game_db.rs` and `assets/games.json` are deleted. Any document that refers to
+them is out of date.
 
-| File | Change |
-|------|--------|
-| `backend/.../presence.go` | Add `game` field to presence struct, handle in `presence_update` |
-| `backend/.../crew_state.go` | Compute `active_games` from member presences |
-| `backend/.../crew_events.go` | Add `recent_games` to catch-up response (or new RPC) |
-| `mello-core/src/presence.rs` | Add `GamePresence` struct, compound activity support |
-| `client/ui/bottom_bar.slint` | Integrate now-playing and post-game states |
-| `client/ui/sidebar.slint` | Add game list section |
+### 7.2 Backend
 
----
-
-## 11. Testing
-
-### 11.1 Unit Tests
-
-- Game DB lookup: case-insensitive exe matching, multiple exe variants
-- Primary game selection: fullscreen preference, single game, no games
-- Session thresholds: sessions under 2 min not reported, under 5 min skip post-game
-- Sidebar merge: live + recent deduplication, sort order, cap at 8
-
-### 11.2 Integration Tests
-
-- Start game process, verify presence updates within 10 seconds
-- Stop game process, verify `game_session_end` RPC called
-- Verify crew state `active_games` reflects member game presence
-- Verify catch-up `recent_games` aggregates correctly from ledger
-
-### 11.3 Manual Test Cases
-
-- [ ] Launch a game from `games.json`, verify NOW PLAYING appears in bottom bar
-- [ ] Close game after 5+ minutes, verify post-game card appears
-- [ ] Tap win/loss/highlight, verify moment appears in event ledger
-- [ ] Ignore post-game card, verify it dismisses after 30 seconds
-- [ ] Close game after < 2 minutes, verify no ledger event
-- [ ] Close game after 2-5 minutes, verify ledger event but no post-game card
-- [ ] Join voice while game is running, verify presence shows both voice + game
-- [ ] Check crew sidebar shows game with live players highlighted
-- [ ] Check crew sidebar shows recent games (no one playing) as dimmed
+| File | Role |
+|---|---|
+| `backend/.../presence.go` | `game` field on presence, handled in `presence_update` |
+| `backend/.../crew_state.go` | Computes `active_games` from member presences |
+| `backend/.../game_icons.go` | Icon upload and serve, `gameIconMaxBytes` |
 
 ---
 
-*This spec covers game detection, the game database, presence integration, crew sidebar game list, and bottom bar UI. For the video capture pipeline, see [14-VIDEO-PIPELINE.md](./14-VIDEO-PIPELINE.md). For the event ledger and post-game moments, see [16-CREW-EVENT-LEDGER.md](./16-CREW-EVENT-LEDGER.md). For presence and crew state, see [11-PRESENCE-CREW-STATE.md](./11-PRESENCE-CREW-STATE.md).*
+## 8. Testing
+
+### 8.1 Unit tests
+
+- Resolution ladder: each rung alone, and the order of precedence.
+- Identity reconciliation: an Epic game resolves to its catalogue id; an
+  ambiguous name keeps the launcher id; an uncatalogued game keeps it too.
+- `drop_windowless`: the drop after the grace period, the reset when a window
+  returns, and the pruning of counts for dead pids.
+- Session keying: a stop matches its game when the pid differs from the start.
+- `is_auxiliary_binary`: suffix match, architecture-digit removal.
+- `looks_like_a_game`: denylists, engine markers, Unreal shipping binaries.
+- Primary selection: fullscreen preference, one game, no games.
+- `dedup_paths`: mixed separators and mixed case.
+- `folder_of`: a Windows path parses on every platform.
+- Restart recovery: a resume needs both the pid and `started_at_ms`.
+- Session thresholds: below 2 minutes records nothing. Below 5 minutes records
+  the session but shows no post-game prompt.
+
+### 8.2 Verified on real hardware
+
+The sensor ran against live processes on a Windows machine. The results follow.
+
+| Process | Result |
+|---|---|
+| `VALORANT-Win64-Shipping.exe` | Resolved to Valorant |
+| `VALORANT.exe` (0.2 MB stub, runs for the full session) | Ignored. It has no window title |
+| `League of Legends.exe` | Resolved to League of Legends during a match |
+| `LeagueClient.exe`, `LeagueClientUx.exe`, 6 × `LeagueClientUxRender.exe` | Ignored, while the match ran |
+| `LeagueCrashHandler64.exe` | Ignored. The architecture-digit removal matched it |
+| `Riot Client.exe`, `RiotClientServices.exe` | Ignored |
+| `vgc.exe`, `vgtray.exe` (Vanguard) | Ignored |
+| `EpicWebHelper.exe` | Ignored |
+| `FortniteClient-Win64-Shipping.exe` | Resolved to Fortnite, one session per launch |
+| `FortniteClient-Win64-Shipping_EAC_EOS.exe`, `FortniteLauncher.exe`, `FortniteBootstrapper.exe` | Ignored |
+| `RobloxPlayerBeta.exe` | Resolved while played. Session ends once it drops to the tray |
+| `RobloxCrashHandler.exe` | Ignored |
+
+A full Steam library move to another disk re-resolved every game. It produced no
+duplicates and no orphans.
+
+Confirmed by playing each title and reading the client log: Fortnite, Roblox,
+Hearthstone, Night Stones (Steam), Valorant and League of Legends each open one
+session and close it on quit.
+
+### 8.3 Not verified
+
+- macOS: no part of the macOS sensing path has run on a Mac.
+- The executable names marked "Not verified" in section 3.2.
+
+---
+
+*This spec defines game detection, the game catalogue and presence integration.
+For the appearance of game surfaces, see [22-GAME-UI-SURFACES.md](./22-GAME-UI-SURFACES.md).
+For the sessions that reach a feed, see [19-FEED-CURATION-PERSONAL-STATS.md](./19-FEED-CURATION-PERSONAL-STATS.md).
+For in-game outcomes, see [18-GAME-TELEMETRY.md](./18-GAME-TELEMETRY.md).
+For the event ledger and post-game moments, see [16-CREW-EVENT-LEDGER.md](./16-CREW-EVENT-LEDGER.md).
+For presence and crew state, see [11-PRESENCE-CREW-STATE.md](./11-PRESENCE-CREW-STATE.md).
+For the video capture pipeline, see [14-VIDEO-PIPELINE.md](./14-VIDEO-PIPELINE.md).*

@@ -1612,3 +1612,149 @@ fn hero_clip_play_ring_sits_left_of_wave_band() {
         "play ring right edge ({ring_right_edge}) must be <= wave band left edge ({wave_left_edge})"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Feed — game session cards (GAME-SURFACING C1)
+// ---------------------------------------------------------------------------
+
+fn logged_in_app(h: &mut Harness) {
+    h.emit(Event::LoggedIn {
+        user: sample_user(),
+    });
+    h.emit(Event::CrewsLoaded {
+        crews: sample_crews(1),
+    });
+    assert_eq!(visible_screens(h), vec![Screen::App]);
+}
+
+fn zero_telemetry_game_session_feed() -> mello_core::crew_events::FeedResponse {
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+    mello_core::crew_events::FeedResponse {
+        crew_id: "crew-0".into(),
+        sections: vec![mello_core::crew_events::FeedSection {
+            id: "this_week".into(),
+            entries: vec![mello_core::crew_events::FeedEntry {
+                id: "gs-t0-1".into(),
+                entry_type: "session".into(),
+                role: "quiet".into(),
+                size: "sm".into(),
+                ts,
+                data: serde_json::json!({
+                    "game_name": "Valorant",
+                    "player_names": ["ostkatt"],
+                    "player_ids": ["user-a"],
+                    "duration_min": 252,
+                    "wins": 0,
+                    "losses": 0,
+                    "draws": 0,
+                }),
+            }],
+        }],
+    }
+}
+
+/// Zero-telemetry sessions must render the compact card shell, not empty W/L
+/// stat slots.
+#[test]
+fn zero_telemetry_game_session_renders_compact_card_without_record() {
+    let mut h = Harness::new();
+    logged_in_app(&mut h);
+
+    h.emit(Event::FeedLoaded {
+        response: zero_telemetry_game_session_feed(),
+    });
+
+    let cards: Vec<_> =
+        ElementHandle::find_by_element_type_name(h.app(), "GameSessionCard").collect();
+    assert!(
+        !cards.is_empty(),
+        "expected a GameSessionCard in the feed for a zero-telemetry game session"
+    );
+
+    let compact: Vec<_> =
+        ElementHandle::find_by_element_type_name(h.app(), "GameSessionCompactBody").collect();
+    assert!(
+        !compact.is_empty(),
+        "zero-telemetry sessions must use the compact body, not the rich record layout"
+    );
+
+    let record: Vec<_> =
+        ElementHandle::find_by_element_type_name(h.app(), "GameSessionRecordPanel").collect();
+    assert!(
+        record.is_empty(),
+        "zero-telemetry sessions must not render W/L record stat slots"
+    );
+}
+
+fn game_rollup_feed() -> mello_core::crew_events::FeedResponse {
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+    mello_core::crew_events::FeedResponse {
+        crew_id: "crew-0".into(),
+        sections: vec![mello_core::crew_events::FeedSection {
+            id: "this_week".into(),
+            entries: vec![mello_core::crew_events::FeedEntry {
+                id: "game_rollup".into(),
+                entry_type: "rollup".into(),
+                role: "standard".into(),
+                size: "md".into(),
+                ts,
+                data: serde_json::json!({
+                    "session_count": 5,
+                    "total_min": 720,
+                    "lines": [
+                        {
+                            "player_name": "ostkatt",
+                            "game_name": "Valorant",
+                            "total_min": 300,
+                            "sessions": 2
+                        },
+                        {
+                            "player_name": "bob",
+                            "game_name": "Minecraft",
+                            "total_min": 240,
+                            "sessions": 1
+                        },
+                        {
+                            "player_name": "kim",
+                            "game_name": "Counter-Strike 2",
+                            "total_min": 180,
+                            "sessions": 1
+                        }
+                    ]
+                }),
+            }],
+        }],
+    }
+}
+
+/// Pruned routine play renders as a crew play rollup card with per-actor lines.
+#[test]
+fn game_rollup_renders_card_with_lines() {
+    let mut h = Harness::new();
+    logged_in_app(&mut h);
+
+    h.emit(Event::FeedLoaded {
+        response: game_rollup_feed(),
+    });
+
+    let cards: Vec<_> =
+        ElementHandle::find_by_element_type_name(h.app(), "GameRollupCard").collect();
+    assert!(
+        !cards.is_empty(),
+        "expected a GameRollupCard in the feed for a rollup entry"
+    );
+
+    let lines: Vec<_> =
+        ElementHandle::find_by_element_type_name(h.app(), "GameRollupLineRow").collect();
+    assert_eq!(
+        lines.len(),
+        3,
+        "rollup card should render one line row per actor"
+    );
+}

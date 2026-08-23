@@ -77,11 +77,23 @@ type GameSessionData struct {
 	GameName string `json:"game_name"`
 	// Stable games.json id (e.g. "counter-strike-2"); empty on legacy events.
 	// The client uses it for the bundled game icon.
-	GameID      string   `json:"game_id,omitempty"`
-	GameIGDBID  int      `json:"game_igdb_id"`
+	GameID string `json:"game_id,omitempty"`
+	// IGDB id when the catalogue resolved the game. Lets surfaces fetch cover
+	// art and lets a game be recognised across launchers. 0 when unresolved —
+	// a Steam-discovered or provisionally-tracked game is still a real
+	// session, it just has no IGDB number yet.
+	GameIGDBID int `json:"game_igdb_id"`
+	// Foreground minutes, where DurationMin is wall time. A game left open
+	// overnight has honest wall time and near-zero active time, and only the
+	// surface can decide which number to show.
+	ActiveMin   int      `json:"active_min,omitempty"`
 	PlayerIDs   []string `json:"player_ids"`
 	PlayerNames []string `json:"player_names"`
-	DurationMin int      `json:"duration_min"`
+	// Minutes the actor overlapped each PlayerIDs entry (index-aligned). Index 0
+	// is the actor's own clamped session duration. Co-play copy must use these
+	// values, never the actor's DurationMin.
+	PlayerOverlapMin []int `json:"player_overlap_min,omitempty"`
+	DurationMin      int   `json:"duration_min"`
 	// Telemetry-derived outcome fields (spec 18). Omitted for games without a
 	// telemetry adapter. StreakAfter is the privacy bridge: the actor's signed
 	// streak (from the private user_game_stats store) copied into this public event.
@@ -697,6 +709,8 @@ type GameSessionEndRequest struct {
 	GameName    string `json:"game_name"`
 	GameID      string `json:"game_id"` // stable id, key for per-user stats; empty if no telemetry
 	DurationMin int    `json:"duration_min"`
+	ActiveMin   int    `json:"active_min"`
+	IgdbID      int    `json:"igdb_id"`
 	Wins        int    `json:"wins"`
 	Losses      int    `json:"losses"`
 	Draws       int    `json:"draws"`
@@ -719,6 +733,38 @@ func clampSessionOutcome(n int) int {
 		return maxSessionOutcomes
 	}
 	return n
+}
+
+const maxSessionDurationMin = 1440 // 24h wall-clock cap
+
+// clampSessionDurationMin bounds client-reported wall minutes to [0, maxSessionDurationMin].
+func clampSessionDurationMin(n int) int {
+	if n < 0 {
+		return 0
+	}
+	if n > maxSessionDurationMin {
+		return maxSessionDurationMin
+	}
+	return n
+}
+
+// clampSessionActiveMin bounds foreground minutes to [0, durationMin].
+func clampSessionActiveMin(activeMin, durationMin int) int {
+	if activeMin < 0 {
+		return 0
+	}
+	if activeMin > durationMin {
+		return durationMin
+	}
+	return activeMin
+}
+
+// clampGameSessionDurations sanitises client-reported session lengths before
+// they feed co-play windows or ledger storage.
+func clampGameSessionDurations(durationMin, activeMin int) (int, int) {
+	durationMin = clampSessionDurationMin(durationMin)
+	activeMin = clampSessionActiveMin(activeMin, durationMin)
+	return durationMin, activeMin
 }
 
 const gameSessionDedupCollection = "game_session_dedup"
@@ -771,6 +817,7 @@ func GameSessionEndRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, n
 	req.Wins = clampSessionOutcome(req.Wins)
 	req.Losses = clampSessionOutcome(req.Losses)
 	req.Draws = clampSessionOutcome(req.Draws)
+	req.DurationMin, req.ActiveMin = clampGameSessionDurations(req.DurationMin, req.ActiveMin)
 
 	if !isCrewMember(ctx, nk, req.CrewID, userID) {
 		return "", runtime.NewError("not a crew member", 7)
@@ -791,13 +838,30 @@ func GameSessionEndRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, n
 
 	username := resolveUsername(ctx, nk, userID)
 
+	// Who else in the crew was in this game at the same time. Best-effort:
+	// enrichment, never a reason to lose the session.
+	ledger, _ := readLedger(ctx, nk, req.CrewID)
+	window := sessionWindow{
+		UserID:  userID,
+		GameID:  req.GameID,
+		StartMs: time.Now().UnixMilli() - int64(req.DurationMin)*60_000,
+		EndMs:   time.Now().UnixMilli(),
+	}
+	playerIDs, playerNames := []string{userID}, []string{username}
+	playerOverlapMin := []int{req.DurationMin}
+	if req.GameID != "" {
+		playerIDs, playerNames, playerOverlapMin = collectCoPlayers(ctx, logger, nk, req.CrewID, window, req.DurationMin, ledger)
+	}
+
 	data := GameSessionData{
-		GameName:    req.GameName,
-		GameID:      req.GameID,
-		GameIGDBID:  0,
-		PlayerIDs:   []string{userID},
-		PlayerNames: []string{username},
-		DurationMin: req.DurationMin,
+		GameName:         req.GameName,
+		GameID:           req.GameID,
+		GameIGDBID:       req.IgdbID,
+		ActiveMin:        req.ActiveMin,
+		PlayerIDs:        playerIDs,
+		PlayerNames:      playerNames,
+		PlayerOverlapMin: playerOverlapMin,
+		DurationMin:      req.DurationMin,
 	}
 	score := 10
 
@@ -810,16 +874,16 @@ func GameSessionEndRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, n
 		data.Verified = true
 	}
 
-	// Telemetry outcomes: update the actor's private per-game stats and bridge
-	// only the resulting streak into this public event. Decisive sessions score
-	// higher so heaters/skids surface in the catch-up card.
+	// Per-game stats: every session updates play time (T0); telemetry outcomes
+	// are folded in when present and only the resulting streak bridges into
+	// this public event.
 	streakAfter := 0
-	if req.GameID != "" && (req.Wins > 0 || req.Losses > 0 || req.Draws > 0) {
-		stats, result, err := UpdateUserGameStats(ctx, nk, userID, req.GameID, req.Wins, req.Losses, req.Draws)
+	if req.GameID != "" {
+		stats, result, err := UpdateUserGameStatsForSession(ctx, nk, userID, req.GameID, req.DurationMin, req.ActiveMin, req.Wins, req.Losses, req.Draws)
 		if err != nil {
-			// Non-fatal: still record the session, just without the streak.
+			// Non-fatal: still record the session, just without stats enrichment.
 			logger.Warn("user_game_stats update failed for %s/%s: %v", userID, req.GameID, err)
-		} else {
+		} else if req.Wins > 0 || req.Losses > 0 || req.Draws > 0 {
 			streakAfter = stats.CurrentStreak
 			data.Wins = req.Wins
 			data.Losses = req.Losses

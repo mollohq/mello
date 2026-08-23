@@ -545,6 +545,12 @@ typedef struct MelloGameProcess {
     /* Main window title (UTF-8); empty when the process has no visible window. */
     char     title[256];
     bool     is_foreground;
+    /* Process creation time, Unix epoch milliseconds; 0 when unavailable
+     * (permission denied, or the process exited between enumeration steps).
+     * This is when the *game* started, not when Mello noticed it — sessions
+     * must be dated from here so a game already running at client launch
+     * reports an honest duration. Appended field: existing offsets unchanged. */
+    int64_t  started_at_ms;
 } MelloGameProcess;
 
 /** List running processes matching the bundled game list. */

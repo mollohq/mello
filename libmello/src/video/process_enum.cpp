@@ -77,6 +77,31 @@ static bool window_is_fullscreen(HWND hwnd) {
            wr.right >= mi.rcMonitor.right && wr.bottom >= mi.rcMonitor.bottom;
 }
 
+/// Process creation time as Unix epoch milliseconds, or 0 when unavailable.
+///
+/// FILETIME counts 100ns intervals from 1601-01-01; the Unix epoch sits
+/// 11644473600 seconds later. Opening with PROCESS_QUERY_LIMITED_INFORMATION
+/// succeeds for normal user processes without elevation; protected and system
+/// processes fail, which is why callers must tolerate 0.
+static int64_t process_started_at_ms(uint32_t pid) {
+    HANDLE proc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+    if (!proc) return 0;
+    FILETIME created{}, exited{}, kernel{}, user{};
+    int64_t out = 0;
+    if (GetProcessTimes(proc, &created, &exited, &kernel, &user)) {
+        ULARGE_INTEGER t{};
+        t.LowPart  = created.dwLowDateTime;
+        t.HighPart = created.dwHighDateTime;
+        // Guard against a clock that predates the Unix epoch rather than
+        // wrapping into a huge negative timestamp.
+        if (t.QuadPart > 116444736000000000ULL) {
+            out = static_cast<int64_t>((t.QuadPart - 116444736000000000ULL) / 10000ULL);
+        }
+    }
+    CloseHandle(proc);
+    return out;
+}
+
 std::vector<GameProcess> enumerate_game_processes() {
     std::vector<GameProcess> result;
 
@@ -116,6 +141,7 @@ std::vector<GameProcess> enumerate_game_processes() {
             gp.exe  = exe_name;
             gp.is_fullscreen = false;
             gp.is_foreground = (fg_pid != 0 && gp.pid == fg_pid);
+            gp.started_at_ms = process_started_at_ms(gp.pid);
             if (auto it = window_by_pid.find(gp.pid); it != window_by_pid.end()) {
                 const VisibleWindow* w = it->second;
                 gp.window_title  = w->title;

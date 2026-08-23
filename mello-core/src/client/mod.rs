@@ -19,7 +19,6 @@ use tokio::sync::mpsc;
 use crate::command::Command;
 use crate::config::Config;
 use crate::events::Event;
-use crate::game_db::GameDatabase;
 use crate::game_sensing::GameSensor;
 use crate::game_state::GameStateManager;
 use crate::giphy::GiphyClient;
@@ -107,14 +106,11 @@ pub struct Client {
     /// Last voice channel we joined (for reconnection)
     last_voice_channel: Option<String>,
     game_state: GameStateManager,
+    /// Last game published to presence, so a 15s scan tick that changes
+    /// nothing does not re-broadcast to every crew member.
+    published_game: Option<crate::presence::GamePresence>,
     #[allow(dead_code)]
     game_sensor: Option<GameSensor>,
-    /// Shared with the sensor thread so user-confirmed custom games apply
-    /// live without a restart.
-    game_db: Arc<std::sync::RwLock<GameDatabase>>,
-    /// User-confirmed games outside the bundled DB (settings-persisted client
-    /// side; the DB overlay is rebuilt from this list on every change).
-    custom_games: Vec<crate::game_db::CustomGame>,
     /// Keeps the telemetry listener thread alive for the client's lifetime.
     #[allow(dead_code)]
     telemetry_listener: Option<TelemetryListener>,
@@ -122,6 +118,8 @@ pub struct Client {
     /// Game integrations the user switched off (Games settings page). Disabled
     /// ids skip config installs and active transports.
     disabled_integrations: std::collections::HashSet<String>,
+    /// When false, sensed play stays local — no crew presence or session-end RPCs.
+    share_game_activity: bool,
     enable_game_sensor: bool,
     emit_process_stats: bool,
     game_event_rx:
@@ -184,20 +182,10 @@ impl Client {
         self.disabled_integrations = ids.into_iter().collect();
     }
 
-    /// Seed user-confirmed custom games from persisted client settings.
-    /// Must be called before `run()` so the sensor recognizes them from the
-    /// first scan.
-    pub fn set_custom_games(&mut self, games: Vec<crate::game_db::CustomGame>) {
-        self.custom_games = games;
-        self.rebuild_game_db();
-    }
-
-    /// Rebuild the shared DB as bundled + custom overlay. Cheap (25 bundled
-    /// entries); runs only on seed/confirm, never in the scan loop.
-    fn rebuild_game_db(&self) {
-        let mut db = GameDatabase::load_bundled();
-        db.add_user_entries(&self.custom_games);
-        *self.game_db.write().expect("game db lock poisoned") = db;
+    /// Seed activity-sharing consent from persisted client settings. Must be
+    /// called before `run()` so the first presence sync honors it.
+    pub fn set_share_game_activity(&mut self, enabled: bool) {
+        self.share_game_activity = enabled;
     }
 
     /// Shared frame lifecycle state used by stream_tick() and UI compositor.
@@ -250,12 +238,12 @@ impl Client {
             sfu_voice_reconnect: None,
             last_voice_channel: None,
             game_state: GameStateManager::new(),
+            published_game: None,
             game_sensor: None,
-            game_db: Arc::new(std::sync::RwLock::new(GameDatabase::load_bundled())),
-            custom_games: Vec::new(),
             telemetry_listener: None,
             telemetry_registry: Arc::new(AdapterRegistry::with_defaults()),
             disabled_integrations: std::collections::HashSet::new(),
+            share_game_activity: true,
             enable_game_sensor,
             emit_process_stats,
             game_event_rx: std::sync::Mutex::new(None),
@@ -301,23 +289,6 @@ impl Client {
 
         loop {
             for game_event in self.drain_game_events() {
-                // Unknown-game candidates go straight to the UI for the
-                // "track it?" confirm prompt; they never touch game state,
-                // presence, or the backend unless the user confirms.
-                if let crate::game_sensing::GameEvent::UnknownCandidate {
-                    exe,
-                    path,
-                    window_title,
-                } = game_event
-                {
-                    let _ = self.event_tx.send(Event::UnknownGameCandidate {
-                        exe,
-                        path,
-                        window_title,
-                    });
-                    continue;
-                }
-
                 // Telemetry adapter side-effects on game start/stop: install the
                 // game's config on first detection, and reset adapter state on exit.
                 match &game_event {
@@ -339,7 +310,7 @@ impl Client {
                             });
                         }
                     }
-                    crate::game_sensing::GameEvent::Stopped(game) => {
+                    crate::game_sensing::GameEvent::Stopped { game, .. } => {
                         if let Some(adapter) = self.telemetry_registry.get(&game.game_id) {
                             adapter.reset();
                             // reset() may flush a final result (file-based
@@ -352,26 +323,32 @@ impl Client {
                             }
                         }
                     }
-                    // Forwarded to the UI above; unreachable here.
-                    crate::game_sensing::GameEvent::UnknownCandidate { .. } => {}
+                    // Focus changes carry no telemetry side-effects; the state
+                    // manager handles them below.
+                    crate::game_sensing::GameEvent::PrimaryChanged { .. } => {}
                 }
 
                 let (ui_events, session_end) = self.game_state.handle_event(game_event);
                 for ev in ui_events {
                     let _ = self.event_tx.send(ev);
                 }
+                self.sync_game_presence().await;
                 if let Some(summary) = session_end {
-                    if let Some(crew_id) = self.nakama.active_crew_id().map(String::from) {
-                        self.handle_game_session_end(
-                            &crew_id,
-                            &summary.game_name,
-                            &summary.game_id,
-                            summary.duration_min,
-                            summary.wins,
-                            summary.losses,
-                            summary.draws,
-                        )
-                        .await;
+                    if game_services::should_emit_game_session_end(self.share_game_activity) {
+                        if let Some(crew_id) = self.nakama.active_crew_id().map(String::from) {
+                            self.handle_game_session_end(
+                                &crew_id,
+                                &summary.game_name,
+                                &summary.game_id,
+                                summary.duration_min,
+                                summary.active_min,
+                                summary.igdb_id,
+                                summary.wins,
+                                summary.losses,
+                                summary.draws,
+                            )
+                            .await;
+                        }
                     }
                 }
             }
@@ -1006,30 +983,22 @@ impl Client {
                 losses,
                 draws,
             } => {
-                self.handle_game_session_end(
-                    &crew_id,
-                    &game_name,
-                    &game_id,
-                    duration_min,
-                    wins,
-                    losses,
-                    draws,
-                )
-                .await;
-            }
-            Command::SetCustomGames { games } => {
-                self.custom_games = games;
-                self.rebuild_game_db();
-            }
-            Command::AddCustomGame { game } => {
-                log::info!(
-                    "[game-sensor] custom game confirmed: {} ({} -> {})",
-                    game.name,
-                    game.exe,
-                    game.id
-                );
-                self.custom_games.push(game);
-                self.rebuild_game_db();
+                if game_services::should_emit_game_session_end(self.share_game_activity) {
+                    self.handle_game_session_end(
+                        &crew_id,
+                        &game_name,
+                        &game_id,
+                        duration_min,
+                        // A manually-reported session (the post-game card) carries
+                        // no foreground accounting or catalogue identity.
+                        0,
+                        0,
+                        wins,
+                        losses,
+                        draws,
+                    )
+                    .await;
+                }
             }
             Command::UploadGameIcon { game_id, png } => {
                 use base64::Engine as _;
@@ -1070,22 +1039,27 @@ impl Client {
                 let registry = self.telemetry_registry.clone();
                 let event_tx = self.event_tx.clone();
                 tokio::task::spawn_blocking(move || {
-                    let game_db = GameDatabase::load_bundled();
+                    let head = crate::catalogue::Head::bundled();
                     let games = registry
                         .all()
                         .iter()
                         .map(|adapter| {
                             let info = adapter.info();
-                            // Badge styling comes from the game DB entry so the
+                            // Badge styling comes from the catalogue so the
                             // settings rows match the now-playing card.
-                            let db_entry = game_db.lookup_by_id(adapter.game_id());
+                            let db_entry =
+                                head.as_ref().and_then(|h| h.by_game_id(adapter.game_id()));
                             crate::events::GameIntegrationStatus {
                                 game_id: adapter.game_id().to_string(),
                                 name: info.game_name.to_string(),
                                 short_name: db_entry
-                                    .map(|e| e.short_name.clone())
+                                    .as_ref()
+                                    .map(|e| e.short_name.to_string())
                                     .unwrap_or_else(|| info.game_name.to_string()),
-                                color: db_entry.and_then(|e| e.color.clone()).unwrap_or_default(),
+                                // Accent colours left the catalogue when the
+                                // exe's own icon became the primary art; the
+                                // badge is now a last resort.
+                                color: String::new(),
                                 installed: adapter.detect_install(),
                                 writes_files: info.writes_files,
                                 note: info.note.to_string(),
@@ -1100,6 +1074,14 @@ impl Client {
             Command::SetGameIntegrations { disabled } => {
                 log::info!("[telemetry] disabled integrations set to {disabled:?}");
                 self.disabled_integrations = disabled.into_iter().collect();
+            }
+            Command::SetShareGameActivity { enabled } => {
+                let changed = self.share_game_activity != enabled;
+                self.share_game_activity = enabled;
+                log::info!("[game-sharing] share_game_activity = {enabled}");
+                if changed {
+                    self.sync_game_presence().await;
+                }
             }
             Command::RiotLink { riot_id, region } => {
                 match self.nakama.riot_link(&riot_id, &region).await {

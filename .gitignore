@@ -72,3 +72,11 @@ client-dev.sh
 client-prod.sh
 client-dev.ps1
 client-prod.ps1
+
+# Game catalogue build (scripts/build_catalogue.py)
+scripts/igdb_credentials.json
+scripts/.catalogue_work/
+# head.bin and appid_index.bin are both committed — they are compiled into the
+# binary via include_bytes!. Delta encoding keeps the index at ~537KB, which is
+# cheap enough to ship that every Steam game resolves offline from first launch
+# rather than waiting on a download path.

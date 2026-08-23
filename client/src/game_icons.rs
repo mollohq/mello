@@ -3,6 +3,8 @@
 //! flow for custom games. Crew sharing (upload/fetch) layers on top via
 //! `Command::UploadGameIcon` / the icon-fetch glue.
 
+use slint::ComponentHandle;
+
 use crate::app_context::AppContext;
 
 /// Resolve a runtime icon for a game id: memory cache first, then the disk
@@ -48,6 +50,53 @@ pub fn resolve_or_fetch_icon(ctx: &AppContext, game_id: &str) -> Option<slint::I
     None
 }
 
+/// Make sure a detected game has art, extracting the executable's own icon if
+/// we have not already cached one.
+///
+/// Rung 1 of the icon ladder (assets §8.2). Runs for *every* detected game
+/// rather than only user-confirmed ones, which is what lets an indie title the
+/// catalogue has never heard of look exactly as good as Counter-Strike.
+/// Cheap and idempotent: a cached id returns immediately.
+pub fn ensure_icon(ctx: &AppContext, game_id: &str, exe_path: &str) {
+    if game_id.is_empty() || exe_path.is_empty() {
+        return;
+    }
+    if ctx.game_icon_cache.borrow().contains_key(game_id)
+        || crate::platform::exe_icon::cached_icon_path(game_id).is_some_and(|p| p.exists())
+    {
+        return;
+    }
+    // A shared runtime's icon is the runtime's, not the game's — Java's coffee
+    // cup on a Minecraft card reads as a bug. The badge is the better answer.
+    if !crate::platform::exe_icon::icon_is_representative(exe_path) {
+        log::debug!("[game-icon] {game_id}: {exe_path} is a generic host, keeping the badge");
+        return;
+    }
+    extract_and_cache(
+        ctx.game_icon_cache.clone(),
+        ctx.cmd_tx.clone(),
+        ctx.rt.clone(),
+        ctx.app.as_weak(),
+        game_id.to_string(),
+        exe_path.to_string(),
+    );
+}
+
+/// Show the game's icon on the NOW PLAYING bar, if one is cached.
+///
+/// Called on detection and again when extraction finishes, because the first
+/// play of a game has no cached icon yet — the bar would otherwise keep the
+/// initials badge until the next launch.
+pub fn push_bar_icon(ctx: &AppContext, game_id: &str) {
+    match resolve_runtime_icon(ctx, game_id) {
+        Some(img) => {
+            ctx.app.set_game_runtime_icon(img);
+            ctx.app.set_game_has_runtime_icon(true);
+        }
+        None => ctx.app.set_game_has_runtime_icon(false),
+    }
+}
+
 /// Extract the exe's icon on a worker thread, write the PNG disk cache, then
 /// decode it into the memory cache on the UI thread. Runs on custom-game
 /// confirm; the crew upload is triggered from the same worker once the PNG
@@ -57,6 +106,7 @@ pub fn extract_and_cache(
     cache: std::rc::Rc<std::cell::RefCell<std::collections::HashMap<String, slint::Image>>>,
     cmd_tx: tokio::sync::mpsc::UnboundedSender<mello_core::Command>,
     rt: tokio::runtime::Handle,
+    app: slint::Weak<crate::MainWindow>,
     game_id: String,
     exe_path: String,
 ) {
@@ -91,8 +141,14 @@ pub fn extract_and_cache(
         move || match rx.try_recv() {
             Ok((rgba, w, h)) => {
                 let img = crate::avatar::rgba_to_image(&rgba, w, h);
-                cache.borrow_mut().insert(game_id.clone(), img);
+                cache.borrow_mut().insert(game_id.clone(), img.clone());
                 log::info!("[game-icon] runtime icon ready for {game_id}");
+                // Show it now rather than on the next launch: extraction
+                // finishes a moment after detection, and the bar is already up.
+                if let Some(app) = app.upgrade() {
+                    app.set_game_runtime_icon(img);
+                    app.set_game_has_runtime_icon(true);
+                }
                 keepalive.borrow_mut().take();
             }
             Err(std::sync::mpsc::TryRecvError::Disconnected) => {

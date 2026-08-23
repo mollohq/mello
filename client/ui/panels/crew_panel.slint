@@ -9,8 +9,9 @@ component VcMemberRow inherits Rectangle {
     in property <bool> deafened: false;
     in property <image> avatar;
     in property <bool> has-avatar: false;
+    in property <string> game-line: "";
 
-    height: 30px;
+    height: game-line != "" ? 40px : 30px;
     border-radius: 6px;
     background: transparent;
     border-width: 0px;
@@ -20,6 +21,7 @@ component VcMemberRow inherits Rectangle {
         spacing: 7px;
         padding-left: 8px;
         padding-right: 8px;
+        cross-axis-alignment: center;
 
         Rectangle {
             width: 20px;
@@ -29,7 +31,6 @@ component VcMemberRow inherits Rectangle {
             border-width: speaking ? 2px : 0px;
             border-color: speaking ? Theme.accent-green : transparent;
             clip: true;
-            y: (parent.height - self.height) / 2;
 
             if has-avatar: Image {
                 source: avatar;
@@ -49,14 +50,24 @@ component VcMemberRow inherits Rectangle {
             }
         }
 
-        Text {
-            text: name;
-            font-size: 12px;
-            color: speaking ? Theme.text-primary : Theme.text-dim;
-            font-weight: speaking ? 500 : 400;
+        VerticalLayout {
             horizontal-stretch: 1;
-            overflow: elide;
-            vertical-alignment: center;
+            spacing: 1px;
+
+            Text {
+                text: name;
+                font-size: 12px;
+                color: speaking ? Theme.text-primary : Theme.text-dim;
+                font-weight: speaking ? 500 : 400;
+                overflow: elide;
+            }
+
+            if game-line != "": Text {
+                text: game-line;
+                font-size: 10px;
+                color: Theme.text-sub;
+                overflow: elide;
+            }
         }
 
         Rectangle {
@@ -353,7 +364,7 @@ component CompactCrewCard inherits Rectangle {
 
             HorizontalLayout {
                 Text {
-                    text: "MOST PLAYED LAST WEEK";
+                    text: "IN GAME NOW";
                     font-size: 9px;
                     font-weight: 600;
                     color: Theme.skel-text;
@@ -809,6 +820,7 @@ component ActiveCrewCard inherits Rectangle {
                                 deafened: member.deafened;
                                 avatar: member.avatar;
                                 has-avatar: member.has-avatar;
+                                game-line: member.game-line;
                             }
                         }
 
@@ -1014,7 +1026,7 @@ export component Preview inherits CrewPanel {
     ];
     voice-channels: [
         { id: "vc1", name: "General", member-count: 3, active: true, members: [
-            { name: "ostkatt", initials: "os", speaking: true, muted: false, deafened: false },
+            { name: "ostkatt", initials: "os", speaking: true, muted: false, deafened: false, game-line: "Valorant · 1h 23m" },
             { name: "FaiL", initials: "Fa", speaking: false, muted: false, deafened: false },
             { name: "b0bben", initials: "b0", speaking: false, muted: false, deafened: false },
         ]},

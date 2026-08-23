@@ -218,6 +218,71 @@ pub struct VoiceUiCtx<'a> {
     pub cache: &'a std::collections::HashMap<String, slint::Image>,
     pub local_muted: bool,
     pub local_deafened: bool,
+    pub game_lines: &'a std::collections::HashMap<String, String>,
+}
+
+pub fn current_time_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64
+}
+
+/// Humanized elapsed play time for member rows: "3m", "47m", "1h 23m".
+pub fn format_elapsed_minutes(elapsed_ms: i64) -> String {
+    if elapsed_ms <= 0 {
+        return "1m".to_string();
+    }
+    let mins = ((elapsed_ms + 59_999) / 60_000).max(1);
+    if mins >= 60 {
+        format!("{}h {}m", mins / 60, mins % 60)
+    } else {
+        format!("{mins}m")
+    }
+}
+
+/// Sidebar game line: "Valorant · 1h 23m", or empty when not playing.
+pub fn format_game_line(game: &mello_core::presence::GamePresence, now_ms: i64) -> String {
+    if game.game_name.is_empty() {
+        return String::new();
+    }
+    let duration = game
+        .started_at
+        .is_empty()
+        .then(String::new)
+        .unwrap_or_else(|| {
+            mello_core::presence::from_rfc3339_ms(&game.started_at)
+                .map(|started_ms| format_elapsed_minutes(now_ms.saturating_sub(started_ms)))
+                .unwrap_or_default()
+        });
+    if duration.is_empty() {
+        game.game_name.clone()
+    } else {
+        format!("{} · {duration}", game.game_name)
+    }
+}
+
+pub fn game_line_from_presence(
+    game: Option<&mello_core::presence::GamePresence>,
+    now_ms: i64,
+) -> String {
+    game.filter(|g| !g.game_name.is_empty())
+        .map(|g| format_game_line(g, now_ms))
+        .unwrap_or_default()
+}
+
+pub fn game_lines_from_members(
+    members: &impl Model<Data = MemberData>,
+) -> std::collections::HashMap<String, String> {
+    let mut out = std::collections::HashMap::new();
+    for i in 0..members.row_count() {
+        if let Some(m) = members.row_data(i) {
+            if !m.game_line.is_empty() {
+                out.insert(m.id.to_string(), m.game_line.to_string());
+            }
+        }
+    }
+    out
 }
 
 pub fn voice_members_to_ui(
@@ -255,6 +320,12 @@ pub fn voice_members_to_ui(
                     m.deafened.unwrap_or(false)
                 },
                 joined_at: secs as i32,
+                game_line: ctx
+                    .game_lines
+                    .get(&m.user_id)
+                    .cloned()
+                    .unwrap_or_default()
+                    .into(),
             }
         })
         .collect();
@@ -389,6 +460,27 @@ pub fn set_voice_member_speaking(app: &MainWindow, member_id: &str, speaking: bo
     false
 }
 
+/// Update one voice-channel member's game line without rebuilding every channel model.
+pub fn set_voice_member_game_line(app: &MainWindow, member_id: &str, game_line: &str) -> bool {
+    let channels = app.get_voice_channels();
+    for i in 0..channels.row_count() {
+        let Some(ch) = channels.row_data(i) else {
+            continue;
+        };
+        let ch_members = ch.members;
+        for j in 0..ch_members.row_count() {
+            if let Some(mut m) = ch_members.row_data(j) {
+                if m.id == member_id && m.game_line.as_str() != game_line {
+                    m.game_line = game_line.into();
+                    ch_members.set_row_data(j, m);
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
 pub fn set_level_history(app: &MainWindow, hist: &DebugHistory) {
     macro_rules! set_lh {
         ($($i:literal),*) => {
@@ -405,4 +497,41 @@ pub fn set_level_history(app: &MainWindow, hist: &DebugHistory) {
         0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
         25, 26, 27, 28, 29
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mello_core::presence::GamePresence;
+
+    #[test]
+    fn game_line_empty_without_game() {
+        assert_eq!(game_line_from_presence(None, 1_700_000_000_000), "");
+        let empty_name = GamePresence {
+            game_name: String::new(),
+            game_id: "g1".into(),
+            started_at: mello_core::presence::to_rfc3339(1_700_000_000_000),
+        };
+        assert_eq!(
+            game_line_from_presence(Some(&empty_name), 1_700_000_000_000),
+            ""
+        );
+    }
+
+    #[test]
+    fn game_line_formats_name_and_elapsed() {
+        let now = 1_700_000_000_000i64;
+        let started = mello_core::presence::to_rfc3339(now - 83 * 60_000);
+        let game = GamePresence {
+            game_name: "Valorant".into(),
+            game_id: "valorant".into(),
+            started_at: started,
+        };
+        assert_eq!(format_game_line(&game, now), "Valorant · 1h 23m");
+    }
+
+    #[test]
+    fn format_elapsed_minutes_sub_hour() {
+        assert_eq!(format_elapsed_minutes(47 * 60_000), "47m");
+    }
 }

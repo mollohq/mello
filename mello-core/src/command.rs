@@ -417,16 +417,6 @@ pub enum Command {
         #[serde(default)]
         draws: u32,
     },
-    /// Replace the set of user-confirmed custom games (seeded from settings
-    /// before `run()`, like `SetGameIntegrations`).
-    SetCustomGames {
-        games: Vec<crate::game_db::CustomGame>,
-    },
-    /// Add one user-confirmed custom game (the "track it?" confirm flow).
-    /// Takes effect on the next sensor scan.
-    AddCustomGame {
-        game: crate::game_db::CustomGame,
-    },
     /// Share an exe-extracted game icon with the crew (raw PNG bytes;
     /// base64-encoded for the RPC). Best-effort; server keeps the first
     /// upload per game id.
@@ -452,6 +442,10 @@ pub enum Command {
     SetGameIntegrations {
         #[serde(default)]
         disabled: Vec<String>,
+    },
+    /// Toggle whether sensed play is shared with crews (presence + session-end).
+    SetShareGameActivity {
+        enabled: bool,
     },
     /// Link the user's Riot ID ("GameName#TAG") for server-verified results.
     RiotLink {

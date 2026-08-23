@@ -2,6 +2,10 @@ use serde::{Deserialize, Serialize};
 
 const APP_NAME: &str = "mello";
 
+fn default_share_game_activity() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -46,20 +50,9 @@ pub struct Settings {
     pub disabled_game_integrations: Vec<String>,
     /// User dismissed the post-game "connect Riot account" CTA; don't re-ask.
     pub riot_prompt_dismissed: bool,
-    /// User-confirmed games outside the bundled DB (the "track it?" flow).
-    pub custom_games: Vec<CustomGameSetting>,
-    /// Lowercase exe names the user marked "not a game"; never re-prompted.
-    pub unknown_game_dismissed: Vec<String>,
-}
-
-/// Persisted form of a user-confirmed custom game (mirrors
-/// `mello_core::game_db::CustomGame`).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CustomGameSetting {
-    pub id: String,
-    pub name: String,
-    pub short_name: String,
-    pub exe: String,
+    /// When false, sensed play is kept local — no crew presence or session-end RPCs.
+    #[serde(default = "default_share_game_activity")]
+    pub share_game_activity: bool,
 }
 
 impl Default for Settings {
@@ -100,8 +93,7 @@ impl Default for Settings {
             seen_session_ids: Vec::new(),
             disabled_game_integrations: Vec::new(),
             riot_prompt_dismissed: false,
-            custom_games: Vec::new(),
-            unknown_game_dismissed: Vec::new(),
+            share_game_activity: default_share_game_activity(),
         }
     }
 }
@@ -196,6 +188,14 @@ mod tests {
         assert!(s.capture_device_id.is_none());
         assert!(s.playback_device_id.is_none());
         assert!(s.dark_theme);
+        assert!(s.share_game_activity);
+    }
+
+    #[test]
+    fn settings_missing_share_game_activity_defaults_true() {
+        let partial = r#"dark_theme = false"#;
+        let decoded: Settings = toml::from_str(partial).expect("deserialize");
+        assert!(decoded.share_game_activity);
     }
 
     #[test]

@@ -6,7 +6,7 @@ use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
 use crate::app_context::AppContext;
 use crate::converters::make_initials;
-use crate::{FeedCardData, RecapAwardRow, RecapLbRow};
+use crate::{FeedCardData, GameRollupLine, RecapAwardRow, RecapLbRow};
 
 fn normalized_entry_data(raw: &serde_json::Value) -> serde_json::Value {
     if raw.is_object() {
@@ -54,6 +54,7 @@ fn derive_backend_type(feed_type: &str, data: &serde_json::Value) -> &'static st
                 "member_joined"
             }
         }
+        "rollup" => "game_rollup",
         _ => "",
     }
 }
@@ -418,10 +419,54 @@ fn humanize_duration(duration_secs: f64) -> String {
         return String::new();
     }
     let mins = ((duration_secs / 60.0).ceil() as u64).max(1);
+    humanize_duration_min(mins as i64)
+}
+
+fn humanize_duration_min(mins: i64) -> String {
+    if mins <= 0 {
+        return String::new();
+    }
+    let mins = mins.max(1);
     if mins >= 60 {
         format!("{}h {}m", mins / 60, mins % 60)
     } else {
         format!("{}m", mins)
+    }
+}
+
+fn extract_rollup_lines(data: &serde_json::Value) -> Vec<GameRollupLine> {
+    data.get("lines")
+        .and_then(|v| v.as_array())
+        .map(|rows| {
+            rows.iter()
+                .filter_map(|row| {
+                    let player_name = row.get("player_name")?.as_str()?;
+                    let game_name = row.get("game_name")?.as_str()?;
+                    let total_min = row.get("total_min").and_then(|v| v.as_i64()).unwrap_or(0);
+                    Some(GameRollupLine {
+                        player_name: player_name.into(),
+                        game_name: game_name.into(),
+                        duration_human: humanize_duration_min(total_min).into(),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Wall-time duration for game sessions; uses active time when wall time is
+/// inflated (left running overnight). GAME-SURFACING §4.
+fn game_session_duration_display(duration_min: i64, active_min: i64) -> String {
+    let use_active = active_min > 0 && active_min * 3 < duration_min;
+    let display_min = if use_active { active_min } else { duration_min };
+    let body = humanize_duration_min(display_min);
+    if body.is_empty() {
+        return body;
+    }
+    if use_active {
+        format!("~{body}")
+    } else {
+        body
     }
 }
 
@@ -430,37 +475,48 @@ fn humanize_duration(duration_secs: f64) -> String {
 /// name), then the user's confirmed custom games. Unresolved names keep an
 /// empty id/short-name so the badge falls back to the raw name.
 fn resolve_game_meta(
-    ctx: &AppContext,
+    _ctx: &AppContext,
     game_id: &str,
     game_name: &str,
 ) -> (String, String, Option<String>) {
     thread_local! {
-        static BUNDLED: std::cell::OnceCell<mello_core::game_db::GameDatabase> =
+        static CATALOGUE: std::cell::OnceCell<Option<mello_core::catalogue::Head>> =
             const { std::cell::OnceCell::new() };
     }
-    let bundled = BUNDLED.with(|db| {
-        let db = db.get_or_init(mello_core::game_db::GameDatabase::load_bundled);
+    let catalogued = CATALOGUE.with(|head| {
+        let head = head.get_or_init(mello_core::catalogue::Head::bundled);
+        let head = head.as_ref()?;
         let entry = if !game_id.is_empty() {
-            db.lookup_by_id(game_id)
-        } else if !game_name.is_empty() {
-            db.lookup_by_name(game_name)
+            head.by_game_id(game_id)
         } else {
             None
-        };
-        entry.map(|e| (e.id.clone(), e.short_name.clone(), e.color.clone()))
+        }
+        .or_else(|| {
+            // Stream sessions and pre-`game_id` events carry only a name.
+            (!game_name.is_empty())
+                .then(|| head.by_name(game_name))
+                .flatten()
+        })?;
+        Some((
+            entry.game_id.to_string(),
+            entry.short_name.to_string(),
+            None,
+        ))
     });
-    if let Some(resolved) = bundled {
+    if let Some(resolved) = catalogued {
         return resolved;
     }
-    let settings = ctx.settings.borrow();
-    let custom = settings.custom_games.iter().find(|g| {
-        (!game_id.is_empty() && g.id == game_id)
-            || (!game_name.is_empty() && g.name.eq_ignore_ascii_case(game_name))
-    });
-    match custom {
-        Some(g) => (g.id.clone(), g.short_name.clone(), None),
-        None => (game_id.to_string(), String::new(), None),
-    }
+
+    // Everything the catalogue has never heard of — a game discovered in an
+    // installed library, or one nothing could name — still needs a badge.
+    // Deriving from the display name is what stops those cards rendering a
+    // blank square, which is what happened while this fell back to "".
+    let short = if game_name.is_empty() {
+        String::new()
+    } else {
+        mello_core::library::derive_short_name(game_name)
+    };
+    (game_id.to_string(), short, None)
 }
 
 // Build a feed card from a server feed entry. card_type is the server-provided
@@ -618,10 +674,35 @@ fn build_feed_card(
     // Rich game-session card fields (spec 19 B2). Retype game sessions so the
     // feed dispatches them to the rich GameSessionCard instead of SessionCard.
     let is_game_session = backend_type == "game_session";
-    let card_type = if is_game_session {
+    let is_rollup = feed_type == "rollup";
+    let card_type = if is_rollup {
+        "rollup"
+    } else if is_game_session {
         "game-session"
     } else {
         feed_type
+    };
+    let (title, subtitle) = if is_rollup {
+        let session_count = data
+            .get("session_count")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
+        let total_min = data.get("total_min").and_then(|v| v.as_i64()).unwrap_or(0);
+        (
+            "CREW PLAY".to_string(),
+            format!(
+                "{} sessions · {}",
+                session_count,
+                humanize_duration_min(total_min)
+            ),
+        )
+    } else {
+        (title, subtitle)
+    };
+    let rollup_lines = if is_rollup {
+        extract_rollup_lines(&data)
+    } else {
+        Vec::new()
     };
     let game_verified = is_game_session
         && data
@@ -637,10 +718,15 @@ fn build_feed_card(
                 .get("streak_after")
                 .and_then(|v| v.as_i64())
                 .unwrap_or(0);
-            let record = if d > 0 {
-                format!("{}W\u{2013}{}L\u{2013}{}D", w, l, d)
+            let matches = w + l + d;
+            let record = if matches > 0 {
+                if d > 0 {
+                    format!("{}W\u{2013}{}L\u{2013}{}D", w, l, d)
+                } else {
+                    format!("{}W\u{2013}{}L", w, l)
+                }
             } else {
-                format!("{}W\u{2013}{}L", w, l)
+                String::new()
             };
             let streak_text = if streak > 0 {
                 format!("W{streak}")
@@ -655,13 +741,7 @@ fn build_feed_card(
             } else {
                 "—".to_string()
             };
-            (
-                record,
-                streak_text,
-                streak >= 0,
-                winrate,
-                (w + l + d) as i32,
-            )
+            (record, streak_text, streak >= 0, winrate, matches as i32)
         } else {
             (String::new(), String::new(), true, String::new(), 0)
         };
@@ -676,7 +756,12 @@ fn build_feed_card(
     } else {
         ""
     };
-    let duration_human = humanize_duration(duration_secs);
+    let duration_human = if is_game_session {
+        let active_min = data.get("active_min").and_then(|v| v.as_i64()).unwrap_or(0);
+        game_session_duration_display(duration_min as i64, active_min)
+    } else {
+        humanize_duration(duration_secs)
+    };
     let peak_count = data
         .get("peak_viewers")
         .or_else(|| data.get("peak_count"))
@@ -844,6 +929,7 @@ fn build_feed_card(
         game_winrate: game_winrate.into(),
         game_matches,
         game_verified,
+        rollup_lines: ModelRc::new(VecModel::from(rollup_lines)),
         snapshot_loading: feed_type == "session-preview" && has_snapshots,
         snapshot_poster_ready: false,
         snapshot_error: false,
@@ -1111,5 +1197,27 @@ pub fn handle(ctx: &AppContext, event: Event) {
             ctx.app.set_clip_duration_ms(0);
         }
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn game_session_duration_uses_wall_time_by_default() {
+        assert_eq!(game_session_duration_display(252, 0), "4h 12m");
+        assert_eq!(game_session_duration_display(45, 0), "45m");
+    }
+
+    #[test]
+    fn game_session_duration_uses_active_when_wall_inflated() {
+        assert_eq!(game_session_duration_display(252, 65), "~1h 5m");
+    }
+
+    #[test]
+    fn game_session_duration_keeps_wall_when_active_not_under_third() {
+        // active * 3 must be strictly less than wall time.
+        assert_eq!(game_session_duration_display(60, 20), "1h 0m");
     }
 }

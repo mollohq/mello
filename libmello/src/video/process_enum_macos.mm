@@ -85,6 +85,17 @@ std::vector<GameProcess> enumerate_game_processes() {
                             gp.name = game.name;
                             gp.exe  = app.localizedName ? [app.localizedName UTF8String] : game.name;
                             gp.is_fullscreen = false;
+                            gp.is_foreground = app.isActive;
+                            // launchDate is when the *game* started, which is
+                            // what sessions must be dated from. Nil for some
+                            // system-launched apps; 0 then, same as Windows.
+                            if (NSDate* launched = app.launchDate) {
+                                gp.started_at_ms =
+                                    (int64_t)([launched timeIntervalSince1970] * 1000.0);
+                            }
+                            if (NSURL* url = app.executableURL) {
+                                gp.path = [[url path] UTF8String];
+                            }
                             result.push_back(std::move(gp));
                             break;
                         }

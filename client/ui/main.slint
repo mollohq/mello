@@ -15,6 +15,7 @@ import {
     FeedCardData,
     RecapLbRow,
     RecapAwardRow,
+    GameRollupLine,
     StreamCardData,
     YouStripData,
     GameStatsCardData,
@@ -33,7 +34,6 @@ import { DebugPanel } from "panels/debug_panel.slint";
 import { Onboarding } from "panels/onboarding.slint";
 import { SignInPanel } from "panels/sign_in.slint";
 import { UpdateToast } from "panels/update_banner.slint";
-import { UnknownGamePrompt } from "panels/unknown_game_prompt.slint";
 import { ForceUpdateWindow } from "panels/force_update_dialog.slint";
 import { DiscoverPanel } from "panels/discover_panel.slint";
 import { JoinCrewModal } from "panels/join_crew_modal.slint";
@@ -43,7 +43,7 @@ import { RiotLinkModal } from "panels/riot_link_modal.slint";
 import { StatsProfileModal } from "panels/stats_profile_modal.slint";
 
 
-export { CrewData, MemberData, ChatMessageData, AudioDeviceData, VoiceChannelData, VoiceChannelMember, CaptureSourceData, DiscoverCrewData, SearchUserData, FeedCardData, RecapLbRow, RecapAwardRow, StreamCardData, YouStripData, GameStatsCardData, GameIntegrationData, Theme, VideoRect, ForceUpdateWindow }
+export { CrewData, MemberData, ChatMessageData, AudioDeviceData, VoiceChannelData, VoiceChannelMember, CaptureSourceData, DiscoverCrewData, SearchUserData, FeedCardData, RecapLbRow, RecapAwardRow, GameRollupLine, StreamCardData, YouStripData, GameStatsCardData, GameIntegrationData, Theme, VideoRect, ForceUpdateWindow }
 
 export component MainWindow inherits Window {
     title: "Mello";
@@ -74,6 +74,7 @@ export component MainWindow inherits Window {
     in property <string> link-error: "";
     in property <bool> is-returning-user: false;
     out property <string> onboarding-nickname;
+    in-out property <bool> onboarding-share-game-activity: true;
     in-out property <int> selected-avatar: -1;
     in-out property <bool> show-sign-in: false;
 
@@ -179,6 +180,11 @@ export component MainWindow inherits Window {
     in property <string> game-name: "";
     in property <string> game-short-name: "";
     in property <color> game-color: #2a2a30;
+    // The game's own icon, extracted from its executable. Set once extraction
+    // finishes, which is shortly after detection on first play and immediate
+    // on every play after that.
+    in property <image> game-runtime-icon;
+    in property <bool> game-has-runtime-icon: false;
     // Pre-filled post-game record from telemetry (e.g. "5W–3L · 2-win streak").
     in property <string> game-summary: "";
     in property <string> telemetry-hint: "";
@@ -228,10 +234,12 @@ export component MainWindow inherits Window {
     in-out property <bool> settings-hud-clip-toasts: true;
     // Games settings
     in property <[GameIntegrationData]> games-list: [];
+    in-out property <bool> settings-share-game-activity: true;
     in property <bool> riot-available: false;
     in property <bool> riot-linked: false;
     in property <string> riot-id: "";
     callback games-integration-toggled(string /* game-id */, bool);
+    callback setting-changed-share-game-activity(bool);
     callback riot-connect-clicked();
     callback riot-disconnect-clicked();
     // Riot link dialog
@@ -494,14 +502,10 @@ export component MainWindow inherits Window {
     in-out property <string> audio-device-warning: "";
 
     // --- Unknown-game "track it?" prompt ---
-    in property <bool> unknown-game-visible: false;
-    in property <string> unknown-game-name: "";
 
     // --- Callbacks ---
     callback update-now-clicked();
     callback update-dismiss-clicked();
-    callback unknown-game-track-clicked();
-    callback unknown-game-dismiss-clicked();
     callback login(string, string);
     callback logout();
     callback create-crew(/* name */ string, /* description */ string, /* is-private */ bool);
@@ -629,6 +633,7 @@ export component MainWindow inherits Window {
         selected-capture-name <=> root.selected-capture-name;
         selected-playback-name <=> root.selected-playback-name;
         nickname <=> root.onboarding-nickname;
+        share-game-activity <=> root.onboarding-share-game-activity;
         selected-avatar <=> root.selected-avatar;
         avatar-img-0: root.avatar-img-0;
         avatar-img-1: root.avatar-img-1;
@@ -939,6 +944,8 @@ export component MainWindow inherits Window {
                         game-name: root.game-name;
                         game-short-name: root.game-short-name;
                         game-color: root.game-color;
+                        game-runtime-icon: root.game-runtime-icon;
+                        game-has-runtime-icon: root.game-has-runtime-icon;
                         game-summary: root.game-summary;
                         telemetry-hint: root.telemetry-hint;
                         can-stream: root.can-stream;
@@ -1101,21 +1108,6 @@ export component MainWindow inherits Window {
         }
         dismiss-clicked => {
             root.update-dismiss-clicked();
-        }
-    }
-
-    // ===================== UNKNOWN GAME PROMPT =====================
-    if logged-in && (onboarding-step == 0 || onboarding-step > 3): UnknownGamePrompt {
-        width: min(420px, root.width - 32px);
-        x: root.width - self.width - 16px;
-        y: root.height - self.height - 76px; // above the control bar
-        show: root.unknown-game-visible;
-        game-name: root.unknown-game-name;
-        track-clicked => {
-            root.unknown-game-track-clicked();
-        }
-        dismiss-clicked => {
-            root.unknown-game-dismiss-clicked();
         }
     }
 
@@ -1491,12 +1483,17 @@ export component MainWindow inherits Window {
         settings-hud-clip-toasts <=> root.settings-hud-clip-toasts;
         // Games
         games-list: root.games-list;
+        settings-share-game-activity <=> root.settings-share-game-activity;
         riot-available: root.riot-available;
         riot-linked: root.riot-linked;
         riot-id: root.riot-id;
         games-integration-toggled(id, v) => {
             root.settings-show-saved = true;
             root.games-integration-toggled(id, v);
+        }
+        setting-changed-share-game-activity(v) => {
+            root.settings-show-saved = true;
+            root.setting-changed-share-game-activity(v);
         }
         riot-connect-clicked => {
             root.riot-dialog-error = "";

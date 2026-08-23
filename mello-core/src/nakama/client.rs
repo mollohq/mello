@@ -18,7 +18,7 @@ use crate::config::Config;
 use crate::crew::{Crew, Member};
 use crate::crew_state::CrewState;
 use crate::events::{ChatMessage, Event, User};
-use crate::presence::{Activity, PresenceStatus};
+use crate::presence::{Activity, GamePresence, PresenceStatus};
 use crate::{Error, Result};
 
 #[derive(Default)]
@@ -1221,6 +1221,9 @@ impl NakamaClient {
 
     // --- Presence RPCs ---
 
+    /// Set status and activity. An explicit `None` activity resets it to
+    /// "none" — this is the connect/logout path, which wants stale activity
+    /// from a previous session cleared.
     pub async fn presence_update(
         &self,
         status: &PresenceStatus,
@@ -1229,7 +1232,19 @@ impl NakamaClient {
         let payload = serde_json::json!({
             "status": status,
             "activity": activity,
+            "clear_activity": activity.is_none(),
         });
+        self.rpc("presence_update", &payload).await?;
+        Ok(())
+    }
+
+    /// Set or clear the orthogonal game field without touching status or
+    /// activity, so "playing CS2" can coexist with "in voice" (spec 17 §5.2).
+    pub async fn presence_set_game(&self, game: Option<&GamePresence>) -> Result<()> {
+        let payload = match game {
+            Some(game) => serde_json::json!({ "game": game }),
+            None => serde_json::json!({ "clear_game": true }),
+        };
         self.rpc("presence_update", &payload).await?;
         Ok(())
     }

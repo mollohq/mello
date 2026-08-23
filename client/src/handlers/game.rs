@@ -18,9 +18,11 @@ pub fn handle(ctx: &AppContext, event: Event) {
             game_name,
             short_name,
             color,
+            exe_path,
             ..
         } => {
             log::info!("[ui] game detected: {}", game_name);
+            let game_id_for_icon = game_id.clone();
             ctx.app.set_game_active(true);
             ctx.app.set_game_id(game_id.into());
             ctx.app.set_game_name(game_name.into());
@@ -33,6 +35,15 @@ pub fn handle(ctx: &AppContext, event: Event) {
             ctx.app.set_riot_cta_visible(false);
             ctx.app.set_can_stream(true);
             ctx.app.set_bar_state(1);
+            // The game's own icon is the primary art (assets §8.2): local,
+            // instant, and what the user already recognises from their
+            // taskbar. Every detected game gets one, not just custom-confirmed
+            // ones, which is what gives unresolved games first-class art.
+            crate::game_icons::ensure_icon(ctx, &game_id_for_icon, &exe_path);
+            // Already cached from an earlier session: show it immediately.
+            // A first-ever launch has nothing yet, and extract_and_cache
+            // pushes it in when extraction finishes a moment later.
+            crate::game_icons::push_bar_icon(ctx, &game_id_for_icon);
         }
         Event::GameEnded {
             game_id,
@@ -58,6 +69,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
         }
         Event::PostGameTimeout => {
             log::info!("[ui] post-game timeout");
+            ctx.app.set_game_has_runtime_icon(false);
             ctx.app.set_game_active(false);
             ctx.app.set_can_stream(false);
             ctx.app.set_game_summary("".into());
@@ -97,38 +109,6 @@ pub fn handle(ctx: &AppContext, event: Event) {
                     ctx.game_icon_cache.borrow_mut().insert(game_id, img);
                 }
             }
-        }
-        Event::UnknownGameCandidate {
-            exe,
-            path,
-            window_title,
-        } => {
-            // Permanently dismissed exes never re-prompt.
-            if ctx
-                .settings
-                .borrow()
-                .unknown_game_dismissed
-                .contains(&exe.to_lowercase())
-            {
-                return;
-            }
-            // One prompt at a time; a new candidate waits for the next run.
-            if ctx.pending_unknown_game.borrow().is_some() {
-                return;
-            }
-            let display_name = crate::platform::exe_meta::exe_display_name(&path)
-                .filter(|n| !n.trim().is_empty())
-                .unwrap_or_else(|| {
-                    if window_title.trim().is_empty() {
-                        crate::platform::exe_meta::filename_stem(&exe)
-                    } else {
-                        window_title.clone()
-                    }
-                });
-            log::info!("[ui] unknown game prompt: {display_name} ({exe})");
-            *ctx.pending_unknown_game.borrow_mut() = Some((exe, path, display_name.clone()));
-            ctx.app.set_unknown_game_name(display_name.into());
-            ctx.app.set_unknown_game_visible(true);
         }
         Event::SessionSummary {
             wins,

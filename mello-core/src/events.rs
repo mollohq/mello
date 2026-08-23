@@ -59,9 +59,10 @@ pub struct UserSearchResult {
 pub struct GameIntegrationStatus {
     pub game_id: String,
     pub name: String,
-    /// Badge text from games.json (e.g. "CS2"); falls back to the name.
+    /// Badge text from the catalogue (e.g. "CS2"); falls back to the name.
     pub short_name: String,
-    /// Badge hex color from games.json (e.g. "#DE9B35").
+    /// Badge hex colour; the exe icon is the primary art, so this is a
+    /// last-resort tint for the initials badge.
     pub color: String,
     /// Whether the game looks installed on this machine; None = unknown.
     pub installed: Option<bool>,
@@ -489,6 +490,10 @@ pub enum Event {
         short_name: String,
         color: String,
         pid: u32,
+        /// Full path to the running executable, so the UI can extract the
+        /// game's own icon (spec: assets §8.2 — the exe icon is what the user
+        /// already recognises, and it needs no catalogue entry or network).
+        exe_path: String,
     },
     /// A game process exited.
     GameEnded {
@@ -499,14 +504,6 @@ pub enum Event {
     },
     /// Post-game prompt timed out without interaction.
     PostGameTimeout,
-    /// A fullscreen/foreground process outside the game DB (debounced by the
-    /// sensor). Drives the one-tap "track it?" confirm prompt; nothing is
-    /// tracked or broadcast unless the user confirms.
-    UnknownGameCandidate {
-        exe: String,
-        path: String,
-        window_title: String,
-    },
     /// Telemetry for the running game needs a one-time user action (e.g.
     /// Dota 2's launch option). Shown as a hint in the "now playing" card.
     TelemetrySetupHint {

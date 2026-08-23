@@ -1,6 +1,6 @@
 import { Theme, MelloTextInput } from "../theme.slint";
 import { CrewData, AudioDeviceData } from "../types.slint";
-import { DeviceDropdown } from "settings_modal.slint";
+import { DeviceDropdown, SettingsToggle } from "settings_modal.slint";
 import { AvatarCard } from "../components/avatar_card.slint";
 
 // ─── Reusable components ───
@@ -434,6 +434,7 @@ export component Onboarding inherits Rectangle {
     min-width: 1024px;
     in-out property <string> nickname: "";
     in-out property <int> selected-avatar: -1;
+    in-out property <bool> share-game-activity: true;
 
     property <image> chosen-avatar-img:
         selected-avatar == 0 ? avatar-img-0 :
@@ -1211,6 +1212,26 @@ export component Onboarding inherits Rectangle {
                     InputField {
                         text <=> root.nickname;
                         placeholder: "Enter handle...";
+                    }
+
+                    Rectangle {
+                        height: 16px;
+                    }
+
+                    HorizontalLayout {
+                        spacing: 12px;
+                        cross-axis-alignment: center;
+
+                        SettingsToggle {
+                            checked <=> root.share-game-activity;
+                        }
+
+                        Text {
+                            text: "Show crew what I'm playing";
+                            font-size: 13px;
+                            color: Theme.text-secondary;
+                            vertical-alignment: center;
+                        }
                     }
                 }
 

@@ -63,6 +63,13 @@ export struct RecapAwardRow {
     detail: string,
 }
 
+// Per-actor row on the crew play rollup card (GAME-SURFACING B1).
+export struct GameRollupLine {
+    player-name: string,
+    game-name: string,
+    duration-human: string,
+}
+
 export struct FeedCardData {
     id: string,
     card-type: string,
@@ -134,6 +141,9 @@ export struct FeedCardData {
     // Result confirmed server-side against an official post-match API
     // (Riot match-v5/TFT) rather than client-reported telemetry.
     game-verified: bool,
+
+    // Crew play rollup (GAME-SURFACING B1).
+    rollup-lines: [GameRollupLine],
 }
 
 // One per-game card in the personal stats profile (spec 19 A2).
@@ -160,10 +170,12 @@ export struct YouStripData {
     game-name: string,
     short-name: string,
     game-color: color,
+    has-record: bool,       // true → W/L stats; false → weekly hours only
     streak-text: string,    // "W4" / "L2" / "—"
     streak-positive: bool,
     record-text: string,    // "12W 5L"
     win-rate-text: string,  // "62%"
+    weekly-time-text: string, // "4h 12m this week" (pre-formatted in Rust)
     recent-form: [string],  // each "W" | "L" | "D", newest last
 }
 
@@ -191,6 +203,7 @@ export struct MemberData {
     online: bool,
     speaking: bool,
     role: int,
+    game-line: string,
 }
 
 export struct ChatLinkData {
@@ -263,6 +276,7 @@ export struct VoiceChannelMember {
     muted: bool,
     deafened: bool,
     joined_at: int,
+    game-line: string,
 }
 
 export struct VoiceChannelData {
