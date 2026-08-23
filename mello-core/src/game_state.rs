@@ -10,16 +10,25 @@ pub const MIN_SESSION_POSTGAME_MIN: u32 = 5;
 /// which is why only one game could be tracked at a time.
 struct GameSession {
     game: ActiveGame,
+    /// Every live process resolving to this game.
+    ///
+    /// A modern title is several processes: Fortnite runs the game, an
+    /// EasyAntiCheat bootstrap, a launcher and a bootstrapper, and more than one
+    /// of them resolves. Keying sessions on pid opened a separate session per
+    /// process, so one launch reported two sessions — a real one and a 0-minute
+    /// companion that ended when anti-cheat stopped the path being readable.
+    pids: std::collections::HashSet<u32>,
     /// Match outcomes accumulated this session (from a telemetry adapter).
     matches: Vec<MatchResult>,
 }
 
 #[derive(Default)]
 pub struct GameStateManager {
-    /// Every open session, keyed by pid — two games can run at once.
-    sessions: std::collections::HashMap<u32, GameSession>,
-    /// The pid the user is actually looking at; drives presence and the bar.
-    primary: Option<u32>,
+    /// Every open session, keyed by `game_id` — two games can run at once, and
+    /// one game can run several processes.
+    sessions: std::collections::HashMap<String, GameSession>,
+    /// The game the user is actually looking at; drives presence and the bar.
+    primary: Option<String>,
 }
 
 impl GameStateManager {
@@ -43,6 +52,24 @@ impl GameStateManager {
                     game.started_at
                 );
                 let pid = game.pid;
+                let game_id = game.game_id.clone();
+                if let Some(open) = self.sessions.get_mut(&game.game_id) {
+                    // Another process of a game already open. Record the pid so
+                    // the session survives until the last one exits, and keep
+                    // the earliest start so duration covers the whole launch.
+                    open.pids.insert(pid);
+                    if game.started_at < open.game.started_at {
+                        open.game.started_at = game.started_at;
+                    }
+                    log::debug!(
+                        "[game-state] {} already open; tracking extra pid {} ({} live)",
+                        game.game_name,
+                        pid,
+                        open.pids.len()
+                    );
+                    return (events, session_end);
+                }
+
                 events.push(Event::GameDetected {
                     game_id: game.game_id.clone(),
                     game_name: game.game_name.clone(),
@@ -52,20 +79,26 @@ impl GameStateManager {
                     exe_path: game.exe_path.clone(),
                 });
                 self.sessions.insert(
-                    pid,
+                    game.game_id.clone(),
                     GameSession {
                         game,
+                        pids: std::collections::HashSet::from([pid]),
                         matches: Vec::new(),
                     },
                 );
                 // First game in becomes primary until the sensor says otherwise,
                 // so a single-game session never waits for a PrimaryChanged.
                 if self.primary.is_none() {
-                    self.primary = Some(pid);
+                    self.primary = Some(game_id);
                 }
             }
             GameEvent::Stopped { game, ended_at } => {
-                let Some(mut session) = self.sessions.remove(&game.pid) else {
+                let Some(game_id) = self
+                    .sessions
+                    .iter()
+                    .find(|(_, s)| s.pids.contains(&game.pid))
+                    .map(|(id, _)| id.clone())
+                else {
                     log::debug!(
                         "[game-state] stop for untracked pid {} ({}); ignoring",
                         game.pid,
@@ -73,8 +106,28 @@ impl GameStateManager {
                     );
                     return (events, session_end);
                 };
-                if self.primary == Some(game.pid) {
-                    self.primary = self.sessions.keys().copied().next();
+
+                // A companion process exiting is not the game exiting. Only the
+                // last live process of a game closes the session.
+                if let Some(open) = self.sessions.get_mut(&game_id) {
+                    open.pids.remove(&game.pid);
+                    open.game.foreground_ms = open.game.foreground_ms.max(game.foreground_ms);
+                    if !open.pids.is_empty() {
+                        log::debug!(
+                            "[game-state] {} pid {} exited; {} still live",
+                            open.game.game_name,
+                            game.pid,
+                            open.pids.len()
+                        );
+                        return (events, session_end);
+                    }
+                }
+
+                let Some(mut session) = self.sessions.remove(&game_id) else {
+                    return (events, session_end);
+                };
+                if self.primary.as_deref() == Some(game_id.as_str()) {
+                    self.primary = self.sessions.keys().next().cloned();
                 }
 
                 // The sensor accumulates foreground time on its scan loop and
@@ -122,7 +175,13 @@ impl GameStateManager {
                 });
             }
             GameEvent::PrimaryChanged { pid } => {
-                self.primary = pid;
+                // The sensor speaks in pids; sessions are keyed by game.
+                self.primary = pid.and_then(|pid| {
+                    self.sessions
+                        .iter()
+                        .find(|(_, s)| s.pids.contains(&pid))
+                        .map(|(id, _)| id.clone())
+                });
             }
             // Handled by the client loop (confirm prompt); never reaches here.
             GameEvent::UnknownCandidate { .. } => {}
@@ -179,7 +238,8 @@ impl GameStateManager {
     /// The game the user is looking at, for presence and the NOW PLAYING bar.
     pub fn current_game(&self) -> Option<&ActiveGame> {
         self.primary
-            .and_then(|pid| self.sessions.get(&pid))
+            .as_ref()
+            .and_then(|id| self.sessions.get(id))
             .map(|s| &s.game)
     }
 
@@ -372,6 +432,118 @@ mod tests {
         });
         assert!(matches!(&events[0], Event::GameEnded { duration_min, .. } if *duration_min == 0));
         assert!(summary.is_none());
+    }
+
+    // --- One game, several processes -------------------------------------
+    //
+    // Fortnite launches the game plus an EasyAntiCheat bootstrap, a launcher
+    // and a bootstrapper. More than one resolves to the same game.
+
+    #[test]
+    fn several_processes_of_one_game_share_a_session() {
+        let mut m = GameStateManager::new();
+        let anticheat = game_at(100, "fortnite", START);
+        let real_game = game_at(200, "fortnite", START + 8_000);
+
+        let (first, _) = m.handle_event(GameEvent::Started(anticheat));
+        let (second, _) = m.handle_event(GameEvent::Started(real_game.clone()));
+
+        assert_eq!(first.len(), 1, "first process announces the game");
+        assert!(
+            second.is_empty(),
+            "a second process of an open game must not announce it again, got {second:?}"
+        );
+        assert!(m.any_active());
+    }
+
+    #[test]
+    fn companion_process_exiting_leaves_the_session_open() {
+        let mut m = GameStateManager::new();
+        let anticheat = game_at(100, "fortnite", START);
+        let real_game = game_at(200, "fortnite", START + 8_000);
+        m.handle_event(GameEvent::Started(anticheat.clone()));
+        m.handle_event(GameEvent::Started(real_game.clone()));
+
+        // Anti-cheat hardens and its path stops being readable, so the sensor
+        // reports it as stopped a few seconds in. That is not the game exiting.
+        let (events, summary) = m.handle_event(stop_after(&anticheat, 0));
+        assert!(events.is_empty(), "companion exit must not end the game");
+        assert!(
+            summary.is_none(),
+            "companion exit must not record a session"
+        );
+        assert!(m.any_active());
+
+        let (events, summary) = m.handle_event(stop_after(&real_game, 7));
+        assert_eq!(events.len(), 1, "last process out ends the game");
+        let summary = summary.expect("real session recorded");
+        assert_eq!(summary.game_id, "fortnite");
+        assert!(!m.any_active());
+    }
+
+    #[test]
+    fn the_last_process_out_ends_the_session_whichever_it_is() {
+        // The same launch with the exit order reversed: the game window closes
+        // first and a companion lingers. Both pids must be held, so neither
+        // order ends the session early or leaves it stuck open.
+        let mut m = GameStateManager::new();
+        let anticheat = game_at(100, "fortnite", START);
+        let real_game = game_at(200, "fortnite", START + 8_000);
+        m.handle_event(GameEvent::Started(anticheat.clone()));
+        m.handle_event(GameEvent::Started(real_game.clone()));
+
+        let (events, summary) = m.handle_event(stop_after(&real_game, 7));
+        assert!(
+            events.is_empty(),
+            "the game exiting while a companion lives must not end the session"
+        );
+        assert!(summary.is_none());
+        assert!(m.any_active(), "session stays open for the surviving pid");
+
+        let (events, summary) = m.handle_event(stop_after(&anticheat, 8));
+        assert_eq!(events.len(), 1, "last process out ends the game");
+        assert!(summary.is_some(), "session recorded once, on the last exit");
+        assert!(!m.any_active());
+    }
+
+    #[test]
+    fn session_duration_spans_the_earliest_process() {
+        let mut m = GameStateManager::new();
+        // The launcher starts 90s before the game itself.
+        let launcher = game_at(100, "fortnite", START);
+        let real_game = game_at(200, "fortnite", START + 90_000);
+        m.handle_event(GameEvent::Started(launcher.clone()));
+        m.handle_event(GameEvent::Started(real_game.clone()));
+        m.handle_event(stop_after(&launcher, 0));
+
+        // 10 minutes after the *game* started is 11.5 minutes after the launcher.
+        let (_, summary) = m.handle_event(stop_after(&real_game, 10));
+        let summary = summary.expect("session recorded");
+        assert_eq!(
+            summary.duration_min, 11,
+            "duration must span the whole launch, not just the last process"
+        );
+    }
+
+    #[test]
+    fn same_game_id_from_two_processes_records_one_session() {
+        let mut m = GameStateManager::new();
+        let a = game_at(100, "fortnite", START);
+        let b = game_at(200, "fortnite", START + 8_000);
+        m.handle_event(GameEvent::Started(a.clone()));
+        m.handle_event(GameEvent::Started(b.clone()));
+        let (_, early) = m.handle_event(stop_after(&a, 0));
+        assert!(
+            early.is_none(),
+            "the first process out must not record a session while another lives"
+        );
+        let (_, first) = m.handle_event(stop_after(&b, 30));
+        assert!(first.is_some(), "one session for the launch");
+
+        // Nothing is left behind that could emit a second summary.
+        let (events, second) = m.handle_event(stop_after(&b, 30));
+        assert!(events.is_empty());
+        assert!(second.is_none(), "no phantom second session");
     }
 
     #[test]

@@ -995,9 +995,7 @@ fn resolve_process(
     if let Some(entry) = library.resolve(&p.path) {
         // A Steam appid maps to an IGDB id through the bundled index, which
         // upgrades a library-discovered game to full catalogue identity —
-        // cover art, and the same id whichever launcher it came from. Epic and
-        // GOG ids have no such mapping yet, and fall back to the launcher's own
-        // name, which is authoritative anyway.
+        // cover art, and the same id whichever launcher it came from.
         let igdb_id = (entry.source == crate::library::LibrarySource::Steam)
             .then(|| entry.external_id.parse::<u32>().ok())
             .flatten()
@@ -1012,6 +1010,23 @@ fn resolve_process(
                 igdb_id: Some(catalogued.igdb_id),
             });
         }
+
+        // Epic and GOG have no id map, but the launcher still names the game,
+        // and the catalogue can be searched by that name. Without this step one
+        // game answers to two ids: Fortnite resolves as `fortnite` through the
+        // curated exe table and as `epic-4fe75bbc…` through this scan, so its
+        // hours split across two `user_game_stats` keys depending on which of
+        // its processes was seen. The name is the only join available here.
+        if let Some(catalogued) = head.and_then(|h| h.by_name(&entry.name)) {
+            return Some(Matched {
+                game_id: catalogued.game_id.to_string(),
+                game_name: catalogued.name.to_string(),
+                short_name: catalogued.short_name.to_string(),
+                color: "#888888".to_string(),
+                igdb_id: Some(catalogued.igdb_id),
+            });
+        }
+
         return Some(Matched {
             game_id: entry.game_id(),
             game_name: entry.name.clone(),
@@ -1110,6 +1125,68 @@ mod tests {
 
     fn test_db() -> UserGames {
         UserGames::new()
+    }
+
+    // --- Identity reconciliation ------------------------------------------
+
+    /// A launcher-discovered game must answer to its catalogue id when the
+    /// catalogue knows the name.
+    ///
+    /// Fortnite runs several processes. The game itself resolves through the
+    /// curated exe table as `fortnite`. Its EasyAntiCheat companion sits under
+    /// the Epic install directory and used to resolve as
+    /// `epic-4fe75bbc5a674f4f9b356b5c90567da5`. One game answered to two ids,
+    /// so its hours split across two `user_game_stats` keys.
+    #[test]
+    fn epic_library_game_resolves_to_its_catalogue_id() {
+        let Some(head) = catalogue_head() else {
+            return; // bundled catalogue unavailable in this build
+        };
+        let Some(expected) = head.by_name("Fortnite") else {
+            return; // the head does not carry Fortnite; nothing to reconcile
+        };
+
+        let install_dir = std::path::PathBuf::from(r"D:\EpicGames\Fortnite");
+        let library = LibraryIndex::from_entries(vec![crate::library::LibraryEntry {
+            source: crate::library::LibrarySource::Epic,
+            external_id: "4fe75bbc5a674f4f9b356b5c90567da5".into(),
+            name: "Fortnite".into(),
+            install_dir: install_dir.clone(),
+        }]);
+
+        let mut p = make_process("FortniteClient-Win64-Shipping_EAC_EOS.exe", 100, false);
+        p.path = r"D:\EpicGames\Fortnite\FortniteGame\Binaries\Win64\FortniteClient-Win64-Shipping_EAC_EOS.exe".into();
+
+        let m = resolve_process(Some(head), &library, &test_db(), &p)
+            .expect("a process under an install dir resolves");
+        assert_eq!(
+            m.game_id, expected.game_id,
+            "library-discovered Fortnite must use the catalogue id, not the Epic id"
+        );
+        assert!(
+            !m.game_id.starts_with("epic-"),
+            "got the launcher id {}, which splits stats from the curated id",
+            m.game_id
+        );
+    }
+
+    /// A game the catalogue has never heard of keeps the launcher id, which is
+    /// still stable and still names the game.
+    #[test]
+    fn unknown_library_game_keeps_the_launcher_id() {
+        let library = LibraryIndex::from_entries(vec![crate::library::LibraryEntry {
+            source: crate::library::LibrarySource::Epic,
+            external_id: "abc123".into(),
+            name: "Some Unreleased Indie Thing".into(),
+            install_dir: std::path::PathBuf::from(r"D:\EpicGames\Indie"),
+        }]);
+        let mut p = make_process("indie.exe", 101, false);
+        p.path = r"D:\EpicGames\Indie\indie.exe".into();
+
+        let m = resolve_process(catalogue_head(), &library, &test_db(), &p)
+            .expect("resolves through the library");
+        assert_eq!(m.game_id, "epic-abc123");
+        assert_eq!(m.game_name, "Some Unreleased Indie Thing");
     }
 
     const NOW: i64 = 1_700_000_000_000;
