@@ -36,6 +36,22 @@ jobs:
           submodules: recursive
           token: ${{ secrets.GH_PAT }}
 
+      # See the macOS job for why this exists (PR #55 died at link with errno 28).
+      - name: Reclaim disk space
+        shell: pwsh
+        run: |
+          Get-PSDrive C | Select-Object Used,Free
+          $vcpkgCache = Join-Path $env:LOCALAPPDATA "vcpkg\archives"
+          if (Test-Path $vcpkgCache) {
+            Remove-Item -Recurse -Force $vcpkgCache -ErrorAction SilentlyContinue
+          }
+          $free = (Get-PSDrive C).Free
+          if ($free -lt 15GB) {
+            Write-Host "::warning::Only $([math]::Round($free/1GB,1)) GB free — purging incremental build dirs"
+            cargo clean
+            Remove-Item -Recurse -Force libmello/build-ci -ErrorAction SilentlyContinue
+          }
+
       - name: Check formatting
         run: cargo fmt --all -- --check
 
@@ -84,6 +100,24 @@ jobs:
         with:
           submodules: recursive
           token: ${{ secrets.GH_PAT }}
+
+      # Self-hosted runners live forever, and their caches grow until a build
+      # dies at the link step with errno 28 — exactly how PR #55's first run
+      # failed. The vcpkg binary cache grows with every dependency hash change
+      # and is safe to purge (only costs re-fetching cached packages).
+      # target/ is kept for incremental builds unless free space is critically
+      # low, in which case a full rebuild beats a guaranteed link failure.
+      - name: Reclaim disk space
+        run: |
+          df -h /
+          rm -rf "$HOME/.cache/vcpkg/archives"
+          avail_kb=$(df -k / | awk 'NR==2 {print $4}')
+          min_kb=$((15 * 1024 * 1024))
+          if [ "$avail_kb" -lt "$min_kb" ]; then
+            echo "::warning::Only $((avail_kb / 1024)) MB free — purging incremental build dirs"
+            cargo clean || true
+            rm -rf libmello/build-ci
+          fi
 
       - name: Check formatting
         run: cargo fmt --all -- --check
