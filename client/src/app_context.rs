@@ -59,7 +59,6 @@ pub struct AppContext {
     pub games_integrations: Rc<RefCell<Vec<mello_core::events::GameIntegrationStatus>>>,
     /// Unknown-game candidate currently shown in the "track it?" prompt
     /// (exe, path, display name). Consumed on track/dismiss.
-    pub pending_unknown_game: Rc<RefCell<Option<(String, String, String)>>>,
     pub muted_before_deafen: Rc<Cell<bool>>,
     pub updater: Rc<RefCell<Option<Updater>>>,
     pub hotkey_mgr: Rc<RefCell<crate::platform::hotkeys::HotkeyManager>>,
@@ -153,7 +152,6 @@ impl AppContext {
             post_game_timer: Rc::new(RefCell::new(None)),
             riot_cta_pending: Rc::new(Cell::new(false)),
             games_integrations: Rc::new(RefCell::new(Vec::new())),
-            pending_unknown_game: Rc::new(RefCell::new(None)),
             muted_before_deafen: Rc::new(Cell::new(false)),
             updater: Rc::new(RefCell::new(None)),
             hotkey_mgr: Rc::new(RefCell::new(
@@ -209,7 +207,6 @@ impl Clone for AppContext {
             post_game_timer: self.post_game_timer.clone(),
             riot_cta_pending: self.riot_cta_pending.clone(),
             games_integrations: self.games_integrations.clone(),
-            pending_unknown_game: self.pending_unknown_game.clone(),
             muted_before_deafen: self.muted_before_deafen.clone(),
             updater: self.updater.clone(),
             hotkey_mgr: self.hotkey_mgr.clone(),

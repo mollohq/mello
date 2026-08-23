@@ -41,7 +41,7 @@ impl Client {
         }
 
         let mello_ctx = self.voice.mello_ctx();
-        let (sensor, game_event_rx) = GameSensor::start(mello_ctx, self.user_games.clone());
+        let (sensor, game_event_rx) = GameSensor::start(mello_ctx);
         self.game_sensor = Some(sensor);
         *self.game_event_rx.lock().unwrap() = Some(game_event_rx);
         log::info!("Game sensor started (post-auth)");

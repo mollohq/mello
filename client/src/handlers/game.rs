@@ -110,38 +110,6 @@ pub fn handle(ctx: &AppContext, event: Event) {
                 }
             }
         }
-        Event::UnknownGameCandidate {
-            exe,
-            path,
-            window_title,
-        } => {
-            // Permanently dismissed exes never re-prompt.
-            if ctx
-                .settings
-                .borrow()
-                .unknown_game_dismissed
-                .contains(&exe.to_lowercase())
-            {
-                return;
-            }
-            // One prompt at a time; a new candidate waits for the next run.
-            if ctx.pending_unknown_game.borrow().is_some() {
-                return;
-            }
-            let display_name = crate::platform::exe_meta::exe_display_name(&path)
-                .filter(|n| !n.trim().is_empty())
-                .unwrap_or_else(|| {
-                    if window_title.trim().is_empty() {
-                        crate::platform::exe_meta::filename_stem(&exe)
-                    } else {
-                        window_title.clone()
-                    }
-                });
-            log::info!("[ui] unknown game prompt: {display_name} ({exe})");
-            *ctx.pending_unknown_game.borrow_mut() = Some((exe, path, display_name.clone()));
-            ctx.app.set_unknown_game_name(display_name.into());
-            ctx.app.set_unknown_game_visible(true);
-        }
         Event::SessionSummary {
             wins,
             losses,

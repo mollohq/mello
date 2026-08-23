@@ -1,11 +1,9 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::mpsc::Sender;
-use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
 use crate::library::LibraryIndex;
 use crate::session_store;
-use crate::user_games::UserGames;
 
 /// Idle cadence. Low enough to be cheap, high enough that a game start can
 /// sit unnoticed for a quarter minute — which is why it tightens after any
@@ -23,10 +21,6 @@ const ACTIVE_CADENCE_SCANS: u32 = 8;
 /// installed mid-session only has to be noticed eventually.
 const LIBRARY_RESCAN_SCANS: u32 = 20;
 const MAX_PROCESSES: usize = 512;
-/// An unknown-game candidate must appear in this many consecutive scans
-/// before it is surfaced (filters transient fullscreen apps like installers).
-const UNKNOWN_DEBOUNCE_SCANS: u32 = 2;
-
 /// Executables that look game-like (fullscreen/foreground) but never are.
 /// Lowercase. Browsers, media players, launchers, comms, capture, system.
 const UNKNOWN_DENYLIST: &[&str] = &[
@@ -119,14 +113,6 @@ pub enum GameEvent {
     PrimaryChanged {
         pid: Option<u32>,
     },
-    /// A fullscreen/foreground process outside the game DB, surfaced (after
-    /// debounce) for the one-tap "track it?" confirm flow. Purely local —
-    /// nothing is tracked or broadcast unless the user confirms.
-    UnknownCandidate {
-        exe: String,
-        path: String,
-        window_title: String,
-    },
 }
 
 /// Wrapper to make raw pointer Send-safe for the sensor thread.
@@ -145,7 +131,6 @@ impl GameSensor {
     /// apply live (Command::AddCustomGame writes through the same lock).
     pub fn start(
         ctx: *mut mello_sys::MelloContext,
-        db: Arc<RwLock<UserGames>>,
     ) -> (Self, std::sync::mpsc::Receiver<GameEvent>) {
         let (tx, rx) = std::sync::mpsc::channel();
         let send_ctx = SendCtx(ctx);
@@ -153,7 +138,7 @@ impl GameSensor {
         let handle = std::thread::Builder::new()
             .name("game-sensor".into())
             .spawn(move || {
-                scan_loop(&send_ctx, &db, &tx);
+                scan_loop(&send_ctx, &tx);
             })
             .expect("failed to spawn game-sensor thread");
 
@@ -166,13 +151,12 @@ impl GameSensor {
     }
 }
 
-fn scan_loop(ctx: &SendCtx, db: &Arc<RwLock<UserGames>>, tx: &Sender<GameEvent>) {
+fn scan_loop(ctx: &SendCtx, tx: &Sender<GameEvent>) {
     // Every game currently running, keyed by pid. v1 tracked a single
     // Option<ActiveGame>, which made alt-tabbing between two games look like a
     // stop/start pair and silently discarded the background game's session.
     let mut active: HashMap<u32, ActiveGame> = HashMap::new();
     let mut primary: Option<u32> = None;
-    let mut unknown = UnknownTracker::default();
     let mut library = LibraryIndex::scan();
     let mut scans_since_library_refresh = 0u32;
     let mut fast_scans_left = ACTIVE_CADENCE_SCANS;
@@ -203,26 +187,7 @@ fn scan_loop(ctx: &SendCtx, db: &Arc<RwLock<UserGames>>, tx: &Sender<GameEvent>)
         let processes = enumerate_game_processes(ctx.0);
         let now = now_ms();
 
-        let (detected, candidate) = {
-            let db = db.read().expect("game db lock poisoned");
-            let detected = detect_games(&db, &library, &processes, now);
-            // Provisionally-tracked games are surfaced for confirmation:
-            // rung 4 already recorded a session, and the prompt is how the
-            // user corrects the name or says it is not a game at all. A game
-            // resolved by a named rung never prompts.
-            let provisional: HashSet<&str> = detected
-                .iter()
-                .filter(|g| g.game_id.starts_with("local-"))
-                .map(|g| g.exe.as_str())
-                .collect();
-            let named: HashSet<&str> = detected
-                .iter()
-                .filter(|g| !g.game_id.starts_with("local-"))
-                .map(|g| g.exe.as_str())
-                .collect();
-            let candidate = pick_unknown_candidate(&db, &processes, &provisional, &named);
-            (detected, candidate)
-        };
+        let detected = detect_games(&library, &processes, now);
 
         // Restart recovery, first scan only. A session whose process is still
         // alive resumes with its original start time; one whose process is
@@ -279,18 +244,6 @@ fn scan_loop(ctx: &SendCtx, db: &Arc<RwLock<UserGames>>, tx: &Sender<GameEvent>)
                         }
                     }
                 }
-            }
-        }
-
-        if let Some(cand) = unknown.observe(candidate) {
-            if let GameEvent::UnknownCandidate {
-                exe, window_title, ..
-            } = &cand
-            {
-                log::info!("[game-sensor] unknown game candidate: {exe} ({window_title})");
-            }
-            if tx.send(cand).is_err() {
-                break;
             }
         }
 
@@ -369,8 +322,8 @@ fn scan_loop(ctx: &SendCtx, db: &Arc<RwLock<UserGames>>, tx: &Sender<GameEvent>)
         };
         std::thread::sleep(interval);
     }
-
-    log::info!("[game-sensor] scan loop ended");
+    // Unreachable: every exit above returns directly when the receiver is
+    // gone, which is the only way this loop ends.
 }
 
 /// Foreground time for a scan tick. Elapsed is zero on the first tick so we
@@ -572,77 +525,6 @@ const UNKNOWN_PATH_DENYLIST: &[&str] = &[
     "\\windowsapps\\",
     "\\appdata\\local\\programs\\",
 ];
-
-/// A fullscreen/foreground windowed process that is not in the game DB and
-/// not denied by exe name or install location. Merely-foreground candidates
-/// (games played windowed) are accepted, which is why the path denylist
-/// matters: any focused desktop app would otherwise qualify — the exact
-/// false positives seen in testing were claude.exe (Electron under
-/// AppData\Local\Programs) and WindowsTerminal.exe (a Store app).
-/// Pure; debounce lives in [`UnknownTracker`].
-fn pick_unknown_candidate(
-    db: &UserGames,
-    processes: &[RawGameProcess],
-    provisional: &HashSet<&str>,
-    named: &HashSet<&str>,
-) -> Option<GameEvent> {
-    processes
-        .iter()
-        .filter(|p| {
-            let path = p.path.to_lowercase();
-            // A game already being tracked provisionally is the *main* reason
-            // to prompt now — we are recording sessions under a guessed name
-            // and want it confirmed. Anything a named rung resolved is never
-            // asked about: we already know what it is, and prompting "is this
-            // a game?" over Counter-Strike would be absurd.
-            let worth_asking = provisional.contains(p.exe.as_str())
-                || (!named.contains(p.exe.as_str()) && (p.is_fullscreen || p.is_foreground));
-            worth_asking
-                && !p.window_title.is_empty()
-                && !p.path.is_empty()
-                && !db.is_dismissed(&p.exe)
-                && !UNKNOWN_DENYLIST.contains(&p.exe.to_lowercase().as_str())
-                && !UNKNOWN_PATH_DENYLIST.iter().any(|d| path.contains(d))
-        })
-        // Fullscreen beats merely-foreground when both qualify.
-        .max_by_key(|p| p.is_fullscreen)
-        .map(|p| GameEvent::UnknownCandidate {
-            exe: p.exe.clone(),
-            path: p.path.clone(),
-            window_title: p.window_title.clone(),
-        })
-}
-
-/// Debounce for unknown-game candidates: a candidate must survive
-/// `UNKNOWN_DEBOUNCE_SCANS` consecutive scans and is emitted once per exe per
-/// run. Pure state machine, unit-tested below.
-#[derive(Default)]
-struct UnknownTracker {
-    counts: HashMap<String, u32>,
-    emitted: HashSet<String>,
-}
-
-impl UnknownTracker {
-    fn observe(&mut self, candidate: Option<GameEvent>) -> Option<GameEvent> {
-        let Some(cand) = candidate else {
-            self.counts.clear();
-            return None;
-        };
-        let GameEvent::UnknownCandidate { exe, .. } = &cand else {
-            return None;
-        };
-        let key = exe.to_lowercase();
-        // A different candidate resets the streaks of everything else.
-        self.counts.retain(|k, _| *k == key);
-        let count = self.counts.entry(key.clone()).or_insert(0);
-        *count += 1;
-        if *count >= UNKNOWN_DEBOUNCE_SCANS && !self.emitted.contains(&key) {
-            self.emitted.insert(key);
-            return Some(cand);
-        }
-        None
-    }
-}
 
 #[derive(Clone)]
 pub(crate) struct RawGameProcess {
@@ -978,7 +860,6 @@ fn provisional_name(p: &RawGameProcess) -> String {
 fn resolve_process(
     head: Option<&'static crate::catalogue::Head>,
     library: &LibraryIndex,
-    db: &UserGames,
     p: &RawGameProcess,
 ) -> Option<Matched> {
     if let Some(entry) = head.and_then(|h| h.lookup_exe(&p.exe, &p.path)) {
@@ -1042,23 +923,12 @@ fn resolve_process(
             igdb_id,
         });
     }
-    if let Some(entry) = db.lookup_by_exe(&p.exe) {
-        return Some(Matched {
-            game_id: entry.id.clone(),
-            game_name: entry.name.clone(),
-            short_name: entry.short_name.clone(),
-            color: "#888888".to_string(),
-            // A hand-confirmed game is one the catalogue has never heard of,
-            // so there is no IGDB id to carry.
-            igdb_id: None,
-        });
-    }
     // Rung 4: nothing named it, but it looks like a game build. Record the
     // session anyway — "ALL games they play we know about" is only true if an
     // unidentified game still produces a session instead of vanishing. The
     // identity is provisional and upgrades in place once a mapping lands or
     // the user confirms.
-    if !db.is_dismissed(&p.exe) && looks_like_a_game(p) {
+    if looks_like_a_game(p) {
         let name = provisional_name(p);
         note_unresolved(&p.exe, &p.path, &name);
         return Some(Matched {
@@ -1077,17 +947,12 @@ fn resolve_process(
 /// v1 returned only one, so a second game running alongside was invisible and
 /// alt-tabbing between two looked like the first had exited. `now` is passed in
 /// rather than read here so a single scan timestamps consistently.
-fn detect_games(
-    db: &UserGames,
-    library: &LibraryIndex,
-    processes: &[RawGameProcess],
-    now: i64,
-) -> Vec<ActiveGame> {
+fn detect_games(library: &LibraryIndex, processes: &[RawGameProcess], now: i64) -> Vec<ActiveGame> {
     let head = catalogue_head();
     processes
         .iter()
         .filter_map(|p| {
-            let matched = resolve_process(head, library, db, p)?;
+            let matched = resolve_process(head, library, p)?;
             Some(ActiveGame {
                 game_id: matched.game_id,
                 game_name: matched.game_name,
@@ -1130,10 +995,6 @@ mod tests {
         }
     }
 
-    fn test_db() -> UserGames {
-        UserGames::new()
-    }
-
     // --- Identity reconciliation ------------------------------------------
 
     /// A launcher-discovered game must answer to its catalogue id when the
@@ -1164,7 +1025,7 @@ mod tests {
         let mut p = make_process("FortniteClient-Win64-Shipping_EAC_EOS.exe", 100, false);
         p.path = r"D:\EpicGames\Fortnite\FortniteGame\Binaries\Win64\FortniteClient-Win64-Shipping_EAC_EOS.exe".into();
 
-        let m = resolve_process(Some(head), &library, &test_db(), &p)
+        let m = resolve_process(Some(head), &library, &p)
             .expect("a process under an install dir resolves");
         assert_eq!(
             m.game_id, expected.game_id,
@@ -1202,8 +1063,7 @@ mod tests {
         let mut p = make_process("game.exe", 102, false);
         p.path = r"D:\EpicGames\Ambiguous\game.exe".into();
 
-        let m = resolve_process(Some(head), &library, &test_db(), &p)
-            .expect("resolves through the library");
+        let m = resolve_process(Some(head), &library, &p).expect("resolves through the library");
         assert_eq!(
             m.game_id, "epic-dupe123",
             "an ambiguous name ({ambiguous}) must not pick one of the pair"
@@ -1223,8 +1083,8 @@ mod tests {
         let mut p = make_process("indie.exe", 101, false);
         p.path = r"D:\EpicGames\Indie\indie.exe".into();
 
-        let m = resolve_process(catalogue_head(), &library, &test_db(), &p)
-            .expect("resolves through the library");
+        let m =
+            resolve_process(catalogue_head(), &library, &p).expect("resolves through the library");
         assert_eq!(m.game_id, "epic-abc123");
         assert_eq!(m.game_name, "Some Unreleased Indie Thing");
     }
@@ -1237,36 +1097,32 @@ mod tests {
 
     #[test]
     fn detect_no_processes() {
-        let db = test_db();
-        assert!(detect_games(&db, &LibraryIndex::default(), &[], NOW).is_empty());
+        assert!(detect_games(&LibraryIndex::default(), &[], NOW).is_empty());
     }
 
     #[test]
     fn detect_single_match() {
-        let db = test_db();
         let procs = vec![make_process("cs2.exe", 1234, false)];
-        let found = detect_games(&db, &LibraryIndex::default(), &procs, NOW);
+        let found = detect_games(&LibraryIndex::default(), &procs, NOW);
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].game_id, "counter-strike-2");
     }
 
     #[test]
     fn detect_unknown_exe_filtered() {
-        let db = test_db();
         let procs = vec![make_process("notepad.exe", 999, false)];
-        assert!(detect_games(&db, &LibraryIndex::default(), &procs, NOW).is_empty());
+        assert!(detect_games(&LibraryIndex::default(), &procs, NOW).is_empty());
     }
 
     #[test]
     fn detect_returns_every_running_game() {
         // v1 returned Option and lost the second game entirely; both sessions
         // must now be tracked.
-        let db = test_db();
         let procs = vec![
             make_process("cs2.exe", 1234, false),
             make_process("dota2.exe", 5678, true),
         ];
-        let found = detect_games(&db, &LibraryIndex::default(), &procs, NOW);
+        let found = detect_games(&LibraryIndex::default(), &procs, NOW);
         assert_eq!(found.len(), 2);
         let mut ids: Vec<&str> = found.iter().map(|g| g.game_id.as_str()).collect();
         ids.sort_unstable();
@@ -1275,10 +1131,9 @@ mod tests {
 
     #[test]
     fn detect_uses_real_process_start_time() {
-        let db = test_db();
         let mut proc = make_process("cs2.exe", 1234, false);
         proc.started_at_ms = NOW - 3 * 3_600_000; // running for three hours
-        let found = detect_games(&db, &LibraryIndex::default(), &[proc], NOW);
+        let found = detect_games(&LibraryIndex::default(), &[proc], NOW);
         // The session must date from when the game started, not from the scan
         // that first noticed it — this is the "played 4hrs" honesty fix.
         assert_eq!(found[0].started_at, NOW - 3 * 3_600_000);
@@ -1287,9 +1142,8 @@ mod tests {
 
     #[test]
     fn detect_falls_back_to_scan_time_when_start_unknown() {
-        let db = test_db();
         let proc = make_process("cs2.exe", 1234, false); // started_at_ms = 0
-        let found = detect_games(&db, &LibraryIndex::default(), &[proc], NOW);
+        let found = detect_games(&LibraryIndex::default(), &[proc], NOW);
         // Never 0 — that would date the session to 1970 and report a 55-year
         // session. The scan time is the honest floor.
         assert_eq!(found[0].started_at, NOW);
@@ -1298,14 +1152,13 @@ mod tests {
 
     #[test]
     fn primary_prefers_foreground_over_fullscreen() {
-        let db = test_db();
         let mut fullscreen = make_process("dota2.exe", 5678, true);
         fullscreen.started_at_ms = NOW - 1000;
         let mut focused = make_process("cs2.exe", 1234, false);
         focused.is_foreground = true;
         focused.started_at_ms = NOW - 500;
         let procs = vec![fullscreen, focused];
-        let active = active_map(detect_games(&db, &LibraryIndex::default(), &procs, NOW));
+        let active = active_map(detect_games(&LibraryIndex::default(), &procs, NOW));
         // v1 sorted on is_fullscreen only and ignored is_foreground entirely,
         // so the game you were actually looking at lost to a backgrounded one.
         assert_eq!(pick_primary(&active, &procs), Some(1234));
@@ -1313,12 +1166,11 @@ mod tests {
 
     #[test]
     fn primary_falls_back_to_fullscreen_then_oldest() {
-        let db = test_db();
         let procs = vec![
             make_process("cs2.exe", 1234, false),
             make_process("dota2.exe", 5678, true),
         ];
-        let active = active_map(detect_games(&db, &LibraryIndex::default(), &procs, NOW));
+        let active = active_map(detect_games(&LibraryIndex::default(), &procs, NOW));
         assert_eq!(pick_primary(&active, &procs), Some(5678));
 
         // Neither focused nor fullscreen: the longest-running wins, and the
@@ -1327,7 +1179,7 @@ mod tests {
             make_process("cs2.exe", 1234, false),
             make_process("dota2.exe", 5678, false),
         ];
-        let mut games = detect_games(&db, &LibraryIndex::default(), &plain, NOW);
+        let mut games = detect_games(&LibraryIndex::default(), &plain, NOW);
         games[0].started_at = NOW - 10_000;
         games[1].started_at = NOW - 90_000;
         let active = active_map(games);
@@ -1339,7 +1191,6 @@ mod tests {
     fn library_resolves_games_the_curated_table_never_heard_of() {
         // The tail mechanism: no exe mapping exists for this game anywhere,
         // yet it resolves — with a real name — purely from the install path.
-        let db = test_db();
         let library = LibraryIndex::from_entries(vec![crate::library::LibraryEntry {
             source: crate::library::LibrarySource::Steam,
             external_id: "1145360".to_string(),
@@ -1352,14 +1203,14 @@ mod tests {
         // Without the library index the game is still recorded — the
         // provisional rung guarantees a session — but only under a guessed id
         // and whatever the window happened to be called.
-        let guessed = detect_games(&db, &LibraryIndex::default(), &[p.clone()], NOW);
+        let guessed = detect_games(&LibraryIndex::default(), &[p.clone()], NOW);
         assert_eq!(guessed.len(), 1);
         assert_eq!(guessed[0].game_id, "local-hades");
 
         // With the library index the Steam appid is known, and the bundled
         // appid index maps it onto IGDB — so the game arrives with full
         // catalogue identity rather than a launcher-scoped id.
-        let found = detect_games(&db, &library, &[p], NOW);
+        let found = detect_games(&library, &[p], NOW);
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].game_name, "Hades");
         assert_eq!(
@@ -1379,7 +1230,6 @@ mod tests {
         // Both rungs can claim the same process. The curated entry wins because
         // it carries the stable game_id that telemetry and stored stats key on;
         // resolving CS2 as "steam-730" would orphan them.
-        let db = test_db();
         let library = LibraryIndex::from_entries(vec![crate::library::LibraryEntry {
             source: crate::library::LibrarySource::Steam,
             external_id: "730".to_string(),
@@ -1392,7 +1242,7 @@ mod tests {
         p.path =
             r"C:\Steam\steamapps\common\Counter-Strike Global Offensive\game\bin\cs2.exe".into();
 
-        let found = detect_games(&db, &library, &[p], NOW);
+        let found = detect_games(&library, &[p], NOW);
         assert_eq!(found[0].game_id, "counter-strike-2");
         assert_eq!(found[0].igdb_id, Some(242408));
     }
@@ -1413,7 +1263,6 @@ mod tests {
     #[test]
     #[ignore = "requires real game installs"]
     fn resolution_report() {
-        let db = test_db();
         let library = LibraryIndex::scan();
         let head = catalogue_head().expect("bundled catalogue");
 
@@ -1458,7 +1307,7 @@ mod tests {
                     is_foreground: false,
                     started_at_ms: 0,
                 };
-                if let Some(m) = resolve_process(Some(head), &library, &db, &p) {
+                if let Some(m) = resolve_process(Some(head), &library, &p) {
                     probed += 1;
                     println!("  {:<38} -> {} ({})", name, m.game_id, m.game_name);
                 }
@@ -1524,9 +1373,7 @@ mod tests {
     fn unrecognised_fullscreen_game_is_tracked_provisionally() {
         // The point of "ALL games they play we know about": a game no rung can
         // name still produces a session instead of vanishing.
-        let db = test_db();
         let found = detect_games(
-            &db,
             &LibraryIndex::default(),
             &[game_like("night stones.exe")],
             NOW,
@@ -1555,13 +1402,12 @@ mod tests {
     fn ordinary_desktop_apps_are_not_tracked() {
         // The plan originally had the classifier gate prompting only, which
         // would have filed "played Notepad for 4 hours" as a session.
-        let db = test_db();
         let mut notepad = make_process("notepad.exe", 10, false);
         notepad.path = "C:\\Windows\\System32\\notepad.exe".into();
         notepad.window_title = "Untitled - Notepad".into();
         notepad.is_foreground = true;
 
-        let found = detect_games(&db, &LibraryIndex::default(), &[notepad], NOW);
+        let found = detect_games(&LibraryIndex::default(), &[notepad], NOW);
         assert!(
             found.is_empty(),
             "a focused text editor is not a game session"
@@ -1640,31 +1486,6 @@ mod tests {
     }
 
     #[test]
-    fn dismissed_executables_stop_being_tracked() {
-        // "Not a game" has to suppress tracking, not just the prompt —
-        // otherwise the user keeps getting sessions for the thing they
-        // rejected, with no prompt to reject again.
-        let mut db = test_db();
-        let proc = game_like("night stones.exe");
-        assert_eq!(
-            detect_games(
-                &db,
-                &LibraryIndex::default(),
-                std::slice::from_ref(&proc),
-                NOW
-            )
-            .len(),
-            1
-        );
-
-        db.set_dismissed_exes(&["Night Stones.exe".to_string()]);
-        assert!(
-            detect_games(&db, &LibraryIndex::default(), &[proc], NOW).is_empty(),
-            "a dismissed exe must not be tracked"
-        );
-    }
-
-    #[test]
     fn provisional_name_prefers_the_window_title() {
         let mut p = game_like("ns_shipping.exe");
         p.window_title = "Night Stones".into();
@@ -1680,300 +1501,15 @@ mod tests {
     fn named_rungs_outrank_provisional_tracking() {
         // A curated game that happens to be fullscreen must keep its stable id
         // rather than falling through to "local-cs2".
-        let db = test_db();
         let mut cs = make_process("cs2.exe", 1, true);
         cs.path = "C:\\Steam\\steamapps\\common\\CSGO\\cs2.exe".into();
         cs.window_title = "Counter-Strike 2".into();
-        let found = detect_games(&db, &LibraryIndex::default(), &[cs], NOW);
+        let found = detect_games(&LibraryIndex::default(), &[cs], NOW);
         assert_eq!(found[0].game_id, "counter-strike-2");
-    }
-
-    #[test]
-    fn provisional_games_are_offered_for_confirmation() {
-        // Rung 4 records the session under a guessed name; the prompt is how
-        // the user corrects it. The prompt used to fire only when *nothing*
-        // was detected, so a provisional game could never be named.
-        let db = test_db();
-        let proc = game_like("night stones.exe");
-        let provisional: HashSet<&str> = ["night stones.exe"].into_iter().collect();
-        let candidate = pick_unknown_candidate(&db, &[proc], &provisional, &HashSet::new());
-        assert!(matches!(
-            candidate,
-            Some(GameEvent::UnknownCandidate { ref exe, .. }) if exe == "night stones.exe"
-        ));
-    }
-
-    #[test]
-    fn dismissed_executables_stop_prompting() {
-        let mut db = test_db();
-        db.set_dismissed_exes(&["night stones.exe".to_string()]);
-        let proc = game_like("night stones.exe");
-        assert!(pick_unknown_candidate(&db, &[proc], &HashSet::new(), &HashSet::new()).is_none());
     }
 
     #[test]
     fn primary_is_none_without_games() {
         assert_eq!(pick_primary(&HashMap::new(), &[]), None);
-    }
-
-    // ------------------------------------------------------------------
-    // Unknown-game candidate heuristic + debounce
-    // ------------------------------------------------------------------
-
-    fn unknown_proc(exe: &str, fullscreen: bool, foreground: bool) -> RawGameProcess {
-        RawGameProcess {
-            pid: 4242,
-            name: exe.to_string(),
-            exe: exe.to_string(),
-            is_fullscreen: fullscreen,
-            path: format!("C:\\Games\\{exe}"),
-            window_title: exe.trim_end_matches(".exe").to_string(),
-            is_foreground: foreground,
-            started_at_ms: 0,
-        }
-    }
-
-    fn candidate_exe(ev: &GameEvent) -> &str {
-        match ev {
-            GameEvent::UnknownCandidate { exe, .. } => exe,
-            other => panic!("expected UnknownCandidate, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn unknown_candidate_requires_fullscreen_or_foreground() {
-        let db = test_db();
-        assert!(pick_unknown_candidate(
-            &db,
-            &[unknown_proc("night stones.exe", false, false)],
-            &HashSet::new(),
-            &HashSet::new(),
-        )
-        .is_none());
-        let c = pick_unknown_candidate(
-            &db,
-            &[unknown_proc("night stones.exe", true, false)],
-            &HashSet::new(),
-            &HashSet::new(),
-        )
-        .expect("fullscreen unknown exe qualifies");
-        assert_eq!(candidate_exe(&c), "night stones.exe");
-        assert!(pick_unknown_candidate(
-            &db,
-            &[unknown_proc("night stones.exe", false, true)],
-            &HashSet::new(),
-            &HashSet::new(),
-        )
-        .is_some());
-    }
-
-    #[test]
-    fn unknown_candidate_skips_named_games_and_denylist() {
-        let db = UserGames::new();
-        // A game a named rung already resolved is never asked about — with the
-        // bundled DB gone, this has to come from the caller's `named` set
-        // rather than from a lookup, or the prompt would fire over CS2.
-        let named: HashSet<&str> = ["cs2.exe"].into_iter().collect();
-        assert!(pick_unknown_candidate(
-            &db,
-            &[unknown_proc("cs2.exe", true, true)],
-            &HashSet::new(),
-            &named,
-        )
-        .is_none());
-        // Denylisted apps are never candidates, however game-like they look.
-        assert!(pick_unknown_candidate(
-            &db,
-            &[unknown_proc("chrome.exe", true, true)],
-            &HashSet::new(),
-            &HashSet::new(),
-        )
-        .is_none());
-        assert!(pick_unknown_candidate(
-            &db,
-            &[unknown_proc("OBS64.exe", true, true)],
-            &HashSet::new(),
-            &HashSet::new(),
-        )
-        .is_none());
-    }
-
-    #[test]
-    fn unknown_candidate_rejects_denied_install_locations() {
-        let db = test_db();
-        // The exact false positives from live testing: an Electron app under
-        // AppData\Local\Programs and a Store app under WindowsApps.
-        let mut electron = unknown_proc("someapp.exe", false, true);
-        electron.path = "C:\\Users\\bob\\AppData\\Local\\Programs\\SomeApp\\someapp.exe".into();
-        assert!(
-            pick_unknown_candidate(&db, &[electron], &HashSet::new(), &HashSet::new()).is_none()
-        );
-
-        let mut store_app = unknown_proc("terminal.exe", false, true);
-        store_app.path = "C:\\Program Files\\WindowsApps\\Microsoft.Terminal\\terminal.exe".into();
-        assert!(
-            pick_unknown_candidate(&db, &[store_app], &HashSet::new(), &HashSet::new()).is_none()
-        );
-
-        // A Steam-library exe stays eligible.
-        let mut steam_game = unknown_proc("night stones.exe", false, true);
-        steam_game.path =
-            "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Night Stones\\night stones.exe"
-                .into();
-        assert!(
-            pick_unknown_candidate(&db, &[steam_game], &HashSet::new(), &HashSet::new()).is_some()
-        );
-    }
-
-    #[test]
-    fn unknown_candidate_requires_window_and_path() {
-        let db = test_db();
-        let mut no_title = unknown_proc("mystery.exe", true, true);
-        no_title.window_title = String::new();
-        assert!(
-            pick_unknown_candidate(&db, &[no_title], &HashSet::new(), &HashSet::new()).is_none()
-        );
-
-        let mut no_path = unknown_proc("mystery.exe", true, true);
-        no_path.path = String::new();
-        assert!(
-            pick_unknown_candidate(&db, &[no_path], &HashSet::new(), &HashSet::new()).is_none()
-        );
-    }
-
-    #[test]
-    fn unknown_candidate_prefers_fullscreen_over_foreground() {
-        let db = test_db();
-        let c = pick_unknown_candidate(
-            &db,
-            &[
-                unknown_proc("fg-only.exe", false, true),
-                unknown_proc("fullscreen.exe", true, false),
-            ],
-            &HashSet::new(),
-            &HashSet::new(),
-        )
-        .unwrap();
-        assert_eq!(candidate_exe(&c), "fullscreen.exe");
-    }
-
-    #[test]
-    fn tracker_debounces_and_emits_once() {
-        let db = test_db();
-        let mut tracker = UnknownTracker::default();
-        let cand = || {
-            pick_unknown_candidate(
-                &db,
-                &[unknown_proc("night stones.exe", true, true)],
-                &HashSet::new(),
-                &HashSet::new(),
-            )
-        };
-
-        // First scan: seen but not yet emitted.
-        assert!(tracker.observe(cand()).is_none());
-        // Second consecutive scan: emitted.
-        assert!(tracker.observe(cand()).is_some());
-        // Never emitted again this run.
-        assert!(tracker.observe(cand()).is_none());
-        assert!(tracker.observe(cand()).is_none());
-    }
-
-    #[test]
-    fn tracker_resets_on_gap_or_different_candidate() {
-        let db = test_db();
-        let mut tracker = UnknownTracker::default();
-        let a = || {
-            pick_unknown_candidate(
-                &db,
-                &[unknown_proc("aaa.exe", true, true)],
-                &HashSet::new(),
-                &HashSet::new(),
-            )
-        };
-        let b = || {
-            pick_unknown_candidate(
-                &db,
-                &[unknown_proc("bbb.exe", true, true)],
-                &HashSet::new(),
-                &HashSet::new(),
-            )
-        };
-
-        assert!(tracker.observe(a()).is_none());
-        // Gap (no candidate) resets the streak.
-        assert!(tracker.observe(None).is_none());
-        assert!(tracker.observe(a()).is_none());
-        // A different candidate also resets the streak for "aaa".
-        assert!(tracker.observe(b()).is_none());
-        assert!(tracker.observe(a()).is_none());
-        assert!(tracker.observe(a()).is_some());
-    }
-
-    #[test]
-    fn foreground_accumulation_uses_elapsed_not_scan_interval() {
-        assert_eq!(accumulate_foreground_ms(1_000, true, 4_000), 5_000);
-        assert_eq!(accumulate_foreground_ms(1_000, true, 0), 1_000);
-        assert_eq!(accumulate_foreground_ms(1_000, false, 15_000), 1_000);
-    }
-
-    #[test]
-    fn companion_binaries_under_one_install_share_one_session() {
-        let db = test_db();
-        let library = LibraryIndex::from_entries(vec![crate::library::LibraryEntry {
-            source: crate::library::LibrarySource::Steam,
-            external_id: "1245620".to_string(),
-            name: "ELDEN RING".to_string(),
-            install_dir: std::path::PathBuf::from(r"D:\SteamLibrary\steamapps\common\ELDEN RING"),
-        }]);
-        let mut main = make_process("eldenring.exe", 100, true);
-        main.path = r"D:\SteamLibrary\steamapps\common\ELDEN RING\Game\eldenring.exe".into();
-        let mut crash = make_process("FooCrashHandler64.exe", 200, false);
-        crash.path =
-            r"D:\SteamLibrary\steamapps\common\ELDEN RING\Game\FooCrashHandler64.exe".into();
-
-        let live = active_map(detect_games(
-            &db,
-            &library,
-            &[main.clone(), crash.clone()],
-            NOW,
-        ));
-        assert_eq!(live.len(), 2);
-        assert_eq!(
-            live[&100].game_id, live[&200].game_id,
-            "both binaries must resolve to the same install"
-        );
-
-        let mut active = HashMap::new();
-        let mut shadow = HashMap::new();
-        let (starts, _) = coalesce_starts(&mut active, &mut shadow, &live);
-        assert_eq!(starts.len(), 1);
-        assert!(
-            matches!(&starts[0], GameEvent::Started(g) if g.pid == 100),
-            "the main binary should own the session"
-        );
-        assert_eq!(active.len(), 1);
-        assert_eq!(shadow.len(), 1);
-
-        let (more_starts, _) = coalesce_starts(&mut active, &mut shadow, &live);
-        assert!(more_starts.is_empty());
-
-        let mut primary = Some(100);
-        let live_main_only: HashMap<u32, ActiveGame> = live
-            .iter()
-            .filter(|(pid, _)| **pid != 200)
-            .map(|(pid, game)| (*pid, game.clone()))
-            .collect();
-        let (stops, _) =
-            coalesce_stops(&mut active, &mut shadow, &live_main_only, NOW, &mut primary);
-        assert!(
-            stops.is_empty(),
-            "losing a shadow pid must not end the session"
-        );
-
-        let (stops, _) =
-            coalesce_stops(&mut active, &mut shadow, &HashMap::new(), NOW, &mut primary);
-        assert_eq!(stops.len(), 1);
-        assert!(matches!(&stops[0], GameEvent::Stopped { game, .. } if game.pid == 100));
     }
 }
