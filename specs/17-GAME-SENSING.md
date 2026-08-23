@@ -75,31 +75,53 @@ time.
 
 ### 2.2 Resolution ladder
 
-Each process goes through four rungs in order. The first match wins.
+Each process goes through three rungs in order. The first match wins.
 
 | Rung | Source | Coverage |
 |---|---|---|
 | 1 | Curated executable table in `head.bin` | Games that no library scan finds, such as Valorant, League of Legends and Hearthstone |
 | 2 | Installed library scan, by path prefix | Games installed through Steam, Epic or GOG |
-| 3 | User-confirmed games in `user_games.rs` | Games the user named |
-| 4 | Provisional tracking | A game that no rung above can name |
+| 3 | Provisional tracking | A game that no rung above can name |
 
-Rung 2 gets full catalogue identity when `appid_index.bin` maps the Steam appid
-to an IGDB id. Epic and GOG have no such map. They use the launcher name, which
-is authoritative.
+**A rung answers which game a process is. It does not answer whether that game
+is being played.** See section 2.4.
+
+#### Identity reconciliation
+
+One game must answer to one id, whichever rung named it. Rung 2 therefore tries
+three sources in order:
+
+1. `appid_index.bin` maps the Steam appid to an IGDB id, then the head supplies
+   the catalogue entry.
+2. Otherwise the head is searched by the launcher's display name.
+3. Otherwise the launcher id stands: `steam-<appid>`, `epic-<id>`, `gog-<id>`.
+
+Step 2 exists because Epic and GOG have no id map. Without it Fortnite answered
+to `fortnite` through the curated table and to
+`epic-4fe75bbc5a674f4f9b356b5c90567da5` through this scan, and its hours split
+across two `user_game_stats` keys depending on which of its processes was seen.
+
+**Step 2 accepts an unambiguous name only.** The head holds 2000 games under
+1983 distinct names: 17 names carry two entries each, because a remake and its
+original share one. `prey`, `overwatch`, `dead space`, `tomb raider`,
+`system shock`, `resident evil 2` and `resident evil 4` are among them. Filing
+a session under the wrong half of a pair is worse than keeping the launcher id,
+which is exact even though it is not catalogue-linked. `Head::all_by_name`
+exists for this; `by_name` cannot express the difference between one match and
+several.
 
 ### 2.3 What counts as a game
 
-`looks_like_a_game` controls provisional tracking, not only the confirm prompt.
-An earlier design controlled the prompt only. That design recorded every focused
-window as a session.
+`looks_like_a_game` controls provisional tracking, which is rung 3. An earlier
+design used it only to decide whether to ask the user. That design recorded
+every focused window as a session.
 
 The gate applies these rules in order.
 
 1. Reject an empty path or an empty window title.
 2. Reject any entry in `UNKNOWN_DENYLIST` (executable) or `UNKNOWN_PATH_DENYLIST`
    (path).
-3. Reject auxiliary binaries. See section 2.4.
+3. Reject auxiliary binaries. See section 2.5.
 4. Accept an Unreal shipping binary. The name `*-Win64-Shipping.exe` identifies
    it.
 5. Otherwise require one of two conditions: the process is fullscreen, or an
@@ -113,7 +135,30 @@ that is windowed and has an engine marker in its directory passes the gate.
 `LeagueClientUx.exe` has the window title "League of Legends". Its directory
 holds no engine marker, so the gate rejects it. See section 8.
 
-### 2.4 Auxiliary binaries
+### 2.4 A resolved process is not a running game
+
+Resolution matches on identity. It does not know whether the game is presenting
+anything. Three symptoms came from that one gap:
+
+| Process | Behaviour | Effect before the fix |
+|---|---|---|
+| `RobloxPlayerBeta.exe` | Quitting Roblox drops it to the tray. It stays alive with no window | The session never ended |
+| `FortniteClient-Win64-Shipping_EAC_EOS.exe` | Starts with a readable path, then anti-cheat hardens it | Opened a second session that closed at 0 minutes |
+| `VALORANT.exe` | A 0.2 MB stub that runs for the whole session | Would have been a second Valorant |
+
+**The window is the signal.** Every process observed while genuinely being
+played carried a title: `Fortnite`, `VALORANT`, `Counter-Strike 2`,
+`League of Legends (TM) Client`. Every lingering companion carried none.
+
+`drop_windowless` removes a resolved game whose process has shown no window for
+`WINDOWLESS_GRACE_SCANS` consecutive scans. The count resets when a window
+returns, and is pruned as processes exit.
+
+The grace period is deliberate. Acting on a single scan means one bad title read
+closes and reopens the session, and one night is recorded as two. Ending a few
+seconds late is the better failure.
+
+### 2.5 Auxiliary binaries
 
 The engine-marker check applies to a directory. Every executable beside a Unity
 or Unreal build gets that signature. On a Hearthstone install, this made
@@ -132,21 +177,21 @@ service, services, daemon, server, config, settings, benchmark
 The check removes trailing architecture digits first. `LeagueCrashHandler64`
 becomes `leaguecrashhandler` and then matches.
 
-### 2.5 Primary game selection
+### 2.6 Primary game selection
 
 `pick_primary` selects the game to publish to presence. A fullscreen or
 foreground process wins over a background process.
 
-### 2.6 Restart recovery
+### 2.7 Restart recovery
 
 `session_store.rs` stores sessions that are in progress. A client restart then
 keeps them. A stored session resumes only when both the pid and `started_at_ms`
 match. The OS reuses a pid, so the pid alone is not sufficient.
 
-### 2.7 Unresolved telemetry
+### 2.8 Unresolved telemetry
 
-`unresolved.rs` counts each unresolved executable one time per run. These
-executables are the candidates for `scripts/exe_mappings.json`.
+`unresolved.rs` counts each unresolved executable one time per run. Section 3.4
+covers what the counts are for.
 
 `folder_of` splits on both separators. It does not use `std::path`, which treats
 a backslash as a separator on Windows only. There are two reasons. A macOS build
@@ -219,78 +264,59 @@ The scan handles two conditions that occur on real machines.
 | Duplicate libraries. `libraryfolders.vdf` and the registry spell the Steam root differently, for example `c:/program files (x86)/steam` against `C:\Program Files (x86)\Steam`. This produced 16 entries for 8 games | `dedup_paths` normalises the paths |
 | Non-games. Steamworks Common Redistributables is an installed appid, but not a game | `NON_GAME_APPIDS` excludes it |
 
-### 3.4 User games
+### 3.4 Curation from observed misses
 
-`user_games.rs` holds only user-supplied data: confirmed games and dismissed
-executables. It replaced `game_db.rs` and `games.json`. That allowlist limited
-detection to 25 titles.
+`unresolved.rs` counts each executable that looked like a game and that no rung
+could name, keeps the top 200, and ships in the diagnostic capture bundle
+(spec 15 section 8). Entries for `scripts/exe_mappings.json` come from there.
 
-Crowd-sourced mappings are not built. The effort was too large for the current
-stage.
+Two designs were considered and rejected:
+
+| Rejected | Reason |
+|---|---|
+| Crowd-sourced mappings submitted by users | A moderation burden, and one person could mislabel a game for every crew. An unnamed game already gets a session, a stable id, a name and an icon; only the display name varies |
+| An in-client "is this a game?" prompt | Its gate accepted any foreground window, so it fired on the Riot Client and on ordinary desktop applications. It also earned little when correct, for the same reason |
+
+Removing the prompt removed the only writer to the user-confirmed rung, so
+`user_games.rs`, `Command::SetCustomGames`, `Command::AddCustomGame` and the
+`custom_games` client setting went with it.
 
 ---
 
 ## 4. Game State Manager
 
-The game state manager in mello-core consumes `GameEvent`s from the scanner and orchestrates all downstream effects.
+The game state manager in `mello-core/src/game_state.rs` consumes `GameEvent`s
+from the sensor and drives presence, the UI and the `game_session_end` RPC.
+
+### 4.1 Sessions are keyed by game, not by process
 
 ```rust
-// mello-core/src/game_state.rs
-
 pub struct GameStateManager {
-    current_game: Option<ActiveGame>,
-    session_start: Option<i64>,
-}
-
-impl GameStateManager {
-    pub fn handle_event(&mut self, event: GameEvent, ctx: &AppContext) {
-        match event {
-            GameEvent::Started(game) => {
-                self.current_game = Some(game.clone());
-                self.session_start = Some(now_ms());
-
-                // 1. Update presence
-                ctx.presence.update_activity(Activity::Playing {
-                    game_name: game.game_name.clone(),
-                    game_id: game.game_id.clone(),
-                    started_at: game.started_at,
-                });
-
-                // 2. Update bottom bar UI
-                ctx.ui.show_now_playing(&game);
-            }
-
-            GameEvent::Stopped(game) => {
-                let duration_min = self.session_start
-                    .map(|s| ((now_ms() - s) / 60_000) as u32)
-                    .unwrap_or(0);
-
-                self.current_game = None;
-                self.session_start = None;
-
-                // 1. Clear presence game activity
-                ctx.presence.clear_game_activity();
-
-                // 2. Report game session to backend (feeds event ledger)
-                if duration_min >= 2 {
-                    ctx.backend.call_rpc("game_session_end", GameSessionEndRequest {
-                        crew_id: ctx.active_crew_id(),
-                        game_name: game.game_name.clone(),
-                        duration_min,
-                    });
-                }
-
-                // 3. Trigger post-game UI flow
-                if duration_min >= 5 {
-                    ctx.ui.show_post_game(&game, duration_min);
-                }
-            }
-        }
-    }
+    /// Every open session, keyed by `game_id`.
+    sessions: HashMap<String, GameSession>,
+    /// The game the user is looking at; drives presence and the bar.
+    primary: Option<String>,
 }
 ```
 
-### 4.1 Minimum Session Thresholds
+Two games can run at once, so this is a map rather than one slot. The key is the
+`game_id` and not a pid, for a reason that is easy to get wrong:
+
+**The sensor promises one `Started` and one `Stopped` per `game_id`. It does not
+promise the same pid in both.** `coalesce_starts` and `coalesce_stops` collapse a
+title's processes to a single representative, and `upgrade_representative` swaps
+which process holds that role whenever a better one appears — silently, with no
+event. Matching a stop on its pid dropped the event, and NOW PLAYING never
+cleared.
+
+For the same reason `GameEvent::PrimaryChanged` carries a `game_id`, not a pid.
+Outside the scan loop a pid is not a stable handle for a game.
+
+Do not re-implement process coalescing here. The sensor owns it. An earlier
+attempt held a set of live pids in this struct, which duplicated
+`coalesce_stops` and disagreed with it.
+
+### 4.2 Minimum Session Thresholds
 
 | Threshold | Value | Purpose |
 |-----------|-------|---------|
@@ -488,8 +514,7 @@ mello-core/src/
 ├── game_sensing.rs     # Scan loop, resolution ladder, GameEvent enum
 ├── catalogue.rs        # head.bin / appid_index.bin readers
 ├── library.rs          # Steam / Epic / GOG install scan
-├── user_games.rs       # User-confirmed games, dismissed executables
-├── unresolved.rs       # Unresolved-executable count
+├── unresolved.rs       # Unresolved-executable count, feeds curation
 ├── session_store.rs    # Restart recovery for sessions in progress
 ├── game_state.rs       # GameStateManager, UI and presence coordination
 └── presence.rs         # GamePresence, activity types
@@ -521,6 +546,11 @@ them is out of date.
 ### 8.1 Unit tests
 
 - Resolution ladder: each rung alone, and the order of precedence.
+- Identity reconciliation: an Epic game resolves to its catalogue id; an
+  ambiguous name keeps the launcher id; an uncatalogued game keeps it too.
+- `drop_windowless`: the drop after the grace period, the reset when a window
+  returns, and the pruning of counts for dead pids.
+- Session keying: a stop matches its game when the pid differs from the start.
 - `is_auxiliary_binary`: suffix match, architecture-digit removal.
 - `looks_like_a_game`: denylists, engine markers, Unreal shipping binaries.
 - Primary selection: fullscreen preference, one game, no games.
@@ -544,9 +574,17 @@ The sensor ran against live processes on a Windows machine. The results follow.
 | `Riot Client.exe`, `RiotClientServices.exe` | Ignored |
 | `vgc.exe`, `vgtray.exe` (Vanguard) | Ignored |
 | `EpicWebHelper.exe` | Ignored |
+| `FortniteClient-Win64-Shipping.exe` | Resolved to Fortnite, one session per launch |
+| `FortniteClient-Win64-Shipping_EAC_EOS.exe`, `FortniteLauncher.exe`, `FortniteBootstrapper.exe` | Ignored |
+| `RobloxPlayerBeta.exe` | Resolved while played. Session ends once it drops to the tray |
+| `RobloxCrashHandler.exe` | Ignored |
 
 A full Steam library move to another disk re-resolved every game. It produced no
 duplicates and no orphans.
+
+Confirmed by playing each title and reading the client log: Fortnite, Roblox,
+Hearthstone, Night Stones (Steam), Valorant and League of Legends each open one
+session and close it on quit.
 
 ### 8.3 Not verified
 
