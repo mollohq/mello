@@ -78,13 +78,15 @@ pub fn wire(ctx: &AppContext) {
     });
 
     let cmd = ctx.cmd_tx.clone();
-    let app_weak: slint::Weak<MainWindow> = ctx.app.as_weak();
-    ctx.app.on_seek_clip(move |normalized| {
-        if let Some(app) = app_weak.upgrade() {
-            let duration_ms = app.get_clip_duration_ms();
-            let position_ms = (normalized * duration_ms as f32) as u32;
+    ctx.app.on_seek_clip_ms(move |position_ms| {
+        // Absolute milliseconds arrive from the waveform, which knows the
+        // per-card duration — the global clip-duration-ms is zeroed when
+        // playback finishes and would break seeks from idle.
+        if position_ms >= 0 {
             log::info!("UI: seek clip to {}ms", position_ms);
-            let _ = cmd.send(Command::SeekClip { position_ms });
+            let _ = cmd.send(Command::SeekClip {
+                position_ms: position_ms as u32,
+            });
         }
     });
 }

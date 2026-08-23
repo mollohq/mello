@@ -578,7 +578,7 @@ export component MainWindow inherits Window {
     callback play-clip(string);
     callback pause-clip();
     callback resume-clip();
-    callback seek-clip(float);
+    callback seek-clip-ms(int);
 
     // --- Onboarding callbacks ---
     callback onboarding-crew-selected(string);
@@ -899,8 +899,8 @@ export component MainWindow inherits Window {
                                     }
                                 }
                             }
-                            seek-clip(v) => {
-                                root.seek-clip(v);
+                            seek-clip-ms(m) => {
+                                root.seek-clip-ms(m);
                             }
                             invite-clicked => {
                                 root.invite-share-requested();
