@@ -117,6 +117,7 @@ Written when a detected game session ends for a user in this crew. Requires game
         "game_igdb_id": 242408,
         "player_ids": ["user_a", "user_b"],
         "player_names": ["ash", "koji"],
+        "player_overlap_min": [45, 22],
         "duration_min": 45,
         "active_min": 41
     }
@@ -130,6 +131,7 @@ Written when a detected game session ends for a user in this crew. Requires game
 - `duration_min` is wall time, from the **process creation time** — not from when Mello noticed the game. A title already running when the client starts reports the hours it actually ran.
 - `active_min` is the time the game held the foreground. A game left open overnight has honest wall time and near-zero active time; which one a surface shows is that surface's decision, so both are recorded.
 - `player_ids` lists everyone in the crew who was in that game at the same time, unioned from overlapping ledger sessions and from live presence. It is not just the actor.
+- `player_overlap_min` is index-aligned with `player_ids` and records how many whole minutes the actor overlapped each of them. Index 0 is the actor's own session duration. **Co-play copy — "you and kim played 2h of CS2" — must be built from these values and never from `duration_min`**, which describes only the actor and says nothing about how long anyone else was present. Computed by `collectCoPlayers` / `overlapMinutes` in [coplay.go](../backend/nakama/data/modules/coplay.go); touching endpoints and sub-minute overlaps both yield 0, because a session that ends as another begins is a handoff, not company.
 
 **Amendment (spec 18 — Game Telemetry):** when the client has a telemetry adapter for the game (e.g. CS2 GSI), this event's `data` is enriched with additive fields `wins`, `losses`, `result` (`"win"`/`"loss"`/`"even"`), and `streak_after` (signed: +N win streak, −N loss streak). These are backward compatible — older clients omit them. The `streak_after` value is derived server-side from the actor's private `user_game_stats` store and copied into this public event so crew surfaces can show streaks without exposing raw per-user history. See [18-GAME-TELEMETRY.md](./18-GAME-TELEMETRY.md) §5.
 
