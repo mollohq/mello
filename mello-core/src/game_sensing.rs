@@ -21,6 +21,19 @@ const ACTIVE_CADENCE_SCANS: u32 = 8;
 /// installed mid-session only has to be noticed eventually.
 const LIBRARY_RESCAN_SCANS: u32 = 20;
 const MAX_PROCESSES: usize = 512;
+/// How many consecutive scans a resolved game may present no window before its
+/// session is closed.
+///
+/// A named process is not the same as a running game. Roblox drops to the tray
+/// on quit: `RobloxPlayerBeta.exe` stays alive with no window, and the curated
+/// exe table happily resolves it, so the session never ended. Every process
+/// that was genuinely being played carried a window title — "Fortnite",
+/// "VALORANT", "Counter-Strike 2" — and every lingering companion carried none.
+///
+/// The grace period exists so one bad read cannot split a night in two. A
+/// session that closes and reopens is recorded as two sessions, which is worse
+/// than ending a few seconds late.
+const WINDOWLESS_GRACE_SCANS: u32 = 2;
 /// Executables that look game-like (fullscreen/foreground) but never are.
 /// Lowercase. Browsers, media players, launchers, comms, capture, system.
 const UNKNOWN_DENYLIST: &[&str] = &[
@@ -166,6 +179,7 @@ fn scan_loop(ctx: &SendCtx, tx: &Sender<GameEvent>) {
     let mut scans_since_library_refresh = 0u32;
     let mut fast_scans_left = ACTIVE_CADENCE_SCANS;
     let mut shadow: HashMap<u32, String> = HashMap::new();
+    let mut windowless: HashMap<u32, u32> = HashMap::new();
     let mut last_scan_at: Option<Instant> = None;
     let mut orphans = session_store::take();
     if !orphans.is_empty() {
@@ -193,6 +207,7 @@ fn scan_loop(ctx: &SendCtx, tx: &Sender<GameEvent>) {
         let now = now_ms();
 
         let detected = detect_games(&library, &processes, now);
+        let detected = drop_windowless(detected, &processes, &mut windowless);
 
         // Restart recovery, first scan only. A session whose process is still
         // alive resumes with its original start time; one whose process is
@@ -950,6 +965,49 @@ fn resolve_process(
     None
 }
 
+/// Drop games whose process has presented no window for too long.
+///
+/// Resolution answers *which* game a process is. It does not answer whether the
+/// game is being played, because the curated table and the library scan both
+/// match on identity alone. A process that resolves but shows no window is a
+/// tray resident or a companion binary, not a session.
+///
+/// `seen` carries the consecutive windowless count per pid across scans, and is
+/// pruned here so it cannot grow with dead pids.
+fn drop_windowless(
+    detected: Vec<ActiveGame>,
+    processes: &[RawGameProcess],
+    seen: &mut HashMap<u32, u32>,
+) -> Vec<ActiveGame> {
+    let mut kept = Vec::with_capacity(detected.len());
+    let mut live_pids: HashSet<u32> = HashSet::new();
+    for game in detected {
+        live_pids.insert(game.pid);
+        let has_window = processes
+            .iter()
+            .find(|p| p.pid == game.pid)
+            .is_some_and(|p| !p.window_title.trim().is_empty());
+        if has_window {
+            seen.remove(&game.pid);
+            kept.push(game);
+            continue;
+        }
+        let misses = seen.entry(game.pid).or_insert(0);
+        *misses += 1;
+        if *misses <= WINDOWLESS_GRACE_SCANS {
+            kept.push(game);
+        } else if *misses == WINDOWLESS_GRACE_SCANS + 1 {
+            log::info!(
+                "[game-sensor] {} (pid={}) has no window; ending its session",
+                game.game_name,
+                game.pid
+            );
+        }
+    }
+    seen.retain(|pid, _| live_pids.contains(pid));
+    kept
+}
+
 /// Every running process the database recognises as a game.
 ///
 /// v1 returned only one, so a second game running alongside was invisible and
@@ -1514,6 +1572,91 @@ mod tests {
         cs.window_title = "Counter-Strike 2".into();
         let found = detect_games(&LibraryIndex::default(), &[cs], NOW);
         assert_eq!(found[0].game_id, "counter-strike-2");
+    }
+
+    // --- Windowless resolved processes -----------------------------------
+
+    fn windowed(exe: &str, pid: u32, title: &str) -> RawGameProcess {
+        let mut p = make_process(exe, pid, false);
+        p.window_title = title.to_string();
+        p
+    }
+
+    fn game_named(pid: u32, id: &str) -> ActiveGame {
+        ActiveGame {
+            game_id: id.into(),
+            game_name: id.into(),
+            short_name: "G".into(),
+            color: "#888888".into(),
+            exe: format!("{id}.exe"),
+            exe_path: format!(r"C:\Games\{id}.exe"),
+            pid,
+            igdb_id: None,
+            started_at: NOW,
+            started_at_ms: NOW,
+            foreground_ms: 0,
+        }
+    }
+
+    /// Roblox drops to the tray on quit. `RobloxPlayerBeta.exe` stays alive
+    /// with no window and the curated exe table still resolves it, so the
+    /// session ran forever.
+    #[test]
+    fn a_windowless_game_is_dropped_after_the_grace_period() {
+        let mut seen = HashMap::new();
+        let proc = make_process("robloxplayerbeta.exe", 10, false);
+        let proc = RawGameProcess {
+            window_title: String::new(),
+            ..proc
+        };
+        // Grace scans keep it, so one bad read cannot split a session.
+        for scan in 1..=WINDOWLESS_GRACE_SCANS {
+            let kept = drop_windowless(
+                vec![game_named(10, "roblox")],
+                std::slice::from_ref(&proc),
+                &mut seen,
+            );
+            assert_eq!(
+                kept.len(),
+                1,
+                "dropped on scan {scan}, inside the grace period"
+            );
+        }
+        let kept = drop_windowless(vec![game_named(10, "roblox")], &[proc], &mut seen);
+        assert!(
+            kept.is_empty(),
+            "a tray resident must not hold a session open"
+        );
+    }
+
+    #[test]
+    fn a_windowed_game_is_always_kept_and_resets_the_count() {
+        let mut seen = HashMap::new();
+        let blind = RawGameProcess {
+            window_title: String::new(),
+            ..make_process("game.exe", 11, false)
+        };
+        drop_windowless(vec![game_named(11, "g")], &[blind], &mut seen);
+        assert_eq!(seen.get(&11), Some(&1), "a miss is counted");
+
+        let seeing = windowed("game.exe", 11, "The Game");
+        let kept = drop_windowless(vec![game_named(11, "g")], &[seeing], &mut seen);
+        assert_eq!(kept.len(), 1);
+        assert!(!seen.contains_key(&11), "a window resets the count");
+    }
+
+    #[test]
+    fn windowless_counts_do_not_accumulate_for_dead_pids() {
+        let mut seen = HashMap::new();
+        let blind = RawGameProcess {
+            window_title: String::new(),
+            ..make_process("game.exe", 12, false)
+        };
+        drop_windowless(vec![game_named(12, "g")], &[blind], &mut seen);
+        assert_eq!(seen.len(), 1);
+        // The game exits entirely; nothing is detected for that pid any more.
+        drop_windowless(Vec::new(), &[], &mut seen);
+        assert!(seen.is_empty(), "counts must be pruned with the process");
     }
 
     #[test]
