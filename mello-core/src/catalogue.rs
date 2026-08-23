@@ -225,6 +225,21 @@ impl Head {
             .find(|e| e.name.eq_ignore_ascii_case(name))
     }
 
+    /// Every entry whose name matches, case-insensitively.
+    ///
+    /// `by_name` returns the first hit, which is wrong for resolution: two
+    /// catalogue entries can share a name, and picking one at random would
+    /// attribute a session to the wrong game.
+    pub fn all_by_name(&self, name: &str) -> Vec<CatalogueEntry<'_>> {
+        if name.is_empty() {
+            return Vec::new();
+        }
+        (0..self.count)
+            .filter_map(|i| self.entry_at(i))
+            .filter(|e| e.name.eq_ignore_ascii_case(name))
+            .collect()
+    }
+
     pub fn len(&self) -> usize {
         self.count
     }

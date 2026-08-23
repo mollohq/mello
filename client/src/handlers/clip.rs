@@ -466,7 +466,7 @@ fn game_session_duration_display(duration_min: i64, active_min: i64) -> String {
 /// name), then the user's confirmed custom games. Unresolved names keep an
 /// empty id/short-name so the badge falls back to the raw name.
 fn resolve_game_meta(
-    ctx: &AppContext,
+    _ctx: &AppContext,
     game_id: &str,
     game_name: &str,
 ) -> (String, String, Option<String>) {
@@ -496,15 +496,6 @@ fn resolve_game_meta(
     });
     if let Some(resolved) = catalogued {
         return resolved;
-    }
-
-    let settings = ctx.settings.borrow();
-    let custom = settings.custom_games.iter().find(|g| {
-        (!game_id.is_empty() && g.id == game_id)
-            || (!game_name.is_empty() && g.name.eq_ignore_ascii_case(game_name))
-    });
-    if let Some(g) = custom {
-        return (g.id.clone(), g.short_name.clone(), None);
     }
 
     // Everything the catalogue has never heard of — a game discovered in an

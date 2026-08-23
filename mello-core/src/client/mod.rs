@@ -29,7 +29,6 @@ use crate::stream::sink::PacketSink;
 use crate::stream::sink_p2p::P2PFanoutSink;
 use crate::telemetry::{AdapterRegistry, TelemetryListener, TELEMETRY_PORT};
 use crate::transport::SfuConnection;
-use crate::user_games::UserGames;
 use crate::voice::{SignalEnvelope, SignalMessage, SignalPurpose, VoiceManager};
 
 use std::collections::{HashMap, VecDeque};
@@ -111,15 +110,6 @@ pub struct Client {
     published_game: Option<crate::presence::GamePresence>,
     #[allow(dead_code)]
     game_sensor: Option<GameSensor>,
-    /// Shared with the sensor thread so a confirmation or dismissal applies
-    /// from the next scan without a restart.
-    user_games: Arc<std::sync::RwLock<UserGames>>,
-    /// The user's own confirmed games (settings-persisted client side; the
-    /// shared store is rebuilt from this list on every change).
-    custom_games: Vec<crate::user_games::CustomGame>,
-    /// Executables the user has marked "not a game"; suppresses provisional
-    /// tracking as well as the confirm prompt.
-    dismissed_games: Vec<String>,
     /// Keeps the telemetry listener thread alive for the client's lifetime.
     #[allow(dead_code)]
     telemetry_listener: Option<TelemetryListener>,
@@ -197,31 +187,6 @@ impl Client {
         self.share_game_activity = enabled;
     }
 
-    /// Seed user-confirmed custom games from persisted client settings.
-    /// Must be called before `run()` so the sensor recognizes them from the
-    /// first scan.
-    pub fn set_custom_games(&mut self, games: Vec<crate::user_games::CustomGame>) {
-        self.custom_games = games;
-        self.rebuild_user_games();
-    }
-
-    /// Seed the "not a game" list from persisted client settings. Must be set
-    /// before `run()`: a dismissal suppresses provisional *tracking*, so a
-    /// late seed would file a session for something the user already rejected.
-    pub fn set_dismissed_games(&mut self, exes: Vec<String>) {
-        self.dismissed_games = exes;
-        self.rebuild_user_games();
-    }
-
-    /// Rebuild the shared store from settings. Tiny; runs only on
-    /// seed/confirm/dismiss, never in the scan loop.
-    fn rebuild_user_games(&self) {
-        let mut store = UserGames::new();
-        store.set_games(&self.custom_games);
-        store.set_dismissed_exes(&self.dismissed_games);
-        *self.user_games.write().expect("user games lock poisoned") = store;
-    }
-
     /// Shared frame lifecycle state used by stream_tick() and UI compositor.
     pub fn frame_lifecycle_slot(&self) -> FrameLifecycleSlot {
         self.frame_lifecycle.clone()
@@ -274,9 +239,6 @@ impl Client {
             game_state: GameStateManager::new(),
             published_game: None,
             game_sensor: None,
-            user_games: Arc::new(std::sync::RwLock::new(UserGames::new())),
-            custom_games: Vec::new(),
-            dismissed_games: Vec::new(),
             telemetry_listener: None,
             telemetry_registry: Arc::new(AdapterRegistry::with_defaults()),
             disabled_integrations: std::collections::HashSet::new(),
@@ -326,23 +288,6 @@ impl Client {
 
         loop {
             for game_event in self.drain_game_events() {
-                // Unknown-game candidates go straight to the UI for the
-                // "track it?" confirm prompt; they never touch game state,
-                // presence, or the backend unless the user confirms.
-                if let crate::game_sensing::GameEvent::UnknownCandidate {
-                    exe,
-                    path,
-                    window_title,
-                } = game_event
-                {
-                    let _ = self.event_tx.send(Event::UnknownGameCandidate {
-                        exe,
-                        path,
-                        window_title,
-                    });
-                    continue;
-                }
-
                 // Telemetry adapter side-effects on game start/stop: install the
                 // game's config on first detection, and reset adapter state on exit.
                 match &game_event {
@@ -380,8 +325,6 @@ impl Client {
                     // Focus changes carry no telemetry side-effects; the state
                     // manager handles them below.
                     crate::game_sensing::GameEvent::PrimaryChanged { .. } => {}
-                    // Forwarded to the UI above; unreachable here.
-                    crate::game_sensing::GameEvent::UnknownCandidate { .. } => {}
                 }
 
                 let (ui_events, session_end) = self.game_state.handle_event(game_event);
@@ -1054,20 +997,6 @@ impl Client {
                     )
                     .await;
                 }
-            }
-            Command::SetCustomGames { games } => {
-                self.custom_games = games;
-                self.rebuild_user_games();
-            }
-            Command::AddCustomGame { game } => {
-                log::info!(
-                    "[game-sensor] custom game confirmed: {} ({} -> {})",
-                    game.name,
-                    game.exe,
-                    game.id
-                );
-                self.custom_games.push(game);
-                self.rebuild_user_games();
             }
             Command::UploadGameIcon { game_id, png } => {
                 use base64::Engine as _;

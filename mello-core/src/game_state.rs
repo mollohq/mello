@@ -16,10 +16,18 @@ struct GameSession {
 
 #[derive(Default)]
 pub struct GameStateManager {
-    /// Every open session, keyed by pid — two games can run at once.
-    sessions: std::collections::HashMap<u32, GameSession>,
-    /// The pid the user is actually looking at; drives presence and the bar.
-    primary: Option<u32>,
+    /// Every open session, keyed by `game_id`.
+    ///
+    /// Not by pid. A modern title is several processes — Fortnite runs the
+    /// game, an EasyAntiCheat bootstrap, a launcher and a bootstrapper — and
+    /// the sensor already collapses them to one `Started` and one `Stopped`
+    /// per game. It does not promise the same pid in both: which process
+    /// represents a game is the sensor's business, and it swaps silently when
+    /// a better one appears. So a pid is not a handle here, and matching on
+    /// one dropped the stop event.
+    sessions: std::collections::HashMap<String, GameSession>,
+    /// The game the user is actually looking at; drives presence and the bar.
+    primary: Option<String>,
 }
 
 impl GameStateManager {
@@ -43,6 +51,21 @@ impl GameStateManager {
                     game.started_at
                 );
                 let pid = game.pid;
+                let game_id = game.game_id.clone();
+                // The sensor coalesces, so a repeat Started for an open game is
+                // not expected. Keep the earliest start and stay quiet rather
+                // than announce the same game twice.
+                if let Some(open) = self.sessions.get_mut(&game.game_id) {
+                    if game.started_at < open.game.started_at {
+                        open.game.started_at = game.started_at;
+                    }
+                    log::debug!(
+                        "[game-state] {} already open; keeping the first session",
+                        game.game_name
+                    );
+                    return (events, session_end);
+                }
+
                 events.push(Event::GameDetected {
                     game_id: game.game_id.clone(),
                     game_name: game.game_name.clone(),
@@ -52,7 +75,7 @@ impl GameStateManager {
                     exe_path: game.exe_path.clone(),
                 });
                 self.sessions.insert(
-                    pid,
+                    game.game_id.clone(),
                     GameSession {
                         game,
                         matches: Vec::new(),
@@ -61,20 +84,21 @@ impl GameStateManager {
                 // First game in becomes primary until the sensor says otherwise,
                 // so a single-game session never waits for a PrimaryChanged.
                 if self.primary.is_none() {
-                    self.primary = Some(pid);
+                    self.primary = Some(game_id);
                 }
             }
             GameEvent::Stopped { game, ended_at } => {
-                let Some(mut session) = self.sessions.remove(&game.pid) else {
+                let game_id = game.game_id.clone();
+                let Some(mut session) = self.sessions.remove(&game_id) else {
                     log::debug!(
-                        "[game-state] stop for untracked pid {} ({}); ignoring",
-                        game.pid,
-                        game.game_name
+                        "[game-state] stop for untracked game {} (pid {}); ignoring",
+                        game_id,
+                        game.pid
                     );
                     return (events, session_end);
                 };
-                if self.primary == Some(game.pid) {
-                    self.primary = self.sessions.keys().copied().next();
+                if self.primary.as_deref() == Some(game_id.as_str()) {
+                    self.primary = self.sessions.keys().next().cloned();
                 }
 
                 // The sensor accumulates foreground time on its scan loop and
@@ -121,11 +145,9 @@ impl GameStateManager {
                     duration_min,
                 });
             }
-            GameEvent::PrimaryChanged { pid } => {
-                self.primary = pid;
+            GameEvent::PrimaryChanged { game_id } => {
+                self.primary = game_id;
             }
-            // Handled by the client loop (confirm prompt); never reaches here.
-            GameEvent::UnknownCandidate { .. } => {}
         }
 
         (events, session_end)
@@ -179,7 +201,8 @@ impl GameStateManager {
     /// The game the user is looking at, for presence and the NOW PLAYING bar.
     pub fn current_game(&self) -> Option<&ActiveGame> {
         self.primary
-            .and_then(|pid| self.sessions.get(&pid))
+            .as_ref()
+            .and_then(|id| self.sessions.get(id))
             .map(|s| &s.game)
     }
 
@@ -374,6 +397,80 @@ mod tests {
         assert!(summary.is_none());
     }
 
+    // --- One game, several processes -------------------------------------
+    //
+    // The sensor collapses a title's processes to one Started and one Stopped
+    // per game_id. It does not promise the same pid in both: Fortnite runs the
+    // game, an EasyAntiCheat bootstrap, a launcher and a bootstrapper, and
+    // `upgrade_representative` silently swaps which one stands for the game.
+
+    /// The regression: Started and Stopped carried different pids, the stop
+    /// was filed as "untracked pid", and NOW PLAYING never cleared.
+    #[test]
+    fn stop_matches_the_game_even_when_the_pid_differs() {
+        let mut m = GameStateManager::new();
+        let started = game_at(35184, "fortnite", START);
+        m.handle_event(GameEvent::Started(started));
+
+        // Same game, the pid the sensor happens to represent it by now.
+        let mut stopped = game_at(24636, "fortnite", START);
+        stopped.foreground_ms = 7 * 60_000;
+        let (events, summary) = m.handle_event(GameEvent::Stopped {
+            game: Box::new(stopped),
+            ended_at: START + 7 * 60_000,
+        });
+
+        assert_eq!(events.len(), 1, "the game must end even under a new pid");
+        let summary = summary.expect("session recorded");
+        assert_eq!(summary.game_id, "fortnite");
+        assert_eq!(summary.duration_min, 7);
+        assert!(!m.any_active(), "NOW PLAYING must clear");
+    }
+
+    #[test]
+    fn a_repeat_start_does_not_announce_the_game_twice() {
+        let mut m = GameStateManager::new();
+        let (first, _) = m.handle_event(GameEvent::Started(game_at(100, "fortnite", START)));
+        let (second, _) =
+            m.handle_event(GameEvent::Started(game_at(200, "fortnite", START + 8_000)));
+        assert_eq!(first.len(), 1);
+        assert!(
+            second.is_empty(),
+            "got a duplicate announcement: {second:?}"
+        );
+    }
+
+    #[test]
+    fn session_duration_spans_the_earliest_start_seen() {
+        let mut m = GameStateManager::new();
+        // A launcher announced first, then the game itself 90s later.
+        m.handle_event(GameEvent::Started(game_at(100, "fortnite", START)));
+        m.handle_event(GameEvent::Started(game_at(200, "fortnite", START + 90_000)));
+
+        let (_, summary) = m.handle_event(GameEvent::Stopped {
+            game: Box::new(game_at(200, "fortnite", START + 90_000)),
+            ended_at: START + 90_000 + 10 * 60_000,
+        });
+        assert_eq!(
+            summary.expect("session recorded").duration_min,
+            11,
+            "duration must span the whole launch"
+        );
+    }
+
+    #[test]
+    fn stop_for_a_game_that_is_not_open_is_ignored() {
+        let mut m = GameStateManager::new();
+        m.handle_event(GameEvent::Started(game_at(100, "fortnite", START)));
+        let (events, summary) = m.handle_event(GameEvent::Stopped {
+            game: Box::new(game_at(999, "counter-strike-2", START)),
+            ended_at: START + 60_000,
+        });
+        assert!(events.is_empty());
+        assert!(summary.is_none());
+        assert!(m.any_active(), "the open game is untouched");
+    }
+
     #[test]
     fn two_games_hold_independent_sessions() {
         // v1 kept a single Option, so starting a second game silently replaced
@@ -429,7 +526,9 @@ mod tests {
         assert_eq!(mgr.current_game().unwrap().game_id, "counter-strike-2");
 
         mgr.handle_event(GameEvent::Started(dota));
-        mgr.handle_event(GameEvent::PrimaryChanged { pid: Some(2) });
+        mgr.handle_event(GameEvent::PrimaryChanged {
+            game_id: Some("dota-2".into()),
+        });
         assert_eq!(mgr.current_game().unwrap().game_id, "dota-2");
 
         // Losing the primary game promotes a survivor rather than going blank

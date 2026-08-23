@@ -1,47 +1,60 @@
 # MELLO Feed Curation & Personal Stats Specification
 
 > **Component:** Personal Stats Surface, Crew Feed Curation for Game Sessions
-> **Version:** 0.2
-> **Status:** Partially implemented — the You strip, `user_game_stats_get`,
-> the notability gate and the feed budget are shipped; the rich session card
-> and the deep profile view are not
+> **Version:** 0.3
+> **Status:** Implemented. The deep profile view (section 2.4), the weekly recap game section (section 3.5) and the rich telemetry session card (section 3.6) are not built.
 > **Parent:** [00-ARCHITECTURE.md](./00-ARCHITECTURE.md)
-> **Related:** [18-GAME-TELEMETRY.md](./18-GAME-TELEMETRY.md), [16-CREW-EVENT-LEDGER.md](./16-CREW-EVENT-LEDGER.md), [04-BACKEND.md](./04-BACKEND.md), [11-PRESENCE-CREW-STATE.md](./11-PRESENCE-CREW-STATE.md)
+> **Related:** [17-GAME-SENSING.md](./17-GAME-SENSING.md), [18-GAME-TELEMETRY.md](./18-GAME-TELEMETRY.md), [16-CREW-EVENT-LEDGER.md](./16-CREW-EVENT-LEDGER.md), [22-GAME-UI-SURFACES.md](./22-GAME-UI-SURFACES.md), [04-BACKEND.md](./04-BACKEND.md), [11-PRESENCE-CREW-STATE.md](./11-PRESENCE-CREW-STATE.md)
 
 ---
 
 ## 1. Overview
 
-Spec 18 produces game outcomes and per-user streaks. This spec covers **how they are surfaced**: a personal "my stats" view (the literal survey ask — *"an overview of my win/loss streaks in CS"*) and a crew feed that mixes game sessions with clips, streams, and recaps **without being flooded** as a crew's play scales up.
+Spec 18 produces game outcomes and per-user streaks. Spec 17 produces a session
+for every game, with or without telemetry. This spec selects which sessions to
+show. It also defines the personal stats surface.
 
-The core realization: these are **two independent jobs** that were being conflated.
+This spec does not define how a card looks. See
+[22-GAME-UI-SURFACES.md](./22-GAME-UI-SURFACES.md).
 
 ```
 ┌────────────────────────────┐     ┌────────────────────────────────────┐
 │ PERSONAL LANE (per-user)   │     │ CREW LANE (shared, identical)      │
 │ "my win/loss streaks"      │     │ the curated crew feed              │
 │                            │     │                                    │
-│  • You strip (glance)      │     │  • notable session → rich card     │
-│  • Profile (depth)         │     │  • the rest → weekly recap rollup  │
-│                            │     │  • threshold rises with volume     │
+│  • You strip (glance)      │     │  • session clears the bar → card   │
+│  • Profile (NOT BUILT)     │     │  • the rest → CREW PLAY rollup     │
+│                            │     │  • bar rises with crew volume      │
 │  always on · no curation   │     │  • same for every member           │
-│  backed by user_game_stats │     │  built on crew_feed.go + recap     │
+│  backed by user_game_stats │     │  built on crew_feed.go             │
 └────────────────────────────┘     └────────────────────────────────────┘
 ```
 
-### Decisions (locked with the operator)
+### The change from version 0.2
+
+Version 0.2 gated feed cards on telemetry signals: rank changes, streak
+milestones and personal bests. Nine adapters cover a catalogue of thousands of
+games. That gate excluded most play. A user whose games have no adapter never
+appeared in the crew feed.
+
+The gate is now T0-first. Duration and company earn a card without an adapter.
+Telemetry bonuses add to that score when they exist.
+
+### Decisions
 
 | Decision | Choice | Consequence |
-|----------|--------|-------------|
-| Personal surface | **Both** a "You" strip + a deeper profile | Survey ask served independently of the feed |
-| Feed personalization | **Identical for everyone** | Feed filters on *notability only*; ownership is irrelevant there |
-| Volume handling | **Adaptive notability threshold** | One knob scales low → high volume crews |
-| Routine sessions in feed | **Folded into the weekly recap** (no separate digest card) | No per-session spam; enriches the premium recap |
-| Notable sessions in feed | **Rich card (mockup), degraded to per-game available stats** | Earned, rare, high-signal |
+|---|---|---|
+| Personal surface | A You strip and a deeper profile | The survey request is served without the feed |
+| Feed personalization | Identical for every member | The feed filters on notability only |
+| Volume handling | Adaptive notability threshold | One control scales low and high volume crews |
+| Routine sessions in feed | A `CREW PLAY` rollup card | Replaces the version 0.2 choice. See section 3.3 |
+| Sessions without telemetry | Earn cards from duration and company | Most play stays visible |
 
-### Why "identical feed" simplifies everything
+### Effect of an identical feed
 
-Because the feed is the same for everyone, it never asks *"whose session is this?"* — only *"is this crew-worthy?"* Ownership matters **only** in the personal lane. So the two-axis model (notability × ownership) collapses: the **feed is a pure notability filter**, and the **personal lane carries everything about you**, always.
+The feed never asks which member owns a session. It asks only whether the crew
+wants to see it. Ownership applies to the personal lane only. The feed is a
+notability filter. The personal lane always carries the user's own data.
 
 ---
 
@@ -66,6 +79,16 @@ type UserGameStats struct {
     LastResult        string   `json:"last_result"`
     LastPlayed        int64    `json:"last_played"`        // NEW — for "active/top game" selection
     UpdatedAt         int64    `json:"updated_at"`
+    PlayedMinTotal    int              `json:"played_min_total"` // NEW - lifetime wall minutes
+    ActiveMinTotal    int              `json:"active_min_total"` // NEW
+    RecentDays        []RecentDayEntry `json:"recent_days"`      // NEW - oldest first, capped
+}
+
+```go
+type RecentDayEntry struct {
+    Date      string `json:"date"`       // "YYYY-MM-DD" (UTC)
+    WallMin   int    `json:"wall_min"`
+    ActiveMin int    `json:"active_min"`
 }
 ```
 
@@ -82,6 +105,15 @@ Authenticated; returns only the caller's own stats across all games. Owner-read 
 
 ### 2.3 You strip
 
+> **Implemented.** The selection rule changed. The strip picks the most
+> recently played game with `games.first()`. It no longer picks the first game
+> that has a win/loss record. Selection by record left an empty strip for any
+> user whose games have no adapter.
+>
+> The strip shows play time when no record exists. Functions: `weekly_minutes`
+> and `weekly_time_text` in `client/src/handlers/stats.rs`. Both apply the
+> overnight guard. See [22](./22-GAME-UI-SURFACES.md) section 4.3.
+
 A compact card pinned at the **top of the crew feed**, showing the viewer's top/active game:
 
 ```
@@ -94,7 +126,10 @@ A compact card pinned at the **top of the crew feed**, showing the viewer's top/
 - Tappable → profile.
 - Always present (even at zero crew activity); shows an empty/encouraging state if no games tracked.
 
-### 2.4 Profile / "Me" view
+### 2.4 Profile / "Me" view — NOT BUILT
+
+> Designed. Not built. The store holds `RecentDays`, which supplies the trend
+> views below, so the data is available.
 
 A dedicated stats view, deeper than the strip:
 - Per-game cards: streak (current/longest), W/L/D record, win-rate, recent-form sparkline.
@@ -103,125 +138,215 @@ A dedicated stats view, deeper than the strip:
 
 ---
 
+---
+
+---
+
 ## 3. Lane B — Crew Feed Curation
 
-Shared, identical for all members. Built on the existing curation in [crew_feed.go](../backend/nakama/data/modules/crew_feed.go) (`buildThisWeek`, `fillerPriority`, `fillerRole`, `sessionPreviewQuality`, `feedQuietBackendTypes`).
+The crew feed is shared and identical for all members. Implementation:
+[crew_feed.go](../backend/nakama/data/modules/crew_feed.go). Functions:
+`buildThisWeek`, `pruneGameSessions`, `fillerPriority`, `fillerRole`,
+`sessionPreviewQuality`.
 
 ### 3.1 Notability gate
 
-A `gameSessionQuality(card)` scorer (mirroring `sessionPreviewQuality`) decides whether a session **earns a rich card**. Signals (server-side, tunable):
+`gameSessionQuality(card)` scores every `game_session`. The score has two parts.
+The T0 base always applies. Telemetry only adds to it.
 
-| Signal | Example |
-|--------|---------|
-| Rank change | promoted/demoted a tier or division |
-| Streak milestone | reached a 3+/5+ win streak, or **snapped** a long loss skid |
-| Personal/seasonal best | career-high K/D, first ace, a flawless `5–0` night |
-| Notably bad | a brutal `0–7` (sympathy card) |
-| Big session | long duration × many matches |
+T0 base, from `gameSessionT0Score`. No adapter is needed.
 
-Sessions below the bar do **not** get individual cards — they fold into the weekly recap rollup (§3.3).
+| Signal | Score |
+|---|---|
+| Duration 240 min or more | +40 |
+| Duration 120 min or more | +25 |
+| Duration 30 min or more | +10 |
+| Each co-player after the actor | +20, to a maximum of +60 |
+
+Telemetry bonuses. These apply only when `wins + losses + draws > 0`.
+
+| Signal | Score |
+|---|---|
+| Streak magnitude 5 or more | +120 |
+| Streak magnitude 3 or more | +80 |
+| 3 or more wins, no losses | +70 |
+| 5 or more losses, no wins | +50 |
+| 8 or more matches | +50 |
+| 5 or more matches | +20 |
+
+A card that is not a `game_session` returns `feedMinQuality`. It does not enter
+this gate.
 
 ### 3.2 Adaptive threshold
 
-The bar rises with crew activity so the feed stays balanced at any scale:
+The floor and the card cap change with the number of sessions in the week.
 
-| Crew volume | Threshold | Notable cards in `this_week` | Routine sessions |
-|-------------|-----------|------------------------------|------------------|
-| Low (few/wk) | low — almost anything qualifies | most sessions show | recap rollup (sparse) |
-| Medium | mid | crew highlights only | recap rollup |
-| High (all day) | high — milestones only | ≤1–2/day | recap rollup (full leaderboard) |
+| Game sessions in the week | Floor (`gameSessionNotableFloor`) | Card cap (`gameSessionCardCap`) |
+|---|---|---|
+| 5 or fewer | 10 | 4 |
+| 6 to 15 | 30 | 2 |
+| More than 15 | 50 (`feedGameSessionNotableMin`) | 2 (`feedGameSessionMaxCards`) |
 
-Computed from recent `game_session` volume for the crew (e.g. a percentile of the week's session quality scores, or a simple count-based step). Auto-tuned server-side; a crew override ("show everything" ↔ "highlights only") is a future option.
+A floor of 10 equals one 30-minute solo session. In a low-volume crew, any real
+session earns a card.
 
-### 3.3 Crew game rollup → the weekly recap (no separate card)
+A crew override, from "show everything" to "highlights only", is a future
+option.
 
-Routine play is **not** given its own feed card. Instead the crew-level game aggregate lives in the **weekly recap**, which is currently sparse and is a **premium / m3llo+ surface** (the durable memory spine, with the locked upsell). This keeps the feed clean and gives the recap "good stuff worth paying for."
+### 3.3 Routine play — the `CREW PLAY` rollup
 
-The recap already carries the seed of this — `GameRecords` (per-member W/L) + `BestStreak`, added in spec 18 ([crew_recaps.go](../backend/nakama/data/modules/crew_recaps.go)). Extend it into a real "this week in games" section:
+`pruneGameSessions` returns the removed sessions separately. `buildGameRollup`
+builds one card per crew per day from them.
 
-```go
-// WeeklyRecapData additions (extends the existing GameRecords/BestStreak)
-GamesPlayed   []GameTally       `json:"games_played"`   // [{game, matches}] across the crew
-Leaderboard   []RecapGameRecord `json:"leaderboard"`    // already have RecapGameRecord (W/L); sort + cap
-Awards        []RecapAward      `json:"awards"`         // fun, shareable superlatives (below)
-```
+| Element | Content |
+|---|---|
+| Member line | `ostkatt · Valorant · 4h` |
+| Footer | Session count and total crew hours |
 
-Candidate **fun / pay-worthy** content (tunable; pick a rotating subset so it stays fresh):
-- Leaderboard — W/L/streak per member, ranked
-- Grinder of the week — most matches played
-- Biggest heater / worst skid — longest win / loss streak
-- Most improved — win-rate delta vs last week
-- Clutch / MVP counts (where the adapter provides them)
-- Head-to-head — a crew rivalry stat
-- Comeback — snapped the longest losing streak
+Fewer than three removed sessions produce no rollup card.
 
-This is a recap enrichment, not a new feed card type — so the feed stays focused and the recap earns its place behind the paywall.
+Version 0.2 stated that routine play gets no card of its own, and that the crew
+aggregate belongs in the weekly recap. The weekly recap is a premium surface.
+That design hid the ordinary play of non-paying crews, which contradicts the
+T0 decision in section 1. The recap enrichment in section 3.5 is still wanted,
+but it does not hold routine play.
+
+Rollup minutes use the overnight guard. See
+[22](./22-GAME-UI-SURFACES.md) section 4.3. `reportableMinutes` in
+`crew_feed.go` applies it. Raw wall time made the rollup contradict the session
+cards below it.
 
 ### 3.4 Curation budget
 
-Extend `buildThisWeek`:
-- Promote at most **N** (≈2) notable game-session cards, chosen by `gameSessionQuality`.
-- Routine `game_session` events no longer become individual cards (today they render as quiet/sm rows — the four identical "SESSION · Counter-Strike 2" cards seen in testing). Their aggregate lives in the weekly recap (§3.3), not the feed.
-- Add the rich session card to `mapCardType` / `fillerPriority` / `fillerRole`.
+`buildThisWeek` applies these rules:
 
-### 3.5 Per-game data degradation
+- Cards that are not game sessions pass through unchanged and in order.
+- `game_session` cards above the floor survive, to the cap in section 3.2.
+- Removed sessions go to the rollup in section 3.3.
+- `mapCardType`, `fillerPriority` and `fillerRole` register both `game_session`
+  and `game_rollup`.
 
-The rich card (mockup) uses the **same IA, different stat slots**, populated by whatever the game's adapter actually provides:
+Curation runs server-side. Only `order`, `role`, `size` and `type` cross to the
+client. A threshold change needs no client release.
 
-| Game | Available (rich card slots) | Not available |
-|------|------------------------------|---------------|
+### 3.5 Weekly recap enrichment — NOT BUILT
+
+The recap carries `GameRecords` and `BestStreak` from spec 18. See
+[crew_recaps.go](../backend/nakama/data/modules/crew_recaps.go). The extension
+below is designed but not built.
+
+```go
+GamesPlayed   []GameTally       `json:"games_played"`
+Leaderboard   []RecapGameRecord `json:"leaderboard"`
+Awards        []RecapAward      `json:"awards"`
+```
+
+Candidate awards: most matches played, longest win streak, longest loss streak,
+largest win-rate change, clutch counts where the adapter supplies them,
+head-to-head record, and longest loss streak ended.
+
+### 3.6 Per-game data degradation
+
+A card renders the stats that exist. A card must not show an empty slot.
+
+| Game | Available | Not available |
+|---|---|---|
 | CS2 (GSI) | K/D, W/L, streak, MVPs, map | ADR, HS%, Premier rating |
-| League (Live Client API) | KDA, CS/min, vision, rank/LP | — (rich) |
-| Apex | — (no official live API) | most live stats |
+| League (Live Client API) | KDA, CS/min, vision, rank/LP | — |
+| Valorant, Fortnite, most of the catalogue | Duration, co-players | All match statistics |
 
-Cards must render gracefully with whatever subset exists; never show empty slots. The mockup's full CS2 stat set (ADR/HS%/rating) is **aspirational** and needs an extra source (a Leetify/Steam-style API or scoreboard OCR) tracked separately in spec 18 future work.
+For this reason the session card has two bodies. See
+[22](./22-GAME-UI-SURFACES.md) section 4.1. The compact body is implemented.
+
+The rich telemetry card from the mockup is not built. Its full CS2 stat set
+needs a source that does not exist yet, such as a Leetify-style API or scoreboard
+OCR. Spec 18 tracks that source.
 
 ---
 
 ## 4. Data Model & API Summary
 
-| Change | Where | New/Modified |
-|--------|-------|--------------|
-| `Draws`, `RecentForm`, `LastPlayed` on `UserGameStats` | `user_game_stats.go` | Modified (additive) |
-| `user_game_stats_get` RPC | new `user_game_stats.go` handler + `main.go` registration | New |
-| `gameSessionQuality()` + threshold | `crew_feed.go` | New |
-| Weekly recap game section (leaderboard, awards) | `crew_recaps.go`, recap card renderer | Modified (extends `GameRecords`/`BestStreak`) |
-| `buildThisWeek` budget (cap notable session cards) | `crew_feed.go` | Modified |
-| You strip + Profile surfaces | `client/ui/panels/*`, handlers, a `Command`/`Event` for `user_game_stats_get` | New |
-
-Curation stays server-side: only `order / role / size / type` cross to the client, so threshold and budget tuning need no client release.
+| Change | Where | Status |
+|---|---|---|
+| `Draws`, `RecentForm`, `LastPlayed` on `UserGameStats` | `user_game_stats.go` | Implemented |
+| `PlayedMinTotal`, `ActiveMinTotal`, `RecentDays` | `user_game_stats.go` | Implemented |
+| `user_game_stats_get` RPC | `user_game_stats.go`, `main.go` | Implemented |
+| `gameSessionT0Score`, `gameSessionQuality`, floor and cap | `crew_feed.go` | Implemented |
+| `pruneGameSessions`, `buildGameRollup`, `reportableMinutes` | `crew_feed.go` | Implemented |
+| You strip | `client/src/handlers/stats.rs`, `client/ui/panels/*` | Implemented |
+| Weekly recap game section | `crew_recaps.go` | Not built. Section 3.5 |
+| Deep profile view | Client | Not built. Section 2.4 |
+| Rich telemetry session card | Client | Not built. Section 3.6 |
 
 ---
 
 ## 5. Build Order
 
-0. **Deploy spec-18 backend** (prerequisite — streak persistence).
-1. **A1 — You strip** + `user_game_stats_get` (and `Draws`/`RecentForm`/`LastPlayed`). → Delivers the survey ask; no curation risk.
-2. **B1 — weekly-recap game section (leaderboard + awards) + notability gate + feed budget.** → Fixes feed flooding immediately (routine sessions roll into the recap) and fills out the premium recap, even before the rich card.
-3. **B2 — rich notable session card** (mockup, CS2 stat set).
-4. **A2 — deep profile view.**
-5. Later — more adapters (League next), richer per-game stat capture (spec 18), crew-configurable threshold.
+The build is complete. The steps were delivered in this order.
 
-Steps 1→2 deliver ~80% of the value (personal streaks + a clean feed) before the heavier rich-card/profile work.
-
+1. T0 scoring and the compact session card.
+2. Per-member playing line. See [22](./22-GAME-UI-SURFACES.md) section 3.3.
+3. `CREW PLAY` rollup.
+4. Per-co-player `overlap_min`. Data only. No surface reads it.
+5. You strip play time.
 ---
 
 ## 6. Testing
 
-- **Pure curation (Go, no Nakama):** `gameSessionQuality` ranking; threshold steps across simulated low/med/high volume; `buildThisWeek` caps notable cards at N; routine sessions never produce individual cards. Weekly recap aggregates the crew leaderboard + awards from the week's `game_session` events.
-- **Stats (Go):** `user_game_stats_get` returns only the caller's data, sorted by `last_played`; `RecentForm` capped and ordered; draws counted without moving the streak.
-- **Client:** You strip renders from `user_game_stats_get`, empty state when no games; profile per-game breakdown.
-- **Manual:** with the spec-18 emulator, drive several sessions across members and confirm the feed shows ≤N notable cards (not a wall of session cards) with routine play rolled into the weekly recap, and the You strip reflects the viewer's own streak.
+Curation, in Go, without Nakama:
+
+- `gameSessionT0Score` and `gameSessionQuality` ranking. A session without
+  telemetry must still score.
+- Floor and cap steps at low, medium and high volume.
+- `pruneGameSessions` limits the number of surviving cards.
+- `buildGameRollup` aggregates removed sessions. It returns false below three.
+- `reportableMinutes` overnight guard. An overnight session must not increase
+  the rollup total.
+
+Stats, in Go:
+
+- `user_game_stats_get` returns only the caller's data, sorted by `last_played`.
+- `RecentForm` is capped and ordered.
+- A draw counts, but does not change the streak.
+- `applySessionPlayTime` adds wall and active minutes.
+
+Client:
+
+- The You strip renders from `user_game_stats_get`.
+- The strip shows play time when no W/L record exists.
+- The strip shows an empty state when the user has no games.
+
+Not covered: no surface has run against a live backend with real crew traffic.
+The manual test is not done. That test drives several sessions across members
+with the spec-18 emulator. It then confirms that the feed shows a few session
+cards and one `CREW PLAY` rollup.
 
 ---
 
 ## 7. Out of Scope / Future
 
-- Per-match streaks (this spec keeps spec 18's per-session granularity).
-- External stat sources for CS2 ADR/HS%/rating (spec 18 future).
-- Crew-configurable curation ("show everything" toggle).
-- Cross-game "career" profile and seasonal resets.
+Designed, not built:
+
+| Item | Section |
+|---|---|
+| Deep profile view | 2.4 |
+| Weekly recap game section | 3.5 |
+| Rich telemetry session card | 3.6 |
+| Co-play duration copy | [22](./22-GAME-UI-SURFACES.md) 4.4 |
+
+The ledger records `player_overlap_min`. No surface reads it.
+
+Out of scope:
+
+- Per-match streaks. This spec keeps the per-session granularity of spec 18.
+- External stat sources for CS2 ADR, HS% and rating. See spec 18.
+- Crew-configurable curation.
+- Cross-game career profile and seasonal resets.
 
 ---
 
-*This spec covers surfacing: the personal stats lane (You strip + profile) and crew feed curation (notability gate, adaptive threshold, weekly-recap rollup). The outcome/streak data it consumes is produced by [18-GAME-TELEMETRY.md](./18-GAME-TELEMETRY.md). For the feed/ledger mechanics it builds on, see [16-CREW-EVENT-LEDGER.md](./16-CREW-EVENT-LEDGER.md).*
+*This spec defines curation and the personal stats lane. For card appearance,
+see [22-GAME-UI-SURFACES.md](./22-GAME-UI-SURFACES.md). Spec
+[18-GAME-TELEMETRY.md](./18-GAME-TELEMETRY.md) produces the outcome data. Spec
+[17-GAME-SENSING.md](./17-GAME-SENSING.md) produces the sessions. Spec
+[16-CREW-EVENT-LEDGER.md](./16-CREW-EVENT-LEDGER.md) defines the ledger.*

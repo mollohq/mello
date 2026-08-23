@@ -1,17 +1,22 @@
 # MELLO Game Telemetry Specification
 
 > **Component:** Game Telemetry Adapters, Match Outcomes, Streak Stats
-> **Version:** 0.2
+> **Version:** 0.3
 > **Status:** Implemented — nine adapters shipped (CS2, Dota 2, LoL, Rocket
 > League, LoR, Hearthstone, Minecraft, Path of Exile, StarCraft II)
 > **Parent:** [00-ARCHITECTURE.md](./00-ARCHITECTURE.md)
-> **Related:** [16-CREW-EVENT-LEDGER.md](./16-CREW-EVENT-LEDGER.md), [17-GAME-SENSING.md](./17-GAME-SENSING.md), [11-PRESENCE-CREW-STATE.md](./11-PRESENCE-CREW-STATE.md), [02-MELLO-CORE.md](./02-MELLO-CORE.md), [19-FEED-CURATION-PERSONAL-STATS.md](./19-FEED-CURATION-PERSONAL-STATS.md)
+> **Related:** [16-CREW-EVENT-LEDGER.md](./16-CREW-EVENT-LEDGER.md), [17-GAME-SENSING.md](./17-GAME-SENSING.md), [11-PRESENCE-CREW-STATE.md](./11-PRESENCE-CREW-STATE.md), [02-MELLO-CORE.md](./02-MELLO-CORE.md), [19-FEED-CURATION-PERSONAL-STATS.md](./19-FEED-CURATION-PERSONAL-STATS.md), [22-GAME-UI-SURFACES.md](./22-GAME-UI-SURFACES.md)
 >
-> **§6 "Crew-First Surfacing" belongs in
-> [19-FEED-CURATION-PERSONAL-STATS.md](./19-FEED-CURATION-PERSONAL-STATS.md)**,
-> which owns surfacing. It predates spec 19 and is pending relocation.
+> **Scope.** This spec covers *producing* outcome and streak data: adapters,
+> the normalized outcome model, and persistence. It does not cover how any of
+> it is drawn. Which sessions reach a feed is
+> [19-FEED-CURATION-PERSONAL-STATS.md](./19-FEED-CURATION-PERSONAL-STATS.md);
+> what the surfaces look like is
+> [22-GAME-UI-SURFACES.md](./22-GAME-UI-SURFACES.md).
 >
-> **Note:** this spec covers *producing* outcome/streak data. How it's *surfaced* — the personal "my streaks" view (You strip + profile) and crew feed curation (notability gate, adaptive threshold, games digest) — is its own spec, [19-FEED-CURATION-PERSONAL-STATS.md](./19-FEED-CURATION-PERSONAL-STATS.md).
+> **Coverage.** Nine adapters cover a catalogue of thousands of games. Most
+> sessions therefore carry no W/L record. Every surface must treat outcome data
+> as absent by default. See spec 19 section 3.6.
 
 ---
 
@@ -423,20 +428,20 @@ The one place a web API beats local telemetry: Riot's post-match data can *verif
 
 ---
 
-## 6. Crew-First Surfacing
+## 6. Games Settings & Consent
 
-| Surface | Change | File |
-|---------|--------|------|
-| Bottom-bar post-game | When telemetry produced a decisive session, pre-fill `CS2 · 5W–3L · +2 streak` with one-tap confirm/share instead of blank "How'd it go?"; manual tap remains the fallback | `client/src/handlers/game.rs`, `client/ui/.../post_game.slint` |
-| Catch-up card | Streak-aware `game_session` fragment, e.g. *"ash closed the night 5W–2L in CS2, riding a 4-win streak"* | `crew_events.go` `renderEventFragment` |
-| Crew feed | Render W–L + streak on the `session` card | `crew_feed.go`, `client/ui/.../crew_feed.slint`, `handlers/clip.rs` |
-| Crew sidebar | Optional small record/streak badge on live game entries | `sidebar_game.slint` (spec 17 §6) |
-| Weekly recap | Per-member W/L record + best streak of the week | `crew_recaps.go` `WeeklyRecapData` |
-| HUD overlay | Optional live round/score line during a competitive match | `client/src/hud_manager.rs`, `HudState` |
+> The surfacing table moved out of this spec. It listed the post-game card, the
+> catch-up fragment, the feed card, the sidebar badge, the weekly recap and the
+> HUD. Curation is now [19-FEED-CURATION-PERSONAL-STATS.md](./19-FEED-CURATION-PERSONAL-STATS.md).
+> Appearance is now [22-GAME-UI-SURFACES.md](./22-GAME-UI-SURFACES.md).
+>
+> This section keeps adapter consent and account linking. Both belong to
+> telemetry.
 
-A standalone personal stats page is out of scope (visibility is crew-first), but `user_game_stats` makes it a clean future addition.
+An earlier version listed a personal stats page as out of scope. That page is
+Lane A of spec 19 and is implemented.
 
-### 6.1 Games settings & consent
+### 6.1 Adapter consent
 
 Settings → **Games** lists every registered adapter (`AdapterInfo`: name, one-line
 mechanism note, `writes_files` flag) with an install-detection badge

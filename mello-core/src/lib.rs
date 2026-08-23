@@ -27,7 +27,6 @@ pub mod stream;
 pub mod telemetry;
 pub mod transport;
 pub mod unresolved;
-pub mod user_games;
 pub mod voice;
 
 pub use client::{

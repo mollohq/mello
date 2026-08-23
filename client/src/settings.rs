@@ -50,23 +50,9 @@ pub struct Settings {
     pub disabled_game_integrations: Vec<String>,
     /// User dismissed the post-game "connect Riot account" CTA; don't re-ask.
     pub riot_prompt_dismissed: bool,
-    /// User-confirmed games outside the bundled DB (the "track it?" flow).
-    pub custom_games: Vec<CustomGameSetting>,
-    /// Lowercase exe names the user marked "not a game"; never re-prompted.
-    pub unknown_game_dismissed: Vec<String>,
     /// When false, sensed play is kept local — no crew presence or session-end RPCs.
     #[serde(default = "default_share_game_activity")]
     pub share_game_activity: bool,
-}
-
-/// Persisted form of a user-confirmed custom game (mirrors
-/// `mello_core::user_games::CustomGame`).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CustomGameSetting {
-    pub id: String,
-    pub name: String,
-    pub short_name: String,
-    pub exe: String,
 }
 
 impl Default for Settings {
@@ -107,8 +93,6 @@ impl Default for Settings {
             seen_session_ids: Vec::new(),
             disabled_game_integrations: Vec::new(),
             riot_prompt_dismissed: false,
-            custom_games: Vec::new(),
-            unknown_game_dismissed: Vec::new(),
             share_game_activity: default_share_game_activity(),
         }
     }
