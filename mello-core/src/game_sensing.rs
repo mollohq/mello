@@ -110,8 +110,13 @@ pub enum GameEvent {
     },
     /// The game the user is actually looking at changed. Drives presence and
     /// the NOW PLAYING bar; `None` when no game holds focus.
+    ///
+    /// Carries the `game_id`, not the representative pid. Which process stands
+    /// for a game is this module's business: `upgrade_representative` swaps it
+    /// silently when a better process appears, so a pid is not a stable handle
+    /// outside the scan loop.
     PrimaryChanged {
-        pid: Option<u32>,
+        game_id: Option<String>,
     },
 }
 
@@ -297,7 +302,10 @@ fn scan_loop(ctx: &SendCtx, tx: &Sender<GameEvent>) {
                     .map_or("none", |g| g.game_name.as_str())
             );
             primary = next_primary;
-            if tx.send(GameEvent::PrimaryChanged { pid: primary }).is_err() {
+            let game_id = primary
+                .and_then(|p| active.get(&p))
+                .map(|g| g.game_id.clone());
+            if tx.send(GameEvent::PrimaryChanged { game_id }).is_err() {
                 return;
             }
         }
