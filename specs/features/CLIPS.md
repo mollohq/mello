@@ -2,7 +2,7 @@
 
 > **Component:** Crew Memory, Clips, Crew Feed  
 > **Version:** 1.0  
-> **Status:** v1 In Progress (durable crew memory landed: clips and recaps persist outside the ledger trim)  
+> **Status:** v1 In Progress (durable crew memory landed: clips and recaps persist outside the ledger trim; dot-matrix waveform clip cards + fresh-clip premiere landed)  
 > **Depends on:** CREW-EVENT-LEDGER.md, 13-VOICE-CHANNELS.md  
 > **Mockups:** m3llo-crew-feed-mockup-v4.html (populated), m3llo-crew-feed-cold-start-full.html (empty)
 
@@ -37,7 +37,7 @@ Clips are also m3llo's primary organic growth channel. Every clip shared externa
 Captured during a voice session. Audio only. Contains:
 
 - Last 30 seconds of mixed voice audio from all participants
-- Played back with a waveform visualization and crew member avatars
+- Played back with a dot-matrix waveform (`DotWaveform`) and crew member avatars
 
 Good for capturing funny conversations, heated arguments, singing, whatever happens in voice.
 
@@ -129,13 +129,15 @@ Client reads last 30 seconds from disk buffer
     │
     ▼
 Client muxes into MP4 (audio-only for voice clips)
+mello-core computes the 64-bucket peak waveform from the WAV
     │
     ▼
 MP4 saved to local disk immediately
     │
     ▼
 Clip metadata sent to backend via RPC: post_clip
-    (clip_id, crew_id, clip_type, game, participants, timestamp, duration)
+    (clip_id, crew_id, clip_type, game, participants, timestamp, duration,
+     waveform = 64 u8 peaks, base64)
     │
     ▼
 Backend stores metadata in crew event ledger
@@ -229,8 +231,8 @@ Center shows the **Crew Feed**: a bento grid layout with mixed-size cards, newes
 
 Card types in the bento grid:
 
-- **Hero clip card** — spans 2 columns and 2 rows. Most recent or highest-ranked clip. Waveform visualization with play button for voice clips. Shows clip badge, duration, who clipped it, game tag, participant avatars, timestamp.
-- **Clip card (standard)** — single cell. Waveform, clip badge, metadata. Tap to play.
+- **Hero clip card** — full-width row with the remaining grid stacked in side columns beneath it. The freshest clip premieres here (see §11.4); otherwise the best session-preview leads. Dot-matrix waveform with play ring, clip badge, duration, who clipped it, game tag, participant avatars, timestamp.
+- **Clip card (standard)** — single cell. Dot-matrix waveform, play ring, clip badge, metadata. Tap the wave to play from that point; drag to scrub.
 - **Session card** — "Your crew played Valorant for 3 hours." Game icon, participant avatars, duration, clip count. From event ledger.
 - **Catch-up card** — "ostkatt and FaiL hung out in General for 45m while you were away." Green label. Promoted from sidebar to center stage.
 - **Now playing card** — real-time game sensing. Game icon, who's playing, duration. Live data.
@@ -240,6 +242,10 @@ Card types in the bento grid:
 - **Invite card** — CTA card in brand red tint (see section 8).
 
 Streaming is initiated via the broadcast icon in the action bar (control bar, always visible).
+
+#### Clip card waveform
+
+Clip cards render audio as a dot-matrix waveform (`DotWaveform` in `crew_feed.slint`): a 64-column grid of dots — 15 rows on the hero card, 9 on the standard card — driven by the stored peak data. Columns up to the playhead light with a phosphor falloff and a white snap column marks the playhead; idle cards show a ghost hairline plus a mono-font time chip. Paused playback breathes (~1.4s cycle); dot state changes fade over 120ms. Dragging scrubs with column snapping and a hover time chip; releasing on an idle card starts playback at that position. Seeks are absolute milliseconds (`seek-clip-ms`) computed against each card's own duration — the global clip duration zeroes when playback finishes and must not be used for scrubbing.
 
 ### 7.2 State: Active Stream(s)
 
@@ -367,6 +373,9 @@ Clip metadata is durable, stored in its own per-crew document `crew_clips/{crew_
 - participants + participant_names (at clip time)
 - game (if detected via game sensing)
 - duration_seconds, actor_id (clipper), ts, score
+- waveform (base64 of 64 u8 peaks computed from the captured WAV at post time; empty for legacy clips, which render a placeholder pattern)
+
+The waveform is computed once on the clipper's machine: mello-core parses the captured PCM WAV into 64 max-amplitude buckets (`waveform.rs`) and posts them base64-encoded (~88 chars) on `post_clip`. The backend validates exactly 64 decoded bytes (`validateClipWaveform`) and stores them on `StoredClip.Waveform`.
 
 ### 11.3 Recaps (Durable)
 
@@ -379,7 +388,7 @@ Stream sessions stay in the ledger for the recent window, but a lean projection 
 ### 11.4 Retrieval
 
 - `crew_feed` RPC is the curated primary feed. Curation lives server-side: the server decides which items appear, their order, and each item's role and size. It returns two sections:
-  - `this_week`: the curated recent feed (replaces the client-side bento ordering). The best session-preview is the `hero` (the live-stream hero is deferred to a separate multi-stream PR). The latest recap is pinned, then diversity/priority fillers.
+  - `this_week`: the curated recent feed (replaces the client-side bento ordering). Hero precedence: the newest clip premieres while it is younger than 24h and has not been buried by 4+ newer cards (`freshClipHeroIndex` in `crew_feed.go`); otherwise the best session-preview leads (the live-stream hero is deferred to a separate multi-stream PR). The latest recap is pinned, then diversity/priority fillers capped at 7 slots with one wide/lg promotion.
   - `memory`: the durable spine of older recaps, clips, and stream replays not already shown this week, returned as a bounded first page (currently 60 entries), with the server-emitted `locked` m3llo+ upsell pinned at the end when the viewer is not premium.
   - Each entry is `{ id, type, role, size, ts, data }`. `type` is the data kind (clip | recap | session-preview | session | catchup); `role` (hero | standard | quiet | recap | locked) and `size` (sm | md | lg) are the curation knobs tuned server-side. `data` is the existing typed payload; clients keep their own text formatting and ignore unknown type/role/size values. The role/size weights and the quiet-type set are a server config block (`crew_feed.go`), changeable without a client release.
 - `crew_timeline` RPC is the raw paginated source (merged 7-day ledger + recent clips + latest recap, newest-first, cursor-based). Used for deep scroll.
@@ -394,7 +403,6 @@ Stream sessions stay in the ledger for the recent window, but a lean projection 
 - **Clip deletion.** Clipper can delete own clips in v1. No crew-wide moderation yet.
 - **Voice clip consent.** Joining a voice channel implies consent for v1. Consider showing a notification ("ostkatt is clipping") when clip button is tapped. Legal review needed before wide EU launch.
 - **Clip audio mixing.** Buffer captures clipper's playback. Muted users are not in the clip. Two people clipping the same moment get different audio. This is correct behavior.
-- **Bento grid layout algorithm.** For v1: most recent clip gets hero position (2x2), everything else fills chronologically as 1x1. More sophisticated ranking later.
 - **Feed scroll position.** New content appears at top. "X new clips" banner for users scrolled down. Never auto-scroll.
 
 ---
