@@ -1017,7 +1017,14 @@ fn resolve_process(
         // curated exe table and as `epic-4fe75bbc…` through this scan, so its
         // hours split across two `user_game_stats` keys depending on which of
         // its processes was seen. The name is the only join available here.
-        if let Some(catalogued) = head.and_then(|h| h.by_name(&entry.name)) {
+        //
+        // Only an unambiguous name is accepted. 17 names in the bundled head
+        // are carried by two entries — a remake and its original share one, so
+        // `prey`, `dead space`, `tomb raider` and `resident evil 2` all collide.
+        // Taking either would file the session under the wrong game, which is
+        // worse than the launcher id, and the launcher id is at least exact.
+        let named = head.map(|h| h.all_by_name(&entry.name)).unwrap_or_default();
+        if let [catalogued] = named.as_slice() {
             return Some(Matched {
                 game_id: catalogued.game_id.to_string(),
                 game_name: catalogued.name.to_string(),
@@ -1167,6 +1174,39 @@ mod tests {
             !m.game_id.starts_with("epic-"),
             "got the launcher id {}, which splits stats from the curated id",
             m.game_id
+        );
+    }
+
+    /// A name carried by two catalogue entries must not be guessed at.
+    ///
+    /// The bundled head holds 17 such names, each a remake and its original:
+    /// `prey`, `dead space`, `tomb raider`, `resident evil 2` and more. Filing
+    /// a session under the wrong one of a pair is worse than keeping the
+    /// launcher id, which is at least exact.
+    #[test]
+    fn ambiguous_catalogue_name_keeps_the_launcher_id() {
+        let Some(head) = catalogue_head() else {
+            return;
+        };
+        let ambiguous = ["Prey", "Dead Space", "Tomb Raider", "Resident Evil 2"]
+            .into_iter()
+            .find(|n| head.all_by_name(n).len() > 1)
+            .expect("the head carries at least one duplicated name");
+
+        let library = LibraryIndex::from_entries(vec![crate::library::LibraryEntry {
+            source: crate::library::LibrarySource::Epic,
+            external_id: "dupe123".into(),
+            name: ambiguous.to_string(),
+            install_dir: std::path::PathBuf::from(r"D:\EpicGames\Ambiguous"),
+        }]);
+        let mut p = make_process("game.exe", 102, false);
+        p.path = r"D:\EpicGames\Ambiguous\game.exe".into();
+
+        let m = resolve_process(Some(head), &library, &test_db(), &p)
+            .expect("resolves through the library");
+        assert_eq!(
+            m.game_id, "epic-dupe123",
+            "an ambiguous name ({ambiguous}) must not pick one of the pair"
         );
     }
 
