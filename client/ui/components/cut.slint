@@ -1,0 +1,173 @@
+import { Theme } from "../theme.slint";
+
+// ============================================================
+//  The cut corner — the signature shape of the graphite system.
+//
+//  Slint has no clip-path, so the shape is drawn with `Path`:
+//    - one Path filled with the keyline colour, at full size
+//    - one Path filled with the surface colour, inset by 1px
+//  which is the same trick the HTML mockup does with ::before/::after.
+//
+//  The geometry goes in through `commands` (SVG path data) rather than
+//  MoveTo/LineTo children, because a Path may not contain another Path
+//  and the corner has to be switchable at the call site.
+//
+//  viewbox-width / viewbox-height are bound to the element size, so path
+//  units are pixels. Without that binding Slint scales the path to fit
+//  and the cut would grow with the card instead of staying 16px.
+//
+//  `corner`: "tr" (default) | "tl" | "br" | "bl"
+// ============================================================
+
+export component CutShape inherits Path {
+    in property <length> n: Theme.notch;
+    in property <string> corner: "tr";
+    in property <length> inset: 0px;
+
+    viewbox-x: 0;
+    viewbox-y: 0;
+    viewbox-width: self.width / 1px;
+    viewbox-height: self.height / 1px;
+
+    property <float> x0: self.inset / 1px;
+    property <float> y0: self.inset / 1px;
+    property <float> x1: (self.width - self.inset) / 1px;
+    property <float> y1: (self.height - self.inset) / 1px;
+    property <float> c: self.n / 1px;
+
+    commands:
+        corner == "tl"
+            ? "M \{x0 + c} \{y0} L \{x1} \{y0} L \{x1} \{y1} L \{x0} \{y1} L \{x0} \{y0 + c} Z"
+        : corner == "br"
+            ? "M \{x0} \{y0} L \{x1} \{y0} L \{x1} \{y1 - c} L \{x1 - c} \{y1} L \{x0} \{y1} Z"
+        : corner == "bl"
+            ? "M \{x0} \{y0} L \{x1} \{y0} L \{x1} \{y1} L \{x0 + c} \{y1} L \{x0} \{y1 - c} Z"
+        :   "M \{x0} \{y0} L \{x1 - c} \{y0} L \{x1} \{y0 + c} L \{x1} \{y1} L \{x0} \{y1} Z";
+}
+
+/// Button and tile silhouette: top-left AND bottom-right cut.
+export component CutButtonShape inherits Path {
+    in property <length> n: Theme.cut;
+    in property <length> inset: 0px;
+
+    viewbox-x: 0;
+    viewbox-y: 0;
+    viewbox-width: self.width / 1px;
+    viewbox-height: self.height / 1px;
+
+    property <float> x0: self.inset / 1px;
+    property <float> y0: self.inset / 1px;
+    property <float> x1: (self.width - self.inset) / 1px;
+    property <float> y1: (self.height - self.inset) / 1px;
+    property <float> c: self.n / 1px;
+
+    commands: "M \{x0 + c} \{y0} L \{x1} \{y0} L \{x1} \{y1 - c} L \{x1 - c} \{y1} L \{x0} \{y1} L \{x0} \{y0 + c} Z";
+}
+
+/// A person. Four corners cut — the octagon means "human".
+export component OctShape inherits Path {
+    in property <length> n: 4px;
+
+    viewbox-x: 0;
+    viewbox-y: 0;
+    viewbox-width: self.width / 1px;
+    viewbox-height: self.height / 1px;
+
+    property <float> w: self.width / 1px;
+    property <float> h: self.height / 1px;
+    property <float> c: self.n / 1px;
+
+    commands: "M \{c} 0 L \{w - c} 0 L \{w} \{c} L \{w} \{h - c} L \{w - c} \{h} L \{c} \{h} L 0 \{h - c} L 0 \{c} Z";
+}
+
+/// A card with one corner cut away and a 1px keyline.
+/// Content goes in as children and is not clipped, so keep it clear of
+/// the cut corner. Edge-to-edge media needs its own clipped Rectangle.
+export component CutCard inherits Rectangle {
+    in property <length> notch: Theme.notch;
+    in property <string> corner: "tr";
+    in property <color> line-color: Theme.card-border;
+    in property <color> fill-color: Theme.card-bg;
+
+    CutShape {
+        width: parent.width; height: parent.height;
+        n: root.notch; corner: root.corner;
+        fill: root.line-color;
+    }
+    CutShape {
+        width: parent.width; height: parent.height;
+        n: root.notch; corner: root.corner;
+        inset: Theme.keyline;
+        fill: root.fill-color;
+    }
+
+    @children
+}
+
+/// The same silhouette with no keyline — a filled surface.
+export component CutFill inherits Rectangle {
+    in property <length> notch: Theme.cut;
+    in property <string> corner: "tr";
+    in property <color> fill-color: Theme.action;
+
+    CutShape {
+        width: parent.width; height: parent.height;
+        n: root.notch; corner: root.corner;
+        fill: root.fill-color;
+    }
+
+    @children
+}
+
+/// Filled button — white by default, because white is the action colour.
+/// `outlined: true` draws a 1px keyline on the surface instead of a fill,
+/// which is how CLIP wears red.
+export component CutButton inherits Rectangle {
+    in property <length> notch: Theme.cut;
+    in property <color> fill-color: Theme.action;
+    in property <bool> outlined: false;
+    in property <color> line-color: Theme.action;
+    in property <color> surface-color: Theme.surface;
+
+    CutButtonShape {
+        width: parent.width; height: parent.height;
+        n: root.notch;
+        fill: root.outlined ? root.line-color : root.fill-color;
+    }
+    if root.outlined: CutButtonShape {
+        width: parent.width; height: parent.height;
+        n: root.notch; inset: Theme.keyline;
+        fill: root.surface-color;
+    }
+
+    @children
+}
+
+/// A person: four corners cut.
+export component OctAvatar inherits Rectangle {
+    in property <length> cut-size: 4px;
+    in property <color> fill-color: Theme.id-blue;
+
+    OctShape {
+        width: parent.width; height: parent.height;
+        n: root.cut-size;
+        fill: root.fill-color;
+    }
+
+    @children
+}
+
+/// A crew or a game: two corners cut, same silhouette as a button.
+/// A thing, not a person.
+export component CutTile inherits Rectangle {
+    in property <length> notch: 7px;
+    in property <color> fill-color: Theme.action;
+
+    CutButtonShape {
+        width: parent.width; height: parent.height;
+        n: root.notch;
+        fill: root.fill-color;
+    }
+
+    @children
+}

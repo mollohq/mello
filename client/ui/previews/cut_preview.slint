@@ -1,0 +1,199 @@
+import { Theme } from "../theme.slint";
+import { CutCard, CutFill, CutButton, OctAvatar, CutTile } from "../components/cut.slint";
+
+// Shape spike: every cut primitive at the sizes the app actually uses.
+// Run with: slint-viewer client/ui/previews/cut_preview.slint
+export component Preview inherits Window {
+    width: 900px;
+    height: 620px;
+    background: Theme.bg-app;
+    title: "m3llo — cut corner spike";
+
+    VerticalLayout {
+        padding: 20px;
+        spacing: 18px;
+
+        Text {
+            text: "CARDS — tr · tl · br · bl";
+            font-family: Theme.font-label;
+            font-weight: Theme.weight-label;
+            font-size: 9.5px;
+            letter-spacing: Theme.track-kicker;
+            color: Theme.text-secondary;
+        }
+
+        HorizontalLayout {
+            spacing: 12px;
+            height: 130px;
+
+            CutCard {
+                corner: "tr";
+                Text {
+                    x: 14px; y: 12px;
+                    text: "Card · top-right";
+                    font-family: Theme.font-display;
+                    font-weight: Theme.weight-display;
+                    font-size: 14px;
+                    color: Theme.text-primary;
+                }
+            }
+            CutCard { corner: "tl"; }
+            CutCard { corner: "br"; }
+            CutCard {
+                corner: "bl";
+                line-color: Theme.action-line;   // the active crew
+            }
+        }
+
+        Text {
+            text: "LIVE CARD · RED KEYLINE   ·   BUTTONS   ·   PEOPLE   ·   TILES";
+            font-family: Theme.font-label;
+            font-weight: Theme.weight-label;
+            font-size: 9.5px;
+            letter-spacing: Theme.track-kicker;
+            color: Theme.text-secondary;
+        }
+
+        HorizontalLayout {
+            spacing: 12px;
+            height: 110px;
+
+            CutCard {
+                corner: "tr";
+                notch: Theme.notch-hero;
+                line-color: Theme.live;
+                Text {
+                    x: 14px; y: 12px;
+                    text: "LIVE NOW";
+                    font-family: Theme.font-label;
+                    font-weight: Theme.weight-label;
+                    font-size: 9.5px;
+                    letter-spacing: Theme.track-kicker;
+                    color: Theme.live;
+                }
+            }
+
+            Rectangle {
+                VerticalLayout {
+                    padding: 10px;
+                    spacing: 10px;
+                    alignment: center;
+
+                    CutButton {
+                        height: 38px;
+                        Text {
+                            text: "STREAM";
+                            font-family: Theme.font-label;
+                            font-weight: Theme.weight-label;
+                            font-size: 10px;
+                            letter-spacing: Theme.track-label;
+                            color: Theme.on-action;
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                        }
+                    }
+                    CutButton {
+                        height: 38px;
+                        outlined: true;
+                        line-color: Theme.live;
+                        Text {
+                            text: "CLIP 30S";
+                            font-family: Theme.font-label;
+                            font-weight: Theme.weight-label;
+                            font-size: 10px;
+                            letter-spacing: Theme.track-label;
+                            color: Theme.live;
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                        }
+                    }
+                }
+            }
+
+            Rectangle {
+                HorizontalLayout {
+                    spacing: 8px;
+                    alignment: center;
+
+                    OctAvatar {
+                        width: 18px; height: 18px; cut-size: 4px;
+                        fill-color: Theme.id-blue;
+                    }
+                    OctAvatar {
+                        width: 30px; height: 30px; cut-size: 7px;
+                        fill-color: Theme.id-purple;
+                        Text {
+                            text: "OS";
+                            font-family: Theme.font-display;
+                            font-weight: 700;
+                            font-size: 10px;
+                            color: #121214;
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                        }
+                    }
+                    OctAvatar {
+                        width: 40px; height: 40px; cut-size: 9px;
+                        fill-color: Theme.id-teal;
+                    }
+                }
+            }
+
+            Rectangle {
+                HorizontalLayout {
+                    spacing: 8px;
+                    alignment: center;
+
+                    CutTile {
+                        width: 28px; height: 28px; notch: 7px;
+                        fill-color: Theme.action;
+                        Text {
+                            text: "m3";
+                            font-family: Theme.font-display;
+                            font-weight: 700;
+                            font-size: 9px;
+                            color: Theme.on-action;
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                        }
+                    }
+                    CutTile {
+                        width: 32px; height: 32px;
+                        fill-color: Theme.id-amber;
+                    }
+                    CutTile {
+                        width: 44px; height: 44px; notch: 9px;
+                        fill-color: Theme.id-pink;
+                    }
+                }
+            }
+        }
+
+        Text {
+            text: "STRESS — the cut must stay a fixed size at every card size";
+            font-family: Theme.font-label;
+            font-weight: Theme.weight-label;
+            font-size: 9.5px;
+            letter-spacing: Theme.track-kicker;
+            color: Theme.text-secondary;
+        }
+
+        HorizontalLayout {
+            spacing: 12px;
+            height: 120px;
+
+            CutCard { width: 60px; corner: "tr"; }
+            CutCard { width: 120px; corner: "tr"; }
+            CutCard { width: 260px; corner: "tr"; }
+            CutCard { corner: "tr"; }
+        }
+
+        Text {
+            text: "Sentence register — Barlow Light 13px. Label register — Barlow SemiBold, tracked.";
+            font-family: Theme.font-body;
+            font-weight: Theme.weight-sentence;
+            font-size: 13px;
+            color: Theme.text-body;
+        }
+    }
+}
