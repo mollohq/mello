@@ -1,9 +1,10 @@
-import "./fonts/Inter-Regular.ttf";
-import "./fonts/Inter-Medium.ttf";
-import "./fonts/Inter-SemiBold.ttf";
-import "./fonts/Inter-Bold.ttf";
-import "./fonts/JetBrainsMono-Regular.ttf";
-import "./fonts/JetBrainsMono-Medium.ttf";
+// Two faces, four files. Both SIL OFL.
+//   Oxanium — names it, or it is big.
+//   Barlow  — everything else, in two registers: 300 sentence, 600 label.
+import "./fonts/Oxanium-SemiBold.ttf";
+import "./fonts/Oxanium-Bold.ttf";
+import "./fonts/Barlow-Light.ttf";
+import "./fonts/Barlow-SemiBold.ttf";
 
 // ============================================================
 //  m3llo design system v3.3 · GRAPHITE
@@ -136,8 +137,6 @@ export global Theme {
     //  Oxanium  — names it, or it is big.
     //  Barlow   — everything else, in two registers:
     //             sentence (300) and label (600 + tracking).
-    //  Font files land in Step A2; the families below fall back to the
-    //  currently embedded faces until then.
     out property <string> font-display: "Oxanium";
     out property <string> font-body:    "Barlow";
     out property <string> font-label:   "Barlow";
