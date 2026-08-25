@@ -146,7 +146,6 @@ export component ControlBar inherits Rectangle {
     callback voice-toggled();
     callback logout-clicked();
     callback presence-changed(int);
-    callback theme-toggled();
     callback settings-clicked();
     callback debug-toggled();
     callback request-mic-permission();
@@ -310,13 +309,6 @@ export component ControlBar inherits Rectangle {
                                 }
 
                                 MenuSeparator { }
-
-                                MenuItem {
-                                    label: Theme.dark ? "Light Mode" : "Dark Mode";
-                                    clicked => {
-                                        theme-toggled();
-                                    }
-                                }
 
                                 MenuItem {
                                     label: "Debug Audio";

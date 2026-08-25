@@ -536,7 +536,6 @@ export component MainWindow inherits Window {
     callback deafen-toggle();
     callback voice-toggle();
     callback presence-changed(int);
-    callback theme-toggled();
     callback settings-requested();
     callback capture-device-selected(string);
     callback playback-device-selected(string);
@@ -970,9 +969,6 @@ export component MainWindow inherits Window {
                         }
                         presence-changed(status) => {
                             root.presence-changed(status);
-                        }
-                        theme-toggled => {
-                            root.theme-toggled();
                         }
                         settings-clicked => {
                             root.settings-requested();
