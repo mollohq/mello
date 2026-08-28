@@ -1,6 +1,6 @@
 import { Theme, MelloTextInput } from "../theme.slint";
 import { GameIcon } from "../components/game_icon.slint";
-import { CutShape, CutButtonShape, OctAvatar } from "../components/cut.slint";
+import { CutShape, CutButtonShape, OctAvatar, OctMask } from "../components/cut.slint";
 
 /// Control-bar icon button. `on` = a live toggle, so it wears a white
 /// keyline. `danger` = leave call, the one red fill in the bar.
@@ -18,7 +18,7 @@ component IconButton inherits Rectangle {
         height: parent.height;
         n: 9px;
         fill: danger ? Theme.live
-            : on ? Theme.action
+            : on ? (ib-hover.has-hover ? Theme.action : Theme.action-line)
             : alert ? Theme.live
             : (ib-hover.has-hover ? Theme.raised-hover : Theme.raised);
     }
@@ -97,12 +97,12 @@ component MenuItem inherits Rectangle {
         padding-right: 12px;
         spacing: 10px;
         alignment: start;
+        cross-axis-alignment: center;
         if has-dot: Rectangle {
             width: 8px;
             height: 8px;
             border-radius: 4px;
             background: dot-color;
-            y: (parent.height - self.height) / 2;
         }
         Text {
             text: label;
@@ -114,11 +114,11 @@ component MenuItem inherits Rectangle {
             vertical-alignment: center;
         }
 
-        if checked: Text {
-            text: "✓";
-            font-size: Theme.font-md;
-            color: Theme.action;
-            vertical-alignment: center;
+        if checked: Image {
+            source: @image-url("../icons/checkmark.svg");
+            width: 13px;
+            height: 13px;
+            colorize: Theme.action;
         }
     }
 
@@ -241,8 +241,16 @@ export component ControlBar inherits Rectangle {
                         source: user-avatar;
                         width: parent.width;
                         height: parent.height;
-                        image-fit: contain;
+                        image-fit: cover;
                     }
+                }
+                // Slint cannot clip to a path, so the four corners are
+                // painted in the bar colour to cut the avatar to shape.
+                if has-user-avatar: OctMask {
+                    width: parent.width;
+                    height: parent.height;
+                    n: 9px;
+                    fill: Theme.surface;
                 }
                 if !has-user-avatar: Text {
                     text: user-initials != "" ? user-initials : "?";
@@ -604,11 +612,11 @@ export component ControlBar inherits Rectangle {
                         background: #12121447;
                     }
 
-                    Text {
-                        text: "▾";
-                        font-family: Theme.font-body;
-                        font-size: 11px;
-                        color: Theme.on-action;
+                    Image {
+                        source: @image-url("../icons/chevron-down.svg");
+                        width: 14px;
+                        height: 14px;
+                        colorize: Theme.on-action;
                         x: (parent.width - self.width) / 2;
                         y: (parent.height - self.height) / 2;
                     }

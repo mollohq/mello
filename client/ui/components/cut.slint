@@ -143,6 +143,28 @@ export component CutButton inherits Rectangle {
     @children
 }
 
+/// Paints the four corners in the surrounding colour, so an image placed
+/// under it reads as an octagon. Slint cannot clip to a path, so the
+/// corners are covered rather than cut.
+export component OctMask inherits Path {
+    in property <length> n: 4px;
+
+    viewbox-x: 0;
+    viewbox-y: 0;
+    viewbox-width: self.width / 1px;
+    viewbox-height: self.height / 1px;
+
+    property <float> w: self.width / 1px;
+    property <float> h: self.height / 1px;
+    property <float> c: self.n / 1px;
+
+    commands:
+        "M 0 0 L \{c} 0 L 0 \{c} Z " +
+        "M \{w - c} 0 L \{w} 0 L \{w} \{c} Z " +
+        "M \{w} \{h - c} L \{w} \{h} L \{w - c} \{h} Z " +
+        "M 0 \{h - c} L \{c} \{h} L 0 \{h} Z";
+}
+
 /// A person: four corners cut.
 export component OctAvatar inherits Rectangle {
     in property <length> cut-size: 4px;
