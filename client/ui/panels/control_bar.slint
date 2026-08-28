@@ -1,28 +1,51 @@
 import { Theme, MelloTextInput } from "../theme.slint";
 import { GameIcon } from "../components/game_icon.slint";
+import { CutShape, CutButtonShape, OctAvatar } from "../components/cut.slint";
 
-component ActionButton inherits Rectangle {
+/// Control-bar icon button. `on` = a live toggle, so it wears a white
+/// keyline. `danger` = leave call, the one red fill in the bar.
+component IconButton inherits Rectangle {
     in property <image> icon;
+    in property <bool> on: false;
     in property <bool> alert: false;
+    in property <bool> danger: false;
     callback clicked();
-    width: 40px;
-    Rectangle {
-        width: 40px;
-        height: 40px;
-        border-radius: 8px;
-        background: alert ? Theme.accent-bg : (btn-hover.has-hover ? (Theme.dark ? #FFFFFF1A : #0000000D) : transparent);
-        y: (parent.height - self.height) / 2;
-        Image {
-            source: icon;
-            width: 20px;
-            height: 20px;
-            colorize: alert ? Theme.accent : (btn-hover.has-hover ? Theme.text-primary : Theme.text-secondary);
-            x: (parent.width - self.width) / 2;
-            y: (parent.height - self.height) / 2;
-        }
+    width: 38px;
+    height: 38px;
+
+    CutButtonShape {
+        width: parent.width;
+        height: parent.height;
+        n: 9px;
+        fill: danger ? Theme.live
+            : on ? Theme.action
+            : alert ? Theme.live
+            : (ib-hover.has-hover ? Theme.raised-hover : Theme.raised);
+    }
+    // `on` and `alert` are outlines, not fills: only leave is a solid colour
+    if on || alert: CutButtonShape {
+        width: parent.width;
+        height: parent.height;
+        n: 9px;
+        inset: Theme.keyline;
+        fill: ib-hover.has-hover
+            ? (alert ? Theme.live-bg : Theme.raised-hover)
+            : Theme.surface;
     }
 
-    btn-hover := TouchArea {
+    Image {
+        source: icon;
+        width: 19px;
+        height: 19px;
+        colorize: danger ? Theme.on-live
+            : on ? Theme.action
+            : alert ? Theme.live
+            : (ib-hover.has-hover ? Theme.text-primary : Theme.text-secondary);
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+    }
+
+    ib-hover := TouchArea {
         mouse-cursor: pointer;
         clicked => {
             root.clicked();
@@ -66,7 +89,7 @@ component MenuItem inherits Rectangle {
     in property <bool> checked: false;
     in property <bool> destructive: false;
     callback clicked();
-    height: 36px;
+    height: 34px;
     border-radius: Theme.r-inner;
     background: item-hover.has-hover ? Theme.hover-overlay : transparent;
     HorizontalLayout {
@@ -83,9 +106,10 @@ component MenuItem inherits Rectangle {
         }
         Text {
             text: label;
+            font-family: Theme.font-body;
             font-size: Theme.font-md;
-            font-weight: checked ? 600 : 400;
-            color: destructive ? Theme.accent : Theme.text-primary;
+            font-weight: checked ? 600 : 300;
+            color: destructive ? Theme.live : Theme.text-primary;
             horizontal-stretch: 1;
             vertical-alignment: center;
         }
@@ -93,7 +117,7 @@ component MenuItem inherits Rectangle {
         if checked: Text {
             text: "✓";
             font-size: Theme.font-md;
-            color: Theme.accent-green;
+            color: Theme.action;
             vertical-alignment: center;
         }
     }
@@ -175,267 +199,298 @@ export component ControlBar inherits Rectangle {
         background: Theme.card-border;
     }
 
+    // ============================================================
+    //  LEFT  · you: avatar, name, channel, mic, headset | leave
+    //  CENTRE· what you would stream: source pill + STREAM + caret
+    //  RIGHT · capture: CLIP 30s, settings
+    //  Left and right both stretch, so the centre is true centre.
+    // ============================================================
     HorizontalLayout {
         width: parent.width;
         height: parent.height;
-        padding: 14px;
+        padding-left: 14px;
+        padding-right: 14px;
+        padding-top: 12px;
+        padding-bottom: 12px;
         spacing: 12px;
 
-        // ===== LEFT: Identity / Voice card =====
-        Rectangle {
-            horizontal-stretch: 0;
-            background: Theme.bg-app;
-            border-radius: 12px;
-            border-width: 1px;
-            border-color: Theme.dark ? #FFFFFF0D : #0000000D;
-            HorizontalLayout {
-                padding: 6px;
-                padding-right: in-voice ? 8px : 16px;
-                spacing: 16px;
+        // ===================== LEFT =====================
+        HorizontalLayout {
+            horizontal-stretch: 1;
+            spacing: 8px;
+            alignment: start;
+            cross-axis-alignment: center;
 
-                // Avatar
-                Rectangle {
-                    width: 44px;
-                    height: 44px;
-                    border-radius: 8px;
-                    background: avatar-touch.has-hover ? Theme.graphic-light : Theme.bg-app;
+            // --- avatar: a person, so four corners are cut ---
+            Rectangle {
+                width: 40px;
+                height: 40px;
+
+                OctAvatar {
+                    width: 40px;
+                    height: 40px;
+                    cut-size: 9px;
+                    fill-color: avatar-touch.has-hover ? Theme.raised-hover : Theme.raised;
+                }
+
+                if has-user-avatar: Rectangle {
+                    width: parent.width;
+                    height: parent.height;
                     clip: true;
-                    if has-user-avatar: Image {
+                    Image {
                         source: user-avatar;
                         width: parent.width;
                         height: parent.height;
                         image-fit: contain;
                     }
-                    if !has-user-avatar: Text {
-                        text: user-initials != "" ? user-initials : "?";
-                        font-weight: 600;
-                        font-size: 14px;
-                        color: Theme.text-secondary;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
-                    }
+                }
+                if !has-user-avatar: Text {
+                    text: user-initials != "" ? user-initials : "?";
+                    font-family: Theme.font-display;
+                    font-weight: Theme.weight-display-bold;
+                    font-size: 13px;
+                    color: Theme.text-primary;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                    width: parent.width;
+                    height: parent.height;
+                }
+
+                // presence dot
+                Rectangle {
+                    x: parent.width - 13px;
+                    y: parent.height - 13px;
+                    width: 13px;
+                    height: 13px;
+                    border-radius: 7px;
+                    background: Theme.surface;
                     Rectangle {
-                        x: parent.width - 14px;
-                        y: parent.height - 14px;
-                        width: 14px;
-                        height: 14px;
-                        border-radius: 7px;
-                        background: in-voice ? Theme.bg-app : Theme.surface;
-                        Rectangle {
-                            x: 3px;
-                            y: 3px;
-                            width: 8px;
-                            height: 8px;
-                            border-radius: 4px;
-                            background: in-voice ? Theme.accent-green : (presence-status == 0 ? Theme.accent-green : (presence-status == 1 ? #FFBD2E : (presence-status == 2 ? Theme.accent : Theme.graphic-med)));
-                        }
+                        x: 2.5px;
+                        y: 2.5px;
+                        width: 8px;
+                        height: 8px;
+                        border-radius: 4px;
+                        background: in-voice ? Theme.action
+                            : (presence-status == 0 ? Theme.action
+                            : (presence-status == 1 ? Theme.text-secondary
+                            : (presence-status == 2 ? Theme.live : Theme.graphic-med)));
                     }
+                }
 
-                    avatar-touch := TouchArea {
-                        mouse-cursor: pointer;
-                        clicked => {
-                            user-menu.show();
-                        }
+                avatar-touch := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        user-menu.show();
                     }
+                }
 
-                    user-menu := PopupWindow {
-                        x: 0;
-                        y: -344px;
-                        width: 220px;
-                        Rectangle {
-                            background: Theme.surface;
-                            border-radius: Theme.r-outer;
-                            border-width: 1px;
-                            border-color: Theme.graphic-light;
-                            drop-shadow-blur: 16px;
-                            drop-shadow-color: Theme.dark ? #00000080 : #00000020;
-                            drop-shadow-offset-y: 4px;
-                            VerticalLayout {
-                                padding: 8px;
-                                spacing: 2px;
-                                Text {
-                                    text: "PRESENCE";
-                                    font-size: Theme.font-xs;
-                                    font-weight: 600;
-                                    letter-spacing: 1.2px;
-                                    color: Theme.text-tertiary;
-                                    height: 28px;
-                                    vertical-alignment: center;
-                                    x: 12px;
+                user-menu := PopupWindow {
+                    x: 0;
+                    y: -300px;
+                    width: 220px;
+                    Rectangle {
+                        background: Theme.surface;
+                        border-radius: Theme.r-outer;
+                        border-width: 1px;
+                        border-color: Theme.graphic-light;
+                        drop-shadow-blur: 16px;
+                        drop-shadow-color: #00000080;
+                        drop-shadow-offset-y: 4px;
+                        VerticalLayout {
+                            padding: 8px;
+                            spacing: 2px;
+                            Text {
+                                text: "PRESENCE";
+                                font-family: Theme.font-label;
+                                font-size: 9.5px;
+                                font-weight: Theme.weight-label;
+                                letter-spacing: Theme.track-kicker;
+                                color: Theme.text-tertiary;
+                                height: 28px;
+                                vertical-alignment: center;
+                                x: 12px;
+                            }
+
+                            MenuItem {
+                                label: "Online";
+                                has-dot: true;
+                                dot-color: Theme.action;
+                                checked: presence-status == 0;
+                                clicked => {
+                                    presence-status = 0;
+                                    presence-changed(0);
                                 }
+                            }
 
-                                MenuItem {
-                                    label: "Online";
-                                    has-dot: true;
-                                    dot-color: Theme.accent-green;
-                                    checked: presence-status == 0;
-                                    clicked => {
-                                        presence-status = 0;
-                                        presence-changed(0);
-                                    }
+                            MenuItem {
+                                label: "Idle";
+                                has-dot: true;
+                                dot-color: Theme.text-secondary;
+                                checked: presence-status == 1;
+                                clicked => {
+                                    presence-status = 1;
+                                    presence-changed(1);
                                 }
+                            }
 
-                                MenuItem {
-                                    label: "Idle";
-                                    has-dot: true;
-                                    dot-color: #FFBD2E;
-                                    checked: presence-status == 1;
-                                    clicked => {
-                                        presence-status = 1;
-                                        presence-changed(1);
-                                    }
+                            MenuItem {
+                                label: "Do Not Disturb";
+                                has-dot: true;
+                                dot-color: Theme.live;
+                                checked: presence-status == 2;
+                                clicked => {
+                                    presence-status = 2;
+                                    presence-changed(2);
                                 }
+                            }
 
-                                MenuItem {
-                                    label: "Do Not Disturb";
-                                    has-dot: true;
-                                    dot-color: Theme.accent;
-                                    checked: presence-status == 2;
-                                    clicked => {
-                                        presence-status = 2;
-                                        presence-changed(2);
-                                    }
+                            MenuItem {
+                                label: "Invisible";
+                                has-dot: true;
+                                dot-color: Theme.graphic-med;
+                                checked: presence-status == 3;
+                                clicked => {
+                                    presence-status = 3;
+                                    presence-changed(3);
                                 }
+                            }
 
-                                MenuItem {
-                                    label: "Invisible";
-                                    has-dot: true;
-                                    dot-color: Theme.graphic-med;
-                                    checked: presence-status == 3;
-                                    clicked => {
-                                        presence-status = 3;
-                                        presence-changed(3);
-                                    }
+                            MenuSeparator { }
+
+                            MenuItem {
+                                label: "Debug Audio";
+                                clicked => {
+                                    debug-toggled();
                                 }
+                            }
 
-                                MenuSeparator { }
+                            MenuSeparator { }
 
-                                MenuItem {
-                                    label: "Debug Audio";
-                                    clicked => {
-                                        debug-toggled();
-                                    }
-                                }
-
-                                MenuSeparator { }
-
-                                MenuItem {
-                                    label: "Log Out";
-                                    destructive: true;
-                                    clicked => {
-                                        logout-clicked();
-                                    }
+                            MenuItem {
+                                label: "Log Out";
+                                destructive: true;
+                                clicked => {
+                                    logout-clicked();
                                 }
                             }
                         }
                     }
                 }
+            }
 
-                // Name + status
-                VerticalLayout {
-                    alignment: center;
+            // --- name + where you are ---
+            VerticalLayout {
+                alignment: center;
+                spacing: 2px;
+                Text {
+                    text: user-name != "" ? user-name : "Not connected";
+                    font-family: Theme.font-display;
+                    font-weight: Theme.weight-display;
+                    font-size: 13px;
+                    letter-spacing: -0.1px;
+                    color: Theme.text-primary;
+                    overflow: elide;
+                }
+
+                if !in-voice && user-tag != "": Text {
+                    text: user-tag;
+                    font-family: Theme.font-label;
+                    font-size: 9.5px;
+                    font-weight: Theme.weight-label;
+                    letter-spacing: Theme.track-label;
+                    color: Theme.text-secondary;
+                    overflow: elide;
+                }
+                // The channel you are in is where you are: white, not red.
+                if in-voice: HorizontalLayout {
+                    spacing: 5px;
+                    alignment: start;
+                    cross-axis-alignment: center;
+                    Rectangle {
+                        width: 5px;
+                        height: 5px;
+                        border-radius: 3px;
+                        background: Theme.action;
+                    }
+
                     Text {
-                        text: user-name != "" ? user-name : "Not connected";
-                        font-size: 15px;
-                        font-weight: 600;
-                        color: Theme.dark ? #E0E0E0 : Theme.text-primary;
-                        overflow: elide;
-                    }
-
-                    if !in-voice && user-tag != "": Text {
-                        text: user-tag;
-                        font-family: Theme.font-mono;
-                        font-size: Theme.font-xs;
-                        color: Theme.text-secondary;
-                        overflow: elide;
-                    }
-                    if in-voice: HorizontalLayout {
-                        spacing: 6px;
-                        alignment: start;
-                        cross-axis-alignment: center;
-                        Rectangle {
-                            width: 6px;
-                            height: 6px;
-                            border-radius: 3px;
-                            background: Theme.accent-green;
-                        }
-
-                        Text {
-                            text: voice-channel-name != "" ? voice-channel-name : "VOICE";
-                            font-family: Theme.font-mono;
-                            font-size: Theme.font-sm;
-                            font-weight: 700;
-                            letter-spacing: 1.5px;
-                            color: Theme.accent-green;
-                            vertical-alignment: center;
-                        }
+                        text: voice-channel-name != "" ? voice-channel-name : "VOICE";
+                        font-family: Theme.font-label;
+                        font-size: 9.5px;
+                        font-weight: Theme.weight-label;
+                        letter-spacing: Theme.track-label;
+                        color: Theme.action;
+                        vertical-alignment: center;
                     }
                 }
+            }
 
-                // Separator (voice card only)
-                if in-voice: Rectangle {
-                    width: 9px;
-                    Rectangle {
-                        width: 1px;
-                        height: 24px;
-                        background: Theme.dark ? #FFFFFF14 : #00000014;
-                        x: 4px;
-                        y: (parent.height - self.height) / 2;
-                    }
+            // --- mic + headset, then a divider, then leave ---
+            if mic-permission-granted: IconButton {
+                icon: mic-muted ? @image-url("../icons/mic-off.svg") : @image-url("../icons/mic.svg");
+                on: in-voice && !mic-muted;
+                alert: in-voice && mic-muted;
+                clicked => {
+                    mic-toggled();
                 }
+            }
+            if mic-permission-granted: IconButton {
+                icon: deafened ? @image-url("../icons/headphone-off.svg") : @image-url("../icons/headphones.svg");
+                on: in-voice && !deafened;
+                alert: in-voice && deafened;
+                clicked => {
+                    deafen-toggled();
+                }
+            }
 
-                // Disconnect button (voice card only)
-                if in-voice: Rectangle {
-                    width: 40px;
-                    Rectangle {
-                        width: 40px;
-                        height: 40px;
-                        border-radius: 8px;
-                        background: hangup-hover.has-hover ? (Theme.dark ? #FF1E5633 : #FF1E5628) : Theme.accent-bg;
-                        border-width: 1px;
-                        border-color: Theme.dark ? #FF1E5633 : #FF1E5620;
-                        y: (parent.height - self.height) / 2;
-                        Image {
-                            source: @image-url("../icons/phone-off.svg");
-                            width: 20px;
-                            height: 20px;
-                            colorize: Theme.accent;
-                            x: (parent.width - self.width) / 2;
-                            y: (parent.height - self.height) / 2;
-                        }
-                    }
-
-                    hangup-hover := TouchArea {
-                        mouse-cursor: pointer;
-                        clicked => {
-                            voice-toggled();
-                        }
-                    }
+            // Leave sits behind a divider so it is not adjacent to the toggles.
+            if in-voice: Rectangle {
+                width: 9px;
+                Rectangle {
+                    width: 1px;
+                    height: 26px;
+                    background: Theme.graphic-light;
+                    x: 4px;
+                    y: (parent.height - self.height) / 2;
+                }
+            }
+            if in-voice: IconButton {
+                icon: @image-url("../icons/phone-off.svg");
+                danger: true;
+                clicked => {
+                    voice-toggled();
                 }
             }
         }
 
-        // ===== SPACER =====
-        Rectangle {
-            horizontal-stretch: 1;
-        }
+        // ===================== CENTRE =====================
 
-        // ===== CENTER: Game states =====
-
-        // State 1: Now Playing
-        if bar-state == 1: VerticalLayout {
+        // Idle or now playing: what you would stream, then how to start.
+        if bar-state == 0 || bar-state == 1: HorizontalLayout {
             horizontal-stretch: 0;
+            spacing: 8px;
             alignment: center;
-            Rectangle {
-                background: Theme.bg-app;
-                border-radius: 12px;
-                border-width: 1px;
-                border-color: Theme.dark ? #FFFFFF0D : #0000000D;
-                HorizontalLayout {
-                    padding: 12px;
-                    padding-left: 12px;
-                    padding-right: 12px;
-                    spacing: 12px;
+            cross-axis-alignment: center;
+
+            // source pill — names the source before you press anything
+            if game-active: Rectangle {
+                width: source-row.preferred-width + 20px;
+                height: 44px;
+
+                CutShape {
+                    width: parent.width;
+                    height: parent.height;
+                    n: 9px;
+                    corner: "tr";
+                    fill: Theme.raised;
+                }
+
+                source-row := HorizontalLayout {
+                    padding-left: 5px;
+                    padding-right: 14px;
+                    spacing: 9px;
+                    cross-axis-alignment: center;
+
                     GameIcon {
                         game-id: game-id;
                         short-name: game-short-name;
@@ -443,65 +498,130 @@ export component ControlBar inherits Rectangle {
                         runtime-icon: game-runtime-icon;
                         has-runtime-icon: game-has-runtime-icon;
                         size: 32px;
-                        y: (parent.height - self.height) / 2;
                     }
 
                     VerticalLayout {
                         spacing: 2px;
                         alignment: center;
-                        Text {
-                            text: "NOW PLAYING";
-                            font-size: 10px;
-                            color: Theme.text-tertiary;
-                            letter-spacing: 1px;
+                        HorizontalLayout {
+                            spacing: 5px;
+                            alignment: start;
+                            cross-axis-alignment: center;
+                            Rectangle {
+                                width: 4px;
+                                height: 4px;
+                                border-radius: 2px;
+                                background: Theme.action;
+                            }
+
+                            Text {
+                                text: "NOW PLAYING";
+                                font-family: Theme.font-label;
+                                font-size: 8.5px;
+                                font-weight: Theme.weight-label;
+                                letter-spacing: Theme.track-label;
+                                color: Theme.text-secondary;
+                            }
                         }
 
                         Text {
                             text: game-name;
-                            font-size: 13px;
-                            color: Theme.text-secondary;
-                            font-weight: 500;
+                            font-family: Theme.font-display;
+                            font-size: 12.5px;
+                            font-weight: Theme.weight-display;
+                            color: Theme.text-primary;
                         }
 
                         // One-time telemetry setup step (e.g. a launch option)
                         if telemetry-hint != "": Text {
                             text: telemetry-hint;
+                            font-family: Theme.font-body;
                             font-size: 10px;
+                            font-weight: Theme.weight-sentence;
                             color: Theme.text-tertiary;
                         }
                     }
+                }
+            }
 
-                    if can-stream: Rectangle {
-                        width: 1px;
-                        height: 24px;
-                        background: Theme.dark ? #FFFFFF14 : #00000014;
+            // STREAM + caret are one control, so they touch.
+            HorizontalLayout {
+                spacing: 0px;
+                cross-axis-alignment: center;
+                // STREAM — white, because white is the action colour
+                Rectangle {
+                    width: stream-label.preferred-width + 40px;
+                    height: 40px;
+
+                    CutShape {
+                        width: parent.width;
+                        height: parent.height;
+                        n: Theme.cut;
+                        corner: "tl";
+                        fill: can-stream
+                            ? (stream-ta.has-hover ? Theme.action-press : Theme.action)
+                            : Theme.raised;
+                    }
+
+                    stream-label := Text {
+                        text: is-hosting ? "LIVE" : "STREAM";
+                        font-family: Theme.font-label;
+                        font-size: 10px;
+                        font-weight: Theme.weight-label;
+                        letter-spacing: Theme.track-label;
+                        color: can-stream ? Theme.on-action : Theme.text-tertiary;
+                        x: (parent.width - self.width) / 2;
                         y: (parent.height - self.height) / 2;
                     }
-                    if can-stream: Rectangle {
-                        width: stream-label.preferred-width + 28px;
-                        height: 32px;
-                        border-radius: 8px;
-                        background: Theme.accent;
-                        y: (parent.height - self.height) / 2;
-                        stream-label := Text {
-                            text: "STREAM";
-                            font-size: 11px;
-                            font-weight: 700;
-                            color: white;
-                            letter-spacing: 0.5px;
-                            horizontal-alignment: center;
-                            vertical-alignment: center;
-                        }
 
-                        TouchArea {
-                            mouse-cursor: pointer;
-                            clicked => {
+                    stream-ta := TouchArea {
+                        mouse-cursor: can-stream ? pointer : default;
+                        clicked => {
+                            if (can-stream) {
                                 stream-requested();
                             }
                         }
                     }
                 }
+
+                // caret — the same shape continues: stream something else
+                Rectangle {
+                    width: 30px;
+                    height: 40px;
+
+                    CutShape {
+                        width: parent.width;
+                        height: parent.height;
+                        n: Theme.cut;
+                        corner: "br";
+                        fill: caret-ta.has-hover ? Theme.action-press : Theme.action;
+                    }
+                    // hairline between the button and the caret
+                    Rectangle {
+                        x: 0;
+                        width: 1px;
+                        height: parent.height;
+                        background: #12121447;
+                    }
+
+                    Text {
+                        text: "▾";
+                        font-family: Theme.font-body;
+                        font-size: 11px;
+                        color: Theme.on-action;
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
+                    }
+
+                    caret-ta := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            go-live-clicked();
+                        }
+                    }
+                }
             }
+
         }
 
         // State 2: Post-game prompt
@@ -510,6 +630,7 @@ export component ControlBar inherits Rectangle {
             alignment: center;
             HorizontalLayout {
                 spacing: 16px;
+                cross-axis-alignment: center;
                 GameIcon {
                     game-id: game-id;
                     short-name: game-short-name;
@@ -521,8 +642,10 @@ export component ControlBar inherits Rectangle {
 
                 Text {
                     text: game-summary != "" ? game-summary : "How'd it go?";
+                    font-family: Theme.font-body;
+                    font-weight: Theme.weight-sentence;
                     font-size: 13px;
-                    color: game-summary != "" ? Theme.text-primary : Theme.text-secondary;
+                    color: game-summary != "" ? Theme.text-primary : Theme.text-body;
                     vertical-alignment: center;
                 }
 
@@ -530,9 +653,9 @@ export component ControlBar inherits Rectangle {
                     spacing: 10px;
                     ReactionButton {
                         icon: @image-url("../icons/trophy.svg");
-                        icon-color: #4ade80;
-                        bg: #1e2a1e;
-                        border-clr: #2d4a2d;
+                        icon-color: Theme.text-primary;
+                        bg: Theme.raised;
+                        border-clr: Theme.graphic-med;
                         clicked => {
                             reaction-tapped("win");
                         }
@@ -540,9 +663,9 @@ export component ControlBar inherits Rectangle {
 
                     ReactionButton {
                         icon: @image-url("../icons/sad-face.svg");
-                        icon-color: #f87171;
-                        bg: #2a1e1e;
-                        border-clr: #4a2d2d;
+                        icon-color: Theme.text-secondary;
+                        bg: Theme.raised;
+                        border-clr: Theme.graphic-med;
                         clicked => {
                             reaction-tapped("loss");
                         }
@@ -550,9 +673,9 @@ export component ControlBar inherits Rectangle {
 
                     ReactionButton {
                         icon: @image-url("../icons/star.svg");
-                        icon-color: #fbbf24;
-                        bg: #2a2418;
-                        border-clr: #4a3d1d;
+                        icon-color: Theme.text-secondary;
+                        bg: Theme.raised;
+                        border-clr: Theme.graphic-med;
                         clicked => {
                             reaction-tapped("highlight");
                         }
@@ -562,27 +685,37 @@ export component ControlBar inherits Rectangle {
                 if riot-cta-visible: Rectangle {
                     width: 1px;
                     height: 24px;
-                    background: Theme.dark ? #FFFFFF14 : #00000014;
-                    y: (parent.height - self.height) / 2;
+                    background: Theme.graphic-light;
                 }
                 if riot-cta-visible: Rectangle {
-                    width: riot-cta-label.preferred-width + 24px;
-                    height: 32px;
-                    border-radius: 8px;
-                    border-width: 1px;
-                    border-color: Theme.accent;
-                    background: riot-cta-ta.has-hover ? Theme.surface-hover : transparent;
-                    y: (parent.height - self.height) / 2;
+                    width: riot-cta-label.preferred-width + 28px;
+                    height: 34px;
+
+                    CutShape {
+                        width: parent.width;
+                        height: parent.height;
+                        n: Theme.cut;
+                        corner: "tl";
+                        fill: Theme.action;
+                    }
+                    CutShape {
+                        width: parent.width;
+                        height: parent.height;
+                        n: Theme.cut;
+                        corner: "tl";
+                        inset: Theme.keyline;
+                        fill: riot-cta-ta.has-hover ? Theme.raised-hover : Theme.surface;
+                    }
 
                     riot-cta-label := Text {
                         text: "GET VERIFIED STATS";
-                        font-family: Theme.font-mono;
-                        font-size: 10px;
-                        font-weight: 700;
-                        letter-spacing: 0.5px;
-                        color: Theme.accent;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
+                        font-family: Theme.font-label;
+                        font-size: 9.5px;
+                        font-weight: Theme.weight-label;
+                        letter-spacing: Theme.track-label;
+                        color: Theme.action;
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
                     }
 
                     riot-cta-ta := TouchArea {
@@ -595,15 +728,12 @@ export component ControlBar inherits Rectangle {
                 if riot-cta-visible: Rectangle {
                     width: 24px;
                     height: 32px;
-                    border-radius: 6px;
-                    background: riot-cta-x-ta.has-hover ? Theme.surface-hover : transparent;
-                    y: (parent.height - self.height) / 2;
 
                     Image {
                         source: @image-url("../icons/x.svg");
                         width: 12px;
                         height: 12px;
-                        colorize: Theme.text-tertiary;
+                        colorize: riot-cta-x-ta.has-hover ? Theme.text-primary : Theme.text-tertiary;
                         x: (parent.width - self.width) / 2;
                         y: (parent.height - self.height) / 2;
                     }
@@ -626,11 +756,11 @@ export component ControlBar inherits Rectangle {
                 spacing: 10px;
                 Rectangle {
                     horizontal-stretch: 1;
-                    height: 36px;
+                    height: 38px;
                     border-radius: Theme.r-inner;
-                    background: Theme.bg-app;
+                    background: Theme.raised;
                     border-width: 1px;
-                    border-color: Theme.graphic-light;
+                    border-color: moment-input.has-focus ? Theme.action : Theme.graphic-light;
                     HorizontalLayout {
                         padding-left: 14px;
                         padding-right: 14px;
@@ -640,11 +770,13 @@ export component ControlBar inherits Rectangle {
                             source: @image-url("../icons/star.svg");
                             width: 16px;
                             height: 16px;
-                            colorize: #fbbf24;
+                            colorize: Theme.text-secondary;
                             y: (parent.height - self.height) / 2;
                         }
 
                         moment-input := MelloTextInput {
+                            font-family: Theme.font-body;
+                            font-weight: Theme.weight-sentence;
                             font-size: 13px;
                             color: Theme.text-primary;
                             horizontal-stretch: 1;
@@ -660,20 +792,27 @@ export component ControlBar inherits Rectangle {
                 }
 
                 Rectangle {
-                    width: 36px;
-                    height: 36px;
-                    border-radius: Theme.r-inner;
-                    background: Theme.accent;
+                    width: 38px;
+                    height: 38px;
+
+                    CutShape {
+                        width: parent.width;
+                        height: parent.height;
+                        n: Theme.cut;
+                        corner: "tl";
+                        fill: send-ta.has-hover ? Theme.action-press : Theme.action;
+                    }
+
                     Image {
                         source: @image-url("../icons/arrow-right.svg");
                         width: 16px;
                         height: 16px;
-                        colorize: white;
+                        colorize: Theme.on-action;
                         x: (parent.width - self.width) / 2;
                         y: (parent.height - self.height) / 2;
                     }
 
-                    TouchArea {
+                    send-ta := TouchArea {
                         mouse-cursor: pointer;
                         clicked => {
                             if moment-input.text != "" {
@@ -692,165 +831,119 @@ export component ControlBar inherits Rectangle {
             alignment: center;
             HorizontalLayout {
                 spacing: 8px;
+                cross-axis-alignment: center;
                 Image {
                     source: @image-url("../icons/checkmark.svg");
                     width: 18px;
                     height: 18px;
-                    colorize: #4ade80;
-                    y: (parent.height - self.height) / 2;
+                    colorize: Theme.action;
                 }
 
                 Text {
                     text: "Moment shared with crew";
+                    font-family: Theme.font-body;
+                    font-weight: Theme.weight-sentence;
                     font-size: 13px;
-                    color: #4ade80;
-                    font-weight: 500;
+                    color: Theme.text-primary;
                     vertical-alignment: center;
                 }
             }
         }
 
-        // ===== SPACER =====
-        Rectangle {
+        // ===================== RIGHT =====================
+        HorizontalLayout {
             horizontal-stretch: 1;
-        }
+            spacing: 8px;
+            alignment: end;
+            cross-axis-alignment: center;
 
-        // ===== RIGHT: Controls group =====
-        if mic-permission-granted: Rectangle {
-            horizontal-stretch: 0;
-            background: Theme.bg-app;
-            border-radius: 12px;
-            border-width: 1px;
-            border-color: Theme.dark ? #FFFFFF0D : #0000000D;
-            HorizontalLayout {
-                padding: 6px;
-                spacing: 0px;
+            // CLIP wears red: pressing it starts a recording.
+            if mic-permission-granted && in-voice: Rectangle {
+                width: clip-row.preferred-width + 28px;
+                height: 38px;
 
-                // Clip button (only when in voice)
-                if in-voice: Rectangle {
-                    width: 40px;
-                    Rectangle {
-                        width: 40px;
-                        height: 40px;
-                        border-radius: 8px;
-                        background: clip-hover.has-hover ? (Theme.dark ? #F59E0B33 : #F59E0B28) : transparent;
-                        y: (parent.height - self.height) / 2;
-                        Image {
-                            source: @image-url("../icons/scissors-line-dashed.svg");
-                            colorize: Theme.clip-amber;
-                            width: 20px;
-                            height: 20px;
-                            x: (parent.width - self.width) / 2;
-                            y: (parent.height - self.height) / 2;
-                        }
-                    }
-
-                    clip-hover := TouchArea {
-                        mouse-cursor: pointer;
-                        clicked => {
-                            clip-captured();
-                        }
-                    }
+                CutButtonShape {
+                    width: parent.width;
+                    height: parent.height;
+                    n: 9px;
+                    fill: Theme.live;
+                }
+                CutButtonShape {
+                    width: parent.width;
+                    height: parent.height;
+                    n: 9px;
+                    inset: Theme.keyline;
+                    fill: clip-hover.has-hover ? Theme.live-bg : Theme.surface;
                 }
 
-                // Go live
-                Rectangle {
-                    width: 40px;
-                    Rectangle {
-                        width: 40px;
-                        height: 40px;
-                        border-radius: 8px;
-                        background: go-live-hover.has-hover ? (Theme.dark ? #FFFFFF1A : #0000000D) : transparent;
-                        y: (parent.height - self.height) / 2;
-                        Image {
-                            source: @image-url("../icons/broadcast.svg");
-                            colorize: is-hosting ? Theme.accent
-                                : go-live-hover.has-hover ? Theme.accent
-                                : Theme.text-secondary;
-                            width: 20px;
-                            height: 20px;
-                            x: (parent.width - self.width) / 2;
-                            y: (parent.height - self.height) / 2;
-                        }
-                    }
-
-                    go-live-hover := TouchArea {
-                        mouse-cursor: pointer;
-                        clicked => { go-live-clicked(); }
-                    }
-                }
-
-                ActionButton {
-                    icon: mic-muted ? @image-url("../icons/mic-off.svg") : @image-url("../icons/mic.svg");
-                    alert: in-voice && mic-muted;
-                    clicked => {
-                        mic-toggled();
-                    }
-                }
-
-                ActionButton {
-                    icon: deafened ? @image-url("../icons/headphone-off.svg") : @image-url("../icons/headphones.svg");
-                    alert: in-voice && deafened;
-                    clicked => {
-                        deafen-toggled();
-                    }
-                }
-
-                // Separator before settings
-                Rectangle {
-                    width: 9px;
-                    Rectangle {
-                        width: 1px;
-                        height: 24px;
-                        background: Theme.dark ? #FFFFFF14 : #00000014;
-                        x: 4px;
-                        y: (parent.height - self.height) / 2;
-                    }
-                }
-
-                ActionButton {
-                    icon: @image-url("../icons/settings.svg");
-                    clicked => {
-                        settings-clicked();
-                    }
-                }
-            }
-        }
-
-        // --- Right: mic permission CTA (when no mic access) ---
-        if !mic-permission-granted: HorizontalLayout {
-            horizontal-stretch: 0;
-            spacing: 12px;
-            alignment: center;
-            Text {
-                text: mic-permission-denied ? "Microphone access denied — enable it in System Settings" : "Microphone access is needed for voice chat";
-                font-family: Theme.font-mono;
-                font-size: 11px;
-                color: Theme.text-secondary;
-                vertical-alignment: center;
-            }
-
-            Rectangle {
-                width: mic-cta-row.preferred-width + 28px;
-                height: 36px;
-                border-radius: Theme.r-inner;
-                background: Theme.accent;
-                mic-cta-row := HorizontalLayout {
+                clip-row := HorizontalLayout {
+                    spacing: 7px;
                     alignment: center;
-                    spacing: 8px;
+                    cross-axis-alignment: center;
+                    Image {
+                        source: @image-url("../icons/scissors-line-dashed.svg");
+                        colorize: Theme.live;
+                        width: 15px;
+                        height: 15px;
+                    }
+
                     Text {
-                        text: mic-permission-denied ? "Open Settings" : "Allow Microphone";
-                        font-family: Theme.font-mono;
-                        font-size: 12px;
-                        font-weight: 600;
-                        color: #FFFFFF;
+                        text: "CLIP 30S";
+                        font-family: Theme.font-label;
+                        font-size: 9.5px;
+                        font-weight: Theme.weight-label;
+                        letter-spacing: Theme.track-label;
+                        color: Theme.live;
                         vertical-alignment: center;
                     }
+                }
 
+                clip-hover := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        clip-captured();
+                    }
+                }
+            }
+
+            if mic-permission-granted: IconButton {
+                icon: @image-url("../icons/settings.svg");
+                clicked => {
+                    settings-clicked();
+                }
+            }
+
+            // --- mic permission CTA (when no mic access) ---
+            if !mic-permission-granted: Text {
+                text: mic-permission-denied ? "Microphone access denied — enable it in System Settings" : "Microphone access is needed for voice chat";
+                font-family: Theme.font-body;
+                font-weight: Theme.weight-sentence;
+                font-size: 12px;
+                color: Theme.text-body;
+                vertical-alignment: center;
+            }
+            if !mic-permission-granted: Rectangle {
+                width: mic-cta-row.preferred-width + 32px;
+                height: 38px;
+
+                CutButtonShape {
+                    width: parent.width;
+                    height: parent.height;
+                    n: Theme.cut;
+                    fill: mic-btn-touch.has-hover ? Theme.action-press : Theme.action;
+                }
+
+                mic-cta-row := HorizontalLayout {
+                    alignment: center;
+                    cross-axis-alignment: center;
+                    spacing: 8px;
                     Text {
-                        text: "→";
-                        font-size: 14px;
-                        color: #FFFFFF;
+                        text: mic-permission-denied ? "OPEN SETTINGS" : "ALLOW MICROPHONE";
+                        font-family: Theme.font-label;
+                        font-size: 9.5px;
+                        font-weight: Theme.weight-label;
+                        letter-spacing: Theme.track-label;
+                        color: Theme.on-action;
                         vertical-alignment: center;
                     }
                 }
