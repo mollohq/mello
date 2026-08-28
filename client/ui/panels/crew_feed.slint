@@ -340,7 +340,7 @@ component HeroClipCard inherits Rectangle {
         width: parent.width;
         height: parent.height;
         n: Theme.notch;
-        corner: "tr";
+        corner: "br";
         fill: card.is-new ? Theme.clip-amber :
                   is-playing ? Theme.clip-amber :
                   card-hover.has-hover ? Theme.graphic-med : Theme.card-border;
@@ -349,7 +349,7 @@ component HeroClipCard inherits Rectangle {
         width: parent.width;
         height: parent.height;
         n: Theme.notch;
-        corner: "tr";
+        corner: "br";
         inset: Theme.keyline;
         fill: card-hover.has-hover ? Theme.card-bg-hover : Theme.card-bg;
     }
@@ -546,15 +546,6 @@ component HeroClipCard inherits Rectangle {
             }
         }
     }
-
-    // media is clipped to a rectangle, so put the corner back
-    CutMask {
-        width: parent.width;
-        height: parent.height;
-        n: Theme.notch;
-        corner: "tr";
-        fill: Theme.bg-app;
-    }
 }
 
 // Standard clip card (1x)
@@ -577,7 +568,7 @@ component ClipCard inherits Rectangle {
         width: parent.width;
         height: parent.height;
         n: Theme.notch;
-        corner: "tl";
+        corner: "bl";
         fill: card.is-new ? Theme.clip-amber :
                   is-playing ? Theme.clip-amber :
                   clip-hover.has-hover ? Theme.graphic-med : Theme.card-border;
@@ -586,7 +577,7 @@ component ClipCard inherits Rectangle {
         width: parent.width;
         height: parent.height;
         n: Theme.notch;
-        corner: "tl";
+        corner: "bl";
         inset: Theme.keyline;
         fill: clip-hover.has-hover ? Theme.card-bg-hover : Theme.card-bg;
     }
@@ -743,15 +734,6 @@ component ClipCard inherits Rectangle {
             }
         }
     }
-
-    // media is clipped to a rectangle, so put the corner back
-    CutMask {
-        width: parent.width;
-        height: parent.height;
-        n: Theme.notch;
-        corner: "tl";
-        fill: Theme.bg-app;
-    }
 }
 
 // Weekly recap card
@@ -902,14 +884,6 @@ component RecapCard inherits Rectangle {
                 Rectangle { height: 1px; background: Theme.card-border; }
                 Rectangle { height: 8px; }
 
-                Text {
-                    font-family: Theme.font-label;
-                    text: "THIS WEEK IN GAMES";
-                    font-size: 10px;
-                    font-weight: Theme.weight-label;
-                    color: Theme.skel-text;
-                    letter-spacing: Theme.track-label;
-                }
 
                 if card.games-summary != "": Text {
                     font-weight: Theme.weight-sentence;
@@ -1004,14 +978,14 @@ component SessionCard inherits Rectangle {
         width: parent.width;
         height: parent.height;
         n: Theme.notch;
-        corner: "tr";
+        corner: "br";
         fill: Theme.card-border;
     }
     CutShape {
         width: parent.width;
         height: parent.height;
         n: Theme.notch;
-        corner: "tr";
+        corner: "br";
         inset: Theme.keyline;
         fill: Theme.card-bg;
     }
@@ -1389,14 +1363,14 @@ component GameSessionCard inherits Rectangle {
         width: parent.width;
         height: parent.height;
         n: Theme.notch;
-        corner: "tr";
+        corner: "br";
         fill: Theme.card-border;
     }
     CutShape {
         width: parent.width;
         height: parent.height;
         n: Theme.notch;
-        corner: "tr";
+        corner: "br";
         inset: Theme.keyline;
         fill: Theme.card-bg;
     }
@@ -1530,15 +1504,6 @@ component GameSessionCard inherits Rectangle {
                 vertical-alignment: center;
             }
         }
-    }
-
-    // media is clipped to a rectangle, so put the corner back
-    CutMask {
-        width: parent.width;
-        height: parent.height;
-        n: Theme.notch;
-        corner: "tr";
-        fill: Theme.bg-app;
     }
 }
 
@@ -1743,14 +1708,14 @@ component SkeletonHeroCard inherits Rectangle {
         width: parent.width;
         height: parent.height;
         n: Theme.notch;
-        corner: "tr";
+        corner: "br";
         fill: Theme.card-border;
     }
     CutShape {
         width: parent.width;
         height: parent.height;
         n: Theme.notch;
-        corner: "tr";
+        corner: "br";
         inset: Theme.keyline;
         fill: Theme.card-bg-skel;
     }
@@ -1849,15 +1814,6 @@ component SkeletonHeroCard inherits Rectangle {
             }
         }
     }
-
-    // media is clipped to a rectangle, so put the corner back
-    CutMask {
-        width: parent.width;
-        height: parent.height;
-        n: Theme.notch;
-        corner: "tr";
-        fill: Theme.bg-app;
-    }
 }
 
 // Recap skeleton (fake stat bars)
@@ -1947,14 +1903,14 @@ component SkeletonClipCard inherits Rectangle {
         width: parent.width;
         height: parent.height;
         n: Theme.notch;
-        corner: "tl";
+        corner: "bl";
         fill: Theme.card-border;
     }
     CutShape {
         width: parent.width;
         height: parent.height;
         n: Theme.notch;
-        corner: "tl";
+        corner: "bl";
         inset: Theme.keyline;
         fill: Theme.card-bg-skel;
     }
@@ -2017,15 +1973,6 @@ component SkeletonClipCard inherits Rectangle {
             }
         }
     }
-
-    // media is clipped to a rectangle, so put the corner back
-    CutMask {
-        width: parent.width;
-        height: parent.height;
-        n: Theme.notch;
-        corner: "tl";
-        fill: Theme.bg-app;
-    }
 }
 
 // Session skeleton
@@ -2038,14 +1985,14 @@ component SkeletonSessionCard inherits Rectangle {
         width: parent.width;
         height: parent.height;
         n: Theme.notch;
-        corner: "tr";
+        corner: "br";
         fill: Theme.card-border;
     }
     CutShape {
         width: parent.width;
         height: parent.height;
         n: Theme.notch;
-        corner: "tr";
+        corner: "br";
         inset: Theme.keyline;
         fill: Theme.card-bg-skel;
     }

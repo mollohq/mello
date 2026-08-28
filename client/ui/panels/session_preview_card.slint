@@ -1,4 +1,5 @@
 import { Theme } from "../theme.slint";
+import { CutShape } from "../components/cut.slint";
 
 component AvatarDot inherits Rectangle {
     in property <string> initials;
@@ -79,11 +80,27 @@ export component SessionPreviewCard inherits Rectangle {
 
     property <int> next-index: image-count > 0 ? Math.mod((frame-index + 1), image-count) : 0;
 
-    background: card-hover.has-hover ? Theme.card-bg-hover : Theme.card-bg;
-    border-radius: 10px;
-    border-width: 1px;
-    border-color: card-hover.has-hover ? Theme.graphic-med : Theme.card-border;
+    background: transparent;
+    border-width: 0px;
     clip: true;
+
+    // A content card cuts at the bottom: the snapshot fills the top edge
+    // and must not be cropped.
+    CutShape {
+        width: parent.width;
+        height: parent.height;
+        n: Theme.notch;
+        corner: "br";
+        fill: card-hover.has-hover ? Theme.graphic-med : Theme.card-border;
+    }
+    CutShape {
+        width: parent.width;
+        height: parent.height;
+        n: Theme.notch;
+        corner: "br";
+        inset: Theme.keyline;
+        fill: card-hover.has-hover ? Theme.card-bg-hover : Theme.card-bg;
+    }
 
     changed snapshot-poster-ready => {
         if snapshot-poster-ready && !playing {
