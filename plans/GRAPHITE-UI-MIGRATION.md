@@ -1,6 +1,11 @@
 # Graphite UI Migration — bringing the client onto design system v3.3
 
-> **Status:** plan only, nothing implemented.
+> **Status:** in progress on `feat/graphite-ui`.
+> Done: theme retokenised, fonts swapped, cut primitives, control bar, crew
+> sidebar, you-strip, crew feed, session preview card, chat panel.
+> Left: settings, onboarding, sign-in, discover, debug and the modals — a
+> token and type sweep only, no layout changes.
+> Hardcoded hex literals: 488 at the start, 367 now.
 > **Design source:** `mello-wip/m3llo-design-system.html` (v3.3) and `mello-wip/m3llo-crew-feed-v15.html`.
 > **Scope:** restyle what exists. No new panels, no new features. Layout may move
 > (the control bar is deliberately regrouped); information does not change.
@@ -148,8 +153,10 @@ actually live. Nothing else animates.
 ## 5. Verification
 
 - `./scripts/check.sh` after each step (`CI=true` is mandatory, the script sets it).
-- Visual passes are **not** verifiable by compiling — each surface needs a look on screen
-  via `.\client-prod.ps1`.
+- `slint-viewer --check <file>` is the fast per-file compile loop, and
+  `slint-viewer --screenshot` renders any panel's `Preview` headless. The
+  running app can be driven over the embedded MCP server. All three are
+  documented in CLAUDE.md under "Verifying Slint UI Work".
 - The existing 57 flow tests assert structurally (component type names), not on colour or
   font, so a restyle should not break them. Watch for tests that assert on fixed geometry.
 

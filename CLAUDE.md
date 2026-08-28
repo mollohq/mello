@@ -141,6 +141,13 @@ Read `TESTING.md` before adding tests. In short:
   `width` smaller than its parent defaults to **horizontally centered** in Slint, so omitting
   `x: 0` makes the bar grow from the center outward. See `debug_panel.slint` `StatBar` for
   the canonical pattern (`x: 0`, `clip: true` on the track).
+- **The bundled fonts carry no symbol glyphs.** Oxanium and Barlow have letters,
+  digits, the middot and dashes. They do not have `✂ ▾ ✓ ▶ › ●`. A symbol
+  written as text renders as a tofu box. Use an SVG from `client/ui/icons/`
+  with `colorize:`, or a `Rectangle` for a dot.
+- **`x` and `y` belong to the layout.** Setting `x` on a direct child of a
+  `HorizontalLayout` is a compile error; setting `y` is silently ignored. Use
+  `cross-axis-alignment: center` on the layout, or wrap the child.
 - When a design mockup (`designs/*.html`) contains inline SVGs, **do not** try to recreate them
   with Slint rectangles or shapes. Instead, extract the SVG into `client/ui/icons/<name>.svg`
   (stroke="black", no hardcoded colors) and reference it with `@image-url("../icons/<name>.svg")`
@@ -150,6 +157,43 @@ Read `TESTING.md` before adding tests. In short:
   it overrides stretch. Instead, remove `alignment`, set `horizontal-stretch: 1` on the element
   that should fill the middle, and `horizontal-stretch: 0` on fixed items. See control_bar.slint
   for the canonical pattern. Same applies vertically with `vertical-stretch`.
+
+## Verifying Slint UI Work
+Never call a UI change done without looking at a render. Reading the code does
+not show a clipped label or a square corner.
+
+**Compile one file (~1s).** A full `cargo check -p mello-client` takes a minute.
+```bash
+slint-viewer --check client/ui/panels/crew_panel.slint
+```
+
+**Render one file headless (no app, no display).** Every panel exports a
+`Preview` component with mock data, so this shows the real layout.
+```bash
+slint-viewer --screenshot out.png client/ui/panels/crew_panel.slint
+```
+Needs `slint-viewer` 1.17+. Check `slint-viewer --version` matches the Slint
+version in `client/Cargo.toml`; older builds have neither flag.
+
+**Drive the running app with real data.** The client compiles an embedded MCP
+server behind its own `mcp` feature (`client/src/lib.rs`, `mcp_server::init`).
+It is a no-op unless `SLINT_MCP_PORT` is set.
+```bash
+SLINT_EMIT_DEBUG_INFO=1 SLINT_MCP_PORT=9315 cargo run -p mello-client --no-default-features --features production,mcp
+```
+Then speak JSON-RPC to `127.0.0.1:9315/mcp`. The `Accept` header is required.
+```bash
+curl -s -X POST http://127.0.0.1:9315/mcp \
+  -H "Content-Type: application/json" -H "Accept: application/json, text/event-stream" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'
+```
+Tools include `take_screenshot`, `get_element_tree`, `find_elements_by_id`,
+`click_element`, `dispatch_key_event` and `set_element_value`.
+`take_screenshot` returns base64: write the response to a file and decode it,
+because the payload breaks inline JSON parsing.
+
+Enabling the feature rebuilds the `slint` crate. Run one cargo process at a
+time, or the second blocks on the artifact lock.
 
 ## Running the Client
 - Always use `.\client-prod.ps1` to start the client — there is no local backend.
