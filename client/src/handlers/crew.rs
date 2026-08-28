@@ -50,6 +50,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
                     .iter()
                     .map(|c| CrewData {
                         id: c.id.clone().into(),
+                        initials: crate::converters::make_initials(&c.name).into(),
                         name: c.name.clone().into(),
                         description: c.description.clone().into(),
                         member_count: c.member_count,
@@ -160,6 +161,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
                     } else {
                         CrewData {
                             id: c.id.clone().into(),
+                            initials: crate::converters::make_initials(&c.name).into(),
                             name: c.name.into(),
                             description: c.description.into(),
                             member_count: c.member_count,

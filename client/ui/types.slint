@@ -1,6 +1,8 @@
 export struct CrewData {
     id: string,
     name: string,
+    // Two letters for the crew tile. The full name never fits a 32px tile.
+    initials: string,
     description: string,
     member-count: int,
     // Capacity, so the UI can tell a full crew from a joinable one. Dropping

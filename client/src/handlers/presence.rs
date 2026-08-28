@@ -610,6 +610,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
                 } else {
                     updated.push(CrewData {
                         id: sc.crew_id.clone().into(),
+                        initials: crate::converters::make_initials(&sc.name).into(),
                         name: sc.name.clone().into(),
                         member_count: sc.counts.total as i32,
                         ..Default::default()
@@ -619,6 +620,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
 
                 if !sc.name.is_empty() {
                     c.name = sc.name.clone().into();
+                    c.initials = crate::converters::make_initials(&sc.name).into();
                 }
                 c.member_count = sc.counts.total as i32;
                 c.online_count = sc.counts.online as i32;

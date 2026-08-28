@@ -285,8 +285,8 @@ component CompactCrewCard inherits Rectangle {
                 }
 
                 Text {
-                    text: crew.name;
-                    font-size: 7px;
+                    text: crew.initials;
+                    font-size: 8px;
                     font-family: Theme.font-display;
                     font-weight: Theme.weight-display-bold;
                     color: Theme.text-dim;
@@ -584,8 +584,8 @@ component ActiveCrewCard inherits Rectangle {
                     }
 
                     Text {
-                        text: crew.name;
-                        font-size: 9px;
+                        text: crew.initials;
+                        font-size: 10px;
                         font-family: Theme.font-display;
                         font-weight: Theme.weight-display-bold;
                         color: Theme.on-action;
@@ -1070,7 +1070,7 @@ export component Preview inherits CrewPanel {
     active-crew-id: "c1";
     crews: [
         {
-            id: "c1", name: "M3LLO CREW", member-count: 10, online-count: 5,
+            id: "c1", name: "M3LLO CREW", initials: "MC", member-count: 10, online-count: 5,
             sfu-enabled: true, voice-count: 3,
             has-catchup: true, catchup-count: 4, catchup-loaded: true,
             catchup-text: "Three moments dropped, one stream recap, and two clips this week.",
@@ -1079,7 +1079,7 @@ export component Preview inherits CrewPanel {
             v2-initials: "b0", v2-name: "b0bben", v2-speaking: false,
         },
         {
-            id: "c2", name: "Neon Syndicate", member-count: 12, online-count: 4,
+            id: "c2", name: "Neon Syndicate", initials: "NS", member-count: 12, online-count: 4,
             has-stream: true, stream-name: "vex_r streaming Valorant",
             voice-count: 4,
             clip-count: 4,
@@ -1092,7 +1092,7 @@ export component Preview inherits CrewPanel {
             v2-initials: "lu",
         },
         {
-            id: "c3", name: "Deep Space", member-count: 8, online-count: 2,
+            id: "c3", name: "Deep Space", initials: "DS", member-count: 8, online-count: 2,
             voice-count: 2,
             game-count: 3,
             g0-name: "Apex", g1-name: "OW2", g2-name: "CoD",
@@ -1102,7 +1102,7 @@ export component Preview inherits CrewPanel {
             v1-initials: "st",
         },
         {
-            id: "c4", name: "Quiet Squad", member-count: 5, online-count: 0,
+            id: "c4", name: "Quiet Squad", initials: "QS", member-count: 5, online-count: 0,
             voice-count: 0,
             game-count: 0,
             clip-count: 0,
