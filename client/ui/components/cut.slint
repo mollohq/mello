@@ -143,6 +143,29 @@ export component CutButton inherits Rectangle {
     @children
 }
 
+/// Paints one corner in the surrounding colour. Media inside a card is
+/// clipped to a rectangle, so it would square off the cut; this covers
+/// that corner back up. Draw it after the content.
+export component CutMask inherits Path {
+    in property <length> n: Theme.notch;
+    in property <string> corner: "tr";
+
+    viewbox-x: 0;
+    viewbox-y: 0;
+    viewbox-width: self.width / 1px;
+    viewbox-height: self.height / 1px;
+
+    property <float> w: self.width / 1px;
+    property <float> h: self.height / 1px;
+    property <float> c: self.n / 1px;
+
+    commands:
+        corner == "tl" ? "M 0 0 L \{c} 0 L 0 \{c} Z"
+      : corner == "br" ? "M \{w} \{h - c} L \{w} \{h} L \{w - c} \{h} Z"
+      : corner == "bl" ? "M 0 \{h - c} L \{c} \{h} L 0 \{h} Z"
+      :                  "M \{w - c} 0 L \{w} 0 L \{w} \{c} Z";
+}
+
 /// Paints the four corners in the surrounding colour, so an image placed
 /// under it reads as an octagon. Slint cannot clip to a path, so the
 /// corners are covered rather than cut.
