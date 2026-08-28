@@ -1,4 +1,5 @@
 import { Theme, MelloTextInput } from "../theme.slint";
+import { CutShape, CutButtonShape, OctShape, OctMask } from "../components/cut.slint";
 import { ListView } from "std-widgets.slint";
 import { ChatMessageData, ChatLinkData, GifItemData, EmojiItemData, MentionMemberData } from "../types.slint";
 
@@ -12,10 +13,10 @@ component LinkPill inherits Rectangle {
 
     border-radius: Theme.r-pill;
     background: pill-touch.has-hover
-        ? (Theme.dark ? #FFFFFF14 : #0000000A)
-        : (Theme.dark ? #FFFFFF0A : #00000006);
+        ? (Theme.dark ? Theme.graphic-light : Theme.hover-overlay)
+        : (Theme.dark ? Theme.hover-overlay : Theme.hover-overlay);
     border-width: 1px;
-    border-color: Theme.dark ? #FFFFFF1A : Theme.graphic-light;
+    border-color: Theme.graphic-light;
 
     pill-touch := TouchArea {
         mouse-cursor: pointer;
@@ -32,14 +33,16 @@ component LinkPill inherits Rectangle {
         alignment: center;
 
         Text {
+            font-family: Theme.font-display;
             text: "↗";
             font-size: 10px;
-            font-weight: 600;
+            font-weight: Theme.weight-display;
             color: Theme.accent;
             vertical-alignment: center;
         }
 
         Text {
+            font-family: Theme.font-body;
             text: root.label;
             font-size: Theme.font-xs;
             font-weight: 500;
@@ -58,23 +61,42 @@ component AvatarCircle inherits Rectangle {
     in property <bool> has-avatar: false;
     width: 28px;
     height: 28px;
-    border-radius: 14px;
-    background: Theme.graphic-light;
-    clip: true;
+    background: transparent;
 
-    if has-avatar: Image {
-        source: avatar;
+    OctShape {
         width: parent.width;
         height: parent.height;
-        image-fit: contain;
+        n: 6px;
+        fill: Theme.raised;
+    }
+
+    if has-avatar: Rectangle {
+        width: parent.width;
+        height: parent.height;
+        clip: true;
+        Image {
+            source: avatar;
+            width: parent.width;
+            height: parent.height;
+            image-fit: cover;
+        }
+        // Slint cannot clip to a path, so the corners are painted back
+        OctMask {
+            width: parent.width;
+            height: parent.height;
+            n: 6px;
+            fill: Theme.surface;
+        }
     }
 
     if !has-avatar: Text {
         text: initials;
         font-size: 10px;
-        font-family: Theme.font-mono;
-        font-weight: 600;
+        font-family: Theme.font-display;
+        font-weight: Theme.weight-display-bold;
         color: Theme.text-secondary;
+        width: parent.width;
+        height: parent.height;
         horizontal-alignment: center;
         vertical-alignment: center;
     }
@@ -136,6 +158,8 @@ component MessageMoreMenu inherits Rectangle {
                     border-radius: 4px;
 
                     Text {
+                        font-weight: Theme.weight-sentence;
+                        font-family: Theme.font-body;
                         text: "Edit";
                         font-size: Theme.font-sm;
                         color: Theme.text-secondary;
@@ -154,9 +178,11 @@ component MessageMoreMenu inherits Rectangle {
                     border-radius: 4px;
 
                     Text {
+                        font-weight: Theme.weight-sentence;
+                        font-family: Theme.font-body;
                         text: "Delete";
                         font-size: Theme.font-sm;
-                        color: #E05555;
+                        color: Theme.live;
                         x: 8px;
                         vertical-alignment: center;
                     }
@@ -172,6 +198,8 @@ component MessageMoreMenu inherits Rectangle {
                     border-radius: 4px;
 
                     Text {
+                        font-weight: Theme.weight-sentence;
+                        font-family: Theme.font-body;
                         text: "Copy text";
                         font-size: Theme.font-sm;
                         color: Theme.text-secondary;
@@ -204,10 +232,9 @@ component PillButton inherits Rectangle {
 
     height: 28px;
     width: pill-layout.preferred-width + 16px;
-    border-radius: Theme.radius-sm;
     background: transparent;
     border-width: touch.has-hover ? 1px : 0px;
-    border-color: Theme.accent;
+    border-color: Theme.action;
 
     touch := TouchArea {
         clicked => { root.clicked(); }
@@ -228,6 +255,7 @@ component PillButton inherits Rectangle {
         }
 
         Text {
+            font-family: Theme.font-body;
             text: label;
             font-size: Theme.font-xs;
             font-weight: 500;
@@ -243,10 +271,24 @@ component ChatClipCard inherits Rectangle {
     callback play-clicked();
 
     height: 72px;
-    background: clip-touch.has-hover ? Theme.card-bg-hover : Theme.card-bg;
-    border-radius: 8px;
-    border-width: 1px;
-    border-color: Theme.card-border;
+    background: transparent;
+    border-width: 0px;
+
+    CutShape {
+        width: parent.width;
+        height: parent.height;
+        n: Theme.notch-sm;
+        corner: "br";
+        fill: Theme.card-border;
+    }
+    CutShape {
+        width: parent.width;
+        height: parent.height;
+        n: Theme.notch-sm;
+        corner: "br";
+        inset: Theme.keyline;
+        fill: clip-touch.has-hover ? Theme.card-bg-hover : Theme.card-bg;
+    }
 
     HorizontalLayout {
         spacing: 10px;
@@ -255,10 +297,8 @@ component ChatClipCard inherits Rectangle {
         Rectangle {
             width: 52px;
             height: 52px;
-            border-radius: 6px;
-            background: Theme.dark
-                ? @linear-gradient(135deg, #1a1a2a 0%, #2a1a2a 100%)
-                : @linear-gradient(135deg, #e8e8f0 0%, #f0e8f0 100%);
+            border-radius: 4px;
+            background: Theme.wave-bg;
 
             HorizontalLayout {
                 alignment: center;
@@ -283,12 +323,13 @@ component ChatClipCard inherits Rectangle {
                 border-radius: 11px;
                 background: #00000066;
 
-                Text {
-                    text: "▶";
-                    font-size: 10px;
-                    color: white;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
+                Image {
+                    source: @image-url("../icons/play.svg");
+                    width: 10px;
+                    height: 10px;
+                    colorize: white;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
                 }
             }
         }
@@ -310,6 +351,7 @@ component ChatClipCard inherits Rectangle {
                 }
 
                 Text {
+                    font-family: Theme.font-body;
                     text: sender-name + " clipped that";
                     font-size: 12px;
                     font-weight: 500;
@@ -319,9 +361,11 @@ component ChatClipCard inherits Rectangle {
             }
 
             Text {
+                font-weight: Theme.weight-sentence;
+                font-family: Theme.font-body;
                 text: "Voice · " + clip-duration + " · Play";
                 font-size: 11px;
-                color: #888888;
+                color: Theme.text-secondary;
             }
         }
     }
@@ -372,6 +416,8 @@ component GifPopover inherits Rectangle {
             }
 
             if gif-search.text == "": Text {
+                font-weight: Theme.weight-sentence;
+                font-family: Theme.font-body;
                 x: 10px;
                 text: "Search GIFs";
                 font-size: Theme.font-md;
@@ -407,7 +453,7 @@ component GifPopover inherits Rectangle {
                         }
 
                         if in-range: Rectangle {
-                            background: gif-cell-touch.has-hover ? #FFFFFF1A : transparent;
+                            background: gif-cell-touch.has-hover ? Theme.action-dim : transparent;
 
                             gif-cell-touch := TouchArea {
                                 clicked => {
@@ -429,6 +475,8 @@ component GifPopover inherits Rectangle {
         }
 
         Text {
+            font-weight: Theme.weight-sentence;
+            font-family: Theme.font-body;
             text: "Powered by GIPHY";
             font-size: Theme.font-xs;
             color: Theme.text-tertiary;
@@ -525,9 +573,10 @@ export component ChatPanel inherits Rectangle {
                     alignment: start;
 
                     Text {
+                        font-family: Theme.font-display;
                         text: "Crew chat";
                         font-size: 15px;
-                        font-weight: 500;
+                        font-weight: Theme.weight-display;
                         color: Theme.text-primary;
                         vertical-alignment: center;
                     }
@@ -540,6 +589,8 @@ export component ChatPanel inherits Rectangle {
                         y: (parent.height - self.height) / 2;
 
                         msg-badge-text := Text {
+                            font-weight: Theme.weight-sentence;
+                            font-family: Theme.font-body;
                             text: root.messages-this-week == 1
                                 ? "1 message this week"
                                 : root.messages-this-week + " messages this week";
@@ -639,9 +690,10 @@ export component ChatPanel inherits Rectangle {
                         }
 
                         Text {
+                            font-family: Theme.font-display;
                             text: "New messages";
                             font-size: Theme.font-xs;
-                            font-weight: 600;
+                            font-weight: Theme.weight-display;
                             color: Theme.accent;
                             horizontal-stretch: 0;
                             vertical-alignment: center;
@@ -668,6 +720,8 @@ export component ChatPanel inherits Rectangle {
                         padding-bottom: 4px;
 
                         Text {
+                            font-weight: Theme.weight-sentence;
+                            font-family: Theme.font-body;
                             text: msg.text;
                             font-size: Theme.font-sm;
                             color: Theme.text-tertiary;
@@ -699,9 +753,10 @@ export component ChatPanel inherits Rectangle {
                         }
 
                         Text {
+                            font-family: Theme.font-display;
                             text: msg.sender-name;
                             font-size: Theme.font-md;
-                            font-weight: 600;
+                            font-weight: Theme.weight-display;
                             color: msg.sender-name == root.user-name ? Theme.accent : Theme.text-primary;
                             vertical-alignment: center;
                             horizontal-stretch: 0;
@@ -712,8 +767,10 @@ export component ChatPanel inherits Rectangle {
                         }
 
                         if msg.display-time != "": Text {
+                            letter-spacing: Theme.track-label;
+                            font-weight: Theme.weight-label;
                             text: msg.display-time;
-                            font-family: Theme.font-mono;
+                            font-family: Theme.font-label;
                             font-size: Theme.font-xs;
                             color: Theme.text-tertiary;
                             vertical-alignment: center;
@@ -808,7 +865,7 @@ export component ChatPanel inherits Rectangle {
                         // Message content
                         Rectangle {
                             horizontal-stretch: 1;
-                            background: msg.mentions-self ? (Theme.dark ? #6C5CE714 : #6C5CE720) : transparent;
+                            background: msg.mentions-self ? (Theme.action-dim) : transparent;
                             border-radius: Theme.radius-sm;
 
                             body-hover := TouchArea {
@@ -845,13 +902,16 @@ export component ChatPanel inherits Rectangle {
                                         spacing: 2px;
 
                                         Text {
+                                            font-family: Theme.font-display;
                                             text: "Replying to " + msg.reply-to-name;
                                             font-size: Theme.font-xs;
-                                            font-weight: 600;
+                                            font-weight: Theme.weight-display;
                                             color: Theme.accent;
                                         }
 
                                         Text {
+                                            font-weight: Theme.weight-sentence;
+                                            font-family: Theme.font-body;
                                             text: msg.reply-preview-text;
                                             font-size: Theme.font-xs;
                                             color: Theme.text-tertiary;
@@ -890,6 +950,8 @@ export component ChatPanel inherits Rectangle {
                                 }
 
                                 if msg.is-edited: Text {
+                                    font-weight: Theme.weight-sentence;
+                                    font-family: Theme.font-body;
                                     text: "(edited)";
                                     font-size: Theme.font-xs;
                                     color: Theme.text-tertiary;
@@ -898,6 +960,8 @@ export component ChatPanel inherits Rectangle {
                             }
 
                             if msg.is-deleted: Text {
+                                font-weight: Theme.weight-sentence;
+                                font-family: Theme.font-body;
                                 text: "[message deleted]";
                                 font-size: Theme.font-md;
                                 color: Theme.text-tertiary;
@@ -948,6 +1012,8 @@ export component ChatPanel inherits Rectangle {
                                 }
 
                                 if !msg.has-gif-image: Text {
+                                    font-weight: Theme.weight-sentence;
+                                    font-family: Theme.font-body;
                                     text: "Loading GIF…";
                                     font-size: Theme.font-xs;
                                     color: Theme.text-tertiary;
@@ -976,6 +1042,8 @@ export component ChatPanel inherits Rectangle {
             background: Theme.surface;
 
             Text {
+                font-weight: Theme.weight-sentence;
+                font-family: Theme.font-body;
                 text: "Loading...";
                 font-size: Theme.font-sm;
                 color: Theme.text-tertiary;
@@ -986,6 +1054,8 @@ export component ChatPanel inherits Rectangle {
 
         // Empty state (overlay, centered)
         if messages.length == 0 && !root.loading-history: Text {
+            font-weight: Theme.weight-sentence;
+            font-family: Theme.font-body;
             text: "No messages yet";
             font-size: Theme.font-md;
             color: Theme.text-tertiary;
@@ -1011,9 +1081,10 @@ export component ChatPanel inherits Rectangle {
             }
 
             Text {
+                font-family: Theme.font-display;
                 text: "New messages ↓";
                 font-size: Theme.font-sm;
-                font-weight: 600;
+                font-weight: Theme.weight-display;
                 color: #FFFFFF;
                 horizontal-alignment: center;
                 vertical-alignment: center;
@@ -1063,6 +1134,8 @@ export component ChatPanel inherits Rectangle {
             padding-right: 8px;
 
             Text {
+                font-weight: Theme.weight-sentence;
+                font-family: Theme.font-body;
                 text: "Replying to " + root.reply-to-name;
                 font-size: Theme.font-sm;
                 color: Theme.accent;
@@ -1104,6 +1177,8 @@ export component ChatPanel inherits Rectangle {
             padding-right: 8px;
 
             Text {
+                font-weight: Theme.weight-sentence;
+                font-family: Theme.font-body;
                 text: "Editing message";
                 font-size: Theme.font-sm;
                 color: Theme.accent;
@@ -1149,6 +1224,8 @@ export component ChatPanel inherits Rectangle {
                 spacing: 8px;
 
                 Text {
+                    font-weight: Theme.weight-sentence;
+                    font-family: Theme.font-body;
                     text: "Delete this message?";
                     font-size: Theme.font-sm;
                     color: Theme.text-secondary;
@@ -1163,6 +1240,8 @@ export component ChatPanel inherits Rectangle {
                     background: del-cancel-touch.has-hover ? Theme.graphic-light : transparent;
 
                     Text {
+                        font-weight: Theme.weight-sentence;
+                        font-family: Theme.font-body;
                         text: "Cancel";
                         font-size: Theme.font-xs;
                         color: Theme.text-tertiary;
@@ -1179,12 +1258,13 @@ export component ChatPanel inherits Rectangle {
                     width: 56px;
                     height: 24px;
                     border-radius: 4px;
-                    background: del-ok-touch.has-hover ? #C0392B : #E05555;
+                    background: del-ok-touch.has-hover ? Theme.live : Theme.live;
 
                     Text {
+                        font-family: Theme.font-display;
                         text: "Delete";
                         font-size: Theme.font-xs;
-                        font-weight: 600;
+                        font-weight: Theme.weight-display;
                         color: white;
                         horizontal-alignment: center;
                         vertical-alignment: center;
@@ -1225,15 +1305,18 @@ export component ChatPanel inherits Rectangle {
                             spacing: 8px;
 
                             Text {
+                                letter-spacing: Theme.track-label;
                                 text: m.initials;
                                 font-size: 10px;
-                                font-family: Theme.font-mono;
+                                font-family: Theme.font-label;
                                 font-weight: 600;
                                 color: Theme.text-secondary;
                                 vertical-alignment: center;
                             }
 
                             Text {
+                                font-weight: Theme.weight-sentence;
+                                font-family: Theme.font-body;
                                 text: m.display-name;
                                 font-size: Theme.font-sm;
                                 color: Theme.text-primary;
@@ -1286,6 +1369,8 @@ export component ChatPanel inherits Rectangle {
                                 background: emoji-cell-touch.has-hover ? Theme.bg-tertiary : transparent;
 
                                 Text {
+                                    font-weight: Theme.weight-display;
+                                    font-family: Theme.font-display;
                                     text: emoji-list[emoji-index].emoji;
                                     font-size: 18px;
                                     horizontal-alignment: center;
@@ -1422,6 +1507,8 @@ export component ChatPanel inherits Rectangle {
             }
 
             if root.chat-input-text == "" && !root.edit-mode: Text {
+                font-weight: Theme.weight-sentence;
+                font-family: Theme.font-body;
                 x: 18px;
                 y: root.composer-multiline ? 10px : (parent.height - self.height) / 2;
                 color: Theme.text-tertiary;
