@@ -1,5 +1,6 @@
 import { Theme, MelloTextInput } from "../theme.slint";
-import { CutShape, CutButtonShape, OctShape, OctMask } from "../components/cut.slint";
+import { CutShape, CutButtonShape } from "../components/cut.slint";
+import { UserAvatar } from "../components/avatar.slint";
 import { ListView } from "std-widgets.slint";
 import { ChatMessageData, ChatLinkData, GifItemData, EmojiItemData, MentionMemberData } from "../types.slint";
 
@@ -32,13 +33,12 @@ component LinkPill inherits Rectangle {
         spacing: 5px;
         alignment: center;
 
-        Text {
-            font-family: Theme.font-display;
-            text: "↗";
-            font-size: 10px;
-            font-weight: Theme.weight-display;
-            color: Theme.accent;
-            vertical-alignment: center;
+        Image {
+            source: @image-url("../icons/external-link.svg");
+            width: 10px;
+            height: 10px;
+            colorize: Theme.text-secondary;
+            y: (parent.height - self.height) / 2;
         }
 
         Text {
@@ -55,52 +55,6 @@ component LinkPill inherits Rectangle {
     }
 }
 
-component AvatarCircle inherits Rectangle {
-    in property <string> initials;
-    in property <image> avatar;
-    in property <bool> has-avatar: false;
-    width: 28px;
-    height: 28px;
-    background: transparent;
-
-    OctShape {
-        width: parent.width;
-        height: parent.height;
-        n: 6px;
-        fill: Theme.raised;
-    }
-
-    if has-avatar: Rectangle {
-        width: parent.width;
-        height: parent.height;
-        clip: true;
-        Image {
-            source: avatar;
-            width: parent.width;
-            height: parent.height;
-            image-fit: cover;
-        }
-        // Slint cannot clip to a path, so the corners are painted back
-        OctMask {
-            width: parent.width;
-            height: parent.height;
-            n: 6px;
-            fill: Theme.surface;
-        }
-    }
-
-    if !has-avatar: Text {
-        text: initials;
-        font-size: 10px;
-        font-family: Theme.font-display;
-        font-weight: Theme.weight-display-bold;
-        color: Theme.text-secondary;
-        width: parent.width;
-        height: parent.height;
-        horizontal-alignment: center;
-        vertical-alignment: center;
-    }
-}
 
 // PopupWindow lives in a component (not in `for`) so it can anchor to the ⋮ button.
 component MessageMoreMenu inherits Rectangle {
@@ -684,7 +638,7 @@ export component ChatPanel inherits Rectangle {
                                 height: 1px;
                                 width: parent.width;
                                 y: (parent.height - self.height) / 2;
-                                background: Theme.accent;
+                                background: Theme.live;
                                 opacity: 0.5;
                             }
                         }
@@ -706,7 +660,7 @@ export component ChatPanel inherits Rectangle {
                                 height: 1px;
                                 width: parent.width;
                                 y: (parent.height - self.height) / 2;
-                                background: Theme.accent;
+                                background: Theme.live;
                                 opacity: 0.5;
                             }
                         }
@@ -743,10 +697,15 @@ export component ChatPanel inherits Rectangle {
                             height: 28px;
                             horizontal-stretch: 0;
 
-                            AvatarCircle {
+                            UserAvatar {
                                 initials: msg.sender-initials;
                                 avatar: msg.sender-avatar;
                                 has-avatar: msg.has-sender-avatar;
+                                // A chat author is not in a coloured list,
+                                // so the fallback stays graphite.
+                                muted: true;
+                                size: 28px;
+                                bg-color: Theme.surface;
                                 x: (parent.width - self.width) / 2;
                                 y: (parent.height - self.height) / 2;
                             }
@@ -889,7 +848,7 @@ export component ChatPanel inherits Rectangle {
 
                                 Rectangle {
                                     width: 3px;
-                                    background: Theme.accent;
+                                    background: Theme.graphic-med;
                                 }
 
                                 Rectangle {
@@ -1069,10 +1028,17 @@ export component ChatPanel inherits Rectangle {
             y: parent.height - self.height - 8px;
             width: 140px;
             height: 28px;
-            border-radius: Theme.r-pill;
-            background: Theme.accent;
+            background: transparent;
             drop-shadow-blur: 4px;
             drop-shadow-color: #00000040;
+
+            // Unread is a state, so the pill is red, not white.
+            CutButtonShape {
+                width: parent.width;
+                height: parent.height;
+                n: 8px;
+                fill: Theme.live;
+            }
 
             new-msg-touch := TouchArea {
                 clicked => {
@@ -1080,14 +1046,25 @@ export component ChatPanel inherits Rectangle {
                 }
             }
 
-            Text {
-                font-family: Theme.font-display;
-                text: "New messages ↓";
-                font-size: Theme.font-sm;
-                font-weight: Theme.weight-display;
-                color: #FFFFFF;
-                horizontal-alignment: center;
-                vertical-alignment: center;
+            HorizontalLayout {
+                spacing: 5px;
+                alignment: center;
+                cross-axis-alignment: center;
+
+                Text {
+                    font-family: Theme.font-display;
+                    text: "New messages";
+                    font-size: Theme.font-sm;
+                    font-weight: Theme.weight-display;
+                    color: Theme.on-live;
+                    vertical-alignment: center;
+                }
+                Image {
+                    source: @image-url("../icons/chevron-down.svg");
+                    width: 11px;
+                    height: 11px;
+                    colorize: Theme.on-live;
+                }
             }
         }
 

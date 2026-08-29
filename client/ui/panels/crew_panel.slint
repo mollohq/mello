@@ -1,4 +1,5 @@
 import { Theme } from "../theme.slint";
+import { UserAvatar } from "../components/avatar.slint";
 import { CutShape, CutButtonShape, OctShape, OctMask } from "../components/cut.slint";
 import { CrewData, VoiceChannelData, VoiceChannelMember } from "../types.slint";
 
@@ -24,57 +25,16 @@ component VcMemberRow inherits Rectangle {
         padding-right: 8px;
         cross-axis-alignment: center;
 
-        Rectangle {
-            width: 22px;
-            height: 22px;
-
-            // Speaking is a state you can see, so it wears the action colour.
-            if speaking: OctShape {
-                width: parent.width;
-                height: parent.height;
-                n: 5px;
-                fill: Theme.action;
-            }
-            OctShape {
-                x: speaking ? 1.5px : 0px;
-                y: speaking ? 1.5px : 0px;
-                width: parent.width - (speaking ? 3px : 0px);
-                height: parent.height - (speaking ? 3px : 0px);
-                n: 5px;
-                fill: Theme.raised;
-            }
-
-            if has-avatar: Rectangle {
-                x: speaking ? 1.5px : 0px;
-                y: speaking ? 1.5px : 0px;
-                width: parent.width - (speaking ? 3px : 0px);
-                height: parent.height - (speaking ? 3px : 0px);
-                clip: true;
-                Image {
-                    source: avatar;
-                    width: parent.width;
-                    height: parent.height;
-                    image-fit: cover;
-                }
-                OctMask {
-                    width: parent.width;
-                    height: parent.height;
-                    n: 5px;
-                    fill: speaking ? Theme.action : Theme.card-bg;
-                }
-            }
-
-            if !has-avatar: Text {
-                text: initials;
-                font-family: Theme.font-display;
-                font-size: 8px;
-                font-weight: Theme.weight-display-bold;
-                color: Theme.text-primary;
-                width: parent.width;
-                height: parent.height;
-                horizontal-alignment: center;
-                vertical-alignment: center;
-            }
+        // Speaking is a state you can see, so it wears the action colour.
+        UserAvatar {
+            initials: root.initials;
+            avatar: root.avatar;
+            has-avatar: root.has-avatar;
+            muted: true;
+            size: 22px;
+            bg-color: Theme.card-bg;
+            active: root.speaking;
+            active-color: Theme.action;
         }
 
         VerticalLayout {

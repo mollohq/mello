@@ -1,88 +1,13 @@
 import { Theme } from "../theme.slint";
 import { CutShape, CutMask, CutButtonShape, OctShape, OctMask } from "../components/cut.slint";
+import { UserAvatar, AvatarOverflow } from "../components/avatar.slint";
 import { FeedCardData, StreamCardData, YouStripData } from "../types.slint";
 import { ActiveStreamsPanel } from "./active_streams_panel.slint";
 import { SessionPreviewCard } from "./session_preview_card.slint";
 import { YouStrip } from "./you_strip.slint";
 import { GameIcon } from "../components/game_icon.slint";
 
-component AvatarDot inherits Rectangle {
-    in property <string> initials;
-    in property <int> color-index: 0;
-    in property <length> size: 18px;
-    in property <color> ring-color: Theme.card-bg;
 
-    width: size;
-    height: size;
-
-    // Avatar rows overlap by -7px. This ring keeps each person readable,
-    // the same job the 2px card-bg border did on the old rounded dot.
-    OctShape {
-        x: -2px;
-        y: -2px;
-        width: root.width + 4px;
-        height: root.height + 4px;
-        n: 5px;
-        fill: root.ring-color;
-    }
-
-    OctShape {
-        width: root.width;
-        height: root.height;
-        n: 4px;
-        fill: root.color-index == 0 ? Theme.id-blue :
-              root.color-index == 1 ? Theme.id-purple :
-              root.color-index == 2 ? Theme.id-teal :
-              root.color-index == 3 ? Theme.id-amber : Theme.id-pink;
-    }
-
-    Text {
-        font-family: Theme.font-display;
-        text: root.initials;
-        font-size: 7px;
-        font-weight: Theme.weight-display-bold;
-        color: Theme.on-action;
-        width: root.width;
-        height: root.height;
-        horizontal-alignment: center;
-        vertical-alignment: center;
-    }
-}
-
-// Shows a real avatar image when cached (spec 19), else the initials dot.
-component RecapAvatar inherits Rectangle {
-    in property <string> initials;
-    in property <int> color-index: 0;
-    in property <image> avatar;
-    in property <bool> has-avatar: false;
-    /// Default matches the recap rows; session cards scale this up so the
-    /// people are the visual, not a footnote.
-    in property <length> size: 18px;
-
-    width: size;
-    height: size;
-
-    if !has-avatar: AvatarDot {
-        initials: root.initials;
-        color-index: root.color-index;
-        size: root.size;
-    }
-
-    if has-avatar: Rectangle {
-        width: root.size;
-        height: root.size;
-        border-radius: max(4px, root.size / 4.5);
-        clip: true;
-        border-width: root.size > 20px ? 2px : 0px;
-        border-color: Theme.card-bg;
-        Image {
-            source: root.avatar;
-            width: root.size;
-            height: root.size;
-            image-fit: cover;
-        }
-    }
-}
 
 // Play/pause ring for clip cards. Declared as a component so both hero and
 // standard cards share geometry, hover fill, and click forwarding.
@@ -530,9 +455,9 @@ component HeroClipCard inherits Rectangle {
                     spacing: -7px;
                     width: self.preferred-width;
 
-                    AvatarDot { initials: card.actor-initials; color-index: 0; }
-                    if card.participant-count > 1: AvatarDot { initials: ""; color-index: 1; }
-                    if card.participant-count > 2: AvatarDot { initials: ""; color-index: 2; }
+                    UserAvatar { initials: card.actor-initials; color-index: 0; ring: 2px; }
+                    if card.participant-count > 1: UserAvatar { initials: ""; color-index: 1; ring: 2px; }
+                    if card.participant-count > 2: UserAvatar { initials: ""; color-index: 2; ring: 2px; }
                 }
 
                 Text {
@@ -869,7 +794,7 @@ component RecapCard inherits Rectangle {
                         spacing: 8px;
                         height: 22px;
 
-                        RecapAvatar { initials: card.mvp0-initials; color-index: 0; avatar: card.mvp0-avatar; has-avatar: card.mvp0-has-avatar; }
+                        UserAvatar { initials: card.mvp0-initials; color-index: 0; avatar: card.mvp0-avatar; has-avatar: card.mvp0-has-avatar; }
                         Text {
                             font-family: Theme.font-body;
                             text: card.mvp0-name;
@@ -927,7 +852,7 @@ component RecapCard inherits Rectangle {
                     for row in card.leaderboard: HorizontalLayout {
                         spacing: 8px;
                         height: 22px;
-                        RecapAvatar { initials: row.initials; color-index: row.color-index; avatar: row.avatar; has-avatar: row.has-avatar; }
+                        UserAvatar { initials: row.initials; color-index: row.color-index; avatar: row.avatar; has-avatar: row.has-avatar; }
                         Text {
                             font-family: Theme.font-body;
                             text: row.name;
@@ -1066,10 +991,11 @@ component SessionCard inherits Rectangle {
                         has-runtime-icon: card.game-has-icon;
                         size: 40px;
                     }
-                    if card.actor-has-avatar || card.actor-initials != "": RecapAvatar {
+                    if card.actor-has-avatar || card.actor-initials != "": UserAvatar {
                         initials: card.actor-initials;
                         avatar: card.actor-avatar;
                         has-avatar: card.actor-has-avatar;
+                        ring: 2px;
                         x: parent.width - self.width + 4px;
                         y: parent.height - self.height + 4px;
                     }
@@ -1141,44 +1067,35 @@ component SessionCard inherits Rectangle {
             alignment: start;
             height: 40px;
 
-            RecapAvatar {
+            UserAvatar {
                 initials: card.part0-initials;
                 avatar: card.part0-avatar;
                 has-avatar: card.part0-has-avatar;
                 color-index: 0;
+                ring: 2px;
                 size: 40px;
             }
-            if card.participant-count > 1: RecapAvatar {
+            if card.participant-count > 1: UserAvatar {
                 initials: card.part1-initials;
                 avatar: card.part1-avatar;
                 has-avatar: card.part1-has-avatar;
                 color-index: 1;
+                ring: 2px;
                 size: 40px;
             }
-            if card.participant-count > 2: RecapAvatar {
+            if card.participant-count > 2: UserAvatar {
                 initials: card.part2-initials;
                 avatar: card.part2-avatar;
                 has-avatar: card.part2-has-avatar;
                 color-index: 2;
+                ring: 2px;
                 size: 40px;
             }
             // Overflow chip: the roster is wider than the three avatar slots.
-            if card.participant-count > 3: Rectangle {
-                width: 40px;
-                height: 40px;
-                border-radius: 9px;
-                border-width: 2px;
-                border-color: Theme.card-bg;
-                background: Theme.graphic-light;
-                Text {
-                    font-family: Theme.font-display;
-                    text: "+\{card.participant-count - 3}";
-                    font-size: 12px;
-                    font-weight: Theme.weight-display;
-                    color: Theme.text-secondary;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
-                }
+            if card.participant-count > 3: AvatarOverflow {
+                count: card.participant-count - 3;
+                size: 40px;
+                ring: 2px;
             }
         }
 
@@ -1327,25 +1244,28 @@ component GameSessionCompactBody inherits VerticalLayout {
         HorizontalLayout {
             spacing: -6px;
             alignment: start;
-            RecapAvatar {
+            UserAvatar {
                 initials: card.part0-initials != "" ? card.part0-initials : card.actor-initials;
                 avatar: card.part0-has-avatar ? card.part0-avatar : card.actor-avatar;
                 has-avatar: card.part0-has-avatar || card.actor-has-avatar;
                 color-index: 0;
+                ring: 2px;
                 size: 20px;
             }
-            if card.participant-count > 1: RecapAvatar {
+            if card.participant-count > 1: UserAvatar {
                 initials: card.part1-initials;
                 avatar: card.part1-avatar;
                 has-avatar: card.part1-has-avatar;
                 color-index: 1;
+                ring: 2px;
                 size: 20px;
             }
-            if card.participant-count > 2: RecapAvatar {
+            if card.participant-count > 2: UserAvatar {
                 initials: card.part2-initials;
                 avatar: card.part2-avatar;
                 has-avatar: card.part2-has-avatar;
                 color-index: 2;
+                ring: 2px;
                 size: 20px;
             }
         }
@@ -1502,23 +1422,26 @@ component GameSessionCard inherits Rectangle {
                 spacing: -7px;
                 horizontal-stretch: 1;
                 alignment: start;
-                RecapAvatar {
+                UserAvatar {
                     initials: card.part0-initials != "" ? card.part0-initials : card.actor-initials;
                     avatar: card.part0-has-avatar ? card.part0-avatar : card.actor-avatar;
                     has-avatar: card.part0-has-avatar || card.actor-has-avatar;
                     color-index: 0;
+                    ring: 2px;
                 }
-                if card.participant-count > 1: RecapAvatar {
+                if card.participant-count > 1: UserAvatar {
                     initials: card.part1-initials;
                     avatar: card.part1-avatar;
                     has-avatar: card.part1-has-avatar;
                     color-index: 1;
+                    ring: 2px;
                 }
-                if card.participant-count > 2: RecapAvatar {
+                if card.participant-count > 2: UserAvatar {
                     initials: card.part2-initials;
                     avatar: card.part2-avatar;
                     has-avatar: card.part2-has-avatar;
                     color-index: 2;
+                    ring: 2px;
                 }
             }
 

@@ -129,13 +129,13 @@ component SourceCard inherits Rectangle {
         x: parent.width - self.width - 8px;
         y: 8px;
 
-        Text {
-            text: "✓";
-            font-size: 12px;
-            font-weight: 700;
-            color: #FFFFFF;
-            horizontal-alignment: center;
-            vertical-alignment: center;
+        Image {
+            source: @image-url("../icons/checkmark.svg");
+            width: 12px;
+            height: 12px;
+            colorize: Theme.on-action;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
         }
     }
 
@@ -462,11 +462,12 @@ export component StreamSourcePicker inherits Rectangle {
                         padding-left: 20px;
                         padding-right: 20px;
 
-                        Text {
-                            text: "▶";
-                            font-size: 11px;
-                            color: has-selection ? #FFFFFF : Theme.text-tertiary;
-                            vertical-alignment: center;
+                        Image {
+                            source: @image-url("../icons/play.svg");
+                            width: 11px;
+                            height: 11px;
+                            colorize: has-selection ? Theme.on-action : Theme.text-tertiary;
+                            y: (parent.height - self.height) / 2;
                         }
 
                         Text {

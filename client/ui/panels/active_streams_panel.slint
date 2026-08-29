@@ -1,4 +1,5 @@
 import { Theme } from "../theme.slint";
+import { UserAvatar } from "../components/avatar.slint";
 import { StreamCardData, VideoRect } from "../types.slint";
 
 component StreamIconButton inherits Rectangle {
@@ -212,30 +213,14 @@ component StreamCard inherits Rectangle {
                     width: 40px;
                     horizontal-stretch: 0;
 
-                    Rectangle {
-                        width: 40px;
-                        height: 40px;
+                    UserAvatar {
+                        initials: root.card.avatar-initials;
+                        avatar: root.card.avatar;
+                        has-avatar: root.card.has-avatar;
+                        color-index: root.card.avatar-color-index;
+                        size: 40px;
+                        bg-color: Theme.card-bg;
                         y: (parent.height - self.height) / 2;
-                        border-radius: 8px;
-                        background: root.card.has-avatar
-                            ? transparent
-                            : (root.card.avatar-color-index == 0 ? #EB4D5F : root.card.avatar-color-index == 1 ? #4a9eff : root.card.avatar-color-index == 2 ? #4ade80 : root.card.avatar-color-index == 3 ? #a78bfa : #f59e0b);
-
-                        if root.card.has-avatar: Image {
-                            source: root.card.avatar;
-                            width: parent.width;
-                            height: parent.height;
-                            image-fit: cover;
-                        }
-
-                        if !root.card.has-avatar: Text {
-                            text: root.card.avatar-initials;
-                            font-size: 12px;
-                            font-weight: 700;
-                            color: #FFFFFF;
-                            horizontal-alignment: center;
-                            vertical-alignment: center;
-                        }
                     }
                 }
 

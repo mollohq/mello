@@ -1,4 +1,5 @@
 import { Theme, MelloTextInput } from "../theme.slint";
+import { UserAvatar } from "../components/avatar.slint";
 import { VoiceChannelData, VoiceChannelMember } from "../types.slint";
 
 // ── Collapsed voice channel row (compact single-line) ──
@@ -76,11 +77,11 @@ component VoiceChannelRow inherits Rectangle {
             }
         }
 
-        Text {
-            text: "▾";
-            font-size: 14px;
-            color: Theme.text-tertiary;
-            vertical-alignment: center;
+        Image {
+            source: @image-url("../icons/chevron-down.svg");
+            width: 12px;
+            height: 12px;
+            colorize: Theme.text-tertiary;
         }
     }
 }
@@ -171,11 +172,12 @@ component VoiceChannelExpanded inherits Rectangle {
                     }
                 }
 
-                Text {
-                    text: "▴";
-                    font-size: 14px;
-                    color: Theme.text-tertiary;
-                    vertical-alignment: center;
+                Image {
+                    source: @image-url("../icons/chevron-down.svg");
+                    width: 12px;
+                    height: 12px;
+                    colorize: Theme.text-tertiary;
+                    transform-rotation: 180deg;
                 }
             }
 
@@ -237,31 +239,16 @@ component VoiceChannelExpanded inherits Rectangle {
                 alignment: center;
                 spacing: 8px;
 
-                Rectangle {
-                    width: 48px;
-                    height: 48px;
-                    border-radius: Theme.r-inner;
-                    background: Theme.surface;
-                    border-width: 1px;
-                    border-color: member.speaking ? Theme.voice-active : Theme.graphic-light;
-                    clip: true;
-
-                    if member.has-avatar: Image {
-                        source: member.avatar;
-                        width: parent.width;
-                        height: parent.height;
-                        image-fit: contain;
-                    }
-
-                    if !member.has-avatar: Text {
-                        text: member.initials;
-                        font-size: 14px;
-                        font-family: Theme.font-mono;
-                        font-weight: 600;
-                        color: member.speaking ? Theme.text-primary : Theme.text-secondary;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
-                    }
+                UserAvatar {
+                    initials: member.initials;
+                    avatar: member.avatar;
+                    has-avatar: member.has-avatar;
+                    muted: true;
+                    size: 48px;
+                    bg-color: Theme.bg-app;
+                    // A speaking member wears the action ring.
+                    active: member.speaking;
+                    active-color: Theme.action;
                 }
 
                 // Voice indicator bars

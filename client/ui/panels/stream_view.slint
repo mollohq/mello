@@ -181,11 +181,12 @@ export component StreamView inherits Rectangle {
                         padding-left: 16px;
                         padding-right: 16px;
 
-                        Text {
-                            text: "▶";
-                            font-size: 11px;
-                            color: watch-ta.has-hover ? #FFFFFF : Theme.text-secondary;
-                            vertical-alignment: center;
+                        Image {
+                            source: @image-url("../icons/play.svg");
+                            width: 11px;
+                            height: 11px;
+                            colorize: watch-ta.has-hover ? Theme.text-primary : Theme.text-secondary;
+                            y: (parent.height - self.height) / 2;
                         }
 
                         Text {
@@ -233,11 +234,12 @@ export component StreamView inherits Rectangle {
                         padding-left: 16px;
                         padding-right: 16px;
 
-                        Text {
-                            text: "▶";
-                            font-size: 11px;
-                            color: go-live-ta.has-hover ? #FFFFFF : Theme.text-secondary;
-                            vertical-alignment: center;
+                        Image {
+                            source: @image-url("../icons/play.svg");
+                            width: 11px;
+                            height: 11px;
+                            colorize: go-live-ta.has-hover ? Theme.text-primary : Theme.text-secondary;
+                            y: (parent.height - self.height) / 2;
                         }
 
                         Text {

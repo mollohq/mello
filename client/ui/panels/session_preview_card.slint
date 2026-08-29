@@ -1,48 +1,7 @@
 import { Theme } from "../theme.slint";
-import { CutShape, OctShape } from "../components/cut.slint";
+import { CutShape } from "../components/cut.slint";
+import { UserAvatar } from "../components/avatar.slint";
 
-component AvatarDot inherits Rectangle {
-    in property <string> initials;
-    in property <int> color-index: 0;
-    in property <length> size: 18px;
-    in property <color> ring-color: Theme.card-bg;
-
-    width: size;
-    height: size;
-
-    // Avatar rows overlap by -7px. This ring keeps each person readable,
-    // the same job the 2px card-bg border did on the old rounded dot.
-    OctShape {
-        x: -2px;
-        y: -2px;
-        width: root.width + 4px;
-        height: root.height + 4px;
-        n: 5px;
-        fill: root.ring-color;
-    }
-
-    OctShape {
-        width: root.width;
-        height: root.height;
-        n: 4px;
-        fill: root.color-index == 0 ? Theme.id-blue :
-              root.color-index == 1 ? Theme.id-purple :
-              root.color-index == 2 ? Theme.id-teal :
-              root.color-index == 3 ? Theme.id-amber : Theme.id-pink;
-    }
-
-    Text {
-        font-family: Theme.font-display;
-        text: root.initials;
-        font-size: 7px;
-        font-weight: Theme.weight-display-bold;
-        color: Theme.on-action;
-        width: root.width;
-        height: root.height;
-        horizontal-alignment: center;
-        vertical-alignment: center;
-    }
-}
 
 export component SessionPreviewCard inherits Rectangle {
     in property <[string]> snapshot-urls;
@@ -240,12 +199,13 @@ export component SessionPreviewCard inherits Rectangle {
                     border-radius: 1px * btn-size / 2;
                     background: #000000aa;
 
-                    Text {
-                        text: "▶";
-                        font-size: is-hero ? 18px : 12px;
-                        color: white;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
+                    Image {
+                        source: @image-url("../icons/play.svg");
+                        width: is-hero ? 18px : 12px;
+                        height: is-hero ? 18px : 12px;
+                        colorize: white;
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
                     }
                 }
 
@@ -280,12 +240,15 @@ export component SessionPreviewCard inherits Rectangle {
                         height: 18px;
                         border-radius: 3px;
 
-                        Text {
-                            text: root.paused ? "▶" : "❚❚";
-                            font-size: root.paused ? 9px : 7px;
-                            color: white;
-                            horizontal-alignment: center;
-                            vertical-alignment: center;
+                        Image {
+                            source: root.paused
+                                ? @image-url("../icons/play.svg")
+                                : @image-url("../icons/pause.svg");
+                            width: 9px;
+                            height: 9px;
+                            colorize: white;
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
                         }
 
                         TouchArea {
@@ -425,9 +388,9 @@ export component SessionPreviewCard inherits Rectangle {
                     spacing: -7px;
                     width: self.preferred-width;
 
-                    AvatarDot { initials: root.streamer-initials; color-index: 0; }
-                    if peak-viewers > 1: AvatarDot { initials: "+"; color-index: 2; }
-                    if peak-viewers > 2: AvatarDot { initials: ""; color-index: 1; }
+                    UserAvatar { bg-color: card-hover.has-hover ? Theme.card-bg-hover : Theme.card-bg; initials: root.streamer-initials; color-index: 0; ring: 2px; }
+                    if peak-viewers > 1: UserAvatar { bg-color: card-hover.has-hover ? Theme.card-bg-hover : Theme.card-bg; initials: "+"; color-index: 2; ring: 2px; }
+                    if peak-viewers > 2: UserAvatar { bg-color: card-hover.has-hover ? Theme.card-bg-hover : Theme.card-bg; initials: ""; color-index: 1; ring: 2px; }
                 }
 
                 Text {
