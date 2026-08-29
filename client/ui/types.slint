@@ -328,6 +328,8 @@ export struct CaptureSourceData {
 export struct DiscoverCrewData {
     id: string,
     name: string,
+    /// Two letters for the tile. The full name does not fit a 48px box.
+    initials: string,
     description: string,
     member-count: int,
     max-members: int,

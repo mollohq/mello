@@ -140,6 +140,8 @@ export component MainWindow inherits Window {
     // --- Crews ---
     in property <[CrewData]> crews: [];
     in property <string> active-crew-id: "";
+    /// Name of the active crew. Discover shows it on the way back.
+    in property <string> active-crew-name: "";
 
     // --- Discover crews ---
     in-out property <bool> show-discover: false;
@@ -827,6 +829,7 @@ export component MainWindow inherits Window {
                     height: parent.height;
                     crews: root.discover-crews-list;
                     bento-set-bases: root.discover-bento-bases;
+                    back-to: root.active-crew-name;
                     join-crew(id) => {
                         root.discover-join-crew(id);
                     }

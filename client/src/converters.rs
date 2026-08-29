@@ -370,10 +370,38 @@ pub fn channels_to_ui(
         .collect()
 }
 
+/// Set the active crew and keep `active_crew_name` in step.
+///
+/// Discover needs the name to offer a way back to the crew the user came
+/// from. Setting the id alone leaves that label stale.
+pub fn set_active_crew(app: &MainWindow, crew_id: &str) {
+    app.set_active_crew_id(crew_id.into());
+    app.set_active_crew_name(lookup_crew_name(app, crew_id).into());
+}
+
+fn lookup_crew_name(app: &MainWindow, crew_id: &str) -> String {
+    if crew_id.is_empty() {
+        return String::new();
+    }
+    let crews = app.get_crews();
+    (0..crews.row_count())
+        .filter_map(|i| crews.row_data(i))
+        .find(|c| c.id == crew_id)
+        .map(|c| c.name.to_string())
+        .unwrap_or_default()
+}
+
 pub fn update_active_crew_card(app: &MainWindow) {
     let active_id = app.get_active_crew_id();
     if active_id.is_empty() {
         return;
+    }
+
+    // The crew list can arrive after the selection, so re-resolve the name
+    // whenever the list changes under us.
+    let name = lookup_crew_name(app, active_id.as_str());
+    if !name.is_empty() && app.get_active_crew_name() != name.as_str() {
+        app.set_active_crew_name(name.into());
     }
 
     let members = app.get_members();
