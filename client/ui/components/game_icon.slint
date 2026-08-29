@@ -1,6 +1,8 @@
+import { Theme } from "../theme.slint";
 import { GameBadge } from "game_badge.slint";
+import { CutMask } from "cut.slint";
 
-/// Square game tile.
+/// Game tile: two corners cut, the silhouette of a thing.
 ///
 /// Precedence (assets §8.2): the game's own icon — extracted from its
 /// executable, or fetched from whichever crewmate uploaded theirs — then the
@@ -13,7 +15,10 @@ import { GameBadge } from "game_badge.slint";
 export component GameIcon inherits Rectangle {
     in property <string> game-id;
     in property <string> short-name;
-    in property <color> badge-color: #2a2a30;
+    in property <color> badge-color: Theme.raised;
+    /// What is behind the tile. The two corners are painted back with it,
+    /// because Slint cannot clip an image to a path.
+    in property <color> bg-color: Theme.card-bg;
     in property <length> size: 36px;
     /// Icon resolved by the converter layer: exe-extracted first, then the
     /// crew-shared copy.
@@ -22,14 +27,33 @@ export component GameIcon inherits Rectangle {
 
     width: size;
     height: size;
-    border-radius: 8px;
-    clip: true;
+    background: transparent;
 
-    if has-runtime-icon: Image {
-        source: runtime-icon;
+    if has-runtime-icon: Rectangle {
         width: parent.width;
         height: parent.height;
-        image-fit: cover;
+        clip: true;
+
+        Image {
+            source: runtime-icon;
+            width: parent.width;
+            height: parent.height;
+            image-fit: cover;
+        }
+        CutMask {
+            width: parent.width;
+            height: parent.height;
+            n: max(4px, root.size * 0.22);
+            corner: "tl";
+            fill: root.bg-color;
+        }
+        CutMask {
+            width: parent.width;
+            height: parent.height;
+            n: max(4px, root.size * 0.22);
+            corner: "br";
+            fill: root.bg-color;
+        }
     }
     if !has-runtime-icon: GameBadge {
         short-name: short-name;

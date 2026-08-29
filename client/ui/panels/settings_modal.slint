@@ -1,5 +1,6 @@
 import { Theme, MelloInputField, MelloScrollArea } from "../theme.slint";
-import { CutShape } from "../components/cut.slint";
+import { UserAvatar } from "../components/avatar.slint";
+import { CutShape, CutButtonShape } from "../components/cut.slint";
 import { AudioDeviceData, GameIntegrationData } from "../types.slint";
 import { AvatarCard } from "../components/avatar_card.slint";
 import { GameIcon } from "../components/game_icon.slint";
@@ -16,7 +17,6 @@ export component DeviceDropdown inherits Rectangle {
 
     Rectangle {
         background: dropdown-hover.has-hover ? Theme.surface-hover : Theme.bg-app;
-        border-radius: 8px;
         border-width: 1px;
         border-color: dropdown-hover.has-hover ? Theme.text-tertiary : Theme.graphic-light;
 
@@ -61,7 +61,6 @@ export component DeviceDropdown inherits Rectangle {
 
         Rectangle {
             background: Theme.surface;
-            border-radius: Theme.r-inner;
             border-width: 1px;
             border-color: Theme.graphic-light;
             drop-shadow-blur: 12px;
@@ -174,7 +173,7 @@ export component SettingsToggle inherits Rectangle {
         width: 20px;
         height: 20px;
         border-radius: 10px;
-        background: checked ? Theme.action : Theme.text-secondary;
+        background: checked ? Theme.on-action : Theme.text-secondary;
 
         animate x { duration: 150ms; easing: ease-in-out; }
         animate background { duration: 150ms; easing: ease-in-out; }
@@ -209,7 +208,7 @@ component SmallToggle inherits Rectangle {
         width: 16px;
         height: 16px;
         border-radius: 8px;
-        background: checked ? Theme.action : Theme.text-secondary;
+        background: checked ? Theme.on-action : Theme.text-secondary;
 
         animate x { duration: 150ms; easing: ease-in-out; }
         animate background { duration: 150ms; easing: ease-in-out; }
@@ -258,8 +257,14 @@ component ToggleRow inherits Rectangle {
     callback toggled(bool);
 
     height: row-layout.preferred-height;
-    border-radius: 8px;
-    background: row-ta.has-hover ? Theme.surface-hover : transparent;
+    background: transparent;
+
+    if row-ta.has-hover: CutButtonShape {
+        width: parent.width;
+        height: parent.height;
+        n: Theme.cut;
+        fill: Theme.surface-hover;
+    }
 
     row-ta := TouchArea {
         clicked => {
@@ -338,7 +343,6 @@ component VolumeSlider inherits VerticalLayout {
         Rectangle {
             width: pct-text.preferred-width + 16px;
             height: 24px;
-            border-radius: 4px;
             background: Theme.accent-bg;
 
             pct-text := Text {
@@ -428,10 +432,21 @@ component ProcessingCard inherits Rectangle {
     callback toggled(bool);
 
     height: card-layout.preferred-height;
-    border-radius: 8px;
-    background: Theme.bg-app;
-    border-width: 1px;
-    border-color: card-ta.has-hover ? Theme.text-tertiary : Theme.graphic-light;
+    background: transparent;
+
+    CutShape {
+        width: parent.width;
+        height: parent.height;
+        n: Theme.notch-sm;
+        fill: card-ta.has-hover ? Theme.text-tertiary : Theme.graphic-light;
+    }
+    CutShape {
+        width: parent.width;
+        height: parent.height;
+        n: Theme.notch-sm;
+        inset: Theme.keyline;
+        fill: Theme.bg-app;
+    }
 
     card-ta := TouchArea {
         clicked => {
@@ -563,7 +578,6 @@ component SensitivitySlider inherits Rectangle {
                 y: 28px;
                 width: 42px;
                 height: 20px;
-                border-radius: 4px;
                 background: Theme.surface;
                 border-width: 1px;
                 border-color: Theme.graphic-light;
@@ -745,10 +759,21 @@ component GeneralTab inherits VerticalLayout {
         }
 
         Rectangle {
-            border-radius: 12px;
-            background: Theme.bg-app;
-            border-width: 1px;
-            border-color: Theme.graphic-light;
+            background: transparent;
+
+            CutShape {
+                width: parent.width;
+                height: parent.height;
+                n: Theme.notch-sm;
+                fill: Theme.graphic-light;
+            }
+            CutShape {
+                width: parent.width;
+                height: parent.height;
+                n: Theme.notch-sm;
+                inset: Theme.keyline;
+                fill: Theme.bg-app;
+            }
             opacity: root.hud-enabled ? 1.0 : 0.4;
 
             VerticalLayout {
@@ -870,10 +895,22 @@ component AudioTab inherits VerticalLayout {
         SectionHeader { title: "AUDIO LEVELS"; }
 
         Rectangle {
-            border-radius: 12px;
-            background: Theme.bg-app;
-            border-width: 1px;
-            border-color: Theme.graphic-light;
+            background: transparent;
+
+            CutShape {
+                width: parent.width;
+                height: parent.height;
+                n: Theme.notch-sm;
+                fill: Theme.graphic-light;
+            }
+            CutShape {
+                width: parent.width;
+                height: parent.height;
+                n: Theme.notch-sm;
+                inset: Theme.keyline;
+                fill: Theme.bg-app;
+            }
+
             levels-col := VerticalLayout {
                 padding: 24px;
                 spacing: 32px;
@@ -936,10 +973,22 @@ component AudioTab inherits VerticalLayout {
         SectionHeader { title: "VOICE ACTIVITY"; }
 
         Rectangle {
-            border-radius: 12px;
-            background: Theme.bg-app;
-            border-width: 1px;
-            border-color: Theme.graphic-light;
+            background: transparent;
+
+            CutShape {
+                width: parent.width;
+                height: parent.height;
+                n: Theme.notch-sm;
+                fill: Theme.graphic-light;
+            }
+            CutShape {
+                width: parent.width;
+                height: parent.height;
+                n: Theme.notch-sm;
+                inset: Theme.keyline;
+                fill: Theme.bg-app;
+            }
+
             vad-col := VerticalLayout {
                 padding: 24px;
                 spacing: 32px;
@@ -963,7 +1012,6 @@ component AudioTab inherits VerticalLayout {
 
                         Rectangle {
                             height: 40px;
-                            border-radius: 8px;
                             background: Theme.surface;
                             border-width: 1px;
                             border-color: Theme.graphic-light;
@@ -975,7 +1023,6 @@ component AudioTab inherits VerticalLayout {
                                 // Voice Activity option
                                 Rectangle {
                                     horizontal-stretch: 1;
-                                    border-radius: 6px;
                                     background: !root.ptt-mode ? Theme.bg-app : transparent;
                                     border-width: 1px;
                                     border-color: !root.ptt-mode ? Theme.graphic-light : transparent;
@@ -1003,7 +1050,6 @@ component AudioTab inherits VerticalLayout {
                                 // Push to Talk option
                                 Rectangle {
                                     horizontal-stretch: 1;
-                                    border-radius: 6px;
                                     background: root.ptt-mode ? Theme.bg-app : transparent;
                                     border-width: 1px;
                                     border-color: root.ptt-mode ? Theme.graphic-light : transparent;
@@ -1047,7 +1093,6 @@ component AudioTab inherits VerticalLayout {
 
                         Rectangle {
                             height: 40px;
-                            border-radius: 8px;
                             background: root.ptt-binding ? Theme.bg-app : Theme.surface;
                             border-width: 2px;
                             border-color: root.ptt-binding ? Theme.accent
@@ -1150,10 +1195,23 @@ component AudioTab inherits VerticalLayout {
             Rectangle {
                 width: 140px;
                 height: 40px;
-                border-radius: Theme.r-inner;
-                background: root.mic-testing
-                    ? Theme.accent-bg
-                    : (test-hover.has-hover ? Theme.graphic-light : Theme.bg-app);
+                background: transparent;
+
+                CutButtonShape {
+                    width: parent.width;
+                    height: parent.height;
+                    n: Theme.cut;
+                    fill: Theme.graphic-med;
+                }
+                CutButtonShape {
+                    width: parent.width;
+                    height: parent.height;
+                    n: Theme.cut;
+                    inset: Theme.keyline;
+                    fill: root.mic-testing
+                        ? Theme.action-dim
+                        : (test-hover.has-hover ? Theme.graphic-light : Theme.bg-app);
+                }
                 border-width: 1px;
                 border-color: root.mic-testing ? Theme.accent : Theme.graphic-light;
 
@@ -1218,7 +1276,6 @@ component ProfileAvatarSlot inherits Rectangle {
     if selected && has-image: Rectangle {
         width: parent.width;
         height: parent.height;
-        border-radius: Theme.r-inner;
         background: Theme.scrim;
 
         use-ta := TouchArea {
@@ -1230,8 +1287,14 @@ component ProfileAvatarSlot inherits Rectangle {
             height: 26px;
             x: (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
-            border-radius: 6px;
-            background: use-ta.has-hover ? Theme.confirm-press : Theme.confirm;
+            background: transparent;
+
+            CutButtonShape {
+                width: parent.width;
+                height: parent.height;
+                n: 6px;
+                fill: use-ta.has-hover ? Theme.confirm-press : Theme.confirm;
+            }
 
             Text {
                 text: "Use";
@@ -1311,39 +1374,26 @@ component ProfileTab inherits VerticalLayout {
             spacing: 10px;
             horizontal-stretch: 0;
 
-            Rectangle {
-                width: 96px;
-                height: 96px;
-                border-radius: 16px;
-                background: Theme.surface;
-                border-width: 1px;
-                border-color: Theme.graphic-light;
-                clip: true;
-
-                if has-current-avatar: Image {
-                    source: current-avatar;
-                    width: parent.width;
-                    height: parent.height;
-                    image-fit: contain;
-                }
-
-                if !has-current-avatar: Text {
-                    letter-spacing: Theme.track-label;
-                    text: current-initials;
-                    font-family: Theme.font-label;
-                    font-size: 26px;
-                    font-weight: 600;
-                    color: Theme.text-secondary;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
-                }
+            UserAvatar {
+                initials: current-initials;
+                avatar: current-avatar;
+                has-avatar: has-current-avatar;
+                muted: true;
+                size: 96px;
+                bg-color: Theme.bg-app;
             }
 
             Rectangle {
                 width: 96px;
                 height: 28px;
-                border-radius: 6px;
-                background: change-ta.has-hover ? Theme.surface-hover : transparent;
+                background: transparent;
+
+                if change-ta.has-hover: CutButtonShape {
+                    width: parent.width;
+                    height: parent.height;
+                    n: Theme.cut;
+                    fill: Theme.surface-hover;
+                }
 
                 change-ta := TouchArea {
                     clicked => {
@@ -1476,7 +1526,6 @@ component ProfileTab inherits VerticalLayout {
             // Upload slot
             Rectangle {
                 horizontal-stretch: 1;
-                border-radius: Theme.r-inner;
                 background: Theme.surface;
                 border-width: 1.5px;
                 border-color: profile-selected-avatar == 7 ? Theme.accent : (upload-ta.has-hover ? Theme.raised : Theme.graphic-light);
@@ -1536,8 +1585,14 @@ component ProfileTab inherits VerticalLayout {
                         height: 26px;
                         x: (parent.width - self.width) / 2;
                         y: (parent.height - self.height) / 2;
-                        border-radius: 6px;
-                        background: upload-use-ta.has-hover ? Theme.confirm-press : Theme.confirm;
+                        background: transparent;
+
+                        CutButtonShape {
+                            width: parent.width;
+                            height: parent.height;
+                            n: 6px;
+                            fill: upload-use-ta.has-hover ? Theme.confirm-press : Theme.confirm;
+                        }
 
                         Text {
                             text: "Use";
@@ -1562,8 +1617,14 @@ component ProfileTab inherits VerticalLayout {
             Rectangle {
                 width: reroll-content.preferred-width + 24px;
                 height: 32px;
-                border-radius: 6px;
-                background: reroll-ta.has-hover ? Theme.surface-hover : transparent;
+                background: transparent;
+
+                if reroll-ta.has-hover: CutButtonShape {
+                    width: parent.width;
+                    height: parent.height;
+                    n: Theme.cut;
+                    fill: Theme.surface-hover;
+                }
 
                 reroll-ta := TouchArea {
                     clicked => { profile-reroll(); }
@@ -1607,8 +1668,14 @@ component GameIntegrationRow inherits Rectangle {
     callback toggled(bool);
 
     height: game-row-layout.preferred-height;
-    border-radius: 8px;
-    background: game-row-ta.has-hover ? Theme.surface-hover : transparent;
+    background: transparent;
+
+    if game-row-ta.has-hover: CutButtonShape {
+        width: parent.width;
+        height: parent.height;
+        n: Theme.cut;
+        fill: Theme.surface-hover;
+    }
 
     game-row-ta := TouchArea {
         clicked => { toggled(!game.enabled); }
@@ -1653,7 +1720,6 @@ component GameIntegrationRow inherits Rectangle {
                 if game.install-status != "": Rectangle {
                     width: status-text.preferred-width + 12px;
                     height: 18px;
-                    border-radius: 4px;
                     background: game.install-status == "found" ? Theme.voice-active-bg : Theme.surface;
                     border-width: 1px;
                     border-color: game.install-status == "found" ? Theme.id-teal : Theme.graphic-light;
@@ -1755,7 +1821,6 @@ component GamesTab inherits VerticalLayout {
 
         Rectangle {
             height: riot-row-layout.preferred-height;
-            border-radius: 8px;
 
             riot-row-layout := HorizontalLayout {
                 padding-top: 14px;
@@ -1804,10 +1869,21 @@ component GamesTab inherits VerticalLayout {
                     Rectangle {
                         width: riot-btn-text.preferred-width + 28px;
                         height: 32px;
-                        border-radius: 8px;
-                        background: riot-linked
-                            ? (riot-btn-ta.has-hover ? Theme.surface-hover : Theme.surface)
-                            : Theme.accent;
+                        background: transparent;
+
+                        CutButtonShape {
+                            width: parent.width;
+                            height: parent.height;
+                            n: Theme.cut;
+                            fill: riot-linked ? Theme.graphic-med : Theme.confirm;
+                        }
+                        if riot-linked: CutButtonShape {
+                            width: parent.width;
+                            height: parent.height;
+                            n: Theme.cut;
+                            inset: Theme.keyline;
+                            fill: riot-btn-ta.has-hover ? Theme.surface-hover : Theme.surface;
+                        }
                         border-width: riot-linked ? 1px : 0px;
                         border-color: Theme.graphic-light;
                         opacity: (riot-available || riot-linked) ? 1.0 : 0.5;
@@ -2015,8 +2091,18 @@ export component SettingsModal inherits Rectangle {
             // ─── Header ──────────────────────────────────────────
             Rectangle {
                 height: 64px;
-                background: Theme.bg-app;
+                background: transparent;
                 border-width: 0px;
+
+                // The header is the top of the panel, so it carries the same
+                // cut. A plain rectangle here would square the corner off.
+                CutShape {
+                    width: parent.width;
+                    height: parent.height;
+                    n: Theme.notch;
+                    inset: Theme.keyline;
+                    fill: Theme.bg-app;
+                }
 
                 // Bottom border
                 Rectangle {
@@ -2051,7 +2137,6 @@ export component SettingsModal inherits Rectangle {
                 Rectangle {
                     width: 32px;
                     height: 32px;
-                    border-radius: 6px;
                     x: parent.width - self.width - 16px;
                     y: (parent.height - self.height) / 2;
                     background: close-btn-ta.has-hover ? Theme.surface-hover : transparent;
@@ -2101,10 +2186,21 @@ export component SettingsModal inherits Rectangle {
                             // Profile
                             Rectangle {
                                 height: 40px;
-                                border-radius: 6px;
-                                background: active-tab == 0 ? Theme.surface : (profile-ta.has-hover ? Theme.surface-hover : transparent);
-                                border-width: active-tab == 0 ? 1px : 0px;
-                                border-color: active-tab == 0 ? Theme.graphic-light : transparent;
+                                background: transparent;
+
+                                if active-tab == 0 || profile-ta.has-hover: CutButtonShape {
+                                    width: parent.width;
+                                    height: parent.height;
+                                    n: Theme.cut;
+                                    fill: active-tab == 0 ? Theme.graphic-light : Theme.surface-hover;
+                                }
+                                if active-tab == 0: CutButtonShape {
+                                    width: parent.width;
+                                    height: parent.height;
+                                    n: Theme.cut;
+                                    inset: Theme.keyline;
+                                    fill: Theme.surface;
+                                }
 
                                 Image {
                                     source: @image-url("../icons/user.svg");
@@ -2135,10 +2231,21 @@ export component SettingsModal inherits Rectangle {
                             // General
                             Rectangle {
                                 height: 40px;
-                                border-radius: 6px;
-                                background: active-tab == 1 ? Theme.surface : (general-ta.has-hover ? Theme.surface-hover : transparent);
-                                border-width: active-tab == 1 ? 1px : 0px;
-                                border-color: active-tab == 1 ? Theme.graphic-light : transparent;
+                                background: transparent;
+
+                                if active-tab == 1 || general-ta.has-hover: CutButtonShape {
+                                    width: parent.width;
+                                    height: parent.height;
+                                    n: Theme.cut;
+                                    fill: active-tab == 1 ? Theme.graphic-light : Theme.surface-hover;
+                                }
+                                if active-tab == 1: CutButtonShape {
+                                    width: parent.width;
+                                    height: parent.height;
+                                    n: Theme.cut;
+                                    inset: Theme.keyline;
+                                    fill: Theme.surface;
+                                }
 
                                 Image {
                                     source: @image-url("../icons/monitor.svg");
@@ -2169,10 +2276,21 @@ export component SettingsModal inherits Rectangle {
                             // Audio & Video
                             Rectangle {
                                 height: 40px;
-                                border-radius: 6px;
-                                background: active-tab == 2 ? Theme.surface : (audio-ta.has-hover ? Theme.surface-hover : transparent);
-                                border-width: active-tab == 2 ? 1px : 0px;
-                                border-color: active-tab == 2 ? Theme.graphic-light : transparent;
+                                background: transparent;
+
+                                if active-tab == 2 || audio-ta.has-hover: CutButtonShape {
+                                    width: parent.width;
+                                    height: parent.height;
+                                    n: Theme.cut;
+                                    fill: active-tab == 2 ? Theme.graphic-light : Theme.surface-hover;
+                                }
+                                if active-tab == 2: CutButtonShape {
+                                    width: parent.width;
+                                    height: parent.height;
+                                    n: Theme.cut;
+                                    inset: Theme.keyline;
+                                    fill: Theme.surface;
+                                }
 
                                 Image {
                                     source: @image-url("../icons/mic.svg");
@@ -2203,10 +2321,21 @@ export component SettingsModal inherits Rectangle {
                             // Games
                             Rectangle {
                                 height: 40px;
-                                border-radius: 6px;
-                                background: active-tab == 3 ? Theme.surface : (games-ta.has-hover ? Theme.surface-hover : transparent);
-                                border-width: active-tab == 3 ? 1px : 0px;
-                                border-color: active-tab == 3 ? Theme.graphic-light : transparent;
+                                background: transparent;
+
+                                if active-tab == 3 || games-ta.has-hover: CutButtonShape {
+                                    width: parent.width;
+                                    height: parent.height;
+                                    n: Theme.cut;
+                                    fill: active-tab == 3 ? Theme.graphic-light : Theme.surface-hover;
+                                }
+                                if active-tab == 3: CutButtonShape {
+                                    width: parent.width;
+                                    height: parent.height;
+                                    n: Theme.cut;
+                                    inset: Theme.keyline;
+                                    fill: Theme.surface;
+                                }
 
                                 Image {
                                     source: @image-url("../icons/gamepad.svg");
@@ -2240,7 +2369,6 @@ export component SettingsModal inherits Rectangle {
                             // Keybinds (disabled)
                             Rectangle {
                                 height: 40px;
-                                border-radius: 6px;
                                 opacity: 0.5;
 
                                 Image {
@@ -2268,7 +2396,6 @@ export component SettingsModal inherits Rectangle {
                             // Security (disabled)
                             Rectangle {
                                 height: 40px;
-                                border-radius: 6px;
                                 opacity: 0.5;
 
                                 Image {
@@ -2473,7 +2600,6 @@ export component SettingsModal inherits Rectangle {
                     y: (parent.height - self.height) / 2;
                     width: reset-text.preferred-width + 24px;
                     height: 32px;
-                    border-radius: 4px;
                     background: reset-ta.has-hover ? Theme.surface-hover : transparent;
 
                     reset-text := Text {
@@ -2512,9 +2638,22 @@ export component SettingsModal inherits Rectangle {
                     y: (parent.height - self.height) / 2;
                     width: 120px;
                     height: 40px;
-                    border-radius: 6px;
-                    background: close-footer-ta.has-hover ? Theme.surface-hover : transparent;
-                    border-width: 1px;
+                    background: transparent;
+                    border-width: 0px;
+
+                    CutButtonShape {
+                        width: parent.width;
+                        height: parent.height;
+                        n: Theme.cut;
+                        fill: Theme.graphic-med;
+                    }
+                    CutButtonShape {
+                        width: parent.width;
+                        height: parent.height;
+                        n: Theme.cut;
+                        inset: Theme.keyline;
+                        fill: close-footer-ta.has-hover ? Theme.surface-hover : Theme.bg-app;
+                    }
                     border-color: Theme.graphic-light;
 
                     Text {
@@ -2536,3 +2675,45 @@ export component SettingsModal inherits Rectangle {
         }
     }
 }
+
+// ── Headless previews, one per tab ────────────────────────────────────
+//   slint-viewer --screenshot out.png --component PreviewAudio \
+//     client/ui/panels/settings_modal.slint
+component SettingsPreview inherits Rectangle {
+    in property <int> tab: 0;
+
+    width: 1000px;
+    height: 780px;
+    background: Theme.bg-app;
+
+    SettingsModal {
+        width: parent.width;
+        height: parent.height;
+        active-tab: root.tab;
+        profile-nickname-value: "b0bben";
+        capture-devices: [
+            { id: "a", name: "Yeti X", is-default: true },
+            { id: "b", name: "Realtek High Definition Audio", is-default: false },
+        ];
+        playback-devices: [
+            { id: "c", name: "Speakers (Realtek)", is-default: true },
+        ];
+        selected-capture-id: "a";
+        selected-playback-id: "c";
+        riot-available: true;
+        riot-linked: false;
+        games-list: [
+            { game-id: "cs2", name: "Counter-Strike 2", short-name: "CS2",
+              color: #DE9B35, install-status: "found", writes-files: true,
+              note: "Writes a config file", enabled: true, has-account-link: false },
+            { game-id: "lol", name: "League of Legends", short-name: "LOL",
+              color: #C8AA6E, install-status: "not-found", writes-files: false,
+              note: "", enabled: false, has-account-link: true },
+        ];
+    }
+}
+
+export component Preview inherits SettingsPreview { tab: 0; }
+export component PreviewGeneral inherits SettingsPreview { tab: 1; }
+export component PreviewAudio inherits SettingsPreview { tab: 2; }
+export component PreviewGames inherits SettingsPreview { tab: 3; }
