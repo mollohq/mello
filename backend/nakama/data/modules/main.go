@@ -188,6 +188,15 @@ func InitModule(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runti
 	if err := initializer.RegisterRpc("voice_join", VoiceJoinRPC); err != nil {
 		return err
 	}
+	if err := initializer.RegisterRpc("guest_voice_join", GuestVoiceJoinRPC); err != nil {
+		return err
+	}
+	if err := initializer.RegisterRpc("guest_voice_leave", GuestVoiceLeaveRPC); err != nil {
+		return err
+	}
+	if err := initializer.RegisterRpc("guest_crew_feed", GuestCrewFeedRPC); err != nil {
+		return err
+	}
 	if err := initializer.RegisterRpc("voice_leave", VoiceLeaveRPC); err != nil {
 		return err
 	}

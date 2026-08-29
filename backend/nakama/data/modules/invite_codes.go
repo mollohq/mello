@@ -57,6 +57,36 @@ type JoinByInviteCodeResponse struct {
 	Name   string `json:"name"`
 }
 
+// normalizeInviteCode trims and upper-cases a user-supplied code so lookups
+// match how GenerateInviteCode stored it.
+func normalizeInviteCode(code string) string {
+	return strings.TrimSpace(strings.ToUpper(code))
+}
+
+// lookupInviteCode resolves an invite code to its crew and the member who
+// created it. Returns a NOT_FOUND error for unknown or malformed codes.
+func lookupInviteCode(ctx context.Context, nk runtime.NakamaModule, code string) (crewID, inviterUserID string, err error) {
+	if code == "" {
+		return "", "", runtime.NewError("invite code required", 3)
+	}
+
+	objects, readErr := nk.StorageRead(ctx, []*runtime.StorageRead{
+		{Collection: InviteCodeCollection, Key: code, UserID: SystemUserID},
+	})
+	if readErr != nil || len(objects) == 0 {
+		return "", "", runtime.NewError("invalid invite code", 5)
+	}
+
+	var data struct {
+		CrewID        string `json:"crew_id"`
+		InviterUserID string `json:"inviter_user_id"`
+	}
+	if jsonErr := json.Unmarshal([]byte(objects[0].GetValue()), &data); jsonErr != nil || data.CrewID == "" {
+		return "", "", runtime.NewError("invalid invite code", 5)
+	}
+	return data.CrewID, data.InviterUserID, nil
+}
+
 // JoinByInviteCodeRPC resolves an invite code to a crew and joins the caller.
 func JoinByInviteCodeRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, payload string) (string, error) {
 	userID, ok := ctx.Value(runtime.RUNTIME_CTX_USER_ID).(string)
@@ -69,25 +99,12 @@ func JoinByInviteCodeRPC(ctx context.Context, logger runtime.Logger, db *sql.DB,
 		return "", runtime.NewError("invalid request", 3)
 	}
 
-	code := strings.TrimSpace(strings.ToUpper(req.Code))
-	if code == "" {
-		return "", runtime.NewError("invite code required", 3)
+	code := normalizeInviteCode(req.Code)
+	crewID, _, err := lookupInviteCode(ctx, nk, code)
+	if err != nil {
+		return "", err
 	}
-
-	// Look up the code in storage
-	objects, err := nk.StorageRead(ctx, []*runtime.StorageRead{
-		{Collection: InviteCodeCollection, Key: code, UserID: SystemUserID},
-	})
-	if err != nil || len(objects) == 0 {
-		return "", runtime.NewError("invalid invite code", 5)
-	}
-
-	var data struct {
-		CrewID string `json:"crew_id"`
-	}
-	if err := json.Unmarshal([]byte(objects[0].GetValue()), &data); err != nil || data.CrewID == "" {
-		return "", runtime.NewError("invalid invite code", 5)
-	}
+	data := struct{ CrewID string }{CrewID: crewID}
 
 	// Join the group
 	if err := nk.GroupUserJoin(ctx, data.CrewID, userID, ""); err != nil {
@@ -213,25 +230,14 @@ func ResolveCrewInviteRPC(ctx context.Context, logger runtime.Logger, db *sql.DB
 		return "", runtime.NewError("invalid request", 3)
 	}
 
-	code := strings.TrimSpace(strings.ToUpper(req.Code))
-	if code == "" {
-		return "", runtime.NewError("invite code required", 3)
+	crewID, inviterUserID, err := lookupInviteCode(ctx, nk, normalizeInviteCode(req.Code))
+	if err != nil {
+		return "", err
 	}
-
-	objects, err := nk.StorageRead(ctx, []*runtime.StorageRead{
-		{Collection: InviteCodeCollection, Key: code, UserID: SystemUserID},
-	})
-	if err != nil || len(objects) == 0 {
-		return "", runtime.NewError("invalid invite code", 5)
-	}
-
-	var data struct {
-		CrewID        string `json:"crew_id"`
-		InviterUserID string `json:"inviter_user_id"`
-	}
-	if err := json.Unmarshal([]byte(objects[0].GetValue()), &data); err != nil || data.CrewID == "" {
-		return "", runtime.NewError("invalid invite code", 5)
-	}
+	data := struct {
+		CrewID        string
+		InviterUserID string
+	}{CrewID: crewID, InviterUserID: inviterUserID}
 
 	groups, err := nk.GroupsGetId(ctx, []string{data.CrewID})
 	if err != nil || len(groups) == 0 {

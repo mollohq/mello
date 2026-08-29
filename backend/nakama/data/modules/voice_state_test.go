@@ -150,7 +150,7 @@ func TestUpsertVoiceMember_IdempotentRejoin(t *testing.T) {
 	voiceUserChannel[userID] = channelID
 	voiceUserChannelMu.Unlock()
 
-	existed := upsertVoiceMember(channelID, crewID, userID, "alice_renamed")
+	existed := upsertVoiceMember(channelID, crewID, userID, "alice_renamed", false)
 	if !existed {
 		t.Fatal("expected upsert to report the member already existed")
 	}
@@ -186,7 +186,7 @@ func TestUpsertVoiceMember_IdempotentRejoin(t *testing.T) {
 func TestUpsertVoiceMember_FirstJoinCreatesRoom(t *testing.T) {
 	resetVoiceState()
 
-	existed := upsertVoiceMember("ch_new", "crew_new", "user_x", "xavier")
+	existed := upsertVoiceMember("ch_new", "crew_new", "user_x", "xavier", false)
 	if existed {
 		t.Fatal("expected first join to report member did not exist")
 	}
