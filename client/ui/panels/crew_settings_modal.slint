@@ -654,14 +654,26 @@ component MembersTab inherits VerticalLayout {
     callback demote-member(string);
     callback kick-member(string);
 
+    // A section runs the whole crew and shows the rows that belong to it,
+    // so every wrapper must measure itself. Section spacing is 0 and the
+    // 8px gap rides inside the wrapper; a wrapper that draws nothing is
+    // 0px tall and adds nothing.
+    property <length> row-h: 52px;
+    property <length> row-gap: 8px;
+
     // OWNER
     VerticalLayout {
-        spacing: 8px;
+        spacing: 0px;
 
         SectionHeader { title: "OWNER"; }
 
-        for m in members: VerticalLayout {
+        for m in members: Rectangle {
+            height: m.role == 0 ? root.row-h + root.row-gap : 0px;
+
             if m.role == 0: MemberRow {
+                y: root.row-gap;
+                width: parent.width;
+                height: root.row-h;
                 member: m;
                 is-owner: true;
             }
@@ -670,12 +682,17 @@ component MembersTab inherits VerticalLayout {
 
     // ADMINS
     VerticalLayout {
-        spacing: 8px;
+        spacing: 0px;
 
         SectionHeader { title: "ADMINS"; }
 
-        for m in members: VerticalLayout {
+        for m in members: Rectangle {
+            height: m.role == 1 ? root.row-h + root.row-gap : 0px;
+
             if m.role == 1: MemberRow {
+                y: root.row-gap;
+                width: parent.width;
+                height: root.row-h;
                 member: m;
                 can-change-roles: root.my-role == 0;
                 can-kick: root.my-role == 0;
@@ -688,12 +705,17 @@ component MembersTab inherits VerticalLayout {
 
     // MEMBERS
     VerticalLayout {
-        spacing: 8px;
+        spacing: 0px;
 
         SectionHeader { title: "MEMBERS"; }
 
-        for m in members: VerticalLayout {
+        for m in members: Rectangle {
+            height: m.role == 2 ? root.row-h + root.row-gap : 0px;
+
             if m.role == 2: MemberRow {
+                y: root.row-gap;
+                width: parent.width;
+                height: root.row-h;
                 member: m;
                 can-change-roles: root.my-role == 0;
                 can-kick: root.my-role <= 1;
