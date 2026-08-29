@@ -1,5 +1,5 @@
 import { Theme, MelloTextInput } from "../theme.slint";
-import { CutShape } from "../components/cut.slint";
+import { CutShape, CutButtonShape } from "../components/cut.slint";
 
 export component InviteShareModal inherits Rectangle {
     in property <string> invite-url: "";
@@ -95,8 +95,17 @@ export component InviteShareModal inherits Rectangle {
                     width: 140px;
                     height: 40px;
                     x: (parent.width - self.width) / 2;
-                    border-radius: Theme.r-inner;
-                    background: copied ? Theme.voice-active : (copy-touch.has-hover ? Theme.action-press : Theme.accent);
+                    background: transparent;
+
+                    // Copying is an action, not a commit: it changes nothing
+                    // on the server, so it stays white.
+                    CutButtonShape {
+                        width: parent.width;
+                        height: parent.height;
+                        n: Theme.cut;
+                        fill: copied ? Theme.accent-green
+                            : (copy-touch.has-hover ? Theme.action-press : Theme.action);
+                    }
 
                     Text {
                         font-family: Theme.font-display;
@@ -119,5 +128,20 @@ export component InviteShareModal inherits Rectangle {
                 }
             }
         }
+    }
+}
+
+// Headless preview:
+//   slint-viewer --screenshot out.png --component Preview \
+//     client/ui/panels/invite_share_modal.slint
+export component Preview inherits Rectangle {
+    width: 900px;
+    height: 600px;
+    background: Theme.bg-app;
+
+    InviteShareModal {
+        width: parent.width;
+        height: parent.height;
+        invite-url: "m3llo.io/join/ALPHA-992-K";
     }
 }

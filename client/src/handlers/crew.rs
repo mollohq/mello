@@ -399,6 +399,9 @@ pub fn handle(ctx: &AppContext, event: Event) {
                 });
             } else {
                 ctx.app.set_join_crew_invite_code(code.into());
+                ctx.app.set_join_crew_initials(
+                    crate::converters::make_initials(&invite.crew_name).into(),
+                );
                 ctx.app.set_join_crew_name(invite.crew_name.into());
                 ctx.app.set_join_crew_id(invite.crew_id.into());
                 ctx.app.set_join_crew_highlight(invite.highlight.into());

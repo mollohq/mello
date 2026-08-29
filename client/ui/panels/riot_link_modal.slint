@@ -1,5 +1,5 @@
 import { Theme, MelloInputField } from "../theme.slint";
-import { CutShape } from "../components/cut.slint";
+import { CutShape, CutButtonShape } from "../components/cut.slint";
 
 // Consent + input dialog for linking a Riot ID. Opened from the Games
 // settings tab or the post-game "connect Riot account" CTA.
@@ -27,7 +27,11 @@ export component RiotLinkModal inherits Rectangle {
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
         width: 420px;
-        height: content.preferred-height + 64px;
+        // `content` already carries 32px of padding on each side, so the
+        // extra 64px was slack. A vertical layout hands slack to the first
+        // stretchable child, which pushed the Riot ID field away from its
+        // label by 64px.
+        height: content.preferred-height;
         background: transparent;
 
         // A modal panel is a card, so it carries the cut and a keyline.
@@ -55,9 +59,10 @@ export component RiotLinkModal inherits Rectangle {
             Text {
                 font-family: Theme.font-display;
                 text: "Connect your Riot account";
-                font-size: Theme.font-xxl;
+                font-size: Theme.font-xl;
                 font-weight: Theme.weight-display-bold;
                 color: Theme.text-primary;
+                wrap: word-wrap;
             }
 
             Text {
@@ -106,15 +111,16 @@ export component RiotLinkModal inherits Rectangle {
                 HorizontalLayout {
                     spacing: 8px;
 
+                    // A segmented choice, so it is square, and the pick is
+                    // a tint with a keyline. A white fill hid the label.
                     for region in ["americas", "europe", "asia", "sea"]: Rectangle {
                         height: 32px;
                         horizontal-stretch: 1;
-                        border-radius: 8px;
                         background: selected-region == region
-                            ? Theme.accent
+                            ? Theme.action-dim
                             : (region-ta.has-hover ? Theme.surface-hover : Theme.bg-app);
                         border-width: 1px;
-                        border-color: selected-region == region ? Theme.accent : Theme.graphic-light;
+                        border-color: selected-region == region ? Theme.action-line : Theme.graphic-light;
 
                         Text {
                             letter-spacing: Theme.track-label;
@@ -122,7 +128,7 @@ export component RiotLinkModal inherits Rectangle {
                             font-family: Theme.font-label;
                             font-size: 11px;
                             font-weight: 600;
-                            color: selected-region == region ? white : Theme.text-secondary;
+                            color: selected-region == region ? Theme.text-primary : Theme.text-secondary;
                             horizontal-alignment: center;
                             vertical-alignment: center;
                         }
@@ -153,10 +159,21 @@ export component RiotLinkModal inherits Rectangle {
                 Rectangle {
                     width: cancel-text.preferred-width + 32px;
                     height: 40px;
-                    border-radius: Theme.r-outer;
-                    background: cancel-ta.has-hover ? Theme.surface-hover : transparent;
-                    border-width: 1px;
-                    border-color: Theme.graphic-light;
+                    background: transparent;
+
+                    CutButtonShape {
+                        width: parent.width;
+                        height: parent.height;
+                        n: Theme.cut;
+                        fill: Theme.graphic-light;
+                    }
+                    CutButtonShape {
+                        width: parent.width;
+                        height: parent.height;
+                        n: Theme.cut;
+                        inset: Theme.keyline;
+                        fill: cancel-ta.has-hover ? Theme.surface-hover : Theme.surface;
+                    }
 
                     cancel-text := Text {
                         font-family: Theme.font-display;
@@ -177,7 +194,14 @@ export component RiotLinkModal inherits Rectangle {
                 Rectangle {
                     width: connect-text.preferred-width + 32px;
                     height: 40px;
-                    background: Theme.confirm;
+                    background: transparent;
+
+                    CutButtonShape {
+                        width: parent.width;
+                        height: parent.height;
+                        n: Theme.cut;
+                        fill: connect-ta.has-hover ? Theme.confirm-press : Theme.confirm;
+                    }
                     opacity: busy ? 0.6 : 1.0;
 
                     connect-text := Text {
@@ -190,7 +214,7 @@ export component RiotLinkModal inherits Rectangle {
                         vertical-alignment: center;
                     }
 
-                    TouchArea {
+                    connect-ta := TouchArea {
                         mouse-cursor: pointer;
                         enabled: !busy;
                         clicked => {
@@ -202,5 +226,19 @@ export component RiotLinkModal inherits Rectangle {
                 }
             }
         }
+    }
+}
+
+// Headless preview:
+//   slint-viewer --screenshot out.png --component Preview \
+//     client/ui/panels/riot_link_modal.slint
+export component Preview inherits Rectangle {
+    width: 900px;
+    height: 640px;
+    background: Theme.bg-app;
+
+    RiotLinkModal {
+        width: parent.width;
+        height: parent.height;
     }
 }

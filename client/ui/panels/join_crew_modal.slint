@@ -1,8 +1,10 @@
 import { Theme } from "../theme.slint";
-import { CutShape } from "../components/cut.slint";
+import { CutShape, CutButtonShape } from "../components/cut.slint";
 
 export component JoinCrewModal inherits Rectangle {
     in property <string> crew-name: "";
+    /// Two letters for the crew tile. The full name does not fit the box.
+    in property <string> crew-initials: "";
     in property <string> crew-id: "";
     in property <string> highlight: "";
     in property <string> avatar-seed: "";
@@ -97,9 +99,15 @@ export component JoinCrewModal inherits Rectangle {
                 Rectangle {
                     height: 44px;
                     width: 160px;
-                    border-radius: Theme.r-outer;
-                    background: Theme.graphic-light;
                     x: (parent.width - self.width) / 2;
+                    background: transparent;
+
+                    CutButtonShape {
+                        width: parent.width;
+                        height: parent.height;
+                        n: Theme.cut;
+                        fill: dismiss-touch.has-hover ? Theme.graphic-med : Theme.graphic-light;
+                    }
 
                     Text {
                         font-family: Theme.font-display;
@@ -126,20 +134,27 @@ export component JoinCrewModal inherits Rectangle {
                 Rectangle {
                     width: 96px;
                     height: 96px;
-                    border-radius: 20px;
-                    background: Theme.confirm;
                     x: (parent.width - self.width) / 2;
+                    background: transparent;
+
+                    // A crew is a thing, so it wears the two-corner tile.
+                    CutButtonShape {
+                        width: parent.width;
+                        height: parent.height;
+                        n: 21px;
+                        fill: Theme.raised;
+                    }
 
                     Text {
                         font-family: Theme.font-display;
-                        text: crew-name != "" ? crew-name : "?";
-                        font-size: 24px;
+                        text: crew-initials != "" ? crew-initials : "?";
+                        font-size: 30px;
                         font-weight: Theme.weight-display-bold;
-                        color: Theme.on-action;
+                        color: Theme.text-secondary;
+                        width: parent.width;
+                        height: parent.height;
                         horizontal-alignment: center;
                         vertical-alignment: center;
-                        overflow: elide;
-                        max-width: 80px;
                     }
                 }
 
@@ -169,16 +184,22 @@ export component JoinCrewModal inherits Rectangle {
                 Rectangle {
                     height: 48px;
                     width: 200px;
-                    border-radius: Theme.r-outer;
-                    background: Theme.accent;
                     x: (parent.width - self.width) / 2;
+                    background: transparent;
+
+                    CutButtonShape {
+                        width: parent.width;
+                        height: parent.height;
+                        n: Theme.cut;
+                        fill: join-touch.has-hover ? Theme.confirm-press : Theme.confirm;
+                    }
 
                     Text {
                         font-family: Theme.font-display;
                         text: "Join crew";
                         font-size: Theme.font-lg;
                         font-weight: Theme.weight-display;
-                        color: Theme.on-action;
+                        color: Theme.on-confirm;
                         horizontal-alignment: center;
                         vertical-alignment: center;
                     }
@@ -205,5 +226,22 @@ export component JoinCrewModal inherits Rectangle {
                 }
             }
         }
+    }
+}
+
+// Headless preview:
+//   slint-viewer --screenshot out.png --component Preview \
+//     client/ui/panels/join_crew_modal.slint
+export component Preview inherits Rectangle {
+    width: 900px;
+    height: 640px;
+    background: Theme.bg-app;
+
+    JoinCrewModal {
+        width: parent.width;
+        height: parent.height;
+        crew-name: "Night Stones";
+        crew-initials: "NI";
+        crew-id: "c1";
     }
 }

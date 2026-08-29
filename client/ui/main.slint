@@ -321,6 +321,8 @@ export component MainWindow inherits Window {
     // --- Join crew modal (deep link invite) ---
     in-out property <bool> join-crew-modal-open: false;
     in property <string> join-crew-name: "";
+    /// Two letters for the crew tile in the join dialog.
+    in property <string> join-crew-initials: "";
     in property <string> join-crew-id: "";
     in property <string> join-crew-invite-code: "";
     in property <string> join-crew-highlight: "";
@@ -1363,6 +1365,7 @@ export component MainWindow inherits Window {
     // ===================== JOIN CREW MODAL =====================
     if join-crew-modal-open: JoinCrewModal {
         crew-name: root.join-crew-name;
+        crew-initials: root.join-crew-initials;
         crew-id: root.join-crew-id;
         highlight: root.join-crew-highlight;
         avatar-seed: root.join-crew-avatar-seed;
