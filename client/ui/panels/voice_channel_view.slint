@@ -34,8 +34,9 @@ component VoiceChannelRow inherits Rectangle {
         }
 
         Text {
+            letter-spacing: Theme.track-label;
             text: channel-name;
-            font-family: Theme.font-mono;
+            font-family: Theme.font-label;
             font-size: 12px;
             font-weight: 600;
             color: Theme.text-secondary;
@@ -43,8 +44,10 @@ component VoiceChannelRow inherits Rectangle {
         }
 
         Text {
+            letter-spacing: Theme.track-label;
+            font-weight: Theme.weight-label;
             text: status-text;
-            font-family: Theme.font-mono;
+            font-family: Theme.font-label;
             font-size: 10px;
             color: Theme.text-tertiary;
             vertical-alignment: center;
@@ -63,7 +66,7 @@ component VoiceChannelRow inherits Rectangle {
 
             join-label := Text {
                 text: "Join";
-                font-family: Theme.font-mono;
+                font-family: Theme.font-label;
                 font-size: 10px;
                 font-weight: 600;
                 color: join-touch.has-hover ? #28C840 : #28C840A0;
@@ -124,8 +127,9 @@ component VoiceChannelExpanded inherits Rectangle {
                     }
 
                     Text {
+                        letter-spacing: Theme.track-label;
                         text: channel-name;
-                        font-family: Theme.font-mono;
+                        font-family: Theme.font-label;
                         font-size: 12px;
                         font-weight: 600;
                         color: Theme.text-primary;
@@ -133,6 +137,8 @@ component VoiceChannelExpanded inherits Rectangle {
                     }
 
                     Text {
+                        font-weight: Theme.weight-display;
+                        font-family: Theme.font-display;
                         text: "·";
                         font-size: 14px;
                         color: Theme.text-tertiary;
@@ -140,8 +146,9 @@ component VoiceChannelExpanded inherits Rectangle {
                     }
 
                     Text {
+                        font-weight: Theme.weight-label;
                         text: members.length > 0 ? "Active Session" : "Empty";
-                        font-family: Theme.font-mono;
+                        font-family: Theme.font-label;
                         font-size: 10px;
                         color: Theme.text-tertiary;
                         letter-spacing: 0.5px;
@@ -156,8 +163,9 @@ component VoiceChannelExpanded inherits Rectangle {
                     alignment: center;
 
                     Text {
+                        font-weight: Theme.weight-label;
                         text: "ACTIVE SESSION";
-                        font-family: Theme.font-mono;
+                        font-family: Theme.font-label;
                         font-size: Theme.font-xs;
                         color: Theme.text-tertiary;
                         letter-spacing: 0.5px;
@@ -207,10 +215,11 @@ component VoiceChannelExpanded inherits Rectangle {
                     border-color: join-tile-touch.has-hover ? #28C84060 : Theme.graphic-light;
 
                     Text {
+                        letter-spacing: Theme.track-label;
                         text: "+";
                         font-size: 20px;
-                        font-family: Theme.font-mono;
-                        font-weight: 400;
+                        font-family: Theme.font-label;
+                        font-weight: Theme.weight-label;
                         color: join-tile-touch.has-hover ? #28C840 : Theme.text-tertiary;
                         horizontal-alignment: center;
                         vertical-alignment: center;
@@ -226,10 +235,11 @@ component VoiceChannelExpanded inherits Rectangle {
                 Rectangle { height: 6px; }
 
                 Text {
+                    letter-spacing: Theme.track-label;
                     text: "Join";
-                    font-family: Theme.font-mono;
+                    font-family: Theme.font-label;
                     font-size: 10px;
-                    font-weight: 500;
+                    font-weight: Theme.weight-label;
                     color: join-tile-touch.has-hover ? #28C840 : Theme.text-tertiary;
                     horizontal-alignment: center;
                 }
@@ -278,8 +288,9 @@ component VoiceChannelExpanded inherits Rectangle {
                 }
 
                 Text {
+                    letter-spacing: Theme.track-label;
                     text: member.name;
-                    font-family: Theme.font-mono;
+                    font-family: Theme.font-label;
                     font-size: 10px;
                     font-weight: member.speaking ? 500 : 400;
                     color: member.speaking ? Theme.voice-active : Theme.text-secondary;
@@ -289,8 +300,10 @@ component VoiceChannelExpanded inherits Rectangle {
 
             // Empty state when no members and already in channel
             if members.length == 0 && !show-join: Text {
+                letter-spacing: Theme.track-label;
+                font-weight: Theme.weight-label;
                 text: "No one here yet";
-                font-family: Theme.font-mono;
+                font-family: Theme.font-label;
                 font-size: 11px;
                 color: Theme.text-tertiary;
                 vertical-alignment: center;
@@ -371,15 +384,19 @@ export component VoiceChannelView inherits Rectangle {
                     alignment: start;
 
                     Text {
+                        letter-spacing: Theme.track-label;
+                        font-weight: Theme.weight-label;
                         text: "+";
                         font-size: 14px;
-                        font-family: Theme.font-mono;
+                        font-family: Theme.font-label;
                         color: add-touch.has-hover ? Theme.text-primary : Theme.text-tertiary;
                         vertical-alignment: center;
                     }
                     Text {
+                        letter-spacing: Theme.track-label;
+                        font-weight: Theme.weight-label;
                         text: "New channel";
-                        font-family: Theme.font-mono;
+                        font-family: Theme.font-label;
                         font-size: 11px;
                         color: add-touch.has-hover ? Theme.text-primary : Theme.text-tertiary;
                         vertical-alignment: center;

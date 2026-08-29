@@ -1,4 +1,5 @@
 import { Theme, MelloTextInput } from "../theme.slint";
+import { CutShape } from "../components/cut.slint";
 import { DiscoverCrewData } from "../types.slint";
 
 component DiscoverCrewCard inherits Rectangle {
@@ -12,10 +13,23 @@ component DiscoverCrewCard inherits Rectangle {
     in property <bool> has-avatar: false;
     callback join-clicked(string);
 
-    background: hero ? (card-touch.has-hover ? #1e1420 : #191119) : (card-touch.has-hover ? Theme.surface-hover : Theme.surface);
-    border-radius: Theme.r-outer;
-    border-width: 1px;
-    border-color: hero ? (card-touch.has-hover ? #FF1E564D : #FF1E5626) : (card-touch.has-hover ? Theme.graphic-med : Theme.graphic-light);
+    background: transparent;
+
+    CutShape {
+        width: parent.width;
+        height: parent.height;
+        n: Theme.notch-sm;
+        fill: hero ? (card-touch.has-hover ? #FFFFFF4D : #FFFFFF26)
+                   : (card-touch.has-hover ? Theme.graphic-med : Theme.graphic-light);
+    }
+    CutShape {
+        width: parent.width;
+        height: parent.height;
+        n: Theme.notch-sm;
+        inset: Theme.keyline;
+        fill: hero ? (card-touch.has-hover ? Theme.card-bg-hover : Theme.card-bg)
+                   : (card-touch.has-hover ? Theme.surface-hover : Theme.surface);
+    }
 
     card-touch := TouchArea {
         mouse-cursor: pointer;
@@ -38,10 +52,10 @@ component DiscoverCrewCard inherits Rectangle {
                 Rectangle {
                     width: hero ? 56px : 48px;
                     height: hero ? 56px : 48px;
-                    background: hero ? #FF1E561A : Theme.bg-app;
+                    background: hero ? Theme.action-dim : Theme.bg-app;
                     border-radius: hero ? 16px : 12px;
                     border-width: has-avatar ? 0px : 1px;
-                    border-color: hero ? #FF1E564D : Theme.graphic-light;
+                    border-color: hero ? #FFFFFF4D : Theme.graphic-light;
                     clip: true;
 
                     if has-avatar: Image {
@@ -52,8 +66,9 @@ component DiscoverCrewCard inherits Rectangle {
                     }
 
                     if !has-avatar: Text {
+                        letter-spacing: Theme.track-label;
                         text: crew-name;
-                        font-family: Theme.font-mono;
+                        font-family: Theme.font-label;
                         font-weight: 700;
                         font-size: hero ? 20px : 16px;
                         color: hero ? Theme.accent : Theme.text-secondary;
@@ -73,6 +88,7 @@ component DiscoverCrewCard inherits Rectangle {
                         spacing: 10px;
 
                         Text {
+                            font-family: Theme.font-body;
                             text: crew-name;
                             font-weight: hero ? 600 : 500;
                             font-size: hero ? 20px : 16px;
@@ -85,8 +101,8 @@ component DiscoverCrewCard inherits Rectangle {
                             height: 22px;
                             border-radius: 4px;
                             border-width: 1px;
-                            border-color: #FF1E564D;
-                            background: #FF1E561A;
+                            border-color: #FFFFFF4D;
+                            background: Theme.action-dim;
                             y: (parent.height - self.height) / 2;
 
                             HorizontalLayout {
@@ -101,8 +117,10 @@ component DiscoverCrewCard inherits Rectangle {
                                 }
 
                                 hero-pill-text := Text {
+                                    letter-spacing: Theme.track-label;
+                                    font-weight: Theme.weight-label;
                                     text: "LIVE";
-                                    font-family: Theme.font-mono;
+                                    font-family: Theme.font-label;
                                     font-size: 10px;
                                     color: Theme.accent;
                                     vertical-alignment: center;
@@ -112,8 +130,9 @@ component DiscoverCrewCard inherits Rectangle {
                     }
 
                     Text {
+                        font-weight: Theme.weight-label;
                         text: member-count < 10 ? "0" + member-count + " Members" : member-count + " Members";
-                        font-family: Theme.font-mono;
+                        font-family: Theme.font-label;
                         font-size: 11px;
                         letter-spacing: 0.5px;
                         color: Theme.text-tertiary;
@@ -127,6 +146,8 @@ component DiscoverCrewCard inherits Rectangle {
 
             // Description
             Text {
+                font-weight: Theme.weight-sentence;
+                font-family: Theme.font-body;
                 text: crew-description;
                 font-size: hero ? 15px : 13px;
                 color: Theme.text-secondary;
@@ -145,7 +166,7 @@ component DiscoverCrewCard inherits Rectangle {
 
             Rectangle {
                 height: 1px;
-                background: hero ? #FF1E5626 : Theme.graphic-light;
+                background: hero ? #FFFFFF26 : Theme.graphic-light;
             }
 
             Rectangle {
@@ -172,7 +193,7 @@ component DiscoverCrewCard inherits Rectangle {
                             width: 24px;
                             height: 24px;
                             border-radius: 12px;
-                            background: hero ? #FF1E5633 : Theme.graphic-light;
+                            background: hero ? #FFFFFF33 : Theme.graphic-light;
                         }
 
                         if online-count >= 2: Rectangle {
@@ -181,15 +202,17 @@ component DiscoverCrewCard inherits Rectangle {
                             width: 24px;
                             height: 24px;
                             border-radius: 12px;
-                            background: hero ? #FF1E564D : Theme.graphic-med;
+                            background: hero ? #FFFFFF4D : Theme.graphic-med;
                             border-width: 2px;
-                            border-color: hero ? #191119 : Theme.surface;
+                            border-color: hero ? Theme.card-bg : Theme.surface;
                         }
                     }
 
                     Text {
+                        letter-spacing: Theme.track-label;
+                        font-weight: Theme.weight-label;
                         text: online-count > 0 ? "+" + online-count + " active" : "No one online";
-                        font-family: Theme.font-mono;
+                        font-family: Theme.font-label;
                         font-size: 11px;
                         color: Theme.text-tertiary;
                         vertical-alignment: center;
@@ -202,14 +225,15 @@ component DiscoverCrewCard inherits Rectangle {
                     height: 32px;
                     border-radius: Theme.r-inner;
                     border-width: 1px;
-                    border-color: hero ? (join-touch.has-hover ? Theme.accent : #FF1E564D) : (join-touch.has-hover ? Theme.text-primary : Theme.graphic-light);
-                    background: hero ? (join-touch.has-hover ? #FF1E5633 : #FF1E561A) : (join-touch.has-hover ? Theme.bg-app : transparent);
+                    border-color: hero ? (join-touch.has-hover ? Theme.accent : #FFFFFF4D) : (join-touch.has-hover ? Theme.text-primary : Theme.graphic-light);
+                    background: hero ? (join-touch.has-hover ? #FFFFFF33 : Theme.action-dim) : (join-touch.has-hover ? Theme.bg-app : transparent);
 
                     join-text := Text {
-                        text: hero ? "Join Crew →" : "Join";
-                        font-family: Theme.font-mono;
+                        letter-spacing: Theme.track-label;
+                        text: hero ? "Join Crew" : "Join";
+                        font-family: Theme.font-label;
                         font-size: 12px;
-                        font-weight: 500;
+                        font-weight: Theme.weight-label;
                         color: hero ? (join-touch.has-hover ? Theme.accent : Theme.text-primary) : Theme.text-primary;
                         horizontal-alignment: center;
                         vertical-alignment: center;
@@ -252,10 +276,21 @@ export component DiscoverPanel inherits Rectangle {
 
             // --- Invite hero section ---
             Rectangle {
-                background: Theme.surface;
-                border-width: 1px;
-                border-color: Theme.graphic-light;
-                border-radius: Theme.r-outer;
+                background: transparent;
+
+                CutShape {
+                    width: parent.width;
+                    height: parent.height;
+                    n: Theme.notch;
+                    fill: Theme.graphic-light;
+                }
+                CutShape {
+                    width: parent.width;
+                    height: parent.height;
+                    n: Theme.notch;
+                    inset: Theme.keyline;
+                    fill: Theme.surface;
+                }
 
                 VerticalLayout {
                     padding: 48px;
@@ -264,7 +299,7 @@ export component DiscoverPanel inherits Rectangle {
 
                     Text {
                         text: "PRIVATE ENTRY";
-                        font-family: Theme.font-mono;
+                        font-family: Theme.font-label;
                         font-size: Theme.font-xs;
                         font-weight: 600;
                         letter-spacing: 1.5px;
@@ -277,6 +312,7 @@ export component DiscoverPanel inherits Rectangle {
                     }
 
                     Text {
+                        font-family: Theme.font-body;
                         text: "Join a Private Crew";
                         font-size: Theme.font-xxl;
                         font-weight: 500;
@@ -289,6 +325,8 @@ export component DiscoverPanel inherits Rectangle {
                     }
 
                     Text {
+                        font-weight: Theme.weight-sentence;
+                        font-family: Theme.font-body;
                         text: "Enter an invite code to join a crew directly.";
                         font-size: Theme.font-lg;
                         color: Theme.text-secondary;
@@ -333,9 +371,11 @@ export component DiscoverPanel inherits Rectangle {
                                 }
 
                                 if invite-input.text == "": Text {
+                                    letter-spacing: Theme.track-label;
+                                    font-weight: Theme.weight-label;
                                     x: 20px;
                                     color: Theme.text-tertiary;
-                                    font-family: Theme.font-mono;
+                                    font-family: Theme.font-label;
                                     font-size: 15px;
                                     vertical-alignment: center;
                                     text: "e.g. ALPHA-992-K";
@@ -349,10 +389,11 @@ export component DiscoverPanel inherits Rectangle {
                                 border-radius: Theme.r-inner;
 
                                 join-btn-label := Text {
+                                    font-family: Theme.font-display;
                                     text: "Join Crew";
-                                    font-weight: 600;
+                                    font-weight: Theme.weight-display;
                                     font-size: Theme.font-lg;
-                                    color: #FFFFFF;
+                                    color: Theme.on-action;
                                     horizontal-alignment: center;
                                     vertical-alignment: center;
                                 }
@@ -378,7 +419,7 @@ export component DiscoverPanel inherits Rectangle {
 
             Text {
                 text: "FEATURED CREWS";
-                font-family: Theme.font-mono;
+                font-family: Theme.font-label;
                 font-size: Theme.font-xs;
                 font-weight: 600;
                 letter-spacing: 1.5px;

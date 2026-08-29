@@ -1,4 +1,5 @@
 import { Theme, MelloInputField, MelloScrollArea } from "../theme.slint";
+import { CutShape } from "../components/cut.slint";
 import { VoiceChannelData, MemberData } from "../types.slint";
 
 // ─── Section Header ────────────────────────────────────────────────────────
@@ -12,7 +13,7 @@ component SectionHeader inherits Rectangle {
 
         Text {
             text: title;
-            font-family: Theme.font-mono;
+            font-family: Theme.font-label;
             font-size: 11px;
             font-weight: 600;
             letter-spacing: 2.4px;
@@ -76,8 +77,9 @@ component OverviewTab inherits VerticalLayout {
                     }
 
                     if !crew-has-avatar: Text {
+                        letter-spacing: Theme.track-label;
                         text: crew-initials;
-                        font-family: Theme.font-mono;
+                        font-family: Theme.font-label;
                         font-size: 22px;
                         font-weight: 600;
                         color: Theme.text-secondary;
@@ -98,8 +100,9 @@ component OverviewTab inherits VerticalLayout {
                     }
 
                     Text {
+                        font-weight: Theme.weight-label;
                         text: "Change";
-                        font-family: Theme.font-mono;
+                        font-family: Theme.font-label;
                         font-size: 11px;
                         letter-spacing: 0.5px;
                         color: Theme.accent;
@@ -119,9 +122,9 @@ component OverviewTab inherits VerticalLayout {
 
                     Text {
                         text: "CREW NAME";
-                        font-family: Theme.font-mono;
+                        font-family: Theme.font-label;
                         font-size: 12px;
-                        font-weight: 500;
+                        font-weight: Theme.weight-label;
                         letter-spacing: 2px;
                         color: Theme.text-secondary;
                     }
@@ -136,9 +139,9 @@ component OverviewTab inherits VerticalLayout {
 
                     Text {
                         text: "DESCRIPTION";
-                        font-family: Theme.font-mono;
+                        font-family: Theme.font-label;
                         font-size: 12px;
-                        font-weight: 500;
+                        font-weight: Theme.weight-label;
                         letter-spacing: 2px;
                         color: Theme.text-secondary;
                     }
@@ -165,12 +168,15 @@ component OverviewTab inherits VerticalLayout {
                 spacing: 2px;
 
                 Text {
+                    font-family: Theme.font-display;
                     text: "Open crew";
                     font-size: 13px;
-                    font-weight: 500;
+                    font-weight: Theme.weight-display;
                     color: Theme.text-primary;
                 }
                 Text {
+                    font-weight: Theme.weight-sentence;
+                    font-family: Theme.font-body;
                     text: "Anyone can find and join this crew without an invite";
                     font-size: 11px;
                     color: Theme.text-tertiary;
@@ -219,12 +225,15 @@ component OverviewTab inherits VerticalLayout {
                 spacing: 2px;
 
                 Text {
+                    font-family: Theme.font-display;
                     text: "Who can create invite links";
                     font-size: 13px;
-                    font-weight: 500;
+                    font-weight: Theme.weight-display;
                     color: Theme.text-primary;
                 }
                 Text {
+                    font-weight: Theme.weight-sentence;
+                    font-family: Theme.font-body;
                     text: invite-policy == "admins" ? "Only admins can generate invite codes" : "All members can generate invite codes";
                     font-size: 11px;
                     color: Theme.text-tertiary;
@@ -246,8 +255,10 @@ component OverviewTab inherits VerticalLayout {
                     border-color: Theme.accent;
 
                     Text {
+                        letter-spacing: Theme.track-label;
+                        font-weight: Theme.weight-label;
                         text: "Everyone";
-                        font-family: Theme.font-mono;
+                        font-family: Theme.font-label;
                         font-size: 11px;
                         color: invite-policy == "everyone" ? Theme.accent : Theme.text-tertiary;
                         horizontal-alignment: center;
@@ -269,8 +280,10 @@ component OverviewTab inherits VerticalLayout {
                     border-color: Theme.accent;
 
                     Text {
+                        letter-spacing: Theme.track-label;
+                        font-weight: Theme.weight-label;
                         text: "Admins";
-                        font-family: Theme.font-mono;
+                        font-family: Theme.font-label;
                         font-size: 11px;
                         color: invite-policy == "admins" ? Theme.accent : Theme.text-tertiary;
                         horizontal-alignment: center;
@@ -299,11 +312,11 @@ component OverviewTab inherits VerticalLayout {
 
             Text {
                 text: "Save";
-                font-family: Theme.font-mono;
+                font-family: Theme.font-label;
                 font-size: 13px;
-                font-weight: 500;
+                font-weight: Theme.weight-label;
                 letter-spacing: 0.5px;
-                color: #FFFFFF;
+                color: Theme.on-action;
                 horizontal-alignment: center;
                 vertical-alignment: center;
             }
@@ -358,9 +371,10 @@ component VoiceChannelsTab inherits VerticalLayout {
                     }
 
                     Text {
+                        font-family: Theme.font-display;
                         text: ch.name;
                         font-size: 14px;
-                        font-weight: 500;
+                        font-weight: Theme.weight-display;
                         color: Theme.text-primary;
                         horizontal-stretch: 1;
                         vertical-alignment: center;
@@ -375,8 +389,10 @@ component VoiceChannelsTab inherits VerticalLayout {
                         y: (parent.height - self.height) / 2;
 
                         def-label := Text {
+                            letter-spacing: Theme.track-label;
+                            font-weight: Theme.weight-label;
                             text: "default";
-                            font-family: Theme.font-mono;
+                            font-family: Theme.font-label;
                             font-size: 10px;
                             color: Theme.accent;
                             horizontal-alignment: center;
@@ -388,14 +404,14 @@ component VoiceChannelsTab inherits VerticalLayout {
                         width: 32px;
                         height: 32px;
                         border-radius: 6px;
-                        background: del-ta.has-hover ? #ef444422 : transparent;
+                        background: del-ta.has-hover ? Theme.live-bg : transparent;
                         y: (parent.height - self.height) / 2;
 
                         Image {
                             source: @image-url("../icons/x.svg");
                             width: 14px;
                             height: 14px;
-                            colorize: del-ta.has-hover ? #ef4444 : Theme.text-tertiary;
+                            colorize: del-ta.has-hover ? Theme.live : Theme.text-tertiary;
                             x: (parent.width - self.width) / 2;
                             y: (parent.height - self.height) / 2;
                         }
@@ -443,7 +459,7 @@ component VoiceChannelsTab inherits VerticalLayout {
                     source: @image-url("../icons/plus.svg");
                     width: 18px;
                     height: 18px;
-                    colorize: add-ch-ta.has-hover ? #FFFFFF : Theme.text-secondary;
+                    colorize: add-ch-ta.has-hover ? Theme.action : Theme.text-secondary;
                     x: (parent.width - self.width) / 2;
                     y: (parent.height - self.height) / 2;
                 }
@@ -501,8 +517,9 @@ component MemberRow inherits Rectangle {
             }
 
             if !member.has-avatar: Text {
+                letter-spacing: Theme.track-label;
                 text: member.initials;
-                font-family: Theme.font-mono;
+                font-family: Theme.font-label;
                 font-size: 11px;
                 font-weight: 600;
                 color: white;
@@ -522,9 +539,10 @@ component MemberRow inherits Rectangle {
                 spacing: 6px;
 
                 Text {
+                    font-family: Theme.font-display;
                     text: member.name;
                     font-size: 13px;
-                    font-weight: 500;
+                    font-weight: Theme.weight-display;
                     color: Theme.text-primary;
                     overflow: elide;
                 }
@@ -534,14 +552,16 @@ component MemberRow inherits Rectangle {
                     width: 8px;
                     height: 8px;
                     border-radius: 4px;
-                    background: #22c55e;
+                    background: Theme.accent-green;
                     y: (parent.height - self.height) / 2;
                 }
             }
 
             Text {
+                letter-spacing: Theme.track-label;
+                font-weight: Theme.weight-label;
                 text: member.role == 0 ? "Owner" : member.role == 1 ? "Admin" : "Member";
-                font-family: Theme.font-mono;
+                font-family: Theme.font-label;
                 font-size: 11px;
                 color: member.role == 0 ? Theme.accent : Theme.text-tertiary;
             }
@@ -560,8 +580,9 @@ component MemberRow inherits Rectangle {
             border-color: Theme.graphic-light;
 
             role-label := Text {
+                font-weight: Theme.weight-label;
                 text: member.role == 0 ? "OWNER" : member.role == 1 ? "ADMIN" : "MEMBER";
-                font-family: Theme.font-mono;
+                font-family: Theme.font-label;
                 font-size: 10px;
                 letter-spacing: 0.5px;
                 color: member.role <= 1 ? Theme.accent : Theme.text-tertiary;
@@ -605,13 +626,13 @@ component MemberRow inherits Rectangle {
             height: 28px;
             border-radius: 6px;
             y: (parent.height - self.height) / 2;
-            background: kick-ta.has-hover ? #3b1118 : transparent;
+            background: kick-ta.has-hover ? Theme.live-bg : transparent;
 
             Image {
                 source: @image-url("../icons/x.svg");
                 width: 12px;
                 height: 12px;
-                colorize: kick-ta.has-hover ? #ef4444 : Theme.text-tertiary;
+                colorize: kick-ta.has-hover ? Theme.live : Theme.text-tertiary;
                 x: (parent.width - self.width) / 2;
                 y: (parent.height - self.height) / 2;
             }
@@ -728,7 +749,7 @@ export component CrewSettingsModal inherits Rectangle {
     callback kick-member(string);
 
     // Backdrop
-    background: #000000AA;
+    background: Theme.scrim;
 
     TouchArea {
         clicked => { close-requested(); }
@@ -740,13 +761,22 @@ export component CrewSettingsModal inherits Rectangle {
         y: (parent.height - self.height) / 2;
         width: min(896px, parent.width - 64px);
         height: 600px;
-        background: Theme.bg-app;
-        border-radius: 12px;
-        border-width: 1px;
-        border-color: Theme.graphic-light;
-        drop-shadow-blur: 64px;
-        drop-shadow-color: #000000E6;
-        drop-shadow-offset-y: 24px;
+        background: transparent;
+
+        // A modal panel is a card, so it carries the cut and a keyline.
+        CutShape {
+            width: parent.width;
+            height: parent.height;
+            n: Theme.notch;
+            fill: Theme.graphic-light;
+        }
+        CutShape {
+            width: parent.width;
+            height: parent.height;
+            n: Theme.notch;
+            inset: Theme.keyline;
+            fill: Theme.bg-app;
+        }
 
         TouchArea {}
 
@@ -773,9 +803,9 @@ export component CrewSettingsModal inherits Rectangle {
 
                 Text {
                     text: "CREW SETTINGS";
-                    font-family: Theme.font-mono;
+                    font-family: Theme.font-label;
                     font-size: 13px;
-                    font-weight: 500;
+                    font-weight: Theme.weight-label;
                     letter-spacing: 2.4px;
                     color: Theme.text-primary;
                     x: 24px + 20px + 12px;
@@ -849,9 +879,9 @@ export component CrewSettingsModal inherits Rectangle {
 
                                 Text {
                                     text: "OVERVIEW";
-                                    font-family: Theme.font-mono;
+                                    font-family: Theme.font-label;
                                     font-size: 12px;
-                                    font-weight: 500;
+                                    font-weight: Theme.weight-label;
                                     letter-spacing: 0.6px;
                                     color: active-tab == 0 ? Theme.text-primary : Theme.text-secondary;
                                     x: 12px + 16px + 12px;
@@ -883,9 +913,9 @@ export component CrewSettingsModal inherits Rectangle {
 
                                 Text {
                                     text: "CHANNELS";
-                                    font-family: Theme.font-mono;
+                                    font-family: Theme.font-label;
                                     font-size: 12px;
-                                    font-weight: 500;
+                                    font-weight: Theme.weight-label;
                                     letter-spacing: 0.6px;
                                     color: active-tab == 1 ? Theme.text-primary : Theme.text-secondary;
                                     x: 12px + 16px + 12px;
@@ -917,9 +947,9 @@ export component CrewSettingsModal inherits Rectangle {
 
                                 Text {
                                     text: "MEMBERS";
-                                    font-family: Theme.font-mono;
+                                    font-family: Theme.font-label;
                                     font-size: 12px;
-                                    font-weight: 500;
+                                    font-weight: Theme.weight-label;
                                     letter-spacing: 0.6px;
                                     color: active-tab == 2 ? Theme.text-primary : Theme.text-secondary;
                                     x: 12px + 16px + 12px;
@@ -1004,14 +1034,15 @@ export component CrewSettingsModal inherits Rectangle {
                     width: delete-text.preferred-width + 24px;
                     height: 32px;
                     border-radius: 4px;
-                    background: delete-ta.has-hover ? #ef444422 : transparent;
+                    background: delete-ta.has-hover ? Theme.live-bg : transparent;
 
                     delete-text := Text {
+                        font-weight: Theme.weight-label;
                         text: "DELETE CREW";
-                        font-family: Theme.font-mono;
+                        font-family: Theme.font-label;
                         font-size: 12px;
                         letter-spacing: 1.2px;
-                        color: delete-ta.has-hover ? #ef4444 : Theme.text-tertiary;
+                        color: delete-ta.has-hover ? Theme.live : Theme.text-tertiary;
                         horizontal-alignment: center;
                         vertical-alignment: center;
                     }
@@ -1024,11 +1055,13 @@ export component CrewSettingsModal inherits Rectangle {
 
                 // Saved indicator
                 Text {
+                    letter-spacing: Theme.track-label;
+                    font-weight: Theme.weight-label;
                     visible: root.show-saved;
                     x: parent.width - 32px - 120px - 16px - self.preferred-width;
                     y: (parent.height - self.preferred-height) / 2;
-                    text: "Saved ✓";
-                    font-family: Theme.font-mono;
+                    text: "Saved";
+                    font-family: Theme.font-label;
                     font-size: 12px;
                     color: Theme.text-tertiary;
                 }
@@ -1046,9 +1079,9 @@ export component CrewSettingsModal inherits Rectangle {
 
                     Text {
                         text: "Close";
-                        font-family: Theme.font-mono;
+                        font-family: Theme.font-label;
                         font-size: 13px;
-                        font-weight: 500;
+                        font-weight: Theme.weight-label;
                         letter-spacing: 0.5px;
                         color: Theme.text-primary;
                         horizontal-alignment: center;

@@ -42,9 +42,10 @@ export component StreamView inherits Rectangle {
                 alignment: start;
 
                 Text {
+                    font-family: Theme.font-display;
                     text: is-hosting ? "YOUR STREAM" : (is-watching ? "CREWMATE STREAM" : "STREAM");
                     font-size: Theme.font-sm;
-                    font-weight: 600;
+                    font-weight: Theme.weight-display;
                     letter-spacing: 1.3px;
                     color: Theme.text-secondary;
                 }
@@ -52,6 +53,7 @@ export component StreamView inherits Rectangle {
                 Rectangle { height: 4px; }
 
                 Text {
+                    font-family: Theme.font-body;
                     text: stream-active && streamer-name != ""
                         ? streamer-name
                         : (crew-has-stream ? active-streamer-name + " is live" : "No active stream");
@@ -83,8 +85,10 @@ export component StreamView inherits Rectangle {
                     }
 
                     Text {
+                        letter-spacing: Theme.track-label;
+                        font-weight: Theme.weight-label;
                         text: is-hosting ? "HOSTING" : "LIVE";
-                        font-family: Theme.font-mono;
+                        font-family: Theme.font-label;
                         font-size: Theme.font-sm;
                         color: Theme.text-primary;
                         vertical-alignment: center;
@@ -103,10 +107,11 @@ export component StreamView inherits Rectangle {
                 y: 0;
 
                 stop-text := Text {
+                    letter-spacing: Theme.track-label;
                     text: is-hosting ? "STOP" : "LEAVE";
-                    font-family: Theme.font-mono;
+                    font-family: Theme.font-label;
                     font-size: Theme.font-sm;
-                    font-weight: 500;
+                    font-weight: Theme.weight-label;
                     color: stop-ta.has-hover ? #FFFFFF : Theme.text-secondary;
                     horizontal-alignment: center;
                     vertical-alignment: center;
@@ -145,7 +150,7 @@ export component StreamView inherits Rectangle {
 
                 Text {
                     text: "STREAMING";
-                    font-family: Theme.font-mono;
+                    font-family: Theme.font-label;
                     font-size: 14px;
                     font-weight: 600;
                     letter-spacing: 2px;
@@ -154,6 +159,8 @@ export component StreamView inherits Rectangle {
                 }
 
                 Text {
+                    font-weight: Theme.weight-display;
+                    font-family: Theme.font-display;
                     text: "Your crew can see your screen";
                     font-size: 13px;
                     color: Theme.text-secondary;
@@ -191,7 +198,7 @@ export component StreamView inherits Rectangle {
 
                         Text {
                             text: "WATCH STREAM";
-                            font-family: Theme.font-mono;
+                            font-family: Theme.font-label;
                             font-size: 13px;
                             font-weight: 600;
                             letter-spacing: 1px;
@@ -244,7 +251,7 @@ export component StreamView inherits Rectangle {
 
                         Text {
                             text: "GO LIVE";
-                            font-family: Theme.font-mono;
+                            font-family: Theme.font-label;
                             font-size: 13px;
                             font-weight: 600;
                             letter-spacing: 1px;
@@ -268,10 +275,11 @@ export component StreamView inherits Rectangle {
             spacing: 16px;
 
             Text {
+                letter-spacing: Theme.track-label;
                 text: stream-label;
-                font-family: Theme.font-mono;
+                font-family: Theme.font-label;
                 font-size: Theme.font-lg;
-                font-weight: 500;
+                font-weight: Theme.weight-label;
                 color: Theme.text-secondary;
                 vertical-alignment: center;
                 horizontal-stretch: 1;

@@ -11,7 +11,7 @@ component SectionHeader inherits Rectangle {
 
         Text {
             text: title;
-            font-family: Theme.font-mono;
+            font-family: Theme.font-label;
             font-size: 11px;
             font-weight: 600;
             letter-spacing: 2.4px;
@@ -81,9 +81,10 @@ component SourceCard inherits Rectangle {
 
         // Source name
         Text {
+            font-family: Theme.font-display;
             text: source-name;
             font-size: 13px;
-            font-weight: 600;
+            font-weight: Theme.weight-display;
             color: selected ? Theme.accent : Theme.text-primary;
             overflow: elide;
         }
@@ -93,8 +94,10 @@ component SourceCard inherits Rectangle {
             spacing: 8px;
 
             Text {
+                letter-spacing: Theme.track-label;
+                font-weight: Theme.weight-label;
                 text: source-subtitle;
-                font-family: Theme.font-mono;
+                font-family: Theme.font-label;
                 font-size: 10px;
                 color: selected ? Theme.text-primary : Theme.text-secondary;
                 horizontal-stretch: 1;
@@ -108,8 +111,9 @@ component SourceCard inherits Rectangle {
                 background: Theme.accent-bg;
 
                 fs-label := Text {
+                    letter-spacing: Theme.track-label;
                     text: "FS";
-                    font-family: Theme.font-mono;
+                    font-family: Theme.font-label;
                     font-size: 9px;
                     font-weight: 600;
                     color: Theme.accent;
@@ -206,7 +210,7 @@ export component StreamSourcePicker inherits Rectangle {
                 // Title
                 Text {
                     text: "SELECT SOURCE";
-                    font-family: Theme.font-mono;
+                    font-family: Theme.font-label;
                     font-size: 16px;
                     font-weight: 600;
                     letter-spacing: 0.8px;
@@ -217,8 +221,9 @@ export component StreamSourcePicker inherits Rectangle {
 
                 // Meta label
                 Text {
+                    font-weight: Theme.weight-label;
                     text: "CAP.01 // INPUT";
-                    font-family: Theme.font-mono;
+                    font-family: Theme.font-label;
                     font-size: 11px;
                     color: Theme.text-tertiary;
                     letter-spacing: 1.6px;
@@ -360,7 +365,7 @@ export component StreamSourcePicker inherits Rectangle {
                 // Quality label
                 Text {
                     text: "QUALITY";
-                    font-family: Theme.font-mono;
+                    font-family: Theme.font-label;
                     font-size: 10px;
                     font-weight: 600;
                     letter-spacing: 1.6px;
@@ -390,7 +395,7 @@ export component StreamSourcePicker inherits Rectangle {
 
                         preset-chip-text := Text {
                             text: preset-label;
-                            font-family: Theme.font-mono;
+                            font-family: Theme.font-label;
                             font-size: 10px;
                             font-weight: 600;
                             letter-spacing: 0.8px;
@@ -414,12 +419,14 @@ export component StreamSourcePicker inherits Rectangle {
                     alignment: start;
 
                     Text {
+                        letter-spacing: Theme.track-label;
+                        font-weight: Theme.weight-label;
                         text: selected-preset == 0 ? "1080p @ 60fps"
                             : selected-preset == 1 ? "1080p @ 30fps"
                             : selected-preset == 2 ? "720p @ 60fps"
                             : selected-preset == 3 ? "720p @ 30fps"
                             : "480p @ 30fps";
-                        font-family: Theme.font-mono;
+                        font-family: Theme.font-label;
                         font-size: 11px;
                         color: Theme.text-secondary;
                         vertical-alignment: center;
@@ -433,12 +440,14 @@ export component StreamSourcePicker inherits Rectangle {
                     }
 
                     Text {
+                        letter-spacing: Theme.track-label;
+                        font-weight: Theme.weight-label;
                         text: selected-preset == 0 ? "~6 Mbit/s"
                             : selected-preset == 1 ? "~4.5 Mbit/s"
                             : selected-preset == 2 ? "~4 Mbit/s"
                             : selected-preset == 3 ? "~2.5 Mbit/s  (martin mode)"
                             : "~1.5 Mbit/s";
-                        font-family: Theme.font-mono;
+                        font-family: Theme.font-label;
                         font-size: 11px;
                         color: Theme.text-tertiary;
                         vertical-alignment: center;
@@ -472,7 +481,7 @@ export component StreamSourcePicker inherits Rectangle {
 
                         Text {
                             text: "START STREAMING";
-                            font-family: Theme.font-mono;
+                            font-family: Theme.font-label;
                             font-size: 13px;
                             font-weight: 600;
                             letter-spacing: 1.2px;

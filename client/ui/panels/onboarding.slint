@@ -1,4 +1,5 @@
 import { Theme, MelloTextInput } from "../theme.slint";
+import { CutShape, CutButtonShape } from "../components/cut.slint";
 import { CrewData, AudioDeviceData } from "../types.slint";
 import { DeviceDropdown, SettingsToggle } from "settings_modal.slint";
 import { AvatarCard } from "../components/avatar_card.slint";
@@ -22,10 +23,21 @@ component CrewCard inherits Rectangle {
     // capacity is unknown, which must not read as full.
     property <bool> is-full: root.max-members > 0 && root.member-count >= root.max-members;
 
-    background: Theme.surface;
-    border-radius: Theme.r-outer;
-    border-width: 1px;
-    border-color: card-touch.has-hover && !root.is-full ? Theme.accent : Theme.graphic-light;
+    background: transparent;
+
+    CutShape {
+        width: parent.width;
+        height: parent.height;
+        n: Theme.notch-sm;
+        fill: card-touch.has-hover && !root.is-full ? Theme.action-line : Theme.graphic-light;
+    }
+    CutShape {
+        width: parent.width;
+        height: parent.height;
+        n: Theme.notch-sm;
+        inset: Theme.keyline;
+        fill: Theme.surface;
+    }
     opacity: root.is-full ? 0.55 : 1.0;
 
     card-touch := TouchArea {
@@ -71,9 +83,9 @@ component CrewCard inherits Rectangle {
 
                         Text {
                             text: crew-name;
-                            font-family: Theme.font-mono;
+                            font-family: Theme.font-label;
                             font-size: 18px;
-                            font-weight: 500;
+                            font-weight: Theme.weight-label;
                             color: Theme.text-primary;
                             overflow: elide;
                             letter-spacing: 0.5px;
@@ -85,8 +97,8 @@ component CrewCard inherits Rectangle {
                             height: 24px;
                             border-radius: 4px;
                             border-width: 1px;
-                            border-color: #FF1E564D;
-                            background: #FF1E561A;
+                            border-color: #FFFFFF4D;
+                            background: Theme.action-dim;
 
                             HorizontalLayout {
                                 alignment: center;
@@ -100,8 +112,10 @@ component CrewCard inherits Rectangle {
                                 }
 
                                 pill-text := Text {
+                                    letter-spacing: Theme.track-label;
+                                    font-weight: Theme.weight-label;
                                     text: "LIVE";
-                                    font-family: Theme.font-mono;
+                                    font-family: Theme.font-label;
                                     font-size: 10px;
                                     color: Theme.accent;
                                     vertical-alignment: center;
@@ -113,6 +127,8 @@ component CrewCard inherits Rectangle {
             }
 
             if crew-description != "": Text {
+                font-weight: Theme.weight-display;
+                font-family: Theme.font-display;
                 text: crew-description;
                 font-size: 14px;
                 color: Theme.text-secondary;
@@ -125,8 +141,10 @@ component CrewCard inherits Rectangle {
             alignment: space-between;
 
             Text {
+                letter-spacing: Theme.track-label;
+                font-weight: Theme.weight-label;
                 text: member-count < 10 ? "0" + member-count + " MEMBERS" : member-count + " MEMBERS";
-                font-family: Theme.font-mono;
+                font-family: Theme.font-label;
                 font-size: 11px;
                 color: Theme.text-tertiary;
                 vertical-alignment: center;
@@ -135,12 +153,13 @@ component CrewCard inherits Rectangle {
             Rectangle {
                 width: 80px;
                 Text {
+                    letter-spacing: Theme.track-label;
                     text: root.is-full
                         ? "FULL"
-                        : (card-touch.has-hover ? "CONNECT →" : "JOIN");
-                    font-family: Theme.font-mono;
+                        : (card-touch.has-hover ? "CONNECT" : "JOIN");
+                    font-family: Theme.font-label;
                     font-size: 12px;
-                    font-weight: 500;
+                    font-weight: Theme.weight-label;
                     color: card-touch.has-hover && !root.is-full
                         ? Theme.accent
                         : Theme.text-tertiary;
@@ -156,9 +175,20 @@ component CreateCrewCard inherits Rectangle {
     callback clicked();
 
     background: transparent;
-    border-radius: Theme.r-outer;
-    border-width: 1px;
-    border-color: create-touch.has-hover ? Theme.accent : Theme.text-tertiary;
+
+    CutShape {
+        width: parent.width;
+        height: parent.height;
+        n: Theme.notch-sm;
+        fill: create-touch.has-hover ? Theme.action-line : Theme.graphic-light;
+    }
+    CutShape {
+        width: parent.width;
+        height: parent.height;
+        n: Theme.notch-sm;
+        inset: Theme.keyline;
+        fill: Theme.bg-app;
+    }
 
     create-touch := TouchArea {
         clicked => {
@@ -180,9 +210,10 @@ component CreateCrewCard inherits Rectangle {
                 background: create-touch.has-hover ? Theme.accent : Theme.graphic-light;
 
                 Text {
+                    font-family: Theme.font-display;
                     text: "+";
                     font-size: 28px;
-                    font-weight: 300;
+                    font-weight: Theme.weight-display;
                     color: Theme.text-primary;
                     horizontal-alignment: center;
                     vertical-alignment: center;
@@ -191,8 +222,9 @@ component CreateCrewCard inherits Rectangle {
         }
 
         Text {
+            font-weight: Theme.weight-label;
             text: "CREATE YOUR\nOWN CREW";
-            font-family: Theme.font-mono;
+            font-family: Theme.font-label;
             font-size: 14px;
             color: Theme.text-secondary;
             horizontal-alignment: center;
@@ -211,18 +243,19 @@ export component AvatarFallback inherits Rectangle {
     border-radius: size > 60px ? 12px : 6px;
 
     property <[color]> palette: [
-        #EB4D5F, #7C5CFC, #06B6D4, #F472B6,
-        #10B981, #F59E0B, #8B5CF6, #EC4899,
+        Theme.live, Theme.id-purple, Theme.id-teal, Theme.id-pink,
+        Theme.accent-green, Theme.id-amber, Theme.id-purple, Theme.id-pink,
     ];
 
     background: palette[Math.clamp(color-index, 0, 7)];
 
     Text {
+        letter-spacing: Theme.track-label;
         text: nickname;
-        font-family: Theme.font-mono;
+        font-family: Theme.font-label;
         font-size: parent.size * 0.32;
-        font-weight: 500;
-        color: #FFFFFF;
+        font-weight: Theme.weight-label;
+        color: Theme.on-action;
         horizontal-alignment: center;
         vertical-alignment: center;
     }
@@ -239,8 +272,9 @@ component StepIndicator inherits Rectangle {
         alignment: start;
 
         Text {
+            font-weight: Theme.weight-label;
             text: current-step < 10 ? "STEP 0" + current-step + " / 03" : "STEP " + current-step + " / 03";
-            font-family: Theme.font-mono;
+            font-family: Theme.font-label;
             font-size: 13px;
             color: Theme.accent;
             letter-spacing: 2px;
@@ -317,9 +351,11 @@ component InputField inherits Rectangle {
     }
 
     if ti.text == "": Text {
+        letter-spacing: Theme.track-label;
+        font-weight: Theme.weight-label;
         x: 16px;
         color: Theme.text-tertiary;
-        font-family: Theme.font-mono;
+        font-family: Theme.font-label;
         font-size: 14px;
         vertical-alignment: center;
         text: placeholder;
@@ -348,19 +384,21 @@ component AccentButton inherits Rectangle {
         spacing: 12px;
 
         Text {
+            letter-spacing: Theme.track-label;
             text: label;
-            font-family: Theme.font-mono;
+            font-family: Theme.font-label;
             font-size: 14px;
             font-weight: 600;
-            color: #FFFFFF;
+            color: root.enabled ? Theme.on-action : Theme.text-tertiary;
             vertical-alignment: center;
         }
 
-        Text {
-            text: "→";
-            font-size: 16px;
-            color: #FFFFFF;
-            vertical-alignment: center;
+        Image {
+            source: @image-url("../icons/arrow-right.svg");
+            width: 14px;
+            height: 14px;
+            colorize: root.enabled ? Theme.on-action : Theme.text-tertiary;
+            y: (parent.height - self.height) / 2;
         }
     }
 }
@@ -374,7 +412,7 @@ component AuthButton inherits Rectangle {
 
     height: 56px;
     preferred-width: 0px;
-    background: auth-touch.has-hover ? #FFFFFF05 : transparent;
+    background: auth-touch.has-hover ? Theme.hover-overlay : transparent;
     border-radius: Theme.r-inner;
     border-width: 1px;
     border-color: auth-touch.has-hover ? Theme.graphic-med : Theme.graphic-light;
@@ -401,8 +439,10 @@ component AuthButton inherits Rectangle {
         }
 
         Text {
+            letter-spacing: Theme.track-label;
+            font-weight: Theme.weight-label;
             text: label;
-            font-family: Theme.font-mono;
+            font-family: Theme.font-label;
             font-size: 13px;
             color: Theme.text-primary;
             vertical-alignment: center;
@@ -549,8 +589,8 @@ export component Onboarding inherits Rectangle {
                 height: 32px;
 
                 signin-link-text := Text {
-                    text: "Sign in →";
-                    font-family: Theme.font-mono;
+                    text: "Sign in";
+                    font-family: Theme.font-label;
                     font-size: 13px;
                     font-weight: 600;
                     color: signin-link-touch.has-hover ? Theme.accent : Theme.text-secondary;
@@ -595,11 +635,12 @@ export component Onboarding inherits Rectangle {
                             background: Theme.accent;
 
                             Text {
+                                letter-spacing: Theme.track-label;
                                 text: device-user-initials != "" ? device-user-initials : "?";
-                                font-family: Theme.font-mono;
+                                font-family: Theme.font-label;
                                 font-size: 13px;
                                 font-weight: 700;
-                                color: #FFFFFF;
+                                color: Theme.on-action;
                                 horizontal-alignment: center;
                                 vertical-alignment: center;
                                 overflow: elide;
@@ -611,8 +652,9 @@ export component Onboarding inherits Rectangle {
                             spacing: 2px;
 
                             Text {
+                                font-weight: Theme.weight-label;
                                 text: "DEVICE USER";
-                                font-family: Theme.font-mono;
+                                font-family: Theme.font-label;
                                 font-size: 9px;
                                 color: Theme.text-tertiary;
                                 letter-spacing: 1px;
@@ -620,7 +662,7 @@ export component Onboarding inherits Rectangle {
 
                             Text {
                                 text: device-user-name != "" ? device-user-name : "anonymous";
-                                font-family: Theme.font-mono;
+                                font-family: Theme.font-label;
                                 font-size: 12px;
                                 font-weight: 600;
                                 color: Theme.text-primary;
@@ -641,8 +683,8 @@ export component Onboarding inherits Rectangle {
                         height: 48px;
 
                         pill-cta-text := Text {
-                            text: "SIGN IN →";
-                            font-family: Theme.font-mono;
+                            text: "SIGN IN";
+                            font-family: Theme.font-label;
                             font-size: 11px;
                             font-weight: 700;
                             color: pill-cta-touch.has-hover ? Theme.accent : Theme.accent;
@@ -678,14 +720,17 @@ export component Onboarding inherits Rectangle {
                     }
 
                     Text {
+                        font-family: Theme.font-display;
                         text: "Discover Your Crew";
                         font-size: 48px;
-                        font-weight: 500;
+                        font-weight: Theme.weight-display;
                         color: Theme.text-primary;
                         letter-spacing: -1.5px;
                     }
 
                     Text {
+                        font-weight: Theme.weight-display;
+                        font-family: Theme.font-display;
                         text: "Join a specialized squad to begin your deployment, or establish a new unit and lead the way.";
                         font-size: 18px;
                         color: Theme.text-secondary;
@@ -718,13 +763,16 @@ export component Onboarding inherits Rectangle {
                             spacing: 2px;
 
                             Text {
+                                font-family: Theme.font-display;
                                 text: "Couldn't load crews";
                                 font-size: 15px;
-                                font-weight: 600;
+                                font-weight: Theme.weight-display;
                                 color: Theme.text-primary;
                             }
 
                             Text {
+                                font-weight: Theme.weight-display;
+                                font-family: Theme.font-display;
                                 text: "Check your connection, or create your own crew below.";
                                 font-size: 13px;
                                 color: Theme.text-secondary;
@@ -742,9 +790,10 @@ export component Onboarding inherits Rectangle {
                             opacity: retry-touch.pressed ? 0.7 : 1.0;
 
                             Text {
+                                font-family: Theme.font-display;
                                 text: "Retry";
                                 font-size: 14px;
-                                font-weight: 600;
+                                font-weight: Theme.weight-display;
                                 color: Theme.text-primary;
                             }
 
@@ -921,9 +970,10 @@ export component Onboarding inherits Rectangle {
                 }
 
                 Text {
+                    font-family: Theme.font-display;
                     text: "Profile & Device Setup";
                     font-size: 36px;
-                    font-weight: 500;
+                    font-weight: Theme.weight-display;
                     color: Theme.text-primary;
                     letter-spacing: -0.7px;
                 }
@@ -944,9 +994,9 @@ export component Onboarding inherits Rectangle {
 
                     Text {
                         text: "CHOOSE IDENTITY";
-                        font-family: Theme.font-mono;
+                        font-family: Theme.font-label;
                         font-size: 10px;
-                        font-weight: 500;
+                        font-weight: Theme.weight-label;
                         color: Theme.text-secondary;
                         letter-spacing: 1.4px;
                     }
@@ -1100,7 +1150,7 @@ export component Onboarding inherits Rectangle {
                                 border-radius: Theme.r-inner;
                                 background: Theme.surface;
                                 border-width: 1.5px;
-                                border-color: root.selected-avatar == 7 ? Theme.accent : (upload-touch.has-hover ? #404045 : Theme.graphic-light);
+                                border-color: root.selected-avatar == 7 ? Theme.accent : (upload-touch.has-hover ? Theme.raised : Theme.graphic-light);
 
                                 property <float> up-opacity: root.avatar-deal-upload ? 1.0 : 0.0;
                                 opacity: up-opacity;
@@ -1126,17 +1176,19 @@ export component Onboarding inherits Rectangle {
                                     HorizontalLayout {
                                         alignment: center;
                                         Text {
+                                            font-family: Theme.font-display;
                                             text: "+";
                                             font-size: 22px;
-                                            font-weight: 300;
+                                            font-weight: Theme.weight-display;
                                             color: Theme.text-tertiary;
                                         }
                                     }
                                     HorizontalLayout {
                                         alignment: center;
                                         Text {
+                                            font-weight: Theme.weight-label;
                                             text: "UPLOAD";
-                                            font-family: Theme.font-mono;
+                                            font-family: Theme.font-label;
                                             font-size: 9px;
                                             color: Theme.text-tertiary;
                                             letter-spacing: 0.8px;
@@ -1181,9 +1233,9 @@ export component Onboarding inherits Rectangle {
 
                                 Text {
                                     text: "REROLL ALL";
-                                    font-family: Theme.font-mono;
+                                    font-family: Theme.font-label;
                                     font-size: 11px;
-                                    font-weight: 500;
+                                    font-weight: Theme.weight-label;
                                     letter-spacing: 0.8px;
                                     color: Theme.text-secondary;
                                     vertical-alignment: center;
@@ -1198,9 +1250,9 @@ export component Onboarding inherits Rectangle {
 
                     Text {
                         text: "CREW NICKNAME";
-                        font-family: Theme.font-mono;
+                        font-family: Theme.font-label;
                         font-size: 10px;
-                        font-weight: 500;
+                        font-weight: Theme.weight-label;
                         color: Theme.text-secondary;
                         letter-spacing: 1.4px;
                     }
@@ -1227,6 +1279,8 @@ export component Onboarding inherits Rectangle {
                         }
 
                         Text {
+                            font-weight: Theme.weight-display;
+                            font-family: Theme.font-display;
                             text: "Show crew what I'm playing";
                             font-size: 13px;
                             color: Theme.text-secondary;
@@ -1241,9 +1295,10 @@ export component Onboarding inherits Rectangle {
                     alignment: start;
 
                     Text {
+                        font-family: Theme.font-display;
                         text: "MICROPHONE INPUT";
                         font-size: 10px;
-                        font-weight: 600;
+                        font-weight: Theme.weight-display;
                         color: Theme.text-secondary;
                         letter-spacing: 1.3px;
                     }
@@ -1266,9 +1321,10 @@ export component Onboarding inherits Rectangle {
                     }
 
                     Text {
+                        font-family: Theme.font-display;
                         text: "SPEAKER OUTPUT";
                         font-size: 10px;
-                        font-weight: 600;
+                        font-weight: Theme.weight-display;
                         color: Theme.text-secondary;
                         letter-spacing: 1.3px;
                     }
@@ -1333,19 +1389,22 @@ export component Onboarding inherits Rectangle {
                 }
 
                 Text {
+                    font-family: Theme.font-display;
                     text: "Lock in your identity.";
                     font-size: 48px;
-                    font-weight: 500;
+                    font-weight: Theme.weight-display;
                     color: Theme.text-primary;
                     letter-spacing: -1.5px;
                     horizontal-alignment: left;
                 }
 
                 Text {
+                    letter-spacing: Theme.track-label;
+                    font-weight: Theme.weight-label;
                     text: "Save your setup so you can jump back in anytime.";
                     font-size: 14px;
                     color: Theme.text-secondary;
-                    font-family: Theme.font-mono;
+                    font-family: Theme.font-label;
                     horizontal-alignment: left;
                 }
 
@@ -1382,7 +1441,7 @@ export component Onboarding inherits Rectangle {
                             Rectangle {
                                 width: 48px;
                                 height: 48px;
-                                background: #FF1E561A;
+                                background: Theme.action-dim;
                                 border-radius: 4px;
                                 border-width: 1px;
                                 border-color: Theme.accent;
@@ -1396,8 +1455,9 @@ export component Onboarding inherits Rectangle {
                                 }
 
                                 if !has-chosen-avatar: Text {
+                                    letter-spacing: Theme.track-label;
                                     text: nickname != "" ? nickname : "?";
-                                    font-family: Theme.font-mono;
+                                    font-family: Theme.font-label;
                                     font-size: 14px;
                                     font-weight: 600;
                                     color: Theme.text-primary;
@@ -1413,10 +1473,11 @@ export component Onboarding inherits Rectangle {
                                 spacing: 4px;
 
                                 Text {
+                                    letter-spacing: Theme.track-label;
                                     text: nickname != "" ? nickname : "Anonymous";
-                                    font-family: Theme.font-mono;
+                                    font-family: Theme.font-label;
                                     font-size: 16px;
-                                    font-weight: 500;
+                                    font-weight: Theme.weight-label;
                                     color: Theme.text-primary;
                                 }
 
@@ -1431,6 +1492,8 @@ export component Onboarding inherits Rectangle {
                                     }
 
                                     Text {
+                                        font-weight: Theme.weight-sentence;
+                                        font-family: Theme.font-body;
                                         text: "ONLINE";
                                         font-size: 12px;
                                         color: Theme.text-secondary;
@@ -1545,8 +1608,9 @@ export component Onboarding inherits Rectangle {
                         height: 24px;
 
                         skip-text := Text {
+                            font-weight: Theme.weight-label;
                             text: "Skip for now — continue as guest";
-                            font-family: Theme.font-mono;
+                            font-family: Theme.font-label;
                             font-size: 11px;
                             color: skip-touch.has-hover ? Theme.text-secondary : Theme.text-tertiary;
                             letter-spacing: 0.5px;
@@ -1575,17 +1639,20 @@ export component Onboarding inherits Rectangle {
                         spacing: 16px;
 
                         Text {
+                            font-family: Theme.font-display;
                             text: "Link email & password";
                             font-size: 20px;
-                            font-weight: 500;
+                            font-weight: Theme.weight-display;
                             color: Theme.text-primary;
                             letter-spacing: -0.3px;
                             horizontal-alignment: center;
                         }
 
                         Text {
+                            letter-spacing: Theme.track-label;
+                            font-weight: Theme.weight-label;
                             text: "Your account will be tied to this email.";
-                            font-family: Theme.font-mono;
+                            font-family: Theme.font-label;
                             font-size: 13px;
                             color: Theme.text-secondary;
                             horizontal-alignment: center;
@@ -1607,6 +1674,8 @@ export component Onboarding inherits Rectangle {
                         }
 
                         if link-error != "": Text {
+                            font-weight: Theme.weight-display;
+                            font-family: Theme.font-display;
                             text: link-error;
                             color: Theme.accent;
                             font-size: 13px;
@@ -1636,18 +1705,21 @@ export component Onboarding inherits Rectangle {
                                     alignment: center;
                                     spacing: 8px;
 
-                                    Text {
-                                        text: "←";
-                                        font-size: 16px;
-                                        color: Theme.text-secondary;
-                                        vertical-alignment: center;
+                                    Image {
+                                        source: @image-url("../icons/arrow-right.svg");
+                                        width: 14px;
+                                        height: 14px;
+                                        colorize: Theme.text-secondary;
+                                        transform-rotation: 180deg;
+                                        y: (parent.height - self.height) / 2;
                                     }
 
                                     Text {
+                                        letter-spacing: Theme.track-label;
                                         text: "Back";
-                                        font-family: Theme.font-mono;
+                                        font-family: Theme.font-label;
                                         font-size: 13px;
-                                        font-weight: 500;
+                                        font-weight: Theme.weight-label;
                                         color: Theme.text-secondary;
                                         vertical-alignment: center;
                                     }
@@ -1674,19 +1746,22 @@ export component Onboarding inherits Rectangle {
                                     spacing: 12px;
 
                                     Text {
+                                        letter-spacing: Theme.track-label;
                                         text: "Link account";
-                                        font-family: Theme.font-mono;
+                                        font-family: Theme.font-label;
                                         font-size: 14px;
                                         font-weight: 600;
-                                        color: #FFFFFF;
+                                        color: Theme.on-action;
                                         vertical-alignment: center;
                                     }
 
-                                    Text {
-                                        text: "→";
-                                        font-size: 16px;
-                                        color: #FFFFFF;
-                                        vertical-alignment: center;
+                                    Image {
+                                        source: @image-url("../icons/arrow-right.svg");
+                                        width: 14px;
+                                        height: 14px;
+                                        colorize: Theme.text-secondary;
+                                        transform-rotation: 0deg;
+                                        y: (parent.height - self.height) / 2;
                                     }
                                 }
                             }

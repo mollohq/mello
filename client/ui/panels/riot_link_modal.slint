@@ -1,4 +1,5 @@
 import { Theme, MelloInputField } from "../theme.slint";
+import { CutShape } from "../components/cut.slint";
 
 // Consent + input dialog for linking a Riot ID. Opened from the Games
 // settings tab or the post-game "connect Riot account" CTA.
@@ -16,7 +17,7 @@ export component RiotLinkModal inherits Rectangle {
 
     width: 100%;
     height: 100%;
-    background: #000000AA;
+    background: Theme.scrim;
 
     TouchArea {
         clicked => { dismiss-requested(); }
@@ -27,10 +28,22 @@ export component RiotLinkModal inherits Rectangle {
         y: (parent.height - self.height) / 2;
         width: 420px;
         height: content.preferred-height + 64px;
-        background: Theme.surface;
-        border-radius: Theme.radius-lg;
-        border-width: 1px;
-        border-color: Theme.graphic-light;
+        background: transparent;
+
+        // A modal panel is a card, so it carries the cut and a keyline.
+        CutShape {
+            width: parent.width;
+            height: parent.height;
+            n: Theme.notch;
+            fill: Theme.graphic-light;
+        }
+        CutShape {
+            width: parent.width;
+            height: parent.height;
+            n: Theme.notch;
+            inset: Theme.keyline;
+            fill: Theme.surface;
+        }
 
         // Block clicks from reaching backdrop
         TouchArea {}
@@ -40,14 +53,17 @@ export component RiotLinkModal inherits Rectangle {
             spacing: 16px;
 
             Text {
+                font-family: Theme.font-display;
                 text: "Connect your Riot account";
                 font-size: Theme.font-xxl;
-                font-weight: 700;
+                font-weight: Theme.weight-display-bold;
                 color: Theme.text-primary;
             }
 
             Text {
-                text: "Get server-verified results for League of Legends and TFT. m3llo only reads your recent match history from Riot's official API — it never touches your account. You can disconnect anytime in Settings → Games.";
+                font-weight: Theme.weight-sentence;
+                font-family: Theme.font-body;
+                text: "Get server-verified results for League of Legends and TFT. m3llo only reads your recent match history from Riot's official API — it never touches your account. You can disconnect anytime in Settings, under Games.";
                 font-size: Theme.font-md;
                 color: Theme.text-secondary;
                 wrap: word-wrap;
@@ -58,7 +74,7 @@ export component RiotLinkModal inherits Rectangle {
 
                 Text {
                     text: "RIOT ID";
-                    font-family: Theme.font-mono;
+                    font-family: Theme.font-label;
                     font-size: 10px;
                     font-weight: 600;
                     letter-spacing: 2px;
@@ -80,7 +96,7 @@ export component RiotLinkModal inherits Rectangle {
 
                 Text {
                     text: "REGION";
-                    font-family: Theme.font-mono;
+                    font-family: Theme.font-label;
                     font-size: 10px;
                     font-weight: 600;
                     letter-spacing: 2px;
@@ -101,8 +117,9 @@ export component RiotLinkModal inherits Rectangle {
                         border-color: selected-region == region ? Theme.accent : Theme.graphic-light;
 
                         Text {
+                            letter-spacing: Theme.track-label;
                             text: region;
-                            font-family: Theme.font-mono;
+                            font-family: Theme.font-label;
                             font-size: 11px;
                             font-weight: 600;
                             color: selected-region == region ? white : Theme.text-secondary;
@@ -119,9 +136,11 @@ export component RiotLinkModal inherits Rectangle {
             }
 
             if error != "": Text {
+                font-weight: Theme.weight-sentence;
+                font-family: Theme.font-body;
                 text: error;
                 font-size: Theme.font-md;
-                color: #f87171;
+                color: Theme.live;
                 wrap: word-wrap;
             }
 
@@ -140,9 +159,10 @@ export component RiotLinkModal inherits Rectangle {
                     border-color: Theme.graphic-light;
 
                     cancel-text := Text {
+                        font-family: Theme.font-display;
                         text: "Not now";
                         font-size: Theme.font-md;
-                        font-weight: 600;
+                        font-weight: Theme.weight-display;
                         color: Theme.text-secondary;
                         horizontal-alignment: center;
                         vertical-alignment: center;
@@ -162,9 +182,10 @@ export component RiotLinkModal inherits Rectangle {
                     opacity: busy ? 0.6 : 1.0;
 
                     connect-text := Text {
+                        font-family: Theme.font-display;
                         text: busy ? "Connecting…" : "Connect";
                         font-size: Theme.font-md;
-                        font-weight: 600;
+                        font-weight: Theme.weight-display;
                         color: white;
                         horizontal-alignment: center;
                         vertical-alignment: center;

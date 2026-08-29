@@ -108,7 +108,7 @@ component StreamCard inherits Rectangle {
 
                     if !show-watch-cta: Text {
                         text: show-hosting-state ? "YOU ARE LIVE" : root.card.streamer-name + " IS LIVE";
-                        font-family: Theme.font-mono;
+                        font-family: Theme.font-label;
                         font-size: 14px;
                         font-weight: 700;
                         letter-spacing: 1.2px;
@@ -117,6 +117,8 @@ component StreamCard inherits Rectangle {
                     }
 
                     if !show-watch-cta: Text {
+                        font-weight: Theme.weight-sentence;
+                        font-family: Theme.font-body;
                         text: root.card.subtitle;
                         font-size: 12px;
                         color: Theme.text-secondary;
@@ -138,7 +140,7 @@ component StreamCard inherits Rectangle {
 
                             watch-label := Text {
                                 text: "Watch stream";
-                                font-family: Theme.font-mono;
+                                font-family: Theme.font-label;
                                 font-size: 11px;
                                 font-weight: 700;
                                 letter-spacing: 0.6px;
@@ -164,7 +166,7 @@ component StreamCard inherits Rectangle {
 
                             stop-text := Text {
                                 text: "END STREAM";
-                                font-family: Theme.font-mono;
+                                font-family: Theme.font-label;
                                 font-size: 12px;
                                 font-weight: 700;
                                 letter-spacing: 0.8px;
@@ -234,9 +236,10 @@ component StreamCard inherits Rectangle {
                         spacing: 8px;
 
                         Text {
+                            font-family: Theme.font-display;
                             text: root.card.streamer-name;
                             font-size: 15px;
-                            font-weight: 700;
+                            font-weight: Theme.weight-display-bold;
                             color: Theme.text-primary;
                             overflow: elide;
                             horizontal-stretch: 0;
@@ -256,7 +259,7 @@ component StreamCard inherits Rectangle {
 
                                 live-label := Text {
                                     text: "LIVE";
-                                    font-family: Theme.font-mono;
+                                    font-family: Theme.font-label;
                                     font-size: 10px;
                                     font-weight: 700;
                                     letter-spacing: 0.5px;
@@ -271,8 +274,9 @@ component StreamCard inherits Rectangle {
                             horizontal-stretch: 0;
 
                             Text {
+                                letter-spacing: Theme.track-label;
                                 text: "\{Math.round(root.stream-ui-render-fps)} fps";
-                                font-family: Theme.font-mono;
+                                font-family: Theme.font-label;
                                 font-size: 10px;
                                 font-weight: 600;
                                 color: Theme.text-secondary;
@@ -285,6 +289,8 @@ component StreamCard inherits Rectangle {
                     }
 
                     Text {
+                        font-weight: Theme.weight-sentence;
+                        font-family: Theme.font-body;
                         text: root.card.subtitle;
                         font-size: 11px;
                         color: Theme.text-secondary;
@@ -328,7 +334,7 @@ component StreamCard inherits Rectangle {
                                 text: "Leave";
                                 font-family: Theme.font-sans;
                                 font-size: 11px;
-                                font-weight: 600;
+                                font-weight: Theme.weight-display;
                                 color: Theme.accent;
                                 horizontal-alignment: center;
                                 vertical-alignment: center;

@@ -1,4 +1,5 @@
 import { Theme } from "../theme.slint";
+import { CutShape } from "../components/cut.slint";
 import { GameStatsCardData } from "../types.slint";
 import { GameIcon } from "../components/game_icon.slint";
 
@@ -8,13 +9,14 @@ component FormPip inherits Rectangle {
     width: 20px;
     height: 20px;
     border-radius: 4px;
-    background: letter == "W" ? #1e3a2a : letter == "L" ? #3a1e1e : #2a2a30;
+    background: letter == "W" ? Theme.action-dim : letter == "L" ? Theme.live-bg : Theme.raised;
 
     Text {
+        font-family: Theme.font-display;
         text: letter;
         font-size: 10px;
-        font-weight: 700;
-        color: letter == "W" ? #4ade80 : letter == "L" ? #f87171 : Theme.text-secondary;
+        font-weight: Theme.weight-display-bold;
+        color: letter == "W" ? Theme.text-primary : letter == "L" ? Theme.live : Theme.text-secondary;
         horizontal-alignment: center;
         vertical-alignment: center;
     }
@@ -29,14 +31,17 @@ component StatCell inherits VerticalLayout {
     spacing: 2px;
 
     Text {
+        font-family: Theme.font-display;
         text: value;
         font-size: 18px;
-        font-weight: 700;
+        font-weight: Theme.weight-display-bold;
         color: value-color;
         horizontal-alignment: center;
     }
 
     Text {
+        font-weight: Theme.weight-sentence;
+        font-family: Theme.font-body;
         text: label;
         font-size: 10px;
         color: Theme.text-secondary;
@@ -76,14 +81,17 @@ component GameStatsCard inherits Rectangle {
                 horizontal-stretch: 1;
 
                 Text {
+                    font-family: Theme.font-display;
                     text: card.game-name;
                     font-size: 15px;
-                    font-weight: 600;
+                    font-weight: Theme.weight-display;
                     color: Theme.text-primary;
                     overflow: elide;
                 }
 
                 if card.last-played-text != "": Text {
+                    font-weight: Theme.weight-sentence;
+                    font-family: Theme.font-body;
                     text: "last played " + card.last-played-text;
                     font-size: 11px;
                     color: Theme.text-tertiary;
@@ -97,7 +105,7 @@ component GameStatsCard inherits Rectangle {
                 StatCell {
                     value: card.streak-text;
                     label: "streak";
-                    value-color: card.streak-positive ? #4ade80 : #f87171;
+                    value-color: card.streak-positive ? Theme.text-primary : Theme.live;
                 }
 
                 StatCell {
@@ -129,8 +137,10 @@ component GameStatsCard inherits Rectangle {
             }
 
             if card.best-streak-text != "": Text {
+                letter-spacing: Theme.track-label;
+                font-weight: Theme.weight-label;
                 text: card.best-streak-text;
-                font-family: Theme.font-mono;
+                font-family: Theme.font-label;
                 font-size: 11px;
                 color: Theme.text-tertiary;
                 vertical-alignment: center;
@@ -149,7 +159,7 @@ export component StatsProfileModal inherits Rectangle {
 
     width: 100%;
     height: 100%;
-    background: #000000AA;
+    background: Theme.scrim;
 
     TouchArea {
         clicked => { dismiss-requested(); }
@@ -160,11 +170,23 @@ export component StatsProfileModal inherits Rectangle {
         y: (parent.height - self.height) / 2;
         width: 560px;
         height: min(root.height - 80px, content.preferred-height + 64px);
-        background: Theme.surface;
-        border-radius: Theme.radius-lg;
-        border-width: 1px;
-        border-color: Theme.graphic-light;
         clip: true;
+        background: transparent;
+
+        // A modal panel is a card, so it carries the cut and a keyline.
+        CutShape {
+            width: parent.width;
+            height: parent.height;
+            n: Theme.notch;
+            fill: Theme.graphic-light;
+        }
+        CutShape {
+            width: parent.width;
+            height: parent.height;
+            n: Theme.notch;
+            inset: Theme.keyline;
+            fill: Theme.surface;
+        }
 
         // Block clicks from reaching backdrop
         TouchArea {}
@@ -180,9 +202,10 @@ export component StatsProfileModal inherits Rectangle {
 
                 HorizontalLayout {
                     Text {
+                        font-family: Theme.font-display;
                         text: "Your game stats";
                         font-size: Theme.font-xxl;
-                        font-weight: 700;
+                        font-weight: Theme.weight-display-bold;
                         color: Theme.text-primary;
                         horizontal-stretch: 1;
                     }
@@ -210,6 +233,8 @@ export component StatsProfileModal inherits Rectangle {
                 }
 
                 Text {
+                    font-weight: Theme.weight-sentence;
+                    font-family: Theme.font-body;
                     text: "Per-game record from your tracked sessions. Only you can see this.";
                     font-size: Theme.font-md;
                     color: Theme.text-secondary;
@@ -228,6 +253,8 @@ export component StatsProfileModal inherits Rectangle {
                     border-color: Theme.graphic-light;
 
                     Text {
+                        font-weight: Theme.weight-sentence;
+                        font-family: Theme.font-body;
                         text: "No tracked games yet.\nPlay a session of a supported game and your stats will show up here.";
                         font-size: Theme.font-md;
                         color: Theme.text-secondary;
@@ -245,7 +272,7 @@ export component StatsProfileModal inherits Rectangle {
 export component Preview inherits Rectangle {
     width: 760px;
     height: 720px;
-    background: #111114;
+    background: Theme.bg-app;
 
     StatsProfileModal {
         games: [
