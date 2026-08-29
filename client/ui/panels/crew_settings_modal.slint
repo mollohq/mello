@@ -1,5 +1,6 @@
 import { Theme, MelloInputField, MelloScrollArea } from "../theme.slint";
-import { CutShape } from "../components/cut.slint";
+import { UserAvatar } from "../components/avatar.slint";
+import { CutShape, CutButtonShape } from "../components/cut.slint";
 import { VoiceChannelData, MemberData } from "../types.slint";
 
 // ─── Section Header ────────────────────────────────────────────────────────
@@ -17,7 +18,7 @@ component SectionHeader inherits Rectangle {
             font-size: 11px;
             font-weight: 600;
             letter-spacing: 2.4px;
-            color: Theme.accent;
+            color: Theme.text-secondary;
         }
 
         Rectangle {
@@ -63,10 +64,22 @@ component OverviewTab inherits VerticalLayout {
                 Rectangle {
                     width: 80px;
                     height: 80px;
-                    border-radius: 14px;
-                    background: Theme.surface;
-                    border-width: 1px;
-                    border-color: Theme.graphic-light;
+                    background: transparent;
+
+                    // A crew is a thing, so it wears the two-corner tile.
+                    CutButtonShape {
+                        width: parent.width;
+                        height: parent.height;
+                        n: 14px;
+                        fill: Theme.graphic-light;
+                    }
+                    CutButtonShape {
+                        width: parent.width;
+                        height: parent.height;
+                        n: 14px;
+                        inset: Theme.keyline;
+                        fill: Theme.surface;
+                    }
                     clip: true;
 
                     if crew-has-avatar: Image {
@@ -91,8 +104,14 @@ component OverviewTab inherits VerticalLayout {
                 Rectangle {
                     width: 80px;
                     height: 28px;
-                    border-radius: 6px;
-                    background: avatar-change-ta.has-hover ? Theme.surface-hover : transparent;
+                    background: transparent;
+
+                    if avatar-change-ta.has-hover: CutButtonShape {
+                        width: parent.width;
+                        height: parent.height;
+                        n: Theme.cut;
+                        fill: Theme.surface-hover;
+                    }
 
                     avatar-change-ta := TouchArea {
                         mouse-cursor: pointer;
@@ -105,7 +124,7 @@ component OverviewTab inherits VerticalLayout {
                         font-family: Theme.font-label;
                         font-size: 11px;
                         letter-spacing: 0.5px;
-                        color: Theme.accent;
+                        color: Theme.text-secondary;
                         horizontal-alignment: center;
                         vertical-alignment: center;
                     }
@@ -196,7 +215,8 @@ component OverviewTab inherits VerticalLayout {
                     width: 18px;
                     height: 18px;
                     border-radius: 9px;
-                    background: white;
+                    // A white knob on a white track cannot be seen.
+                    background: is-open ? Theme.on-action : Theme.text-secondary;
                     x: is-open ? parent.width - self.width - 3px : 3px;
                     y: 3px;
 
@@ -249,10 +269,9 @@ component OverviewTab inherits VerticalLayout {
                 Rectangle {
                     width: 80px;
                     height: 30px;
-                    border-radius: 6px;
-                    background: invite-policy == "everyone" ? Theme.accent-bg : (inv-everyone-ta.has-hover ? Theme.surface-hover : transparent);
+                    background: invite-policy == "everyone" ? Theme.action-dim : (inv-everyone-ta.has-hover ? Theme.surface-hover : transparent);
                     border-width: invite-policy == "everyone" ? 1px : 0px;
-                    border-color: Theme.accent;
+                    border-color: Theme.action-line;
 
                     Text {
                         letter-spacing: Theme.track-label;
@@ -260,7 +279,7 @@ component OverviewTab inherits VerticalLayout {
                         text: "Everyone";
                         font-family: Theme.font-label;
                         font-size: 11px;
-                        color: invite-policy == "everyone" ? Theme.accent : Theme.text-tertiary;
+                        color: invite-policy == "everyone" ? Theme.text-primary : Theme.text-tertiary;
                         horizontal-alignment: center;
                         vertical-alignment: center;
                     }
@@ -274,10 +293,9 @@ component OverviewTab inherits VerticalLayout {
                 Rectangle {
                     width: 70px;
                     height: 30px;
-                    border-radius: 6px;
-                    background: invite-policy == "admins" ? Theme.accent-bg : (inv-admins-ta.has-hover ? Theme.surface-hover : transparent);
+                    background: invite-policy == "admins" ? Theme.action-dim : (inv-admins-ta.has-hover ? Theme.surface-hover : transparent);
                     border-width: invite-policy == "admins" ? 1px : 0px;
-                    border-color: Theme.accent;
+                    border-color: Theme.action-line;
 
                     Text {
                         letter-spacing: Theme.track-label;
@@ -285,7 +303,7 @@ component OverviewTab inherits VerticalLayout {
                         text: "Admins";
                         font-family: Theme.font-label;
                         font-size: 11px;
-                        color: invite-policy == "admins" ? Theme.accent : Theme.text-tertiary;
+                        color: invite-policy == "admins" ? Theme.text-primary : Theme.text-tertiary;
                         horizontal-alignment: center;
                         vertical-alignment: center;
                     }
@@ -299,34 +317,6 @@ component OverviewTab inherits VerticalLayout {
         }
     }
 
-    // SAVE
-    HorizontalLayout {
-        alignment: end;
-
-        Rectangle {
-            width: 120px;
-            height: 40px;
-            border-radius: 6px;
-            background: save-ta.has-hover ? Theme.confirm-press : Theme.confirm;
-            opacity: save-ta.has-hover ? 0.9 : 1.0;
-
-            Text {
-                text: "Save";
-                font-family: Theme.font-label;
-                font-size: 13px;
-                font-weight: Theme.weight-label;
-                letter-spacing: 0.5px;
-                color: Theme.on-action;
-                horizontal-alignment: center;
-                vertical-alignment: center;
-            }
-
-            save-ta := TouchArea {
-                mouse-cursor: pointer;
-                clicked => { save-requested(); }
-            }
-        }
-    }
 }
 
 // ─── Voice Channels Tab ────────────────────────────────────────────────────
@@ -352,10 +342,21 @@ component VoiceChannelsTab inherits VerticalLayout {
 
             for ch[i] in channels: Rectangle {
                 height: 48px;
-                border-radius: 8px;
-                background: Theme.bg-app;
-                border-width: 1px;
-                border-color: Theme.graphic-light;
+                background: transparent;
+
+                CutShape {
+                    width: parent.width;
+                    height: parent.height;
+                    n: Theme.notch-sm;
+                    fill: Theme.graphic-light;
+                }
+                CutShape {
+                    width: parent.width;
+                    height: parent.height;
+                    n: Theme.notch-sm;
+                    inset: Theme.keyline;
+                    fill: Theme.bg-app;
+                }
 
                 HorizontalLayout {
                     padding-left: 16px;
@@ -384,8 +385,7 @@ component VoiceChannelsTab inherits VerticalLayout {
                     if ch.is-default: Rectangle {
                         width: def-label.preferred-width + 12px;
                         height: 22px;
-                        border-radius: 4px;
-                        background: Theme.accent-bg;
+                        background: Theme.raised;
                         y: (parent.height - self.height) / 2;
 
                         def-label := Text {
@@ -394,7 +394,7 @@ component VoiceChannelsTab inherits VerticalLayout {
                             text: "default";
                             font-family: Theme.font-label;
                             font-size: 10px;
-                            color: Theme.accent;
+                            color: Theme.text-secondary;
                             horizontal-alignment: center;
                             vertical-alignment: center;
                         }
@@ -403,7 +403,6 @@ component VoiceChannelsTab inherits VerticalLayout {
                     if !ch.is-default: Rectangle {
                         width: 32px;
                         height: 32px;
-                        border-radius: 6px;
                         background: del-ta.has-hover ? Theme.live-bg : transparent;
                         y: (parent.height - self.height) / 2;
 
@@ -450,10 +449,21 @@ component VoiceChannelsTab inherits VerticalLayout {
             Rectangle {
                 width: 44px;
                 height: 44px;
-                border-radius: 8px;
-                background: add-ch-ta.has-hover ? Theme.accent : Theme.surface;
-                border-width: 1px;
-                border-color: add-ch-ta.has-hover ? Theme.accent : Theme.graphic-light;
+                background: transparent;
+
+                CutButtonShape {
+                    width: parent.width;
+                    height: parent.height;
+                    n: Theme.cut;
+                    fill: add-ch-ta.has-hover ? Theme.confirm : Theme.graphic-light;
+                }
+                if !add-ch-ta.has-hover: CutButtonShape {
+                    width: parent.width;
+                    height: parent.height;
+                    n: Theme.cut;
+                    inset: Theme.keyline;
+                    fill: Theme.surface;
+                }
 
                 Image {
                     source: @image-url("../icons/plus.svg");
@@ -490,8 +500,14 @@ component MemberRow inherits Rectangle {
     callback kick(string);
 
     height: 52px;
-    border-radius: 8px;
-    background: row-ta.has-hover ? Theme.bg-app : transparent;
+    background: transparent;
+
+    if row-ta.has-hover: CutButtonShape {
+        width: parent.width;
+        height: parent.height;
+        n: Theme.cut;
+        fill: Theme.bg-app;
+    }
 
     row-ta := TouchArea {}
 
@@ -501,31 +517,14 @@ component MemberRow inherits Rectangle {
         spacing: 12px;
 
         // Avatar
-        Rectangle {
-            width: 32px;
-            height: 32px;
-            border-radius: 8px;
-            background: Theme.accent;
+        UserAvatar {
+            initials: member.initials;
+            avatar: member.avatar;
+            has-avatar: member.has-avatar;
+            muted: true;
+            size: 32px;
+            bg-color: Theme.bg-app;
             y: (parent.height - self.height) / 2;
-            clip: true;
-
-            if member.has-avatar: Image {
-                source: member.avatar;
-                width: parent.width;
-                height: parent.height;
-                image-fit: cover;
-            }
-
-            if !member.has-avatar: Text {
-                letter-spacing: Theme.track-label;
-                text: member.initials;
-                font-family: Theme.font-label;
-                font-size: 11px;
-                font-weight: 600;
-                color: white;
-                horizontal-alignment: center;
-                vertical-alignment: center;
-            }
         }
 
         // Name + status
@@ -563,7 +562,7 @@ component MemberRow inherits Rectangle {
                 text: member.role == 0 ? "Owner" : member.role == 1 ? "Admin" : "Member";
                 font-family: Theme.font-label;
                 font-size: 11px;
-                color: member.role == 0 ? Theme.accent : Theme.text-tertiary;
+                color: member.role == 0 ? Theme.text-secondary : Theme.text-tertiary;
             }
 
             Rectangle { vertical-stretch: 1; }
@@ -573,9 +572,8 @@ component MemberRow inherits Rectangle {
         Rectangle {
             width: role-label.preferred-width + 16px;
             height: 24px;
-            border-radius: 4px;
             y: (parent.height - self.height) / 2;
-            background: member.role == 0 ? Theme.accent-bg : (member.role == 1 ? Theme.accent-bg : transparent);
+            background: member.role <= 1 ? Theme.raised : transparent;
             border-width: member.role <= 1 ? 0px : 1px;
             border-color: Theme.graphic-light;
 
@@ -585,7 +583,7 @@ component MemberRow inherits Rectangle {
                 font-family: Theme.font-label;
                 font-size: 10px;
                 letter-spacing: 0.5px;
-                color: member.role <= 1 ? Theme.accent : Theme.text-tertiary;
+                color: member.role <= 1 ? Theme.text-primary : Theme.text-tertiary;
                 horizontal-alignment: center;
                 vertical-alignment: center;
             }
@@ -595,7 +593,6 @@ component MemberRow inherits Rectangle {
         if can-change-roles && member.role > 0: Rectangle {
             width: 28px;
             height: 28px;
-            border-radius: 6px;
             y: (parent.height - self.height) / 2;
             background: role-btn-ta.has-hover ? Theme.surface-hover : transparent;
 
@@ -624,7 +621,6 @@ component MemberRow inherits Rectangle {
         if can-kick && member.role > 0: Rectangle {
             width: 28px;
             height: 28px;
-            border-radius: 6px;
             y: (parent.height - self.height) / 2;
             background: kick-ta.has-hover ? Theme.live-bg : transparent;
 
@@ -784,7 +780,16 @@ export component CrewSettingsModal inherits Rectangle {
             // ─── Header ──────────────────────────────────────────
             Rectangle {
                 height: 64px;
-                background: Theme.bg-app;
+                background: transparent;
+
+                // The header is the top of the panel, so it carries the cut.
+                CutShape {
+                    width: parent.width;
+                    height: parent.height;
+                    n: Theme.notch;
+                    inset: Theme.keyline;
+                    fill: Theme.bg-app;
+                }
 
                 Rectangle {
                     y: parent.height - 1px;
@@ -796,7 +801,7 @@ export component CrewSettingsModal inherits Rectangle {
                     source: @image-url("../icons/settings.svg");
                     width: 20px;
                     height: 20px;
-                    colorize: Theme.accent;
+                    colorize: Theme.text-primary;
                     x: 24px;
                     y: (parent.height - self.height) / 2;
                 }
@@ -815,7 +820,6 @@ export component CrewSettingsModal inherits Rectangle {
                 Rectangle {
                     width: 32px;
                     height: 32px;
-                    border-radius: 6px;
                     x: parent.width - self.width - 16px;
                     y: (parent.height - self.height) / 2;
                     background: close-btn-ta.has-hover ? Theme.surface-hover : transparent;
@@ -862,10 +866,21 @@ export component CrewSettingsModal inherits Rectangle {
                             // Overview
                             Rectangle {
                                 height: 40px;
-                                border-radius: 6px;
-                                background: active-tab == 0 ? Theme.surface : (overview-ta.has-hover ? Theme.surface-hover : transparent);
-                                border-width: active-tab == 0 ? 1px : 0px;
-                                border-color: active-tab == 0 ? Theme.graphic-light : transparent;
+                                background: transparent;
+
+                                if active-tab == 0 || overview-ta.has-hover: CutButtonShape {
+                                    width: parent.width;
+                                    height: parent.height;
+                                    n: Theme.cut;
+                                    fill: active-tab == 0 ? Theme.graphic-light : Theme.surface-hover;
+                                }
+                                if active-tab == 0: CutButtonShape {
+                                    width: parent.width;
+                                    height: parent.height;
+                                    n: Theme.cut;
+                                    inset: Theme.keyline;
+                                    fill: Theme.surface;
+                                }
 
                                 Image {
                                     source: @image-url("../icons/settings.svg");
@@ -896,10 +911,21 @@ export component CrewSettingsModal inherits Rectangle {
                             // Voice Channels
                             Rectangle {
                                 height: 40px;
-                                border-radius: 6px;
-                                background: active-tab == 1 ? Theme.surface : (channels-ta.has-hover ? Theme.surface-hover : transparent);
-                                border-width: active-tab == 1 ? 1px : 0px;
-                                border-color: active-tab == 1 ? Theme.graphic-light : transparent;
+                                background: transparent;
+
+                                if active-tab == 1 || channels-ta.has-hover: CutButtonShape {
+                                    width: parent.width;
+                                    height: parent.height;
+                                    n: Theme.cut;
+                                    fill: active-tab == 1 ? Theme.graphic-light : Theme.surface-hover;
+                                }
+                                if active-tab == 1: CutButtonShape {
+                                    width: parent.width;
+                                    height: parent.height;
+                                    n: Theme.cut;
+                                    inset: Theme.keyline;
+                                    fill: Theme.surface;
+                                }
 
                                 Image {
                                     source: @image-url("../icons/mic.svg");
@@ -930,10 +956,21 @@ export component CrewSettingsModal inherits Rectangle {
                             // Members
                             Rectangle {
                                 height: 40px;
-                                border-radius: 6px;
-                                background: active-tab == 2 ? Theme.surface : (members-ta.has-hover ? Theme.surface-hover : transparent);
-                                border-width: active-tab == 2 ? 1px : 0px;
-                                border-color: active-tab == 2 ? Theme.graphic-light : transparent;
+                                background: transparent;
+
+                                if active-tab == 2 || members-ta.has-hover: CutButtonShape {
+                                    width: parent.width;
+                                    height: parent.height;
+                                    n: Theme.cut;
+                                    fill: active-tab == 2 ? Theme.graphic-light : Theme.surface-hover;
+                                }
+                                if active-tab == 2: CutButtonShape {
+                                    width: parent.width;
+                                    height: parent.height;
+                                    n: Theme.cut;
+                                    inset: Theme.keyline;
+                                    fill: Theme.surface;
+                                }
 
                                 Image {
                                     source: @image-url("../icons/user.svg");
@@ -1033,7 +1070,6 @@ export component CrewSettingsModal inherits Rectangle {
                     y: (parent.height - self.height) / 2;
                     width: delete-text.preferred-width + 24px;
                     height: 32px;
-                    border-radius: 4px;
                     background: delete-ta.has-hover ? Theme.live-bg : transparent;
 
                     delete-text := Text {
@@ -1053,12 +1089,49 @@ export component CrewSettingsModal inherits Rectangle {
                     }
                 }
 
+                // Save. Only the overview tab has anything to save, and a
+                // dialog has one commit, bottom-right.
+                if root.active-tab == 0: Rectangle {
+                    x: parent.width - self.width - 32px - 120px - 12px;
+                    y: (parent.height - self.height) / 2;
+                    width: 120px;
+                    height: 40px;
+                    background: transparent;
+
+                    CutButtonShape {
+                        width: parent.width;
+                        height: parent.height;
+                        n: Theme.cut;
+                        fill: save-ta.has-hover ? Theme.confirm-press : Theme.confirm;
+                    }
+
+                    Text {
+                        text: "Save";
+                        font-family: Theme.font-label;
+                        font-size: 13px;
+                        font-weight: Theme.weight-label;
+                        letter-spacing: Theme.track-label;
+                        color: Theme.on-confirm;
+                        width: parent.width;
+                        height: parent.height;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+
+                    save-ta := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            root.save-crew(root.crew-name-value, root.crew-description-value);
+                        }
+                    }
+                }
+
                 // Saved indicator
                 Text {
                     letter-spacing: Theme.track-label;
                     font-weight: Theme.weight-label;
                     visible: root.show-saved;
-                    x: parent.width - 32px - 120px - 16px - self.preferred-width;
+                    x: 200px;
                     y: (parent.height - self.preferred-height) / 2;
                     text: "Saved";
                     font-family: Theme.font-label;
@@ -1072,10 +1145,21 @@ export component CrewSettingsModal inherits Rectangle {
                     y: (parent.height - self.height) / 2;
                     width: 120px;
                     height: 40px;
-                    border-radius: 6px;
-                    background: close-footer-ta.has-hover ? Theme.surface-hover : transparent;
-                    border-width: 1px;
-                    border-color: Theme.graphic-light;
+                    background: transparent;
+
+                    CutButtonShape {
+                        width: parent.width;
+                        height: parent.height;
+                        n: Theme.cut;
+                        fill: Theme.graphic-med;
+                    }
+                    CutButtonShape {
+                        width: parent.width;
+                        height: parent.height;
+                        n: Theme.cut;
+                        inset: Theme.keyline;
+                        fill: close-footer-ta.has-hover ? Theme.surface-hover : Theme.bg-app;
+                    }
 
                     Text {
                         text: "Close";
@@ -1096,3 +1180,40 @@ export component CrewSettingsModal inherits Rectangle {
         }
     }
 }
+
+// ── Headless previews, one per tab ────────────────────────────────────
+//   slint-viewer --screenshot out.png --component PreviewMembers \
+//     client/ui/panels/crew_settings_modal.slint
+component CrewSettingsPreview inherits Rectangle {
+    in property <int> tab: 0;
+
+    width: 1000px;
+    height: 720px;
+    background: Theme.bg-app;
+
+    CrewSettingsModal {
+        width: parent.width;
+        height: parent.height;
+        active-tab: root.tab;
+        crew-name: "M3LLO CREW";
+        crew-description: "Crew for m3llo lovers <3";
+        crew-initials: "M3";
+        my-role: 0;
+        channels: [
+            { id: "c1", name: "General", member-count: 4, is-default: true },
+            { id: "c2", name: "Ranked grind", member-count: 2, is-default: false },
+            { id: "c3", name: "Movie night", member-count: 0, is-default: false },
+        ];
+        members: [
+            { id: "m1", name: "b0bben", initials: "b0", online: true, role: 0 },
+            { id: "m2", name: "Ostkatt", initials: "os", online: true, role: 1,
+              game-line: "Counter-Strike 2" },
+            { id: "m3", name: "Propotato", initials: "Pr", online: false, role: 2 },
+            { id: "m4", name: "titovicka", initials: "ti", online: false, role: 2 },
+        ];
+    }
+}
+
+export component Preview inherits CrewSettingsPreview { tab: 0; }
+export component PreviewChannels inherits CrewSettingsPreview { tab: 1; }
+export component PreviewMembers inherits CrewSettingsPreview { tab: 2; }
