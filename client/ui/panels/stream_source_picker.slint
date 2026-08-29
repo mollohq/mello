@@ -462,7 +462,7 @@ export component StreamSourcePicker inherits Rectangle {
                     x: parent.width - self.width - 32px;
                     y: (parent.height - self.height) / 2;
                     background: has-selection
-                        ? (start-btn-ta.has-hover ? #E8184E : Theme.accent)
+                        ? (start-btn-ta.has-hover ? Theme.confirm-press : Theme.confirm)
                         : Theme.graphic-light;
 
                     start-row := HorizontalLayout {
@@ -475,7 +475,7 @@ export component StreamSourcePicker inherits Rectangle {
                             source: @image-url("../icons/play.svg");
                             width: 11px;
                             height: 11px;
-                            colorize: has-selection ? Theme.on-action : Theme.text-tertiary;
+                            colorize: has-selection ? Theme.on-confirm : Theme.text-tertiary;
                             y: (parent.height - self.height) / 2;
                         }
 
@@ -485,7 +485,7 @@ export component StreamSourcePicker inherits Rectangle {
                             font-size: 13px;
                             font-weight: 600;
                             letter-spacing: 1.2px;
-                            color: has-selection ? #FFFFFF : Theme.text-tertiary;
+                            color: has-selection ? Theme.on-confirm : Theme.text-tertiary;
                             vertical-alignment: center;
                         }
                     }

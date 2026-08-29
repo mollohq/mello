@@ -9,7 +9,7 @@ component ForceUpdateButton inherits Rectangle {
     width: label.preferred-width + 32px;
     height: 34px;
     background: primary
-        ? (touch.has-hover ? Theme.live : Theme.live)
+        ? (touch.has-hover ? Theme.confirm-press : Theme.confirm)
         : (touch.has-hover ? Theme.hover-overlay : transparent);
     border-width: primary ? 0px : 1px;
     border-color: Theme.action-line;
@@ -18,7 +18,7 @@ component ForceUpdateButton inherits Rectangle {
 
     label := Text {
         text: root.text;
-        color: primary ? white : Theme.text-body;
+        color: primary ? Theme.on-confirm : Theme.text-body;
         font-family: Theme.font-sans;
         font-size: Theme.font-md;
         font-weight: 500;

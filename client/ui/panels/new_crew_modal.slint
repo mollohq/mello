@@ -1,5 +1,5 @@
 import { Theme, MelloTextInput } from "../theme.slint";
-import { CutShape } from "../components/cut.slint";
+import { CutShape, CutButtonShape, CutMask } from "../components/cut.slint";
 import { SearchUserData } from "../types.slint";
 
 export component NewCrewModal inherits Rectangle {
@@ -68,7 +68,17 @@ export component NewCrewModal inherits Rectangle {
             // ─── Header ──────────────────────────────────────────
             Rectangle {
                 height: 64px;
-                background: Theme.bg-app;
+                background: transparent;
+
+                // The header is the top of the panel, so it carries the same
+                // cut. A plain rectangle here would square the corner off.
+                CutShape {
+                    width: parent.width;
+                    height: parent.height;
+                    n: Theme.notch;
+                    inset: Theme.keyline;
+                    fill: Theme.bg-app;
+                }
 
                 Rectangle {
                     y: parent.height - 1px;
@@ -138,7 +148,6 @@ export component NewCrewModal inherits Rectangle {
                 Rectangle {
                     height: 48px;
                     background: Theme.bg-app;
-                    border-radius: Theme.r-inner;
                     border-width: 1px;
                     border-color: Theme.graphic-light;
 
@@ -215,16 +224,50 @@ export component NewCrewModal inherits Rectangle {
                     Rectangle {
                         width: 80px;
                         height: 80px;
-                        border-radius: 12px;
-                        background: Theme.bg-app;
-                        border-width: has-avatar ? 0px : 2px;
-                        border-color: avatar-touch.has-hover ? Theme.accent : Theme.graphic-med;
+                        background: transparent;
 
-                        if has-avatar: Image {
-                            source: avatar-preview;
+                        // A crew is a thing, so it wears the two-corner tile.
+                        CutButtonShape {
                             width: parent.width;
                             height: parent.height;
-                            image-fit: cover;
+                            n: 14px;
+                            fill: avatar-touch.has-hover ? Theme.action-line : Theme.graphic-med;
+                        }
+                        CutButtonShape {
+                            width: parent.width;
+                            height: parent.height;
+                            n: 14px;
+                            inset: root.has-avatar ? 0px : 2px;
+                            fill: Theme.bg-app;
+                        }
+
+                        if has-avatar: Rectangle {
+                            width: parent.width;
+                            height: parent.height;
+                            clip: true;
+
+                            Image {
+                                source: avatar-preview;
+                                width: parent.width;
+                                height: parent.height;
+                                image-fit: cover;
+                            }
+                            // the image is clipped to a rectangle, so the two
+                            // corners are painted back
+                            CutMask {
+                                width: parent.width;
+                                height: parent.height;
+                                n: 14px;
+                                corner: "tl";
+                                fill: Theme.surface;
+                            }
+                            CutMask {
+                                width: parent.width;
+                                height: parent.height;
+                                n: 14px;
+                                corner: "br";
+                                fill: Theme.surface;
+                            }
                         }
 
                         if !has-avatar: Image {
@@ -293,7 +336,6 @@ export component NewCrewModal inherits Rectangle {
                     Rectangle {
                         height: 44px;
                         background: Theme.bg-app;
-                        border-radius: Theme.r-inner;
                         border-width: 1px;
                         border-color: name-input.has-focus ? Theme.accent : Theme.graphic-light;
 
@@ -336,7 +378,6 @@ export component NewCrewModal inherits Rectangle {
                     Rectangle {
                         height: 80px;
                         background: Theme.bg-app;
-                        border-radius: Theme.r-inner;
                         border-width: 1px;
                         border-color: desc-input.has-focus ? Theme.accent : Theme.graphic-light;
 
@@ -452,7 +493,6 @@ export component NewCrewModal inherits Rectangle {
                     Rectangle {
                         height: 44px;
                         background: Theme.bg-app;
-                        border-radius: Theme.r-inner;
                         border-width: 1px;
                         border-color: invite-input.has-focus ? Theme.accent : Theme.graphic-light;
 
@@ -546,7 +586,6 @@ export component NewCrewModal inherits Rectangle {
                     Rectangle {
                         height: 40px;
                         background: Theme.bg-app;
-                        border-radius: 8px;
                         border-width: 1px;
                         border-color: Theme.graphic-light;
 
@@ -555,7 +594,6 @@ export component NewCrewModal inherits Rectangle {
 
                             Rectangle {
                                 horizontal-stretch: 1;
-                                border-radius: 6px;
                                 background: is-private ? Theme.graphic-light : transparent;
 
                                 Text {
@@ -576,7 +614,6 @@ export component NewCrewModal inherits Rectangle {
 
                             Rectangle {
                                 horizontal-stretch: 1;
-                                border-radius: 6px;
                                 background: !is-private ? Theme.graphic-light : transparent;
 
                                 Text {
@@ -638,9 +675,15 @@ export component NewCrewModal inherits Rectangle {
                         Rectangle {
                             width: cancel-text.preferred-width + 40px;
                             height: 38px;
-                            border-radius: Theme.r-inner;
                             y: (parent.height - self.height) / 2;
-                            background: cancel-touch.has-hover ? Theme.hover-overlay : transparent;
+                            background: transparent;
+
+                            if cancel-touch.has-hover: CutButtonShape {
+                                width: parent.width;
+                                height: parent.height;
+                                n: Theme.cut;
+                                fill: Theme.hover-overlay;
+                            }
 
                             cancel-text := Text {
                                 font-weight: Theme.weight-display;
@@ -661,16 +704,24 @@ export component NewCrewModal inherits Rectangle {
                         Rectangle {
                             width: create-text.preferred-width + 48px;
                             height: 38px;
-                            border-radius: Theme.r-inner;
                             y: (parent.height - self.height) / 2;
-                            background: crew-name-text != "" ? (create-touch.has-hover ? Theme.action-press : Theme.accent) : Theme.graphic-light;
+                            background: transparent;
+
+                            CutButtonShape {
+                                width: parent.width;
+                                height: parent.height;
+                                n: Theme.cut;
+                                fill: crew-name-text != ""
+                                    ? (create-touch.has-hover ? Theme.confirm-press : Theme.confirm)
+                                    : Theme.graphic-light;
+                            }
 
                             create-text := Text {
                                 text: onboarding-mode ? "Save & Continue" : "Establish Crew";
                                 font-family: Theme.font-sans;
                                 font-size: 13px;
                                 font-weight: Theme.weight-display;
-                                color: crew-name-text != "" ? Theme.action : Theme.text-tertiary;
+                                color: crew-name-text != "" ? Theme.on-confirm : Theme.text-tertiary;
                                 horizontal-alignment: center;
                                 vertical-alignment: center;
                             }
@@ -688,5 +739,19 @@ export component NewCrewModal inherits Rectangle {
                 }
             }
         }
+    }
+}
+
+// Headless preview, so the dialog can be rendered without the app:
+//   slint-viewer --screenshot out.png --component Preview \
+//     client/ui/panels/new_crew_modal.slint
+export component Preview inherits Rectangle {
+    width: 900px;
+    height: 760px;
+    background: Theme.bg-app;
+
+    NewCrewModal {
+        width: parent.width;
+        height: parent.height;
     }
 }

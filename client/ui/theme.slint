@@ -54,6 +54,14 @@ export global Theme {
     out property <color> live-bg:   #FF453A24;
     out property <color> on-live:   #FFFFFF;
 
+    // --- CONFIRM (the mark's red) -----------------------------------------
+    //  The button that commits the thing wears the red of the 3 in m3llo:
+    //  create the crew, join it, save it, sign in. White stays the colour
+    //  of everything else you can press, STREAM included.
+    out property <color> confirm:       live;
+    out property <color> confirm-press: #D93A30;
+    out property <color> on-confirm:    #FFFFFF;
+
     // --- Identity — people, crews, games. Never chrome. -------------------
     out property <color> id-blue:   #6E8FB8;
     out property <color> id-purple: #8E7FB0;
@@ -188,7 +196,8 @@ export component MelloInputField inherits Rectangle {
 
     height: field-height;
     background: Theme.bg-app;
-    border-radius: 8px;
+    // A field is a plain rectangle. The cut belongs to cards and buttons.
+    border-radius: 0px;
     border-width: 1px;
     border-color: input.has-focus ? Theme.action : Theme.graphic-light;
 

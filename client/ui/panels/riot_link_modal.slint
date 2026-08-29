@@ -177,8 +177,7 @@ export component RiotLinkModal inherits Rectangle {
                 Rectangle {
                     width: connect-text.preferred-width + 32px;
                     height: 40px;
-                    border-radius: Theme.r-outer;
-                    background: Theme.accent;
+                    background: Theme.confirm;
                     opacity: busy ? 0.6 : 1.0;
 
                     connect-text := Text {
@@ -186,7 +185,7 @@ export component RiotLinkModal inherits Rectangle {
                         text: busy ? "Connecting…" : "Connect";
                         font-size: Theme.font-md;
                         font-weight: Theme.weight-display;
-                        color: white;
+                        color: Theme.on-confirm;
                         horizontal-alignment: center;
                         vertical-alignment: center;
                     }

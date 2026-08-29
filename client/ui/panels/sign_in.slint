@@ -8,7 +8,6 @@ component InputField inherits Rectangle {
 
     height: 52px;
     background: Theme.surface;
-    border-radius: Theme.r-inner;
     border-width: 1px;
     border-color: ti.has-focus ? Theme.graphic-med : Theme.graphic-light;
 
@@ -48,7 +47,7 @@ component AccentButton inherits Rectangle {
         width: parent.width;
         height: parent.height;
         n: Theme.cut;
-        fill: root.enabled ? Theme.action : Theme.graphic-med;
+        fill: root.enabled ? Theme.confirm : Theme.graphic-med;
     }
 
     btn-touch := TouchArea {
@@ -69,7 +68,7 @@ component AccentButton inherits Rectangle {
             font-family: Theme.font-label;
             font-size: 14px;
             font-weight: 600;
-            color: root.enabled ? Theme.on-action : Theme.text-tertiary;
+            color: root.enabled ? Theme.on-confirm : Theme.text-tertiary;
             vertical-alignment: center;
         }
 
@@ -77,7 +76,7 @@ component AccentButton inherits Rectangle {
             source: @image-url("../icons/arrow-right.svg");
             width: 14px;
             height: 14px;
-            colorize: root.enabled ? Theme.on-action : Theme.text-tertiary;
+            colorize: root.enabled ? Theme.on-confirm : Theme.text-tertiary;
             y: (parent.height - self.height) / 2;
         }
     }
