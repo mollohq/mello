@@ -1,25 +1,44 @@
 import { Theme } from "../theme.slint";
-import { CutShape } from "../components/cut.slint";
+import { CutShape, OctShape } from "../components/cut.slint";
 
 component AvatarDot inherits Rectangle {
     in property <string> initials;
     in property <int> color-index: 0;
+    in property <length> size: 18px;
+    in property <color> ring-color: Theme.card-bg;
 
-    width: 18px;
-    height: 18px;
-    border-radius: 4px;
-    border-width: 2px;
-    border-color: Theme.card-bg;
-    background: color-index == 0 ? #EB4D5F :
-                color-index == 1 ? #4a9eff :
-                color-index == 2 ? #4ade80 :
-                color-index == 3 ? #a78bfa : #f59e0b;
+    width: size;
+    height: size;
+
+    // Avatar rows overlap by -7px. This ring keeps each person readable,
+    // the same job the 2px card-bg border did on the old rounded dot.
+    OctShape {
+        x: -2px;
+        y: -2px;
+        width: root.width + 4px;
+        height: root.height + 4px;
+        n: 5px;
+        fill: root.ring-color;
+    }
+
+    OctShape {
+        width: root.width;
+        height: root.height;
+        n: 4px;
+        fill: root.color-index == 0 ? Theme.id-blue :
+              root.color-index == 1 ? Theme.id-purple :
+              root.color-index == 2 ? Theme.id-teal :
+              root.color-index == 3 ? Theme.id-amber : Theme.id-pink;
+    }
 
     Text {
-        text: initials;
+        font-family: Theme.font-display;
+        text: root.initials;
         font-size: 7px;
-        font-weight: 600;
-        color: white;
+        font-weight: Theme.weight-display-bold;
+        color: Theme.on-action;
+        width: root.width;
+        height: root.height;
         horizontal-alignment: center;
         vertical-alignment: center;
     }

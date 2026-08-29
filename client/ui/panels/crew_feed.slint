@@ -10,23 +10,40 @@ component AvatarDot inherits Rectangle {
     in property <string> initials;
     in property <int> color-index: 0;
     in property <length> size: 18px;
+    in property <color> ring-color: Theme.card-bg;
 
     width: size;
     height: size;
-    border-radius: max(4px, size / 4.5);
-    border-width: 2px;
-    border-color: Theme.card-bg;
-    background: color-index == 0 ? Theme.live :
-                color-index == 1 ? Theme.id-blue :
-                color-index == 2 ? Theme.text-primary :
-                color-index == 3 ? Theme.id-purple : Theme.id-amber;
+
+    // Avatar rows overlap by -7px. This ring keeps each person readable,
+    // the same job the 2px card-bg border did on the old rounded dot.
+    OctShape {
+        x: -2px;
+        y: -2px;
+        width: root.width + 4px;
+        height: root.height + 4px;
+        n: 5px;
+        fill: root.ring-color;
+    }
+
+    OctShape {
+        width: root.width;
+        height: root.height;
+        n: 4px;
+        fill: root.color-index == 0 ? Theme.id-blue :
+              root.color-index == 1 ? Theme.id-purple :
+              root.color-index == 2 ? Theme.id-teal :
+              root.color-index == 3 ? Theme.id-amber : Theme.id-pink;
+    }
 
     Text {
         font-family: Theme.font-display;
-        text: initials;
+        text: root.initials;
         font-size: 7px;
-        font-weight: Theme.weight-display;
-        color: white;
+        font-weight: Theme.weight-display-bold;
+        color: Theme.on-action;
+        width: root.width;
+        height: root.height;
         horizontal-alignment: center;
         vertical-alignment: center;
     }
@@ -304,17 +321,17 @@ component DotWaveform inherits Rectangle {
 }
 
 component NewBadge inherits Rectangle {
-    width: new-text.preferred-width + 16px;
-    height: 22px;
-    border-radius: 5px;
-    background: Theme.clip-amber;
+    width: new-text.preferred-width + 12px;
+    height: 16px;
+    border-radius: 4px;
+    background: Theme.live;
 
     new-text := Text {
         font-family: Theme.font-display;
         text: "NEW";
-        font-size: 10px;
+        font-size: 9px;
         font-weight: Theme.weight-display-bold;
-        color: white;
+        color: Theme.on-live;
         horizontal-alignment: center;
         vertical-alignment: center;
     }
@@ -378,6 +395,11 @@ component HeroClipCard inherits Rectangle {
 
             HorizontalLayout {
                 spacing: 0px;
+
+                if card.is-new: NewBadge {
+                    horizontal-stretch: 0;
+                }
+                if card.is-new: Rectangle { width: 6px; horizontal-stretch: 0; }
 
                 if !is-playing: HorizontalLayout {
                     spacing: 5px;
@@ -450,10 +472,6 @@ component HeroClipCard inherits Rectangle {
                 }
             }
 
-            if card.is-new: NewBadge {
-                x: 0px;
-                y: 0px;
-            }
         }
 
         // Wave row: play ring + dot-matrix band (absorbs vertical slack)
@@ -601,6 +619,11 @@ component ClipCard inherits Rectangle {
             vertical-stretch: 0;
 
             HorizontalLayout {
+                if card.is-new: NewBadge {
+                    horizontal-stretch: 0;
+                }
+                if card.is-new: Rectangle { width: 6px; horizontal-stretch: 0; }
+
                 if !is-playing: HorizontalLayout {
                     spacing: 5px;
                     horizontal-stretch: 0;
@@ -672,10 +695,6 @@ component ClipCard inherits Rectangle {
                 }
             }
 
-            if card.is-new: NewBadge {
-                x: 0px;
-                y: 0px;
-            }
         }
 
         // Wave band with corner play ring (absorbs vertical slack)
@@ -773,7 +792,7 @@ component RecapCard inherits Rectangle {
             text: "WEEKLY RECAP";
             font-size: 10px;
             font-weight: Theme.weight-label;
-            color: Theme.accent;
+            color: Theme.text-secondary;
             letter-spacing: Theme.track-label;
         }
 
@@ -884,6 +903,14 @@ component RecapCard inherits Rectangle {
                 Rectangle { height: 1px; background: Theme.card-border; }
                 Rectangle { height: 8px; }
 
+                Text {
+                    font-family: Theme.font-label;
+                    text: "THIS WEEK IN GAMES";
+                    font-size: 10px;
+                    font-weight: Theme.weight-label;
+                    color: Theme.skel-text;
+                    letter-spacing: Theme.track-label;
+                }
 
                 if card.games-summary != "": Text {
                     font-weight: Theme.weight-sentence;
@@ -1444,7 +1471,7 @@ component GameSessionCard inherits Rectangle {
                     border-width: 1px;
                     border-color: Theme.graphic-med;
                     verified-label := Text {
-                        text: "✓ VERIFIED";
+                        text: "VERIFIED";
                         font-family: Theme.font-label;
                         font-size: 9px;
                         font-weight: 600;
@@ -1737,7 +1764,7 @@ component SkeletonHeroCard inherits Rectangle {
 
                 badge-t := Text {
                     font-family: Theme.font-label;
-                    text: "✂ CLIP";
+                    text: "CLIP";
                     font-size: 10px;
                     font-weight: Theme.weight-label;
                     color: Theme.skel-ghost;
@@ -1757,14 +1784,13 @@ component SkeletonHeroCard inherits Rectangle {
                 border-color: Theme.skel-ghost;
                 background: transparent;
 
-                Text {
-                    font-weight: Theme.weight-display;
-                    font-family: Theme.font-display;
-                    text: "▶";
-                    font-size: 16px;
-                    color: Theme.skel-ghost;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
+                Image {
+                    source: @image-url("../icons/play.svg");
+                    width: 16px;
+                    height: 16px;
+                    colorize: Theme.skel-ghost;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
                 }
             }
 
@@ -1807,7 +1833,7 @@ component SkeletonHeroCard inherits Rectangle {
             Text {
                 font-weight: Theme.weight-sentence;
                 font-family: Theme.font-body;
-                text: "Tap ✂ during a voice call to save the last 30 seconds. Your crew's best clips show up right here.";
+                text: "Tap the clip button during a voice call to save the last 30 seconds. Your crew's best clips show up right here.";
                 font-size: 11px;
                 color: Theme.skel-hint;
                 wrap: word-wrap;
@@ -1950,7 +1976,7 @@ component SkeletonClipCard inherits Rectangle {
 
             Text {
                 font-family: Theme.font-display;
-                text: "✂ VOICE CLIP · 0:30";
+                text: "VOICE CLIP · 0:30";
                 font-size: 10px;
                 font-weight: Theme.weight-display-bold;
                 color: Theme.skel-ghost;
@@ -2350,7 +2376,7 @@ component InviteCard inherits Rectangle {
                 height: 36px;
                 x: (parent.width - self.width) / 2;
                 border-radius: Theme.r-inner;
-                background: invite-btn-touch.has-hover ? Theme.action-press : Theme.accent;
+                background: invite-btn-touch.has-hover ? Theme.action-press : Theme.action;
 
                 Text {
                     font-family: Theme.font-display;
@@ -2444,6 +2470,10 @@ component LockedCard inherits Rectangle {
 
 // Dispatcher: renders the correct card based on card-type
 component FeedSlot inherits Rectangle {
+    // A card that outgrows its slot must be cut off at the slot edge, not
+    // painted over the gap below it. This is `overflow: hidden` in the mockup.
+    clip: true;
+
     in property <FeedCardData> card;
     in property <string> playing-path: "";
     in property <float> clip-progress: 0.0;
@@ -2605,8 +2635,16 @@ export component CrewFeed inherits Rectangle {
     property <bool> hero-is-clip: cards.length > feed-start-index
         && cards[feed-start-index].card-type == "clip"
         && cards[feed-start-index].is-hero;
+    // The recap carries a header, a stat block, an MVP and the games table.
+    // It does not fit one row. The design gives it column 3 across both rows,
+    // so it takes the side column alone and row 1 holds two cards, not three.
+    property <bool> side-is-recap: cards.length > feed-start-index + 1
+        && cards[feed-start-index + 1].card-type == "recap"
+        && (cards[feed-start-index + 1].leaderboard.length > 0
+            || cards[feed-start-index + 1].awards.length > 0);
     property <int> row1-consumed: cards.length <= feed-start-index ? 0
         : hero-is-clip ? 1
+        : side-is-recap ? Math.min(2, cards.length - feed-start-index)
         : Math.min(3, cards.length - feed-start-index);
     property <int> row2-base: feed-start-index + row1-consumed;
 
@@ -2684,7 +2722,7 @@ export component CrewFeed inherits Rectangle {
 
                 // Stream cards live in the feed flow, directly under the header.
                 if stream-cards.length == 1 && cards.length > 0: HorizontalLayout {
-                    height: 420px;
+                    height: Theme.feed-row * 2 + 12px;
                     spacing: 12px;
 
                     Rectangle {
@@ -2720,7 +2758,7 @@ export component CrewFeed inherits Rectangle {
                         spacing: 12px;
 
                         if cards.length > 0: FeedSlot {
-                            height: 204px;
+                            height: Theme.feed-row;
                             card: cards[0];
                             playing-path: root.clip-playing-path;
                             clip-progress: root.clip-progress;
@@ -2738,7 +2776,7 @@ export component CrewFeed inherits Rectangle {
                         }
 
                         if cards.length > 1: FeedSlot {
-                            height: 204px;
+                            height: Theme.feed-row;
                             card: cards[1];
                             playing-path: root.clip-playing-path;
                             clip-progress: root.clip-progress;
@@ -2803,7 +2841,7 @@ export component CrewFeed inherits Rectangle {
 
                 // Row 1: full-width hero clip OR 2:1 hero + stacked side column
                 if hero-is-clip && cards.length > root.feed-start-index: FeedSlot {
-                    height: 240px;
+                    height: Theme.feed-row;
                     card: cards[root.feed-start-index];
                     playing-path: root.clip-playing-path;
                     clip-progress: root.clip-progress;
@@ -2821,7 +2859,7 @@ export component CrewFeed inherits Rectangle {
                 }
 
                 if !hero-is-clip && cards.length > root.feed-start-index: HorizontalLayout {
-                    height: 420px;
+                    height: Theme.feed-row * 2 + 12px;
                     spacing: 12px;
 
                     FeedSlot {
@@ -2847,8 +2885,9 @@ export component CrewFeed inherits Rectangle {
                         height: parent.height;
                         spacing: 12px;
 
+                        // A recap holds the whole column; anything else is one row.
                         if cards.length > root.feed-start-index + 1: FeedSlot {
-                            height: 204px;
+                            height: root.side-is-recap ? parent.height : Theme.feed-row;
                             card: cards[root.feed-start-index + 1];
                             playing-path: root.clip-playing-path;
                             clip-progress: root.clip-progress;
@@ -2865,8 +2904,8 @@ export component CrewFeed inherits Rectangle {
                             session-preview-request-frame(sid, idx) => { root.session-preview-request-frame(sid, idx); }
                         }
 
-                        if cards.length > root.feed-start-index + 2: FeedSlot {
-                            height: 204px;
+                        if !root.side-is-recap && cards.length > root.feed-start-index + 2: FeedSlot {
+                            height: Theme.feed-row;
                             card: cards[root.feed-start-index + 2];
                             playing-path: root.clip-playing-path;
                             clip-progress: root.clip-progress;
@@ -2887,7 +2926,7 @@ export component CrewFeed inherits Rectangle {
 
                 // Row 2: Three 1x cards
                 if cards.length > root.row2-base: HorizontalLayout {
-                    height: 210px;
+                    height: Theme.feed-row;
                     spacing: 12px;
 
                     for rel-idx in [0, 1, 2]: FeedSlot {
@@ -2913,7 +2952,7 @@ export component CrewFeed inherits Rectangle {
 
                 // Row 3: card (1x) + wide card (2x)
                 if cards.length > root.row2-base + 3: HorizontalLayout {
-                    height: 210px;
+                    height: Theme.feed-row;
                     spacing: 12px;
 
                     FeedSlot {
@@ -2955,7 +2994,7 @@ export component CrewFeed inherits Rectangle {
 
                 // Row 4+ for extra cards (cold start has 9 slots)
                 if cards.length > root.row2-base + 5: HorizontalLayout {
-                    height: 210px;
+                    height: Theme.feed-row;
                     spacing: 12px;
 
                     for rel-idx in [0, 1]: FeedSlot {
@@ -2999,7 +3038,7 @@ export component CrewFeed inherits Rectangle {
                     }
 
                     for r in Math.ceil(memory-cards.length / 3.0): HorizontalLayout {
-                        height: 210px;
+                        height: Theme.feed-row;
                         spacing: 12px;
 
                         for c in 3: FeedSlot {
@@ -3391,6 +3430,18 @@ export component PreviewSessionHero inherits Rectangle {
                 mvp-count: 2,
                 mvp0-name: "b0bben", mvp0-initials: "b0", mvp0-stat: "3.1h",
                 mvp1-name: "FaiL", mvp1-initials: "Fa", mvp1-stat: "2.4h",
+                // A full recap: this is the card that needs both grid rows.
+                games-summary: "24 matches · Counter-Strike 2",
+                leaderboard: [
+                    { name: "b0bben", initials: "b0", record: "10W 7L", color-index: 0 },
+                    { name: "Propotato", initials: "Pr", record: "3W 2L", color-index: 1 },
+                    { name: "Ostkatt", initials: "os", record: "0W 2L", color-index: 2 },
+                ],
+                awards: [
+                    { kind: "grinder", title: "Grinder of the week", name: "b0bben", detail: "17 matches" },
+                    { kind: "heater", title: "Biggest heater", name: "b0bben", detail: "4-win streak" },
+                    { kind: "skid", title: "Roughest patch", name: "Ostkatt", detail: "4-loss skid" },
+                ],
             },
             {
                 id: "side-b", card-type: "clip", is-hero: false, is-skeleton: false,
