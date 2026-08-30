@@ -1,0 +1,101 @@
+import { Theme } from "../theme.slint";
+
+// ============================================================
+//  Stream quality, as one row of pills.
+//
+//  The window picker and the STREAM menu both set the preset, and they
+//  must agree, so the control lives here and neither owns it.
+//
+//  The index is the wire value: 0=Ultra, 1=High, 2=Medium, 3=Low,
+//  4=Potato, which is what Command::StartStream carries.
+// ============================================================
+
+export component QualityPills inherits VerticalLayout {
+    in-out property <int> selected: 2;
+    /// Show the resolution and bitrate the pick works out to.
+    in property <bool> show-detail: true;
+    in property <string> label: "QUALITY";
+
+    spacing: 8px;
+
+    Text {
+        text: root.label;
+        font-family: Theme.font-label;
+        font-size: 10px;
+        font-weight: Theme.weight-label;
+        letter-spacing: Theme.track-label;
+        color: Theme.text-tertiary;
+    }
+
+    HorizontalLayout {
+        spacing: 8px;
+        alignment: start;
+
+        for preset-label[idx] in ["ULTRA", "HIGH", "MEDIUM", "PRO-POTATO", "POTATO"]: Rectangle {
+            width: chip-text.preferred-width + 16px;
+            height: 26px;
+            background: root.selected == idx
+                ? Theme.action-dim
+                : (chip-ta.has-hover ? Theme.surface-hover : transparent);
+            border-width: 1px;
+            border-color: root.selected == idx ? Theme.action-line : Theme.graphic-light;
+
+            chip-text := Text {
+                text: preset-label;
+                font-family: Theme.font-label;
+                font-size: 10px;
+                font-weight: Theme.weight-label;
+                letter-spacing: 0.8px;
+                color: root.selected == idx ? Theme.text-primary : Theme.text-secondary;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+
+            chip-ta := TouchArea {
+                mouse-cursor: pointer;
+                clicked => { root.selected = idx; }
+            }
+        }
+    }
+
+    if root.show-detail: HorizontalLayout {
+        spacing: 16px;
+        alignment: start;
+        height: 16px;
+
+        Text {
+            letter-spacing: Theme.track-label;
+            font-weight: Theme.weight-label;
+            text: root.selected == 0 ? "1080p @ 60fps"
+                : root.selected == 1 ? "1080p @ 30fps"
+                : root.selected == 2 ? "720p @ 60fps"
+                : root.selected == 3 ? "720p @ 30fps"
+                : "480p @ 30fps";
+            font-family: Theme.font-label;
+            font-size: 11px;
+            color: Theme.text-secondary;
+            vertical-alignment: center;
+        }
+
+        Rectangle {
+            width: 1px;
+            height: 12px;
+            background: Theme.graphic-light;
+            y: (parent.height - self.height) / 2;
+        }
+
+        Text {
+            letter-spacing: Theme.track-label;
+            font-weight: Theme.weight-label;
+            text: root.selected == 0 ? "~6 Mbit/s"
+                : root.selected == 1 ? "~4.5 Mbit/s"
+                : root.selected == 2 ? "~4 Mbit/s"
+                : root.selected == 3 ? "~2.5 Mbit/s  (martin mode)"
+                : "~1.5 Mbit/s";
+            font-family: Theme.font-label;
+            font-size: 11px;
+            color: Theme.text-tertiary;
+            vertical-alignment: center;
+        }
+    }
+}

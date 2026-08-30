@@ -1,5 +1,6 @@
 import { Theme } from "../theme.slint";
 import { CutShape, CutButtonShape } from "../components/cut.slint";
+import { QualityPills } from "../components/quality_pills.slint";
 import { GameIcon } from "../components/game_icon.slint";
 import { CaptureSourceData } from "../types.slint";
 
@@ -119,8 +120,8 @@ export component StreamSourceMenu inherits Rectangle {
     in property <bool> streaming-game: false;
     /// Displays, so "Whole screen" can name the one it will take.
     in property <[CaptureSourceData]> monitors: [];
-    /// Where the stream lands, named in the footer.
-    in property <string> channel-name: "General";
+    /// Stream quality, shared with the window picker.
+    in-out property <int> preset: 2;
     /// No capture backend exists for a camera yet.
     in property <bool> camera-available: false;
     in property <string> camera-name: "";
@@ -144,7 +145,7 @@ export component StreamSourceMenu inherits Rectangle {
         x: (parent.width - self.width) / 2;
         // sits directly above the control bar
         y: parent.height - Theme.control-bar-height - self.height - 10px;
-        width: 320px;
+        width: 400px;
         height: body.preferred-height;
         background: transparent;
 
@@ -243,15 +244,14 @@ export component StreamSourceMenu inherits Rectangle {
 
             Rectangle { height: 1px; background: Theme.graphic-light; }
 
-            Text {
-                text: "Your crew sees the stream in " + root.channel-name + ".";
-                font-family: Theme.font-body;
-                font-weight: Theme.weight-sentence;
-                font-size: 11px;
-                color: Theme.text-tertiary;
-                height: 34px;
-                vertical-alignment: center;
-                x: 14px;
+            // Quality belongs with the choice, not two dialogs away.
+            VerticalLayout {
+                padding: 14px;
+
+                QualityPills {
+                    show-detail: false;
+                    selected <=> root.preset;
+                }
             }
         }
     }
@@ -273,7 +273,6 @@ export component Preview inherits Rectangle {
         game-short-name: "CS2";
         game-color: #DE9B35;
         streaming-game: false;
-        channel-name: "General";
         monitors: [
             { id: "m0", name: "Display 1", mode: "monitor", resolution: "2560 x 1440" },
         ];
@@ -291,7 +290,6 @@ export component PreviewNoGame inherits Rectangle {
         width: parent.width;
         height: parent.height;
         game-active: false;
-        channel-name: "General";
         monitors: [
             { id: "m0", name: "Display 1", mode: "monitor", resolution: "2560 x 1440" },
         ];

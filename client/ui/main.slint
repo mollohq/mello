@@ -295,6 +295,10 @@ export component MainWindow inherits Window {
     in-out property <bool> source-picker-open: false;
     /// The STREAM caret menu: game, window, screen, camera.
     in-out property <bool> source-menu-open: false;
+    /// Stream quality. The menu and the window picker both set it, and
+    /// every start path reads it, so the pick means the same thing
+    /// wherever it was made. 0=Ultra 1=High 2=Medium 3=Low 4=Potato.
+    in-out property <int> stream-preset: 2;
     in property <[CaptureSourceData]> stream-monitors: [];
     in property <[CaptureSourceData]> stream-games: [];
     in property <[CaptureSourceData]> stream-windows: [];
@@ -1684,7 +1688,7 @@ export component MainWindow inherits Window {
         streaming-game: root.is-hosting && root.game-active
             && root.stream-label == root.game-name;
         monitors: root.stream-monitors;
-        channel-name: root.voice-channel-name != "" ? root.voice-channel-name : "General";
+        preset <=> root.stream-preset;
 
         close-requested => {
             root.source-menu-open = false;
@@ -1703,7 +1707,7 @@ export component MainWindow inherits Window {
             root.source-menu-open = false;
             root.stop-thumbnail-refresh();
             if (id != "") {
-                root.start-stream(id, "monitor", 2);
+                root.start-stream(id, "monitor", root.stream-preset);
             }
         }
         stream-camera => {
@@ -1714,6 +1718,7 @@ export component MainWindow inherits Window {
     // ===================== STREAM SOURCE PICKER OVERLAY =====================
     if source-picker-open: StreamSourcePicker {
         windows: root.stream-windows;
+        selected-preset <=> root.stream-preset;
         close-requested => {
             root.source-picker-open = false;
             root.stop-thumbnail-refresh();

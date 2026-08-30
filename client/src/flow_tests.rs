@@ -1803,3 +1803,35 @@ fn active_crew_name_follows_the_active_crew() {
     assert_eq!(h.app().get_active_crew_id(), "");
     assert_eq!(h.app().get_active_crew_name(), "");
 }
+
+/// The quality pills in the STREAM menu and the window picker write one
+/// property. The quick path — STREAM with a game detected — used to send a
+/// hardcoded Medium, so the pills were a lie on the path most people take.
+#[test]
+fn the_quick_stream_path_uses_the_chosen_quality() {
+    let mut h = Harness::new();
+    h.app().set_logged_in(true);
+    h.app().set_active_crew_id("crew-1".into());
+    h.app().set_game_name("Counter-Strike 2".into());
+    h.ctx()
+        .fg_monitor
+        .borrow_mut()
+        .set_game_active(true, Some(4242));
+
+    // Ultra, not the old hardcoded Medium.
+    h.app().set_stream_preset(0);
+    h.pump();
+    h.app().invoke_stream_requested();
+    h.pump();
+
+    let cmds = h.commands();
+    let preset = cmds.iter().find_map(|c| match c {
+        Command::StartStream { preset, pid, .. } if *pid == Some(4242) => Some(*preset),
+        _ => None,
+    });
+    assert_eq!(
+        preset,
+        Some(0),
+        "STREAM must send the preset the pills chose, got {cmds:?}"
+    );
+}

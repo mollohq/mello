@@ -1,5 +1,6 @@
 import { Theme } from "../theme.slint";
 import { CutShape, CutButtonShape } from "../components/cut.slint";
+import { QualityPills } from "../components/quality_pills.slint";
 import { CaptureSourceData } from "../types.slint";
 
 component SectionHeader inherits Rectangle {
@@ -350,96 +351,11 @@ export component StreamSourcePicker inherits Rectangle {
                     background: Theme.graphic-light;
                 }
 
-                // Quality label
-                Text {
-                    text: "QUALITY";
-                    font-family: Theme.font-label;
-                    font-size: 10px;
-                    font-weight: 600;
-                    letter-spacing: 1.6px;
-                    color: Theme.text-tertiary;
+                QualityPills {
                     x: 32px;
                     y: 16px;
-                }
-
-                // Preset chips
-                HorizontalLayout {
-                    x: 32px;
-                    y: 34px;
-                    width: parent.width - 64px;
-                    height: 26px;
-                    spacing: 8px;
-                    alignment: start;
-
-                    for preset-label[idx] in ["ULTRA", "HIGH", "MEDIUM", "PRO-POTATO", "POTATO"]: Rectangle {
-                        width: preset-chip-text.preferred-width + 16px;
-                        height: 26px;
-                        border-radius: 4px;
-                        background: selected-preset == idx
-                            ? Theme.action-dim
-                            : (preset-chip-ta.has-hover ? Theme.surface-hover : transparent);
-                        border-width: 1px;
-                        border-color: selected-preset == idx ? Theme.action-line : Theme.graphic-light;
-
-                        preset-chip-text := Text {
-                            text: preset-label;
-                            font-family: Theme.font-label;
-                            font-size: 10px;
-                            font-weight: 600;
-                            letter-spacing: 0.8px;
-                            color: selected-preset == idx ? Theme.text-primary : Theme.text-secondary;
-                            horizontal-alignment: center;
-                            vertical-alignment: center;
-                        }
-
-                        preset-chip-ta := TouchArea {
-                            clicked => { selected-preset = idx; }
-                        }
-                    }
-                }
-
-                // Preset info (below chips)
-                HorizontalLayout {
-                    x: 32px;
-                    y: 68px;
-                    height: 16px;
-                    spacing: 16px;
-                    alignment: start;
-
-                    Text {
-                        letter-spacing: Theme.track-label;
-                        font-weight: Theme.weight-label;
-                        text: selected-preset == 0 ? "1080p @ 60fps"
-                            : selected-preset == 1 ? "1080p @ 30fps"
-                            : selected-preset == 2 ? "720p @ 60fps"
-                            : selected-preset == 3 ? "720p @ 30fps"
-                            : "480p @ 30fps";
-                        font-family: Theme.font-label;
-                        font-size: 11px;
-                        color: Theme.text-secondary;
-                        vertical-alignment: center;
-                    }
-
-                    Rectangle {
-                        width: 1px;
-                        height: 12px;
-                        background: Theme.graphic-light;
-                        y: (parent.height - self.height) / 2;
-                    }
-
-                    Text {
-                        letter-spacing: Theme.track-label;
-                        font-weight: Theme.weight-label;
-                        text: selected-preset == 0 ? "~6 Mbit/s"
-                            : selected-preset == 1 ? "~4.5 Mbit/s"
-                            : selected-preset == 2 ? "~4 Mbit/s"
-                            : selected-preset == 3 ? "~2.5 Mbit/s  (martin mode)"
-                            : "~1.5 Mbit/s";
-                        font-family: Theme.font-label;
-                        font-size: 11px;
-                        color: Theme.text-tertiary;
-                        vertical-alignment: center;
-                    }
+                    width: parent.width - 64px - 220px;
+                    selected <=> root.selected-preset;
                 }
 
                 // Start button (bottom-right)
