@@ -65,10 +65,20 @@ export component UserAvatar inherits Rectangle {
         height: root.size;
         clip: true;
 
+        // Overdraw by a pixel on every side, and let the parent clip it.
+        //
+        // The octagon plate sits under the image, and the image was landing
+        // a fraction short of the box: the last row rounded to the plate
+        // instead of the picture, so every avatar with a photo wore a light
+        // line along one edge. Covering past the edge removes the rounding
+        // from the question. The plate stays, so an avatar with
+        // transparency still has graphite behind it.
         Image {
             source: root.avatar;
-            width: root.size;
-            height: root.size;
+            x: -1px;
+            y: -1px;
+            width: root.size + 2px;
+            height: root.size + 2px;
             image-fit: cover;
         }
 
@@ -134,5 +144,46 @@ export component AvatarOverflow inherits Rectangle {
         height: root.size;
         horizontal-alignment: center;
         vertical-alignment: center;
+    }
+}
+
+// Headless preview:
+//   slint-viewer --screenshot out.png --component Preview \
+//     client/ui/components/avatar.slint
+export component Preview inherits Rectangle {
+    width: 420px;
+    height: 200px;
+    background: Theme.surface;
+
+    HorizontalLayout {
+        padding: 30px;
+        spacing: 30px;
+        alignment: start;
+        cross-axis-alignment: center;
+
+        // initials, muted
+        UserAvatar {
+            initials: "b0";
+            muted: true;
+            size: 80px;
+            bg-color: Theme.surface;
+        }
+
+        // a picture
+        UserAvatar {
+            avatar: @image-url("../icons/brands/steam.svg");
+            has-avatar: true;
+            muted: true;
+            size: 80px;
+            bg-color: Theme.surface;
+        }
+
+        // identity colour
+        UserAvatar {
+            initials: "os";
+            color-index: 2;
+            size: 80px;
+            bg-color: Theme.surface;
+        }
     }
 }

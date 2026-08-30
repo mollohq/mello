@@ -339,11 +339,21 @@ component GifPopover inherits Rectangle {
 
     visible: show;
     height: 360px;
-    background: Theme.surface;
-    border-width: 1px;
-    border-color: Theme.graphic-light;
-    border-radius: Theme.r-inner;
-    clip: true;
+    background: transparent;
+
+    CutShape {
+        width: parent.width;
+        height: parent.height;
+        n: Theme.notch-sm;
+        fill: Theme.graphic-light;
+    }
+    CutShape {
+        width: parent.width;
+        height: parent.height;
+        n: Theme.notch-sm;
+        inset: Theme.keyline;
+        fill: Theme.surface;
+    }
 
     VerticalLayout {
         padding: 8px;
@@ -394,7 +404,6 @@ component GifPopover inherits Rectangle {
                         visible: in-range;
                         horizontal-stretch: 1;
                         height: in-range ? self.width * 0.75 : 0;
-                        border-radius: Theme.radius-sm;
                         clip: true;
                         background: in-range && !gifs[gif-index].has-preview ? Theme.bg-app : transparent;
 
@@ -1313,11 +1322,21 @@ export component ChatPanel inherits Rectangle {
         // --- Emoji popover ---
         if root.emoji-popover-open: Rectangle {
             height: 200px;
-            background: Theme.surface;
-            border-width: 1px;
-            border-color: Theme.graphic-light;
-            border-radius: Theme.r-inner;
-            clip: true;
+            background: transparent;
+
+            CutShape {
+                width: parent.width;
+                height: parent.height;
+                n: Theme.notch-sm;
+                fill: Theme.graphic-light;
+            }
+            CutShape {
+                width: parent.width;
+                height: parent.height;
+                n: Theme.notch-sm;
+                inset: Theme.keyline;
+                fill: Theme.surface;
+            }
 
             Flickable {
                 width: parent.width;
@@ -1336,7 +1355,6 @@ export component ChatPanel inherits Rectangle {
                             visible: in-range;
                             width: 32px;
                             height: 32px;
-                            border-radius: 4px;
                             clip: true;
 
                             if in-range: Rectangle {
@@ -1344,9 +1362,11 @@ export component ChatPanel inherits Rectangle {
                                 height: parent.height;
                                 background: emoji-cell-touch.has-hover ? Theme.bg-tertiary : transparent;
 
+                                // No font-family: Oxanium and Barlow carry
+                                // no emoji, so naming either of them here
+                                // gives a grid of tofu boxes. Left unset,
+                                // the platform emoji font resolves them.
                                 Text {
-                                    font-weight: Theme.weight-display;
-                                    font-family: Theme.font-display;
                                     text: emoji-list[emoji-index].emoji;
                                     font-size: 18px;
                                     horizontal-alignment: center;
@@ -1630,5 +1650,44 @@ export component Preview inherits ChatPanel {
             timestamp: "May 19, 8:15 PM", display-time: "just now",
             is-group-start: true,
         },
+    ];
+}
+
+/// The emoji picker, open.
+export component PreviewEmoji inherits ChatPanel {
+    width: 400px;
+    height: 820px;
+    user-name: "bobdev";
+    user-id: "u1";
+    emoji-popover-open: true;
+    emoji-list: [
+        { emoji: "😀", name: "grinning" },
+        { emoji: "👍", name: "thumbsup" },
+        { emoji: "🔥", name: "fire" },
+        { emoji: "❤️", name: "heart" },
+        { emoji: "😂", name: "joy" },
+        { emoji: "🎮", name: "game" },
+        { emoji: "💀", name: "skull" },
+        { emoji: "🙏", name: "pray" },
+        { emoji: "👀", name: "eyes" },
+        { emoji: "🤝", name: "handshake" },
+    ];
+}
+
+/// The GIF picker, open. The cells have no preview image, so they show
+/// the placeholder, which is what a slow network shows too.
+export component PreviewGif inherits ChatPanel {
+    width: 400px;
+    height: 820px;
+    user-name: "bobdev";
+    user-id: "u1";
+    gif-popover-open: true;
+    gif-results: [
+        { gif-id: "1", url: "", preview-url: "", width: 200, height: 150 },
+        { gif-id: "2", url: "", preview-url: "", width: 200, height: 150 },
+        { gif-id: "3", url: "", preview-url: "", width: 200, height: 150 },
+        { gif-id: "4", url: "", preview-url: "", width: 200, height: 150 },
+        { gif-id: "5", url: "", preview-url: "", width: 200, height: 150 },
+        { gif-id: "6", url: "", preview-url: "", width: 200, height: 150 },
     ];
 }
