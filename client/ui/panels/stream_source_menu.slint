@@ -1,0 +1,299 @@
+import { Theme } from "../theme.slint";
+import { CutShape, CutButtonShape } from "../components/cut.slint";
+import { GameIcon } from "../components/game_icon.slint";
+import { CaptureSourceData } from "../types.slint";
+
+// ============================================================
+//  "Stream something else" — the menu behind the STREAM caret.
+//
+//  The order is the order of intent. The game you are playing is what
+//  you almost always want, so it is first and needs no thought. A window
+//  is the next most common, and it opens the picker. The whole screen is
+//  the blunt instrument. The camera is last because it is the rarest.
+//
+//  Anchored above the control bar, like the mockup.
+// ============================================================
+
+component MenuRow inherits Rectangle {
+    in property <string> title;
+    in property <string> subtitle;
+    in property <bool> current: false;
+    in property <bool> enabled: true;
+    callback clicked();
+
+    height: 56px;
+    background: transparent;
+
+    if root.enabled && row-ta.has-hover: Rectangle {
+        background: Theme.surface-hover;
+    }
+
+    HorizontalLayout {
+        padding-left: 14px;
+        padding-right: 14px;
+        spacing: 12px;
+        cross-axis-alignment: center;
+
+        // the caller drops the icon in here
+        @children
+
+        VerticalLayout {
+            alignment: center;
+            spacing: 2px;
+            horizontal-stretch: 1;
+
+            Text {
+                font-family: Theme.font-display;
+                text: root.title;
+                font-size: 13px;
+                font-weight: Theme.weight-display;
+                color: root.enabled ? Theme.text-primary : Theme.text-tertiary;
+                overflow: elide;
+            }
+
+            Text {
+                font-family: Theme.font-body;
+                font-weight: Theme.weight-sentence;
+                text: root.subtitle;
+                font-size: 11px;
+                color: Theme.text-secondary;
+                overflow: elide;
+            }
+        }
+
+        if root.current: Image {
+            source: @image-url("../icons/checkmark.svg");
+            width: 13px;
+            height: 13px;
+            colorize: Theme.text-primary;
+            horizontal-stretch: 0;
+        }
+    }
+
+    row-ta := TouchArea {
+        mouse-cursor: root.enabled ? pointer : default;
+        clicked => {
+            if (root.enabled) {
+                root.clicked();
+            }
+        }
+    }
+}
+
+/// A 36px square that stands in for a source that has no art.
+component SourceGlyph inherits Rectangle {
+    in property <image> icon;
+
+    width: 36px;
+    height: 36px;
+    background: transparent;
+    horizontal-stretch: 0;
+
+    CutButtonShape {
+        width: parent.width;
+        height: parent.height;
+        n: 8px;
+        fill: Theme.raised;
+    }
+
+    Image {
+        source: root.icon;
+        width: 17px;
+        height: 17px;
+        colorize: Theme.text-secondary;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+    }
+}
+
+export component StreamSourceMenu inherits Rectangle {
+    /// The game the sensor found, if any.
+    in property <bool> game-active: false;
+    in property <string> game-id: "";
+    in property <string> game-name: "";
+    in property <string> game-short-name: "";
+    in property <color> game-color: Theme.id-amber;
+    in property <image> game-runtime-icon;
+    in property <bool> game-has-runtime-icon: false;
+    /// True while that game is the thing being streamed.
+    in property <bool> streaming-game: false;
+    /// Displays, so "Whole screen" can name the one it will take.
+    in property <[CaptureSourceData]> monitors: [];
+    /// Where the stream lands, named in the footer.
+    in property <string> channel-name: "General";
+    /// No capture backend exists for a camera yet.
+    in property <bool> camera-available: false;
+    in property <string> camera-name: "";
+
+    callback close-requested();
+    callback stream-game();
+    callback pick-window();
+    callback stream-screen(/* source_id */ string);
+    callback stream-camera();
+
+    width: 100%;
+    height: 100%;
+    background: transparent;
+
+    // Click anywhere else to dismiss.
+    TouchArea {
+        clicked => { root.close-requested(); }
+    }
+
+    menu := Rectangle {
+        x: (parent.width - self.width) / 2;
+        // sits directly above the control bar
+        y: parent.height - Theme.control-bar-height - self.height - 10px;
+        width: 320px;
+        height: body.preferred-height;
+        background: transparent;
+
+        CutShape {
+            width: parent.width;
+            height: parent.height;
+            n: Theme.notch-sm;
+            fill: Theme.graphic-med;
+        }
+        CutShape {
+            width: parent.width;
+            height: parent.height;
+            n: Theme.notch-sm;
+            inset: Theme.keyline;
+            fill: Theme.surface;
+        }
+
+        // Swallow clicks so the backdrop does not close the menu.
+        TouchArea {}
+
+        body := VerticalLayout {
+            spacing: 0px;
+
+            Text {
+                text: "STREAM SOMETHING ELSE";
+                font-family: Theme.font-label;
+                font-size: 9.5px;
+                font-weight: Theme.weight-label;
+                letter-spacing: Theme.track-kicker;
+                color: Theme.text-tertiary;
+                height: 34px;
+                vertical-alignment: center;
+                horizontal-alignment: left;
+                // the layout has no padding, so the text carries its own
+                x: 14px;
+            }
+
+            Rectangle { height: 1px; background: Theme.graphic-light; }
+
+            // 1. what you are playing
+            if root.game-active: MenuRow {
+                title: root.game-name;
+                subtitle: "Detected by game sensor";
+                current: root.streaming-game;
+                clicked => { root.stream-game(); }
+
+                GameIcon {
+                    game-id: root.game-id;
+                    short-name: root.game-short-name;
+                    badge-color: root.game-color;
+                    runtime-icon: root.game-runtime-icon;
+                    has-runtime-icon: root.game-has-runtime-icon;
+                    size: 36px;
+                    bg-color: Theme.surface;
+                    horizontal-stretch: 0;
+                }
+            }
+
+            // 2. any other application
+            MenuRow {
+                title: "Pick a window";
+                subtitle: "Any app — browser, editor, emulator";
+                clicked => { root.pick-window(); }
+
+                SourceGlyph {
+                    icon: @image-url("../icons/maximize.svg");
+                }
+            }
+
+            // 3. everything at once
+            MenuRow {
+                title: "Whole screen";
+                subtitle: root.monitors.length > 0
+                    ? root.monitors[0].name + " · " + root.monitors[0].resolution
+                    : "Your main display";
+                clicked => {
+                    root.stream-screen(root.monitors.length > 0 ? root.monitors[0].id : "");
+                }
+
+                SourceGlyph {
+                    icon: @image-url("../icons/monitor.svg");
+                }
+            }
+
+            // 4. the rarest, and the only one with no engine behind it yet
+            MenuRow {
+                title: "Camera only";
+                subtitle: root.camera-available ? root.camera-name : "Not available yet";
+                enabled: root.camera-available;
+                clicked => { root.stream-camera(); }
+
+                SourceGlyph {
+                    icon: @image-url("../icons/broadcast.svg");
+                }
+            }
+
+            Rectangle { height: 1px; background: Theme.graphic-light; }
+
+            Text {
+                text: "Your crew sees the stream in " + root.channel-name + ".";
+                font-family: Theme.font-body;
+                font-weight: Theme.weight-sentence;
+                font-size: 11px;
+                color: Theme.text-tertiary;
+                height: 34px;
+                vertical-alignment: center;
+                x: 14px;
+            }
+        }
+    }
+}
+
+// Headless preview:
+//   slint-viewer --screenshot out.png --component Preview \
+//     client/ui/panels/stream_source_menu.slint
+export component Preview inherits Rectangle {
+    width: 700px;
+    height: 460px;
+    background: Theme.bg-app;
+
+    StreamSourceMenu {
+        width: parent.width;
+        height: parent.height;
+        game-active: true;
+        game-name: "Counter-Strike 2";
+        game-short-name: "CS2";
+        game-color: #DE9B35;
+        streaming-game: false;
+        channel-name: "General";
+        monitors: [
+            { id: "m0", name: "Display 1", mode: "monitor", resolution: "2560 x 1440" },
+        ];
+    }
+}
+
+/// The same menu with no game detected: the first row is gone and the
+/// window picker leads.
+export component PreviewNoGame inherits Rectangle {
+    width: 700px;
+    height: 460px;
+    background: Theme.bg-app;
+
+    StreamSourceMenu {
+        width: parent.width;
+        height: parent.height;
+        game-active: false;
+        channel-name: "General";
+        monitors: [
+            { id: "m0", name: "Display 1", mode: "monitor", resolution: "2560 x 1440" },
+        ];
+    }
+}

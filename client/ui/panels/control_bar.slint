@@ -533,14 +533,15 @@ export component ControlBar inherits Rectangle {
                     width: stream-label.preferred-width + 40px;
                     height: 40px;
 
+                    // Always white, always live. You can stream anything
+                    // from a crew, whether or not a game is detected and
+                    // whether or not you are in the voice channel.
                     CutShape {
                         width: parent.width;
                         height: parent.height;
                         n: Theme.cut;
                         corner: "tl";
-                        fill: can-stream
-                            ? (stream-ta.has-hover ? Theme.action-press : Theme.action)
-                            : Theme.raised;
+                        fill: stream-ta.has-hover ? Theme.action-press : Theme.action;
                     }
 
                     stream-label := Text {
@@ -549,16 +550,22 @@ export component ControlBar inherits Rectangle {
                         font-size: 10px;
                         font-weight: Theme.weight-label;
                         letter-spacing: Theme.track-label;
-                        color: can-stream ? Theme.on-action : Theme.text-tertiary;
+                        color: Theme.on-action;
                         x: (parent.width - self.width) / 2;
                         y: (parent.height - self.height) / 2;
                     }
 
                     stream-ta := TouchArea {
-                        mouse-cursor: can-stream ? pointer : default;
+                        mouse-cursor: pointer;
                         clicked => {
+                            // With a game detected, STREAM streams it: that
+                            // is what the pill in front of the button says.
+                            // With nothing detected there is no obvious
+                            // subject, so it asks.
                             if (can-stream) {
                                 stream-requested();
+                            } else {
+                                go-live-clicked();
                             }
                         }
                     }
