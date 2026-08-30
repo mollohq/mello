@@ -49,10 +49,20 @@ export component UserAvatar inherits Rectangle {
         fill: root.active ? root.active-color : root.ring-color;
     }
 
+    // The plate stops one pixel short of the edge when a picture covers it.
+    //
+    // A picture lands a fraction short of its box, and the last row used to
+    // round to the plate instead of the picture. Theme.raised is lighter
+    // than every surface an avatar sits on, so that row read as a line
+    // along one edge, moving between top and bottom with the rounding. A
+    // plate that never reaches the edge cannot be the thing that shows
+    // there. It still sits behind a picture with transparency in it.
     OctShape {
-        width: root.size;
-        height: root.size;
-        n: root.cut;
+        x: root.has-avatar ? 1px : 0px;
+        y: root.has-avatar ? 1px : 0px;
+        width: root.has-avatar ? root.size - 2px : root.size;
+        height: root.has-avatar ? root.size - 2px : root.size;
+        n: root.has-avatar ? max(2px, root.cut - 1px) : root.cut;
         fill: root.muted ? Theme.raised
             : root.color-index == 0 ? Theme.id-blue
             : root.color-index == 1 ? Theme.id-purple
@@ -65,20 +75,10 @@ export component UserAvatar inherits Rectangle {
         height: root.size;
         clip: true;
 
-        // Overdraw by a pixel on every side, and let the parent clip it.
-        //
-        // The octagon plate sits under the image, and the image was landing
-        // a fraction short of the box: the last row rounded to the plate
-        // instead of the picture, so every avatar with a photo wore a light
-        // line along one edge. Covering past the edge removes the rounding
-        // from the question. The plate stays, so an avatar with
-        // transparency still has graphite behind it.
         Image {
             source: root.avatar;
-            x: -1px;
-            y: -1px;
-            width: root.size + 2px;
-            height: root.size + 2px;
+            width: root.size;
+            height: root.size;
             image-fit: cover;
         }
 
