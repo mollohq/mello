@@ -1,6 +1,6 @@
 import { Theme } from "../theme.slint";
 import { UserAvatar } from "../components/avatar.slint";
-import { CutShape, CutButtonShape, OctShape, OctMask } from "../components/cut.slint";
+import { CutShape, CutButtonShape, CutMask, OctShape, OctMask } from "../components/cut.slint";
 import { CrewData, VoiceChannelData, VoiceChannelMember } from "../types.slint";
 
 component VcMemberRow inherits Rectangle {
@@ -508,8 +508,20 @@ component ActiveCrewCard inherits Rectangle {
 
         Rectangle {
             height: 56px;
-            background: Theme.raised;
+            background: transparent;
             border-width: 0px;
+
+            // The header is the top of the card, so it carries the same
+            // cut and stops one keyline short of the edge. A plain
+            // rectangle here painted over the outline and the corner.
+            CutShape {
+                width: parent.width;
+                height: parent.height;
+                n: Theme.notch-sm;
+                corner: "tr";
+                inset: Theme.keyline;
+                fill: Theme.raised;
+            }
 
             HorizontalLayout {
                 padding-left: 10px;
@@ -519,15 +531,32 @@ component ActiveCrewCard inherits Rectangle {
                 if crew.has-avatar: Rectangle {
                     width: 32px;
                     height: 32px;
-                    border-radius: 7px;
-                    clip: true;
                     y: (parent.height - self.height) / 2;
+                    clip: true;
 
                     Image {
                         source: crew.avatar;
                         width: parent.width;
                         height: parent.height;
                         image-fit: cover;
+                    }
+
+                    // A crew is a thing, so it wears the two-corner tile.
+                    // Slint cannot clip to a path, so the corners are
+                    // painted back in the header colour.
+                    CutMask {
+                        width: parent.width;
+                        height: parent.height;
+                        n: 7px;
+                        corner: "tl";
+                        fill: Theme.raised;
+                    }
+                    CutMask {
+                        width: parent.width;
+                        height: parent.height;
+                        n: 7px;
+                        corner: "br";
+                        fill: Theme.raised;
                     }
                 }
 
@@ -536,19 +565,24 @@ component ActiveCrewCard inherits Rectangle {
                     height: 32px;
                     y: (parent.height - self.height) / 2;
 
+                    // Graphite, not white. A crew is a thing you look at,
+                    // not a thing you press, and every other crew tile in
+                    // the app reads this way.
                     CutButtonShape {
                         width: parent.width;
                         height: parent.height;
                         n: 7px;
-                        fill: Theme.action;
+                        fill: Theme.raised-hover;
                     }
 
                     Text {
                         text: crew.initials;
-                        font-size: 10px;
+                        font-size: 11px;
                         font-family: Theme.font-display;
                         font-weight: Theme.weight-display-bold;
-                        color: Theme.on-action;
+                        color: Theme.text-secondary;
+                        width: parent.width;
+                        height: parent.height;
                         horizontal-alignment: center;
                         vertical-alignment: center;
                         overflow: clip;
@@ -1084,3 +1118,4 @@ export component Preview inherits CrewPanel {
         { id: "vc4", name: "Movie night", member-count: 0, active: false },
     ];
 }
+
