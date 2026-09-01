@@ -1,17 +1,24 @@
 # Graphite UI Migration — bringing the client onto design system v3.3
 
-> **Status:** every surface is on the graphite system, on `feat/graphite-ui`.
-> Done: theme retokenised, fonts swapped, cut primitives, one shared
-> `UserAvatar`, control bar, crew sidebar, you-strip, crew feed, session
-> preview card, chat panel, and the Step D-6 batch — settings, onboarding,
-> sign-in, discover, debug, stream view, stream source picker, voice channel
-> view, active streams and the eight modals.
-> Hardcoded hex literals: 488 at the start, 151 now. The rest are game brand
-> colours (content keeps its colour) and a few one-off tints.
-> Symbol glyphs in UI strings: 47 at the start, 0 that the bundled fonts
-> cannot draw.
-> Left: nothing blocking. The remaining radii are on dots, discs, inputs and
-> small chips, which the design keeps rounded.
+> **Status:** in progress on `feat/graphite-ui`.
+> An earlier version of this line claimed every surface was done. That was
+> wrong: the Step D-6 batch ran the type and glyph passes over the stream
+> and voice surfaces, but not the colour pass, and they were listed as
+> finished anyway.
+> Done: theme, fonts, cut primitives, one shared `UserAvatar`, shared
+> `QualityPills`, control bar, crew sidebar, you-strip, crew feed, session
+> preview card, chat panel and its two pickers, settings, crew settings,
+> discover, onboarding, sign-in, debug, the stream source menu and window
+> picker, the eight modals, and the active streams panel.
+> Left: `voice_channel_view` (12 literals, all the old join-green) and
+> `session_preview_card` (12, black scrims and a purple gradient).
+> Hardcoded hex literals: 488 at the start, 125 now. 51 of those are the
+> token definitions in `theme.slint`; the rest are game brand colours and
+> a few one-off washes.
+> Symbol glyphs the bundled fonts cannot draw: 47 at the start, 0 now.
+> Nine panels still have no `Preview`, so they cannot be rendered headless:
+> debug, force-update, onboarding, session preview card, sign-in, stream
+> view, update banner, voice channel view.
 > **Design source:** `mello-wip/m3llo-design-system.html` (v3.3) and `mello-wip/m3llo-crew-feed-v15.html`.
 > **Scope:** restyle what exists. No new panels, no new features. Layout may move
 > (the control bar is deliberately regrouped); information does not change.
