@@ -101,9 +101,9 @@ export component StreamView inherits Rectangle {
                 width: stop-text.preferred-width + 24px;
                 height: 28px;
                 border-radius: Theme.r-pill;
-                background: stop-ta.has-hover ? Theme.accent : Theme.bg-app;
+                background: stop-ta.has-hover ? Theme.live : Theme.bg-app;
                 border-width: 1px;
-                border-color: stop-ta.has-hover ? Theme.accent : Theme.graphic-light;
+                border-color: stop-ta.has-hover ? Theme.live : Theme.graphic-light;
                 y: 0;
 
                 stop-text := Text {
@@ -112,7 +112,7 @@ export component StreamView inherits Rectangle {
                     font-family: Theme.font-label;
                     font-size: Theme.font-sm;
                     font-weight: Theme.weight-label;
-                    color: stop-ta.has-hover ? #FFFFFF : Theme.text-secondary;
+                    color: stop-ta.has-hover ? Theme.on-live : Theme.text-secondary;
                     horizontal-alignment: center;
                     vertical-alignment: center;
                 }
@@ -177,7 +177,7 @@ export component StreamView inherits Rectangle {
                     width: watch-row.preferred-width + 32px;
                     height: 40px;
                     border-radius: 6px;
-                    background: watch-ta.has-hover ? Theme.accent : Theme.bg-app;
+                    background: watch-ta.has-hover ? Theme.action : Theme.bg-app;
                     border-width: 1px;
                     border-color: watch-ta.has-hover ? Theme.accent : Theme.graphic-light;
                     x: (parent.width - self.width) / 2;
@@ -192,7 +192,7 @@ export component StreamView inherits Rectangle {
                             source: @image-url("../icons/play.svg");
                             width: 11px;
                             height: 11px;
-                            colorize: watch-ta.has-hover ? Theme.text-primary : Theme.text-secondary;
+                            colorize: watch-ta.has-hover ? Theme.on-action : Theme.text-secondary;
                             y: (parent.height - self.height) / 2;
                         }
 
@@ -202,7 +202,7 @@ export component StreamView inherits Rectangle {
                             font-size: 13px;
                             font-weight: 600;
                             letter-spacing: 1px;
-                            color: watch-ta.has-hover ? #FFFFFF : Theme.text-secondary;
+                            color: watch-ta.has-hover ? Theme.on-action : Theme.text-secondary;
                             vertical-alignment: center;
                         }
                     }
@@ -230,7 +230,7 @@ export component StreamView inherits Rectangle {
                     width: go-live-row.preferred-width + 32px;
                     height: 40px;
                     border-radius: 6px;
-                    background: go-live-ta.has-hover ? Theme.accent : Theme.bg-app;
+                    background: go-live-ta.has-hover ? Theme.action : Theme.bg-app;
                     border-width: 1px;
                     border-color: go-live-ta.has-hover ? Theme.accent : Theme.graphic-light;
                     x: (parent.width - self.width) / 2;
@@ -245,7 +245,7 @@ export component StreamView inherits Rectangle {
                             source: @image-url("../icons/play.svg");
                             width: 11px;
                             height: 11px;
-                            colorize: go-live-ta.has-hover ? Theme.text-primary : Theme.text-secondary;
+                            colorize: go-live-ta.has-hover ? Theme.on-action : Theme.text-secondary;
                             y: (parent.height - self.height) / 2;
                         }
 
@@ -255,7 +255,7 @@ export component StreamView inherits Rectangle {
                             font-size: 13px;
                             font-weight: 600;
                             letter-spacing: 1px;
-                            color: go-live-ta.has-hover ? #FFFFFF : Theme.text-secondary;
+                            color: go-live-ta.has-hover ? Theme.on-action : Theme.text-secondary;
                             vertical-alignment: center;
                         }
                     }

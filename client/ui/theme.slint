@@ -62,6 +62,12 @@ export global Theme {
     out property <color> confirm-press: #D93A30;
     out property <color> on-confirm:    #FFFFFF;
 
+    // --- SPEAKING (the one exception) -------------------------------------
+    //  Green appears nowhere else in the product. It marks one thing: the
+    //  person talking right now, on their name in the voice channel list.
+    //  White was too quiet to carry that, and red already means state.
+    out property <color> speaking: #3FD07A;
+
     // --- Identity — people, crews, games. Never chrome. -------------------
     out property <color> id-blue:   #6E8FB8;
     out property <color> id-purple: #8E7FB0;

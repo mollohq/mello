@@ -85,13 +85,13 @@ export component UpdateToast inherits Rectangle {
             Rectangle {
                 width: btn-text.preferred-width + 28px;
                 height: 28px;
-                background: ta.has-hover ? Theme.action-press : Theme.accent;
+                background: ta.has-hover ? Theme.confirm-press : Theme.confirm;
                 border-radius: Theme.r-inner;
                 animate background { duration: 150ms; }
 
                 btn-text := Text {
                     text: "UPDATE";
-                    color: white;
+                    color: Theme.on-confirm;
                     font-family: Theme.font-label;
                     font-size: Theme.font-xs;
                     font-weight: 600;

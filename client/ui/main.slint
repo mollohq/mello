@@ -1195,13 +1195,13 @@ export component MainWindow inherits Window {
                     Rectangle {
                         width: adw-ok-text.preferred-width + 32px;
                         height: 32px;
-                        background: adw-ok-ta.has-hover ? #FF3D6E : Theme.accent;
+                        background: adw-ok-ta.has-hover ? Theme.action-press : Theme.action;
                         border-radius: Theme.r-inner;
                         animate background { duration: 150ms; }
 
                         adw-ok-text := Text {
                             text: "Continue";
-                            color: white;
+                            color: Theme.on-action;
                             font-family: Theme.font-sans;
                             font-size: 13px;
                             font-weight: 600;
