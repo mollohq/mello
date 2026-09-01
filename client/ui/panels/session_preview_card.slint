@@ -130,7 +130,7 @@ export component SessionPreviewCard inherits Rectangle {
 
             // Poster / playback
             if show-thumbnail: Rectangle {
-                background: #000000;
+                background: Theme.media-ground;
 
                 Image {
                     x: 0; y: 0; width: parent.width; height: parent.height;
@@ -168,7 +168,7 @@ export component SessionPreviewCard inherits Rectangle {
 
                         Image {
                             source: @image-url("../icons/scissors.svg");
-                            colorize: white;
+                            colorize: Theme.on-media;
                             width: is-hero ? 10px : 9px;
                             height: is-hero ? 10px : 9px;
                             y: (parent.height - self.height) / 2;
@@ -178,7 +178,7 @@ export component SessionPreviewCard inherits Rectangle {
                             text: clip-count > 1 ? clip-count + " clips" : "1 clip";
                             font-size: is-hero ? 10px : 9px;
                             font-weight: 700;
-                            color: white;
+                            color: Theme.on-media;
                             vertical-alignment: center;
                         }
                     }
@@ -187,7 +187,7 @@ export component SessionPreviewCard inherits Rectangle {
                 if !root.playing || root.finished || root.paused: Rectangle {
                     x: 0; y: 0;
                     width: parent.width; height: parent.height;
-                    background: #00000044;
+                    background: Theme.over-media-soft;
                 }
 
                 if snapshot-poster-ready && (!root.playing || root.finished): Rectangle {
@@ -197,13 +197,13 @@ export component SessionPreviewCard inherits Rectangle {
                     width: 1px * btn-size;
                     height: 1px * btn-size;
                     border-radius: 1px * btn-size / 2;
-                    background: #000000aa;
+                    background: Theme.over-media;
 
                     Image {
                         source: @image-url("../icons/play.svg");
                         width: is-hero ? 18px : 12px;
                         height: is-hero ? 18px : 12px;
-                        colorize: white;
+                        colorize: Theme.on-media;
                         x: (parent.width - self.width) / 2;
                         y: (parent.height - self.height) / 2;
                     }
@@ -215,12 +215,12 @@ export component SessionPreviewCard inherits Rectangle {
                     width: dur-text.preferred-width + 16px;
                     height: is-hero ? 22px : 20px;
                     border-radius: 4px;
-                    background: #000000aa;
+                    background: Theme.over-media;
 
                     dur-text := Text {
                         text: root.duration-text;
                         font-size: 11px;
-                        color: white;
+                        color: Theme.on-media;
                         horizontal-alignment: center;
                         vertical-alignment: center;
                     }
@@ -231,7 +231,7 @@ export component SessionPreviewCard inherits Rectangle {
                     y: parent.height - 22px;
                     width: parent.width;
                     height: 22px;
-                    background: #00000066;
+                    background: Theme.over-media-bar;
 
                     Rectangle {
                         x: 4px;
@@ -246,7 +246,7 @@ export component SessionPreviewCard inherits Rectangle {
                                 : @image-url("../icons/pause.svg");
                             width: 9px;
                             height: 9px;
-                            colorize: white;
+                            colorize: Theme.on-media;
                             x: (parent.width - self.width) / 2;
                             y: (parent.height - self.height) / 2;
                         }
@@ -263,7 +263,7 @@ export component SessionPreviewCard inherits Rectangle {
                         width: parent.width - 34px;
                         height: 3px;
                         border-radius: 1.5px;
-                        background: #ffffff33;
+                        background: Theme.over-media-line;
 
                         Rectangle {
                             x: 0; y: 0;
@@ -272,7 +272,7 @@ export component SessionPreviewCard inherits Rectangle {
                                 : parent.width;
                             height: parent.height;
                             border-radius: 1.5px;
-                            background: white;
+                            background: Theme.on-media;
                             animate width { duration: 300ms; easing: ease-out; }
                         }
                     }
@@ -281,10 +281,11 @@ export component SessionPreviewCard inherits Rectangle {
 
             // No snapshots fallback
             if show-placeholder: Rectangle {
+                // Graphite. The old hero placeholder was a purple gradient,
+                // which is colour on chrome — and there is no footage here
+                // to justify it.
                 background: is-hero
-                    ? (Theme.dark
-                        ? @linear-gradient(135deg, #1a0d1a 0%, #150a15 40%, #151520 100%)
-                        : @linear-gradient(135deg, #f0e8f0 0%, #e8dde8 40%, #e0e0ea 100%))
+                    ? @linear-gradient(135deg, Theme.card-bg 0%, Theme.card-bg-inset 100%)
                     : Theme.card-bg-inset;
 
                 Rectangle {
@@ -465,3 +466,45 @@ export component SessionPreviewCard inherits Rectangle {
         }
     }
 }
+
+// Headless preview:
+//   slint-viewer --screenshot out.png --component Preview \
+//     client/ui/panels/session_preview_card.slint
+export component Preview inherits Rectangle {
+    width: 900px;
+    height: 380px;
+    background: Theme.bg-app;
+
+    HorizontalLayout {
+        padding: 20px;
+        spacing: 16px;
+
+        // hero, no snapshots: the placeholder path
+        SessionPreviewCard {
+            horizontal-stretch: 2;
+            is-hero: true;
+            title: "b0bben streamed Counter-Strike 2";
+            game-name: "Counter-Strike 2";
+            streamer-username: "b0bben";
+            streamer-initials: "b0";
+            duration-min: 22;
+            peak-viewers: 3;
+            clip-count: 2;
+            time-since-ended: "Tuesday";
+        }
+
+        // standard, still loading
+        SessionPreviewCard {
+            horizontal-stretch: 1;
+            title: "alice streamed Valorant";
+            game-name: "Valorant";
+            streamer-username: "alice";
+            streamer-initials: "al";
+            duration-min: 74;
+            peak-viewers: 5;
+            time-since-ended: "Yesterday";
+            snapshot-loading: true;
+        }
+    }
+}
+

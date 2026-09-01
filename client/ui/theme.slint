@@ -91,6 +91,17 @@ export global Theme {
     out property <color> wave-off:       #3A3A41;   // unplayed waveform
     out property <color> wave-bg:        #0F0F11;
 
+    // --- Over media -------------------------------------------------------
+    //  Game footage keeps its colour, so chrome laid on top cannot borrow
+    //  the graphite ramp: it needs its own ground to stay legible against
+    //  whatever the frame happens to be. These are washes, not palette.
+    out property <color> media-ground:   #000000;    // letterbox behind a frame
+    out property <color> over-media-soft: #00000044; // rest-state dim
+    out property <color> over-media:      #000000AA; // a chip or a play disc
+    out property <color> over-media-bar:  #00000066; // the scrubber strip
+    out property <color> over-media-line: #FFFFFF33; // a track on the wash
+    out property <color> on-media:        #FFFFFF;   // text on any of them
+
     // --- Depth -----------------------------------------------------------
     //  A modal sits on a scrim. Nothing else in the app casts a shadow.
     out property <color> scrim:        #000000AA;
