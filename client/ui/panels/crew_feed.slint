@@ -452,7 +452,7 @@ component HeroClipCard inherits Rectangle {
                 height: 20px;
 
                 if card.participant-count > 0: HorizontalLayout {
-                    spacing: -7px;
+                    spacing: 4px;
                     width: self.preferred-width;
 
                     UserAvatar { initials: card.actor-initials; color-index: 0; ring: 2px; }
@@ -995,7 +995,6 @@ component SessionCard inherits Rectangle {
                         initials: card.actor-initials;
                         avatar: card.actor-avatar;
                         has-avatar: card.actor-has-avatar;
-                        ring: 2px;
                         x: parent.width - self.width + 4px;
                         y: parent.height - self.height + 4px;
                     }
@@ -1063,7 +1062,7 @@ component SessionCard inherits Rectangle {
         if !is-stream: Rectangle { height: 6px; }
 
         if !is-stream && card.participant-count > 0: HorizontalLayout {
-            spacing: -10px;
+            spacing: 4px;
             alignment: start;
             height: 40px;
 
@@ -1072,7 +1071,6 @@ component SessionCard inherits Rectangle {
                 avatar: card.part0-avatar;
                 has-avatar: card.part0-has-avatar;
                 color-index: 0;
-                ring: 2px;
                 size: 40px;
             }
             if card.participant-count > 1: UserAvatar {
@@ -1080,7 +1078,6 @@ component SessionCard inherits Rectangle {
                 avatar: card.part1-avatar;
                 has-avatar: card.part1-has-avatar;
                 color-index: 1;
-                ring: 2px;
                 size: 40px;
             }
             if card.participant-count > 2: UserAvatar {
@@ -1088,14 +1085,12 @@ component SessionCard inherits Rectangle {
                 avatar: card.part2-avatar;
                 has-avatar: card.part2-has-avatar;
                 color-index: 2;
-                ring: 2px;
                 size: 40px;
             }
             // Overflow chip: the roster is wider than the three avatar slots.
             if card.participant-count > 3: AvatarOverflow {
                 count: card.participant-count - 3;
                 size: 40px;
-                ring: 2px;
             }
         }
 
@@ -1242,14 +1237,13 @@ component GameSessionCompactBody inherits VerticalLayout {
         height: 20px;
 
         HorizontalLayout {
-            spacing: -6px;
+            spacing: 4px;
             alignment: start;
             UserAvatar {
                 initials: card.part0-initials != "" ? card.part0-initials : card.actor-initials;
                 avatar: card.part0-has-avatar ? card.part0-avatar : card.actor-avatar;
                 has-avatar: card.part0-has-avatar || card.actor-has-avatar;
                 color-index: 0;
-                ring: 2px;
                 size: 20px;
             }
             if card.participant-count > 1: UserAvatar {
@@ -1257,7 +1251,6 @@ component GameSessionCompactBody inherits VerticalLayout {
                 avatar: card.part1-avatar;
                 has-avatar: card.part1-has-avatar;
                 color-index: 1;
-                ring: 2px;
                 size: 20px;
             }
             if card.participant-count > 2: UserAvatar {
@@ -1265,7 +1258,6 @@ component GameSessionCompactBody inherits VerticalLayout {
                 avatar: card.part2-avatar;
                 has-avatar: card.part2-has-avatar;
                 color-index: 2;
-                ring: 2px;
                 size: 20px;
             }
         }
@@ -1419,7 +1411,7 @@ component GameSessionCard inherits Rectangle {
             height: 20px;
 
             HorizontalLayout {
-                spacing: -7px;
+                spacing: 4px;
                 horizontal-stretch: 1;
                 alignment: start;
                 UserAvatar {
@@ -1427,21 +1419,18 @@ component GameSessionCard inherits Rectangle {
                     avatar: card.part0-has-avatar ? card.part0-avatar : card.actor-avatar;
                     has-avatar: card.part0-has-avatar || card.actor-has-avatar;
                     color-index: 0;
-                    ring: 2px;
                 }
                 if card.participant-count > 1: UserAvatar {
                     initials: card.part1-initials;
                     avatar: card.part1-avatar;
                     has-avatar: card.part1-has-avatar;
                     color-index: 1;
-                    ring: 2px;
                 }
                 if card.participant-count > 2: UserAvatar {
                     initials: card.part2-initials;
                     avatar: card.part2-avatar;
                     has-avatar: card.part2-has-avatar;
                     color-index: 2;
-                    ring: 2px;
                 }
             }
 
@@ -1984,7 +1973,7 @@ component SkeletonSessionCard inherits Rectangle {
         Rectangle { height: 8px; }
 
         HorizontalLayout {
-            spacing: -7px;
+            spacing: 4px;
             height: 18px;
 
             for c in [0, 1, 2]: Rectangle {

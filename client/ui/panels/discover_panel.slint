@@ -215,7 +215,7 @@ component DiscoverCrewCard inherits Rectangle {
                     alignment: start;
 
                     Rectangle {
-                        width: online-count >= 2 ? 40px : 24px;
+                        width: online-count >= 2 ? 52px : 24px;
                         height: 24px;
 
                         UserAvatar {
@@ -227,12 +227,10 @@ component DiscoverCrewCard inherits Rectangle {
                         }
 
                         if online-count >= 2: UserAvatar {
-                            x: 16px;
+                            x: 28px;
                             y: 0px;
                             size: 24px;
                             muted: true;
-                            ring: 2px;
-                            ring-color: root.hero ? Theme.card-bg : Theme.surface;
                             bg-color: root.hero ? Theme.card-bg : Theme.surface;
                         }
                     }
