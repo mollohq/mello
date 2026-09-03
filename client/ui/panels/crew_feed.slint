@@ -455,9 +455,9 @@ component HeroClipCard inherits Rectangle {
                     spacing: 4px;
                     width: self.preferred-width;
 
-                    UserAvatar { initials: card.actor-initials; color-index: 0; ring: 2px; }
-                    if card.participant-count > 1: UserAvatar { initials: ""; color-index: 1; ring: 2px; }
-                    if card.participant-count > 2: UserAvatar { initials: ""; color-index: 2; ring: 2px; }
+                    UserAvatar { initials: card.actor-initials; color-index: 0; }
+                    if card.participant-count > 1: UserAvatar { initials: ""; color-index: 1; }
+                    if card.participant-count > 2: UserAvatar { initials: ""; color-index: 2; }
                 }
 
                 Text {
@@ -1122,13 +1122,48 @@ component GameSessionRecordPanel inherits VerticalLayout {
 
     spacing: 0px;
 
-    // Headline record
-    Text {
-        font-family: Theme.font-display;
-        text: card.game-record;
-        font-size: 30px;
-        font-weight: Theme.weight-display-bold;
-        color: record-color;
+    // Headline record. A win reads white and a loss reads red, the same
+    // rule the you-strip pips follow. Colouring the whole record by the
+    // streak painted the wins red on any session that ended down.
+    HorizontalLayout {
+        alignment: start;
+        spacing: 0px;
+
+        Text {
+            font-family: Theme.font-display;
+            text: card.game-wins + "W";
+            font-size: 30px;
+            font-weight: Theme.weight-display-bold;
+            color: Theme.text-primary;
+        }
+        Text {
+            font-family: Theme.font-display;
+            text: "–";
+            font-size: 30px;
+            font-weight: Theme.weight-display-bold;
+            color: Theme.text-tertiary;
+        }
+        Text {
+            font-family: Theme.font-display;
+            text: card.game-losses + "L";
+            font-size: 30px;
+            font-weight: Theme.weight-display-bold;
+            color: Theme.live;
+        }
+        if card.game-draws > 0: Text {
+            font-family: Theme.font-display;
+            text: "–";
+            font-size: 30px;
+            font-weight: Theme.weight-display-bold;
+            color: Theme.text-tertiary;
+        }
+        if card.game-draws > 0: Text {
+            font-family: Theme.font-display;
+            text: card.game-draws + "D";
+            font-size: 30px;
+            font-weight: Theme.weight-display-bold;
+            color: Theme.text-secondary;
+        }
     }
     Text {
         font-weight: Theme.weight-sentence;
@@ -3270,6 +3305,16 @@ export component Preview inherits Rectangle {
                 game-name: "Cursor",
                 duration: "1h 2m", duration-min: 62, timestamp: "2 days ago",
                 participant-count: 2, clip-count: 3, clip-path: "",
+            },
+            {
+                id: "gs", card-type: "game-session", is-hero: false, is-skeleton: false,
+                title: "Counter-Strike 2", game-name: "Counter-Strike 2",
+                game-short-name: "CS2", game-has-color: true, game-color: #DE9B35,
+                game-record: "1W–1L", game-wins: 1, game-losses: 1,
+                game-streak-text: "L2", game-streak-positive: false,
+                game-winrate: "50%", game-matches: 2,
+                duration-human: "2h 37m", timestamp: "Tuesday",
+                actor-name: "b0bben", actor-initials: "b0",
             },
             {
                 id: "5", card-type: "catchup", is-hero: false, is-skeleton: false,

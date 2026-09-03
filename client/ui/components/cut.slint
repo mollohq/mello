@@ -216,3 +216,34 @@ export component CutTile inherits Rectangle {
 
     @children
 }
+
+/// Everything OUTSIDE the octagon, as one path.
+///
+/// Painted over an image, this is what makes the image octagonal. It
+/// replaces a plate under the image plus four corner triangles over it:
+/// three layers that each round independently, so at fractional display
+/// scaling one of them lands a fraction short and shows as a light line
+/// along an edge. One path cannot disagree with itself.
+///
+/// `fill-rule: evenodd` makes the inner octagon a hole regardless of the
+/// direction it is wound in.
+export component OctFrame inherits Path {
+    in property <length> n: 4px;
+
+    viewbox-x: 0;
+    viewbox-y: 0;
+    viewbox-width: self.width / 1px;
+    viewbox-height: self.height / 1px;
+    fill-rule: evenodd;
+
+    property <float> w: self.width / 1px;
+    property <float> h: self.height / 1px;
+    property <float> c: self.n / 1px;
+
+    // The outer rectangle runs clockwise and the octagon runs the other
+    // way, so it is a hole under either fill rule. `fill-rule: evenodd`
+    // alone was not enough: the renderer filled the whole box.
+    commands: "M 0 0 L \{w} 0 L \{w} \{h} L 0 \{h} Z "
+        + "M \{c} 0 L 0 \{c} L 0 \{h - c} L \{c} \{h} "
+        + "L \{w - c} \{h} L \{w} \{h - c} L \{w} \{c} L \{w - c} 0 Z";
+}

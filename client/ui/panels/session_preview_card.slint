@@ -389,9 +389,9 @@ export component SessionPreviewCard inherits Rectangle {
                     spacing: 4px;
                     width: self.preferred-width;
 
-                    UserAvatar { bg-color: card-hover.has-hover ? Theme.card-bg-hover : Theme.card-bg; initials: root.streamer-initials; color-index: 0; ring: 2px; }
-                    if peak-viewers > 1: UserAvatar { bg-color: card-hover.has-hover ? Theme.card-bg-hover : Theme.card-bg; initials: "+"; color-index: 2; ring: 2px; }
-                    if peak-viewers > 2: UserAvatar { bg-color: card-hover.has-hover ? Theme.card-bg-hover : Theme.card-bg; initials: ""; color-index: 1; ring: 2px; }
+                    UserAvatar { bg-color: card-hover.has-hover ? Theme.card-bg-hover : Theme.card-bg; initials: root.streamer-initials; color-index: 0; }
+                    if peak-viewers > 1: UserAvatar { bg-color: card-hover.has-hover ? Theme.card-bg-hover : Theme.card-bg; initials: "+"; color-index: 2; }
+                    if peak-viewers > 2: UserAvatar { bg-color: card-hover.has-hover ? Theme.card-bg-hover : Theme.card-bg; initials: ""; color-index: 1; }
                 }
 
                 Text {

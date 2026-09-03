@@ -136,6 +136,11 @@ export struct FeedCardData {
 
     // Rich game-session card (spec 19 B2). Pre-formatted in Rust.
     game-record: string,        // "5W–3L" (with draws: "5W–3L–1D")
+    // The parts, so a card can colour a win and a loss differently.
+    // The joined string above stays for anything wanting one label.
+    game-wins: int,
+    game-losses: int,
+    game-draws: int,
     game-streak-text: string,   // "W4" / "L2" / "—"
     game-streak-positive: bool,
     game-winrate: string,       // "62%" / "—"

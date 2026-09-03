@@ -29,8 +29,10 @@ component IconButton inherits Rectangle {
         height: parent.height;
         n: 9px;
         inset: Theme.keyline;
+        // Opaque. This shape sits on top of the red outline shape, so a
+        // translucent red here reads as a solid red button.
         fill: ib-hover.has-hover
-            ? (alert ? Theme.live-bg : Theme.raised-hover)
+            ? (alert ? Theme.live.mix(Theme.surface, 0.16) : Theme.raised-hover)
             : Theme.surface;
     }
 
