@@ -49,19 +49,19 @@ is the gate before merge.
    Measured ERLE on v2.1: aligned 23.74 dB, misaligned 22.72 dB
    (v1.3 aligned was 24.33 dB — the ideal harness does not discriminate
    generations; the win is under impairments, still to be field-proven).
-7. **VPIO capture backend (macOS)** — `CoreAudioCapture` takes
-   `kAudioUnitSubType_VoiceProcessingIO` when the echo toggle is on
-   (subtype swap, same bus/format/contract validation). The toggle is now
-   a backend selector on macOS: on = VPIO (OS AEC/AGC, our APM capture
-   pass skipped via an atomic cached at capture start), off = plain unit
-   + software v2.1 AEC. Fresh starts default to VPIO (toggle defaults
-   true). Device switches and backend switches preserve the selected
-   device; VPIO init failure falls back to the plain unit with a loud
-   log. Headless test `VpioPlumbing` covers the desired/actual split.
-   OPEN FIELD QUESTIONS: (a) whether input-only VPIO gets a usable echo
-   reference for OUR playback and clips, or needs the output bus enabled
-   (combined unit = iteration 2); (b) clip-echo A/B vs software v2.1 —
-   the operator matrix below decides.
+7. **VPIO capture backend (macOS) — INPUT-ONLY VARIANT DEAD.** A
+   hardware probe (`/tmp/vpio-probe.cpp`, MacBook mic+speakers) proves
+   `VoiceProcessingIO` refuses `AudioUnitInitialize` (-10875) unless the
+   output bus is enabled with its format set. Input-only subtype swap
+   always falls back to plain HAL + software AEC. The toggle, backend
+   switching, APM skip, and fallback paths are landed and tested, but
+   they cannot produce a working VPIO unit alone. REQUIRED ITERATION:
+   combined duplex VPIO unit carrying both capture input and render
+   output (our mix must flow through its output bus to serve as the AEC
+   reference), used only when input+output devices match, plain fallback
+   otherwise. Until then the client runs software v2.1 AEC on both
+   toggle positions — which is exactly what the clip-case field test
+   below should measure first.
 
 ## Windows TODOs (in order)
 
