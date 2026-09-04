@@ -55,6 +55,7 @@ endif()
 # --- rtc_base ---
 set(RTC_BASE_SOURCES
     webrtc/rtc_base/checks.cc
+    webrtc/rtc_base/containers/flat_tree.cc
     webrtc/rtc_base/event.cc
     webrtc/rtc_base/event_tracer.cc
     webrtc/rtc_base/experiments/field_trial_parser.cc
@@ -63,36 +64,32 @@ set(RTC_BASE_SOURCES
     webrtc/rtc_base/platform_thread.cc
     webrtc/rtc_base/platform_thread_types.cc
     webrtc/rtc_base/race_checker.cc
+    webrtc/rtc_base/random.cc
     webrtc/rtc_base/string_encode.cc
     webrtc/rtc_base/string_to_number.cc
     webrtc/rtc_base/string_utils.cc
     webrtc/rtc_base/strings/string_builder.cc
-    webrtc/rtc_base/synchronization/mutex.cc
-    webrtc/rtc_base/synchronization/rw_lock_wrapper.cc
-    webrtc/rtc_base/synchronization/yield.cc
+    webrtc/rtc_base/synchronization/sequence_checker_internal.cc
     webrtc/rtc_base/synchronization/yield_policy.cc
     webrtc/rtc_base/system/file_wrapper.cc
+    webrtc/rtc_base/system_time.cc
     webrtc/rtc_base/time_utils.cc
     webrtc/rtc_base/zero_memory.cc
 )
-if(WIN32)
-    list(APPEND RTC_BASE_SOURCES webrtc/rtc_base/synchronization/rw_lock_win.cc)
-else()
-    list(APPEND RTC_BASE_SOURCES webrtc/rtc_base/synchronization/rw_lock_posix.cc)
-endif()
+
+# NOTE: v2.x removed rtc_base synchronization primitives (mutex, rw_lock,
+# yield) in favor of absl equivalents — no OS-conditional sources remain.
 
 # --- api ---
 set(API_SOURCES
     webrtc/api/audio/audio_frame.cc
+    webrtc/api/audio/audio_processing.cc
+    webrtc/api/audio/audio_processing_statistics.cc
     webrtc/api/audio/channel_layout.cc
     webrtc/api/audio/echo_canceller3_config.cc
-    webrtc/api/audio_codecs/audio_decoder.cc
-    webrtc/api/audio_codecs/audio_encoder.cc
     webrtc/api/rtp_headers.cc
     webrtc/api/rtp_packet_info.cc
     webrtc/api/task_queue/task_queue_base.cc
-    webrtc/api/units/data_rate.cc
-    webrtc/api/units/data_size.cc
     webrtc/api/units/frequency.cc
     webrtc/api/units/time_delta.cc
     webrtc/api/units/timestamp.cc
@@ -105,6 +102,7 @@ set(API_SOURCES
 # --- system_wrappers ---
 set(SYSTEM_WRAPPERS_SOURCES
     webrtc/system_wrappers/source/cpu_features.cc
+    webrtc/system_wrappers/source/denormal_disabler.cc
     webrtc/system_wrappers/source/field_trial.cc
     webrtc/system_wrappers/source/metrics.cc
     webrtc/system_wrappers/source/sleep.cc
@@ -117,8 +115,6 @@ set(COMMON_AUDIO_SOURCES
     webrtc/common_audio/channel_buffer.cc
     webrtc/common_audio/fir_filter_c.cc
     webrtc/common_audio/fir_filter_factory.cc
-    webrtc/common_audio/real_fourier.cc
-    webrtc/common_audio/real_fourier_ooura.cc
     webrtc/common_audio/resampler/push_resampler.cc
     webrtc/common_audio/resampler/push_sinc_resampler.cc
     webrtc/common_audio/resampler/resampler.cc
@@ -168,9 +164,6 @@ set(COMMON_AUDIO_SOURCES
     webrtc/common_audio/vad/vad_gmm.c
     webrtc/common_audio/vad/vad_sp.c
     webrtc/common_audio/vad/webrtc_vad.c
-    webrtc/common_audio/wav_file.cc
-    webrtc/common_audio/wav_header.cc
-    webrtc/common_audio/window_generator.cc
 )
 
 set(COMMON_AUDIO_SSE2_SOURCES
@@ -224,6 +217,7 @@ set(AUDIO_PROCESSING_SOURCES
     webrtc/modules/audio_processing/aec3/clockdrift_detector.cc
     webrtc/modules/audio_processing/aec3/coarse_filter_update_gain.cc
     webrtc/modules/audio_processing/aec3/comfort_noise_generator.cc
+    webrtc/modules/audio_processing/aec3/config_selector.cc
     webrtc/modules/audio_processing/aec3/decimator.cc
     webrtc/modules/audio_processing/aec3/dominant_nearend_detector.cc
     webrtc/modules/audio_processing/aec3/downsampled_render_buffer.cc
@@ -242,6 +236,7 @@ set(AUDIO_PROCESSING_SOURCES
     webrtc/modules/audio_processing/aec3/matched_filter.cc
     webrtc/modules/audio_processing/aec3/matched_filter_lag_aggregator.cc
     webrtc/modules/audio_processing/aec3/moving_average.cc
+    webrtc/modules/audio_processing/aec3/multi_channel_content_detector.cc
     webrtc/modules/audio_processing/aec3/refined_filter_update_gain.cc
     webrtc/modules/audio_processing/aec3/render_buffer.cc
     webrtc/modules/audio_processing/aec3/render_delay_buffer.cc
@@ -273,37 +268,42 @@ set(AUDIO_PROCESSING_SOURCES
     webrtc/modules/audio_processing/agc/legacy/digital_agc.cc
     webrtc/modules/audio_processing/agc/loudness_histogram.cc
     webrtc/modules/audio_processing/agc/utility.cc
-    webrtc/modules/audio_processing/agc2/adaptive_agc.cc
-    webrtc/modules/audio_processing/agc2/adaptive_digital_gain_applier.cc
-    webrtc/modules/audio_processing/agc2/adaptive_mode_level_estimator_agc.cc
-    webrtc/modules/audio_processing/agc2/adaptive_mode_level_estimator.cc
+    webrtc/modules/audio_processing/agc2/adaptive_digital_gain_controller.cc
     webrtc/modules/audio_processing/agc2/agc2_testing_common.cc
     webrtc/modules/audio_processing/agc2/biquad_filter.cc
+    webrtc/modules/audio_processing/agc2/clipping_predictor.cc
+    webrtc/modules/audio_processing/agc2/clipping_predictor_level_buffer.cc
     webrtc/modules/audio_processing/agc2/compute_interpolated_gain_curve.cc
-    webrtc/modules/audio_processing/agc2/down_sampler.cc
+    webrtc/modules/audio_processing/agc2/cpu_features.cc
     webrtc/modules/audio_processing/agc2/fixed_digital_level_estimator.cc
     webrtc/modules/audio_processing/agc2/gain_applier.cc
+    webrtc/modules/audio_processing/agc2/input_volume_controller.cc
+    webrtc/modules/audio_processing/agc2/input_volume_stats_reporter.cc
     webrtc/modules/audio_processing/agc2/interpolated_gain_curve.cc
     webrtc/modules/audio_processing/agc2/limiter.cc
     webrtc/modules/audio_processing/agc2/limiter_db_gain_curve.cc
     webrtc/modules/audio_processing/agc2/noise_level_estimator.cc
-    webrtc/modules/audio_processing/agc2/noise_spectrum_estimator.cc
     webrtc/modules/audio_processing/agc2/rnn_vad/auto_correlation.cc
-    webrtc/modules/audio_processing/agc2/rnn_vad/common.cc
     webrtc/modules/audio_processing/agc2/rnn_vad/features_extraction.cc
     webrtc/modules/audio_processing/agc2/rnn_vad/lp_residual.cc
     webrtc/modules/audio_processing/agc2/rnn_vad/pitch_search.cc
     webrtc/modules/audio_processing/agc2/rnn_vad/pitch_search_internal.cc
     webrtc/modules/audio_processing/agc2/rnn_vad/rnn.cc
+    webrtc/modules/audio_processing/agc2/rnn_vad/rnn_fc.cc
+    webrtc/modules/audio_processing/agc2/rnn_vad/rnn_gru.cc
     webrtc/modules/audio_processing/agc2/rnn_vad/spectral_features.cc
     webrtc/modules/audio_processing/agc2/rnn_vad/spectral_features_internal.cc
     webrtc/modules/audio_processing/agc2/saturation_protector.cc
-    webrtc/modules/audio_processing/agc2/signal_classifier.cc
-    webrtc/modules/audio_processing/agc2/vad_with_level.cc
+    webrtc/modules/audio_processing/agc2/saturation_protector_buffer.cc
+    webrtc/modules/audio_processing/agc2/speech_level_estimator.cc
+    webrtc/modules/audio_processing/agc2/speech_probability_buffer.cc
+    webrtc/modules/audio_processing/agc2/vad_wrapper.cc
     webrtc/modules/audio_processing/agc2/vector_float_frame.cc
     webrtc/modules/audio_processing/audio_buffer.cc
     webrtc/modules/audio_processing/audio_processing_builder_impl.cc
     webrtc/modules/audio_processing/audio_processing_impl.cc
+    webrtc/modules/audio_processing/capture_levels_adjuster/audio_samples_scaler.cc
+    webrtc/modules/audio_processing/capture_levels_adjuster/capture_levels_adjuster.cc
     webrtc/modules/audio_processing/echo_control_mobile_impl.cc
     webrtc/modules/audio_processing/echo_detector/circular_buffer.cc
     webrtc/modules/audio_processing/echo_detector/mean_variance_estimator.cc
@@ -314,10 +314,6 @@ set(AUDIO_PROCESSING_SOURCES
     webrtc/modules/audio_processing/high_pass_filter.cc
     webrtc/modules/audio_processing/include/aec_dump.cc
     webrtc/modules/audio_processing/include/audio_frame_proxies.cc
-    webrtc/modules/audio_processing/include/audio_processing.cc
-    webrtc/modules/audio_processing/include/audio_processing_statistics.cc
-    webrtc/modules/audio_processing/include/config.cc
-    webrtc/modules/audio_processing/level_estimator.cc
     webrtc/modules/audio_processing/logging/apm_data_dumper.cc
     webrtc/modules/audio_processing/ns/fast_math.cc
     webrtc/modules/audio_processing/ns/histograms.cc
@@ -332,18 +328,10 @@ set(AUDIO_PROCESSING_SOURCES
     webrtc/modules/audio_processing/ns/speech_probability_estimator.cc
     webrtc/modules/audio_processing/ns/suppression_params.cc
     webrtc/modules/audio_processing/ns/wiener_filter.cc
-    webrtc/modules/audio_processing/optionally_built_submodule_creators.cc
     webrtc/modules/audio_processing/residual_echo_detector.cc
     webrtc/modules/audio_processing/rms_level.cc
     webrtc/modules/audio_processing/splitting_filter.cc
     webrtc/modules/audio_processing/three_band_filter_bank.cc
-    webrtc/modules/audio_processing/transient/file_utils.cc
-    webrtc/modules/audio_processing/transient/moving_moments.cc
-    webrtc/modules/audio_processing/transient/transient_detector.cc
-    webrtc/modules/audio_processing/transient/transient_suppressor_impl.cc
-    webrtc/modules/audio_processing/transient/wpd_node.cc
-    webrtc/modules/audio_processing/transient/wpd_tree.cc
-    webrtc/modules/audio_processing/typing_detection.cc
     webrtc/modules/audio_processing/utility/cascaded_biquad_filter.cc
     webrtc/modules/audio_processing/utility/delay_estimator.cc
     webrtc/modules/audio_processing/utility/delay_estimator_wrapper.cc
@@ -356,7 +344,6 @@ set(AUDIO_PROCESSING_SOURCES
     webrtc/modules/audio_processing/vad/vad_audio_proc.cc
     webrtc/modules/audio_processing/vad/vad_circular_buffer.cc
     webrtc/modules/audio_processing/vad/voice_activity_detector.cc
-    webrtc/modules/audio_processing/voice_detection.cc
 )
 
 set(AUDIO_PROCESSING_AVX2_SOURCES
@@ -365,6 +352,7 @@ set(AUDIO_PROCESSING_AVX2_SOURCES
     webrtc/modules/audio_processing/aec3/fft_data_avx2.cc
     webrtc/modules/audio_processing/aec3/matched_filter_avx2.cc
     webrtc/modules/audio_processing/aec3/vector_math_avx2.cc
+    webrtc/modules/audio_processing/agc2/rnn_vad/vector_math_avx2.cc
 )
 
 set(AUDIO_PROCESSING_NEON_SOURCES
@@ -404,10 +392,20 @@ target_include_directories(webrtc_audio_processing
     PUBLIC  ${WAP_ROOT} ${WAP_ROOT}/webrtc
 )
 
+# Compat shims for vendored-vs-vcpkg drift (MSVC-safe, no include_next).
+# BEFORE keeps them ahead of absl interface includes so quoted includes
+# resolve here first. PRIVATE: never leaks to consumers.
+# - compat/absl/base/nullability.h: absl dropped the Nullable/Nonnull C++
+#   wrappers while v2.1 still uses them.
+target_include_directories(webrtc_audio_processing
+    BEFORE PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/compat
+)
+
 target_link_libraries(webrtc_audio_processing
     PUBLIC
         absl::base
         absl::flags
+        absl::numeric
         absl::strings
         absl::synchronization
         absl::bad_optional_access
@@ -421,6 +419,7 @@ if(WAP_HAS_X86)
     list(TRANSFORM SSE2_SOURCES PREPEND "${WAP_ROOT}/")
     add_library(wap_sse2 OBJECT ${SSE2_SOURCES})
     target_compile_definitions(wap_sse2 PRIVATE ${WAP_DEFINES})
+    target_include_directories(wap_sse2 BEFORE PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/compat)
     target_include_directories(wap_sse2 PRIVATE ${WAP_ROOT} ${WAP_ROOT}/webrtc)
     target_link_libraries(wap_sse2 PRIVATE absl::base)
     if(MSVC)
@@ -433,6 +432,7 @@ if(WAP_HAS_X86)
     list(TRANSFORM AVX2_SOURCES PREPEND "${WAP_ROOT}/")
     add_library(wap_avx2 OBJECT ${AVX2_SOURCES})
     target_compile_definitions(wap_avx2 PRIVATE ${WAP_DEFINES})
+    target_include_directories(wap_avx2 BEFORE PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/compat)
     target_include_directories(wap_avx2 PRIVATE ${WAP_ROOT} ${WAP_ROOT}/webrtc)
     target_link_libraries(wap_avx2 PRIVATE absl::base)
     if(MSVC)
@@ -453,6 +453,7 @@ if(WAP_HAS_NEON)
     list(TRANSFORM NEON_SOURCES PREPEND "${WAP_ROOT}/")
     add_library(wap_neon OBJECT ${NEON_SOURCES})
     target_compile_definitions(wap_neon PRIVATE ${WAP_DEFINES})
+    target_include_directories(wap_neon BEFORE PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/compat)
     target_include_directories(wap_neon PRIVATE ${WAP_ROOT} ${WAP_ROOT}/webrtc)
     target_link_libraries(wap_neon PRIVATE absl::base)
 

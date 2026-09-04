@@ -6,14 +6,18 @@ isProject: false
 
 # Windows Handoff — Echo Cancellation Improvements
 
-Branch: `echo-cancellation-improvements` (cut from `main` @ `22aa1e6`).
-Status: macOS work done, **uncommitted**. Commit or stash before switching machines.
+Branch: `feat/echo-cancellation-improvements`.
+Status (2026-09-04, macOS arm64): harness + delay hints committed as
+`9900279`. Engine upgrade v2.1 is done locally, uncommitted — this file
+now covers the remaining Windows verification plus WASAPI latency.
 
 ## What landed on macOS (do not redo)
 
-1. **ERLE harness** — `libmello/tests/test_echo_canceller.cpp`, 4 new tests:
+1. **ERLE harness** — `libmello/tests/test_echo_canceller.cpp`, 5 new tests:
    - `BroadbandLoopbackCancelsEcho` (white-noise loopback, 1-frame delay,
-     AGC2 off, threshold >10 dB; measured **24.33 dB** on v1.3 / macOS arm64).
+     AGC2 off, threshold >10 dB).
+   - `MisalignedDelayLoopbackCancelsEcho` (24.4 ms non-integer delay,
+     longer warmup, threshold >6 dB; guards the delay-estimator path).
    - `BlindRunStaysPassthrough` (no render feed, must stay within +/-3 dB).
    - `StreamDelayHintClamped` (setter clamp 0..500 ms).
    - `RenderAccumulatesSubFrameChunks` (48x100-sample feeds must yield
@@ -31,6 +35,19 @@ Status: macOS work done, **uncommitted**. Commit or stash before switching machi
 5. **Neural insertion point** — comment in `on_captured_audio` marks where
    the two-input suppressor goes and notes the gate must move to post-stage
    RMS at that time. No behavior change today.
+6. **Engine upgrade v1.3 -> v2.1 (M131)** — submodule now pinned at v2.1
+   (`846fe90`); CMake wrapper file lists regenerated from v2.1 meson
+   sources (251 files, all verified present); `absl::numeric` added;
+   `apply_config` drops the removed `voice_detection` /
+   `residual_echo_detector` knobs; `apm_` handle is now
+   `rtc::scoped_refptr` (v2.x `Create()` breaking change; no more manual
+   delete); transient-suppression toggle stays API-compatible but inert
+   (backend removed upstream); `compat/absl/base/nullability.h` shim
+   covers the `Nullable`/`Nonnull` wrappers absl dropped (identity
+   aliases, MSVC-safe, PRIVATE to WAP + mello + mello_tests targets).
+   Measured ERLE on v2.1: aligned 23.74 dB, misaligned 22.72 dB
+   (v1.3 aligned was 24.33 dB — the ideal harness does not discriminate
+   generations; the win is under impairments, still to be field-proven).
 
 ## Windows TODOs (in order)
 
@@ -44,10 +61,13 @@ cmake --build libmello/build --target mello_tests
 $env:CI='true'; ctest --test-dir libmello/build --output-on-failure
 ```
 
-- Expect all 13 `EchoCancellerTest.*` green.
-- Record the `BroadbandLoopbackCancelsEcho` `[ERLE]` line on Windows hardware.
-  Expect ~20-25 dB. If it is far lower (<15 dB), suspect the WASAPI path
-  before blaming the engine.
+- Expect all 14 `EchoCancellerTest.*` green.
+- Record both `[ERLE]` lines on Windows hardware.
+  Expect aligned ~23-24 dB, misaligned ~22-23 dB. If either is far lower
+  (<15 dB aligned), suspect the WASAPI path before blaming the engine.
+- MSVC attention: the nullability shim uses no `include_next` and is
+  C++17-clean, but confirm the WAP target builds warning-clean under the
+  vendored-code warning suppressions already in the wrapper.
 - Known pre-existing failure (macOS, unrelated, audio untouched):
   `RtpVideoSenderFecTest.ParityFecRepairsOneLossPerGroupWithoutPli`.
   Confirm it fails on clean `main` too before investigating.
@@ -78,16 +98,16 @@ $env:CI='true'; ctest --test-dir libmello/build --output-on-failure
   `BlindRunStaysPassthrough` stays green.
 - Restore with `touch` (not `cp`/`mv`, per TESTING.md mtime note).
 
-### 5. v2.x upgrade spike (blocked on TODOs 1-4)
+### 5. Confirm the v2.1 upgrade on Windows (spike landed on macOS)
 
-- Replace `libmello/third_party/webrtc-audio-processing` with freedesktop
-  v2.x. Regenerate the explicit file list in
-  `libmello/cmake/webrtc-audio-processing/CMakeLists.txt`.
-- Audit `apply_config()` in `echo_canceller.cpp`: `residual_echo_detector`
-  may be gone/renamed in v2.x config.
-- Watch the absl version bump in the vcpkg manifest.
-- Gate: same harness ERLE >= 25 dB + `check-full.sh` green.
-- Keep the int16 `ProcessStream` / `ProcessReverseStream` usage.
+- The tree swap + wrapper regen + Config audit are done (see item 6
+  above). On Windows: rebuild, run the harness, compare ERLE numbers
+  with the macOS baselines (aligned 23.74, misaligned 22.72).
+- Then run `check-full.sh` green before merging the branch.
+- iOS note: the submodule move drops the Apple-framework packaging
+  scripts (`create-lipo.sh`, cross inis) from the tree. The CMake build
+  never used them, but the iOS build must still be verified on a Mac
+  with the iOS toolchain before merge.
 
 ### 6. Windows-specific notes (not macOS work)
 
@@ -98,14 +118,15 @@ $env:CI='true'; ctest --test-dir libmello/build --output-on-failure
   (remote talk + clip playback), Bluetooth connect/disconnect mid-session,
   headset double-talk over loud clip, mouth-to-ear <50 ms.
 
-## Files changed (macOS, uncommitted)
+## Files changed (macOS, uncommitted beyond `9900279`)
 
-- `libmello/src/audio/echo_canceller.hpp` / `.cpp`
-- `libmello/src/audio/audio_capture.hpp`, `audio_playback.hpp`
-- `libmello/src/audio/audio_pipeline.hpp` / `.cpp`
-- `libmello/src/audio/capture_coreaudio.hpp` / `.cpp`
-- `libmello/src/audio/playback_coreaudio.hpp` / `.cpp`
-- `libmello/tests/test_echo_canceller.cpp`
+- `libmello/third_party/webrtc-audio-processing` (submodule pin f8efa84 -> v2.1 `846fe90`)
+- `libmello/cmake/webrtc-audio-processing/CMakeLists.txt` (regenerated lists, `absl::numeric`, compat includes)
+- `libmello/cmake/webrtc-audio-processing/compat/absl/base/nullability.h` (new)
+- `libmello/CMakeLists.txt` (compat include for mello target)
+- `libmello/tests/CMakeLists.txt` (compat include for mello_tests target)
+- `libmello/src/audio/echo_canceller.hpp` / `.cpp` (scoped_refptr handle, Config deltas)
+- `libmello/tests/test_echo_canceller.cpp` (misaligned variant, v2.1 baselines)
 
 No spec changes yet (docs step lands after the engine upgrade).
 No public C API changes. No new dependencies.

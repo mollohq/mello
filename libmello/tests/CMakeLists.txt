@@ -37,6 +37,11 @@ target_link_libraries(mello_tests PRIVATE
 target_include_directories(mello_tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../src
     ${CMAKE_CURRENT_SOURCE_DIR}/../include
+    # Nullability compat shims for the vendored WAP tree (see
+    # cmake/webrtc-audio-processing/compat). Test TUs include
+    # echo_canceller.hpp -> api/scoped_refptr.h directly, so they need the
+    # same shadow the mello target gets (PRIVATE there does not propagate).
+    ${CMAKE_CURRENT_SOURCE_DIR}/../cmake/webrtc-audio-processing/compat
 )
 
 add_executable(mello_rtp_tests

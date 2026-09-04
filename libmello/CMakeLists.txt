@@ -343,6 +343,12 @@ target_include_directories(mello PRIVATE
     ${MELLO_AMF_DIR}
     ${MELLO_VPL_DIR}
 )
+# Nullability compat shims for the vendored WAP tree (see
+# cmake/webrtc-audio-processing/compat). BEFORE keeps them ahead of absl
+# interface includes. PRIVATE: never leaks to FFI consumers.
+target_include_directories(mello
+    BEFORE PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/cmake/webrtc-audio-processing/compat
+)
 if(DEFINED ENV{CUDA_PATH})
     target_include_directories(mello PRIVATE "$ENV{CUDA_PATH}/include")
 endif()

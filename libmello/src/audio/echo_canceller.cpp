@@ -52,7 +52,6 @@ bool EchoCanceller::initialize(int sample_rate, int channels) {
     int err = apm_->Initialize(proc_cfg);
     if (err != 0) {
         MELLO_LOG_ERROR("aec", "APM Initialize failed (error %d)", err);
-        delete apm_;
         apm_ = nullptr;
         return false;
     }
@@ -74,7 +73,6 @@ bool EchoCanceller::initialize(int sample_rate, int channels) {
 
 void EchoCanceller::shutdown() {
     if (apm_) {
-        delete apm_;
         apm_ = nullptr;
         MELLO_LOG_INFO("aec", "shut down");
     }
@@ -98,8 +96,9 @@ void EchoCanceller::apply_config() {
         transient_suppression_enabled_.load(std::memory_order_relaxed);
     cfg.high_pass_filter.enabled = high_pass_filter_enabled_.load(std::memory_order_relaxed);
     cfg.pre_amplifier.enabled = false;
-    cfg.voice_detection.enabled = false;
-    cfg.residual_echo_detector.enabled = true;
+    // voice_detection and residual_echo_detector knobs were removed
+    // upstream in v2.x; the residual-echo estimator now runs unconditionally
+    // inside AEC3.
 
     apm_->ApplyConfig(cfg);
 }
@@ -219,6 +218,9 @@ void EchoCanceller::set_noise_suppression_level(WebRtcNsLevel level) {
 
 void EchoCanceller::set_transient_suppression_enabled(bool enabled) {
     transient_suppression_enabled_.store(enabled, std::memory_order_relaxed);
+    // The transient-suppressor backend was removed upstream in v2.x, so this
+    // Config flag is accepted but inert. The setter stays so the runtime
+    // control keeps its shape for a future replacement stage.
     apply_config();
     MELLO_LOG_INFO("aec", "Transient suppression %s", enabled ? "enabled" : "disabled");
 }

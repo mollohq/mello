@@ -3,6 +3,7 @@
 #include <atomic>
 #include <memory>
 #include <vector>
+#include "api/scoped_refptr.h"
 
 namespace webrtc {
 class AudioProcessing;
@@ -68,7 +69,9 @@ public:
 private:
     void apply_config();
 
-    webrtc::AudioProcessing* apm_ = nullptr;
+    // Ref-counted handle; v2.x Create() returns scoped_refptr instead of a
+    // raw pointer. Assigning nullptr releases our reference.
+    rtc::scoped_refptr<webrtc::AudioProcessing> apm_;
     int sample_rate_ = 0;
     int channels_ = 0;
     std::atomic<bool> aec_enabled_{true};
