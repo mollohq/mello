@@ -20,6 +20,12 @@ public:
 
     virtual uint32_t sample_rate() const = 0;
     virtual uint32_t channels() const = 0;
+
+    /// Estimated device + safety-offset input latency in ms.
+    /// Default 0 (unknown). CoreAudio overrides with
+    /// kAudioUnitProperty_Latency + SafetyOffset. Windows override
+    /// (WASAPI GetStreamLatency + GetDevicePeriod) is a handoff TODO.
+    virtual int input_latency_ms() const { return 0; }
 };
 
 /// Create platform-specific capture backend.

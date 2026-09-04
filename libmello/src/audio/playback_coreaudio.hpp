@@ -27,8 +27,10 @@ public:
     }
 
     uint32_t sample_rate() const override { return sample_rate_; }
+    int output_latency_ms() const override { return cached_output_latency_ms_; }
 
 private:
+    int query_output_latency_ms();
     static OSStatus render_callback(
         void* inRefCon,
         AudioUnitRenderActionFlags* ioActionFlags,
@@ -45,6 +47,7 @@ private:
     /// Interleaved channels in the samples handed to `feed`. Voice is mono;
     /// stream game audio is stereo.
     uint32_t input_channels_ = 1;
+    int cached_output_latency_ms_ = 0;
 
     std::atomic<bool> running_{false};
     // ~1 second at stereo 48 kHz; mono uses half of it.

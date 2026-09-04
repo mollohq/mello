@@ -45,6 +45,12 @@ public:
     void set_noise_suppression_level(WebRtcNsLevel level);
     void set_transient_suppression_enabled(bool enabled);
     void set_high_pass_filter_enabled(bool enabled);
+
+    /// Hint to APM about capture-minus-render latency (ms). Clamped to
+    /// 0..500. Call after device switches and when the jitter depth
+    /// changes. Thread-safe: may be called from any thread.
+    void set_stream_delay_ms(int delay_ms);
+    int stream_delay_ms() const { return stream_delay_ms_.load(std::memory_order_relaxed); }
     bool aec_enabled() const { return aec_enabled_.load(std::memory_order_relaxed); }
     bool agc_enabled() const { return agc_enabled_.load(std::memory_order_relaxed); }
     WebRtcNsLevel noise_suppression_level() const {
@@ -72,7 +78,15 @@ private:
     std::atomic<bool> high_pass_filter_enabled_{false};
     std::atomic<uint32_t> capture_frames_{0};
     std::atomic<uint32_t> render_frames_{0};
+    std::atomic<int> stream_delay_ms_{0};
     std::vector<int16_t> render_scratch_;
+    // Pending render tail (< APM_FRAME_SIZE) carried to the next
+    // process_render call. CoreAudio/WASAPI callbacks are ~512 frames,
+    // not multiples of 480 — dropping the tail corrupts AEC alignment.
+    // Guarded by APM's internal lock via ProcessReverseStream calls;
+    // all pushes/pops happen on the playback thread (mix_output).
+    std::vector<int16_t> render_pending_;
+    std::atomic<uint32_t> render_dropped_tail_frames_{0};
 };
 
 } // namespace mello::audio

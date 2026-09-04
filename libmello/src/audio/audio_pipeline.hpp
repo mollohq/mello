@@ -130,6 +130,11 @@ private:
     void process_and_encode_frame(int16_t* frame);
     void reset_speech_gate_state();
     void clear_remote_streams();
+    /// Recompute APM stream-delay hint from device latencies plus jitter
+    /// depth. Called on init and device switches (not per-frame: the
+    /// estimator converges from a close start; per-frame jitter tracking
+    /// is future work — see Windows handoff TODO).
+    void refresh_stream_delay_hint();
 #ifdef _WIN32
     void apply_session(AudioPlayback* pb);
 #endif

@@ -187,9 +187,61 @@ bool CoreAudioCapture::initialize(const char* device_id) {
         return false;
     }
 
+    cached_input_latency_ms_ = query_input_latency_ms();
+
     MELLO_LOG_INFO("capture", "CoreAudio: initialized (rate=%u ch=%u maxFrames=%u device=%u)",
                    sample_rate_, channels_, maxFrames, (unsigned)device_id_);
     return true;
+}
+
+int CoreAudioCapture::query_input_latency_ms() {
+    double total_ms = 0.0;
+
+    // AudioUnit internal latency (seconds).
+    Float64 unit_latency_sec = 0.0;
+    UInt32 size = sizeof(unit_latency_sec);
+    OSStatus s = AudioUnitGetProperty(audio_unit_, kAudioUnitProperty_Latency,
+                                      kAudioUnitScope_Global, 0,
+                                      &unit_latency_sec, &size);
+    if (s == noErr && unit_latency_sec > 0 && unit_latency_sec < 2.0) {
+        total_ms += unit_latency_sec * 1000.0;
+    }
+
+    if (device_id_ != kAudioObjectUnknown) {
+        // Safety offset (frames) on the input scope.
+        UInt32 safety_frames = 0;
+        size = sizeof(safety_frames);
+        AudioObjectPropertyAddress safety_addr = {
+            kAudioDevicePropertySafetyOffset,
+            kAudioObjectPropertyScopeInput,
+            kAudioObjectPropertyElementMain};
+        if (AudioObjectHasProperty(device_id_, &safety_addr)) {
+            if (AudioObjectGetPropertyData(device_id_, &safety_addr, 0, nullptr,
+                                           &size, &safety_frames) == noErr) {
+                total_ms += static_cast<double>(safety_frames) * 1000.0 / 48000.0;
+            }
+        }
+        // Device buffer size (frames) — the dominant term on most Macs.
+        UInt32 buffer_frames = 0;
+        size = sizeof(buffer_frames);
+        AudioObjectPropertyAddress buf_addr = {
+            kAudioDevicePropertyBufferFrameSize,
+            kAudioObjectPropertyScopeInput,
+            kAudioObjectPropertyElementMain};
+        if (AudioObjectHasProperty(device_id_, &buf_addr)) {
+            if (AudioObjectGetPropertyData(device_id_, &buf_addr, 0, nullptr,
+                                           &size, &buffer_frames) == noErr &&
+                buffer_frames > 0 && buffer_frames <= 8192) {
+                total_ms += static_cast<double>(buffer_frames) * 1000.0 / 48000.0;
+            }
+        }
+    }
+
+    if (total_ms < 0) total_ms = 0;
+    if (total_ms > 500) total_ms = 500;
+    int ms = static_cast<int>(total_ms + 0.5);
+    MELLO_LOG_INFO("capture", "CoreAudio: input latency estimate %d ms", ms);
+    return ms;
 }
 
 bool CoreAudioCapture::start(Callback callback) {

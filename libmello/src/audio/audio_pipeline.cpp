@@ -172,6 +172,7 @@ bool AudioPipeline::initialize() {
 
     capture_accum_.reserve(FRAME_SIZE * 2);
     initialized_ = true;
+    refresh_stream_delay_hint();
     MELLO_LOG_INFO("pipeline", "audio pipeline ready (frame=%d samples, %dHz mono)",
                    FRAME_SIZE, SAMPLE_RATE);
     return true;
@@ -351,6 +352,14 @@ void AudioPipeline::on_captured_audio(const int16_t* samples, size_t count) {
             }
 
             echo_canceller_.process_capture(capture_accum_.data(), FRAME_SIZE);
+
+            // NEURAL RESIDUAL-ECHO INSERTION POINT: a two-input
+            // (post-AEC mic + far-end reference) suppressor runs here, before
+            // the gate/VAD below. GATE ORDERING TODO: the `rms` used for
+            // candidate gating above is measured pre-AEC; once the neural
+            // stage lands, the gate threshold must use post-stage RMS so echo
+            // residue alone cannot hold the gate open. Kept pre-AEC today to
+            // avoid behavior change before the model exists.
 
             if (local_clip_ring_ && clip_buffer_ && clip_buffer_->is_active()) {
                 local_clip_ring_->write(capture_accum_.data(), FRAME_SIZE);
@@ -753,6 +762,28 @@ float AudioPipeline::pipeline_delay_ms() const {
     return jb_ms + pb_ms;
 }
 
+void AudioPipeline::refresh_stream_delay_hint() {
+    if (!capture_ || !playback_) return;
+    // Total render-to-capture latency ~= output device latency + input
+    // device latency + jitter/playout buffering. The jitter term is small
+    // at switch time (buffers just cleared); the AEC delay estimator
+    // converges the rest. Sum, not difference: both legs add delay.
+    // WINDOWS TODO: verify against IAudioClient::GetStreamLatency +
+    // GetDevicePeriod on hardware; confirm sign with a loopback ERLE run.
+    int out_ms = playback_->output_latency_ms();
+    int in_ms = capture_->input_latency_ms();
+    float jb_ms = 0.0f;
+    if (initialized_) {
+        jb_ms = pipeline_delay_ms();
+    }
+    int delay = out_ms + in_ms + static_cast<int>(jb_ms + 0.5f);
+    if (delay < 0) delay = 0;
+    if (delay > 500) delay = 500;
+    echo_canceller_.set_stream_delay_ms(delay);
+    MELLO_LOG_INFO("pipeline", "stream delay hint: out=%d in=%d jb=%.1f total=%d ms",
+                   out_ms, in_ms, jb_ms, delay);
+}
+
 void AudioPipeline::clear_remote_streams() {
     std::lock_guard<std::mutex> lock(peer_buffers_mutex_);
     size_t had = peer_buffers_.size();
@@ -803,8 +834,10 @@ int AudioPipeline::set_capture_device(const char* device_id) {
         });
         if (ok) capturing_ = true;
         MELLO_LOG_INFO("pipeline", "capture restarted on new device: %s", ok ? "ok" : "FAILED");
+        if (ok) refresh_stream_delay_hint();
         return ok ? (fell_back ? 2 : 1) : 0;
     }
+    refresh_stream_delay_hint();
     return fell_back ? 2 : 1;
 }
 
@@ -837,6 +870,7 @@ int AudioPipeline::set_playback_device(const char* device_id) {
     });
     bool ok = playback_->start();
     MELLO_LOG_INFO("pipeline", "playback restarted on new device: %s", ok ? "ok" : "FAILED");
+    if (ok) refresh_stream_delay_hint();
     return ok ? (fell_back ? 2 : 1) : 0;
 }
 

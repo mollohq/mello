@@ -21,8 +21,10 @@ public:
 
     uint32_t sample_rate() const override { return sample_rate_; }
     uint32_t channels() const override { return channels_; }
+    int input_latency_ms() const override { return cached_input_latency_ms_; }
 
 private:
+    int query_input_latency_ms();
     static OSStatus input_callback(
         void* inRefCon,
         AudioUnitRenderActionFlags* ioActionFlags,
@@ -36,6 +38,7 @@ private:
 
     uint32_t sample_rate_ = 48000;
     uint32_t channels_ = 1;
+    int cached_input_latency_ms_ = 0;
 
     std::atomic<bool> running_{false};
     Callback callback_;
