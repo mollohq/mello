@@ -312,18 +312,3 @@ TEST_F(EchoCancellerTest, RenderAccumulatesSubFrameChunks) {
     EXPECT_EQ(ec.render_frames() - before, 10u);
 }
 
-#ifdef __APPLE__
-#include "audio/capture_coreaudio.hpp"
-
-// No hardware needed: verifies the desired/actual split. The flag records
-// intent; provides_echo_cancellation() stays false until a VPIO unit
-// actually initializes (needs a real input device, so only field-tested).
-TEST(VpioPlumbing, FlagDoesNotClaimBackendBeforeInit) {
-    mello::audio::CoreAudioCapture plain;
-    EXPECT_FALSE(plain.provides_echo_cancellation());
-
-    mello::audio::CoreAudioCapture vpio;
-    vpio.set_voice_processing_enabled(true);
-    EXPECT_FALSE(vpio.provides_echo_cancellation());
-}
-#endif

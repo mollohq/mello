@@ -251,6 +251,7 @@ elseif(APPLE)
     list(APPEND MELLO_SOURCES
         src/audio/capture_coreaudio.cpp
         src/audio/playback_coreaudio.cpp
+        src/audio/vpio_duplex.cpp
         src/audio/audio_backend_coreaudio.cpp
         src/audio/device_enumerator_coreaudio.cpp
         src/audio/clip_encoder_audiotoolbox.cpp

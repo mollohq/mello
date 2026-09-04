@@ -49,19 +49,19 @@ is the gate before merge.
    Measured ERLE on v2.1: aligned 23.74 dB, misaligned 22.72 dB
    (v1.3 aligned was 24.33 dB — the ideal harness does not discriminate
    generations; the win is under impairments, still to be field-proven).
-7. **VPIO capture backend (macOS) — INPUT-ONLY VARIANT DEAD.** A
-   hardware probe (`/tmp/vpio-probe.cpp`, MacBook mic+speakers) proves
-   `VoiceProcessingIO` refuses `AudioUnitInitialize` (-10875) unless the
-   output bus is enabled with its format set. Input-only subtype swap
-   always falls back to plain HAL + software AEC. The toggle, backend
-   switching, APM skip, and fallback paths are landed and tested, but
-   they cannot produce a working VPIO unit alone. REQUIRED ITERATION:
-   combined duplex VPIO unit carrying both capture input and render
-   output (our mix must flow through its output bus to serve as the AEC
-   reference), used only when input+output devices match, plain fallback
-   otherwise. Until then the client runs software v2.1 AEC on both
-   toggle positions — which is exactly what the clip-case field test
-   below should measure first.
+7. **VPIO duplex backend (macOS) — IMPLEMENTED, hardware-verified
+   init.** A hardware probe proved input-only VPIO never initializes
+   (-10875); the duplex unit (one `VoiceProcessingIO` AudioUnit, input +
+   output enabled, our mix rendered through its output bus as Apple's
+   AEC reference) initializes cleanly on MacBook mic+speakers with
+   explicit device selection. `VpioUnit` (refcounted start/stop,
+   latency queries, contract validation) + capture/playback adapters
+   are live; the toggle selects duplex vs plain HAL pair with fallback;
+   software APM capture is skipped on the duplex path. `VpioDuplex`
+   tests pass on hardware (init, frame flow both directions, invalid-id
+   failure). REMAINING: operator field test of actual echo
+   cancellation (remote voices, clips, AirPods) — init working does
+   not yet prove cancellation working.
 
 ## Windows TODOs (in order)
 

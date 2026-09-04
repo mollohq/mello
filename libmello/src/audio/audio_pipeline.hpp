@@ -130,13 +130,23 @@ private:
     void process_and_encode_frame(int16_t* frame);
     void reset_speech_gate_state();
     void clear_remote_streams();
-    /// (Re)create the capture backend for the desired voice-processing
-    /// state and restart it if we were capturing. Falls back to the plain
-    /// backend when the VPIO unit fails to initialize.
-    void switch_capture_backend(bool voice_processing);
+    /// (Re)build the capture+playback backend pair for the desired
+    /// voice-processing state (macOS: VPIO duplex vs plain HAL pair) and
+    /// restart what was running. Falls back to the plain pair when the
+    /// duplex unit fails to initialize.
+    void switch_audio_backend(bool voice_processing);
     const char* current_capture_device_id() const {
         return capture_device_id_.empty() ? nullptr : capture_device_id_.c_str();
     }
+    const char* current_playback_device_id() const {
+        return playback_device_id_.empty() ? nullptr : playback_device_id_.c_str();
+    }
+#ifdef __APPLE__
+    /// Install a live VPIO duplex pair for the stored device ids. Returns
+    /// false when the unit fails (caller falls back to the plain pair).
+    bool activate_vpio_pair();
+    void activate_plain_pair();
+#endif
     /// Recompute APM stream-delay hint from device latencies plus jitter
     /// depth. Called on init and device switches (not per-frame: the
     /// estimator converges from a close start; per-frame jitter tracking
@@ -201,9 +211,10 @@ private:
     // (the audio thread must not touch the capture_ pointer: device
     // switches can replace it mid-callback).
     std::atomic<bool> backend_cancels_echo_{false};
-    // Last requested capture device ("empty" = default). Backend switches
-    // re-open the same device.
+    // Last requested devices ("empty" = default). Backend and device
+    // switches re-open the stored pair.
     std::string capture_device_id_;
+    std::string playback_device_id_;
     float noise_floor_rms_ = 0.001f;
     int candidate_hangover_frames_ = 0;
     int speech_hangover_frames_ = 0;
