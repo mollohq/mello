@@ -26,10 +26,18 @@ CoreAudioCapture::~CoreAudioCapture() {
 bool CoreAudioCapture::initialize(const char* device_id) {
     MELLO_LOG_INFO("capture", "CoreAudio: initializing (device=%s)", device_id ? device_id : "default");
 
-    // Find the AUHAL component
+    // Find the capture component: plain AUHAL, or VoiceProcessingIO when
+    // the voice-processing path is desired. VPIO runs Apple's own
+    // AEC/AGC against the output route (including Bluetooth latency our
+    // software AEC cannot track) and needs no render reference from us.
+    // using_voice_processing_ records the ACTUAL backend: it stays false
+    // if any step below fails, so the pipeline falls back to software AEC.
+    using_voice_processing_ = false;
     AudioComponentDescription desc = {};
     desc.componentType = kAudioUnitType_Output;
-    desc.componentSubType = kAudioUnitSubType_HALOutput;
+    desc.componentSubType = voice_processing_enabled_
+        ? kAudioUnitSubType_VoiceProcessingIO
+        : kAudioUnitSubType_HALOutput;
     desc.componentManufacturer = kAudioUnitManufacturer_Apple;
 
     AudioComponent component = AudioComponentFindNext(nullptr, &desc);
@@ -188,9 +196,11 @@ bool CoreAudioCapture::initialize(const char* device_id) {
     }
 
     cached_input_latency_ms_ = query_input_latency_ms();
+    using_voice_processing_ = voice_processing_enabled_;
 
-    MELLO_LOG_INFO("capture", "CoreAudio: initialized (rate=%u ch=%u maxFrames=%u device=%u)",
-                   sample_rate_, channels_, maxFrames, (unsigned)device_id_);
+    MELLO_LOG_INFO("capture", "CoreAudio: initialized (rate=%u ch=%u maxFrames=%u device=%u backend=%s)",
+                   sample_rate_, channels_, maxFrames, (unsigned)device_id_,
+                   using_voice_processing_ ? "VoiceProcessingIO" : "HAL");
     return true;
 }
 

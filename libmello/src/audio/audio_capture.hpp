@@ -26,6 +26,16 @@ public:
     /// kAudioUnitProperty_Latency + SafetyOffset. Windows override
     /// (WASAPI GetStreamLatency + GetDevicePeriod) is a handoff TODO.
     virtual int input_latency_ms() const { return 0; }
+
+    /// Select the OS voice-processing capture path (macOS
+    /// VoiceProcessingIO). Must be set before initialize(); ignored by
+    /// backends without one. Default no-op.
+    virtual void set_voice_processing_enabled(bool /*enabled*/) {}
+
+    /// True when the active backend cancels echo itself (VPIO). The
+    /// pipeline skips its own APM capture pass in that case to avoid
+    /// double processing. Default false.
+    virtual bool provides_echo_cancellation() const { return false; }
 };
 
 /// Create platform-specific capture backend.

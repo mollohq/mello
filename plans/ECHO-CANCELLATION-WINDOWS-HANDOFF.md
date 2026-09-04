@@ -8,8 +8,9 @@ isProject: false
 
 Branch: `feat/echo-cancellation-improvements`.
 Status (2026-09-04, macOS arm64): harness + delay hints committed as
-`9900279`. Engine upgrade v2.1 is done locally, uncommitted — this file
-now covers the remaining Windows verification plus WASAPI latency.
+`9900279`, engine upgrade v2.1 committed as `da0c388`. VPIO backend is
+done locally, uncommitted — operator field matrix (clip case first)
+is the gate before merge.
 
 ## What landed on macOS (do not redo)
 
@@ -48,6 +49,19 @@ now covers the remaining Windows verification plus WASAPI latency.
    Measured ERLE on v2.1: aligned 23.74 dB, misaligned 22.72 dB
    (v1.3 aligned was 24.33 dB — the ideal harness does not discriminate
    generations; the win is under impairments, still to be field-proven).
+7. **VPIO capture backend (macOS)** — `CoreAudioCapture` takes
+   `kAudioUnitSubType_VoiceProcessingIO` when the echo toggle is on
+   (subtype swap, same bus/format/contract validation). The toggle is now
+   a backend selector on macOS: on = VPIO (OS AEC/AGC, our APM capture
+   pass skipped via an atomic cached at capture start), off = plain unit
+   + software v2.1 AEC. Fresh starts default to VPIO (toggle defaults
+   true). Device switches and backend switches preserve the selected
+   device; VPIO init failure falls back to the plain unit with a loud
+   log. Headless test `VpioPlumbing` covers the desired/actual split.
+   OPEN FIELD QUESTIONS: (a) whether input-only VPIO gets a usable echo
+   reference for OUR playback and clips, or needs the output bus enabled
+   (combined unit = iteration 2); (b) clip-echo A/B vs software v2.1 —
+   the operator matrix below decides.
 
 ## Windows TODOs (in order)
 
@@ -118,7 +132,7 @@ $env:CI='true'; ctest --test-dir libmello/build --output-on-failure
   (remote talk + clip playback), Bluetooth connect/disconnect mid-session,
   headset double-talk over loud clip, mouth-to-ear <50 ms.
 
-## Files changed (macOS, uncommitted beyond `9900279`)
+## Files changed (macOS, `da0c388` committed; VPIO below uncommitted)
 
 - `libmello/third_party/webrtc-audio-processing` (submodule pin f8efa84 -> v2.1 `846fe90`)
 - `libmello/cmake/webrtc-audio-processing/CMakeLists.txt` (regenerated lists, `absl::numeric`, compat includes)
@@ -127,6 +141,9 @@ $env:CI='true'; ctest --test-dir libmello/build --output-on-failure
 - `libmello/tests/CMakeLists.txt` (compat include for mello_tests target)
 - `libmello/src/audio/echo_canceller.hpp` / `.cpp` (scoped_refptr handle, Config deltas)
 - `libmello/tests/test_echo_canceller.cpp` (misaligned variant, v2.1 baselines)
+- `libmello/src/audio/audio_capture.hpp` (voice-processing + backend-report virtuals)
+- `libmello/src/audio/capture_coreaudio.hpp` / `.cpp` (VPIO subtype, backend log)
+- `libmello/src/audio/audio_pipeline.hpp` / `.cpp` (backend switch, APM skip, device-id store)
 
 No spec changes yet (docs step lands after the engine upgrade).
 No public C API changes. No new dependencies.

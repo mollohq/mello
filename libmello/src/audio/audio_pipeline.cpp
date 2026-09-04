@@ -124,9 +124,32 @@ bool AudioPipeline::initialize() {
 #endif
 
     capture_ = create_audio_capture();
+#ifdef __APPLE__
+    // Default backend follows the AEC default (on): fresh starts use the
+    // voice-processing unit; the runtime toggle switches afterwards.
+    voice_processing_capture_.store(echo_canceller_.aec_enabled(),
+                                    std::memory_order_relaxed);
+    capture_->set_voice_processing_enabled(
+        voice_processing_capture_.load(std::memory_order_relaxed));
+#endif
     if (!capture_->initialize()) {
+#ifdef __APPLE__
+        if (!voice_processing_capture_.load(std::memory_order_relaxed)) {
+            MELLO_LOG_ERROR("pipeline", "capture init failed");
+            return false;
+        }
+        MELLO_LOG_WARN("pipeline", "voice-processing capture init failed, falling back to plain unit");
+        voice_processing_capture_.store(false, std::memory_order_relaxed);
+        capture_ = create_audio_capture();
+        capture_->set_voice_processing_enabled(false);
+        if (!capture_->initialize()) {
+            MELLO_LOG_ERROR("pipeline", "capture init failed");
+            return false;
+        }
+#else
         MELLO_LOG_ERROR("pipeline", "capture init failed");
         return false;
+#endif
     }
 
     playback_ = create_audio_playback();
@@ -205,6 +228,11 @@ bool AudioPipeline::start_capture() {
         capture_inject_mode_.store(false, std::memory_order_relaxed);
     }
 
+    // Cache the actual backend echo state for the audio thread (it must
+    // not dereference capture_: device switches can replace it).
+    backend_cancels_echo_.store(capture_ && capture_->provides_echo_cancellation(),
+                                std::memory_order_relaxed);
+
     bool ok = capture_->start([this](const int16_t* samples, size_t count) {
         on_captured_audio(samples, count);
     });
@@ -275,6 +303,56 @@ void AudioPipeline::set_high_pass_filter(bool enabled) {
     echo_canceller_.set_high_pass_filter_enabled(enabled);
 }
 
+void AudioPipeline::set_echo_cancellation(bool enabled) {
+    echo_canceller_.set_aec_enabled(enabled);
+#ifdef __APPLE__
+    // On macOS the toggle selects the capture backend: on = OS
+    // voice-processing unit (its own AEC/AGC, our APM pass skipped), off =
+    // plain unit + software AEC. Elsewhere it only flips the APM flag.
+    if (initialized_ &&
+        voice_processing_capture_.load(std::memory_order_relaxed) != enabled) {
+        switch_capture_backend(enabled);
+    } else {
+        voice_processing_capture_.store(enabled, std::memory_order_relaxed);
+    }
+#endif
+}
+
+void AudioPipeline::switch_capture_backend(bool voice_processing) {
+    MELLO_LOG_INFO("pipeline", "switching capture backend (voice_processing=%d, was_capturing=%d)",
+                   (int)voice_processing, (int)capturing_.load());
+    voice_processing_capture_.store(voice_processing, std::memory_order_relaxed);
+
+    bool was_capturing = capturing_;
+    if (was_capturing && capture_) {
+        capture_->stop();
+        capturing_ = false;
+    }
+
+    capture_ = create_audio_capture();
+    capture_->set_voice_processing_enabled(voice_processing);
+    if (!capture_->initialize(current_capture_device_id())) {
+        MELLO_LOG_WARN("pipeline", "capture backend switch failed, falling back to plain unit");
+        capture_ = create_audio_capture();
+        capture_->set_voice_processing_enabled(false);
+        if (!capture_->initialize(current_capture_device_id())) {
+            MELLO_LOG_ERROR("pipeline", "capture backend switch failed on fallback too");
+            return;
+        }
+    }
+
+    if (was_capturing) {
+        bool ok = capture_->start([this](const int16_t* samples, size_t count) {
+            on_captured_audio(samples, count);
+        });
+        if (ok) capturing_ = true;
+        MELLO_LOG_INFO("pipeline", "capture restarted on new backend: %s",
+                       ok ? (capture_->provides_echo_cancellation() ? "VoiceProcessingIO" : "plain")
+                          : "FAILED");
+    }
+    refresh_stream_delay_hint();
+}
+
 void AudioPipeline::set_mute(bool muted) { muted_ = muted; }
 void AudioPipeline::set_deafen(bool deafened) { deafened_ = deafened; }
 
@@ -322,6 +400,12 @@ void AudioPipeline::process_and_encode_frame(int16_t* frame) {
 void AudioPipeline::on_captured_audio(const int16_t* samples, size_t count) {
     std::lock_guard<std::mutex> lock(accum_mutex_);
 
+    // VPIO path: the OS unit already ran AEC/AGC on this audio. Skipping
+    // our APM capture pass avoids double processing. RNNoise + VAD below
+    // run unchanged on both paths.
+    const bool skip_apm_capture =
+        backend_cancels_echo_.load(std::memory_order_relaxed);
+
     capture_accum_.insert(capture_accum_.end(), samples, samples + count);
 
     while (capture_accum_.size() >= FRAME_SIZE) {
@@ -351,7 +435,9 @@ void AudioPipeline::on_captured_audio(const int16_t* samples, size_t count) {
                 }
             }
 
-            echo_canceller_.process_capture(capture_accum_.data(), FRAME_SIZE);
+            if (!skip_apm_capture) {
+                echo_canceller_.process_capture(capture_accum_.data(), FRAME_SIZE);
+            }
 
             // NEURAL RESIDUAL-ECHO INSERTION POINT: a two-input
             // (post-AEC mic + far-end reference) suppressor runs here, before
@@ -807,6 +893,7 @@ AudioDeviceEnumerator& AudioPipeline::device_enumerator() {
 
 int AudioPipeline::set_capture_device(const char* device_id) {
     MELLO_LOG_INFO("pipeline", "switching capture device (was_capturing=%d)", (int)capturing_.load());
+    capture_device_id_ = device_id ? device_id : "";
 
     bool was_capturing = capturing_;
     if (was_capturing && capture_) {
@@ -817,10 +904,19 @@ int AudioPipeline::set_capture_device(const char* device_id) {
     bool fell_back = false;
     bool init_ok = false;
     capture_ = create_audio_capture();
+#ifdef __APPLE__
+    capture_->set_voice_processing_enabled(
+        voice_processing_capture_.load(std::memory_order_relaxed));
+#endif
     try { init_ok = capture_->initialize(device_id); } catch (...) { init_ok = false; }
     if (!init_ok) {
         MELLO_LOG_WARN("pipeline", "capture device switch failed, falling back to default");
         capture_ = create_audio_capture();
+#ifdef __APPLE__
+        // Fallback is always the plain unit: it is the known-good path.
+        // The desired flag stays untouched so a later toggle retries VPIO.
+        capture_->set_voice_processing_enabled(false);
+#endif
         if (!capture_->initialize(nullptr)) {
             MELLO_LOG_ERROR("pipeline", "default capture device also failed");
             return 0;
