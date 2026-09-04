@@ -90,7 +90,7 @@ The rest of this README is for people who want to build m3llo from source, contr
 - **Performance is the feature.** Targets: `<100MB install` · `<80MB RAM in active voice` · `1080p60 stream` · `<60ms WAN latency`
 - **Self-hostable.** The full client and backend is Apache 2.0. Run your own instance with no dependency on our infrastructure.
 - **P2P as a first-class citizen for self-hosters.** Voice and streaming can be direct peer-to-peer. No server in the middle unless you wish.
-- **UX matters as much as code.**
+- **UX matters as much as code.** Follow the design system in [`designs/design-system.html`](designs/design-system.html).
 
 ## Build from source
 

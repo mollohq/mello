@@ -110,6 +110,36 @@ Read `TESTING.md` before adding tests. In short:
   - P2P: <50ms voice latency, >90% NAT traversal success.
 - Before adding a dependency: will it fit inside the size/RAM budget? Check binary size impact.
 
+## The Design System
+`designs/design-system.html` is the source of truth for every visual decision.
+Open it before changing any UI, and follow it. If a change needs something the
+system does not have, ask — do not invent a colour, a shape or a type size.
+
+The rules it carries, in short:
+
+- **Red `#FF453A` is state**: live, recording, unread, the 3 in the mark. It is
+  also the fill of a button that commits — create, join, save, sign in, update,
+  end a stream.
+- **White is action**: everything else you press, the active channel, focus.
+- **Green `#3FD07A` is one thing**: the person speaking, on their name.
+- **Identity colours** are for people, crews and games. Never on chrome.
+- **Shape**: a card cuts one corner, a button cuts top-left and bottom-right, a
+  person is an octagon, a crew or game is a two-corner tile, a field is a plain
+  rectangle. Radii survive only on dots, discs and pips.
+- **Type**: Oxanium names it or it is big; Barlow is everything else, in a 300
+  sentence register and a 600 label register with tracking.
+- **Content keeps its colour.** Game footage is the only saturated thing on
+  screen. Chrome laid over it gets black washes, not the graphite ramp.
+
+Two failure modes have each cost a day. Check for both:
+
+- **A white fill with a white label.** `Theme.accent` resolves to white now, so
+  any control still pairing it with `#FFFFFF` is invisible. Seven shipped that
+  way before a grep found them.
+- **A header strip that paints over its panel's cut corner.** A strip in a
+  different colour from the panel must carry the panel's shape, inset by the
+  keyline, or it erases the outline.
+
 ## Slint UI Rules
 - Use `MelloTextInput` from `theme.slint` instead of raw `TextInput` — it applies `Theme.selection-bg` / `selection-fg` (accent-tinted highlight) instead of Slint’s default cupertino blue.
 - For bordered form fields (settings, modals), use `MelloInputField` — it fills the field height so mouse drag-selection works; do not vertically center a bare `MelloTextInput` with `preferred-height` only.
