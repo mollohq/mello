@@ -1,7 +1,10 @@
 import { Theme } from "../theme.slint";
+import { CutShape, CutButtonShape } from "../components/cut.slint";
 
 export component JoinCrewModal inherits Rectangle {
     in property <string> crew-name: "";
+    /// Two letters for the crew tile. The full name does not fit the box.
+    in property <string> crew-initials: "";
     in property <string> crew-id: "";
     in property <string> highlight: "";
     in property <string> avatar-seed: "";
@@ -13,7 +16,7 @@ export component JoinCrewModal inherits Rectangle {
 
     width: 100%;
     height: 100%;
-    background: #000000AA;
+    background: Theme.scrim;
 
     // Close on background click
     bg-touch := TouchArea {
@@ -26,8 +29,22 @@ export component JoinCrewModal inherits Rectangle {
         y: (parent.height - self.height) / 2;
         width: 360px;
         height: content.preferred-height + 64px;
-        background: Theme.surface;
-        border-radius: Theme.radius-lg;
+        background: transparent;
+
+        // A modal panel is a card, so it carries the cut and a keyline.
+        CutShape {
+            width: parent.width;
+            height: parent.height;
+            n: Theme.notch;
+            fill: Theme.graphic-light;
+        }
+        CutShape {
+            width: parent.width;
+            height: parent.height;
+            n: Theme.notch;
+            inset: Theme.keyline;
+            fill: Theme.surface;
+        }
 
         card-touch := TouchArea {}
 
@@ -71,6 +88,8 @@ export component JoinCrewModal inherits Rectangle {
                 alignment: center;
 
                 Text {
+                    font-weight: Theme.weight-sentence;
+                    font-family: Theme.font-body;
                     text: "This invite link is no longer valid.";
                     font-size: Theme.font-lg;
                     color: Theme.text-primary;
@@ -80,14 +99,21 @@ export component JoinCrewModal inherits Rectangle {
                 Rectangle {
                     height: 44px;
                     width: 160px;
-                    border-radius: Theme.r-outer;
-                    background: Theme.graphic-light;
                     x: (parent.width - self.width) / 2;
+                    background: transparent;
+
+                    CutButtonShape {
+                        width: parent.width;
+                        height: parent.height;
+                        n: Theme.cut;
+                        fill: dismiss-touch.has-hover ? Theme.graphic-med : Theme.graphic-light;
+                    }
 
                     Text {
+                        font-family: Theme.font-display;
                         text: "Dismiss";
                         font-size: Theme.font-md;
-                        font-weight: 600;
+                        font-weight: Theme.weight-display;
                         color: Theme.text-primary;
                         horizontal-alignment: center;
                         vertical-alignment: center;
@@ -108,32 +134,43 @@ export component JoinCrewModal inherits Rectangle {
                 Rectangle {
                     width: 96px;
                     height: 96px;
-                    border-radius: 20px;
-                    background: Theme.accent;
                     x: (parent.width - self.width) / 2;
+                    background: transparent;
+
+                    // A crew is a thing, so it wears the two-corner tile.
+                    CutButtonShape {
+                        width: parent.width;
+                        height: parent.height;
+                        n: 21px;
+                        fill: Theme.raised;
+                    }
 
                     Text {
-                        text: crew-name != "" ? crew-name : "?";
-                        font-size: 24px;
-                        font-weight: 700;
-                        color: #FFFFFF;
+                        font-family: Theme.font-display;
+                        text: crew-initials != "" ? crew-initials : "?";
+                        font-size: 30px;
+                        font-weight: Theme.weight-display-bold;
+                        color: Theme.text-secondary;
+                        width: parent.width;
+                        height: parent.height;
                         horizontal-alignment: center;
                         vertical-alignment: center;
-                        overflow: elide;
-                        max-width: 80px;
                     }
                 }
 
                 // Crew name
                 Text {
+                    font-family: Theme.font-display;
                     text: crew-name;
                     font-size: Theme.font-xxl;
-                    font-weight: 700;
+                    font-weight: Theme.weight-display-bold;
                     color: Theme.text-primary;
                     horizontal-alignment: center;
                 }
 
                 if highlight != "": Text {
+                    font-weight: Theme.weight-sentence;
+                    font-family: Theme.font-body;
                     text: highlight;
                     font-size: Theme.font-md;
                     color: Theme.text-secondary;
@@ -147,15 +184,22 @@ export component JoinCrewModal inherits Rectangle {
                 Rectangle {
                     height: 48px;
                     width: 200px;
-                    border-radius: Theme.r-outer;
-                    background: Theme.accent;
                     x: (parent.width - self.width) / 2;
+                    background: transparent;
+
+                    CutButtonShape {
+                        width: parent.width;
+                        height: parent.height;
+                        n: Theme.cut;
+                        fill: join-touch.has-hover ? Theme.confirm-press : Theme.confirm;
+                    }
 
                     Text {
+                        font-family: Theme.font-display;
                         text: "Join crew";
                         font-size: Theme.font-lg;
-                        font-weight: 600;
-                        color: #FFFFFF;
+                        font-weight: Theme.weight-display;
+                        color: Theme.on-confirm;
                         horizontal-alignment: center;
                         vertical-alignment: center;
                     }
@@ -168,6 +212,8 @@ export component JoinCrewModal inherits Rectangle {
 
                 // Not now link
                 Text {
+                    font-weight: Theme.weight-sentence;
+                    font-family: Theme.font-body;
                     text: "Not now";
                     font-size: Theme.font-md;
                     color: Theme.text-secondary;
@@ -180,5 +226,22 @@ export component JoinCrewModal inherits Rectangle {
                 }
             }
         }
+    }
+}
+
+// Headless preview:
+//   slint-viewer --screenshot out.png --component Preview \
+//     client/ui/panels/join_crew_modal.slint
+export component Preview inherits Rectangle {
+    width: 900px;
+    height: 640px;
+    background: Theme.bg-app;
+
+    JoinCrewModal {
+        width: parent.width;
+        height: parent.height;
+        crew-name: "Night Stones";
+        crew-initials: "NI";
+        crew-id: "c1";
     }
 }

@@ -433,21 +433,6 @@ pub fn wire(ctx: &AppContext) {
         });
     }
 
-    // --- Theme toggle ---
-    {
-        let app_weak = ctx.app.as_weak();
-        let s = ctx.settings.clone();
-        ctx.app.on_theme_toggled(move || {
-            if let Some(app) = app_weak.upgrade() {
-                let new_dark = !app.global::<crate::Theme>().get_dark();
-                app.global::<crate::Theme>().set_dark(new_dark);
-                let mut settings = s.borrow_mut();
-                settings.dark_theme = new_dark;
-                settings.save();
-            }
-        });
-    }
-
     // --- Debug toggle ---
     {
         let cmd = ctx.cmd_tx.clone();

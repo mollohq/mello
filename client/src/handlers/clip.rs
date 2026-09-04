@@ -709,42 +709,68 @@ fn build_feed_card(
             .get("verified")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
-    let (game_record, game_streak_text, game_streak_positive, game_winrate, game_matches) =
-        if is_game_session {
-            let w = data.get("wins").and_then(|v| v.as_i64()).unwrap_or(0);
-            let l = data.get("losses").and_then(|v| v.as_i64()).unwrap_or(0);
-            let d = data.get("draws").and_then(|v| v.as_i64()).unwrap_or(0);
-            let streak = data
-                .get("streak_after")
-                .and_then(|v| v.as_i64())
-                .unwrap_or(0);
-            let matches = w + l + d;
-            let record = if matches > 0 {
-                if d > 0 {
-                    format!("{}W\u{2013}{}L\u{2013}{}D", w, l, d)
-                } else {
-                    format!("{}W\u{2013}{}L", w, l)
-                }
+    let (
+        game_record,
+        game_wins,
+        game_losses,
+        game_draws,
+        game_streak_text,
+        game_streak_positive,
+        game_winrate,
+        game_matches,
+    ) = if is_game_session {
+        let w = data.get("wins").and_then(|v| v.as_i64()).unwrap_or(0);
+        let l = data.get("losses").and_then(|v| v.as_i64()).unwrap_or(0);
+        let d = data.get("draws").and_then(|v| v.as_i64()).unwrap_or(0);
+        let streak = data
+            .get("streak_after")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
+        let matches = w + l + d;
+        let record = if matches > 0 {
+            if d > 0 {
+                format!("{}W\u{2013}{}L\u{2013}{}D", w, l, d)
             } else {
-                String::new()
-            };
-            let streak_text = if streak > 0 {
-                format!("W{streak}")
-            } else if streak < 0 {
-                format!("L{}", -streak)
-            } else {
-                "—".to_string()
-            };
-            let decided = w + l;
-            let winrate = if decided > 0 {
-                format!("{}%", (w * 100) / decided)
-            } else {
-                "—".to_string()
-            };
-            (record, streak_text, streak >= 0, winrate, matches as i32)
+                format!("{}W\u{2013}{}L", w, l)
+            }
         } else {
-            (String::new(), String::new(), true, String::new(), 0)
+            String::new()
         };
+        let streak_text = if streak > 0 {
+            format!("W{streak}")
+        } else if streak < 0 {
+            format!("L{}", -streak)
+        } else {
+            "—".to_string()
+        };
+        let decided = w + l;
+        let winrate = if decided > 0 {
+            format!("{}%", (w * 100) / decided)
+        } else {
+            "—".to_string()
+        };
+        (
+            record,
+            w as i32,
+            l as i32,
+            d as i32,
+            streak_text,
+            streak >= 0,
+            winrate,
+            matches as i32,
+        )
+    } else {
+        (
+            String::new(),
+            0,
+            0,
+            0,
+            String::new(),
+            true,
+            String::new(),
+            0,
+        )
+    };
 
     // --- Session card redesign (voice/stream): typed, person-aware fields ---
     let session_kind = if feed_type == "session" || feed_type == "session-preview" {
@@ -924,6 +950,9 @@ fn build_feed_card(
         leaderboard: ModelRc::new(VecModel::from(recap_leaderboard)),
         awards: ModelRc::new(VecModel::from(recap_awards)),
         game_record: game_record.into(),
+        game_wins,
+        game_losses,
+        game_draws,
         game_streak_text: game_streak_text.into(),
         game_streak_positive,
         game_winrate: game_winrate.into(),

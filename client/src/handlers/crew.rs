@@ -50,6 +50,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
                     .iter()
                     .map(|c| CrewData {
                         id: c.id.clone().into(),
+                        initials: crate::converters::make_initials(&c.name).into(),
                         name: c.name.clone().into(),
                         description: c.description.clone().into(),
                         member_count: c.member_count,
@@ -79,6 +80,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
                     all.push(DiscoverCrewData {
                         id: c.id.clone().into(),
                         name: c.name.clone().into(),
+                        initials: crate::converters::make_initials(&c.name).into(),
                         description: c.description.clone().into(),
                         member_count: c.member_count,
                         max_members: c.max_members,
@@ -99,6 +101,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
                     .map(|c| DiscoverCrewData {
                         id: c.id.clone().into(),
                         name: c.name.clone().into(),
+                        initials: crate::converters::make_initials(&c.name).into(),
                         description: c.description.clone().into(),
                         member_count: c.member_count,
                         max_members: c.max_members,
@@ -160,6 +163,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
                     } else {
                         CrewData {
                             id: c.id.clone().into(),
+                            initials: crate::converters::make_initials(&c.name).into(),
                             name: c.name.into(),
                             description: c.description.into(),
                             member_count: c.member_count,
@@ -347,7 +351,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
             ctx.app.set_feed_cold_start(true);
             ctx.app.set_feed_clip_count(0);
             ctx.app.set_feed_has_more(false);
-            ctx.app.set_active_crew_id(crew_id.clone().into());
+            crate::converters::set_active_crew(&ctx.app, crew_id.as_str());
             let empty_channels: Vec<VoiceChannelData> = vec![];
             ctx.app
                 .set_voice_channels(Rc::new(slint::VecModel::from(empty_channels)).into());
@@ -375,7 +379,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
                 .collect();
             ctx.app
                 .set_crews(Rc::new(slint::VecModel::from(updated)).into());
-            ctx.app.set_active_crew_id("".into());
+            crate::converters::set_active_crew(&ctx.app, "");
         }
         Event::CrewInviteResolved { code, invite } => {
             log::info!(
@@ -395,6 +399,9 @@ pub fn handle(ctx: &AppContext, event: Event) {
                 });
             } else {
                 ctx.app.set_join_crew_invite_code(code.into());
+                ctx.app.set_join_crew_initials(
+                    crate::converters::make_initials(&invite.crew_name).into(),
+                );
                 ctx.app.set_join_crew_name(invite.crew_name.into());
                 ctx.app.set_join_crew_id(invite.crew_id.into());
                 ctx.app.set_join_crew_highlight(invite.highlight.into());
@@ -447,7 +454,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
             ctx.app
                 .set_crews(Rc::new(slint::VecModel::from(updated)).into());
             if ctx.app.get_active_crew_id() == crew_id.as_str() {
-                ctx.app.set_active_crew_id("".into());
+                crate::converters::set_active_crew(&ctx.app, "");
             }
         }
         Event::CrewDeleteFailed { reason } => {

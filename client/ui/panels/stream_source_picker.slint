@@ -1,4 +1,6 @@
 import { Theme } from "../theme.slint";
+import { CutShape, CutButtonShape } from "../components/cut.slint";
+import { QualityPills } from "../components/quality_pills.slint";
 import { CaptureSourceData } from "../types.slint";
 
 component SectionHeader inherits Rectangle {
@@ -11,11 +13,11 @@ component SectionHeader inherits Rectangle {
 
         Text {
             text: title;
-            font-family: Theme.font-mono;
+            font-family: Theme.font-label;
             font-size: 11px;
             font-weight: 600;
             letter-spacing: 2.4px;
-            color: Theme.accent;
+            color: Theme.text-secondary;
         }
 
         Rectangle {
@@ -37,10 +39,22 @@ component SourceCard inherits Rectangle {
     callback clicked();
 
     height: card-col.preferred-height;
-    border-radius: Theme.r-inner;
-    background: selected ? #1a1a1a : (card-ta.has-hover ? #1a1a1a : Theme.bg-app);
-    border-width: selected ? 2px : 1px;
-    border-color: selected ? Theme.accent : (card-ta.has-hover ? Theme.graphic-med : Theme.graphic-light);
+    background: transparent;
+
+    CutShape {
+        width: parent.width;
+        height: parent.height;
+        n: Theme.notch-sm;
+        fill: selected ? Theme.action
+            : (card-ta.has-hover ? Theme.graphic-med : Theme.graphic-light);
+    }
+    CutShape {
+        width: parent.width;
+        height: parent.height;
+        n: Theme.notch-sm;
+        inset: selected ? 2px : Theme.keyline;
+        fill: card-ta.has-hover || selected ? Theme.card-bg-hover : Theme.bg-app;
+    }
 
     card-col := VerticalLayout {
         padding: 12px;
@@ -49,8 +63,7 @@ component SourceCard inherits Rectangle {
         // Preview area
         Rectangle {
             height: 80px;
-            background: selected ? Theme.accent-bg : Theme.surface;
-            border-radius: 4px;
+            background: selected ? Theme.action-dim : Theme.surface;
             clip: true;
 
             if has-thumbnail: Image {
@@ -73,7 +86,7 @@ component SourceCard inherits Rectangle {
                 width: 8px;
                 height: 8px;
                 border-radius: 4px;
-                background: Theme.accent;
+                background: Theme.text-primary;
                 x: (parent.width - self.width) / 2;
                 y: (parent.height - self.height) / 2;
             }
@@ -81,10 +94,11 @@ component SourceCard inherits Rectangle {
 
         // Source name
         Text {
+            font-family: Theme.font-display;
             text: source-name;
             font-size: 13px;
-            font-weight: 600;
-            color: selected ? Theme.accent : Theme.text-primary;
+            font-weight: Theme.weight-display;
+            color: Theme.text-primary;
             overflow: elide;
         }
 
@@ -93,8 +107,10 @@ component SourceCard inherits Rectangle {
             spacing: 8px;
 
             Text {
+                letter-spacing: Theme.track-label;
+                font-weight: Theme.weight-label;
                 text: source-subtitle;
-                font-family: Theme.font-mono;
+                font-family: Theme.font-label;
                 font-size: 10px;
                 color: selected ? Theme.text-primary : Theme.text-secondary;
                 horizontal-stretch: 1;
@@ -104,15 +120,15 @@ component SourceCard inherits Rectangle {
             if is-fullscreen: Rectangle {
                 width: fs-label.preferred-width + 10px;
                 height: 16px;
-                border-radius: 3px;
-                background: Theme.accent-bg;
+                background: Theme.raised;
 
                 fs-label := Text {
+                    letter-spacing: Theme.track-label;
                     text: "FS";
-                    font-family: Theme.font-mono;
+                    font-family: Theme.font-label;
                     font-size: 9px;
                     font-weight: 600;
-                    color: Theme.accent;
+                    color: Theme.text-secondary;
                     horizontal-alignment: center;
                     vertical-alignment: center;
                 }
@@ -125,17 +141,17 @@ component SourceCard inherits Rectangle {
         width: 20px;
         height: 20px;
         border-radius: 10px;
-        background: Theme.accent;
+        background: Theme.action;
         x: parent.width - self.width - 8px;
         y: 8px;
 
-        Text {
-            text: "✓";
-            font-size: 12px;
-            font-weight: 700;
-            color: #FFFFFF;
-            horizontal-alignment: center;
-            vertical-alignment: center;
+        Image {
+            source: @image-url("../icons/checkmark.svg");
+            width: 12px;
+            height: 12px;
+            colorize: Theme.on-action;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
         }
     }
 
@@ -145,8 +161,6 @@ component SourceCard inherits Rectangle {
 }
 
 export component StreamSourcePicker inherits Rectangle {
-    in property <[CaptureSourceData]> monitors: [];
-    in property <[CaptureSourceData]> games: [];
     in property <[CaptureSourceData]> windows: [];
 
     in-out property <string> selected-id: "";
@@ -159,7 +173,7 @@ export component StreamSourcePicker inherits Rectangle {
     property <bool> has-selection: selected-id != "";
 
     // Backdrop
-    background: #000000AA;
+    background: Theme.scrim;
 
     TouchArea {
         clicked => { close-requested(); }
@@ -171,13 +185,22 @@ export component StreamSourcePicker inherits Rectangle {
         y: (parent.height - self.height) / 2;
         width: min(780px, parent.width - 64px);
         height: min(620px, parent.height - 64px);
-        background: Theme.surface;
-        border-radius: 12px;
-        border-width: 1px;
-        border-color: Theme.graphic-light;
-        drop-shadow-blur: 64px;
-        drop-shadow-color: #000000E6;
-        drop-shadow-offset-y: 24px;
+        background: transparent;
+
+        // A modal panel is a card, so it carries the cut and a keyline.
+        CutShape {
+            width: parent.width;
+            height: parent.height;
+            n: Theme.notch;
+            fill: Theme.graphic-light;
+        }
+        CutShape {
+            width: parent.width;
+            height: parent.height;
+            n: Theme.notch;
+            inset: Theme.keyline;
+            fill: Theme.surface;
+        }
 
         TouchArea {}
 
@@ -185,7 +208,16 @@ export component StreamSourcePicker inherits Rectangle {
             // Header
             Rectangle {
                 height: 64px;
-                background: Theme.surface;
+                background: transparent;
+
+                // The header is the top of the panel, so it carries the cut.
+                CutShape {
+                    width: parent.width;
+                    height: parent.height;
+                    n: Theme.notch;
+                    inset: Theme.keyline;
+                    fill: Theme.surface;
+                }
 
                 Rectangle {
                     y: parent.height - 1px;
@@ -193,20 +225,19 @@ export component StreamSourcePicker inherits Rectangle {
                     background: Theme.graphic-light;
                 }
 
-                // Accent dot
                 Rectangle {
                     width: 8px;
                     height: 8px;
                     border-radius: 4px;
-                    background: Theme.accent;
+                    background: Theme.text-tertiary;
                     x: 32px;
                     y: (parent.height - self.height) / 2;
                 }
 
                 // Title
                 Text {
-                    text: "SELECT SOURCE";
-                    font-family: Theme.font-mono;
+                    text: "PICK A WINDOW";
+                    font-family: Theme.font-label;
                     font-size: 16px;
                     font-weight: 600;
                     letter-spacing: 0.8px;
@@ -217,12 +248,13 @@ export component StreamSourcePicker inherits Rectangle {
 
                 // Meta label
                 Text {
+                    font-weight: Theme.weight-label;
                     text: "CAP.01 // INPUT";
-                    font-family: Theme.font-mono;
+                    font-family: Theme.font-label;
                     font-size: 11px;
                     color: Theme.text-tertiary;
                     letter-spacing: 1.6px;
-                    x: parent.width - self.preferred-width - 32px;
+                    x: parent.width - self.preferred-width - 64px;
                     y: (parent.height - self.preferred-height) / 2;
                 }
 
@@ -230,7 +262,6 @@ export component StreamSourcePicker inherits Rectangle {
                 Rectangle {
                     width: 32px;
                     height: 32px;
-                    border-radius: 6px;
                     x: parent.width - self.width - 16px;
                     y: (parent.height - self.height) / 2;
                     background: close-ta.has-hover ? Theme.surface-hover : transparent;
@@ -263,58 +294,21 @@ export component StreamSourcePicker inherits Rectangle {
                         padding: 32px;
                         spacing: 32px;
 
-                        // DISPLAYS section
-                        VerticalLayout {
-                            spacing: 16px;
-
-                            SectionHeader { title: "DISPLAYS"; }
-
-                            HorizontalLayout {
-                                spacing: 16px;
-                                alignment: start;
-
-                                for src[i] in monitors: SourceCard {
-                                    width: 160px;
-                                    source-name: src.name;
-                                    source-subtitle: src.resolution != "" ? src.resolution : "Primary";
-                                    selected: selected-id == src.id;
-                                    clicked => {
-                                        selected-id = src.id;
-                                        selected-mode = src.mode;
-                                    }
-                                }
-                            }
+                        // The whole dialog is the window list now. A
+                        // display or the detected game is one click away in
+                        // the STREAM menu, so neither belongs here.
+                        if windows.length == 0: Text {
+                            font-family: Theme.font-body;
+                            font-weight: Theme.weight-sentence;
+                            text: "No open windows to stream. Open an app and try again.";
+                            font-size: 13px;
+                            color: Theme.text-secondary;
                         }
 
-                        // GAMES section (only if we have games)
-                        if games.length > 0: VerticalLayout {
-                            spacing: 16px;
-
-                            SectionHeader { title: "GAMES"; }
-
-                            HorizontalLayout {
-                                spacing: 16px;
-                                alignment: start;
-
-                                for src[i] in games: SourceCard {
-                                    width: 160px;
-                                    source-name: src.name;
-                                    source-subtitle: src.exe;
-                                    is-fullscreen: src.is-fullscreen;
-                                    selected: selected-id == src.id;
-                                    clicked => {
-                                        selected-id = src.id;
-                                        selected-mode = src.mode;
-                                    }
-                                }
-                            }
-                        }
-
-                        // APPLICATION WINDOWS section (only if we have windows)
                         if windows.length > 0: VerticalLayout {
                             spacing: 16px;
 
-                            SectionHeader { title: "APPLICATION WINDOWS"; }
+                            SectionHeader { title: "OPEN WINDOWS"; }
 
                             Rectangle {
                                 property <length> card-w: 160px;
@@ -357,104 +351,29 @@ export component StreamSourcePicker inherits Rectangle {
                     background: Theme.graphic-light;
                 }
 
-                // Quality label
-                Text {
-                    text: "QUALITY";
-                    font-family: Theme.font-mono;
-                    font-size: 10px;
-                    font-weight: 600;
-                    letter-spacing: 1.6px;
-                    color: Theme.text-tertiary;
+                QualityPills {
                     x: 32px;
                     y: 16px;
-                }
-
-                // Preset chips
-                HorizontalLayout {
-                    x: 32px;
-                    y: 34px;
-                    width: parent.width - 64px;
-                    height: 26px;
-                    spacing: 8px;
-                    alignment: start;
-
-                    for preset-label[idx] in ["ULTRA", "HIGH", "MEDIUM", "PRO-POTATO", "POTATO"]: Rectangle {
-                        width: preset-chip-text.preferred-width + 16px;
-                        height: 26px;
-                        border-radius: 4px;
-                        background: selected-preset == idx
-                            ? Theme.accent
-                            : (preset-chip-ta.has-hover ? Theme.surface-hover : transparent);
-                        border-width: selected-preset == idx ? 0 : 1px;
-                        border-color: selected-preset == idx ? transparent : Theme.graphic-light;
-
-                        preset-chip-text := Text {
-                            text: preset-label;
-                            font-family: Theme.font-mono;
-                            font-size: 10px;
-                            font-weight: 600;
-                            letter-spacing: 0.8px;
-                            color: selected-preset == idx ? #FFFFFF : Theme.text-secondary;
-                            horizontal-alignment: center;
-                            vertical-alignment: center;
-                        }
-
-                        preset-chip-ta := TouchArea {
-                            clicked => { selected-preset = idx; }
-                        }
-                    }
-                }
-
-                // Preset info (below chips)
-                HorizontalLayout {
-                    x: 32px;
-                    y: 68px;
-                    height: 16px;
-                    spacing: 16px;
-                    alignment: start;
-
-                    Text {
-                        text: selected-preset == 0 ? "1080p @ 60fps"
-                            : selected-preset == 1 ? "1080p @ 30fps"
-                            : selected-preset == 2 ? "720p @ 60fps"
-                            : selected-preset == 3 ? "720p @ 30fps"
-                            : "480p @ 30fps";
-                        font-family: Theme.font-mono;
-                        font-size: 11px;
-                        color: Theme.text-secondary;
-                        vertical-alignment: center;
-                    }
-
-                    Rectangle {
-                        width: 1px;
-                        height: 12px;
-                        background: Theme.graphic-light;
-                        y: (parent.height - self.height) / 2;
-                    }
-
-                    Text {
-                        text: selected-preset == 0 ? "~6 Mbit/s"
-                            : selected-preset == 1 ? "~4.5 Mbit/s"
-                            : selected-preset == 2 ? "~4 Mbit/s"
-                            : selected-preset == 3 ? "~2.5 Mbit/s  (martin mode)"
-                            : "~1.5 Mbit/s";
-                        font-family: Theme.font-mono;
-                        font-size: 11px;
-                        color: Theme.text-tertiary;
-                        vertical-alignment: center;
-                    }
+                    width: parent.width - 64px - 220px;
+                    selected <=> root.selected-preset;
                 }
 
                 // Start button (bottom-right)
                 Rectangle {
                     width: start-row.preferred-width + 40px;
                     height: 40px;
-                    border-radius: 6px;
                     x: parent.width - self.width - 32px;
                     y: (parent.height - self.height) / 2;
-                    background: has-selection
-                        ? (start-btn-ta.has-hover ? #E8184E : Theme.accent)
-                        : Theme.graphic-light;
+                    background: transparent;
+
+                    CutButtonShape {
+                        width: parent.width;
+                        height: parent.height;
+                        n: Theme.cut;
+                        fill: has-selection
+                            ? (start-btn-ta.has-hover ? Theme.confirm-press : Theme.confirm)
+                            : Theme.graphic-light;
+                    }
 
                     start-row := HorizontalLayout {
                         alignment: center;
@@ -462,20 +381,21 @@ export component StreamSourcePicker inherits Rectangle {
                         padding-left: 20px;
                         padding-right: 20px;
 
-                        Text {
-                            text: "▶";
-                            font-size: 11px;
-                            color: has-selection ? #FFFFFF : Theme.text-tertiary;
-                            vertical-alignment: center;
+                        Image {
+                            source: @image-url("../icons/play.svg");
+                            width: 11px;
+                            height: 11px;
+                            colorize: has-selection ? Theme.on-confirm : Theme.text-tertiary;
+                            y: (parent.height - self.height) / 2;
                         }
 
                         Text {
                             text: "START STREAMING";
-                            font-family: Theme.font-mono;
+                            font-family: Theme.font-label;
                             font-size: 13px;
                             font-weight: 600;
                             letter-spacing: 1.2px;
-                            color: has-selection ? #FFFFFF : Theme.text-tertiary;
+                            color: has-selection ? Theme.on-confirm : Theme.text-tertiary;
                             vertical-alignment: center;
                         }
                     }
@@ -490,5 +410,40 @@ export component StreamSourcePicker inherits Rectangle {
                 }
             }
         }
+    }
+}
+
+// Headless preview:
+//   slint-viewer --screenshot out.png --component Preview \
+//     client/ui/panels/stream_source_picker.slint
+export component Preview inherits Rectangle {
+    width: 1100px;
+    height: 760px;
+    background: Theme.bg-app;
+
+    StreamSourcePicker {
+        width: parent.width;
+        height: parent.height;
+        windows: [
+            { id: "w1", name: "Visual Studio Code", mode: "window", exe: "Code.exe" },
+            { id: "w2", name: "Firefox — m3llo.io", mode: "window", exe: "firefox.exe" },
+            { id: "w3", name: "Spotify", mode: "window", exe: "Spotify.exe" },
+            { id: "w4", name: "Discord", mode: "window", exe: "Discord.exe" },
+            { id: "w5", name: "Steam", mode: "window", exe: "steam.exe" },
+            { id: "w6", name: "OBS Studio", mode: "window", exe: "obs64.exe" },
+        ];
+    }
+}
+
+/// Nothing open to stream.
+export component PreviewEmpty inherits Rectangle {
+    width: 1100px;
+    height: 760px;
+    background: Theme.bg-app;
+
+    StreamSourcePicker {
+        width: parent.width;
+        height: parent.height;
+        windows: [];
     }
 }

@@ -1,4 +1,6 @@
 import { Theme } from "../theme.slint";
+import { UserAvatar } from "../components/avatar.slint";
+import { CutShape, CutButtonShape, CutMask, OctShape, OctMask } from "../components/cut.slint";
 import { CrewData, VoiceChannelData, VoiceChannelMember } from "../types.slint";
 
 component VcMemberRow inherits Rectangle {
@@ -23,31 +25,13 @@ component VcMemberRow inherits Rectangle {
         padding-right: 8px;
         cross-axis-alignment: center;
 
-        Rectangle {
-            width: 20px;
-            height: 20px;
-            border-radius: 4px;
-            background: Theme.graphic-med;
-            border-width: speaking ? 2px : 0px;
-            border-color: speaking ? Theme.accent-green : transparent;
-            clip: true;
-
-            if has-avatar: Image {
-                source: avatar;
-                width: parent.width;
-                height: parent.height;
-                image-fit: cover;
-            }
-
-            if !has-avatar: Text {
-                text: initials;
-                font-family: Theme.font-mono;
-                font-size: 8px;
-                font-weight: 600;
-                color: white;
-                horizontal-alignment: center;
-                vertical-alignment: center;
-            }
+        UserAvatar {
+            initials: root.initials;
+            avatar: root.avatar;
+            has-avatar: root.has-avatar;
+            muted: true;
+            size: 22px;
+            bg-color: Theme.card-bg;
         }
 
         VerticalLayout {
@@ -56,14 +40,20 @@ component VcMemberRow inherits Rectangle {
 
             Text {
                 text: name;
+                font-family: Theme.font-display;
                 font-size: 12px;
-                color: speaking ? Theme.text-primary : Theme.text-dim;
-                font-weight: speaking ? 500 : 400;
+                // The only green in the product: this person is talking
+                // right now. It goes on the name and nowhere else — the
+                // avatar keeps its shape, the row keeps its ground.
+                color: speaking ? Theme.speaking : Theme.text-dim;
+                font-weight: speaking ? Theme.weight-display : 400;
                 overflow: elide;
             }
 
             if game-line != "": Text {
                 text: game-line;
+                font-family: Theme.font-body;
+                font-weight: Theme.weight-sentence;
                 font-size: 10px;
                 color: Theme.text-sub;
                 overflow: elide;
@@ -107,7 +97,7 @@ component CatchupStoryCard inherits Rectangle {
             height: 3px;
             border-radius: 2px;
             background: crew.catchup-loaded
-                ? (crew.catchup-count > 0 ? Theme.accent : Theme.graphic-med)
+                ? (crew.catchup-count > 0 ? Theme.action : Theme.graphic-med)
                 : Theme.skel-text;
             y: (parent.height - self.height) / 2;
         }
@@ -124,8 +114,9 @@ component CatchupStoryCard inherits Rectangle {
                         : "All quiet lately."
                 )
                 : "Loading recent story...";
-            font-family: Theme.font-mono;
-            font-size: 10px;
+            font-family: Theme.font-body;
+            font-weight: Theme.weight-sentence;
+            font-size: 10.5px;
             color: Theme.text-sub;
             horizontal-stretch: 1;
             vertical-alignment: center;
@@ -139,10 +130,22 @@ component SidebarActionButton inherits Rectangle {
     in property <image> icon;
     callback tapped();
 
-    border-radius: 8px;
-    border-width: 1px;
-    border-color: Theme.card-border;
-    background: btn-touch.has-hover ? Theme.surface-hover : Theme.card-bg-skel;
+    background: transparent;
+    border-width: 0px;
+
+    CutButtonShape {
+        width: parent.width;
+        height: parent.height;
+        n: 8px;
+        fill: btn-touch.has-hover ? Theme.graphic-med : Theme.card-border;
+    }
+    CutButtonShape {
+        width: parent.width;
+        height: parent.height;
+        n: 8px;
+        inset: Theme.keyline;
+        fill: btn-touch.has-hover ? Theme.raised-hover : Theme.surface;
+    }
 
     HorizontalLayout {
         alignment: center;
@@ -163,9 +166,11 @@ component SidebarActionButton inherits Rectangle {
 
         Text {
             text: label;
-            font-size: 10px;
-            font-weight: 500;
-            color: btn-touch.has-hover ? Theme.text-sub : Theme.text-dim;
+            font-family: Theme.font-label;
+            font-weight: Theme.weight-label;
+            letter-spacing: Theme.track-label;
+            font-size: 9.5px;
+            color: btn-touch.has-hover ? Theme.text-primary : Theme.text-dim;
             vertical-alignment: center;
         }
     }
@@ -182,10 +187,24 @@ component CompactCrewCard inherits Rectangle {
     in property <CrewData> crew;
     callback selected(string);
 
-    border-radius: 10px;
-    background: card-touch.has-hover ? (Theme.dark ? #202226 : Theme.card-bg-hover) : (Theme.dark ? #1A1B1E : Theme.card-bg-skel);
-    border-width: 1px;
-    border-color: card-touch.has-hover ? (Theme.dark ? #36393F : Theme.graphic-med) : Theme.card-border;
+    background: transparent;
+    border-width: 0px;
+
+    CutShape {
+        width: parent.width;
+        height: parent.height;
+        n: Theme.notch-sm;
+        corner: "tr";
+        fill: card-touch.has-hover ? Theme.graphic-med : Theme.card-border;
+    }
+    CutShape {
+        width: parent.width;
+        height: parent.height;
+        n: Theme.notch-sm;
+        corner: "tr";
+        inset: Theme.keyline;
+        fill: card-touch.has-hover ? Theme.card-bg-hover : Theme.card-bg;
+    }
 
     VerticalLayout {
         padding: 10px;
@@ -200,9 +219,8 @@ component CompactCrewCard inherits Rectangle {
             if crew.has-avatar: Rectangle {
                 width: 22px;
                 height: 22px;
-                border-radius: 5px;
                 clip: true;
-                opacity: card-touch.has-hover ? 0.72 : 0.52;
+                opacity: card-touch.has-hover ? 0.85 : 0.6;
                 y: (parent.height - self.height) / 2;
 
                 Image {
@@ -216,16 +234,21 @@ component CompactCrewCard inherits Rectangle {
             if !crew.has-avatar: Rectangle {
                 width: 22px;
                 height: 22px;
-                border-radius: 5px;
-                background: Theme.card-border;
-                opacity: card-touch.has-hover ? 0.68 : 0.48;
+                opacity: card-touch.has-hover ? 0.9 : 0.7;
                 y: (parent.height - self.height) / 2;
 
+                CutButtonShape {
+                    width: parent.width;
+                    height: parent.height;
+                    n: 5px;
+                    fill: Theme.raised;
+                }
+
                 Text {
-                    text: crew.name;
-                    font-size: 7px;
-                    font-family: Theme.font-mono;
-                    font-weight: 700;
+                    text: crew.initials;
+                    font-size: 8px;
+                    font-family: Theme.font-display;
+                    font-weight: Theme.weight-display-bold;
                     color: Theme.text-dim;
                     horizontal-alignment: center;
                     vertical-alignment: center;
@@ -235,9 +258,10 @@ component CompactCrewCard inherits Rectangle {
 
             Text {
                 text: crew.name;
+                font-family: Theme.font-display;
                 font-size: 13px;
-                font-weight: 700;
-                color: card-touch.has-hover ? #C8CDD8 : #9198A7;
+                font-weight: Theme.weight-display;
+                color: card-touch.has-hover ? Theme.text-primary : Theme.text-secondary;
                 horizontal-stretch: 1;
                 overflow: elide;
                 vertical-alignment: center;
@@ -247,7 +271,7 @@ component CompactCrewCard inherits Rectangle {
                 min-width: 18px;
                 height: 18px;
                 border-radius: 9px;
-                background: crew.unread-mention ? Theme.accent : Theme.graphic-med;
+                background: crew.unread-mention ? Theme.live : Theme.graphic-med;
                 y: (parent.height - self.height) / 2;
 
                 Text {
@@ -262,7 +286,7 @@ component CompactCrewCard inherits Rectangle {
 
             if crew.has-stream: Rectangle {
                 border-radius: 3px;
-                background: #dc2626;
+                background: Theme.live;
                 height: 16px;
                 min-width: 34px;
                 vertical-stretch: 0;
@@ -294,8 +318,8 @@ component CompactCrewCard inherits Rectangle {
             if crew.clip-count > 0 && !crew.has-stream: Rectangle {
                 border-radius: 4px;
                 border-width: 1px;
-                border-color: Theme.dark ? #EB4D5F22 : #EB4D5F33;
-                background: Theme.dark ? #EB4D5F18 : #EB4D5F14;
+                border-color: Theme.live-bg;
+                background: Theme.live-bg;
                 height: 16px;
                 min-width: 31px;
                 vertical-stretch: 0;
@@ -310,7 +334,7 @@ component CompactCrewCard inherits Rectangle {
                         source: @image-url("../icons/scissors.svg");
                         width: 8px;
                         height: 8px;
-                        colorize: Theme.dark ? #EB4D5F88 : #EB4D5FAA;
+                        colorize: Theme.live;
                         y: (parent.height - self.height) / 2;
                     }
 
@@ -318,7 +342,7 @@ component CompactCrewCard inherits Rectangle {
                         text: crew.clip-count;
                         font-size: 9px;
                         font-weight: 700;
-                        color: Theme.dark ? #EB4D5F88 : #EB4D5FAA;
+                        color: Theme.live;
                         vertical-alignment: center;
                     }
                 }
@@ -380,7 +404,7 @@ component CompactCrewCard inherits Rectangle {
                 border-radius: 3px;
                 border-width: 1px;
                 border-color: Theme.card-border;
-                background: Theme.dark ? #77777714 : #7777770E;
+                background: Theme.raised;
                 height: 14px;
                 min-width: 12px;
                 vertical-stretch: 0;
@@ -399,7 +423,7 @@ component CompactCrewCard inherits Rectangle {
                 border-radius: 3px;
                 border-width: 1px;
                 border-color: Theme.card-border;
-                background: Theme.dark ? #77777714 : #7777770E;
+                background: Theme.raised;
                 height: 14px;
                 min-width: 12px;
                 vertical-stretch: 0;
@@ -418,7 +442,7 @@ component CompactCrewCard inherits Rectangle {
                 border-radius: 3px;
                 border-width: 1px;
                 border-color: Theme.card-border;
-                background: Theme.dark ? #77777714 : #7777770E;
+                background: Theme.raised;
                 height: 14px;
                 min-width: 12px;
                 vertical-stretch: 0;
@@ -459,20 +483,45 @@ component ActiveCrewCard inherits Rectangle {
     callback crew-leave-requested();
     callback crew-add-channel-requested();
 
-    border-radius: 10px;
-    background: Theme.dark ? #1A1B1E : Theme.card-bg;
-    border-width: 1px;
-    border-color: Theme.dark ? #3D4048 : Theme.graphic-med;
-    clip: true;
+    background: transparent;
+    border-width: 0px;
     height: card-height;
+
+    CutShape {
+        width: parent.width;
+        height: parent.height;
+        n: Theme.notch-sm;
+        corner: "tr";
+        fill: Theme.action-line;
+    }
+    CutShape {
+        width: parent.width;
+        height: parent.height;
+        n: Theme.notch-sm;
+        corner: "tr";
+        inset: Theme.keyline;
+        fill: Theme.card-bg;
+    }
 
     VerticalLayout {
         spacing: 0px;
 
         Rectangle {
             height: 56px;
-            background: Theme.dark ? #222428 : Theme.card-bg-hover;
+            background: transparent;
             border-width: 0px;
+
+            // The header is the top of the card, so it carries the same
+            // cut and stops one keyline short of the edge. A plain
+            // rectangle here painted over the outline and the corner.
+            CutShape {
+                width: parent.width;
+                height: parent.height;
+                n: Theme.notch-sm;
+                corner: "tr";
+                inset: Theme.keyline;
+                fill: Theme.raised;
+            }
 
             HorizontalLayout {
                 padding-left: 10px;
@@ -482,9 +531,8 @@ component ActiveCrewCard inherits Rectangle {
                 if crew.has-avatar: Rectangle {
                     width: 32px;
                     height: 32px;
-                    border-radius: 7px;
-                    clip: true;
                     y: (parent.height - self.height) / 2;
+                    clip: true;
 
                     Image {
                         source: crew.avatar;
@@ -492,21 +540,49 @@ component ActiveCrewCard inherits Rectangle {
                         height: parent.height;
                         image-fit: cover;
                     }
+
+                    // A crew is a thing, so it wears the two-corner tile.
+                    // Slint cannot clip to a path, so the corners are
+                    // painted back in the header colour.
+                    CutMask {
+                        width: parent.width;
+                        height: parent.height;
+                        n: 7px;
+                        corner: "tl";
+                        fill: Theme.raised;
+                    }
+                    CutMask {
+                        width: parent.width;
+                        height: parent.height;
+                        n: 7px;
+                        corner: "br";
+                        fill: Theme.raised;
+                    }
                 }
 
                 if !crew.has-avatar: Rectangle {
                     width: 32px;
                     height: 32px;
-                    border-radius: 7px;
-                    background: Theme.accent;
                     y: (parent.height - self.height) / 2;
 
+                    // Graphite, not white. A crew is a thing you look at,
+                    // not a thing you press, and every other crew tile in
+                    // the app reads this way.
+                    CutButtonShape {
+                        width: parent.width;
+                        height: parent.height;
+                        n: 7px;
+                        fill: Theme.raised-hover;
+                    }
+
                     Text {
-                        text: crew.name;
-                        font-size: 9px;
-                        font-family: Theme.font-mono;
-                        font-weight: 800;
-                        color: white;
+                        text: crew.initials;
+                        font-size: 11px;
+                        font-family: Theme.font-display;
+                        font-weight: Theme.weight-display-bold;
+                        color: Theme.text-secondary;
+                        width: parent.width;
+                        height: parent.height;
                         horizontal-alignment: center;
                         vertical-alignment: center;
                         overflow: clip;
@@ -515,8 +591,10 @@ component ActiveCrewCard inherits Rectangle {
 
                 Text {
                     text: crew.name;
+                    font-family: Theme.font-display;
                     font-size: 14px;
-                    font-weight: 700;
+                    font-weight: Theme.weight-display;
+                    letter-spacing: -0.1px;
                     color: Theme.text-primary;
                     horizontal-stretch: 1;
                     horizontal-alignment: center;
@@ -756,7 +834,7 @@ component ActiveCrewCard inherits Rectangle {
                         if ch.member-count > 0: Rectangle {
                             height: 22px;
                             border-radius: 5px;
-                            background: ch.active ? (Theme.dark ? #2B2D31AA : Theme.card-border) : (ch-touch.has-hover ? Theme.card-border : transparent);
+                            background: ch.active ? Theme.action-dim : (ch-touch.has-hover ? Theme.raised : transparent);
 
                             HorizontalLayout {
                                 padding-left: 7px;
@@ -773,9 +851,10 @@ component ActiveCrewCard inherits Rectangle {
 
                                 Text {
                                     text: ch.name;
+                                    font-family: Theme.font-display;
                                     font-size: 12px;
-                                    font-weight: 600;
-                                    color: ch.active ? Theme.text-primary : Theme.text-sub;
+                                    font-weight: Theme.weight-display;
+                                    color: ch.active ? Theme.action : Theme.text-sub;
                                     horizontal-stretch: 1;
                                     overflow: elide;
                                     vertical-alignment: center;
@@ -786,7 +865,7 @@ component ActiveCrewCard inherits Rectangle {
                                     font-family: Theme.font-mono;
                                     font-size: 10px;
                                     font-weight: 700;
-                                    color: ch.member-count > 0 ? (ch.active ? Theme.accent : #F59E0B) : Theme.text-tertiary;
+                                    color: ch.member-count > 0 ? (ch.active ? Theme.action : Theme.text-secondary) : Theme.text-tertiary;
                                     vertical-alignment: center;
                                     min-width: 14px;
                                     horizontal-alignment: right;
@@ -827,7 +906,7 @@ component ActiveCrewCard inherits Rectangle {
                         if ch.member-count == 0: Rectangle {
                             height: 24px;
                             border-radius: 5px;
-                            background: ch-touch-empty.has-hover ? (Theme.dark ? #2B2D3122 : Theme.card-border) : transparent;
+                            background: ch-touch-empty.has-hover ? Theme.raised : transparent;
 
                             HorizontalLayout {
                                 padding-left: 7px;
@@ -844,6 +923,7 @@ component ActiveCrewCard inherits Rectangle {
 
                                 Text {
                                     text: ch.name + " [0]";
+                                    font-family: Theme.font-display;
                                     font-size: 12px;
                                     color: Theme.text-dim;
                                     horizontal-stretch: 1;
@@ -984,7 +1064,7 @@ export component Preview inherits CrewPanel {
     active-crew-id: "c1";
     crews: [
         {
-            id: "c1", name: "M3LLO CREW", member-count: 10, online-count: 5,
+            id: "c1", name: "M3LLO CREW", initials: "MC", member-count: 10, online-count: 5,
             sfu-enabled: true, voice-count: 3,
             has-catchup: true, catchup-count: 4, catchup-loaded: true,
             catchup-text: "Three moments dropped, one stream recap, and two clips this week.",
@@ -993,7 +1073,7 @@ export component Preview inherits CrewPanel {
             v2-initials: "b0", v2-name: "b0bben", v2-speaking: false,
         },
         {
-            id: "c2", name: "Neon Syndicate", member-count: 12, online-count: 4,
+            id: "c2", name: "Neon Syndicate", initials: "NS", member-count: 12, online-count: 4,
             has-stream: true, stream-name: "vex_r streaming Valorant",
             voice-count: 4,
             clip-count: 4,
@@ -1006,7 +1086,7 @@ export component Preview inherits CrewPanel {
             v2-initials: "lu",
         },
         {
-            id: "c3", name: "Deep Space", member-count: 8, online-count: 2,
+            id: "c3", name: "Deep Space", initials: "DS", member-count: 8, online-count: 2,
             voice-count: 2,
             game-count: 3,
             g0-name: "Apex", g1-name: "OW2", g2-name: "CoD",
@@ -1016,7 +1096,7 @@ export component Preview inherits CrewPanel {
             v1-initials: "st",
         },
         {
-            id: "c4", name: "Quiet Squad", member-count: 5, online-count: 0,
+            id: "c4", name: "Quiet Squad", initials: "QS", member-count: 5, online-count: 0,
             voice-count: 0,
             game-count: 0,
             clip-count: 0,
@@ -1038,3 +1118,4 @@ export component Preview inherits CrewPanel {
         { id: "vc4", name: "Movie night", member-count: 0, active: false },
     ];
 }
+

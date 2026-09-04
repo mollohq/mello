@@ -1,9 +1,8 @@
-import "../../client/ui/fonts/Inter-Regular.ttf";
-import "../../client/ui/fonts/Inter-Medium.ttf";
-import "../../client/ui/fonts/Inter-SemiBold.ttf";
-import "../../client/ui/fonts/Inter-Bold.ttf";
-import "../../client/ui/fonts/JetBrainsMono-Regular.ttf";
-import "../../client/ui/fonts/JetBrainsMono-Medium.ttf";
+// The HUD follows the same two faces as the client.
+import "../../client/ui/fonts/Oxanium-SemiBold.ttf";
+import "../../client/ui/fonts/Oxanium-Bold.ttf";
+import "../../client/ui/fonts/Barlow-Light.ttf";
+import "../../client/ui/fonts/Barlow-SemiBold.ttf";
 
 // ── Data types ──────────────────────────────────────────────────────────────
 
@@ -93,7 +92,7 @@ component MemberRow inherits Rectangle {
 
             Text {
                 text: initials;
-                font-family: "JetBrains Mono";
+                font-family: "Barlow";
                 font-size: 10px;
                 font-weight: 700;
                 color: speaking ? white : (muted ? #555555 : #8A8A8A);
@@ -105,7 +104,7 @@ component MemberRow inherits Rectangle {
         // Name
         Text {
             text: display-name;
-            font-family: "Inter";
+            font-family: "Barlow";
             font-size: 13px;
             font-weight: speaking ? 600 : 500;
             color: speaking ? white : (muted ? #8A8A8A : #D4D4D4);
@@ -135,7 +134,7 @@ export component MiniPlayerWindow inherits Window {
     title: "m3llo HUD";
     no-frame: true;
     background: transparent;
-    default-font-family: "Inter";
+    default-font-family: "Barlow";
     width: 280px;
     height: self.preferred-height < 360px ? 360px : self.preferred-height;
 
@@ -235,7 +234,7 @@ export component MiniPlayerWindow inherits Window {
 
                         Text {
                             text: crew-initials;
-                            font-family: "JetBrains Mono";
+                            font-family: "Barlow";
                             font-size: 12px;
                             font-weight: 700;
                             color: #FF1E56;
@@ -269,7 +268,7 @@ export component MiniPlayerWindow inherits Window {
                             }
                             Text {
                                 text: online-count + " online";
-                                font-family: "JetBrains Mono";
+                                font-family: "Barlow";
                                 font-size: 10px;
                                 color: #8A8A8A;
                                 vertical-alignment: center;
@@ -374,7 +373,7 @@ export component MiniPlayerWindow inherits Window {
 
                             Text {
                                 text: stream-card.streamer + " is streaming";
-                                font-family: "JetBrains Mono";
+                                font-family: "Barlow";
                                 font-size: 9px;
                                 color: #8A8A8A;
                                 letter-spacing: 0.5px;
@@ -432,7 +431,7 @@ export component MiniPlayerWindow inherits Window {
 
                             Text {
                                 text: msg.display-name + ":";
-                                font-family: "JetBrains Mono";
+                                font-family: "Barlow";
                                 font-size: 10px;
                                 color: msg.sender-color;
                             }
@@ -485,7 +484,7 @@ export component MiniPlayerWindow inherits Window {
 
                             Text {
                                 text: self-initials;
-                                font-family: "JetBrains Mono";
+                                font-family: "Barlow";
                                 font-size: 12px;
                                 font-weight: 700;
                                 color: white;
@@ -506,7 +505,7 @@ export component MiniPlayerWindow inherits Window {
                             }
                             Text {
                                 text: "Connected";
-                                font-family: "JetBrains Mono";
+                                font-family: "Barlow";
                                 font-size: 10px;
                                 color: #8A8A8A;
                             }

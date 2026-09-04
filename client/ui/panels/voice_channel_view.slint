@@ -1,4 +1,6 @@
 import { Theme, MelloTextInput } from "../theme.slint";
+import { UserAvatar } from "../components/avatar.slint";
+import { CutButtonShape } from "../components/cut.slint";
 import { VoiceChannelData, VoiceChannelMember } from "../types.slint";
 
 // ── Collapsed voice channel row (compact single-line) ──
@@ -10,7 +12,7 @@ component VoiceChannelRow inherits Rectangle {
     callback clicked();
     callback join-clicked();
 
-    background: touch.has-hover ? #FFFFFF06 : transparent;
+    background: touch.has-hover ? Theme.hover-overlay : transparent;
 
     // Row-level touch BEFORE layout so the join button renders on top
     touch := TouchArea {
@@ -33,8 +35,9 @@ component VoiceChannelRow inherits Rectangle {
         }
 
         Text {
+            letter-spacing: Theme.track-label;
             text: channel-name;
-            font-family: Theme.font-mono;
+            font-family: Theme.font-label;
             font-size: 12px;
             font-weight: 600;
             color: Theme.text-secondary;
@@ -42,8 +45,10 @@ component VoiceChannelRow inherits Rectangle {
         }
 
         Text {
+            letter-spacing: Theme.track-label;
+            font-weight: Theme.weight-label;
             text: status-text;
-            font-family: Theme.font-mono;
+            font-family: Theme.font-label;
             font-size: 10px;
             color: Theme.text-tertiary;
             vertical-alignment: center;
@@ -54,19 +59,32 @@ component VoiceChannelRow inherits Rectangle {
         if show-join: Rectangle {
             width: join-label.preferred-width + 20px;
             height: 22px;
-            border-radius: 11px;
-            background: join-touch.has-hover ? #28C84030 : #28C84018;
-            border-width: 1px;
-            border-color: join-touch.has-hover ? #28C84060 : #28C84030;
+            background: transparent;
             vertical-stretch: 0;
+
+            // Joining is something you press, so it is white. The green in
+            // this panel was never about speaking.
+            CutButtonShape {
+                width: parent.width;
+                height: parent.height;
+                n: 5px;
+                fill: join-touch.has-hover ? Theme.action : Theme.action-line;
+            }
+            if !join-touch.has-hover: CutButtonShape {
+                width: parent.width;
+                height: parent.height;
+                n: 5px;
+                inset: Theme.keyline;
+                fill: Theme.surface;
+            }
 
             join-label := Text {
                 text: "Join";
-                font-family: Theme.font-mono;
+                font-family: Theme.font-label;
                 font-size: 10px;
-                font-weight: 600;
-                color: join-touch.has-hover ? #28C840 : #28C840A0;
-                letter-spacing: 0.3px;
+                font-weight: Theme.weight-label;
+                color: join-touch.has-hover ? Theme.on-action : Theme.text-primary;
+                letter-spacing: Theme.track-label;
                 horizontal-alignment: center;
                 vertical-alignment: center;
             }
@@ -76,11 +94,11 @@ component VoiceChannelRow inherits Rectangle {
             }
         }
 
-        Text {
-            text: "▾";
-            font-size: 14px;
-            color: Theme.text-tertiary;
-            vertical-alignment: center;
+        Image {
+            source: @image-url("../icons/chevron-down.svg");
+            width: 12px;
+            height: 12px;
+            colorize: Theme.text-tertiary;
         }
     }
 }
@@ -123,8 +141,9 @@ component VoiceChannelExpanded inherits Rectangle {
                     }
 
                     Text {
+                        letter-spacing: Theme.track-label;
                         text: channel-name;
-                        font-family: Theme.font-mono;
+                        font-family: Theme.font-label;
                         font-size: 12px;
                         font-weight: 600;
                         color: Theme.text-primary;
@@ -132,6 +151,8 @@ component VoiceChannelExpanded inherits Rectangle {
                     }
 
                     Text {
+                        font-weight: Theme.weight-display;
+                        font-family: Theme.font-display;
                         text: "·";
                         font-size: 14px;
                         color: Theme.text-tertiary;
@@ -139,8 +160,9 @@ component VoiceChannelExpanded inherits Rectangle {
                     }
 
                     Text {
+                        font-weight: Theme.weight-label;
                         text: members.length > 0 ? "Active Session" : "Empty";
-                        font-family: Theme.font-mono;
+                        font-family: Theme.font-label;
                         font-size: 10px;
                         color: Theme.text-tertiary;
                         letter-spacing: 0.5px;
@@ -155,8 +177,9 @@ component VoiceChannelExpanded inherits Rectangle {
                     alignment: center;
 
                     Text {
+                        font-weight: Theme.weight-label;
                         text: "ACTIVE SESSION";
-                        font-family: Theme.font-mono;
+                        font-family: Theme.font-label;
                         font-size: Theme.font-xs;
                         color: Theme.text-tertiary;
                         letter-spacing: 0.5px;
@@ -171,11 +194,12 @@ component VoiceChannelExpanded inherits Rectangle {
                     }
                 }
 
-                Text {
-                    text: "▴";
-                    font-size: 14px;
-                    color: Theme.text-tertiary;
-                    vertical-alignment: center;
+                Image {
+                    source: @image-url("../icons/chevron-down.svg");
+                    width: 12px;
+                    height: 12px;
+                    colorize: Theme.text-tertiary;
+                    transform-rotation: 180deg;
                 }
             }
 
@@ -199,17 +223,31 @@ component VoiceChannelExpanded inherits Rectangle {
                 Rectangle {
                     width: 48px;
                     height: 48px;
-                    border-radius: Theme.r-inner;
-                    background: join-tile-touch.has-hover ? #28C84018 : #FFFFFF04;
-                    border-width: 1px;
-                    border-color: join-tile-touch.has-hover ? #28C84060 : Theme.graphic-light;
+                    background: transparent;
+
+                    // The tile sits in a row of people, so it takes their
+                    // silhouette without pretending to be one.
+                    CutButtonShape {
+                        width: parent.width;
+                        height: parent.height;
+                        n: 11px;
+                        fill: join-tile-touch.has-hover ? Theme.action-line : Theme.graphic-light;
+                    }
+                    CutButtonShape {
+                        width: parent.width;
+                        height: parent.height;
+                        n: 11px;
+                        inset: Theme.keyline;
+                        fill: join-tile-touch.has-hover ? Theme.surface-hover : Theme.bg-app;
+                    }
 
                     Text {
+                        letter-spacing: Theme.track-label;
                         text: "+";
                         font-size: 20px;
-                        font-family: Theme.font-mono;
-                        font-weight: 400;
-                        color: join-tile-touch.has-hover ? #28C840 : Theme.text-tertiary;
+                        font-family: Theme.font-label;
+                        font-weight: Theme.weight-label;
+                        color: join-tile-touch.has-hover ? Theme.text-primary : Theme.text-tertiary;
                         horizontal-alignment: center;
                         vertical-alignment: center;
                     }
@@ -224,11 +262,12 @@ component VoiceChannelExpanded inherits Rectangle {
                 Rectangle { height: 6px; }
 
                 Text {
+                    letter-spacing: Theme.track-label;
                     text: "Join";
-                    font-family: Theme.font-mono;
+                    font-family: Theme.font-label;
                     font-size: 10px;
-                    font-weight: 500;
-                    color: join-tile-touch.has-hover ? #28C840 : Theme.text-tertiary;
+                    font-weight: Theme.weight-label;
+                    color: join-tile-touch.has-hover ? Theme.text-primary : Theme.text-tertiary;
                     horizontal-alignment: center;
                 }
             }
@@ -237,34 +276,18 @@ component VoiceChannelExpanded inherits Rectangle {
                 alignment: center;
                 spacing: 8px;
 
-                Rectangle {
-                    width: 48px;
-                    height: 48px;
-                    border-radius: Theme.r-inner;
-                    background: Theme.surface;
-                    border-width: 1px;
-                    border-color: member.speaking ? Theme.voice-active : Theme.graphic-light;
-                    clip: true;
-
-                    if member.has-avatar: Image {
-                        source: member.avatar;
-                        width: parent.width;
-                        height: parent.height;
-                        image-fit: contain;
-                    }
-
-                    if !member.has-avatar: Text {
-                        text: member.initials;
-                        font-size: 14px;
-                        font-family: Theme.font-mono;
-                        font-weight: 600;
-                        color: member.speaking ? Theme.text-primary : Theme.text-secondary;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
-                    }
+                UserAvatar {
+                    initials: member.initials;
+                    avatar: member.avatar;
+                    has-avatar: member.has-avatar;
+                    muted: true;
+                    size: 48px;
+                    bg-color: Theme.bg-app;
                 }
 
-                // Voice indicator bars
+                // Voice indicator bars. They widen when the person talks;
+                // the colour stays neutral because green marks speaking on
+                // the name and nowhere else.
                 HorizontalLayout {
                     alignment: center;
                     spacing: 4px;
@@ -274,36 +297,39 @@ component VoiceChannelExpanded inherits Rectangle {
                         width: 3px;
                         height: 3px;
                         border-radius: 1.5px;
-                        background: member.speaking ? Theme.voice-active : Theme.graphic-light;
+                        background: member.speaking ? Theme.text-secondary : Theme.graphic-light;
                     }
                     Rectangle {
                         width: member.speaking ? 20px : 10px;
                         height: 3px;
                         border-radius: 1.5px;
-                        background: member.speaking ? Theme.voice-active : Theme.graphic-light;
+                        background: member.speaking ? Theme.text-secondary : Theme.graphic-light;
                     }
                     Rectangle {
                         width: 3px;
                         height: 3px;
                         border-radius: 1.5px;
-                        background: member.speaking ? Theme.voice-active : Theme.graphic-light;
+                        background: member.speaking ? Theme.text-secondary : Theme.graphic-light;
                     }
                 }
 
                 Text {
+                    letter-spacing: Theme.track-label;
                     text: member.name;
-                    font-family: Theme.font-mono;
+                    font-family: Theme.font-label;
                     font-size: 10px;
                     font-weight: member.speaking ? 500 : 400;
-                    color: member.speaking ? Theme.voice-active : Theme.text-secondary;
+                    color: member.speaking ? Theme.speaking : Theme.text-secondary;
                     horizontal-alignment: center;
                 }
             }
 
             // Empty state when no members and already in channel
             if members.length == 0 && !show-join: Text {
+                letter-spacing: Theme.track-label;
+                font-weight: Theme.weight-label;
                 text: "No one here yet";
-                font-family: Theme.font-mono;
+                font-family: Theme.font-label;
                 font-size: 11px;
                 color: Theme.text-tertiary;
                 vertical-alignment: center;
@@ -384,15 +410,19 @@ export component VoiceChannelView inherits Rectangle {
                     alignment: start;
 
                     Text {
+                        letter-spacing: Theme.track-label;
+                        font-weight: Theme.weight-label;
                         text: "+";
                         font-size: 14px;
-                        font-family: Theme.font-mono;
+                        font-family: Theme.font-label;
                         color: add-touch.has-hover ? Theme.text-primary : Theme.text-tertiary;
                         vertical-alignment: center;
                     }
                     Text {
+                        letter-spacing: Theme.track-label;
+                        font-weight: Theme.weight-label;
                         text: "New channel";
-                        font-family: Theme.font-mono;
+                        font-family: Theme.font-label;
                         font-size: 11px;
                         color: add-touch.has-hover ? Theme.text-primary : Theme.text-tertiary;
                         vertical-alignment: center;
@@ -421,7 +451,6 @@ export component VoiceChannelView inherits Rectangle {
 
                     Rectangle {
                         horizontal-stretch: 1;
-                        border-radius: Theme.radius-sm;
                         background: Theme.bg-app;
 
                         // Click anywhere on this row to focus the input
@@ -448,5 +477,35 @@ export component VoiceChannelView inherits Rectangle {
                 }
             }
         }
+    }
+}
+
+// Headless preview:
+//   slint-viewer --screenshot out.png --component Preview \
+//     client/ui/panels/voice_channel_view.slint
+export component Preview inherits Rectangle {
+    width: 620px;
+    height: 520px;
+    background: Theme.bg-app;
+
+    VoiceChannelView {
+        x: 20px;
+        y: 20px;
+        width: parent.width - 40px;
+        height: parent.height - 40px;
+        can-manage-channels: true;
+        voice-channels: [
+            {
+                id: "c1", name: "General", member-count: 3, is-default: true,
+                expanded: true, active: true,
+                members: [
+                    { id: "m1", name: "ostkatt", initials: "os", speaking: true },
+                    { id: "m2", name: "b0bben", initials: "b0", speaking: false },
+                    { id: "m3", name: "FaiL", initials: "Fa", speaking: false },
+                ],
+            },
+            { id: "c2", name: "Ranked grind", member-count: 0, is-default: false },
+            { id: "c3", name: "Movie night", member-count: 0, is-default: false },
+        ];
     }
 }

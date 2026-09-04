@@ -1,4 +1,18 @@
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
+
+/// Accept an explicit JSON `null` for a field that has a default.
+///
+/// `#[serde(default)]` covers a *missing* key only. Go marshals a nil slice as
+/// `null`, not `[]`, and no `omitempty` is set on the stats fields, so the
+/// backend does send `"recent_days": null`. Without this the whole response
+/// fails to parse and the You strip reports zero games.
+fn null_to_default<'de, D, T>(d: D) -> Result<T, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de> + Default,
+{
+    Ok(Option::<T>::deserialize(d)?.unwrap_or_default())
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CatchupResponse {
@@ -113,7 +127,7 @@ pub struct UserGameStats {
     #[serde(default)]
     pub longest_loss_streak: u32,
     /// Per-session form, newest last: "W" | "L" | "D".
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_to_default")]
     pub recent_form: Vec<String>,
     #[serde(default)]
     pub last_result: String,
@@ -125,7 +139,7 @@ pub struct UserGameStats {
     pub played_min_total: u32,
     #[serde(default)]
     pub active_min_total: u32,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_to_default")]
     pub recent_days: Vec<RecentDayEntry>,
 }
 
@@ -271,4 +285,32 @@ pub struct DiagnosticLogUploadURLResponse {
     /// Object key the log will be stored under (for support tooling reference).
     #[serde(default)]
     pub key: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The backend sets no `omitempty` on the stats slices, and Go marshals a
+    /// nil slice as `null`. One such document used to fail the whole parse,
+    /// which emptied the list and hid the You strip.
+    #[test]
+    fn user_game_stats_accepts_null_slices() {
+        let json = r#"{
+            "games": [{
+                "game_id": "cs2",
+                "recent_form": null,
+                "recent_days": null,
+                "played_min_total": 312
+            }]
+        }"#;
+
+        let parsed: UserGameStatsListResponse =
+            serde_json::from_str(json).expect("a null slice must parse as empty");
+
+        assert_eq!(parsed.games.len(), 1);
+        assert_eq!(parsed.games[0].played_min_total, 312);
+        assert!(parsed.games[0].recent_form.is_empty());
+        assert!(parsed.games[0].recent_days.is_empty());
+    }
 }

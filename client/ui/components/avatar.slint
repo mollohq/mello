@@ -1,0 +1,157 @@
+import { Theme } from "../theme.slint";
+import { OctShape, OctFrame } from "./cut.slint";
+
+// ============================================================
+//  The user avatar. There is one of these, and every surface uses it.
+//
+//  A person is an octagon. A crew or a game is a two-corner tile
+//  (`CutTile` in cut.slint). The shape tells you which one you look at.
+//
+//  Slint cannot clip an image to a path, so the octagon is cut by
+//  painting everything outside it in `bg-color` — one path, over the
+//  image, after it. `bg-color` must be what is really behind the avatar.
+//
+//  Two earlier attempts drew a plate under the image and masked the four
+//  corners over it. Three layers, each rounding on its own, and at
+//  fractional display scaling one of them lands a fraction short: that
+//  sliver is the light line that kept appearing along an edge. With a
+//  picture there is now nothing under it and one shape over it, so there
+//  is nothing left to peek out.
+// ============================================================
+
+export component UserAvatar inherits Rectangle {
+    in property <string> initials;
+    in property <image> avatar;
+    in property <bool> has-avatar: false;
+    /// Identity colour of the initials fallback. Ignored when `muted`.
+    in property <int> color-index: 0;
+    /// Graphite fill instead of an identity colour, for a person with no
+    /// place in a coloured list (a chat author, an unknown member).
+    in property <bool> muted: false;
+    in property <length> size: 18px;
+    /// What is really behind the avatar. The corners are painted with it,
+    /// so a wrong value shows as light wedges on the diagonals.
+    in property <color> bg-color: Theme.card-bg;
+
+    /// The cut keeps its proportion, so an 18px dot and a 40px avatar read
+    /// as the same shape. 0.22 is the mockup's 4px on 18px.
+    property <length> cut: max(3px, root.size * 0.22);
+
+    width: size;
+    height: size;
+    background: transparent;
+
+    // ── initials: one filled octagon, nothing over it ────────────────
+    if !root.has-avatar: OctShape {
+        width: root.size;
+        height: root.size;
+        n: root.cut;
+        fill: root.muted ? Theme.raised
+            : root.color-index == 0 ? Theme.id-blue
+            : root.color-index == 1 ? Theme.id-purple
+            : root.color-index == 2 ? Theme.id-teal
+            : root.color-index == 3 ? Theme.id-amber : Theme.id-pink;
+    }
+
+    if !root.has-avatar: Text {
+        text: root.initials;
+        font-family: Theme.font-display;
+        font-size: max(7px, root.size * 0.38);
+        font-weight: Theme.weight-display-bold;
+        color: root.muted ? Theme.text-secondary : Theme.on-action;
+        width: root.size;
+        height: root.size;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+
+    // ── a picture: the image, then the frame that cuts it ────────────
+    if root.has-avatar: Rectangle {
+        width: root.size;
+        height: root.size;
+        clip: true;
+
+        Image {
+            source: root.avatar;
+            width: root.size;
+            height: root.size;
+            image-fit: cover;
+        }
+    }
+
+    if root.has-avatar: OctFrame {
+        width: root.size;
+        height: root.size;
+        n: root.cut;
+        fill: root.bg-color;
+    }
+}
+
+/// The "+3" chip that closes a row of avatars. Same silhouette as a
+/// person, because it stands for people.
+export component AvatarOverflow inherits Rectangle {
+    in property <int> count: 0;
+    in property <length> size: 18px;
+
+    property <length> cut: max(3px, root.size * 0.22);
+
+    width: size;
+    height: size;
+    background: transparent;
+
+    OctShape {
+        width: root.size;
+        height: root.size;
+        n: root.cut;
+        fill: Theme.raised;
+    }
+
+    Text {
+        text: "+" + root.count;
+        font-family: Theme.font-display;
+        font-size: max(7px, root.size * 0.32);
+        font-weight: Theme.weight-display;
+        color: Theme.text-secondary;
+        width: root.size;
+        height: root.size;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
+
+// Headless preview:
+//   slint-viewer --screenshot out.png --component Preview \
+//     client/ui/components/avatar.slint
+export component Preview inherits Rectangle {
+    width: 420px;
+    height: 200px;
+    background: Theme.surface;
+
+    HorizontalLayout {
+        padding: 30px;
+        spacing: 30px;
+        alignment: start;
+        cross-axis-alignment: center;
+
+        UserAvatar {
+            initials: "b0";
+            muted: true;
+            size: 80px;
+            bg-color: Theme.surface;
+        }
+
+        UserAvatar {
+            avatar: @image-url("../icons/brands/steam.svg");
+            has-avatar: true;
+            size: 80px;
+            bg-color: Theme.surface;
+        }
+
+        UserAvatar {
+            initials: "os";
+            color-index: 2;
+            size: 80px;
+            bg-color: Theme.surface;
+        }
+    }
+}

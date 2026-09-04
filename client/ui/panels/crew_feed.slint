@@ -1,69 +1,13 @@
 import { Theme } from "../theme.slint";
+import { CutShape, CutMask, CutButtonShape, OctShape, OctMask } from "../components/cut.slint";
+import { UserAvatar, AvatarOverflow } from "../components/avatar.slint";
 import { FeedCardData, StreamCardData, YouStripData } from "../types.slint";
 import { ActiveStreamsPanel } from "./active_streams_panel.slint";
 import { SessionPreviewCard } from "./session_preview_card.slint";
 import { YouStrip } from "./you_strip.slint";
 import { GameIcon } from "../components/game_icon.slint";
 
-component AvatarDot inherits Rectangle {
-    in property <string> initials;
-    in property <int> color-index: 0;
-    in property <length> size: 18px;
 
-    width: size;
-    height: size;
-    border-radius: max(4px, size / 4.5);
-    border-width: 2px;
-    border-color: Theme.card-bg;
-    background: color-index == 0 ? #EB4D5F :
-                color-index == 1 ? #4a9eff :
-                color-index == 2 ? #4ade80 :
-                color-index == 3 ? #a78bfa : #f59e0b;
-
-    Text {
-        text: initials;
-        font-size: 7px;
-        font-weight: 600;
-        color: white;
-        horizontal-alignment: center;
-        vertical-alignment: center;
-    }
-}
-
-// Shows a real avatar image when cached (spec 19), else the initials dot.
-component RecapAvatar inherits Rectangle {
-    in property <string> initials;
-    in property <int> color-index: 0;
-    in property <image> avatar;
-    in property <bool> has-avatar: false;
-    /// Default matches the recap rows; session cards scale this up so the
-    /// people are the visual, not a footnote.
-    in property <length> size: 18px;
-
-    width: size;
-    height: size;
-
-    if !has-avatar: AvatarDot {
-        initials: root.initials;
-        color-index: root.color-index;
-        size: root.size;
-    }
-
-    if has-avatar: Rectangle {
-        width: root.size;
-        height: root.size;
-        border-radius: max(4px, root.size / 4.5);
-        clip: true;
-        border-width: root.size > 20px ? 2px : 0px;
-        border-color: Theme.card-bg;
-        Image {
-            source: root.avatar;
-            width: root.size;
-            height: root.size;
-            image-fit: cover;
-        }
-    }
-}
 
 // Play/pause ring for clip cards. Declared as a component so both hero and
 // standard cards share geometry, hover fill, and click forwarding.
@@ -81,7 +25,7 @@ component ClipPlayRing inherits Rectangle {
     border-radius: self.width / 2;
     border-width: 1.5px;
     border-color: Theme.clip-amber;
-    background: ring-hover.has-hover ? #F59E0B1F : transparent;
+    background: ring-hover.has-hover ? Theme.live-bg : transparent;
     animate background { duration: 150ms; easing: ease-out; }
 
     if !is-playing || is-paused: Image {
@@ -262,11 +206,13 @@ component DotWaveform inherits Rectangle {
             width: chip-text.preferred-width + 10px;
             height: chip-text.preferred-height + 4px;
             border-radius: 3px;
-            background: #000000cc;
+            background: #000000CC;
 
             chip-text := Text {
+                letter-spacing: Theme.track-label;
+                font-weight: Theme.weight-label;
                 text: chip-time;
-                font-family: Theme.font-mono;
+                font-family: Theme.font-label;
                 font-size: 10px;
                 color: Theme.clip-amber;
                 horizontal-alignment: center;
@@ -300,16 +246,17 @@ component DotWaveform inherits Rectangle {
 }
 
 component NewBadge inherits Rectangle {
-    width: new-text.preferred-width + 16px;
-    height: 22px;
-    border-radius: 5px;
-    background: Theme.clip-amber;
+    width: new-text.preferred-width + 12px;
+    height: 16px;
+    border-radius: 4px;
+    background: Theme.live;
 
     new-text := Text {
+        font-family: Theme.font-display;
         text: "NEW";
-        font-size: 10px;
-        font-weight: 700;
-        color: white;
+        font-size: 9px;
+        font-weight: Theme.weight-display-bold;
+        color: Theme.on-live;
         horizontal-alignment: center;
         vertical-alignment: center;
     }
@@ -327,13 +274,28 @@ component HeroClipCard inherits Rectangle {
     callback play-clicked(string);
     callback seek-ms(int);
 
-    background: card-hover.has-hover ? Theme.card-bg-hover : Theme.card-bg;
-    border-radius: 10px;
-    border-width: 1px;
-    border-color: card.is-new ? Theme.clip-amber :
+    background: transparent;
+    border-width: 0px;
+    clip: true;
+
+    CutShape {
+        width: parent.width;
+        height: parent.height;
+        n: Theme.notch;
+        corner: "br";
+        fill: card.is-new ? Theme.clip-amber :
                   is-playing ? Theme.clip-amber :
                   card-hover.has-hover ? Theme.graphic-med : Theme.card-border;
-    clip: true;
+    }
+    CutShape {
+        width: parent.width;
+        height: parent.height;
+        n: Theme.notch;
+        corner: "br";
+        inset: Theme.keyline;
+        fill: card-hover.has-hover ? Theme.card-bg-hover : Theme.card-bg;
+    }
+
 
     // Declared BEFORE the content so embedded touch areas (waveform scrub,
     // play ring) sit on top and receive their own pointer events — a full-card
@@ -359,6 +321,11 @@ component HeroClipCard inherits Rectangle {
             HorizontalLayout {
                 spacing: 0px;
 
+                if card.is-new: NewBadge {
+                    horizontal-stretch: 0;
+                }
+                if card.is-new: Rectangle { width: 6px; horizontal-stretch: 0; }
+
                 if !is-playing: HorizontalLayout {
                     spacing: 5px;
                     horizontal-stretch: 0;
@@ -374,11 +341,12 @@ component HeroClipCard inherits Rectangle {
                     }
 
                     Text {
+                        font-family: Theme.font-label;
                         text: "VOICE CLIP";
                         font-size: 10px;
-                        font-weight: 700;
+                        font-weight: Theme.weight-label;
                         color: Theme.clip-amber;
-                        letter-spacing: 1.5px;
+                        letter-spacing: Theme.track-label;
                         vertical-alignment: center;
                     }
                 }
@@ -405,11 +373,12 @@ component HeroClipCard inherits Rectangle {
                     }
 
                     Text {
+                        font-family: Theme.font-label;
                         text: is-paused ? "PAUSED" : "PLAYING";
                         font-size: 10px;
-                        font-weight: 700;
+                        font-weight: Theme.weight-label;
                         color: Theme.clip-amber;
-                        letter-spacing: 1.5px;
+                        letter-spacing: Theme.track-label;
                         vertical-alignment: center;
                     }
                 }
@@ -417,8 +386,10 @@ component HeroClipCard inherits Rectangle {
                 Rectangle { horizontal-stretch: 1; }
 
                 Text {
+                    letter-spacing: Theme.track-label;
+                    font-weight: Theme.weight-label;
                     text: is-playing ? position-text + " / " + duration-text : card.duration;
-                    font-family: Theme.font-mono;
+                    font-family: Theme.font-label;
                     font-size: 11px;
                     color: Theme.text-sub;
                     vertical-alignment: center;
@@ -426,10 +397,6 @@ component HeroClipCard inherits Rectangle {
                 }
             }
 
-            if card.is-new: NewBadge {
-                x: 0px;
-                y: 0px;
-            }
         }
 
         // Wave row: play ring + dot-matrix band (absorbs vertical slack)
@@ -473,9 +440,10 @@ component HeroClipCard inherits Rectangle {
             vertical-stretch: 0;
 
             Text {
+                font-family: Theme.font-display;
                 text: card.title != "" ? card.title : card.actor-name + " clipped that";
                 font-size: 14px;
-                font-weight: 500;
+                font-weight: Theme.weight-display;
                 color: Theme.text-primary;
             }
 
@@ -484,15 +452,17 @@ component HeroClipCard inherits Rectangle {
                 height: 20px;
 
                 if card.participant-count > 0: HorizontalLayout {
-                    spacing: -7px;
+                    spacing: 4px;
                     width: self.preferred-width;
 
-                    AvatarDot { initials: card.actor-initials; color-index: 0; }
-                    if card.participant-count > 1: AvatarDot { initials: ""; color-index: 1; }
-                    if card.participant-count > 2: AvatarDot { initials: ""; color-index: 2; }
+                    UserAvatar { initials: card.actor-initials; color-index: 0; }
+                    if card.participant-count > 1: UserAvatar { initials: ""; color-index: 1; }
+                    if card.participant-count > 2: UserAvatar { initials: ""; color-index: 2; }
                 }
 
                 Text {
+                    font-weight: Theme.weight-sentence;
+                    font-family: Theme.font-body;
                     text: card.timestamp;
                     font-size: 11px;
                     color: Theme.text-sub;
@@ -500,6 +470,8 @@ component HeroClipCard inherits Rectangle {
                 }
 
                 if card.game-name != "": Text {
+                    font-weight: Theme.weight-sentence;
+                    font-family: Theme.font-body;
                     text: "·";
                     font-size: 11px;
                     color: Theme.text-dim;
@@ -507,6 +479,8 @@ component HeroClipCard inherits Rectangle {
                 }
 
                 if card.game-name != "": Text {
+                    font-weight: Theme.weight-sentence;
+                    font-family: Theme.font-body;
                     text: card.game-name;
                     font-size: 11px;
                     color: Theme.text-sub;
@@ -515,7 +489,6 @@ component HeroClipCard inherits Rectangle {
             }
         }
     }
-
 }
 
 // Standard clip card (1x)
@@ -530,13 +503,28 @@ component ClipCard inherits Rectangle {
     callback play-clicked(string);
     callback seek-ms(int);
 
-    background: clip-hover.has-hover ? Theme.card-bg-hover : Theme.card-bg;
-    border-radius: 10px;
-    border-width: 1px;
-    border-color: card.is-new ? Theme.clip-amber :
+    background: transparent;
+    border-width: 0px;
+    clip: true;
+
+    CutShape {
+        width: parent.width;
+        height: parent.height;
+        n: Theme.notch;
+        corner: "bl";
+        fill: card.is-new ? Theme.clip-amber :
                   is-playing ? Theme.clip-amber :
                   clip-hover.has-hover ? Theme.graphic-med : Theme.card-border;
-    clip: true;
+    }
+    CutShape {
+        width: parent.width;
+        height: parent.height;
+        n: Theme.notch;
+        corner: "bl";
+        inset: Theme.keyline;
+        fill: clip-hover.has-hover ? Theme.card-bg-hover : Theme.card-bg;
+    }
+
 
     // Same ordering rule as HeroClipCard: content touches must win.
     clip-hover := TouchArea {
@@ -556,6 +544,11 @@ component ClipCard inherits Rectangle {
             vertical-stretch: 0;
 
             HorizontalLayout {
+                if card.is-new: NewBadge {
+                    horizontal-stretch: 0;
+                }
+                if card.is-new: Rectangle { width: 6px; horizontal-stretch: 0; }
+
                 if !is-playing: HorizontalLayout {
                     spacing: 5px;
                     horizontal-stretch: 0;
@@ -571,11 +564,12 @@ component ClipCard inherits Rectangle {
                     }
 
                     Text {
+                        font-family: Theme.font-label;
                         text: "VOICE CLIP";
                         font-size: 10px;
-                        font-weight: 700;
+                        font-weight: Theme.weight-label;
                         color: Theme.clip-amber;
-                        letter-spacing: 1.5px;
+                        letter-spacing: Theme.track-label;
                         vertical-alignment: center;
                     }
                 }
@@ -602,11 +596,12 @@ component ClipCard inherits Rectangle {
                     }
 
                     Text {
+                        font-family: Theme.font-label;
                         text: is-paused ? "PAUSED" : "PLAYING";
                         font-size: 10px;
-                        font-weight: 700;
+                        font-weight: Theme.weight-label;
                         color: Theme.clip-amber;
-                        letter-spacing: 1.5px;
+                        letter-spacing: Theme.track-label;
                         vertical-alignment: center;
                     }
                 }
@@ -614,8 +609,10 @@ component ClipCard inherits Rectangle {
                 Rectangle { horizontal-stretch: 1; }
 
                 Text {
+                    letter-spacing: Theme.track-label;
+                    font-weight: Theme.weight-label;
                     text: is-playing ? position-text + " / " + duration-text : card.duration;
-                    font-family: Theme.font-mono;
+                    font-family: Theme.font-label;
                     font-size: 11px;
                     color: Theme.text-sub;
                     vertical-alignment: center;
@@ -623,10 +620,6 @@ component ClipCard inherits Rectangle {
                 }
             }
 
-            if card.is-new: NewBadge {
-                x: 0px;
-                y: 0px;
-            }
         }
 
         // Wave band with corner play ring (absorbs vertical slack)
@@ -668,32 +661,48 @@ component ClipCard inherits Rectangle {
             vertical-stretch: 0;
 
             Text {
+                font-family: Theme.font-display;
                 text: card.title != "" ? card.title : card.actor-name + " clipped that";
                 font-size: 13px;
-                font-weight: 500;
+                font-weight: Theme.weight-display;
                 color: Theme.text-primary;
                 overflow: elide;
             }
 
             Text {
+                font-weight: Theme.weight-sentence;
+                font-family: Theme.font-body;
                 text: card.timestamp + (card.game-name != "" ? " · " + card.game-name : "");
                 font-size: 11px;
                 color: Theme.text-sub;
             }
         }
     }
-
 }
 
 // Weekly recap card
 component RecapCard inherits Rectangle {
     in property <FeedCardData> card;
 
-    background: Theme.card-bg;
-    border-radius: 10px;
-    border-width: 1px;
-    border-color: Theme.card-border;
-    clip: true;
+    background: transparent;
+    border-width: 0px;
+
+    CutShape {
+        width: parent.width;
+        height: parent.height;
+        n: Theme.notch;
+        corner: "bl";
+        fill: Theme.card-border;
+    }
+    CutShape {
+        width: parent.width;
+        height: parent.height;
+        n: Theme.notch;
+        corner: "bl";
+        inset: Theme.keyline;
+        fill: Theme.card-bg;
+    }
+
 
     VerticalLayout {
         padding: 14px;
@@ -704,23 +713,27 @@ component RecapCard inherits Rectangle {
         alignment: start;
 
         Text {
+            font-family: Theme.font-label;
             text: "WEEKLY RECAP";
             font-size: 10px;
-            font-weight: 700;
-            color: Theme.accent;
-            letter-spacing: 1.2px;
+            font-weight: Theme.weight-label;
+            color: Theme.text-secondary;
+            letter-spacing: Theme.track-label;
         }
 
         Rectangle { height: 8px; }
 
         Text {
+            font-family: Theme.font-display;
             text: card.title;
             font-size: 28px;
-            font-weight: 700;
+            font-weight: Theme.weight-display-bold;
             color: Theme.text-primary;
         }
 
         Text {
+            font-weight: Theme.weight-sentence;
+            font-family: Theme.font-body;
             text: "Total crew time";
             font-size: 11px;
             color: Theme.text-sub;
@@ -737,18 +750,18 @@ component RecapCard inherits Rectangle {
             spacing: 5px;
 
             if card.game-name != "": HorizontalLayout {
-                Text { text: "Top game"; font-size: 11px; color: Theme.text-dim; horizontal-stretch: 1; }
-                Text { text: card.game-name; font-size: 11px; color: Theme.text-value; }
+                Text { font-weight: Theme.weight-sentence; font-family: Theme.font-body; text: "Top game"; font-size: 11px; color: Theme.text-dim; horizontal-stretch: 1; }
+                Text { font-weight: Theme.weight-sentence; font-family: Theme.font-body; text: card.game-name; font-size: 11px; color: Theme.text-value; }
             }
 
             if card.duration != "": HorizontalLayout {
-                Text { text: "Longest sesh"; font-size: 11px; color: Theme.text-dim; horizontal-stretch: 1; }
-                Text { text: card.duration; font-size: 11px; color: Theme.text-value; }
+                Text { font-weight: Theme.weight-sentence; font-family: Theme.font-body; text: "Longest sesh"; font-size: 11px; color: Theme.text-dim; horizontal-stretch: 1; }
+                Text { font-weight: Theme.weight-sentence; font-family: Theme.font-body; text: card.duration; font-size: 11px; color: Theme.text-value; }
             }
 
             if card.subtitle != "": HorizontalLayout {
-                Text { text: "Clips"; font-size: 11px; color: Theme.text-dim; horizontal-stretch: 1; }
-                Text { text: card.subtitle; font-size: 11px; color: Theme.text-value; }
+                Text { font-weight: Theme.weight-sentence; font-family: Theme.font-body; text: "Clips"; font-size: 11px; color: Theme.text-dim; horizontal-stretch: 1; }
+                Text { font-weight: Theme.weight-sentence; font-family: Theme.font-body; text: card.subtitle; font-size: 11px; color: Theme.text-value; }
             }
         }
 
@@ -764,11 +777,12 @@ component RecapCard inherits Rectangle {
                 Rectangle { height: 8px; }
 
                 Text {
+                    font-family: Theme.font-label;
                     text: "MVP";
                     font-size: 10px;
-                    font-weight: 600;
+                    font-weight: Theme.weight-label;
                     color: Theme.skel-text;
-                    letter-spacing: 0.8px;
+                    letter-spacing: Theme.track-label;
                 }
 
                 Rectangle { height: 6px; }
@@ -780,8 +794,9 @@ component RecapCard inherits Rectangle {
                         spacing: 8px;
                         height: 22px;
 
-                        RecapAvatar { initials: card.mvp0-initials; color-index: 0; avatar: card.mvp0-avatar; has-avatar: card.mvp0-has-avatar; }
+                        UserAvatar { initials: card.mvp0-initials; color-index: 0; avatar: card.mvp0-avatar; has-avatar: card.mvp0-has-avatar; }
                         Text {
+                            font-family: Theme.font-body;
                             text: card.mvp0-name;
                             font-size: 12px;
                             font-weight: 500;
@@ -790,6 +805,8 @@ component RecapCard inherits Rectangle {
                             horizontal-stretch: 1;
                         }
                         Text {
+                            font-weight: Theme.weight-sentence;
+                            font-family: Theme.font-body;
                             text: card.mvp0-stat;
                             font-size: 11px;
                             color: Theme.text-sub;
@@ -812,14 +829,17 @@ component RecapCard inherits Rectangle {
                 Rectangle { height: 8px; }
 
                 Text {
+                    font-family: Theme.font-label;
                     text: "THIS WEEK IN GAMES";
                     font-size: 10px;
-                    font-weight: 600;
+                    font-weight: Theme.weight-label;
                     color: Theme.skel-text;
-                    letter-spacing: 0.8px;
+                    letter-spacing: Theme.track-label;
                 }
 
                 if card.games-summary != "": Text {
+                    font-weight: Theme.weight-sentence;
+                    font-family: Theme.font-body;
                     text: card.games-summary;
                     font-size: 11px;
                     color: Theme.text-sub;
@@ -832,8 +852,9 @@ component RecapCard inherits Rectangle {
                     for row in card.leaderboard: HorizontalLayout {
                         spacing: 8px;
                         height: 22px;
-                        RecapAvatar { initials: row.initials; color-index: row.color-index; avatar: row.avatar; has-avatar: row.has-avatar; }
+                        UserAvatar { initials: row.initials; color-index: row.color-index; avatar: row.avatar; has-avatar: row.has-avatar; }
                         Text {
+                            font-family: Theme.font-body;
                             text: row.name;
                             font-size: 12px;
                             font-weight: 500;
@@ -842,6 +863,8 @@ component RecapCard inherits Rectangle {
                             horizontal-stretch: 1;
                         }
                         Text {
+                            font-weight: Theme.weight-sentence;
+                            font-family: Theme.font-body;
                             text: row.record;
                             font-size: 11px;
                             color: Theme.text-sub;
@@ -858,6 +881,8 @@ component RecapCard inherits Rectangle {
                         spacing: 8px;
                         height: 18px;
                         Text {
+                            font-weight: Theme.weight-sentence;
+                            font-family: Theme.font-body;
                             text: a.title;
                             font-size: 11px;
                             color: Theme.text-dim;
@@ -865,6 +890,7 @@ component RecapCard inherits Rectangle {
                             horizontal-stretch: 1;
                         }
                         Text {
+                            font-family: Theme.font-body;
                             text: a.name;
                             font-size: 11px;
                             font-weight: 500;
@@ -872,6 +898,8 @@ component RecapCard inherits Rectangle {
                             vertical-alignment: center;
                         }
                         Text {
+                            font-weight: Theme.weight-sentence;
+                            font-family: Theme.font-body;
                             text: a.detail;
                             font-size: 10px;
                             color: Theme.text-sub;
@@ -893,12 +921,27 @@ component SessionCard inherits Rectangle {
     in property <FeedCardData> card;
 
     property <bool> is-stream: card.session-kind == "stream";
-    property <color> kind-color: is-stream ? Theme.accent : #4a9eff;
+    property <color> kind-color: is-stream ? Theme.accent : Theme.id-blue;
 
-    background: Theme.card-bg;
-    border-radius: 10px;
-    border-width: 1px;
-    border-color: Theme.card-border;
+    background: transparent;
+    border-width: 0px;
+
+    CutShape {
+        width: parent.width;
+        height: parent.height;
+        n: Theme.notch;
+        corner: "br";
+        fill: Theme.card-border;
+    }
+    CutShape {
+        width: parent.width;
+        height: parent.height;
+        n: Theme.notch;
+        corner: "br";
+        inset: Theme.keyline;
+        fill: Theme.card-bg;
+    }
+
 
     VerticalLayout {
         padding: 14px;
@@ -918,11 +961,12 @@ component SessionCard inherits Rectangle {
                 }
             }
             Text {
+                font-family: Theme.font-label;
                 text: is-stream ? "STREAM" : card.session-kind == "voice" ? "VOICE" : "SESSION";
                 font-size: 10px;
-                font-weight: 600;
+                font-weight: Theme.weight-label;
                 color: kind-color;
-                letter-spacing: 0.8px;
+                letter-spacing: Theme.track-label;
             }
         }
 
@@ -947,7 +991,7 @@ component SessionCard inherits Rectangle {
                         has-runtime-icon: card.game-has-icon;
                         size: 40px;
                     }
-                    if card.actor-has-avatar || card.actor-initials != "": RecapAvatar {
+                    if card.actor-has-avatar || card.actor-initials != "": UserAvatar {
                         initials: card.actor-initials;
                         avatar: card.actor-avatar;
                         has-avatar: card.actor-has-avatar;
@@ -963,13 +1007,16 @@ component SessionCard inherits Rectangle {
                 horizontal-stretch: 1;
 
                 Text {
+                    font-family: Theme.font-display;
                     text: card.game-name != "" ? card.game-name : card.title;
                     font-size: 13px;
-                    font-weight: 600;
+                    font-weight: Theme.weight-display;
                     color: Theme.text-primary;
                     overflow: elide;
                 }
                 Text {
+                    font-weight: Theme.weight-sentence;
+                    font-family: Theme.font-body;
                     text: card.actor-name != "" ? "by " + card.actor-name
                             + (card.duration-human != "" ? " · " + card.duration-human : "")
                         : card.duration-human;
@@ -981,6 +1028,8 @@ component SessionCard inherits Rectangle {
         }
 
         if is-stream && card.peak-count > 0: Text {
+            font-weight: Theme.weight-sentence;
+            font-family: Theme.font-body;
             text: "\{card.peak-count} watched at peak";
             font-size: 11px;
             color: Theme.text-sub;
@@ -992,13 +1041,16 @@ component SessionCard inherits Rectangle {
         if !is-stream: VerticalLayout {
             spacing: 2px;
             Text {
+                font-family: Theme.font-display;
                 text: card.channel-name != "" ? card.channel-name : card.title;
                 font-size: 13px;
-                font-weight: 600;
+                font-weight: Theme.weight-display;
                 color: Theme.text-primary;
                 overflow: elide;
             }
             Text {
+                font-weight: Theme.weight-sentence;
+                font-family: Theme.font-body;
                 text: card.duration-human
                     + (card.peak-count > 0 ? " · \{card.peak-count} in call" : "");
                 font-size: 11px;
@@ -1010,25 +1062,25 @@ component SessionCard inherits Rectangle {
         if !is-stream: Rectangle { height: 6px; }
 
         if !is-stream && card.participant-count > 0: HorizontalLayout {
-            spacing: -10px;
+            spacing: 4px;
             alignment: start;
             height: 40px;
 
-            RecapAvatar {
+            UserAvatar {
                 initials: card.part0-initials;
                 avatar: card.part0-avatar;
                 has-avatar: card.part0-has-avatar;
                 color-index: 0;
                 size: 40px;
             }
-            if card.participant-count > 1: RecapAvatar {
+            if card.participant-count > 1: UserAvatar {
                 initials: card.part1-initials;
                 avatar: card.part1-avatar;
                 has-avatar: card.part1-has-avatar;
                 color-index: 1;
                 size: 40px;
             }
-            if card.participant-count > 2: RecapAvatar {
+            if card.participant-count > 2: UserAvatar {
                 initials: card.part2-initials;
                 avatar: card.part2-avatar;
                 has-avatar: card.part2-has-avatar;
@@ -1036,25 +1088,15 @@ component SessionCard inherits Rectangle {
                 size: 40px;
             }
             // Overflow chip: the roster is wider than the three avatar slots.
-            if card.participant-count > 3: Rectangle {
-                width: 40px;
-                height: 40px;
-                border-radius: 9px;
-                border-width: 2px;
-                border-color: Theme.card-bg;
-                background: Theme.graphic-light;
-                Text {
-                    text: "+\{card.participant-count - 3}";
-                    font-size: 12px;
-                    font-weight: 600;
-                    color: Theme.text-secondary;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
-                }
+            if card.participant-count > 3: AvatarOverflow {
+                count: card.participant-count - 3;
+                size: 40px;
             }
         }
 
         if !is-stream && card.participants-line != "": Text {
+            font-weight: Theme.weight-sentence;
+            font-family: Theme.font-body;
             text: card.participants-line;
             font-size: 11px;
             color: Theme.text-sub;
@@ -1064,6 +1106,8 @@ component SessionCard inherits Rectangle {
         Rectangle { vertical-stretch: 1; }
 
         Text {
+            font-weight: Theme.weight-sentence;
+            font-family: Theme.font-body;
             text: card.timestamp + (card.subtitle != "" ? " · " + card.subtitle : "");
             font-size: 11px;
             color: Theme.skel-text;
@@ -1078,14 +1122,52 @@ component GameSessionRecordPanel inherits VerticalLayout {
 
     spacing: 0px;
 
-    // Headline record
-    Text {
-        text: card.game-record;
-        font-size: 30px;
-        font-weight: 700;
-        color: record-color;
+    // Headline record. A win reads white and a loss reads red, the same
+    // rule the you-strip pips follow. Colouring the whole record by the
+    // streak painted the wins red on any session that ended down.
+    HorizontalLayout {
+        alignment: start;
+        spacing: 0px;
+
+        Text {
+            font-family: Theme.font-display;
+            text: card.game-wins + "W";
+            font-size: 30px;
+            font-weight: Theme.weight-display-bold;
+            color: Theme.text-primary;
+        }
+        Text {
+            font-family: Theme.font-display;
+            text: "–";
+            font-size: 30px;
+            font-weight: Theme.weight-display-bold;
+            color: Theme.text-tertiary;
+        }
+        Text {
+            font-family: Theme.font-display;
+            text: card.game-losses + "L";
+            font-size: 30px;
+            font-weight: Theme.weight-display-bold;
+            color: Theme.live;
+        }
+        if card.game-draws > 0: Text {
+            font-family: Theme.font-display;
+            text: "–";
+            font-size: 30px;
+            font-weight: Theme.weight-display-bold;
+            color: Theme.text-tertiary;
+        }
+        if card.game-draws > 0: Text {
+            font-family: Theme.font-display;
+            text: card.game-draws + "D";
+            font-size: 30px;
+            font-weight: Theme.weight-display-bold;
+            color: Theme.text-secondary;
+        }
     }
     Text {
+        font-weight: Theme.weight-sentence;
+        font-family: Theme.font-body;
         text: "this session";
         font-size: 11px;
         color: Theme.text-sub;
@@ -1103,34 +1185,37 @@ component GameSessionRecordPanel inherits VerticalLayout {
             spacing: 2px;
             horizontal-stretch: 1;
             Text {
+                font-family: Theme.font-display;
                 text: card.game-streak-text;
                 font-size: 16px;
-                font-weight: 700;
-                color: card.game-streak-positive ? #4ade80 : #f87171;
+                font-weight: Theme.weight-display-bold;
+                color: card.game-streak-positive ? Theme.text-primary : Theme.live;
             }
-            Text { text: "streak"; font-size: 10px; color: Theme.text-sub; }
+            Text { font-weight: Theme.weight-sentence; font-family: Theme.font-body; text: "streak"; font-size: 10px; color: Theme.text-sub; }
         }
         VerticalLayout {
             spacing: 2px;
             horizontal-stretch: 1;
             Text {
+                font-family: Theme.font-display;
                 text: card.game-winrate;
                 font-size: 16px;
-                font-weight: 700;
+                font-weight: Theme.weight-display-bold;
                 color: Theme.text-primary;
             }
-            Text { text: "win rate"; font-size: 10px; color: Theme.text-sub; }
+            Text { font-weight: Theme.weight-sentence; font-family: Theme.font-body; text: "win rate"; font-size: 10px; color: Theme.text-sub; }
         }
         VerticalLayout {
             spacing: 2px;
             horizontal-stretch: 1;
             Text {
+                font-family: Theme.font-display;
                 text: "\{card.game-matches}";
                 font-size: 16px;
-                font-weight: 700;
+                font-weight: Theme.weight-display-bold;
                 color: Theme.text-primary;
             }
-            Text { text: "matches"; font-size: 10px; color: Theme.text-sub; }
+            Text { font-weight: Theme.weight-sentence; font-family: Theme.font-body; text: "matches"; font-size: 10px; color: Theme.text-sub; }
         }
     }
 }
@@ -1164,16 +1249,18 @@ component GameSessionCompactBody inherits VerticalLayout {
             alignment: start;
 
             Text {
+                font-family: Theme.font-display;
                 text: card.title != "" ? card.title : card.game-name;
                 font-size: quiet ? 12px : 13px;
-                font-weight: 600;
+                font-weight: Theme.weight-display;
                 color: Theme.text-primary;
                 overflow: elide;
             }
             if card.duration-human != "": Text {
+                font-family: Theme.font-display;
                 text: card.duration-human;
                 font-size: quiet ? 16px : 20px;
-                font-weight: 700;
+                font-weight: Theme.weight-display-bold;
                 color: Theme.text-primary;
             }
         }
@@ -1185,23 +1272,23 @@ component GameSessionCompactBody inherits VerticalLayout {
         height: 20px;
 
         HorizontalLayout {
-            spacing: -6px;
+            spacing: 4px;
             alignment: start;
-            RecapAvatar {
+            UserAvatar {
                 initials: card.part0-initials != "" ? card.part0-initials : card.actor-initials;
                 avatar: card.part0-has-avatar ? card.part0-avatar : card.actor-avatar;
                 has-avatar: card.part0-has-avatar || card.actor-has-avatar;
                 color-index: 0;
                 size: 20px;
             }
-            if card.participant-count > 1: RecapAvatar {
+            if card.participant-count > 1: UserAvatar {
                 initials: card.part1-initials;
                 avatar: card.part1-avatar;
                 has-avatar: card.part1-has-avatar;
                 color-index: 1;
                 size: 20px;
             }
-            if card.participant-count > 2: RecapAvatar {
+            if card.participant-count > 2: UserAvatar {
                 initials: card.part2-initials;
                 avatar: card.part2-avatar;
                 has-avatar: card.part2-has-avatar;
@@ -1211,6 +1298,8 @@ component GameSessionCompactBody inherits VerticalLayout {
         }
 
         if card.participants-line != "": Text {
+            font-weight: Theme.weight-sentence;
+            font-family: Theme.font-body;
             text: card.participants-line;
             font-size: 11px;
             color: Theme.text-sub;
@@ -1222,6 +1311,8 @@ component GameSessionCompactBody inherits VerticalLayout {
     Rectangle { vertical-stretch: 1; }
 
     Text {
+        font-weight: Theme.weight-sentence;
+        font-family: Theme.font-body;
         text: card.timestamp;
         font-size: 11px;
         color: Theme.skel-text;
@@ -1236,13 +1327,28 @@ component GameSessionCard inherits Rectangle {
     property <bool> has-record: card.game-matches > 0;
     property <bool> is-quiet: card.role == "quiet" || card.size == "sm";
     property <color> game-accent: card.game-has-color ? card.game-color : Theme.accent;
-    property <color> record-color: card.game-streak-positive ? #4ade80 : #f87171;
+    property <color> record-color: card.game-streak-positive ? Theme.text-primary : Theme.live;
 
-    background: Theme.card-bg;
-    border-radius: 10px;
-    border-width: 1px;
-    border-color: Theme.card-border;
+    background: transparent;
+    border-width: 0px;
     clip: true;
+
+    CutShape {
+        width: parent.width;
+        height: parent.height;
+        n: Theme.notch;
+        corner: "br";
+        fill: Theme.card-border;
+    }
+    CutShape {
+        width: parent.width;
+        height: parent.height;
+        n: Theme.notch;
+        corner: "br";
+        inset: Theme.keyline;
+        fill: Theme.card-bg;
+    }
+
 
     if !has-record: VerticalLayout {
         padding: is-quiet ? 10px : 12px;
@@ -1284,13 +1390,16 @@ component GameSessionCard inherits Rectangle {
                 spacing: 2px;
                 horizontal-stretch: 1;
                 Text {
+                    font-family: Theme.font-display;
                     text: card.game-name != "" ? card.game-name : "Game session";
                     font-size: 14px;
-                    font-weight: 600;
+                    font-weight: Theme.weight-display;
                     color: Theme.text-primary;
                     overflow: elide;
                 }
                 Text {
+                    font-weight: Theme.weight-sentence;
+                    font-family: Theme.font-body;
                     text: card.actor-name != "" ? card.actor-name + " · " + card.timestamp : card.timestamp;
                     font-size: 11px;
                     color: Theme.text-sub;
@@ -1305,16 +1414,16 @@ component GameSessionCard inherits Rectangle {
                     width: verified-label.preferred-width + 12px;
                     height: 18px;
                     border-radius: 4px;
-                    background: #1e2a1e;
+                    background: Theme.raised;
                     border-width: 1px;
-                    border-color: #2d4a2d;
+                    border-color: Theme.graphic-med;
                     verified-label := Text {
-                        text: "✓ VERIFIED";
-                        font-family: Theme.font-mono;
+                        text: "VERIFIED";
+                        font-family: Theme.font-label;
                         font-size: 9px;
                         font-weight: 600;
                         letter-spacing: 1px;
-                        color: #4ade80;
+                        color: Theme.text-primary;
                         horizontal-alignment: center;
                         vertical-alignment: center;
                     }
@@ -1337,22 +1446,22 @@ component GameSessionCard inherits Rectangle {
             height: 20px;
 
             HorizontalLayout {
-                spacing: -7px;
+                spacing: 4px;
                 horizontal-stretch: 1;
                 alignment: start;
-                RecapAvatar {
+                UserAvatar {
                     initials: card.part0-initials != "" ? card.part0-initials : card.actor-initials;
                     avatar: card.part0-has-avatar ? card.part0-avatar : card.actor-avatar;
                     has-avatar: card.part0-has-avatar || card.actor-has-avatar;
                     color-index: 0;
                 }
-                if card.participant-count > 1: RecapAvatar {
+                if card.participant-count > 1: UserAvatar {
                     initials: card.part1-initials;
                     avatar: card.part1-avatar;
                     has-avatar: card.part1-has-avatar;
                     color-index: 1;
                 }
-                if card.participant-count > 2: RecapAvatar {
+                if card.participant-count > 2: UserAvatar {
                     initials: card.part2-initials;
                     avatar: card.part2-avatar;
                     has-avatar: card.part2-has-avatar;
@@ -1361,6 +1470,8 @@ component GameSessionCard inherits Rectangle {
             }
 
             if card.duration-human != "": Text {
+                font-weight: Theme.weight-sentence;
+                font-family: Theme.font-body;
                 text: card.duration-human;
                 font-size: 11px;
                 color: Theme.skel-text;
@@ -1377,6 +1488,8 @@ component GameRollupLineRow inherits Rectangle {
     height: 18px;
 
     Text {
+        font-weight: Theme.weight-sentence;
+        font-family: Theme.font-body;
         text: line-text;
         font-size: 12px;
         color: Theme.text-value;
@@ -1387,11 +1500,25 @@ component GameRollupLineRow inherits Rectangle {
 component GameRollupCard inherits Rectangle {
     in property <FeedCardData> card;
 
-    background: Theme.card-bg;
-    border-radius: 10px;
-    border-width: 1px;
-    border-color: Theme.card-border;
-    clip: true;
+    background: transparent;
+    border-width: 0px;
+
+    CutShape {
+        width: parent.width;
+        height: parent.height;
+        n: Theme.notch;
+        corner: "tr";
+        fill: Theme.card-border;
+    }
+    CutShape {
+        width: parent.width;
+        height: parent.height;
+        n: Theme.notch;
+        corner: "tr";
+        inset: Theme.keyline;
+        fill: Theme.card-bg;
+    }
+
 
     VerticalLayout {
         padding: 14px;
@@ -1399,14 +1526,17 @@ component GameRollupCard inherits Rectangle {
         alignment: start;
 
         Text {
+            font-family: Theme.font-label;
             text: "CREW PLAY";
             font-size: 10px;
-            font-weight: 700;
+            font-weight: Theme.weight-label;
             color: Theme.accent;
-            letter-spacing: 1.2px;
+            letter-spacing: Theme.track-label;
         }
 
         Text {
+            font-weight: Theme.weight-sentence;
+            font-family: Theme.font-body;
             text: card.subtitle;
             font-size: 11px;
             color: Theme.text-sub;
@@ -1427,24 +1557,42 @@ component GameRollupCard inherits Rectangle {
 component CatchupCard inherits Rectangle {
     in property <FeedCardData> card;
 
-    background: Theme.card-bg;
-    border-radius: 10px;
-    border-width: 1px;
-    border-color: Theme.card-border;
+    background: transparent;
+    border-width: 0px;
+
+    CutShape {
+        width: parent.width;
+        height: parent.height;
+        n: Theme.notch;
+        corner: "br";
+        fill: Theme.card-border;
+    }
+    CutShape {
+        width: parent.width;
+        height: parent.height;
+        n: Theme.notch;
+        corner: "br";
+        inset: Theme.keyline;
+        fill: Theme.card-bg;
+    }
+
 
     VerticalLayout {
         padding: 14px;
         spacing: 8px;
 
         Text {
+            font-family: Theme.font-label;
             text: "CATCH-UP";
             font-size: 10px;
-            font-weight: 700;
+            font-weight: Theme.weight-label;
             color: Theme.accent-green;
-            letter-spacing: 1px;
+            letter-spacing: Theme.track-label;
         }
 
         Text {
+            font-weight: Theme.weight-display;
+            font-family: Theme.font-display;
             text: card.title;
             font-size: 13px;
             color: Theme.text-value;
@@ -1453,6 +1601,8 @@ component CatchupCard inherits Rectangle {
         }
 
         Text {
+            font-weight: Theme.weight-sentence;
+            font-family: Theme.font-body;
             text: card.timestamp;
             font-size: 11px;
             color: Theme.skel-text;
@@ -1464,10 +1614,25 @@ component CatchupCard inherits Rectangle {
 component SkeletonCard inherits Rectangle {
     in property <FeedCardData> card;
 
-    background: Theme.card-bg-skel;
-    border-radius: 10px;
-    border-width: 1px;
-    border-color: Theme.card-border;
+    background: transparent;
+    border-width: 0px;
+
+    CutShape {
+        width: parent.width;
+        height: parent.height;
+        n: Theme.notch;
+        corner: "tr";
+        fill: Theme.card-border;
+    }
+    CutShape {
+        width: parent.width;
+        height: parent.height;
+        n: Theme.notch;
+        corner: "tr";
+        inset: Theme.keyline;
+        fill: Theme.card-bg-skel;
+    }
+
 
     VerticalLayout {
         alignment: center;
@@ -1486,14 +1651,17 @@ component SkeletonCard inherits Rectangle {
         }
 
         Text {
+            font-family: Theme.font-display;
             text: card.title != "" ? card.title : "Your crew's clips show up here";
             font-size: 13px;
-            font-weight: 500;
+            font-weight: Theme.weight-display;
             color: Theme.skel-text;
             horizontal-alignment: center;
         }
 
         Text {
+            font-weight: Theme.weight-sentence;
+            font-family: Theme.font-body;
             text: card.subtitle != "" ? card.subtitle : "Tap the scissors during a voice call to save the last 30 seconds";
             font-size: 11px;
             color: Theme.skel-hint;
@@ -1505,11 +1673,26 @@ component SkeletonCard inherits Rectangle {
 
 // Hero clip skeleton (2x, dashed play button)
 component SkeletonHeroCard inherits Rectangle {
-    background: Theme.card-bg-skel;
-    border-radius: 10px;
-    border-width: 1px;
-    border-color: Theme.card-border;
+
+    background: transparent;
+    border-width: 0px;
     clip: true;
+
+    CutShape {
+        width: parent.width;
+        height: parent.height;
+        n: Theme.notch;
+        corner: "br";
+        fill: Theme.card-border;
+    }
+    CutShape {
+        width: parent.width;
+        height: parent.height;
+        n: Theme.notch;
+        corner: "br";
+        inset: Theme.keyline;
+        fill: Theme.card-bg-skel;
+    }
 
     VerticalLayout {
         Rectangle {
@@ -1527,13 +1710,14 @@ component SkeletonHeroCard inherits Rectangle {
                 background: transparent;
 
                 badge-t := Text {
-                    text: "✂ CLIP";
+                    font-family: Theme.font-label;
+                    text: "CLIP";
                     font-size: 10px;
-                    font-weight: 700;
+                    font-weight: Theme.weight-label;
                     color: Theme.skel-ghost;
                     horizontal-alignment: center;
                     vertical-alignment: center;
-                    letter-spacing: 0.5px;
+                    letter-spacing: Theme.track-label;
                 }
             }
 
@@ -1547,12 +1731,13 @@ component SkeletonHeroCard inherits Rectangle {
                 border-color: Theme.skel-ghost;
                 background: transparent;
 
-                Text {
-                    text: "▶";
-                    font-size: 16px;
-                    color: Theme.skel-ghost;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
+                Image {
+                    source: @image-url("../icons/play.svg");
+                    width: 16px;
+                    height: 16px;
+                    colorize: Theme.skel-ghost;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
                 }
             }
 
@@ -1567,6 +1752,8 @@ component SkeletonHeroCard inherits Rectangle {
                 background: transparent;
 
                 dur-sk := Text {
+                    font-weight: Theme.weight-sentence;
+                    font-family: Theme.font-body;
                     text: "0:30";
                     font-size: 11px;
                     color: Theme.skel-ghost;
@@ -1583,14 +1770,17 @@ component SkeletonHeroCard inherits Rectangle {
             vertical-stretch: 0;
 
             Text {
+                font-family: Theme.font-display;
                 text: "Your first clip goes here";
                 font-size: 14px;
-                font-weight: 500;
+                font-weight: Theme.weight-display;
                 color: Theme.skel-text;
             }
 
             Text {
-                text: "Tap ✂ during a voice call to save the last 30 seconds. Your crew's best clips show up right here.";
+                font-weight: Theme.weight-sentence;
+                font-family: Theme.font-body;
+                text: "Tap the clip button during a voice call to save the last 30 seconds. Your crew's best clips show up right here.";
                 font-size: 11px;
                 color: Theme.skel-hint;
                 wrap: word-wrap;
@@ -1601,10 +1791,25 @@ component SkeletonHeroCard inherits Rectangle {
 
 // Recap skeleton (fake stat bars)
 component SkeletonRecapCard inherits Rectangle {
-    background: Theme.card-bg-skel;
-    border-radius: 10px;
-    border-width: 1px;
-    border-color: Theme.card-border;
+
+    background: transparent;
+    border-width: 0px;
+
+    CutShape {
+        width: parent.width;
+        height: parent.height;
+        n: Theme.notch;
+        corner: "bl";
+        fill: Theme.card-border;
+    }
+    CutShape {
+        width: parent.width;
+        height: parent.height;
+        n: Theme.notch;
+        corner: "bl";
+        inset: Theme.keyline;
+        fill: Theme.card-bg-skel;
+    }
 
     VerticalLayout {
         alignment: center;
@@ -1628,14 +1833,17 @@ component SkeletonRecapCard inherits Rectangle {
         }
 
         Text {
+            font-family: Theme.font-display;
             text: "Weekly recap";
             font-size: 13px;
-            font-weight: 500;
+            font-weight: Theme.weight-display;
             color: Theme.skel-text;
             horizontal-alignment: center;
         }
 
         Text {
+            font-weight: Theme.weight-sentence;
+            font-family: Theme.font-body;
             text: "Your crew's stats will appear after your first week together";
             font-size: 11px;
             color: Theme.skel-hint;
@@ -1659,11 +1867,26 @@ component SkeletonRecapCard inherits Rectangle {
 
 // Voice clip skeleton (faint waveform)
 component SkeletonClipCard inherits Rectangle {
-    background: Theme.card-bg-skel;
-    border-radius: 10px;
-    border-width: 1px;
-    border-color: Theme.card-border;
+
+    background: transparent;
+    border-width: 0px;
     clip: true;
+
+    CutShape {
+        width: parent.width;
+        height: parent.height;
+        n: Theme.notch;
+        corner: "bl";
+        fill: Theme.card-border;
+    }
+    CutShape {
+        width: parent.width;
+        height: parent.height;
+        n: Theme.notch;
+        corner: "bl";
+        inset: Theme.keyline;
+        fill: Theme.card-bg-skel;
+    }
 
     VerticalLayout {
         Rectangle {
@@ -1699,13 +1922,15 @@ component SkeletonClipCard inherits Rectangle {
             vertical-stretch: 0;
 
             Text {
-                text: "✂ VOICE CLIP · 0:30";
+                font-family: Theme.font-display;
+                text: "VOICE CLIP · 0:30";
                 font-size: 10px;
-                font-weight: 700;
+                font-weight: Theme.weight-display-bold;
                 color: Theme.skel-ghost;
             }
 
             Text {
+                font-family: Theme.font-body;
                 text: "Voice clips land here";
                 font-size: 12px;
                 font-weight: 500;
@@ -1713,6 +1938,8 @@ component SkeletonClipCard inherits Rectangle {
             }
 
             Text {
+                font-weight: Theme.weight-sentence;
+                font-family: Theme.font-body;
                 text: "Funny moment in voice? Clip it.";
                 font-size: 11px;
                 color: Theme.skel-hint;
@@ -1723,10 +1950,25 @@ component SkeletonClipCard inherits Rectangle {
 
 // Session skeleton
 component SkeletonSessionCard inherits Rectangle {
-    background: Theme.card-bg-skel;
-    border-radius: 10px;
-    border-width: 1px;
-    border-color: Theme.card-border;
+
+    background: transparent;
+    border-width: 0px;
+
+    CutShape {
+        width: parent.width;
+        height: parent.height;
+        n: Theme.notch;
+        corner: "br";
+        fill: Theme.card-border;
+    }
+    CutShape {
+        width: parent.width;
+        height: parent.height;
+        n: Theme.notch;
+        corner: "br";
+        inset: Theme.keyline;
+        fill: Theme.card-bg-skel;
+    }
 
     VerticalLayout {
         padding: 16px;
@@ -1734,11 +1976,12 @@ component SkeletonSessionCard inherits Rectangle {
         alignment: start;
 
         Text {
+            font-family: Theme.font-label;
             text: "SESSION";
             font-size: 10px;
-            font-weight: 600;
+            font-weight: Theme.weight-label;
             color: Theme.skel-ghost;
-            letter-spacing: 0.8px;
+            letter-spacing: Theme.track-label;
         }
 
         Rectangle { height: 12px; }
@@ -1765,7 +2008,7 @@ component SkeletonSessionCard inherits Rectangle {
         Rectangle { height: 8px; }
 
         HorizontalLayout {
-            spacing: -7px;
+            spacing: 4px;
             height: 18px;
 
             for c in [0, 1, 2]: Rectangle {
@@ -1785,10 +2028,25 @@ component SkeletonSessionCard inherits Rectangle {
 
 // Catch-up skeleton
 component SkeletonCatchupCard inherits Rectangle {
-    background: Theme.card-bg-skel;
-    border-radius: 10px;
-    border-width: 1px;
-    border-color: Theme.card-border;
+
+    background: transparent;
+    border-width: 0px;
+
+    CutShape {
+        width: parent.width;
+        height: parent.height;
+        n: Theme.notch;
+        corner: "br";
+        fill: Theme.card-border;
+    }
+    CutShape {
+        width: parent.width;
+        height: parent.height;
+        n: Theme.notch;
+        corner: "br";
+        inset: Theme.keyline;
+        fill: Theme.card-bg-skel;
+    }
 
     VerticalLayout {
         padding: 16px;
@@ -1796,11 +2054,12 @@ component SkeletonCatchupCard inherits Rectangle {
         alignment: start;
 
         Text {
+            font-family: Theme.font-label;
             text: "CATCH-UP";
             font-size: 10px;
-            font-weight: 700;
-            color: Theme.dark ? #4ade8033 : #28C84066;
-            letter-spacing: 1px;
+            font-weight: Theme.weight-label;
+            color: Theme.dark ? Theme.live-bg : Theme.action-dim;
+            letter-spacing: Theme.track-label;
         }
 
         Rectangle { height: 10px; }
@@ -1815,10 +2074,25 @@ component SkeletonCatchupCard inherits Rectangle {
 
 // Now Playing skeleton
 component SkeletonNowPlayingCard inherits Rectangle {
-    background: Theme.card-bg-skel;
-    border-radius: 10px;
-    border-width: 1px;
-    border-color: Theme.card-border;
+
+    background: transparent;
+    border-width: 0px;
+
+    CutShape {
+        width: parent.width;
+        height: parent.height;
+        n: Theme.notch;
+        corner: "tr";
+        fill: Theme.card-border;
+    }
+    CutShape {
+        width: parent.width;
+        height: parent.height;
+        n: Theme.notch;
+        corner: "tr";
+        inset: Theme.keyline;
+        fill: Theme.card-bg-skel;
+    }
 
     VerticalLayout {
         alignment: center;
@@ -1842,14 +2116,17 @@ component SkeletonNowPlayingCard inherits Rectangle {
         }
 
         Text {
+            font-family: Theme.font-display;
             text: "Now playing";
             font-size: 13px;
-            font-weight: 500;
+            font-weight: Theme.weight-display;
             color: Theme.skel-text;
             horizontal-alignment: center;
         }
 
         Text {
+            font-weight: Theme.weight-sentence;
+            font-family: Theme.font-body;
             text: "Games your crew is playing show up here automatically";
             font-size: 11px;
             color: Theme.skel-hint;
@@ -1861,10 +2138,25 @@ component SkeletonNowPlayingCard inherits Rectangle {
 
 // Stream clips skeleton
 component SkeletonStreamClipsCard inherits Rectangle {
-    background: Theme.card-bg-skel;
-    border-radius: 10px;
-    border-width: 1px;
-    border-color: Theme.card-border;
+
+    background: transparent;
+    border-width: 0px;
+
+    CutShape {
+        width: parent.width;
+        height: parent.height;
+        n: Theme.notch;
+        corner: "tr";
+        fill: Theme.card-border;
+    }
+    CutShape {
+        width: parent.width;
+        height: parent.height;
+        n: Theme.notch;
+        corner: "tr";
+        inset: Theme.keyline;
+        fill: Theme.card-bg-skel;
+    }
 
     VerticalLayout {
         alignment: center;
@@ -1888,6 +2180,7 @@ component SkeletonStreamClipsCard inherits Rectangle {
         }
 
         Text {
+            font-family: Theme.font-body;
             text: "Stream clips";
             font-size: 12px;
             font-weight: 500;
@@ -1896,6 +2189,8 @@ component SkeletonStreamClipsCard inherits Rectangle {
         }
 
         Text {
+            font-weight: Theme.weight-sentence;
+            font-family: Theme.font-body;
             text: "Clip highlights while watching a crewmate's stream";
             font-size: 10px;
             color: Theme.skel-hint;
@@ -1907,10 +2202,25 @@ component SkeletonStreamClipsCard inherits Rectangle {
 
 // Recent games skeleton
 component SkeletonRecentGamesCard inherits Rectangle {
-    background: Theme.card-bg-skel;
-    border-radius: 10px;
-    border-width: 1px;
-    border-color: Theme.card-border;
+
+    background: transparent;
+    border-width: 0px;
+
+    CutShape {
+        width: parent.width;
+        height: parent.height;
+        n: Theme.notch;
+        corner: "tr";
+        fill: Theme.card-border;
+    }
+    CutShape {
+        width: parent.width;
+        height: parent.height;
+        n: Theme.notch;
+        corner: "tr";
+        inset: Theme.keyline;
+        fill: Theme.card-bg-skel;
+    }
 
     VerticalLayout {
         padding: 16px;
@@ -1918,11 +2228,12 @@ component SkeletonRecentGamesCard inherits Rectangle {
         alignment: start;
 
         Text {
+            font-family: Theme.font-label;
             text: "RECENT GAMES";
             font-size: 10px;
-            font-weight: 600;
+            font-weight: Theme.weight-label;
             color: Theme.skel-ghost;
-            letter-spacing: 0.8px;
+            letter-spacing: Theme.track-label;
         }
 
         Rectangle { height: 12px; }
@@ -1959,10 +2270,25 @@ component InviteCard inherits Rectangle {
     callback invite-clicked();
     callback hide-clicked();
 
-    background: Theme.card-bg;
-    border-radius: 10px;
-    border-width: 1px;
-    border-color: Theme.card-border;
+    background: transparent;
+    border-width: 0px;
+
+    CutShape {
+        width: parent.width;
+        height: parent.height;
+        n: Theme.notch;
+        corner: "tr";
+        fill: Theme.card-border;
+    }
+    CutShape {
+        width: parent.width;
+        height: parent.height;
+        n: Theme.notch;
+        corner: "tr";
+        inset: Theme.keyline;
+        fill: Theme.card-bg;
+    }
+
 
     VerticalLayout {
         alignment: center;
@@ -1970,14 +2296,17 @@ component InviteCard inherits Rectangle {
         padding: 20px;
 
         Text {
+            font-family: Theme.font-display;
             text: "Invite friends";
             font-size: 14px;
-            font-weight: 600;
+            font-weight: Theme.weight-display;
             color: Theme.text-primary;
             horizontal-alignment: center;
         }
 
         Text {
+            font-weight: Theme.weight-sentence;
+            font-family: Theme.font-body;
             text: "The feed comes alive when your crew is here.";
             font-size: 11px;
             color: Theme.text-sub;
@@ -1994,13 +2323,14 @@ component InviteCard inherits Rectangle {
                 height: 36px;
                 x: (parent.width - self.width) / 2;
                 border-radius: Theme.r-inner;
-                background: invite-btn-touch.has-hover ? #FF1E56DD : Theme.accent;
+                background: invite-btn-touch.has-hover ? Theme.action-press : Theme.action;
 
                 Text {
+                    font-family: Theme.font-display;
                     text: "Share invite link";
                     font-size: 12px;
-                    font-weight: 600;
-                    color: #FFFFFF;
+                    font-weight: Theme.weight-display;
+                    color: Theme.on-action;
                     horizontal-alignment: center;
                     vertical-alignment: center;
                 }
@@ -2017,6 +2347,8 @@ component InviteCard inherits Rectangle {
             height: 16px;
 
             Text {
+                font-weight: Theme.weight-sentence;
+                font-family: Theme.font-body;
                 text: "Hide";
                 font-size: 11px;
                 color: Theme.text-tertiary;
@@ -2036,10 +2368,25 @@ component InviteCard inherits Rectangle {
 // m3llo+ upsell card pinned at the end of the memory band. Server emits a
 // "locked" entry; copy and visual stay client-side.
 component LockedCard inherits Rectangle {
-    background: Theme.card-bg;
-    border-radius: 10px;
-    border-width: 1px;
-    border-color: Theme.card-border;
+
+    background: transparent;
+    border-width: 0px;
+
+    CutShape {
+        width: parent.width;
+        height: parent.height;
+        n: Theme.notch;
+        corner: "tr";
+        fill: Theme.card-border;
+    }
+    CutShape {
+        width: parent.width;
+        height: parent.height;
+        n: Theme.notch;
+        corner: "tr";
+        inset: Theme.keyline;
+        fill: Theme.card-bg;
+    }
 
     VerticalLayout {
         alignment: center;
@@ -2047,15 +2394,18 @@ component LockedCard inherits Rectangle {
         padding: 20px;
 
         Text {
+            font-family: Theme.font-display;
             text: "Unlock your crew's full story";
             font-size: 14px;
-            font-weight: 600;
+            font-weight: Theme.weight-display;
             color: Theme.text-primary;
             horizontal-alignment: center;
             wrap: word-wrap;
         }
 
         Text {
+            font-weight: Theme.weight-sentence;
+            font-family: Theme.font-body;
             text: "Keep every clip and recap forever with m3llo+.";
             font-size: 11px;
             color: Theme.text-sub;
@@ -2067,6 +2417,10 @@ component LockedCard inherits Rectangle {
 
 // Dispatcher: renders the correct card based on card-type
 component FeedSlot inherits Rectangle {
+    // A card that outgrows its slot must be cut off at the slot edge, not
+    // painted over the gap below it. This is `overflow: hidden` in the mockup.
+    clip: true;
+
     in property <FeedCardData> card;
     in property <string> playing-path: "";
     in property <float> clip-progress: 0.0;
@@ -2228,8 +2582,16 @@ export component CrewFeed inherits Rectangle {
     property <bool> hero-is-clip: cards.length > feed-start-index
         && cards[feed-start-index].card-type == "clip"
         && cards[feed-start-index].is-hero;
+    // The recap carries a header, a stat block, an MVP and the games table.
+    // It does not fit one row. The design gives it column 3 across both rows,
+    // so it takes the side column alone and row 1 holds two cards, not three.
+    property <bool> side-is-recap: cards.length > feed-start-index + 1
+        && cards[feed-start-index + 1].card-type == "recap"
+        && (cards[feed-start-index + 1].leaderboard.length > 0
+            || cards[feed-start-index + 1].awards.length > 0);
     property <int> row1-consumed: cards.length <= feed-start-index ? 0
         : hero-is-clip ? 1
+        : side-is-recap ? Math.min(2, cards.length - feed-start-index)
         : Math.min(3, cards.length - feed-start-index);
     property <int> row2-base: feed-start-index + row1-consumed;
 
@@ -2254,9 +2616,10 @@ export component CrewFeed inherits Rectangle {
                     alignment: start;
 
                     Text {
+                        font-family: Theme.font-display;
                         text: "Crew feed";
                         font-size: 15px;
-                        font-weight: 500;
+                        font-weight: Theme.weight-display;
                         color: Theme.text-primary;
                         vertical-alignment: center;
                     }
@@ -2269,6 +2632,8 @@ export component CrewFeed inherits Rectangle {
                         y: (parent.height - self.height) / 2;
 
                         badge-text := Text {
+                            font-weight: Theme.weight-sentence;
+                            font-family: Theme.font-body;
                             text: clip-count + " clips this week";
                             font-size: 11px;
                             color: Theme.text-sub;
@@ -2304,7 +2669,7 @@ export component CrewFeed inherits Rectangle {
 
                 // Stream cards live in the feed flow, directly under the header.
                 if stream-cards.length == 1 && cards.length > 0: HorizontalLayout {
-                    height: 420px;
+                    height: Theme.feed-row * 2 + 12px;
                     spacing: 12px;
 
                     Rectangle {
@@ -2340,7 +2705,7 @@ export component CrewFeed inherits Rectangle {
                         spacing: 12px;
 
                         if cards.length > 0: FeedSlot {
-                            height: 204px;
+                            height: Theme.feed-row;
                             card: cards[0];
                             playing-path: root.clip-playing-path;
                             clip-progress: root.clip-progress;
@@ -2358,7 +2723,7 @@ export component CrewFeed inherits Rectangle {
                         }
 
                         if cards.length > 1: FeedSlot {
-                            height: 204px;
+                            height: Theme.feed-row;
                             card: cards[1];
                             playing-path: root.clip-playing-path;
                             clip-progress: root.clip-progress;
@@ -2423,7 +2788,7 @@ export component CrewFeed inherits Rectangle {
 
                 // Row 1: full-width hero clip OR 2:1 hero + stacked side column
                 if hero-is-clip && cards.length > root.feed-start-index: FeedSlot {
-                    height: 240px;
+                    height: Theme.feed-row;
                     card: cards[root.feed-start-index];
                     playing-path: root.clip-playing-path;
                     clip-progress: root.clip-progress;
@@ -2441,7 +2806,7 @@ export component CrewFeed inherits Rectangle {
                 }
 
                 if !hero-is-clip && cards.length > root.feed-start-index: HorizontalLayout {
-                    height: 420px;
+                    height: Theme.feed-row * 2 + 12px;
                     spacing: 12px;
 
                     FeedSlot {
@@ -2467,8 +2832,9 @@ export component CrewFeed inherits Rectangle {
                         height: parent.height;
                         spacing: 12px;
 
+                        // A recap holds the whole column; anything else is one row.
                         if cards.length > root.feed-start-index + 1: FeedSlot {
-                            height: 204px;
+                            height: root.side-is-recap ? parent.height : Theme.feed-row;
                             card: cards[root.feed-start-index + 1];
                             playing-path: root.clip-playing-path;
                             clip-progress: root.clip-progress;
@@ -2485,8 +2851,8 @@ export component CrewFeed inherits Rectangle {
                             session-preview-request-frame(sid, idx) => { root.session-preview-request-frame(sid, idx); }
                         }
 
-                        if cards.length > root.feed-start-index + 2: FeedSlot {
-                            height: 204px;
+                        if !root.side-is-recap && cards.length > root.feed-start-index + 2: FeedSlot {
+                            height: Theme.feed-row;
                             card: cards[root.feed-start-index + 2];
                             playing-path: root.clip-playing-path;
                             clip-progress: root.clip-progress;
@@ -2507,7 +2873,7 @@ export component CrewFeed inherits Rectangle {
 
                 // Row 2: Three 1x cards
                 if cards.length > root.row2-base: HorizontalLayout {
-                    height: 210px;
+                    height: Theme.feed-row;
                     spacing: 12px;
 
                     for rel-idx in [0, 1, 2]: FeedSlot {
@@ -2533,7 +2899,7 @@ export component CrewFeed inherits Rectangle {
 
                 // Row 3: card (1x) + wide card (2x)
                 if cards.length > root.row2-base + 3: HorizontalLayout {
-                    height: 210px;
+                    height: Theme.feed-row;
                     spacing: 12px;
 
                     FeedSlot {
@@ -2575,7 +2941,7 @@ export component CrewFeed inherits Rectangle {
 
                 // Row 4+ for extra cards (cold start has 9 slots)
                 if cards.length > root.row2-base + 5: HorizontalLayout {
-                    height: 210px;
+                    height: Theme.feed-row;
                     spacing: 12px;
 
                     for rel-idx in [0, 1]: FeedSlot {
@@ -2606,9 +2972,10 @@ export component CrewFeed inherits Rectangle {
                     spacing: 12px;
 
                     Text {
+                        font-family: Theme.font-display;
                         text: "Crew history";
                         font-size: 13px;
-                        font-weight: 600;
+                        font-weight: Theme.weight-display;
                         color: Theme.text-sub;
                     }
 
@@ -2618,7 +2985,7 @@ export component CrewFeed inherits Rectangle {
                     }
 
                     for r in Math.ceil(memory-cards.length / 3.0): HorizontalLayout {
-                        height: 210px;
+                        height: Theme.feed-row;
                         spacing: 12px;
 
                         for c in 3: FeedSlot {
@@ -2654,9 +3021,10 @@ export component CrewFeed inherits Rectangle {
                         background: show-more-touch.has-hover ? Theme.card-bg-hover : Theme.card-bg;
 
                         show-more-label := Text {
+                            font-family: Theme.font-display;
                             text: "Show more";
                             font-size: 13px;
-                            font-weight: 500;
+                            font-weight: Theme.weight-display;
                             color: Theme.text-primary;
                             horizontal-alignment: center;
                             vertical-alignment: center;
@@ -2939,6 +3307,16 @@ export component Preview inherits Rectangle {
                 participant-count: 2, clip-count: 3, clip-path: "",
             },
             {
+                id: "gs", card-type: "game-session", is-hero: false, is-skeleton: false,
+                title: "Counter-Strike 2", game-name: "Counter-Strike 2",
+                game-short-name: "CS2", game-has-color: true, game-color: #DE9B35,
+                game-record: "1W–1L", game-wins: 1, game-losses: 1,
+                game-streak-text: "L2", game-streak-positive: false,
+                game-winrate: "50%", game-matches: 2,
+                duration-human: "2h 37m", timestamp: "Tuesday",
+                actor-name: "b0bben", actor-initials: "b0",
+            },
+            {
                 id: "5", card-type: "catchup", is-hero: false, is-skeleton: false,
                 title: "ostkatt and FaiL hung out in General for 45m while you were away",
                 subtitle: "",
@@ -3009,6 +3387,18 @@ export component PreviewSessionHero inherits Rectangle {
                 mvp-count: 2,
                 mvp0-name: "b0bben", mvp0-initials: "b0", mvp0-stat: "3.1h",
                 mvp1-name: "FaiL", mvp1-initials: "Fa", mvp1-stat: "2.4h",
+                // A full recap: this is the card that needs both grid rows.
+                games-summary: "24 matches · Counter-Strike 2",
+                leaderboard: [
+                    { name: "b0bben", initials: "b0", record: "10W 7L", color-index: 0 },
+                    { name: "Propotato", initials: "Pr", record: "3W 2L", color-index: 1 },
+                    { name: "Ostkatt", initials: "os", record: "0W 2L", color-index: 2 },
+                ],
+                awards: [
+                    { kind: "grinder", title: "Grinder of the week", name: "b0bben", detail: "17 matches" },
+                    { kind: "heater", title: "Biggest heater", name: "b0bben", detail: "4-win streak" },
+                    { kind: "skid", title: "Roughest patch", name: "Ostkatt", detail: "4-loss skid" },
+                ],
             },
             {
                 id: "side-b", card-type: "clip", is-hero: false, is-skeleton: false,

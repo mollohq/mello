@@ -1,4 +1,6 @@
 import { Theme } from "../theme.slint";
+import { CutShape, CutButtonShape, CutMask } from "../components/cut.slint";
+import { UserAvatar } from "../components/avatar.slint";
 import { StreamCardData, VideoRect } from "../types.slint";
 
 component StreamIconButton inherits Rectangle {
@@ -6,10 +8,21 @@ component StreamIconButton inherits Rectangle {
 
     width: 32px;
     height: 32px;
-    border-radius: 6px;
-    background: btn-hover.has-hover ? Theme.hover-overlay : transparent;
-    border-width: 1px;
-    border-color: btn-hover.has-hover ? Theme.graphic-light : transparent;
+    background: transparent;
+
+    if btn-hover.has-hover: CutButtonShape {
+        width: parent.width;
+        height: parent.height;
+        n: 7px;
+        fill: Theme.graphic-light;
+    }
+    if btn-hover.has-hover: CutButtonShape {
+        width: parent.width;
+        height: parent.height;
+        n: 7px;
+        inset: Theme.keyline;
+        fill: Theme.surface-hover;
+    }
 
     Image {
         source: icon;
@@ -46,18 +59,32 @@ component StreamCard inherits Rectangle {
     property <bool> show-hosting-state: selected-card && is-hosting && !card.can-watch;
     property <bool> show-watch-cta: card.can-watch && !show-live-frame;
 
-    border-radius: 16px;
-    border-width: 1px;
-    border-color: selected-card ? Theme.accent : Theme.card-border;
-    background: Theme.card-bg;
+    background: transparent;
     clip: true;
+
+    CutShape {
+        width: parent.width;
+        height: parent.height;
+        n: Theme.notch;
+        corner: "br";
+        fill: Theme.card-border;
+    }
+    CutShape {
+        width: parent.width;
+        height: parent.height;
+        n: Theme.notch;
+        corner: "br";
+        inset: Theme.keyline;
+        fill: Theme.card-bg;
+    }
 
     VerticalLayout {
         spacing: 0px;
 
         media-rect := Rectangle {
             height: root.media-height;
-            background: Theme.dark ? @linear-gradient(135deg, #2a2d3e 0%, #111218 100%) : @linear-gradient(135deg, #dce3ff 0%, #b9c6e6 100%);
+            // Graphite, not blue. Nothing but game footage carries colour.
+            background: @linear-gradient(135deg, Theme.card-bg 0%, Theme.card-bg-inset 100%);
             clip: true;
 
             if show-live-frame: Rectangle {
@@ -99,7 +126,7 @@ component StreamCard inherits Rectangle {
             if !show-live-frame: Rectangle {
                 width: parent.width;
                 height: parent.height;
-                background: Theme.dark ? #00000026 : #FFFFFF26;
+                background: transparent;
 
                 VerticalLayout {
                     alignment: center;
@@ -107,7 +134,7 @@ component StreamCard inherits Rectangle {
 
                     if !show-watch-cta: Text {
                         text: show-hosting-state ? "YOU ARE LIVE" : root.card.streamer-name + " IS LIVE";
-                        font-family: Theme.font-mono;
+                        font-family: Theme.font-label;
                         font-size: 14px;
                         font-weight: 700;
                         letter-spacing: 1.2px;
@@ -116,6 +143,8 @@ component StreamCard inherits Rectangle {
                     }
 
                     if !show-watch-cta: Text {
+                        font-weight: Theme.weight-sentence;
+                        font-family: Theme.font-body;
                         text: root.card.subtitle;
                         font-size: 12px;
                         color: Theme.text-secondary;
@@ -130,18 +159,22 @@ component StreamCard inherits Rectangle {
                             width: watch-label.preferred-width + 28px;
                             height: parent.height;
                             x: (parent.width - self.width) / 2;
-                            border-radius: 10px;
-                            border-width: 1px;
-                            border-color: #FFFFFF2A;
-                            background: #0000007A;
+                            background: transparent;
+
+                            CutButtonShape {
+                                width: parent.width;
+                                height: parent.height;
+                                n: Theme.cut;
+                                fill: Theme.action;
+                            }
 
                             watch-label := Text {
                                 text: "Watch stream";
-                                font-family: Theme.font-mono;
+                                font-family: Theme.font-label;
                                 font-size: 11px;
-                                font-weight: 700;
-                                letter-spacing: 0.6px;
-                                color: #FFFFFF;
+                                font-weight: Theme.weight-label;
+                                letter-spacing: Theme.track-label;
+                                color: Theme.on-action;
                                 horizontal-alignment: center;
                                 vertical-alignment: center;
                             }
@@ -156,18 +189,24 @@ component StreamCard inherits Rectangle {
                             width: stop-text.preferred-width + 40px;
                             height: parent.height;
                             x: (parent.width - self.width) / 2;
-                            border-radius: 8px;
-                            background: stop-hover.has-hover ? #E0174A : Theme.accent;
-                            border-width: 1px;
-                            border-color: stop-hover.has-hover ? #E0174A : Theme.accent;
+                            background: transparent;
+
+                            // Ending the stream commits, so it is red. It was
+                            // a white fill with a white label: a blank pill.
+                            CutButtonShape {
+                                width: parent.width;
+                                height: parent.height;
+                                n: Theme.cut;
+                                fill: stop-hover.has-hover ? Theme.confirm-press : Theme.confirm;
+                            }
 
                             stop-text := Text {
                                 text: "END STREAM";
-                                font-family: Theme.font-mono;
+                                font-family: Theme.font-label;
                                 font-size: 12px;
-                                font-weight: 700;
-                                letter-spacing: 0.8px;
-                                color: #FFFFFF;
+                                font-weight: Theme.weight-label;
+                                letter-spacing: Theme.track-label;
+                                color: Theme.on-confirm;
                                 horizontal-alignment: center;
                                 vertical-alignment: center;
                             }
@@ -198,9 +237,22 @@ component StreamCard inherits Rectangle {
 
         Rectangle {
             height: 72px;
-            background: Theme.surface;
-            border-width: 1px;
-            border-color: Theme.card-border;
+            background: transparent;
+
+            // The footer is the bottom of the card, so it carries the cut.
+            CutShape {
+                width: parent.width;
+                height: parent.height;
+                n: Theme.notch;
+                corner: "br";
+                inset: Theme.keyline;
+                fill: Theme.surface;
+            }
+            Rectangle {
+                y: 0;
+                height: 1px;
+                background: Theme.card-border;
+            }
 
             HorizontalLayout {
                 padding-left: 16px;
@@ -212,30 +264,14 @@ component StreamCard inherits Rectangle {
                     width: 40px;
                     horizontal-stretch: 0;
 
-                    Rectangle {
-                        width: 40px;
-                        height: 40px;
+                    UserAvatar {
+                        initials: root.card.avatar-initials;
+                        avatar: root.card.avatar;
+                        has-avatar: root.card.has-avatar;
+                        color-index: root.card.avatar-color-index;
+                        size: 40px;
+                        bg-color: Theme.card-bg;
                         y: (parent.height - self.height) / 2;
-                        border-radius: 8px;
-                        background: root.card.has-avatar
-                            ? transparent
-                            : (root.card.avatar-color-index == 0 ? #EB4D5F : root.card.avatar-color-index == 1 ? #4a9eff : root.card.avatar-color-index == 2 ? #4ade80 : root.card.avatar-color-index == 3 ? #a78bfa : #f59e0b);
-
-                        if root.card.has-avatar: Image {
-                            source: root.card.avatar;
-                            width: parent.width;
-                            height: parent.height;
-                            image-fit: cover;
-                        }
-
-                        if !root.card.has-avatar: Text {
-                            text: root.card.avatar-initials;
-                            font-size: 12px;
-                            font-weight: 700;
-                            color: #FFFFFF;
-                            horizontal-alignment: center;
-                            vertical-alignment: center;
-                        }
                     }
                 }
 
@@ -249,9 +285,10 @@ component StreamCard inherits Rectangle {
                         spacing: 8px;
 
                         Text {
+                            font-family: Theme.font-display;
                             text: root.card.streamer-name;
                             font-size: 15px;
-                            font-weight: 700;
+                            font-weight: Theme.weight-display-bold;
                             color: Theme.text-primary;
                             overflow: elide;
                             horizontal-stretch: 0;
@@ -266,16 +303,15 @@ component StreamCard inherits Rectangle {
                                 width: parent.width;
                                 height: parent.height;
                                 y: (parent.height - self.height) / 2;
-                                border-radius: 3px;
-                                background: Theme.accent;
+                                background: Theme.live;
 
                                 live-label := Text {
                                     text: "LIVE";
-                                    font-family: Theme.font-mono;
+                                    font-family: Theme.font-label;
                                     font-size: 10px;
-                                    font-weight: 700;
-                                    letter-spacing: 0.5px;
-                                    color: #FFFFFF;
+                                    font-weight: Theme.weight-label;
+                                    letter-spacing: Theme.track-label;
+                                    color: Theme.on-live;
                                     horizontal-alignment: center;
                                     vertical-alignment: center;
                                 }
@@ -286,8 +322,9 @@ component StreamCard inherits Rectangle {
                             horizontal-stretch: 0;
 
                             Text {
+                                letter-spacing: Theme.track-label;
                                 text: "\{Math.round(root.stream-ui-render-fps)} fps";
-                                font-family: Theme.font-mono;
+                                font-family: Theme.font-label;
                                 font-size: 10px;
                                 font-weight: 600;
                                 color: Theme.text-secondary;
@@ -300,6 +337,8 @@ component StreamCard inherits Rectangle {
                     }
 
                     Text {
+                        font-weight: Theme.weight-sentence;
+                        font-family: Theme.font-body;
                         text: root.card.subtitle;
                         font-size: 11px;
                         color: Theme.text-secondary;
@@ -334,17 +373,22 @@ component StreamCard inherits Rectangle {
 
                         if show-live-frame: Rectangle {
                             height: 26px;
-                            border-radius: 6px;
-                            background: leave-hover.has-hover ? (Theme.dark ? #FF1E5633 : #FF1E5628) : Theme.accent-bg;
-                            border-width: 1px;
-                            border-color: Theme.dark ? #EB4D5F33 : #FF1E5622;
+                            background: transparent;
+
+                            CutButtonShape {
+                                width: parent.width;
+                                height: parent.height;
+                                n: 6px;
+                                fill: leave-hover.has-hover ? Theme.live : Theme.live-bg;
+                            }
 
                             leave-label := Text {
                                 text: "Leave";
-                                font-family: Theme.font-sans;
+                                font-family: Theme.font-label;
                                 font-size: 11px;
-                                font-weight: 600;
-                                color: Theme.accent;
+                                font-weight: Theme.weight-label;
+                                letter-spacing: Theme.track-label;
+                                color: leave-hover.has-hover ? Theme.on-live : Theme.live;
                                 horizontal-alignment: center;
                                 vertical-alignment: center;
                             }
@@ -444,3 +488,42 @@ export component ActiveStreamsPanel inherits Rectangle {
         }
     }
 }
+
+// Headless preview:
+//   slint-viewer --screenshot out.png --component PreviewHosting \
+//     client/ui/panels/active_streams_panel.slint
+component StreamsPreview inherits Rectangle {
+    in property <bool> hosting: false;
+    in property <bool> watching: false;
+    in property <bool> can-watch: false;
+
+    width: 820px;
+    height: 470px;
+    background: Theme.bg-app;
+
+    ActiveStreamsPanel {
+        x: 20px;
+        y: 20px;
+        width: parent.width - 40px;
+        height: parent.height - 40px;
+        is-hosting: root.hosting;
+        is-watching: root.watching;
+        active-streamer-id: "h1";
+        cards: [
+            {
+                host-id: "h1", session-id: "s1",
+                streamer-name: "b0bben",
+                subtitle: "Display 1 (Primary)",
+                avatar-initials: "b0", avatar-color-index: 0,
+                viewer-count: 3, stream-width: 1920, stream-height: 1080,
+                can-watch: root.can-watch,
+            },
+        ];
+    }
+}
+
+/// Your own stream, running.
+export component PreviewHosting inherits StreamsPreview { hosting: true; }
+
+/// Somebody else is live and you have not joined yet.
+export component PreviewWatchCta inherits StreamsPreview { can-watch: true; }
