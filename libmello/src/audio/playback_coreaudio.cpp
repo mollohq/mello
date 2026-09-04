@@ -1,5 +1,6 @@
 #ifdef __APPLE__
 #include "playback_coreaudio.hpp"
+#include "coreaudio_unit_lock.hpp"
 #include "../util/log.hpp"
 #include <cstring>
 #include <vector>
@@ -11,6 +12,7 @@ CoreAudioPlayback::CoreAudioPlayback() = default;
 
 CoreAudioPlayback::~CoreAudioPlayback() {
     stop();
+    std::lock_guard<std::mutex> lock(coreaudio_unit_mutex());
     if (audio_unit_) {
         AudioComponentInstanceDispose(audio_unit_);
         audio_unit_ = nullptr;
@@ -18,6 +20,8 @@ CoreAudioPlayback::~CoreAudioPlayback() {
 }
 
 bool CoreAudioPlayback::initialize(const char* device_id) {
+    // Unit setup is serialized process-wide (see coreaudio_unit_lock.hpp).
+    std::lock_guard<std::mutex> lock(coreaudio_unit_mutex());
     MELLO_LOG_INFO("playback", "CoreAudio: initializing (device=%s)", device_id ? device_id : "default");
 
     // Find the default output Audio Unit (AUHAL)
