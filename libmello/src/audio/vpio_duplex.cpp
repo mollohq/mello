@@ -445,6 +445,14 @@ size_t VpioPlaybackAdapter::feed(const int16_t* samples, size_t count) {
     return unit_->feed(samples, count);
 }
 
+void VpioPlaybackAdapter::set_render_source(RenderSourceFn fn) {
+    // Forward to the unit: the base-class member would leave the unit's
+    // render callback pulling silence (this exact bug stalled all VPIO
+    // playout — clips and remote voices alike).
+    render_source_ = std::move(fn);
+    if (unit_) unit_->set_render_source(render_source_);
+}
+
 void VpioPlaybackAdapter::set_input_channels(uint32_t channels) {
     if (channels != 1) {
         MELLO_LOG_WARN("vpio", "voice duplex is mono-only, ignoring channels=%u", channels);

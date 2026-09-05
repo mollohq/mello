@@ -131,6 +131,7 @@ public:
     bool start() override;
     void stop() override;
     size_t feed(const int16_t* samples, size_t count) override;
+    void set_render_source(RenderSourceFn fn) override;
     void set_input_channels(uint32_t channels) override;
     uint32_t sample_rate() const override { return 48000; }
     int output_latency_ms() const override;

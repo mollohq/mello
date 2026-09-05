@@ -36,8 +36,14 @@ TEST(VpioDuplex, InitializesOnDefaultDevicesWhenPresent) {
                                        std::memory_order_relaxed);
         }));
 
-    play.set_render_source([](int16_t* out, size_t count) {
+    // Rendered-frame counting: guards render-source forwarding (a missing
+    // forward once left VPIO playout permanently silent — no crash, just
+    // no audio out, including clips).
+    std::atomic<int> rendered_samples{0};
+    play.set_render_source([&](int16_t* out, size_t count) {
         std::memset(out, 0, count * sizeof(int16_t));
+        rendered_samples.fetch_add(static_cast<int>(count),
+                                   std::memory_order_relaxed);
         return count;
     });
     EXPECT_TRUE(play.start());
@@ -46,6 +52,7 @@ TEST(VpioDuplex, InitializesOnDefaultDevicesWhenPresent) {
     // Generous by design (callback startup alone can take tens of ms).
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
     EXPECT_GT(captured_samples.load(std::memory_order_relaxed), 0);
+    EXPECT_GT(rendered_samples.load(std::memory_order_relaxed), 0);
 
     cap.stop();
     play.stop();
