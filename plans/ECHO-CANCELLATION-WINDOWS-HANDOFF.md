@@ -62,6 +62,16 @@ is the gate before merge.
    failure). REMAINING: operator field test of actual echo
    cancellation (remote voices, clips, AirPods) — init working does
    not yet prove cancellation working.
+8. **VPIO teardown abort — FIXED.** Field crash on backend toggle with
+   live DSP load: malloc `free_list_checksum_botch` inside Apple's
+   DSPGraph teardown. ASan proved the cause: VPIO delivers 960-frame
+   input slices against a reported `MaximumFramesPerSlice` of 512, so
+   Apple's render wrote 1920 audio bytes past our 1024-byte capture
+   buffer on every slice. Fix: 8192-frame capture buffers plus a
+   drop-and-log guard on both VPIO and HAL capture paths, and
+   `AudioUnitUninitialize` before dispose in VPIO teardown. Verified
+   with a loud-clip toggle stress under ASan (aborts before, clean
+   after). If a slice ever exceeds 8192 the log will say so.
 
 ## Windows TODOs (in order)
 
