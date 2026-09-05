@@ -176,7 +176,10 @@ All functions return `MelloResult` enum. On failure, `mello_get_error()` returns
 
 ### Key design decisions
 
-- **WebRTC APM (AEC3 + AGC2):** Runs first on the raw mic after WASAPI capture (AEC needs the speaker reference from mixed playback). Optional WebRTC NS, HPF, and transient suppression are runtime-testable.
+- **WebRTC APM v2.1 / M131 (AEC3 + AGC2):** Runs first on the raw mic after capture (AEC needs the speaker reference from mixed playback). The vendored tree was upgraded from v1.3/M88; `residual_echo_detector` and `voice_detection` knobs are gone, the APM handle is ref-counted, and transient suppression is inert (backend removed upstream). Optional WebRTC NS and HPF remain runtime-testable.
+- **macOS VPIO duplex alternative:** When the echo toggle is on, capture and playback share one VoiceProcessingIO unit whose output bus carries our mix as Apple's AEC reference. Our APM capture pass is skipped on this path to avoid double processing; RNNoise and VAD run unchanged. Toggle off selects the plain HAL pair plus software AEC. Input-only VPIO never initializes; only the combined unit works.
+- **Stream-delay hints:** `AudioPipeline` feeds measured device latency plus jitter depth into APM (`set_stream_delay_ms`) on init and every device switch, so the delay estimator starts converged.
+- **Render reference accumulator:** Playback callbacks arrive in device-sized chunks (~512 frames), not APM 10 ms chunks. The render feed accumulates to 480-sample units instead of dropping tails, which kept AEC misaligned. Capture buffers are sized defensively (8192 frames) with a drop-and-log guard: VPIO has delivered 960-frame slices against a reported max of 512.
 - **Adaptive speech gate:** A cheap RMS/noise-floor gate runs before neural work. It keeps a short pre-roll and hangover windows so speech starts/ends are not clipped.
 - **RNNoise over alternatives:** Real-time, small model (<100KB), no GPU needed, well-tested in voice comms. It remains the default quality path, but now only runs during active speech/pre-roll/hangover windows.
 - **Silero VAD:** ONNX-based neural VAD with hysteresis. It confirms candidate speech windows instead of running as the only gate for every frame forever.
@@ -229,6 +232,7 @@ When `set_playback_device()` or `set_capture_device()` replaces the `AudioPlayba
 |----------|-------------|----------------|
 | `set_playback_device()` | `playback_->set_render_source(...)` with the `mix_output` lambda | `initialize()` step 9/9 |
 | `set_capture_device()` | `capture_->start(...)` with the `on_captured_audio` lambda | `start_capture()` |
+| `switch_audio_backend()` (macOS) | **Both** of the above: the duplex unit spans both directions, so capture and playback instances are replaced together | `initialize()` pair setup |
 
 Without this, the WASAPI playback thread falls through to `ring_.read()` (always empty in SFU/clip mode), producing permanent silence. The capture side drops all mic data.
 
@@ -374,6 +378,8 @@ libmello is **synchronous C++ by design** — no async runtimes. Threads are cre
 ## 9. Testing
 
 Tests use Google Test and live in `libmello/tests/`. Tests requiring audio hardware (WASAPI capture/playback) are separated and excluded from CI since they need physical devices.
+
+`EchoCancellerTest` carries an ERLE harness: broadband synthetic loopback (frame-aligned plus a misaligned-delay variant for the delay estimator), a blind no-reference passthrough check, and render-accumulator coverage. `VpioDuplex` tests run against real CoreAudio devices where present and skip headless.
 
 Run tests:
 ```bash

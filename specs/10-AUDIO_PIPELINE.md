@@ -90,6 +90,8 @@ private:
 };
 ```
 
+`set_echo_cancellation` is a backend selector on macOS: on selects the VPIO duplex unit (OS AEC/AGC, software APM capture skipped), off selects the plain HAL pair plus software AEC. On other platforms it only flips the APM flag.
+
 ---
 
 ## 4. Capture and Encode Path
@@ -97,13 +99,14 @@ private:
 Per 20ms frame, endpoint processing order is adaptive:
 
 1. optional input gain
-2. WebRTC APM capture-side processing (AEC3 + AGC2, plus optional WebRTC NS/HPF/transient suppression)
-3. clip ring tap (when clip buffer is active)
-4. cheap RMS/noise-floor gate updates input level and decides whether this is a speech candidate
-5. Silero VAD runs only for candidate speech / hangover windows
-6. when speech opens, flush pre-roll frames so starts are not clipped
-7. while speech or hangover is active, apply the selected enhancement mode and Opus encode
-8. enqueue encoded packet with monotonically increasing sequence
+2. WebRTC APM capture-side processing (AEC3 + AGC2, plus optional WebRTC NS/HPF) — skipped when the macOS VPIO duplex backend is active (the OS unit already ran AEC/AGC; see §6.2)
+3. neural residual-echo suppressor insertion point (future stage; its gate threshold must use post-stage RMS so residue alone cannot hold the gate open)
+4. clip ring tap (when clip buffer is active)
+5. cheap RMS/noise-floor gate updates input level and decides whether this is a speech candidate
+6. Silero VAD runs only for candidate speech / hangover windows
+7. when speech opens, flush pre-roll frames so starts are not clipped
+8. while speech or hangover is active, apply the selected enhancement mode and Opus encode
+9. enqueue encoded packet with monotonically increasing sequence
 
 RNNoise remains the default quality noise suppression path, but it is not run on obvious
 silence or non-speech background. This preserves Discord-like voice quality during speech
@@ -202,6 +205,8 @@ Mixed output applies:
 - optional clip playback overlay
 - AEC render reference feed (`process_render`) when far-end audio exists
 
+The render feed accumulates variable-size playback callbacks into 10 ms APM chunks; tails are carried, not dropped. The stream-delay hint refreshes from device latencies plus jitter depth on init and every device or backend switch.
+
 On voice leave, `stop_capture()` must clear all remote decode/jitter/ring state immediately to avoid stale PLC artifacts.
 
 ---
@@ -220,6 +225,8 @@ On voice leave, `stop_capture()` must clear all remote decode/jitter/ring state 
 - capture/playback set 48k mono int16 stream format
 - post-set validation rejects mismatch
 - fails fast if actual device unit format violates contract
+
+Voice path: one VoiceProcessingIO duplex unit carries capture input and render output together when the echo toggle is on. Apple's AEC reference is the audio rendered through that unit's own output bus, so the pair cannot split: input-only VPIO never initializes, and device switches rebuild both halves together with plain-HAL fallback. Capture buffers are sized defensively (observed slices exceed the unit's reported max). See spec 03 §4.
 
 ---
 
