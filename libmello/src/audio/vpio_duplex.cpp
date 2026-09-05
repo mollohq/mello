@@ -169,12 +169,15 @@ bool VpioUnit::initialize(const char* capture_device_id, const char* playback_de
                          kAudioUnitScope_Global, 0, &maxFrames, &propSize);
     if (maxFrames == 0) maxFrames = 4096;
 
+    capture_buffer_capacity_frames_ = kCaptureBufferCapFrames;
     capture_buffer_list_ =
         static_cast<AudioBufferList*>(calloc(1, sizeof(AudioBufferList)));
     capture_buffer_list_->mNumberBuffers = 1;
     capture_buffer_list_->mBuffers[0].mNumberChannels = 1;
-    capture_buffer_list_->mBuffers[0].mDataByteSize = maxFrames * sizeof(int16_t);
-    capture_buffer_list_->mBuffers[0].mData = calloc(maxFrames, sizeof(int16_t));
+    capture_buffer_list_->mBuffers[0].mDataByteSize =
+        capture_buffer_capacity_frames_ * sizeof(int16_t);
+    capture_buffer_list_->mBuffers[0].mData =
+        calloc(capture_buffer_capacity_frames_, sizeof(int16_t));
 
     AURenderCallbackStruct inputCb = {};
     inputCb.inputProc = VpioUnit::input_callback;
@@ -227,6 +230,15 @@ void VpioUnit::shutdown() {
 void VpioUnit::shutdown_locked() {
     if (audio_unit_) {
         AudioOutputUnitStop(audio_unit_);
+        // Uninitialize BEFORE dispose: this tears down the DSP graph
+        // (drains Apple's VoiceProcessor workers, frees internal buffers)
+        // while the unit is still valid. Skipping it and going straight
+        // to Dispose corrupts the heap on teardown after live processing
+        // (field crash: free_list_checksum_botch in DSPGraph teardown).
+        OSStatus status = AudioUnitUninitialize(audio_unit_);
+        if (status != noErr) {
+            MELLO_LOG_WARN("vpio", "uninitialize failed: %d", (int)status);
+        }
         AudioComponentInstanceDispose(audio_unit_);
         audio_unit_ = nullptr;
     }
@@ -368,6 +380,14 @@ OSStatus VpioUnit::input_callback(void* inRefCon,
     }
     if (!cb || !self->capture_buffer_list_) return noErr;
 
+    // Defensive: never render more than the buffer holds. Oversized
+    // slices have been observed (960 vs 512 max); overflowing here
+    // corrupts the heap and aborts later in Apple's teardown.
+    if (inNumberFrames > self->capture_buffer_capacity_frames_) {
+        MELLO_LOG_ERROR("vpio", "slice %u exceeds capture buffer %zu; dropping",
+                        inNumberFrames, self->capture_buffer_capacity_frames_);
+        return noErr;
+    }
     self->capture_buffer_list_->mBuffers[0].mDataByteSize =
         inNumberFrames * sizeof(int16_t);
     OSStatus status = AudioUnitRender(self->audio_unit_, ioActionFlags, inTimeStamp,

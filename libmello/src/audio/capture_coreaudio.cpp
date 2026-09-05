@@ -163,11 +163,14 @@ bool CoreAudioCapture::initialize(const char* device_id) {
     if (maxFrames == 0) maxFrames = 4096;
 
     // Allocate buffer list for the render call
+    buffer_capacity_frames_ = kBufferCapFrames;
     buffer_list_ = (AudioBufferList*)calloc(1, sizeof(AudioBufferList));
     buffer_list_->mNumberBuffers = 1;
     buffer_list_->mBuffers[0].mNumberChannels = 1;
-    buffer_list_->mBuffers[0].mDataByteSize = maxFrames * sizeof(int16_t);
-    buffer_list_->mBuffers[0].mData = calloc(maxFrames, sizeof(int16_t));
+    buffer_list_->mBuffers[0].mDataByteSize =
+        buffer_capacity_frames_ * sizeof(int16_t);
+    buffer_list_->mBuffers[0].mData =
+        calloc(buffer_capacity_frames_, sizeof(int16_t));
 
     render_buf_.resize(maxFrames);
 
@@ -284,6 +287,13 @@ OSStatus CoreAudioCapture::input_callback(
 {
     auto* self = static_cast<CoreAudioCapture*>(inRefCon);
     if (!self->running_ || !self->callback_) return noErr;
+
+    // Defensive: never render more than the buffer holds (see header note).
+    if (inNumberFrames > self->buffer_capacity_frames_) {
+        MELLO_LOG_ERROR("capture", "CoreAudio: slice %u exceeds buffer %zu; dropping",
+                        inNumberFrames, self->buffer_capacity_frames_);
+        return noErr;
+    }
 
     // Reset buffer for this render call
     self->buffer_list_->mBuffers[0].mDataByteSize = inNumberFrames * sizeof(int16_t);

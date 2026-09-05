@@ -99,6 +99,12 @@ private:
     util::RingBuffer<int16_t> ring_{48000 * 2};
 
     AudioBufferList* capture_buffer_list_ = nullptr;
+    // Capture buffer capacity in frames. Deliberately larger than the
+    // unit's MaximumFramesPerSlice: VPIO has delivered 960-frame slices
+    // against a reported max of 512, overflowing a max-sized buffer and
+    // corrupting the heap (field abort + ASan heap-buffer-overflow).
+    size_t capture_buffer_capacity_frames_ = 0;
+    static constexpr size_t kCaptureBufferCapFrames = 8192;
 };
 
 /// AudioCapture hat over a shared VpioUnit. initialize() only verifies the

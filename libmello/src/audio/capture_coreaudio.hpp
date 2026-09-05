@@ -45,6 +45,11 @@ private:
     // Buffer for the render callback to fill
     std::vector<int16_t> render_buf_;
     AudioBufferList* buffer_list_ = nullptr;
+    // Capture buffer capacity in frames. Sized defensively above the
+    // unit's MaximumFramesPerSlice: oversized slices overflow a
+    // max-sized buffer and corrupt the heap (seen on VPIO; same guard).
+    size_t buffer_capacity_frames_ = 0;
+    static constexpr size_t kBufferCapFrames = 8192;
 };
 
 } // namespace mello::audio
