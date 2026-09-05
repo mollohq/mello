@@ -418,7 +418,9 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
-    app.global::<Theme>().set_dark(settings.borrow().dark_theme);
+    // Graphite is dark only. `dark` stays a constant so the remaining
+    // `Theme.dark ? a : b` call sites keep resolving to the dark arm.
+    app.global::<Theme>().set_dark(true);
     app.set_onboarding_share_game_activity(settings.borrow().share_game_activity);
     app.set_settings_share_game_activity(settings.borrow().share_game_activity);
 

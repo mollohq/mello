@@ -1,9 +1,12 @@
 import { Theme, MelloTextInput } from "../theme.slint";
+import { CutShape, CutButtonShape, CutMask } from "../components/cut.slint";
+import { UserAvatar } from "../components/avatar.slint";
 import { DiscoverCrewData } from "../types.slint";
 
 component DiscoverCrewCard inherits Rectangle {
     in property <string> crew-id;
     in property <string> crew-name;
+    in property <string> crew-initials;
     in property <string> crew-description;
     in property <int> member-count;
     in property <int> online-count;
@@ -12,10 +15,23 @@ component DiscoverCrewCard inherits Rectangle {
     in property <bool> has-avatar: false;
     callback join-clicked(string);
 
-    background: hero ? (card-touch.has-hover ? #1e1420 : #191119) : (card-touch.has-hover ? Theme.surface-hover : Theme.surface);
-    border-radius: Theme.r-outer;
-    border-width: 1px;
-    border-color: hero ? (card-touch.has-hover ? #FF1E564D : #FF1E5626) : (card-touch.has-hover ? Theme.graphic-med : Theme.graphic-light);
+    background: transparent;
+
+    CutShape {
+        width: parent.width;
+        height: parent.height;
+        n: Theme.notch-sm;
+        fill: hero ? (card-touch.has-hover ? #FFFFFF4D : #FFFFFF26)
+                   : (card-touch.has-hover ? Theme.graphic-med : Theme.graphic-light);
+    }
+    CutShape {
+        width: parent.width;
+        height: parent.height;
+        n: Theme.notch-sm;
+        inset: Theme.keyline;
+        fill: hero ? (card-touch.has-hover ? Theme.card-bg-hover : Theme.card-bg)
+                   : (card-touch.has-hover ? Theme.surface-hover : Theme.surface);
+    }
 
     card-touch := TouchArea {
         mouse-cursor: pointer;
@@ -38,29 +54,59 @@ component DiscoverCrewCard inherits Rectangle {
                 Rectangle {
                     width: hero ? 56px : 48px;
                     height: hero ? 56px : 48px;
-                    background: hero ? #FF1E561A : Theme.bg-app;
-                    border-radius: hero ? 16px : 12px;
-                    border-width: has-avatar ? 0px : 1px;
-                    border-color: hero ? #FF1E564D : Theme.graphic-light;
-                    clip: true;
+                    background: transparent;
 
-                    if has-avatar: Image {
-                        source: crew-avatar;
+                    CutButtonShape {
                         width: parent.width;
                         height: parent.height;
-                        image-fit: cover;
+                        n: hero ? 13px : 11px;
+                        fill: hero ? Theme.raised : Theme.graphic-light;
+                    }
+                    if !root.has-avatar: CutButtonShape {
+                        width: parent.width;
+                        height: parent.height;
+                        n: hero ? 13px : 11px;
+                        inset: Theme.keyline;
+                        fill: hero ? Theme.action-dim : Theme.bg-app;
+                    }
+
+                    if has-avatar: Rectangle {
+                        width: parent.width;
+                        height: parent.height;
+                        clip: true;
+
+                        Image {
+                            source: crew-avatar;
+                            width: parent.width;
+                            height: parent.height;
+                            image-fit: cover;
+                        }
+                        CutMask {
+                            width: parent.width;
+                            height: parent.height;
+                            n: hero ? 13px : 11px;
+                            corner: "tl";
+                            fill: root.hero ? Theme.card-bg : Theme.surface;
+                        }
+                        CutMask {
+                            width: parent.width;
+                            height: parent.height;
+                            n: hero ? 13px : 11px;
+                            corner: "br";
+                            fill: root.hero ? Theme.card-bg : Theme.surface;
+                        }
                     }
 
                     if !has-avatar: Text {
-                        text: crew-name;
-                        font-family: Theme.font-mono;
-                        font-weight: 700;
-                        font-size: hero ? 20px : 16px;
-                        color: hero ? Theme.accent : Theme.text-secondary;
+                        text: crew-initials;
+                        font-family: Theme.font-display;
+                        font-weight: Theme.weight-display-bold;
+                        font-size: hero ? 18px : 15px;
+                        color: Theme.text-secondary;
+                        width: parent.width;
+                        height: parent.height;
                         horizontal-alignment: center;
                         vertical-alignment: center;
-                        overflow: elide;
-                        max-width: hero ? 44px : 36px;
                     }
                 }
 
@@ -73,6 +119,7 @@ component DiscoverCrewCard inherits Rectangle {
                         spacing: 10px;
 
                         Text {
+                            font-family: Theme.font-body;
                             text: crew-name;
                             font-weight: hero ? 600 : 500;
                             font-size: hero ? 20px : 16px;
@@ -85,8 +132,8 @@ component DiscoverCrewCard inherits Rectangle {
                             height: 22px;
                             border-radius: 4px;
                             border-width: 1px;
-                            border-color: #FF1E564D;
-                            background: #FF1E561A;
+                            border-color: #FFFFFF4D;
+                            background: Theme.action-dim;
                             y: (parent.height - self.height) / 2;
 
                             HorizontalLayout {
@@ -97,12 +144,14 @@ component DiscoverCrewCard inherits Rectangle {
                                     width: 6px;
                                     height: 6px;
                                     border-radius: 3px;
-                                    background: Theme.accent;
+                                    background: Theme.confirm;
                                 }
 
                                 hero-pill-text := Text {
+                                    letter-spacing: Theme.track-label;
+                                    font-weight: Theme.weight-label;
                                     text: "LIVE";
-                                    font-family: Theme.font-mono;
+                                    font-family: Theme.font-label;
                                     font-size: 10px;
                                     color: Theme.accent;
                                     vertical-alignment: center;
@@ -112,8 +161,9 @@ component DiscoverCrewCard inherits Rectangle {
                     }
 
                     Text {
+                        font-weight: Theme.weight-label;
                         text: member-count < 10 ? "0" + member-count + " Members" : member-count + " Members";
-                        font-family: Theme.font-mono;
+                        font-family: Theme.font-label;
                         font-size: 11px;
                         letter-spacing: 0.5px;
                         color: Theme.text-tertiary;
@@ -127,6 +177,8 @@ component DiscoverCrewCard inherits Rectangle {
 
             // Description
             Text {
+                font-weight: Theme.weight-sentence;
+                font-family: Theme.font-body;
                 text: crew-description;
                 font-size: hero ? 15px : 13px;
                 color: Theme.text-secondary;
@@ -145,7 +197,7 @@ component DiscoverCrewCard inherits Rectangle {
 
             Rectangle {
                 height: 1px;
-                background: hero ? #FF1E5626 : Theme.graphic-light;
+                background: hero ? #FFFFFF26 : Theme.graphic-light;
             }
 
             Rectangle {
@@ -163,33 +215,31 @@ component DiscoverCrewCard inherits Rectangle {
                     alignment: start;
 
                     Rectangle {
-                        width: online-count >= 2 ? 40px : 24px;
+                        width: online-count >= 2 ? 52px : 24px;
                         height: 24px;
 
-                        Rectangle {
+                        UserAvatar {
                             x: 0px;
                             y: 0px;
-                            width: 24px;
-                            height: 24px;
-                            border-radius: 12px;
-                            background: hero ? #FF1E5633 : Theme.graphic-light;
+                            size: 24px;
+                            muted: true;
+                            bg-color: root.hero ? Theme.card-bg : Theme.surface;
                         }
 
-                        if online-count >= 2: Rectangle {
-                            x: 16px;
+                        if online-count >= 2: UserAvatar {
+                            x: 28px;
                             y: 0px;
-                            width: 24px;
-                            height: 24px;
-                            border-radius: 12px;
-                            background: hero ? #FF1E564D : Theme.graphic-med;
-                            border-width: 2px;
-                            border-color: hero ? #191119 : Theme.surface;
+                            size: 24px;
+                            muted: true;
+                            bg-color: root.hero ? Theme.card-bg : Theme.surface;
                         }
                     }
 
                     Text {
+                        letter-spacing: Theme.track-label;
+                        font-weight: Theme.weight-label;
                         text: online-count > 0 ? "+" + online-count + " active" : "No one online";
-                        font-family: Theme.font-mono;
+                        font-family: Theme.font-label;
                         font-size: 11px;
                         color: Theme.text-tertiary;
                         vertical-alignment: center;
@@ -200,17 +250,22 @@ component DiscoverCrewCard inherits Rectangle {
                 Rectangle {
                     width: join-text.preferred-width + 32px;
                     height: 32px;
-                    border-radius: Theme.r-inner;
-                    border-width: 1px;
-                    border-color: hero ? (join-touch.has-hover ? Theme.accent : #FF1E564D) : (join-touch.has-hover ? Theme.text-primary : Theme.graphic-light);
-                    background: hero ? (join-touch.has-hover ? #FF1E5633 : #FF1E561A) : (join-touch.has-hover ? Theme.bg-app : transparent);
+                    background: transparent;
+
+                    CutButtonShape {
+                        width: parent.width;
+                        height: parent.height;
+                        n: Theme.cut;
+                        fill: join-touch.has-hover ? Theme.confirm-press : Theme.confirm;
+                    }
 
                     join-text := Text {
-                        text: hero ? "Join Crew →" : "Join";
-                        font-family: Theme.font-mono;
+                        letter-spacing: Theme.track-label;
+                        text: hero ? "Join Crew" : "Join";
+                        font-family: Theme.font-label;
                         font-size: 12px;
-                        font-weight: 500;
-                        color: hero ? (join-touch.has-hover ? Theme.accent : Theme.text-primary) : Theme.text-primary;
+                        font-weight: Theme.weight-label;
+                        color: Theme.on-confirm;
                         horizontal-alignment: center;
                         vertical-alignment: center;
                     }
@@ -230,6 +285,9 @@ component DiscoverCrewCard inherits Rectangle {
 export component DiscoverPanel inherits Rectangle {
     in property <[DiscoverCrewData]> crews: [];
     in property <[int]> bento-set-bases: [];
+    /// The crew the user was in when they opened discover. Empty means
+    /// there is nowhere to go back to, so the control is not drawn.
+    in property <string> back-to: "";
     callback join-crew(string);
     callback join-invite(string);
     callback back-requested();
@@ -237,8 +295,74 @@ export component DiscoverPanel inherits Rectangle {
 
     background: transparent;
 
+    VerticalLayout {
+        spacing: 0px;
+
+        // Discover is a detour, not a destination, so the way out is the
+        // first thing on the screen. `back-requested` existed and was wired
+        // in main.slint; nothing ever emitted it.
+        if root.back-to != "": Rectangle {
+            height: 56px;
+            background: transparent;
+            vertical-stretch: 0;
+
+            Rectangle {
+                x: 20px;
+                y: (parent.height - self.height) / 2;
+                width: back-row.preferred-width + 28px;
+                height: 34px;
+                background: transparent;
+
+                CutButtonShape {
+                    width: parent.width;
+                    height: parent.height;
+                    n: Theme.cut;
+                    fill: back-ta.has-hover ? Theme.action-line : Theme.graphic-light;
+                }
+                CutButtonShape {
+                    width: parent.width;
+                    height: parent.height;
+                    n: Theme.cut;
+                    inset: Theme.keyline;
+                    fill: back-ta.has-hover ? Theme.surface-hover : Theme.surface;
+                }
+
+                back-row := HorizontalLayout {
+                    padding-left: 14px;
+                    padding-right: 14px;
+                    spacing: 8px;
+                    alignment: center;
+                    cross-axis-alignment: center;
+
+                    Image {
+                        source: @image-url("../icons/arrow-right.svg");
+                        width: 13px;
+                        height: 13px;
+                        colorize: back-ta.has-hover ? Theme.text-primary : Theme.text-secondary;
+                        transform-rotation: 180deg;
+                    }
+
+                    Text {
+                        font-family: Theme.font-label;
+                        text: "BACK TO " + root.back-to;
+                        font-size: 10px;
+                        font-weight: Theme.weight-label;
+                        letter-spacing: Theme.track-label;
+                        color: back-ta.has-hover ? Theme.text-primary : Theme.text-secondary;
+                        vertical-alignment: center;
+                        overflow: elide;
+                    }
+                }
+
+                back-ta := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { root.back-requested(); }
+                }
+            }
+        }
+
     Flickable {
-        width: root.width;
+        vertical-stretch: 1;
         flicked => {
             if (-self.viewport-y + self.height) > (self.viewport-height - 400px) {
                 root.load-more();
@@ -247,15 +371,28 @@ export component DiscoverPanel inherits Rectangle {
 
         VerticalLayout {
             width: root.width;
+            padding-left: 20px;
+            padding-right: 20px;
             padding-bottom: 48px;
             spacing: 0px;
 
             // --- Invite hero section ---
             Rectangle {
-                background: Theme.surface;
-                border-width: 1px;
-                border-color: Theme.graphic-light;
-                border-radius: Theme.r-outer;
+                background: transparent;
+
+                CutShape {
+                    width: parent.width;
+                    height: parent.height;
+                    n: Theme.notch;
+                    fill: Theme.graphic-light;
+                }
+                CutShape {
+                    width: parent.width;
+                    height: parent.height;
+                    n: Theme.notch;
+                    inset: Theme.keyline;
+                    fill: Theme.surface;
+                }
 
                 VerticalLayout {
                     padding: 48px;
@@ -264,7 +401,7 @@ export component DiscoverPanel inherits Rectangle {
 
                     Text {
                         text: "PRIVATE ENTRY";
-                        font-family: Theme.font-mono;
+                        font-family: Theme.font-label;
                         font-size: Theme.font-xs;
                         font-weight: 600;
                         letter-spacing: 1.5px;
@@ -277,6 +414,7 @@ export component DiscoverPanel inherits Rectangle {
                     }
 
                     Text {
+                        font-family: Theme.font-body;
                         text: "Join a Private Crew";
                         font-size: Theme.font-xxl;
                         font-weight: 500;
@@ -289,6 +427,8 @@ export component DiscoverPanel inherits Rectangle {
                     }
 
                     Text {
+                        font-weight: Theme.weight-sentence;
+                        font-family: Theme.font-body;
                         text: "Enter an invite code to join a crew directly.";
                         font-size: Theme.font-lg;
                         color: Theme.text-secondary;
@@ -314,7 +454,6 @@ export component DiscoverPanel inherits Rectangle {
                                 background: Theme.bg-app;
                                 border-width: 1px;
                                 border-color: invite-input.has-focus ? Theme.accent : Theme.graphic-light;
-                                border-radius: Theme.r-inner;
 
                                 invite-input := MelloTextInput {
                                     x: 20px;
@@ -333,9 +472,11 @@ export component DiscoverPanel inherits Rectangle {
                                 }
 
                                 if invite-input.text == "": Text {
+                                    letter-spacing: Theme.track-label;
+                                    font-weight: Theme.weight-label;
                                     x: 20px;
                                     color: Theme.text-tertiary;
-                                    font-family: Theme.font-mono;
+                                    font-family: Theme.font-label;
                                     font-size: 15px;
                                     vertical-alignment: center;
                                     text: "e.g. ALPHA-992-K";
@@ -345,19 +486,16 @@ export component DiscoverPanel inherits Rectangle {
                             Rectangle {
                                 width: join-btn-label.preferred-width + 56px;
                                 height: 48px;
-                                background: Theme.accent;
-                                border-radius: Theme.r-inner;
+                                background: transparent;
 
-                                join-btn-label := Text {
-                                    text: "Join Crew";
-                                    font-weight: 600;
-                                    font-size: Theme.font-lg;
-                                    color: #FFFFFF;
-                                    horizontal-alignment: center;
-                                    vertical-alignment: center;
+                                CutButtonShape {
+                                    width: parent.width;
+                                    height: parent.height;
+                                    n: Theme.cut;
+                                    fill: invite-btn-ta.has-hover ? Theme.confirm-press : Theme.confirm;
                                 }
 
-                                TouchArea {
+                                invite-btn-ta := TouchArea {
                                     mouse-cursor: pointer;
                                     clicked => {
                                         if invite-input.text != "" {
@@ -365,6 +503,16 @@ export component DiscoverPanel inherits Rectangle {
                                             invite-input.text = "";
                                         }
                                     }
+                                }
+
+                                join-btn-label := Text {
+                                    font-family: Theme.font-display;
+                                    text: "Join Crew";
+                                    font-weight: Theme.weight-display;
+                                    font-size: Theme.font-lg;
+                                    color: Theme.on-confirm;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
                                 }
                             }
                         }
@@ -378,7 +526,7 @@ export component DiscoverPanel inherits Rectangle {
 
             Text {
                 text: "FEATURED CREWS";
-                font-family: Theme.font-mono;
+                font-family: Theme.font-label;
                 font-size: Theme.font-xs;
                 font-weight: 600;
                 letter-spacing: 1.5px;
@@ -406,6 +554,7 @@ export component DiscoverPanel inherits Rectangle {
                             hero: true;
                             crew-id: crews.length > base ? crews[base].id : "";
                             crew-name: crews.length > base ? crews[base].name : "";
+                            crew-initials: crews.length > base ? crews[base].initials : "";
                             crew-description: crews.length > base ? crews[base].description : "";
                             member-count: crews.length > base ? crews[base].member-count : 0;
                             online-count: crews.length > base ? crews[base].online-count : 0;
@@ -418,6 +567,7 @@ export component DiscoverPanel inherits Rectangle {
                             horizontal-stretch: 1;
                             crew-id: crews.length > base + 1 ? crews[base + 1].id : "";
                             crew-name: crews.length > base + 1 ? crews[base + 1].name : "";
+                            crew-initials: crews.length > base + 1 ? crews[base + 1].initials : "";
                             crew-description: crews.length > base + 1 ? crews[base + 1].description : "";
                             member-count: crews.length > base + 1 ? crews[base + 1].member-count : 0;
                             online-count: crews.length > base + 1 ? crews[base + 1].online-count : 0;
@@ -437,6 +587,7 @@ export component DiscoverPanel inherits Rectangle {
                             horizontal-stretch: 1;
                             crew-id: crews[base + 2].id;
                             crew-name: crews[base + 2].name;
+                            crew-initials: crews[base + 2].initials;
                             crew-description: crews[base + 2].description;
                             member-count: crews[base + 2].member-count;
                             online-count: crews[base + 2].online-count;
@@ -449,6 +600,7 @@ export component DiscoverPanel inherits Rectangle {
                             horizontal-stretch: 1;
                             crew-id: crews.length > base + 3 ? crews[base + 3].id : "";
                             crew-name: crews.length > base + 3 ? crews[base + 3].name : "";
+                            crew-initials: crews.length > base + 3 ? crews[base + 3].initials : "";
                             crew-description: crews.length > base + 3 ? crews[base + 3].description : "";
                             member-count: crews.length > base + 3 ? crews[base + 3].member-count : 0;
                             online-count: crews.length > base + 3 ? crews[base + 3].online-count : 0;
@@ -462,6 +614,7 @@ export component DiscoverPanel inherits Rectangle {
                             horizontal-stretch: 1;
                             crew-id: crews.length > base + 4 ? crews[base + 4].id : "";
                             crew-name: crews.length > base + 4 ? crews[base + 4].name : "";
+                            crew-initials: crews.length > base + 4 ? crews[base + 4].initials : "";
                             crew-description: crews.length > base + 4 ? crews[base + 4].description : "";
                             member-count: crews.length > base + 4 ? crews[base + 4].member-count : 0;
                             online-count: crews.length > base + 4 ? crews[base + 4].online-count : 0;
@@ -481,6 +634,7 @@ export component DiscoverPanel inherits Rectangle {
                             horizontal-stretch: 1;
                             crew-id: crews[base + 5].id;
                             crew-name: crews[base + 5].name;
+                            crew-initials: crews[base + 5].initials;
                             crew-description: crews[base + 5].description;
                             member-count: crews[base + 5].member-count;
                             online-count: crews[base + 5].online-count;
@@ -494,6 +648,7 @@ export component DiscoverPanel inherits Rectangle {
                             hero: true;
                             crew-id: crews.length > base + 6 ? crews[base + 6].id : "";
                             crew-name: crews.length > base + 6 ? crews[base + 6].name : "";
+                            crew-initials: crews.length > base + 6 ? crews[base + 6].initials : "";
                             crew-description: crews.length > base + 6 ? crews[base + 6].description : "";
                             member-count: crews.length > base + 6 ? crews[base + 6].member-count : 0;
                             online-count: crews.length > base + 6 ? crews[base + 6].online-count : 0;
@@ -506,5 +661,38 @@ export component DiscoverPanel inherits Rectangle {
                 }
             }
         }
+    }
+    }
+}
+
+// Headless preview:
+//   slint-viewer --screenshot out.png --component Preview \
+//     client/ui/panels/discover_panel.slint
+export component Preview inherits Rectangle {
+    width: 1100px;
+    height: 900px;
+    background: Theme.bg-app;
+
+    DiscoverPanel {
+        width: parent.width;
+        height: parent.height;
+        back-to: "M3LLO CREW";
+        bento-set-bases: [0];
+        crews: [
+            { id: "1", name: "Night Stones", initials: "NI", description: "Late-night CS2 and too much Valorant.",
+              member-count: 24, max-members: 50, online-count: 6, open: true },
+            { id: "2", name: "Deep Space", initials: "DS", description: "Apex, OW2 and the occasional CoD night.",
+              member-count: 12, max-members: 30, online-count: 2, open: true },
+            { id: "3", name: "Quiet Squad", initials: "QS", description: "No mic, no problem.",
+              member-count: 8, max-members: 20, online-count: 0, open: true },
+            { id: "4", name: "Neon Syndicate", initials: "NS", description: "Ranked grinders only.",
+              member-count: 41, max-members: 50, online-count: 11, open: true },
+            { id: "5", name: "Butthole Surfers", initials: "BS", description: "It is what it says.",
+              member-count: 5, max-members: 25, online-count: 1, open: true },
+            { id: "6", name: "Devs", initials: "DE", description: "We ship on Fridays.",
+              member-count: 23, max-members: 40, online-count: 3, open: true },
+            { id: "7", name: "Music", initials: "MU", description: "Production, sample swaps, listening parties.",
+              member-count: 15, max-members: 40, online-count: 4, open: true },
+        ];
     }
 }

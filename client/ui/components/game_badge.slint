@@ -1,18 +1,32 @@
+import { Theme } from "../theme.slint";
+import { CutButtonShape } from "cut.slint";
+
+/// A game is a thing, not a person, so it wears the two-corner tile — the
+/// same silhouette as a crew and as a button.
 export component GameBadge inherits Rectangle {
     in property <string> short-name;
-    in property <color> bg-color: #2a2a30;
+    in property <color> bg-color: Theme.raised;
     in property <length> size: 32px;
 
     width: size;
     height: size;
-    border-radius: 8px;
-    background: bg-color;
+    background: transparent;
+
+    CutButtonShape {
+        width: parent.width;
+        height: parent.height;
+        n: max(4px, root.size * 0.22);
+        fill: root.bg-color;
+    }
 
     Text {
-        text: short-name;
-        font-size: size > 36px ? 12px : 11px;
-        font-weight: 700;
-        color: white;
+        text: root.short-name;
+        font-family: Theme.font-display;
+        font-size: root.size > 36px ? 12px : 11px;
+        font-weight: Theme.weight-display-bold;
+        color: Theme.on-action;
+        width: root.size;
+        height: root.size;
         horizontal-alignment: center;
         vertical-alignment: center;
     }

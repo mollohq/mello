@@ -1,20 +1,26 @@
 import { Theme } from "../theme.slint";
 import { YouStripData } from "../types.slint";
 import { GameIcon } from "../components/game_icon.slint";
+import { CutShape } from "../components/cut.slint";
 
 component FormPip inherits Rectangle {
     in property <string> letter;
 
-    width: 18px;
-    height: 18px;
-    border-radius: 4px;
-    background: letter == "W" ? #1e3a2a : letter == "L" ? #3a1e1e : #2a2a30;
+    width: 17px;
+    height: 17px;
+    border-radius: 3px;
+    background: letter == "W" ? Theme.action
+              : letter == "L" ? Theme.live-bg
+              : Theme.raised;
 
     Text {
         text: letter;
-        font-size: 10px;
-        font-weight: 700;
-        color: letter == "W" ? #4ade80 : letter == "L" ? #f87171 : Theme.text-secondary;
+        font-family: Theme.font-label;
+        font-size: 9px;
+        font-weight: Theme.weight-label;
+        color: letter == "W" ? Theme.on-action
+             : letter == "L" ? Theme.live
+             : Theme.text-secondary;
         horizontal-alignment: center;
         vertical-alignment: center;
     }
@@ -30,15 +36,20 @@ component StatCell inherits VerticalLayout {
 
     Text {
         text: value;
+        font-family: Theme.font-display;
         font-size: 17px;
-        font-weight: 700;
+        font-weight: Theme.weight-display;
+        letter-spacing: -0.2px;
         color: value-color;
         horizontal-alignment: center;
     }
 
     Text {
         text: label;
-        font-size: 10px;
+        font-family: Theme.font-label;
+        font-size: 8.5px;
+        font-weight: Theme.weight-label;
+        letter-spacing: Theme.track-label;
         color: Theme.text-secondary;
         horizontal-alignment: center;
     }
@@ -61,10 +72,24 @@ export component YouStrip inherits Rectangle {
         y: 8px;
         width: parent.width - 32px;
         height: 76px;
-        background: strip-ta.has-hover ? Theme.surface-hover : Theme.card-bg;
-        border-radius: 12px;
-        border-width: 1px;
-        border-color: #ffffff14;
+        background: transparent;
+        border-width: 0px;
+
+        CutShape {
+            width: parent.width;
+            height: parent.height;
+            n: Theme.notch;
+            corner: "tr";
+            fill: strip-ta.has-hover ? Theme.graphic-med : Theme.card-border;
+        }
+        CutShape {
+            width: parent.width;
+            height: parent.height;
+            n: Theme.notch;
+            corner: "tr";
+            inset: Theme.keyline;
+            fill: strip-ta.has-hover ? Theme.card-bg-hover : Theme.card-bg;
+        }
 
         strip-ta := TouchArea {
             mouse-cursor: pointer;
@@ -93,16 +118,20 @@ export component YouStrip inherits Rectangle {
                 spacing: 4px;
 
                 Text {
-                    text: "Your stats";
-                    font-size: 10px;
-                    letter-spacing: 1px;
+                    text: "YOUR STATS";
+                    font-family: Theme.font-label;
+                    font-size: 8.5px;
+                    font-weight: Theme.weight-label;
+                    letter-spacing: Theme.track-kicker;
                     color: Theme.text-secondary;
                 }
 
                 Text {
                     text: data.game-name;
+                    font-family: Theme.font-display;
                     font-size: 14px;
-                    font-weight: 600;
+                    font-weight: Theme.weight-display;
+                    letter-spacing: -0.1px;
                     color: Theme.text-primary;
                 }
 
@@ -122,7 +151,7 @@ export component YouStrip inherits Rectangle {
                 StatCell {
                     value: data.streak-text;
                     label: "streak";
-                    value-color: data.streak-positive ? #4ade80 : #f87171;
+                    value-color: data.streak-positive ? Theme.text-primary : Theme.live;
                 }
 
                 StatCell {
@@ -140,10 +169,16 @@ export component YouStrip inherits Rectangle {
             // Tap affordance → full stats profile.
             VerticalLayout {
                 alignment: center;
-                Text {
-                    text: "›";
-                    font-size: 18px;
-                    color: Theme.text-tertiary;
+                Rectangle {
+                    width: 14px;
+                    height: 14px;
+                    Image {
+                        source: @image-url("../icons/chevron-down.svg");
+                        width: 14px;
+                        height: 14px;
+                        rotation-angle: -90deg;
+                        colorize: strip-ta.has-hover ? Theme.text-secondary : Theme.text-tertiary;
+                    }
                 }
             }
         }

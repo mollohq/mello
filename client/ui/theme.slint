@@ -1,83 +1,162 @@
-import "./fonts/Inter-Regular.ttf";
-import "./fonts/Inter-Medium.ttf";
-import "./fonts/Inter-SemiBold.ttf";
-import "./fonts/Inter-Bold.ttf";
-import "./fonts/JetBrainsMono-Regular.ttf";
-import "./fonts/JetBrainsMono-Medium.ttf";
+// Two faces, four files. Both SIL OFL.
+//   Oxanium — names it, or it is big.
+//   Barlow  — everything else, in two registers: 300 sentence, 600 label.
+import "./fonts/Oxanium-SemiBold.ttf";
+import "./fonts/Oxanium-Bold.ttf";
+import "./fonts/Barlow-Light.ttf";
+import "./fonts/Barlow-SemiBold.ttf";
+
+// ============================================================
+//  m3llo design system v3.3 · GRAPHITE
+//  Source of truth: mello-wip/m3llo-design-system.html
+//
+//  Two rules the whole theme hangs on:
+//    RED  (#FF453A) is STATE   — the 3 in the mark, live, recording, unread.
+//    WHITE           is ACTION — the thing you press, where you are, focus.
+//  Everything else is graphite. Game footage is the only colour on screen.
+//
+//  Dark only. `dark` is kept as a constant so the ~44 existing
+//  `Theme.dark ? a : b` call sites keep compiling; both arms now
+//  resolve to the same graphite value.
+// ============================================================
 
 export global Theme {
+    // Constant. Light mode was dropped with the graphite system.
     in property <bool> dark: true;
 
-    // --- Surfaces ---
-    out property <color> bg-app:     dark ? #181818 : #F5F5F5;
-    out property <color> surface:    dark ? #202020 : #FFFFFF;
-    out property <color> titlebar:   dark ? #161616 : #ECECEC;
+    // --- Ground ---------------------------------------------------------
+    out property <color> bg-app:     #121214;   // window + feed ground
+    out property <color> surface:    #17171A;   // sidebars, header, control bar
+    out property <color> titlebar:   #0F0F11;
 
-    // --- Text ---
-    out property <color> text-primary:   dark ? #F5F5F5 : #121212;
-    out property <color> text-secondary: dark ? #606060 : #888888;
-    out property <color> text-tertiary:  dark ? #404040 : #B0B0B0;
+    // --- Text -----------------------------------------------------------
+    out property <color> text-primary:   #F3F3F4;
+    out property <color> text-secondary: #6F6F76;
+    out property <color> text-tertiary:  #4B4B52;
+    out property <color> text-body:      #A2A2A8;   // sentences
 
-    // --- Graphic / border ---
-    out property <color> graphic-light: dark ? #2E2E2E : #E0E0E0;
-    out property <color> graphic-med:   dark ? #404040 : #D0D0D0;
-    out property <color> graphic-dark:  dark ? #F5F5F5 : #121212;
+    // --- Graphic / border -----------------------------------------------
+    out property <color> graphic-light: #2F2F35;   // keyline
+    out property <color> graphic-med:   #42424A;   // keyline, hover
+    out property <color> graphic-dark:  #F3F3F4;
 
-    // --- Accent ---
-    out property <color> accent:       #FF1E56;
-    out property <color> accent-bg:    dark ? #FF1E561A : #FF1E5614;
+    // --- ACTION (white) --------------------------------------------------
+    out property <color> action:       #FFFFFF;
+    out property <color> action-press: #D2D2D6;
+    out property <color> action-dim:   #FFFFFF1A;  // tint of the active row
+    out property <color> action-line:  #FFFFFF57;  // keyline of the active crew
+    out property <color> on-action:    #121214;    // text on a white fill
+    out property <color> action-quiet: #8A8A92;
 
-    // --- Text selection (override Slint cupertino/fluent default blue) ---
-    out property <color> selection-bg: dark ? #FF1E5655 : #FF1E5648;
+    // --- STATE (m3llo red) -----------------------------------------------
+    //  the 3 in the mark · live · recording · clip · unread · leave
+    out property <color> live:      #FF453A;
+    out property <color> live-bg:   #FF453A24;
+    out property <color> on-live:   #FFFFFF;
+
+    // --- CONFIRM (the mark's red) -----------------------------------------
+    //  The button that commits the thing wears the red of the 3 in m3llo:
+    //  create the crew, join it, save it, sign in. White stays the colour
+    //  of everything else you can press, STREAM included.
+    out property <color> confirm:       live;
+    out property <color> confirm-press: #D93A30;
+    out property <color> on-confirm:    #FFFFFF;
+
+    // --- SPEAKING (the one exception) -------------------------------------
+    //  Green appears nowhere else in the product. It marks one thing: the
+    //  person talking right now, on their name in the voice channel list.
+    //  White was too quiet to carry that, and red already means state.
+    out property <color> speaking: #3FD07A;
+
+    // --- Identity — people, crews, games. Never chrome. -------------------
+    out property <color> id-blue:   #6E8FB8;
+    out property <color> id-purple: #8E7FB0;
+    out property <color> id-teal:   #5FA396;
+    out property <color> id-amber:  #B39158;
+    out property <color> id-pink:   #B07793;
+
+    // --- Cards / Feed ----------------------------------------------------
+    out property <color> card-bg:        #1C1C20;
+    out property <color> card-bg-hover:  #212127;
+    out property <color> card-border:    #2F2F35;
+    out property <color> card-bg-inset:  #0F0F11;
+    out property <color> card-bg-skel:   #17171A;
+    out property <color> skel-element:   #26262B;
+    out property <color> skel-text:      #4B4B52;
+    out property <color> skel-hint:      #3A3A41;
+    out property <color> skel-ghost:     #33333A;
+    out property <color> text-sub:       #6F6F76;
+    out property <color> text-dim:       #6F6F76;
+    out property <color> text-value:     #F3F3F4;
+    out property <color> wave-off:       #3A3A41;   // unplayed waveform
+    out property <color> wave-bg:        #0F0F11;
+
+    // --- Over media -------------------------------------------------------
+    //  Game footage keeps its colour, so chrome laid on top cannot borrow
+    //  the graphite ramp: it needs its own ground to stay legible against
+    //  whatever the frame happens to be. These are washes, not palette.
+    out property <color> media-ground:   #000000;    // letterbox behind a frame
+    out property <color> over-media-soft: #00000044; // rest-state dim
+    out property <color> over-media:      #000000AA; // a chip or a play disc
+    out property <color> over-media-bar:  #00000066; // the scrubber strip
+    out property <color> over-media-line: #FFFFFF33; // a track on the wash
+    out property <color> on-media:        #FFFFFF;   // text on any of them
+
+    // --- Depth -----------------------------------------------------------
+    //  A modal sits on a scrim. Nothing else in the app casts a shadow.
+    out property <color> scrim:        #000000AA;
+    out property <color> shadow-modal: #000000E6;
+    out property <color> shadow-soft:  #00000060;
+
+    // --- Text selection --------------------------------------------------
+    out property <color> selection-bg: #FFFFFF3D;
     out property <color> selection-fg: text-primary;
 
-    // --- Voice ---
-    out property <color> voice-active:    #46923c;
-    out property <color> voice-active-bg: dark ? #46923c26 : #46923c1A;
-
-    // --- Clips ---
-    out property <color> clip-amber:    #F59E0B;
-    out property <color> clip-amber-bg: dark ? #F59E0B1A : #F59E0B14;
-
-    // --- Cards / Feed ---
-    out property <color> card-bg:        dark ? #222226 : #FFFFFF;
-    out property <color> card-bg-hover:  dark ? #2a2a2e : #F5F5F7;
-    out property <color> card-border:    dark ? #2a2a2e : #E0E0E0;
-    out property <color> card-bg-inset:  dark ? #19191d : #F0F0F2;
-    out property <color> card-bg-skel:   dark ? #1c1c20 : #F5F5F7;
-    out property <color> skel-element:   dark ? #232328 : #E0E0E5;
-    out property <color> skel-text:      dark ? #555555 : #999999;
-    out property <color> skel-hint:      dark ? #3a3a3e : #BBBBBB;
-    out property <color> skel-ghost:     dark ? #333333 : #CCCCCC;
-    out property <color> text-sub:       dark ? #888888 : #666666;
-    out property <color> text-dim:       dark ? #666666 : #888888;
-    out property <color> text-value:     dark ? #cccccc : #333333;
-
-    // --- Convenience aliases (backward compat) ---
+    // --- Compatibility aliases -------------------------------------------
+    //  `accent` used to mean both "press this" and "something is happening".
+    //  The system splits those. Until every call site is triaged (Step B of
+    //  plans/GRAPHITE-UI-MIGRATION.md) `accent` resolves to ACTION, which is
+    //  the more common of the two readings.
+    out property <color> accent:       action;
+    out property <color> accent-bg:    action-dim;
+    out property <color> accent-red:   live;
+    out property <color> accent-green: id-teal;      // presence, muted
+    out property <color> voice-active:    id-teal;
+    out property <color> voice-active-bg: #5FA39626;
+    out property <color> clip-amber:    live;        // clips are recordings → red
+    out property <color> clip-amber-bg: live-bg;
     out property <color> bg-primary:   surface;
     out property <color> bg-secondary: bg-app;
     out property <color> bg-tertiary:  graphic-light;
-    out property <color> bg-dark:      dark ? #F5F5F5 : #1A1A1A;
+    out property <color> bg-dark:      #F3F3F4;
     out property <color> text-muted:   text-secondary;
-    out property <color> accent-red:   accent;
-    out property <color> accent-green: #28C840;
     out property <color> border-light: graphic-light;
+    out property <color> hover-overlay: #FFFFFF0D;
+    out property <color> surface-hover: #26262B;
+    out property <color> raised:        #26262B;
+    out property <color> raised-hover:  #2E2E34;
 
-    // --- Radii ---
+    // --- Shape -----------------------------------------------------------
+    //  The cut corner is the signature. `cut` is for things you act on,
+    //  `notch` for cards. Radii survive only for dots, discs and inputs.
+    out property <length> cut:   10px;   // buttons, icon buttons, tiles
+    out property <length> notch: 16px;   // cards
+    out property <length> notch-hero: 20px;
+    out property <length> notch-sm: 12px;   // sidebar cards
+    out property <length> keyline: 1px;
+
     out property <length> r-outer: 10px;
     out property <length> r-inner: 6px;
     out property <length> r-pill:  20px;
-
-    // backward compat
     out property <length> radius-sm: 4px;
     out property <length> radius-md: r-outer;
     out property <length> radius-lg: 16px;
 
-    // --- Spacing ---
+    // --- Spacing ---------------------------------------------------------
     out property <length> gap: 12px;
     out property <length> pad: 24px;
-    // Composer separator → bottom (1px rule + pills + input + padding); control bar top aligns to that rule.
     out property <length> control-bar-height: 81px;
+    out property <length> feed-row: 232px;      // fixed feed grid row
 
     out property <length> spacing-xs: 4px;
     out property <length> spacing-sm: 8px;
@@ -85,21 +164,33 @@ export global Theme {
     out property <length> spacing-lg: 24px;
     out property <length> spacing-xl: 32px;
 
-    // --- Font sizes ---
-    out property <length> font-xs:  10px;
-    out property <length> font-sm:  11px;
-    out property <length> font-md:  13px;
-    out property <length> font-lg:  14px;
+    // --- Type ------------------------------------------------------------
+    //  Oxanium  — names it, or it is big.
+    //  Barlow   — everything else, in two registers:
+    //             sentence (300) and label (600 + tracking).
+    out property <string> font-display: "Oxanium";
+    out property <string> font-body:    "Barlow";
+    out property <string> font-label:   "Barlow";
+    // backward compat: 217 call sites still say font-mono for labels
+    out property <string> font-mono: font-label;
+    out property <string> font-sans: font-body;
+
+    out property <int>    weight-display: 600;   // titles, names
+    out property <int>    weight-display-bold: 700;
+    out property <int>    weight-sentence: 300;
+    out property <int>    weight-label: 600;
+    //  Slint letter-spacing is absolute, not em-relative: these are the
+    //  .16em / .20em of the design system resolved at label sizes.
+    out property <length> track-label:  1.5px;   // 9.5px label
+    out property <length> track-kicker: 1.9px;   // 9.5px kicker, wider
+
+    // --- Font sizes ------------------------------------------------------
+    out property <length> font-xs:  10px;   // label
+    out property <length> font-sm:  11px;   // meta
+    out property <length> font-md:  13px;   // sentence
+    out property <length> font-lg:  14px;   // card title
     out property <length> font-xl:  20px;
     out property <length> font-xxl: 32px;
-
-    // --- Font families ---
-    out property <string> font-sans: "Inter";
-    out property <string> font-mono: "JetBrains Mono";
-
-    // --- Hover helpers ---
-    out property <color> hover-overlay: dark ? #FFFFFF0D : #0000000D;
-    out property <color> surface-hover: dark ? #2A2A2A : #F0F0F0;
 }
 
 /// TextInput with Mello selection colors (not platform default blue).
@@ -122,9 +213,10 @@ export component MelloInputField inherits Rectangle {
 
     height: field-height;
     background: Theme.bg-app;
-    border-radius: 8px;
+    // A field is a plain rectangle. The cut belongs to cards and buttons.
+    border-radius: 0px;
     border-width: 1px;
-    border-color: input.has-focus ? Theme.accent : Theme.graphic-light;
+    border-color: input.has-focus ? Theme.action : Theme.graphic-light;
 
     input := MelloTextInput {
         x: pad-x;

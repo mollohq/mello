@@ -29,6 +29,19 @@ impl IpcListener {
     pub fn try_recv(&self) -> Vec<String> {
         self.inner.try_recv()
     }
+
+    /// Block until one message arrives, or the deadline passes.
+    ///
+    /// Test-only: the app polls with `try_recv` on its frame tick and never
+    /// blocks the UI thread.
+    ///
+    /// The app polls with `try_recv` on its own frame tick. A test cannot:
+    /// polling on a sleep is a retry loop, and it fails under load rather
+    /// than when the code is wrong. This waits on the delivery itself.
+    #[cfg(test)]
+    pub fn recv_timeout(&self, timeout: std::time::Duration) -> Option<String> {
+        self.inner.recv_timeout(timeout)
+    }
 }
 
 /// Send a message to the running instance and return true on success.
@@ -80,6 +93,22 @@ mod platform {
                 }
             }
             messages
+        }
+
+        #[cfg(test)]
+        pub fn recv_timeout(&self, timeout: std::time::Duration) -> Option<String> {
+            // The listener is non-blocking, so block on readability instead
+            // of on a sleep. `accept` then returns without waiting.
+            let deadline = std::time::Instant::now() + timeout;
+            loop {
+                if let Some(msg) = self.try_recv().into_iter().next() {
+                    return Some(msg);
+                }
+                if std::time::Instant::now() >= deadline {
+                    return None;
+                }
+                std::thread::yield_now();
+            }
         }
     }
 
@@ -156,6 +185,17 @@ mod platform {
                 messages.push(msg);
             }
             messages
+        }
+
+        #[cfg(test)]
+        pub fn recv_timeout(&self, timeout: std::time::Duration) -> Option<String> {
+            match self.rx.recv_timeout(timeout) {
+                Ok(msg) => {
+                    log::info!("[ipc] received: {}", msg);
+                    Some(msg)
+                }
+                Err(_) => None,
+            }
         }
     }
 
@@ -273,18 +313,13 @@ mod tests {
 
         assert!(send_to_running(&ep, "mello://join/TEST-1234"));
 
-        // On Windows the listener thread may not have forwarded the message
-        // through the channel yet; poll briefly.
-        let mut msgs = Vec::new();
-        for _ in 0..50 {
-            msgs = listener.try_recv();
-            if !msgs.is_empty() {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
-        assert_eq!(msgs.len(), 1);
-        assert_eq!(msgs[0], "mello://join/TEST-1234");
+        // The listener hands the message over on its own thread. Wait on
+        // that handover, not on a sleep: a poll loop passes on a quiet
+        // machine and fails when the gate builds in parallel.
+        let msg = listener
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("the listener never delivered the message");
+        assert_eq!(msg, "mello://join/TEST-1234");
 
         // No pending messages after drain
         assert!(listener.try_recv().is_empty());

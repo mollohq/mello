@@ -1,4 +1,5 @@
 import { Theme, MelloTextInput } from "../theme.slint";
+import { CutShape, CutButtonShape, CutMask } from "../components/cut.slint";
 import { SearchUserData } from "../types.slint";
 
 export component NewCrewModal inherits Rectangle {
@@ -32,7 +33,7 @@ export component NewCrewModal inherits Rectangle {
         }
     }
 
-    background: #000000AA;
+    background: Theme.scrim;
 
     TouchArea {
         clicked => { close-requested(); }
@@ -43,13 +44,22 @@ export component NewCrewModal inherits Rectangle {
         y: (parent.height - self.height) / 2;
         width: min(520px, parent.width - 64px);
         height: self.preferred-height;
-        background: Theme.surface;
-        border-radius: 12px;
-        border-width: 1px;
-        border-color: Theme.graphic-light;
-        drop-shadow-blur: 64px;
-        drop-shadow-color: #000000E6;
-        drop-shadow-offset-y: 24px;
+        background: transparent;
+
+        // A modal panel is a card, so it carries the cut and a keyline.
+        CutShape {
+            width: parent.width;
+            height: parent.height;
+            n: Theme.notch;
+            fill: Theme.graphic-light;
+        }
+        CutShape {
+            width: parent.width;
+            height: parent.height;
+            n: Theme.notch;
+            inset: Theme.keyline;
+            fill: Theme.surface;
+        }
 
         TouchArea {}
 
@@ -58,7 +68,17 @@ export component NewCrewModal inherits Rectangle {
             // ─── Header ──────────────────────────────────────────
             Rectangle {
                 height: 64px;
-                background: Theme.bg-app;
+                background: transparent;
+
+                // The header is the top of the panel, so it carries the same
+                // cut. A plain rectangle here would square the corner off.
+                CutShape {
+                    width: parent.width;
+                    height: parent.height;
+                    n: Theme.notch;
+                    inset: Theme.keyline;
+                    fill: Theme.bg-app;
+                }
 
                 Rectangle {
                     y: parent.height - 1px;
@@ -77,9 +97,9 @@ export component NewCrewModal inherits Rectangle {
 
                 Text {
                     text: created ? "CREW ESTABLISHED" : "INITIALIZE NEW CREW";
-                    font-family: Theme.font-mono;
+                    font-family: Theme.font-label;
                     font-size: 13px;
-                    font-weight: 500;
+                    font-weight: Theme.weight-label;
                     letter-spacing: 2.4px;
                     color: Theme.text-primary;
                     x: 24px + 20px + 12px;
@@ -116,6 +136,7 @@ export component NewCrewModal inherits Rectangle {
                 spacing: 20px;
 
                 Text {
+                    font-weight: Theme.weight-display;
                     text: "Your crew is ready. Share this link to invite others:";
                     font-family: Theme.font-sans;
                     font-size: 14px;
@@ -127,7 +148,6 @@ export component NewCrewModal inherits Rectangle {
                 Rectangle {
                     height: 48px;
                     background: Theme.bg-app;
-                    border-radius: Theme.r-inner;
                     border-width: 1px;
                     border-color: Theme.graphic-light;
 
@@ -146,14 +166,14 @@ export component NewCrewModal inherits Rectangle {
                 Rectangle {
                     height: 40px;
                     border-radius: Theme.r-inner;
-                    background: link-copied ? Theme.voice-active : (copy-touch.has-hover ? #FF1E56DD : Theme.accent);
+                    background: link-copied ? Theme.voice-active : (copy-touch.has-hover ? Theme.action-press : Theme.accent);
 
                     Text {
                         text: link-copied ? "Copied!" : "Copy link";
                         font-family: Theme.font-sans;
                         font-size: 13px;
-                        font-weight: 600;
-                        color: #FFFFFF;
+                        font-weight: Theme.weight-display;
+                        color: Theme.on-action;
                         horizontal-alignment: center;
                         vertical-alignment: center;
                     }
@@ -175,6 +195,7 @@ export component NewCrewModal inherits Rectangle {
                     background: done-touch.has-hover ? Theme.surface-hover : transparent;
 
                     Text {
+                        font-weight: Theme.weight-display;
                         text: "Done";
                         font-family: Theme.font-sans;
                         font-size: 13px;
@@ -203,16 +224,50 @@ export component NewCrewModal inherits Rectangle {
                     Rectangle {
                         width: 80px;
                         height: 80px;
-                        border-radius: 12px;
-                        background: Theme.bg-app;
-                        border-width: has-avatar ? 0px : 2px;
-                        border-color: avatar-touch.has-hover ? Theme.accent : Theme.graphic-med;
+                        background: transparent;
 
-                        if has-avatar: Image {
-                            source: avatar-preview;
+                        // A crew is a thing, so it wears the two-corner tile.
+                        CutButtonShape {
                             width: parent.width;
                             height: parent.height;
-                            image-fit: cover;
+                            n: 14px;
+                            fill: avatar-touch.has-hover ? Theme.action-line : Theme.graphic-med;
+                        }
+                        CutButtonShape {
+                            width: parent.width;
+                            height: parent.height;
+                            n: 14px;
+                            inset: root.has-avatar ? 0px : 2px;
+                            fill: Theme.bg-app;
+                        }
+
+                        if has-avatar: Rectangle {
+                            width: parent.width;
+                            height: parent.height;
+                            clip: true;
+
+                            Image {
+                                source: avatar-preview;
+                                width: parent.width;
+                                height: parent.height;
+                                image-fit: cover;
+                            }
+                            // the image is clipped to a rectangle, so the two
+                            // corners are painted back
+                            CutMask {
+                                width: parent.width;
+                                height: parent.height;
+                                n: 14px;
+                                corner: "tl";
+                                fill: Theme.surface;
+                            }
+                            CutMask {
+                                width: parent.width;
+                                height: parent.height;
+                                n: 14px;
+                                corner: "br";
+                                fill: Theme.surface;
+                            }
                         }
 
                         if !has-avatar: Image {
@@ -225,8 +280,10 @@ export component NewCrewModal inherits Rectangle {
                         }
 
                         if !has-avatar: Text {
+                            letter-spacing: Theme.track-label;
+                            font-weight: Theme.weight-label;
                             text: "UPLOAD";
-                            font-family: Theme.font-mono;
+                            font-family: Theme.font-label;
                             font-size: 9px;
                             color: Theme.text-tertiary;
                             horizontal-alignment: center;
@@ -247,14 +304,16 @@ export component NewCrewModal inherits Rectangle {
                             text: "CREW IDENTIFIER";
                             font-family: Theme.font-sans;
                             font-size: 11px;
-                            font-weight: 600;
+                            font-weight: Theme.weight-display;
                             letter-spacing: 1.3px;
                             color: Theme.text-secondary;
                         }
 
                         Text {
+                            letter-spacing: Theme.track-label;
+                            font-weight: Theme.weight-label;
                             text: "JPG, PNG or GIF. Max 20MB.";
-                            font-family: Theme.font-mono;
+                            font-family: Theme.font-label;
                             font-size: 12px;
                             color: Theme.text-tertiary;
                         }
@@ -269,7 +328,7 @@ export component NewCrewModal inherits Rectangle {
                         text: "CREW NAME";
                         font-family: Theme.font-sans;
                         font-size: 11px;
-                        font-weight: 600;
+                        font-weight: Theme.weight-display;
                         letter-spacing: 1.3px;
                         color: Theme.text-secondary;
                     }
@@ -277,7 +336,6 @@ export component NewCrewModal inherits Rectangle {
                     Rectangle {
                         height: 44px;
                         background: Theme.bg-app;
-                        border-radius: Theme.r-inner;
                         border-width: 1px;
                         border-color: name-input.has-focus ? Theme.accent : Theme.graphic-light;
 
@@ -293,6 +351,7 @@ export component NewCrewModal inherits Rectangle {
                         }
 
                         if crew-name-text == "": Text {
+                            font-weight: Theme.weight-display;
                             x: 16px;
                             color: Theme.text-tertiary;
                             font-family: Theme.font-sans;
@@ -311,7 +370,7 @@ export component NewCrewModal inherits Rectangle {
                         text: "DESCRIPTION";
                         font-family: Theme.font-sans;
                         font-size: 11px;
-                        font-weight: 600;
+                        font-weight: Theme.weight-display;
                         letter-spacing: 1.3px;
                         color: Theme.text-secondary;
                     }
@@ -319,7 +378,6 @@ export component NewCrewModal inherits Rectangle {
                     Rectangle {
                         height: 80px;
                         background: Theme.bg-app;
-                        border-radius: Theme.r-inner;
                         border-width: 1px;
                         border-color: desc-input.has-focus ? Theme.accent : Theme.graphic-light;
 
@@ -336,6 +394,7 @@ export component NewCrewModal inherits Rectangle {
                         }
 
                         if crew-desc-text == "": Text {
+                            font-weight: Theme.weight-display;
                             x: 16px;
                             y: 12px;
                             color: Theme.text-tertiary;
@@ -354,7 +413,7 @@ export component NewCrewModal inherits Rectangle {
                         text: "INVITE MEMBERS";
                         font-family: Theme.font-sans;
                         font-size: 11px;
-                        font-weight: 600;
+                        font-weight: Theme.weight-display;
                         letter-spacing: 1.3px;
                         color: Theme.text-tertiary;
                     }
@@ -367,6 +426,7 @@ export component NewCrewModal inherits Rectangle {
                         border-color: Theme.graphic-light;
 
                         Text {
+                            font-weight: Theme.weight-display;
                             x: 16px;
                             color: Theme.text-tertiary;
                             font-family: Theme.font-sans;
@@ -386,7 +446,7 @@ export component NewCrewModal inherits Rectangle {
                         text: "INVITE MEMBERS";
                         font-family: Theme.font-sans;
                         font-size: 11px;
-                        font-weight: 600;
+                        font-weight: Theme.weight-display;
                         letter-spacing: 1.3px;
                         color: Theme.text-secondary;
                     }
@@ -405,6 +465,7 @@ export component NewCrewModal inherits Rectangle {
                             border-color: Theme.graphic-light;
 
                             chip-name := Text {
+                                font-weight: Theme.weight-sentence;
                                 text: user.display-name;
                                 font-family: Theme.font-sans;
                                 font-size: 12px;
@@ -413,13 +474,13 @@ export component NewCrewModal inherits Rectangle {
                                 vertical-alignment: center;
                             }
 
-                            Text {
-                                text: "×";
-                                font-family: Theme.font-sans;
-                                font-size: 14px;
-                                color: chip-remove.has-hover ? Theme.accent : Theme.text-tertiary;
-                                x: parent.width - 18px;
-                                vertical-alignment: center;
+                            Image {
+                                source: @image-url("../icons/x.svg");
+                                width: 12px;
+                                height: 12px;
+                                colorize: Theme.text-secondary;
+                                x: (parent.width - self.width) / 2;
+                                y: (parent.height - self.height) / 2;
                             }
 
                             chip-remove := TouchArea {
@@ -432,7 +493,6 @@ export component NewCrewModal inherits Rectangle {
                     Rectangle {
                         height: 44px;
                         background: Theme.bg-app;
-                        border-radius: Theme.r-inner;
                         border-width: 1px;
                         border-color: invite-input.has-focus ? Theme.accent : Theme.graphic-light;
 
@@ -450,6 +510,7 @@ export component NewCrewModal inherits Rectangle {
                         }
 
                         if invite-input.text == "": Text {
+                            font-weight: Theme.weight-display;
                             x: 16px;
                             color: Theme.text-tertiary;
                             font-family: Theme.font-sans;
@@ -478,6 +539,7 @@ export component NewCrewModal inherits Rectangle {
                                     spacing: 8px;
 
                                     Text {
+                                        font-weight: Theme.weight-display;
                                         text: result.display-name;
                                         font-family: Theme.font-sans;
                                         font-size: 13px;
@@ -486,8 +548,9 @@ export component NewCrewModal inherits Rectangle {
                                     }
 
                                     if result.is-friend: Text {
+                                        font-weight: Theme.weight-label;
                                         text: "FRIEND";
-                                        font-family: Theme.font-mono;
+                                        font-family: Theme.font-label;
                                         font-size: 9px;
                                         letter-spacing: 1px;
                                         color: Theme.accent;
@@ -515,7 +578,7 @@ export component NewCrewModal inherits Rectangle {
                         text: "VISIBILITY";
                         font-family: Theme.font-sans;
                         font-size: 11px;
-                        font-weight: 600;
+                        font-weight: Theme.weight-display;
                         letter-spacing: 1.3px;
                         color: Theme.text-secondary;
                     }
@@ -523,7 +586,6 @@ export component NewCrewModal inherits Rectangle {
                     Rectangle {
                         height: 40px;
                         background: Theme.bg-app;
-                        border-radius: 8px;
                         border-width: 1px;
                         border-color: Theme.graphic-light;
 
@@ -532,7 +594,6 @@ export component NewCrewModal inherits Rectangle {
 
                             Rectangle {
                                 horizontal-stretch: 1;
-                                border-radius: 6px;
                                 background: is-private ? Theme.graphic-light : transparent;
 
                                 Text {
@@ -553,7 +614,6 @@ export component NewCrewModal inherits Rectangle {
 
                             Rectangle {
                                 horizontal-stretch: 1;
-                                border-radius: 6px;
                                 background: !is-private ? Theme.graphic-light : transparent;
 
                                 Text {
@@ -585,6 +645,7 @@ export component NewCrewModal inherits Rectangle {
                     background: transparent;
 
                     Text {
+                        font-weight: Theme.weight-sentence;
                         text: "Your crew will be created after account setup.";
                         font-family: Theme.font-sans;
                         font-size: 11px;
@@ -597,7 +658,7 @@ export component NewCrewModal inherits Rectangle {
 
                 Rectangle {
                     height: 64px;
-                    background: Theme.dark ? #00000019 : #0000000A;
+                    background: Theme.dark ? Theme.shadow-soft : Theme.shadow-soft;
 
                     Rectangle {
                         y: 0px;
@@ -614,11 +675,18 @@ export component NewCrewModal inherits Rectangle {
                         Rectangle {
                             width: cancel-text.preferred-width + 40px;
                             height: 38px;
-                            border-radius: Theme.r-inner;
                             y: (parent.height - self.height) / 2;
-                            background: cancel-touch.has-hover ? Theme.hover-overlay : transparent;
+                            background: transparent;
+
+                            if cancel-touch.has-hover: CutButtonShape {
+                                width: parent.width;
+                                height: parent.height;
+                                n: Theme.cut;
+                                fill: Theme.hover-overlay;
+                            }
 
                             cancel-text := Text {
+                                font-weight: Theme.weight-display;
                                 text: "Cancel";
                                 font-family: Theme.font-sans;
                                 font-size: 13px;
@@ -636,16 +704,24 @@ export component NewCrewModal inherits Rectangle {
                         Rectangle {
                             width: create-text.preferred-width + 48px;
                             height: 38px;
-                            border-radius: Theme.r-inner;
                             y: (parent.height - self.height) / 2;
-                            background: crew-name-text != "" ? (create-touch.has-hover ? #FF1E56DD : Theme.accent) : Theme.graphic-light;
+                            background: transparent;
+
+                            CutButtonShape {
+                                width: parent.width;
+                                height: parent.height;
+                                n: Theme.cut;
+                                fill: crew-name-text != ""
+                                    ? (create-touch.has-hover ? Theme.confirm-press : Theme.confirm)
+                                    : Theme.graphic-light;
+                            }
 
                             create-text := Text {
                                 text: onboarding-mode ? "Save & Continue" : "Establish Crew";
                                 font-family: Theme.font-sans;
                                 font-size: 13px;
-                                font-weight: 600;
-                                color: crew-name-text != "" ? #FFFFFF : Theme.text-tertiary;
+                                font-weight: Theme.weight-display;
+                                color: crew-name-text != "" ? Theme.on-confirm : Theme.text-tertiary;
                                 horizontal-alignment: center;
                                 vertical-alignment: center;
                             }
@@ -663,5 +739,19 @@ export component NewCrewModal inherits Rectangle {
                 }
             }
         }
+    }
+}
+
+// Headless preview, so the dialog can be rendered without the app:
+//   slint-viewer --screenshot out.png --component Preview \
+//     client/ui/panels/new_crew_modal.slint
+export component Preview inherits Rectangle {
+    width: 900px;
+    height: 760px;
+    background: Theme.bg-app;
+
+    NewCrewModal {
+        width: parent.width;
+        height: parent.height;
     }
 }

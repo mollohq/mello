@@ -1341,7 +1341,11 @@ impl NakamaClient {
         let payload = serde_json::to_value(req)?;
         let resp = self.rpc("game_session_end", &payload).await?;
         // Older servers reply `{"success":true}` with no streak; default to 0.
-        let parsed = serde_json::from_str(&resp).unwrap_or_default();
+        // A schema drift here used to hide the whole You strip in silence.
+        let parsed = serde_json::from_str(&resp).unwrap_or_else(|e| {
+            log::warn!("user_game_stats_get: cannot parse the answer: {e}");
+            Default::default()
+        });
         Ok(parsed)
     }
 

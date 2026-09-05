@@ -60,9 +60,8 @@ export component AvatarCard inherits Rectangle {
         y: Math.round(deal-y) * 1px - 1px;
         width: parent.width + 2px;
         height: parent.height + 2px;
-        border-radius: Theme.r-inner + 1px;
         border-width: selected ? 1px : 0px;
-        border-color: Theme.accent;
+        border-color: Theme.action;
         background: transparent;
     }
 
@@ -72,11 +71,11 @@ export component AvatarCard inherits Rectangle {
         y: Math.round(deal-y) * 1px;
         width: parent.width * deal-scale * scale-x-factor;
         height: parent.height * deal-scale;
-        border-radius: Theme.r-inner;
         clip: true;
-        background: spinning ? Theme.surface-hover : (selected ? #FF1E560A : Theme.surface);
-        border-width: selected ? 1.5px : 1.5px;
-        border-color: spinning ? Theme.accent : (selected ? Theme.accent : (av-touch.has-hover ? #404045 : Theme.graphic-light));
+        background: spinning ? Theme.surface-hover : (selected ? Theme.action-dim : Theme.surface);
+        border-width: 1.5px;
+        border-color: spinning || selected ? Theme.action
+            : (av-touch.has-hover ? Theme.raised : Theme.graphic-light);
 
         // Front face — avatar image (normal mode)
         if show-front && has-image && !spinning: Image {

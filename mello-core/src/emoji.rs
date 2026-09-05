@@ -104,7 +104,7 @@ const EMOJI_DATA: &[(&str, &str, usize)] = &[
     ("🖖", "vulcan salute", 1),
     ("👌", "ok hand", 1),
     ("🤌", "pinched fingers", 1),
-    ("✌️", "victory", 1),
+    ("✌", "victory", 1),
     ("🤞", "crossed fingers", 1),
     ("🤟", "love you", 1),
     ("🤘", "rock on", 1),
@@ -139,8 +139,8 @@ const EMOJI_DATA: &[(&str, &str, usize)] = &[
     ("🌈", "rainbow", 2),
     ("⭐", "star", 2),
     ("🌙", "crescent moon", 2),
-    ("☀️", "sun", 2),
-    ("⛈️", "thunder cloud rain", 2),
+    ("☀", "sun", 2),
+    ("⛈", "thunder cloud rain", 2),
     // Food
     ("🍎", "apple", 3),
     ("🍕", "pizza", 3),
@@ -173,16 +173,16 @@ const EMOJI_DATA: &[(&str, &str, usize)] = &[
     ("🎊", "confetti ball", 4),
     // Travel
     ("🚗", "car", 5),
-    ("✈️", "airplane", 5),
+    ("✈", "airplane", 5),
     ("🚀", "rocket", 5),
     ("🏠", "house", 5),
-    ("🏖️", "beach", 5),
-    ("🗺️", "world map", 5),
+    ("🏖", "beach", 5),
+    ("🗺", "world map", 5),
     // Objects
     ("💻", "laptop", 6),
     ("📱", "phone", 6),
-    ("⌨️", "keyboard", 6),
-    ("🖥️", "desktop", 6),
+    ("⌨", "keyboard", 6),
+    ("🖥", "desktop", 6),
     ("📷", "camera", 6),
     ("💡", "lightbulb", 6),
     ("📝", "memo", 6),
@@ -191,7 +191,7 @@ const EMOJI_DATA: &[(&str, &str, usize)] = &[
     ("🔒", "lock", 6),
     ("🔑", "key", 6),
     // Symbols
-    ("❤️", "red heart", 7),
+    ("❤", "red heart", 7),
     ("🧡", "orange heart", 7),
     ("💛", "yellow heart", 7),
     ("💚", "green heart", 7),
@@ -202,9 +202,32 @@ const EMOJI_DATA: &[(&str, &str, usize)] = &[
     ("💯", "hundred", 7),
     ("✅", "check mark", 7),
     ("❌", "cross mark", 7),
-    ("⚠️", "warning", 7),
+    ("⚠", "warning", 7),
     ("💬", "speech bubble", 7),
     ("👀", "eyes", 7),
     ("🔴", "red circle", 7),
     ("🟢", "green circle", 7),
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::EMOJI_DATA;
+
+    /// Slint's font fallback does not resolve `<base> + U+FE0F`. Ten
+    /// entries carried that variation selector and every one of them drew
+    /// a tofu box in the picker, while the same character without it draws
+    /// a colour emoji. The selector only asks for emoji presentation, and
+    /// the platform already gives it, so the table must not carry one.
+    #[test]
+    fn no_emoji_carries_a_variation_selector() {
+        let offenders: Vec<&str> = EMOJI_DATA
+            .iter()
+            .filter(|(emoji, _, _)| emoji.contains('\u{FE0F}'))
+            .map(|(_, name, _)| *name)
+            .collect();
+        assert!(
+            offenders.is_empty(),
+            "these would render as boxes in the picker: {offenders:?}"
+        );
+    }
+}

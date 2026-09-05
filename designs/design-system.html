@@ -1,0 +1,475 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>m3llo — Design System v3.3 · Graphite</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Oxanium:wght@200;300;400;500;600;700&family=Barlow:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<style>
+/* ============================================================
+   m3llo DESIGN SYSTEM v3.3 · GRAPHITE
+   Locked from crew feed v15. Red is state, white is action.
+   The interface has no colour of its own. The game does.
+   ============================================================ */
+:root{
+  --bg-app:#121214; --bg-panel:#17171A; --bg-card:#1C1C20; --bg-raised:#26262B;
+  --line:#2F2F35; --line-hi:#42424A;
+  --text-hi:#F3F3F4; --text:#A2A2A8; --text-dim:#6F6F76; --text-faint:#4B4B52;
+
+  --accent:#FFFFFF; --accent-press:#D2D2D6;
+  --accent-dim:rgba(255,255,255,.10);
+  --on-accent:#121214; --accent-quiet:#8A8A92;
+
+  --live:#FF453A; --on-live:#150202; --live-dim:rgba(255,69,58,.14);
+
+  --id-blue:#6E8FB8; --id-purple:#8E7FB0; --id-teal:#5FA396;
+  --id-amber:#B39158; --id-pink:#B07793;
+
+  --grad-stat:linear-gradient(96deg,#FFFFFF,#C9C9CF);
+  --wave-off:#3A3A41; --wave-bg:#0F0F11; --raised-hover:#2E2E34;
+
+  --display:'Oxanium',sans-serif;                 /* names it, or it is big */
+  --text-face:'Barlow','Segoe UI',system-ui,sans-serif;  /* everything else */
+  --mono:var(--text-face);                        /* label register of the same face */
+
+  --cut:10px; --notch:16px; --r-sm:5px; --r-pill:999px;
+  --s-1:4px; --s-2:8px; --s-3:12px; --s-4:16px; --s-5:24px; --s-6:32px; --s-7:48px; --s-8:72px;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:var(--bg-app);color:var(--text);font-family:var(--text-face);font-weight:300;font-size:15px;
+  line-height:1.7;-webkit-font-smoothing:antialiased}
+h1,h2,h3{font-family:var(--display);font-weight:300;letter-spacing:-.03em;color:var(--text-hi);line-height:1.08}
+code{font-family:ui-monospace,Consolas,monospace;font-size:12px;color:var(--text)}
+
+.wrap{max-width:1120px;margin:0 auto;padding:0 26px}
+header.top{border-bottom:1px solid var(--line);background:var(--bg-panel);position:sticky;top:0;z-index:30}
+header.top .wrap{display:flex;align-items:center;height:60px;gap:16px}
+.mark{font-family:var(--display);font-weight:700;font-size:19px;letter-spacing:-.02em;color:var(--text-hi)}
+.mark b{color:var(--live)}
+.ver{margin-left:auto;font-family:var(--mono);font-weight:600;font-size:9.5px;letter-spacing:.2em;text-transform:uppercase;color:var(--text-dim)}
+
+.hero{padding:70px 0 48px;border-bottom:1px solid var(--line)}
+.hero h1{font-size:clamp(30px,5vw,52px);font-weight:700;letter-spacing:-.035em}
+.hero h1 em{font-style:normal;font-weight:200;color:var(--text-dim)}
+.hero p{max-width:64ch;margin-top:18px;font-size:15.5px;line-height:1.75}
+
+section{padding:70px 0;border-bottom:1px solid var(--line)}
+.sec-head{display:flex;align-items:baseline;gap:14px;margin-bottom:12px}
+.sec-head h2{font-size:clamp(22px,3vw,32px)}
+.sec-head .n{font-family:var(--mono);font-weight:600;font-size:10px;letter-spacing:.22em;color:var(--accent)}
+.lede{max-width:72ch;margin-bottom:32px;font-size:15px;line-height:1.75}
+.kicker{font-family:var(--mono);font-weight:600;font-size:9.5px;letter-spacing:.2em;text-transform:uppercase;color:var(--text-dim);margin-bottom:12px}
+.note{font-size:13px;color:var(--text-dim);margin-top:10px}
+.note b{color:var(--text-hi);font-weight:500}
+.rule{border-left:2px solid var(--accent);padding-left:16px;margin-top:24px;font-size:14px;line-height:1.75}
+
+.grid{display:grid;gap:14px}
+.g2{grid-template-columns:repeat(2,1fr)} .g3{grid-template-columns:repeat(3,1fr)}
+.g4{grid-template-columns:repeat(4,1fr)} .g5{grid-template-columns:repeat(5,1fr)}
+@media(max-width:900px){.g3,.g4,.g5{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:600px){.g2,.g3,.g4,.g5{grid-template-columns:1fr}}
+
+/* card primitive */
+.card{position:relative;--n:var(--notch);--line-c:var(--line);--fill:var(--bg-card);
+  clip-path:polygon(0 0,calc(100% - var(--n)) 0,100% var(--n),100% 100%,0 100%)}
+.cut-tl{clip-path:polygon(var(--n) 0,100% 0,100% 100%,0 100%,0 var(--n))}
+.cut-br{clip-path:polygon(0 0,100% 0,100% calc(100% - var(--n)),calc(100% - var(--n)) 100%,0 100%)}
+.cut-bl{clip-path:polygon(0 0,100% 0,100% 100%,var(--n) 100%,0 calc(100% - var(--n)))}
+.card::before{content:"";position:absolute;inset:0;background:var(--line-c);clip-path:inherit}
+.card::after{content:"";position:absolute;inset:1px;background:var(--fill);clip-path:inherit}
+.card > *{position:relative;z-index:1}
+.card.accent{--line-c:rgba(255,255,255,.34)}
+.pad{padding:16px}
+
+/* buttons */
+.btn{font-family:var(--mono);font-weight:600;font-size:10px;letter-spacing:.18em;text-transform:uppercase;
+  display:inline-flex;align-items:center;gap:8px;padding:11px 18px;border:0;cursor:pointer;
+  background:var(--bg-raised);color:var(--text-hi);
+  clip-path:polygon(var(--cut) 0,100% 0,100% calc(100% - var(--cut)),calc(100% - var(--cut)) 100%,0 100%,0 var(--cut))}
+.btn-primary{background:var(--accent);color:var(--on-accent)}
+.btn-primary:active{background:var(--accent-press)}
+.btn-secondary{box-shadow:inset 0 0 0 1px var(--line-hi)}
+.btn-outline{background:transparent;color:var(--accent);box-shadow:inset 0 0 0 1px rgba(255,255,255,.4)}
+.btn-rec{background:transparent;color:var(--live);box-shadow:inset 0 0 0 1px rgba(255,69,58,.45)}
+.btn-confirm{background:var(--live);color:var(--on-live)}
+.btn-confirm:active{background:#D93A30}
+.btn-danger{background:var(--live);color:var(--on-live)}
+.field{font-family:var(--sans);font-weight:300;font-size:14px;color:var(--text-hi);
+  background:var(--bg-app);border:1px solid var(--line);border-radius:0;
+  padding:12px 14px;min-width:220px;outline:0}
+.field::placeholder{color:var(--text-faint)}
+.field:focus{border-color:var(--line-hi)}
+.btn:disabled{background:var(--bg-raised);color:var(--text-faint);cursor:not-allowed}
+.row{display:flex;gap:12px;flex-wrap:wrap;align-items:center}
+
+/* badges */
+.badge{display:inline-flex;align-items:center;gap:6px;font-family:var(--mono);font-weight:600;font-size:9px;letter-spacing:.16em;
+  text-transform:uppercase;padding:4px 9px;background:var(--bg-raised);color:var(--text-dim);
+  clip-path:polygon(4px 0,100% 0,100% calc(100% - 4px),calc(100% - 4px) 100%,0 100%,0 4px)}
+.badge-live{background:var(--live);color:#FFFFFF}
+.badge-rec{background:var(--live);color:var(--on-live)}
+.badge-clip{background:rgba(0,0,0,.72);color:var(--text-hi)}
+.badge-clip .ic{color:var(--live)}
+.badge-out{background:transparent;box-shadow:inset 0 0 0 1px var(--line-hi)}
+.dot{width:6px;height:6px;border-radius:var(--r-pill);display:inline-block}
+.dot-a{background:var(--accent)} .dot-l{background:var(--live)}
+.live-kick{color:var(--live)!important}
+
+/* avatars + tiles */
+.av{display:inline-flex;align-items:center;justify-content:center;font-family:var(--display);font-size:10px;font-weight:700;
+  color:#0E0E10;text-transform:uppercase;width:30px;height:30px;--c:7px;
+  clip-path:polygon(var(--c) 0,calc(100% - var(--c)) 0,100% var(--c),100% calc(100% - var(--c)),
+    calc(100% - var(--c)) 100%,var(--c) 100%,0 calc(100% - var(--c)),0 var(--c))}
+.av-blue{background:var(--id-blue)} .av-purple{background:var(--id-purple)}
+.av-teal{background:var(--id-teal)} .av-amber{background:var(--id-amber)} .av-pink{background:var(--id-pink)}
+.tile{display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;font-family:var(--display);
+  font-weight:700;font-size:9px;color:#0E0E10;background:var(--accent);
+  clip-path:polygon(7px 0,100% 0,100% calc(100% - 7px),calc(100% - 7px) 100%,0 100%,0 7px)}
+
+/* swatches */
+.sw{overflow:hidden;background:var(--bg-card);border:1px solid var(--line)}
+.sw .chip{height:70px}
+.sw .m{padding:10px 12px;font-size:11.5px}
+.sw .m b{display:block;color:var(--text-hi);font-weight:500;font-size:12.5px;margin-bottom:2px}
+.sw .m code{color:var(--text-dim);font-size:11px}
+.sw .m i{display:block;font-style:normal;color:var(--text-faint);margin-top:5px;font-size:10.5px}
+
+/* type specimens */
+.trow{display:grid;grid-template-columns:170px 1fr;gap:24px;padding:18px 0;border-top:1px solid var(--line);align-items:baseline}
+.tspec{font-family:var(--mono);font-weight:500;font-size:10.5px;line-height:1.9;color:var(--text-dim)}
+.tspec b{display:block;color:var(--accent);font-size:9.5px;margin-bottom:4px;letter-spacing:.14em}
+.t-h1{font-family:var(--display);font-weight:700;font-size:38px;letter-spacing:-.035em;color:var(--text-hi)}
+.t-h2{font-family:var(--display);font-weight:300;font-size:30px;letter-spacing:-.04em;color:var(--text-hi)}
+.t-h3{font-family:var(--display);font-weight:600;font-size:17px;letter-spacing:-.02em;color:var(--text-hi)}
+.t-stat{font-family:var(--display);font-weight:600;font-size:34px;letter-spacing:-.03em;
+  background:var(--grad-stat);-webkit-background-clip:text;background-clip:text;color:transparent}
+.t-title{font-family:var(--display);font-weight:600;font-size:14.5px;letter-spacing:-.01em;color:var(--text-hi)}
+.t-body{font-family:var(--text-face);font-weight:300;font-size:14px;line-height:1.7}
+.t-kick{font-family:var(--mono);font-weight:600;font-size:9.5px;letter-spacing:.2em;text-transform:uppercase;color:var(--text-dim)}
+.t-data{font-family:var(--mono);font-size:13px;color:var(--text-hi);font-variant-numeric:tabular-nums}
+
+/* budget table */
+.budget{display:grid;grid-template-columns:126px 1fr;gap:16px 24px}
+.budget .t{font-family:var(--display);font-weight:600;font-size:13px;letter-spacing:-.01em;color:var(--text-hi);padding-top:2px}
+.budget .t span{display:block;font-family:var(--mono);font-size:9px;font-weight:400;letter-spacing:.12em;
+  color:var(--text-dim);margin-top:5px;text-transform:uppercase}
+.budget .d{border-top:1px solid var(--line);padding-top:12px;font-size:13.5px;line-height:1.7}
+.budget .d b{color:var(--text-hi);font-weight:500}
+.chipline{display:inline-block;width:10px;height:10px;vertical-align:-1px;margin-right:7px}
+
+/* demo strip */
+.demo{background:var(--bg-panel);border:1px solid var(--line);padding:16px;overflow-x:auto}
+.bar{display:flex;align-items:center;gap:12px;min-width:720px}
+.divider{width:1px;height:30px;background:var(--line)}
+.ib,.caret{font-family:var(--mono)}
+.ib{width:38px;height:38px;display:inline-flex;align-items:center;justify-content:center;background:var(--bg-raised);
+  border:0;cursor:pointer;clip-path:polygon(8px 0,100% 0,100% calc(100% - 8px),calc(100% - 8px) 100%,0 100%,0 8px)}
+.ib svg{width:17px;height:17px;stroke:var(--text);fill:none;stroke-width:2}
+.ib.on{background:transparent;box-shadow:inset 0 0 0 1px rgba(255,255,255,.4)}
+.ib.on svg{stroke:var(--accent)}
+.ib.leave{background:var(--live)} .ib.leave svg{stroke:var(--on-live)}
+.src{display:flex;align-items:center;gap:10px;background:var(--bg-raised);padding:5px 15px 5px 5px;
+  clip-path:polygon(0 0,calc(100% - 9px) 0,100% 9px,100% 100%,0 100%)}
+.src .l{font-family:var(--mono);font-size:8px;letter-spacing:.18em;text-transform:uppercase;color:var(--text-dim);
+  display:flex;align-items:center;gap:5px}
+.src .g{font-family:var(--display);font-weight:600;font-size:12.5px;color:var(--text-hi);margin-top:2px}
+.stream{display:flex;align-items:center;gap:7px;background:var(--accent);color:var(--on-accent);border:0;cursor:pointer;
+  font-family:var(--mono);font-size:10px;letter-spacing:.18em;text-transform:uppercase;padding:0 18px;height:40px;
+  clip-path:polygon(10px 0,100% 0,100% 100%,0 100%,0 10px)}
+.caret{width:30px;height:40px;border:0;cursor:pointer;background:var(--accent);color:var(--on-accent);font-size:10px;
+  box-shadow:inset 1px 0 0 rgba(18,18,20,.28);
+  clip-path:polygon(0 0,100% 0,100% calc(100% - 10px),calc(100% - 10px) 100%,0 100%)}
+
+table{width:100%;border-collapse:collapse;font-size:13px}
+th,td{text-align:left;padding:10px 14px;border-bottom:1px solid var(--line);vertical-align:top}
+th{font-family:var(--mono);font-weight:600;color:var(--accent);font-size:9.5px;text-transform:uppercase;letter-spacing:.2em}
+.tablewrap{overflow-x:auto}
+pre{background:var(--bg-card);border:1px solid var(--line);padding:22px;overflow-x:auto;
+  font-family:ui-monospace,Consolas,monospace;font-size:12px;line-height:1.8;color:var(--text)}
+pre .c{color:var(--text-faint)}
+pre .v{color:var(--text-hi)}
+footer{padding:48px 0;font-family:var(--mono);font-weight:500;font-size:11px;letter-spacing:.1em;color:var(--text-faint)}
+</style>
+</head>
+<body>
+
+<header class="top"><div class="wrap">
+  <div class="mark">m<b>3</b>llo</div>
+  <span class="ver">Design system · v3.3 · graphite · red mark</span>
+</div></header>
+
+<div class="hero"><div class="wrap">
+  <h1>Red is state.<br>White is action.<br><em>Everything else is graphite.</em></h1>
+  <p>m3llo is graphite, white and one red. The red is the <b style="color:var(--live)">3</b> in the mark, and it is the only colour allowed to say <em style="font-style:normal;color:var(--text-hi)">this is happening now</em>. White carries every action. Everything else is greyscale, so the only saturated things on screen are the game footage and the brand.</p>
+</div></div>
+
+<!-- 01 -->
+<section>
+  <div class="wrap">
+    <div class="sec-head"><span class="n">01</span><h2>The colour rule</h2></div>
+    <p class="lede">Four tiers. The split that keeps two accents from fighting: <b style="color:var(--text-hi)">red is state, white is action</b>. Red tells you something is happening; white is what you press to do something about it. They never mean the same thing, so they can sit on the same screen without competing.</p>
+
+    <div class="budget">
+      <div class="t">Red<span>The mark, and now</span></div>
+      <div class="d"><b><span class="chipline" style="background:var(--live)"></span>#FF453A</b> — two jobs, no others.
+        <b>One:</b> the <b>3</b> in m<b style="color:var(--live)">3</b>llo, everywhere the mark appears.
+        <b>Two:</b> <b>this is happening</b> — live badges, the live-now kicker, recording and clip marks, the unread dot, leave call.
+        Red is a state, never a surface and never decoration.</div>
+
+      <div class="t">White<span>The action</span></div>
+      <div class="d"><b><span class="chipline" style="background:#fff"></span>#FFFFFF</b> — the thing you press: the primary button, the active channel you are sitting in, a focus ring, the big number. White is loud enough on graphite that it never needs help. One filled white button per surface.</div>
+
+      <div class="t">Red again<span>The commit</span></div>
+      <div class="d"><b><span class="chipline" style="background:#FF453A"></span>#FF453A</b> — <b>the button that commits wears the mark’s red.</b> Create the crew, join it, save the settings, sign in, start the stream from the picker. This is the second and last place red appears as a fill, and the reason is the same as the first: it marks the moment something becomes true. White stays the colour of every other thing you can press — STREAM included, because STREAM opens a choice rather than settling one.</div>
+
+      <div class="t">Green<span>Speaking, and only that</span></div>
+      <div class="d"><b><span class="chipline" style="background:#3FD07A"></span>#3FD07A</b> — the person talking right now, on their name in the voice list. Green appears nowhere else in the product. White was too quiet to carry it and red is taken. The avatar does not change, and neither does the row.</div>
+
+      <div class="t">Identity<span>People, not chrome</span></div>
+      <div class="d">Five muted hues for avatars, crew marks and game tiles. They are desaturated on purpose — enough to tell Ostkatt from Propotato at a glance, not enough to read as interface colour. Never on a button, a border, or a label.</div>
+
+      <div class="t">Over footage<span>Its own ground</span></div>
+      <div class="d">A chip, a scrubber or a play disc laid on a game frame cannot borrow the graphite ramp, because the frame underneath is any colour at all. They get black washes and white text: <code>#00000044</code> at rest, <code>#000000AA</code> for a chip, <code>#00000066</code> for a bar, <code>#FFFFFF33</code> for a track. These are washes, not palette.</div>
+
+      <div class="t">Content<span>Untouched</span></div>
+      <div class="d"><b>Game footage keeps its full colour.</b> Thumbnails, streams and clips are the only saturated things in the product. A very slight <code>saturate(.85)</code> keeps them from screaming, and nothing else is applied.</div>
+    </div>
+
+    <p class="rule">The test: take a screenshot and desaturate everything except the media and the mark. Only two things should lose colour — a live badge and a record dot — and both of them are red because something is genuinely happening. If anything else changes, it was decoration.</p>
+  </div>
+</section>
+
+<!-- 02 -->
+<section>
+  <div class="wrap">
+    <div class="sec-head"><span class="n">02</span><h2>Colour</h2></div>
+    <p class="lede">The ground sits off pure black — #121214 rather than #000 — which is what makes the monochrome liveable for long sessions. Four steps up from it carry every surface.</p>
+
+    <div class="grid g5">
+      <div class="sw"><div class="chip" style="background:#121214"></div><div class="m"><b>App</b><code>#121214</code><i>Window and feed ground</i></div></div>
+      <div class="sw"><div class="chip" style="background:#17171A"></div><div class="m"><b>Panel</b><code>#17171A</code><i>Sidebars, header, control bar</i></div></div>
+      <div class="sw"><div class="chip" style="background:#1C1C20"></div><div class="m"><b>Card</b><code>#1C1C20</code><i>Card fill</i></div></div>
+      <div class="sw"><div class="chip" style="background:#26262B"></div><div class="m"><b>Raised</b><code>#26262B</code><i>Chips, inputs, icon buttons</i></div></div>
+      <div class="sw"><div class="chip" style="background:#2F2F35"></div><div class="m"><b>Line</b><code>#2F2F35</code><i>Keyline; #42424A on hover</i></div></div>
+    </div>
+
+    <div class="grid g4" style="margin-top:14px">
+      <div class="sw"><div class="chip" style="background:#F3F3F4"></div><div class="m"><b>Text high</b><code>#F3F3F4</code><i>Titles, values, names</i></div></div>
+      <div class="sw"><div class="chip" style="background:#A2A2A8"></div><div class="m"><b>Text</b><code>#A2A2A8</code><i>Body</i></div></div>
+      <div class="sw"><div class="chip" style="background:#6F6F76"></div><div class="m"><b>Text dim</b><code>#6F6F76</code><i>Labels, meta, inactive</i></div></div>
+      <div class="sw"><div class="chip" style="background:#4B4B52"></div><div class="m"><b>Text faint</b><code>#4B4B52</code><i>Dates, empty counts</i></div></div>
+    </div>
+
+    <div class="grid g4" style="margin-top:14px">
+      <div class="sw"><div class="chip" style="background:#FFFFFF"></div><div class="m"><b>Accent</b><code>#FFFFFF</code><i>Primary action, active, live</i></div></div>
+      <div class="sw"><div class="chip" style="background:rgba(255,255,255,.10)"></div><div class="m"><b>Accent dim</b><code>rgba(255,255,255,.10)</code><i>Tint of the active row</i></div></div>
+      <div class="sw"><div class="chip" style="background:#FF453A"></div><div class="m"><b>m3llo red</b><code>#FF453A</code><i>The mark · live · recording · unread</i></div></div>
+      <div class="sw"><div class="chip" style="background:var(--grad-stat)"></div><div class="m"><b>Stat gradient</b><code>#FFFFFF → #C9C9CF</code><i>One number per screen</i></div></div>
+    </div>
+
+    <p class="kicker" style="margin-top:32px">Identity — muted on purpose</p>
+    <div class="grid g5">
+      <div class="sw"><div class="chip" style="height:46px;background:#6E8FB8"></div><div class="m"><b>Blue</b><code>#6E8FB8</code></div></div>
+      <div class="sw"><div class="chip" style="height:46px;background:#8E7FB0"></div><div class="m"><b>Purple</b><code>#8E7FB0</code></div></div>
+      <div class="sw"><div class="chip" style="height:46px;background:#5FA396"></div><div class="m"><b>Teal</b><code>#5FA396</code></div></div>
+      <div class="sw"><div class="chip" style="height:46px;background:#B39158"></div><div class="m"><b>Amber</b><code>#B39158</code></div></div>
+      <div class="sw"><div class="chip" style="height:46px;background:#B07793"></div><div class="m"><b>Pink</b><code>#B07793</code></div></div>
+    </div>
+  </div>
+</section>
+
+<!-- 03 TYPE -->
+<section>
+  <div class="wrap">
+    <div class="sec-head"><span class="n">03</span><h2>Typography</h2></div>
+    <p class="lede">Two faces, and one question: <b style="color:var(--text-hi)">does this name something, or is it big?</b> If yes, Oxanium. If no, Barlow. Barlow then works in <b style="color:var(--text-hi)">two registers</b> — 300 for sentences, 600 with wide tracking for micro labels — which is what lets a single text face carry both the chat panel and the instrument chrome. Nothing is italic; nothing is uppercase except the label register.</p>
+
+    <div class="tablewrap" style="margin-bottom:30px">
+      <table>
+        <tr><th>Face</th><th>Register</th><th>Job</th><th>Weights</th></tr>
+        <tr><td rowspan="1"><b style="font-family:var(--display);font-weight:600;color:var(--text-hi);font-size:15px">Oxanium</b></td>
+            <td>—</td>
+            <td>Anything that <b style="color:var(--text-hi)">names</b> something, or is big: wordmark, screen titles,
+                card titles, people and crew names, every number and stat.</td><td>200 · 300 · 600 · 700</td></tr>
+        <tr><td rowspan="2"><b style="font-family:var(--text-face);font-weight:500;color:var(--text-hi);font-size:15px">Barlow</b></td>
+            <td><b style="color:var(--text-hi)">Sentence</b><br>300</td>
+            <td>Everything read as prose: chat messages, catch-up lines, descriptions, empty states, inputs.
+                13px / 1.6.</td><td>300</td></tr>
+        <tr><td><b style="color:var(--text-hi)">Label</b><br>600 · .16em</td>
+            <td>Every micro label, badge, button, timestamp, duration and record. 9.5px uppercase for labels,
+                11px for meta lines, 10px for buttons.</td><td>500 · 600</td></tr>
+      </table>
+    </div>
+
+    <div class="trow"><div class="tspec"><b>SCREEN TITLE</b>Oxanium 700<br>26–38px<br>−.035em</div><div class="t-h1">Crew feed</div></div>
+    <div class="trow"><div class="tspec"><b>DISPLAY</b>Oxanium 300<br>30px<br>−.04em<br>em → 200</div><div class="t-h2">Ostkatt is streaming <em style="font-style:normal;font-weight:200;color:var(--text-dim)">Counter-Strike 2</em></div></div>
+    <div class="trow"><div class="tspec"><b>HEADING</b>Oxanium 600<br>17px</div><div class="t-h3">Weekly recap</div></div>
+    <div class="trow"><div class="tspec"><b>STAT</b>Oxanium 600<br>34px<br>Stat gradient</div><div class="t-stat">43.2h</div></div>
+    <div class="trow"><div class="tspec"><b>CARD TITLE</b>Oxanium 600<br>13–14.5px</div><div class="t-title">b0bben streamed Counter-Strike 2</div></div>
+    <div class="trow"><div class="tspec"><b>SENTENCE</b>Barlow 300<br>13px / 1.6<br>Chat, descriptions</div><div class="t-body">Ostkatt and Propotato hung out in General for 45m while you were away.</div></div>
+    <div class="trow"><div class="tspec"><b>LABEL</b>Barlow 600<br>9.5px<br>.2em · uppercase</div><div class="t-kick">Session · 2h 9m</div></div>
+    <div class="trow"><div class="tspec"><b>DATA</b>Barlow 600<br>11px<br>tabular-nums</div><div class="t-data">10W 7L · 14:53:00 · 44%</div></div>
+
+    <p class="rule">Barlow has proportional figures by default, so any column of numbers wobbles between rows. Every place digits stack — records, durations, counts, the recap ledger — sets <code>font-variant-numeric:tabular-nums</code>. This is not optional; it is the one thing a mono face gave us for free.</p>
+  </div>
+</section>
+
+<!-- 04 SHAPE -->
+<section>
+  <div class="wrap">
+    <div class="sec-head"><span class="n">04</span><h2>Shape</h2></div>
+    <p class="lede">Unchanged from v2, and the one part of the system that carries personality now that colour does not. A clipped keyline layer, a clipped fill inset by 1px, and one corner cut away.</p>
+
+    <div class="grid g4">
+      <div><div class="card" style="height:88px"></div><p class="note">Card · top-right (default)</p></div>
+      <div><div class="card cut-tl" style="height:88px"></div><p class="note">Card · top-left</p></div>
+      <div><div class="card cut-br" style="height:88px"></div><p class="note">Card · bottom-right</p></div>
+      <div><div class="card cut-bl" style="height:88px"></div><p class="note">Card · bottom-left</p></div>
+    </div>
+    <p class="note">Two or three cards per screen take a corner other than the default. Deliberate, not alternating.</p>
+      <p class="rule"><b>Avatars sit in a row with a gap. They never overlap.</b> A stack is borrowed from photo avatars, where a face survives being half covered. Initials do not: clip "xt" and it reads "t". A cut corner over a neighbour also reads as a bite taken out of it.</p>
+
+    <div class="grid g3" style="margin-top:32px">
+      <div>
+        <p class="kicker">Buttons — 10px, top-left + bottom-right</p>
+        <div class="row"><button class="btn btn-primary">Stream</button><button class="btn btn-secondary">Secondary</button></div>
+      </div>
+      <div>
+        <p class="kicker">People — all four corners</p>
+        <div class="row"><span class="av av-blue">os</span><span class="av av-purple">pr</span><span class="av av-teal">b0</span></div>
+      </div>
+      <div>
+        <p class="kicker">Crews and games — two corners</p>
+        <div class="row"><span class="tile">m3</span><span class="tile" style="background:var(--id-amber)">CS2</span></div>
+      </div>
+    </div>
+
+    <div class="tablewrap" style="margin-top:32px">
+      <table>
+        <tr><th>Token</th><th>Value</th><th>Use</th></tr>
+        <tr><td><code>--notch</code></td><td><code>16px</code> (20 hero, 12 sidebar)</td><td>Card corner cut</td></tr>
+        <tr><td><code>--cut</code></td><td><code>10px</code></td><td>Buttons, icon buttons, tiles</td></tr>
+        <tr><td><code>--r-sm</code></td><td><code>5px</code></td><td>Form pips. Not inputs: a field is square</td></tr>
+        <tr><td><code>--r-pill</code></td><td><code>999px</code></td><td>Status dots, play discs</td></tr>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- 05 COMPONENTS -->
+<section>
+  <div class="wrap">
+    <div class="sec-head"><span class="n">05</span><h2>Components</h2></div>
+
+    <p class="kicker">Buttons</p>
+    <div class="row">
+      <button class="btn btn-primary">▶ Stream</button>
+      <button class="btn btn-confirm">Establish crew</button>
+      <button class="btn btn-outline">▶ Watch</button>
+      <button class="btn btn-secondary">Secondary</button>
+      <button class="btn btn-rec">● Clip 30s</button>
+      <button class="btn btn-danger">Leave</button>
+      <button class="btn" disabled>Disabled</button>
+    </div>
+    <p class="note">White filled is primary, one per surface. <b>Red filled is the commit</b> — the button that creates, joins, saves or signs in. A dialog has exactly one, and it sits bottom-right. White outline is a second white-worthy action on the same screen. Leave is filled red too, because ending the call commits as much as starting the crew does. <b>Clip outlines in red</b> rather than filling: it describes a state it is about to create, and it sits next to nothing else red.</p>
+
+    <p class="kicker" style="margin-top:32px">Fields</p>
+    <div class="row">
+      <input class="field" placeholder="e.g. Shadow Syndicate">
+      <input class="field" value="gwegweg">
+    </div>
+    <p class="note"><b>A field is a plain rectangle.</b> No radius and no cut: the cut belongs to things you press and things that hold content, and a field is neither — it is a hole you type into. Square corners also keep a stack of fields reading as one block instead of a row of pills. Dots, discs and progress tracks keep their radius; nothing else does.</p>
+
+    <p class="kicker" style="margin-top:32px">Badges and marks</p>
+    <div class="row">
+      <span class="badge badge-live"><span class="dot" style="background:#fff"></span> Live</span>
+      <span class="badge badge-rec">● Rec</span>
+      <span class="badge badge-clip"><span class="ic">✂</span> Clip</span>
+      <span class="badge">3 watching</span>
+      <span class="badge badge-out">24 matches this week</span>
+      <span style="display:inline-flex;align-items:center;gap:7px;font-family:var(--mono);font-size:9px;
+        letter-spacing:.2em;text-transform:uppercase;color:var(--text-dim)"><span class="dot dot-l"></span> Session · 2h 9m</span>
+      <span style="display:inline-flex;align-items:center;gap:7px;font-family:var(--mono);font-weight:600;font-size:9.5px;
+        letter-spacing:.2em;text-transform:uppercase;color:var(--live)"><span class="dot dot-l"></span> Live now · General</span>
+    </div>
+
+    <p class="kicker" style="margin-top:32px">Control bar</p>
+    <div class="demo">
+      <div class="bar">
+        <span class="av av-teal" style="width:36px;height:36px;--c:8px">b0</span>
+        <div>
+          <div style="font-family:var(--display);font-weight:600;font-size:12.5px;color:var(--text-hi)">b0bben</div>
+          <div style="font-family:var(--mono);font-size:9px;color:var(--text-hi);margin-top:3px">● General</div>
+        </div>
+        <button class="ib on"><svg viewBox="0 0 24 24"><rect x="9" y="1" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0"/><line x1="12" y1="17" x2="12" y2="21"/></svg></button>
+        <button class="ib on"><svg viewBox="0 0 24 24"><path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/></svg></button>
+        <span class="divider"></span>
+        <button class="ib leave"><svg viewBox="0 0 24 24"><path d="M10.68 13.31a16 16 0 0 1-2.47-2.47l1.34-1.34a2 2 0 0 0 .4-2.28L8.78 4.5a2 2 0 0 0-2.18-1.1l-2.48.5A2 2 0 0 0 2.5 5.87 16 16 0 0 0 18.13 21.5a2 2 0 0 0 1.97-1.62l.5-2.48a2 2 0 0 0-1.1-2.18l-2.72-1.17a2 2 0 0 0-2.28.4l-1.34 1.34z" transform="rotate(135 12 12)"/></svg></button>
+        <div style="flex:1"></div>
+        <div class="src">
+          <span class="tile" style="background:var(--id-amber)">CS2</span>
+          <div><div class="l"><span class="dot dot-a" style="width:4px;height:4px"></span> Now playing</div><div class="g">Counter-Strike 2</div></div>
+        </div>
+        <button class="stream">▶ Stream</button><button class="caret">▾</button>
+        <div style="flex:1"></div>
+        <button class="btn btn-rec" style="height:38px">✂ Clip 30s</button>
+      </div>
+    </div>
+    <p class="note">Left is you and your state, with leave separated by a divider. Centre is what you would stream, named before you press. Right is capture. <b>Stream and Clip are the only labelled controls</b> — everything else is a toggle whose state is visible.</p>
+  </div>
+</section>
+
+<!-- 06 TOKENS -->
+<section>
+  <div class="wrap">
+    <div class="sec-head"><span class="n">06</span><h2>Tokens</h2></div>
+<pre><span class="c">/* ground — graphite, off pure black */</span>
+--bg-app:<span class="v">#121214</span>;  --bg-panel:<span class="v">#17171A</span>;  --bg-card:<span class="v">#1C1C20</span>;
+--bg-raised:<span class="v">#26262B</span>; --line:<span class="v">#2F2F35</span>;      --line-hi:<span class="v">#42424A</span>;
+
+<span class="c">/* text */</span>
+--text-hi:<span class="v">#F3F3F4</span>; --text:<span class="v">#A2A2A8</span>; --text-dim:<span class="v">#6F6F76</span>; --text-faint:<span class="v">#4B4B52</span>;
+
+<span class="c">/* accent — white. one filled per surface */</span>
+--accent:<span class="v">#FFFFFF</span>; --accent-press:<span class="v">#D2D2D6</span>;
+--accent-dim:rgba(255,255,255,.10);  --on-accent:<span class="v">#121214</span>;
+
+<span class="c">/* m3llo red: the mark, and anything happening now */</span>
+--live:<span class="v">#FF453A</span>; --on-live:<span class="v">#FFFFFF</span>; --live-dim:rgba(255,69,58,.14);
+.wordmark b{color:var(--live)}   <span class="c">/* the 3, always */</span>
+
+<span class="c">/* identity — muted, people only */</span>
+--id-blue:#6E8FB8; --id-purple:#8E7FB0; --id-teal:#5FA396;
+--id-amber:#B39158; --id-pink:#B07793;
+
+<span class="c">/* type */</span>
+--display:'Oxanium',sans-serif;              <span class="c">/* names it, or it is big */</span>
+--text-face:'Barlow',sans-serif;             <span class="c">/* everything else        */</span>
+
+<span class="c">/* Barlow, two registers */</span>
+sentence: 300 · 13px/1.6 · tracking 0
+label:    600 · 9.5px    · tracking .16em · uppercase
+data:     600 · 11px     · font-variant-numeric:tabular-nums
+
+<span class="c">/* shape + space */</span>
+--notch:16px; --cut:10px; --r-sm:5px; --r-pill:999px;
+--s-1:4px; --s-2:8px; --s-3:12px; --s-4:16px;
+--s-5:24px; --s-6:32px; --s-7:48px; --s-8:72px;
+
+<span class="c">/* feed grid */</span>
+.bento-grid{display:grid;grid-template-columns:repeat(3,1fr);
+            grid-auto-rows:232px;gap:12px;align-items:stretch}
+
+<span class="c">/* content keeps its colour */</span>
+.thumb,.small-thumb{filter:saturate(.85)}</pre>
+
+    <p class="rule">Before shipping a screen: count the white fills — one button. Then read every red thing out loud. If you cannot finish the sentence "this is happening right now", or it is not the 3 in the mark, it should not be red.</p>
+  </div>
+</section>
+
+<footer><div class="wrap">m3llo design system v3.3 · graphite — locked from crew feed v15 · Oxanium · Barlow</div></footer>
+
+</body>
+</html>

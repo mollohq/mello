@@ -24,7 +24,7 @@ export component UpdateToast inherits Rectangle {
     border-width: 1px;
     border-radius: Theme.r-inner;
     drop-shadow-blur: 32px;
-    drop-shadow-color: #00000066;
+    drop-shadow-color: Theme.shadow-soft;
     drop-shadow-offset-y: 8px;
 
     HorizontalLayout {
@@ -45,14 +45,16 @@ export component UpdateToast inherits Rectangle {
                 color: Theme.text-primary;
                 font-family: Theme.font-sans;
                 font-size: 12px;
-                font-weight: 600;
+                font-weight: Theme.weight-display;
             }
 
             if !status-only: Text {
+                letter-spacing: Theme.track-label;
+                font-weight: Theme.weight-label;
                 text: downloading ? "Downloading v" + version
                     : "v" + version;
                 color: Theme.text-secondary;
-                font-family: Theme.font-mono;
+                font-family: Theme.font-label;
                 font-size: Theme.font-xs;
             }
         }
@@ -83,14 +85,14 @@ export component UpdateToast inherits Rectangle {
             Rectangle {
                 width: btn-text.preferred-width + 28px;
                 height: 28px;
-                background: ta.has-hover ? #FF3D6E : Theme.accent;
+                background: ta.has-hover ? Theme.confirm-press : Theme.confirm;
                 border-radius: Theme.r-inner;
                 animate background { duration: 150ms; }
 
                 btn-text := Text {
                     text: "UPDATE";
-                    color: white;
-                    font-family: Theme.font-mono;
+                    color: Theme.on-confirm;
+                    font-family: Theme.font-label;
                     font-size: Theme.font-xs;
                     font-weight: 600;
                     letter-spacing: 0.06 * 1px;

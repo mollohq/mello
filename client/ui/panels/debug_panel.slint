@@ -13,8 +13,10 @@ component StatBar inherits Rectangle {
         alignment: start;
 
         Text {
+            letter-spacing: Theme.track-label;
+            font-weight: Theme.weight-label;
             text: label;
-            font-family: Theme.font-mono;
+            font-family: Theme.font-label;
             font-size: 10px;
             color: Theme.text-secondary;
             width: 70px;
@@ -25,7 +27,7 @@ component StatBar inherits Rectangle {
             horizontal-stretch: 1;
             height: 12px;
             y: (parent.height - self.height) / 2;
-            background: #000000;
+            background: Theme.card-bg-inset;
             border-radius: 2px;
             clip: true;
 
@@ -42,13 +44,15 @@ component StatBar inherits Rectangle {
                 x: parent.width * clamp(threshold, 0.0, 1.0) - 1px;
                 width: 2px;
                 height: parent.height;
-                background: #FFFF00AA;
+                background: Theme.text-primary.with-alpha(0.65);
             }
         }
 
         Text {
+            letter-spacing: Theme.track-label;
+            font-weight: Theme.weight-label;
             text: "\{Math.round(value * 100)}%";
-            font-family: Theme.font-mono;
+            font-family: Theme.font-label;
             font-size: 10px;
             color: Theme.text-primary;
             width: 36px;
@@ -73,12 +77,14 @@ component StatusDot inherits Rectangle {
             height: 8px;
             y: (parent.height - self.height) / 2;
             border-radius: 4px;
-            background: active ? Theme.accent-green : #FF4444;
+            background: active ? Theme.accent-green : Theme.live;
         }
 
         Text {
+            letter-spacing: Theme.track-label;
+            font-weight: Theme.weight-label;
             text: label;
-            font-family: Theme.font-mono;
+            font-family: Theme.font-label;
             font-size: 10px;
             color: active ? Theme.text-primary : Theme.text-secondary;
             vertical-alignment: center;
@@ -151,43 +157,43 @@ component LevelHistory inherits Rectangle {
     in property <bool> s29;
 
     height: 60px;
-    background: #000000;
+    background: Theme.card-bg-inset;
     border-radius: 4px;
     clip: true;
 
     property <length> bw: (self.width - 2px) / 30;
 
     // Each bar: green if speaking, gray if not
-    Rectangle { x: bw * 0  + 1px; width: bw - 1px; height: parent.height * clamp(v0, 0.02, 1.0);  y: parent.height - self.height; background: s0  ? #28C840 : #404040; }
-    Rectangle { x: bw * 1  + 1px; width: bw - 1px; height: parent.height * clamp(v1, 0.02, 1.0);  y: parent.height - self.height; background: s1  ? #28C840 : #404040; }
-    Rectangle { x: bw * 2  + 1px; width: bw - 1px; height: parent.height * clamp(v2, 0.02, 1.0);  y: parent.height - self.height; background: s2  ? #28C840 : #404040; }
-    Rectangle { x: bw * 3  + 1px; width: bw - 1px; height: parent.height * clamp(v3, 0.02, 1.0);  y: parent.height - self.height; background: s3  ? #28C840 : #404040; }
-    Rectangle { x: bw * 4  + 1px; width: bw - 1px; height: parent.height * clamp(v4, 0.02, 1.0);  y: parent.height - self.height; background: s4  ? #28C840 : #404040; }
-    Rectangle { x: bw * 5  + 1px; width: bw - 1px; height: parent.height * clamp(v5, 0.02, 1.0);  y: parent.height - self.height; background: s5  ? #28C840 : #404040; }
-    Rectangle { x: bw * 6  + 1px; width: bw - 1px; height: parent.height * clamp(v6, 0.02, 1.0);  y: parent.height - self.height; background: s6  ? #28C840 : #404040; }
-    Rectangle { x: bw * 7  + 1px; width: bw - 1px; height: parent.height * clamp(v7, 0.02, 1.0);  y: parent.height - self.height; background: s7  ? #28C840 : #404040; }
-    Rectangle { x: bw * 8  + 1px; width: bw - 1px; height: parent.height * clamp(v8, 0.02, 1.0);  y: parent.height - self.height; background: s8  ? #28C840 : #404040; }
-    Rectangle { x: bw * 9  + 1px; width: bw - 1px; height: parent.height * clamp(v9, 0.02, 1.0);  y: parent.height - self.height; background: s9  ? #28C840 : #404040; }
-    Rectangle { x: bw * 10 + 1px; width: bw - 1px; height: parent.height * clamp(v10, 0.02, 1.0); y: parent.height - self.height; background: s10 ? #28C840 : #404040; }
-    Rectangle { x: bw * 11 + 1px; width: bw - 1px; height: parent.height * clamp(v11, 0.02, 1.0); y: parent.height - self.height; background: s11 ? #28C840 : #404040; }
-    Rectangle { x: bw * 12 + 1px; width: bw - 1px; height: parent.height * clamp(v12, 0.02, 1.0); y: parent.height - self.height; background: s12 ? #28C840 : #404040; }
-    Rectangle { x: bw * 13 + 1px; width: bw - 1px; height: parent.height * clamp(v13, 0.02, 1.0); y: parent.height - self.height; background: s13 ? #28C840 : #404040; }
-    Rectangle { x: bw * 14 + 1px; width: bw - 1px; height: parent.height * clamp(v14, 0.02, 1.0); y: parent.height - self.height; background: s14 ? #28C840 : #404040; }
-    Rectangle { x: bw * 15 + 1px; width: bw - 1px; height: parent.height * clamp(v15, 0.02, 1.0); y: parent.height - self.height; background: s15 ? #28C840 : #404040; }
-    Rectangle { x: bw * 16 + 1px; width: bw - 1px; height: parent.height * clamp(v16, 0.02, 1.0); y: parent.height - self.height; background: s16 ? #28C840 : #404040; }
-    Rectangle { x: bw * 17 + 1px; width: bw - 1px; height: parent.height * clamp(v17, 0.02, 1.0); y: parent.height - self.height; background: s17 ? #28C840 : #404040; }
-    Rectangle { x: bw * 18 + 1px; width: bw - 1px; height: parent.height * clamp(v18, 0.02, 1.0); y: parent.height - self.height; background: s18 ? #28C840 : #404040; }
-    Rectangle { x: bw * 19 + 1px; width: bw - 1px; height: parent.height * clamp(v19, 0.02, 1.0); y: parent.height - self.height; background: s19 ? #28C840 : #404040; }
-    Rectangle { x: bw * 20 + 1px; width: bw - 1px; height: parent.height * clamp(v20, 0.02, 1.0); y: parent.height - self.height; background: s20 ? #28C840 : #404040; }
-    Rectangle { x: bw * 21 + 1px; width: bw - 1px; height: parent.height * clamp(v21, 0.02, 1.0); y: parent.height - self.height; background: s21 ? #28C840 : #404040; }
-    Rectangle { x: bw * 22 + 1px; width: bw - 1px; height: parent.height * clamp(v22, 0.02, 1.0); y: parent.height - self.height; background: s22 ? #28C840 : #404040; }
-    Rectangle { x: bw * 23 + 1px; width: bw - 1px; height: parent.height * clamp(v23, 0.02, 1.0); y: parent.height - self.height; background: s23 ? #28C840 : #404040; }
-    Rectangle { x: bw * 24 + 1px; width: bw - 1px; height: parent.height * clamp(v24, 0.02, 1.0); y: parent.height - self.height; background: s24 ? #28C840 : #404040; }
-    Rectangle { x: bw * 25 + 1px; width: bw - 1px; height: parent.height * clamp(v25, 0.02, 1.0); y: parent.height - self.height; background: s25 ? #28C840 : #404040; }
-    Rectangle { x: bw * 26 + 1px; width: bw - 1px; height: parent.height * clamp(v26, 0.02, 1.0); y: parent.height - self.height; background: s26 ? #28C840 : #404040; }
-    Rectangle { x: bw * 27 + 1px; width: bw - 1px; height: parent.height * clamp(v27, 0.02, 1.0); y: parent.height - self.height; background: s27 ? #28C840 : #404040; }
-    Rectangle { x: bw * 28 + 1px; width: bw - 1px; height: parent.height * clamp(v28, 0.02, 1.0); y: parent.height - self.height; background: s28 ? #28C840 : #404040; }
-    Rectangle { x: bw * 29 + 1px; width: bw - 1px; height: parent.height * clamp(v29, 0.02, 1.0); y: parent.height - self.height; background: s29 ? #28C840 : #404040; }
+    Rectangle { x: bw * 0  + 1px; width: bw - 1px; height: parent.height * clamp(v0, 0.02, 1.0);  y: parent.height - self.height; background: s0  ? Theme.accent-green : Theme.graphic-med; }
+    Rectangle { x: bw * 1  + 1px; width: bw - 1px; height: parent.height * clamp(v1, 0.02, 1.0);  y: parent.height - self.height; background: s1  ? Theme.accent-green : Theme.graphic-med; }
+    Rectangle { x: bw * 2  + 1px; width: bw - 1px; height: parent.height * clamp(v2, 0.02, 1.0);  y: parent.height - self.height; background: s2  ? Theme.accent-green : Theme.graphic-med; }
+    Rectangle { x: bw * 3  + 1px; width: bw - 1px; height: parent.height * clamp(v3, 0.02, 1.0);  y: parent.height - self.height; background: s3  ? Theme.accent-green : Theme.graphic-med; }
+    Rectangle { x: bw * 4  + 1px; width: bw - 1px; height: parent.height * clamp(v4, 0.02, 1.0);  y: parent.height - self.height; background: s4  ? Theme.accent-green : Theme.graphic-med; }
+    Rectangle { x: bw * 5  + 1px; width: bw - 1px; height: parent.height * clamp(v5, 0.02, 1.0);  y: parent.height - self.height; background: s5  ? Theme.accent-green : Theme.graphic-med; }
+    Rectangle { x: bw * 6  + 1px; width: bw - 1px; height: parent.height * clamp(v6, 0.02, 1.0);  y: parent.height - self.height; background: s6  ? Theme.accent-green : Theme.graphic-med; }
+    Rectangle { x: bw * 7  + 1px; width: bw - 1px; height: parent.height * clamp(v7, 0.02, 1.0);  y: parent.height - self.height; background: s7  ? Theme.accent-green : Theme.graphic-med; }
+    Rectangle { x: bw * 8  + 1px; width: bw - 1px; height: parent.height * clamp(v8, 0.02, 1.0);  y: parent.height - self.height; background: s8  ? Theme.accent-green : Theme.graphic-med; }
+    Rectangle { x: bw * 9  + 1px; width: bw - 1px; height: parent.height * clamp(v9, 0.02, 1.0);  y: parent.height - self.height; background: s9  ? Theme.accent-green : Theme.graphic-med; }
+    Rectangle { x: bw * 10 + 1px; width: bw - 1px; height: parent.height * clamp(v10, 0.02, 1.0); y: parent.height - self.height; background: s10 ? Theme.accent-green : Theme.graphic-med; }
+    Rectangle { x: bw * 11 + 1px; width: bw - 1px; height: parent.height * clamp(v11, 0.02, 1.0); y: parent.height - self.height; background: s11 ? Theme.accent-green : Theme.graphic-med; }
+    Rectangle { x: bw * 12 + 1px; width: bw - 1px; height: parent.height * clamp(v12, 0.02, 1.0); y: parent.height - self.height; background: s12 ? Theme.accent-green : Theme.graphic-med; }
+    Rectangle { x: bw * 13 + 1px; width: bw - 1px; height: parent.height * clamp(v13, 0.02, 1.0); y: parent.height - self.height; background: s13 ? Theme.accent-green : Theme.graphic-med; }
+    Rectangle { x: bw * 14 + 1px; width: bw - 1px; height: parent.height * clamp(v14, 0.02, 1.0); y: parent.height - self.height; background: s14 ? Theme.accent-green : Theme.graphic-med; }
+    Rectangle { x: bw * 15 + 1px; width: bw - 1px; height: parent.height * clamp(v15, 0.02, 1.0); y: parent.height - self.height; background: s15 ? Theme.accent-green : Theme.graphic-med; }
+    Rectangle { x: bw * 16 + 1px; width: bw - 1px; height: parent.height * clamp(v16, 0.02, 1.0); y: parent.height - self.height; background: s16 ? Theme.accent-green : Theme.graphic-med; }
+    Rectangle { x: bw * 17 + 1px; width: bw - 1px; height: parent.height * clamp(v17, 0.02, 1.0); y: parent.height - self.height; background: s17 ? Theme.accent-green : Theme.graphic-med; }
+    Rectangle { x: bw * 18 + 1px; width: bw - 1px; height: parent.height * clamp(v18, 0.02, 1.0); y: parent.height - self.height; background: s18 ? Theme.accent-green : Theme.graphic-med; }
+    Rectangle { x: bw * 19 + 1px; width: bw - 1px; height: parent.height * clamp(v19, 0.02, 1.0); y: parent.height - self.height; background: s19 ? Theme.accent-green : Theme.graphic-med; }
+    Rectangle { x: bw * 20 + 1px; width: bw - 1px; height: parent.height * clamp(v20, 0.02, 1.0); y: parent.height - self.height; background: s20 ? Theme.accent-green : Theme.graphic-med; }
+    Rectangle { x: bw * 21 + 1px; width: bw - 1px; height: parent.height * clamp(v21, 0.02, 1.0); y: parent.height - self.height; background: s21 ? Theme.accent-green : Theme.graphic-med; }
+    Rectangle { x: bw * 22 + 1px; width: bw - 1px; height: parent.height * clamp(v22, 0.02, 1.0); y: parent.height - self.height; background: s22 ? Theme.accent-green : Theme.graphic-med; }
+    Rectangle { x: bw * 23 + 1px; width: bw - 1px; height: parent.height * clamp(v23, 0.02, 1.0); y: parent.height - self.height; background: s23 ? Theme.accent-green : Theme.graphic-med; }
+    Rectangle { x: bw * 24 + 1px; width: bw - 1px; height: parent.height * clamp(v24, 0.02, 1.0); y: parent.height - self.height; background: s24 ? Theme.accent-green : Theme.graphic-med; }
+    Rectangle { x: bw * 25 + 1px; width: bw - 1px; height: parent.height * clamp(v25, 0.02, 1.0); y: parent.height - self.height; background: s25 ? Theme.accent-green : Theme.graphic-med; }
+    Rectangle { x: bw * 26 + 1px; width: bw - 1px; height: parent.height * clamp(v26, 0.02, 1.0); y: parent.height - self.height; background: s26 ? Theme.accent-green : Theme.graphic-med; }
+    Rectangle { x: bw * 27 + 1px; width: bw - 1px; height: parent.height * clamp(v27, 0.02, 1.0); y: parent.height - self.height; background: s27 ? Theme.accent-green : Theme.graphic-med; }
+    Rectangle { x: bw * 28 + 1px; width: bw - 1px; height: parent.height * clamp(v28, 0.02, 1.0); y: parent.height - self.height; background: s28 ? Theme.accent-green : Theme.graphic-med; }
+    Rectangle { x: bw * 29 + 1px; width: bw - 1px; height: parent.height * clamp(v29, 0.02, 1.0); y: parent.height - self.height; background: s29 ? Theme.accent-green : Theme.graphic-med; }
 }
 
 // Clickable section header with a chevron; toggles its bound `collapsed` flag.
@@ -205,17 +211,18 @@ component SectionHeader inherits Rectangle {
         spacing: 6px;
         alignment: start;
 
-        Text {
-            text: root.collapsed ? "▸" : "▾";
-            font-family: Theme.font-mono;
-            font-size: 9px;
-            color: Theme.text-tertiary;
-            vertical-alignment: center;
+        Image {
+            source: @image-url("../icons/chevron-down.svg");
             width: 10px;
+            height: 10px;
+            colorize: Theme.text-tertiary;
+            transform-rotation: root.collapsed ? -90deg : 0deg;
+            y: (parent.height - self.height) / 2;
         }
         Text {
+            letter-spacing: Theme.track-label;
             text: root.title;
-            font-family: Theme.font-mono;
+            font-family: Theme.font-label;
             font-size: 9px;
             font-weight: 600;
             color: Theme.text-tertiary;
@@ -298,7 +305,7 @@ export component DebugPanel inherits Rectangle {
 
     width: 320px;
     // Opaque (was semi-transparent) so chat/GIFs behind it never bleed through.
-    background: Theme.dark ? #161616 : #F4F4F4;
+    background: Theme.bg-app;
     border-radius: Theme.r-outer;
     border-width: 1px;
     border-color: Theme.graphic-light;
@@ -314,8 +321,9 @@ export component DebugPanel inherits Rectangle {
             alignment: space-between;
 
             Text {
-                text: "🔊 Audio Debug";
-                font-family: Theme.font-mono;
+                letter-spacing: Theme.track-label;
+                text: "Audio Debug";
+                font-family: Theme.font-label;
                 font-size: 11px;
                 font-weight: 600;
                 color: Theme.text-primary;
@@ -328,12 +336,13 @@ export component DebugPanel inherits Rectangle {
                 border-radius: 4px;
                 background: close-hover.has-hover ? Theme.graphic-light : transparent;
 
-                Text {
-                    text: "×";
-                    font-size: 14px;
-                    color: Theme.text-secondary;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
+                Image {
+                    source: @image-url("../icons/x.svg");
+                    width: 12px;
+                    height: 12px;
+                    colorize: Theme.text-secondary;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
                 }
 
                 close-hover := TouchArea {
@@ -357,8 +366,10 @@ export component DebugPanel inherits Rectangle {
 
         // Level waveform
         Text {
+            letter-spacing: Theme.track-label;
+            font-weight: Theme.weight-label;
             text: "Input Level (green = speaking)";
-            font-family: Theme.font-mono;
+            font-family: Theme.font-label;
             font-size: 9px;
             color: Theme.text-tertiary;
         }
@@ -384,18 +395,18 @@ export component DebugPanel inherits Rectangle {
         StatBar {
             label: "Silero";
             value: root.silero-vad-prob;
-            bar-color: root.silero-vad-prob >= 0.5 ? #28C840 : #E06020;
+            bar-color: root.silero-vad-prob >= 0.5 ? Theme.accent-green : Theme.id-amber;
             threshold: 0.5;
         }
         StatBar {
             label: "RNNoise";
             value: root.rnnoise-prob;
-            bar-color: #3090E0;
+            bar-color: Theme.id-blue;
         }
         StatBar {
             label: "Level";
             value: root.input-level;
-            bar-color: #9060D0;
+            bar-color: Theme.id-purple;
         }
 
         Rectangle { height: 4px; }
@@ -411,8 +422,8 @@ export component DebugPanel inherits Rectangle {
             }
             VerticalLayout {
                 spacing: 4px;
-                StatusDot { label: root.is-muted ? "Muted ✓" : "Unmuted"; active: !root.is-muted; }
-                StatusDot { label: root.is-deafened ? "Deaf ✓" : "Listening"; active: !root.is-deafened; }
+                StatusDot { label: root.is-muted ? "Muted" : "Unmuted"; active: !root.is-muted; }
+                StatusDot { label: root.is-deafened ? "Deaf" : "Listening"; active: !root.is-deafened; }
             }
         }
 
@@ -437,20 +448,26 @@ export component DebugPanel inherits Rectangle {
                 spacing: 12px;
 
                 Text {
+                    letter-spacing: Theme.track-label;
+                    font-weight: Theme.weight-label;
                     text: "Cap: \{root.aec-capture}";
-                    font-family: Theme.font-mono;
+                    font-family: Theme.font-label;
                     font-size: 10px;
                     color: root.aec-capture > 0 ? Theme.text-primary : Theme.text-secondary;
                 }
                 Text {
+                    letter-spacing: Theme.track-label;
+                    font-weight: Theme.weight-label;
                     text: "Ref: \{root.aec-render}";
-                    font-family: Theme.font-mono;
+                    font-family: Theme.font-label;
                     font-size: 10px;
-                    color: root.aec-render > 0 ? Theme.accent-green : #FF4444;
+                    color: root.aec-render > 0 ? Theme.accent-green : Theme.live;
                 }
                 Text {
+                    letter-spacing: Theme.track-label;
+                    font-weight: Theme.weight-label;
                     text: "Enc: \{root.packets-encoded}";
-                    font-family: Theme.font-mono;
+                    font-family: Theme.font-label;
                     font-size: 10px;
                     color: Theme.text-secondary;
                 }
@@ -467,79 +484,99 @@ export component DebugPanel inherits Rectangle {
 
             Row {
                 Text {
-                    font-family: Theme.font-mono;
+                    letter-spacing: Theme.track-label;
+                    font-weight: Theme.weight-label;
+                    font-family: Theme.font-label;
                     font-size: 10px;
                     color: Theme.text-secondary;
                     text: "Streams";
                     col: 0;
                 }
                 Text {
-                    font-family: Theme.font-mono;
+                    letter-spacing: Theme.track-label;
+                    font-weight: Theme.weight-label;
+                    font-family: Theme.font-label;
                     font-size: 10px;
                     color: root.incoming-streams > 0 ? Theme.accent-green : Theme.text-secondary;
                     text: "\{root.incoming-streams}";
                     col: 1;
                 }
                 Text {
-                    font-family: Theme.font-mono;
+                    letter-spacing: Theme.track-label;
+                    font-weight: Theme.weight-label;
+                    font-family: Theme.font-label;
                     font-size: 10px;
                     color: Theme.text-secondary;
                     text: "Latency";
                     col: 2;
                 }
                 Text {
-                    font-family: Theme.font-mono;
+                    letter-spacing: Theme.track-label;
+                    font-weight: Theme.weight-label;
+                    font-family: Theme.font-label;
                     font-size: 10px;
-                    color: (root.rtt-ms / 2 + root.delay-ms) > 150 ? #FF4444 :
-                           (root.rtt-ms / 2 + root.delay-ms) > 80  ? #E0A020 : Theme.accent-green;
+                    color: (root.rtt-ms / 2 + root.delay-ms) > 150 ? Theme.live :
+                           (root.rtt-ms / 2 + root.delay-ms) > 80  ? Theme.id-amber : Theme.accent-green;
                     text: "\{Math.round(root.rtt-ms / 2 + root.delay-ms)}ms";
                     col: 3;
                 }
             }
             Row {
                 Text {
-                    font-family: Theme.font-mono;
+                    letter-spacing: Theme.track-label;
+                    font-weight: Theme.weight-label;
+                    font-family: Theme.font-label;
                     font-size: 10px;
                     color: Theme.text-secondary;
                     text: "RTP Recv";
                     col: 0;
                 }
                 Text {
-                    font-family: Theme.font-mono;
+                    letter-spacing: Theme.track-label;
+                    font-weight: Theme.weight-label;
+                    font-family: Theme.font-label;
                     font-size: 10px;
                     color: Theme.text-secondary;
                     text: "\{root.rtp-recv}";
                     col: 1;
                 }
                 Text {
-                    font-family: Theme.font-mono;
+                    letter-spacing: Theme.track-label;
+                    font-weight: Theme.weight-label;
+                    font-family: Theme.font-label;
                     font-size: 10px;
                     color: Theme.text-secondary;
                     text: "RTT";
                     col: 2;
                 }
                 Text {
-                    font-family: Theme.font-mono;
+                    letter-spacing: Theme.track-label;
+                    font-weight: Theme.weight-label;
+                    font-family: Theme.font-label;
                     font-size: 10px;
-                    color: root.rtt-ms > 200 ? #FF4444 : root.rtt-ms > 100 ? #E0A020 : Theme.text-secondary;
+                    color: root.rtt-ms > 200 ? Theme.live : root.rtt-ms > 100 ? Theme.id-amber : Theme.text-secondary;
                     text: "\{Math.round(root.rtt-ms)}ms";
                     col: 3;
                 }
             }
             Row {
                 Text {
-                    font-family: Theme.font-mono;
+                    letter-spacing: Theme.track-label;
+                    font-weight: Theme.weight-label;
+                    font-family: Theme.font-label;
                     font-size: 10px;
-                    color: root.underruns-5s > 0 ? #FF4444 : Theme.text-secondary;
+                    color: root.underruns-5s > 0 ? Theme.live : Theme.text-secondary;
                     text: "Underrun/5s";
                     col: 0;
                 }
                 Text {
-                    font-family: Theme.font-mono;
+                    letter-spacing: Theme.track-label;
+                    font-weight: Theme.weight-label;
+                    font-family: Theme.font-label;
                     font-size: 10px;
-                    color: root.underruns-5s > 0 ? #FF4444 : Theme.text-secondary;
+                    color: root.underruns-5s > 0 ? Theme.live : Theme.text-secondary;
                     // Windowed (real signal) with lifetime total for reference.
-                    text: "\{root.underruns-5s} (Σ\{root.underruns})";
+                    text: "\{root.underruns-5s} (tot \{root.underruns})";
                     col: 1;
                 }
             }
@@ -555,105 +592,133 @@ export component DebugPanel inherits Rectangle {
 
             Row {
                 Text {
-                    font-family: Theme.font-mono;
+                    letter-spacing: Theme.track-label;
+                    font-weight: Theme.weight-label;
+                    font-family: Theme.font-label;
                     font-size: 10px;
                     color: Theme.text-secondary;
                     text: "Mode";
                     col: 0;
                 }
                 Text {
-                    font-family: Theme.font-mono;
+                    letter-spacing: Theme.track-label;
+                    font-weight: Theme.weight-label;
+                    font-family: Theme.font-label;
                     font-size: 10px;
                     color: root.stream-mode == "sfu" ? Theme.accent-green :
-                           root.stream-mode == "p2p" ? #E0A020 : Theme.text-secondary;
+                           root.stream-mode == "p2p" ? Theme.id-amber : Theme.text-secondary;
                     text: root.stream-mode;
                     col: 1;
                 }
                 Text {
-                    font-family: Theme.font-mono;
+                    letter-spacing: Theme.track-label;
+                    font-weight: Theme.weight-label;
+                    font-family: Theme.font-label;
                     font-size: 10px;
                     color: Theme.text-secondary;
                     text: "Ingress";
                     col: 2;
                 }
                 Text {
-                    font-family: Theme.font-mono;
+                    letter-spacing: Theme.track-label;
+                    font-weight: Theme.weight-label;
+                    font-family: Theme.font-label;
                     font-size: 10px;
-                    color: root.stream-kbps > 6000 ? #FF4444 : root.stream-kbps > 3000 ? #E0A020 : Theme.accent-green;
+                    color: root.stream-kbps > 6000 ? Theme.live : root.stream-kbps > 3000 ? Theme.id-amber : Theme.accent-green;
                     text: "\{Math.round(root.stream-kbps)} kbps";
                     col: 3;
                 }
             }
             Row {
                 Text {
-                    font-family: Theme.font-mono;
+                    letter-spacing: Theme.track-label;
+                    font-weight: Theme.weight-label;
+                    font-family: Theme.font-label;
                     font-size: 10px;
                     color: Theme.text-secondary;
                     text: "Frames";
                     col: 0;
                 }
                 Text {
-                    font-family: Theme.font-mono;
+                    letter-spacing: Theme.track-label;
+                    font-weight: Theme.weight-label;
+                    font-family: Theme.font-label;
                     font-size: 10px;
                     color: Theme.text-secondary;
                     text: "\{root.stream-frames}";
                     col: 1;
                 }
                 Text {
-                    font-family: Theme.font-mono;
+                    letter-spacing: Theme.track-label;
+                    font-weight: Theme.weight-label;
+                    font-family: Theme.font-label;
                     font-size: 10px;
                     color: Theme.text-secondary;
                     text: "Present";
                     col: 2;
                 }
                 Text {
-                    font-family: Theme.font-mono;
+                    letter-spacing: Theme.track-label;
+                    font-weight: Theme.weight-label;
+                    font-family: Theme.font-label;
                     font-size: 10px;
-                    color: root.stream-fps < 30 ? #E0A020 : Theme.accent-green;
+                    color: root.stream-fps < 30 ? Theme.id-amber : Theme.accent-green;
                     text: "\{Math.round(root.stream-fps)} fps";
                     col: 3;
                 }
             }
             Row {
                 Text {
-                    font-family: Theme.font-mono;
+                    letter-spacing: Theme.track-label;
+                    font-weight: Theme.weight-label;
+                    font-family: Theme.font-label;
                     font-size: 10px;
                     color: Theme.text-secondary;
                     text: "UI Render";
                     col: 0;
                 }
                 Text {
-                    font-family: Theme.font-mono;
+                    letter-spacing: Theme.track-label;
+                    font-weight: Theme.weight-label;
+                    font-family: Theme.font-label;
                     font-size: 10px;
-                    color: root.stream-ui-render-fps < 30 ? #E0A020 : Theme.accent-green;
+                    color: root.stream-ui-render-fps < 30 ? Theme.id-amber : Theme.accent-green;
                     text: "\{Math.round(root.stream-ui-render-fps)} fps";
                     col: 1;
                 }
             }
             Row {
                 Text {
-                    font-family: Theme.font-mono;
+                    letter-spacing: Theme.track-label;
+                    font-weight: Theme.weight-label;
+                    font-family: Theme.font-label;
                     font-size: 10px;
                     color: Theme.text-secondary;
                     text: "Packets";
                     col: 0;
                 }
                 Text {
-                    font-family: Theme.font-mono;
+                    letter-spacing: Theme.track-label;
+                    font-weight: Theme.weight-label;
+                    font-family: Theme.font-label;
                     font-size: 10px;
                     color: Theme.text-secondary;
                     text: "\{root.stream-packets}";
                     col: 1;
                 }
                 Text {
-                    font-family: Theme.font-mono;
+                    letter-spacing: Theme.track-label;
+                    font-weight: Theme.weight-label;
+                    font-family: Theme.font-label;
                     font-size: 10px;
                     color: Theme.text-secondary;
                     text: "Data";
                     col: 2;
                 }
                 Text {
-                    font-family: Theme.font-mono;
+                    letter-spacing: Theme.track-label;
+                    font-weight: Theme.weight-label;
+                    font-family: Theme.font-label;
                     font-size: 10px;
                     color: Theme.text-secondary;
                     text: "\{(Math.round(root.stream-mb * 10.0) / 10.0)} MB";
@@ -662,16 +727,20 @@ export component DebugPanel inherits Rectangle {
             }
             Row {
                 Text {
-                    font-family: Theme.font-mono;
+                    letter-spacing: Theme.track-label;
+                    font-weight: Theme.weight-label;
+                    font-family: Theme.font-label;
                     font-size: 10px;
-                    color: root.stream-truncations > 0 ? #FF4444 : Theme.text-secondary;
+                    color: root.stream-truncations > 0 ? Theme.live : Theme.text-secondary;
                     text: "Trunc";
                     col: 0;
                 }
                 Text {
-                    font-family: Theme.font-mono;
+                    letter-spacing: Theme.track-label;
+                    font-weight: Theme.weight-label;
+                    font-family: Theme.font-label;
                     font-size: 10px;
-                    color: root.stream-truncations > 0 ? #FF4444 : Theme.text-secondary;
+                    color: root.stream-truncations > 0 ? Theme.live : Theme.text-secondary;
                     text: "\{root.stream-truncations}";
                     col: 1;
                 }
@@ -687,29 +756,37 @@ export component DebugPanel inherits Rectangle {
 
             Row {
                 Text {
-                    font-family: Theme.font-mono;
+                    letter-spacing: Theme.track-label;
+                    font-weight: Theme.weight-label;
+                    font-family: Theme.font-label;
                     font-size: 10px;
                     color: Theme.text-secondary;
                     text: "Mode";
                     col: 0;
                 }
                 Text {
-                    font-family: Theme.font-mono;
+                    letter-spacing: Theme.track-label;
+                    font-weight: Theme.weight-label;
+                    font-family: Theme.font-label;
                     font-size: 10px;
                     color: root.host-pacing-mode == "sfu" ? Theme.accent-green :
-                           root.host-pacing-mode == "p2p" ? #E0A020 : Theme.text-secondary;
+                           root.host-pacing-mode == "p2p" ? Theme.id-amber : Theme.text-secondary;
                     text: root.host-pacing-mode;
                     col: 1;
                 }
                 Text {
-                    font-family: Theme.font-mono;
+                    letter-spacing: Theme.track-label;
+                    font-weight: Theme.weight-label;
+                    font-family: Theme.font-label;
                     font-size: 10px;
                     color: Theme.text-secondary;
                     text: "Target";
                     col: 2;
                 }
                 Text {
-                    font-family: Theme.font-mono;
+                    letter-spacing: Theme.track-label;
+                    font-weight: Theme.weight-label;
+                    font-family: Theme.font-label;
                     font-size: 10px;
                     color: Theme.text-secondary;
                     text: "\{root.host-pacing-target-kbps} kbps";
@@ -718,29 +795,37 @@ export component DebugPanel inherits Rectangle {
             }
             Row {
                 Text {
-                    font-family: Theme.font-mono;
+                    letter-spacing: Theme.track-label;
+                    font-weight: Theme.weight-label;
+                    font-family: Theme.font-label;
                     font-size: 10px;
                     color: Theme.text-secondary;
                     text: "Out";
                     col: 0;
                 }
                 Text {
-                    font-family: Theme.font-mono;
+                    letter-spacing: Theme.track-label;
+                    font-weight: Theme.weight-label;
+                    font-family: Theme.font-label;
                     font-size: 10px;
-                    color: root.host-pacing-out-kbps > root.host-pacing-target-kbps * 1.15 ? #FF4444 :
-                           root.host-pacing-out-kbps > root.host-pacing-target-kbps * 1.03 ? #E0A020 : Theme.accent-green;
+                    color: root.host-pacing-out-kbps > root.host-pacing-target-kbps * 1.15 ? Theme.live :
+                           root.host-pacing-out-kbps > root.host-pacing-target-kbps * 1.03 ? Theme.id-amber : Theme.accent-green;
                     text: "\{Math.round(root.host-pacing-out-kbps)} kbps";
                     col: 1;
                 }
                 Text {
-                    font-family: Theme.font-mono;
+                    letter-spacing: Theme.track-label;
+                    font-weight: Theme.weight-label;
+                    font-family: Theme.font-label;
                     font-size: 10px;
                     color: Theme.text-secondary;
                     text: "Paced";
                     col: 2;
                 }
                 Text {
-                    font-family: Theme.font-mono;
+                    letter-spacing: Theme.track-label;
+                    font-weight: Theme.weight-label;
+                    font-family: Theme.font-label;
                     font-size: 10px;
                     color: Theme.text-secondary;
                     text: "\{(Math.round(root.host-pacing-mb * 10.0) / 10.0)} MB";
@@ -749,28 +834,36 @@ export component DebugPanel inherits Rectangle {
             }
             Row {
                 Text {
-                    font-family: Theme.font-mono;
+                    letter-spacing: Theme.track-label;
+                    font-weight: Theme.weight-label;
+                    font-family: Theme.font-label;
                     font-size: 10px;
                     color: Theme.text-secondary;
                     text: "Sleep";
                     col: 0;
                 }
                 Text {
-                    font-family: Theme.font-mono;
+                    letter-spacing: Theme.track-label;
+                    font-weight: Theme.weight-label;
+                    font-family: Theme.font-label;
                     font-size: 10px;
                     color: Theme.text-secondary;
                     text: "\{root.host-pacing-sleep-count}";
                     col: 1;
                 }
                 Text {
-                    font-family: Theme.font-mono;
+                    letter-spacing: Theme.track-label;
+                    font-weight: Theme.weight-label;
+                    font-family: Theme.font-label;
                     font-size: 10px;
                     color: Theme.text-secondary;
                     text: "Sleep ms";
                     col: 2;
                 }
                 Text {
-                    font-family: Theme.font-mono;
+                    letter-spacing: Theme.track-label;
+                    font-weight: Theme.weight-label;
+                    font-family: Theme.font-label;
                     font-size: 10px;
                     color: Theme.text-secondary;
                     text: "\{root.host-pacing-sleep-ms}";
@@ -779,30 +872,38 @@ export component DebugPanel inherits Rectangle {
             }
             Row {
                 Text {
-                    font-family: Theme.font-mono;
+                    letter-spacing: Theme.track-label;
+                    font-weight: Theme.weight-label;
+                    font-family: Theme.font-label;
                     font-size: 10px;
                     color: Theme.text-secondary;
                     text: "Sleep d";
                     col: 0;
                 }
                 Text {
-                    font-family: Theme.font-mono;
+                    letter-spacing: Theme.track-label;
+                    font-weight: Theme.weight-label;
+                    font-family: Theme.font-label;
                     font-size: 10px;
-                    color: root.host-pacing-sleep-delta-count > 0 ? #E0A020 : Theme.text-secondary;
+                    color: root.host-pacing-sleep-delta-count > 0 ? Theme.id-amber : Theme.text-secondary;
                     text: "\{root.host-pacing-sleep-delta-count}";
                     col: 1;
                 }
                 Text {
-                    font-family: Theme.font-mono;
+                    letter-spacing: Theme.track-label;
+                    font-weight: Theme.weight-label;
+                    font-family: Theme.font-label;
                     font-size: 10px;
                     color: Theme.text-secondary;
                     text: "Sleep d ms";
                     col: 2;
                 }
                 Text {
-                    font-family: Theme.font-mono;
+                    letter-spacing: Theme.track-label;
+                    font-weight: Theme.weight-label;
+                    font-family: Theme.font-label;
                     font-size: 10px;
-                    color: root.host-pacing-sleep-delta-ms > 0 ? #E0A020 : Theme.text-secondary;
+                    color: root.host-pacing-sleep-delta-ms > 0 ? Theme.id-amber : Theme.text-secondary;
                     text: "\{root.host-pacing-sleep-delta-ms}";
                     col: 3;
                 }
@@ -815,8 +916,9 @@ export component DebugPanel inherits Rectangle {
         Rectangle { height: 1px; background: Theme.graphic-light; }
 
         Text {
+            letter-spacing: Theme.track-label;
             text: "Diagnostic Capture";
-            font-family: Theme.font-mono;
+            font-family: Theme.font-label;
             font-size: 9px;
             font-weight: 600;
             color: Theme.text-tertiary;
@@ -826,14 +928,15 @@ export component DebugPanel inherits Rectangle {
             height: 30px;
             border-radius: Theme.r-inner;
             background: root.diag-capturing
-                ? #E0402080
+                ? Theme.live-bg
                 : (diag-hover.has-hover ? Theme.graphic-light : Theme.bg-app);
             border-width: 1px;
-            border-color: root.diag-capturing ? #E06020 : Theme.graphic-light;
+            border-color: root.diag-capturing ? Theme.live : Theme.graphic-light;
 
             Text {
-                text: root.diag-capturing ? "⏺ Stop & upload" : "Start diagnostic capture";
-                font-family: Theme.font-mono;
+                letter-spacing: Theme.track-label;
+                text: root.diag-capturing ? "Stop & upload" : "Start diagnostic capture";
+                font-family: Theme.font-label;
                 font-size: 10px;
                 font-weight: 600;
                 color: Theme.text-primary;
@@ -847,8 +950,10 @@ export component DebugPanel inherits Rectangle {
         }
 
         if root.diag-status != "": Text {
+            letter-spacing: Theme.track-label;
+            font-weight: Theme.weight-label;
             text: root.diag-status;
-            font-family: Theme.font-mono;
+            font-family: Theme.font-label;
             font-size: 9px;
             color: Theme.text-secondary;
             wrap: word-wrap;

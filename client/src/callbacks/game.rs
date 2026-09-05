@@ -118,6 +118,11 @@ pub fn wire(ctx: &AppContext) {
                 game_pid,
                 title
             );
+            // The quality pills in the STREAM menu and the window picker
+            // write the same property, so the quick path has to read it.
+            // A hardcoded preset here made the pills a lie on the one path
+            // most people take.
+            let preset = app.get_stream_preset().max(0) as u32;
             let _ = cmd.send(Command::StartStream {
                 crew_id,
                 title,
@@ -125,7 +130,7 @@ pub fn wire(ctx: &AppContext) {
                 monitor_index: None,
                 hwnd: None,
                 pid: Some(game_pid),
-                preset: 2, // Medium
+                preset,
             });
         });
     }

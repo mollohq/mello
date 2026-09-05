@@ -1,4 +1,5 @@
 import { Theme, MelloTextInput } from "../theme.slint";
+import { CutShape, CutButtonShape } from "../components/cut.slint";
 
 export component InviteShareModal inherits Rectangle {
     in property <string> invite-url: "";
@@ -9,7 +10,7 @@ export component InviteShareModal inherits Rectangle {
 
     width: 100%;
     height: 100%;
-    background: #000000AA;
+    background: Theme.scrim;
 
     revert-timer := Timer {
         interval: 3s;
@@ -29,8 +30,22 @@ export component InviteShareModal inherits Rectangle {
         y: (parent.height - self.height) / 2;
         width: 380px;
         height: inner.preferred-height + 40px;
-        background: Theme.surface;
-        border-radius: Theme.radius-lg;
+        background: transparent;
+
+        // A modal panel is a card, so it carries the cut and a keyline.
+        CutShape {
+            width: parent.width;
+            height: parent.height;
+            n: Theme.notch;
+            fill: Theme.graphic-light;
+        }
+        CutShape {
+            width: parent.width;
+            height: parent.height;
+            n: Theme.notch;
+            inset: Theme.keyline;
+            fill: Theme.surface;
+        }
 
         card-touch := TouchArea {}
 
@@ -39,14 +54,17 @@ export component InviteShareModal inherits Rectangle {
             spacing: 14px;
 
             Text {
+                font-family: Theme.font-display;
                 text: "Invite people";
                 font-size: Theme.font-xl;
-                font-weight: 700;
+                font-weight: Theme.weight-display-bold;
                 color: Theme.text-primary;
                 horizontal-alignment: center;
             }
 
             Text {
+                font-weight: Theme.weight-sentence;
+                font-family: Theme.font-body;
                 text: "Share this link to invite anyone to your crew:";
                 font-size: Theme.font-sm;
                 color: Theme.text-secondary;
@@ -56,7 +74,6 @@ export component InviteShareModal inherits Rectangle {
 
             Rectangle {
                 height: 40px;
-                border-radius: Theme.r-inner;
                 background: Theme.bg-app;
 
                 MelloTextInput {
@@ -78,14 +95,24 @@ export component InviteShareModal inherits Rectangle {
                     width: 140px;
                     height: 40px;
                     x: (parent.width - self.width) / 2;
-                    border-radius: Theme.r-inner;
-                    background: copied ? Theme.voice-active : (copy-touch.has-hover ? #FF1E56DD : Theme.accent);
+                    background: transparent;
+
+                    // Copying is an action, not a commit: it changes nothing
+                    // on the server, so it stays white.
+                    CutButtonShape {
+                        width: parent.width;
+                        height: parent.height;
+                        n: Theme.cut;
+                        fill: copied ? Theme.accent-green
+                            : (copy-touch.has-hover ? Theme.action-press : Theme.action);
+                    }
 
                     Text {
+                        font-family: Theme.font-display;
                         text: copied ? "Copied!" : "Copy link";
                         font-size: Theme.font-md;
-                        font-weight: 600;
-                        color: #FFFFFF;
+                        font-weight: Theme.weight-display;
+                        color: Theme.on-action;
                         horizontal-alignment: center;
                         vertical-alignment: center;
                     }
@@ -101,5 +128,20 @@ export component InviteShareModal inherits Rectangle {
                 }
             }
         }
+    }
+}
+
+// Headless preview:
+//   slint-viewer --screenshot out.png --component Preview \
+//     client/ui/panels/invite_share_modal.slint
+export component Preview inherits Rectangle {
+    width: 900px;
+    height: 600px;
+    background: Theme.bg-app;
+
+    InviteShareModal {
+        width: parent.width;
+        height: parent.height;
+        invite-url: "m3llo.io/join/ALPHA-992-K";
     }
 }

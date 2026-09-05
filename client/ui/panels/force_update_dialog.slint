@@ -9,16 +9,16 @@ component ForceUpdateButton inherits Rectangle {
     width: label.preferred-width + 32px;
     height: 34px;
     background: primary
-        ? (touch.has-hover ? #D8404F : #EB4D5F)
-        : (touch.has-hover ? #FFFFFF0D : transparent);
+        ? (touch.has-hover ? Theme.confirm-press : Theme.confirm)
+        : (touch.has-hover ? Theme.hover-overlay : transparent);
     border-width: primary ? 0px : 1px;
-    border-color: #FFFFFF24;
+    border-color: Theme.action-line;
     border-radius: 9px;
     animate background { duration: 150ms; }
 
     label := Text {
         text: root.text;
-        color: primary ? white : #C9CCD2;
+        color: primary ? Theme.on-confirm : Theme.text-body;
         font-family: Theme.font-sans;
         font-size: Theme.font-md;
         font-weight: 500;
@@ -81,9 +81,9 @@ export component ForceUpdateWindow inherits Window {
     Rectangle {
         width: parent.width;
         height: parent.height;
-        background: #15171B;
+        background: Theme.surface;
         border-width: 1px;
-        border-color: #FFFFFF12;
+        border-color: Theme.graphic-light;
         border-radius: Theme.radius-lg;
         clip: true;
 
@@ -105,19 +105,20 @@ export component ForceUpdateWindow inherits Window {
 
                     Text {
                         text: "m3llo";
-                        color: #F4F5F7;
+                        color: Theme.text-primary;
                         font-family: Theme.font-sans;
                         font-size: Theme.font-xl;
-                        font-weight: 700;
+                        font-weight: Theme.weight-display-bold;
                         letter-spacing: -0.4px;
                     }
 
                     Rectangle { horizontal-stretch: 1; }
 
                     Text {
+                        letter-spacing: Theme.track-label;
                         text: root.version-text;
-                        color: failed ? #7A8089 : #C9CCD2;
-                        font-family: Theme.font-mono;
+                        color: failed ? Theme.text-secondary : Theme.text-body;
+                        font-family: Theme.font-label;
                         font-size: 12px;
                         font-weight: 600;
                     }
@@ -128,15 +129,16 @@ export component ForceUpdateWindow inherits Window {
 
                     Text {
                         text: "Update failed";
-                        color: #F4F5F7;
+                        color: Theme.text-primary;
                         font-family: Theme.font-sans;
                         font-size: Theme.font-lg;
                         font-weight: 500;
                     }
 
                     Text {
+                        font-weight: Theme.weight-sentence;
                         text: root.failure-body;
-                        color: #9AA0A8;
+                        color: Theme.text-secondary;
                         font-family: Theme.font-sans;
                         font-size: 12.5px;
                         wrap: word-wrap;
@@ -149,7 +151,7 @@ export component ForceUpdateWindow inherits Window {
 
                     Text {
                         text: root.stage;
-                        color: #B3B7BE;
+                        color: Theme.text-body;
                         font-family: Theme.font-sans;
                         font-size: Theme.font-md;
                         font-weight: 500;
@@ -158,10 +160,11 @@ export component ForceUpdateWindow inherits Window {
                     Rectangle { horizontal-stretch: 1; }
 
                     Text {
+                        letter-spacing: Theme.track-label;
                         visible: !root.indeterminate;
                         text: root.progress-text;
-                        color: #F4F5F7;
-                        font-family: Theme.font-mono;
+                        color: Theme.text-primary;
+                        font-family: Theme.font-label;
                         font-size: Theme.font-md;
                         font-weight: 600;
                     }
@@ -169,7 +172,7 @@ export component ForceUpdateWindow inherits Window {
 
                 track := Rectangle {
                     height: 3px;
-                    background: #FFFFFF14;
+                    background: Theme.raised;
                     border-radius: 3px;
                     clip: true;
 
@@ -183,7 +186,7 @@ export component ForceUpdateWindow inherits Window {
                                 ? parent.width * 0.28
                                 : parent.width * clamp(root.progress, 0.0, 1.0);
                         height: parent.height;
-                        background: failed ? #4A4F57 : #EB4D5F;
+                        background: failed ? Theme.text-tertiary : Theme.live;
                         border-radius: 3px;
                         animate width { duration: 100ms; }
                         animate x { duration: 50ms; }
@@ -196,8 +199,8 @@ export component ForceUpdateWindow inherits Window {
                     Text {
                         y: 11px;
                         text: root.error-code;
-                        color: #6B7079;
-                        font-family: Theme.font-mono;
+                        color: Theme.text-secondary;
+                        font-family: Theme.font-label;
                         font-size: Theme.font-sm;
                         font-weight: 600;
                         letter-spacing: 0.22px;
@@ -208,8 +211,9 @@ export component ForceUpdateWindow inherits Window {
                     padding-top: 13px;
 
                     Text {
+                        font-weight: Theme.weight-sentence;
                         text: "Required update";
-                        color: #6B7079;
+                        color: Theme.text-secondary;
                         font-family: Theme.font-sans;
                         font-size: Theme.font-sm;
                     }
@@ -217,10 +221,11 @@ export component ForceUpdateWindow inherits Window {
                     Rectangle { horizontal-stretch: 1; }
 
                     Text {
+                        letter-spacing: Theme.track-label;
                         visible: !root.indeterminate;
                         text: root.bytes-text;
-                        color: #6B7079;
-                        font-family: Theme.font-mono;
+                        color: Theme.text-secondary;
+                        font-family: Theme.font-label;
                         font-size: Theme.font-sm;
                         font-weight: 600;
                     }

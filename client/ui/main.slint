@@ -24,6 +24,7 @@ import {
 } from "types.slint";
 import { CrewPanel } from "panels/crew_panel.slint";
 import { StreamSourcePicker } from "panels/stream_source_picker.slint";
+import { StreamSourceMenu } from "panels/stream_source_menu.slint";
 import { VoiceChannelView } from "panels/voice_channel_view.slint";
 import { ChatPanel } from "panels/chat_panel.slint";
 import { ControlBar } from "panels/control_bar.slint";
@@ -140,6 +141,8 @@ export component MainWindow inherits Window {
     // --- Crews ---
     in property <[CrewData]> crews: [];
     in property <string> active-crew-id: "";
+    /// Name of the active crew. Discover shows it on the way back.
+    in property <string> active-crew-name: "";
 
     // --- Discover crews ---
     in-out property <bool> show-discover: false;
@@ -290,6 +293,12 @@ export component MainWindow inherits Window {
 
     // --- Streaming ---
     in-out property <bool> source-picker-open: false;
+    /// The STREAM caret menu: game, window, screen, camera.
+    in-out property <bool> source-menu-open: false;
+    /// Stream quality. The menu and the window picker both set it, and
+    /// every start path reads it, so the pick means the same thing
+    /// wherever it was made. 0=Ultra 1=High 2=Medium 3=Low 4=Potato.
+    in-out property <int> stream-preset: 2;
     in property <[CaptureSourceData]> stream-monitors: [];
     in property <[CaptureSourceData]> stream-games: [];
     in property <[CaptureSourceData]> stream-windows: [];
@@ -319,6 +328,8 @@ export component MainWindow inherits Window {
     // --- Join crew modal (deep link invite) ---
     in-out property <bool> join-crew-modal-open: false;
     in property <string> join-crew-name: "";
+    /// Two letters for the crew tile in the join dialog.
+    in property <string> join-crew-initials: "";
     in property <string> join-crew-id: "";
     in property <string> join-crew-invite-code: "";
     in property <string> join-crew-highlight: "";
@@ -536,7 +547,6 @@ export component MainWindow inherits Window {
     callback deafen-toggle();
     callback voice-toggle();
     callback presence-changed(int);
-    callback theme-toggled();
     callback settings-requested();
     callback capture-device-selected(string);
     callback playback-device-selected(string);
@@ -828,6 +838,7 @@ export component MainWindow inherits Window {
                     height: parent.height;
                     crews: root.discover-crews-list;
                     bento-set-bases: root.discover-bento-bases;
+                    back-to: root.active-crew-name;
                     join-crew(id) => {
                         root.discover-join-crew(id);
                     }
@@ -953,8 +964,10 @@ export component MainWindow inherits Window {
                         is-watching: root.is-watching;
                         bar-state <=> root.bar-state;
                         go-live-clicked => {
+                            // The menu names the display it would take, so
+                            // the source list has to be in before it opens.
                             root.list-capture-sources();
-                            root.source-picker-open = true;
+                            root.source-menu-open = true;
                         }
                         mic-toggled => {
                             root.mic-toggle();
@@ -970,9 +983,6 @@ export component MainWindow inherits Window {
                         }
                         presence-changed(status) => {
                             root.presence-changed(status);
-                        }
-                        theme-toggled => {
-                            root.theme-toggled();
                         }
                         settings-clicked => {
                             root.settings-requested();
@@ -1185,13 +1195,13 @@ export component MainWindow inherits Window {
                     Rectangle {
                         width: adw-ok-text.preferred-width + 32px;
                         height: 32px;
-                        background: adw-ok-ta.has-hover ? #FF3D6E : Theme.accent;
+                        background: adw-ok-ta.has-hover ? Theme.action-press : Theme.action;
                         border-radius: Theme.r-inner;
                         animate background { duration: 150ms; }
 
                         adw-ok-text := Text {
                             text: "Continue";
-                            color: white;
+                            color: Theme.on-action;
                             font-family: Theme.font-sans;
                             font-size: 13px;
                             font-weight: 600;
@@ -1364,6 +1374,7 @@ export component MainWindow inherits Window {
     // ===================== JOIN CREW MODAL =====================
     if join-crew-modal-open: JoinCrewModal {
         crew-name: root.join-crew-name;
+        crew-initials: root.join-crew-initials;
         crew-id: root.join-crew-id;
         highlight: root.join-crew-highlight;
         avatar-seed: root.join-crew-avatar-seed;
@@ -1663,11 +1674,51 @@ export component MainWindow inherits Window {
         }
     }
 
+    // ===================== STREAM SOURCE MENU =====================
+    if source-menu-open: StreamSourceMenu {
+        game-active: root.game-active;
+        game-id: root.game-id;
+        game-name: root.game-name;
+        game-short-name: root.game-short-name;
+        game-color: root.game-color;
+        game-runtime-icon: root.game-runtime-icon;
+        game-has-runtime-icon: root.game-has-runtime-icon;
+        // The tick means "this is what you are streaming". The quick path
+        // labels the stream with the game name, so that is the test.
+        streaming-game: root.is-hosting && root.game-active
+            && root.stream-label == root.game-name;
+        monitors: root.stream-monitors;
+        preset <=> root.stream-preset;
+
+        close-requested => {
+            root.source-menu-open = false;
+            root.stop-thumbnail-refresh();
+        }
+        stream-game => {
+            root.source-menu-open = false;
+            root.stop-thumbnail-refresh();
+            root.stream-requested();
+        }
+        pick-window => {
+            root.source-menu-open = false;
+            root.source-picker-open = true;
+        }
+        stream-screen(id) => {
+            root.source-menu-open = false;
+            root.stop-thumbnail-refresh();
+            if (id != "") {
+                root.start-stream(id, "monitor", root.stream-preset);
+            }
+        }
+        stream-camera => {
+            root.source-menu-open = false;
+        }
+    }
+
     // ===================== STREAM SOURCE PICKER OVERLAY =====================
     if source-picker-open: StreamSourcePicker {
-        monitors: root.stream-monitors;
-        games: root.stream-games;
         windows: root.stream-windows;
+        selected-preset <=> root.stream-preset;
         close-requested => {
             root.source-picker-open = false;
             root.stop-thumbnail-refresh();

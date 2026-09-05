@@ -37,7 +37,7 @@ pub fn wire(ctx: &AppContext) {
                 app.set_user_tag("".into());
                 app.set_user_avatar(slint::Image::default());
                 app.set_has_user_avatar(false);
-                app.set_active_crew_id("".into());
+                crate::converters::set_active_crew(&app, "");
                 crate::onboarding::advance_with(
                     &app,
                     &settings_ref,
