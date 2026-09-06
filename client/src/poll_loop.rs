@@ -274,6 +274,7 @@ impl PollState {
                                 poll_ctx
                                     .app
                                     .set_settings_echo_suppression(settings.echo_suppression);
+                                poll_ctx.app.set_settings_agc(settings.agc);
                                 poll_ctx
                                     .app
                                     .set_settings_ptt_mode(settings.input_mode == "push_to_talk");
