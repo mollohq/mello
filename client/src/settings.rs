@@ -32,6 +32,7 @@ pub struct Settings {
     pub output_volume: f32,
     pub noise_suppression: bool,
     pub echo_cancellation: bool,
+    pub echo_suppression: bool,
     pub input_mode: String, // "voice_activity" or "push_to_talk"
     pub vad_threshold: f32,
     // HUD tab
@@ -79,6 +80,7 @@ impl Default for Settings {
             output_volume: 1.0,
             noise_suppression: true,
             echo_cancellation: true,
+            echo_suppression: false,
             input_mode: "voice_activity".into(),
             vad_threshold: -40.0,
             hud_enabled: true,

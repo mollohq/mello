@@ -4,11 +4,6 @@
 #include <algorithm>
 #include <cmath>
 
-#ifdef _WIN32
-#include <Windows.h>
-#include <filesystem>
-#endif
-
 namespace mello::audio {
 
 VoiceActivityDetector::VoiceActivityDetector() = default;
@@ -23,96 +18,21 @@ bool VoiceActivityDetector::initialize(const std::string& model_path) {
     MELLO_LOG_WARN("vad", "Silero VAD stubbed (MELLO_IOS_NO_VAD kill-switch) — ORT not linked");
     return false;
 #else
-    try {
-#ifdef _WIN32
-        // Windows ships onnxruntime.dll in System32/WinSxS (Copilot, Studio Effects)
-        // which shadows ours via the PE loader. Bypass the import table entirely:
-        // LoadLibrary our copy by full path and GetProcAddress for OrtGetApiBase.
-        {
-            auto try_load = [](const std::filesystem::path& p) -> HMODULE {
-                HMODULE h = LoadLibraryExW(p.c_str(), nullptr,
-                                           LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR |
-                                           LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
-                if (!h) h = LoadLibraryW(p.c_str());
-                return h;
-            };
-
-            // Try next to the model first (production layout), then next to
-            // the exe (dev layout — build.rs copies DLLs to target/<profile>/).
-            auto model_dir = std::filesystem::path(model_path).parent_path();
-            HMODULE h = try_load(model_dir / "onnxruntime.dll");
-            if (!h) {
-                wchar_t exe_buf[MAX_PATH];
-                GetModuleFileNameW(nullptr, exe_buf, MAX_PATH);
-                auto exe_dir = std::filesystem::path(exe_buf).parent_path();
-                h = try_load(exe_dir / "onnxruntime.dll");
-            }
-            if (!h) {
-                MELLO_LOG_ERROR("vad", "cannot load onnxruntime.dll (err=%lu)", GetLastError());
-                return false;
-            }
-            wchar_t loaded[MAX_PATH];
-            GetModuleFileNameW(h, loaded, MAX_PATH);
-            MELLO_LOG_INFO("vad", "ORT DLL loaded: %ls", loaded);
-
-            auto get_api_base = reinterpret_cast<decltype(&OrtGetApiBase)>(
-                GetProcAddress(h, "OrtGetApiBase"));
-            if (!get_api_base) {
-                MELLO_LOG_ERROR("vad", "OrtGetApiBase not found in DLL");
-                return false;
-            }
-
-            const OrtApiBase* api_base = get_api_base();
-            MELLO_LOG_INFO("vad", "ORT DLL version=%s (need API %d)",
-                           api_base->GetVersionString(), ORT_API_VERSION);
-
-            const OrtApi* api = api_base->GetApi(ORT_API_VERSION);
-            if (!api) {
-                MELLO_LOG_ERROR("vad", "GetApi(%d) returned null — DLL too old (%s)",
-                                ORT_API_VERSION, api_base->GetVersionString());
-                return false;
-            }
-            Ort::InitApi(api);
-        }
-#else
-        const OrtApiBase* api_base = OrtGetApiBase();
-        if (!api_base) {
-            MELLO_LOG_ERROR("vad", "OrtGetApiBase() returned null");
-            return false;
-        }
-        const OrtApi* api = api_base->GetApi(ORT_API_VERSION);
-        if (!api) {
-            MELLO_LOG_ERROR("vad", "ORT API version mismatch (need %d, DLL=%s)",
-                            ORT_API_VERSION, api_base->GetVersionString());
-            return false;
-        }
-        Ort::InitApi(api);
-#endif
-
-        env_ = std::make_unique<Ort::Env>(ORT_LOGGING_LEVEL_WARNING, "mello_vad");
-        session_options_ = std::make_unique<Ort::SessionOptions>();
-        session_options_->SetIntraOpNumThreads(1);
-        session_options_->SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
-
-        MELLO_LOG_INFO("vad", "loading model: %s", model_path.c_str());
-#ifdef _WIN32
-        std::wstring wpath(model_path.begin(), model_path.end());
-        session_ = new Ort::Session(*env_, wpath.c_str(), *session_options_);
-#else
-        session_ = new Ort::Session(*env_, model_path.c_str(), *session_options_);
-#endif
-        h_state_.resize(VAD_STATE_SIZE, 0.0f);
-        context_.resize(VAD_CONTEXT_SIZE, 0.0f);
-        model_input_buf_.resize(VAD_CONTEXT_SIZE + VAD_CHUNK_SIZE);
-
-        initialized_ = true;
-        MELLO_LOG_INFO("vad", "Silero VAD v5 initialized (model=%s)", model_path.c_str());
-        return true;
-    } catch (const Ort::Exception& e) {
-        MELLO_LOG_ERROR("vad", "Silero VAD init failed: %s", e.what());
+    ort_ = init_ort(model_path);
+    if (!ort_) return false;
+    session_ = open_ort_session(*ort_, model_path, "vad");
+    if (!session_) {
+        ort_.reset();
         return false;
     }
-#endif // MELLO_IOS_NO_VAD
+    h_state_.resize(VAD_STATE_SIZE, 0.0f);
+    context_.resize(VAD_CONTEXT_SIZE, 0.0f);
+    model_input_buf_.resize(VAD_CONTEXT_SIZE + VAD_CHUNK_SIZE);
+
+    initialized_ = true;
+    MELLO_LOG_INFO("vad", "Silero VAD v5 initialized (model=%s)", model_path.c_str());
+    return true;
+#endif  // MELLO_IOS_NO_VAD
 }
 
 void VoiceActivityDetector::shutdown() {
@@ -121,8 +41,7 @@ void VoiceActivityDetector::shutdown() {
         delete session_;
         session_ = nullptr;
     }
-    session_options_.reset();
-    env_.reset();
+    ort_.reset();
 #endif
     h_state_.clear();
     context_.clear();

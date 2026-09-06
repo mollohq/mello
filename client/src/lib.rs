@@ -436,6 +436,9 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
         let _ = cmd_tx.send(Command::SetEchoCancellation {
             enabled: s.echo_cancellation,
         });
+        let _ = cmd_tx.send(Command::SetEchoSuppression {
+            enabled: s.echo_suppression,
+        });
         let _ = cmd_tx.send(Command::SetNoiseSuppression {
             enabled: s.noise_suppression,
         });

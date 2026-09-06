@@ -4,6 +4,7 @@
 #include "opus_codec.hpp"
 #include "noise_suppressor.hpp"
 #include "echo_canceller.hpp"
+#include "echo_suppressor.hpp"
 #include "jitter_buffer.hpp"
 #include "device_enumerator.hpp"
 #include "clip_buffer.hpp"
@@ -64,6 +65,10 @@ public:
     float output_volume() const { return output_gain_.load(std::memory_order_relaxed); }
     void set_echo_cancellation(bool enabled);
     void set_agc(bool enabled) { echo_canceller_.set_agc_enabled(enabled); }
+    /// Neural residual-echo suppressor (flag-off rollout). Soft dependency:
+    /// missing model degrades to passthrough, never blocks audio.
+    void set_echo_suppression(bool enabled) { echo_suppressor_.set_enabled(enabled); }
+    bool echo_suppression_enabled() const { return echo_suppressor_.enabled(); }
     void set_noise_suppression(bool enabled) { set_ns_mode(enabled ? NsMode::Rnnoise : NsMode::Off); }
     void set_ns_mode(NsMode mode);
     NsMode ns_mode() const { return static_cast<NsMode>(ns_mode_.load(std::memory_order_relaxed)); }
@@ -166,6 +171,7 @@ private:
     OpusEnc encoder_;
     NoiseSuppressor noise_suppressor_;
     EchoCanceller echo_canceller_;
+    EchoSuppressor echo_suppressor_;
     VoiceActivityDetector vad_;
     std::unordered_map<std::string, OpusDec> decoders_;
     std::unordered_map<std::string, bool> decoder_primed_;

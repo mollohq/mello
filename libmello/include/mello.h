@@ -116,6 +116,11 @@ MELLO_API void mello_voice_set_vad_callback(
 /** Enable/disable echo cancellation (AEC3). Enabled by default. */
 MELLO_API void mello_voice_set_echo_cancellation(MelloContext* ctx, bool enabled);
 
+/** Enable/disable neural residual-echo suppression (post-AEC mask model).
+ *  Disabled by default. Soft dependency: without the model file the stage
+ *  is a passthrough and the toggle has no audible effect. */
+MELLO_API void mello_voice_set_echo_suppression(MelloContext* ctx, bool enabled);
+
 /** Enable/disable automatic gain control (AGC2). Enabled by default. */
 MELLO_API void mello_voice_set_agc(MelloContext* ctx, bool enabled);
 

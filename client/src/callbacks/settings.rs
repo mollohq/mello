@@ -54,6 +54,7 @@ pub fn wire(ctx: &AppContext) {
                 app.set_settings_output_volume(settings.output_volume);
                 app.set_settings_noise_suppression(settings.noise_suppression);
                 app.set_settings_echo_cancellation(settings.echo_cancellation);
+                app.set_settings_echo_suppression(settings.echo_suppression);
                 app.set_settings_ptt_mode(settings.input_mode == "push_to_talk");
                 app.set_settings_vad_threshold(settings.vad_threshold);
                 app.set_settings_hud_enabled(settings.hud_enabled);
@@ -292,6 +293,16 @@ pub fn wire(ctx: &AppContext) {
     }
     {
         let s = ctx.settings.clone();
+        let cmd = ctx.cmd_tx.clone();
+        ctx.app.on_setting_changed_echo_suppression(move |v| {
+            let mut settings = s.borrow_mut();
+            settings.echo_suppression = v;
+            settings.save();
+            let _ = cmd.send(Command::SetEchoSuppression { enabled: v });
+        });
+    }
+    {
+        let s = ctx.settings.clone();
         let hk = ctx.hotkey_mgr.clone();
         let cmd = ctx.cmd_tx.clone();
         let app_weak = ctx.app.as_weak();
@@ -388,6 +399,9 @@ pub fn wire(ctx: &AppContext) {
             let _ = cmd.send(Command::SetEchoCancellation {
                 enabled: defaults.echo_cancellation,
             });
+            let _ = cmd.send(Command::SetEchoSuppression {
+                enabled: defaults.echo_suppression,
+            });
             let _ = cmd.send(Command::SetPushToTalk {
                 enabled: defaults.input_mode == "push_to_talk",
             });
@@ -415,6 +429,7 @@ pub fn wire(ctx: &AppContext) {
                 app.set_settings_output_volume(defaults.output_volume);
                 app.set_settings_noise_suppression(defaults.noise_suppression);
                 app.set_settings_echo_cancellation(defaults.echo_cancellation);
+                app.set_settings_echo_suppression(defaults.echo_suppression);
                 app.set_settings_ptt_mode(defaults.input_mode == "push_to_talk");
                 app.set_settings_vad_threshold(defaults.vad_threshold);
                 app.set_settings_ptt_key_label("Unassigned".into());

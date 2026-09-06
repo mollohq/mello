@@ -208,6 +208,8 @@ set(MELLO_SOURCES
     src/audio/stream_audio_pipeline.cpp
     src/audio/noise_suppressor.cpp
     src/audio/echo_canceller.cpp
+    src/audio/echo_suppressor.cpp
+    src/audio/ort_loader.cpp
     src/audio/jitter_buffer.cpp
     src/audio/vad.cpp
     src/transport/peer_connection.cpp
@@ -448,6 +450,29 @@ if(NOT IOS AND NOT EXISTS "${SILERO_VAD_MODEL}")
     message(STATUS "[mello] Silero VAD model downloaded")
 endif()
 
+# Download echo-suppressor model if missing (skipped on iOS — suppressor is
+# desktop-only, like VAD-gated speech). MS AEC-Challenge 2022 GRU baseline
+# via PINTO0309's Apache-2.0 ONNX conversion, pinned by commit + SHA256.
+# Attribution: Microsoft (MIT baseline code) + PINTO0309 (conversion).
+set(ECHO_SUPPRESSOR_MODEL "${CMAKE_CURRENT_SOURCE_DIR}/models/echo_suppressor.onnx")
+set(ECHO_SUPPRESSOR_URL "https://github.com/PINTO0309/onnx-aec/raw/b053cc23da308bf9b481946ce495b4f18a6346cd/dec-baseline-model-icassp2022.onnx")
+set(ECHO_SUPPRESSOR_SHA256 "61bab1b83662f90963f536a32c00d4015113c96a725bad75b4c01172669583de")
+if(NOT IOS AND NOT EXISTS "${ECHO_SUPPRESSOR_MODEL}")
+    message(STATUS "[mello] Downloading echo-suppressor model (~5MB)...")
+    file(DOWNLOAD
+        "${ECHO_SUPPRESSOR_URL}"
+        "${ECHO_SUPPRESSOR_MODEL}"
+        SHOW_PROGRESS
+        STATUS ECHO_DL_STATUS
+        EXPECTED_HASH SHA256=${ECHO_SUPPRESSOR_SHA256})
+    list(GET ECHO_DL_STATUS 0 ECHO_DL_CODE)
+    if(NOT ECHO_DL_CODE EQUAL 0)
+        list(GET ECHO_DL_STATUS 1 ECHO_DL_MSG)
+        message(FATAL_ERROR "[mello] Echo-suppressor download failed: ${ECHO_DL_MSG}")
+    endif()
+    message(STATUS "[mello] Echo-suppressor model downloaded")
+endif()
+
 install(TARGETS mello rnnoise webrtc_audio_processing
     ARCHIVE DESTINATION lib
     LIBRARY DESTINATION lib
@@ -456,6 +481,7 @@ install(TARGETS mello rnnoise webrtc_audio_processing
 install(FILES include/mello.h DESTINATION include)
 if(NOT IOS)
     install(FILES models/silero_vad.onnx DESTINATION models)
+    install(FILES models/echo_suppressor.onnx DESTINATION models)
 endif()
 
 # Tests (opt-in via MELLO_BUILD_TESTS)

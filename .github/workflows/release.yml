@@ -94,6 +94,7 @@ jobs:
           cp libmello/third_party/onnxruntime/onnxruntime-win-x64-*/lib/onnxruntime.dll dist/
           cp libmello/third_party/onnxruntime/onnxruntime-win-x64-*/lib/onnxruntime_providers_shared.dll dist/
           cp (Get-ChildItem target/release/build -Recurse -Filter silero_vad.onnx | Select -First 1).FullName dist/
+          cp (Get-ChildItem target/release/build -Recurse -Filter echo_suppressor.onnx | Select -First 1).FullName dist/
           del dist/*.lib -ErrorAction SilentlyContinue
 
       - name: Login to Azure
@@ -224,6 +225,7 @@ jobs:
           # Preserve ORT symlink structure so the unversioned dylib stays a symlink.
           cp -P libmello/third_party/onnxruntime/onnxruntime-osx-arm64-*/lib/libonnxruntime*.dylib dist/
           cp $(find target/release/build -name silero_vad.onnx | head -1) dist/
+          cp $(find target/release/build -name echo_suppressor.onnx | head -1) dist/
 
       - name: Codesign external libraries
         run: |

@@ -70,32 +70,32 @@ static std::string get_exe_dir() {
 #endif
 }
 
-static std::string find_model_path() {
+static std::string find_model_file(const char* filename) {
     std::string exe_dir = get_exe_dir();
 
     // Check next to executable first
-    std::string p1 = exe_dir + "/silero_vad.onnx";
+    std::string p1 = exe_dir + "/" + filename;
     if (std::ifstream(p1).good()) return p1;
 
     // Check models/ subdirectory next to exe
-    std::string p2 = exe_dir + "/models/silero_vad.onnx";
+    std::string p2 = exe_dir + "/models/" + filename;
     if (std::ifstream(p2).good()) return p2;
 
     // Check source tree path (development)
-    std::string p3 = exe_dir + "/../libmello/models/silero_vad.onnx";
+    std::string p3 = exe_dir + "/../libmello/models/" + filename;
     if (std::ifstream(p3).good()) return p3;
 
     // Walk up from exe looking for libmello/models (handles target/debug layout)
     std::string dir = exe_dir;
     for (int i = 0; i < 5; ++i) {
-        std::string candidate = dir + "/libmello/models/silero_vad.onnx";
+        std::string candidate = dir + "/libmello/models/" + filename;
         if (std::ifstream(candidate).good()) return candidate;
         auto pos = dir.find_last_of("\\/");
         if (pos == std::string::npos) break;
         dir = dir.substr(0, pos);
     }
 
-    MELLO_LOG_WARN("pipeline", "silero_vad.onnx not found, searched from: %s", exe_dir.c_str());
+    MELLO_LOG_WARN("pipeline", "%s not found, searched from: %s", filename, exe_dir.c_str());
     return "";
 }
 
@@ -175,10 +175,18 @@ bool AudioPipeline::initialize() {
     set_transient_suppression(transient_suppression_enabled());
     set_high_pass_filter(high_pass_filter_enabled());
 
-    std::string model_path = find_model_path();
+    std::string model_path = find_model_file("silero_vad.onnx");
     if (model_path.empty() || !vad_.initialize(model_path)) {
         MELLO_LOG_ERROR("pipeline", "Silero VAD init failed (model_path=%s)", model_path.c_str());
         return false;
+    }
+
+    // Neural suppressor is a soft dependency: missing model degrades to
+    // passthrough and the flag stays effective for when it appears.
+    std::string echo_model = find_model_file("echo_suppressor.onnx");
+    if (!echo_suppressor_.initialize(echo_model)) {
+        MELLO_LOG_WARN("pipeline", "echo suppressor unavailable (model_path=%s)",
+                       echo_model.c_str());
     }
     playback_->set_render_source([this](int16_t* out, size_t count) -> size_t {
         return mix_output(out, count);
@@ -192,6 +200,7 @@ bool AudioPipeline::initialize() {
     capture_accum_.reserve(FRAME_SIZE * 2);
     initialized_ = true;
     refresh_stream_delay_hint();
+    echo_suppressor_.reset();
     MELLO_LOG_INFO("pipeline", "audio pipeline ready (frame=%d samples, %dHz mono)",
                    FRAME_SIZE, SAMPLE_RATE);
     return true;
@@ -202,6 +211,7 @@ void AudioPipeline::shutdown() {
     stop_capture();
     if (playback_) playback_->stop();
     echo_canceller_.shutdown();
+    echo_suppressor_.shutdown();
     noise_suppressor_.shutdown();
     vad_.shutdown();
     capture_.reset();
@@ -223,6 +233,9 @@ bool AudioPipeline::start_capture() {
         capturing_ = false;
         capture_inject_mode_.store(false, std::memory_order_relaxed);
     }
+
+    // Fresh GRU states + delay search for the new speech session.
+    echo_suppressor_.reset();
 
     // Cache the actual backend echo state for the audio thread (it must
     // not dereference capture_: device switches can replace it).
@@ -407,6 +420,7 @@ void AudioPipeline::switch_audio_backend(bool voice_processing) {
                           : "FAILED");
     }
     refresh_stream_delay_hint();
+    echo_suppressor_.reset();
 }
 
 void AudioPipeline::set_mute(bool muted) { muted_ = muted; }
@@ -497,11 +511,28 @@ void AudioPipeline::on_captured_audio(const int16_t* samples, size_t count) {
 
             // NEURAL RESIDUAL-ECHO INSERTION POINT: a two-input
             // (post-AEC mic + far-end reference) suppressor runs here, before
-            // the gate/VAD below. GATE ORDERING TODO: the `rms` used for
-            // candidate gating above is measured pre-AEC; once the neural
-            // stage lands, the gate threshold must use post-stage RMS so echo
-            // residue alone cannot hold the gate open. Kept pre-AEC today to
-            // avoid behavior change before the model exists.
+            // the gate/VAD below.
+            // Iteration 1 runs on the software path only: the VPIO duplex
+            // already applies OS AEC, and stacking an extra stage there is
+            // an unmeasured experiment for later.
+            bool suppressor_ran = false;
+            if (!skip_apm_capture && echo_suppressor_.enabled()) {
+                echo_suppressor_.process(capture_accum_.data());
+                suppressor_ran = true;
+            }
+
+            // The gate threshold uses post-stage RMS once the suppressor
+            // runs, so echo residue alone cannot hold the gate open. Pre-AEC
+            // behavior is unchanged with the flag off.
+            float gate_rms = rms;
+            if (suppressor_ran) {
+                double sum = 0.0;
+                for (int i = 0; i < FRAME_SIZE; ++i) {
+                    double s = capture_accum_[i] / 32768.0;
+                    sum += s * s;
+                }
+                gate_rms = static_cast<float>(std::sqrt(sum / FRAME_SIZE));
+            }
 
             if (local_clip_ring_ && clip_buffer_ && clip_buffer_->is_active()) {
                 local_clip_ring_->write(capture_accum_.data(), FRAME_SIZE);
@@ -512,7 +543,7 @@ void AudioPipeline::on_captured_audio(const int16_t* samples, size_t count) {
             } else {
                 const float speech_threshold =
                     (std::max)(MIN_SPEECH_RMS, noise_floor_rms_ * NOISE_FLOOR_GATE_MULT);
-                bool candidate_speech = rms >= speech_threshold;
+                bool candidate_speech = gate_rms >= speech_threshold;
 
                 if (candidate_speech) {
                     candidate_hangover_frames_ = CANDIDATE_HANGOVER_FRAMES;
@@ -559,7 +590,7 @@ void AudioPipeline::on_captured_audio(const int16_t* samples, size_t count) {
 
                     // Track ambient floor only while closed so the speech threshold adapts
                     // without chasing active speech.
-                    noise_floor_rms_ = 0.98f * noise_floor_rms_ + 0.02f * rms;
+                    noise_floor_rms_ = 0.98f * noise_floor_rms_ + 0.02f * gate_rms;
                 }
             }
         }
@@ -880,6 +911,11 @@ size_t AudioPipeline::mix_output(int16_t* out, size_t count) {
         echo_canceller_.process_render(out, static_cast<int>(count));
     }
 
+    // Same signal conditions the neural suppressor's reference ring.
+    if (echo_suppressor_.enabled() && (any_remote || has_clip_audio)) {
+        echo_suppressor_.feed_far_end(out, count);
+    }
+
     return (any_remote || has_clip_audio) ? count : 0;
 }
 
@@ -986,10 +1022,14 @@ int AudioPipeline::set_capture_device(const char* device_id) {
         });
         if (ok) capturing_ = true;
         MELLO_LOG_INFO("pipeline", "capture restarted on new device: %s", ok ? "ok" : "FAILED");
-        if (ok) refresh_stream_delay_hint();
+        if (ok) {
+            refresh_stream_delay_hint();
+            echo_suppressor_.reset();
+        }
         return ok ? (fell_back ? 2 : 1) : 0;
     }
     refresh_stream_delay_hint();
+    echo_suppressor_.reset();
     return fell_back ? 2 : 1;
 }
 
@@ -1032,7 +1072,10 @@ int AudioPipeline::set_playback_device(const char* device_id) {
     });
     bool ok = playback_->start();
     MELLO_LOG_INFO("pipeline", "playback restarted on new device: %s", ok ? "ok" : "FAILED");
-    if (ok) refresh_stream_delay_hint();
+    if (ok) {
+        refresh_stream_delay_hint();
+        echo_suppressor_.reset();
+    }
     return ok ? (fell_back ? 2 : 1) : 0;
 }
 

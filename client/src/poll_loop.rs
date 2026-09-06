@@ -273,6 +273,9 @@ impl PollState {
                                     .set_settings_echo_cancellation(settings.echo_cancellation);
                                 poll_ctx
                                     .app
+                                    .set_settings_echo_suppression(settings.echo_suppression);
+                                poll_ctx
+                                    .app
                                     .set_settings_ptt_mode(settings.input_mode == "push_to_talk");
                                 let ptt_enabled = settings.input_mode == "push_to_talk";
                                 let _ = poll_ctx.cmd_tx.send(Command::SetPushToTalk {

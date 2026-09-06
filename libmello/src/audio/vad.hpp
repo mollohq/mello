@@ -5,8 +5,7 @@
 // set, gating the ORT include + members here keeps every TU that includes
 // vad.hpp (e.g. audio_pipeline) free of ONNX Runtime. Desktop never sets it.
 #ifndef MELLO_IOS_NO_VAD
-#define ORT_API_MANUAL_INIT
-#include <onnxruntime_cxx_api.h>
+#include "ort_loader.hpp"
 #endif
 #include <cstdint>
 #include <vector>
@@ -45,8 +44,7 @@ private:
     void downsample_48_to_16(const int16_t* in, int count);
 
 #ifndef MELLO_IOS_NO_VAD
-    std::unique_ptr<Ort::Env> env_;
-    std::unique_ptr<Ort::SessionOptions> session_options_;
+    std::unique_ptr<OrtHandles> ort_;
     Ort::Session* session_ = nullptr;
 #endif
 
