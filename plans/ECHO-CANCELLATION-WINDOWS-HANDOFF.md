@@ -6,8 +6,16 @@ isProject: false
 
 # Windows Handoff — Echo Cancellation Improvements
 
-Branch: `feat/echo-cancellation-improvements` (includes `origin/main` through the graphite-ui merge).
-Specs `03-LIBMELLO.md` §4/§9 and `10-AUDIO_PIPELINE.md` §3/§4/§5.2/§6.2 describe the landed architecture.
+Branch state: `feat/dtln-echo-suppression` holds everything below on top
+of `feat/echo-cancellation-improvements` (merged with `origin/main`
+through the graphite-ui merge). Status: **ready for Windows**.
+Field-verified on macOS: VPIO duplex suppresses clips and remote voices;
+toggle-off transmits (software path); backend-toggle teardown abort
+fixed and stress-verified.
+
+Landed since the last refresh: neural suppressor integrated behind
+`settings.echo_suppression` (default off), AGC user toggle in voice
+settings (beta clipping investigation tool), Slint card alignment fix.
 
 ## Landed on macOS (do not redo)
 
@@ -71,4 +79,8 @@ $env:CI='true'; ctest --test-dir libmello/build --output-on-failure
 ## Explicitly not Windows work
 
 - VPIO backend is macOS-only.
-- Neural residual suppression continues on branch `feat/neural-echo-suppression` (DTLN-AEC). Its Windows CPU bench (≤10 ms inference per 20 ms frame on min-spec CPU, ≤20 MB RAM, ≤6 MB installer) is tracked there.
+- Neural suppression is integrated on this branch behind
+  `settings.echo_suppression` (default off). Windows open items: CPU
+  bench on min-spec hardware (≤10 ms inference per 20 ms frame),
+  steady-state RAM (≤20 MB), installer delta check (model is 5.0 MB),
+  then field MOS before any default-on decision.

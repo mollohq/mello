@@ -954,6 +954,8 @@ component AudioTab inherits VerticalLayout {
 
             ProcessingCard {
                 horizontal-stretch: 1;
+                // Shared with the three cards below: equal heights, aligned rows.
+                min-height: 88px;
                 title: "Noise Suppression";
                 description: "Filter out background hum and typing.";
                 checked <=> root.noise-suppression;
@@ -962,6 +964,7 @@ component AudioTab inherits VerticalLayout {
 
             ProcessingCard {
                 horizontal-stretch: 1;
+                min-height: 88px;
                 title: "Echo Cancellation";
                 description: "Prevent audio feedback loop from speakers.";
                 checked <=> root.echo-cancellation;
@@ -974,6 +977,7 @@ component AudioTab inherits VerticalLayout {
 
             ProcessingCard {
                 horizontal-stretch: 1;
+                min-height: 88px;
                 title: "Auto Gain";
                 description: "Even out microphone volume. Off if voices clip.";
                 checked <=> root.agc;
@@ -982,7 +986,8 @@ component AudioTab inherits VerticalLayout {
 
             ProcessingCard {
                 horizontal-stretch: 1;
-                title: "Echo Suppression (Neural)";
+                min-height: 88px;
+                title: "Echo Suppression";
                 description: "Extra cleanup for leftover echo. Experimental.";
                 checked <=> root.echo-suppression;
                 toggled(v) => { echo-suppression-toggled(v); }

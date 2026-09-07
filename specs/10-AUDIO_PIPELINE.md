@@ -100,9 +100,9 @@ Per 20ms frame, endpoint processing order is adaptive:
 
 1. optional input gain
 2. WebRTC APM capture-side processing (AEC3 + AGC2, plus optional WebRTC NS/HPF) — skipped when the macOS VPIO duplex backend is active (the OS unit already ran AEC/AGC; see §6.2)
-3. neural residual-echo suppressor insertion point (future stage; its gate threshold must use post-stage RMS so residue alone cannot hold the gate open)
+3. neural residual-echo suppression when `echo_suppression` is on (software path only; post-AEC mic plus far-end reference ring, silence bypass)
 4. clip ring tap (when clip buffer is active)
-5. cheap RMS/noise-floor gate updates input level and decides whether this is a speech candidate
+5. cheap RMS/noise-floor gate updates input level and decides whether this is a speech candidate (uses post-stage RMS when the suppressor ran, pre-AEC level otherwise)
 6. Silero VAD runs only for candidate speech / hangover windows
 7. when speech opens, flush pre-roll frames so starts are not clipped
 8. while speech or hangover is active, apply the selected enhancement mode and Opus encode
@@ -116,7 +116,8 @@ levels remain available as runtime test/diagnostic modes.
 ```cpp
 // libmello/src/audio/audio_pipeline.cpp (simplified)
 echo_canceller_.process_capture(capture_accum_.data(), FRAME_SIZE);
-bool candidate = rms >= max(MIN_SPEECH_RMS, noise_floor * NOISE_FLOOR_GATE_MULT);
+if (suppressor_enabled) echo_suppressor_.process(capture_accum_.data());
+bool candidate = gate_rms >= max(MIN_SPEECH_RMS, noise_floor * NOISE_FLOOR_GATE_MULT);
 if (candidate || candidate_hangover || speech_hangover) {
     vad_.feed(capture_accum_.data(), FRAME_SIZE);
 }
@@ -271,6 +272,7 @@ MelloResult mello_voice_stop_capture(MelloContext* ctx);
 void mello_voice_set_mute(MelloContext* ctx, bool muted);
 void mello_voice_set_deafen(MelloContext* ctx, bool deafened);
 void mello_voice_set_echo_cancellation(MelloContext* ctx, bool enabled);
+void mello_voice_set_echo_suppression(MelloContext* ctx, bool enabled);
 void mello_voice_set_agc(MelloContext* ctx, bool enabled);
 void mello_voice_set_noise_suppression(MelloContext* ctx, bool enabled);
 void mello_voice_set_ns_mode(MelloContext* ctx, MelloNsMode mode);
