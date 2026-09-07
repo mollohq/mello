@@ -90,7 +90,7 @@ private:
 };
 ```
 
-`set_echo_cancellation` is a backend selector on macOS: on selects the VPIO duplex unit (OS AEC/AGC, software APM capture skipped), off selects the plain HAL pair plus software AEC. On other platforms it only flips the APM flag.
+`set_echo_cancellation` is a backend selector on macOS: on selects the VPIO duplex unit (OS AEC/AGC, software APM capture skipped), off selects the plain HAL pair plus software AEC. On other platforms it only flips the APM flag. The switch applies immediately only mid-session; outside voice the desired backend is stored for the next capture start.
 
 ---
 
@@ -227,7 +227,7 @@ On voice leave, `stop_capture()` must clear all remote decode/jitter/ring state 
 - post-set validation rejects mismatch
 - fails fast if actual device unit format violates contract
 
-Voice path: one VoiceProcessingIO duplex unit carries capture input and render output together when the echo toggle is on. Apple's AEC reference is the audio rendered through that unit's own output bus, so the pair cannot split: input-only VPIO never initializes, and device switches rebuild both halves together with plain-HAL fallback. Capture buffers are sized defensively (observed slices exceed the unit's reported max). See spec 03 §4.
+Voice path: one VoiceProcessingIO duplex unit carries capture input and render output together when the echo toggle is on. Apple's AEC reference is the audio rendered through that unit's own output bus, so the pair cannot split: input-only VPIO never initializes, and device switches rebuild both halves together with plain-HAL fallback. The duplex unit is voice-session scoped: it activates on capture start and drops back to the plain pair on stop, so no mic-capable unit runs (and no mic indicator shows) outside a voice session. Capture buffers are sized defensively (observed slices exceed the unit's reported max). See spec 03 §4.
 
 ---
 

@@ -5,6 +5,7 @@ add_executable(mello_tests
     test_noise_suppressor.cpp
     test_echo_canceller.cpp
     test_echo_suppressor.cpp
+    test_audio_pipeline.cpp
     test_vpio_duplex.cpp
     test_jitter_buffer.cpp
     test_vad.cpp

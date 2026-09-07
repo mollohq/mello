@@ -124,25 +124,19 @@ bool AudioPipeline::initialize() {
     session_win_->initialize();
 #endif
 
-#ifdef __APPLE__
-    // Default backend follows the AEC default (on): fresh starts use the
-    // combined VPIO duplex unit, whose output bus carries our mix as
-    // Apple's AEC reference. The runtime toggle switches afterwards.
-    voice_processing_capture_.store(echo_canceller_.aec_enabled(),
-                                    std::memory_order_relaxed);
-    if (!(voice_processing_capture_.load(std::memory_order_relaxed) &&
-          activate_vpio_pair())) {
-        if (voice_processing_capture_.load(std::memory_order_relaxed)) {
-            MELLO_LOG_WARN("pipeline", "VPIO duplex unavailable, falling back to plain HAL pair");
-        }
-        activate_plain_pair();
-    }
-#else
     capture_ = create_audio_capture();
     playback_ = create_audio_playback();
 #ifdef _WIN32
     apply_session(playback_.get());
 #endif
+#ifdef __APPLE__
+    // Voice-session scope: the duplex unit lights the mic at the device
+    // level as soon as it starts, so it must not exist before a voice
+    // session. Startup is always the plain pair (clips preview mic-free);
+    // the toggle applies at capture start. Only the desired backend is
+    // stored here.
+    voice_processing_capture_.store(echo_canceller_.aec_enabled(),
+                                    std::memory_order_relaxed);
 #endif
     if (!capture_->initialize(current_capture_device_id())) {
         MELLO_LOG_ERROR("pipeline", "capture init failed");
@@ -208,6 +202,7 @@ bool AudioPipeline::initialize() {
 
 void AudioPipeline::shutdown() {
     MELLO_LOG_INFO("pipeline", "shutting down");
+    initialized_ = false;  // first: no backend switching while dying
     stop_capture();
     if (playback_) playback_->stop();
     echo_canceller_.shutdown();
@@ -221,7 +216,6 @@ void AudioPipeline::shutdown() {
         session_win_->shutdown();
     }
 #endif
-    initialized_ = false;
     capture_inject_mode_.store(false, std::memory_order_relaxed);
 }
 
@@ -236,6 +230,16 @@ bool AudioPipeline::start_capture() {
 
     // Fresh GRU states + delay search for the new speech session.
     echo_suppressor_.reset();
+
+#ifdef __APPLE__
+    // Activate the duplex pair for the session when desired and not live.
+    // Starting it any earlier shows mic usage with no voice session.
+    if (voice_processing_capture_.load(std::memory_order_relaxed) &&
+        !(capture_ && capture_->provides_echo_cancellation())) {
+        switch_audio_backend(true);
+        if (!capture_) return false;
+    }
+#endif
 
     // Cache the actual backend echo state for the audio thread (it must
     // not dereference capture_: device switches can replace it).
@@ -258,6 +262,17 @@ void AudioPipeline::stop_capture() {
         capture_inject_mode_.store(false, std::memory_order_relaxed);
     }
 
+#ifdef __APPLE__
+    // Leaving voice releases the mic: drop a live duplex unit back to the
+    // plain pair. Desired stays where the toggle put it (the APM flag
+    // mirrors it); only the live backend drops. Skipped while dying.
+    if (initialized_ && capture_ && capture_->provides_echo_cancellation()) {
+        switch_audio_backend(false);
+        voice_processing_capture_.store(echo_canceller_.aec_enabled(),
+                                        std::memory_order_relaxed);
+    }
+#endif
+
     std::lock_guard<std::mutex> lock(accum_mutex_);
     capture_accum_.clear();
     reset_speech_gate_state();
@@ -276,6 +291,10 @@ bool AudioPipeline::start_capture_inject() {
 
     capturing_ = true;
     capture_inject_mode_.store(true, std::memory_order_relaxed);
+    // Same backend snapshot as start_capture(): injected frames must take
+    // the same APM path the live backend would.
+    backend_cancels_echo_.store(capture_ && capture_->provides_echo_cancellation(),
+                                std::memory_order_relaxed);
     MELLO_LOG_INFO("pipeline", "capture inject mode started");
     return true;
 }
@@ -317,8 +336,11 @@ void AudioPipeline::set_echo_cancellation(bool enabled) {
 #ifdef __APPLE__
     // On macOS the toggle selects the capture backend: on = combined VPIO
     // duplex (OS AEC/AGC, our APM capture pass skipped), off = plain HAL
-    // pair + software AEC. Elsewhere it only flips the APM flag.
-    if (initialized_ &&
+    // pair + software AEC. Elsewhere it only flips the APM flag. The
+    // switch applies immediately only mid-session; outside voice the
+    // desired backend is stored for the next capture start, so no unit
+    // ever runs (and no mic shows) without a session.
+    if (initialized_ && capturing_ &&
         voice_processing_capture_.load(std::memory_order_relaxed) != enabled) {
         switch_audio_backend(enabled);
     } else {
@@ -988,8 +1010,10 @@ int AudioPipeline::set_capture_device(const char* device_id) {
     capture_device_id_ = device_id ? device_id : "";
 
 #ifdef __APPLE__
-    // Duplex mode rebuilds the whole pair (the unit spans both directions).
-    if (voice_processing_capture_.load(std::memory_order_relaxed)) {
+    // Duplex mode rebuilds the whole pair (the unit spans both directions),
+    // but only mid-session: outside voice there is nothing to restart and
+    // no unit may run.
+    if (voice_processing_capture_.load(std::memory_order_relaxed) && capturing_) {
         switch_audio_backend(true);
         if (!capture_ || !playback_) return 0;
         return capture_->provides_echo_cancellation() ? 1 : 2;
@@ -1038,8 +1062,10 @@ int AudioPipeline::set_playback_device(const char* device_id) {
     playback_device_id_ = device_id ? device_id : "";
 
 #ifdef __APPLE__
-    // Duplex mode rebuilds the whole pair (the unit spans both directions).
-    if (voice_processing_capture_.load(std::memory_order_relaxed)) {
+    // Duplex mode rebuilds the whole pair (the unit spans both directions),
+    // but only mid-session: outside voice there is nothing to restart and
+    // no unit may run.
+    if (voice_processing_capture_.load(std::memory_order_relaxed) && capturing_) {
         switch_audio_backend(true);
         if (!capture_ || !playback_) return 0;
         return capture_->provides_echo_cancellation() ? 1 : 2;
