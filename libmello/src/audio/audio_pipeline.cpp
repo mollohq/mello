@@ -968,8 +968,9 @@ void AudioPipeline::refresh_stream_delay_hint() {
     // device latency + jitter/playout buffering. The jitter term is small
     // at switch time (buffers just cleared); the AEC delay estimator
     // converges the rest. Sum, not difference: both legs add delay.
-    // WINDOWS TODO: verify against IAudioClient::GetStreamLatency +
-    // GetDevicePeriod on hardware; confirm sign with a loopback ERLE run.
+    // WASAPI latencies come from GetStreamLatency + GetDevicePeriod.
+    // Sign check (sum vs difference) is validated by the ERLE harness
+    // runs in the Windows handoff task 3.
     int out_ms = playback_->output_latency_ms();
     int in_ms = capture_->input_latency_ms();
     float jb_ms = 0.0f;

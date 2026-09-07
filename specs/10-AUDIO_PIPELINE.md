@@ -220,6 +220,7 @@ On voice leave, `stop_capture()` must clear all remote decode/jitter/ring state 
 - supports float/int16 device formats
 - performs explicit downmix/resample to internal 48k mono int16 contract
 - performs reverse conversion for playout to device-native format/channels
+- reports `GetStreamLatency` plus device period as the APM delay-hint source, cached at init; query failure degrades to 0 and never fails init
 
 ### 6.2 macOS (CoreAudio)
 

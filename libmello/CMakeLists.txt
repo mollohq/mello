@@ -333,7 +333,7 @@ endif()
 # Static library for Rust FFI linking
 add_library(mello STATIC ${MELLO_SOURCES})
 
-target_compile_definitions(mello PRIVATE MELLO_EXPORTS NOMINMAX)
+target_compile_definitions(mello PRIVATE MELLO_EXPORTS NOMINMAX _USE_MATH_DEFINES)
 
 # iOS: VideoToolbox H.264 decode is live (Step 5); encode + screen capture stay
 # stubbed (no mobile hosting in v1). VAD is live as of Step 2 (prebuilt static ORT).

@@ -82,3 +82,16 @@ include(GoogleTest)
 gtest_discover_tests(mello_tests)
 gtest_discover_tests(mello_rtp_tests)
 gtest_discover_tests(mello_procenum_tests)
+
+# Windows: ORT loads onnxruntime.dll at runtime via LoadLibrary. Copy it
+# next to the test binaries so ctest passes without manual PATH setup.
+# Desktop-only: iOS links ORT statically and has no DLLs.
+if(WIN32 AND NOT IOS)
+    foreach(_ort_dll onnxruntime.dll onnxruntime_providers_shared.dll)
+        add_custom_command(TARGET mello_tests POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${ORT_DIR}/lib/${_ort_dll}"
+                "$<TARGET_FILE_DIR:mello_tests>/${_ort_dll}"
+            COMMENT "Copying ${_ort_dll} next to mello_tests")
+    endforeach()
+endif()

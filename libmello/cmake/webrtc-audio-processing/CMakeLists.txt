@@ -21,7 +21,7 @@ set(WAP_DEFINES
 set(WAP_LIBS)
 
 if(WIN32)
-    list(APPEND WAP_DEFINES WEBRTC_WIN _WIN32 __STDC_FORMAT_MACROS=1 NOMINMAX _USE_MATH_DEFINES)
+    list(APPEND WAP_DEFINES WEBRTC_WIN _WIN32 __STDC_FORMAT_MACROS=1 NOMINMAX _USE_MATH_DEFINES WIN32_LEAN_AND_MEAN)
     list(APPEND WAP_LIBS winmm)
 elseif(APPLE)
     list(APPEND WAP_DEFINES WEBRTC_MAC WEBRTC_POSIX)
@@ -381,6 +381,11 @@ list(TRANSFORM ALL_SOURCES PREPEND "${WAP_ROOT}/")
 
 add_library(webrtc_audio_processing STATIC ${ALL_SOURCES})
 
+# v2.x uses C++20 designated initializers (gain_controller2, input_volume
+# stats). MSVC rejects them under /std:c++17; clang accepts them as an
+# extension. Pin the vendored targets to C++20 so Windows builds.
+set_target_properties(webrtc_audio_processing PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+
 target_compile_definitions(webrtc_audio_processing PRIVATE ${WAP_DEFINES})
 
 # pffft needs _GNU_SOURCE
@@ -418,6 +423,7 @@ if(WAP_HAS_X86)
     set(SSE2_SOURCES ${COMMON_AUDIO_SSE2_SOURCES})
     list(TRANSFORM SSE2_SOURCES PREPEND "${WAP_ROOT}/")
     add_library(wap_sse2 OBJECT ${SSE2_SOURCES})
+    set_target_properties(wap_sse2 PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
     target_compile_definitions(wap_sse2 PRIVATE ${WAP_DEFINES})
     target_include_directories(wap_sse2 BEFORE PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/compat)
     target_include_directories(wap_sse2 PRIVATE ${WAP_ROOT} ${WAP_ROOT}/webrtc)
@@ -431,6 +437,7 @@ if(WAP_HAS_X86)
     set(AVX2_SOURCES ${COMMON_AUDIO_AVX2_SOURCES} ${AUDIO_PROCESSING_AVX2_SOURCES})
     list(TRANSFORM AVX2_SOURCES PREPEND "${WAP_ROOT}/")
     add_library(wap_avx2 OBJECT ${AVX2_SOURCES})
+    set_target_properties(wap_avx2 PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
     target_compile_definitions(wap_avx2 PRIVATE ${WAP_DEFINES})
     target_include_directories(wap_avx2 BEFORE PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/compat)
     target_include_directories(wap_avx2 PRIVATE ${WAP_ROOT} ${WAP_ROOT}/webrtc)
@@ -452,6 +459,7 @@ if(WAP_HAS_NEON)
     set(NEON_SOURCES ${COMMON_AUDIO_NEON_SOURCES} ${AUDIO_PROCESSING_NEON_SOURCES})
     list(TRANSFORM NEON_SOURCES PREPEND "${WAP_ROOT}/")
     add_library(wap_neon OBJECT ${NEON_SOURCES})
+    set_target_properties(wap_neon PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
     target_compile_definitions(wap_neon PRIVATE ${WAP_DEFINES})
     target_include_directories(wap_neon BEFORE PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/compat)
     target_include_directories(wap_neon PRIVATE ${WAP_ROOT} ${WAP_ROOT}/webrtc)

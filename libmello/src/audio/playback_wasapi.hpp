@@ -29,8 +29,14 @@ public:
 
     uint32_t sample_rate() const override { return sample_rate_; }
 
+    /// Cached WASAPI stream + device-period latency. Written once at
+    /// initialize() on the calling thread; read later by
+    /// AudioPipeline::refresh_stream_delay_hint(). Never fails init.
+    int output_latency_ms() const override { return cached_output_latency_ms_; }
+
 private:
     void playback_thread();
+    int query_output_latency_ms();
 
     AudioSessionWin* session_win_ = nullptr;
 
@@ -46,6 +52,7 @@ private:
     bool device_float_format_ = true;
     uint16_t device_bits_per_sample_ = 32;
     uint32_t buffer_frames_ = 0;
+    int cached_output_latency_ms_ = 0;
 
     // 48k internal stream -> device-rate stream resampler state
     std::vector<float> src_fifo_;

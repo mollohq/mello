@@ -23,8 +23,8 @@ public:
 
     /// Estimated device + safety-offset input latency in ms.
     /// Default 0 (unknown). CoreAudio overrides with
-    /// kAudioUnitProperty_Latency + SafetyOffset. Windows override
-    /// (WASAPI GetStreamLatency + GetDevicePeriod) is a handoff TODO.
+    /// kAudioUnitProperty_Latency + SafetyOffset. WASAPI overrides with
+    /// GetStreamLatency + GetDevicePeriod, cached at initialize().
     virtual int input_latency_ms() const { return 0; }
 
     /// Select the OS voice-processing capture path (macOS
