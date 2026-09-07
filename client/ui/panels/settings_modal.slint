@@ -954,9 +954,10 @@ component AudioTab inherits VerticalLayout {
 
             ProcessingCard {
                 horizontal-stretch: 1;
-                // Shared with the three cards below: equal heights, aligned rows.
-                // Must clear two-line content (~91px); smaller values no-op.
-                min-height: 112px;
+                // Fixed tile: all four cards pixel-identical. The 556pt
+                // content column splits into 266 + 24 + 266.
+                width: 266px;
+                height: 128px;
                 title: "Noise Suppression";
                 description: "Filter out background hum and typing.";
                 checked <=> root.noise-suppression;
@@ -964,8 +965,10 @@ component AudioTab inherits VerticalLayout {
             }
 
             ProcessingCard {
-                horizontal-stretch: 1;
-                min-height: 112px;
+                // Fixed tile: all four cards pixel-identical. The 556pt
+                // content column splits into 266 + 24 + 266.
+                width: 266px;
+                height: 128px;
                 title: "Echo Cancellation";
                 description: "Prevent audio feedback loop from speakers.";
                 checked <=> root.echo-cancellation;
@@ -977,8 +980,10 @@ component AudioTab inherits VerticalLayout {
             spacing: 24px;
 
             ProcessingCard {
-                horizontal-stretch: 1;
-                min-height: 112px;
+                // Fixed tile: all four cards pixel-identical. The 556pt
+                // content column splits into 266 + 24 + 266.
+                width: 266px;
+                height: 128px;
                 title: "Auto Gain";
                 description: "Even out microphone volume. Off if voices clip.";
                 checked <=> root.agc;
@@ -986,8 +991,10 @@ component AudioTab inherits VerticalLayout {
             }
 
             ProcessingCard {
-                horizontal-stretch: 1;
-                min-height: 112px;
+                // Fixed tile: all four cards pixel-identical. The 556pt
+                // content column splits into 266 + 24 + 266.
+                width: 266px;
+                height: 128px;
                 title: "Echo Suppression";
                 description: "Extra cleanup for leftover echo. Experimental.";
                 checked <=> root.echo-suppression;
