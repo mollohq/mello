@@ -209,6 +209,9 @@ pub enum Command {
     SetEchoCancellation {
         enabled: bool,
     },
+    SetEchoSuppression {
+        enabled: bool,
+    },
     SetAgc {
         enabled: bool,
     },

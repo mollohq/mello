@@ -219,6 +219,20 @@ cmake --build libmello/build
 CI=true ctest --test-dir libmello/build --output-on-failure
 ```
 
+Windows notes:
+
+- The Visual Studio generator is multi-config. Pass `-C Release` to every
+  `cmake --build` and `ctest` call, or ctest probes an unbuilt Debug tree.
+- ONNX DLLs (`onnxruntime.dll`, `onnxruntime_providers_shared.dll`) copy next
+  to `mello_tests` at build time via a POST_BUILD step. Without this step the
+  suppressor and VAD tests fail with `err=126`.
+- Run `check-full.sh` under Git Bash (`C:\Program Files\Git\bin\bash.exe`).
+  `C:\Windows\system32\bash.exe` (WSL) chokes on the CRLF line endings that
+  `core.autocrlf=true` checkouts produce.
+- The vendored webrtc-audio-processing tree pins C++20 on its targets
+  (designated initializers; MSVC rejects them under C++17) and defines
+  `WIN32_LEAN_AND_MEAN` (winsock include order). Keep both on engine upgrades.
+
 **`CI=true` is required here for the same reason as `cargo test --workspace`.**
 `VideoPipelineTest` does real monitor capture + hardware encode; its `SetUp`
 (`libmello/tests/test_video_pipeline.cpp`) skips when `CI` is set. Without it,

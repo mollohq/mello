@@ -22,9 +22,15 @@ public:
     uint32_t sample_rate() const override { return sample_rate_; }
     uint32_t channels() const override { return channels_; }
 
+    /// Cached WASAPI stream + device-period latency. Written once at
+    /// initialize() on the calling thread; read later by
+    /// AudioPipeline::refresh_stream_delay_hint(). Never fails init.
+    int input_latency_ms() const override { return cached_input_latency_ms_; }
+
 private:
     void capture_thread();
     bool init_com();
+    int query_input_latency_ms();
 
     IMMDevice* device_ = nullptr;
     IAudioClient* audio_client_ = nullptr;
@@ -38,6 +44,7 @@ private:
     uint32_t device_channels_ = 1;
     bool device_float_format_ = true;
     uint16_t device_bits_per_sample_ = 32;
+    int cached_input_latency_ms_ = 0;
 
     // Source-rate -> 48k stream resampler state
     double resample_src_pos_ = 0.0;

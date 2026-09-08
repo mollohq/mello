@@ -131,6 +131,8 @@ bool WasapiCapture::initialize(const char* device_id) {
         return false;
     }
 
+    cached_input_latency_ms_ = query_input_latency_ms();
+
     MELLO_LOG_INFO(
         "capture",
         "initialized: device_rate=%u device_ch=%u fmt=%s -> internal_rate=%u internal_ch=%u buf=%u frames",
@@ -247,6 +249,37 @@ void WasapiCapture::capture_thread() {
         }
     }
     CoUninitialize();
+}
+
+int WasapiCapture::query_input_latency_ms() {
+    if (!audio_client_) return 0;
+    double total_ms = 0.0;
+
+    REFERENCE_TIME stream_latency = 0;
+    HRESULT hr = audio_client_->GetStreamLatency(&stream_latency);
+    if (SUCCEEDED(hr) && stream_latency > 0) {
+        total_ms += static_cast<double>(stream_latency) / 10000.0;
+    } else if (FAILED(hr)) {
+        MELLO_LOG_INFO("capture", "GetStreamLatency failed hr=0x%08lx, using 0", hr);
+    } else {
+        MELLO_LOG_DEBUG("capture", "GetStreamLatency returned 0 (shared mode), using 0");
+    }
+
+    REFERENCE_TIME default_period = 0, min_period = 0;
+    hr = audio_client_->GetDevicePeriod(&default_period, &min_period);
+    if (SUCCEEDED(hr) && default_period > 0) {
+        total_ms += static_cast<double>(default_period) / 10000.0;
+    } else if (FAILED(hr)) {
+        MELLO_LOG_INFO("capture", "GetDevicePeriod failed hr=0x%08lx, using 0", hr);
+    } else {
+        MELLO_LOG_DEBUG("capture", "GetDevicePeriod returned 0, using 0");
+    }
+
+    if (total_ms < 0) total_ms = 0;
+    if (total_ms > 500) total_ms = 500;
+    int ms = static_cast<int>(total_ms + 0.5);
+    MELLO_LOG_INFO("capture", "WASAPI input latency estimate %d ms", ms);
+    return ms;
 }
 
 } // namespace mello::audio

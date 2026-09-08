@@ -267,6 +267,12 @@ void mello_voice_set_echo_cancellation(MelloContext* ctx, bool enabled) {
     } catch (...) {}
 }
 
+void mello_voice_set_echo_suppression(MelloContext* ctx, bool enabled) {
+    try {
+        if (ctx) ctx_cast(ctx)->audio().set_echo_suppression(enabled);
+    } catch (...) {}
+}
+
 void mello_voice_set_agc(MelloContext* ctx, bool enabled) {
     try {
         if (ctx) ctx_cast(ctx)->audio().set_agc(enabled);

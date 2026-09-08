@@ -732,6 +732,9 @@ impl Client {
             Command::SetEchoCancellation { enabled } => {
                 self.voice.set_echo_cancellation(enabled);
             }
+            Command::SetEchoSuppression { enabled } => {
+                self.voice.set_echo_suppression(enabled);
+            }
             Command::SetAgc { enabled } => {
                 self.voice.set_agc(enabled);
             }

@@ -811,6 +811,8 @@ component AudioTab inherits VerticalLayout {
     // Processing
     in-out property <bool> noise-suppression: true;
     in-out property <bool> echo-cancellation: true;
+    in-out property <bool> echo-suppression: false;
+    in-out property <bool> agc: true;
 
     // Voice activity
     in-out property <bool> ptt-mode: false;  // false = voice activity, true = push to talk
@@ -828,6 +830,8 @@ component AudioTab inherits VerticalLayout {
     callback output-volume-changed(float);
     callback noise-suppression-toggled(bool);
     callback echo-cancellation-toggled(bool);
+    callback echo-suppression-toggled(bool);
+    callback agc-toggled(bool);
     callback input-mode-changed(bool);  // true = ptt
     callback ptt-key-captured(/* key_text */ string, /* ctrl */ bool, /* alt */ bool, /* shift */ bool, /* meta */ bool);
     callback vad-threshold-changed(float);
@@ -950,6 +954,10 @@ component AudioTab inherits VerticalLayout {
 
             ProcessingCard {
                 horizontal-stretch: 1;
+                // Fixed tile: all four cards pixel-identical. The 556pt
+                // content column splits into 266 + 24 + 266.
+                width: 266px;
+                height: 128px;
                 title: "Noise Suppression";
                 description: "Filter out background hum and typing.";
                 checked <=> root.noise-suppression;
@@ -957,11 +965,40 @@ component AudioTab inherits VerticalLayout {
             }
 
             ProcessingCard {
-                horizontal-stretch: 1;
+                // Fixed tile: all four cards pixel-identical. The 556pt
+                // content column splits into 266 + 24 + 266.
+                width: 266px;
+                height: 128px;
                 title: "Echo Cancellation";
                 description: "Prevent audio feedback loop from speakers.";
                 checked <=> root.echo-cancellation;
                 toggled(v) => { echo-cancellation-toggled(v); }
+            }
+        }
+
+        HorizontalLayout {
+            spacing: 24px;
+
+            ProcessingCard {
+                // Fixed tile: all four cards pixel-identical. The 556pt
+                // content column splits into 266 + 24 + 266.
+                width: 266px;
+                height: 128px;
+                title: "Auto Gain";
+                description: "Even out microphone volume. Off if voices clip.";
+                checked <=> root.agc;
+                toggled(v) => { agc-toggled(v); }
+            }
+
+            ProcessingCard {
+                // Fixed tile: all four cards pixel-identical. The 556pt
+                // content column splits into 266 + 24 + 266.
+                width: 266px;
+                height: 128px;
+                title: "Echo Suppression";
+                description: "Extra cleanup for leftover echo. Experimental.";
+                checked <=> root.echo-suppression;
+                toggled(v) => { echo-suppression-toggled(v); }
             }
         }
     }
@@ -1944,6 +1981,8 @@ export component SettingsModal inherits Rectangle {
     in-out property <float> output-volume: 1.0;
     in-out property <bool> noise-suppression: true;
     in-out property <bool> echo-cancellation: true;
+    in-out property <bool> echo-suppression: false;
+    in-out property <bool> agc: true;
     in-out property <bool> ptt-mode: false;
     in property <string> ptt-key-label: "Unassigned";
     in-out property <bool> ptt-binding: false;
@@ -2050,6 +2089,8 @@ export component SettingsModal inherits Rectangle {
     callback setting-changed-output-volume(float);
     callback setting-changed-noise-suppression(bool);
     callback setting-changed-echo-cancellation(bool);
+    callback setting-changed-echo-suppression(bool);
+    callback setting-changed-agc(bool);
     callback setting-changed-input-mode(bool);
     callback setting-changed-vad-threshold(float);
     callback ptt-key-captured(string, bool, bool, bool, bool);
@@ -2547,6 +2588,8 @@ export component SettingsModal inherits Rectangle {
                             output-volume <=> root.output-volume;
                             noise-suppression <=> root.noise-suppression;
                             echo-cancellation <=> root.echo-cancellation;
+                            echo-suppression <=> root.echo-suppression;
+                            agc <=> root.agc;
                             ptt-mode <=> root.ptt-mode;
                             ptt-key-label: root.ptt-key-label;
                             ptt-binding <=> root.ptt-binding;
@@ -2559,6 +2602,8 @@ export component SettingsModal inherits Rectangle {
                             output-volume-changed(v) => { root.setting-changed-output-volume(v); }
                             noise-suppression-toggled(v) => { root.setting-changed-noise-suppression(v); }
                             echo-cancellation-toggled(v) => { root.setting-changed-echo-cancellation(v); }
+                            echo-suppression-toggled(v) => { root.setting-changed-echo-suppression(v); }
+                            agc-toggled(v) => { root.setting-changed-agc(v); }
                             input-mode-changed(v) => { root.setting-changed-input-mode(v); }
                             ptt-key-captured(key, ctrl, alt, shift, meta) => { root.ptt-key-captured(key, ctrl, alt, shift, meta); }
                             vad-threshold-changed(v) => { root.setting-changed-vad-threshold(v); }

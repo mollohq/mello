@@ -429,6 +429,14 @@ impl VoiceManager {
         }
     }
 
+    pub fn set_echo_suppression(&mut self, enabled: bool) {
+        if !self.ctx.is_null() {
+            unsafe {
+                mello_sys::mello_voice_set_echo_suppression(self.ctx, enabled);
+            }
+        }
+    }
+
     pub fn set_agc(&mut self, enabled: bool) {
         if !self.ctx.is_null() {
             unsafe {

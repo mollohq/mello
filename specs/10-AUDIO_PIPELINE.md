@@ -90,6 +90,8 @@ private:
 };
 ```
 
+`set_echo_cancellation` is a backend selector on macOS: on selects the VPIO duplex unit (OS AEC/AGC, software APM capture skipped), off selects the plain HAL pair plus software AEC. On other platforms it only flips the APM flag. The switch applies immediately only mid-session; outside voice the desired backend is stored for the next capture start.
+
 ---
 
 ## 4. Capture and Encode Path
@@ -97,13 +99,14 @@ private:
 Per 20ms frame, endpoint processing order is adaptive:
 
 1. optional input gain
-2. WebRTC APM capture-side processing (AEC3 + AGC2, plus optional WebRTC NS/HPF/transient suppression)
-3. clip ring tap (when clip buffer is active)
-4. cheap RMS/noise-floor gate updates input level and decides whether this is a speech candidate
-5. Silero VAD runs only for candidate speech / hangover windows
-6. when speech opens, flush pre-roll frames so starts are not clipped
-7. while speech or hangover is active, apply the selected enhancement mode and Opus encode
-8. enqueue encoded packet with monotonically increasing sequence
+2. WebRTC APM capture-side processing (AEC3 + AGC2, plus optional WebRTC NS/HPF) — skipped when the macOS VPIO duplex backend is active (the OS unit already ran AEC/AGC; see §6.2)
+3. neural residual-echo suppression when `echo_suppression` is on (software path only; post-AEC mic plus far-end reference ring, silence bypass)
+4. clip ring tap (when clip buffer is active)
+5. cheap RMS/noise-floor gate updates input level and decides whether this is a speech candidate (uses post-stage RMS when the suppressor ran, pre-AEC level otherwise)
+6. Silero VAD runs only for candidate speech / hangover windows
+7. when speech opens, flush pre-roll frames so starts are not clipped
+8. while speech or hangover is active, apply the selected enhancement mode and Opus encode
+9. enqueue encoded packet with monotonically increasing sequence
 
 RNNoise remains the default quality noise suppression path, but it is not run on obvious
 silence or non-speech background. This preserves Discord-like voice quality during speech
@@ -113,7 +116,8 @@ levels remain available as runtime test/diagnostic modes.
 ```cpp
 // libmello/src/audio/audio_pipeline.cpp (simplified)
 echo_canceller_.process_capture(capture_accum_.data(), FRAME_SIZE);
-bool candidate = rms >= max(MIN_SPEECH_RMS, noise_floor * NOISE_FLOOR_GATE_MULT);
+if (suppressor_enabled) echo_suppressor_.process(capture_accum_.data());
+bool candidate = gate_rms >= max(MIN_SPEECH_RMS, noise_floor * NOISE_FLOOR_GATE_MULT);
 if (candidate || candidate_hangover || speech_hangover) {
     vad_.feed(capture_accum_.data(), FRAME_SIZE);
 }
@@ -202,6 +206,8 @@ Mixed output applies:
 - optional clip playback overlay
 - AEC render reference feed (`process_render`) when far-end audio exists
 
+The render feed accumulates variable-size playback callbacks into 10 ms APM chunks; tails are carried, not dropped. The stream-delay hint refreshes from device latencies plus jitter depth on init and every device or backend switch.
+
 On voice leave, `stop_capture()` must clear all remote decode/jitter/ring state immediately to avoid stale PLC artifacts.
 
 ---
@@ -214,12 +220,15 @@ On voice leave, `stop_capture()` must clear all remote decode/jitter/ring state 
 - supports float/int16 device formats
 - performs explicit downmix/resample to internal 48k mono int16 contract
 - performs reverse conversion for playout to device-native format/channels
+- reports `GetStreamLatency` plus device period as the APM delay-hint source, cached at init; query failure degrades to 0 and never fails init
 
 ### 6.2 macOS (CoreAudio)
 
 - capture/playback set 48k mono int16 stream format
 - post-set validation rejects mismatch
 - fails fast if actual device unit format violates contract
+
+Voice path: one VoiceProcessingIO duplex unit carries capture input and render output together when the echo toggle is on. Apple's AEC reference is the audio rendered through that unit's own output bus, so the pair cannot split: input-only VPIO never initializes, and device switches rebuild both halves together with plain-HAL fallback. The duplex unit is voice-session scoped: it activates on capture start and drops back to the plain pair on stop, so no mic-capable unit runs (and no mic indicator shows) outside a voice session. Capture buffers are sized defensively (observed slices exceed the unit's reported max). See spec 03 §4.
 
 ---
 
@@ -264,6 +273,7 @@ MelloResult mello_voice_stop_capture(MelloContext* ctx);
 void mello_voice_set_mute(MelloContext* ctx, bool muted);
 void mello_voice_set_deafen(MelloContext* ctx, bool deafened);
 void mello_voice_set_echo_cancellation(MelloContext* ctx, bool enabled);
+void mello_voice_set_echo_suppression(MelloContext* ctx, bool enabled);
 void mello_voice_set_agc(MelloContext* ctx, bool enabled);
 void mello_voice_set_noise_suppression(MelloContext* ctx, bool enabled);
 void mello_voice_set_ns_mode(MelloContext* ctx, MelloNsMode mode);

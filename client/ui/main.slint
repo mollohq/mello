@@ -225,6 +225,8 @@ export component MainWindow inherits Window {
     in-out property <float> settings-output-volume: 1.0;
     in-out property <bool> settings-noise-suppression: true;
     in-out property <bool> settings-echo-cancellation: true;
+    in-out property <bool> settings-echo-suppression: false;
+    in-out property <bool> settings-agc: true;
     in-out property <bool> settings-ptt-mode: false;
     in property <string> settings-ptt-key-label: "Unassigned";
     in-out property <bool> settings-ptt-binding: false;
@@ -570,6 +572,8 @@ export component MainWindow inherits Window {
     callback setting-changed-output-volume(float);
     callback setting-changed-noise-suppression(bool);
     callback setting-changed-echo-cancellation(bool);
+    callback setting-changed-echo-suppression(bool);
+    callback setting-changed-agc(bool);
     callback setting-changed-input-mode(bool);
     callback setting-changed-vad-threshold(float);
     callback settings-ptt-key-captured(/* key_text */ string, /* ctrl */ bool, /* alt */ bool, /* shift */ bool, /* meta */ bool);
@@ -1482,6 +1486,8 @@ export component MainWindow inherits Window {
         output-volume <=> root.settings-output-volume;
         noise-suppression <=> root.settings-noise-suppression;
         echo-cancellation <=> root.settings-echo-cancellation;
+        echo-suppression <=> root.settings-echo-suppression;
+        agc <=> root.settings-agc;
         ptt-mode <=> root.settings-ptt-mode;
         ptt-key-label: root.settings-ptt-key-label;
         ptt-binding <=> root.settings-ptt-binding;
@@ -1575,6 +1581,14 @@ export component MainWindow inherits Window {
         setting-changed-echo-cancellation(v) => {
             root.settings-show-saved = true;
             root.setting-changed-echo-cancellation(v);
+        }
+        setting-changed-echo-suppression(v) => {
+            root.settings-show-saved = true;
+            root.setting-changed-echo-suppression(v);
+        }
+        setting-changed-agc(v) => {
+            root.settings-show-saved = true;
+            root.setting-changed-agc(v);
         }
         setting-changed-input-mode(v) => {
             root.settings-show-saved = true;

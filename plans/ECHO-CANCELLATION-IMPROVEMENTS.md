@@ -4,28 +4,28 @@ overview: "Fix acoustic echo end-to-end: upgrade the stale WebRTC audio engine (
 todos:
   - id: a-upgrade-engine
     content: "Upgrade vendored webrtc-audio-processing v1.3 -> v2.x, rebuild CMake wrapper, keep API surface"
-    status: pending
+    status: completed
   - id: a-delay-hints
     content: "Feed measured device latency as APM stream-delay hints (CoreAudio + WASAPI)"
-    status: pending
+    status: completed
   - id: a-regression-harness
     content: "ERLE regression harness: synthetic loopback test asserting cancellation, fails without render feed"
-    status: pending
+    status: completed
   - id: b-vpio-macos
     content: "macOS VoiceProcessingIO capture backend behind runtime echo-cancellation toggle"
-    status: pending
+    status: completed
   - id: c-model-pick
     content: "Select + benchmark a small two-input (mic + far-end) suppression model, export ONNX"
-    status: pending
+    status: completed
   - id: c-integration
     content: "Integrate model post-AEC in audio pipeline behind settings flag (default off)"
-    status: pending
+    status: completed
   - id: c-validation
     content: "Latency/CPU bench vs budgets, field test matrix, decide default-on"
     status: pending
   - id: docs
     content: "Update specs/03-LIBMELLO.md §4 and specs/10-AUDIO_PIPELINE.md to match landed reality"
-    status: pending
+    status: completed
 isProject: false
 ---
 

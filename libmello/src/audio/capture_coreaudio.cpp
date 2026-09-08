@@ -1,5 +1,6 @@
 #ifdef __APPLE__
 #include "capture_coreaudio.hpp"
+#include "coreaudio_unit_lock.hpp"
 #include "../util/log.hpp"
 #include <cstring>
 #include <cmath>
@@ -10,6 +11,7 @@ CoreAudioCapture::CoreAudioCapture() = default;
 
 CoreAudioCapture::~CoreAudioCapture() {
     stop();
+    std::lock_guard<std::mutex> lock(coreaudio_unit_mutex());
     if (audio_unit_) {
         AudioComponentInstanceDispose(audio_unit_);
         audio_unit_ = nullptr;
@@ -24,9 +26,12 @@ CoreAudioCapture::~CoreAudioCapture() {
 }
 
 bool CoreAudioCapture::initialize(const char* device_id) {
+    // Unit setup is serialized process-wide (see coreaudio_unit_lock.hpp).
+    std::lock_guard<std::mutex> lock(coreaudio_unit_mutex());
     MELLO_LOG_INFO("capture", "CoreAudio: initializing (device=%s)", device_id ? device_id : "default");
 
-    // Find the AUHAL component
+    // Find the AUHAL component (plain input unit; the voice-processing
+    // path lives in the combined VPIO duplex unit, vpio_duplex.cpp).
     AudioComponentDescription desc = {};
     desc.componentType = kAudioUnitType_Output;
     desc.componentSubType = kAudioUnitSubType_HALOutput;
@@ -158,11 +163,14 @@ bool CoreAudioCapture::initialize(const char* device_id) {
     if (maxFrames == 0) maxFrames = 4096;
 
     // Allocate buffer list for the render call
+    buffer_capacity_frames_ = kBufferCapFrames;
     buffer_list_ = (AudioBufferList*)calloc(1, sizeof(AudioBufferList));
     buffer_list_->mNumberBuffers = 1;
     buffer_list_->mBuffers[0].mNumberChannels = 1;
-    buffer_list_->mBuffers[0].mDataByteSize = maxFrames * sizeof(int16_t);
-    buffer_list_->mBuffers[0].mData = calloc(maxFrames, sizeof(int16_t));
+    buffer_list_->mBuffers[0].mDataByteSize =
+        buffer_capacity_frames_ * sizeof(int16_t);
+    buffer_list_->mBuffers[0].mData =
+        calloc(buffer_capacity_frames_, sizeof(int16_t));
 
     render_buf_.resize(maxFrames);
 
@@ -187,9 +195,61 @@ bool CoreAudioCapture::initialize(const char* device_id) {
         return false;
     }
 
+    cached_input_latency_ms_ = query_input_latency_ms();
+
     MELLO_LOG_INFO("capture", "CoreAudio: initialized (rate=%u ch=%u maxFrames=%u device=%u)",
                    sample_rate_, channels_, maxFrames, (unsigned)device_id_);
     return true;
+}
+
+int CoreAudioCapture::query_input_latency_ms() {
+    double total_ms = 0.0;
+
+    // AudioUnit internal latency (seconds).
+    Float64 unit_latency_sec = 0.0;
+    UInt32 size = sizeof(unit_latency_sec);
+    OSStatus s = AudioUnitGetProperty(audio_unit_, kAudioUnitProperty_Latency,
+                                      kAudioUnitScope_Global, 0,
+                                      &unit_latency_sec, &size);
+    if (s == noErr && unit_latency_sec > 0 && unit_latency_sec < 2.0) {
+        total_ms += unit_latency_sec * 1000.0;
+    }
+
+    if (device_id_ != kAudioObjectUnknown) {
+        // Safety offset (frames) on the input scope.
+        UInt32 safety_frames = 0;
+        size = sizeof(safety_frames);
+        AudioObjectPropertyAddress safety_addr = {
+            kAudioDevicePropertySafetyOffset,
+            kAudioObjectPropertyScopeInput,
+            kAudioObjectPropertyElementMain};
+        if (AudioObjectHasProperty(device_id_, &safety_addr)) {
+            if (AudioObjectGetPropertyData(device_id_, &safety_addr, 0, nullptr,
+                                           &size, &safety_frames) == noErr) {
+                total_ms += static_cast<double>(safety_frames) * 1000.0 / 48000.0;
+            }
+        }
+        // Device buffer size (frames) — the dominant term on most Macs.
+        UInt32 buffer_frames = 0;
+        size = sizeof(buffer_frames);
+        AudioObjectPropertyAddress buf_addr = {
+            kAudioDevicePropertyBufferFrameSize,
+            kAudioObjectPropertyScopeInput,
+            kAudioObjectPropertyElementMain};
+        if (AudioObjectHasProperty(device_id_, &buf_addr)) {
+            if (AudioObjectGetPropertyData(device_id_, &buf_addr, 0, nullptr,
+                                           &size, &buffer_frames) == noErr &&
+                buffer_frames > 0 && buffer_frames <= 8192) {
+                total_ms += static_cast<double>(buffer_frames) * 1000.0 / 48000.0;
+            }
+        }
+    }
+
+    if (total_ms < 0) total_ms = 0;
+    if (total_ms > 500) total_ms = 500;
+    int ms = static_cast<int>(total_ms + 0.5);
+    MELLO_LOG_INFO("capture", "CoreAudio: input latency estimate %d ms", ms);
+    return ms;
 }
 
 bool CoreAudioCapture::start(Callback callback) {
@@ -227,6 +287,13 @@ OSStatus CoreAudioCapture::input_callback(
 {
     auto* self = static_cast<CoreAudioCapture*>(inRefCon);
     if (!self->running_ || !self->callback_) return noErr;
+
+    // Defensive: never render more than the buffer holds (see header note).
+    if (inNumberFrames > self->buffer_capacity_frames_) {
+        MELLO_LOG_ERROR("capture", "CoreAudio: slice %u exceeds buffer %zu; dropping",
+                        inNumberFrames, self->buffer_capacity_frames_);
+        return noErr;
+    }
 
     // Reset buffer for this render call
     self->buffer_list_->mBuffers[0].mDataByteSize = inNumberFrames * sizeof(int16_t);

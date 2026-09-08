@@ -2,6 +2,7 @@
 #include "../util/log.hpp"
 #include "modules/audio_processing/include/audio_processing.h"
 #include <cmath>
+#include <cstddef>
 
 namespace mello::audio {
 
@@ -51,7 +52,6 @@ bool EchoCanceller::initialize(int sample_rate, int channels) {
     int err = apm_->Initialize(proc_cfg);
     if (err != 0) {
         MELLO_LOG_ERROR("aec", "APM Initialize failed (error %d)", err);
-        delete apm_;
         apm_ = nullptr;
         return false;
     }
@@ -73,7 +73,6 @@ bool EchoCanceller::initialize(int sample_rate, int channels) {
 
 void EchoCanceller::shutdown() {
     if (apm_) {
-        delete apm_;
         apm_ = nullptr;
         MELLO_LOG_INFO("aec", "shut down");
     }
@@ -97,8 +96,9 @@ void EchoCanceller::apply_config() {
         transient_suppression_enabled_.load(std::memory_order_relaxed);
     cfg.high_pass_filter.enabled = high_pass_filter_enabled_.load(std::memory_order_relaxed);
     cfg.pre_amplifier.enabled = false;
-    cfg.voice_detection.enabled = false;
-    cfg.residual_echo_detector.enabled = true;
+    // voice_detection and residual_echo_detector knobs were removed
+    // upstream in v2.x; the residual-echo estimator now runs unconditionally
+    // inside AEC3.
 
     apm_->ApplyConfig(cfg);
 }
@@ -128,6 +128,13 @@ void EchoCanceller::process_capture(int16_t* samples, int count) {
 
     webrtc::StreamConfig stream_cfg(sample_rate_, channels_);
 
+    // Capture is always framed to 960 by AudioPipeline::capture_accum_,
+    // so count is a multiple of 480 in practice. Log if that invariant
+    // ever breaks — a trailing tail here would be dropped unprocessed.
+    if (count % APM_FRAME_SIZE != 0) {
+        MELLO_LOG_WARN("aec", "capture count %d not a multiple of %d; tail dropped",
+                       count, APM_FRAME_SIZE);
+    }
     for (int offset = 0; offset + APM_FRAME_SIZE <= count; offset += APM_FRAME_SIZE) {
         int err = apm_->ProcessStream(
             samples + offset, stream_cfg, stream_cfg, samples + offset);
@@ -150,26 +157,44 @@ void EchoCanceller::process_render(const int16_t* samples, int count) {
     if (!apm_ || !aec_enabled_.load(std::memory_order_relaxed)) {
         return;
     }
+    if (!samples || count <= 0) return;
 
     uint32_t frame_num = render_frames_.load(std::memory_order_relaxed);
     bool should_log = (frame_num % 500) == 0;
 
     if (should_log) {
         float rms = rms_i16(samples, count);
-        MELLO_LOG_DEBUG("aec", "render: rms=%.4f count=%d frames=%u",
-                        rms, count, frame_num);
+        MELLO_LOG_DEBUG("aec", "render: rms=%.4f count=%d frames=%u pending=%zu",
+                        rms, count, frame_num, render_pending_.size());
     }
 
     webrtc::StreamConfig stream_cfg(sample_rate_, channels_);
 
-    for (int offset = 0; offset + APM_FRAME_SIZE <= count; offset += APM_FRAME_SIZE) {
+    // Accumulate variable-size playback callbacks into 10 ms APM chunks.
+    // The tail (< 480 samples) stays pending for the next call instead of
+    // being dropped, which kept AEC misaligned on 512-frame callbacks.
+    render_pending_.insert(render_pending_.end(), samples, samples + count);
+    // Bound growth if capture stalls while playback runs (e.g. deafened):
+    // keep at most ~1 s of reference.
+    constexpr size_t kMaxPending = 480 * 100;
+    if (render_pending_.size() > kMaxPending) {
+        size_t drop = render_pending_.size() - kMaxPending;
+        render_pending_.erase(render_pending_.begin(),
+                              render_pending_.begin() + static_cast<ptrdiff_t>(drop));
+        render_dropped_tail_frames_.fetch_add(static_cast<uint32_t>(drop),
+                                              std::memory_order_relaxed);
+    }
+
+    while (render_pending_.size() >= static_cast<size_t>(APM_FRAME_SIZE)) {
         int err = apm_->ProcessReverseStream(
-            samples + offset, stream_cfg, stream_cfg,
+            render_pending_.data(), stream_cfg, stream_cfg,
             render_scratch_.data());
         if (err != 0) {
             MELLO_LOG_WARN("aec", "ProcessReverseStream error %d", err);
         }
         render_frames_.fetch_add(1, std::memory_order_relaxed);
+        render_pending_.erase(render_pending_.begin(),
+                              render_pending_.begin() + APM_FRAME_SIZE);
     }
 }
 
@@ -193,6 +218,9 @@ void EchoCanceller::set_noise_suppression_level(WebRtcNsLevel level) {
 
 void EchoCanceller::set_transient_suppression_enabled(bool enabled) {
     transient_suppression_enabled_.store(enabled, std::memory_order_relaxed);
+    // The transient-suppressor backend was removed upstream in v2.x, so this
+    // Config flag is accepted but inert. The setter stays so the runtime
+    // control keeps its shape for a future replacement stage.
     apply_config();
     MELLO_LOG_INFO("aec", "Transient suppression %s", enabled ? "enabled" : "disabled");
 }
@@ -201,6 +229,17 @@ void EchoCanceller::set_high_pass_filter_enabled(bool enabled) {
     high_pass_filter_enabled_.store(enabled, std::memory_order_relaxed);
     apply_config();
     MELLO_LOG_INFO("aec", "High-pass filter %s", enabled ? "enabled" : "disabled");
+}
+
+void EchoCanceller::set_stream_delay_ms(int delay_ms) {
+    if (delay_ms < 0) delay_ms = 0;
+    if (delay_ms > 500) delay_ms = 500;
+    stream_delay_ms_.store(delay_ms, std::memory_order_relaxed);
+    if (apm_) {
+        // Best effort: old trees may ignore out-of-range values.
+        apm_->set_stream_delay_ms(delay_ms);
+    }
+    MELLO_LOG_INFO("aec", "stream delay hint set to %d ms", delay_ms);
 }
 
 } // namespace mello::audio

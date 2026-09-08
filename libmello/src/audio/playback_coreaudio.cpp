@@ -1,5 +1,6 @@
 #ifdef __APPLE__
 #include "playback_coreaudio.hpp"
+#include "coreaudio_unit_lock.hpp"
 #include "../util/log.hpp"
 #include <cstring>
 #include <vector>
@@ -11,6 +12,7 @@ CoreAudioPlayback::CoreAudioPlayback() = default;
 
 CoreAudioPlayback::~CoreAudioPlayback() {
     stop();
+    std::lock_guard<std::mutex> lock(coreaudio_unit_mutex());
     if (audio_unit_) {
         AudioComponentInstanceDispose(audio_unit_);
         audio_unit_ = nullptr;
@@ -18,6 +20,8 @@ CoreAudioPlayback::~CoreAudioPlayback() {
 }
 
 bool CoreAudioPlayback::initialize(const char* device_id) {
+    // Unit setup is serialized process-wide (see coreaudio_unit_lock.hpp).
+    std::lock_guard<std::mutex> lock(coreaudio_unit_mutex());
     MELLO_LOG_INFO("playback", "CoreAudio: initializing (device=%s)", device_id ? device_id : "default");
 
     // Find the default output Audio Unit (AUHAL)
@@ -151,9 +155,58 @@ bool CoreAudioPlayback::initialize(const char* device_id) {
         return false;
     }
 
+    cached_output_latency_ms_ = query_output_latency_ms();
+
     MELLO_LOG_INFO("playback", "CoreAudio: initialized (rate=%u device_ch=%u device=%u)",
                    sample_rate_, device_channels_, (unsigned)device_id_);
     return true;
+}
+
+int CoreAudioPlayback::query_output_latency_ms() {
+    double total_ms = 0.0;
+
+    Float64 unit_latency_sec = 0.0;
+    UInt32 size = sizeof(unit_latency_sec);
+    OSStatus s = AudioUnitGetProperty(audio_unit_, kAudioUnitProperty_Latency,
+                                      kAudioUnitScope_Global, 0,
+                                      &unit_latency_sec, &size);
+    if (s == noErr && unit_latency_sec > 0 && unit_latency_sec < 2.0) {
+        total_ms += unit_latency_sec * 1000.0;
+    }
+
+    if (device_id_ != kAudioObjectUnknown) {
+        UInt32 safety_frames = 0;
+        size = sizeof(safety_frames);
+        AudioObjectPropertyAddress safety_addr = {
+            kAudioDevicePropertySafetyOffset,
+            kAudioObjectPropertyScopeOutput,
+            kAudioObjectPropertyElementMain};
+        if (AudioObjectHasProperty(device_id_, &safety_addr)) {
+            if (AudioObjectGetPropertyData(device_id_, &safety_addr, 0, nullptr,
+                                           &size, &safety_frames) == noErr) {
+                total_ms += static_cast<double>(safety_frames) * 1000.0 / 48000.0;
+            }
+        }
+        UInt32 buffer_frames = 0;
+        size = sizeof(buffer_frames);
+        AudioObjectPropertyAddress buf_addr = {
+            kAudioDevicePropertyBufferFrameSize,
+            kAudioObjectPropertyScopeOutput,
+            kAudioObjectPropertyElementMain};
+        if (AudioObjectHasProperty(device_id_, &buf_addr)) {
+            if (AudioObjectGetPropertyData(device_id_, &buf_addr, 0, nullptr,
+                                           &size, &buffer_frames) == noErr &&
+                buffer_frames > 0 && buffer_frames <= 8192) {
+                total_ms += static_cast<double>(buffer_frames) * 1000.0 / 48000.0;
+            }
+        }
+    }
+
+    if (total_ms < 0) total_ms = 0;
+    if (total_ms > 500) total_ms = 500;
+    int ms = static_cast<int>(total_ms + 0.5);
+    MELLO_LOG_INFO("playback", "CoreAudio: output latency estimate %d ms", ms);
+    return ms;
 }
 
 bool CoreAudioPlayback::start() {

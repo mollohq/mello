@@ -88,16 +88,26 @@ fn main() {
     println!("cargo:rustc-link-lib=static=srtp2");
     println!("cargo:rustc-link-lib=static=usrsctp");
 
-    // Abseil (transitive dependency of webrtc_audio_processing, installed by vcpkg)
+    // Abseil (transitive dependency of webrtc_audio_processing, installed by vcpkg).
+    // Unix archives carry a `lib` prefix that rustc re-adds itself
+    // (`-labsl_strings` finds `libabsl_strings.a`); Windows .lib files have
+    // no prefix. The old `starts_with("absl_")` check matched nothing on
+    // Unix, which went unnoticed while webrtc-audio-processing v1.3 used
+    // absl header-only. v2.x links real absl symbols, so enumerate exactly.
     if let Ok(entries) = std::fs::read_dir(&vcpkg_installed) {
         let suffix = if target_os == "windows" { ".lib" } else { ".a" };
-        for entry in entries.filter_map(|e| e.ok()) {
-            let name = entry.file_name();
-            let name_str = name.to_string_lossy();
-            if name_str.starts_with("absl_") && name_str.ends_with(suffix) {
-                let lib_name = name_str.strip_suffix(suffix).unwrap();
-                println!("cargo:rustc-link-lib=static={}", lib_name);
-            }
+        let mut absl_libs: Vec<String> = entries
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter_map(|name| {
+                let stem = name.strip_suffix(suffix)?;
+                let stem = stem.strip_prefix("lib").unwrap_or(stem);
+                stem.starts_with("absl_").then(|| stem.to_owned())
+            })
+            .collect();
+        absl_libs.sort();
+        for lib_name in absl_libs {
+            println!("cargo:rustc-link-lib=static={}", lib_name);
         }
     }
 

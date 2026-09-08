@@ -448,7 +448,9 @@ export component ControlBar inherits Rectangle {
         // ===================== CENTRE =====================
 
         // Idle or now playing: what you would stream, then how to start.
-        if bar-state == 0 || bar-state == 1: HorizontalLayout {
+        // Hidden while mic access is missing: the permission CTA takes
+        // this centre slot instead (see below).
+        if (bar-state == 0 || bar-state == 1) && mic-permission-granted: HorizontalLayout {
             horizontal-stretch: 0;
             spacing: 8px;
             alignment: center;
@@ -611,6 +613,62 @@ export component ControlBar inherits Rectangle {
                 }
             }
 
+        }
+
+        // No mic access: the permission CTA takes the centre slot where
+        // the stream control sits, so it never covers the settings gear.
+        if (bar-state == 0 || bar-state == 1) && !mic-permission-granted: HorizontalLayout {
+            horizontal-stretch: 0;
+            spacing: 12px;
+            alignment: center;
+            cross-axis-alignment: center;
+
+            Text {
+                text: mic-permission-denied ? "Microphone access denied — enable it in System Settings" : "Microphone access is needed for voice chat";
+                font-family: Theme.font-body;
+                font-weight: Theme.weight-sentence;
+                font-size: 12px;
+                color: Theme.text-body;
+                vertical-alignment: center;
+            }
+
+            Rectangle {
+                width: mic-cta-row.preferred-width + 32px;
+                height: 38px;
+
+                CutButtonShape {
+                    width: parent.width;
+                    height: parent.height;
+                    n: Theme.cut;
+                    fill: mic-btn-touch.has-hover ? Theme.action-press : Theme.action;
+                }
+
+                mic-cta-row := HorizontalLayout {
+                    alignment: center;
+                    cross-axis-alignment: center;
+                    spacing: 8px;
+                    Text {
+                        text: mic-permission-denied ? "OPEN SETTINGS" : "ALLOW MICROPHONE";
+                        font-family: Theme.font-label;
+                        font-size: 9.5px;
+                        font-weight: Theme.weight-label;
+                        letter-spacing: Theme.track-label;
+                        color: Theme.on-action;
+                        vertical-alignment: center;
+                    }
+                }
+
+                mic-btn-touch := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        if (root.mic-permission-denied) {
+                            root.open-mic-settings();
+                        } else {
+                            root.request-mic-permission();
+                        }
+                    }
+                }
+            }
         }
 
         // State 2: Post-game prompt
@@ -894,57 +952,12 @@ export component ControlBar inherits Rectangle {
                 }
             }
 
-            if mic-permission-granted: IconButton {
+            // Settings stay reachable with or without mic access: the
+            // permission CTA lives in the centre slot, never here.
+            IconButton {
                 icon: @image-url("../icons/settings.svg");
                 clicked => {
                     settings-clicked();
-                }
-            }
-
-            // --- mic permission CTA (when no mic access) ---
-            if !mic-permission-granted: Text {
-                text: mic-permission-denied ? "Microphone access denied — enable it in System Settings" : "Microphone access is needed for voice chat";
-                font-family: Theme.font-body;
-                font-weight: Theme.weight-sentence;
-                font-size: 12px;
-                color: Theme.text-body;
-                vertical-alignment: center;
-            }
-            if !mic-permission-granted: Rectangle {
-                width: mic-cta-row.preferred-width + 32px;
-                height: 38px;
-
-                CutButtonShape {
-                    width: parent.width;
-                    height: parent.height;
-                    n: Theme.cut;
-                    fill: mic-btn-touch.has-hover ? Theme.action-press : Theme.action;
-                }
-
-                mic-cta-row := HorizontalLayout {
-                    alignment: center;
-                    cross-axis-alignment: center;
-                    spacing: 8px;
-                    Text {
-                        text: mic-permission-denied ? "OPEN SETTINGS" : "ALLOW MICROPHONE";
-                        font-family: Theme.font-label;
-                        font-size: 9.5px;
-                        font-weight: Theme.weight-label;
-                        letter-spacing: Theme.track-label;
-                        color: Theme.on-action;
-                        vertical-alignment: center;
-                    }
-                }
-
-                mic-btn-touch := TouchArea {
-                    mouse-cursor: pointer;
-                    clicked => {
-                        if (root.mic-permission-denied) {
-                            root.open-mic-settings();
-                        } else {
-                            root.request-mic-permission();
-                        }
-                    }
                 }
             }
         }

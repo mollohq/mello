@@ -39,6 +39,11 @@ public:
 
     virtual uint32_t sample_rate() const = 0;
 
+    /// Estimated device + safety-offset output latency in ms.
+    /// Default 0 (unknown). See AudioCapture::input_latency_ms for
+    /// platform notes.
+    virtual int output_latency_ms() const { return 0; }
+
 protected:
     RenderSourceFn render_source_;
 };

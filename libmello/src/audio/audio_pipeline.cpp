@@ -13,6 +13,7 @@
 #include <mach-o/dyld.h>
 #include <libgen.h>
 #include <climits>
+#include "vpio_duplex.hpp"
 #else
 #include <unistd.h>
 #include <limits.h>
@@ -69,32 +70,32 @@ static std::string get_exe_dir() {
 #endif
 }
 
-static std::string find_model_path() {
+static std::string find_model_file(const char* filename) {
     std::string exe_dir = get_exe_dir();
 
     // Check next to executable first
-    std::string p1 = exe_dir + "/silero_vad.onnx";
+    std::string p1 = exe_dir + "/" + filename;
     if (std::ifstream(p1).good()) return p1;
 
     // Check models/ subdirectory next to exe
-    std::string p2 = exe_dir + "/models/silero_vad.onnx";
+    std::string p2 = exe_dir + "/models/" + filename;
     if (std::ifstream(p2).good()) return p2;
 
     // Check source tree path (development)
-    std::string p3 = exe_dir + "/../libmello/models/silero_vad.onnx";
+    std::string p3 = exe_dir + "/../libmello/models/" + filename;
     if (std::ifstream(p3).good()) return p3;
 
     // Walk up from exe looking for libmello/models (handles target/debug layout)
     std::string dir = exe_dir;
     for (int i = 0; i < 5; ++i) {
-        std::string candidate = dir + "/libmello/models/silero_vad.onnx";
+        std::string candidate = dir + "/libmello/models/" + filename;
         if (std::ifstream(candidate).good()) return candidate;
         auto pos = dir.find_last_of("\\/");
         if (pos == std::string::npos) break;
         dir = dir.substr(0, pos);
     }
 
-    MELLO_LOG_WARN("pipeline", "silero_vad.onnx not found, searched from: %s", exe_dir.c_str());
+    MELLO_LOG_WARN("pipeline", "%s not found, searched from: %s", filename, exe_dir.c_str());
     return "";
 }
 
@@ -124,16 +125,28 @@ bool AudioPipeline::initialize() {
 #endif
 
     capture_ = create_audio_capture();
-    if (!capture_->initialize()) {
-        MELLO_LOG_ERROR("pipeline", "capture init failed");
-        return false;
-    }
-
     playback_ = create_audio_playback();
 #ifdef _WIN32
     apply_session(playback_.get());
 #endif
-    if (!playback_->initialize()) {
+#ifdef __APPLE__
+    // Voice-session scope: the duplex unit lights the mic at the device
+    // level as soon as it starts, so it must not exist before a voice
+    // session. Startup is always the plain pair (clips preview mic-free);
+    // the toggle applies at capture start. Only the desired backend is
+    // stored here.
+    voice_processing_capture_.store(echo_canceller_.aec_enabled(),
+                                    std::memory_order_relaxed);
+#endif
+    if (!capture_->initialize(current_capture_device_id())) {
+        MELLO_LOG_ERROR("pipeline", "capture init failed");
+        return false;
+    }
+
+#ifdef _WIN32
+    apply_session(playback_.get());
+#endif
+    if (!playback_->initialize(current_playback_device_id())) {
         MELLO_LOG_ERROR("pipeline", "playback init failed");
         return false;
     }
@@ -156,10 +169,18 @@ bool AudioPipeline::initialize() {
     set_transient_suppression(transient_suppression_enabled());
     set_high_pass_filter(high_pass_filter_enabled());
 
-    std::string model_path = find_model_path();
+    std::string model_path = find_model_file("silero_vad.onnx");
     if (model_path.empty() || !vad_.initialize(model_path)) {
         MELLO_LOG_ERROR("pipeline", "Silero VAD init failed (model_path=%s)", model_path.c_str());
         return false;
+    }
+
+    // Neural suppressor is a soft dependency: missing model degrades to
+    // passthrough and the flag stays effective for when it appears.
+    std::string echo_model = find_model_file("echo_suppressor.onnx");
+    if (!echo_suppressor_.initialize(echo_model)) {
+        MELLO_LOG_WARN("pipeline", "echo suppressor unavailable (model_path=%s)",
+                       echo_model.c_str());
     }
     playback_->set_render_source([this](int16_t* out, size_t count) -> size_t {
         return mix_output(out, count);
@@ -172,6 +193,8 @@ bool AudioPipeline::initialize() {
 
     capture_accum_.reserve(FRAME_SIZE * 2);
     initialized_ = true;
+    refresh_stream_delay_hint();
+    echo_suppressor_.reset();
     MELLO_LOG_INFO("pipeline", "audio pipeline ready (frame=%d samples, %dHz mono)",
                    FRAME_SIZE, SAMPLE_RATE);
     return true;
@@ -179,9 +202,11 @@ bool AudioPipeline::initialize() {
 
 void AudioPipeline::shutdown() {
     MELLO_LOG_INFO("pipeline", "shutting down");
+    initialized_ = false;  // first: no backend switching while dying
     stop_capture();
     if (playback_) playback_->stop();
     echo_canceller_.shutdown();
+    echo_suppressor_.shutdown();
     noise_suppressor_.shutdown();
     vad_.shutdown();
     capture_.reset();
@@ -191,7 +216,6 @@ void AudioPipeline::shutdown() {
         session_win_->shutdown();
     }
 #endif
-    initialized_ = false;
     capture_inject_mode_.store(false, std::memory_order_relaxed);
 }
 
@@ -203,6 +227,24 @@ bool AudioPipeline::start_capture() {
         capturing_ = false;
         capture_inject_mode_.store(false, std::memory_order_relaxed);
     }
+
+    // Fresh GRU states + delay search for the new speech session.
+    echo_suppressor_.reset();
+
+#ifdef __APPLE__
+    // Activate the duplex pair for the session when desired and not live.
+    // Starting it any earlier shows mic usage with no voice session.
+    if (voice_processing_capture_.load(std::memory_order_relaxed) &&
+        !(capture_ && capture_->provides_echo_cancellation())) {
+        switch_audio_backend(true);
+        if (!capture_) return false;
+    }
+#endif
+
+    // Cache the actual backend echo state for the audio thread (it must
+    // not dereference capture_: device switches can replace it).
+    backend_cancels_echo_.store(capture_ && capture_->provides_echo_cancellation(),
+                                std::memory_order_relaxed);
 
     bool ok = capture_->start([this](const int16_t* samples, size_t count) {
         on_captured_audio(samples, count);
@@ -219,6 +261,17 @@ void AudioPipeline::stop_capture() {
         capturing_ = false;
         capture_inject_mode_.store(false, std::memory_order_relaxed);
     }
+
+#ifdef __APPLE__
+    // Leaving voice releases the mic: drop a live duplex unit back to the
+    // plain pair. Desired stays where the toggle put it (the APM flag
+    // mirrors it); only the live backend drops. Skipped while dying.
+    if (initialized_ && capture_ && capture_->provides_echo_cancellation()) {
+        switch_audio_backend(false);
+        voice_processing_capture_.store(echo_canceller_.aec_enabled(),
+                                        std::memory_order_relaxed);
+    }
+#endif
 
     std::lock_guard<std::mutex> lock(accum_mutex_);
     capture_accum_.clear();
@@ -238,6 +291,10 @@ bool AudioPipeline::start_capture_inject() {
 
     capturing_ = true;
     capture_inject_mode_.store(true, std::memory_order_relaxed);
+    // Same backend snapshot as start_capture(): injected frames must take
+    // the same APM path the live backend would.
+    backend_cancels_echo_.store(capture_ && capture_->provides_echo_cancellation(),
+                                std::memory_order_relaxed);
     MELLO_LOG_INFO("pipeline", "capture inject mode started");
     return true;
 }
@@ -272,6 +329,120 @@ void AudioPipeline::set_transient_suppression(bool enabled) {
 void AudioPipeline::set_high_pass_filter(bool enabled) {
     high_pass_filter_enabled_.store(enabled, std::memory_order_relaxed);
     echo_canceller_.set_high_pass_filter_enabled(enabled);
+}
+
+void AudioPipeline::set_echo_cancellation(bool enabled) {
+    echo_canceller_.set_aec_enabled(enabled);
+#ifdef __APPLE__
+    // On macOS the toggle selects the capture backend: on = combined VPIO
+    // duplex (OS AEC/AGC, our APM capture pass skipped), off = plain HAL
+    // pair + software AEC. Elsewhere it only flips the APM flag. The
+    // switch applies immediately only mid-session; outside voice the
+    // desired backend is stored for the next capture start, so no unit
+    // ever runs (and no mic shows) without a session.
+    if (initialized_ && capturing_ &&
+        voice_processing_capture_.load(std::memory_order_relaxed) != enabled) {
+        switch_audio_backend(enabled);
+    } else {
+        voice_processing_capture_.store(enabled, std::memory_order_relaxed);
+    }
+#endif
+}
+
+#ifdef __APPLE__
+bool AudioPipeline::activate_vpio_pair() {
+    auto unit = VpioUnit::create();
+    if (!unit->initialize(current_capture_device_id(), current_playback_device_id())) {
+        return false;
+    }
+    capture_ = std::make_unique<VpioCaptureAdapter>(unit);
+    playback_ = std::make_unique<VpioPlaybackAdapter>(unit);
+    MELLO_LOG_INFO("pipeline", "VPIO duplex pair active");
+    return true;
+}
+
+void AudioPipeline::activate_plain_pair() {
+    capture_ = create_audio_capture();
+    playback_ = create_audio_playback();
+#ifdef _WIN32
+    apply_session(playback_.get());
+#endif
+}
+#endif
+
+void AudioPipeline::switch_audio_backend(bool voice_processing) {
+    MELLO_LOG_INFO("pipeline", "switching audio backend (voice_processing=%d, was_capturing=%d)",
+                   (int)voice_processing, (int)capturing_.load());
+    voice_processing_capture_.store(voice_processing, std::memory_order_relaxed);
+
+    bool was_capturing = capturing_;
+    if (was_capturing && capture_) {
+        capture_->stop();
+        capturing_ = false;
+    }
+    if (playback_) playback_->stop();
+
+    bool live = false;
+#ifdef __APPLE__
+    if (voice_processing) live = activate_vpio_pair();
+    if (!live) {
+        if (voice_processing) {
+            MELLO_LOG_WARN("pipeline", "VPIO duplex unavailable, falling back to plain HAL pair");
+        }
+        activate_plain_pair();
+    }
+#else
+    // Only reached on Apple (call sites are guarded); plain pair it is.
+    (void)voice_processing;
+    (void)live;
+    capture_ = create_audio_capture();
+    playback_ = create_audio_playback();
+#ifdef _WIN32
+    apply_session(playback_.get());
+#endif
+#endif
+
+    // (Re)wire both halves before start (device-switch invariants): the
+    // capture callback and the render source do not transfer across
+    // replacement instances.
+    if (!capture_->initialize(current_capture_device_id()) ||
+        !playback_->initialize(current_playback_device_id())) {
+        MELLO_LOG_WARN("pipeline", "backend switch failed on stored devices, retrying defaults");
+        capture_device_id_.clear();
+        playback_device_id_.clear();
+#ifdef __APPLE__
+        activate_plain_pair();
+#else
+        capture_ = create_audio_capture();
+        playback_ = create_audio_playback();
+#ifdef _WIN32
+        apply_session(playback_.get());
+#endif
+#endif
+        if (!capture_->initialize(nullptr) || !playback_->initialize(nullptr)) {
+            MELLO_LOG_ERROR("pipeline", "backend switch failed on fallback too");
+            return;
+        }
+    }
+    playback_->set_render_source([this](int16_t* out, size_t count) -> size_t {
+        return mix_output(out, count);
+    });
+    if (!playback_->start()) {
+        MELLO_LOG_ERROR("pipeline", "playback restart on backend switch failed");
+        return;
+    }
+
+    if (was_capturing) {
+        bool ok = capture_->start([this](const int16_t* samples, size_t count) {
+            on_captured_audio(samples, count);
+        });
+        if (ok) capturing_ = true;
+        MELLO_LOG_INFO("pipeline", "capture restarted on new backend: %s",
+                       ok ? (capture_->provides_echo_cancellation() ? "VoiceProcessingIO" : "plain")
+                          : "FAILED");
+    }
+    refresh_stream_delay_hint();
+    echo_suppressor_.reset();
 }
 
 void AudioPipeline::set_mute(bool muted) { muted_ = muted; }
@@ -321,6 +492,12 @@ void AudioPipeline::process_and_encode_frame(int16_t* frame) {
 void AudioPipeline::on_captured_audio(const int16_t* samples, size_t count) {
     std::lock_guard<std::mutex> lock(accum_mutex_);
 
+    // VPIO path: the OS unit already ran AEC/AGC on this audio. Skipping
+    // our APM capture pass avoids double processing. RNNoise + VAD below
+    // run unchanged on both paths.
+    const bool skip_apm_capture =
+        backend_cancels_echo_.load(std::memory_order_relaxed);
+
     capture_accum_.insert(capture_accum_.end(), samples, samples + count);
 
     while (capture_accum_.size() >= FRAME_SIZE) {
@@ -350,7 +527,34 @@ void AudioPipeline::on_captured_audio(const int16_t* samples, size_t count) {
                 }
             }
 
-            echo_canceller_.process_capture(capture_accum_.data(), FRAME_SIZE);
+            if (!skip_apm_capture) {
+                echo_canceller_.process_capture(capture_accum_.data(), FRAME_SIZE);
+            }
+
+            // NEURAL RESIDUAL-ECHO INSERTION POINT: a two-input
+            // (post-AEC mic + far-end reference) suppressor runs here, before
+            // the gate/VAD below.
+            // Iteration 1 runs on the software path only: the VPIO duplex
+            // already applies OS AEC, and stacking an extra stage there is
+            // an unmeasured experiment for later.
+            bool suppressor_ran = false;
+            if (!skip_apm_capture && echo_suppressor_.enabled()) {
+                echo_suppressor_.process(capture_accum_.data());
+                suppressor_ran = true;
+            }
+
+            // The gate threshold uses post-stage RMS once the suppressor
+            // runs, so echo residue alone cannot hold the gate open. Pre-AEC
+            // behavior is unchanged with the flag off.
+            float gate_rms = rms;
+            if (suppressor_ran) {
+                double sum = 0.0;
+                for (int i = 0; i < FRAME_SIZE; ++i) {
+                    double s = capture_accum_[i] / 32768.0;
+                    sum += s * s;
+                }
+                gate_rms = static_cast<float>(std::sqrt(sum / FRAME_SIZE));
+            }
 
             if (local_clip_ring_ && clip_buffer_ && clip_buffer_->is_active()) {
                 local_clip_ring_->write(capture_accum_.data(), FRAME_SIZE);
@@ -361,7 +565,7 @@ void AudioPipeline::on_captured_audio(const int16_t* samples, size_t count) {
             } else {
                 const float speech_threshold =
                     (std::max)(MIN_SPEECH_RMS, noise_floor_rms_ * NOISE_FLOOR_GATE_MULT);
-                bool candidate_speech = rms >= speech_threshold;
+                bool candidate_speech = gate_rms >= speech_threshold;
 
                 if (candidate_speech) {
                     candidate_hangover_frames_ = CANDIDATE_HANGOVER_FRAMES;
@@ -408,7 +612,7 @@ void AudioPipeline::on_captured_audio(const int16_t* samples, size_t count) {
 
                     // Track ambient floor only while closed so the speech threshold adapts
                     // without chasing active speech.
-                    noise_floor_rms_ = 0.98f * noise_floor_rms_ + 0.02f * rms;
+                    noise_floor_rms_ = 0.98f * noise_floor_rms_ + 0.02f * gate_rms;
                 }
             }
         }
@@ -729,6 +933,11 @@ size_t AudioPipeline::mix_output(int16_t* out, size_t count) {
         echo_canceller_.process_render(out, static_cast<int>(count));
     }
 
+    // Same signal conditions the neural suppressor's reference ring.
+    if (echo_suppressor_.enabled() && (any_remote || has_clip_audio)) {
+        echo_suppressor_.feed_far_end(out, count);
+    }
+
     return (any_remote || has_clip_audio) ? count : 0;
 }
 
@@ -751,6 +960,29 @@ float AudioPipeline::pipeline_delay_ms() const {
         pb_ms /= static_cast<float>(peer_buffers_.size());
 
     return jb_ms + pb_ms;
+}
+
+void AudioPipeline::refresh_stream_delay_hint() {
+    if (!capture_ || !playback_) return;
+    // Total render-to-capture latency ~= output device latency + input
+    // device latency + jitter/playout buffering. The jitter term is small
+    // at switch time (buffers just cleared); the AEC delay estimator
+    // converges the rest. Sum, not difference: both legs add delay.
+    // WASAPI latencies come from GetStreamLatency + GetDevicePeriod.
+    // Sign check (sum vs difference) is validated by the ERLE harness
+    // runs in the Windows handoff task 3.
+    int out_ms = playback_->output_latency_ms();
+    int in_ms = capture_->input_latency_ms();
+    float jb_ms = 0.0f;
+    if (initialized_) {
+        jb_ms = pipeline_delay_ms();
+    }
+    int delay = out_ms + in_ms + static_cast<int>(jb_ms + 0.5f);
+    if (delay < 0) delay = 0;
+    if (delay > 500) delay = 500;
+    echo_canceller_.set_stream_delay_ms(delay);
+    MELLO_LOG_INFO("pipeline", "stream delay hint: out=%d in=%d jb=%.1f total=%d ms",
+                   out_ms, in_ms, jb_ms, delay);
 }
 
 void AudioPipeline::clear_remote_streams() {
@@ -776,6 +1008,18 @@ AudioDeviceEnumerator& AudioPipeline::device_enumerator() {
 
 int AudioPipeline::set_capture_device(const char* device_id) {
     MELLO_LOG_INFO("pipeline", "switching capture device (was_capturing=%d)", (int)capturing_.load());
+    capture_device_id_ = device_id ? device_id : "";
+
+#ifdef __APPLE__
+    // Duplex mode rebuilds the whole pair (the unit spans both directions),
+    // but only mid-session: outside voice there is nothing to restart and
+    // no unit may run.
+    if (voice_processing_capture_.load(std::memory_order_relaxed) && capturing_) {
+        switch_audio_backend(true);
+        if (!capture_ || !playback_) return 0;
+        return capture_->provides_echo_cancellation() ? 1 : 2;
+    }
+#endif
 
     bool was_capturing = capturing_;
     if (was_capturing && capture_) {
@@ -803,13 +1047,31 @@ int AudioPipeline::set_capture_device(const char* device_id) {
         });
         if (ok) capturing_ = true;
         MELLO_LOG_INFO("pipeline", "capture restarted on new device: %s", ok ? "ok" : "FAILED");
+        if (ok) {
+            refresh_stream_delay_hint();
+            echo_suppressor_.reset();
+        }
         return ok ? (fell_back ? 2 : 1) : 0;
     }
+    refresh_stream_delay_hint();
+    echo_suppressor_.reset();
     return fell_back ? 2 : 1;
 }
 
 int AudioPipeline::set_playback_device(const char* device_id) {
     MELLO_LOG_INFO("pipeline", "switching playback device");
+    playback_device_id_ = device_id ? device_id : "";
+
+#ifdef __APPLE__
+    // Duplex mode rebuilds the whole pair (the unit spans both directions),
+    // but only mid-session: outside voice there is nothing to restart and
+    // no unit may run.
+    if (voice_processing_capture_.load(std::memory_order_relaxed) && capturing_) {
+        switch_audio_backend(true);
+        if (!capture_ || !playback_) return 0;
+        return capture_->provides_echo_cancellation() ? 1 : 2;
+    }
+#endif
 
     if (playback_) playback_->stop();
 
@@ -837,6 +1099,10 @@ int AudioPipeline::set_playback_device(const char* device_id) {
     });
     bool ok = playback_->start();
     MELLO_LOG_INFO("pipeline", "playback restarted on new device: %s", ok ? "ok" : "FAILED");
+    if (ok) {
+        refresh_stream_delay_hint();
+        echo_suppressor_.reset();
+    }
     return ok ? (fell_back ? 2 : 1) : 0;
 }
 

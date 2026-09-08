@@ -114,6 +114,8 @@ bool WasapiPlayback::initialize(const char* device_id) {
         return false;
     }
 
+    cached_output_latency_ms_ = query_output_latency_ms();
+
     WAVEFORMATEX* log_fmt = nullptr;
     if (SUCCEEDED(audio_client_->GetMixFormat(&log_fmt))) {
         MELLO_LOG_INFO("playback", "mix_fmt: rate=%u ch=%u bits=%u tag=0x%04x",
@@ -300,6 +302,37 @@ void WasapiPlayback::playback_thread() {
         render_client_->ReleaseBuffer(available, 0);
     }
     CoUninitialize();
+}
+
+int WasapiPlayback::query_output_latency_ms() {
+    if (!audio_client_) return 0;
+    double total_ms = 0.0;
+
+    REFERENCE_TIME stream_latency = 0;
+    HRESULT hr = audio_client_->GetStreamLatency(&stream_latency);
+    if (SUCCEEDED(hr) && stream_latency > 0) {
+        total_ms += static_cast<double>(stream_latency) / 10000.0;
+    } else if (FAILED(hr)) {
+        MELLO_LOG_INFO("playback", "GetStreamLatency failed hr=0x%08lx, using 0", hr);
+    } else {
+        MELLO_LOG_DEBUG("playback", "GetStreamLatency returned 0 (shared mode), using 0");
+    }
+
+    REFERENCE_TIME default_period = 0, min_period = 0;
+    hr = audio_client_->GetDevicePeriod(&default_period, &min_period);
+    if (SUCCEEDED(hr) && default_period > 0) {
+        total_ms += static_cast<double>(default_period) / 10000.0;
+    } else if (FAILED(hr)) {
+        MELLO_LOG_INFO("playback", "GetDevicePeriod failed hr=0x%08lx, using 0", hr);
+    } else {
+        MELLO_LOG_DEBUG("playback", "GetDevicePeriod returned 0, using 0");
+    }
+
+    if (total_ms < 0) total_ms = 0;
+    if (total_ms > 500) total_ms = 500;
+    int ms = static_cast<int>(total_ms + 0.5);
+    MELLO_LOG_INFO("playback", "WASAPI output latency estimate %d ms", ms);
+    return ms;
 }
 
 } // namespace mello::audio

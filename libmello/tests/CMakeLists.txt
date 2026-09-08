@@ -4,6 +4,9 @@ add_executable(mello_tests
     test_opus_codec.cpp
     test_noise_suppressor.cpp
     test_echo_canceller.cpp
+    test_echo_suppressor.cpp
+    test_audio_pipeline.cpp
+    test_vpio_duplex.cpp
     test_jitter_buffer.cpp
     test_vad.cpp
     test_video_pipeline.cpp
@@ -37,6 +40,11 @@ target_link_libraries(mello_tests PRIVATE
 target_include_directories(mello_tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../src
     ${CMAKE_CURRENT_SOURCE_DIR}/../include
+    # Nullability compat shims for the vendored WAP tree (see
+    # cmake/webrtc-audio-processing/compat). Test TUs include
+    # echo_canceller.hpp -> api/scoped_refptr.h directly, so they need the
+    # same shadow the mello target gets (PRIVATE there does not propagate).
+    ${CMAKE_CURRENT_SOURCE_DIR}/../cmake/webrtc-audio-processing/compat
 )
 
 add_executable(mello_rtp_tests
@@ -74,3 +82,16 @@ include(GoogleTest)
 gtest_discover_tests(mello_tests)
 gtest_discover_tests(mello_rtp_tests)
 gtest_discover_tests(mello_procenum_tests)
+
+# Windows: ORT loads onnxruntime.dll at runtime via LoadLibrary. Copy it
+# next to the test binaries so ctest passes without manual PATH setup.
+# Desktop-only: iOS links ORT statically and has no DLLs.
+if(WIN32 AND NOT IOS)
+    foreach(_ort_dll onnxruntime.dll onnxruntime_providers_shared.dll)
+        add_custom_command(TARGET mello_tests POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${ORT_DIR}/lib/${_ort_dll}"
+                "$<TARGET_FILE_DIR:mello_tests>/${_ort_dll}"
+            COMMENT "Copying ${_ort_dll} next to mello_tests")
+    endforeach()
+endif()

@@ -4,6 +4,7 @@
 #include "opus_codec.hpp"
 #include "noise_suppressor.hpp"
 #include "echo_canceller.hpp"
+#include "echo_suppressor.hpp"
 #include "jitter_buffer.hpp"
 #include "device_enumerator.hpp"
 #include "clip_buffer.hpp"
@@ -62,8 +63,12 @@ public:
     void set_output_volume(float vol) { output_gain_.store(vol, std::memory_order_relaxed); }
     float input_volume() const { return input_gain_.load(std::memory_order_relaxed); }
     float output_volume() const { return output_gain_.load(std::memory_order_relaxed); }
-    void set_echo_cancellation(bool enabled) { echo_canceller_.set_aec_enabled(enabled); }
+    void set_echo_cancellation(bool enabled);
     void set_agc(bool enabled) { echo_canceller_.set_agc_enabled(enabled); }
+    /// Neural residual-echo suppressor (flag-off rollout). Soft dependency:
+    /// missing model degrades to passthrough, never blocks audio.
+    void set_echo_suppression(bool enabled) { echo_suppressor_.set_enabled(enabled); }
+    bool echo_suppression_enabled() const { return echo_suppressor_.enabled(); }
     void set_noise_suppression(bool enabled) { set_ns_mode(enabled ? NsMode::Rnnoise : NsMode::Off); }
     void set_ns_mode(NsMode mode);
     NsMode ns_mode() const { return static_cast<NsMode>(ns_mode_.load(std::memory_order_relaxed)); }
@@ -130,6 +135,28 @@ private:
     void process_and_encode_frame(int16_t* frame);
     void reset_speech_gate_state();
     void clear_remote_streams();
+    /// (Re)build the capture+playback backend pair for the desired
+    /// voice-processing state (macOS: VPIO duplex vs plain HAL pair) and
+    /// restart what was running. Falls back to the plain pair when the
+    /// duplex unit fails to initialize.
+    void switch_audio_backend(bool voice_processing);
+    const char* current_capture_device_id() const {
+        return capture_device_id_.empty() ? nullptr : capture_device_id_.c_str();
+    }
+    const char* current_playback_device_id() const {
+        return playback_device_id_.empty() ? nullptr : playback_device_id_.c_str();
+    }
+#ifdef __APPLE__
+    /// Install a live VPIO duplex pair for the stored device ids. Returns
+    /// false when the unit fails (caller falls back to the plain pair).
+    bool activate_vpio_pair();
+    void activate_plain_pair();
+#endif
+    /// Recompute APM stream-delay hint from device latencies plus jitter
+    /// depth. Called on init and device switches (not per-frame: the
+    /// estimator converges from a close start; per-frame jitter tracking
+    /// is future work — see Windows handoff TODO).
+    void refresh_stream_delay_hint();
 #ifdef _WIN32
     void apply_session(AudioPlayback* pb);
 #endif
@@ -144,6 +171,7 @@ private:
     OpusEnc encoder_;
     NoiseSuppressor noise_suppressor_;
     EchoCanceller echo_canceller_;
+    EchoSuppressor echo_suppressor_;
     VoiceActivityDetector vad_;
     std::unordered_map<std::string, OpusDec> decoders_;
     std::unordered_map<std::string, bool> decoder_primed_;
@@ -182,6 +210,17 @@ private:
     std::atomic<bool> transient_suppression_enabled_{false};
     std::atomic<bool> high_pass_filter_enabled_{false};
     std::atomic<bool> capture_inject_mode_{false};
+    // Desired capture backend on macOS (echo toggle position). The actual
+    // backend is reported by AudioCapture::provides_echo_cancellation().
+    std::atomic<bool> voice_processing_capture_{false};
+    // Actual backend echo state, cached on the main thread at capture start
+    // (the audio thread must not touch the capture_ pointer: device
+    // switches can replace it mid-callback).
+    std::atomic<bool> backend_cancels_echo_{false};
+    // Last requested devices ("empty" = default). Backend and device
+    // switches re-open the stored pair.
+    std::string capture_device_id_;
+    std::string playback_device_id_;
     float noise_floor_rms_ = 0.001f;
     int candidate_hangover_frames_ = 0;
     int speech_hangover_frames_ = 0;
