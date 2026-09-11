@@ -1077,9 +1077,21 @@ impl SfuConnection {
 
         let answer: SignalingMessage = parse_ws_message(&answer_msg)?;
         if answer.msg_type != "answer" {
+            // Surface the relay's code/message: without them a failed setup
+            // logs only "got error" and the cause is undebuggable in the field.
+            let code = answer
+                .data
+                .get("code")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let detail = answer
+                .data
+                .get("message")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
             return Err(StreamError::SfuProtocolError(format!(
-                "expected answer, got {}",
-                answer.msg_type
+                "expected answer, got {} (code={} message={})",
+                answer.msg_type, code, detail
             )));
         }
 
