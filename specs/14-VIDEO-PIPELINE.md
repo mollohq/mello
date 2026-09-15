@@ -215,12 +215,16 @@ std::unique_ptr<CaptureSource> create_capture_source(const CaptureSourceDesc& de
 
 | Capture mode | Condition | Backend |
 |---|---|---|
-| `Monitor` | Always | DXGI DDI |
-| `Window` | Always | WGC |
-| `Process` | Target process owns a DXGI output (exclusive fullscreen) | DXGI DDI on that output |
-| `Process` | Otherwise (windowed / borderless) | WGC on process's main HWND |
+| `Monitor` | Default | DXGI DDI |
+| `Monitor` | `prefer_wgc` (benchmark, `MELLO_CAPTURE_MONITOR_WGC`) | WGC on that monitor |
+| `Window` | Always | WGC on the HWND |
+| `Process` | First ladder step, window covers its monitor | DXGI DDI on that monitor |
+| `Process` | First ladder step, windowed | WGC on the process's main HWND |
+| `Process` | Later ladder steps | The remaining methods, in order |
 
-Backend selection for `Process` mode is performed at `start()` time and re-evaluated periodically (see §4.5 Hot-swap).
+`Process` mode runs the capture ladder: the first method that delivers a frame
+within 2 s keeps the stream. See `12-STREAMING.md` §3.1 for the rules and
+`mello-backlog/plans/streaming-reliability.md` for why.
 
 ### 4.3 DXGI Desktop Duplication Backend
 

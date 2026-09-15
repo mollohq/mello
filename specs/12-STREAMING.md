@@ -49,14 +49,33 @@ Capture → GPU Preprocess → Encode Queue → Encode Thread → Stream Manager
 
 ### 3.1 Capture
 
-Two backends, selected automatically per-process:
+Three methods, tried in order by the capture ladder:
 
-| Backend | API | When |
-|---------|-----|------|
-| **DXGI-DDI** | `IDXGIOutputDuplication` | Fullscreen / exclusive-fullscreen games |
-| **WGC** | `Windows.Graphics.Capture` | Windowed games |
+| Backend | API | Notes |
+|---------|-----|-------|
+| **DXGI-DDI** | `IDXGIOutputDuplication` | The game window's monitor. Cannot see exclusive-fullscreen content. |
+| **WGC** | `Windows.Graphics.Capture`, `CreateForWindow` | The game window. Cannot see exclusive-fullscreen content either. |
+| **WGC-Monitor** | `Windows.Graphics.Capture`, `CreateForMonitor` | Fallback when window capture fails. |
 
-`ProcessCapture` wraps both. Given a PID it finds the main game window (`EnumWindows`, largest restored-area, non-toolwindow), detects fullscreen (covers ≥90% of monitor), and picks the backend. A background `monitor_thread` periodically re-evaluates and hot-swaps if the game transitions windowed↔fullscreen — triggering a keyframe on swap.
+`ProcessCapture` owns the ladder. Given a PID it finds the main game window
+(`EnumWindows`, largest restored-area, non-toolwindow) and orders the methods:
+a window that covers its monitor starts on DXGI, a windowed game starts on WGC.
+That order is provisional until the DXGI vs WGC benchmark runs
+(`mello-backlog/plans/streaming-reliability.md` §2.6, `stream-host --bench-csv`).
+
+**A method fails only on evidence.** No first frame within 2 s is a failure, and
+the ladder moves on. Silence after the first frame is not: a paused game or an
+idle desktop delivers nothing and is healthy. Desktop duplication on a static
+desktop delivers no frame at all. The other evidence is a backend that stopped
+for good (duplication rebuild gave up, capture item closed) and a game entering
+exclusive fullscreen (`SHQueryUserNotificationState`), which rebuilds the
+current method and restarts its deadline. While the game is minimized the
+first-frame deadline is held, because nothing can capture a minimized game.
+
+Every ladder move forces a keyframe. When every method has failed, host stats
+carry `cap_failed`, the method history rides in `cap_hist`, and the client sends
+one `StreamError`. Exclusive-fullscreen games need the game capture hook
+(plan work stream 3), which does not exist yet.
 
 **Deferred start:** If the target window is minimized at stream start (user tabbed out to launch the stream), capture waits. The monitor thread polls until the window is restored, then initializes the backend. Width/height return restored dimensions during the wait so the encoder can pre-initialize. This matches Discord's behaviour.
 
@@ -94,6 +113,12 @@ not what the user thinks it is: a minimized window, where WGC returns the ~160x2
 iconic size, or an auxiliary window sharing the game's title. The WGC hot-swap
 path refuses a minimized target for the same reason and waits for restore —
 a fullscreen game exiting to the desktop minimizes it, so that path is common.
+
+**Idle keepalive:** DXGI and WGC deliver a frame only when pixels change, so a
+quiet screen sends no video. After 500 ms without a new frame the encode thread
+re-encodes the last picture at 2 fps, and a keyframe request re-encodes it as an
+IDR at once. Without this a viewer who joined a static stream saw black: the IDR
+waited for a frame that never came. Counted as `idle_rep_hz` in host stats.
 
 **Adaptive DXGI throttle:** DXGI delivers at the monitor's refresh rate (60–360 Hz). We only want `target_fps` (typically 60). On startup, we calibrate the monitor's vsync interval from the first two acquired frames, then set a deadline of `target_interval - half_vsync`. This ensures we accept the closest vsync that satisfies the target on any refresh rate, without over- or under-delivering.
 
