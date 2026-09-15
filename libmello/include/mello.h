@@ -500,7 +500,7 @@ typedef enum MelloDecoderBackend {
     MELLO_DECODER_AMF          = 1,
     MELLO_DECODER_D3D11VA      = 2,
     MELLO_DECODER_OPENH264     = 3,
-    MELLO_DECODER_DAV1D        = 4,
+    MELLO_DECODER_DAV1D        = 4, // retired: kept for ABI stability, never reported
     MELLO_DECODER_VIDEOTOOLBOX = 5, // macOS (Apple Silicon)
 } MelloDecoderBackend;
 

@@ -16,10 +16,6 @@
       "name": "cppwinrt",
       "platform": "windows"
     },
-    {
-      "name": "dav1d",
-      "platform": "!ios"
-    },
     "abseil"
   ]
 }

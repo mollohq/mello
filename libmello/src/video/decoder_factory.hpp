@@ -5,7 +5,8 @@
 
 namespace mello::video {
 
-/// Priority order: NVDEC -> AMF -> D3D11VA -> OpenH264 (H.264) / dav1d (AV1)
+/// Priority order: NVDEC -> AMF -> D3D11VA -> OpenH264 (H.264 only; AV1 is
+/// never negotiated, so no AV1 decoder ships)
 std::unique_ptr<Decoder> create_best_decoder(
     const GraphicsDevice& device,
     const DecoderConfig&  config

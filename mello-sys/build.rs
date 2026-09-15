@@ -111,11 +111,6 @@ fn main() {
         }
     }
 
-    // dav1d AV1 decoder (statically linked via vcpkg)
-    if vcpkg_installed.join("dav1d.lib").exists() || vcpkg_installed.join("libdav1d.a").exists() {
-        println!("cargo:rustc-link-lib=static=dav1d");
-    }
-
     // ONNX Runtime (dynamic linking — static is 2GB+ and impractical)
     // CMake downloads ORT into third_party/onnxruntime/<platform-dir>/; find it by glob
     // so we don't duplicate the version string here.
