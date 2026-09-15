@@ -86,7 +86,11 @@ fn spawn_mello(
         "PERF_TEST_PASSWORD",
         "PERF_TEST_CREW_ID",
         "PERF_TEST_CHANNEL_ID",
+        "NAKAMA_HOST",
+        "NAKAMA_PORT",
+        "NAKAMA_SSL",
         "NAKAMA_SERVER_KEY",
+        "NAKAMA_HTTP_KEY",
         "CI",
     ] {
         if let Ok(val) = std::env::var(key) {
