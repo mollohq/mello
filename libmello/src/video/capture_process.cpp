@@ -227,6 +227,18 @@ bool first_frame_overdue(uint64_t frames_since_step_start, uint64_t step_started
 
 }  // namespace ladder
 
+/// True when the game has a window that can present: it exists and is not
+/// minimized. A minimized game produces no frames through any capture method,
+/// so a silent capture then says nothing about the method.
+static bool target_can_present(uint32_t pid) {
+    HWND hwnd = find_main_window(pid);
+    if (!hwnd || !IsWindow(hwnd)) return false;
+    WINDOWPLACEMENT wp{};
+    wp.length = sizeof(wp);
+    if (GetWindowPlacement(hwnd, &wp) && wp.showCmd == SW_SHOWMINIMIZED) return false;
+    return true;
+}
+
 /// True when the game window is the foreground window and Windows reports an
 /// exclusive-fullscreen Direct3D application. Discord uses the same query to
 /// detect exclusive fullscreen, which no screen-level capture method can see.
@@ -531,11 +543,18 @@ void ProcessCapture::monitor_thread() {
         std::lock_guard<std::mutex> lock(swap_mutex_);
         if (!active_) continue;
 
-        // 1. A method that never delivered a first frame has failed.
+        // 1. A method that never delivered a first frame has failed — but only
+        // while the game can actually present. A minimized game renders
+        // nothing, so its capture method is not at fault; restart the deadline
+        // when the window comes back.
         if (!exhausted_.load(std::memory_order_relaxed) &&
             ladder::first_frame_overdue(step_frames_.load(std::memory_order_relaxed),
                                         step_started_us_, now)) {
-            advance_locked("no first frame within 2 s");
+            if (target_can_present(pid_)) {
+                advance_locked("no first frame within 2 s");
+            } else {
+                step_started_us_ = now;
+            }
             continue;
         }
 

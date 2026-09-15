@@ -502,3 +502,11 @@ TEST(PresentDelayHistogram, SnapshotIsCumulative) {
     EXPECT_EQ(out[2], 2u);
     EXPECT_EQ(out[PresentDelayHistogram::kBuckets - 1], 1u);
 }
+
+TEST(CaptureLadder, FirstFrameDeadlineIsTheSameForEveryMethod) {
+    // The deadline is a property of the ladder, not of a backend: a method
+    // that delivers nothing gets exactly one chance.
+    const uint64_t started = 0;
+    EXPECT_TRUE(ladder::first_frame_overdue(0, started, ladder::kFirstFrameDeadlineUs));
+    EXPECT_FALSE(ladder::first_frame_overdue(2, started, ladder::kFirstFrameDeadlineUs));
+}
