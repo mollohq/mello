@@ -107,9 +107,6 @@ bool DxgiCapture::get_cursor(CursorData& out) {
     return true;
 }
 
-// Long enough that an idle desktop does not churn duplication, short enough that
-// a viewer is not staring at a frozen picture. A rebuild costs one IDR.
-static constexpr auto kStallRecoverAfter = std::chrono::seconds(3);
 // Brief pause when a rebuild fails, so a mid-transition output is not spun on.
 static constexpr auto kAccessLostRetryDelay = std::chrono::milliseconds(250);
 // ~10s of retries at the delay above before declaring the output unusable.
@@ -118,8 +115,6 @@ static constexpr int kMaxRebuildAttempts = 40;
 void DxgiCapture::capture_thread() {
     using clock = std::chrono::steady_clock;
 
-    // Watchdog anchor: last time a frame was actually acquired.
-    auto last_frame_tp = clock::now();
     int  rebuild_failures = 0;
 
     UINT timeout_ms = std::max(1000u / target_fps_ * 2, 34u);
@@ -152,6 +147,7 @@ void DxgiCapture::capture_thread() {
                     MELLO_LOG_ERROR(TAG,
                         "Duplication rebuild failed %d times, giving up on monitor %u",
                         rebuild_failures, monitor_index_);
+                    failed_ = true;
                     running_ = false;
                     break;
                 }
@@ -160,7 +156,6 @@ void DxgiCapture::capture_thread() {
             }
             rebuild_failures = 0;
             MELLO_LOG_INFO(TAG, "Duplication rebuilt, capture resuming");
-            last_frame_tp = clock::now();
         }
 
         ComPtr<IDXGIResource> resource;
@@ -168,21 +163,11 @@ void DxgiCapture::capture_thread() {
         HRESULT hr = duplication_->AcquireNextFrame(timeout_ms, &frame_info, &resource);
 
         if (hr == DXGI_ERROR_WAIT_TIMEOUT) {
-            // No desktop update. Normal on a static screen — but also exactly
-            // what an exclusive-fullscreen app looks like, because it bypasses
-            // the compositor and duplication of that output goes silent with no
-            // error at all. Indistinguishable here, so recover on a timer: if
-            // nothing arrives for long enough, rebuild the duplication, which is
-            // the documented way back after a fullscreen transition.
-            if (clock::now() - last_frame_tp >= kStallRecoverAfter) {
-                MELLO_LOG_WARN(TAG,
-                    "No frame for %llds — rebuilding duplication (fullscreen transition?)",
-                    static_cast<long long>(
-                        std::chrono::duration_cast<std::chrono::seconds>(kStallRecoverAfter)
-                            .count()));
-                duplication_.Reset();  // top of loop rebuilds
-                last_frame_tp = clock::now();
-            }
+            // No desktop update. Normal on a static screen, so silence is never
+            // acted on here. The old rule rebuilt duplication after 3 s of
+            // silence, which churned on every idle desktop. An exclusive-
+            // fullscreen transition is detected by ProcessCapture instead
+            // (SHQueryUserNotificationState), which rebuilds on that evidence.
             continue;
         }
 
@@ -194,14 +179,13 @@ void DxgiCapture::capture_thread() {
             if (hr == DXGI_ERROR_ACCESS_LOST || hr == DXGI_ERROR_INVALID_CALL) {
                 MELLO_LOG_WARN(TAG, "DXGI access lost (hr=0x%08X), rebuilding duplication", hr);
                 duplication_.Reset();  // top of loop rebuilds
-                last_frame_tp = clock::now();
                 continue;
             }
             MELLO_LOG_ERROR(TAG, "AcquireNextFrame failed: hr=0x%08X", hr);
+            failed_ = true;
             running_ = false;
             break;
         }
-        last_frame_tp = clock::now();
 
         // Extract cursor info before releasing the frame
         if (frame_info.LastMouseUpdateTime.QuadPart != 0) {
@@ -271,6 +255,16 @@ void DxgiCapture::capture_thread() {
 
         ComPtr<ID3D11Texture2D> texture;
         hr = resource.As(&texture);
+        if (SUCCEEDED(hr) && delay_hist_) {
+            // LastPresentTime is the QPC time of the present that produced
+            // this desktop image.
+            LARGE_INTEGER qpc{}, freq{};
+            if (QueryPerformanceCounter(&qpc) && QueryPerformanceFrequency(&freq) && freq.QuadPart > 0) {
+                const double ms = static_cast<double>(qpc.QuadPart - frame_info.LastPresentTime.QuadPart) *
+                                  1000.0 / static_cast<double>(freq.QuadPart);
+                delay_hist_->record_ms(ms);
+            }
+        }
         if (SUCCEEDED(hr) && callback_) {
             auto now = std::chrono::duration_cast<std::chrono::microseconds>(
                 now_tp.time_since_epoch()).count();

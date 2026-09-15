@@ -149,6 +149,7 @@ bool VideoPipeline::start_host(const CaptureSourceDesc& source,
 
     // 1. Capture
     capture_ = create_capture_source(source);
+    if (capture_) capture_->set_present_delay_histogram(&present_delay_hist_);
     if (!capture_ || !capture_->initialize(device_, source)) {
         MELLO_LOG_ERROR(TAG, "Failed to initialize capture source");
         return false;
@@ -288,14 +289,21 @@ void VideoPipeline::stop_host() {
     if (!host_running_.load()) return;
     host_running_ = false;
 
+    // Each step is logged before it starts. A stop that hangs in a driver or a
+    // capture thread then names its own step in the log: the 2026-09-15 beta
+    // hang left no way to tell capture, encode and encoder shutdown apart.
+    MELLO_LOG_INFO(TAG, "stop_host: capture stop (%s)", capture_ ? capture_->backend_name() : "none");
     if (capture_)   capture_->stop();
 
     // Wake and join the encode thread before shutting down encoder/preprocessor
+    MELLO_LOG_INFO(TAG, "stop_host: encode thread join");
     eq_cv_.notify_all();
     if (encode_thread_.joinable()) encode_thread_.join();
 
+    MELLO_LOG_INFO(TAG, "stop_host: encoder shutdown (%s)", encoder_ ? encoder_->name() : "none");
     if (encoder_)   encoder_->shutdown();
 #ifdef _WIN32
+    MELLO_LOG_INFO(TAG, "stop_host: preprocessor shutdown");
     if (preprocessor_) preprocessor_->shutdown();
 #endif
 
@@ -356,6 +364,24 @@ void VideoPipeline::get_host_resolution(uint32_t& w, uint32_t& h) const {
 
 void VideoPipeline::request_keyframe() {
     if (encoder_) encoder_->request_keyframe();
+    // An idle stream has no next frame to carry the IDR. Wake the encode
+    // thread so it re-encodes the last picture now.
+    keepalive_kick_.store(true, std::memory_order_relaxed);
+    eq_cv_.notify_all();
+}
+
+bool VideoPipeline::idle_repeat_due(bool have_last_frame, bool kicked,
+                                    uint64_t now_us, uint64_t last_new_frame_us,
+                                    uint64_t last_encode_us) {
+    if (!have_last_frame) return false;
+    const uint64_t since_new = now_us > last_new_frame_us ? now_us - last_new_frame_us : 0;
+    // A keyframe request while frames still flow is carried by the next frame.
+    // Only answer it here when capture has been quiet for a few frames.
+    static constexpr uint64_t kKickQuietUs = 100'000;
+    if (kicked && since_new >= kKickQuietUs) return true;
+    if (since_new < kIdleAfterUs) return false;
+    const uint64_t since_encode = now_us > last_encode_us ? now_us - last_encode_us : 0;
+    return since_encode >= kIdleRepeatIntervalUs;
 }
 
 // NOTE for future adaptive bitrate/framerate: avoid reconfiguring the encoder's
@@ -480,7 +506,12 @@ void VideoPipeline::get_host_telemetry(HostTelemetry& out) const {
         out.encode_ms  = static_cast<float>(last_encode_ms_);
     }
 
-    if (capture_)  out.capture_backend = capture_->backend_name();
+    if (capture_) {
+        out.capture_backend = capture_->backend_name();
+        out.capture_failed  = capture_->failed();
+        out.capture_history = capture_->method_history();
+    }
+    present_delay_hist_.snapshot(out.present_delay_hist.data());
     if (encoder_) {
         out.encoder_name = encoder_->name();
         out.encoder_cost_tier = encoder_->cost_tier();
@@ -491,6 +522,7 @@ void VideoPipeline::get_host_telemetry(HostTelemetry& out) const {
         out.encode_lock_ms   = static_cast<float>(phases.lock_ms);
     }
     out.encode_ms_mean = static_cast<float>(encode_ms_mean_.load(std::memory_order_relaxed));
+    out.idle_repeat_frames = idle_repeat_frames_.load(std::memory_order_relaxed);
     out.gpu_name = device_.adapter_name;
 }
 
@@ -553,15 +585,44 @@ void VideoPipeline::on_captured_frame(ID3D11Texture2D* texture, uint64_t timesta
 }
 
 void VideoPipeline::encode_thread_func() {
+    // Keepalive state, only touched on this thread. The last job's texture is a
+    // preprocessor NV12 ring slot, valid until stop_host joins this thread.
+    EncodeJob last_job{};
+    bool have_last_job = false;
+    uint64_t last_new_frame_us = 0;
+    uint64_t last_encode_us = 0;
+    static constexpr auto kIdlePoll = std::chrono::milliseconds(100);
+
     while (true) {
         EncodeJob job{};
+        bool idle_repeat = false;
         {
             std::unique_lock<std::mutex> lock(eq_mutex_);
-            eq_cv_.wait(lock, [this] { return eq_count_ > 0 || !host_running_.load(); });
+            eq_cv_.wait_for(lock, kIdlePoll, [this] {
+                return eq_count_ > 0 || !host_running_.load() ||
+                       keepalive_kick_.load(std::memory_order_relaxed);
+            });
             if (eq_count_ == 0 && !host_running_.load()) break;
-            job = encode_queue_[eq_tail_];
-            eq_tail_ = (eq_tail_ + 1) % ENCODE_QUEUE_CAP;
-            eq_count_--;
+            if (eq_count_ > 0) {
+                job = encode_queue_[eq_tail_];
+                eq_tail_ = (eq_tail_ + 1) % ENCODE_QUEUE_CAP;
+                eq_count_--;
+            } else {
+                const bool kicked = keepalive_kick_.exchange(false, std::memory_order_relaxed);
+                const uint64_t now = now_us();
+                if (!idle_repeat_due(have_last_job, kicked, now, last_new_frame_us, last_encode_us)) {
+                    continue;
+                }
+                job = last_job;
+                job.timestamp_us = now;
+                idle_repeat = true;
+            }
+        }
+
+        if (!idle_repeat) {
+            last_job = job;
+            have_last_job = true;
+            last_new_frame_us = now_us();
         }
 
         auto t0 = std::chrono::steady_clock::now();
@@ -592,12 +653,17 @@ void VideoPipeline::encode_thread_func() {
                     last_convert_ms_, last_encode_ms_, eq_count_, eq_drops_);
             }
 
-            maybe_reduce_encoder_cost();
+            if (idle_repeat) {
+                idle_repeat_frames_.fetch_add(1, std::memory_order_relaxed);
+            } else {
+                maybe_reduce_encoder_cost();
+            }
 
             if (packet_cb_) {
                 packet_cb_(packet.data.data(), packet.data.size(), packet.is_keyframe, job.timestamp_us);
             }
         }
+        last_encode_us = now_us();
     }
 }
 

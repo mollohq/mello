@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 #include "video/video_pipeline.hpp"
 #include <vector>
+#include <algorithm>
 #include <mutex>
 #include <atomic>
 #include <thread>
@@ -400,4 +401,104 @@ TEST(FramerateDecimation, ClockResetDoesNotWedgeTheStream) {
     // keeps frames flowing instead of stalling until the old clock is passed.
     uint64_t deadline = 9'000'000;
     EXPECT_TRUE(VideoPipeline::decimation_accepts(5, deadline, 30));
+}
+
+// Idle keepalive: a quiet capture still needs video, or a viewer who joins a
+// static stream waits for a keyframe that never comes.
+TEST(IdleKeepalive, NothingToRepeatBeforeTheFirstFrame) {
+    EXPECT_FALSE(VideoPipeline::idle_repeat_due(false, true, 10'000'000, 0, 0));
+}
+
+TEST(IdleKeepalive, NoRepeatWhileFramesFlow) {
+    const uint64_t now = 10'000'000;
+    EXPECT_FALSE(VideoPipeline::idle_repeat_due(true, false, now, now - 16'000, now - 16'000));
+}
+
+TEST(IdleKeepalive, RepeatsAfterTheIdleThreshold) {
+    const uint64_t now = 10'000'000;
+    const uint64_t last_new = now - VideoPipeline::kIdleAfterUs;
+    EXPECT_TRUE(VideoPipeline::idle_repeat_due(true, false, now, last_new, last_new));
+}
+
+TEST(IdleKeepalive, RepeatsAtTheKeepaliveRateNotFaster) {
+    const uint64_t now = 10'000'000;
+    const uint64_t last_new = now - 5'000'000;
+    EXPECT_FALSE(VideoPipeline::idle_repeat_due(true, false, now, last_new, now - 100'000));
+    EXPECT_TRUE(VideoPipeline::idle_repeat_due(
+        true, false, now, last_new, now - VideoPipeline::kIdleRepeatIntervalUs));
+}
+
+TEST(IdleKeepalive, KeyframeRequestOnAQuietStreamRepeatsAtOnce) {
+    const uint64_t now = 10'000'000;
+    // Quiet for 200 ms, last encode 10 ms ago: only the kick makes it due.
+    EXPECT_FALSE(VideoPipeline::idle_repeat_due(true, false, now, now - 200'000, now - 10'000));
+    EXPECT_TRUE(VideoPipeline::idle_repeat_due(true, true, now, now - 200'000, now - 10'000));
+}
+
+TEST(IdleKeepalive, KeyframeRequestWhileFramesFlowWaitsForTheNextFrame) {
+    const uint64_t now = 10'000'000;
+    EXPECT_FALSE(VideoPipeline::idle_repeat_due(true, true, now, now - 16'000, now - 16'000));
+}
+
+#ifdef _WIN32
+#include "video/capture_process.hpp"
+
+// Capture ladder: a method that never delivers a first frame fails; a method
+// that went quiet after frames is a static screen and stays.
+TEST(CaptureLadder, SilentFromTheStartFailsAfterTheDeadline) {
+    const uint64_t started = 1'000'000;
+    EXPECT_FALSE(ladder::first_frame_overdue(0, started, started + 1'999'999));
+    EXPECT_TRUE(ladder::first_frame_overdue(0, started, started + ladder::kFirstFrameDeadlineUs));
+}
+
+TEST(CaptureLadder, QuietAfterFramesIsNeverAFailure) {
+    const uint64_t started = 1'000'000;
+    // One frame, then 30 minutes of nothing: a paused game, not a dead capture.
+    EXPECT_FALSE(ladder::first_frame_overdue(1, started, started + 1'800'000'000ULL));
+}
+
+TEST(CaptureLadder, ClockBeforeStepStartIsNotOverdue) {
+    EXPECT_FALSE(ladder::first_frame_overdue(0, 5'000'000, 1'000'000));
+}
+
+TEST(CaptureLadder, EveryMethodIsInEveryOrder) {
+    for (bool covers : {true, false}) {
+        auto order = ladder::initial_order(covers);
+        ASSERT_EQ(order.size(), 3u);
+        EXPECT_NE(std::find(order.begin(), order.end(), LadderStep::Dxgi), order.end());
+        EXPECT_NE(std::find(order.begin(), order.end(), LadderStep::WgcWindow), order.end());
+        EXPECT_NE(std::find(order.begin(), order.end(), LadderStep::WgcMonitor), order.end());
+    }
+}
+
+TEST(CaptureLadder, KeepsPreBenchmarkPreference) {
+    // Until the DXGI vs WGC benchmark decides, a window that covers its monitor
+    // starts on DXGI and a windowed game starts on WGC, as before the ladder.
+    EXPECT_EQ(ladder::initial_order(true).front(), LadderStep::Dxgi);
+    EXPECT_EQ(ladder::initial_order(false).front(), LadderStep::WgcWindow);
+}
+#endif
+
+// Present-to-capture delay histogram used by the DXGI vs WGC benchmark.
+TEST(PresentDelayHistogram, BucketsAreOneMillisecondWide) {
+    EXPECT_EQ(PresentDelayHistogram::bucket_for_ms(0.4), 0u);
+    EXPECT_EQ(PresentDelayHistogram::bucket_for_ms(1.0), 1u);
+    EXPECT_EQ(PresentDelayHistogram::bucket_for_ms(8.9), 8u);
+}
+
+TEST(PresentDelayHistogram, NegativeAndLargeDelaysAreClamped) {
+    // A frame timestamp slightly in the future (clock rounding) is not a crash.
+    EXPECT_EQ(PresentDelayHistogram::bucket_for_ms(-3.0), 0u);
+    EXPECT_EQ(PresentDelayHistogram::bucket_for_ms(500.0), PresentDelayHistogram::kBuckets - 1);
+}
+
+TEST(PresentDelayHistogram, SnapshotIsCumulative) {
+    PresentDelayHistogram h;
+    h.record_ms(2.5);
+    h.record_ms(2.1);
+    h.record_ms(40.0);
+    uint32_t out[PresentDelayHistogram::kBuckets]{};
+    h.snapshot(out);
+    EXPECT_EQ(out[2], 2u);
+    EXPECT_EQ(out[PresentDelayHistogram::kBuckets - 1], 1u);
 }

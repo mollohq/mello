@@ -519,6 +519,9 @@ typedef enum MelloCaptureMode {
     MELLO_CAPTURE_MONITOR = 0,
     MELLO_CAPTURE_WINDOW  = 1,
     MELLO_CAPTURE_PROCESS = 2,
+    /* Monitor captured with Windows Graphics Capture instead of DXGI desktop
+     * duplication. For the DXGI vs WGC benchmark; Windows only. */
+    MELLO_CAPTURE_MONITOR_WGC = 3,
 } MelloCaptureMode;
 
 typedef struct MelloCaptureSource {
@@ -737,6 +740,18 @@ typedef struct MelloStreamStats {
     float    encode_lock_ms;
     /* Quality features given up to hold the frame budget; 0 = full quality. */
     int32_t  encoder_cost_tier;
+    /* Frames re-encoded from the last picture because capture delivered
+     * nothing new (idle keepalive). A quiet stream, not a dead capture. */
+    uint64_t idle_repeat_frames;
+    /* 1 when every capture method failed to deliver a first frame (for a game:
+     * probably exclusive fullscreen). Silence after frames never sets it. */
+    uint32_t capture_failed;
+    /* Capture method changes and reasons, "METHOD:reason;..." (truncated). */
+    char     capture_history[96];
+    /* Cumulative present-to-capture delay histogram: bucket i counts frames
+     * delayed [i, i+1) ms; the last bucket counts >= 31 ms. Diff two reads
+     * for a window. */
+    uint32_t present_delay_hist[32];
 } MelloStreamStats;
 
 MELLO_API void mello_stream_get_stats(MelloStreamHost* host, MelloStreamStats* stats);

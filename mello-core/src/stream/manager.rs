@@ -92,6 +92,13 @@ pub(crate) struct HostStatsFields {
     pub encode_wait_ms: f32,
     pub encode_lock_ms: f32,
     pub encoder_cost_tier: i32,
+    /// Keepalive re-encodes of the last picture per second. Non-zero with
+    /// `cap_fps` at 0 is a quiet screen, not a dead capture.
+    pub idle_repeat_hz: f32,
+    /// Every capture method failed to deliver a first frame.
+    pub capture_failed: bool,
+    /// Capture method changes and reasons.
+    pub capture_history: String,
 }
 
 /// Build the host `stream_client_stats` payload.
@@ -130,6 +137,9 @@ pub(crate) fn host_stats_payload(f: HostStatsFields) -> serde_json::Value {
         "enc_wait_ms": round1(f.encode_wait_ms),
         "enc_lock_ms": round1(f.encode_lock_ms),
         "enc_tier": f.encoder_cost_tier,
+        "idle_rep_hz": round1(f.idle_repeat_hz),
+        "cap_failed": f.capture_failed,
+        "cap_hist": f.capture_history,
     })
 }
 
@@ -159,12 +169,18 @@ pub struct AudioPacket {
     pub timestamp: u64,
 }
 
+/// Longest time `StreamSession::stop_and_wait` waits for the manager run loop.
+pub const MANAGER_EXIT_DEADLINE: Duration = Duration::from_secs(2);
+
 /// Active streaming session returned by `start_stream`.
 pub struct StreamSession {
     pub session_id: String,
     pub mode: String,
     stop_tx: Option<oneshot::Sender<()>>,
     manager_task: Option<tokio::task::JoinHandle<()>>,
+    /// Set by the manager when every capture method failed. Taken by the
+    /// client, which reports it once per failure.
+    capture_failed: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl StreamSession {
@@ -179,7 +195,32 @@ impl StreamSession {
             mode,
             stop_tx: Some(stop_tx),
             manager_task: Some(manager_task),
+            capture_failed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
+    }
+
+    /// Session whose capture failure flag is shared with a manager.
+    pub fn with_capture_failed_flag(
+        session_id: String,
+        mode: String,
+        stop_tx: oneshot::Sender<()>,
+        manager_task: tokio::task::JoinHandle<()>,
+        capture_failed: Arc<std::sync::atomic::AtomicBool>,
+    ) -> Self {
+        let mut session = Self::new(session_id, mode, stop_tx, manager_task);
+        session.capture_failed = capture_failed;
+        session
+    }
+
+    /// The flag the manager sets when every capture method failed.
+    pub fn capture_failed_flag(&self) -> Arc<std::sync::atomic::AtomicBool> {
+        Arc::clone(&self.capture_failed)
+    }
+
+    /// True once per capture failure reported by the manager.
+    pub fn take_capture_failed(&self) -> bool {
+        self.capture_failed
+            .swap(false, std::sync::atomic::Ordering::AcqRel)
     }
 
     pub fn stop(&mut self) {
@@ -188,12 +229,28 @@ impl StreamSession {
         }
     }
 
-    /// Signal the manager and wait until it has stopped using host and sink resources.
+    /// Signal the manager and wait until it has stopped using host and sink
+    /// resources, at most `MANAGER_EXIT_DEADLINE`.
+    ///
+    /// The run loop is pure async and exits within milliseconds. If it does not
+    /// (a sink send stuck at an await), the task is aborted. Abort is safe: the
+    /// native host guard inside the task drops with it and stops the host on the
+    /// teardown thread. This never waits for native teardown.
     pub async fn stop_and_wait(mut self) {
         self.stop();
-        if let Some(task) = self.manager_task.take() {
-            if let Err(e) = task.await {
-                log::warn!("Stream manager task join failed during shutdown: {}", e);
+        if let Some(mut task) = self.manager_task.take() {
+            match tokio::time::timeout(MANAGER_EXIT_DEADLINE, &mut task).await {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => {
+                    log::warn!("Stream manager task join failed during shutdown: {}", e);
+                }
+                Err(_) => {
+                    log::error!(
+                        "Stream manager did not exit within {} ms; aborting its task",
+                        MANAGER_EXIT_DEADLINE.as_millis()
+                    );
+                    task.abort();
+                }
             }
         }
     }
@@ -207,6 +264,11 @@ impl Drop for StreamSession {
 
 /// The stream manager orchestrates the host-side streaming pipeline:
 /// receives encoded access units from libmello and sends them through native RTP sinks.
+///
+/// The manager uses the host pointer but does not own it. The
+/// `NativeTeardownGuard` from `stream::host::start_host` owns the host and stops
+/// it on a teardown thread. The manager used to stop it in `Drop`, which ran the
+/// blocking native join inside the command loop's await.
 pub struct StreamManager {
     #[allow(dead_code)]
     ctx: *mut mello_sys::MelloContext,
@@ -255,6 +317,10 @@ pub struct StreamManager {
     last_stats_paced_bytes: u64,
     last_stats_audio_in: u64,
     last_stats_audio_sent: u64,
+    last_idle_repeat_frames: u64,
+    /// Shared with the StreamSession; set on a capture failure transition.
+    capture_failed_flag: Arc<std::sync::atomic::AtomicBool>,
+    capture_failed_last: bool,
     /// Owns the encoder's framerate target. Congestion control feeds it the
     /// bitrate; it decides the cadence that bitrate can actually sustain.
     framerate_ladder: FramerateLadder,
@@ -282,16 +348,6 @@ struct ManagerTelemetrySnapshot {
 
 unsafe impl Send for StreamManager {}
 unsafe impl Sync for StreamManager {}
-
-impl Drop for StreamManager {
-    fn drop(&mut self) {
-        log::info!("StreamManager dropping — cleaning up C++ host resources");
-        unsafe {
-            mello_sys::mello_stream_stop_audio(self.host);
-            mello_sys::mello_stream_stop_host(self.host);
-        }
-    }
-}
 
 impl StreamManager {
     pub fn new(
@@ -347,6 +403,9 @@ impl StreamManager {
             last_stats_paced_bytes: 0,
             last_stats_audio_in: 0,
             last_stats_audio_sent: 0,
+            last_idle_repeat_frames: 0,
+            capture_failed_flag: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            capture_failed_last: false,
             framerate_ladder: ladder,
             last_manager_sample: ManagerTelemetrySnapshot::default(),
             last_manager_sample_at: Instant::now(),
@@ -603,6 +662,39 @@ impl StreamManager {
     /// ladder reacts to what the encoder was actually told — including the
     /// configured floor and ceiling — rather than to a target that was clamped
     /// away before it ever reached the wire.
+    /// Share the session's capture failure flag with this manager.
+    pub fn set_capture_failed_flag(&mut self, flag: Arc<std::sync::atomic::AtomicBool>) {
+        self.capture_failed_flag = flag;
+    }
+
+    /// Report a transition into "every capture method failed" once. The
+    /// native ladder keeps trying on evidence; a recovery re-arms the report.
+    fn check_capture_state(&mut self) {
+        if self.host.is_null() {
+            return;
+        }
+        let mut stats: mello_sys::MelloStreamStats = unsafe { std::mem::zeroed() };
+        unsafe { mello_sys::mello_stream_get_stats(self.host, &mut stats) };
+        let failed = stats.capture_failed != 0;
+        if failed == self.capture_failed_last {
+            return;
+        }
+        self.capture_failed_last = failed;
+        if failed {
+            log::error!(
+                "Stream capture failed: no capture method delivers frames (history: {})",
+                cstr_field(&stats.capture_history)
+            );
+            self.capture_failed_flag
+                .store(true, std::sync::atomic::Ordering::Release);
+        } else {
+            log::info!(
+                "Stream capture recovered (history: {})",
+                cstr_field(&stats.capture_history)
+            );
+        }
+    }
+
     fn tick_framerate_ladder(&mut self) {
         let Some(fps) = self
             .framerate_ladder
@@ -653,6 +745,9 @@ impl StreamManager {
             .saturating_sub(self.last_frames_captured);
         self.last_frames_captured = stats.frames_captured;
         let capture_fps = captured_delta as f32 / STREAM_STATS_REPORT_INTERVAL_SECS as f32;
+
+        let idle_repeat_hz =
+            rate_since(stats.idle_repeat_frames, &mut self.last_idle_repeat_frames);
 
         let eq_drops_delta = stats
             .encode_queue_drops
@@ -705,6 +800,9 @@ impl StreamManager {
             encode_wait_ms: stats.encode_wait_ms,
             encode_lock_ms: stats.encode_lock_ms,
             encoder_cost_tier: stats.encoder_cost_tier,
+            idle_repeat_hz,
+            capture_failed: stats.capture_failed != 0,
+            capture_history: cstr_field(&stats.capture_history),
         });
         self.sink.send_stats(&payload).await;
     }
@@ -748,6 +846,7 @@ impl StreamManager {
                 _ = manager_tick.tick() => {
                     self.log_manager_telemetry().await;
                     self.tick_framerate_ladder();
+                    self.check_capture_state();
                 }
                 _ = stats_tick.tick() => {
                     self.report_stream_stats().await;
@@ -1154,6 +1253,9 @@ mod tests {
             encode_wait_ms: 9999.9,
             encode_lock_ms: 9999.9,
             encoder_cost_tier: i32::MAX,
+            idle_repeat_hz: 9999.9,
+            capture_failed: true,
+            capture_history: "W".repeat(95),
         });
         // Matches the envelope the connection actually sends.
         let envelope = serde_json::json!({

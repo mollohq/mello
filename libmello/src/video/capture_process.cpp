@@ -5,6 +5,8 @@
 #include "../util/log.hpp"
 #include <dxgi.h>
 #include <wrl/client.h>
+#include <shlobj.h>
+#include <chrono>
 
 using Microsoft::WRL::ComPtr;
 
@@ -191,33 +193,186 @@ int query_exclusive_fullscreen_output(uint32_t pid) {
     return -1;
 }
 
+// --- Ladder decisions ---
+
+static uint64_t ladder_now_us() {
+    return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count());
+}
+
+const char* ladder_step_name(LadderStep step) {
+    switch (step) {
+        case LadderStep::Dxgi:       return "DXGI-DDI";
+        case LadderStep::WgcWindow:  return "WGC";
+        case LadderStep::WgcMonitor: return "WGC-Monitor";
+    }
+    return "unknown";
+}
+
+namespace ladder {
+
+std::vector<LadderStep> initial_order(bool window_covers_monitor) {
+    if (window_covers_monitor) {
+        return {LadderStep::Dxgi, LadderStep::WgcWindow, LadderStep::WgcMonitor};
+    }
+    return {LadderStep::WgcWindow, LadderStep::WgcMonitor, LadderStep::Dxgi};
+}
+
+bool first_frame_overdue(uint64_t frames_since_step_start, uint64_t step_started_us,
+                         uint64_t now_us) {
+    if (frames_since_step_start > 0) return false;
+    if (now_us < step_started_us) return false;
+    return now_us - step_started_us >= kFirstFrameDeadlineUs;
+}
+
+}  // namespace ladder
+
+/// True when the game window is the foreground window and Windows reports an
+/// exclusive-fullscreen Direct3D application. Discord uses the same query to
+/// detect exclusive fullscreen, which no screen-level capture method can see.
+static bool process_in_exclusive_fullscreen(uint32_t pid) {
+    QUERY_USER_NOTIFICATION_STATE state{};
+    if (FAILED(SHQueryUserNotificationState(&state))) return false;
+    if (state != QUNS_RUNNING_D3D_FULL_SCREEN) return false;
+    DWORD fg_pid = 0;
+    GetWindowThreadProcessId(GetForegroundWindow(), &fg_pid);
+    return fg_pid == pid;
+}
+
 // --- ProcessCapture ---
+
+std::unique_ptr<CaptureSource> ProcessCapture::make_step(LadderStep step, HWND hwnd) const {
+    if (!hwnd) return nullptr;
+    HMONITOR mon = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+    switch (step) {
+        case LadderStep::Dxgi: {
+            uint32_t output = 0;
+            if (!output_index_for_monitor_on_device(device_.d3d11(), mon, &output)) {
+                MELLO_LOG_WARN(TAG, "ladder: no DXGI output on the encoder adapter for pid=%u", pid_);
+                return nullptr;
+            }
+            auto dxgi = std::make_unique<DxgiCapture>();
+            CaptureSourceDesc desc{};
+            desc.mode = CaptureMode::Monitor;
+            desc.monitor_index = output;
+            if (!dxgi->initialize(device_, desc)) return nullptr;
+            return dxgi;
+        }
+        case LadderStep::WgcWindow: {
+            auto wgc = std::make_unique<WgcCapture>();
+            CaptureSourceDesc desc{};
+            desc.mode = CaptureMode::Window;
+            desc.hwnd = hwnd;
+            if (!wgc->initialize(device_, desc)) return nullptr;
+            return wgc;
+        }
+        case LadderStep::WgcMonitor: {
+            auto wgc = std::make_unique<WgcCapture>();
+            if (!wgc->initialize_monitor(device_, mon)) return nullptr;
+            return wgc;
+        }
+    }
+    return nullptr;
+}
+
+void ProcessCapture::note_history_locked(const std::string& entry) {
+    // Bounded: the history rides in host telemetry, which has a size cap.
+    static constexpr size_t kMaxHistory = 96;
+    if (!history_.empty()) history_ += ";";
+    history_ += entry;
+    if (history_.size() > kMaxHistory) {
+        history_.erase(0, history_.size() - kMaxHistory);
+    }
+}
+
+void ProcessCapture::set_present_delay_histogram(PresentDelayHistogram* hist) {
+    std::lock_guard<std::mutex> lock(swap_mutex_);
+    delay_hist_ = hist;
+    if (active_) active_->set_present_delay_histogram(hist);
+}
+
+std::string ProcessCapture::method_history() const {
+    std::lock_guard<std::mutex> lock(swap_mutex_);
+    return history_;
+}
+
+bool ProcessCapture::activate_locked(size_t index, const char* reason) {
+    if (index >= ladder_.size()) return false;
+    const LadderStep step = ladder_[index];
+    HWND hwnd = find_main_window(pid_);
+    auto next = make_step(step, hwnd);
+    if (!next) {
+        MELLO_LOG_WARN(TAG, "ladder: %s unavailable for pid=%u", ladder_step_name(step), pid_);
+        return false;
+    }
+
+    const char* old_name = active_ ? active_->backend_name() : "none";
+    uint32_t old_w = active_ ? active_->width() : 0;
+    uint32_t old_h = active_ ? active_->height() : 0;
+    if (active_) active_->stop();
+
+    step_frames_.store(0, std::memory_order_relaxed);
+    next->set_present_delay_histogram(delay_hist_);
+    if (!next->start(target_fps_, counting_callback_)) {
+        MELLO_LOG_ERROR(TAG, "ladder: %s failed to start for pid=%u", ladder_step_name(step), pid_);
+        if (active_) {
+            if (!active_->start(target_fps_, counting_callback_)) {
+                MELLO_LOG_ERROR(TAG, "ladder: previous backend %s did not restart", old_name);
+            }
+        }
+        return false;
+    }
+
+    if (old_w != 0 && (next->width() != old_w || next->height() != old_h)) {
+        // The preprocessor and encoder keep their start size. A different size
+        // may scale or crop; the first-frame rule moves on if it delivers
+        // nothing.
+        MELLO_LOG_WARN(TAG, "ladder: %s is %ux%u, stream started at %ux%u",
+                       ladder_step_name(step), next->width(), next->height(), old_w, old_h);
+    }
+
+    active_ = std::move(next);
+    step_index_ = index;
+    step_started_us_ = ladder_now_us();
+    swap_occurred_.store(true, std::memory_order_release);
+    note_history_locked(std::string(ladder_step_name(step)) + ":" + reason);
+    MELLO_LOG_WARN(TAG, "ladder: pid=%u %s -> %s (%s)", pid_, old_name, ladder_step_name(step), reason);
+    return true;
+}
+
+void ProcessCapture::advance_locked(const char* reason) {
+    for (size_t i = step_index_ + 1; i < ladder_.size(); ++i) {
+        if (activate_locked(i, reason)) {
+            exhausted_.store(false, std::memory_order_relaxed);
+            return;
+        }
+    }
+    if (!exhausted_.exchange(true, std::memory_order_relaxed)) {
+        note_history_locked("exhausted");
+        MELLO_LOG_ERROR(TAG,
+            "ladder: every capture method failed for pid=%u (last: %s). "
+            "The game is probably in exclusive fullscreen.",
+            pid_, active_ ? active_->backend_name() : "none");
+    }
+    // Keep the last method running: if the game leaves exclusive fullscreen
+    // it may start delivering, which clears the exhausted state.
+    step_started_us_ = ladder_now_us();
+}
 
 bool ProcessCapture::initialize(const GraphicsDevice& device, const CaptureSourceDesc& desc) {
     pid_ = desc.pid;
     device_ = device;
 
-    uint32_t fs_output = 0;
-    HWND hwnd = nullptr;
-    bool exclusive_fs = resolve_process_dxgi_output(
-        pid_, device_.d3d11(), &fs_output, &hwnd);
-
-    if (exclusive_fs) {
-        auto dxgi = std::make_unique<DxgiCapture>();
-        CaptureSourceDesc monitor_desc{};
-        monitor_desc.mode = CaptureMode::Monitor;
-        monitor_desc.monitor_index = fs_output;
-        if (!dxgi->initialize(device, monitor_desc)) return false;
-        active_ = std::move(dxgi);
-        MELLO_LOG_INFO(TAG, "Source: Process(pid=%u) fullscreen -> backend=DXGI-DDI output=%d",
-            pid_, static_cast<int>(fs_output));
-        return true;
-    }
-
+    HWND hwnd = find_main_window(pid_);
     if (!hwnd) {
         MELLO_LOG_ERROR(TAG, "Process(pid=%u): no window found", pid_);
         return false;
     }
+
+    uint32_t fs_output = 0;
+    const bool covers_monitor = resolve_process_dxgi_output(
+        pid_, device_.d3d11(), &fs_output, nullptr);
+    ladder_ = ladder::initial_order(covers_monitor);
 
     // If the window is minimized (tabbed-out game), WGC would capture at the
     // tiny minimized size. Defer start until the window is restored -- the
@@ -239,21 +394,37 @@ bool ProcessCapture::initialize(const GraphicsDevice& device, const CaptureSourc
         return true;
     }
 
-    auto wgc = std::make_unique<WgcCapture>();
-    CaptureSourceDesc wnd_desc{};
-    wnd_desc.mode = CaptureMode::Window;
-    wnd_desc.hwnd = hwnd;
-    if (!wgc->initialize(device, wnd_desc)) return false;
-    active_ = std::move(wgc);
-    MELLO_LOG_INFO(TAG, "Source: Process(pid=%u) -> backend=WGC hwnd=0x%p",
-        pid_, hwnd);
-    return true;
+    std::lock_guard<std::mutex> lock(swap_mutex_);
+    for (size_t i = 0; i < ladder_.size(); ++i) {
+        auto backend = make_step(ladder_[i], hwnd);
+        if (backend) {
+            active_ = std::move(backend);
+            step_index_ = i;
+            note_history_locked(std::string(ladder_step_name(ladder_[i])) + ":initial");
+            MELLO_LOG_INFO(TAG, "Source: Process(pid=%u) ladder step %zu/%zu -> backend=%s%s",
+                pid_, i + 1, ladder_.size(), ladder_step_name(ladder_[i]),
+                covers_monitor ? " (window covers monitor)" : "");
+            return true;
+        }
+    }
+    MELLO_LOG_ERROR(TAG, "Process(pid=%u): no capture method could initialize", pid_);
+    return false;
 }
 
 bool ProcessCapture::start(uint32_t target_fps, FrameCallback callback) {
     if (running_.load()) return false;
     target_fps_ = target_fps;
     callback_ = callback;
+    // Every backend delivers through this wrapper, so the ladder counts frames
+    // per method without the backends knowing about it.
+    counting_callback_ = [this](auto* tex, uint64_t ts) {
+        step_frames_.fetch_add(1, std::memory_order_relaxed);
+        if (exhausted_.load(std::memory_order_relaxed)) {
+            exhausted_.store(false, std::memory_order_relaxed);
+            MELLO_LOG_INFO(TAG, "ladder: frames arrived for pid=%u, capture recovered", pid_);
+        }
+        callback_(tex, ts);
+    };
     swap_occurred_.store(false, std::memory_order_release);
 
     // Deferred mode: no active backend yet, monitor thread will start capture
@@ -263,8 +434,12 @@ bool ProcessCapture::start(uint32_t target_fps, FrameCallback callback) {
         return true;
     }
 
-    std::lock_guard<std::mutex> lock(swap_mutex_);
-    if (!active_ || !active_->start(target_fps, callback)) return false;
+    {
+        std::lock_guard<std::mutex> lock(swap_mutex_);
+        step_frames_.store(0, std::memory_order_relaxed);
+        if (!active_ || !active_->start(target_fps, counting_callback_)) return false;
+        step_started_us_ = ladder_now_us();
+    }
 
     running_ = true;
     monitor_thread_ = std::thread(&ProcessCapture::monitor_thread, this);
@@ -305,98 +480,6 @@ bool ProcessCapture::consume_swap_event() {
     return swap_occurred_.exchange(false, std::memory_order_acq_rel);
 }
 
-bool ProcessCapture::swap_to_dxgi() {
-    std::lock_guard<std::mutex> lock(swap_mutex_);
-    if (!active_) return false;
-
-    uint32_t fs_output = 0;
-    if (!resolve_process_dxgi_output(pid_, device_.d3d11(), &fs_output, nullptr)) {
-        MELLO_LOG_WARN(TAG, "Hot-swap skipped for pid=%u: fullscreen output unresolved on current adapter", pid_);
-        return false;
-    }
-
-    const char* old_backend = active_->backend_name();
-    auto dxgi = std::make_unique<DxgiCapture>();
-    CaptureSourceDesc desc{};
-    desc.mode = CaptureMode::Monitor;
-    desc.monitor_index = fs_output;
-    if (!dxgi->initialize(device_, desc)) {
-        MELLO_LOG_WARN(TAG, "Hot-swap %s->DXGI init failed for pid=%u output=%u",
-                       old_backend, pid_, fs_output);
-        return false;
-    }
-
-    active_->stop();
-    if (!dxgi->start(target_fps_, callback_)) {
-        bool recovered = active_->start(target_fps_, callback_);
-        MELLO_LOG_ERROR(TAG, "Hot-swap %s->DXGI start failed for pid=%u output=%u",
-                        old_backend, pid_, fs_output);
-        if (!recovered) {
-            MELLO_LOG_ERROR(TAG, "Hot-swap rollback failed for pid=%u; previous backend did not restart", pid_);
-        }
-        return false;
-    }
-
-    active_ = std::move(dxgi);
-    swap_occurred_.store(true, std::memory_order_release);
-    MELLO_LOG_WARN(TAG, "Hot-swap complete for pid=%u: %s -> DXGI-DDI (output=%u)",
-                   pid_, old_backend, fs_output);
-    return true;
-}
-
-bool ProcessCapture::swap_to_wgc() {
-    std::lock_guard<std::mutex> lock(swap_mutex_);
-    if (!active_) return false;
-
-    HWND hwnd = find_main_window(pid_);
-    if (!hwnd) {
-        MELLO_LOG_WARN(TAG, "Hot-swap skipped for pid=%u: no window found for WGC", pid_);
-        return false;
-    }
-
-    // A minimized window has no real surface — WGC hands back the ~160x28 iconic
-    // size, which is below the encoder minimum and produces a stream that
-    // connects and then sends nothing. Initial start already refuses this
-    // (see initialize); the swap path has to as well, because the common route
-    // here is a fullscreen game exiting to the desktop, which minimizes it.
-    // Returning false leaves the current backend alone and lets the monitor
-    // thread retry once the window comes back.
-    WINDOWPLACEMENT wp{};
-    wp.length = sizeof(wp);
-    if (GetWindowPlacement(hwnd, &wp) && wp.showCmd == SW_SHOWMINIMIZED) {
-        MELLO_LOG_WARN(TAG,
-            "Hot-swap skipped for pid=%u: target window is minimized, waiting for restore", pid_);
-        return false;
-    }
-
-    const char* old_backend = active_->backend_name();
-    auto wgc = std::make_unique<WgcCapture>();
-    CaptureSourceDesc desc{};
-    desc.mode = CaptureMode::Window;
-    desc.hwnd = hwnd;
-    if (!wgc->initialize(device_, desc)) {
-        MELLO_LOG_WARN(TAG, "Hot-swap %s->WGC init failed for pid=%u hwnd=0x%p",
-                       old_backend, pid_, hwnd);
-        return false;
-    }
-
-    active_->stop();
-    if (!wgc->start(target_fps_, callback_)) {
-        bool recovered = active_->start(target_fps_, callback_);
-        MELLO_LOG_ERROR(TAG, "Hot-swap %s->WGC start failed for pid=%u hwnd=0x%p",
-                        old_backend, pid_, hwnd);
-        if (!recovered) {
-            MELLO_LOG_ERROR(TAG, "Hot-swap rollback failed for pid=%u; previous backend did not restart", pid_);
-        }
-        return false;
-    }
-
-    active_ = std::move(wgc);
-    swap_occurred_.store(true, std::memory_order_release);
-    MELLO_LOG_WARN(TAG, "Hot-swap complete for pid=%u: %s -> WGC", pid_, old_backend);
-    return true;
-}
-
 bool ProcessCapture::start_deferred() {
     HWND hwnd = deferred_hwnd_;
     if (!hwnd) return false;
@@ -406,40 +489,21 @@ bool ProcessCapture::start_deferred() {
     if (!GetWindowPlacement(hwnd, &wp) || wp.showCmd == SW_SHOWMINIMIZED)
         return false;
 
-    // Window is restored/visible -- start capture
     MELLO_LOG_INFO(TAG, "Process(pid=%u) deferred: window restored, starting capture", pid_);
 
     uint32_t fs_output = 0;
-    bool exclusive_fs = resolve_process_dxgi_output(pid_, device_.d3d11(), &fs_output, nullptr);
+    const bool covers_monitor = resolve_process_dxgi_output(pid_, device_.d3d11(), &fs_output, nullptr);
 
     std::lock_guard<std::mutex> lock(swap_mutex_);
-    if (exclusive_fs) {
-        auto dxgi = std::make_unique<DxgiCapture>();
-        CaptureSourceDesc desc{};
-        desc.mode = CaptureMode::Monitor;
-        desc.monitor_index = fs_output;
-        if (!dxgi->initialize(device_, desc) || !dxgi->start(target_fps_, callback_)) {
-            MELLO_LOG_ERROR(TAG, "Deferred DXGI start failed for pid=%u", pid_);
-            return false;
+    ladder_ = ladder::initial_order(covers_monitor);
+    for (size_t i = 0; i < ladder_.size(); ++i) {
+        if (activate_locked(i, "deferred start")) {
+            deferred_hwnd_ = nullptr;
+            return true;
         }
-        active_ = std::move(dxgi);
-        MELLO_LOG_INFO(TAG, "Source: Process(pid=%u) deferred -> DXGI-DDI output=%u", pid_, fs_output);
-    } else {
-        auto wgc = std::make_unique<WgcCapture>();
-        CaptureSourceDesc desc{};
-        desc.mode = CaptureMode::Window;
-        desc.hwnd = hwnd;
-        if (!wgc->initialize(device_, desc) || !wgc->start(target_fps_, callback_)) {
-            MELLO_LOG_ERROR(TAG, "Deferred WGC start failed for pid=%u", pid_);
-            return false;
-        }
-        active_ = std::move(wgc);
-        MELLO_LOG_INFO(TAG, "Source: Process(pid=%u) deferred -> WGC hwnd=0x%p", pid_, hwnd);
     }
-
-    deferred_hwnd_ = nullptr;
-    swap_occurred_.store(true, std::memory_order_release);
-    return true;
+    MELLO_LOG_ERROR(TAG, "Deferred start failed for pid=%u: no capture method started", pid_);
+    return false;
 }
 
 void ProcessCapture::monitor_thread() {
@@ -457,24 +521,66 @@ void ProcessCapture::monitor_thread() {
             was_fullscreen = (std::string(active_->backend_name()) == "DXGI-DDI");
         }
     }
+    bool was_exclusive = process_in_exclusive_fullscreen(pid_);
 
     while (running_.load()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
         if (!running_.load()) break;
 
-        uint32_t output_idx = 0;
-        bool is_fullscreen = resolve_process_dxgi_output(
-            pid_, device_.d3d11(), &output_idx, nullptr);
+        const uint64_t now = ladder_now_us();
+        std::lock_guard<std::mutex> lock(swap_mutex_);
+        if (!active_) continue;
 
-        if (is_fullscreen && !was_fullscreen) {
-            if (swap_to_dxgi()) {
-                was_fullscreen = true;
-            }
-        } else if (!is_fullscreen && was_fullscreen) {
-            if (swap_to_wgc()) {
-                was_fullscreen = false;
-            }
+        // 1. A method that never delivered a first frame has failed.
+        if (!exhausted_.load(std::memory_order_relaxed) &&
+            ladder::first_frame_overdue(step_frames_.load(std::memory_order_relaxed),
+                                        step_started_us_, now)) {
+            advance_locked("no first frame within 2 s");
+            continue;
         }
+
+        // 2. A backend that stopped for good has failed.
+        if (active_->failed()) {
+            advance_locked("backend failed");
+            continue;
+        }
+
+        // 3. Evidence: the game entered exclusive fullscreen. Rebuild the
+        // current method and give it a new first-frame deadline; the ladder
+        // moves on if it stays silent. Silence alone is never evidence.
+        const bool exclusive = process_in_exclusive_fullscreen(pid_);
+        if (exclusive && !was_exclusive) {
+            was_exclusive = true;
+            MELLO_LOG_WARN(TAG, "ladder: pid=%u entered exclusive fullscreen", pid_);
+            exhausted_.store(false, std::memory_order_relaxed);
+            activate_locked(step_index_, "entered exclusive fullscreen");
+            continue;
+        }
+        if (!exclusive) was_exclusive = false;
+
+        // 4. Evidence: the window started or stopped covering its monitor.
+        uint32_t output_idx = 0;
+        const bool is_fullscreen = resolve_process_dxgi_output(
+            pid_, device_.d3d11(), &output_idx, nullptr);
+        if (is_fullscreen == was_fullscreen) continue;
+
+        // A minimized window has no real surface; WGC hands back the ~160x28
+        // iconic size. Keep the current method until the window comes back.
+        HWND hwnd = find_main_window(pid_);
+        WINDOWPLACEMENT wp{};
+        wp.length = sizeof(wp);
+        if (!hwnd || (GetWindowPlacement(hwnd, &wp) && wp.showCmd == SW_SHOWMINIMIZED)) {
+            continue;
+        }
+
+        const std::vector<LadderStep> order = ladder::initial_order(is_fullscreen);
+        ladder_ = order;
+        exhausted_.store(false, std::memory_order_relaxed);
+        bool switched = false;
+        for (size_t i = 0; i < ladder_.size() && !switched; ++i) {
+            switched = activate_locked(i, is_fullscreen ? "window covers monitor" : "window left fullscreen");
+        }
+        if (switched) was_fullscreen = is_fullscreen;
     }
 }
 
@@ -483,6 +589,7 @@ void ProcessCapture::monitor_thread() {
 std::unique_ptr<CaptureSource> create_capture_source(const CaptureSourceDesc& desc) {
     switch (desc.mode) {
         case CaptureMode::Monitor:
+            if (desc.prefer_wgc) return std::make_unique<WgcCapture>();
             return std::make_unique<DxgiCapture>();
         case CaptureMode::Window:
             return std::make_unique<WgcCapture>();

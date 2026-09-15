@@ -23,6 +23,8 @@ public:
     const char* backend_name() const override { return "DXGI-DDI"; }
 
     bool get_cursor(CursorData& out) override;
+    bool failed() const override { return failed_.load(std::memory_order_relaxed); }
+    void set_present_delay_histogram(PresentDelayHistogram* hist) override { delay_hist_ = hist; }
 
 private:
     void capture_thread();
@@ -46,6 +48,8 @@ private:
     uint32_t           target_fps_ = 60;
     std::thread        thread_;
     std::atomic<bool>  running_{false};
+    std::atomic<bool>  failed_{false};
+    PresentDelayHistogram* delay_hist_ = nullptr;
     FrameCallback      callback_;
 
     std::mutex         cursor_mutex_;

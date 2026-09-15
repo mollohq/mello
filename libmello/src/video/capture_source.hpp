@@ -1,5 +1,6 @@
 #pragma once
 #include "graphics_device.hpp"
+#include "present_delay.hpp"
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -25,6 +26,9 @@ struct CaptureSourceDesc {
         void*    hwnd;
         uint32_t pid;
     };
+    /// Monitor mode only: capture with Windows Graphics Capture instead of
+    /// DXGI desktop duplication. Used by the DXGI vs WGC benchmark.
+    bool prefer_wgc = false;
 };
 
 struct CursorData {
@@ -72,6 +76,21 @@ public:
     // Backends with runtime source/backend switching can raise a swap event.
     // The pipeline consumes this to force a keyframe and accelerate recovery.
     virtual bool consume_swap_event() { return false; }
+
+    /// True when the backend has stopped for good (duplication rebuild gave up,
+    /// capture item closed) or, for ProcessCapture, when every capture method
+    /// failed to deliver a first frame. Silence alone never sets this: a static
+    /// screen delivers no frames and is healthy.
+    virtual bool failed() const { return false; }
+
+    /// Short history of capture method changes and their reasons, for logs and
+    /// host telemetry. Empty for backends that never change method.
+    virtual std::string method_history() const { return {}; }
+
+    /// Where to record present-to-capture delay. Backends that can measure it
+    /// (DXGI, WGC) record every delivered frame. The histogram outlives the
+    /// capture source.
+    virtual void set_present_delay_histogram(PresentDelayHistogram* hist) { (void)hist; }
 };
 
 std::unique_ptr<CaptureSource> create_capture_source(const CaptureSourceDesc& desc);

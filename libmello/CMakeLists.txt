@@ -361,6 +361,7 @@ if(WIN32)
         dxguid
         d3dcompiler
         windowsapp
+        shell32
     )
     # OpenH264 is NOT linked — Cisco prebuilt DLL loaded at runtime via LoadLibrary
 elseif(IOS)

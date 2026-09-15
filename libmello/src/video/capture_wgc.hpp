@@ -14,14 +14,20 @@ namespace mello::video {
 class WgcCapture : public CaptureSource {
 public:
     bool initialize(const GraphicsDevice& device, const CaptureSourceDesc& desc) override;
+    /// Capture a whole monitor with Windows Graphics Capture. Used by the
+    /// process capture ladder as a fallback when window capture fails. It does
+    /// not see exclusive-fullscreen content either.
+    bool initialize_monitor(const GraphicsDevice& device, HMONITOR monitor);
     bool start(uint32_t target_fps, FrameCallback callback) override;
     void stop() override;
 
     uint32_t width()  const override { return width_; }
     uint32_t height() const override { return height_; }
-    const char* backend_name() const override { return "WGC"; }
+    const char* backend_name() const override { return monitor_ ? "WGC-Monitor" : "WGC"; }
 
     bool get_cursor(CursorData& out) override;
+    bool failed() const override { return closed_.load(std::memory_order_relaxed); }
+    void set_present_delay_histogram(PresentDelayHistogram* hist) override { delay_hist_ = hist; }
 
 private:
     void on_frame_arrived(
@@ -38,7 +44,12 @@ private:
 
     uint32_t          width_  = 0;
     uint32_t          height_ = 0;
+    bool              monitor_ = false;
     std::atomic<bool> running_{false};
+    // Set by the capture item's Closed event: the window or monitor is gone.
+    std::atomic<bool> closed_{false};
+    PresentDelayHistogram* delay_hist_ = nullptr;
+    winrt::event_token closed_token_{};
     FrameCallback     callback_;
 
     std::mutex   cursor_mutex_;

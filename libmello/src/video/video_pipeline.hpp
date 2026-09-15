@@ -136,6 +136,15 @@ public:
         float       encode_wait_ms      = 0.0f;
         float       encode_lock_ms      = 0.0f;
         int         encoder_cost_tier   = 0;
+        // Frames re-encoded from the last picture because capture delivered
+        // nothing new. A quiet stream, not a dead capture.
+        uint64_t    idle_repeat_frames  = 0;
+        // Every capture method failed (process capture ladder exhausted).
+        bool        capture_failed      = false;
+        // Capture method changes and reasons, oldest first.
+        std::string capture_history;
+        // Cumulative present-to-capture delay, 1 ms buckets.
+        std::array<uint32_t, PresentDelayHistogram::kBuckets> present_delay_hist{};
     };
     void get_host_telemetry(HostTelemetry& out) const;
 
@@ -226,6 +235,28 @@ private:
     std::condition_variable eq_cv_;
     std::thread encode_thread_;
     void encode_thread_func();
+
+    // Idle keepalive (Windows encode thread). DXGI and WGC deliver a frame only
+    // when pixels change, so a paused game or an idle desktop sends no video at
+    // all. A viewer who joined then saw black: its keyframe request only set a
+    // flag that waited for the next encoded frame, which never came.
+public:
+    /// After this long without a new captured frame, the encode thread
+    /// re-encodes the last picture.
+    static constexpr uint64_t kIdleAfterUs = 500'000;
+    /// Interval between keepalive re-encodes while idle (2 fps).
+    static constexpr uint64_t kIdleRepeatIntervalUs = 500'000;
+    /// Pure decision for the encode thread, testable without a GPU. Returns
+    /// true when the last picture should be re-encoded now.
+    static bool idle_repeat_due(bool have_last_frame, bool kicked,
+                                uint64_t now_us, uint64_t last_new_frame_us,
+                                uint64_t last_encode_us);
+private:
+    // Set by request_keyframe(): wake the encode thread so an idle stream
+    // answers the keyframe request with the last picture at once.
+    std::atomic<bool> keepalive_kick_{false};
+    std::atomic<uint64_t> idle_repeat_frames_{0};
+    PresentDelayHistogram present_delay_hist_;
 #ifdef _WIN32
     // Called on the encode thread after each encoded frame.
     void maybe_reduce_encoder_cost();
