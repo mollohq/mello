@@ -42,4 +42,7 @@ lto = "thin"
 codegen-units = 1
 strip = "symbols"
 panic = "unwind"
+# Size trial: optimize Rust for size. Hot DSP loops live in C++ and native
+# libs, so impact should be UI/cold paths only. Validate with perf-harness.
+opt-level = "z"
 

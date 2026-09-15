@@ -13,26 +13,6 @@ endif()
 find_package(Opus CONFIG REQUIRED)
 find_package(LibDataChannel CONFIG REQUIRED)
 
-# dav1d uses meson/pkgconfig — no CMake config. Try pkg-config first,
-# fall back to probing the vcpkg installed path directly.
-find_package(PkgConfig QUIET)
-if(PkgConfig_FOUND)
-    pkg_check_modules(DAV1D QUIET IMPORTED_TARGET dav1d)
-endif()
-if(NOT DAV1D_FOUND)
-    # Manual fallback: check vcpkg installed dir
-    find_path(DAV1D_INCLUDE_DIR NAMES dav1d/dav1d.h)
-    find_library(DAV1D_LIBRARY NAMES dav1d)
-    if(DAV1D_INCLUDE_DIR AND DAV1D_LIBRARY)
-        set(DAV1D_FOUND TRUE)
-        add_library(dav1d::dav1d STATIC IMPORTED)
-        set_target_properties(dav1d::dav1d PROPERTIES
-            IMPORTED_LOCATION "${DAV1D_LIBRARY}"
-            INTERFACE_INCLUDE_DIRECTORIES "${DAV1D_INCLUDE_DIR}"
-        )
-    endif()
-endif()
-
 # ---- Hardware SDK detection (header-only, runtime-loaded) ----
 # SDK headers are bundled in the repo (MIT / Apache 2.0 — redistributable).
 # All three encoder/decoder backends are always compiled; runtime LoadLibrary
@@ -45,14 +25,8 @@ set(MELLO_VPL_DIR      ${CMAKE_CURRENT_SOURCE_DIR}/third_party)
 # Always enabled — the DLL is shipped next to the binary.
 message(STATUS "[mello] OpenH264 decoder enabled (Cisco prebuilt DLL, runtime-loaded)")
 
-# dav1d AV1 decoder: statically linked via vcpkg
-if(DAV1D_FOUND)
-    set(MELLO_HAS_DAV1D TRUE)
-    message(STATUS "[mello] dav1d found — AV1 software decoder enabled")
-else()
-    set(MELLO_HAS_DAV1D FALSE)
-    message(STATUS "[mello] dav1d not found — AV1 software decoder disabled")
-endif()
+# AV1 software decode (dav1d) was removed for installed size: signaling is
+# H264-only, so no AV1 decoder can ever trigger.
 
 # ONNX Runtime. Desktop: prebuilt shared lib, auto-downloaded. iOS: pinned prebuilt
 # *static* onnxruntime.xcframework (Microsoft official onnxruntime-c pod-archive),
@@ -286,7 +260,6 @@ if(WIN32)
         src/video/decoder_amf.cpp
         src/video/decoder_d3d11va.cpp
         src/video/decoder_openh264.cpp
-        src/video/decoder_dav1d.cpp
         src/video/openh264_dynload.cpp
     )
 elseif(IOS)
@@ -355,9 +328,6 @@ target_include_directories(mello
 if(DEFINED ENV{CUDA_PATH})
     target_include_directories(mello PRIVATE "$ENV{CUDA_PATH}/include")
 endif()
-if(MELLO_HAS_DAV1D)
-    target_compile_definitions(mello PRIVATE MELLO_HAS_DAV1D)
-endif()
 
 if(MSVC)
     target_compile_options(mello PRIVATE /EHsc /await)
@@ -422,14 +392,6 @@ elseif(APPLE)
         "-framework AppKit"
         "-framework Accelerate"
     )
-endif()
-
-if(MELLO_HAS_DAV1D)
-    if(TARGET PkgConfig::DAV1D)
-        target_link_libraries(mello PRIVATE PkgConfig::DAV1D)
-    elseif(TARGET dav1d::dav1d)
-        target_link_libraries(mello PRIVATE dav1d::dav1d)
-    endif()
 endif()
 
 # Download Silero VAD v6.2 model if missing (skipped on iOS — VAD stubbed in Step 1)

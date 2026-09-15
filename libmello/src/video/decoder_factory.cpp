@@ -6,7 +6,6 @@
 #include "decoder_amf.hpp"
 #include "decoder_d3d11va.hpp"
 #include "decoder_openh264.hpp"
-#include "decoder_dav1d.hpp"
 #elif defined(__APPLE__)
 #include "decoder_videotoolbox.hpp"
 #endif
@@ -44,14 +43,11 @@ std::unique_ptr<Decoder> create_best_decoder(
         MELLO_LOG_DEBUG(TAG, "Probing D3D11VA... not available");
     }
 
-    // 4. Software fallback — codec-dependent
+    // 4. Software fallback — H.264 only. AV1 is never negotiated
+    // (signaling requires H264; VideoCodec::AV1 is never assigned), so no
+    // AV1 software decoder ships. dav1d was removed for installed size.
     if (config.codec == VideoCodec::AV1) {
-        if (Dav1dDecoder::is_available()) {
-            auto dec = std::make_unique<Dav1dDecoder>();
-            if (dec->initialize(device, config)) return dec;
-        } else {
-            MELLO_LOG_WARN(TAG, "dav1d not available — AV1 software decode disabled");
-        }
+        MELLO_LOG_WARN(TAG, "AV1 requested but no AV1 decoder ships; refusing");
     } else {
         if (OpenH264Decoder::is_available()) {
             auto dec = std::make_unique<OpenH264Decoder>();
@@ -87,7 +83,6 @@ std::vector<const char*> enumerate_decoders(const GraphicsDevice& device) {
     if (AmfDecoder::is_available())                      result.push_back("AMF-Decode");
     if (D3d11vaDecoder::is_available(device.d3d11()))    result.push_back("D3D11VA");
     if (OpenH264Decoder::is_available())                 result.push_back("OpenH264");
-    if (Dav1dDecoder::is_available())                    result.push_back("dav1d");
 #elif defined(__APPLE__)
     (void)device;
     if (VTDecoder::is_available()) result.push_back("VideoToolbox");
