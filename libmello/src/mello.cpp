@@ -96,6 +96,11 @@ static mello::audio::NsMode to_ns_mode(MelloNsMode mode) {
 
 struct MelloStreamHost {
     mello::Context*          ctx;
+    /// Owned per host, not shared on the context. A stop that hangs in a
+    /// driver keeps its own threads and members, and the next stream starts on
+    /// a fresh pipeline. With a shared pipeline, a new start during a hung stop
+    /// assigns a joinable std::thread and terminates the process.
+    std::unique_ptr<mello::video::VideoPipeline> video;
     MelloPacketCallback      callback;
     void*                    user_data;
     MelloAudioPacketCallback audio_callback;
@@ -113,8 +118,8 @@ struct MelloStreamHost {
 /// on macOS fires on ScreenCaptureKit's audio queue, so tearing down the
 /// pipeline first would leave that queue calling into freed memory.
 static void stream_audio_teardown(MelloStreamHost* host) {
-    if (host->ctx) {
-        if (auto* capture = host->ctx->video().capture()) {
+    if (host->video) {
+        if (auto* capture = host->video->capture()) {
             capture->set_audio_callback(nullptr);
         }
     }
@@ -126,6 +131,8 @@ static void stream_audio_teardown(MelloStreamHost* host) {
 
 struct MelloStreamView {
     mello::Context*          ctx;
+    /// Owned per viewer, for the same reason as MelloStreamHost::video.
+    std::unique_ptr<mello::video::VideoPipeline> video;
     MelloFrameCallback       callback;
     void*                    user_data;
     MelloNativeFrameCallback native_callback;
@@ -1130,6 +1137,11 @@ MelloStreamHost* mello_stream_start_host(
                 desc.mode = mello::video::CaptureMode::Process;
                 desc.pid = source->pid;
                 break;
+            case MELLO_CAPTURE_MONITOR_WGC:
+                desc.mode = mello::video::CaptureMode::Monitor;
+                desc.monitor_index = source->monitor_index;
+                desc.prefer_wgc = true;
+                break;
         }
 
         mello::video::PipelineConfig pc{};
@@ -1141,14 +1153,20 @@ MelloStreamHost* mello_stream_start_host(
 
         const uint32_t capture_pid =
             (source->mode == MELLO_CAPTURE_PROCESS) ? source->pid : 0;
-        auto* host =
-            new MelloStreamHost{c, on_packet, user_data, nullptr, nullptr, nullptr, capture_pid};
+        auto* host = new MelloStreamHost{c,
+                                         std::make_unique<mello::video::VideoPipeline>(),
+                                         on_packet,
+                                         user_data,
+                                         nullptr,
+                                         nullptr,
+                                         nullptr,
+                                         capture_pid};
 
         auto cb = [host](const uint8_t* data, size_t size, bool is_keyframe, uint64_t ts) {
             host->callback(host->user_data, data, static_cast<int>(size), is_keyframe, ts);
         };
 
-        if (!c->video().start_host(desc, pc, cb)) {
+        if (!host->video->start_host(desc, pc, cb)) {
             delete host;
             return nullptr;
         }
@@ -1160,27 +1178,31 @@ MelloStreamHost* mello_stream_start_host(
 void mello_stream_stop_host(MelloStreamHost* host) {
     if (!host) return;
     try {
+        MELLO_LOG_INFO("stream", "stop_host: audio teardown");
         stream_audio_teardown(host);
-        host->ctx->video().stop_host();
+        MELLO_LOG_INFO("stream", "stop_host: video pipeline stop");
+        host->video->stop_host();
+        MELLO_LOG_INFO("stream", "stop_host: release host");
         delete host;
+        MELLO_LOG_INFO("stream", "stop_host: done");
     } catch (...) {}
     stream_timer_resolution_release();
 }
 
 void mello_stream_get_host_resolution(MelloStreamHost* host, uint32_t* width, uint32_t* height) {
     if (!host || !width || !height) return;
-    host->ctx->video().get_host_resolution(*width, *height);
+    host->video->get_host_resolution(*width, *height);
 }
 
 void mello_stream_request_keyframe(MelloStreamHost* host) {
     if (!host) return;
-    try { host->ctx->video().request_keyframe(); } catch (...) {}
+    try { host->video->request_keyframe(); } catch (...) {}
 }
 
 MelloResult mello_stream_set_bitrate(MelloStreamHost* host, uint32_t bitrate_kbps) {
     if (!host) return MELLO_ERROR_INVALID_PARAM;
     try {
-        host->ctx->video().set_bitrate(bitrate_kbps);
+        host->video->set_bitrate(bitrate_kbps);
         return MELLO_OK;
     } catch (...) { return MELLO_ERROR_FAILED; }
 }
@@ -1188,7 +1210,7 @@ MelloResult mello_stream_set_bitrate(MelloStreamHost* host, uint32_t bitrate_kbp
 MelloResult mello_stream_set_framerate(MelloStreamHost* host, uint32_t fps) {
     if (!host) return MELLO_ERROR_INVALID_PARAM;
     try {
-        host->ctx->video().set_output_fps(fps);
+        host->video->set_output_fps(fps);
         return MELLO_OK;
     } catch (...) { return MELLO_ERROR_FAILED; }
 }
@@ -1228,7 +1250,7 @@ MelloResult mello_stream_start_audio(MelloStreamHost* host) {
         // the capture stream that is already running for video, so the pipeline
         // is fed from there instead of opening its own source. On Windows the
         // capture backend ignores this and the WASAPI loopback drives it.
-        if (auto* capture = host->ctx->video().capture()) {
+        if (auto* capture = host->video->capture()) {
             auto* raw = pipeline.get();
             capture->set_audio_callback(
                 [raw](const float* s, uint32_t frames, uint32_t ch, uint32_t rate) {
@@ -1266,7 +1288,8 @@ MelloStreamView* mello_stream_start_viewer(
         pc.fps          = config->fps;
         pc.bitrate_kbps = config->bitrate_kbps;
 
-        auto* view = new MelloStreamView{c, on_frame, user_data, nullptr, nullptr};
+        auto* view = new MelloStreamView{
+            c, std::make_unique<mello::video::VideoPipeline>(), on_frame, user_data, nullptr, nullptr};
 
         mello::video::VideoPipeline::FrameCallback cb{};
         if (on_frame) {
@@ -1275,7 +1298,7 @@ MelloStreamView* mello_stream_start_viewer(
             };
         }
 
-        if (!c->video().start_viewer(pc, cb)) {
+        if (!view->video->start_viewer(pc, cb)) {
             delete view;
             return nullptr;
         }
@@ -1291,8 +1314,8 @@ void mello_stream_stop_viewer(MelloStreamView* view) {
             view->audio_playout->stop();
             view->audio_playout.reset();
         }
-        view->ctx->video().set_native_frame_callback({});
-        view->ctx->video().stop_viewer();
+        view->video->set_native_frame_callback({});
+        view->video->stop_viewer();
         delete view;
     } catch (...) {}
     stream_timer_resolution_release();
@@ -1301,19 +1324,19 @@ void mello_stream_stop_viewer(MelloStreamView* view) {
 bool mello_stream_feed_packet(MelloStreamView* view, const uint8_t* data, int size, bool is_keyframe) {
     if (!view || !data || size <= 0) return false;
     try {
-        return view->ctx->video().feed_packet(data, static_cast<size_t>(size), is_keyframe);
+        return view->video->feed_packet(data, static_cast<size_t>(size), is_keyframe);
     } catch (...) { return false; }
 }
 
 int mello_stream_viewer_decode_queue_depth(MelloStreamView* view) {
     if (!view) return 0;
-    return static_cast<int>(view->ctx->video().decode_queue_depth());
+    return static_cast<int>(view->video->decode_queue_depth());
 }
 
 bool mello_stream_present_frame(MelloStreamView* view) {
     if (!view) return false;
     try {
-        return view->ctx->video().present_frame();
+        return view->video->present_frame();
     } catch (...) { return false; }
 }
 
@@ -1328,7 +1351,7 @@ void mello_stream_set_native_frame_callback(
         view->native_user_data = user_data;
 
         if (!callback) {
-            view->ctx->video().set_native_frame_callback({});
+            view->video->set_native_frame_callback({});
             return;
         }
 
@@ -1352,7 +1375,7 @@ void mello_stream_set_native_frame_callback(
                 );
             }
         };
-        view->ctx->video().set_native_frame_callback(native_cb);
+        view->video->set_native_frame_callback(native_cb);
     } catch (...) {}
 }
 
@@ -1373,14 +1396,14 @@ void mello_stream_get_stats(MelloStreamHost* host, MelloStreamStats* stats) {
     try {
         memset(stats, 0, sizeof(MelloStreamStats));
         mello::video::EncoderStats es{};
-        host->ctx->video().get_stats(es);
+        host->video->get_stats(es);
         stats->bitrate_kbps  = es.bitrate_kbps;
         stats->fps_actual    = es.fps_actual;
         stats->keyframes_sent = es.keyframes_sent;
         stats->bytes_sent    = es.bytes_sent;
 
         mello::video::VideoPipeline::HostTelemetry ht{};
-        host->ctx->video().get_host_telemetry(ht);
+        host->video->get_host_telemetry(ht);
         stats->frames_captured    = ht.frames_captured;
         stats->capture_idle_ms    = ht.capture_idle_ms;
         stats->encode_queue_depth = ht.encode_queue_depth;
@@ -1392,6 +1415,12 @@ void mello_stream_get_stats(MelloStreamHost* host, MelloStreamStats* stats) {
         stats->encode_wait_ms     = ht.encode_wait_ms;
         stats->encode_lock_ms     = ht.encode_lock_ms;
         stats->encoder_cost_tier  = ht.encoder_cost_tier;
+        stats->idle_repeat_frames = ht.idle_repeat_frames;
+        stats->capture_failed     = ht.capture_failed ? 1u : 0u;
+        strncpy(stats->capture_history, ht.capture_history.c_str(),
+                sizeof(stats->capture_history) - 1);
+        memcpy(stats->present_delay_hist, ht.present_delay_hist.data(),
+               sizeof(stats->present_delay_hist));
         // stats was memset above, so strncpy with size-1 always leaves a
         // terminator. HostTelemetry's string members default to "" and are
         // never null.
@@ -1407,7 +1436,7 @@ int mello_stream_get_cursor_packet(MelloStreamHost* host, uint8_t* buf, int buf_
     if (!host || !buf || buf_size <= 0) return 0;
     try {
         size_t size = static_cast<size_t>(buf_size);
-        if (host->ctx->video().get_cursor_packet(buf, &size)) {
+        if (host->video->get_cursor_packet(buf, &size)) {
             return static_cast<int>(size);
         }
         return 0;
@@ -1417,7 +1446,7 @@ int mello_stream_get_cursor_packet(MelloStreamHost* host, uint8_t* buf, int buf_
 MelloResult mello_stream_apply_cursor_packet(MelloStreamView* view, const uint8_t* buf, int size) {
     if (!view || !buf || size <= 0) return MELLO_ERROR_INVALID_PARAM;
     try {
-        view->ctx->video().apply_cursor_packet(buf, static_cast<size_t>(size));
+        view->video->apply_cursor_packet(buf, static_cast<size_t>(size));
         return MELLO_OK;
     } catch (...) { return MELLO_ERROR_FAILED; }
 }
@@ -1426,7 +1455,7 @@ void mello_stream_get_cursor_state(MelloStreamView* view, MelloCursorState* out)
     if (!view || !out) return;
     try {
         mello::video::CursorState cs{};
-        view->ctx->video().get_cursor_state(cs);
+        view->video->get_cursor_state(cs);
         out->x       = cs.x;
         out->y       = cs.y;
         out->visible = cs.visible;

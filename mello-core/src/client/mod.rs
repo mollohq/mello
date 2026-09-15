@@ -5,6 +5,7 @@ mod connection;
 mod crew;
 mod diagnostics;
 mod game_services;
+pub mod loop_watchdog;
 mod presence;
 mod reconnect;
 mod stats_emit;
@@ -273,6 +274,8 @@ impl Client {
 
         let mut signal_rx = self.nakama.take_signal_rx().unwrap();
         let mut presence_rx = self.nakama.take_presence_rx().unwrap();
+        // Reports any loop step that holds the loop, while it still holds it.
+        let watchdog = loop_watchdog::LoopWatchdog::start();
         let mut voice_tick = tokio::time::interval(tokio::time::Duration::from_millis(20));
         voice_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         let mut stream_tick = tokio::time::interval(tokio::time::Duration::from_millis(16));
@@ -362,7 +365,10 @@ impl Client {
             tokio::select! {
                 cmd = cmd_rx.recv() => {
                     match cmd {
-                        Some(cmd) => self.handle_command(cmd).await,
+                        Some(cmd) => {
+                            let _step = watchdog.step(loop_watchdog::command_name(&cmd));
+                            self.handle_command(cmd).await;
+                        }
                         None => break,
                     }
                 }
@@ -377,18 +383,22 @@ impl Client {
                     }
                 }
                 _ = voice_tick.tick(), if self.needs_voice_tick() => {
+                    let _step = watchdog.step("voice_tick");
                     self.voice_tick().await;
                     if self.clip_was_playing {
                         self.clip_playback_tick();
                     }
                 }
                 _ = stream_tick.tick(), if self.needs_stream_tick() => {
+                    let _step = watchdog.step("stream_tick");
                     self.stream_tick().await;
                 }
                 _ = refresh_tick.tick() => {
+                    let _step = watchdog.step("refresh_token");
                     self.refresh_token().await;
                 }
                 _ = connection_tick.tick() => {
+                    let _step = watchdog.step("connection_tick");
                     self.connection_tick().await;
                 }
                 _ = stats_tick.tick(), if self.emit_process_stats => {

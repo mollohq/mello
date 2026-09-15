@@ -10,6 +10,7 @@ pub mod rtp_peer;
 pub mod sink;
 pub mod sink_p2p;
 pub mod sink_sfu;
+pub mod teardown;
 
 pub use config::{Codec, QualityPreset, StreamConfig};
 pub use error::StreamError;

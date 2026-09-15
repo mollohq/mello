@@ -35,7 +35,14 @@ pub fn wire(ctx: &AppContext) {
     // --- Voice toggle (leave) ---
     {
         let cmd = ctx.cmd_tx.clone();
+        let app_weak = ctx.app.as_weak();
         ctx.app.on_voice_toggle(move || {
+            // Show the hangup at once. The core confirms with
+            // VoiceStateChanged { in_call: false }, which clears the channel
+            // membership. The button must respond even when the core is busy.
+            if let Some(app) = app_weak.upgrade() {
+                app.set_in_voice(false);
+            }
             let _ = cmd.send(Command::LeaveVoice);
         });
     }

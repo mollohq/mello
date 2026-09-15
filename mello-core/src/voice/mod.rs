@@ -227,6 +227,9 @@ impl VoiceManager {
         }
 
         unsafe { connection.start_stats_reporter(self.ctx) };
+        // Received voice goes straight to the decoder from the native track
+        // callback, so a busy command loop cannot mute other speakers.
+        unsafe { connection.set_direct_voice_sink(self.ctx) };
         self.sfu_connection = Some(connection);
         self.sfu_crew_id = crew_id.to_string();
         self.active = true;
@@ -250,7 +253,9 @@ impl VoiceManager {
                 self.mesh.destroy_all_peers();
             }
             VoiceMode::SFU => {
-                self.sfu_connection = None;
+                if let Some(conn) = self.sfu_connection.take() {
+                    conn.clear_direct_voice_sink();
+                }
                 self.sfu_crew_id.clear();
                 self.sfu_connected_at = None;
                 self.rtp_stall_checks = 0;
@@ -293,6 +298,7 @@ impl VoiceManager {
             self.stop_capture();
         }
         if let Some(conn) = self.sfu_connection.take() {
+            conn.clear_direct_voice_sink();
             Self::spawn_best_effort_sfu_leave(conn);
         }
         self.active = false;
@@ -1017,6 +1023,11 @@ impl Drop for VoiceManager {
     fn drop(&mut self) {
         if !self.ctx.is_null() {
             self.leave_voice();
+            // A connection Arc held elsewhere may outlive this manager. Its
+            // direct voice sink must not reference the context destroyed below.
+            if let Some(conn) = self.sfu_connection.take() {
+                conn.clear_direct_voice_sink();
+            }
             unsafe {
                 mello_sys::mello_destroy(self.ctx);
                 mello_sys::mello_set_log_callback(None, std::ptr::null_mut());

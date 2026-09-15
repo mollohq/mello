@@ -95,7 +95,14 @@ pub fn wire(ctx: &AppContext) {
     }
     {
         let cmd = ctx.cmd_tx.clone();
+        let app_weak = ctx.app.as_weak();
         ctx.app.on_stop_stream(move || {
+            // Show the result of the click at once. The core confirms with
+            // StreamEnded, which clears the rest of the stream state. If the
+            // core is busy, the button must still respond (2026-09-15 beta).
+            if let Some(app) = app_weak.upgrade() {
+                app.set_is_hosting(false);
+            }
             let _ = cmd.send(Command::StopStream);
         });
     }

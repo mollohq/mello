@@ -1120,6 +1120,47 @@ fn failed_restore_stops_the_spinner() {
 
 use crate::onboarding::{advance, resume, Input, OnboardingState};
 
+/// END STREAM must change the screen on click, before the core answers. On
+/// 2026-09-15 the core was blocked in a native stop and the button looked dead.
+#[test]
+fn end_stream_click_updates_ui_before_core_confirms() {
+    let mut h = Harness::new();
+    h.app().set_is_hosting(true);
+    let _ = h.commands();
+
+    h.app().invoke_stop_stream();
+
+    assert!(
+        !h.app().get_is_hosting(),
+        "END STREAM must leave the hosting state without waiting for StreamEnded"
+    );
+    let cmds = h.commands();
+    assert!(
+        cmds.iter().any(|c| matches!(c, Command::StopStream)),
+        "END STREAM must still send StopStream, got {cmds:?}"
+    );
+}
+
+/// Hangup must change the screen on click, before the core answers.
+#[test]
+fn hangup_click_updates_ui_before_core_confirms() {
+    let mut h = Harness::new();
+    h.app().set_in_voice(true);
+    let _ = h.commands();
+
+    h.app().invoke_voice_toggle();
+
+    assert!(
+        !h.app().get_in_voice(),
+        "hangup must leave the in-voice state without waiting for VoiceStateChanged"
+    );
+    let cmds = h.commands();
+    assert!(
+        cmds.iter().any(|c| matches!(c, Command::LeaveVoice)),
+        "hangup must still send LeaveVoice, got {cmds:?}"
+    );
+}
+
 fn listed_audio_devices(cmds: &[Command]) -> bool {
     cmds.iter().any(|c| matches!(c, Command::ListAudioDevices))
 }

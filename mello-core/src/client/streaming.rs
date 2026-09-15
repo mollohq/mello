@@ -32,6 +32,8 @@ use super::stream_ffi::{
 use super::FRAME_STATE_PRESENTED;
 
 const STREAM_DEBUG_EVENT_INTERVAL_SECS: f32 = 1.0;
+/// Longest wait for the SFU leave message when a viewer stops watching.
+const SFU_LEAVE_DEADLINE: std::time::Duration = std::time::Duration::from_millis(1500);
 /// Viewer report cadence to the SFU. Above the server's 5s rate limit so a
 /// message is never dropped for arriving too soon.
 const VIEWER_STATS_INTERVAL_SECS: u64 = 10;
@@ -419,6 +421,21 @@ impl super::Client {
     }
 
     pub(super) async fn stream_tick(&mut self) {
+        // 0. Every capture method failed (for a game: probably exclusive
+        // fullscreen). Report once per failure. The UI only logs StreamError
+        // today; a visible message needs a design.
+        if self
+            .stream_session
+            .as_ref()
+            .is_some_and(|session| session.take_capture_failed())
+        {
+            let _ = self.event_tx.send(Event::StreamError {
+                message: "m3llo cannot see this game. It is probably in exclusive fullscreen. \
+                          Switch the game to borderless or windowed fullscreen."
+                    .to_string(),
+            });
+        }
+
         // 1. Drain stream signal queue and send via Nakama
         let signals: Vec<(String, SignalEnvelope)> = {
             match self.stream_signal_queue.lock() {
@@ -1112,7 +1129,7 @@ impl super::Client {
 
         // Step 2: sync FFI calls (raw pointer ctx must NOT live across await)
         // Scope ctx so it's dropped before any SFU .await calls.
-        let (host, video_rx, audio_rx, resources) = {
+        let (host, video_rx, audio_rx, teardown) = {
             let ctx = self.voice.mello_ctx();
 
             if !unsafe { crate::stream::encoder_available(ctx) } {
@@ -1159,7 +1176,7 @@ impl super::Client {
                 }
             };
 
-            let (host, video_rx, audio_rx, resources) =
+            let (host, video_rx, audio_rx, teardown) =
                 match unsafe { crate::stream::host::start_host(ctx, &source, &mello_config) } {
                     Ok(v) => v,
                     Err(e) => {
@@ -1182,7 +1199,9 @@ impl super::Client {
                 mello_sys::mello_stream_start_audio(host);
             }
 
-            (StreamHostHandle(host), video_rx, audio_rx, resources)
+            // `teardown` owns the native host from here. Every return below
+            // drops it, which stops the host on a teardown thread.
+            (StreamHostHandle(host), video_rx, audio_rx, teardown)
         }; // ctx and raw pointers drop here — safe to .await below
 
         // Update backend with actual encode resolution (may differ from preset)
@@ -1242,10 +1261,8 @@ impl super::Client {
             let message =
                 "SFU stream setup failed on host; aborting stream start (no silent P2P fallback)";
             log::error!("{}", message);
-            unsafe {
-                mello_sys::mello_stream_stop_audio(host.0);
-                mello_sys::mello_stream_stop_host(host.0);
-            }
+            // Bounded native stop on the teardown thread, never inline here.
+            drop(teardown);
             let _ = self.event_tx.send(Event::StreamError {
                 message: message.to_string(),
             });
@@ -1265,7 +1282,7 @@ impl super::Client {
             config,
             video_rx,
             audio_rx,
-            resources,
+            teardown,
             Arc::clone(&sink),
         ) {
             Ok(session) => {
@@ -1282,11 +1299,9 @@ impl super::Client {
                 self.host_pacing_last_at = Instant::now();
             }
             Err(e) => {
+                // The teardown guard moved into create_stream_session and was
+                // dropped there, which already stopped the host.
                 log::error!("Failed to create stream session: {}", e);
-                unsafe {
-                    mello_sys::mello_stream_stop_audio(host);
-                    mello_sys::mello_stream_stop_host(host);
-                }
                 let _ = self.event_tx.send(Event::StreamError {
                     message: e.to_string(),
                 });
@@ -1296,42 +1311,64 @@ impl super::Client {
     }
 
     pub(super) async fn handle_stop_stream(&mut self) {
-        if let Some(session) = self.stream_session.take() {
-            session.stop_and_wait().await;
+        let Some(session) = self.stream_session.take() else {
+            return;
+        };
+        log::info!("Stopping stream session {}", session.session_id);
 
-            // The manager has exited. Remove every sink membership before
-            // destroying its native peer and callback state.
-            for (id, hp) in self.stream_host_peers.drain() {
-                if let Some(ref sink) = self.stream_sink {
-                    sink.remove_viewer(&id);
-                }
-                unsafe {
-                    mello_sys::mello_peer_destroy(hp.peer);
-                    if !hp.ice_cb_data.is_null() {
-                        drop(Box::from_raw(hp.ice_cb_data));
+        // The UI is told first. Nothing below may delay END STREAM: the manager
+        // join is bounded, native teardown runs on its own thread, and the RPC
+        // is best effort. On 2026-09-15 this event waited behind a native stop
+        // that never returned, and the button looked dead.
+        let crew_id = self.nakama.active_crew_id().map(String::from);
+        let _ = self.event_tx.send(Event::StreamEnded {
+            crew_id: crew_id.clone().unwrap_or_default(),
+        });
+
+        // Bounded. The native host stops on the teardown thread when the
+        // manager task ends or is aborted.
+        session.stop_and_wait().await;
+
+        // The manager has exited. Remove every sink membership before handing
+        // the native peers to the teardown thread.
+        let mut peers = Vec::new();
+        for (id, hp) in self.stream_host_peers.drain() {
+            if let Some(ref sink) = self.stream_sink {
+                sink.remove_viewer(&id);
+            }
+            peers.push((id, hp));
+        }
+        if !peers.is_empty() {
+            crate::stream::teardown::spawn("stream_host_peers", move |steps| {
+                for (id, hp) in peers {
+                    steps.step("mello_peer_destroy");
+                    unsafe {
+                        mello_sys::mello_peer_destroy(hp.peer);
+                        if !hp.ice_cb_data.is_null() {
+                            drop(Box::from_raw(hp.ice_cb_data));
+                        }
                     }
+                    log::info!("Destroyed stream host peer {}", id);
                 }
-                log::info!("Destroyed stream host peer {}", id);
-            }
-            self.stream_sink = None;
-            self.stream_host_sink = None;
-            self.stream_sfu_connection = None;
-            self.host_pacing_last = None;
-            self.host_pacing_last_at = Instant::now();
-            self.pending_remote_ice.clear();
-            if let Ok(mut queue) = self.stream_disconnect_queue.lock() {
-                queue.clear();
-            }
-            self.stream_encode_width = 0;
-            self.stream_encode_height = 0;
-            self.stream_bitrate_kbps = 0;
+            });
+        }
+        self.stream_sink = None;
+        self.stream_host_sink = None;
+        self.stream_sfu_connection = None;
+        self.host_pacing_last = None;
+        self.host_pacing_last_at = Instant::now();
+        self.pending_remote_ice.clear();
+        if let Ok(mut queue) = self.stream_disconnect_queue.lock() {
+            queue.clear();
+        }
+        self.stream_encode_width = 0;
+        self.stream_encode_height = 0;
+        self.stream_bitrate_kbps = 0;
 
-            if let Some(crew_id) = self.nakama.active_crew_id().map(String::from) {
-                let payload = serde_json::json!({ "crew_id": crew_id });
-                if let Err(e) = self.nakama.rpc("stop_stream", &payload).await {
-                    log::warn!("stop_stream RPC failed: {}", e);
-                }
-                let _ = self.event_tx.send(Event::StreamEnded { crew_id });
+        if let Some(crew_id) = crew_id {
+            let payload = serde_json::json!({ "crew_id": crew_id });
+            if let Err(e) = self.nakama.rpc("stop_stream", &payload).await {
+                log::warn!("stop_stream RPC failed: {}", e);
             }
         }
     }
@@ -1801,13 +1838,24 @@ impl super::Client {
     pub(super) async fn handle_stop_watching(&mut self) {
         if let Some(vs) = self.viewer_state.take() {
             log::info!("Stopping stream viewer for host {}", vs.host_id);
+            // UI first; the SFU leave and the native teardown below are bounded
+            // or off-loop and must not delay it.
+            let _ = self.event_tx.send(Event::StreamWatchingStopped);
             if let Some(ref conn) = vs.sfu_connection {
-                conn.leave().await;
+                if tokio::time::timeout(SFU_LEAVE_DEADLINE, conn.leave())
+                    .await
+                    .is_err()
+                {
+                    log::warn!(
+                        "SFU viewer leave did not finish within {} ms; dropping the connection",
+                        SFU_LEAVE_DEADLINE.as_millis()
+                    );
+                }
             }
+            // Native stop runs on the teardown thread (ViewerState::drop).
             drop(vs);
             self.frame_lifecycle
                 .store(FRAME_STATE_PRESENTED, std::sync::atomic::Ordering::Release);
-            let _ = self.event_tx.send(Event::StreamWatchingStopped);
         }
     }
 }

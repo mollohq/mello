@@ -150,25 +150,53 @@ impl ViewerState {
 
 impl Drop for ViewerState {
     fn drop(&mut self) {
-        unsafe {
-            if let Some(v) = self.viewer {
-                if !v.is_null() {
-                    mello_sys::mello_stream_stop_viewer(v);
-                }
-            }
-            if !self.peer.is_null() {
-                mello_sys::mello_peer_destroy(self.peer);
-            }
-            if !self._frame_cb_data.is_null() {
-                drop(Box::from_raw(self._frame_cb_data));
-            }
-            if !self._ice_cb_data.is_null() {
-                drop(Box::from_raw(self._ice_cb_data));
-            }
-            if !self._audio_cb_data.is_null() {
-                drop(Box::from_raw(self._audio_cb_data));
-            }
+        // Native viewer stop joins decode threads and the peer close joins
+        // network threads. Both run on the teardown thread, bounded by its
+        // watchdog, never on the command loop. The callback contexts are freed
+        // there only after the native objects that call into them are gone.
+        use crate::stream::teardown::TeardownPtr;
+        let viewer = TeardownPtr(self.viewer.take().unwrap_or(std::ptr::null_mut()));
+        let peer = TeardownPtr(std::mem::replace(&mut self.peer, std::ptr::null_mut()));
+        let frame_cb = TeardownPtr(std::mem::replace(
+            &mut self._frame_cb_data,
+            std::ptr::null_mut(),
+        ));
+        let ice_cb = TeardownPtr(std::mem::replace(
+            &mut self._ice_cb_data,
+            std::ptr::null_mut(),
+        ));
+        let audio_cb = TeardownPtr(std::mem::replace(
+            &mut self._audio_cb_data,
+            std::ptr::null_mut(),
+        ));
+        if viewer.get().is_null()
+            && peer.get().is_null()
+            && frame_cb.get().is_null()
+            && ice_cb.get().is_null()
+            && audio_cb.get().is_null()
+        {
+            return;
         }
+        crate::stream::teardown::spawn("stream_viewer", move |steps| unsafe {
+            if !viewer.get().is_null() {
+                steps.step("mello_stream_stop_viewer");
+                mello_sys::mello_stream_stop_viewer(viewer.get());
+            }
+            if !peer.get().is_null() {
+                steps.step("mello_peer_destroy");
+                mello_sys::mello_peer_destroy(peer.get());
+            }
+            steps.step("free callback contexts");
+            if !frame_cb.get().is_null() {
+                drop(Box::from_raw(frame_cb.get()));
+            }
+            if !ice_cb.get().is_null() {
+                drop(Box::from_raw(ice_cb.get()));
+            }
+            if !audio_cb.get().is_null() {
+                drop(Box::from_raw(audio_cb.get()));
+            }
+        });
         // SfuConnection is Arc-dropped automatically; leave() is called in handle_stop_watching
     }
 }

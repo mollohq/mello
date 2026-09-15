@@ -192,7 +192,20 @@ struct IceCallbackData {
 
 struct AudioTrackCallbackData {
     event_tx: mpsc::Sender<SfuEvent>,
+    /// Voice decoder to feed directly from the native track callback. None for
+    /// stream connections and until voice attaches. See
+    /// `SfuConnection::set_direct_voice_sink`.
+    voice_sink: std::sync::RwLock<Option<VoiceSinkCtx>>,
 }
+
+/// libmello context pointer used from the native audio track callback thread.
+#[derive(Clone, Copy)]
+struct VoiceSinkCtx(*mut mello_sys::MelloContext);
+// SAFETY: `mello_voice_feed_packet` is safe to call from any thread (it locks
+// the per-peer maps). The pointer is valid while the sink is set; the voice
+// manager clears the sink, under the write lock, before the context goes away.
+unsafe impl Send for VoiceSinkCtx {}
+unsafe impl Sync for VoiceSinkCtx {}
 
 // ---------------------------------------------------------------------------
 // Implementation
@@ -965,6 +978,21 @@ impl SfuConnection {
                 static DROP_COUNT: AtomicU64 = AtomicU64::new(0);
                 let n = CB_COUNT.fetch_add(1, AtOrd::Relaxed) + 1;
                 let cb_data = &*(user_data as *const AudioTrackCallbackData);
+
+                // Voice: feed the decoder here, on the native callback thread.
+                // Before, packets went through an mpsc that only the core
+                // command loop's voice tick drained, so any command that blocked
+                // the loop muted every other speaker (2026-09-15 beta session).
+                if let Ok(sink) = cb_data.voice_sink.read() {
+                    if let Some(VoiceSinkCtx(ctx)) = *sink {
+                        if n <= 5 {
+                            log::info!("SFU audio_track_cb #{} (direct voice): size={}", n, size);
+                        }
+                        mello_sys::mello_voice_feed_packet(ctx, sender_id, data, size);
+                        return;
+                    }
+                }
+
                 let sid = CStr::from_ptr(sender_id).to_string_lossy().into_owned();
                 if n <= 5 {
                     log::info!("SFU audio_track_cb #{}: sender={} size={}", n, sid, size);
@@ -996,6 +1024,7 @@ impl SfuConnection {
 
             let audio_cb = Box::into_raw(Box::new(AudioTrackCallbackData {
                 event_tx: self.event_tx.clone(),
+                voice_sink: std::sync::RwLock::new(None),
             }));
             unsafe {
                 mello_sys::mello_peer_set_audio_track_callback(
@@ -1271,6 +1300,38 @@ impl SfuConnection {
         Ok(session_info)
     }
 
+    /// Feed received voice audio straight into the libmello voice decoder, from
+    /// the native audio track callback, instead of through the event queue.
+    ///
+    /// # Safety
+    /// `ctx` must stay valid until `clear_direct_voice_sink` returns or this
+    /// connection is dropped.
+    pub unsafe fn set_direct_voice_sink(&self, ctx: *mut mello_sys::MelloContext) {
+        if self.audio_cb_data.is_null() || ctx.is_null() {
+            log::warn!("SFU: direct voice sink not set (no audio callback or context)");
+            return;
+        }
+        let cb = unsafe { &*self.audio_cb_data };
+        if let Ok(mut sink) = cb.voice_sink.write() {
+            *sink = Some(VoiceSinkCtx(ctx));
+            log::info!("SFU: voice audio feeds the decoder directly");
+        }
+    }
+
+    /// Stop feeding the voice decoder directly. Waits for a callback that is
+    /// feeding right now, so the context may be released after this returns.
+    pub fn clear_direct_voice_sink(&self) {
+        if self.audio_cb_data.is_null() {
+            return;
+        }
+        let cb = unsafe { &*self.audio_cb_data };
+        if let Ok(mut sink) = cb.voice_sink.write() {
+            if sink.take().is_some() {
+                log::info!("SFU: direct voice sink cleared");
+            }
+        }
+    }
+
     /// Spawn a background task that sends `client_stats` to the SFU every 10s.
     /// Requires a valid MelloContext pointer (used for `mello_get_debug_stats`).
     ///
@@ -1323,28 +1384,47 @@ impl Drop for SfuConnection {
                 t.abort();
             }
         }
-        if !self.peer.is_null() {
-            unsafe {
-                mello_sys::mello_peer_set_ice_callback(self.peer, None, std::ptr::null_mut());
-                mello_sys::mello_peer_set_state_callback(self.peer, None, std::ptr::null_mut());
-                mello_sys::mello_peer_set_audio_track_callback(
-                    self.peer,
-                    None,
-                    std::ptr::null_mut(),
-                );
-                mello_sys::mello_peer_destroy(self.peer);
-            }
-            self.peer = std::ptr::null_mut();
-        }
-        if !self.ice_cb_data.is_null() {
-            unsafe {
-                let _ = Box::from_raw(self.ice_cb_data);
-            }
-        }
-        if !self.audio_cb_data.is_null() {
-            unsafe {
-                let _ = Box::from_raw(self.audio_cb_data);
-            }
+        // Native peer close joins libdatachannel threads. It runs on the
+        // teardown thread, not on whatever thread dropped the last Arc (often
+        // the core command loop). Callback contexts are freed there, after the
+        // peer that calls into them is destroyed.
+        self.clear_direct_voice_sink();
+        use crate::stream::teardown::TeardownPtr;
+        let peer = TeardownPtr(std::mem::replace(&mut self.peer, std::ptr::null_mut()));
+        let ice_cb = TeardownPtr(std::mem::replace(
+            &mut self.ice_cb_data,
+            std::ptr::null_mut(),
+        ));
+        let audio_cb = TeardownPtr(std::mem::replace(
+            &mut self.audio_cb_data,
+            std::ptr::null_mut(),
+        ));
+        if !peer.get().is_null() || !ice_cb.get().is_null() || !audio_cb.get().is_null() {
+            crate::stream::teardown::spawn("sfu_peer", move |steps| unsafe {
+                if !peer.get().is_null() {
+                    steps.step("clear peer callbacks");
+                    mello_sys::mello_peer_set_ice_callback(peer.get(), None, std::ptr::null_mut());
+                    mello_sys::mello_peer_set_state_callback(
+                        peer.get(),
+                        None,
+                        std::ptr::null_mut(),
+                    );
+                    mello_sys::mello_peer_set_audio_track_callback(
+                        peer.get(),
+                        None,
+                        std::ptr::null_mut(),
+                    );
+                    steps.step("mello_peer_destroy");
+                    mello_sys::mello_peer_destroy(peer.get());
+                }
+                steps.step("free callback contexts");
+                if !ice_cb.get().is_null() {
+                    drop(Box::from_raw(ice_cb.get()));
+                }
+                if !audio_cb.get().is_null() {
+                    drop(Box::from_raw(audio_cb.get()));
+                }
+            });
         }
         log::info!("SFU: connection dropped (server_id={})", self.server_id);
     }
@@ -1420,6 +1500,9 @@ unsafe fn collect_client_stats(ctx_addr: usize, peer_addr: usize) -> serde_json:
         "rtt_ms": rtt as u32,
         "send_audio_skips": send_skips,
         "recv_tracks": recv_tracks,
+        // Native teardowns (stream host, viewer, peer) stuck past their
+        // deadline. Non-zero means a native stop hung on this client.
+        "hung_teardowns": crate::stream::teardown::hung_teardowns(),
     })
 }
 
