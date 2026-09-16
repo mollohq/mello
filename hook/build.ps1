@@ -31,3 +31,13 @@ cmake --build $build --config $Config
 if ($LASTEXITCODE -ne 0) { throw "build failed" }
 
 Write-Host "[mello-hook] $Bits-bit set in $build/$Config"
+
+# Both architectures land in one folder, because that is how they ship and how
+# the client finds them: it picks the 32-bit or the 64-bit set from the game's
+# bitness, and both have to be in MELLO_HOOK_DIR. Heaven is a 32-bit game, and
+# a folder with only the 64-bit set gave it no hook at all.
+$stage = Join-Path $root "bin/$Config"
+New-Item -ItemType Directory -Force -Path $stage | Out-Null
+Get-ChildItem -Path (Join-Path $build $Config) -Include "mello-*.dll", "mello-*.exe" -File -Recurse |
+    ForEach-Object { Copy-Item $_.FullName -Destination $stage -Force }
+Write-Host "[mello-hook] staged into $stage"

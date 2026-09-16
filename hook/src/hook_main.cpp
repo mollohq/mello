@@ -83,8 +83,11 @@ DWORD WINAPI hook_thread(LPVOID) {
 }  // namespace
 
 // The injection helper points SetWindowsHookEx at this. It must do nothing.
-extern "C" __declspec(dllexport) LRESULT CALLBACK mello_hook_proc(int code, WPARAM wparam,
-                                                                 LPARAM lparam) {
+//
+// It is exported by name through src/mello_hook.def, not with dllexport: on
+// x86 the calling convention would decorate the name and the helper's
+// GetProcAddress would miss it.
+extern "C" LRESULT CALLBACK mello_hook_proc(int code, WPARAM wparam, LPARAM lparam) {
     return CallNextHookEx(nullptr, code, wparam, lparam);
 }
 

@@ -40,6 +40,9 @@ target_include_directories(mello_hook PRIVATE include ${DETOURS_INCLUDE_DIRS})
 target_compile_definitions(mello_hook PRIVATE
     WIN32_LEAN_AND_MEAN NOMINMAX MELLO_HOOK_BITS=${MELLO_HOOK_BITS})
 target_link_libraries(mello_hook PRIVATE ${DETOURS_LIBRARY} d3d11 dxgi dxguid)
+# Exports the hook procedure under its plain name on x86 as well as x64.
+set_target_properties(mello_hook PROPERTIES
+    LINK_FLAGS "/DEF:\"${CMAKE_CURRENT_SOURCE_DIR}/src/mello_hook.def\"")
 
 # --- Offsets helper ----------------------------------------------------------
 # Builds a throwaway device outside the game and prints the present-function
