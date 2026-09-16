@@ -29,6 +29,9 @@ struct CaptureSourceDesc {
     /// Monitor mode only: capture with Windows Graphics Capture instead of
     /// DXGI desktop duplication. Used by the DXGI vs WGC benchmark.
     bool prefer_wgc = false;
+    /// Process mode only: the caller allows the game capture hook for this
+    /// game. False keeps the ladder on screen capture, whatever the game is.
+    bool allow_hook = false;
 };
 
 struct CursorData {

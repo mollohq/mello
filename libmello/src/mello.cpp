@@ -1140,6 +1140,7 @@ MelloStreamHost* mello_stream_start_host(
             case MELLO_CAPTURE_PROCESS:
                 desc.mode = mello::video::CaptureMode::Process;
                 desc.pid = source->pid;
+                desc.allow_hook = source->allow_hook;
                 break;
             case MELLO_CAPTURE_MONITOR_WGC:
                 desc.mode = mello::video::CaptureMode::Monitor;

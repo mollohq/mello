@@ -12,6 +12,7 @@ namespace mello::video {
 
 /// Capture methods the process capture ladder can use, in no fixed order.
 enum class LadderStep : uint8_t {
+    Hook,        // the m3llo game capture hook, inside the game process
     Dxgi,        // desktop duplication of the game window's monitor
     WgcWindow,   // Windows Graphics Capture of the game window
     WgcMonitor,  // Windows Graphics Capture of the game window's monitor
@@ -30,7 +31,12 @@ namespace ladder {
 /// capture ran the same game at 48 fps with a 1 ms present-to-capture delay.
 /// Desktop duplication stays last, as a fallback for cases window capture
 /// cannot serve.
-std::vector<LadderStep> initial_order();
+///
+/// `allow_hook` puts the game capture hook first. It is the only method that
+/// sees an exclusive-fullscreen game, and the only one that needs permission:
+/// the caller passes the catalogue and backend decision, and libmello runs its
+/// own run-time checks before it injects anything (plan 3.6).
+std::vector<LadderStep> initial_order(bool allow_hook);
 
 /// A method that delivered no frame at all by this point has failed.
 static constexpr uint64_t kFirstFrameDeadlineUs = 2'000'000;
@@ -130,6 +136,8 @@ private:
     // `history_` are guarded by swap_mutex_. Frames are counted on the capture
     // thread, so the counter is atomic.
     std::vector<LadderStep>          ladder_;
+    // The caller's decision for this game, from the catalogue and the backend.
+    bool                             allow_hook_ = false;
     size_t                           step_index_ = 0;
     uint64_t                         step_started_us_ = 0;
     std::atomic<uint64_t>            step_frames_{0};

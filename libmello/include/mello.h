@@ -529,6 +529,12 @@ typedef struct MelloCaptureSource {
     uint32_t         monitor_index;
     void*            hwnd;
     uint32_t         pid;
+    /* Process mode only: the caller allows the game capture hook for this
+     * game. The client sets it from the catalogue policy and the backend
+     * switch; with neither, it stays false and no game is ever hooked.
+     * libmello still runs its own run-time checks before it injects.
+     * Appended field: existing offsets unchanged. */
+    bool             allow_hook;
 } MelloCaptureSource;
 
 typedef struct MelloMonitorInfo {

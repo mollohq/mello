@@ -249,6 +249,9 @@ if(WIN32)
         src/video/capture_dxgi.cpp
         src/video/capture_wgc.cpp
         src/video/capture_process.cpp
+        src/video/capture_hook.cpp
+        src/video/hook_launcher.cpp
+        src/video/hook_policy.cpp
         src/video/process_enum.cpp
         src/video/window_thumbnail.cpp
         src/video/video_preprocessor.cpp
@@ -337,6 +340,13 @@ target_include_directories(mello
     PUBLIC  include
     PRIVATE src
 )
+
+# The game capture hook's protocol header. Both sides of the hook compile the
+# same file: libmello is the client end, hook/ builds the DLL that runs in the
+# game.
+if(WIN32)
+    target_include_directories(mello PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../hook/include)
+endif()
 
 target_link_libraries(mello
     PUBLIC

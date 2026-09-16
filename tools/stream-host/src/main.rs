@@ -139,10 +139,16 @@ fn main() {
             Some((_, pid, title)) => format!("{:?} {} (pid {})", backend, title, pid),
             None => format!("{:?} monitor {}", backend, monitor_index),
         };
+        // --allow-hook stands in for the game catalogue and the backend
+        // switch, which the client has and this tool does not. It only makes
+        // the hook step available; libmello still runs every run-time check
+        // before it injects.
+        let allow_hook = has_flag(&args, "--allow-hook");
         let source = match bench::source_for(
             backend,
             monitor_index,
             window.as_ref().map(|(hwnd, pid, _)| (*hwnd, *pid)),
+            allow_hook,
         ) {
             Ok(s) => s,
             Err(e) => {
@@ -365,6 +371,7 @@ fn enumerate_sources(
                 monitor_index: i,
                 hwnd: std::ptr::null_mut(),
                 pid: 0,
+                allow_hook: false,
             },
         ));
     }
@@ -401,6 +408,7 @@ fn enumerate_sources(
                     monitor_index: 0,
                     hwnd: std::ptr::null_mut(),
                     pid,
+                    allow_hook: false,
                 },
             ));
         }
@@ -429,6 +437,7 @@ fn enumerate_sources(
                     monitor_index: 0,
                     hwnd: std::ptr::null_mut(),
                     pid,
+                    allow_hook: false,
                 },
             ));
         }

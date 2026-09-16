@@ -487,7 +487,7 @@ TEST(CaptureLadder, ClockBeforeStepStartIsNotOverdue) {
 }
 
 TEST(CaptureLadder, EveryMethodIsInTheOrder) {
-    auto order = ladder::initial_order();
+    auto order = ladder::initial_order(false);
     ASSERT_EQ(order.size(), 3u);
     EXPECT_NE(std::find(order.begin(), order.end(), LadderStep::Dxgi), order.end());
     EXPECT_NE(std::find(order.begin(), order.end(), LadderStep::WgcWindow), order.end());
@@ -498,9 +498,97 @@ TEST(CaptureLadder, WindowCaptureRunsFirstAndDuplicationLast) {
     // Measured on 2026-09-16 against a fullscreen game: desktop duplication
     // delivered one frame, then nothing, then wedged in the display driver and
     // left the device unusable. Window capture ran the same game at 48 fps.
-    auto order = ladder::initial_order();
+    auto order = ladder::initial_order(false);
     EXPECT_EQ(order.front(), LadderStep::WgcWindow);
     EXPECT_EQ(order.back(), LadderStep::Dxgi);
+}
+
+// The hook is the only method that sees an exclusive-fullscreen game, so it
+// goes first - but only when the caller allows it. A client with no capture
+// policy from the backend never hooks anything (plan 3.6).
+TEST(CaptureLadder, TheHookRunsFirstOnlyWhenTheCallerAllowsIt) {
+    auto without = ladder::initial_order(false);
+    EXPECT_EQ(std::find(without.begin(), without.end(), LadderStep::Hook), without.end());
+
+    auto with = ladder::initial_order(true);
+    ASSERT_EQ(with.size(), 4u);
+    EXPECT_EQ(with.front(), LadderStep::Hook);
+    EXPECT_EQ(with.back(), LadderStep::Dxgi);
+}
+
+// The hook delivers a frame for every present, like duplication, but it sees
+// only the game. A game that renders nothing is silent on it, and that is not
+// a failure.
+TEST(CaptureLadder, TheHookIsNotJudgedOnFrameCount) {
+    EXPECT_FALSE(ladder::expects_continuous_frames(LadderStep::Hook));
+}
+
+#include "video/hook_policy.hpp"
+
+// The run-time hook checks. Bob's rule is that the hook must not get anyone
+// banned, so each of these is a refusal, and a refusal only costs a fallback to
+// screen capture.
+TEST(HookPolicy, KnownAntiCheatModulesAreRefused) {
+    using namespace mello::video::hook;
+    EXPECT_TRUE(is_anticheat_module("EasyAntiCheat_x64.dll"));
+    EXPECT_TRUE(is_anticheat_module("C:\\Games\\x\\BEClient_x64.dll"));
+    EXPECT_TRUE(is_anticheat_module("ACE-BASE.dll"));
+    EXPECT_TRUE(is_anticheat_module("vgk.sys"));
+    EXPECT_TRUE(is_anticheat_module("mhyprot3.sys"));
+    EXPECT_TRUE(is_anticheat_module("xhunter1.sys"));
+
+    EXPECT_FALSE(is_anticheat_module("d3d11.dll"));
+    EXPECT_FALSE(is_anticheat_module("Heaven.exe"));
+    EXPECT_FALSE(is_anticheat_module(""));
+
+    // The names are matched from the start. A module that merely contains the
+    // letters of a short pattern is not an anti-cheat, and refusing it would
+    // cost every player of that game the hook.
+    EXPECT_FALSE(is_anticheat_module("reach.dll"));
+    EXPECT_FALSE(is_anticheat_module("svgc_helper.dll"));
+    EXPECT_FALSE(is_anticheat_module("nvgameguardian.dll"));
+}
+
+TEST(HookPolicy, KnownAntiCheatProcessesAreRefused) {
+    using namespace mello::video::hook;
+    EXPECT_TRUE(is_anticheat_process("EasyAntiCheat.exe"));
+    EXPECT_TRUE(is_anticheat_process("BEService.exe"));
+    EXPECT_TRUE(is_anticheat_process("vgc.exe"));
+    EXPECT_FALSE(is_anticheat_process("explorer.exe"));
+}
+
+TEST(HookPolicy, StorePackagedAndChromiumGamesAreRefused) {
+    using namespace mello::video::hook;
+    EXPECT_TRUE(is_store_packaged("C:\\Program Files\\WindowsApps\\Game_1.0\\game.exe"));
+    EXPECT_FALSE(is_store_packaged("C:\\Games\\game.exe"));
+
+    EXPECT_TRUE(is_chromium_window_class("Chrome_WidgetWin_1"));
+    EXPECT_TRUE(is_chromium_window_class("Chrome_WidgetWin_0"));
+    EXPECT_FALSE(is_chromium_window_class("UnigineWindowClass"));
+}
+
+// The developer override stands in for the backend safe list. It names one
+// executable, and a partial name must not widen it to other games.
+TEST(HookPolicy, TheDeveloperOverrideNamesOneExecutable) {
+    using namespace mello::video::hook;
+    EXPECT_TRUE(developer_allows("Heaven.exe", R"(C:\Games\Heaven\bin\Heaven.exe)"));
+    EXPECT_TRUE(developer_allows("heaven.exe", R"(C:\Games\Heaven.exe)"));
+    EXPECT_TRUE(developer_allows(R"(C:\Games\Heaven.exe)", R"(D:\other\Heaven.exe)"));
+
+    EXPECT_FALSE(developer_allows("Heaven", R"(C:\Games\Heaven.exe)")) << "whole name only";
+    EXPECT_FALSE(developer_allows("Heav", R"(C:\Games\Heaven.exe)"));
+    EXPECT_FALSE(developer_allows("Heaven.exe", R"(C:\Games\HeavenBenchmark.exe)"));
+    EXPECT_FALSE(developer_allows("", R"(C:\Games\Heaven.exe)")) << "unset allows nothing";
+    EXPECT_FALSE(developer_allows("Heaven.exe", ""));
+}
+
+// The catalogue and the backend decide first. With no decision there is no
+// hook, whatever the process looks like.
+TEST(HookPolicy, NothingIsHookedWithoutTheCallersPermission) {
+    using namespace mello::video::hook;
+    const PolicyResult result = check_process(GetCurrentProcessId(), false);
+    EXPECT_FALSE(result.allowed());
+    EXPECT_EQ(result.verdict, PolicyVerdict::NotAllowedByCaller);
 }
 #endif
 

@@ -96,6 +96,7 @@ fn host_to_viewer_loopback() {
             monitor_index: 0,
             hwnd: std::ptr::null_mut(),
             pid: 0,
+            allow_hook: false,
         };
 
         let config = mello_sys::MelloStreamConfig {

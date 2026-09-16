@@ -1156,6 +1156,7 @@ impl super::Client {
                         monitor_index: 0,
                         hwnd: hwnd as *mut std::ffi::c_void,
                         pid: 0,
+                        allow_hook: false,
                     }
                 }
                 crate::stream::config::CaptureTarget::Process { pid } => {
@@ -1164,6 +1165,11 @@ impl super::Client {
                         monitor_index: 0,
                         hwnd: std::ptr::null_mut(),
                         pid,
+                        // The game capture hook stays off until the backend
+                        // sends a `capture` block with the safe list and the
+                        // kill switch (plan 3.6). Until then no game is
+                        // hooked, which is the required default.
+                        allow_hook: false,
                     }
                 }
                 crate::stream::config::CaptureTarget::Monitor { index } => {
@@ -1172,6 +1178,7 @@ impl super::Client {
                         monitor_index: index,
                         hwnd: std::ptr::null_mut(),
                         pid: 0,
+                        allow_hook: false,
                     }
                 }
             };

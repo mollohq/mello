@@ -1,6 +1,8 @@
 #ifdef _WIN32
 #include "capture_process.hpp"
 #include "capture_dxgi.hpp"
+#include "capture_hook.hpp"
+#include "hook_policy.hpp"
 #include "capture_wgc.hpp"
 #include "../util/log.hpp"
 #include <dxgi.h>
@@ -202,6 +204,7 @@ static uint64_t ladder_now_us() {
 
 const char* ladder_step_name(LadderStep step) {
     switch (step) {
+        case LadderStep::Hook:       return "Hook";
         case LadderStep::Dxgi:       return "DXGI-DDI";
         case LadderStep::WgcWindow:  return "WGC";
         case LadderStep::WgcMonitor: return "WGC-Monitor";
@@ -211,7 +214,11 @@ const char* ladder_step_name(LadderStep step) {
 
 namespace ladder {
 
-std::vector<LadderStep> initial_order() {
+std::vector<LadderStep> initial_order(bool allow_hook) {
+    if (allow_hook) {
+        return {LadderStep::Hook, LadderStep::WgcWindow, LadderStep::WgcMonitor,
+                LadderStep::Dxgi};
+    }
     return {LadderStep::WgcWindow, LadderStep::WgcMonitor, LadderStep::Dxgi};
 }
 
@@ -266,6 +273,25 @@ std::unique_ptr<CaptureSource> ProcessCapture::make_step(LadderStep step, HWND h
     if (!hwnd) return nullptr;
     HMONITOR mon = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
     switch (step) {
+        case LadderStep::Hook: {
+            // Every run-time check runs here, on every stream start, however
+            // the catalogue classified this game.
+            const hook::PolicyResult policy = hook::check_process(pid_, allow_hook_);
+            if (!policy.allowed()) {
+                MELLO_LOG_INFO(TAG, "ladder: no hook for pid=%u: %s%s%s", pid_,
+                               hook::verdict_name(policy.verdict),
+                               policy.detail.empty() ? "" : " - ",
+                               policy.detail.c_str());
+                return nullptr;
+            }
+            auto hooked = std::make_unique<HookCapture>();
+            CaptureSourceDesc desc{};
+            desc.mode = CaptureMode::Process;
+            desc.pid = pid_;
+            desc.allow_hook = true;
+            if (!hooked->initialize(device_, desc)) return nullptr;
+            return hooked;
+        }
         case LadderStep::Dxgi: {
             uint32_t output = 0;
             if (!output_index_for_monitor_on_device(device_.d3d11(), mon, &output)) {
@@ -471,7 +497,13 @@ bool ProcessCapture::initialize(const GraphicsDevice& device, const CaptureSourc
         return false;
     }
 
-    ladder_ = ladder::initial_order();
+    allow_hook_ = desc.allow_hook;
+    // The developer override names one executable and stands in for the backend
+    // safe list, which does not exist yet. The ladder has to offer the step for
+    // the override to reach the policy check at all.
+    const bool hook_step_available =
+        allow_hook_ || GetEnvironmentVariableA(hook::kDeveloperAllowVariable, nullptr, 0) > 0;
+    ladder_ = ladder::initial_order(hook_step_available);
 
     // If the window is minimized (tabbed-out game), WGC would capture at the
     // tiny minimized size. Defer start until the window is restored -- the
@@ -609,7 +641,8 @@ bool ProcessCapture::start_deferred() {
 
     MELLO_LOG_INFO(TAG, "Process(pid=%u) deferred: window restored, starting capture", pid_);
 
-    ladder_ = ladder::initial_order();
+    ladder_ = ladder::initial_order(
+        allow_hook_ || GetEnvironmentVariableA(hook::kDeveloperAllowVariable, nullptr, 0) > 0);
     for (size_t i = 0; i < ladder_.size(); ++i) {
         if (activate(i, "deferred start")) {
             deferred_hwnd_ = nullptr;

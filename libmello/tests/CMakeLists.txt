@@ -11,6 +11,7 @@ add_executable(mello_tests
     test_vad.cpp
     test_video_pipeline.cpp
     test_stream_audio_pipeline.cpp
+    test_hook_capture.cpp
 )
 
 # Separate target: mello_tests currently fails to build (test_jitter_buffer.cpp
@@ -40,6 +41,8 @@ target_link_libraries(mello_tests PRIVATE
 target_include_directories(mello_tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../src
     ${CMAKE_CURRENT_SOURCE_DIR}/../include
+    # The game capture hook's protocol header, shared with the hook project.
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../hook/include
     # Nullability compat shims for the vendored WAP tree (see
     # cmake/webrtc-audio-processing/compat). Test TUs include
     # echo_canceller.hpp -> api/scoped_refptr.h directly, so they need the

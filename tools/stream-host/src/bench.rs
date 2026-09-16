@@ -95,12 +95,14 @@ pub fn source_for(
     backend: BenchBackend,
     monitor_index: u32,
     window: Option<(*mut std::ffi::c_void, u32)>,
+    allow_hook: bool,
 ) -> Result<mello_sys::MelloCaptureSource, String> {
     let blank = mello_sys::MelloCaptureSource {
         mode: mello_sys::MelloCaptureMode_MELLO_CAPTURE_MONITOR,
         monitor_index: 0,
         hwnd: std::ptr::null_mut(),
         pid: 0,
+        allow_hook: false,
     };
     Ok(match backend {
         BenchBackend::Dxgi => mello_sys::MelloCaptureSource {
@@ -122,9 +124,13 @@ pub fn source_for(
         }
         BenchBackend::Process => {
             let (_, pid) = window.ok_or("process needs --source-title-substring")?;
+            // The hook is the ladder's first step only when the caller allows
+            // it. In the client that decision comes from the game catalogue and
+            // the backend; here it comes from --allow-hook.
             mello_sys::MelloCaptureSource {
                 mode: mello_sys::MelloCaptureMode_MELLO_CAPTURE_PROCESS,
                 pid,
+                allow_hook,
                 ..blank
             }
         }

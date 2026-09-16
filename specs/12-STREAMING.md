@@ -49,17 +49,19 @@ Capture → GPU Preprocess → Encode Queue → Encode Thread → Stream Manager
 
 ### 3.1 Capture
 
-Three methods, tried in order by the capture ladder:
+Four methods, tried in order by the capture ladder:
 
 | Backend | API | Notes |
 |---------|-----|-------|
+| **Hook** | m3llo game capture hook, inside the game | The game's own back buffer. The only method that sees exclusive fullscreen. Needs permission; see 3.1.1. |
 | **DXGI-DDI** | `IDXGIOutputDuplication` | The game window's monitor. Cannot see exclusive-fullscreen content. |
 | **WGC** | `Windows.Graphics.Capture`, `CreateForWindow` | The game window. Cannot see exclusive-fullscreen content either. |
 | **WGC-Monitor** | `Windows.Graphics.Capture`, `CreateForMonitor` | Fallback when window capture fails. |
 
 `ProcessCapture` owns the ladder. Given a PID it finds the main game window
 (`EnumWindows`, largest restored-area, non-toolwindow) and tries the methods in
-one order for every game: **WGC window, WGC monitor, DXGI desktop duplication**.
+one order for every game: **the hook when it is allowed, then WGC window, WGC
+monitor, DXGI desktop duplication**.
 
 Measured on 2026-09-16 against Unigine Heaven (Direct3D11, borderless
 fullscreen, 3440x1440, NVIDIA):
@@ -95,6 +97,64 @@ in exclusive fullscreen, or the capture device is stuck. Host stats then carry
 `StreamError`. Without that proof the stream is quiet, not broken, and the user
 is not told anything. Exclusive-fullscreen games need the game capture hook
 (plan work stream 3), which does not exist yet.
+
+### 3.1.1 Game capture hook
+
+The hook is the first ladder step, and the only method that sees an
+exclusive-fullscreen game. It is off unless the caller allows that game.
+
+**How a frame travels.** The hook DLL runs inside the game. It detours
+`IDXGISwapChain::Present`, `Present1` and `ResizeBuffers`, and on each present
+it copies the back buffer into one of two shared textures and signals an event.
+`HookCapture` (`libmello/src/video/capture_hook.cpp`) opens those textures on
+the encoder's device, copies the newest one, and hands it to the pipeline as
+any other backend does. No frame is copied through system memory.
+
+**Binaries** (`hook/`, its own CMake project because it builds for x86 as well
+as x64 and links the static CRT):
+
+| Binary | Runs where | Does what |
+|---|---|---|
+| `mello-hook{32,64}.dll` | Inside the game | Detours, copies, signals |
+| `mello-inject{32,64}.exe` | Its own process | `SetWindowsHookEx(WH_GETMESSAGE)` on the game's window thread |
+| `mello-offsets{32,64}.exe` | Its own process | Prints present-function offsets |
+
+**The shared block** (`hook/include/mello_hook_protocol.h`) is the whole
+contract. The client creates it, the events and the keepalive before it
+injects; the hook only opens them. Each field has one writer. Textures are
+shared with legacy DXGI handles (`D3D11_RESOURCE_MISC_SHARED`,
+`GetSharedHandle`), stored as `uint32_t`, so a 32-bit game's texture opens in
+the 64-bit client with no `DuplicateHandle`.
+
+**Offsets, not probes.** The hook never creates a device inside a game to find
+`Present`. The offsets helper builds a throwaway D3D11 swap chain in its own
+process, reads the addresses out of the COM virtual function table, and prints
+them as offsets from `dxgi.dll`. The client caches them against that file's
+version and writes them into the shared block before injection.
+
+**Safety rules the code keeps** (plan 3.7): `DllMain` starts a thread and
+returns; every detour body runs in a structured exception guard and a fault
+turns capture off for good; nothing on the present path allocates, locks or
+logs; the DLL pins itself and the detours are never removed, because a game
+thread can be inside one; the hook stops capturing 5 s after the client's
+heartbeat stops.
+
+**Permission.** Two gates, both needed:
+
+1. The caller allows this game. In the client that comes from the game
+   catalogue policy and the backend `capture` block (plan 3.6). Neither exists
+   yet, so the client passes `allow_hook: false` and nothing is hooked. The
+   environment variable `MELLO_HOOK_ALLOW_EXE` names one executable and stands
+   in for the backend list while the hook is being tested.
+2. The run-time checks in `hook_policy.cpp`, on every stream start: the process
+   can be opened for read, no anti-cheat module is loaded in it, no anti-cheat
+   service is running, it is not Store-packaged, not a Chromium shell, and not
+   elevated. Any one of these refuses the hook, and the ladder falls back to
+   screen capture.
+
+**What works today:** DXGI swap chains, which covers Direct3D 11 and 10, for
+64-bit games. D3D12, D3D9 and OpenGL are later steps in the plan. Vulkan games
+use the WGC steps by decision (plan 3.10).
 
 **Deferred start:** If the target window is minimized at stream start (user tabbed out to launch the stream), capture waits. The monitor thread polls until the window is restored, then initializes the backend. Width/height return restored dimensions during the wait so the encoder can pre-initialize. This matches Discord's behaviour.
 
