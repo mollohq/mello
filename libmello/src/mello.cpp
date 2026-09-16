@@ -1446,6 +1446,7 @@ void mello_stream_get_stats(MelloStreamHost* host, MelloStreamStats* stats) {
         stats->encoder_cost_tier  = ht.encoder_cost_tier;
         stats->idle_repeat_frames = ht.idle_repeat_frames;
         stats->capture_failed     = ht.capture_failed ? 1u : 0u;
+        stats->capture_state      = ht.capture_state;
         strncpy(stats->capture_history, ht.capture_history.c_str(),
                 sizeof(stats->capture_history) - 1);
         memcpy(stats->present_delay_hist, ht.present_delay_hist.data(),

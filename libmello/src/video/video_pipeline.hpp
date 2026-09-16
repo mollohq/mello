@@ -142,6 +142,8 @@ public:
         uint64_t    idle_repeat_frames  = 0;
         // Every capture method failed (process capture ladder exhausted).
         bool        capture_failed      = false;
+        // What the capture is doing, for the streamer's and viewers' screens.
+        uint32_t    capture_state       = 0;
         // Capture method changes and reasons, oldest first.
         std::string capture_history;
         // Cumulative present-to-capture delay, 1 ms buckets.

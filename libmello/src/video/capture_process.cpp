@@ -787,6 +787,30 @@ void ProcessCapture::monitor_thread() {
     }
 }
 
+const char* capture_state_name(CaptureState state) {
+    switch (state) {
+        case CaptureState::Capturing:        return "capturing";
+        case CaptureState::WaitingMinimized: return "the game is minimized";
+        case CaptureState::WaitingForGame:   return "the game has drawn nothing yet";
+        case CaptureState::Failed:           return "capture failed";
+    }
+    return "unknown";
+}
+
+CaptureState ProcessCapture::state() const {
+    if (exhausted_.load(std::memory_order_relaxed)) return CaptureState::Failed;
+
+    // The deferred start: the game was minimized when the stream began and
+    // capture has not started at all yet.
+    {
+        std::lock_guard<std::mutex> lock(swap_mutex_);
+        if (deferred_hwnd_ != nullptr) return CaptureState::WaitingMinimized;
+        if (active_ && active_->waiting_for_the_game()) return CaptureState::WaitingForGame;
+    }
+    if (!target_can_present(pid_)) return CaptureState::WaitingMinimized;
+    return CaptureState::Capturing;
+}
+
 // --- Choosing what to capture ---
 
 bool window_is_capturable(uint32_t client_width, uint32_t client_height,

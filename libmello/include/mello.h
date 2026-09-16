@@ -758,6 +758,15 @@ typedef struct MelloStreamStats {
     uint32_t capture_failed;
     /* Capture method changes and reasons, "METHOD:reason;..." (truncated). */
     char     capture_history[96];
+    /* What the capture is doing, for the streamer's screen and the viewers':
+     *   0  capturing
+     *   1  waiting, the game is minimized
+     *   2  waiting, the game has drawn nothing yet (loading, or the person has
+     *      not reached it)
+     *   3  failed, with proof that the game is drawing
+     * Anything but 0 means the viewer is looking at a still picture and should
+     * be told why. Appended field: existing offsets unchanged. */
+    uint32_t capture_state;
     /* Cumulative present-to-capture delay histogram: bucket i counts frames
      * delayed [i, i+1) ms; the last bucket counts >= 31 ms. Diff two reads
      * for a window. */

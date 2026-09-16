@@ -44,6 +44,24 @@ struct CursorData {
     std::vector<uint8_t> shape_rgba;
 };
 
+/// What the capture is doing right now, for the person streaming and for the
+/// people watching. Everything except `Capturing` means the viewer is looking
+/// at a still picture, and both ends should be told why rather than shown a
+/// black rectangle.
+enum class CaptureState : uint32_t {
+    Capturing = 0,
+    /// The game is minimized. Nothing can capture a minimized window, and the
+    /// stream carries on as soon as it comes back.
+    WaitingMinimized = 1,
+    /// The game is up but has drawn nothing yet: it is loading, or the person
+    /// has not reached it.
+    WaitingForGame = 2,
+    /// Every method failed, with proof that the game is drawing.
+    Failed = 3,
+};
+
+const char* capture_state_name(CaptureState state);
+
 class CaptureSource {
 public:
 #ifdef _WIN32
@@ -89,6 +107,9 @@ public:
     /// Short history of capture method changes and their reasons, for logs and
     /// host telemetry. Empty for backends that never change method.
     virtual std::string method_history() const { return {}; }
+
+    /// What to tell the user about this capture. See CaptureState.
+    virtual CaptureState state() const { return CaptureState::Capturing; }
 
     /// True when this backend works but the game has drawn nothing yet.
     ///

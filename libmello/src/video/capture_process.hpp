@@ -105,6 +105,7 @@ public:
     bool get_cursor(CursorData& out) override;
     bool consume_swap_event() override;
     bool failed() const override { return exhausted_.load(std::memory_order_relaxed); }
+    CaptureState state() const override;
     bool stop_timed_out() const override { return stop_timed_out_.load(std::memory_order_relaxed); }
     std::string method_history() const override;
     void set_present_delay_histogram(PresentDelayHistogram* hist) override;
