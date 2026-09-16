@@ -72,8 +72,14 @@ const char* error_name(uint32_t error) {
     }
 }
 
-// The window the game presents to, used only for its size while no frame has
-// arrived yet.
+// The size of the game's largest window, used while no frame has arrived yet.
+//
+// It reads the restored size, not the current one, and it does not ask whether
+// the window is visible. A game that is still starting, or one that has just
+// taken exclusive fullscreen, has a window that answers neither question the
+// way a normal window does: measured against Unigine Heaven on 2026-09-16,
+// where its only window was a 0x0 proxy and the hook refused to start because
+// of it, and the stream fell back to capturing the whole desktop.
 bool window_client_size(uint32_t pid, uint32_t* width, uint32_t* height) {
     struct Search {
         uint32_t pid;
@@ -87,19 +93,26 @@ bool window_client_size(uint32_t pid, uint32_t* width, uint32_t* height) {
             auto* s = reinterpret_cast<Search*>(param);
             DWORD owner = 0;
             GetWindowThreadProcessId(window, &owner);
-            if (owner != s->pid || !IsWindowVisible(window)) return TRUE;
-            RECT rect{};
-            if (!GetClientRect(window, &rect)) return TRUE;
-            const LONG area = (rect.right - rect.left) * (rect.bottom - rect.top);
+            if (owner != s->pid) return TRUE;
+
+            WINDOWPLACEMENT placement{};
+            placement.length = sizeof(placement);
+            if (!GetWindowPlacement(window, &placement)) return TRUE;
+            const RECT& restored = placement.rcNormalPosition;
+            const LONG width = restored.right - restored.left;
+            const LONG height = restored.bottom - restored.top;
+            if (width <= 0 || height <= 0) return TRUE;
+
+            const LONG area = width * height;
             if (area <= s->area) return TRUE;
             s->area = area;
-            s->width = static_cast<uint32_t>(rect.right - rect.left);
-            s->height = static_cast<uint32_t>(rect.bottom - rect.top);
+            s->width = static_cast<uint32_t>(width);
+            s->height = static_cast<uint32_t>(height);
             return TRUE;
         },
         reinterpret_cast<LPARAM>(&search));
 
-    if (search.width == 0 || search.height == 0) return false;
+    if (search.width < kMinEncodeWidth || search.height < kMinEncodeHeight) return false;
     *width = search.width;
     *height = search.height;
     return true;
@@ -281,6 +294,15 @@ bool HookCapture::initialize(const GraphicsDevice& device, const CaptureSourceDe
     MELLO_LOG_INFO(TAG, "hook is in pid=%u (%d-bit), capturing %ux%u fmt=%u", pid_, bits_, width_,
                    height_, info_->dxgi_format);
     return true;
+}
+
+bool HookCapture::waiting_for_the_game() const {
+    if (!info_) return false;
+    // The hook is in and has faulted on nothing. If the game has presented at
+    // all, a missing frame is the hook's fault; if it has not, there is nothing
+    // to capture anywhere.
+    return as_atomic_u64(const_cast<uint64_t*>(&info_->presents_seen))
+               ->load(std::memory_order_relaxed) == 0;
 }
 
 bool HookCapture::wait_for_first_frame(uint32_t timeout_ms) {

@@ -270,6 +270,7 @@ void note_fault(const char* where) {
 }
 
 void guarded_capture(IDirect3DDevice9* device, const char* where) {
+    HookState::instance().count_present();
     if (g_disabled.load(std::memory_order_relaxed)) return;
     if (g_in_capture.exchange(true, std::memory_order_acquire)) return;
     __try {

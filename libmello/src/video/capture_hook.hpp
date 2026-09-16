@@ -42,6 +42,7 @@ public:
     const char* backend_name() const override { return "Hook"; }
 
     bool failed() const override { return failed_.load(std::memory_order_relaxed); }
+    bool waiting_for_the_game() const override;
     bool stop_timed_out() const override { return detached_.load(std::memory_order_relaxed); }
     void set_present_delay_histogram(PresentDelayHistogram* hist) override { delay_hist_ = hist; }
 

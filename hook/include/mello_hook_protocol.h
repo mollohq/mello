@@ -124,7 +124,15 @@ typedef struct MelloHookInfo {
     uint32_t cpu_frame_bytes;    // size of one frame, 0 when frames are textures
     uint32_t cpu_pitch;          // bytes per row in that frame
 
-    uint64_t reserved[5];
+    // Presents the hook has seen, whether or not it captured them. Zero means
+    // the game has not drawn anything through the APIs this hook detoured: it
+    // is still loading, or it is between levels, or it draws through an API the
+    // hook does not cover yet. The client needs that difference, because
+    // silence from a hook that sees presents is a broken hook, and silence from
+    // one that sees none is a game with nothing on screen.
+    uint64_t presents_seen;
+
+    uint64_t reserved[4];
 } MelloHookInfo;
 #pragma pack(pop)
 

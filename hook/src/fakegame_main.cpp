@@ -6,6 +6,12 @@
 // this program drew, and not a black frame or somebody else's window.
 //
 // Usage: mello-fakegame64.exe [--seconds N] [--width W] [--height H] [--d3d9]
+//                             [--fullscreen] [--start-delay N]
+//
+// `--start-delay` shows the window but builds no device until N seconds have
+// passed, the way a game looks while it loads. A stream that starts in that
+// window finds nothing to capture anywhere, which is what a real game did on
+// 2026-09-16.
 //
 // `--d3d9` presents through Direct3D 9 instead, which is the other path the
 // hook covers and the one a 2012-era game uses.
@@ -58,7 +64,20 @@ bool flag(int argc, wchar_t** argv, const wchar_t* name) {
 
 // The Direct3D 9 build of the same program: one window, one device, a clear to
 // the same colour, and a present every frame.
-int run_d3d9(HWND window, int width, int height, int seconds, bool fullscreen) {
+int run_d3d9(HWND window, int width, int height, int seconds, bool fullscreen,
+             int start_delay_seconds) {
+    // Nothing is rendered and no device exists yet: the window is up and the
+    // process is alive, and that is all a capture method can find.
+    const DWORD start_at = GetTickCount() + static_cast<DWORD>(start_delay_seconds) * 1000;
+    while (g_running && GetTickCount() < start_at) {
+        MSG message;
+        while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE)) {
+            TranslateMessage(&message);
+            DispatchMessageW(&message);
+        }
+        Sleep(16);
+    }
+
     IDirect3D9Ex* d3d9 = nullptr;
     if (FAILED(Direct3DCreate9Ex(D3D_SDK_VERSION, &d3d9)) || !d3d9) {
         std::fprintf(stderr, "no Direct3D 9Ex on this machine\n");
@@ -130,6 +149,7 @@ int wmain(int argc, wchar_t** argv) {
     const int height = argument(argc, argv, L"--height", 360);
     const bool use_d3d9 = flag(argc, argv, L"--d3d9");
     const bool fullscreen = flag(argc, argv, L"--fullscreen");
+    const int start_delay = argument(argc, argv, L"--start-delay", 0);
 
     WNDCLASSEXW wc{};
     wc.cbSize = sizeof(wc);
@@ -154,7 +174,7 @@ int wmain(int argc, wchar_t** argv) {
             SetWindowLongW(window, GWL_STYLE, WS_POPUP | WS_VISIBLE);
             SetWindowPos(window, HWND_TOP, 0, 0, width, height, SWP_FRAMECHANGED | SWP_SHOWWINDOW);
         }
-        const int result = run_d3d9(window, width, height, seconds, fullscreen);
+        const int result = run_d3d9(window, width, height, seconds, fullscreen, start_delay);
         DestroyWindow(window);
         return result;
     }

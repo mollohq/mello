@@ -81,13 +81,32 @@ the device poisoned and stops using it.
 
 | Evidence | Applies to | Rule |
 |---|---|---|
-| No first frame | Every method | 2 s with no frame at all |
+| No first frame | Every method | 2 s with no frame at all, or 15 s while the game has drawn nothing (see below) |
 | Too few frames | DXGI only | Under 3 frames in 3 s. Duplication delivers a frame for every change on screen, so silence under a game that presents means it is blind. WGC delivers a frame only when the captured content changes, so silence there is a static game. |
 | Backend stopped for good | Every method | Duplication rebuild gave up, or the capture item closed |
 | Game entered exclusive fullscreen | Every method | `SHQueryUserNotificationState`. Rebuilds the current method and restarts its deadline |
 
 While the game is minimized every deadline is held, because nothing can capture
 a minimized game.
+
+**A game that has drawn nothing is not a failed capture method.** A person
+starts the stream and then goes to their game: switching window, loading a
+level and taking fullscreen take seconds, and no method has anything to show in
+that time. Moving the ladder on there is worse than waiting, because monitor
+capture then delivers the desktop, keeps delivering, and nothing ever moves the
+ladder back. That is what a user saw on 2026-09-16: their viewer watched the
+whole desktop with the game as a small window inside it.
+
+Only the hook can tell the difference, because only the hook sees the game's
+presents from inside the game: it counts them in `presents_seen`, whether or
+not it captured them. No presents at all means the game has drawn nothing, and
+the first-frame deadline becomes 15 s. It stays bounded, because a game that
+draws through an API the hook does not cover looks exactly the same.
+
+**The ladder walks back up on evidence.** It only ever walks down by itself,
+since the method it settles on keeps delivering. When the game enters exclusive
+fullscreen, the best method becomes possible again, so the ladder restarts from
+the top.
 
 Every ladder move forces a keyframe. When every method has delivered nothing,
 the ladder goes back to the first method, waits 30 s, and tries them all again.

@@ -475,6 +475,29 @@ TEST(CaptureLadder, OneFrameThenSilenceIsNormalForWindowCapture) {
     EXPECT_TRUE(ladder::expects_continuous_frames(LadderStep::Dxgi));
 }
 
+// A person starts the stream and then goes to their game. Loading, switching
+// window and taking fullscreen all take seconds, and the hook reports that the
+// game has drawn nothing at all in that time. Moving the ladder on there cost a
+// real user a stream of their desktop on 2026-09-16.
+TEST(CaptureLadder, AMethodWaitsWhileTheGameHasDrawnNothing) {
+    const uint64_t started = 1'000'000;
+
+    // Without that knowledge, two seconds of silence is a failure.
+    EXPECT_TRUE(ladder::startup_failed(false, 0, started,
+                                       started + ladder::kFirstFrameDeadlineUs, false));
+
+    // With it, the same silence is a game that has not drawn yet.
+    EXPECT_FALSE(ladder::startup_failed(false, 0, started,
+                                        started + ladder::kFirstFrameDeadlineUs, true));
+    EXPECT_FALSE(ladder::startup_failed(false, 0, started,
+                                        started + ladder::kWaitingForGameUs - 1, true));
+
+    // The wait is bounded: a game that draws through an API the hook does not
+    // cover is silent in exactly the same way, and stays silent.
+    EXPECT_TRUE(ladder::startup_failed(false, 0, started,
+                                       started + ladder::kWaitingForGameUs, true));
+}
+
 TEST(CaptureLadder, DeliveringMethodIsNeverFailed) {
     const uint64_t started = 1'000'000;
     // Delivered its quota, then 30 minutes of nothing: a paused game.

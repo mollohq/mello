@@ -90,6 +90,14 @@ public:
     /// host telemetry. Empty for backends that never change method.
     virtual std::string method_history() const { return {}; }
 
+    /// True when this backend works but the game has drawn nothing yet.
+    ///
+    /// Only the hook can tell: it counts the game's presents from inside the
+    /// game. Silence then says nothing about the capture method, and moving the
+    /// ladder on would trade the best method for one that shows the desktop.
+    /// Every other backend answers false, because none of them can know.
+    virtual bool waiting_for_the_game() const { return false; }
+
     /// True when `stop()` gave up waiting for its own thread and detached it.
     ///
     /// The thread may still touch this object, so the owner must never destroy

@@ -231,10 +231,14 @@ bool expects_continuous_frames(LadderStep step) {
 }
 
 bool startup_failed(bool continuous, uint64_t frames_since_step_start,
-                    uint64_t step_started_us, uint64_t now_us) {
+                    uint64_t step_started_us, uint64_t now_us,
+                    bool waiting_for_the_game) {
     if (now_us < step_started_us) return false;
     const uint64_t elapsed = now_us - step_started_us;
     if (frames_since_step_start == 0) {
+        // The game has drawn nothing at all, so no method would have anything
+        // to show. Wait for the person to reach their game.
+        if (waiting_for_the_game) return elapsed >= kWaitingForGameUs;
         return elapsed >= kFirstFrameDeadlineUs;
     }
     if (!continuous) return false;
@@ -427,6 +431,20 @@ bool ProcessCapture::activate(size_t index, const char* reason) {
     MELLO_LOG_WARN(TAG, "ladder: pid=%u %s -> %s (%s)", pid_, old_name.c_str(),
                    ladder_step_name(step), reason);
     return true;
+}
+
+// Goes back to the first method in the ladder. Used when something changes
+// that makes a better method possible again: the ladder only ever walks
+// downwards on its own, because the method it is on keeps delivering.
+void ProcessCapture::restart_from_best(const char* reason) {
+    if (ladder_.empty()) return;
+    if (activate(0, reason)) return;
+    // The best method still refuses. Whatever is running now keeps the stream;
+    // rule 1 moves the ladder on if that stops delivering.
+    MELLO_LOG_INFO(TAG, "ladder: %s is still unavailable for pid=%u", ladder_step_name(ladder_[0]),
+                   pid_);
+    std::lock_guard<std::mutex> lock(swap_mutex_);
+    step_started_us_ = ladder_now_us();
 }
 
 void ProcessCapture::advance(const char* reason) {
@@ -674,10 +692,14 @@ void ProcessCapture::monitor_thread() {
         std::string backend;
         bool has_active = false;
         bool continuous = false;
+        bool waiting_for_the_game = false;
         {
             std::lock_guard<std::mutex> lock(swap_mutex_);
             has_active = active_ != nullptr;
-            if (has_active) backend = active_->backend_name();
+            if (has_active) {
+                backend = active_->backend_name();
+                waiting_for_the_game = active_->waiting_for_the_game();
+            }
             if (step_index_ < ladder_.size()) {
                 continuous = ladder::expects_continuous_frames(ladder_[step_index_]);
             }
@@ -708,11 +730,14 @@ void ProcessCapture::monitor_thread() {
             step_started_us_ = now;
             continue;
         }
-        if (ladder::startup_failed(continuous, step_frames, step_started, now)) {
+        if (ladder::startup_failed(continuous, step_frames, step_started, now,
+                                   waiting_for_the_game)) {
             if (target_can_present(pid_)) {
-                MELLO_LOG_WARN(TAG, "ladder: %s delivered %llu frames in %llu ms for pid=%u",
+                MELLO_LOG_WARN(TAG,
+                               "ladder: %s delivered %llu frames in %llu ms for pid=%u%s",
                                backend.c_str(), (unsigned long long)step_frames,
-                               (unsigned long long)((now - step_started) / 1000), pid_);
+                               (unsigned long long)((now - step_started) / 1000), pid_,
+                               waiting_for_the_game ? " (the game drew nothing at all)" : "");
                 advance(step_frames == 0 ? "no frames" : "too few frames");
             } else {
                 std::lock_guard<std::mutex> lock(swap_mutex_);
@@ -732,17 +757,30 @@ void ProcessCapture::monitor_thread() {
             continue;
         }
 
-        // 3. Evidence: the game entered exclusive fullscreen. Restart the
-        // current method's probation; if it now delivers nothing, rule 1 moves
-        // the ladder on. Silence alone is never evidence.
+        // 3. Evidence: the game entered exclusive fullscreen.
+        //
+        // This changes which method is right, so the ladder starts again from
+        // the top rather than only restarting the current method's deadline. A
+        // game that goes fullscreen while the stream runs on monitor capture
+        // is the case: monitor capture keeps delivering, so nothing else would
+        // ever move the ladder, and the viewer watches the whole desktop with
+        // the game as a small window in it (2026-09-16).
         const bool exclusive = process_in_exclusive_fullscreen(pid_);
         if (exclusive && !was_exclusive) {
             was_exclusive = true;
-            MELLO_LOG_WARN(TAG, "ladder: pid=%u entered exclusive fullscreen", pid_);
             exhausted_.store(false, std::memory_order_relaxed);
-            std::lock_guard<std::mutex> lock(swap_mutex_);
-            step_frames_.store(0, std::memory_order_relaxed);
-            step_started_us_ = now;
+            pass_failed_.store(false, std::memory_order_relaxed);
+
+            size_t step = 0;
+            {
+                std::lock_guard<std::mutex> lock(swap_mutex_);
+                step = step_index_;
+                step_frames_.store(0, std::memory_order_relaxed);
+                step_started_us_ = now;
+            }
+            MELLO_LOG_WARN(TAG, "ladder: pid=%u entered exclusive fullscreen%s", pid_,
+                           step == 0 ? "" : "; trying the best method again");
+            if (step != 0) restart_from_best("entered exclusive fullscreen");
             continue;
         }
         if (!exclusive) was_exclusive = false;

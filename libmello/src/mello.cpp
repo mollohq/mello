@@ -6,6 +6,9 @@
 #include "video/decoder_factory.hpp"
 #include "video/process_enum.hpp"
 #include "video/window_thumbnail.hpp"
+#ifdef _WIN32
+#include "video/hook_launcher.hpp"
+#endif
 #include "audio/clip_encoder.hpp"
 #include "audio/stream_audio_pipeline.hpp"
 #include "util/log.hpp"
@@ -167,6 +170,12 @@ MelloContext* mello_init(void) {
     try {
         init_log_level();
         MELLO_LOG_INFO("api", "mello_init()");
+#ifdef _WIN32
+        // The game capture hook needs present-function offsets for this
+        // machine. Read them now, in the background, so a stream start never
+        // waits for a helper process on the command loop.
+        mello::video::hook::warm_offsets_cache();
+#endif
         auto* ctx = new mello::Context();
         if (!ctx->initialize()) {
             MELLO_LOG_ERROR("api", "mello_init: context init failed");

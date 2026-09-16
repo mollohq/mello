@@ -157,6 +157,11 @@ void HookState::count_drop() {
     as_atomic_u64(&info_->frames_dropped)->fetch_add(1, std::memory_order_relaxed);
 }
 
+void HookState::count_present() {
+    if (!info_) return;
+    as_atomic_u64(&info_->presents_seen)->fetch_add(1, std::memory_order_relaxed);
+}
+
 void HookState::count_fault() {
     if (!info_) return;
     as_atomic_u64(&info_->faults)->fetch_add(1, std::memory_order_relaxed);

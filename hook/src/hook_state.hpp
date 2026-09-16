@@ -48,6 +48,10 @@ public:
     void set_error(uint32_t error);
     void count_drop();
     void count_fault();
+    /// Called on every present, before anything else. It is two instructions on
+    /// the game's render thread and it is what tells the client the difference
+    /// between a hook that cannot see and a game that is not drawing.
+    void count_present();
 
     void signal_ready();
     void signal_frame();

@@ -269,6 +269,7 @@ void note_fault(const char* where) {
 // Runs `capture_present` with the reentrancy guard and the exception guard. A
 // fault here disables capture; it never reaches the game.
 void guarded_capture(IDXGISwapChain* swap, const char* where) {
+    HookState::instance().count_present();
     if (g_disabled.load(std::memory_order_relaxed)) return;
     if (g_in_capture.exchange(true, std::memory_order_acquire)) return;
     __try {

@@ -35,6 +35,15 @@ struct Offsets {
 /// The second call for the same bitness returns the cached answer.
 const Offsets& offsets_for(int bits);
 
+/// Fills that cache in the background, for both bitnesses.
+///
+/// The helper is a process launch and a device build, about a second in total.
+/// On the stream path that second lands on the client's command loop, where it
+/// stalls voice and every button (measured at 2.9 s on 2026-09-16). Doing it at
+/// startup takes it off that path: by the time anybody streams, the answer is
+/// already there.
+void warm_offsets_cache();
+
 /// Result of an injection attempt, for the log and for telemetry.
 enum class InjectResult {
     Ready,          // the hook signalled ready

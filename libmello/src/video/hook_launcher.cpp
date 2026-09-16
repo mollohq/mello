@@ -7,6 +7,7 @@
 #include <array>
 #include <cstdlib>
 #include <mutex>
+#include <thread>
 #include <string>
 #include <unordered_map>
 
@@ -215,6 +216,15 @@ const Offsets& offsets_for(int bits) {
         MELLO_LOG_WARN(TAG, "offsets helper printed nothing usable");
     }
     return g_offsets_cache.emplace(bits, offsets).first->second;
+}
+
+void warm_offsets_cache() {
+    // Detached on purpose: nothing waits for this, and a helper that hangs is
+    // bounded by its own timeout inside run_helper.
+    std::thread([] {
+        offsets_for(64);
+        offsets_for(32);
+    }).detach();
 }
 
 const char* inject_result_name(InjectResult result) {

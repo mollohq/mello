@@ -55,13 +55,29 @@ static constexpr uint64_t kProbationFrames = 3;
 /// method that works perfectly.
 bool expects_continuous_frames(LadderStep step);
 
+/// How long a method may wait while the game itself has drawn nothing.
+///
+/// A person starts a stream and then goes to the game: switching windows,
+/// loading a level and taking fullscreen all take seconds. Two seconds of
+/// silence in that window means nothing, and moving the ladder on because of it
+/// trades the right method for one that shows the desktop (2026-09-16). Only
+/// the hook can report this, because only the hook sees the game's presents.
+/// The wait is bounded because a game that draws through an API the hook does
+/// not cover is silent for the same reason and will stay silent.
+static constexpr uint64_t kWaitingForGameUs = 15'000'000;
+
 /// True when the active method has had its chance and is not delivering video.
 ///
 /// Applies only while the game can present. Silence from a method that is
 /// delivering normally is never a failure: a paused game and an idle desktop
 /// are quiet and healthy.
+///
+/// `waiting_for_the_game` is the backend saying the game has drawn nothing at
+/// all. Then the deadline is `kWaitingForGameUs`, not the first-frame one: the
+/// method is not the problem.
 bool startup_failed(bool continuous, uint64_t frames_since_step_start,
-                    uint64_t step_started_us, uint64_t now_us);
+                    uint64_t step_started_us, uint64_t now_us,
+                    bool waiting_for_the_game = false);
 
 /// Wait between ladder passes when no method delivered. A visible game that
 /// renders nothing (paused, or a benchmark waiting for input) looks exactly
@@ -98,6 +114,9 @@ private:
 
     /// Build and initialize (not start) the backend for one ladder step.
     std::unique_ptr<CaptureSource> make_step(LadderStep step, HWND hwnd) const;
+    /// Goes back to the first method in the ladder, on evidence that it can
+    /// work now. The ladder never walks back up by itself.
+    void restart_from_best(const char* reason);
     /// Replace the active backend with ladder step `index` and start it.
     ///
     /// Runs backend calls without `swap_mutex_` held: starting or stopping a
