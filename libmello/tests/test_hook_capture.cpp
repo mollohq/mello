@@ -15,6 +15,7 @@
 #include <windows.h>
 
 #include <d3d11.h>
+#include <d3d11_4.h>
 #include <wrl/client.h>
 
 #include <atomic>
@@ -27,6 +28,7 @@
 #include "video/capture_hook.hpp"
 #include "video/graphics_device.hpp"
 #include "video/hook_policy.hpp"
+#include "video/video_preprocessor.hpp"
 
 using namespace mello::video;
 
@@ -244,6 +246,58 @@ TEST(HookCapture, RefusesAProcessTheCallerDidNotAllow) {
     const hook::PolicyResult result = hook::check_process(GetCurrentProcessId(), false);
     EXPECT_FALSE(result.allowed());
     EXPECT_EQ(result.verdict, hook::PolicyVerdict::NotAllowedByCaller);
+}
+
+// Capture threads and the encode thread share one immediate context. D3D11
+// does not make that safe by itself, and an unprotected context made the video
+// processor refuse every frame from a Direct3D 9 game while capture reported
+// 50 fps.
+TEST(GraphicsDeviceTest, TheSharedContextIsThreadProtected) {
+    if (running_under_ci()) GTEST_SKIP() << "needs a GPU";
+
+    const GraphicsDevice device = create_d3d11_device();
+    ASSERT_NE(device.d3d11(), nullptr) << "no D3D11 device on this machine";
+
+    Microsoft::WRL::ComPtr<ID3D11DeviceContext> context;
+    device.d3d11()->GetImmediateContext(&context);
+    ASSERT_TRUE(context);
+    Microsoft::WRL::ComPtr<ID3D11Multithread> multithread;
+    ASSERT_TRUE(SUCCEEDED(context.As(&multithread)));
+    EXPECT_TRUE(multithread->GetMultithreadProtected());
+}
+
+// The texture the hook's memory path builds has to be one the preprocessor can
+// convert. A Direct3D 9 game against Unigine Heaven showed it was not:
+// CreateVideoProcessorInputView refused it with E_INVALIDARG on every frame,
+// and the stream carried no picture while capture reported 50 fps.
+TEST(HookCapture, TheMemoryFrameTextureConverts) {
+    if (running_under_ci()) GTEST_SKIP() << "needs a GPU";
+
+    const GraphicsDevice device = create_d3d11_device();
+    ASSERT_NE(device.d3d11(), nullptr) << "no D3D11 device on this machine";
+
+    constexpr uint32_t kWidth = 1280;
+    constexpr uint32_t kHeight = 720;
+
+    D3D11_TEXTURE2D_DESC desc{};
+    desc.Width = kWidth;
+    desc.Height = kHeight;
+    desc.MipLevels = 1;
+    desc.ArraySize = 1;
+    desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+    desc.SampleDesc.Count = 1;
+    desc.Usage = D3D11_USAGE_DEFAULT;
+    desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
+
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> texture;
+    ASSERT_TRUE(SUCCEEDED(device.d3d11()->CreateTexture2D(&desc, nullptr, &texture)));
+
+    VideoPreprocessor preprocessor;
+    ASSERT_TRUE(preprocessor.initialize(device, kWidth, kHeight));
+
+    const ConvertResult result = preprocessor.convert(texture.Get());
+    EXPECT_NE(result.texture, nullptr) << "the preprocessor refused the frame texture";
+    preprocessor.shutdown();
 }
 
 #endif // _WIN32

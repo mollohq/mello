@@ -1,4 +1,6 @@
 #include "video_pipeline.hpp"
+
+#include <future>
 #include "encoder_factory.hpp"
 #include "decoder_factory.hpp"
 #include "../util/log.hpp"
@@ -13,6 +15,11 @@
 #endif
 
 namespace mello::video {
+
+// How long `stop_host` waits for the encode thread. It is the same bound the
+// capture backends use: long enough that a healthy thread always makes it, and
+// short enough that a stuck one never holds a user interface.
+static constexpr std::chrono::seconds kEncodeJoinDeadline{5};
 
 // iOS has no hosting/capture in v1 (and the macOS impl lives in the excluded
 // capture_screencapturekit.mm), so provide the nullptr stub here too.
@@ -221,7 +228,14 @@ bool VideoPipeline::start_host(const CaptureSourceDesc& source,
     output_fps_.store(0, std::memory_order_relaxed);
     next_emit_deadline_us_ = 0;
 
-    encode_thread_ = std::thread(&VideoPipeline::encode_thread_func, this);
+    {
+        std::promise<void> exited;
+        encode_exited_ = exited.get_future();
+        encode_thread_ = std::thread([this, exited = std::move(exited)]() mutable {
+            encode_thread_func();
+            exited.set_value();
+        });
+    }
 
     auto self = this;
     if (!capture_->start(config.fps, [self](ID3D11Texture2D* tex, uint64_t ts) {
@@ -309,10 +323,39 @@ void VideoPipeline::stop_host() {
         }
     }
 
-    // Wake and join the encode thread before shutting down encoder/preprocessor
+    // Wake and join the encode thread before shutting down encoder/preprocessor.
+    //
+    // The join is bounded. This thread calls into the display driver and the
+    // hardware encoder, and either can block for as long as it likes: on
+    // 2026-09-16 a stop sat in this join for 25 minutes while the encode thread
+    // waited inside D3D11. When the deadline passes, the thread is left running
+    // and everything it touches is left allocated. A leak is the cheap outcome;
+    // destroying an encoder under a live thread is a crash.
     MELLO_LOG_INFO(TAG, "stop_host: encode thread join");
     eq_cv_.notify_all();
-    if (encode_thread_.joinable()) encode_thread_.join();
+    bool encode_thread_stopped = true;
+    if (encode_thread_.joinable()) {
+        if (encode_exited_.valid() &&
+            encode_exited_.wait_for(kEncodeJoinDeadline) == std::future_status::ready) {
+            encode_thread_.join();
+        } else {
+            encode_thread_stopped = false;
+            encode_thread_detached_.store(true, std::memory_order_relaxed);
+            encode_thread_.detach();
+            MELLO_LOG_ERROR(TAG,
+                "stop_host: the encode thread did not stop within %lld ms. It is left running "
+                "and its encoder, preprocessor and frames are leaked on purpose.",
+                static_cast<long long>(
+                    std::chrono::duration_cast<std::chrono::milliseconds>(kEncodeJoinDeadline)
+                        .count()));
+        }
+    }
+
+    if (!encode_thread_stopped) {
+        // Nothing below may run: the thread that is still going owns all of it.
+        MELLO_LOG_INFO(TAG, "stop_host: done (encoder and preprocessor abandoned)");
+        return;
+    }
 
     MELLO_LOG_INFO(TAG, "stop_host: encoder shutdown (%s)", encoder_ ? encoder_->name() : "none");
     if (encoder_)   encoder_->shutdown();

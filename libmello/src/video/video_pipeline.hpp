@@ -8,6 +8,7 @@
 #include <functional>
 #include <mutex>
 #include <atomic>
+#include <future>
 #include <array>
 #include <thread>
 #include <condition_variable>
@@ -240,6 +241,13 @@ private:
     std::condition_variable eq_cv_;
     std::thread encode_thread_;
     void encode_thread_func();
+    /// Set by the encode thread as it leaves. `stop_host` waits on this with a
+    /// deadline instead of joining without one: a thread stuck inside a
+    /// graphics driver must never hold the whole teardown (2026-09-16, where a
+    /// stream-host sat in this join for 25 minutes).
+    std::future<void> encode_exited_;
+    /// True when that deadline passed and the thread was left running.
+    std::atomic<bool> encode_thread_detached_{false};
 
     // Idle keepalive (Windows encode thread). DXGI and WGC deliver a frame only
     // when pixels change, so a paused game or an idle desktop sends no video at

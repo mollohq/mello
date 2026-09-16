@@ -130,6 +130,7 @@ public:
 
     // HOST SIDE
     bool start_host(const CaptureSourceDesc& source, const PipelineConfig& config, PacketCallback on_packet);
+    // Every wait inside is bounded. See "Teardown never waits without a bound".
     void stop_host();
     void request_keyframe();
     void set_bitrate(uint32_t kbps);
@@ -1308,3 +1309,23 @@ Normal operation is silent. Only log when something is wrong.
 ```
 [video/staging] WARN: Map() stall 4.2ms — possible GPU pipeline pressure (frame seq=7823)
 ```
+
+
+## Teardown never waits without a bound
+
+`stop_host` calls into a capture backend, a graphics driver and a hardware
+encoder. Each of them can block for as long as it likes, and each has:
+
+| Step | Bound | What happens when it passes |
+|---|---|---|
+| Capture stop | 5 s | The capture thread is detached and the backend is leaked, never destroyed |
+| Encode thread join | 5 s | The thread is left running, and its encoder, preprocessor and frames are leaked |
+
+A leak is the cheap outcome. Destroying an encoder or a texture under a thread
+that is still inside the driver is a crash, and holding the teardown is a frozen
+client: on 2026-09-15 a stuck capture stop took the command loop with it, and
+voice, the END STREAM button and hangup all died with it. On 2026-09-16 a
+stop sat in the encode-thread join for 25 minutes.
+
+Both leaks are counted and reported in host stats, so a machine that hits them
+is visible rather than merely slow.

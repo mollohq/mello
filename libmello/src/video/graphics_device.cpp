@@ -3,6 +3,7 @@
 
 #ifdef _WIN32
 #include <d3d11.h>
+#include <d3d11_4.h>  // ID3D11Multithread
 #include <dxgi1_2.h>
 #include <wrl/client.h>
 #include <cassert>
@@ -85,6 +86,21 @@ GraphicsDevice create_d3d11_device() {
     if (FAILED(hr)) {
         MELLO_LOG_ERROR(TAG, "D3D11CreateDevice failed: hr=0x%08X", hr);
         return {GraphicsBackend::D3D11, nullptr};
+    }
+
+    // The immediate context is shared: capture threads copy frames into it and
+    // the encode thread converts them. A D3D11 immediate context is not thread
+    // safe on its own, and without this the video processor refuses input views
+    // with E_INVALIDARG while the other thread is inside a copy. Measured
+    // against Unigine Heaven in Direct3D 9 on 2026-09-16, where capture ran at
+    // 50 fps and every frame failed to convert.
+    ComPtr<ID3D11DeviceContext> immediate;
+    device->GetImmediateContext(&immediate);
+    ComPtr<ID3D11Multithread> multithread;
+    if (immediate && SUCCEEDED(immediate.As(&multithread)) && multithread) {
+        multithread->SetMultithreadProtected(TRUE);
+    } else {
+        MELLO_LOG_WARN(TAG, "no ID3D11Multithread on this device; the context is unprotected");
     }
 
     GraphicsDevice result{GraphicsBackend::D3D11, nullptr, {}};

@@ -152,6 +152,14 @@ heartbeat stops.
    elevated. Any one of these refuses the hook, and the ladder falls back to
    screen capture.
 
+**The shared D3D11 context is thread protected.** Capture threads copy frames
+into the immediate context and the encode thread converts them. A D3D11
+immediate context is not thread safe by itself, and without
+`ID3D11Multithread::SetMultithreadProtected` the video processor refuses input
+views with `E_INVALIDARG` while another thread is inside a copy. Measured on
+2026-09-16 against a Direct3D 9 game: capture ran at 50 fps and every frame
+failed to convert. `create_d3d11_device` turns it on for every backend.
+
 **Direct3D 9 travels through memory.** A D3D9 surface cannot be opened on the
 client's D3D11 device, so that path does what plan 3.2 asks for first: on each
 present the hook reads the back buffer back with `GetRenderTargetData` into a
@@ -159,7 +167,10 @@ system-memory surface, and copies the pixels into a second shared block
 (`Local\mello_hook_frames_<pid>`, two slots). The client uploads them into a
 texture and the pipeline sees the same thing as from any other backend. The
 hook sets `MELLO_HOOK_FLAG_CPU_COPY` and the `cpu_frame_bytes` and `cpu_pitch`
-fields; those are how the client knows which transport to use. `Reset` and
+fields; those are how the client knows which transport to use. The back buffer
+goes through a single-sample render target first (`StretchRect`), because a
+multisampled surface cannot be read back at all, and a game's back buffer often
+is one. `Reset` and
 `ResetEx` are detoured as well: a reset changes the back buffer, so the
 read-back surfaces are dropped and the next present rebuilds them.
 

@@ -65,6 +65,12 @@ DWORD WINAPI hook_thread(LPVOID) {
         return 0;
     }
 
+    // A game uses one API, so the other one failing to install is normal and
+    // must not be left in `last_error`: the client reads that field to decide
+    // whether the hook can deliver at all.
+    state.set_error(MELLO_HOOK_OK);
+    log_line("hooked %s%s%s", dxgi ? "DXGI" : "", dxgi && d3d9 ? " and " : "", d3d9 ? "D3D9" : "");
+
     // From here the present path does the work. This thread only watches, for
     // as long as the game runs.
     //

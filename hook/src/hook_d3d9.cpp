@@ -37,6 +37,11 @@ std::atomic<bool> g_in_capture{false};
 // Everything below belongs to the game's present thread.
 struct Resources {
     IDirect3DDevice9*  device      = nullptr;   // not owned; compared only
+    // The back buffer is copied here first. A game's back buffer can be
+    // multisampled, and a multisampled surface cannot be read back at all;
+    // StretchRect resolves it on the way. Measured against Unigine Heaven in
+    // Direct3D 9 on 2026-09-16, where every direct read-back failed.
+    IDirect3DSurface9* resolve     = nullptr;   // default pool, single sample
     IDirect3DSurface9* readback    = nullptr;   // system memory, one per slot
     IDirect3DSurface9* readback2   = nullptr;
     HANDLE             mapping     = nullptr;   // the frame block
@@ -53,6 +58,10 @@ struct Resources {
 Resources g_res;
 
 void release_resources() {
+    if (g_res.resolve) {
+        g_res.resolve->Release();
+        g_res.resolve = nullptr;
+    }
     if (g_res.readback) {
         g_res.readback->Release();
         g_res.readback = nullptr;
@@ -99,6 +108,17 @@ bool build_resources(IDirect3DDevice9* device, const D3DSURFACE_DESC& desc) {
     if (dxgi_format == 0) {
         log_line("back buffer format %u is not one the client can show", desc.Format);
         HookState::instance().set_error(MELLO_HOOK_ERR_FORMAT);
+        return false;
+    }
+
+    // A single-sample render target to copy the back buffer into. It also
+    // resolves a multisampled back buffer, which cannot be read back directly.
+    if (FAILED(device->CreateRenderTarget(desc.Width, desc.Height, desc.Format,
+                                          D3DMULTISAMPLE_NONE, 0, FALSE, &g_res.resolve,
+                                          nullptr))) {
+        log_line("resolve target %ux%u fmt=%u failed", desc.Width, desc.Height, desc.Format);
+        HookState::instance().set_error(MELLO_HOOK_ERR_SHARED_TEXTURE);
+        release_resources();
         return false;
     }
 
@@ -194,15 +214,25 @@ void capture_present(IDirect3DDevice9* device) {
     const uint32_t slot = g_res.next;
     IDirect3DSurface9* readback = slot == 0 ? g_res.readback : g_res.readback2;
 
-    // The read back costs a stall on the render thread. It is what plan 3.2
-    // asks for first: it works on every D3D9 device, including the plain ones
-    // that cannot share a surface at all.
-    const HRESULT hr = device->GetRenderTargetData(back, readback);
+    // Two steps, both needed. StretchRect gives a single-sample copy on the
+    // GPU, which is the only kind that can be read back, and it resolves a
+    // multisampled back buffer on the way. GetRenderTargetData then brings that
+    // copy into system memory, which costs a stall on the render thread. This
+    // is the path plan 3.2 asks for first: it works on every D3D9 device,
+    // including the plain ones that cannot share a surface at all.
+    HRESULT hr = device->StretchRect(back, nullptr, g_res.resolve, nullptr, D3DTEXF_NONE);
     back->Release();
+    if (SUCCEEDED(hr)) {
+        hr = device->GetRenderTargetData(g_res.resolve, readback);
+    }
     if (FAILED(hr)) {
         state.count_drop();
-        // A multisampled back buffer cannot be read back. Say so once: the
-        // client turns it into a ladder move, not an error for the user.
+        static bool reported = false;
+        if (!reported) {
+            reported = true;
+            log_line("D3D9 read-back failed: hr=0x%08lx (%ux%u fmt=%u)",
+                     static_cast<unsigned long>(hr), g_res.width, g_res.height, g_res.format);
+        }
         state.set_error(hr == D3DERR_INVALIDCALL ? MELLO_HOOK_ERR_MULTISAMPLED
                                                  : MELLO_HOOK_ERR_COPY);
         return;

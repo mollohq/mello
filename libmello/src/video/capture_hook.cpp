@@ -154,6 +154,10 @@ bool HookCapture::create_shared_block(uint32_t pid) {
     info_->struct_size = sizeof(MelloHookInfo);
     info_->client_pid = GetCurrentProcessId();
     info_->capture_enabled = 0;
+    // The error field describes this stream. A hook that is still loaded from
+    // an earlier stream leaves its last one behind, and reading that would
+    // refuse a hook that works.
+    info_->last_error = MELLO_HOOK_OK;
     beat();
 
     mello_hook::object_name(name, sizeof(name), MELLO_HOOK_NAME_READY, pid);
