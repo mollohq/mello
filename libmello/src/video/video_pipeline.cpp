@@ -293,7 +293,21 @@ void VideoPipeline::stop_host() {
     // capture thread then names its own step in the log: the 2026-09-15 beta
     // hang left no way to tell capture, encode and encoder shutdown apart.
     MELLO_LOG_INFO(TAG, "stop_host: capture stop (%s)", capture_ ? capture_->backend_name() : "none");
-    if (capture_)   capture_->stop();
+    if (capture_) {
+        capture_->stop();
+        if (capture_->stop_timed_out()) {
+            // A capture thread is still running inside the driver. It calls
+            // back into this pipeline, so nothing here may be freed or shut
+            // down: leak the whole pipeline and return. The alternative is a
+            // use-after-free, or the indefinite block this replaces.
+            abandoned_ = true;
+            (void)capture_.release();
+            MELLO_LOG_ERROR(TAG,
+                "stop_host: capture could not be stopped; abandoning this pipeline "
+                "(encoder, preprocessor and device stay allocated)");
+            return;
+        }
+    }
 
     // Wake and join the encode thread before shutting down encoder/preprocessor
     MELLO_LOG_INFO(TAG, "stop_host: encode thread join");

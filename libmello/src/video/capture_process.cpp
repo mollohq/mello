@@ -321,7 +321,15 @@ bool ProcessCapture::activate_locked(size_t index, const char* reason) {
     const char* old_name = active_ ? active_->backend_name() : "none";
     uint32_t old_w = active_ ? active_->width() : 0;
     uint32_t old_h = active_ ? active_->height() : 0;
-    if (active_) active_->stop();
+    if (active_) {
+        active_->stop();
+        if (active_->stop_timed_out()) {
+            // Abandoned, not stopped: leak it rather than destroy it under a
+            // thread that still runs. The ladder continues on the next method.
+            MELLO_LOG_ERROR(TAG, "ladder: %s abandoned during a swap; it is leaked", old_name);
+            (void)active_.release();
+        }
+    }
 
     step_frames_.store(0, std::memory_order_relaxed);
     next->set_present_delay_histogram(delay_hist_);
@@ -410,6 +418,10 @@ bool ProcessCapture::initialize(const GraphicsDevice& device, const CaptureSourc
     for (size_t i = 0; i < ladder_.size(); ++i) {
         auto backend = make_step(ladder_[i], hwnd);
         if (backend) {
+            // The pipeline attaches the histogram before this call, when there
+            // is no backend yet. Hand it to the one we just built, or process
+            // capture reports no delay at all.
+            backend->set_present_delay_histogram(delay_hist_);
             active_ = std::move(backend);
             step_index_ = i;
             note_history_locked(std::string(ladder_step_name(ladder_[i])) + ":initial");
@@ -463,7 +475,15 @@ void ProcessCapture::stop() {
     if (monitor_thread_.joinable()) monitor_thread_.join();
 
     std::lock_guard<std::mutex> lock(swap_mutex_);
-    if (active_) active_->stop();
+    if (!active_) return;
+    active_->stop();
+    if (active_->stop_timed_out()) {
+        // Its thread is still running and may touch it. Leak it, and tell the
+        // owner that this whole capture must not be destroyed.
+        stop_timed_out_ = true;
+        (void)active_.release();
+        MELLO_LOG_ERROR(TAG, "ladder: capture backend for pid=%u abandoned; it is leaked", pid_);
+    }
 }
 
 uint32_t ProcessCapture::width() const {

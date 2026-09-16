@@ -87,6 +87,15 @@ public:
     /// host telemetry. Empty for backends that never change method.
     virtual std::string method_history() const { return {}; }
 
+    /// True when `stop()` gave up waiting for its own thread and detached it.
+    ///
+    /// The thread may still touch this object, so the owner must never destroy
+    /// it: leak it instead. `IDXGIOutputDuplication::AcquireNextFrame` can block
+    /// inside the display driver for as long as another application holds the
+    /// output in exclusive fullscreen, whatever timeout it was given. That is
+    /// what froze a host on 2026-09-15 and what a 2026-09-16 dump confirmed.
+    virtual bool stop_timed_out() const { return false; }
+
     /// Where to record present-to-capture delay. Backends that can measure it
     /// (DXGI, WGC) record every delivered frame. The histogram outlives the
     /// capture source.

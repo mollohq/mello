@@ -643,6 +643,10 @@ MELLO_API void mello_stream_stop_host(MelloStreamHost* host);
 /** Get the actual capture resolution after host pipeline has started. */
 MELLO_API void mello_stream_get_host_resolution(MelloStreamHost* host, uint32_t* width, uint32_t* height);
 
+/** Capture pipelines abandoned this session because a capture thread would not
+ *  stop (stuck in the display driver). Non-zero means leaked GPU resources. */
+MELLO_API uint32_t mello_stream_abandoned_pipelines(void);
+
 MELLO_API void mello_stream_request_keyframe(MelloStreamHost* host);
 
 /** Hot-reconfigure encoder bitrate without restarting the session. */

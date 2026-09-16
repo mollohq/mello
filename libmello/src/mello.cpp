@@ -112,6 +112,10 @@ struct MelloStreamHost {
     uint32_t capture_pid;
 };
 
+/// Pipelines abandoned because a capture thread would not stop. Never
+/// decreases; a non-zero value means this session leaked a capture pipeline.
+static std::atomic<uint32_t> g_abandoned_pipelines{0};
+
 /// Detach the capture audio callback, then destroy the pipeline.
 ///
 /// Order is load-bearing: the callback holds a raw pointer to the pipeline and
@@ -1182,11 +1186,23 @@ void mello_stream_stop_host(MelloStreamHost* host) {
         stream_audio_teardown(host);
         MELLO_LOG_INFO("stream", "stop_host: video pipeline stop");
         host->video->stop_host();
+        if (host->video->abandoned()) {
+            // A capture thread is stuck in the display driver and still uses
+            // the pipeline. Leak it rather than free memory it may touch.
+            (void)host->video.release();
+            g_abandoned_pipelines.fetch_add(1, std::memory_order_relaxed);
+            MELLO_LOG_ERROR("stream", "stop_host: pipeline abandoned (total %u this session)",
+                            g_abandoned_pipelines.load(std::memory_order_relaxed));
+        }
         MELLO_LOG_INFO("stream", "stop_host: release host");
         delete host;
         MELLO_LOG_INFO("stream", "stop_host: done");
     } catch (...) {}
     stream_timer_resolution_release();
+}
+
+uint32_t mello_stream_abandoned_pipelines(void) {
+    return g_abandoned_pipelines.load(std::memory_order_relaxed);
 }
 
 void mello_stream_get_host_resolution(MelloStreamHost* host, uint32_t* width, uint32_t* height) {

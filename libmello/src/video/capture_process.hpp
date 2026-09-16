@@ -49,6 +49,7 @@ public:
     bool get_cursor(CursorData& out) override;
     bool consume_swap_event() override;
     bool failed() const override { return exhausted_.load(std::memory_order_relaxed); }
+    bool stop_timed_out() const override { return stop_timed_out_.load(std::memory_order_relaxed); }
     std::string method_history() const override;
     void set_present_delay_histogram(PresentDelayHistogram* hist) override;
 
@@ -91,6 +92,7 @@ private:
     uint64_t                         step_started_us_ = 0;
     std::atomic<uint64_t>            step_frames_{0};
     std::atomic<bool>                exhausted_{false};
+    std::atomic<bool>                stop_timed_out_{false};
     std::string                      history_;
 
     // Deferred start: window was minimized at init time; we store the hwnd

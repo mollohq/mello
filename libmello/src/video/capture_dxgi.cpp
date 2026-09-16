@@ -92,13 +92,32 @@ bool DxgiCapture::start(uint32_t target_fps, FrameCallback callback) {
     target_fps_ = target_fps;
     callback_ = std::move(callback);
     running_ = true;
+    exited_ = std::promise<void>();
+    exited_future_ = exited_.get_future();
     thread_ = std::thread(&DxgiCapture::capture_thread, this);
     return true;
 }
 
 void DxgiCapture::stop() {
     running_ = false;
-    if (thread_.joinable()) thread_.join();
+    if (!thread_.joinable()) return;
+
+    // Wait with a deadline. AcquireNextFrame can sit in the display driver
+    // holding a sync object for as long as an exclusive-fullscreen application
+    // owns the output, and it ignores its own timeout there. Joining without a
+    // deadline froze the whole client on 2026-09-15.
+    if (exited_future_.valid() &&
+        exited_future_.wait_for(kStopDeadline) == std::future_status::ready) {
+        thread_.join();
+        return;
+    }
+
+    detached_ = true;
+    thread_.detach();
+    MELLO_LOG_ERROR(TAG,
+        "Capture thread for monitor %u did not stop within %lld ms (stuck in the display "
+        "driver). Abandoning it; this capture object must not be destroyed.",
+        monitor_index_, static_cast<long long>(kStopDeadline.count()));
 }
 
 bool DxgiCapture::get_cursor(CursorData& out) {
@@ -114,6 +133,16 @@ static constexpr int kMaxRebuildAttempts = 40;
 
 void DxgiCapture::capture_thread() {
     using clock = std::chrono::steady_clock;
+    // Signals stop() that the thread is really gone, whatever path it leaves by.
+    struct ExitSignal {
+        std::promise<void>& p;
+        ~ExitSignal() {
+            try {
+                p.set_value();
+            } catch (...) {
+            }
+        }
+    } exit_signal{exited_};
 
     int  rebuild_failures = 0;
 

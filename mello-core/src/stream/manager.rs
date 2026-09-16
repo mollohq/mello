@@ -99,6 +99,9 @@ pub(crate) struct HostStatsFields {
     pub capture_failed: bool,
     /// Capture method changes and reasons.
     pub capture_history: String,
+    /// Capture pipelines abandoned this session because a capture thread would
+    /// not stop. Non-zero means leaked GPU resources on this host.
+    pub abandoned_pipelines: u32,
 }
 
 /// Build the host `stream_client_stats` payload.
@@ -140,6 +143,7 @@ pub(crate) fn host_stats_payload(f: HostStatsFields) -> serde_json::Value {
         "idle_rep_hz": round1(f.idle_repeat_hz),
         "cap_failed": f.capture_failed,
         "cap_hist": f.capture_history,
+        "cap_abandoned": f.abandoned_pipelines,
     })
 }
 
@@ -803,6 +807,7 @@ impl StreamManager {
             idle_repeat_hz,
             capture_failed: stats.capture_failed != 0,
             capture_history: cstr_field(&stats.capture_history),
+            abandoned_pipelines: unsafe { mello_sys::mello_stream_abandoned_pipelines() },
         });
         self.sink.send_stats(&payload).await;
     }
@@ -1256,6 +1261,7 @@ mod tests {
             idle_repeat_hz: 9999.9,
             capture_failed: true,
             capture_history: "W".repeat(95),
+            abandoned_pipelines: u32::MAX,
         });
         // Matches the envelope the connection actually sends.
         let envelope = serde_json::json!({

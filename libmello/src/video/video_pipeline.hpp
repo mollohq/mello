@@ -180,6 +180,10 @@ public:
     // Info
     const GraphicsDevice& device() const { return device_; }
     bool is_host_running()   const { return host_running_.load(); }
+    /// True when `stop_host` had to abandon a capture thread stuck in the
+    /// display driver. This pipeline owns objects that thread may still touch,
+    /// so the caller must leak it instead of destroying it.
+    bool abandoned() const { return abandoned_.load(std::memory_order_relaxed); }
     bool is_viewer_running() const { return viewer_running_.load(); }
     bool encoder_available() const;
 
@@ -205,6 +209,7 @@ private:
     PipelineConfig  config_{};
 
     std::atomic<bool> host_running_{false};
+    std::atomic<bool> abandoned_{false};
     std::atomic<bool> viewer_running_{false};
 
     mutable std::mutex cursor_mutex_;
