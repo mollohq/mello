@@ -236,6 +236,38 @@ TEST(HookCapture, CapturesADirect3D9Game) {
     EXPECT_FALSE(capture.failed());
 }
 
+// The injection helper has to exit cleanly, every time. It used to crash with
+// an access violation after reporting success: the hook DLL started its thread
+// in DllMain and pinned itself from that thread, and Windows dropped the DLL
+// when the helper removed its window hook, sometimes before the thread's first
+// instruction. The pin moved into DllMain. A crashing helper reads as a failed
+// injection to libmello, so the ladder would drop a hook that was already in.
+TEST(HookCapture, TheInjectionHelperExitsCleanly) {
+    if (running_under_ci()) GTEST_SKIP() << "needs a desktop session";
+    const std::string directory = hook_directory();
+    if (directory.empty()) GTEST_SKIP() << "set MELLO_HOOK_DIR to the hook build folder";
+
+    FakeGame game;
+    ASSERT_TRUE(game.start(directory, 30)) << "the test program did not start";
+
+    const GraphicsDevice device = create_d3d11_device();
+    ASSERT_NE(device.d3d11(), nullptr) << "no D3D11 device on this machine";
+
+    CaptureSourceDesc desc{};
+    desc.mode = CaptureMode::Process;
+    desc.pid = game.pid();
+    desc.allow_hook = true;
+
+    // Twice: the second run meets a hook that is already loaded, which is the
+    // path where the helper's exit code decides whether the stream gets it.
+    for (int attempt = 0; attempt < 2; ++attempt) {
+        HookCapture capture;
+        EXPECT_TRUE(capture.initialize(device, desc))
+            << "attempt " << attempt << " did not get the hook";
+        capture.stop();
+    }
+}
+
 // The hook must never go into a process the caller did not allow, whatever the
 // process is.
 TEST(HookCapture, RefusesAProcessTheCallerDidNotAllow) {

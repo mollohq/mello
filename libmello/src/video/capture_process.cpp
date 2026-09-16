@@ -749,6 +749,50 @@ void ProcessCapture::monitor_thread() {
     }
 }
 
+// --- Choosing what to capture ---
+
+bool window_is_capturable(uint32_t client_width, uint32_t client_height,
+                          const std::string& window_class) {
+    // Direct3D 9 leaves this behind when a game takes exclusive fullscreen. It
+    // is a real window with a real title, so it appears in any window picker,
+    // and it never carries a single frame of the game.
+    std::string lowered;
+    lowered.reserve(window_class.size());
+    for (char c : window_class) lowered.push_back(static_cast<char>(std::tolower(c)));
+    if (lowered.rfind("d3dproxywindow", 0) == 0) return false;
+
+    return client_width >= kMinEncodeWidth && client_height >= kMinEncodeHeight;
+}
+
+CaptureSourceDesc resolve_capture_target(const CaptureSourceDesc& desc) {
+    if (desc.mode != CaptureMode::Window || !desc.hwnd) return desc;
+
+    HWND hwnd = static_cast<HWND>(desc.hwnd);
+    RECT client{};
+    if (!GetClientRect(hwnd, &client)) return desc;
+    const uint32_t width = static_cast<uint32_t>(client.right - client.left);
+    const uint32_t height = static_cast<uint32_t>(client.bottom - client.top);
+
+    char class_name[128]{};
+    GetClassNameA(hwnd, class_name, sizeof(class_name));
+
+    if (window_is_capturable(width, height, class_name)) return desc;
+
+    DWORD pid = 0;
+    GetWindowThreadProcessId(hwnd, &pid);
+    if (pid == 0) return desc;
+
+    MELLO_LOG_WARN(TAG,
+        "Window(hwnd=%p) is %ux%u, class \"%s\": it cannot carry a stream. Capturing "
+        "process %lu instead, which runs the whole capture ladder.",
+        hwnd, width, height, class_name, pid);
+
+    CaptureSourceDesc process = desc;
+    process.mode = CaptureMode::Process;
+    process.pid = static_cast<uint32_t>(pid);
+    return process;
+}
+
 // --- Factory ---
 
 std::unique_ptr<CaptureSource> create_capture_source(const CaptureSourceDesc& desc) {

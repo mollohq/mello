@@ -33,8 +33,10 @@ static constexpr const char* TAG = "video/pipeline";
 // minimum is 145x49; AMF and QSV are comparable. Below this the encoder rejects
 // initialization outright, so catching it here turns a misleading
 // "no hardware encoder" into a statement of what is actually wrong.
-static constexpr uint32_t kMinEncodeWidth  = 145;
-static constexpr uint32_t kMinEncodeHeight = 49;
+// The encoder minimums live with the capture sources, because choosing what to
+// capture needs them too.
+using mello::video::kMinEncodeWidth;
+using mello::video::kMinEncodeHeight;
 
 // Ring-buffer helpers for decoded frames ─────────────────────────────────────
 
@@ -154,10 +156,16 @@ bool VideoPipeline::start_host(const CaptureSourceDesc& source,
     config_    = config;
     packet_cb_ = std::move(on_packet);
 
-    // 1. Capture
-    capture_ = create_capture_source(source);
+    // 1. Capture. The user picks what to stream; this picks how. A window that
+    // cannot carry a stream on its own becomes its process here.
+#ifdef _WIN32
+    const CaptureSourceDesc resolved = resolve_capture_target(source);
+#else
+    const CaptureSourceDesc resolved = source;
+#endif
+    capture_ = create_capture_source(resolved);
     if (capture_) capture_->set_present_delay_histogram(&present_delay_hist_);
-    if (!capture_ || !capture_->initialize(device_, source)) {
+    if (!capture_ || !capture_->initialize(device_, resolved)) {
         MELLO_LOG_ERROR(TAG, "Failed to initialize capture source");
         return false;
     }

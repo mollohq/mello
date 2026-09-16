@@ -525,6 +525,25 @@ TEST(CaptureLadder, TheHookIsNotJudgedOnFrameCount) {
 
 #include "video/hook_policy.hpp"
 
+// Choosing what to capture from what the user picked. A window picker lists
+// every window a game has, including ones that can never carry a stream.
+TEST(CaptureTarget, AProxyWindowCannotCarryAStream) {
+    // Direct3D 9 leaves this behind when a game takes exclusive fullscreen.
+    // Measured on 2026-09-16: picking Unigine Heaven in the window list gave a
+    // 160x28 D3DProxyWindow and the stream refused to start.
+    EXPECT_FALSE(window_is_capturable(160, 28, "D3DProxyWindow"));
+    EXPECT_FALSE(window_is_capturable(1920, 1080, "D3DProxyWindow"))
+        << "a proxy window is never the game, whatever size it claims";
+    EXPECT_FALSE(window_is_capturable(1920, 1080, "d3dproxywindow"));
+}
+
+TEST(CaptureTarget, AWindowBelowTheEncoderMinimumCannotCarryAStream) {
+    EXPECT_FALSE(window_is_capturable(kMinEncodeWidth - 1, 720, "UnigineWindowClass"));
+    EXPECT_FALSE(window_is_capturable(1280, kMinEncodeHeight - 1, "UnigineWindowClass"));
+    EXPECT_TRUE(window_is_capturable(kMinEncodeWidth, kMinEncodeHeight, "UnigineWindowClass"));
+    EXPECT_TRUE(window_is_capturable(1280, 720, "UnigineWindowClass"));
+}
+
 // The run-time hook checks. Bob's rule is that the hook must not get anyone
 // banned, so each of these is a refusal, and a refusal only costs a fallback to
 // screen capture.

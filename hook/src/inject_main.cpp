@@ -152,11 +152,13 @@ int wmain(int argc, wchar_t** argv) {
         if (result == WAIT_OBJECT_0) break;
     }
 
+    // Removing the window hook makes Windows drop its reference to the DLL,
+    // both here and in the game. The DLL pinned itself in DllMain, so it stays.
     UnhookWindowsHookEx(hook);
     CloseHandle(ready);
-    // The hook DLL pins itself inside the game, so this only drops the copy
-    // loaded here in the helper.
-    FreeLibrary(module);
+    // The DLL is deliberately not freed. It pinned itself in DllMain, so the
+    // reference stays anyway, and this helper exits in a moment. Unloading a
+    // DLL that runs a thread is how the helper used to crash.
 
     if (result != WAIT_OBJECT_0) {
         log_line("the hook did not report ready within %lu ms", timeout_ms);

@@ -105,6 +105,30 @@ public:
     virtual void set_present_delay_histogram(PresentDelayHistogram* hist) { (void)hist; }
 };
 
+/// Smallest frame the hardware encoders accept. NVENC H.264 is 145x49, and AMF
+/// and QSV are comparable. A capture source below this cannot be encoded at all.
+static constexpr uint32_t kMinEncodeWidth  = 145;
+static constexpr uint32_t kMinEncodeHeight = 49;
+
+#ifdef _WIN32
+/// True when a window can carry a stream on its own.
+///
+/// A window that is too small to encode cannot, and neither can a proxy window:
+/// a Direct3D 9 game in exclusive fullscreen leaves a tiny `D3DProxyWindow`
+/// behind, and that is what a window picker lists. Measured on 2026-09-16:
+/// picking Unigine Heaven in the window list gave a 160x28 proxy and the stream
+/// refused to start.
+bool window_is_capturable(uint32_t client_width, uint32_t client_height,
+                          const std::string& window_class);
+
+/// Returns the source to capture for what the user picked.
+///
+/// The user picks a window; the client picks the method. A window that cannot
+/// carry a stream becomes its process, which runs the whole capture ladder and
+/// can see a fullscreen game. Every other choice is returned unchanged.
+CaptureSourceDesc resolve_capture_target(const CaptureSourceDesc& desc);
+#endif
+
 std::unique_ptr<CaptureSource> create_capture_source(const CaptureSourceDesc& desc);
 
 } // namespace mello::video

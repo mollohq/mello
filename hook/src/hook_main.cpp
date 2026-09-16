@@ -25,19 +25,38 @@ namespace {
 
 HMODULE g_module = nullptr;
 
-// Keeps the DLL loaded for the life of the process. Detours cannot be taken out
-// safely while a game thread may be inside one, so the code must stay.
+// Keeps the DLL loaded for the life of the process.
+//
+// This runs in DllMain, before the thread starts, and it has to. Windows calls
+// FreeLibrary on this DLL as soon as the injection helper removes its window
+// hook, and the helper does that the moment the hook reports ready. A thread
+// that has not pinned the module by then runs on code that is no longer mapped:
+// a 32-bit injector crashed exactly that way on 2026-09-16, with the fault
+// address inside an unloaded mello-hook32.dll.
+//
+// Pinning only adds a reference to a module that is already loaded. It starts
+// no initializer and loads nothing, so it is safe under the loader lock, unlike
+// LoadLibrary.
+BOOL  g_pinned = FALSE;
+DWORD g_pin_error = 0;
+
 void pin_module() {
     HMODULE pinned = nullptr;
-    GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_PIN | GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
-                       reinterpret_cast<LPCWSTR>(&pin_module), &pinned);
+    g_pinned =
+        GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_PIN | GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
+                           reinterpret_cast<LPCWSTR>(&pin_module), &pinned);
+    g_pin_error = g_pinned ? 0 : GetLastError();
 }
 
 DWORD WINAPI hook_thread(LPVOID) {
     using namespace mello_hook;
 
     log_open("hook");
-    pin_module();
+    if (!g_pinned) {
+        // The DLL can be unloaded under this thread from here on. Say so: a
+        // crash in the game would otherwise have no explanation.
+        log_line("WARNING: the module is not pinned (error %lu)", g_pin_error);
+    }
 
     HookState& state = HookState::instance();
     if (!state.open()) {
@@ -119,6 +138,8 @@ BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID) {
     if (reason == DLL_PROCESS_ATTACH) {
         g_module = module;
         DisableThreadLibraryCalls(module);
+        // Before the thread, never after it. See pin_module.
+        pin_module();
         const HANDLE thread = CreateThread(nullptr, 0, hook_thread, nullptr, 0, nullptr);
         if (thread) CloseHandle(thread);
     }

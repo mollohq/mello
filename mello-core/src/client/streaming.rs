@@ -1129,17 +1129,19 @@ impl super::Client {
 
         // Step 2: sync FFI calls (raw pointer ctx must NOT live across await)
         // Scope ctx so it's dropped before any SFU .await calls.
-        let (host, video_rx, audio_rx, teardown) = {
+        //
+        // Nothing in here leaves the function. The backend has already told the
+        // crew about this stream, so every failure has to reach the retraction
+        // below: a stream that never started must not stay advertised, or a
+        // viewer presses "watch" and gets a black rectangle (2026-09-16).
+        let started: Result<_, String> = 'start: {
             let ctx = self.voice.mello_ctx();
 
             if !unsafe { crate::stream::encoder_available(ctx) } {
                 let msg = "Streaming requires a hardware encoder \
                            (NVIDIA, AMD, or Intel). None was found on this machine.";
                 log::error!("{}", msg);
-                let _ = self.event_tx.send(Event::StreamError {
-                    message: msg.to_string(),
-                });
-                return;
+                break 'start Err(msg.to_string());
             }
 
             let mello_config = mello_sys::MelloStreamConfig {
@@ -1186,12 +1188,7 @@ impl super::Client {
             let (host, video_rx, audio_rx, teardown) =
                 match unsafe { crate::stream::host::start_host(ctx, &source, &mello_config) } {
                     Ok(v) => v,
-                    Err(e) => {
-                        let _ = self.event_tx.send(Event::StreamError {
-                            message: e.to_string(),
-                        });
-                        return;
-                    }
+                    Err(e) => break 'start Err(e.to_string()),
                 };
 
             let (mut actual_w, mut actual_h) = (config.width, config.height);
@@ -1208,8 +1205,18 @@ impl super::Client {
 
             // `teardown` owns the native host from here. Every return below
             // drops it, which stops the host on a teardown thread.
-            (StreamHostHandle(host), video_rx, audio_rx, teardown)
+            Ok((StreamHostHandle(host), video_rx, audio_rx, teardown))
         }; // ctx and raw pointers drop here — safe to .await below
+
+        let (host, video_rx, audio_rx, teardown) = match started {
+            Ok(v) => v,
+            Err(message) => {
+                // Take the stream back before anybody tries to watch it.
+                self.retract_advertised_stream(crew_id).await;
+                let _ = self.event_tx.send(Event::StreamError { message });
+                return;
+            }
+        };
 
         // Update backend with actual encode resolution (may differ from preset)
         if let Err(e) = self
@@ -1314,6 +1321,25 @@ impl super::Client {
                 });
                 self.stream_host_sink = None;
             }
+        }
+    }
+
+    /// Tells the backend to drop a stream session that never carried a frame.
+    ///
+    /// `start_stream` announces the stream to the crew before the host starts,
+    /// which is what makes the button feel instant. When the host then fails,
+    /// that announcement is wrong: viewers see a live stream and get black.
+    /// This is the other half of that trade.
+    pub(super) async fn retract_advertised_stream(&mut self, crew_id: &str) {
+        log::info!(
+            "Stream host did not start; retracting the session for crew {}",
+            crew_id
+        );
+        let payload = serde_json::json!({ "crew_id": crew_id });
+        if let Err(e) = self.nakama.rpc("stop_stream", &payload).await {
+            // Nothing else to try here. The backend drops a session when the
+            // host stops sending, so this is a delay, not a permanent lie.
+            log::warn!("stop_stream RPC failed while retracting: {}", e);
         }
     }
 

@@ -116,9 +116,13 @@ pub fn source_for(
         },
         BenchBackend::WgcWindow => {
             let (hwnd, _) = window.ok_or("wgc-window needs --source-title-substring")?;
+            // Window mode can end up as process capture: libmello turns a
+            // window that cannot carry a stream into its process. The hook
+            // permission travels with it, exactly as it does in the client.
             mello_sys::MelloCaptureSource {
                 mode: mello_sys::MelloCaptureMode_MELLO_CAPTURE_WINDOW,
                 hwnd,
+                allow_hook,
                 ..blank
             }
         }

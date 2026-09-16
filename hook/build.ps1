@@ -38,6 +38,20 @@ Write-Host "[mello-hook] $Bits-bit set in $build/$Config"
 # a folder with only the 64-bit set gave it no hook at all.
 $stage = Join-Path $root "bin/$Config"
 New-Item -ItemType Directory -Force -Path $stage | Out-Null
+$locked = @()
 Get-ChildItem -Path (Join-Path $build $Config) -Include "mello-*.dll", "mello-*.exe" -File -Recurse |
-    ForEach-Object { Copy-Item $_.FullName -Destination $stage -Force }
+    ForEach-Object {
+        try { Copy-Item $_.FullName -Destination $stage -Force -ErrorAction Stop }
+        catch { $locked += $_.Name }
+    }
+if ($locked.Count -gt 0) {
+    # A game that has the hook loaded holds the DLL open, and the hook pins
+    # itself for the life of that process on purpose. Staging a new build over
+    # it is impossible until the game exits, and a partly staged folder is
+    # worse than none: the helpers and the DLL must match.
+    Write-Host "[mello-hook] NOT staged. A running game still holds:" -ForegroundColor Red
+    $locked | ForEach-Object { Write-Host "    $_" -ForegroundColor Red }
+    Write-Host "[mello-hook] Close the game and build again. The build itself is in $build/$Config."
+    throw "staging blocked by a running game"
+}
 Write-Host "[mello-hook] staged into $stage"

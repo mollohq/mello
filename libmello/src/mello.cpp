@@ -1140,7 +1140,6 @@ MelloStreamHost* mello_stream_start_host(
             case MELLO_CAPTURE_PROCESS:
                 desc.mode = mello::video::CaptureMode::Process;
                 desc.pid = source->pid;
-                desc.allow_hook = source->allow_hook;
                 break;
             case MELLO_CAPTURE_MONITOR_WGC:
                 desc.mode = mello::video::CaptureMode::Monitor;
@@ -1148,6 +1147,10 @@ MelloStreamHost* mello_stream_start_host(
                 desc.prefer_wgc = true;
                 break;
         }
+        // The hook permission belongs to the request, not to the mode a caller
+        // happened to pick. A window that cannot carry a stream becomes its
+        // process further down, and the permission has to travel with it.
+        desc.allow_hook = source->allow_hook;
 
         mello::video::PipelineConfig pc{};
         pc.width        = config->width;
