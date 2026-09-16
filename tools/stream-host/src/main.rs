@@ -692,6 +692,7 @@ fn run_sfu_mode(
                 audio_rx,
                 resources,
                 sink_for_events,
+                None,
             )
         })
         .map_err(|e| format!("create_stream_session failed: {}", e))?;

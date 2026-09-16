@@ -226,6 +226,20 @@ bool should_report_failure(bool target_in_exclusive_fullscreen) {
     return target_in_exclusive_fullscreen;
 }
 
+CaptureState capture_state_for(bool exhausted, bool deferred_start, bool waiting_for_the_game,
+                               bool captures_while_minimized, bool target_can_present) {
+    if (exhausted) return CaptureState::Failed;
+    // No capture has started at all: the game was minimized when the stream
+    // began, and nothing can capture a minimized window from outside.
+    if (deferred_start) return CaptureState::WaitingMinimized;
+    if (waiting_for_the_game) return CaptureState::WaitingForGame;
+    // The hook takes the frame inside the game, so a minimized game keeps
+    // streaming and the window's state says nothing about what viewers see.
+    if (captures_while_minimized) return CaptureState::Capturing;
+    if (!target_can_present) return CaptureState::WaitingMinimized;
+    return CaptureState::Capturing;
+}
+
 bool expects_continuous_frames(LadderStep step) {
     return step == LadderStep::Dxgi;
 }
@@ -798,17 +812,20 @@ const char* capture_state_name(CaptureState state) {
 }
 
 CaptureState ProcessCapture::state() const {
-    if (exhausted_.load(std::memory_order_relaxed)) return CaptureState::Failed;
-
-    // The deferred start: the game was minimized when the stream began and
-    // capture has not started at all yet.
+    bool deferred = false;
+    bool waiting_for_the_game = false;
+    bool captures_while_minimized = false;
     {
         std::lock_guard<std::mutex> lock(swap_mutex_);
-        if (deferred_hwnd_ != nullptr) return CaptureState::WaitingMinimized;
-        if (active_ && active_->waiting_for_the_game()) return CaptureState::WaitingForGame;
+        deferred = deferred_hwnd_ != nullptr;
+        if (active_) {
+            waiting_for_the_game = active_->waiting_for_the_game();
+            captures_while_minimized = active_->captures_while_minimized();
+        }
     }
-    if (!target_can_present(pid_)) return CaptureState::WaitingMinimized;
-    return CaptureState::Capturing;
+    return ladder::capture_state_for(exhausted_.load(std::memory_order_relaxed), deferred,
+                                     waiting_for_the_game, captures_while_minimized,
+                                     target_can_present(pid_));
 }
 
 // --- Choosing what to capture ---

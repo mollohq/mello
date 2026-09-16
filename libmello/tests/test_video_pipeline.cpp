@@ -546,6 +546,28 @@ TEST(CaptureLadder, TheHookIsNotJudgedOnFrameCount) {
     EXPECT_FALSE(ladder::expects_continuous_frames(LadderStep::Hook));
 }
 
+// What a still stream tells the person watching. A wrong answer here shows a
+// pause card over a live game, or leaves a frozen picture unexplained.
+TEST(CaptureState, TheHookKeepsStreamingAMinimizedGame) {
+    using ladder::capture_state_for;
+    // Minimized, on the hook: the frame is taken inside the game, so the
+    // stream is live and there is nothing to tell the viewer.
+    EXPECT_EQ(capture_state_for(false, false, false, true, false), CaptureState::Capturing);
+    // Minimized, on screen capture: the viewer is looking at a still picture.
+    EXPECT_EQ(capture_state_for(false, false, false, false, false),
+              CaptureState::WaitingMinimized);
+}
+
+TEST(CaptureState, WaitingAndFailedAreDifferentSentences) {
+    using ladder::capture_state_for;
+    EXPECT_EQ(capture_state_for(false, true, false, true, true), CaptureState::WaitingMinimized)
+        << "the stream began with the game minimized, so nothing started";
+    EXPECT_EQ(capture_state_for(false, false, true, true, true), CaptureState::WaitingForGame);
+    EXPECT_EQ(capture_state_for(true, false, false, true, true), CaptureState::Failed)
+        << "a proven failure outranks every wait";
+    EXPECT_EQ(capture_state_for(false, false, false, false, true), CaptureState::Capturing);
+}
+
 #include "video/hook_policy.hpp"
 
 // Choosing what to capture from what the user picked. A window picker lists

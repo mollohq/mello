@@ -47,6 +47,13 @@ static constexpr uint64_t kFirstFrameDeadlineUs = 2'000'000;
 static constexpr uint64_t kProbationUs = 3'000'000;
 static constexpr uint64_t kProbationFrames = 3;
 
+/// What to tell the user about a capture, from what the ladder knows.
+///
+/// Pure, because it is the sentence a viewer reads: a wrong answer here shows a
+/// pause card over a live game, or leaves a still picture unexplained.
+CaptureState capture_state_for(bool exhausted, bool deferred_start, bool waiting_for_the_game,
+                               bool captures_while_minimized, bool target_can_present);
+
 /// True when this method delivers a frame for every change on screen.
 ///
 /// Desktop duplication does: a game that presents keeps it busy, so silence

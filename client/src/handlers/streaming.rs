@@ -115,6 +115,9 @@ pub fn handle(ctx: &AppContext, event: Event) {
             log::info!("Stream ended: crew={}", crew_id);
             ctx.app.set_is_hosting(false);
             ctx.app.set_is_watching(false);
+            ctx.app.set_stream_paused(false);
+            ctx.app.set_paused_streamer_name("".into());
+            ctx.app.set_stream_host_paused(false);
             ctx.stream_frame_timer.set_watching(false);
             ctx.app.set_streamer_name("".into());
             ctx.app.set_stream_label("".into());
@@ -162,6 +165,8 @@ pub fn handle(ctx: &AppContext, event: Event) {
         } => {
             log::info!("Watching stream from {} ({}x{})", host_id, width, height);
             ctx.app.set_is_watching(true);
+            ctx.app.set_stream_paused(false);
+            ctx.app.set_paused_streamer_name("".into());
             ctx.stream_frame_timer.set_watching(true);
             ctx.app.set_streamer_name(host_id.into());
             #[cfg(target_os = "windows")]
@@ -200,6 +205,8 @@ pub fn handle(ctx: &AppContext, event: Event) {
         Event::StreamWatchingStopped => {
             log::info!("Stopped watching stream");
             ctx.app.set_is_watching(false);
+            ctx.app.set_stream_paused(false);
+            ctx.app.set_paused_streamer_name("".into());
             ctx.stream_frame_timer.set_watching(false);
             ctx.app.set_streamer_name("".into());
             ctx.app.set_stream_label("".into());
@@ -228,6 +235,26 @@ pub fn handle(ctx: &AppContext, event: Event) {
             sync_active_stream_cards(ctx);
         }
         Event::StreamFrame { .. } => {}
+        Event::StreamPaused { host_id, paused } => {
+            log::info!("Stream pause state: host={} paused={}", host_id, paused);
+            ctx.app.set_stream_paused(paused);
+            ctx.app
+                .set_paused_streamer_name(if paused { host_id.into() } else { "".into() });
+            #[cfg(target_os = "windows")]
+            {
+                // The DComp video layer composites above Slint content: hide
+                // it so the Slint pause card shows, restore on resume.
+                if let Some(p) = ctx.dcomp_presenter.borrow().as_ref() {
+                    // set_content_visible takes &self; borrow scope ends here.
+                    p.set_content_visible(!paused);
+                }
+            }
+            sync_active_stream_cards(ctx);
+        }
+        Event::StreamHostPaused { paused } => {
+            log::info!("Host stream pause state: paused={}", paused);
+            ctx.app.set_stream_host_paused(paused);
+        }
         Event::StreamDebugStats {
             mode,
             transport_packets,

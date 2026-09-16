@@ -111,6 +111,14 @@ public:
     /// What to tell the user about this capture. See CaptureState.
     virtual CaptureState state() const { return CaptureState::Capturing; }
 
+    /// True when this backend keeps delivering frames from a minimized game.
+    ///
+    /// The hook does: it takes the frame inside the game, before the window
+    /// manager has any say, so a minimized game still streams. Every screen
+    /// capture method sees nothing of a minimized window, and its viewers are
+    /// looking at a still picture that needs explaining.
+    virtual bool captures_while_minimized() const { return false; }
+
     /// True when this backend works but the game has drawn nothing yet.
     ///
     /// Only the hook can tell: it counts the game's presents from inside the

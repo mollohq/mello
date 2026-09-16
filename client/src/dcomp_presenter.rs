@@ -104,6 +104,22 @@ impl DCompPresenter {
         }
     }
 
+    /// Show or hide the video content without destroying the presenter.
+    /// Pause UX calls this: hiding reveals the Slint pause card underneath
+    /// (the DComp layer composites above Slint content, so a Slint overlay
+    /// alone would hide behind the frozen frame). Presenting resumes into
+    /// the same swap chain — no re-init, no geometry replay.
+    pub fn set_content_visible(&self, visible: bool) {
+        unsafe {
+            if visible {
+                let _ = self.dcomp_visual.SetContent(&self.swap_chain);
+            } else {
+                let _ = self.dcomp_visual.SetContent(None);
+            }
+            let _ = self.dcomp_device.Commit();
+        }
+    }
+
     /// Update the DComp visual position, scale, and clip to fit the card area.
     /// All coordinates are in physical pixels.
     /// `viewport_y` / `viewport_h` define the scroll container's visible bounds

@@ -24,10 +24,11 @@ fn catalogue() -> Option<&'static crate::catalogue::Head> {
 }
 use super::stream_ffi::{
     feed_viewer_audio_packet, flush_ice_buffer, log_viewer_native_stats, on_viewer_native_frame,
-    poll_p2p_viewer_access_units, poll_sfu_viewer_access_units, stream_audio_track_callback,
-    stream_ice_callback, stream_state_callback, tick_viewer_congestion_p2p,
-    tick_viewer_congestion_sfu, FrameCallbackData, StreamAudioCallbackData, StreamHostHandle,
-    StreamHostPeer, StreamIceCallbackData, StreamPeerDisconnect, ViewerState,
+    poll_p2p_viewer_access_units, poll_sfu_viewer_access_units, register_pause_callback,
+    stream_audio_track_callback, stream_ice_callback, stream_state_callback,
+    tick_viewer_congestion_p2p, tick_viewer_congestion_sfu, unregister_pause_callback,
+    FrameCallbackData, PauseSlot, StreamAudioCallbackData, StreamHostHandle, StreamHostPeer,
+    StreamIceCallbackData, StreamPeerDisconnect, ViewerState,
 };
 use super::FRAME_STATE_PRESENTED;
 
@@ -493,6 +494,30 @@ impl super::Client {
                 // Same reasoning as the SFU path above.
                 let _ = poll_p2p_viewer_access_units(vs, viewer, peer);
             }
+        }
+
+        // Pause UX: host tab-out arrives on the reliable control channel into
+        // the pause slot. Report transitions to the UI; while paused the
+        // freeze clock is frozen too — a paused picture is deliberate, not a
+        // stall, and must not accrue freeze time or trip the resume with a
+        // phantom freeze.
+        let paused_now = vs.pause_slot.is_paused();
+        if paused_now != vs.last_reported_paused {
+            vs.last_reported_paused = paused_now;
+            log::info!(
+                "Stream pause state changed: host={} paused={}",
+                vs.host_id,
+                paused_now
+            );
+            let _ = self.event_tx.send(Event::StreamPaused {
+                host_id: vs.host_id.clone(),
+                paused: paused_now,
+            });
+        }
+        if paused_now {
+            vs.last_new_frame_at = Instant::now();
+            vs.in_freeze = false;
+            vs.freeze_accounted_ms = 0;
         }
 
         // Present at most one frame per stream tick so visual cadence tracks
@@ -1298,6 +1323,7 @@ impl super::Client {
             audio_rx,
             teardown,
             Arc::clone(&sink),
+            Some(self.event_tx.clone()),
         ) {
             Ok(session) => {
                 let _ = self.event_tx.send(Event::StreamStarted {
@@ -1567,6 +1593,22 @@ impl super::Client {
         log::info!("SFU viewer connected to session {}", session_id);
         let conn = Arc::new(conn);
 
+        // Pause state arrives on the reliable control channel (host tab-out).
+        // Registered late — messages before this are lost, but the host
+        // re-broadcasts on viewer joins and periodically while paused.
+        let pause_slot = Arc::new(PauseSlot::new());
+        let mut pause_cb_data: *mut std::ffi::c_void = std::ptr::null_mut();
+        let mut pause_cb_peer: *mut mello_sys::MelloPeerConnection = std::ptr::null_mut();
+        match conn.peer_nonnull() {
+            Ok(peer) => {
+                pause_cb_peer = peer.as_ptr();
+                pause_cb_data = unsafe { register_pause_callback(peer, &pause_slot) };
+            }
+            Err(e) => {
+                log::warn!("SFU viewer: pause callback registration failed: {}", e);
+            }
+        }
+
         // Prefer actual encode resolution from watch_stream response (set by host
         // via update_stream_resolution RPC), fall back to crew-state UI values.
         let (w, h) = if resp.width > 0 && resp.height > 0 {
@@ -1671,6 +1713,10 @@ impl super::Client {
             _frame_cb_data: frame_cb_data,
             _ice_cb_data: std::ptr::null_mut(),
             _audio_cb_data: std::ptr::null_mut(),
+            pause_slot,
+            last_reported_paused: false,
+            _pause_cb_data: pause_cb_data,
+            pause_cb_peer,
             frames_presented: 0,
             stream_tick_count: 0,
             present_attempts: 0,
@@ -1766,11 +1812,22 @@ impl super::Client {
                 audio_cb_data as *mut std::ffi::c_void,
             );
         }
+        // Pause state arrives on the reliable control channel (host tab-out).
+        // Same late-registration caveat as the SFU path: the host
+        // re-broadcasts on joins and periodically while paused.
+        let pause_slot = Arc::new(PauseSlot::new());
+        let mut pause_cb_data: *mut std::ffi::c_void = std::ptr::null_mut();
+        if let Some(peer_nn) = NonNull::new(peer) {
+            pause_cb_data = unsafe { register_pause_callback(peer_nn, &pause_slot) };
+        }
 
         let sdp_ptr = unsafe { mello_sys::mello_peer_create_offer(peer) };
         if sdp_ptr.is_null() {
             log::error!("Failed to create stream offer");
             unsafe {
+                if let Some(peer_nn) = NonNull::new(peer) {
+                    unregister_pause_callback(peer_nn, pause_cb_data);
+                }
                 mello_sys::mello_peer_destroy(peer);
                 drop(Box::from_raw(ice_cb_data));
                 drop(Box::from_raw(audio_cb_data));
@@ -1827,6 +1884,10 @@ impl super::Client {
             _frame_cb_data: frame_cb_data,
             _ice_cb_data: ice_cb_data,
             _audio_cb_data: audio_cb_data,
+            pause_slot,
+            last_reported_paused: false,
+            _pause_cb_data: pause_cb_data,
+            pause_cb_peer: peer,
             frames_presented: 0,
             stream_tick_count: 0,
             present_attempts: 0,

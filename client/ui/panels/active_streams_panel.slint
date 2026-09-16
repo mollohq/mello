@@ -48,6 +48,9 @@ component StreamCard inherits Rectangle {
     in property <length> media-height: 186px;
     in property <float> viewport-abs-y: 0;
     in property <float> viewport-height: 0;
+    /// Viewer pause UX: the watched host tabbed out. Shows a pause card
+    /// over the (detached) video area instead of a frozen frame.
+    in property <bool> stream-paused: false;
 
 
     callback watch-stream-clicked(string, string, int, int);
@@ -58,6 +61,7 @@ component StreamCard inherits Rectangle {
     property <bool> show-live-frame: selected-card && is-watching && card.can-watch;
     property <bool> show-hosting-state: selected-card && is-hosting && !card.can-watch;
     property <bool> show-watch-cta: card.can-watch && !show-live-frame;
+    property <bool> show-paused: show-live-frame && stream-paused;
 
     background: transparent;
     clip: true;
@@ -92,11 +96,56 @@ component StreamCard inherits Rectangle {
                 height: parent.height;
                 background: transparent;
 
-                Image {
+                if !show-paused: Image {
                     source: root.stream-frame;
                     width: parent.width;
                     height: parent.height;
                     image-fit: contain;
+                }
+
+                // Pause UX: opaque cover over the stale frame (and over the
+                // detached DComp layer on Windows) with the host's name.
+                if show-paused: Rectangle {
+                    width: parent.width;
+                    height: parent.height;
+                    background: Theme.bg-app;
+
+                    VerticalLayout {
+                        alignment: center;
+                        spacing: 10px;
+
+                        Rectangle {
+                            width: parent.width;
+                            height: 26px;
+                            background: transparent;
+
+                            Image {
+                                source: @image-url("../icons/pause.svg");
+                                width: 26px;
+                                height: 26px;
+                                colorize: Theme.text-secondary;
+                                x: (parent.width - self.width) / 2;
+                            }
+                        }
+
+                        Text {
+                            text: root.card.streamer-name + " paused the stream";
+                            font-family: Theme.font-label;
+                            font-size: 13px;
+                            font-weight: 700;
+                            letter-spacing: 1px;
+                            color: Theme.text-primary;
+                            horizontal-alignment: center;
+                        }
+
+                        Text {
+                            text: "Video resumes when they're back in game";
+                            font-family: Theme.font-body;
+                            font-size: 12px;
+                            color: Theme.text-secondary;
+                            horizontal-alignment: center;
+                        }
+                    }
                 }
 
                 geo-tracker := Rectangle {
@@ -416,6 +465,8 @@ export component ActiveStreamsPanel inherits Rectangle {
     in property <float> stream-ui-render-fps: 0.0;
     in property <float> viewport-abs-y: 0;
     in property <float> viewport-height: 0;
+    /// Viewer pause UX, forwarded to the selected card.
+    in property <bool> stream-paused: false;
 
     callback watch-stream-clicked(string, string, int, int);
     callback stop-stream-clicked();
@@ -434,6 +485,7 @@ export component ActiveStreamsPanel inherits Rectangle {
         active-streamer-id: root.active-streamer-id;
         stream-frame: root.stream-frame;
         stream-ui-render-fps: root.stream-ui-render-fps;
+        stream-paused: root.stream-paused;
         viewport-abs-y: root.viewport-abs-y;
         viewport-height: root.viewport-height;
         watch-stream-clicked(host-id, session-id, w, h) => {
@@ -474,6 +526,7 @@ export component ActiveStreamsPanel inherits Rectangle {
                     active-streamer-id: root.active-streamer-id;
                     stream-frame: root.stream-frame;
                     stream-ui-render-fps: root.stream-ui-render-fps;
+                    stream-paused: root.stream-paused;
                     watch-stream-clicked(host-id, session-id, w, h) => {
                         root.watch-stream-clicked(host-id, session-id, w, h);
                     }

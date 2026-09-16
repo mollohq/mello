@@ -210,7 +210,7 @@ pub fn run(
     writeln!(
         file,
         "t_s,label,backend,capture_fps,encode_fps,capture_idle_ms,convert_ms,encode_ms_mean,\
-eq_drops,idle_repeats,kbps,delay_frames,delay_p50_ms,delay_p95_ms,delay_p99_ms,capture_failed,history"
+eq_drops,idle_repeats,kbps,delay_frames,delay_p50_ms,delay_p95_ms,delay_p99_ms,capture_failed,capture_state,history"
     )
     .map_err(|e| e.to_string())?;
 
@@ -238,7 +238,7 @@ eq_drops,idle_repeats,kbps,delay_frames,delay_p50_ms,delay_p95_ms,delay_p99_ms,c
                 .unwrap_or_default()
         };
         let row = format!(
-            "{:.0},{},{},{:.1},{},{},{:.2},{:.2},{},{},{:.0},{},{},{},{},{},{}",
+            "{:.0},{},{},{:.1},{},{},{:.2},{:.2},{},{},{:.0},{},{},{},{},{},{},{}",
             start.elapsed().as_secs_f64(),
             label.replace(',', " "),
             cstr(&s.capture_backend),
@@ -255,6 +255,7 @@ eq_drops,idle_repeats,kbps,delay_frames,delay_p50_ms,delay_p95_ms,delay_p99_ms,c
             fmt_p(95.0),
             fmt_p(99.0),
             s.capture_failed,
+            s.capture_state,
             cstr(&s.capture_history).replace(',', " "),
         );
         writeln!(file, "{row}").map_err(|e| e.to_string())?;

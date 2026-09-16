@@ -327,6 +327,18 @@ pub enum Event {
         height: u32,
     },
     StreamWatchingStopped,
+    /// A watched stream paused or resumed: the host tabbed out of (or back
+    /// into) the captured game. Viewers show a pause card instead of a
+    /// frozen frame while `paused` holds.
+    StreamPaused {
+        host_id: String,
+        paused: bool,
+    },
+    /// The locally hosted stream paused or resumed. Drives the host-side
+    /// "viewers see paused" hint; viewers learn via the control channel.
+    StreamHostPaused {
+        paused: bool,
+    },
     StreamFrame {
         width: u32,
         height: u32,

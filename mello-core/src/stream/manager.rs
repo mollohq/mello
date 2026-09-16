@@ -11,8 +11,10 @@ use super::error::StreamError;
 use super::input::{InputPassthrough, InputPassthroughStub};
 use super::ladder::FramerateLadder;
 use super::pacer::{calc_stream_pacing_target_kbps, PacingTelemetry};
+use super::pause::{pause_message, PauseController};
 use super::sink::{PacketSink, SinkVideoFeedback, SinkVideoFeedbackKind};
 use super::sink_sfu::SFU_CONTROL_VIEWER_ID;
+use crate::events::Event;
 
 const PACING_TELEMETRY_INTERVAL_SECS: u64 = 2;
 const MANAGER_TELEMETRY_INTERVAL_SECS: u64 = 1;
@@ -102,6 +104,9 @@ pub(crate) struct HostStatsFields {
     /// Capture pipelines abandoned this session because a capture thread would
     /// not stop. Non-zero means leaked GPU resources on this host.
     pub abandoned_pipelines: u32,
+    /// Viewer pause UX state. Remote-visible so a paused-but-silent host is
+    /// diagnosable without its client log.
+    pub paused: bool,
 }
 
 /// Build the host `stream_client_stats` payload.
@@ -144,6 +149,7 @@ pub(crate) fn host_stats_payload(f: HostStatsFields) -> serde_json::Value {
         "cap_failed": f.capture_failed,
         "cap_hist": f.capture_history,
         "cap_abandoned": f.abandoned_pipelines,
+        "paused": f.paused,
     })
 }
 
@@ -177,6 +183,24 @@ pub struct AudioPacket {
 pub const MANAGER_EXIT_DEADLINE: Duration = Duration::from_secs(2);
 
 /// Active streaming session returned by `start_stream`.
+/// What the capture is doing, as reported by `MelloStreamStats::capture_state`.
+/// The numbers are the C API's; see `mello.h`.
+pub const CAPTURE_STATE_CAPTURING: u32 = 0;
+pub const CAPTURE_STATE_WAITING_MINIMIZED: u32 = 1;
+pub const CAPTURE_STATE_WAITING_FOR_GAME: u32 = 2;
+pub const CAPTURE_STATE_FAILED: u32 = 3;
+
+/// One sentence for each state, for the log and for the person streaming.
+pub fn capture_state_reason(state: u32) -> &'static str {
+    match state {
+        CAPTURE_STATE_CAPTURING => "capturing",
+        CAPTURE_STATE_WAITING_MINIMIZED => "the game is minimized",
+        CAPTURE_STATE_WAITING_FOR_GAME => "the game has drawn nothing yet",
+        CAPTURE_STATE_FAILED => "no capture method can see the game",
+        _ => "unknown",
+    }
+}
+
 pub struct StreamSession {
     pub session_id: String,
     pub mode: String,
@@ -325,9 +349,17 @@ pub struct StreamManager {
     /// Shared with the StreamSession; set on a capture failure transition.
     capture_failed_flag: Arc<std::sync::atomic::AtomicBool>,
     capture_failed_last: bool,
+    /// What the capture was doing at the last check. See `MelloStreamStats`.
+    capture_state_last: u32,
     /// Owns the encoder's framerate target. Congestion control feeds it the
     /// bitrate; it decides the cadence that bitrate can actually sustain.
     framerate_ladder: FramerateLadder,
+    /// Viewer pause UX: debounced capture-target availability. Transitions
+    /// broadcast a control message and (for the host UI) an event.
+    pause: PauseController,
+    /// Host-UI event sink for pause transitions. `None` in tools/tests that
+    /// have no UI loop; the control-channel broadcast still runs.
+    pause_event_tx: Option<std::sync::mpsc::Sender<Event>>,
     last_manager_sample: ManagerTelemetrySnapshot,
     last_manager_sample_at: Instant,
     drop_delta_until_keyframe: bool,
@@ -410,7 +442,10 @@ impl StreamManager {
             last_idle_repeat_frames: 0,
             capture_failed_flag: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             capture_failed_last: false,
+            capture_state_last: CAPTURE_STATE_CAPTURING,
             framerate_ladder: ladder,
+            pause: PauseController::new(),
+            pause_event_tx: None,
             last_manager_sample: ManagerTelemetrySnapshot::default(),
             last_manager_sample_at: Instant::now(),
             drop_delta_until_keyframe: false,
@@ -659,6 +694,17 @@ impl StreamManager {
         &self.config
     }
 
+    /// Attach the host-UI event sink for pause transitions. Builder-style so
+    /// existing `StreamManager::new` callers (tools, tests) keep working.
+    pub fn set_pause_event_tx(&mut self, tx: Option<std::sync::mpsc::Sender<Event>>) {
+        self.pause_event_tx = tx;
+    }
+
+    /// Whether viewers are currently told the stream is paused.
+    pub fn is_paused(&self) -> bool {
+        self.pause.is_paused()
+    }
+
     /// Let the ladder judge whether the current bitrate can sustain the current
     /// framerate, and retarget the encoder when it cannot.
     ///
@@ -673,12 +719,25 @@ impl StreamManager {
 
     /// Report a transition into "every capture method failed" once. The
     /// native ladder keeps trying on evidence; a recovery re-arms the report.
+    ///
+    /// It also records what the capture is doing, which is what the pause card
+    /// is built on: see `capture_state_reason`.
     fn check_capture_state(&mut self) {
         if self.host.is_null() {
             return;
         }
         let mut stats: mello_sys::MelloStreamStats = unsafe { std::mem::zeroed() };
         unsafe { mello_sys::mello_stream_get_stats(self.host, &mut stats) };
+
+        if stats.capture_state != self.capture_state_last {
+            log::info!(
+                "Stream capture: {} -> {}",
+                capture_state_reason(self.capture_state_last),
+                capture_state_reason(stats.capture_state)
+            );
+            self.capture_state_last = stats.capture_state;
+        }
+
         let failed = stats.capture_failed != 0;
         if failed == self.capture_failed_last {
             return;
@@ -728,6 +787,40 @@ impl StreamManager {
                 "headroom recovered, restoring"
             }
         );
+    }
+
+    /// Viewer pause UX, polled on the 1 Hz manager tick.
+    ///
+    /// Feeds capture-target availability into the debounced controller and, on
+    /// transitions, tells viewers over the reliable control channel and the
+    /// host UI over the event channel. Entering is debounced (~3 s of
+    /// minimized/tabbed-out target); leaving is immediate. While paused, game
+    /// audio stops at `handle_audio` — viewers hear silence, not stale audio.
+    async fn tick_stream_pause(&mut self) {
+        // `check_capture_state` runs first on the same tick and leaves the
+        // state here. The capture layer knows more than "is the window there":
+        // a game that is minimized, one that has drawn nothing yet, and one no
+        // method can see are three different sentences for the viewer.
+        let state = self.capture_state_last;
+        let Some(paused) = self.pause.observe(state == CAPTURE_STATE_CAPTURING) else {
+            return;
+        };
+        if paused {
+            log::info!(
+                "Stream paused: {} — viewers see the pause card, game audio muted",
+                capture_state_reason(state)
+            );
+        } else {
+            log::info!("Stream resumed: the game is drawing again — requesting IDR");
+            self.request_host_keyframe_with_cooldown(
+                "pause_resume",
+                Duration::from_millis(VIEWER_KEYFRAME_REQUEST_COOLDOWN_MS),
+            );
+        }
+        self.sink.send_control(&pause_message(paused)).await;
+        if let Some(tx) = &self.pause_event_tx {
+            let _ = tx.send(Event::StreamHostPaused { paused });
+        }
     }
 
     /// Push host diagnostics to the relay so a remote user's stream can be
@@ -808,8 +901,15 @@ impl StreamManager {
             capture_failed: stats.capture_failed != 0,
             capture_history: cstr_field(&stats.capture_history),
             abandoned_pipelines: unsafe { mello_sys::mello_stream_abandoned_pipelines() },
+            paused: self.pause.is_paused(),
         });
         self.sink.send_stats(&payload).await;
+        // While paused, re-broadcast the state on the slow stats cadence: a
+        // viewer whose control channel opened after the transition (or who
+        // joined without a join event reaching us) syncs within ~10 s.
+        if self.pause.is_paused() {
+            self.sink.send_control(&pause_message(true)).await;
+        }
     }
 
     /// Main run loop — called from a dedicated tokio task after stream start.
@@ -852,6 +952,7 @@ impl StreamManager {
                     self.log_manager_telemetry().await;
                     self.tick_framerate_ladder();
                     self.check_capture_state();
+                    self.tick_stream_pause().await;
                 }
                 _ = stats_tick.tick() => {
                     self.report_stream_stats().await;
@@ -897,6 +998,11 @@ impl StreamManager {
             "viewer_join",
             Duration::from_millis(VIEWER_KEYFRAME_REQUEST_COOLDOWN_MS),
         );
+        // Late join into a paused stream: tell the newcomer at once, or they
+        // stare at a black frame instead of the pause card.
+        if self.pause.is_paused() {
+            self.sink.send_control(&pause_message(true)).await;
+        }
     }
 
     async fn handle_viewer_left(&mut self, viewer_id: &str) {
@@ -1153,6 +1259,12 @@ impl StreamManager {
 
     async fn handle_audio(&mut self, pkt: AudioPacket) {
         self.manager_audio_packets_in_total = self.manager_audio_packets_in_total.saturating_add(1);
+        // Paused viewers hear silence: the game is tabbed out, so its audio
+        // would be stale or the loopback of nothing. Voice is a separate path
+        // and keeps flowing.
+        if self.pause.is_paused() {
+            return;
+        }
         let _ = self.audio_seq.fetch_add(1, Ordering::Relaxed);
         match self.sink.send_audio(&pkt.data).await {
             Ok(()) => {
@@ -1262,6 +1374,7 @@ mod tests {
             capture_failed: true,
             capture_history: "W".repeat(95),
             abandoned_pipelines: u32::MAX,
+            paused: true,
         });
         // Matches the envelope the connection actually sends.
         let envelope = serde_json::json!({
@@ -1286,11 +1399,13 @@ mod tests {
 
     use super::{
         coalesce_video_packet, CoalesceOutcome, StreamManager, StreamSession, VideoPacket,
-        ViewerRembState, MAX_VIDEO_COALESCE_DRAIN, REMB_STALE_SECS,
+        ViewerRembState, CAPTURE_STATE_CAPTURING, CAPTURE_STATE_WAITING_FOR_GAME,
+        CAPTURE_STATE_WAITING_MINIMIZED, MAX_VIDEO_COALESCE_DRAIN, REMB_STALE_SECS,
         VIEWER_KEYFRAME_REQUEST_COOLDOWN_MS,
     };
     use crate::stream::config::{Codec, QualityPreset, StreamConfig};
     use crate::stream::error::StreamError;
+    use crate::stream::pause::PAUSE_ENTER_UNAVAILABLE_TICKS;
     use crate::stream::sink::{
         NativeRtpTelemetry, PacketSink, SinkVideoFeedback, SinkVideoFeedbackKind,
     };
@@ -1302,6 +1417,7 @@ mod tests {
         feedback: Mutex<Vec<SinkVideoFeedback>>,
         joins: Mutex<Vec<String>>,
         audio_packets: Mutex<Vec<Vec<u8>>>,
+        control: Mutex<Vec<Vec<u8>>>,
     }
 
     impl FakeSink {
@@ -1312,6 +1428,7 @@ mod tests {
                 feedback: Mutex::new(Vec::new()),
                 joins: Mutex::new(Vec::new()),
                 audio_packets: Mutex::new(Vec::new()),
+                control: Mutex::new(Vec::new()),
             }
         }
 
@@ -1343,6 +1460,10 @@ mod tests {
 
         async fn set_pacing_kbps(&self, target_kbps: u32) {
             self.pacing_kbps.store(target_kbps, Ordering::Relaxed);
+        }
+
+        async fn send_control(&self, data: &[u8]) {
+            self.control.lock().expect("lock").push(data.to_vec());
         }
 
         async fn native_rtp_telemetry(&self) -> Option<NativeRtpTelemetry> {
@@ -1536,6 +1657,153 @@ mod tests {
             },
         );
         assert_eq!(mgr.aggregate_remb_target_kbps(now), Some(3_000));
+        std::mem::forget(mgr);
+    }
+
+    #[test]
+    fn pause_enters_after_three_ticks_broadcasts_once_and_events() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        let config = StreamConfig::from_preset(QualityPreset::High, Codec::H264);
+        let sink = Arc::new(FakeSink::new());
+        let (_video_tx, video_rx) = mpsc::channel(4);
+        let (_audio_tx, audio_rx) = mpsc::channel(4);
+        let mut mgr = StreamManager::new(
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            sink.clone(),
+            config,
+            video_rx,
+            audio_rx,
+        );
+        // The capture layer reports what it is doing; the pause card follows
+        // it. Anything but "capturing" is a still picture for the viewer.
+        let (event_tx, event_rx) = std::sync::mpsc::channel();
+        mgr.set_pause_event_tx(Some(event_tx));
+        mgr.capture_state_last = CAPTURE_STATE_WAITING_MINIMIZED;
+        rt.block_on(mgr.tick_stream_pause());
+        rt.block_on(mgr.tick_stream_pause());
+        assert!(!mgr.is_paused(), "a quick tab-out never reaches viewers");
+        rt.block_on(mgr.tick_stream_pause());
+        assert!(mgr.is_paused());
+        // No re-broadcast while the game stays away.
+        rt.block_on(mgr.tick_stream_pause());
+        let control = sink.control.lock().expect("lock");
+        assert_eq!(control.len(), 1);
+        assert_eq!(control[0], vec![0x04, 0x03, 0x01]);
+        drop(control);
+        match event_rx.try_recv().expect("pause event") {
+            crate::events::Event::StreamHostPaused { paused } => assert!(paused),
+            other => panic!("expected StreamHostPaused, got {:?}", other),
+        }
+        assert!(event_rx.try_recv().is_err(), "no duplicate pause event");
+
+        // Drawing again resumes at once: one tick, no debounce.
+        mgr.capture_state_last = CAPTURE_STATE_CAPTURING;
+        rt.block_on(mgr.tick_stream_pause());
+        assert!(!mgr.is_paused());
+        let control = sink.control.lock().expect("lock");
+        assert_eq!(control.len(), 2);
+        assert_eq!(control[1], vec![0x04, 0x03, 0x00]);
+        drop(control);
+        match event_rx.try_recv().expect("resume event") {
+            crate::events::Event::StreamHostPaused { paused } => assert!(!paused),
+            other => panic!("expected StreamHostPaused, got {:?}", other),
+        }
+        std::mem::forget(mgr);
+    }
+
+    // A game that has drawn nothing yet is a pause for the viewer too: the
+    // picture is still, and a still picture with no explanation reads as a
+    // broken stream (2026-09-16).
+    #[test]
+    fn a_game_that_has_drawn_nothing_pauses_the_stream() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        let config = StreamConfig::from_preset(QualityPreset::High, Codec::H264);
+        let sink = Arc::new(FakeSink::new());
+        let (_video_tx, video_rx) = mpsc::channel(4);
+        let (_audio_tx, audio_rx) = mpsc::channel(4);
+        let mut mgr = StreamManager::new(
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            sink.clone(),
+            config,
+            video_rx,
+            audio_rx,
+        );
+        mgr.capture_state_last = CAPTURE_STATE_WAITING_FOR_GAME;
+        for _ in 0..PAUSE_ENTER_UNAVAILABLE_TICKS {
+            rt.block_on(mgr.tick_stream_pause());
+        }
+        assert!(mgr.is_paused());
+        std::mem::forget(mgr);
+    }
+
+    #[test]
+    fn paused_host_mutes_game_audio_but_keeps_video() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        let config = StreamConfig::from_preset(QualityPreset::High, Codec::H264);
+        let sink = Arc::new(FakeSink::new());
+        let (_video_tx, video_rx) = mpsc::channel(4);
+        let (_audio_tx, audio_rx) = mpsc::channel(4);
+        let mut mgr = StreamManager::new(
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            sink.clone(),
+            config,
+            video_rx,
+            audio_rx,
+        );
+        for _ in 0..PAUSE_ENTER_UNAVAILABLE_TICKS {
+            let _ = mgr.pause.observe(false);
+        }
+        assert!(mgr.is_paused());
+        rt.block_on(mgr.handle_audio(super::AudioPacket {
+            data: vec![1, 2, 3],
+            timestamp: 1,
+        }));
+        assert!(
+            sink.audio_packets.lock().expect("lock").is_empty(),
+            "paused game audio must not reach viewers"
+        );
+        std::mem::forget(mgr);
+    }
+
+    #[test]
+    fn viewer_join_during_pause_gets_pause_state() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        let config = StreamConfig::from_preset(QualityPreset::High, Codec::H264);
+        let sink = Arc::new(FakeSink::new());
+        let (_video_tx, video_rx) = mpsc::channel(4);
+        let (_audio_tx, audio_rx) = mpsc::channel(4);
+        let mut mgr = StreamManager::new(
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            sink.clone(),
+            config,
+            video_rx,
+            audio_rx,
+        );
+        for _ in 0..PAUSE_ENTER_UNAVAILABLE_TICKS {
+            let _ = mgr.pause.observe(false);
+        }
+        rt.block_on(mgr.handle_viewer_joined("late-viewer"));
+        let control = sink.control.lock().expect("lock");
+        assert!(
+            control.iter().any(|m| *m == vec![0x04, 0x03, 0x01]),
+            "late joiner into a paused stream must be told it is paused"
+        );
         std::mem::forget(mgr);
     }
 

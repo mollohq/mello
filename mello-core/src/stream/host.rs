@@ -277,6 +277,10 @@ pub unsafe fn start_host(
 }
 
 /// Create the manager and spawn the run loop. The caller provides the sink.
+///
+/// `pause_event_tx` carries pause transitions to the host UI (`None` in
+/// tools/tests without a UI loop). The control-channel broadcast to viewers
+/// runs regardless.
 #[allow(clippy::too_many_arguments)]
 pub fn create_stream_session(
     ctx: *mut mello_sys::MelloContext,
@@ -287,6 +291,7 @@ pub fn create_stream_session(
     audio_rx: mpsc::Receiver<AudioPacket>,
     teardown: NativeTeardownGuard,
     sink: Arc<dyn PacketSink>,
+    pause_event_tx: Option<std::sync::mpsc::Sender<crate::events::Event>>,
 ) -> Result<StreamSession, StreamError> {
     let session_id = resp.session_id();
     let mode = resp.mode.clone();
@@ -294,6 +299,7 @@ pub fn create_stream_session(
     let mut manager = StreamManager::new(ctx, host, sink, config, video_rx, audio_rx);
     let capture_failed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     manager.set_capture_failed_flag(std::sync::Arc::clone(&capture_failed));
+    manager.set_pause_event_tx(pause_event_tx);
 
     let (stop_tx, stop_rx) = tokio::sync::oneshot::channel();
     let manager_task = tokio::spawn(async move {

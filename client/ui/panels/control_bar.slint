@@ -166,6 +166,9 @@ export component ControlBar inherits Rectangle {
     in property <bool> can-stream: false;
     in property <bool> is-hosting: false;
     in property <bool> is-watching: false;
+    /// Host pause UX: our capture target is gone and viewers see the pause
+    /// card. Shown as a hint next to the LIVE button.
+    in property <bool> stream-host-paused: false;
     // 0=idle, 1=now-playing, 2=post-game, 3=moment-input, 4=confirmed
     in-out property <int> bar-state: 0;
     callback mic-toggled();
@@ -610,6 +613,18 @@ export component ControlBar inherits Rectangle {
                             go-live-clicked();
                         }
                     }
+                }
+
+                // Host pause UX: capture target gone (minimized/tabbed-out),
+                // viewers see the pause card. Tab back in to resume.
+                if is-hosting && stream-host-paused: Text {
+                    text: "VIEWERS SEE PAUSED";
+                    font-family: Theme.font-label;
+                    font-size: 9px;
+                    font-weight: Theme.weight-label;
+                    letter-spacing: Theme.track-label;
+                    color: Theme.text-secondary;
+                    vertical-alignment: center;
                 }
             }
 

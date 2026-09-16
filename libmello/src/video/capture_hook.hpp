@@ -43,6 +43,8 @@ public:
 
     bool failed() const override { return failed_.load(std::memory_order_relaxed); }
     bool waiting_for_the_game() const override;
+    // The frame is taken inside the game, so a minimized game still streams.
+    bool captures_while_minimized() const override { return true; }
     bool stop_timed_out() const override { return detached_.load(std::memory_order_relaxed); }
     void set_present_delay_histogram(PresentDelayHistogram* hist) override { delay_hist_ = hist; }
 

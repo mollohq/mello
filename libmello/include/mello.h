@@ -765,7 +765,9 @@ typedef struct MelloStreamStats {
      *      not reached it)
      *   3  failed, with proof that the game is drawing
      * Anything but 0 means the viewer is looking at a still picture and should
-     * be told why. Appended field: existing offsets unchanged. */
+     * be told why. It replaces the earlier `target_available` flag, which could
+     * only say whether the window was there. Appended field: existing offsets
+     * unchanged. */
     uint32_t capture_state;
     /* Cumulative present-to-capture delay histogram: bucket i counts frames
      * delayed [i, i+1) ms; the last bucket counts >= 31 ms. Diff two reads

@@ -60,6 +60,19 @@ pub(super) struct ViewerState {
     pub _frame_cb_data: *mut FrameCallbackData,
     pub _ice_cb_data: *mut StreamIceCallbackData,
     pub _audio_cb_data: *mut StreamAudioCallbackData,
+    /// Latest pause state from the reliable control channel (host tab-out).
+    /// Written by `stream_control_data_callback`, polled by `stream_tick`.
+    pub pause_slot: Arc<PauseSlot>,
+    /// Last pause state reported to the UI. Compared against the slot so
+    /// `Event::StreamPaused` fires on transitions only.
+    pub last_reported_paused: bool,
+    /// Opaque slot pointer handed to libmello (`Arc::into_raw`). Freed in
+    /// `Drop` via `unregister_pause_callback`.
+    pub _pause_cb_data: *mut std::ffi::c_void,
+    /// Non-owning peer the pause callback is registered on. P2P: same as
+    /// `peer`. SFU: the shared connection's peer (kept alive by our
+    /// `sfu_connection` Arc through `Drop`, so unregister is safe there).
+    pub pause_cb_peer: *mut mello_sys::MelloPeerConnection,
     pub frames_presented: u64,
     pub stream_tick_count: u64,
     pub present_attempts: u64,
@@ -150,6 +163,23 @@ impl ViewerState {
 
 impl Drop for ViewerState {
     fn drop(&mut self) {
+        // The viewer's pause callback goes first, on this thread. It touches the
+        // peer, which the bounded teardown below takes ownership of.
+        //
+        // For P2P the peer is destroyed by that teardown, which ends delivery;
+        // for SFU the shared connection outlives this viewer through its own
+        // Arc, so the peer is still valid right here.
+        unsafe {
+            if !self._pause_cb_data.is_null() {
+                if let Some(peer) = NonNull::new(self.pause_cb_peer) {
+                    unregister_pause_callback(peer, self._pause_cb_data);
+                } else {
+                    drop(Arc::from_raw(self._pause_cb_data as *const PauseSlot));
+                }
+                self._pause_cb_data = std::ptr::null_mut();
+            }
+        }
+
         // Native viewer stop joins decode threads and the peer close joins
         // network threads. Both run on the teardown thread, bounded by its
         // watchdog, never on the command loop. The callback contexts are freed
@@ -214,6 +244,72 @@ pub(super) struct StreamIceCallbackData {
 pub(super) struct StreamAudioCallbackData {
     pub viewer_slot: std::sync::Mutex<Option<*mut mello_sys::MelloStreamView>>,
     pub packets_received: std::sync::atomic::AtomicU64,
+}
+
+/// Viewer pause slot: written by the reliable-control data callback on a
+/// libdatachannel thread, polled by `stream_tick` on the client thread.
+/// Latest-wins, like the native frame slot — pause state is idempotent.
+pub(super) struct PauseSlot {
+    paused: std::sync::atomic::AtomicU8,
+}
+
+impl PauseSlot {
+    pub fn new() -> Self {
+        Self {
+            paused: std::sync::atomic::AtomicU8::new(0),
+        }
+    }
+
+    pub fn is_paused(&self) -> bool {
+        self.paused.load(std::sync::atomic::Ordering::Acquire) != 0
+    }
+}
+
+/// Reliable-control data callback. Only pause messages (`0x04/0x03`) are
+/// handled; everything else (cursor future use, stray binary pongs) is
+/// ignored fast so the hot data path never blocks here.
+pub(super) unsafe extern "C" fn stream_control_data_callback(
+    user_data: *mut std::ffi::c_void,
+    data: *const u8,
+    size: i32,
+    reliable: bool,
+) {
+    if !reliable || user_data.is_null() || data.is_null() || size <= 0 {
+        return;
+    }
+    let bytes = std::slice::from_raw_parts(data, size as usize);
+    if let Some(paused) = crate::stream::pause::parse_pause_message(bytes) {
+        let slot = &*(user_data as *const PauseSlot);
+        slot.paused
+            .store(u8::from(paused), std::sync::atomic::Ordering::Release);
+    }
+}
+
+/// Register the pause callback on a viewer peer. Returns the opaque slot
+/// pointer the caller must hand to [`unregister_pause_callback`] on teardown.
+///
+/// # Safety
+/// `peer` must be a valid `MelloPeerConnection` that outlives the registration.
+pub(super) unsafe fn register_pause_callback(
+    peer: NonNull<mello_sys::MelloPeerConnection>,
+    slot: &Arc<PauseSlot>,
+) -> *mut std::ffi::c_void {
+    let raw = Arc::into_raw(Arc::clone(slot)) as *mut std::ffi::c_void;
+    mello_sys::mello_peer_set_data_callback(peer.as_ptr(), Some(stream_control_data_callback), raw);
+    raw
+}
+
+/// Clear the callback and free the slot. Safe to call with a null `raw`
+/// (no-op). The peer must still be valid — for P2P call before
+/// `mello_peer_destroy`, for SFU while the shared connection is alive.
+pub(super) unsafe fn unregister_pause_callback(
+    peer: NonNull<mello_sys::MelloPeerConnection>,
+    raw: *mut std::ffi::c_void,
+) {
+    mello_sys::mello_peer_set_data_callback(peer.as_ptr(), None, std::ptr::null_mut());
+    if !raw.is_null() {
+        drop(Arc::from_raw(raw as *const PauseSlot));
+    }
 }
 
 /// Feed one Opus packet to the native viewer for playout.

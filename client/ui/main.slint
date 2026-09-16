@@ -308,6 +308,13 @@ export component MainWindow inherits Window {
     in property <bool> is-watching: false;
     in property <string> stream-label: "";
     in property <string> streamer-name: "";
+    /// Viewer pause UX: the watched host tabbed out of the game. The stream
+    /// card shows a pause overlay instead of a frozen frame while set.
+    in property <bool> stream-paused: false;
+    in property <string> paused-streamer-name: "";
+    /// Host pause UX: our own capture target is gone (minimized/tabbed-out)
+    /// and viewers see the pause card. Shown as a hint on the control bar.
+    in property <bool> stream-host-paused: false;
     in property <image> stream-frame;
     in property <string> active-streamer-id: "";
     in property <string> active-streamer-name: "";
@@ -880,6 +887,7 @@ export component MainWindow inherits Window {
                             active-streamer-id: root.active-streamer-id;
                             stream-frame: root.stream-frame;
                             stream-ui-render-fps: root.dbg-stream-ui-render-fps;
+                            stream-paused: root.stream-paused;
                             is-cold-start: root.feed-cold-start;
                             feed-has-more: root.feed-has-more;
                             clip-count: root.feed-clip-count;
@@ -966,6 +974,7 @@ export component MainWindow inherits Window {
                         can-stream: root.can-stream;
                         is-hosting: root.is-hosting;
                         is-watching: root.is-watching;
+                        stream-host-paused: root.stream-host-paused;
                         bar-state <=> root.bar-state;
                         go-live-clicked => {
                             // The menu names the display it would take, so
