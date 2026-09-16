@@ -58,23 +58,42 @@ Three methods, tried in order by the capture ladder:
 | **WGC-Monitor** | `Windows.Graphics.Capture`, `CreateForMonitor` | Fallback when window capture fails. |
 
 `ProcessCapture` owns the ladder. Given a PID it finds the main game window
-(`EnumWindows`, largest restored-area, non-toolwindow) and orders the methods:
-a window that covers its monitor starts on DXGI, a windowed game starts on WGC.
-That order is provisional until the DXGI vs WGC benchmark runs
-(`mello-backlog/plans/streaming-reliability.md` §2.6, `stream-host --bench-csv`).
+(`EnumWindows`, largest restored-area, non-toolwindow) and tries the methods in
+one order for every game: **WGC window, WGC monitor, DXGI desktop duplication**.
 
-**A method fails only on evidence.** No first frame within 2 s is a failure, and
-the ladder moves on. Silence after the first frame is not: a paused game or an
-idle desktop delivers nothing and is healthy. Desktop duplication on a static
-desktop delivers no frame at all. The other evidence is a backend that stopped
-for good (duplication rebuild gave up, capture item closed) and a game entering
-exclusive fullscreen (`SHQueryUserNotificationState`), which rebuilds the
-current method and restarts its deadline. While the game is minimized the
-first-frame deadline is held, because nothing can capture a minimized game.
+Measured on 2026-09-16 against Unigine Heaven (Direct3D11, borderless
+fullscreen, 3440x1440, NVIDIA):
 
-Every ladder move forces a keyframe. When every method has failed, host stats
-carry `cap_failed`, the method history rides in `cap_hist`, and the client sends
-one `StreamError`. Exclusive-fullscreen games need the game capture hook
+| Method | Delivered fps | Present-to-capture p50 / p95 / p99 |
+|---|---|---|
+| WGC window | 48 | 1 ms / 1 ms / 1 ms |
+| DXGI-DDI | 1 frame in 20 s, then nothing | n/a |
+
+Desktop duplication is last because of what the same runs showed:
+`AcquireNextFrame` blocks inside the NVIDIA display driver (`nvwgf2umx.dll`) and
+ignores its timeout. That wedged thread also leaves the shared D3D11 device
+unusable, so every later capture attempt on that device blocks. The ladder marks
+the device poisoned and stops using it.
+
+**A method fails only on evidence.** The evidence is:
+
+| Evidence | Applies to | Rule |
+|---|---|---|
+| No first frame | Every method | 2 s with no frame at all |
+| Too few frames | DXGI only | Under 3 frames in 3 s. Duplication delivers a frame for every change on screen, so silence under a game that presents means it is blind. WGC delivers a frame only when the captured content changes, so silence there is a static game. |
+| Backend stopped for good | Every method | Duplication rebuild gave up, or the capture item closed |
+| Game entered exclusive fullscreen | Every method | `SHQueryUserNotificationState`. Rebuilds the current method and restarts its deadline |
+
+While the game is minimized every deadline is held, because nothing can capture
+a minimized game.
+
+Every ladder move forces a keyframe. When every method has delivered nothing,
+the ladder goes back to the first method, waits 30 s, and tries them all again.
+The user sees an error only with proof that the game is rendering: the game is
+in exclusive fullscreen, or the capture device is stuck. Host stats then carry
+`cap_failed`, the method history rides in `cap_hist`, and the client sends one
+`StreamError`. Without that proof the stream is quiet, not broken, and the user
+is not told anything. Exclusive-fullscreen games need the game capture hook
 (plan work stream 3), which does not exist yet.
 
 **Deferred start:** If the target window is minimized at stream start (user tabbed out to launch the stream), capture waits. The monitor thread polls until the window is restored, then initializes the backend. Width/height return restored dimensions during the wait so the encoder can pre-initialize. This matches Discord's behaviour.

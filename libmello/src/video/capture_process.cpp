@@ -211,18 +211,27 @@ const char* ladder_step_name(LadderStep step) {
 
 namespace ladder {
 
-std::vector<LadderStep> initial_order(bool window_covers_monitor) {
-    if (window_covers_monitor) {
-        return {LadderStep::Dxgi, LadderStep::WgcWindow, LadderStep::WgcMonitor};
-    }
+std::vector<LadderStep> initial_order() {
     return {LadderStep::WgcWindow, LadderStep::WgcMonitor, LadderStep::Dxgi};
 }
 
-bool first_frame_overdue(uint64_t frames_since_step_start, uint64_t step_started_us,
-                         uint64_t now_us) {
-    if (frames_since_step_start > 0) return false;
+bool should_report_failure(bool target_in_exclusive_fullscreen) {
+    return target_in_exclusive_fullscreen;
+}
+
+bool expects_continuous_frames(LadderStep step) {
+    return step == LadderStep::Dxgi;
+}
+
+bool startup_failed(bool continuous, uint64_t frames_since_step_start,
+                    uint64_t step_started_us, uint64_t now_us) {
     if (now_us < step_started_us) return false;
-    return now_us - step_started_us >= kFirstFrameDeadlineUs;
+    const uint64_t elapsed = now_us - step_started_us;
+    if (frames_since_step_start == 0) {
+        return elapsed >= kFirstFrameDeadlineUs;
+    }
+    if (!continuous) return false;
+    return frames_since_step_start < kProbationFrames && elapsed >= kProbationUs;
 }
 
 }  // namespace ladder
@@ -287,7 +296,7 @@ std::unique_ptr<CaptureSource> ProcessCapture::make_step(LadderStep step, HWND h
     return nullptr;
 }
 
-void ProcessCapture::note_history_locked(const std::string& entry) {
+void ProcessCapture::note_history(const std::string& entry) {
     // Bounded: the history rides in host telemetry, which has a size cap.
     static constexpr size_t kMaxHistory = 96;
     if (!history_.empty()) history_ += ";";
@@ -308,75 +317,148 @@ std::string ProcessCapture::method_history() const {
     return history_;
 }
 
-bool ProcessCapture::activate_locked(size_t index, const char* reason) {
+bool ProcessCapture::activate(size_t index, const char* reason) {
+    std::lock_guard<std::mutex> op(ladder_op_mutex_);
     if (index >= ladder_.size()) return false;
+    if (device_poisoned_.load(std::memory_order_relaxed)) return false;
     const LadderStep step = ladder_[index];
+
+    // Take the old backend out under the short lock, then work on it without
+    // holding it: stop() can block for up to its own deadline.
+    std::unique_ptr<CaptureSource> old;
+    std::string old_name;
+    uint32_t old_w = 0, old_h = 0;
+    {
+        std::lock_guard<std::mutex> lock(swap_mutex_);
+        old = std::move(active_);
+        if (old) {
+            old_name = old->backend_name();
+            old_w = old->width();
+            old_h = old->height();
+        }
+    }
+    if (old_name.empty()) old_name = "none";
+
+    if (old) {
+        old->stop();
+        if (old->stop_timed_out()) {
+            // Abandoned, not stopped: leak it rather than destroy it under a
+            // thread that still runs. That thread also keeps the D3D11 device
+            // busy in the driver, so no further method can start on it.
+            MELLO_LOG_ERROR(TAG,
+                "ladder: %s abandoned during a swap; it is leaked and the capture device "
+                "is unusable for the rest of this stream", old_name.c_str());
+            (void)old.release();
+            device_poisoned_ = true;
+            stop_timed_out_ = true;
+            return false;
+        }
+    }
+
     HWND hwnd = find_main_window(pid_);
     auto next = make_step(step, hwnd);
     if (!next) {
         MELLO_LOG_WARN(TAG, "ladder: %s unavailable for pid=%u", ladder_step_name(step), pid_);
-        return false;
-    }
-
-    const char* old_name = active_ ? active_->backend_name() : "none";
-    uint32_t old_w = active_ ? active_->width() : 0;
-    uint32_t old_h = active_ ? active_->height() : 0;
-    if (active_) {
-        active_->stop();
-        if (active_->stop_timed_out()) {
-            // Abandoned, not stopped: leak it rather than destroy it under a
-            // thread that still runs. The ladder continues on the next method.
-            MELLO_LOG_ERROR(TAG, "ladder: %s abandoned during a swap; it is leaked", old_name);
-            (void)active_.release();
+    } else {
+        next->set_present_delay_histogram(delay_hist_);
+        if (!next->start(target_fps_, counting_callback_)) {
+            MELLO_LOG_ERROR(TAG, "ladder: %s failed to start for pid=%u",
+                            ladder_step_name(step), pid_);
+            next.reset();
         }
     }
 
-    step_frames_.store(0, std::memory_order_relaxed);
-    next->set_present_delay_histogram(delay_hist_);
-    if (!next->start(target_fps_, counting_callback_)) {
-        MELLO_LOG_ERROR(TAG, "ladder: %s failed to start for pid=%u", ladder_step_name(step), pid_);
-        if (active_) {
-            if (!active_->start(target_fps_, counting_callback_)) {
-                MELLO_LOG_ERROR(TAG, "ladder: previous backend %s did not restart", old_name);
+    if (!next) {
+        // Put the old backend back so the stream keeps whatever it had.
+        if (old) {
+            if (!old->start(target_fps_, counting_callback_)) {
+                MELLO_LOG_ERROR(TAG, "ladder: previous backend %s did not restart",
+                                old_name.c_str());
             }
+            std::lock_guard<std::mutex> lock(swap_mutex_);
+            active_ = std::move(old);
         }
         return false;
     }
 
     if (old_w != 0 && (next->width() != old_w || next->height() != old_h)) {
         // The preprocessor and encoder keep their start size. A different size
-        // may scale or crop; the first-frame rule moves on if it delivers
+        // may scale or crop; the probation rule moves on if it delivers
         // nothing.
         MELLO_LOG_WARN(TAG, "ladder: %s is %ux%u, stream started at %ux%u",
                        ladder_step_name(step), next->width(), next->height(), old_w, old_h);
     }
 
-    active_ = std::move(next);
-    step_index_ = index;
-    step_started_us_ = ladder_now_us();
+    {
+        std::lock_guard<std::mutex> lock(swap_mutex_);
+        step_frames_.store(0, std::memory_order_relaxed);
+        active_ = std::move(next);
+        step_index_ = index;
+        step_started_us_ = ladder_now_us();
+        note_history(std::string(ladder_step_name(step)) + ":" + reason);
+    }
     swap_occurred_.store(true, std::memory_order_release);
-    note_history_locked(std::string(ladder_step_name(step)) + ":" + reason);
-    MELLO_LOG_WARN(TAG, "ladder: pid=%u %s -> %s (%s)", pid_, old_name, ladder_step_name(step), reason);
+    MELLO_LOG_WARN(TAG, "ladder: pid=%u %s -> %s (%s)", pid_, old_name.c_str(),
+                   ladder_step_name(step), reason);
     return true;
 }
 
-void ProcessCapture::advance_locked(const char* reason) {
-    for (size_t i = step_index_ + 1; i < ladder_.size(); ++i) {
-        if (activate_locked(i, reason)) {
+void ProcessCapture::advance(const char* reason) {
+    size_t from = 0;
+    {
+        std::lock_guard<std::mutex> lock(swap_mutex_);
+        from = step_index_;
+    }
+    for (size_t i = from + 1; i < ladder_.size(); ++i) {
+        if (activate(i, reason)) {
+            pass_failed_.store(false, std::memory_order_relaxed);
             exhausted_.store(false, std::memory_order_relaxed);
             return;
         }
+        if (device_poisoned_.load(std::memory_order_relaxed)) break;
     }
-    if (!exhausted_.exchange(true, std::memory_order_relaxed)) {
-        note_history_locked("exhausted");
-        MELLO_LOG_ERROR(TAG,
-            "ladder: every capture method failed for pid=%u (last: %s). "
-            "The game is probably in exclusive fullscreen.",
-            pid_, active_ ? active_->backend_name() : "none");
+
+    // Every method has had its turn and none delivered.
+    const bool poisoned = device_poisoned_.load(std::memory_order_relaxed);
+    const bool exclusive = process_in_exclusive_fullscreen(pid_);
+    const bool report = poisoned || ladder::should_report_failure(exclusive);
+    const uint64_t now = ladder_now_us();
+
+    if (!pass_failed_.exchange(true, std::memory_order_relaxed)) {
+        std::lock_guard<std::mutex> lock(swap_mutex_);
+        note_history(report ? "failed" : "quiet");
+        if (report) {
+            MELLO_LOG_ERROR(TAG,
+                "ladder: every capture method failed for pid=%u (last: %s)%s",
+                pid_, active_ ? active_->backend_name() : "none",
+                poisoned
+                    ? ". The capture device is stuck in the display driver; restart the stream."
+                    : ". The game is in exclusive fullscreen, which no screen capture method can see.");
+        } else {
+            MELLO_LOG_WARN(TAG,
+                "ladder: no method delivered for pid=%u and the game is not in exclusive "
+                "fullscreen. It is probably rendering nothing. Retrying in %llu s.",
+                pid_, (unsigned long long)(ladder::kRetryPassUs / 1'000'000));
+        }
     }
-    // Keep the last method running: if the game leaves exclusive fullscreen
-    // it may start delivering, which clears the exhausted state.
-    step_started_us_ = ladder_now_us();
+    if (report) {
+        exhausted_.store(true, std::memory_order_relaxed);
+    }
+
+    // Go back to the best method and wait. A paused game starts to render
+    // again, and the best method must be the one that receives those frames.
+    bool back_at_top = false;
+    {
+        std::lock_guard<std::mutex> lock(swap_mutex_);
+        back_at_top = step_index_ == 0;
+    }
+    if (!back_at_top && !poisoned) {
+        activate(0, report ? "retry best method" : "game is quiet");
+    }
+
+    std::lock_guard<std::mutex> lock(swap_mutex_);
+    next_pass_us_ = now + ladder::kRetryPassUs;
+    step_started_us_ = now;
 }
 
 bool ProcessCapture::initialize(const GraphicsDevice& device, const CaptureSourceDesc& desc) {
@@ -389,10 +471,7 @@ bool ProcessCapture::initialize(const GraphicsDevice& device, const CaptureSourc
         return false;
     }
 
-    uint32_t fs_output = 0;
-    const bool covers_monitor = resolve_process_dxgi_output(
-        pid_, device_.d3d11(), &fs_output, nullptr);
-    ladder_ = ladder::initial_order(covers_monitor);
+    ladder_ = ladder::initial_order();
 
     // If the window is minimized (tabbed-out game), WGC would capture at the
     // tiny minimized size. Defer start until the window is restored -- the
@@ -414,7 +493,6 @@ bool ProcessCapture::initialize(const GraphicsDevice& device, const CaptureSourc
         return true;
     }
 
-    std::lock_guard<std::mutex> lock(swap_mutex_);
     for (size_t i = 0; i < ladder_.size(); ++i) {
         auto backend = make_step(ladder_[i], hwnd);
         if (backend) {
@@ -422,12 +500,12 @@ bool ProcessCapture::initialize(const GraphicsDevice& device, const CaptureSourc
             // is no backend yet. Hand it to the one we just built, or process
             // capture reports no delay at all.
             backend->set_present_delay_histogram(delay_hist_);
+            std::lock_guard<std::mutex> lock(swap_mutex_);
             active_ = std::move(backend);
             step_index_ = i;
-            note_history_locked(std::string(ladder_step_name(ladder_[i])) + ":initial");
-            MELLO_LOG_INFO(TAG, "Source: Process(pid=%u) ladder step %zu/%zu -> backend=%s%s",
-                pid_, i + 1, ladder_.size(), ladder_step_name(ladder_[i]),
-                covers_monitor ? " (window covers monitor)" : "");
+            note_history(std::string(ladder_step_name(ladder_[i])) + ":initial");
+            MELLO_LOG_INFO(TAG, "Source: Process(pid=%u) ladder step %zu/%zu -> backend=%s",
+                pid_, i + 1, ladder_.size(), ladder_step_name(ladder_[i]));
             return true;
         }
     }
@@ -474,16 +552,24 @@ void ProcessCapture::stop() {
     running_ = false;
     if (monitor_thread_.joinable()) monitor_thread_.join();
 
-    std::lock_guard<std::mutex> lock(swap_mutex_);
-    if (!active_) return;
-    active_->stop();
-    if (active_->stop_timed_out()) {
+    std::lock_guard<std::mutex> op(ladder_op_mutex_);
+    std::unique_ptr<CaptureSource> active;
+    {
+        std::lock_guard<std::mutex> lock(swap_mutex_);
+        active = std::move(active_);
+    }
+    if (!active) return;
+    active->stop();
+    if (active->stop_timed_out()) {
         // Its thread is still running and may touch it. Leak it, and tell the
         // owner that this whole capture must not be destroyed.
         stop_timed_out_ = true;
-        (void)active_.release();
+        (void)active.release();
         MELLO_LOG_ERROR(TAG, "ladder: capture backend for pid=%u abandoned; it is leaked", pid_);
+        return;
     }
+    std::lock_guard<std::mutex> lock(swap_mutex_);
+    active_ = std::move(active);
 }
 
 uint32_t ProcessCapture::width() const {
@@ -523,13 +609,9 @@ bool ProcessCapture::start_deferred() {
 
     MELLO_LOG_INFO(TAG, "Process(pid=%u) deferred: window restored, starting capture", pid_);
 
-    uint32_t fs_output = 0;
-    const bool covers_monitor = resolve_process_dxgi_output(pid_, device_.d3d11(), &fs_output, nullptr);
-
-    std::lock_guard<std::mutex> lock(swap_mutex_);
-    ladder_ = ladder::initial_order(covers_monitor);
+    ladder_ = ladder::initial_order();
     for (size_t i = 0; i < ladder_.size(); ++i) {
-        if (activate_locked(i, "deferred start")) {
+        if (activate(i, "deferred start")) {
             deferred_hwnd_ = nullptr;
             return true;
         }
@@ -546,80 +628,91 @@ void ProcessCapture::monitor_thread() {
         if (start_deferred()) break;
     }
 
-    bool was_fullscreen = false;
-    {
-        std::lock_guard<std::mutex> lock(swap_mutex_);
-        if (active_) {
-            was_fullscreen = (std::string(active_->backend_name()) == "DXGI-DDI");
-        }
-    }
     bool was_exclusive = process_in_exclusive_fullscreen(pid_);
 
     while (running_.load()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
         if (!running_.load()) break;
+        if (device_poisoned_.load(std::memory_order_relaxed)) continue;
 
         const uint64_t now = ladder_now_us();
-        std::lock_guard<std::mutex> lock(swap_mutex_);
-        if (!active_) continue;
+        uint64_t step_frames = 0;
+        uint64_t step_started = 0;
+        std::string backend;
+        bool has_active = false;
+        bool continuous = false;
+        {
+            std::lock_guard<std::mutex> lock(swap_mutex_);
+            has_active = active_ != nullptr;
+            if (has_active) backend = active_->backend_name();
+            if (step_index_ < ladder_.size()) {
+                continuous = ladder::expects_continuous_frames(ladder_[step_index_]);
+            }
+            step_frames = step_frames_.load(std::memory_order_relaxed);
+            step_started = step_started_us_;
+        }
+        if (!has_active) continue;
 
-        // 1. A method that never delivered a first frame has failed — but only
-        // while the game can actually present. A minimized game renders
-        // nothing, so its capture method is not at fault; restart the deadline
-        // when the window comes back.
-        if (!exhausted_.load(std::memory_order_relaxed) &&
-            ladder::first_frame_overdue(step_frames_.load(std::memory_order_relaxed),
-                                        step_started_us_, now)) {
+        // 1. A method that is not delivering video has failed — but only while
+        // the game can actually present. A minimized game renders nothing, so
+        // its capture method is not at fault; restart the window when the game
+        // comes back.
+        // A pass that delivered nothing waits, on the best method, for the
+        // game to render again. Frames while it waits end the wait.
+        if (pass_failed_.load(std::memory_order_relaxed)) {
+            if (step_frames >= ladder::kProbationFrames) {
+                MELLO_LOG_INFO(TAG, "ladder: pid=%u delivers frames again on %s",
+                               pid_, backend.c_str());
+                pass_failed_.store(false, std::memory_order_relaxed);
+                exhausted_.store(false, std::memory_order_relaxed);
+                continue;
+            }
+            if (now < next_pass_us_) continue;
+            // The wait is over: give every method another turn.
+            pass_failed_.store(false, std::memory_order_relaxed);
+            std::lock_guard<std::mutex> lock(swap_mutex_);
+            step_frames_.store(0, std::memory_order_relaxed);
+            step_started_us_ = now;
+            continue;
+        }
+        if (ladder::startup_failed(continuous, step_frames, step_started, now)) {
             if (target_can_present(pid_)) {
-                advance_locked("no first frame within 2 s");
+                MELLO_LOG_WARN(TAG, "ladder: %s delivered %llu frames in %llu ms for pid=%u",
+                               backend.c_str(), (unsigned long long)step_frames,
+                               (unsigned long long)((now - step_started) / 1000), pid_);
+                advance(step_frames == 0 ? "no frames" : "too few frames");
             } else {
+                std::lock_guard<std::mutex> lock(swap_mutex_);
                 step_started_us_ = now;
             }
             continue;
         }
 
         // 2. A backend that stopped for good has failed.
-        if (active_->failed()) {
-            advance_locked("backend failed");
+        bool backend_failed = false;
+        {
+            std::lock_guard<std::mutex> lock(swap_mutex_);
+            backend_failed = active_ && active_->failed();
+        }
+        if (backend_failed) {
+            advance("backend failed");
             continue;
         }
 
-        // 3. Evidence: the game entered exclusive fullscreen. Rebuild the
-        // current method and give it a new first-frame deadline; the ladder
-        // moves on if it stays silent. Silence alone is never evidence.
+        // 3. Evidence: the game entered exclusive fullscreen. Restart the
+        // current method's probation; if it now delivers nothing, rule 1 moves
+        // the ladder on. Silence alone is never evidence.
         const bool exclusive = process_in_exclusive_fullscreen(pid_);
         if (exclusive && !was_exclusive) {
             was_exclusive = true;
             MELLO_LOG_WARN(TAG, "ladder: pid=%u entered exclusive fullscreen", pid_);
             exhausted_.store(false, std::memory_order_relaxed);
-            activate_locked(step_index_, "entered exclusive fullscreen");
+            std::lock_guard<std::mutex> lock(swap_mutex_);
+            step_frames_.store(0, std::memory_order_relaxed);
+            step_started_us_ = now;
             continue;
         }
         if (!exclusive) was_exclusive = false;
-
-        // 4. Evidence: the window started or stopped covering its monitor.
-        uint32_t output_idx = 0;
-        const bool is_fullscreen = resolve_process_dxgi_output(
-            pid_, device_.d3d11(), &output_idx, nullptr);
-        if (is_fullscreen == was_fullscreen) continue;
-
-        // A minimized window has no real surface; WGC hands back the ~160x28
-        // iconic size. Keep the current method until the window comes back.
-        HWND hwnd = find_main_window(pid_);
-        WINDOWPLACEMENT wp{};
-        wp.length = sizeof(wp);
-        if (!hwnd || (GetWindowPlacement(hwnd, &wp) && wp.showCmd == SW_SHOWMINIMIZED)) {
-            continue;
-        }
-
-        const std::vector<LadderStep> order = ladder::initial_order(is_fullscreen);
-        ladder_ = order;
-        exhausted_.store(false, std::memory_order_relaxed);
-        bool switched = false;
-        for (size_t i = 0; i < ladder_.size() && !switched; ++i) {
-            switched = activate_locked(i, is_fullscreen ? "window covers monitor" : "window left fullscreen");
-        }
-        if (switched) was_fullscreen = is_fullscreen;
     }
 }
 

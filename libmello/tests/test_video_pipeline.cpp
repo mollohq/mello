@@ -443,39 +443,64 @@ TEST(IdleKeepalive, KeyframeRequestWhileFramesFlowWaitsForTheNextFrame) {
 #ifdef _WIN32
 #include "video/capture_process.hpp"
 
-// Capture ladder: a method that never delivers a first frame fails; a method
-// that went quiet after frames is a static screen and stays.
+// Capture ladder: a method that does not deliver video fails; a method that
+// went quiet after delivering is a static screen and stays.
 TEST(CaptureLadder, SilentFromTheStartFailsAfterTheDeadline) {
     const uint64_t started = 1'000'000;
-    EXPECT_FALSE(ladder::first_frame_overdue(0, started, started + 1'999'999));
-    EXPECT_TRUE(ladder::first_frame_overdue(0, started, started + ladder::kFirstFrameDeadlineUs));
-}
-
-TEST(CaptureLadder, QuietAfterFramesIsNeverAFailure) {
-    const uint64_t started = 1'000'000;
-    // One frame, then 30 minutes of nothing: a paused game, not a dead capture.
-    EXPECT_FALSE(ladder::first_frame_overdue(1, started, started + 1'800'000'000ULL));
-}
-
-TEST(CaptureLadder, ClockBeforeStepStartIsNotOverdue) {
-    EXPECT_FALSE(ladder::first_frame_overdue(0, 5'000'000, 1'000'000));
-}
-
-TEST(CaptureLadder, EveryMethodIsInEveryOrder) {
-    for (bool covers : {true, false}) {
-        auto order = ladder::initial_order(covers);
-        ASSERT_EQ(order.size(), 3u);
-        EXPECT_NE(std::find(order.begin(), order.end(), LadderStep::Dxgi), order.end());
-        EXPECT_NE(std::find(order.begin(), order.end(), LadderStep::WgcWindow), order.end());
-        EXPECT_NE(std::find(order.begin(), order.end(), LadderStep::WgcMonitor), order.end());
+    for (bool continuous : {false, true}) {
+        EXPECT_FALSE(ladder::startup_failed(continuous, 0, started, started + 1'999'999));
+        EXPECT_TRUE(ladder::startup_failed(continuous, 0, started,
+                                           started + ladder::kFirstFrameDeadlineUs));
     }
 }
 
-TEST(CaptureLadder, KeepsPreBenchmarkPreference) {
-    // Until the DXGI vs WGC benchmark decides, a window that covers its monitor
-    // starts on DXGI and a windowed game starts on WGC, as before the ladder.
-    EXPECT_EQ(ladder::initial_order(true).front(), LadderStep::Dxgi);
-    EXPECT_EQ(ladder::initial_order(false).front(), LadderStep::WgcWindow);
+// Desktop duplication hands over one initial desktop image and then goes
+// silent under a game. Measured against Unigine Heaven on 2026-09-16: the
+// ladder accepted DXGI forever on the strength of that single frame.
+TEST(CaptureLadder, OneFrameThenSilenceIsAFailureForDuplication) {
+    const uint64_t started = 1'000'000;
+    EXPECT_FALSE(ladder::startup_failed(true, 1, started, started + 2'999'999));
+    EXPECT_TRUE(ladder::startup_failed(true, 1, started, started + ladder::kProbationUs));
+}
+
+// Window capture delivers a frame only when the captured content changes.
+// Measured against Unigine Heaven on 2026-09-16: the game sat on a static
+// screen, window capture delivered one frame, and the probation rule threw
+// away a method that worked. Only desktop duplication gets that rule.
+TEST(CaptureLadder, OneFrameThenSilenceIsNormalForWindowCapture) {
+    const uint64_t started = 1'000'000;
+    EXPECT_FALSE(ladder::startup_failed(false, 1, started, started + 1'800'000'000ULL));
+    EXPECT_FALSE(ladder::expects_continuous_frames(LadderStep::WgcWindow));
+    EXPECT_FALSE(ladder::expects_continuous_frames(LadderStep::WgcMonitor));
+    EXPECT_TRUE(ladder::expects_continuous_frames(LadderStep::Dxgi));
+}
+
+TEST(CaptureLadder, DeliveringMethodIsNeverFailed) {
+    const uint64_t started = 1'000'000;
+    // Delivered its quota, then 30 minutes of nothing: a paused game.
+    EXPECT_FALSE(ladder::startup_failed(true, ladder::kProbationFrames, started,
+                                        started + 1'800'000'000ULL));
+}
+
+TEST(CaptureLadder, ClockBeforeStepStartIsNotOverdue) {
+    EXPECT_FALSE(ladder::startup_failed(true, 0, 5'000'000, 1'000'000));
+}
+
+TEST(CaptureLadder, EveryMethodIsInTheOrder) {
+    auto order = ladder::initial_order();
+    ASSERT_EQ(order.size(), 3u);
+    EXPECT_NE(std::find(order.begin(), order.end(), LadderStep::Dxgi), order.end());
+    EXPECT_NE(std::find(order.begin(), order.end(), LadderStep::WgcWindow), order.end());
+    EXPECT_NE(std::find(order.begin(), order.end(), LadderStep::WgcMonitor), order.end());
+}
+
+TEST(CaptureLadder, WindowCaptureRunsFirstAndDuplicationLast) {
+    // Measured on 2026-09-16 against a fullscreen game: desktop duplication
+    // delivered one frame, then nothing, then wedged in the display driver and
+    // left the device unusable. Window capture ran the same game at 48 fps.
+    auto order = ladder::initial_order();
+    EXPECT_EQ(order.front(), LadderStep::WgcWindow);
+    EXPECT_EQ(order.back(), LadderStep::Dxgi);
 }
 #endif
 
@@ -503,10 +528,22 @@ TEST(PresentDelayHistogram, SnapshotIsCumulative) {
     EXPECT_EQ(out[PresentDelayHistogram::kBuckets - 1], 1u);
 }
 
-TEST(CaptureLadder, FirstFrameDeadlineIsTheSameForEveryMethod) {
-    // The deadline is a property of the ladder, not of a backend: a method
-    // that delivers nothing gets exactly one chance.
+TEST(CaptureLadder, TheFirstFrameDeadlineIsTheSameForEveryMethod) {
+    // A method that delivers nothing at all gets exactly one chance, whichever
+    // method it is.
     const uint64_t started = 0;
-    EXPECT_TRUE(ladder::first_frame_overdue(0, started, ladder::kFirstFrameDeadlineUs));
-    EXPECT_FALSE(ladder::first_frame_overdue(2, started, ladder::kFirstFrameDeadlineUs));
+    EXPECT_TRUE(ladder::startup_failed(true, 0, started, ladder::kFirstFrameDeadlineUs));
+    EXPECT_FALSE(ladder::startup_failed(true, 2, started, ladder::kFirstFrameDeadlineUs));
+    EXPECT_TRUE(ladder::startup_failed(true, 2, started, ladder::kProbationUs));
+}
+
+// A quiet stream is only an error when the game is provably rendering. A
+// visible game that renders nothing looks exactly like a blind capture method,
+// and telling that user to change a setting would be wrong.
+TEST(CaptureLadder, QuietGameIsNotReportedAsAFailure) {
+    EXPECT_FALSE(ladder::should_report_failure(false));
+}
+
+TEST(CaptureLadder, ExclusiveFullscreenIsReported) {
+    EXPECT_TRUE(ladder::should_report_failure(true));
 }

@@ -21,19 +21,53 @@ const char* ladder_step_name(LadderStep step);
 
 /// Pure ladder decisions, split out so they are testable without a GPU.
 namespace ladder {
-/// Order of capture methods for a process. Today this keeps the pre-ladder
-/// preference (DXGI for a window that covers its monitor, WGC otherwise); the
-/// DXGI vs WGC benchmark in the streaming reliability plan decides the final
-/// order.
-std::vector<LadderStep> initial_order(bool window_covers_monitor);
+/// Order of capture methods for a process.
+///
+/// Window capture first, always. Measured against Unigine Heaven on
+/// 2026-09-16: desktop duplication delivered one frame and then nothing for a
+/// fullscreen game, wedged inside the display driver so its thread could not be
+/// stopped, and left the D3D11 device unusable for the next method. Window
+/// capture ran the same game at 48 fps with a 1 ms present-to-capture delay.
+/// Desktop duplication stays last, as a fallback for cases window capture
+/// cannot serve.
+std::vector<LadderStep> initial_order();
 
-/// A method that delivered no frame since it started has failed once this
-/// deadline passes. Silence after the first frame is never a failure.
+/// A method that delivered no frame at all by this point has failed.
 static constexpr uint64_t kFirstFrameDeadlineUs = 2'000'000;
+/// A continuous method must deliver at least `kProbationFrames` by this point.
+/// Desktop duplication hands over one initial desktop image and then goes
+/// silent under a game, which a first-frame test alone accepts forever
+/// (measured against Unigine Heaven on 2026-09-16).
+static constexpr uint64_t kProbationUs = 3'000'000;
+static constexpr uint64_t kProbationFrames = 3;
 
-/// True when the active method has had its chance and delivered nothing.
-bool first_frame_overdue(uint64_t frames_since_step_start, uint64_t step_started_us,
-                         uint64_t now_us);
+/// True when this method delivers a frame for every change on screen.
+///
+/// Desktop duplication does: a game that presents keeps it busy, so silence
+/// means it is blind. Windows Graphics Capture does not: it delivers a frame
+/// only when the captured content changes, so a paused game is silent on a
+/// method that works perfectly.
+bool expects_continuous_frames(LadderStep step);
+
+/// True when the active method has had its chance and is not delivering video.
+///
+/// Applies only while the game can present. Silence from a method that is
+/// delivering normally is never a failure: a paused game and an idle desktop
+/// are quiet and healthy.
+bool startup_failed(bool continuous, uint64_t frames_since_step_start,
+                    uint64_t step_started_us, uint64_t now_us);
+
+/// Wait between ladder passes when no method delivered. A visible game that
+/// renders nothing (paused, or a benchmark waiting for input) looks exactly
+/// like a blind capture method, so the ladder retries instead of churning.
+static constexpr uint64_t kRetryPassUs = 30'000'000;
+
+/// True when a failed ladder pass should be reported to the user.
+///
+/// Only exclusive fullscreen is proof that the game renders while every method
+/// sees nothing. Without that proof a quiet stream is not an error: it is a
+/// paused game, and telling the user to change a setting would be wrong.
+bool should_report_failure(bool target_in_exclusive_fullscreen);
 }  // namespace ladder
 
 class ProcessCapture : public CaptureSource {
@@ -59,13 +93,17 @@ private:
     /// Build and initialize (not start) the backend for one ladder step.
     std::unique_ptr<CaptureSource> make_step(LadderStep step, HWND hwnd) const;
     /// Replace the active backend with ladder step `index` and start it.
-    /// Caller holds swap_mutex_. Returns false and keeps the old backend when
-    /// the step cannot initialize or start.
-    bool activate_locked(size_t index, const char* reason);
+    ///
+    /// Runs backend calls without `swap_mutex_` held: starting or stopping a
+    /// backend can block for seconds inside the display driver, and telemetry
+    /// callers (`backend_name`, `method_history`) must never wait for that.
+    /// Serialized by `ladder_op_mutex_`. Returns false when the step cannot
+    /// initialize or start.
+    bool activate(size_t index, const char* reason);
     /// Move to the next ladder step that starts. Marks the ladder exhausted
-    /// when none does. Caller holds swap_mutex_.
-    void advance_locked(const char* reason);
-    void note_history_locked(const std::string& entry);
+    /// when none does.
+    void advance(const char* reason);
+    void note_history(const std::string& entry);
 
     bool start_deferred();
 
@@ -77,7 +115,11 @@ private:
     uint32_t                         target_fps_ = 60;
 
     std::unique_ptr<CaptureSource>   active_;
+    // Guards the fields below. Held only for short reads and pointer swaps,
+    // never across a backend call.
     mutable std::mutex               swap_mutex_;
+    // Serializes ladder operations (monitor thread against stop()).
+    std::mutex                       ladder_op_mutex_;
     std::thread                      monitor_thread_;
     std::atomic<bool>                running_{false};
 
@@ -91,8 +133,17 @@ private:
     size_t                           step_index_ = 0;
     uint64_t                         step_started_us_ = 0;
     std::atomic<uint64_t>            step_frames_{0};
+    // A full ladder pass delivered nothing. Internal: drives the retry timer.
+    std::atomic<bool>                pass_failed_{false};
+    // Reported to the user through failed(): a pass failed and the game is in
+    // exclusive fullscreen, which no capture method here can see.
     std::atomic<bool>                exhausted_{false};
+    uint64_t                         next_pass_us_ = 0;
     std::atomic<bool>                stop_timed_out_{false};
+    // An abandoned capture thread keeps the D3D11 device busy inside the
+    // driver: the next method blocks on the same device. Once this is set the
+    // ladder stops trying.
+    std::atomic<bool>                device_poisoned_{false};
     std::string                      history_;
 
     // Deferred start: window was minimized at init time; we store the hwnd
