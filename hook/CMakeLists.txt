@@ -33,13 +33,14 @@ add_library(mello_hook SHARED
     src/hook_main.cpp
     src/hook_state.cpp
     src/hook_dxgi.cpp
+    src/hook_d3d9.cpp
     src/hook_log.cpp
 )
 set_target_properties(mello_hook PROPERTIES OUTPUT_NAME "mello-hook${MELLO_HOOK_BITS}")
 target_include_directories(mello_hook PRIVATE include ${DETOURS_INCLUDE_DIRS})
 target_compile_definitions(mello_hook PRIVATE
     WIN32_LEAN_AND_MEAN NOMINMAX MELLO_HOOK_BITS=${MELLO_HOOK_BITS})
-target_link_libraries(mello_hook PRIVATE ${DETOURS_LIBRARY} d3d11 dxgi dxguid)
+target_link_libraries(mello_hook PRIVATE ${DETOURS_LIBRARY} d3d11 d3d9 dxgi dxguid)
 # Exports the hook procedure under its plain name on x86 as well as x64.
 set_target_properties(mello_hook PROPERTIES
     LINK_FLAGS "/DEF:\"${CMAKE_CURRENT_SOURCE_DIR}/src/mello_hook.def\"")
@@ -52,7 +53,7 @@ set_target_properties(mello_offsets PROPERTIES OUTPUT_NAME "mello-offsets${MELLO
 target_include_directories(mello_offsets PRIVATE include)
 target_compile_definitions(mello_offsets PRIVATE
     WIN32_LEAN_AND_MEAN NOMINMAX MELLO_HOOK_BITS=${MELLO_HOOK_BITS})
-target_link_libraries(mello_offsets PRIVATE d3d11 dxgi dxguid version)
+target_link_libraries(mello_offsets PRIVATE d3d11 d3d9 dxgi dxguid version)
 
 # --- Injection helper --------------------------------------------------------
 # Loads the hook into the game with SetWindowsHookEx. Its bitness must match
@@ -73,7 +74,7 @@ if(MELLO_HOOK_TEST_APP)
     target_include_directories(mello_fakegame PRIVATE include)
     target_compile_definitions(mello_fakegame PRIVATE
         WIN32_LEAN_AND_MEAN NOMINMAX MELLO_HOOK_BITS=${MELLO_HOOK_BITS})
-    target_link_libraries(mello_fakegame PRIVATE d3d11 dxgi dxguid)
+    target_link_libraries(mello_fakegame PRIVATE d3d11 d3d9 dxgi dxguid)
 endif()
 
 # --- Tests -------------------------------------------------------------------

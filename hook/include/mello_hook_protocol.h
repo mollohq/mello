@@ -113,9 +113,18 @@ typedef struct MelloHookInfo {
     uint64_t off_d3d9_present;                 // IDirect3DDevice9::Present, from d3d9.dll
     uint64_t off_d3d9_present_ex;              // IDirect3DDevice9Ex::PresentEx
     uint64_t off_d3d9_swapchain_present;       // IDirect3DSwapChain9::Present
+    uint64_t off_d3d9_reset;                   // IDirect3DDevice9::Reset
+    uint64_t off_d3d9_reset_ex;                // IDirect3DDevice9Ex::ResetEx
     uint64_t off_opengl_swap_buffers;          // wglSwapBuffers, from opengl32.dll
 
-    uint64_t reserved[8];
+    // --- Frames through memory. Written by the hook, and only when it sets
+    // MELLO_HOOK_FLAG_CPU_COPY. A Direct3D 9 game reads back its own render
+    // target and writes the pixels into a second shared block, because a D3D9
+    // surface cannot be opened on the client's D3D11 device. ---
+    uint32_t cpu_frame_bytes;    // size of one frame, 0 when frames are textures
+    uint32_t cpu_pitch;          // bytes per row in that frame
+
+    uint64_t reserved[5];
 } MelloHookInfo;
 #pragma pack(pop)
 
@@ -131,6 +140,9 @@ static_assert(sizeof(MelloHookInfo) % 8 == 0, "MelloHookInfo must stay 8-byte al
 // the game's process id.
 
 #define MELLO_HOOK_NAME_INFO      "Local\\mello_hook_info_%u"
+// Frames through memory, one block per game. The hook creates this one,
+// because only the hook knows how big a frame is.
+#define MELLO_HOOK_NAME_FRAMES    "Local\\mello_hook_frames_%u"
 #define MELLO_HOOK_NAME_READY     "Local\\mello_hook_ready_%u"
 #define MELLO_HOOK_NAME_FRAME     "Local\\mello_hook_frame_%u"
 #define MELLO_HOOK_NAME_STOP      "Local\\mello_hook_stop_%u"

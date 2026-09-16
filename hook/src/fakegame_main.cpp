@@ -5,13 +5,17 @@
 // colour, so a test can check that the pixels the hook delivered are the pixels
 // this program drew, and not a black frame or somebody else's window.
 //
-// Usage: mello-fakegame64.exe [--seconds N] [--width W] [--height H]
+// Usage: mello-fakegame64.exe [--seconds N] [--width W] [--height H] [--d3d9]
+//
+// `--d3d9` presents through Direct3D 9 instead, which is the other path the
+// hook covers and the one a 2012-era game uses.
 //
 // It prints `ready pid=<pid>` when the swap chain is up, so a test can wait for
 // that line instead of sleeping.
 
 #include <windows.h>
 
+#include <d3d9.h>
 #include <d3d11.h>
 #include <dxgi1_2.h>
 
@@ -20,6 +24,7 @@
 #include <cstring>
 
 #pragma comment(lib, "d3d11.lib")
+#pragma comment(lib, "d3d9.lib")
 
 namespace {
 
@@ -44,12 +49,70 @@ int argument(int argc, wchar_t** argv, const wchar_t* name, int fallback) {
     return fallback;
 }
 
+bool flag(int argc, wchar_t** argv, const wchar_t* name) {
+    for (int i = 1; i < argc; ++i) {
+        if (wcscmp(argv[i], name) == 0) return true;
+    }
+    return false;
+}
+
+// The Direct3D 9 build of the same program: one window, one device, a clear to
+// the same colour, and a present every frame.
+int run_d3d9(HWND window, int width, int height, int seconds) {
+    IDirect3D9Ex* d3d9 = nullptr;
+    if (FAILED(Direct3DCreate9Ex(D3D_SDK_VERSION, &d3d9)) || !d3d9) {
+        std::fprintf(stderr, "no Direct3D 9Ex on this machine\n");
+        return 1;
+    }
+
+    D3DPRESENT_PARAMETERS pp{};
+    pp.Windowed = TRUE;
+    pp.SwapEffect = D3DSWAPEFFECT_DISCARD;
+    pp.BackBufferFormat = D3DFMT_X8R8G8B8;
+    pp.BackBufferWidth = static_cast<UINT>(width);
+    pp.BackBufferHeight = static_cast<UINT>(height);
+    pp.hDeviceWindow = window;
+    pp.PresentationInterval = D3DPRESENT_INTERVAL_ONE;
+
+    IDirect3DDevice9Ex* device = nullptr;
+    const HRESULT hr = d3d9->CreateDeviceEx(
+        D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, window,
+        D3DCREATE_HARDWARE_VERTEXPROCESSING | D3DCREATE_NOWINDOWCHANGES, &pp, nullptr, &device);
+    if (FAILED(hr) || !device) {
+        std::fprintf(stderr, "no D3D9 device: hr=0x%08lx\n", static_cast<unsigned long>(hr));
+        d3d9->Release();
+        return 1;
+    }
+
+    // The same colour the D3D11 path clears to, so one test covers both.
+    const D3DCOLOR colour = D3DCOLOR_XRGB(64, 128, 191);
+
+    std::printf("ready pid=%lu api=d3d9\n", GetCurrentProcessId());
+    std::fflush(stdout);
+
+    const DWORD deadline = GetTickCount() + static_cast<DWORD>(seconds) * 1000;
+    while (g_running && GetTickCount() < deadline) {
+        MSG message;
+        while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE)) {
+            TranslateMessage(&message);
+            DispatchMessageW(&message);
+        }
+        device->Clear(0, nullptr, D3DCLEAR_TARGET, colour, 1.0f, 0);
+        device->Present(nullptr, nullptr, nullptr, nullptr);
+    }
+
+    device->Release();
+    d3d9->Release();
+    return 0;
+}
+
 }  // namespace
 
 int wmain(int argc, wchar_t** argv) {
     const int seconds = argument(argc, argv, L"--seconds", 30);
     const int width = argument(argc, argv, L"--width", 640);
     const int height = argument(argc, argv, L"--height", 360);
+    const bool use_d3d9 = flag(argc, argv, L"--d3d9");
 
     WNDCLASSEXW wc{};
     wc.cbSize = sizeof(wc);
@@ -68,6 +131,12 @@ int wmain(int argc, wchar_t** argv) {
         return 1;
     }
     ShowWindow(window, SW_SHOW);
+
+    if (use_d3d9) {
+        const int result = run_d3d9(window, width, height, seconds);
+        DestroyWindow(window);
+        return result;
+    }
 
     DXGI_SWAP_CHAIN_DESC desc{};
     desc.BufferCount = 2;

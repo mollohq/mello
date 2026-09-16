@@ -20,6 +20,7 @@
 #include <windows.h>
 
 #include <d3d11.h>
+#include <d3d9.h>
 #include <dxgi1_2.h>
 
 #include <cstdint>
@@ -30,6 +31,7 @@
 #include "mello_hook_protocol.h"
 
 #pragma comment(lib, "version.lib")
+#pragma comment(lib, "d3d9.lib")
 
 namespace {
 
@@ -40,6 +42,15 @@ namespace {
 constexpr int kVtPresent       = 8;   // IDXGISwapChain::Present
 constexpr int kVtResizeBuffers = 13;  // IDXGISwapChain::ResizeBuffers
 constexpr int kVtPresent1      = 22;  // IDXGISwapChain1::Present1
+
+// The same for Direct3D 9. IDirect3DDevice9 has 119 methods, and
+// IDirect3DDevice9Ex adds its own after them, so PresentEx and ResetEx sit
+// past the end of the older interface.
+constexpr int kVtD3d9Present    = 17;   // IDirect3DDevice9::Present
+constexpr int kVtD3d9Reset      = 16;   // IDirect3DDevice9::Reset
+constexpr int kVtD3d9PresentEx  = 121;  // IDirect3DDevice9Ex::PresentEx
+constexpr int kVtD3d9ResetEx    = 132;  // IDirect3DDevice9Ex::ResetEx
+constexpr int kVtD3d9SwapPresent = 3;   // IDirect3DSwapChain9::Present
 
 void* vtable_entry(void* com_object, int index) {
     if (!com_object) return nullptr;
@@ -194,6 +205,59 @@ int main() {
     if (context) context->Release();
     if (device) device->Release();
     swap->Release();
+
+    // --- Direct3D 9 -----------------------------------------------------------
+    // A D3D9Ex device carries both interfaces, so one device gives every offset.
+    // A machine with no D3D9Ex still runs D3D9 games, and then only the older
+    // offsets come out.
+    IDirect3D9Ex* d3d9ex = nullptr;
+    if (SUCCEEDED(Direct3DCreate9Ex(D3D_SDK_VERSION, &d3d9ex)) && d3d9ex) {
+        D3DPRESENT_PARAMETERS pp{};
+        pp.Windowed = TRUE;
+        pp.SwapEffect = D3DSWAPEFFECT_DISCARD;
+        pp.BackBufferFormat = D3DFMT_UNKNOWN;
+        pp.BackBufferWidth = 16;
+        pp.BackBufferHeight = 16;
+        pp.hDeviceWindow = window;
+
+        IDirect3DDevice9Ex* device9 = nullptr;
+        HRESULT hr9 = d3d9ex->CreateDeviceEx(
+            D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, window,
+            D3DCREATE_SOFTWARE_VERTEXPROCESSING | D3DCREATE_NOWINDOWCHANGES, &pp, nullptr,
+            &device9);
+        if (SUCCEEDED(hr9) && device9) {
+            bool d3d9_ok = true;
+            print_offset("d3d9_present", vtable_entry(device9, kVtD3d9Present), "d3d9.dll",
+                         &d3d9_ok);
+            print_offset("d3d9_reset", vtable_entry(device9, kVtD3d9Reset), "d3d9.dll", &d3d9_ok);
+            print_offset("d3d9_present_ex", vtable_entry(device9, kVtD3d9PresentEx), "d3d9.dll",
+                         &d3d9_ok);
+            print_offset("d3d9_reset_ex", vtable_entry(device9, kVtD3d9ResetEx), "d3d9.dll",
+                         &d3d9_ok);
+
+            IDirect3DSwapChain9* swap9 = nullptr;
+            if (SUCCEEDED(device9->GetSwapChain(0, &swap9)) && swap9) {
+                print_offset("d3d9_swapchain_present", vtable_entry(swap9, kVtD3d9SwapPresent),
+                             "d3d9.dll", &d3d9_ok);
+                swap9->Release();
+            }
+            // A failure here is not fatal for the whole run: a machine without
+            // D3D9 still hooks DXGI games.
+            if (!d3d9_ok) {
+                std::fprintf(stderr, "d3d9 offsets are incomplete on this machine\n");
+            }
+            char version9[64]{};
+            if (file_version_of("d3d9.dll", version9, sizeof(version9))) {
+                std::printf("d3d9_file_version=%s\n", version9);
+            }
+            device9->Release();
+        } else {
+            std::fprintf(stderr, "no D3D9Ex device: hr=0x%08lx\n",
+                         static_cast<unsigned long>(hr9));
+        }
+        d3d9ex->Release();
+    }
+
     DestroyWindow(window);
 
     return all_ok ? 0 : 1;

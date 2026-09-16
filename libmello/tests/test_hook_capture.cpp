@@ -49,9 +49,9 @@ struct FakeGame {
     PROCESS_INFORMATION process{};
     HWND                window = nullptr;
 
-    bool start(const std::string& directory, int seconds) {
+    bool start(const std::string& directory, int seconds, bool d3d9 = false) {
         std::string command = "\"" + directory + "\\mello-fakegame64.exe\" --seconds " +
-                              std::to_string(seconds);
+                              std::to_string(seconds) + (d3d9 ? " --d3d9" : "");
         std::wstring wide(command.begin(), command.end());
         wide.push_back(L'\0');
 
@@ -166,6 +166,65 @@ TEST(HookCapture, CapturesTheFramesTheGameDrew) {
     ASSERT_TRUE(middle_pixel(device.d3d11(), context.Get(), frame.Get(), &pixel));
     // The test program clears to (0.25, 0.50, 0.75). Anything else means the
     // hook captured the wrong surface, or the channels are swapped.
+    EXPECT_NEAR(pixel.r, 64, 2);
+    EXPECT_NEAR(pixel.g, 128, 2);
+    EXPECT_NEAR(pixel.b, 191, 2);
+
+    capture.stop();
+    EXPECT_FALSE(capture.stop_timed_out());
+    EXPECT_FALSE(capture.failed());
+}
+
+// The same chain for a Direct3D 9 game. Its frames cannot travel as a shared
+// texture, because a D3D9 surface does not open on a D3D11 device, so the hook
+// reads the render target back and sends the pixels through memory (plan 3.2).
+// This is the API the beta user's game used on 2026-09-15.
+TEST(HookCapture, CapturesADirect3D9Game) {
+    if (running_under_ci()) GTEST_SKIP() << "needs a GPU and a desktop session";
+    const std::string directory = hook_directory();
+    if (directory.empty()) GTEST_SKIP() << "set MELLO_HOOK_DIR to the hook build folder";
+
+    FakeGame game;
+    ASSERT_TRUE(game.start(directory, 30, /*d3d9=*/true)) << "the D3D9 test program did not start";
+
+    const GraphicsDevice device = create_d3d11_device();
+    ASSERT_NE(device.d3d11(), nullptr) << "no D3D11 device on this machine";
+    Microsoft::WRL::ComPtr<ID3D11DeviceContext> context;
+    device.d3d11()->GetImmediateContext(&context);
+
+    CaptureSourceDesc desc{};
+    desc.mode = CaptureMode::Process;
+    desc.pid = game.pid();
+    desc.allow_hook = true;
+
+    HookCapture capture;
+    ASSERT_TRUE(capture.initialize(device, desc)) << "the hook did not load into the D3D9 program";
+
+    std::atomic<int> frames{0};
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> last;
+    std::mutex last_mutex;
+    ASSERT_TRUE(capture.start(60, [&](ID3D11Texture2D* texture, uint64_t) {
+        std::lock_guard<std::mutex> lock(last_mutex);
+        last = texture;
+        frames.fetch_add(1);
+    }));
+
+    for (int i = 0; i < 40 && frames.load() < 10; ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+    EXPECT_GE(frames.load(), 10) << "the hook delivered no D3D9 frames";
+
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> frame;
+    {
+        std::lock_guard<std::mutex> lock(last_mutex);
+        frame = last;
+    }
+    ASSERT_TRUE(frame) << "no frame texture";
+
+    Pixel pixel;
+    ASSERT_TRUE(middle_pixel(device.d3d11(), context.Get(), frame.Get(), &pixel));
+    // The D3D9 program clears to the same colour as the D3D11 one, so a wrong
+    // channel order in the read-back path shows up here.
     EXPECT_NEAR(pixel.r, 64, 2);
     EXPECT_NEAR(pixel.g, 128, 2);
     EXPECT_NEAR(pixel.b, 191, 2);

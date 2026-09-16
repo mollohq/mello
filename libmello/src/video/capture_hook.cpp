@@ -177,6 +177,14 @@ bool HookCapture::create_shared_block(uint32_t pid) {
 }
 
 void HookCapture::release_shared_block() {
+    if (frames_) {
+        UnmapViewOfFile(const_cast<uint8_t*>(frames_));
+        frames_ = nullptr;
+    }
+    if (frames_mapping_) {
+        CloseHandle(frames_mapping_);
+        frames_mapping_ = nullptr;
+    }
     if (info_) {
         UnmapViewOfFile(info_);
         info_ = nullptr;
@@ -227,6 +235,11 @@ bool HookCapture::initialize(const GraphicsDevice& device, const CaptureSourceDe
     info_->off_dxgi_present = offsets.dxgi_present;
     info_->off_dxgi_present1 = offsets.dxgi_present1;
     info_->off_dxgi_resize_buffers = offsets.dxgi_resize_buffers;
+    info_->off_d3d9_present = offsets.d3d9_present;
+    info_->off_d3d9_present_ex = offsets.d3d9_present_ex;
+    info_->off_d3d9_swapchain_present = offsets.d3d9_swapchain_present;
+    info_->off_d3d9_reset = offsets.d3d9_reset;
+    info_->off_d3d9_reset_ex = offsets.d3d9_reset_ex;
     // Capture is on from the start: the hook publishes the frame size with its
     // first frame, and the stream needs that size to size its encoder.
     as_atomic_u32(&info_->capture_enabled)->store(1, std::memory_order_relaxed);
@@ -280,9 +293,87 @@ bool HookCapture::wait_for_first_frame(uint32_t timeout_ms) {
     return false;
 }
 
+// Opens the block a Direct3D 9 game writes its frames into. That API cannot
+// share a surface with the client's D3D11 device, so its frames come through
+// memory (plan 3.2).
+bool HookCapture::refresh_memory_frames() {
+    const uint32_t bytes = info_->cpu_frame_bytes;
+    const uint32_t pitch = info_->cpu_pitch;
+    if (bytes == 0 || pitch == 0) return false;
+
+    if (frames_) {
+        UnmapViewOfFile(const_cast<uint8_t*>(frames_));
+        frames_ = nullptr;
+    }
+    if (frames_mapping_) {
+        CloseHandle(frames_mapping_);
+        frames_mapping_ = nullptr;
+    }
+    copy_.Reset();
+
+    char name[64];
+    mello_hook::object_name(name, sizeof(name), MELLO_HOOK_NAME_FRAMES, pid_);
+    frames_mapping_ = OpenFileMappingA(FILE_MAP_READ, FALSE, name);
+    if (!frames_mapping_) {
+        MELLO_LOG_ERROR(TAG, "the hook's frame block for pid=%u is missing: %lu", pid_,
+                        GetLastError());
+        failed_.store(true, std::memory_order_relaxed);
+        return false;
+    }
+    const size_t total = static_cast<size_t>(bytes) * MELLO_HOOK_TEXTURE_COUNT;
+    frames_ = static_cast<const uint8_t*>(
+        MapViewOfFile(frames_mapping_, FILE_MAP_READ, 0, 0, total));
+    if (!frames_) {
+        MELLO_LOG_ERROR(TAG, "cannot map the hook's frame block: %lu", GetLastError());
+        failed_.store(true, std::memory_order_relaxed);
+        return false;
+    }
+
+    D3D11_TEXTURE2D_DESC desc{};
+    desc.Width = info_->width;
+    desc.Height = info_->height;
+    desc.MipLevels = 1;
+    desc.ArraySize = 1;
+    desc.Format = static_cast<DXGI_FORMAT>(info_->dxgi_format);
+    desc.SampleDesc.Count = 1;
+    // Written once a frame from the capture thread, read by the preprocessor.
+    desc.Usage = D3D11_USAGE_DEFAULT;
+    desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
+    if (FAILED(device_->CreateTexture2D(&desc, nullptr, copy_.GetAddressOf()))) {
+        MELLO_LOG_ERROR(TAG, "cannot create the frame texture %ux%u", desc.Width, desc.Height);
+        failed_.store(true, std::memory_order_relaxed);
+        return false;
+    }
+
+    width_ = desc.Width;
+    height_ = desc.Height;
+    frame_bytes_ = bytes;
+    frame_pitch_ = pitch;
+    texture_generation_ = as_atomic_u32(&info_->texture_generation)->load(std::memory_order_acquire);
+    MELLO_LOG_INFO(TAG, "hook frames are %ux%u fmt=%u through memory (%u bytes a frame)", width_,
+                   height_, info_->dxgi_format, bytes);
+    return true;
+}
+
+bool HookCapture::upload_memory_frame(uint32_t slot) {
+    if (!frames_ || !copy_) return false;
+    const uint8_t* source = frames_ + static_cast<size_t>(slot) * frame_bytes_;
+    // One upload, no intermediate copy: the source rows are already the pitch
+    // the hook wrote them at.
+    context_->UpdateSubresource(copy_.Get(), 0, nullptr, source, frame_pitch_, 0);
+    return true;
+}
+
 // Opens the textures the hook published. Called when the generation changes:
 // at the first frame, and after a resize.
 bool HookCapture::refresh_textures() {
+    if ((info_->flags & MELLO_HOOK_FLAG_CPU_COPY) != 0) {
+        const uint32_t generation =
+            as_atomic_u32(&info_->texture_generation)->load(std::memory_order_acquire);
+        if (generation == texture_generation_ && copy_) return true;
+        return refresh_memory_frames();
+    }
+
     const uint32_t generation =
         as_atomic_u32(&info_->texture_generation)->load(std::memory_order_acquire);
     if (generation == texture_generation_ && shared_[0]) return true;
@@ -383,10 +474,14 @@ void HookCapture::capture_thread() {
         last_delivered_us_ = now;
 
         const uint32_t slot = info_->texture_index % MELLO_HOOK_TEXTURE_COUNT;
-        if (!shared_[slot] || !copy_) continue;
-        // The copy takes the frame away from the hook's pair, so the game can
-        // keep presenting into them while the pipeline reads this one.
-        context_->CopyResource(copy_.Get(), shared_[slot].Get());
+        if (frames_) {
+            if (!upload_memory_frame(slot)) continue;
+        } else {
+            if (!shared_[slot] || !copy_) continue;
+            // The copy takes the frame away from the hook's pair, so the game
+            // can keep presenting into them while the pipeline reads this one.
+            context_->CopyResource(copy_.Get(), shared_[slot].Get());
+        }
 
         if (delay_hist_ && qpc_frequency_ > 0) {
             const int64_t present_qpc = static_cast<int64_t>(info_->frame_qpc);

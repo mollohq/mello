@@ -20,6 +20,15 @@ struct Offsets {
     uint64_t    dxgi_present = 0;
     uint64_t    dxgi_present1 = 0;
     uint64_t    dxgi_resize_buffers = 0;
+
+    /// Direct3D 9. A game uses one graphics API, so a machine that reports
+    /// neither set has nothing the hook can work with.
+    std::string d3d9_file_version;
+    uint64_t    d3d9_present = 0;
+    uint64_t    d3d9_present_ex = 0;
+    uint64_t    d3d9_swapchain_present = 0;
+    uint64_t    d3d9_reset = 0;
+    uint64_t    d3d9_reset_ex = 0;
 };
 
 /// Runs the offsets helper for `bits` (32 or 64) and returns what it printed.

@@ -15,6 +15,7 @@
 
 #include <windows.h>
 
+#include "hook_d3d9.hpp"
 #include "hook_dxgi.hpp"
 #include "hook_log.hpp"
 #include "hook_state.hpp"
@@ -49,7 +50,13 @@ DWORD WINAPI hook_thread(LPVOID) {
     log_line("hook %u-bit loaded into pid %lu", static_cast<unsigned>(MELLO_HOOK_BITS),
              GetCurrentProcessId());
 
-    if (!install_dxgi_hooks(*state.info())) {
+    // A game uses one graphics API, and the modules it loaded say which. Both
+    // are tried: a game can load d3d9.dll for its launcher and dxgi.dll for
+    // itself, and a hook on a module the game never presents through costs
+    // nothing.
+    const bool dxgi = install_dxgi_hooks(*state.info());
+    const bool d3d9 = install_d3d9_hooks(*state.info());
+    if (!dxgi && !d3d9) {
         // `last_error` already says why. The client reads it and moves the
         // capture ladder on.
         state.signal_ready();

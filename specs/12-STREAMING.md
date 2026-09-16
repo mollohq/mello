@@ -115,7 +115,7 @@ as x64 and links the static CRT):
 
 | Binary | Runs where | Does what |
 |---|---|---|
-| `mello-hook{32,64}.dll` | Inside the game | Detours, copies, signals |
+| `mello-hook{32,64}.dll` | Inside the game | Detours DXGI and D3D9 present, copies, signals |
 | `mello-inject{32,64}.exe` | Its own process | `SetWindowsHookEx(WH_GETMESSAGE)` on the game's window thread |
 | `mello-offsets{32,64}.exe` | Its own process | Prints present-function offsets |
 
@@ -152,9 +152,25 @@ heartbeat stops.
    elevated. Any one of these refuses the hook, and the ladder falls back to
    screen capture.
 
-**What works today:** DXGI swap chains, which covers Direct3D 11 and 10, for
-64-bit games. D3D12, D3D9 and OpenGL are later steps in the plan. Vulkan games
-use the WGC steps by decision (plan 3.10).
+**Direct3D 9 travels through memory.** A D3D9 surface cannot be opened on the
+client's D3D11 device, so that path does what plan 3.2 asks for first: on each
+present the hook reads the back buffer back with `GetRenderTargetData` into a
+system-memory surface, and copies the pixels into a second shared block
+(`Local\mello_hook_frames_<pid>`, two slots). The client uploads them into a
+texture and the pipeline sees the same thing as from any other backend. The
+hook sets `MELLO_HOOK_FLAG_CPU_COPY` and the `cpu_frame_bytes` and `cpu_pitch`
+fields; those are how the client knows which transport to use. `Reset` and
+`ResetEx` are detoured as well: a reset changes the back buffer, so the
+read-back surfaces are dropped and the next present rebuilds them.
+
+The shared-texture path for D3D9 comes later. It needs a D3D9Ex device, and a
+game that made a plain D3D9 device cannot share a surface at all without
+reaching into the device's internals.
+
+**What works today:** DXGI swap chains, which covers Direct3D 11 and 10, and
+Direct3D 9 through memory. Both for 32-bit and 64-bit games. D3D12 and OpenGL
+are later steps in the plan. Vulkan games use the WGC steps by decision
+(plan 3.10).
 
 **Deferred start:** If the target window is minimized at stream start (user tabbed out to launch the stream), capture waits. The monitor thread polls until the window is restored, then initializes the backend. Width/height return restored dimensions during the wait so the encoder can pre-initialize. This matches Discord's behaviour.
 

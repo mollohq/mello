@@ -55,6 +55,11 @@ private:
     bool wait_for_first_frame(uint32_t timeout_ms);
     void capture_thread();
     bool refresh_textures();
+    /// Opens the block a Direct3D 9 game writes its frames into, and builds the
+    /// texture those frames are uploaded to.
+    bool refresh_memory_frames();
+    /// Copies one frame from that block into the texture the pipeline reads.
+    bool upload_memory_frame(uint32_t slot);
     void beat();
 
     Microsoft::WRL::ComPtr<ID3D11Device>        device_;
@@ -64,6 +69,11 @@ private:
 
     HANDLE         mapping_     = nullptr;
     MelloHookInfo* info_        = nullptr;
+    // Frames through memory, for Direct3D 9 games. Empty for every other API.
+    HANDLE         frames_mapping_ = nullptr;
+    const uint8_t* frames_        = nullptr;
+    uint32_t       frame_bytes_   = 0;
+    uint32_t       frame_pitch_   = 0;
     HANDLE         ready_event_ = nullptr;
     HANDLE         frame_event_ = nullptr;
     HANDLE         stop_event_  = nullptr;

@@ -143,10 +143,23 @@ Offsets parse_offsets(const std::string& text) {
             out.dxgi_present1 = parse_hex(value);
         } else if (key == "dxgi_resize_buffers") {
             out.dxgi_resize_buffers = parse_hex(value);
+        } else if (key == "d3d9_file_version") {
+            out.d3d9_file_version = value;
+        } else if (key == "d3d9_present") {
+            out.d3d9_present = parse_hex(value);
+        } else if (key == "d3d9_present_ex") {
+            out.d3d9_present_ex = parse_hex(value);
+        } else if (key == "d3d9_swapchain_present") {
+            out.d3d9_swapchain_present = parse_hex(value);
+        } else if (key == "d3d9_reset") {
+            out.d3d9_reset = parse_hex(value);
+        } else if (key == "d3d9_reset_ex") {
+            out.d3d9_reset_ex = parse_hex(value);
         }
     }
-    // Present is the one function the hook cannot work without.
-    out.valid = out.dxgi_present != 0;
+    // One present function is enough: the game uses one graphics API, and the
+    // hook takes whichever of them is loaded in it.
+    out.valid = out.dxgi_present != 0 || out.d3d9_present != 0;
     return out;
 }
 
@@ -188,12 +201,16 @@ const Offsets& offsets_for(int bits) {
     offsets = parse_offsets(output);
     if (offsets.valid) {
         MELLO_LOG_INFO(TAG,
-                       "present offsets for %d-bit games (dxgi.dll %s): present=0x%llx "
-                       "present1=0x%llx resize=0x%llx",
+                       "present offsets for %d-bit games: dxgi.dll %s present=0x%llx "
+                       "present1=0x%llx resize=0x%llx; d3d9.dll %s present=0x%llx "
+                       "present_ex=0x%llx",
                        bits, offsets.dxgi_file_version.c_str(),
                        static_cast<unsigned long long>(offsets.dxgi_present),
                        static_cast<unsigned long long>(offsets.dxgi_present1),
-                       static_cast<unsigned long long>(offsets.dxgi_resize_buffers));
+                       static_cast<unsigned long long>(offsets.dxgi_resize_buffers),
+                       offsets.d3d9_file_version.c_str(),
+                       static_cast<unsigned long long>(offsets.d3d9_present),
+                       static_cast<unsigned long long>(offsets.d3d9_present_ex));
     } else {
         MELLO_LOG_WARN(TAG, "offsets helper printed nothing usable");
     }
