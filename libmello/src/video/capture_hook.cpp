@@ -167,9 +167,12 @@ bool HookCapture::create_shared_block(uint32_t pid) {
         MELLO_LOG_ERROR(TAG, "hook events for pid=%u failed: %lu", pid, GetLastError());
         return false;
     }
-    // A hook left over from an earlier stream reads this: the stop event is
-    // still set from the last teardown.
+    // Both events carry a meaning for this stream, not for the last one. The
+    // stop event is still set from the previous teardown, and the ready event
+    // is still set from the previous injection. A hook that is already loaded
+    // raises ready again within half a second.
     ResetEvent(stop_event_);
+    ResetEvent(ready_event_);
     return true;
 }
 

@@ -225,13 +225,16 @@ InjectResult inject(uint32_t pid, int bits, uint32_t timeout_ms) {
     // The helper has its own deadline. This one only catches a helper that
     // never returns at all.
     if (!run_helper(command, timeout_ms + 2000, &exit_code, nullptr)) {
+        MELLO_LOG_WARN(TAG, "injection helper for pid=%u did not finish", pid);
         return InjectResult::HelperFailed;
     }
     switch (exit_code) {
         case 0: return InjectResult::Ready;
         case 2: return InjectResult::Timeout;
         case 3: return InjectResult::NoWindowThread;
-        default: return InjectResult::HelperFailed;
+        default:
+            MELLO_LOG_WARN(TAG, "injection helper for pid=%u exited with %lu", pid, exit_code);
+            return InjectResult::HelperFailed;
     }
 }
 

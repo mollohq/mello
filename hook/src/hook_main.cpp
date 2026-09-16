@@ -58,26 +58,37 @@ DWORD WINAPI hook_thread(LPVOID) {
         return 0;
     }
 
-    // From here the present path does the work. This thread only watches.
-    state.signal_ready();
-
+    // From here the present path does the work. This thread only watches, for
+    // as long as the game runs.
+    //
+    // It never ends on a stop. The first stream leaves this DLL loaded, and a
+    // later stream has to find it armed: the client resets the ready event
+    // before it injects, so this thread raising it again is what tells the
+    // injection helper that a hook which is already in the game is listening.
     bool capturing = false;
+    bool stopped = false;
     for (;;) {
-        if (state.wait_for_stop(500)) {
-            log_line("client asked the hook to stop");
-            break;
+        state.signal_ready();
+        const bool stop = state.wait_for_stop(500);
+        if (stop != stopped) {
+            stopped = stop;
+            if (stop) log_line("the client ended its stream");
         }
-        const bool wanted = state.capture_wanted();
+        // Capture itself follows `capture_enabled` and the heartbeat, which the
+        // present path reads. The resources belong to that thread and it
+        // releases them there; releasing them here could pull a texture out
+        // from under a copy in progress.
+        const bool wanted = !stop && state.capture_wanted();
         if (wanted != capturing) {
             capturing = wanted;
             log_line(capturing ? "capture on" : "capture off (stopped or heartbeat lost)");
         }
+        if (stop) {
+            // The stop event stays set until the next stream clears it. Sleep
+            // rather than spin on it.
+            Sleep(500);
+        }
     }
-
-    stop_dxgi_capture();
-    log_line("hook idle; the detours stay in place until the game exits");
-    log_close();
-    return 0;
 }
 
 }  // namespace
