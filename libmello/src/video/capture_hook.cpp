@@ -20,6 +20,12 @@ constexpr const char* TAG = "video/hook";
 // helper works to (plan 3.4).
 constexpr uint32_t kInjectTimeoutMs = 4000;
 
+// A game whose present count has not moved for this long has stopped drawing.
+// One second is long enough to cover a slow frame on a loaded machine and short
+// enough that viewers are told about an alt-tab quickly. The pause card has its
+// own debounce on top.
+constexpr uint64_t kGameQuietUs = 1'000'000;
+
 // How long to wait for the game's first present before the stream starts. A
 // game at 60 fps presents every 17 ms; a game that is between levels can take
 // longer, and then the window size is used instead.
@@ -43,19 +49,10 @@ std::atomic<uint32_t>* as_atomic_u32(uint32_t* p) {
     return reinterpret_cast<std::atomic<uint32_t>*>(p);
 }
 
-// A fatal error means the hook is loaded but cannot deliver. The ladder moves
-// on. Errors that only describe one swap chain are not fatal.
-bool error_is_fatal(uint32_t error) {
-    switch (error) {
-        case MELLO_HOOK_ERR_EXCEPTION:
-        case MELLO_HOOK_ERR_DETOUR:
-        case MELLO_HOOK_ERR_NO_OFFSETS:
-        case MELLO_HOOK_ERR_SHARED_TEXTURE:
-            return true;
-        default:
-            return false;
-    }
-}
+// Both rules live in the protocol header, so the hook and the client cannot
+// disagree about what an error means.
+bool error_is_fatal(uint32_t error) { return mello_hook_error_is_fatal(error) != 0; }
+bool error_is_transient(uint32_t error) { return mello_hook_error_is_transient(error) != 0; }
 
 const char* error_name(uint32_t error) {
     switch (error) {
@@ -68,6 +65,7 @@ const char* error_name(uint32_t error) {
         case MELLO_HOOK_ERR_MULTISAMPLED:   return "multisampled back buffer";
         case MELLO_HOOK_ERR_NO_OFFSETS:     return "no present offsets";
         case MELLO_HOOK_ERR_DETOUR:         return "Detours refused the transaction";
+        case MELLO_HOOK_ERR_DEVICE_LOST:    return "the game's graphics device is lost";
         default:                            return "unknown";
     }
 }
@@ -298,11 +296,25 @@ bool HookCapture::initialize(const GraphicsDevice& device, const CaptureSourceDe
 
 bool HookCapture::waiting_for_the_game() const {
     if (!info_) return false;
-    // The hook is in and has faulted on nothing. If the game has presented at
-    // all, a missing frame is the hook's fault; if it has not, there is nothing
-    // to capture anywhere.
-    return as_atomic_u64(const_cast<uint64_t*>(&info_->presents_seen))
-               ->load(std::memory_order_relaxed) == 0;
+
+    // A device that is lost fails every call until the game resets it. The
+    // game is fine, the hook is fine, and the wait is short: Direct3D 9 does
+    // this while a display mode changes.
+    if (error_is_transient(
+            as_atomic_u32(const_cast<uint32_t*>(&info_->last_error))->load(std::memory_order_relaxed))) {
+        return true;
+    }
+
+    const uint64_t presents =
+        as_atomic_u64(const_cast<uint64_t*>(&info_->presents_seen))->load(std::memory_order_relaxed);
+    if (presents == 0) return true;  // the game has drawn nothing at all yet
+
+    // The count stopped moving: the game stopped drawing. A fullscreen game
+    // does that the moment somebody alt-tabs away from it.
+    const uint64_t changed_at = last_presents_change_us_.load(std::memory_order_relaxed);
+    if (changed_at == 0) return false;
+    const uint64_t now = now_us();
+    return now > changed_at && now - changed_at > kGameQuietUs;
 }
 
 bool HookCapture::wait_for_first_frame(uint32_t timeout_ms) {
@@ -471,8 +483,23 @@ void HookCapture::capture_thread() {
     MELLO_LOG_INFO(TAG, "hook capture thread started for pid=%u", pid_);
     const uint64_t interval_us = 1'000'000ull / target_fps_;
 
+    last_presents_change_us_.store(now_us(), std::memory_order_relaxed);
+
     while (running_.load()) {
         beat();
+
+        // Sample the game's present count on every turn, frame or no frame.
+        // This is what says whether the game is drawing at all, and the loop
+        // runs at least every 100 ms whatever the game does.
+        {
+            const uint64_t presents = as_atomic_u64(&info_->presents_seen)
+                                          ->load(std::memory_order_relaxed);
+            if (presents != last_presents_.load(std::memory_order_relaxed)) {
+                last_presents_.store(presents, std::memory_order_relaxed);
+                last_presents_change_us_.store(now_us(), std::memory_order_relaxed);
+            }
+        }
+
         if (WaitForSingleObject(frame_event_, 100) != WAIT_OBJECT_0) {
             // No frame. A game that presents nothing is quiet, not broken: the
             // ladder rule for that lives in ProcessCapture.
@@ -484,6 +511,11 @@ void HookCapture::capture_thread() {
         last_frame_index_ = index;
 
         const uint32_t error = as_atomic_u32(&info_->last_error)->load(std::memory_order_relaxed);
+        if (error_is_transient(error)) {
+            // The hook recovers by itself. Keep waiting; the ladder gives this
+            // state its own, longer deadline.
+            continue;
+        }
         if (error_is_fatal(error)) {
             MELLO_LOG_ERROR(TAG, "the hook stopped capturing in pid=%u: %s", pid_,
                             error_name(error));

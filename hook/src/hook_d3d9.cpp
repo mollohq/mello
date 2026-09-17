@@ -5,6 +5,8 @@
 #include <d3d9.h>
 
 #include <atomic>
+#include <cstdarg>
+#include <cstdio>
 #include <cstring>
 
 #include <detours/detours.h>
@@ -116,8 +118,11 @@ bool build_resources(IDirect3DDevice9* device, const D3DSURFACE_DESC& desc) {
     if (FAILED(device->CreateRenderTarget(desc.Width, desc.Height, desc.Format,
                                           D3DMULTISAMPLE_NONE, 0, FALSE, &g_res.resolve,
                                           nullptr))) {
-        log_line("resolve target %ux%u fmt=%u failed", desc.Width, desc.Height, desc.Format);
-        HookState::instance().set_error(MELLO_HOOK_ERR_SHARED_TEXTURE);
+        const HRESULT level = device->TestCooperativeLevel();
+        log_line("resolve target %ux%u fmt=%u failed (device state 0x%08lx)", desc.Width,
+                 desc.Height, desc.Format, static_cast<unsigned long>(level));
+        HookState::instance().set_error(FAILED(level) ? MELLO_HOOK_ERR_DEVICE_LOST
+                                                      : MELLO_HOOK_ERR_SHARED_TEXTURE);
         release_resources();
         return false;
     }
@@ -181,6 +186,24 @@ bool build_resources(IDirect3DDevice9* device, const D3DSURFACE_DESC& desc) {
     return true;
 }
 
+// Rate-limited logging for the present path: one line every two seconds at
+// most, so a failure that repeats every frame is visible without writing a log
+// line 60 times a second inside somebody's game.
+void log_throttled(DWORD* last_tick, const char* format, ...) {
+    const DWORD now = GetTickCount();
+    if (*last_tick != 0 && now - *last_tick < 2000) return;
+    *last_tick = now;
+
+    char message[256];
+    va_list args;
+    va_start(args, format);
+    std::vsnprintf(message, sizeof(message), format, args);
+    va_end(args);
+    log_line("%s", message);
+}
+
+DWORD g_last_readback_log = 0;
+
 // The body of the present hooks. Runs on the game's render thread.
 void capture_present(IDirect3DDevice9* device) {
     HookState& state = HookState::instance();
@@ -191,6 +214,12 @@ void capture_present(IDirect3DDevice9* device) {
         }
         return;
     }
+
+    // A lost device is not checked for here. Asking the device on every present
+    // costs the game frames: it ran at 17 fps instead of 48 with that call in
+    // place (measured 2026-09-17). The read-back below reports the same state
+    // through its own return code, at no cost, and the copy has to happen
+    // anyway.
 
     IDirect3DSurface9* back = nullptr;
     if (FAILED(device->GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO, &back)) || !back) {
@@ -227,16 +256,18 @@ void capture_present(IDirect3DDevice9* device) {
     }
     if (FAILED(hr)) {
         state.count_drop();
-        static bool reported = false;
-        if (!reported) {
-            reported = true;
-            log_line("D3D9 read-back failed: hr=0x%08lx (%ux%u fmt=%u)",
-                     static_cast<unsigned long>(hr), g_res.width, g_res.height, g_res.format);
+        log_throttled(&g_last_readback_log, "D3D9 read-back failed: hr=0x%08lx (%ux%u fmt=%u)",
+                      static_cast<unsigned long>(hr), g_res.width, g_res.height, g_res.format);
+        if (hr == D3DERR_DEVICELOST || hr == D3DERR_DEVICENOTRESET) {
+            release_resources();
+            state.set_error(MELLO_HOOK_ERR_DEVICE_LOST);
+            return;
         }
         state.set_error(hr == D3DERR_INVALIDCALL ? MELLO_HOOK_ERR_MULTISAMPLED
                                                  : MELLO_HOOK_ERR_COPY);
         return;
     }
+    state.set_error(MELLO_HOOK_OK);
 
     D3DLOCKED_RECT locked{};
     if (FAILED(readback->LockRect(&locked, nullptr, D3DLOCK_READONLY))) {

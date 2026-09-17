@@ -119,12 +119,14 @@ public:
     /// looking at a still picture that needs explaining.
     virtual bool captures_while_minimized() const { return false; }
 
-    /// True when this backend works but the game has drawn nothing yet.
+    /// True when this backend works but the game is giving it nothing.
     ///
-    /// Only the hook can tell: it counts the game's presents from inside the
-    /// game. Silence then says nothing about the capture method, and moving the
-    /// ladder on would trade the best method for one that shows the desktop.
-    /// Every other backend answers false, because none of them can know.
+    /// Two causes, both outside the capture method: the game is drawing nothing
+    /// at all, or its graphics device is lost while the display mode changes.
+    /// Only the hook can tell, because only the hook counts the game's presents
+    /// from inside it. Silence then says nothing about the method, and moving
+    /// the ladder on would trade the best method for one that shows the
+    /// desktop. Every other backend answers false, because none of them knows.
     virtual bool waiting_for_the_game() const { return false; }
 
     /// True when `stop()` gave up waiting for its own thread and detached it.

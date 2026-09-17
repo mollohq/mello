@@ -56,7 +56,26 @@ enum MelloHookError {
     MELLO_HOOK_ERR_MULTISAMPLED   = 6,  // back buffer is multisampled, needs a resolve
     MELLO_HOOK_ERR_NO_OFFSETS     = 7,  // the client passed no usable offsets
     MELLO_HOOK_ERR_DETOUR         = 8,  // Detours refused the transaction
+    /// The graphics device is lost. Direct3D 9 does this while a game changes
+    /// display mode, which is exactly when a person takes a game fullscreen.
+    /// Every call fails until the game resets its device. It is a state to wait
+    /// through, not a failure: the hook rebuilds and carries on by itself.
+    MELLO_HOOK_ERR_DEVICE_LOST    = 9,
 };
+
+// True when an error means the hook cannot deliver at all and the capture
+// ladder should move on. Both sides use this one definition.
+static inline int mello_hook_error_is_fatal(uint32_t error) {
+    return error == MELLO_HOOK_ERR_EXCEPTION || error == MELLO_HOOK_ERR_DETOUR ||
+           error == MELLO_HOOK_ERR_NO_OFFSETS || error == MELLO_HOOK_ERR_SHARED_TEXTURE;
+}
+
+// True when an error passes by itself and the client should wait rather than
+// give up a working hook. A lost device is the one that matters: Direct3D 9
+// loses it whenever the display mode changes.
+static inline int mello_hook_error_is_transient(uint32_t error) {
+    return error == MELLO_HOOK_ERR_DEVICE_LOST;
+}
 
 // `flags`
 #define MELLO_HOOK_FLAG_HDR      0x1u  // the back buffer format is HDR

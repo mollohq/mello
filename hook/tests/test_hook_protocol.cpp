@@ -89,6 +89,25 @@ TEST(HookProtocol, LayoutIsFixed) {
     EXPECT_EQ(offsetof(MelloHookInfo, off_dxgi_present), 120u);
 }
 
+// A lost device is the state Direct3D 9 enters whenever the display mode
+// changes, which is exactly when a person takes a game fullscreen. Reading it
+// as a broken hook cost a real stream its hook on 2026-09-16: the client gave
+// up two seconds before the game finished switching.
+TEST(HookProtocol, ALostDeviceIsSomethingToWaitThrough) {
+    EXPECT_TRUE(mello_hook_error_is_transient(MELLO_HOOK_ERR_DEVICE_LOST));
+    EXPECT_FALSE(mello_hook_error_is_fatal(MELLO_HOOK_ERR_DEVICE_LOST));
+
+    // These the hook never recovers from by itself.
+    EXPECT_TRUE(mello_hook_error_is_fatal(MELLO_HOOK_ERR_EXCEPTION));
+    EXPECT_TRUE(mello_hook_error_is_fatal(MELLO_HOOK_ERR_DETOUR));
+    EXPECT_TRUE(mello_hook_error_is_fatal(MELLO_HOOK_ERR_NO_OFFSETS));
+    EXPECT_FALSE(mello_hook_error_is_transient(MELLO_HOOK_ERR_EXCEPTION));
+
+    // A healthy hook is neither.
+    EXPECT_FALSE(mello_hook_error_is_fatal(MELLO_HOOK_OK));
+    EXPECT_FALSE(mello_hook_error_is_transient(MELLO_HOOK_OK));
+}
+
 TEST(HookProtocol, NamesCarryTheProcessId) {
     char name[64];
     object_name(name, sizeof(name), MELLO_HOOK_NAME_INFO, 4321);

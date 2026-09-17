@@ -232,9 +232,13 @@ CaptureState capture_state_for(bool exhausted, bool deferred_start, bool waiting
     // No capture has started at all: the game was minimized when the stream
     // began, and nothing can capture a minimized window from outside.
     if (deferred_start) return CaptureState::WaitingMinimized;
+    // The game itself stopped drawing: alt-tabbed away from a fullscreen game,
+    // on a loading screen, or its device is lost during a mode change. The
+    // viewer is looking at a still picture whatever method is capturing.
     if (waiting_for_the_game) return CaptureState::WaitingForGame;
-    // The hook takes the frame inside the game, so a minimized game keeps
-    // streaming and the window's state says nothing about what viewers see.
+    // The hook takes the frame inside the game, so a minimized game that keeps
+    // drawing keeps streaming, and its window state says nothing about what
+    // viewers see.
     if (captures_while_minimized) return CaptureState::Capturing;
     if (!target_can_present) return CaptureState::WaitingMinimized;
     return CaptureState::Capturing;
@@ -798,6 +802,28 @@ void ProcessCapture::monitor_thread() {
             continue;
         }
         if (!exclusive) was_exclusive = false;
+
+        // 4. While a game is in exclusive fullscreen, keep trying to get back
+        // to the best method. Screen capture of a fullscreen game can deliver
+        // the desktop and keep delivering it, and nothing above moves a ladder
+        // whose method works.
+        if (exclusive) {
+            size_t step = 0;
+            {
+                std::lock_guard<std::mutex> lock(swap_mutex_);
+                step = step_index_;
+            }
+            if (step != 0) {
+                if (next_best_retry_us_ == 0) {
+                    next_best_retry_us_ = now + ladder::kBestMethodRetryUs;
+                } else if (now >= next_best_retry_us_) {
+                    next_best_retry_us_ = now + ladder::kBestMethodRetryUs;
+                    restart_from_best("trying the best method again");
+                }
+            } else {
+                next_best_retry_us_ = 0;
+            }
+        }
     }
 }
 

@@ -86,6 +86,16 @@ bool startup_failed(bool continuous, uint64_t frames_since_step_start,
                     uint64_t step_started_us, uint64_t now_us,
                     bool waiting_for_the_game = false);
 
+/// Wait between attempts to go back to the best method while a game is in
+/// exclusive fullscreen.
+///
+/// The ladder only walks down by itself, because whatever it settles on keeps
+/// delivering. That is the wrong outcome for a fullscreen game: screen capture
+/// can deliver the desktop with the game as a small window inside it, forever.
+/// A failed attempt costs nothing, because the current method keeps the stream
+/// until a better one is running (2026-09-16).
+static constexpr uint64_t kBestMethodRetryUs = 30'000'000;
+
 /// Wait between ladder passes when no method delivered. A visible game that
 /// renders nothing (paused, or a benchmark waiting for input) looks exactly
 /// like a blind capture method, so the ladder retries instead of churning.
@@ -174,6 +184,7 @@ private:
     // exclusive fullscreen, which no capture method here can see.
     std::atomic<bool>                exhausted_{false};
     uint64_t                         next_pass_us_ = 0;
+    uint64_t                         next_best_retry_us_ = 0;
     std::atomic<bool>                stop_timed_out_{false};
     // An abandoned capture thread keeps the D3D11 device busy inside the
     // driver: the next method blocks on the same device. Once this is set the

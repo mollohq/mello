@@ -92,6 +92,13 @@ private:
     uint32_t target_fps_ = 60;
     uint64_t last_delivered_us_ = 0;
 
+    // The game's own present count, sampled by the capture thread. A count that
+    // stops moving is a game that stopped drawing: minimized, alt-tabbed out of
+    // a fullscreen mode, or waiting on a loading screen. The ladder and the
+    // pause card both need that, and neither can see it any other way.
+    std::atomic<uint64_t> last_presents_{0};
+    std::atomic<uint64_t> last_presents_change_us_{0};
+
     std::thread       thread_;
     std::atomic<bool> running_{false};
     std::atomic<bool> failed_{false};
