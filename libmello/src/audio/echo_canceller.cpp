@@ -3,7 +3,6 @@
 #include "modules/audio_processing/include/audio_processing.h"
 #include <cmath>
 #include <cstddef>
-
 namespace mello::audio {
 
 static webrtc::AudioProcessing::Config::NoiseSuppression::Level to_webrtc_ns_level(
@@ -88,6 +87,15 @@ void EchoCanceller::apply_config() {
         high_pass_filter_enabled_.load(std::memory_order_relaxed);
     cfg.gain_controller2.enabled = agc_enabled_.load(std::memory_order_relaxed);
     cfg.gain_controller2.adaptive_digital.enabled = true;
+    // AGC2 adaptive-digital starts at 0 dB instead of the M131 default of
+    // +15 dB. The default start-gain lingers across far-end talk/gap cycles:
+    // AEC cancels the echo, AGC2 sees near-silence, and the leftover start
+    // gain blasts the residue/noise floor when the far-end pauses (measured
+    // +11.6 dB in EchoCancellerTest.Agc2DoesNotPumpResidueInFarEndGaps, field
+    // reports up to +19 dB). Starting at 0 removes that pump without capping
+    // max_gain_db, so genuine near-end speech still gets full adaptive gain.
+    // See plans/AEC-CLIPPING-REPRO.md.
+    cfg.gain_controller2.adaptive_digital.initial_gain_db = 0.0f;
     WebRtcNsLevel ns_level =
         static_cast<WebRtcNsLevel>(ns_level_.load(std::memory_order_relaxed));
     cfg.noise_suppression.enabled = ns_level != WebRtcNsLevel::Off;
