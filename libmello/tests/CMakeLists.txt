@@ -13,6 +13,7 @@ add_executable(mello_tests
     test_stream_audio_pipeline.cpp
     test_hook_capture.cpp
     test_hook_loopback.cpp
+    test_graphics_device.cpp
 )
 
 # Separate target: mello_tests currently fails to build (test_jitter_buffer.cpp

@@ -186,7 +186,10 @@ pub fn handle(ctx: &AppContext, event: Event) {
                     })
                     .flatten();
                 if let Some(hwnd) = hwnd {
-                    match DCompPresenter::new(hwnd, width, height, 0.0, 0.0) {
+                    // The presenter opens libmello's shared textures, so its
+                    // device has to sit on the same GPU libmello decodes on.
+                    let adapter_luid = mello_core::video_adapter_luid();
+                    match DCompPresenter::new(hwnd, width, height, 0.0, 0.0, adapter_luid) {
                         Ok(p) => {
                             *ctx.dcomp_presenter.borrow_mut() = Some(p);
                             log::info!("DComp presenter created for stream watching");

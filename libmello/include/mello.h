@@ -700,6 +700,17 @@ MELLO_API bool mello_stream_feed_packet(MelloStreamView* view, const uint8_t* da
 /** Number of decoded frames waiting in the ring buffer to be presented. */
 MELLO_API int mello_stream_viewer_decode_queue_depth(MelloStreamView* view);
 
+/** LUID of the GPU adapter libmello uses for video, as (HighPart << 32) | LowPart.
+ *  Returns 0 when no adapter is usable. Safe to call before any stream starts.
+ *
+ *  A caller that opens the shared texture handles from
+ *  MelloNativeFrameCallback must create its own D3D11 device on this adapter.
+ *  A shared handle is only valid on the adapter that made it, so a device on
+ *  the system default adapter fails every open with E_INVALIDARG. The two are
+ *  the same adapter on a single-GPU machine and differ on a laptop that has
+ *  both an integrated and a discrete GPU. */
+MELLO_API uint64_t mello_video_adapter_luid(void);
+
 /** Read back the latest decoded frame and deliver it via the frame callback.
  *  Call once per display frame after feeding all available packets. */
 MELLO_API bool mello_stream_present_frame(MelloStreamView* view);

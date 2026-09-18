@@ -22,17 +22,25 @@ ID3D11Device* GraphicsDevice::d3d11() const {
     return static_cast<ID3D11Device*>(handle);
 }
 
-GraphicsDevice create_d3d11_device() {
+uint64_t luid_to_u64(const LUID& luid) {
+    return (static_cast<uint64_t>(static_cast<uint32_t>(luid.HighPart)) << 32) |
+           static_cast<uint64_t>(static_cast<uint32_t>(luid.LowPart));
+}
+
+// Pick the adapter every video device in this process uses: the one with the
+// most dedicated video memory, which on a laptop is the discrete GPU rather
+// than the integrated one. Kept as one function because video_adapter_luid()
+// has to answer for the same adapter that create_d3d11_device() will take. A
+// second copy of this rule would drift, and the symptom of a drift is silent:
+// textures shared from one adapter cannot be opened on another.
+ComPtr<IDXGIAdapter1> select_video_adapter(DXGI_ADAPTER_DESC1& out_desc, bool log_candidates) {
     ComPtr<IDXGIFactory2> factory;
-    HRESULT hr = CreateDXGIFactory1(IID_PPV_ARGS(&factory));
-    if (FAILED(hr)) {
-        MELLO_LOG_ERROR(TAG, "CreateDXGIFactory1 failed: hr=0x%08X", hr);
-        return {GraphicsBackend::D3D11, nullptr};
+    if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&factory)))) {
+        MELLO_LOG_ERROR(TAG, "CreateDXGIFactory1 failed");
+        return nullptr;
     }
 
-    // Enumerate all adapters, prefer discrete GPU (most VRAM) for HW encoding
     ComPtr<IDXGIAdapter1> best_adapter;
-    DXGI_ADAPTER_DESC1 best_desc{};
     SIZE_T best_vram = 0;
 
     for (UINT i = 0; ; ++i) {
@@ -44,21 +52,38 @@ GraphicsDevice create_d3d11_device() {
 
         if (desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) continue;
 
-        char name[128]{};
-        WideCharToMultiByte(CP_UTF8, 0, desc.Description, -1, name, sizeof(name), nullptr, nullptr);
-        MELLO_LOG_INFO(TAG, "  adapter[%u]: \"%s\" vram=%lluMB",
-            i, name, desc.DedicatedVideoMemory / (1024 * 1024));
+        if (log_candidates) {
+            char name[128]{};
+            WideCharToMultiByte(CP_UTF8, 0, desc.Description, -1, name, sizeof(name), nullptr,
+                                nullptr);
+            MELLO_LOG_INFO(TAG, "  adapter[%u]: \"%s\" luid=0x%016llX vram=%lluMB",
+                i, name, static_cast<unsigned long long>(luid_to_u64(desc.AdapterLuid)),
+                desc.DedicatedVideoMemory / (1024 * 1024));
+        }
 
         if (desc.DedicatedVideoMemory > best_vram) {
             best_vram = desc.DedicatedVideoMemory;
             best_adapter = candidate;
-            best_desc = desc;
+            out_desc = desc;
         }
     }
+    return best_adapter;
+}
+
+uint64_t video_adapter_luid() {
+    DXGI_ADAPTER_DESC1 desc{};
+    ComPtr<IDXGIAdapter1> adapter = select_video_adapter(desc, false);
+    if (!adapter) return 0;
+    return luid_to_u64(desc.AdapterLuid);
+}
+
+GraphicsDevice create_d3d11_device() {
+    DXGI_ADAPTER_DESC1 best_desc{};
+    ComPtr<IDXGIAdapter1> best_adapter = select_video_adapter(best_desc, true);
 
     if (!best_adapter) {
         MELLO_LOG_ERROR(TAG, "No suitable DXGI adapter found");
-        return {GraphicsBackend::D3D11, nullptr};
+        return {GraphicsBackend::D3D11, nullptr, {}, 0};
     }
 
     D3D_FEATURE_LEVEL feature_levels[] = {
@@ -70,7 +95,7 @@ GraphicsDevice create_d3d11_device() {
     D3D_FEATURE_LEVEL achieved_level{};
     UINT flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT;
 
-    hr = D3D11CreateDevice(
+    HRESULT hr = D3D11CreateDevice(
         best_adapter.Get(),
         D3D_DRIVER_TYPE_UNKNOWN,
         nullptr,
@@ -85,7 +110,7 @@ GraphicsDevice create_d3d11_device() {
 
     if (FAILED(hr)) {
         MELLO_LOG_ERROR(TAG, "D3D11CreateDevice failed: hr=0x%08X", hr);
-        return {GraphicsBackend::D3D11, nullptr};
+        return {GraphicsBackend::D3D11, nullptr, {}, 0};
     }
 
     // The immediate context is shared: capture threads copy frames into it and
@@ -103,13 +128,16 @@ GraphicsDevice create_d3d11_device() {
         MELLO_LOG_WARN(TAG, "no ID3D11Multithread on this device; the context is unprotected");
     }
 
-    GraphicsDevice result{GraphicsBackend::D3D11, nullptr, {}};
+    GraphicsDevice result{GraphicsBackend::D3D11, nullptr, {}, 0};
     WideCharToMultiByte(CP_UTF8, 0, best_desc.Description, -1,
                         result.adapter_name, sizeof(result.adapter_name), nullptr, nullptr);
     result.adapter_name[sizeof(result.adapter_name) - 1] = '\0';
+    result.adapter_luid = luid_to_u64(best_desc.AdapterLuid);
 
-    MELLO_LOG_INFO(TAG, "D3D11 device created: adapter=\"%s\" vram=%lluMB feature_level=0x%04X",
+    MELLO_LOG_INFO(TAG,
+        "D3D11 device created: adapter=\"%s\" luid=0x%016llX vram=%lluMB feature_level=0x%04X",
         result.adapter_name,
+        static_cast<unsigned long long>(result.adapter_luid),
         best_desc.DedicatedVideoMemory / (1024 * 1024),
         achieved_level);
 

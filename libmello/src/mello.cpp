@@ -8,6 +8,7 @@
 #include "video/window_thumbnail.hpp"
 #ifdef _WIN32
 #include "video/hook_launcher.hpp"
+#include "video/graphics_device.hpp"
 #endif
 #include "audio/clip_encoder.hpp"
 #include "audio/stream_audio_pipeline.hpp"
@@ -1360,6 +1361,14 @@ bool mello_stream_feed_packet(MelloStreamView* view, const uint8_t* data, int si
 int mello_stream_viewer_decode_queue_depth(MelloStreamView* view) {
     if (!view) return 0;
     return static_cast<int>(view->video->decode_queue_depth());
+}
+
+uint64_t mello_video_adapter_luid(void) {
+#ifdef _WIN32
+    return mello::video::video_adapter_luid();
+#else
+    return 0;
+#endif
 }
 
 bool mello_stream_present_frame(MelloStreamView* view) {

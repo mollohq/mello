@@ -40,6 +40,29 @@ use std::time::Instant;
 pub use stream_ffi::feed_viewer_audio_packet;
 use stream_ffi::{StreamHostPeer, StreamPeerDisconnect, ViewerState};
 
+/// LUID of the GPU adapter libmello decodes on, as `(HighPart << 32) | LowPart`.
+/// Zero when no adapter is usable, and always zero off Windows.
+///
+/// Anything that opens the shared texture handle in [`NativeSurfaceFrame`] must
+/// create its D3D11 device on this adapter. A shared handle belongs to the
+/// adapter that made it, so a device on the system default adapter fails every
+/// open with `E_INVALIDARG`. Those are the same adapter on a single-GPU machine
+/// and different ones on a laptop with an integrated and a discrete GPU, which
+/// is why the mismatch stays invisible until someone streams to a laptop.
+///
+/// Safe to call before any stream starts: it reads the adapter list and does
+/// not create a device.
+pub fn video_adapter_luid() -> u64 {
+    #[cfg(target_os = "windows")]
+    {
+        unsafe { mello_sys::mello_video_adapter_luid() }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        0
+    }
+}
+
 /// Shared single-slot buffer for decoded stream frames. The C++ callback
 /// overwrites the latest frame; the UI timer reads and takes it. This avoids
 /// unbounded queue buildup that occurs when sending ~11 MB frames through a
