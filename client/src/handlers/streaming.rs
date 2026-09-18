@@ -1,6 +1,6 @@
 use std::rc::Rc;
 
-use mello_core::Event;
+use mello_core::{Command, Event};
 use slint::Model;
 
 use super::stream_cards::sync_active_stream_cards;
@@ -151,6 +151,12 @@ pub fn handle(ctx: &AppContext, event: Event) {
             ctx.app.set_dbg_host_pacing_sleep_delta_count(0);
             ctx.app.set_dbg_host_pacing_sleep_delta_ms(0);
             sync_active_stream_cards(ctx);
+        }
+        Event::StreamTargetExited => {
+            // The captured game quit. Stop hosting through the normal path so
+            // the session tears down and the backend tells the viewers.
+            log::info!("Stream target exited — stopping hosted stream");
+            let _ = ctx.cmd_tx.send(Command::StopStream);
         }
         Event::StreamViewerJoined { viewer_id } => {
             log::info!("Stream viewer joined: {}", viewer_id);

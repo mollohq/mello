@@ -1,5 +1,6 @@
 #pragma once
 #include "capture_source.hpp"
+#include "process_liveness.hpp"
 
 #ifdef _WIN32
 #include <thread>
@@ -123,6 +124,7 @@ public:
     bool consume_swap_event() override;
     bool failed() const override { return exhausted_.load(std::memory_order_relaxed); }
     CaptureState state() const override;
+    bool target_exited() const override { return target_liveness_.exited(); }
     bool stop_timed_out() const override { return stop_timed_out_.load(std::memory_order_relaxed); }
     std::string method_history() const override;
     void set_present_delay_histogram(PresentDelayHistogram* hist) override;
@@ -151,6 +153,12 @@ private:
     bool start_deferred();
 
     uint32_t                         pid_ = 0;
+    // Tracks the captured process object itself, not the pid, so pid reuse
+    // cannot confuse it. Refreshed on every monitor pass; sticky once the
+    // process is known dead. Ends the stream via get_host_telemetry, where
+    // CaptureState only pauses it.
+    // Written on the monitor thread, read on any thread.
+    ProcessLiveness                  target_liveness_;
     GraphicsDevice                   device_{};
     FrameCallback                    callback_;
     FrameCallback                    counting_callback_;

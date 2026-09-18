@@ -351,6 +351,13 @@ pub struct StreamManager {
     capture_failed_last: bool,
     /// What the capture was doing at the last check. See `MelloStreamStats`.
     capture_state_last: u32,
+    /// The captured process has exited, as of the last stats read. Kept apart
+    /// from `capture_state_last` because it is final and every capture state
+    /// is not.
+    target_exited_seen: bool,
+    /// The exit has been reported. Sticky: the tick reports it exactly once
+    /// and the host ends the stream on it.
+    target_exited_reported: bool,
     /// Owns the encoder's framerate target. Congestion control feeds it the
     /// bitrate; it decides the cadence that bitrate can actually sustain.
     framerate_ladder: FramerateLadder,
@@ -443,6 +450,8 @@ impl StreamManager {
             capture_failed_flag: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             capture_failed_last: false,
             capture_state_last: CAPTURE_STATE_CAPTURING,
+            target_exited_seen: false,
+            target_exited_reported: false,
             framerate_ladder: ladder,
             pause: PauseController::new(),
             pause_event_tx: None,
@@ -729,6 +738,10 @@ impl StreamManager {
         let mut stats: mello_sys::MelloStreamStats = unsafe { std::mem::zeroed() };
         unsafe { mello_sys::mello_stream_get_stats(self.host, &mut stats) };
 
+        // Sticky in the capture layer; kept sticky here so a later read can
+        // never walk it back.
+        self.target_exited_seen |= stats.target_exited != 0;
+
         if stats.capture_state != self.capture_state_last {
             log::info!(
                 "Stream capture: {} -> {}",
@@ -801,6 +814,21 @@ impl StreamManager {
         // state here. The capture layer knows more than "is the window there":
         // a game that is minimized, one that has drawn nothing yet, and one no
         // method can see are three different sentences for the viewer.
+        // A quit game looks exactly like a tabbed-out one from here: no
+        // window, no frames. Checked first so the last thing viewers get is
+        // the stream ending, not a pause card for a game that is gone.
+        //
+        // The guard is the sticky flag, not the one-shot transition: the host
+        // takes a moment to tear the stream down, and the ticks in between
+        // would otherwise reach the pause debounce and broadcast a pause card
+        // for a process that has already exited.
+        if self.target_exited_seen {
+            if self.observe_target_exit(true) {
+                log::info!("Stream ending: the captured process exited");
+            }
+            return;
+        }
+
         let state = self.capture_state_last;
         let Some(paused) = self.pause.observe(state == CAPTURE_STATE_CAPTURING) else {
             return;
@@ -821,6 +849,23 @@ impl StreamManager {
         if let Some(tx) = &self.pause_event_tx {
             let _ = tx.send(Event::StreamHostPaused { paused });
         }
+    }
+
+    /// Target-process exit, polled on the same tick as the pause state.
+    ///
+    /// Not debounced, unlike pause: a dead process never comes back, so there
+    /// is nothing to wait out. Sends `Event::StreamTargetExited` once and the
+    /// host ends the stream on it. No FFI here, so tests drive it without a
+    /// native host. Returns true on the transition.
+    fn observe_target_exit(&mut self, exited: bool) -> bool {
+        if exited && !self.target_exited_reported {
+            self.target_exited_reported = true;
+            if let Some(tx) = &self.pause_event_tx {
+                let _ = tx.send(Event::StreamTargetExited);
+            }
+            return true;
+        }
+        false
     }
 
     /// Push host diagnostics to the relay so a remote user's stream can be
@@ -1657,6 +1702,84 @@ mod tests {
             },
         );
         assert_eq!(mgr.aggregate_remb_target_kbps(now), Some(3_000));
+        std::mem::forget(mgr);
+    }
+
+    #[test]
+    fn target_exit_reports_once_and_stays_reported() {
+        let config = StreamConfig::from_preset(QualityPreset::High, Codec::H264);
+        let sink = Arc::new(FakeSink::new());
+        let (_video_tx, video_rx) = mpsc::channel(4);
+        let (_audio_tx, audio_rx) = mpsc::channel(4);
+        let mut mgr = StreamManager::new(
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            sink,
+            config,
+            video_rx,
+            audio_rx,
+        );
+        let (event_tx, event_rx) = std::sync::mpsc::channel();
+        mgr.set_pause_event_tx(Some(event_tx));
+        // No FFI here: the state machine, not the stats poll, is under test.
+        assert!(!mgr.observe_target_exit(false));
+        assert!(mgr.observe_target_exit(true));
+        assert!(!mgr.observe_target_exit(true));
+        match event_rx.try_recv().expect("exit event") {
+            crate::events::Event::StreamTargetExited => {}
+            other => panic!("expected StreamTargetExited, got {:?}", other),
+        }
+        assert!(event_rx.try_recv().is_err(), "no duplicate exit event");
+        std::mem::forget(mgr);
+    }
+
+    /// A quit game and a minimized one look identical to the capture layer.
+    /// The exit has to win: a viewer's last impression must be the stream
+    /// ending, not a pause card for a game that is never coming back.
+    #[test]
+    fn exited_target_ends_without_pause_broadcast() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        let config = StreamConfig::from_preset(QualityPreset::High, Codec::H264);
+        let sink = Arc::new(FakeSink::new());
+        let (_video_tx, video_rx) = mpsc::channel(4);
+        let (_audio_tx, audio_rx) = mpsc::channel(4);
+        let mut mgr = StreamManager::new(
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            sink.clone(),
+            config,
+            video_rx,
+            audio_rx,
+        );
+        let (event_tx, event_rx) = std::sync::mpsc::channel();
+        mgr.set_pause_event_tx(Some(event_tx));
+        // Minimized *and* exited, which is what a quit game reports.
+        mgr.capture_state_last = CAPTURE_STATE_WAITING_MINIMIZED;
+        mgr.target_exited_seen = true;
+
+        rt.block_on(mgr.tick_stream_pause());
+        assert!(!mgr.pause.is_paused());
+        assert!(
+            sink.control.lock().expect("lock").is_empty(),
+            "an exited target must not broadcast pause"
+        );
+        match event_rx.try_recv().expect("exit event") {
+            crate::events::Event::StreamTargetExited => {}
+            other => panic!("expected StreamTargetExited, got {:?}", other),
+        }
+
+        // Further ticks: still no pause broadcast, and no second event.
+        rt.block_on(mgr.tick_stream_pause());
+        rt.block_on(mgr.tick_stream_pause());
+        rt.block_on(mgr.tick_stream_pause());
+        assert!(
+            sink.control.lock().expect("lock").is_empty(),
+            "an exited target must never broadcast pause"
+        );
+        assert!(event_rx.try_recv().is_err(), "no duplicate exit event");
         std::mem::forget(mgr);
     }
 

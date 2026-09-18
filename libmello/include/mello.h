@@ -784,6 +784,11 @@ typedef struct MelloStreamStats {
      * delayed [i, i+1) ms; the last bucket counts >= 31 ms. Diff two reads
      * for a window. */
     uint32_t present_delay_hist[32];
+    /* The process behind the capture target has exited. Ends the stream: a
+     * minimized game only pauses it, a quit game is never coming back. Sticky;
+     * 0 for monitor capture, which has no process behind it. Appended field:
+     * existing offsets unchanged. */
+    uint8_t  target_exited;
 } MelloStreamStats;
 
 MELLO_API void mello_stream_get_stats(MelloStreamHost* host, MelloStreamStats* stats);

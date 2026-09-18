@@ -253,6 +253,7 @@ if(WIN32)
         src/video/hook_launcher.cpp
         src/video/hook_policy.cpp
         src/video/process_enum.cpp
+        src/video/process_liveness.cpp
         src/video/window_thumbnail.cpp
         src/video/video_preprocessor.cpp
         src/video/staging_texture.cpp

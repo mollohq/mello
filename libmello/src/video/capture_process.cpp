@@ -526,6 +526,7 @@ void ProcessCapture::advance(const char* reason) {
 bool ProcessCapture::initialize(const GraphicsDevice& device, const CaptureSourceDesc& desc) {
     pid_ = desc.pid;
     device_ = device;
+    target_liveness_.track(pid_);
 
     HWND hwnd = find_main_window(pid_);
     if (!hwnd) {
@@ -619,6 +620,7 @@ bool ProcessCapture::start(uint32_t target_fps, FrameCallback callback) {
 void ProcessCapture::stop() {
     running_ = false;
     if (monitor_thread_.joinable()) monitor_thread_.join();
+    target_liveness_.reset();
 
     std::lock_guard<std::mutex> op(ladder_op_mutex_);
     std::unique_ptr<CaptureSource> active;
@@ -703,6 +705,10 @@ void ProcessCapture::monitor_thread() {
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
         if (!running_.load()) break;
         if (device_poisoned_.load(std::memory_order_relaxed)) continue;
+
+        // Cheap (a zero-timeout wait on a handle we already hold), and this
+        // is the only thread that polls it for the ladder backends.
+        target_liveness_.refresh();
 
         const uint64_t now = ladder_now_us();
         uint64_t step_frames = 0;

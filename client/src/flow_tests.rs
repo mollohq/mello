@@ -1876,3 +1876,18 @@ fn the_quick_stream_path_uses_the_chosen_quality() {
         "STREAM must send the preset the pills chose, got {cmds:?}"
     );
 }
+
+/// A quit game ends the hosted stream: the core reports the exited target
+/// and the UI must route it to the normal stop path, not leave the session
+/// streaming a dead process.
+#[test]
+fn quit_game_stops_the_hosted_stream() {
+    let mut h = Harness::new();
+    h.emit(Event::StreamTargetExited);
+
+    let cmds = h.commands();
+    assert!(
+        cmds.iter().any(|c| matches!(c, Command::StopStream)),
+        "StreamTargetExited must emit Command::StopStream, got {cmds:?}"
+    );
+}

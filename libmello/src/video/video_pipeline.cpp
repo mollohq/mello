@@ -575,6 +575,7 @@ void VideoPipeline::get_host_telemetry(HostTelemetry& out) const {
         out.capture_backend = capture_->backend_name();
         out.capture_failed  = capture_->failed();
         out.capture_state   = static_cast<uint32_t>(capture_->state());
+        out.target_exited   = capture_->target_exited();
         out.capture_history = capture_->method_history();
     }
     present_delay_hist_.snapshot(out.present_delay_hist.data());

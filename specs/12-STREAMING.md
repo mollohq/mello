@@ -117,6 +117,20 @@ in exclusive fullscreen, or the capture device is stuck. Host stats then carry
 is not told anything. Exclusive-fullscreen games need the game capture hook
 (plan work stream 3), which does not exist yet.
 
+**Target exit ends the stream.** Each backend holds the target process object
+through an open handle, so pid reuse cannot confuse it, and reports
+`target_exited` in host stats. The host manager polls it at 1 Hz; on exit the
+host stops and calls `stop_stream`, and viewers leave through the normal
+crew-event path.
+
+This is deliberately not a capture state. Every capture state recovers: the
+game is minimized, or loading, or drawing through an API no method can see. A
+quit game is final, and from outside it looks identical to a tabbed-out one.
+Folding them together would either end streams on an alt-tab or hold a stream
+open on a game that is gone. A minimized target only pauses; monitor capture
+has no target and never exits. Any ambiguous answer reads as alive, so a
+stream never ends on uncertainty.
+
 ### 3.1.1 Game capture hook
 
 The hook is the first ladder step, and the only method that sees an
@@ -629,7 +643,7 @@ The host captures cursor state (position, visibility, shape RGBA) alongside vide
 
 ### Teardown
 
-Host: signal `StreamSession::stop_and_wait` so the manager drains sinks before peer teardown. Viewer: stop pipeline, release GPU resources, leave SFU/P2P session.
+Host: signal `StreamSession::stop_and_wait` so the manager drains sinks before peer teardown. Viewer: stop pipeline, release GPU resources, leave SFU/P2P session. The host also stops on user request and when the captured process quits (`target_exited`); both run the same teardown and `stop_stream` RPC.
 
 ---
 

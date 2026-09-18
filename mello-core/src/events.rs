@@ -339,6 +339,9 @@ pub enum Event {
     StreamHostPaused {
         paused: bool,
     },
+    /// The process owning the capture target exited. The host ends the
+    /// stream; viewers learn through the normal stop path (session teardown).
+    StreamTargetExited,
     StreamFrame {
         width: u32,
         height: u32,

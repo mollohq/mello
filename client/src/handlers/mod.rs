@@ -93,6 +93,7 @@ pub fn handle_event(ctx: &AppContext, event: Event) {
         | Event::StreamWatchingStopped
         | Event::StreamPaused { .. }
         | Event::StreamHostPaused { .. }
+        | Event::StreamTargetExited
         | Event::StreamFrame { .. }
         | Event::StreamDebugStats { .. }
         | Event::StreamHostPacingStats { .. }

@@ -163,6 +163,10 @@ bool WgcCapture::initialize(const GraphicsDevice& device, const CaptureSourceDes
     item_ = create_capture_item_for_hwnd(hwnd);
     if (!item_) return false;
 
+    DWORD wnd_pid = 0;
+    GetWindowThreadProcessId(hwnd, &wnd_pid);
+    target_liveness_.track(static_cast<uint32_t>(wnd_pid));
+
     auto size = item_.Size();
     width_  = static_cast<uint32_t>(size.Width);
     height_ = static_cast<uint32_t>(size.Height);
@@ -226,6 +230,7 @@ bool WgcCapture::start(uint32_t target_fps, FrameCallback callback) {
 
 void WgcCapture::stop() {
     running_ = false;
+    target_liveness_.reset();
     if (item_ && closed_token_.value != 0) {
         try {
             item_.Closed(closed_token_);

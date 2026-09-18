@@ -1,5 +1,6 @@
 #pragma once
 #include "capture_source.hpp"
+#include "process_liveness.hpp"
 
 #ifdef _WIN32
 #include <winrt/Windows.Graphics.Capture.h>
@@ -27,6 +28,16 @@ public:
 
     bool get_cursor(CursorData& out) override;
     bool failed() const override { return closed_.load(std::memory_order_relaxed); }
+
+    // No monitor thread here, so the owning process is polled lazily on the
+    // ~1 Hz stats call. A closed capture item alone is not enough to end a
+    // stream: a destroyed window can mean a mode change, while a dead owning
+    // process is final.
+    bool target_exited() const override {
+        target_liveness_.refresh();
+        return target_liveness_.exited();
+    }
+
     void set_present_delay_histogram(PresentDelayHistogram* hist) override { delay_hist_ = hist; }
 
 private:
@@ -49,6 +60,11 @@ private:
     // Set by the capture item's Closed event: the window or monitor is gone.
     std::atomic<bool> closed_{false};
     PresentDelayHistogram* delay_hist_ = nullptr;
+    // Process that owns hwnd_, tracked so a quit game ends the stream instead
+    // of pausing it forever. Resolved once at initialize; the handle pins the
+    // exact process object against pid reuse. Empty for monitor capture, which
+    // has no owning process.
+    mutable ProcessLiveness target_liveness_;
     winrt::event_token closed_token_{};
     FrameCallback     callback_;
 

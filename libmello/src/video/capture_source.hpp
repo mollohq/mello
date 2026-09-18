@@ -111,6 +111,19 @@ public:
     /// What to tell the user about this capture. See CaptureState.
     virtual CaptureState state() const { return CaptureState::Capturing; }
 
+    /// Whether the process that owns the capture target has exited.
+    ///
+    /// Deliberately not a CaptureState: every state above is something the
+    /// stream can recover from, and this one is final. A quit game and a
+    /// minimized game look identical from outside — no window, no frames — so
+    /// folding them together would either end streams on an alt-tab or wait
+    /// forever on a game that is gone. Sticky once true.
+    ///
+    /// Default false: monitor capture, and any backend with no process to
+    /// speak of, never has the target exit from under it. Polled at ~1 Hz
+    /// alongside state(), so it must stay cheap.
+    virtual bool target_exited() const { return false; }
+
     /// True when this backend keeps delivering frames from a minimized game.
     ///
     /// The hook does: it takes the frame inside the game, before the window

@@ -144,6 +144,10 @@ public:
         bool        capture_failed      = false;
         // What the capture is doing, for the streamer's and viewers' screens.
         uint32_t    capture_state       = 0;
+        // The process behind the capture target has exited. Separate from
+        // capture_state because it is final: every capture state recovers, a
+        // quit game does not. Sticky; false for monitor capture.
+        bool        target_exited       = false;
         // Capture method changes and reasons, oldest first.
         std::string capture_history;
         // Cumulative present-to-capture delay, 1 ms buckets.
