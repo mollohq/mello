@@ -499,8 +499,8 @@ framerate — an encoder still told 60 while fed 30 hands out half the bits each
 frame deserves. Each switch forces an IDR.
 
 Stage 2 (geometry rungs: 540p/480p/360p) needs viewer-side work — mid-stream SPS
-geometry change and a `DCompPresenter` swap-chain resize — and is tracked in
-`plans/ADAPTIVE-QUALITY-LADDER.md`.
+geometry change and a `DCompPresenter` swap-chain resize — and is not built.
+See `plans/STREAM-CAPTURE-QUALITY.md`.
 
 ### 8.2 REMB congestion control
 

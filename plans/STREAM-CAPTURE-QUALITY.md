@@ -19,7 +19,7 @@ Codebase state on `main`:
 | Geometry ladder missing | Confirmed. FFI has only `mello_stream_set_bitrate` (`mello.h:646`) and `mello_stream_set_framerate` (`mello.h:658`). No `set_resolution`. No rung-change message. |
 | DComp auto-resize exists | Confirmed. `client/src/dcomp_presenter.rs:330-351` detects texture dim change and calls `ResizeBuffers`. Viewer can absorb geometry change without new plumbing, but needs explicit signal for determinism. |
 
-Old plans were stale: `STREAM-QUALITY-ROADMAP` Phases 0–2 landed, Phase 3 lists game audio (done), dual rendition, AV1, macOS — not this work. `ADAPTIVE-QUALITY-LADDER` Stage 1 landed, Stage 2 stayed design-only. Both are superseded by this file.
+Old plans were stale: `STREAM-QUALITY-ROADMAP` Phases 0–2 landed, Phase 3 lists game audio (done), dual rendition, AV1, macOS — not this work. `ADAPTIVE-QUALITY-LADDER` Stage 1 landed, Stage 2 stayed design-only. Both were superseded by this file and deleted.
 
 ---
 
