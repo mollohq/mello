@@ -56,6 +56,11 @@ private:
     uint32_t          width_  = 0;
     uint32_t          height_ = 0;
     bool              monitor_ = false;
+    // What the capture item was made from, kept so start() can make it again.
+    // stop() closes the item, and the capture ladder stops a backend and
+    // starts it again when a better method turns out to be unavailable.
+    HWND              source_hwnd_ = nullptr;      // window capture
+    HMONITOR          source_monitor_ = nullptr;   // monitor capture
     std::atomic<bool> running_{false};
     // Set by the capture item's Closed event: the window or monitor is gone.
     std::atomic<bool> closed_{false};

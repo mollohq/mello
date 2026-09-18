@@ -15,6 +15,7 @@ add_executable(mello_tests
     test_hook_loopback.cpp
     test_graphics_device.cpp
     test_process_liveness.cpp
+    test_capture_wgc_restart.cpp
 )
 
 # Separate target: mello_tests currently fails to build (test_jitter_buffer.cpp

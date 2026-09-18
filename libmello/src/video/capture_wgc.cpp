@@ -125,6 +125,7 @@ bool WgcCapture::initialize_monitor(const GraphicsDevice& device, HMONITOR monit
     item_ = create_capture_item_for_monitor(monitor);
     if (!item_) return false;
     monitor_ = true;
+    source_monitor_ = monitor;
     auto size = item_.Size();
     width_  = static_cast<uint32_t>(size.Width);
     height_ = static_cast<uint32_t>(size.Height);
@@ -162,6 +163,7 @@ bool WgcCapture::initialize(const GraphicsDevice& device, const CaptureSourceDes
 
     item_ = create_capture_item_for_hwnd(hwnd);
     if (!item_) return false;
+    source_hwnd_ = hwnd;
 
     DWORD wnd_pid = 0;
     GetWindowThreadProcessId(hwnd, &wnd_pid);
@@ -179,6 +181,30 @@ bool WgcCapture::initialize(const GraphicsDevice& device, const CaptureSourceDes
 bool WgcCapture::start(uint32_t target_fps, FrameCallback callback) {
     if (running_.load()) return false;
 
+    // stop() closes the capture item, so a restart has to make a new one. The
+    // ladder does exactly that: it stops the running backend to try a better
+    // one, and puts this one back when the better one turns out to be
+    // unavailable. Without this, start() called CreateCaptureSession on a
+    // closed item, which threw out of the monitor thread and took the whole
+    // client down with it (CS2 entering exclusive fullscreen, 2026-09-18).
+    if (!item_) {
+        item_ = monitor_ ? create_capture_item_for_monitor(source_monitor_)
+                         : create_capture_item_for_hwnd(source_hwnd_);
+        if (!item_) {
+            MELLO_LOG_WARN(TAG, "WGC: the capture target is gone; cannot restart");
+            return false;
+        }
+        // The window may have been resized while this backend was stopped.
+        auto size = item_.Size();
+        width_  = static_cast<uint32_t>(size.Width);
+        height_ = static_cast<uint32_t>(size.Height);
+        if (!monitor_) {
+            DWORD wnd_pid = 0;
+            GetWindowThreadProcessId(source_hwnd_, &wnd_pid);
+            target_liveness_.track(static_cast<uint32_t>(wnd_pid));
+        }
+    }
+
     {
         std::lock_guard<std::mutex> lock(throttle_mutex_);
         target_fps_ = target_fps > 0 ? target_fps : 60;
@@ -189,6 +215,11 @@ bool WgcCapture::start(uint32_t target_fps, FrameCallback callback) {
 
     callback_ = std::move(callback);
 
+    // Everything below is a WinRT call, and every one of them throws on
+    // failure. A capture backend that cannot start is an ordinary outcome the
+    // ladder handles, so it is reported as false here. Letting it throw ends
+    // the process, because the caller is a bare std::thread.
+    try {
     auto winrt_device = create_winrt_device(device_.Get());
 
     frame_pool_ = winrt::Windows::Graphics::Capture::Direct3D11CaptureFramePool::CreateFreeThreaded(
@@ -226,6 +257,22 @@ bool WgcCapture::start(uint32_t target_fps, FrameCallback callback) {
     running_ = true;
     session_.StartCapture();
     return true;
+    } catch (const winrt::hresult_error& e) {
+        MELLO_LOG_ERROR(TAG, "WGC: start failed: hr=0x%08X", static_cast<unsigned>(e.code()));
+    } catch (...) {
+        MELLO_LOG_ERROR(TAG, "WGC: start failed");
+    }
+    // Leave nothing half-built: the ladder may call start() again.
+    running_ = false;
+    if (session_) {
+        session_.Close();
+        session_ = nullptr;
+    }
+    if (frame_pool_) {
+        frame_pool_.Close();
+        frame_pool_ = nullptr;
+    }
+    return false;
 }
 
 void WgcCapture::stop() {

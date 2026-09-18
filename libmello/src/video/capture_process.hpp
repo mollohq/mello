@@ -131,6 +131,9 @@ public:
 
 private:
     void monitor_thread();
+    // The body of monitor_thread, so the thread entry point can contain any
+    // exception the capture backends throw.
+    void monitor_pass();
 
     /// Build and initialize (not start) the backend for one ladder step.
     std::unique_ptr<CaptureSource> make_step(LadderStep step, HWND hwnd) const;

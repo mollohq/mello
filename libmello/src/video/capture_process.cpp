@@ -692,6 +692,22 @@ bool ProcessCapture::start_deferred() {
 }
 
 void ProcessCapture::monitor_thread() {
+    // This thread drives the whole capture ladder, and every step of it calls
+    // into a graphics API that throws. A throw that escapes a std::thread
+    // calls std::terminate, so a capture backend that fails in an unusual way
+    // takes the client down with it: a crash, no log line, and a lost voice
+    // call. A failed ladder step is an ordinary outcome, so it is contained
+    // here and the stream keeps whatever it already had.
+    try {
+        monitor_pass();
+    } catch (const std::exception& e) {
+        MELLO_LOG_ERROR(TAG, "ladder: monitor thread stopped on an exception: %s", e.what());
+    } catch (...) {
+        MELLO_LOG_ERROR(TAG, "ladder: monitor thread stopped on an exception");
+    }
+}
+
+void ProcessCapture::monitor_pass() {
     // If deferred, poll until the window is restored before starting capture
     while (deferred_hwnd_ && running_.load()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(250));
