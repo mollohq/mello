@@ -66,8 +66,9 @@ DWORD WINAPI hook_thread(LPVOID) {
         return 0;
     }
 
-    log_line("hook %u-bit loaded into pid %lu", static_cast<unsigned>(MELLO_HOOK_BITS),
-             GetCurrentProcessId());
+    log_line("hook %u-bit (protocol %u, built %s %s) loaded into pid %lu",
+             static_cast<unsigned>(MELLO_HOOK_BITS), MELLO_HOOK_PROTOCOL_VERSION, __DATE__,
+             __TIME__, GetCurrentProcessId());
 
     // A game uses one graphics API, and the modules it loaded say which. Both
     // are tried: a game can load d3d9.dll for its launcher and dxgi.dll for

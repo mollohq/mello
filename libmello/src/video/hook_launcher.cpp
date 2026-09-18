@@ -238,6 +238,20 @@ const char* inject_result_name(InjectResult result) {
     return "unknown";
 }
 
+// When the DLL was last written, as "YYYY-MM-DD HH:MM". A hook that a running
+// game holds open cannot be replaced, so a developer build can be hours older
+// than the client that loads it; this is what makes that visible in the log.
+std::string dll_timestamp(const std::string& path) {
+    WIN32_FILE_ATTRIBUTE_DATA info{};
+    if (!GetFileAttributesExA(path.c_str(), GetFileExInfoStandard, &info)) return "unknown";
+    SYSTEMTIME utc{};
+    if (!FileTimeToSystemTime(&info.ftLastWriteTime, &utc)) return "unknown";
+    char text[32];
+    std::snprintf(text, sizeof(text), "%04u-%02u-%02u %02u:%02u", utc.wYear, utc.wMonth, utc.wDay,
+                  utc.wHour, utc.wMinute);
+    return text;
+}
+
 InjectResult inject(uint32_t pid, int bits, uint32_t timeout_ms) {
     const std::string directory = hook_directory();
     const std::string helper = directory + "\\mello-inject" + std::to_string(bits) + ".exe";
@@ -245,6 +259,10 @@ InjectResult inject(uint32_t pid, int bits, uint32_t timeout_ms) {
         MELLO_LOG_WARN(TAG, "injection helper not found: %s", helper.c_str());
         return InjectResult::HelperMissing;
     }
+
+    const std::string dll = directory + "\\mello-hook" + std::to_string(bits) + ".dll";
+    MELLO_LOG_INFO(TAG, "injecting %s (written %s) into pid=%u", dll.c_str(),
+                   dll_timestamp(dll).c_str(), pid);
 
     const std::string command = "\"" + helper + "\" " + std::to_string(pid) + " " +
                                 std::to_string(timeout_ms);
@@ -257,7 +275,16 @@ InjectResult inject(uint32_t pid, int bits, uint32_t timeout_ms) {
     }
     switch (exit_code) {
         case 0: return InjectResult::Ready;
-        case 2: return InjectResult::Timeout;
+        case 2:
+            // The most common reason on a developer machine: the game already
+            // holds an older hook, which refuses a protocol it does not know
+            // and never reports ready. The game has to restart to pick up a new
+            // one, because the hook pins itself for the life of the process.
+            MELLO_LOG_WARN(TAG,
+                           "the hook did not report ready for pid=%u. If this game was already "
+                           "running when the hook was last built, restart it.",
+                           pid);
+            return InjectResult::Timeout;
         case 3: return InjectResult::NoWindowThread;
         default:
             MELLO_LOG_WARN(TAG, "injection helper for pid=%u exited with %lu", pid, exit_code);

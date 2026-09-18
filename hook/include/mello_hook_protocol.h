@@ -27,7 +27,16 @@
 
 #include <stdint.h>
 
-#define MELLO_HOOK_PROTOCOL_VERSION 1u
+// Bump this whenever a field changes meaning, including a field taken from the
+// reserved area. The size alone cannot catch that: `presents_seen` was carved
+// out of `reserved` at the same size, so an older hook and a newer client
+// agreed on the layout while the older hook never wrote the field. The client
+// read the zero it left as "this game has drawn nothing" and waited fifteen
+// seconds for a game that was drawing the whole time (2026-09-18).
+//
+// Version 2: presents_seen, cpu_frame_bytes, cpu_pitch, the D3D9 offsets and
+// MELLO_HOOK_ERR_DEVICE_LOST.
+#define MELLO_HOOK_PROTOCOL_VERSION 2u
 
 // Two textures, used one after the other. The hook writes the one the client is
 // not reading, so a slow client cannot see a half-written frame.

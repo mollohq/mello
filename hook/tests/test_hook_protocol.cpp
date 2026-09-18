@@ -77,6 +77,12 @@ private:
 // The hook and the client ship as separate files and can be different versions
 // after a failed update. Every field offset is part of the contract.
 TEST(HookProtocol, LayoutIsFixed) {
+    // The version travels with the meaning of the fields, not only their
+    // layout. A field taken out of the reserved area keeps the size the same,
+    // and an older hook then leaves it at zero while a newer client reads that
+    // zero as an answer: on 2026-09-18 a client waited fifteen seconds for a
+    // game that was drawing, because the hook in it predated presents_seen.
+    EXPECT_EQ(MELLO_HOOK_PROTOCOL_VERSION, 2u);
     EXPECT_EQ(sizeof(MelloHookInfo), 248u);
     EXPECT_EQ(offsetof(MelloHookInfo, protocol_version), 0u);
     EXPECT_EQ(offsetof(MelloHookInfo, struct_size), 4u);
