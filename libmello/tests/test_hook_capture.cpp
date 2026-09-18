@@ -51,9 +51,11 @@ struct FakeGame {
     PROCESS_INFORMATION process{};
     HWND                window = nullptr;
 
-    bool start(const std::string& directory, int seconds, bool d3d9 = false) {
+    bool start(const std::string& directory, int seconds, bool d3d9 = false,
+               bool second_device = false) {
         std::string command = "\"" + directory + "\\mello-fakegame64.exe\" --seconds " +
-                              std::to_string(seconds) + (d3d9 ? " --d3d9" : "");
+                              std::to_string(seconds) + (d3d9 ? " --d3d9" : "") +
+                              (second_device ? " --second-device" : "");
         std::wstring wide(command.begin(), command.end());
         wide.push_back(L'\0');
 
@@ -234,6 +236,44 @@ TEST(HookCapture, CapturesADirect3D9Game) {
     capture.stop();
     EXPECT_FALSE(capture.stop_timed_out());
     EXPECT_FALSE(capture.failed());
+}
+
+// A game that presents through both Present and PresentEx hands the hook two
+// interface pointers for one device. Comparing them directly made the hook
+// tear down and rebuild its capture on almost every frame: measured against
+// Unigine Heaven on 2026-09-18, a rebuild every 110 ms, each one costing the
+// game a set of surfaces and the client its texture.
+TEST(HookCapture, AGameThatPresentsTwoWaysDoesNotRebuildTheCapture) {
+    if (running_under_ci()) GTEST_SKIP() << "needs a GPU and a desktop session";
+    const std::string directory = hook_directory();
+    if (directory.empty()) GTEST_SKIP() << "set MELLO_HOOK_DIR to the hook build folder";
+
+    FakeGame game;
+    ASSERT_TRUE(game.start(directory, 20, /*d3d9=*/true, /*second_device=*/true))
+        << "the D3D9 test program did not start";
+
+    const GraphicsDevice device = create_d3d11_device();
+    ASSERT_NE(device.d3d11(), nullptr) << "no D3D11 device on this machine";
+
+    CaptureSourceDesc desc{};
+    desc.mode = CaptureMode::Process;
+    desc.pid = game.pid();
+    desc.allow_hook = true;
+
+    HookCapture capture;
+    ASSERT_TRUE(capture.initialize(device, desc));
+
+    std::atomic<int> frames{0};
+    ASSERT_TRUE(capture.start(60, [&](ID3D11Texture2D*, uint64_t) { frames.fetch_add(1); }));
+    std::this_thread::sleep_for(std::chrono::seconds(3));
+
+    EXPECT_GT(frames.load(), 30) << "the hook delivered almost nothing";
+    // One build for the stream. Two more would still be a resize or a device
+    // reset; a game presenting at 48 fps for three seconds must not need 100.
+    EXPECT_LE(capture.texture_generation(), 3u)
+        << "the hook is rebuilding its capture: " << capture.texture_generation() << " times";
+
+    capture.stop();
 }
 
 // The injection helper has to exit cleanly, every time. It used to crash with

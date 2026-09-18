@@ -294,6 +294,12 @@ bool HookCapture::initialize(const GraphicsDevice& device, const CaptureSourceDe
     return true;
 }
 
+uint32_t HookCapture::texture_generation() const {
+    if (!info_) return 0;
+    return as_atomic_u32(const_cast<uint32_t*>(&info_->texture_generation))
+        ->load(std::memory_order_relaxed);
+}
+
 bool HookCapture::waiting_for_the_game() const {
     if (!info_) return false;
 

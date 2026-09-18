@@ -46,7 +46,10 @@ struct Resources {
     ID3D11DeviceContext* context  = nullptr;
     ID3D11Texture2D*     texture[MELLO_HOOK_TEXTURE_COUNT]{};
     uint32_t             handle[MELLO_HOOK_TEXTURE_COUNT]{};
-    IDXGISwapChain*      swap     = nullptr;   // not owned, compared only
+    // Identity, not the interface pointer: a game that presents through both
+    // IDXGISwapChain and IDXGISwapChain1 hands over two pointers to one object,
+    // and comparing them directly rebuilds the capture on every other frame.
+    IUnknown*            swap     = nullptr;   // identity only; never called
     UINT                 width    = 0;
     UINT                 height   = 0;
     DXGI_FORMAT          format   = DXGI_FORMAT_UNKNOWN;
@@ -78,6 +81,14 @@ void release_resources() {
     g_res.format = DXGI_FORMAT_UNKNOWN;
     g_res.next = 0;
     g_res.ready = false;
+}
+
+IUnknown* identity_of(IUnknown* com_object) {
+    if (!com_object) return nullptr;
+    IUnknown* identity = nullptr;
+    if (FAILED(com_object->QueryInterface(IID_PPV_ARGS(&identity)))) return nullptr;
+    identity->Release();
+    return identity;
 }
 
 bool format_is_hdr(DXGI_FORMAT f) {
@@ -177,7 +188,7 @@ bool build_resources(IDXGISwapChain* swap, const DXGI_SWAP_CHAIN_DESC& desc) {
 
     device->GetImmediateContext(&g_res.context);
     g_res.device = device;  // reference passed on from GetDevice
-    g_res.swap = swap;
+    g_res.swap = identity_of(swap);
     g_res.width = td.Width;
     g_res.height = td.Height;
     g_res.format = td.Format;
@@ -201,7 +212,7 @@ bool build_resources(IDXGISwapChain* swap, const DXGI_SWAP_CHAIN_DESC& desc) {
 // take the largest back buffer, which is the game's own output rather than a
 // launcher or an overlay.
 bool is_target_swap_chain(IDXGISwapChain* swap, const DXGI_SWAP_CHAIN_DESC& desc) {
-    if (!g_res.ready || g_res.swap == swap) return true;
+    if (!g_res.ready || g_res.swap == identity_of(swap)) return true;
     const uint64_t candidate = static_cast<uint64_t>(desc.BufferDesc.Width) * desc.BufferDesc.Height;
     const uint64_t current = static_cast<uint64_t>(g_res.width) * g_res.height;
     return candidate > current;
@@ -223,7 +234,7 @@ void capture_present(IDXGISwapChain* swap) {
     if (desc.BufferDesc.Width == 0 || desc.BufferDesc.Height == 0) return;
     if (!is_target_swap_chain(swap, desc)) return;
 
-    const bool changed = !g_res.ready || g_res.swap != swap ||
+    const bool changed = !g_res.ready || g_res.swap != identity_of(swap) ||
                          g_res.width != desc.BufferDesc.Width ||
                          g_res.height != desc.BufferDesc.Height ||
                          g_res.format != desc.BufferDesc.Format;
@@ -299,7 +310,7 @@ HRESULT STDMETHODCALLTYPE hooked_resize_buffers(IDXGISwapChain* swap, UINT count
     if (!g_disabled.load(std::memory_order_relaxed) &&
         !g_in_capture.exchange(true, std::memory_order_acquire)) {
         __try {
-            if (g_res.swap == swap) release_resources();
+            if (g_res.swap == identity_of(swap)) release_resources();
         } __except (EXCEPTION_EXECUTE_HANDLER) {
             note_fault("ResizeBuffers");
         }

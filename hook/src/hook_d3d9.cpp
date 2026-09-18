@@ -37,8 +37,24 @@ std::atomic<bool> g_disabled{false};
 std::atomic<bool> g_in_capture{false};
 
 // Everything below belongs to the game's present thread.
+// Two interface pointers belong to the same COM object only when their
+// IUnknown pointers match. A Direct3D 9Ex game hands us IDirect3DDevice9
+// through Present and IDirect3DDevice9Ex through PresentEx, and those are
+// different pointers to one device. Comparing them directly made the hook
+// rebuild its resources on almost every present: measured against Unigine
+// Heaven on 2026-09-18, a rebuild every 110 ms for as long as the stream ran.
+IUnknown* identity_of(IUnknown* com_object) {
+    if (!com_object) return nullptr;
+    IUnknown* identity = nullptr;
+    if (FAILED(com_object->QueryInterface(IID_PPV_ARGS(&identity)))) return nullptr;
+    // The reference is dropped straight away: the pointer is only ever compared,
+    // never called, and the game owns the object.
+    identity->Release();
+    return identity;
+}
+
 struct Resources {
-    IDirect3DDevice9*  device      = nullptr;   // not owned; compared only
+    IUnknown*          device      = nullptr;   // identity only; never called
     // The back buffer is copied here first. A game's back buffer can be
     // multisampled, and a multisampled surface cannot be read back at all;
     // StretchRect resolves it on the way. Measured against Unigine Heaven in
@@ -165,7 +181,7 @@ bool build_resources(IDirect3DDevice9* device, const D3DSURFACE_DESC& desc) {
         return false;
     }
 
-    g_res.device = device;
+    g_res.device = identity_of(device);
     g_res.width = desc.Width;
     g_res.height = desc.Height;
     g_res.format = desc.Format;
@@ -233,8 +249,24 @@ void capture_present(IDirect3DDevice9* device) {
         return;
     }
 
-    const bool changed = !g_res.ready || g_res.device != device || g_res.width != desc.Width ||
-                         g_res.height != desc.Height || g_res.format != desc.Format;
+    // A game can have more than one device: a launcher, an overlay or a login
+    // window alongside the one that draws the game. Capture the biggest and
+    // ignore the rest, or every present from the small one tears the capture
+    // down and builds it again. Measured against Unigine Heaven on 2026-09-18:
+    // a rebuild every 110 ms for as long as the stream ran.
+    IUnknown* const identity = identity_of(device);
+    if (g_res.ready && g_res.device != identity) {
+        const uint64_t candidate = static_cast<uint64_t>(desc.Width) * desc.Height;
+        const uint64_t current = static_cast<uint64_t>(g_res.width) * g_res.height;
+        if (candidate <= current) {
+            back->Release();
+            return;
+        }
+    }
+
+    const bool changed = !g_res.ready || g_res.device != identity ||
+                         g_res.width != desc.Width || g_res.height != desc.Height ||
+                         g_res.format != desc.Format;
     if (changed && !build_resources(device, desc)) {
         back->Release();
         return;

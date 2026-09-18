@@ -48,6 +48,11 @@ public:
     bool stop_timed_out() const override { return detached_.load(std::memory_order_relaxed); }
     void set_present_delay_histogram(PresentDelayHistogram* hist) override { delay_hist_ = hist; }
 
+    /// How many times the hook has published a new set of frame buffers. One
+    /// build per stream is normal; a number that climbs means the hook is
+    /// rebuilding, which costs the game frames and the client its textures.
+    uint32_t texture_generation() const;
+
     /// Bitness of the target process, 32 or 64. The helpers and the hook must
     /// match it.
     static int process_bitness(uint32_t pid);

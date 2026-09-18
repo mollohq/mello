@@ -29,6 +29,7 @@
 #include <d3d11.h>
 #include <dxgi1_2.h>
 
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -77,8 +78,56 @@ bool drawing_paused(DWORD started_at, int after_seconds, int for_seconds) {
     return elapsed >= from && elapsed < from + static_cast<DWORD>(for_seconds) * 1000;
 }
 
+// A second device on its own window, presenting slowly: a launcher, an overlay
+// or a login window next to the one that draws the game. Heaven has one.
+struct SecondDevice {
+    HWND                window = nullptr;
+    IDirect3D9Ex*       d3d9   = nullptr;
+    IDirect3DDevice9Ex* device = nullptr;
+
+    bool create() {
+        WNDCLASSEXW wc{};
+        wc.cbSize = sizeof(wc);
+        wc.lpfnWndProc = DefWindowProcW;
+        wc.hInstance = GetModuleHandleW(nullptr);
+        wc.lpszClassName = L"mello_fake_game_second";
+        RegisterClassExW(&wc);
+        window = CreateWindowExW(0, wc.lpszClassName, L"m3llo fake game overlay",
+                                 WS_OVERLAPPEDWINDOW, 0, 0, 320, 200, nullptr, nullptr,
+                                 wc.hInstance, nullptr);
+        if (!window) return false;
+
+        if (FAILED(Direct3DCreate9Ex(D3D_SDK_VERSION, &d3d9)) || !d3d9) return false;
+        D3DPRESENT_PARAMETERS pp{};
+        pp.Windowed = TRUE;
+        pp.SwapEffect = D3DSWAPEFFECT_DISCARD;
+        pp.BackBufferFormat = D3DFMT_X8R8G8B8;
+        pp.BackBufferWidth = 320;
+        pp.BackBufferHeight = 200;
+        pp.hDeviceWindow = window;
+        pp.PresentationInterval = D3DPRESENT_INTERVAL_IMMEDIATE;
+        return SUCCEEDED(d3d9->CreateDeviceEx(D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, window,
+                                              D3DCREATE_SOFTWARE_VERTEXPROCESSING |
+                                                  D3DCREATE_NOWINDOWCHANGES,
+                                              &pp, nullptr, &device)) &&
+               device != nullptr;
+    }
+
+    void present() {
+        if (!device) return;
+        device->Clear(0, nullptr, D3DCLEAR_TARGET, D3DCOLOR_XRGB(255, 0, 0), 1.0f, 0);
+        device->Present(nullptr, nullptr, nullptr, nullptr);
+    }
+
+    ~SecondDevice() {
+        if (device) device->Release();
+        if (d3d9) d3d9->Release();
+        if (window) DestroyWindow(window);
+    }
+};
+
 int run_d3d9(HWND window, int width, int height, int seconds, bool fullscreen,
-             int start_delay_seconds, int stop_after, int stop_for) {
+             int start_delay_seconds, int stop_after, int stop_for, bool second_device) {
     // Nothing is rendered and no device exists yet: the window is up and the
     // process is alive, and that is all a capture method can find.
     const DWORD start_at = GetTickCount() + static_cast<DWORD>(start_delay_seconds) * 1000;
@@ -138,6 +187,13 @@ int run_d3d9(HWND window, int width, int height, int seconds, bool fullscreen,
     std::printf("ready pid=%lu api=d3d9\n", GetCurrentProcessId());
     std::fflush(stdout);
 
+    SecondDevice overlay;
+    if (second_device && !overlay.create()) {
+        std::fprintf(stderr, "second device failed\n");
+    }
+
+    uint64_t frames = 0;
+    DWORD last_overlay_present = 0;
     const DWORD started_at = GetTickCount();
     const DWORD deadline = started_at + static_cast<DWORD>(seconds) * 1000;
     bool was_paused = false;
@@ -158,7 +214,21 @@ int run_d3d9(HWND window, int width, int height, int seconds, bool fullscreen,
             continue;
         }
         device->Clear(0, nullptr, D3DCLEAR_TARGET, colour, 1.0f, 0);
-        device->Present(nullptr, nullptr, nullptr, nullptr);
+        // Alternate the two present calls a D3D9Ex game has. They reach the
+        // hook as two different interface pointers to one device, which is what
+        // Unigine Heaven does and what made the hook rebuild its capture on
+        // almost every frame until 2026-09-18.
+        if ((frames++ & 1) == 0) {
+            device->Present(nullptr, nullptr, nullptr, nullptr);
+        } else {
+            device->PresentEx(nullptr, nullptr, nullptr, nullptr, 0);
+        }
+        // The small device presents about nine times a second, which is what
+        // Heaven's second window did.
+        if (second_device && GetTickCount() - last_overlay_present >= 110) {
+            last_overlay_present = GetTickCount();
+            overlay.present();
+        }
     }
 
     device->Release();
@@ -177,6 +247,7 @@ int wmain(int argc, wchar_t** argv) {
     const int start_delay = argument(argc, argv, L"--start-delay", 0);
     const int stop_after = argument(argc, argv, L"--stop-drawing-after", 0);
     const int stop_for = argument(argc, argv, L"--stop-drawing-for", 0);
+    const bool second_device = flag(argc, argv, L"--second-device");
 
     WNDCLASSEXW wc{};
     wc.cbSize = sizeof(wc);
@@ -202,7 +273,7 @@ int wmain(int argc, wchar_t** argv) {
             SetWindowPos(window, HWND_TOP, 0, 0, width, height, SWP_FRAMECHANGED | SWP_SHOWWINDOW);
         }
         const int result = run_d3d9(window, width, height, seconds, fullscreen, start_delay,
-                                    stop_after, stop_for);
+                                    stop_after, stop_for, second_device);
         DestroyWindow(window);
         return result;
     }
