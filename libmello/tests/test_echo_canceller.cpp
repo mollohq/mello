@@ -1,7 +1,12 @@
 #include <gtest/gtest.h>
 #include "audio/echo_canceller.hpp"
+#include "audio/speech_expander.hpp"
 #include <cmath>
+#include <cstdint>
+#include <cstdlib>
 #include <cstring>
+#include <fstream>
+#include <string>
 #include <vector>
 
 using namespace mello::audio;
@@ -310,5 +315,511 @@ TEST_F(EchoCancellerTest, RenderAccumulatesSubFrameChunks) {
         ec.process_render(chunk, 100);
     }
     EXPECT_EQ(ec.render_frames() - before, 10u);
+}
+
+// --- AGC2 residue-pumping reproduction (expected RED before fix) ---
+// Field fact (plans/ECHO-CANCELLATION-IMPROVEMENTS.md, AEC-CLIPPING-REPRO.md):
+// AGC2 blasts AEC3 residue up to +19 dB during far-end gaps. Mechanism:
+// with EC ON, AEC cancels the echo, so AGC2 sees a quiet post-AEC signal
+// and ramps its gain up; when the far-end stops, that high gain blasts the
+// near-end noise floor -> "clipping". With EC OFF, AGC2 sees the loud
+// uncancelled echo during bursts and keeps its gain low, so the SAME gap
+// floor stays quiet. That asymmetry is exactly the field report: heavy
+// clipping with EC on, audible-echo-but-clean with EC off.
+//
+// The test drives a burst/gap far-end with a constant quiet near-end floor
+// and measures the gap-floor gain with EC on vs EC off. The EC-on excess
+// over EC-off is the defect. Render is fed every frame (zeros in gaps) so
+// AEC alignment is ideal and the AGC effect is isolated (render-feed
+// continuity is a separate test/concern).
+
+struct GapPumpResult {
+    double pre_floor_rms;  // injected near-end floor level (mic in, gap frames)
+    double gap_post_rms;   // output level in gap frames (after processing)
+};
+
+static GapPumpResult run_gap_pump(EchoCanceller& ec, bool aec_enabled) {
+    ec.set_agc_enabled(true);
+    ec.set_aec_enabled(aec_enabled);
+
+    constexpr int kBurst = 30;             // ~600 ms far-end active
+    constexpr int kGap = 20;               // ~400 ms far-end silent
+    constexpr int kCycle = kBurst + kGap;
+    constexpr int kCycles = 12;
+    constexpr int kMeasureFromCycle = 5;   // let AGC settle before measuring
+    constexpr int kGapMeasStart = 2;       // skip the 1-frame echo tail
+    constexpr int kGapMeasEnd = 12;        // early-gap transient = what users hear
+    constexpr float kEchoAtten = 0.5f;     // -6 dB echo path
+    constexpr int16_t kFloorAmp = 200;     // ~ -49 dBFS near-end floor (operator silent)
+    constexpr int16_t kFarAmp = 8000;
+
+    uint32_t far_seed = 0x1234u;
+    uint32_t floor_seed = 0x0000BEEFu;
+    std::vector<int16_t> far(FRAME_SIZE);
+    std::vector<int16_t> prev_far(FRAME_SIZE, 0);
+    std::vector<int16_t> floor(FRAME_SIZE);
+    std::vector<int16_t> mic(FRAME_SIZE);
+
+    double pre_sum_sq = 0.0, post_sum_sq = 0.0;
+    int64_t meas_samples = 0;
+
+    for (int c = 0; c < kCycles; ++c) {
+        for (int k = 0; k < kCycle; ++k) {
+            const bool in_burst = k < kBurst;
+            if (in_burst) {
+                fill_broadband(far.data(), FRAME_SIZE, far_seed, kFarAmp);
+            } else {
+                std::memset(far.data(), 0, FRAME_SIZE * sizeof(int16_t));
+            }
+
+            // Constant low-level near-end floor (advancing seed = stationary
+            // noise at fixed RMS), plus a 1-frame-delayed attenuated echo.
+            fill_broadband(floor.data(), FRAME_SIZE, floor_seed, kFloorAmp);
+            for (int i = 0; i < FRAME_SIZE; ++i) {
+                int32_t v = static_cast<int32_t>(floor[i]) +
+                            static_cast<int32_t>(prev_far[i] * kEchoAtten);
+                if (v > 32767) v = 32767;
+                if (v < -32768) v = -32768;
+                mic[i] = static_cast<int16_t>(v);
+            }
+
+            ec.process_render(far.data(), FRAME_SIZE);
+
+            const int gap_k = k - kBurst;  // >= 0 while in the gap
+            const bool measure = c >= kMeasureFromCycle && !in_burst &&
+                                 gap_k >= kGapMeasStart && gap_k < kGapMeasEnd;
+            if (measure) {
+                const double pre = rms_of(mic.data(), FRAME_SIZE);
+                pre_sum_sq += pre * pre * FRAME_SIZE;
+            }
+            ec.process_capture(mic.data(), FRAME_SIZE);
+            if (measure) {
+                const double post = rms_of(mic.data(), FRAME_SIZE);
+                post_sum_sq += post * post * FRAME_SIZE;
+                meas_samples += FRAME_SIZE;
+            }
+            prev_far = far;
+        }
+    }
+
+    GapPumpResult r{};
+    r.pre_floor_rms = std::sqrt(pre_sum_sq / meas_samples);
+    r.gap_post_rms = std::sqrt(post_sum_sq / meas_samples);
+    return r;
+}
+
+TEST_F(EchoCancellerTest, Agc2DoesNotPumpResidueInFarEndGaps) {
+    const GapPumpResult on = run_gap_pump(ec, /*aec_enabled=*/true);
+    // Fresh APM state for the control run.
+    ec.shutdown();
+    ASSERT_TRUE(ec.initialize(SAMPLE_RATE, CHANNELS));
+    const GapPumpResult off = run_gap_pump(ec, /*aec_enabled=*/false);
+
+    const double gain_on_db =
+        20.0 * std::log10((on.gap_post_rms + 1e-12) / (on.pre_floor_rms + 1e-12));
+    const double gain_off_db =
+        20.0 * std::log10((off.gap_post_rms + 1e-12) / (off.pre_floor_rms + 1e-12));
+    const double excess_db = gain_on_db - gain_off_db;
+    printf("[AGC-PUMP] gap-floor gain: EC on=%.2f dB, EC off=%.2f dB, excess=%.2f dB "
+           "(gap_on=%.6f gap_off=%.6f floor=%.6f)\n",
+           gain_on_db, gain_off_db, excess_db, on.gap_post_rms, off.gap_post_rms,
+           on.pre_floor_rms);
+
+    // A healthy AGC treats the near-end floor the same whether or not AEC
+    // ran. EC-on must not pump the far-end-gap floor far above EC-off.
+    // Field pumping was ~+19 dB; the threshold catches that class.
+    EXPECT_LT(excess_db, 6.0)
+        << "EC-on pumps the far-end-gap floor " << excess_db
+        << " dB above EC-off (AGC2 amplifying AEC residue)";
+}
+
+// Invariant guard for the pumping fix: steady low-level input must stay near
+// unity gain (AGC2 must not newly amplify a stationary floor). Measured on
+// current code: -0.27 dB. The fix must not turn this into amplification.
+// NOTE: this does NOT prove quiet-talker normalization — AGC2's VAD treats
+// synthetic broadband as noise, not speech, so quiet-SPEECH normalization is
+// validated at Level 2 with real LibriSpeech (see plans/AEC-CLIPPING-REPRO.md).
+TEST_F(EchoCancellerTest, SteadyLowLevelInputNotAmplified) {
+    ec.set_aec_enabled(true);
+    ec.set_agc_enabled(true);
+
+    constexpr int kWarm = 200;
+    constexpr int kMeasure = 100;
+    constexpr int16_t kQuietAmp = 1000;  // ~ -35 dBFS RMS broadband
+
+    uint32_t seed = 0x00005151u;
+    std::vector<int16_t> mic(FRAME_SIZE);
+    double pre_sum_sq = 0.0, post_sum_sq = 0.0;
+    int64_t meas_samples = 0;
+
+    for (int f = 0; f < kWarm + kMeasure; ++f) {
+        fill_broadband(mic.data(), FRAME_SIZE, seed, kQuietAmp);
+        if (f >= kWarm) {
+            const double pre = rms_of(mic.data(), FRAME_SIZE);
+            pre_sum_sq += pre * pre * FRAME_SIZE;
+        }
+        ec.process_capture(mic.data(), FRAME_SIZE);
+        if (f >= kWarm) {
+            const double post = rms_of(mic.data(), FRAME_SIZE);
+            post_sum_sq += post * post * FRAME_SIZE;
+            meas_samples += FRAME_SIZE;
+        }
+    }
+
+    const double pre_rms = std::sqrt(pre_sum_sq / meas_samples);
+    const double post_rms = std::sqrt(post_sum_sq / meas_samples);
+    const double gain_db = 20.0 * std::log10((post_rms + 1e-12) / (pre_rms + 1e-12));
+    printf("[AGC-NORM] steady low-level gain: %.2f dB (pre=%.6f post=%.6f)\n",
+           gain_db, pre_rms, post_rms);
+
+    EXPECT_LT(gain_db, 3.0) << "AGC2 amplifies a steady low-level floor: " << gain_db << " dB";
+}
+
+// --- Level 2: real-speech pumping harness (skips when dataset absent) ---
+// The unit tests above use synthetic broadband, which AGC2 treats as noise,
+// not speech. This harness drives REAL near-end and far-end speech through a
+// talk / far-only cycle: the near-end talks (AGC2 ramps its gain up on real
+// speech), then goes silent while the far-end talks (echo present, cancelled).
+// The speech-driven pump — gain ramped for near-end speech lingering into the
+// following far-end gap — shows up as residue swelling in the far-only phase.
+// Data lives outside the repo (tools/voice-test-client/test-data/clean, fetched
+// by fetch_dataset.sh), so the test SKIPS in CI. Set MELLO_AEC_DUMP_WAV=1 to
+// write before/after WAVs for subjective A/B.
+
+// Reads a 48 kHz mono 16-bit PCM WAV, scanning chunks (LIST/INFO may precede
+// data). Returns false on missing file or format mismatch.
+static bool read_wav_mono48k(const std::string& path, std::vector<int16_t>& out) {
+    std::ifstream f(path, std::ios::binary);
+    if (!f) return false;
+    char hdr[12];
+    f.read(hdr, 12);
+    if (!f || std::string(hdr, 4) != "RIFF" || std::string(hdr + 8, 4) != "WAVE") return false;
+    uint16_t fmt = 0, ch = 0, bps = 0;
+    uint32_t sr = 0;
+    while (f) {
+        char id[4];
+        uint32_t sz = 0;
+        f.read(id, 4);
+        f.read(reinterpret_cast<char*>(&sz), 4);
+        if (!f) break;
+        if (std::string(id, 4) == "fmt ") {
+            std::vector<char> buf(sz);
+            f.read(buf.data(), static_cast<std::streamsize>(sz));
+            if (sz >= 16) {
+                std::memcpy(&fmt, buf.data(), 2);
+                std::memcpy(&ch, buf.data() + 2, 2);
+                std::memcpy(&sr, buf.data() + 4, 4);
+                std::memcpy(&bps, buf.data() + 14, 2);
+            }
+        } else if (std::string(id, 4) == "data") {
+            if (ch != 1 || bps != 16 || sr != 48000) return false;
+            out.resize(sz / 2);
+            f.read(reinterpret_cast<char*>(out.data()), static_cast<std::streamsize>(sz));
+            return static_cast<bool>(f);
+        } else {
+            f.seekg(sz + (sz & 1), std::ios::cur);  // chunks are word-aligned
+        }
+    }
+    return false;
+}
+
+static void write_wav_mono48k(const std::string& path, const std::vector<int16_t>& pcm) {
+    std::ofstream f(path, std::ios::binary);
+    if (!f) return;
+    const uint32_t data_bytes = static_cast<uint32_t>(pcm.size() * 2);
+    const uint32_t riff = 36 + data_bytes, sr = 48000, byte_rate = 48000 * 2, fmt_sz = 16;
+    const uint16_t ch = 1, bps = 16, fmt = 1, block = 2;
+    f.write("RIFF", 4); f.write(reinterpret_cast<const char*>(&riff), 4); f.write("WAVE", 4);
+    f.write("fmt ", 4); f.write(reinterpret_cast<const char*>(&fmt_sz), 4);
+    f.write(reinterpret_cast<const char*>(&fmt), 2); f.write(reinterpret_cast<const char*>(&ch), 2);
+    f.write(reinterpret_cast<const char*>(&sr), 4);
+    f.write(reinterpret_cast<const char*>(&byte_rate), 4);
+    f.write(reinterpret_cast<const char*>(&block), 2); f.write(reinterpret_cast<const char*>(&bps), 2);
+    f.write("data", 4); f.write(reinterpret_cast<const char*>(&data_bytes), 4);
+    f.write(reinterpret_cast<const char*>(pcm.data()), static_cast<std::streamsize>(data_bytes));
+}
+
+// Finds the clean-speech dataset dir from the build cwd or MELLO_AEC_SPEECH_DIR.
+static std::string find_speech_dir() {
+    if (const char* env = std::getenv("MELLO_AEC_SPEECH_DIR")) {
+        if (std::ifstream(std::string(env) + "/librispeech_0.wav").good()) return env;
+    }
+    // Walk up from the cwd: the test binary runs under different depths
+    // (libmello/build vs ctest's libmello/build-ci/tests), so search several
+    // parent levels for the dataset rather than assuming one relative path.
+    const std::string suffix = "tools/voice-test-client/test-data/clean";
+    std::string prefix;
+    for (int up = 0; up < 6; ++up) {
+        const std::string dir = prefix + suffix;
+        if (std::ifstream(dir + "/librispeech_0.wav").good()) return dir;
+        prefix += "../";
+    }
+    return "";
+}
+
+TEST_F(EchoCancellerTest, RealSpeechNoFarEndGapPump) {
+    const std::string dir = find_speech_dir();
+    if (dir.empty()) GTEST_SKIP() << "speech dataset not found (run fetch_dataset.sh); skipping";
+
+    std::vector<int16_t> near_src, far_src;
+    ASSERT_TRUE(read_wav_mono48k(dir + "/librispeech_0.wav", near_src)) << "near WAV load failed";
+    ASSERT_TRUE(read_wav_mono48k(dir + "/librispeech_1.wav", far_src)) << "far WAV load failed";
+    ASSERT_GT(near_src.size(), static_cast<size_t>(FRAME_SIZE * 100));
+    ASSERT_GT(far_src.size(), static_cast<size_t>(FRAME_SIZE * 100));
+
+    ec.set_aec_enabled(true);
+    ec.set_agc_enabled(true);
+
+    constexpr int kNearTalk = 80;   // ~1.6 s near-end speech (AGC ramps up)
+    constexpr int kFarOnly = 80;    // ~1.6 s far-end only, near-end silent
+    constexpr int kCycle = kNearTalk + kFarOnly;
+    constexpr int kCycles = 4;
+    constexpr float kEchoAtten = 0.5f;
+    constexpr int kMeasureFromCycle = 1;  // let the first cycle warm AEC/AGC
+
+    size_t ni = 0, fi = 0;  // wrap indices into the sources
+    uint32_t floor_seed = 0x0C0FFEE0u;
+    constexpr int16_t kFloorAmp = 200;  // ~ -49 dBFS ever-present mic floor
+    std::vector<int16_t> far(FRAME_SIZE), prev_far(FRAME_SIZE, 0), mic(FRAME_SIZE);
+    std::vector<int16_t> floor(FRAME_SIZE);
+    std::vector<int16_t> out_dump;  // captured near-end-processed output for A/B
+
+    double faronly_sum_sq = 0.0, far_in_sum_sq = 0.0;
+    double faronly_peak = 0.0;
+    int64_t faronly_samples = 0;
+
+    for (int c = 0; c < kCycles; ++c) {
+        for (int k = 0; k < kCycle; ++k) {
+            const bool near_talk = k < kNearTalk;
+
+            // ostkatt's mic always carries a low-level floor (room/breath/keys),
+            // present whether or not he is talking. The pump is this floor being
+            // amplified during far-only windows, so it must never be zero.
+            fill_broadband(floor.data(), FRAME_SIZE, floor_seed, kFloorAmp);
+
+            if (near_talk) {
+                std::memset(far.data(), 0, FRAME_SIZE * sizeof(int16_t));  // far-end silent
+                for (int i = 0; i < FRAME_SIZE; ++i) {
+                    int32_t v = static_cast<int32_t>(near_src[(ni + i) % near_src.size()]) + floor[i];
+                    if (v > 32767) v = 32767;
+                    if (v < -32768) v = -32768;
+                    mic[i] = static_cast<int16_t>(v);
+                }
+                ni += FRAME_SIZE;
+            } else {
+                for (int i = 0; i < FRAME_SIZE; ++i) far[i] = far_src[(fi + i) % far_src.size()];
+                fi += FRAME_SIZE;
+                // near-end silent: mic = floor + NONLINEAR echo of far-end.
+                // Real loudspeakers distort (soft-clip); the harmonics AEC3
+                // cannot model become speech-correlated residue — exactly what
+                // an AGC can latch onto and pump. A pure linear echo cancels too
+                // cleanly to represent a real speaker path.
+                for (int i = 0; i < FRAME_SIZE; ++i) {
+                    const float x = prev_far[i] / 32768.0f;
+                    const float dist = std::tanh(3.0f * x) / std::tanh(3.0f);  // speaker soft-clip
+                    int32_t e = static_cast<int32_t>(dist * kEchoAtten * 32768.0f);
+                    int32_t v = static_cast<int32_t>(floor[i]) + e;
+                    if (v > 32767) v = 32767;
+                    if (v < -32768) v = -32768;
+                    mic[i] = static_cast<int16_t>(v);
+                }
+            }
+
+            ec.process_render(far.data(), FRAME_SIZE);  // fed every frame
+            const int far_k = k - kNearTalk;
+            const bool measure = c >= kMeasureFromCycle && !near_talk && far_k >= 2;
+            double far_in_rms = 0.0;
+            if (measure) far_in_rms = rms_of(far.data(), FRAME_SIZE);
+            ec.process_capture(mic.data(), FRAME_SIZE);
+
+            if (measure) {
+                const double post = rms_of(mic.data(), FRAME_SIZE);
+                faronly_sum_sq += post * post * FRAME_SIZE;
+                far_in_sum_sq += far_in_rms * far_in_rms * FRAME_SIZE;
+                faronly_peak = std::max(faronly_peak, post);
+                faronly_samples += FRAME_SIZE;
+            }
+            out_dump.insert(out_dump.end(), mic.begin(), mic.end());
+            prev_far = far;
+        }
+    }
+
+    const double residue_rms = std::sqrt(faronly_sum_sq / faronly_samples);
+    const double far_in_rms = std::sqrt(far_in_sum_sq / faronly_samples);
+    const double residue_dbfs = 20.0 * std::log10(residue_rms + 1e-12);
+    const double erle_db = 20.0 * std::log10((far_in_rms + 1e-12) / (residue_rms + 1e-12));
+    printf("[REAL-SPEECH] far-only residue: rms=%.6f (%.1f dBFS) peak=%.6f, "
+           "far_in=%.6f, echo-path ERLE=%.1f dB\n",
+           residue_rms, residue_dbfs, faronly_peak, far_in_rms, erle_db);
+
+    if (std::getenv("MELLO_AEC_DUMP_WAV")) {
+        write_wav_mono48k("aec_realspeech_out.wav", out_dump);
+        printf("[REAL-SPEECH] wrote aec_realspeech_out.wav (%zu samples)\n", out_dump.size());
+    }
+
+    // Near-end is silent in the far-only phase, so the echo residue must stay
+    // low. A lingering AGC pump would swell it toward speech level. -30 dBFS
+    // catches the pumping class while leaving margin for normal AEC residue.
+    EXPECT_LT(residue_dbfs, -30.0)
+        << "far-only residue pumped to " << residue_dbfs << " dBFS (AGC lingering gain)";
+}
+
+// ostkatt's field pump (diagnostic log 2026-09-19): his mic is quiet (~ -39
+// dBFS speech, pre_rms 0.011), so AGC2 ramps to ~+23 dB and applies that gain to
+// his near-silent floor in speech gaps (log: -64 dBFS floor -> -41 dBFS, ratio
+// 14). That floor swelling between words is the crackle the far side hears.
+// AGC-only; no echo/render needed. AGC config alone cannot fix it (one gain for
+// speech and floor). The VAD-gated SpeechExpander, running after AGC, pushes the
+// pumped floor back down in gaps while leaving speech at unity.
+
+struct QuietMicResult {
+    bool ran = false;
+    double gap_gain_db = 0.0;
+    double speech_out_dbfs = 0.0;
+};
+
+// Runs the quiet-mic speak/gap scenario through AGC. When `exp` is non-null it
+// applies the expander after AGC, keyed off the ground-truth speak/gap phase (an
+// ideal VAD). Returns the gap-floor gain (the pump) and the speech output level.
+static QuietMicResult run_quiet_mic_scenario(EchoCanceller& ec, SpeechExpander* exp,
+                                             const std::string& near_wav,
+                                             std::vector<int16_t>* out_dump = nullptr) {
+    QuietMicResult r;
+    std::vector<int16_t> near_src;
+    if (!read_wav_mono48k(near_wav, near_src)) return r;
+    if (near_src.size() < static_cast<size_t>(FRAME_SIZE * 120)) return r;
+
+    const double src_rms = rms_of(near_src.data(), static_cast<int>(near_src.size()));
+    const double kTargetRms = 0.011;  // ostkatt's ~ -39 dBFS mic level
+    const double scale = (src_rms > 1e-9) ? kTargetRms / src_rms : 1.0;
+
+    ec.set_aec_enabled(true);
+    ec.set_agc_enabled(true);
+    if (exp) exp->reset();
+
+    constexpr int kSpeak = 60, kGap = 40, kCycle = kSpeak + kGap, kCycles = 6;
+    constexpr int kMeasureFromCycle = 2, kGapSkip = 3;
+    constexpr int16_t kFloorAmp = 40;  // ~ -63 dBFS floor (matches log line 83)
+
+    size_t ni = 0;
+    uint32_t floor_seed = 0x0C0FFEE0u;
+    std::vector<int16_t> floor(FRAME_SIZE), mic(FRAME_SIZE);
+    double floor_sum_sq = 0.0, gap_post_sum_sq = 0.0, speech_post_sum_sq = 0.0;
+    int64_t gap_samples = 0, speech_samples = 0;
+
+    for (int c = 0; c < kCycles; ++c) {
+        for (int k = 0; k < kCycle; ++k) {
+            const bool speaking = k < kSpeak;
+            fill_broadband(floor.data(), FRAME_SIZE, floor_seed, kFloorAmp);
+            if (speaking) {
+                for (int i = 0; i < FRAME_SIZE; ++i) {
+                    int32_t s = static_cast<int32_t>(near_src[(ni + i) % near_src.size()] * scale) +
+                                floor[i];
+                    if (s > 32767) s = 32767;
+                    if (s < -32768) s = -32768;
+                    mic[i] = static_cast<int16_t>(s);
+                }
+                ni += FRAME_SIZE;
+            } else {
+                std::memcpy(mic.data(), floor.data(), FRAME_SIZE * sizeof(int16_t));
+            }
+
+            const int gap_k = k - kSpeak;
+            const bool meas_gap = c >= kMeasureFromCycle && !speaking && gap_k >= kGapSkip;
+            const bool meas_speech = c >= kMeasureFromCycle && speaking && k >= kSpeak / 2;
+            double floor_in = 0.0;
+            if (meas_gap) floor_in = rms_of(mic.data(), FRAME_SIZE);
+            ec.process_capture(mic.data(), FRAME_SIZE);
+            if (exp) exp->process(mic.data(), FRAME_SIZE, speaking);
+            if (out_dump) out_dump->insert(out_dump->end(), mic.begin(), mic.end());
+            if (meas_gap) {
+                const double post = rms_of(mic.data(), FRAME_SIZE);
+                gap_post_sum_sq += post * post * FRAME_SIZE;
+                floor_sum_sq += floor_in * floor_in * FRAME_SIZE;
+                gap_samples += FRAME_SIZE;
+            }
+            if (meas_speech) {
+                const double post = rms_of(mic.data(), FRAME_SIZE);
+                speech_post_sum_sq += post * post * FRAME_SIZE;
+                speech_samples += FRAME_SIZE;
+            }
+        }
+    }
+
+    const double gap_post = std::sqrt(gap_post_sum_sq / gap_samples);
+    const double floor_in = std::sqrt(floor_sum_sq / gap_samples);
+    const double speech_post = std::sqrt(speech_post_sum_sq / speech_samples);
+    r.ran = true;
+    r.gap_gain_db = 20.0 * std::log10((gap_post + 1e-12) / (floor_in + 1e-12));
+    r.speech_out_dbfs = 20.0 * std::log10(speech_post + 1e-12);
+    return r;
+}
+
+// DISABLED_: documents the raw AGC pump (no expander). Reproduces at +14.4 dB.
+// The GREEN counterpart below (with the expander) is the acceptance test.
+TEST_F(EchoCancellerTest, DISABLED_Agc2QuietMicGapPumpRealSpeech) {
+    const std::string dir = find_speech_dir();
+    if (dir.empty()) GTEST_SKIP() << "speech dataset not found; skipping";
+    std::vector<int16_t> dump;
+    const bool want_wav = std::getenv("MELLO_AEC_DUMP_WAV") != nullptr;
+    const QuietMicResult r = run_quiet_mic_scenario(ec, nullptr, dir + "/librispeech_0.wav",
+                                                    want_wav ? &dump : nullptr);
+    ASSERT_TRUE(r.ran) << "scenario did not run";
+    printf("[QUIET-PUMP] no expander: gap-floor gain=%.1f dB, speech out=%.1f dBFS\n",
+           r.gap_gain_db, r.speech_out_dbfs);
+    if (want_wav) {
+        write_wav_mono48k("aec_quietmic_before.wav", dump);
+        printf("[QUIET-PUMP] wrote aec_quietmic_before.wav (%zu samples)\n", dump.size());
+    }
+    EXPECT_LT(r.gap_gain_db, 10.0) << "quiet-mic gap floor pumped " << r.gap_gain_db << " dB";
+}
+
+// Acceptance test for the fix: the VAD-gated expander must push the pumped gap
+// floor back down WITHOUT swallowing speech.
+TEST_F(EchoCancellerTest, SpeechExpanderTamesQuietMicGapPump) {
+    const std::string dir = find_speech_dir();
+    if (dir.empty()) GTEST_SKIP() << "speech dataset not found; skipping";
+    SpeechExpander exp;
+    exp.configure(/*floor_gain=*/0.1f, /*attack=*/0.6f, /*release=*/0.12f);
+    std::vector<int16_t> dump;
+    const bool want_wav = std::getenv("MELLO_AEC_DUMP_WAV") != nullptr;
+    const QuietMicResult r = run_quiet_mic_scenario(ec, &exp, dir + "/librispeech_0.wav",
+                                                    want_wav ? &dump : nullptr);
+    ASSERT_TRUE(r.ran) << "scenario did not run";
+    printf("[QUIET-PUMP] with expander: gap-floor gain=%.1f dB, speech out=%.1f dBFS\n",
+           r.gap_gain_db, r.speech_out_dbfs);
+    if (want_wav) {
+        write_wav_mono48k("aec_quietmic_after.wav", dump);
+        printf("[QUIET-PUMP] wrote aec_quietmic_after.wav (%zu samples)\n", dump.size());
+    }
+    // Gap floor must not be pumped (near or below its true level); speech must
+    // stay boosted (not swallowed). Raw pump is +14.4 dB / speech -25 dBFS.
+    EXPECT_LT(r.gap_gain_db, 3.0) << "expander did not tame the gap pump";
+    EXPECT_GT(r.speech_out_dbfs, -30.0) << "expander swallowed speech";
+}
+
+// Unit test for the expander in isolation: unity while speech is active,
+// attenuates toward the floor when it stops, and recovers to unity quickly.
+TEST(SpeechExpanderTest, AttenuatesNonSpeechKeepsSpeech) {
+    SpeechExpander exp;
+    exp.configure(/*floor_gain=*/0.1f, /*attack=*/0.6f, /*release=*/0.12f);
+
+    constexpr int N = 480;
+    int16_t frame[N];
+    auto fill = [&](int16_t amp) { for (int i = 0; i < N; ++i) frame[i] = amp; };
+
+    // Speech active for 30 frames: gain settles to ~unity, samples preserved.
+    for (int f = 0; f < 30; ++f) { fill(1000); exp.process(frame, N, true); }
+    EXPECT_GT(exp.gain(), 0.95f);
+    EXPECT_NEAR(frame[0], 1000, 60) << "speech should pass at unity";
+
+    // Speech stops for 40 frames (~800 ms): gain closes toward the floor.
+    for (int f = 0; f < 40; ++f) { fill(1000); exp.process(frame, N, false); }
+    EXPECT_LT(exp.gain(), 0.15f) << "gain should close toward floor on silence";
+    EXPECT_LT(frame[0], 200) << "non-speech floor should be attenuated";
+
+    // Speech resumes: gain must re-open fast (no chopped onset).
+    fill(1000); exp.process(frame, N, true);
+    EXPECT_GT(exp.gain(), 0.5f) << "attack should re-open within a frame";
 }
 

@@ -5,6 +5,7 @@
 #include "noise_suppressor.hpp"
 #include "echo_canceller.hpp"
 #include "echo_suppressor.hpp"
+#include "speech_expander.hpp"
 #include "jitter_buffer.hpp"
 #include "device_enumerator.hpp"
 #include "clip_buffer.hpp"
@@ -172,6 +173,11 @@ private:
     NoiseSuppressor noise_suppressor_;
     EchoCanceller echo_canceller_;
     EchoSuppressor echo_suppressor_;
+    // Post-AGC downward expander: pushes the AGC-pumped noise floor back down in
+    // speech gaps (keyed off the Silero VAD), so a quiet mic that forces large
+    // AGC gain does not transmit a swelling floor between words. See
+    // plans/AEC-CLIPPING-REPRO.md. Capture-thread only.
+    SpeechExpander speech_expander_;
     VoiceActivityDetector vad_;
     std::unordered_map<std::string, OpusDec> decoders_;
     std::unordered_map<std::string, bool> decoder_primed_;

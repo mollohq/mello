@@ -453,6 +453,7 @@ void AudioPipeline::reset_speech_gate_state() {
     candidate_hangover_frames_ = 0;
     speech_hangover_frames_ = 0;
     speech_gate_active_ = false;
+    speech_expander_.reset();
     vad_.force_silence();
 }
 
@@ -587,6 +588,24 @@ void AudioPipeline::on_captured_audio(const int16_t* samples, size_t count) {
                 }
 
                 bool should_encode = vad_.is_speaking() || speech_hangover_frames_ > 0;
+
+                // Downward expander (post-AGC): attenuate the frame toward its
+                // floor when the VAD says no speech, so AGC gain ramped for a
+                // quiet talker cannot pump the noise floor in gaps. Smoothed
+                // release keeps word tails; the gate decision above is
+                // unchanged (it read capture_accum_ before this point). Applied
+                // to the current frame and to stored pre-roll frames alike.
+                //
+                // Keyed off the RAW VAD probability, not is_speaking(): the
+                // latter latches true through an 8-frame holdover, so it stays
+                // set through the inter-word gaps where the floor is pumped
+                // (observed in ostkatt's log: prob 0.04 but is_speaking still
+                // true). The raw probability drops in those gaps and closes the
+                // expander there.
+                const bool expander_speech =
+                    vad_.probability() >= VAD_THRESHOLD;
+                speech_expander_.process(capture_accum_.data(), FRAME_SIZE,
+                                         expander_speech);
 
                 if (should_encode) {
                     if (!speech_gate_active_) {
