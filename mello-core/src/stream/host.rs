@@ -25,9 +25,13 @@ pub struct StartStreamRequest {
     pub width: u32,
     pub height: u32,
     pub bitrate_kbps: u32,
+    /// Game executable name for logging only. The server never trusts it to
+    /// allow a hook; the client matches exe against the capture block lists.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub exe: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct StartStreamResponse {
     pub session_id: Option<String>,
     pub stream_id: Option<String>,
@@ -40,10 +44,56 @@ pub struct StartStreamResponse {
     pub sfu_endpoint: Option<String>,
     #[serde(default)]
     pub sfu_token: Option<String>,
+    /// Backend `capture` block (streaming-reliability plan §8). `None` on
+    /// older backend responses, which the client treats as "never hook".
+    #[serde(default)]
+    pub capture: Option<CapturePolicy>,
+}
+
+/// Backend hook policy for one stream start. Lists carry executable names
+/// (e.g. "heaven.exe") and are matched case-insensitively. Deny wins over
+/// allow; unknown executables are never hooked.
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+pub struct CapturePolicy {
+    #[serde(default)]
+    pub hook_enabled: bool,
+    #[serde(default)]
+    pub policy_version: String,
+    #[serde(default)]
+    pub hook_allow: Vec<String>,
+    #[serde(default)]
+    pub hook_deny: Vec<String>,
 }
 
 fn default_mode() -> String {
     "p2p".to_string()
+}
+
+/// Decide whether the game capture hook may run for `exe` under `policy`.
+///
+/// All three must hold: the backend kill switch is on, the exe is on the
+/// allow list, and it is not on the deny list. Matching is ASCII
+/// case-insensitive because Windows executable names vary in case. `None`
+/// (no `capture` block) or an empty exe never allows the hook.
+pub fn hook_allowed_for_exe(exe: &str, policy: Option<&CapturePolicy>) -> bool {
+    let policy = match policy {
+        Some(p) => p,
+        None => return false,
+    };
+    if !policy.hook_enabled {
+        return false;
+    }
+    if exe.is_empty() {
+        return false;
+    }
+    let denied = policy.hook_deny.iter().any(|d| d.eq_ignore_ascii_case(exe));
+    if denied {
+        return false;
+    }
+    policy
+        .hook_allow
+        .iter()
+        .any(|a| a.eq_ignore_ascii_case(exe))
 }
 
 impl StartStreamResponse {
@@ -57,6 +107,7 @@ impl StartStreamResponse {
 
 /// Call the backend RPC to start a stream and get topology info.
 /// This is a separate async step so raw pointers don't cross await points.
+#[allow(clippy::too_many_arguments)]
 pub async fn request_start_stream(
     nakama: &NakamaClient,
     crew_id: &str,
@@ -65,6 +116,7 @@ pub async fn request_start_stream(
     width: u32,
     height: u32,
     bitrate_kbps: u32,
+    exe: &str,
 ) -> Result<StartStreamResponse, StreamError> {
     let req = StartStreamRequest {
         crew_id: crew_id.to_string(),
@@ -73,6 +125,7 @@ pub async fn request_start_stream(
         width,
         height,
         bitrate_kbps,
+        exe: exe.to_string(),
     };
     let payload = serde_json::to_value(&req).map_err(|e| StreamError::Backend(e.to_string()))?;
 
@@ -325,7 +378,70 @@ pub fn create_stream_session(
 
 #[cfg(test)]
 mod tests {
-    use super::StartStreamRequest;
+    use super::{hook_allowed_for_exe, CapturePolicy, StartStreamRequest, StartStreamResponse};
+
+    fn policy() -> CapturePolicy {
+        CapturePolicy {
+            hook_enabled: true,
+            policy_version: "2026-09-19:2001".to_string(),
+            hook_allow: vec!["heaven.exe".to_string()],
+            hook_deny: vec!["cs2.exe".to_string()],
+        }
+    }
+
+    #[test]
+    fn hook_allowed_for_listed_exe_case_insensitive() {
+        assert!(hook_allowed_for_exe("Heaven.exe", Some(&policy())));
+    }
+
+    #[test]
+    fn hook_denied_wins_over_allow() {
+        let mut p = policy();
+        p.hook_allow.push("cs2.exe".to_string());
+        assert!(!hook_allowed_for_exe("cs2.exe", Some(&p)));
+    }
+
+    #[test]
+    fn hook_denied_for_unknown_exe() {
+        assert!(!hook_allowed_for_exe("unknown-game.exe", Some(&policy())));
+    }
+
+    #[test]
+    fn hook_denied_when_kill_switch_off() {
+        let mut p = policy();
+        p.hook_enabled = false;
+        assert!(!hook_allowed_for_exe("heaven.exe", Some(&p)));
+    }
+
+    #[test]
+    fn hook_denied_without_capture_block() {
+        assert!(!hook_allowed_for_exe("heaven.exe", None));
+    }
+
+    #[test]
+    fn hook_denied_for_empty_exe() {
+        assert!(!hook_allowed_for_exe("", Some(&policy())));
+    }
+
+    #[test]
+    fn old_backend_response_without_capture_parses() {
+        let resp: StartStreamResponse = serde_json::from_str(r#"{"session_id":"s1","mode":"p2p"}"#)
+            .expect("old response parses");
+        assert!(resp.capture.is_none());
+        assert!(!hook_allowed_for_exe("heaven.exe", resp.capture.as_ref()));
+    }
+
+    #[test]
+    fn new_backend_response_with_capture_parses() {
+        let resp: StartStreamResponse = serde_json::from_str(
+            r#"{"session_id":"s1","mode":"p2p","capture":{"hook_enabled":true,"policy_version":"v1","hook_allow":["heaven.exe"],"hook_deny":["cs2.exe"]}}"#,
+        )
+        .expect("new response parses");
+        let capture = resp.capture.as_ref().expect("capture block present");
+        assert_eq!(capture.policy_version, "v1");
+        assert!(hook_allowed_for_exe("heaven.exe", Some(capture)));
+        assert!(!hook_allowed_for_exe("cs2.exe", Some(capture)));
+    }
 
     #[test]
     fn start_stream_request_serializes_configured_bitrate() {
@@ -336,8 +452,24 @@ mod tests {
             width: 1920,
             height: 1080,
             bitrate_kbps: 4_500,
+            exe: String::new(),
         };
         let json = serde_json::to_value(request).expect("serialize request");
         assert_eq!(json["bitrate_kbps"], 4_500);
+    }
+
+    #[test]
+    fn start_stream_request_omits_empty_exe() {
+        let request = StartStreamRequest {
+            crew_id: "crew".to_string(),
+            title: String::new(),
+            supports_av1: false,
+            width: 1280,
+            height: 720,
+            bitrate_kbps: 2_500,
+            exe: String::new(),
+        };
+        let json = serde_json::to_value(request).expect("serialize request");
+        assert!(json.get("exe").is_none(), "empty exe stays off the wire");
     }
 }

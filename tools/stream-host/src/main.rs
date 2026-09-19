@@ -671,6 +671,7 @@ fn run_sfu_mode(
         max_viewers: None,
         sfu_endpoint: Some(endpoint.to_string()),
         sfu_token: None,
+        capture: None,
     };
 
     let cfg = StreamConfig {

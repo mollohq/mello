@@ -1,5 +1,5 @@
 use mello_core::Command;
-use slint::ComponentHandle;
+use slint::{ComponentHandle, Model};
 
 use crate::app_context::AppContext;
 use crate::MainWindow;
@@ -123,6 +123,21 @@ pub fn wire(ctx: &AppContext) {
             // A hardcoded preset here made the pills a lie on the one path
             // most people take.
             let preset = app.get_stream_preset().max(0) as u32;
+            // Look up the exe for the hook policy decision. Empty means the
+            // core denies the hook, which is the safe default.
+            let exe = {
+                let games = app.get_stream_games();
+                let mut found = String::new();
+                for row in 0..games.row_count() {
+                    if let Some(entry) = games.row_data(row) {
+                        if entry.pid == game_pid as i32 && !entry.exe.is_empty() {
+                            found = entry.exe.to_string();
+                            break;
+                        }
+                    }
+                }
+                found
+            };
             let _ = cmd.send(Command::StartStream {
                 crew_id,
                 title,
@@ -131,6 +146,7 @@ pub fn wire(ctx: &AppContext) {
                 hwnd: None,
                 pid: Some(game_pid),
                 preset,
+                exe,
             });
         });
     }

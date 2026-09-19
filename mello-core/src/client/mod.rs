@@ -107,6 +107,9 @@ pub struct Client {
     stream_host_sink: Option<Arc<dyn PacketSink>>,
     stream_sfu_connection: Option<Arc<SfuConnection>>,
     stream_sink: Option<Arc<P2PFanoutSink>>,
+    /// Native host start in flight on its own thread. Polled on the stream
+    /// tick; never awaited. See `PendingStreamStart` in streaming.rs.
+    pending_stream_start: Option<crate::client::streaming::PendingStreamStart>,
     stream_host_peers: HashMap<String, StreamHostPeer>,
     viewer_state: Option<ViewerState>,
     stream_signal_queue: Arc<std::sync::Mutex<Vec<(String, SignalEnvelope)>>>,
@@ -246,6 +249,7 @@ impl Client {
             stream_host_sink: None,
             stream_sfu_connection: None,
             stream_sink: None,
+            pending_stream_start: None,
             stream_host_peers: HashMap::new(),
             viewer_state: None,
             stream_signal_queue: Arc::new(std::sync::Mutex::new(Vec::new())),
@@ -848,6 +852,7 @@ impl Client {
                 hwnd,
                 pid,
                 preset,
+                exe,
             } => {
                 self.handle_start_stream(
                     &crew_id,
@@ -857,6 +862,7 @@ impl Client {
                     hwnd,
                     pid,
                     preset,
+                    &exe,
                 )
                 .await;
             }
