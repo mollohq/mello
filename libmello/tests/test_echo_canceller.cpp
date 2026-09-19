@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 #include "audio/echo_canceller.hpp"
+#include "audio/speech_expander.hpp"
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
@@ -543,13 +544,15 @@ static std::string find_speech_dir() {
     if (const char* env = std::getenv("MELLO_AEC_SPEECH_DIR")) {
         if (std::ifstream(std::string(env) + "/librispeech_0.wav").good()) return env;
     }
-    const char* candidates[] = {
-        "../../tools/voice-test-client/test-data/clean",
-        "../tools/voice-test-client/test-data/clean",
-        "tools/voice-test-client/test-data/clean",
-    };
-    for (const char* c : candidates) {
-        if (std::ifstream(std::string(c) + "/librispeech_0.wav").good()) return c;
+    // Walk up from the cwd: the test binary runs under different depths
+    // (libmello/build vs ctest's libmello/build-ci/tests), so search several
+    // parent levels for the dataset rather than assuming one relative path.
+    const std::string suffix = "tools/voice-test-client/test-data/clean";
+    std::string prefix;
+    for (int up = 0; up < 6; ++up) {
+        const std::string dir = prefix + suffix;
+        if (std::ifstream(dir + "/librispeech_0.wav").good()) return dir;
+        prefix += "../";
     }
     return "";
 }
@@ -659,5 +662,164 @@ TEST_F(EchoCancellerTest, RealSpeechNoFarEndGapPump) {
     // catches the pumping class while leaving margin for normal AEC residue.
     EXPECT_LT(residue_dbfs, -30.0)
         << "far-only residue pumped to " << residue_dbfs << " dBFS (AGC lingering gain)";
+}
+
+// ostkatt's field pump (diagnostic log 2026-09-19): his mic is quiet (~ -39
+// dBFS speech, pre_rms 0.011), so AGC2 ramps to ~+23 dB and applies that gain to
+// his near-silent floor in speech gaps (log: -64 dBFS floor -> -41 dBFS, ratio
+// 14). That floor swelling between words is the crackle the far side hears.
+// AGC-only; no echo/render needed. AGC config alone cannot fix it (one gain for
+// speech and floor). The VAD-gated SpeechExpander, running after AGC, pushes the
+// pumped floor back down in gaps while leaving speech at unity.
+
+struct QuietMicResult {
+    bool ran = false;
+    double gap_gain_db = 0.0;
+    double speech_out_dbfs = 0.0;
+};
+
+// Runs the quiet-mic speak/gap scenario through AGC. When `exp` is non-null it
+// applies the expander after AGC, keyed off the ground-truth speak/gap phase (an
+// ideal VAD). Returns the gap-floor gain (the pump) and the speech output level.
+static QuietMicResult run_quiet_mic_scenario(EchoCanceller& ec, SpeechExpander* exp,
+                                             const std::string& near_wav,
+                                             std::vector<int16_t>* out_dump = nullptr) {
+    QuietMicResult r;
+    std::vector<int16_t> near_src;
+    if (!read_wav_mono48k(near_wav, near_src)) return r;
+    if (near_src.size() < static_cast<size_t>(FRAME_SIZE * 120)) return r;
+
+    const double src_rms = rms_of(near_src.data(), static_cast<int>(near_src.size()));
+    const double kTargetRms = 0.011;  // ostkatt's ~ -39 dBFS mic level
+    const double scale = (src_rms > 1e-9) ? kTargetRms / src_rms : 1.0;
+
+    ec.set_aec_enabled(true);
+    ec.set_agc_enabled(true);
+    if (exp) exp->reset();
+
+    constexpr int kSpeak = 60, kGap = 40, kCycle = kSpeak + kGap, kCycles = 6;
+    constexpr int kMeasureFromCycle = 2, kGapSkip = 3;
+    constexpr int16_t kFloorAmp = 40;  // ~ -63 dBFS floor (matches log line 83)
+
+    size_t ni = 0;
+    uint32_t floor_seed = 0x0C0FFEE0u;
+    std::vector<int16_t> floor(FRAME_SIZE), mic(FRAME_SIZE);
+    double floor_sum_sq = 0.0, gap_post_sum_sq = 0.0, speech_post_sum_sq = 0.0;
+    int64_t gap_samples = 0, speech_samples = 0;
+
+    for (int c = 0; c < kCycles; ++c) {
+        for (int k = 0; k < kCycle; ++k) {
+            const bool speaking = k < kSpeak;
+            fill_broadband(floor.data(), FRAME_SIZE, floor_seed, kFloorAmp);
+            if (speaking) {
+                for (int i = 0; i < FRAME_SIZE; ++i) {
+                    int32_t s = static_cast<int32_t>(near_src[(ni + i) % near_src.size()] * scale) +
+                                floor[i];
+                    if (s > 32767) s = 32767;
+                    if (s < -32768) s = -32768;
+                    mic[i] = static_cast<int16_t>(s);
+                }
+                ni += FRAME_SIZE;
+            } else {
+                std::memcpy(mic.data(), floor.data(), FRAME_SIZE * sizeof(int16_t));
+            }
+
+            const int gap_k = k - kSpeak;
+            const bool meas_gap = c >= kMeasureFromCycle && !speaking && gap_k >= kGapSkip;
+            const bool meas_speech = c >= kMeasureFromCycle && speaking && k >= kSpeak / 2;
+            double floor_in = 0.0;
+            if (meas_gap) floor_in = rms_of(mic.data(), FRAME_SIZE);
+            ec.process_capture(mic.data(), FRAME_SIZE);
+            if (exp) exp->process(mic.data(), FRAME_SIZE, speaking);
+            if (out_dump) out_dump->insert(out_dump->end(), mic.begin(), mic.end());
+            if (meas_gap) {
+                const double post = rms_of(mic.data(), FRAME_SIZE);
+                gap_post_sum_sq += post * post * FRAME_SIZE;
+                floor_sum_sq += floor_in * floor_in * FRAME_SIZE;
+                gap_samples += FRAME_SIZE;
+            }
+            if (meas_speech) {
+                const double post = rms_of(mic.data(), FRAME_SIZE);
+                speech_post_sum_sq += post * post * FRAME_SIZE;
+                speech_samples += FRAME_SIZE;
+            }
+        }
+    }
+
+    const double gap_post = std::sqrt(gap_post_sum_sq / gap_samples);
+    const double floor_in = std::sqrt(floor_sum_sq / gap_samples);
+    const double speech_post = std::sqrt(speech_post_sum_sq / speech_samples);
+    r.ran = true;
+    r.gap_gain_db = 20.0 * std::log10((gap_post + 1e-12) / (floor_in + 1e-12));
+    r.speech_out_dbfs = 20.0 * std::log10(speech_post + 1e-12);
+    return r;
+}
+
+// DISABLED_: documents the raw AGC pump (no expander). Reproduces at +14.4 dB.
+// The GREEN counterpart below (with the expander) is the acceptance test.
+TEST_F(EchoCancellerTest, DISABLED_Agc2QuietMicGapPumpRealSpeech) {
+    const std::string dir = find_speech_dir();
+    if (dir.empty()) GTEST_SKIP() << "speech dataset not found; skipping";
+    std::vector<int16_t> dump;
+    const bool want_wav = std::getenv("MELLO_AEC_DUMP_WAV") != nullptr;
+    const QuietMicResult r = run_quiet_mic_scenario(ec, nullptr, dir + "/librispeech_0.wav",
+                                                    want_wav ? &dump : nullptr);
+    ASSERT_TRUE(r.ran) << "scenario did not run";
+    printf("[QUIET-PUMP] no expander: gap-floor gain=%.1f dB, speech out=%.1f dBFS\n",
+           r.gap_gain_db, r.speech_out_dbfs);
+    if (want_wav) {
+        write_wav_mono48k("aec_quietmic_before.wav", dump);
+        printf("[QUIET-PUMP] wrote aec_quietmic_before.wav (%zu samples)\n", dump.size());
+    }
+    EXPECT_LT(r.gap_gain_db, 10.0) << "quiet-mic gap floor pumped " << r.gap_gain_db << " dB";
+}
+
+// Acceptance test for the fix: the VAD-gated expander must push the pumped gap
+// floor back down WITHOUT swallowing speech.
+TEST_F(EchoCancellerTest, SpeechExpanderTamesQuietMicGapPump) {
+    const std::string dir = find_speech_dir();
+    if (dir.empty()) GTEST_SKIP() << "speech dataset not found; skipping";
+    SpeechExpander exp;
+    exp.configure(/*floor_gain=*/0.1f, /*attack=*/0.6f, /*release=*/0.12f);
+    std::vector<int16_t> dump;
+    const bool want_wav = std::getenv("MELLO_AEC_DUMP_WAV") != nullptr;
+    const QuietMicResult r = run_quiet_mic_scenario(ec, &exp, dir + "/librispeech_0.wav",
+                                                    want_wav ? &dump : nullptr);
+    ASSERT_TRUE(r.ran) << "scenario did not run";
+    printf("[QUIET-PUMP] with expander: gap-floor gain=%.1f dB, speech out=%.1f dBFS\n",
+           r.gap_gain_db, r.speech_out_dbfs);
+    if (want_wav) {
+        write_wav_mono48k("aec_quietmic_after.wav", dump);
+        printf("[QUIET-PUMP] wrote aec_quietmic_after.wav (%zu samples)\n", dump.size());
+    }
+    // Gap floor must not be pumped (near or below its true level); speech must
+    // stay boosted (not swallowed). Raw pump is +14.4 dB / speech -25 dBFS.
+    EXPECT_LT(r.gap_gain_db, 3.0) << "expander did not tame the gap pump";
+    EXPECT_GT(r.speech_out_dbfs, -30.0) << "expander swallowed speech";
+}
+
+// Unit test for the expander in isolation: unity while speech is active,
+// attenuates toward the floor when it stops, and recovers to unity quickly.
+TEST(SpeechExpanderTest, AttenuatesNonSpeechKeepsSpeech) {
+    SpeechExpander exp;
+    exp.configure(/*floor_gain=*/0.1f, /*attack=*/0.6f, /*release=*/0.12f);
+
+    constexpr int N = 480;
+    int16_t frame[N];
+    auto fill = [&](int16_t amp) { for (int i = 0; i < N; ++i) frame[i] = amp; };
+
+    // Speech active for 30 frames: gain settles to ~unity, samples preserved.
+    for (int f = 0; f < 30; ++f) { fill(1000); exp.process(frame, N, true); }
+    EXPECT_GT(exp.gain(), 0.95f);
+    EXPECT_NEAR(frame[0], 1000, 60) << "speech should pass at unity";
+
+    // Speech stops for 40 frames (~800 ms): gain closes toward the floor.
+    for (int f = 0; f < 40; ++f) { fill(1000); exp.process(frame, N, false); }
+    EXPECT_LT(exp.gain(), 0.15f) << "gain should close toward floor on silence";
+    EXPECT_LT(frame[0], 200) << "non-speech floor should be attenuated";
+
+    // Speech resumes: gain must re-open fast (no chopped onset).
+    fill(1000); exp.process(frame, N, true);
+    EXPECT_GT(exp.gain(), 0.5f) << "attack should re-open within a frame";
 }
 
