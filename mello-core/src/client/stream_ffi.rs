@@ -66,6 +66,10 @@ pub(super) struct ViewerState {
     /// Last pause state reported to the UI. Compared against the slot so
     /// `Event::StreamPaused` fires on transitions only.
     pub last_reported_paused: bool,
+    /// Last pause reason reported to the UI, as the short code. Compared
+    /// alongside the flag so the card copy follows a reason change that
+    /// arrives while already paused (loading behind an alt-tab).
+    pub last_reported_pause_reason: String,
     /// Opaque slot pointer handed to libmello (`Arc::into_raw`). Freed in
     /// `Drop` via `unregister_pause_callback`.
     pub _pause_cb_data: *mut std::ffi::c_void,
@@ -251,17 +255,28 @@ pub(super) struct StreamAudioCallbackData {
 /// Latest-wins, like the native frame slot — pause state is idempotent.
 pub(super) struct PauseSlot {
     paused: std::sync::atomic::AtomicU8,
+    reason: std::sync::atomic::AtomicU8,
 }
 
 impl PauseSlot {
     pub fn new() -> Self {
         Self {
             paused: std::sync::atomic::AtomicU8::new(0),
+            reason: std::sync::atomic::AtomicU8::new(0),
         }
     }
 
     pub fn is_paused(&self) -> bool {
         self.paused.load(std::sync::atomic::Ordering::Acquire) != 0
+    }
+
+    pub fn reason(&self) -> crate::stream::pause::PauseReason {
+        match self.reason.load(std::sync::atomic::Ordering::Acquire) {
+            1 => crate::stream::pause::PauseReason::Minimized,
+            2 => crate::stream::pause::PauseReason::WaitingForGame,
+            3 => crate::stream::pause::PauseReason::Failed,
+            _ => crate::stream::pause::PauseReason::Unknown,
+        }
     }
 }
 
@@ -278,10 +293,12 @@ pub(super) unsafe extern "C" fn stream_control_data_callback(
         return;
     }
     let bytes = std::slice::from_raw_parts(data, size as usize);
-    if let Some(paused) = crate::stream::pause::parse_pause_message(bytes) {
+    if let Some((paused, reason)) = crate::stream::pause::parse_pause_message_full(bytes) {
         let slot = &*(user_data as *const PauseSlot);
         slot.paused
             .store(u8::from(paused), std::sync::atomic::Ordering::Release);
+        slot.reason
+            .store(reason as u8, std::sync::atomic::Ordering::Release);
     }
 }
 

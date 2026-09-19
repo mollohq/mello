@@ -311,6 +311,9 @@ export component MainWindow inherits Window {
     /// Viewer pause UX: the watched host tabbed out of the game. The stream
     /// card shows a pause overlay instead of a frozen frame while set.
     in property <bool> stream-paused: false;
+    /// Why the watched stream paused ("minimized", "waiting", "failed",
+    /// "unknown"). Drives the pause card copy next to `stream-paused`.
+    in property <string> stream-paused-reason: "";
     in property <string> paused-streamer-name: "";
     /// Host pause UX: our own capture target is gone (minimized/tabbed-out)
     /// and viewers see the pause card. Shown as a hint on the control bar.
@@ -888,6 +891,7 @@ export component MainWindow inherits Window {
                             stream-frame: root.stream-frame;
                             stream-ui-render-fps: root.dbg-stream-ui-render-fps;
                             stream-paused: root.stream-paused;
+                            stream-paused-reason: root.stream-paused-reason;
                             is-cold-start: root.feed-cold-start;
                             feed-has-more: root.feed-has-more;
                             clip-count: root.feed-clip-count;

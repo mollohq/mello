@@ -329,10 +329,14 @@ pub enum Event {
     StreamWatchingStopped,
     /// A watched stream paused or resumed: the host tabbed out of (or back
     /// into) the captured game. Viewers show a pause card instead of a
-    /// frozen frame while `paused` holds.
+    /// frozen frame while `paused` holds. `reason` is the host's capture
+    /// state as a short code ("minimized", "waiting", "failed", "unknown")
+    /// so the card can name the cause; older hosts send "unknown".
     StreamPaused {
         host_id: String,
         paused: bool,
+        #[serde(default)]
+        reason: String,
     },
     /// The locally hosted stream paused or resumed. Drives the host-side
     /// "viewers see paused" hint; viewers learn via the control channel.

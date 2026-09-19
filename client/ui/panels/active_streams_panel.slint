@@ -51,6 +51,10 @@ component StreamCard inherits Rectangle {
     /// Viewer pause UX: the watched host tabbed out. Shows a pause card
     /// over the (detached) video area instead of a frozen frame.
     in property <bool> stream-paused: false;
+    /// Why the stream paused ("minimized", "waiting", "failed", "unknown").
+    /// Selects the pause card copy; a game that is still loading is not
+    /// "paused".
+    in property <string> stream-paused-reason: "";
 
 
     callback watch-stream-clicked(string, string, int, int);
@@ -58,6 +62,17 @@ component StreamCard inherits Rectangle {
     callback stop-watching-clicked();
 
     property <bool> selected-card: (is-watching && card.host-id == active-streamer-id) || (is-hosting && !card.can-watch);
+    /// Pause card copy, by why the stream paused. One place: a minimized
+    /// game, one still loading, and one no method can see are three
+    /// different sentences.
+    property <string> pause-title:
+        stream-paused-reason == "waiting" ? card.streamer-name + " is getting the game ready" :
+        stream-paused-reason == "failed" ? card.streamer-name + "'s game isn't visible" :
+        card.streamer-name + " paused the stream";
+    property <string> pause-subtitle:
+        stream-paused-reason == "waiting" ? "Video starts when the game draws its first frame" :
+        stream-paused-reason == "failed" ? "The stream resumes when capture finds the game" :
+        "Video resumes when they're back in game";
     property <bool> show-live-frame: selected-card && is-watching && card.can-watch;
     property <bool> show-hosting-state: selected-card && is-hosting && !card.can-watch;
     property <bool> show-watch-cta: card.can-watch && !show-live-frame;
@@ -129,7 +144,7 @@ component StreamCard inherits Rectangle {
                         }
 
                         Text {
-                            text: root.card.streamer-name + " paused the stream";
+                            text: root.pause-title;
                             font-family: Theme.font-label;
                             font-size: 13px;
                             font-weight: 700;
@@ -139,7 +154,7 @@ component StreamCard inherits Rectangle {
                         }
 
                         Text {
-                            text: "Video resumes when they're back in game";
+                            text: root.pause-subtitle;
                             font-family: Theme.font-body;
                             font-size: 12px;
                             color: Theme.text-secondary;
@@ -467,6 +482,7 @@ export component ActiveStreamsPanel inherits Rectangle {
     in property <float> viewport-height: 0;
     /// Viewer pause UX, forwarded to the selected card.
     in property <bool> stream-paused: false;
+    in property <string> stream-paused-reason: "";
 
     callback watch-stream-clicked(string, string, int, int);
     callback stop-stream-clicked();
@@ -486,6 +502,7 @@ export component ActiveStreamsPanel inherits Rectangle {
         stream-frame: root.stream-frame;
         stream-ui-render-fps: root.stream-ui-render-fps;
         stream-paused: root.stream-paused;
+        stream-paused-reason: root.stream-paused-reason;
         viewport-abs-y: root.viewport-abs-y;
         viewport-height: root.viewport-height;
         watch-stream-clicked(host-id, session-id, w, h) => {
@@ -527,6 +544,7 @@ export component ActiveStreamsPanel inherits Rectangle {
                     stream-frame: root.stream-frame;
                     stream-ui-render-fps: root.stream-ui-render-fps;
                     stream-paused: root.stream-paused;
+                    stream-paused-reason: root.stream-paused-reason;
                     watch-stream-clicked(host-id, session-id, w, h) => {
                         root.watch-stream-clicked(host-id, session-id, w, h);
                     }

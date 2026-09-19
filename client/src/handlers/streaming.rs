@@ -116,6 +116,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
             ctx.app.set_is_hosting(false);
             ctx.app.set_is_watching(false);
             ctx.app.set_stream_paused(false);
+            ctx.app.set_stream_paused_reason("".into());
             ctx.app.set_paused_streamer_name("".into());
             ctx.app.set_stream_host_paused(false);
             ctx.stream_frame_timer.set_watching(false);
@@ -172,6 +173,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
             log::info!("Watching stream from {} ({}x{})", host_id, width, height);
             ctx.app.set_is_watching(true);
             ctx.app.set_stream_paused(false);
+            ctx.app.set_stream_paused_reason("".into());
             ctx.app.set_paused_streamer_name("".into());
             ctx.stream_frame_timer.set_watching(true);
             ctx.app.set_streamer_name(host_id.into());
@@ -215,6 +217,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
             log::info!("Stopped watching stream");
             ctx.app.set_is_watching(false);
             ctx.app.set_stream_paused(false);
+            ctx.app.set_stream_paused_reason("".into());
             ctx.app.set_paused_streamer_name("".into());
             ctx.stream_frame_timer.set_watching(false);
             ctx.app.set_streamer_name("".into());
@@ -244,9 +247,19 @@ pub fn handle(ctx: &AppContext, event: Event) {
             sync_active_stream_cards(ctx);
         }
         Event::StreamFrame { .. } => {}
-        Event::StreamPaused { host_id, paused } => {
-            log::info!("Stream pause state: host={} paused={}", host_id, paused);
+        Event::StreamPaused {
+            host_id,
+            paused,
+            reason,
+        } => {
+            log::info!(
+                "Stream pause state: host={} paused={} reason={}",
+                host_id,
+                paused,
+                reason
+            );
             ctx.app.set_stream_paused(paused);
+            ctx.app.set_stream_paused_reason(reason.into());
             ctx.app
                 .set_paused_streamer_name(if paused { host_id.into() } else { "".into() });
             #[cfg(target_os = "windows")]

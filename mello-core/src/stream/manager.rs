@@ -802,6 +802,24 @@ impl StreamManager {
         );
     }
 
+    /// Broadcast the pause state on the reliable control channel, both wire
+    /// versions: v1 for old viewers, v2 with the reason for new ones.
+    async fn send_pause_state_with_reason(&self, paused: bool, reason: super::pause::PauseReason) {
+        self.sink.send_control(&pause_message(paused)).await;
+        self.sink
+            .send_control(&super::pause::pause_message_with_reason(paused, reason))
+            .await;
+    }
+
+    /// Same, with the reason read from the last capture state.
+    async fn send_pause_state(&self, paused: bool) {
+        self.send_pause_state_with_reason(
+            paused,
+            super::pause::PauseReason::from_capture_state(self.capture_state_last),
+        )
+        .await;
+    }
+
     /// Viewer pause UX, polled on the 1 Hz manager tick.
     ///
     /// Feeds capture-target availability into the debounced controller and, on
@@ -833,6 +851,7 @@ impl StreamManager {
         let Some(paused) = self.pause.observe(state == CAPTURE_STATE_CAPTURING) else {
             return;
         };
+        let reason = super::pause::PauseReason::from_capture_state(state);
         if paused {
             log::info!(
                 "Stream paused: {} — viewers see the pause card, game audio muted",
@@ -845,7 +864,9 @@ impl StreamManager {
                 Duration::from_millis(VIEWER_KEYFRAME_REQUEST_COOLDOWN_MS),
             );
         }
-        self.sink.send_control(&pause_message(paused)).await;
+        // Both wire versions: old viewers read v1, new viewers take the
+        // reason from v2. Transitions only, so the extra datagram is cheap.
+        self.send_pause_state_with_reason(paused, reason).await;
         if let Some(tx) = &self.pause_event_tx {
             let _ = tx.send(Event::StreamHostPaused { paused });
         }
@@ -953,7 +974,7 @@ impl StreamManager {
         // viewer whose control channel opened after the transition (or who
         // joined without a join event reaching us) syncs within ~10 s.
         if self.pause.is_paused() {
-            self.sink.send_control(&pause_message(true)).await;
+            self.send_pause_state(true).await;
         }
     }
 
@@ -1046,7 +1067,7 @@ impl StreamManager {
         // Late join into a paused stream: tell the newcomer at once, or they
         // stare at a black frame instead of the pause card.
         if self.pause.is_paused() {
-            self.sink.send_control(&pause_message(true)).await;
+            self.send_pause_state(true).await;
         }
     }
 
@@ -1814,8 +1835,11 @@ mod tests {
         // No re-broadcast while the game stays away.
         rt.block_on(mgr.tick_stream_pause());
         let control = sink.control.lock().expect("lock");
-        assert_eq!(control.len(), 1);
+        // One transition, two datagrams: v1 for old viewers, v2 with the
+        // reason (minimized = 1) for new ones.
+        assert_eq!(control.len(), 2);
         assert_eq!(control[0], vec![0x04, 0x03, 0x01]);
+        assert_eq!(control[1], vec![0x04, 0x03, 0x01, 0x01]);
         drop(control);
         match event_rx.try_recv().expect("pause event") {
             crate::events::Event::StreamHostPaused { paused } => assert!(paused),
@@ -1828,8 +1852,9 @@ mod tests {
         rt.block_on(mgr.tick_stream_pause());
         assert!(!mgr.is_paused());
         let control = sink.control.lock().expect("lock");
-        assert_eq!(control.len(), 2);
-        assert_eq!(control[1], vec![0x04, 0x03, 0x00]);
+        assert_eq!(control.len(), 4);
+        assert_eq!(control[2], vec![0x04, 0x03, 0x00]);
+        assert_eq!(control[3], vec![0x04, 0x03, 0x00, 0x00]);
         drop(control);
         match event_rx.try_recv().expect("resume event") {
             crate::events::Event::StreamHostPaused { paused } => assert!(!paused),
