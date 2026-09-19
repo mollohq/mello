@@ -4,8 +4,8 @@ The hook captures a game from inside the game process. It is the only capture
 method that sees an exclusive-fullscreen game, and the only one that needs
 permission before it runs.
 
-Design and policy: `mello-backlog/plans/streaming-reliability.md` work stream 3.
-Research and sources: `mello-backlog/plans/game-capture-hook-research.md`.
+Design and policy: `mello-backlog/plans/streaming-reliability.md`, section 7.
+State of the work: `mello-backlog/plans/streaming-reliability-handoff.md`.
 
 ## What is in here
 
@@ -16,8 +16,8 @@ Research and sources: `mello-backlog/plans/game-capture-hook-research.md`.
 | `mello-offsets64.exe` | Prints the present-function offsets for this machine. Run outside the game, never inside it. |
 | `mello-fakegame64.exe` | A D3D11 program that presents, for tests. Not shipped. |
 
-The 32-bit set has the same names with `32`. It is for 32-bit games, such as
-the D3D9 titles in work stream 3 step 5.
+The 32-bit set has the same names with `32`. It is for 32-bit games, which is
+most pre-2012 titles and every Direct3D 9 game that matters here.
 
 `include/mello_hook_protocol.h` is the whole contract between the hook and
 libmello. Both sides compile that one file.
