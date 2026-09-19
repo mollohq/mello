@@ -163,10 +163,16 @@ fn host_to_viewer_loopback() {
             );
         }
 
-        // Trigger staging readback + RGBA conversion + callback
-        mello_sys::mello_stream_present_frame(view);
-
-        std::thread::sleep(Duration::from_millis(200));
+        // Pull decoded frames: the viewer only fires the frame callback
+        // from present_frame(), so poll it until a frame arrives or the
+        // wait expires (same shape as HookLoopback::run_loopback).
+        for _ in 0..400 {
+            if FRAMES_DECODED.load(Ordering::Relaxed) > 0 {
+                break;
+            }
+            mello_sys::mello_stream_present_frame(view);
+            std::thread::sleep(Duration::from_millis(5));
+        }
 
         mello_sys::mello_stream_stop_viewer(view);
 

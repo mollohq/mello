@@ -106,10 +106,14 @@ void release_resources() {
     g_res.ready = false;
 }
 
+// Forward declarations: capture_present (below) uses the resolve-only
+// rebuild, which is defined alongside the reset hooks further down.
+void release_resolve_only();
+bool build_resolve_only(IDirect3DDevice9* device, const D3DSURFACE_DESC& desc);
+
 // The client works in DXGI formats. These two are what a game's back buffer
 // carries; anything else the hook refuses rather than sending wrong colours.
-uint32_t dxgi_format_of(D3DFORMAT format) {
-    switch (format) {
+uint32_t dxgi_format_of(D3DFORMAT format) {    switch (format) {
         case D3DFMT_A8R8G8B8:
         case D3DFMT_X8R8G8B8:
             return 87;  // DXGI_FORMAT_B8G8R8A8_UNORM
@@ -272,6 +276,14 @@ void capture_present(IDirect3DDevice9* device) {
         return;
     }
 
+    // A reset dropped the resolve target while the read-back surfaces and the
+    // frame block survived. Recreate that one surface; anything else missing
+    // means the full rebuild above already ran.
+    if (!g_res.resolve && !build_resolve_only(device, desc)) {
+        back->Release();
+        return;
+    }
+
     const uint32_t slot = g_res.next;
     IDirect3DSurface9* readback = slot == 0 ? g_res.readback : g_res.readback2;
 
@@ -344,14 +356,42 @@ void guarded_capture(IDirect3DDevice9* device, const char* where) {
     g_in_capture.store(false, std::memory_order_release);
 }
 
-// A reset throws away every resource in the default pool and can change the
-// back buffer size. Ours live in system memory, but they are the wrong size
-// afterwards, so drop them and let the next present rebuild.
-void guarded_release(const char* where) {
+// A reset destroys every default-pool resource and can change the back
+// buffer size. Only the resolve target lives in the default pool; the
+// read-back surfaces are system memory and the frame block is shared memory,
+// so both survive a reset unchanged. Drop the resolve target here and let the
+// next present rebuild that one surface, unless the size or format moved, in
+// which case the full rebuild path runs. Rebuilding everything on each of the
+// ~57 resets of a fullscreen switch is pure churn.
+void release_resolve_only() {
+    if (g_res.resolve) {
+        g_res.resolve->Release();
+        g_res.resolve = nullptr;
+    }
+}
+
+// Recreate just the resolve target for the current back buffer description.
+// Returns false when the device is lost or the target cannot be made, in
+// which case the caller reports the error as build_resources would.
+bool build_resolve_only(IDirect3DDevice9* device, const D3DSURFACE_DESC& desc) {
+    if (FAILED(device->CreateRenderTarget(desc.Width, desc.Height, desc.Format,
+                                          D3DMULTISAMPLE_NONE, 0, FALSE, &g_res.resolve,
+                                          nullptr))) {
+        const HRESULT level = device->TestCooperativeLevel();
+        log_line("resolve target %ux%u fmt=%u failed (device state 0x%08lx)", desc.Width,
+                 desc.Height, desc.Format, static_cast<unsigned long>(level));
+        HookState::instance().set_error(FAILED(level) ? MELLO_HOOK_ERR_DEVICE_LOST
+                                                      : MELLO_HOOK_ERR_SHARED_TEXTURE);
+        return false;
+    }
+    return true;
+}
+
+void guarded_release_resolve(const char* where) {
     if (g_disabled.load(std::memory_order_relaxed)) return;
     if (g_in_capture.exchange(true, std::memory_order_acquire)) return;
     __try {
-        release_resources();
+        release_resolve_only();
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         note_fault(where);
     }
@@ -385,13 +425,13 @@ HRESULT STDMETHODCALLTYPE hooked_swap_present(IDirect3DSwapChain9* swap, const R
 }
 
 HRESULT STDMETHODCALLTYPE hooked_reset(IDirect3DDevice9* device, D3DPRESENT_PARAMETERS* params) {
-    guarded_release("D3D9 Reset");
+    guarded_release_resolve("D3D9 Reset");
     return g_real_reset(device, params);
 }
 
 HRESULT STDMETHODCALLTYPE hooked_reset_ex(IDirect3DDevice9Ex* device,
                                           D3DPRESENT_PARAMETERS* params, D3DDISPLAYMODEEX* mode) {
-    guarded_release("D3D9 ResetEx");
+    guarded_release_resolve("D3D9 ResetEx");
     return g_real_reset_ex(device, params, mode);
 }
 

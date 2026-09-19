@@ -139,10 +139,16 @@ TEST_F(VideoPipelineTest, HostToViewerLoopback) {
             else continue;
         }
         pipeline.feed_packet(p.data.data(), p.data.size(), p.is_keyframe);
+        if (frames_decoded.load() > 0) break;
     }
 
-    // Decoder may need a moment to flush
-    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    // The viewer does not push frames: the client pulls one per tick via
+    // present_frame(). Poll it until a frame arrives or the wait expires
+    // (same shape as HookLoopback::run_loopback).
+    for (int i = 0; i < 400 && frames_decoded.load() == 0; ++i) {
+        pipeline.present_frame();
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
 
     pipeline.stop_viewer();
 
@@ -199,9 +205,15 @@ TEST_F(VideoPipelineTest, SaveDecodedFrame) {
         }
         pipeline.feed_packet(p.data.data(), p.data.size(), p.is_keyframe);
         if (!saved_rgba.empty()) break;
+        // Pull decoded frames; the viewer only fires on_frame from
+        // present_frame().
+        pipeline.present_frame();
     }
 
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    for (int i = 0; i < 200 && saved_rgba.empty(); ++i) {
+        pipeline.present_frame();
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
     pipeline.stop_viewer();
 
     if (saved_rgba.empty()) {
