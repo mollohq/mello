@@ -104,9 +104,10 @@ Per 20ms frame, endpoint processing order is adaptive:
 4. clip ring tap (when clip buffer is active)
 5. cheap RMS/noise-floor gate updates input level and decides whether this is a speech candidate (uses post-stage RMS when the suppressor ran, pre-AEC level otherwise)
 6. Silero VAD runs only for candidate speech / hangover windows
-7. when speech opens, flush pre-roll frames so starts are not clipped
-8. while speech or hangover is active, apply the selected enhancement mode and Opus encode
-9. enqueue encoded packet with monotonically increasing sequence
+7. downward expander attenuates the frame toward a floor gain when the VAD is below threshold (see §4.4)
+8. when speech opens, flush pre-roll frames so starts are not clipped
+9. while speech or hangover is active, apply the selected enhancement mode and Opus encode
+10. enqueue encoded packet with monotonically increasing sequence
 
 RNNoise remains the default quality noise suppression path, but it is not run on obvious
 silence or non-speech background. This preserves Discord-like voice quality during speech
@@ -121,6 +122,8 @@ bool candidate = gate_rms >= max(MIN_SPEECH_RMS, noise_floor * NOISE_FLOOR_GATE_
 if (candidate || candidate_hangover || speech_hangover) {
     vad_.feed(capture_accum_.data(), FRAME_SIZE);
 }
+speech_expander_.process(capture_accum_.data(), FRAME_SIZE,
+                         vad_.probability() >= VAD_THRESHOLD);  // §4.4
 if (vad_.is_speaking() || speech_hangover) {
     flush_pre_roll_if_gate_just_opened();
     process_and_encode_frame(capture_accum_.data()); // RNNoise/WebRTC mode + Opus
@@ -159,6 +162,18 @@ In SFU RTP mode, `mello-core` strips this 4-byte sequence before `mello_peer_sen
 ### 4.3 Push-to-Talk Mode
 
 When the client enables push-to-talk (`mello_voice_set_push_to_talk(true)`), Silero VAD and the adaptive RMS/pre-roll speech gate are bypassed while the mic is unmuted. The client hotkey and mute state control when packets are sent; AEC3, AGC2, RNNoise, and Opus run on every captured frame during an unmuted PTT hold. Speaking indicators and `voice_speaking` presence remain hotkey-driven in the client, not Silero-driven.
+
+### 4.4 Downward Expander (AGC pump control)
+
+`SpeechExpander` (`libmello/src/audio/speech_expander.hpp`) runs after AGC2 and after the gate decision, before encode. It solves the quiet-mic AGC pump.
+
+Problem: a quiet mic (field case: −39 dBFS speech) forces AGC2 to a large gain (~+23 dB) to normalize the voice. AGC2 applies one gain to speech and floor alike, so it holds that gain across inter-word gaps and blasts the noise floor (measured +14..23 dB). The far side hears the floor swelling between words as crackle. No AGC2 config separates the two gains (verified by a knob sweep).
+
+Fix: the expander passes speech at unity gain and attenuates the frame toward a floor gain (default −20 dB) when the VAD reports no speech. Attack is fast (~1 frame); release is smoothed (~150 ms) so word onsets and tails are not chopped.
+
+Key detail: the expander is keyed off the **raw** `vad_.probability() >= VAD_THRESHOLD`, not `is_speaking()`. `is_speaking()` latches through an 8-frame holdover and stays true through the gaps that pump. The raw probability drops in those gaps and closes the expander there.
+
+The gate decision above is unchanged: it reads the frame before the expander runs. The expander state resets with the gate state on session boundaries. AGC2 also starts at `initial_gain_db = 0` (not the M131 default +15) to remove a separate start-gain pump on the listener path (`echo_canceller.cpp`).
 
 ---
 
@@ -320,6 +335,7 @@ libmello/src/audio/
 ├── opus_codec.hpp / .cpp
 ├── noise_suppressor.hpp / .cpp
 ├── echo_canceller.hpp / .cpp
+├── speech_expander.hpp        # post-AGC downward expander (§4.4)
 └── vad.hpp / .cpp
 
 mello-core/src/
