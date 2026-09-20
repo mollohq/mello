@@ -245,6 +245,10 @@ bool HookCapture::initialize(const GraphicsDevice& device, const CaptureSourceDe
         release_shared_block();
         return false;
     }
+    // The hook shares Direct3D 9 back buffers only with this adapter. A
+    // shared handle is valid nowhere else, so the hook must know before it
+    // chooses the GPU path or the memory path.
+    info_->client_adapter_luid = device.adapter_luid;
 
     info_->offsets_valid = 1;
     info_->off_dxgi_present = offsets.dxgi_present;

@@ -82,17 +82,21 @@ TEST(HookProtocol, LayoutIsFixed) {
     // and an older hook then leaves it at zero while a newer client reads that
     // zero as an answer: on 2026-09-18 a client waited fifteen seconds for a
     // game that was drawing, because the hook in it predated presents_seen.
-    EXPECT_EQ(MELLO_HOOK_PROTOCOL_VERSION, 2u);
-    EXPECT_EQ(sizeof(MelloHookInfo), 248u);
+    EXPECT_EQ(MELLO_HOOK_PROTOCOL_VERSION, 3u);
+    EXPECT_EQ(sizeof(MelloHookInfo), 256u);
     EXPECT_EQ(offsetof(MelloHookInfo, protocol_version), 0u);
     EXPECT_EQ(offsetof(MelloHookInfo, struct_size), 4u);
     EXPECT_EQ(offsetof(MelloHookInfo, adapter_luid), 32u);
     EXPECT_EQ(offsetof(MelloHookInfo, shared_handles), 40u);
     EXPECT_EQ(offsetof(MelloHookInfo, capture_enabled), 64u);
-    EXPECT_EQ(offsetof(MelloHookInfo, frame_index), 72u);
-    EXPECT_EQ(offsetof(MelloHookInfo, heartbeat_qpc), 88u);
-    EXPECT_EQ(offsetof(MelloHookInfo, offsets_valid), 112u);
-    EXPECT_EQ(offsetof(MelloHookInfo, off_dxgi_present), 120u);
+    EXPECT_EQ(offsetof(MelloHookInfo, client_pid), 68u);
+    // Version 3: the client's adapter LUID rides in the control section, so
+    // a Direct3D 9 game knows which adapter to share with.
+    EXPECT_EQ(offsetof(MelloHookInfo, client_adapter_luid), 72u);
+    EXPECT_EQ(offsetof(MelloHookInfo, frame_index), 80u);
+    EXPECT_EQ(offsetof(MelloHookInfo, heartbeat_qpc), 96u);
+    EXPECT_EQ(offsetof(MelloHookInfo, offsets_valid), 120u);
+    EXPECT_EQ(offsetof(MelloHookInfo, off_dxgi_present), 128u);
 }
 
 // A lost device is the state Direct3D 9 enters whenever the display mode
