@@ -285,16 +285,16 @@ func StartStreamRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk r
 				SFUEndpoint: endpoint,
 			})
 
-		logger.Info("User %s started stream %s (SFU) in crew %s region=%s", userID, streamID, req.CrewID, region)
-		resp, _ := json.Marshal(map[string]interface{}{
-			"stream_id":    streamID,
-			"session_id":   streamID,
-			"mode":         "sfu",
-			"sfu_endpoint": endpoint,
-			"sfu_token":    token,
-			"capture":      loadCapturePolicy(ctx, nk),
-		})
-		return string(resp), nil
+			logger.Info("User %s started stream %s (SFU) in crew %s region=%s", userID, streamID, req.CrewID, region)
+			resp, _ := json.Marshal(map[string]interface{}{
+				"stream_id":    streamID,
+				"session_id":   streamID,
+				"mode":         "sfu",
+				"sfu_endpoint": endpoint,
+				"sfu_token":    token,
+				"capture":      loadCapturePolicy(ctx, nk),
+			})
+			return string(resp), nil
 		}
 	}
 
