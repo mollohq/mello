@@ -1,0 +1,9 @@
+# Line endings, enforced on checkout on every OS.
+#
+# Go and shell sources must be LF. A Windows checkout with
+# core.autocrlf=true otherwise hands gofmt CRLF, which it always flags —
+# so a file can pass every local gate and still fail PR CI on Linux
+# (PR #62's backend job died exactly this way). Rust is unaffected
+# (cargo fmt normalizes) and stays under the default text handling.
+*.go text eol=lf
+*.sh text eol=lf
