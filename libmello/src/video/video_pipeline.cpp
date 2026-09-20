@@ -1,4 +1,6 @@
 #include "video_pipeline.hpp"
+
+#include <future>
 #include "encoder_factory.hpp"
 #include "decoder_factory.hpp"
 #include "../util/log.hpp"
@@ -14,6 +16,11 @@
 
 namespace mello::video {
 
+// How long `stop_host` waits for the encode thread. It is the same bound the
+// capture backends use: long enough that a healthy thread always makes it, and
+// short enough that a stuck one never holds a user interface.
+static constexpr std::chrono::seconds kEncodeJoinDeadline{5};
+
 // iOS has no hosting/capture in v1 (and the macOS impl lives in the excluded
 // capture_screencapturekit.mm), so provide the nullptr stub here too.
 #if (!defined(_WIN32) && !defined(__APPLE__)) || defined(MELLO_IOS_NO_HOSTING)
@@ -26,8 +33,10 @@ static constexpr const char* TAG = "video/pipeline";
 // minimum is 145x49; AMF and QSV are comparable. Below this the encoder rejects
 // initialization outright, so catching it here turns a misleading
 // "no hardware encoder" into a statement of what is actually wrong.
-static constexpr uint32_t kMinEncodeWidth  = 145;
-static constexpr uint32_t kMinEncodeHeight = 49;
+// The encoder minimums live with the capture sources, because choosing what to
+// capture needs them too.
+using mello::video::kMinEncodeWidth;
+using mello::video::kMinEncodeHeight;
 
 // Ring-buffer helpers for decoded frames ─────────────────────────────────────
 
@@ -147,9 +156,16 @@ bool VideoPipeline::start_host(const CaptureSourceDesc& source,
     config_    = config;
     packet_cb_ = std::move(on_packet);
 
-    // 1. Capture
-    capture_ = create_capture_source(source);
-    if (!capture_ || !capture_->initialize(device_, source)) {
+    // 1. Capture. The user picks what to stream; this picks how. A window that
+    // cannot carry a stream on its own becomes its process here.
+#ifdef _WIN32
+    const CaptureSourceDesc resolved = resolve_capture_target(source);
+#else
+    const CaptureSourceDesc resolved = source;
+#endif
+    capture_ = create_capture_source(resolved);
+    if (capture_) capture_->set_present_delay_histogram(&present_delay_hist_);
+    if (!capture_ || !capture_->initialize(device_, resolved)) {
         MELLO_LOG_ERROR(TAG, "Failed to initialize capture source");
         return false;
     }
@@ -220,7 +236,14 @@ bool VideoPipeline::start_host(const CaptureSourceDesc& source,
     output_fps_.store(0, std::memory_order_relaxed);
     next_emit_deadline_us_ = 0;
 
-    encode_thread_ = std::thread(&VideoPipeline::encode_thread_func, this);
+    {
+        std::promise<void> exited;
+        encode_exited_ = exited.get_future();
+        encode_thread_ = std::thread([this, exited = std::move(exited)]() mutable {
+            encode_thread_func();
+            exited.set_value();
+        });
+    }
 
     auto self = this;
     if (!capture_->start(config.fps, [self](ID3D11Texture2D* tex, uint64_t ts) {
@@ -288,14 +311,64 @@ void VideoPipeline::stop_host() {
     if (!host_running_.load()) return;
     host_running_ = false;
 
-    if (capture_)   capture_->stop();
+    // Each step is logged before it starts. A stop that hangs in a driver or a
+    // capture thread then names its own step in the log: the 2026-09-15 beta
+    // hang left no way to tell capture, encode and encoder shutdown apart.
+    MELLO_LOG_INFO(TAG, "stop_host: capture stop (%s)", capture_ ? capture_->backend_name() : "none");
+    if (capture_) {
+        capture_->stop();
+        if (capture_->stop_timed_out()) {
+            // A capture thread is still running inside the driver. It calls
+            // back into this pipeline, so nothing here may be freed or shut
+            // down: leak the whole pipeline and return. The alternative is a
+            // use-after-free, or the indefinite block this replaces.
+            abandoned_ = true;
+            (void)capture_.release();
+            MELLO_LOG_ERROR(TAG,
+                "stop_host: capture could not be stopped; abandoning this pipeline "
+                "(encoder, preprocessor and device stay allocated)");
+            return;
+        }
+    }
 
-    // Wake and join the encode thread before shutting down encoder/preprocessor
+    // Wake and join the encode thread before shutting down encoder/preprocessor.
+    //
+    // The join is bounded. This thread calls into the display driver and the
+    // hardware encoder, and either can block for as long as it likes: on
+    // 2026-09-16 a stop sat in this join for 25 minutes while the encode thread
+    // waited inside D3D11. When the deadline passes, the thread is left running
+    // and everything it touches is left allocated. A leak is the cheap outcome;
+    // destroying an encoder under a live thread is a crash.
+    MELLO_LOG_INFO(TAG, "stop_host: encode thread join");
     eq_cv_.notify_all();
-    if (encode_thread_.joinable()) encode_thread_.join();
+    bool encode_thread_stopped = true;
+    if (encode_thread_.joinable()) {
+        if (encode_exited_.valid() &&
+            encode_exited_.wait_for(kEncodeJoinDeadline) == std::future_status::ready) {
+            encode_thread_.join();
+        } else {
+            encode_thread_stopped = false;
+            encode_thread_detached_.store(true, std::memory_order_relaxed);
+            encode_thread_.detach();
+            MELLO_LOG_ERROR(TAG,
+                "stop_host: the encode thread did not stop within %lld ms. It is left running "
+                "and its encoder, preprocessor and frames are leaked on purpose.",
+                static_cast<long long>(
+                    std::chrono::duration_cast<std::chrono::milliseconds>(kEncodeJoinDeadline)
+                        .count()));
+        }
+    }
 
+    if (!encode_thread_stopped) {
+        // Nothing below may run: the thread that is still going owns all of it.
+        MELLO_LOG_INFO(TAG, "stop_host: done (encoder and preprocessor abandoned)");
+        return;
+    }
+
+    MELLO_LOG_INFO(TAG, "stop_host: encoder shutdown (%s)", encoder_ ? encoder_->name() : "none");
     if (encoder_)   encoder_->shutdown();
 #ifdef _WIN32
+    MELLO_LOG_INFO(TAG, "stop_host: preprocessor shutdown");
     if (preprocessor_) preprocessor_->shutdown();
 #endif
 
@@ -356,6 +429,24 @@ void VideoPipeline::get_host_resolution(uint32_t& w, uint32_t& h) const {
 
 void VideoPipeline::request_keyframe() {
     if (encoder_) encoder_->request_keyframe();
+    // An idle stream has no next frame to carry the IDR. Wake the encode
+    // thread so it re-encodes the last picture now.
+    keepalive_kick_.store(true, std::memory_order_relaxed);
+    eq_cv_.notify_all();
+}
+
+bool VideoPipeline::idle_repeat_due(bool have_last_frame, bool kicked,
+                                    uint64_t now_us, uint64_t last_new_frame_us,
+                                    uint64_t last_encode_us) {
+    if (!have_last_frame) return false;
+    const uint64_t since_new = now_us > last_new_frame_us ? now_us - last_new_frame_us : 0;
+    // A keyframe request while frames still flow is carried by the next frame.
+    // Only answer it here when capture has been quiet for a few frames.
+    static constexpr uint64_t kKickQuietUs = 100'000;
+    if (kicked && since_new >= kKickQuietUs) return true;
+    if (since_new < kIdleAfterUs) return false;
+    const uint64_t since_encode = now_us > last_encode_us ? now_us - last_encode_us : 0;
+    return since_encode >= kIdleRepeatIntervalUs;
 }
 
 // NOTE for future adaptive bitrate/framerate: avoid reconfiguring the encoder's
@@ -480,7 +571,14 @@ void VideoPipeline::get_host_telemetry(HostTelemetry& out) const {
         out.encode_ms  = static_cast<float>(last_encode_ms_);
     }
 
-    if (capture_)  out.capture_backend = capture_->backend_name();
+    if (capture_) {
+        out.capture_backend = capture_->backend_name();
+        out.capture_failed  = capture_->failed();
+        out.capture_state   = static_cast<uint32_t>(capture_->state());
+        out.target_exited   = capture_->target_exited();
+        out.capture_history = capture_->method_history();
+    }
+    present_delay_hist_.snapshot(out.present_delay_hist.data());
     if (encoder_) {
         out.encoder_name = encoder_->name();
         out.encoder_cost_tier = encoder_->cost_tier();
@@ -491,6 +589,7 @@ void VideoPipeline::get_host_telemetry(HostTelemetry& out) const {
         out.encode_lock_ms   = static_cast<float>(phases.lock_ms);
     }
     out.encode_ms_mean = static_cast<float>(encode_ms_mean_.load(std::memory_order_relaxed));
+    out.idle_repeat_frames = idle_repeat_frames_.load(std::memory_order_relaxed);
     out.gpu_name = device_.adapter_name;
 }
 
@@ -553,15 +652,44 @@ void VideoPipeline::on_captured_frame(ID3D11Texture2D* texture, uint64_t timesta
 }
 
 void VideoPipeline::encode_thread_func() {
+    // Keepalive state, only touched on this thread. The last job's texture is a
+    // preprocessor NV12 ring slot, valid until stop_host joins this thread.
+    EncodeJob last_job{};
+    bool have_last_job = false;
+    uint64_t last_new_frame_us = 0;
+    uint64_t last_encode_us = 0;
+    static constexpr auto kIdlePoll = std::chrono::milliseconds(100);
+
     while (true) {
         EncodeJob job{};
+        bool idle_repeat = false;
         {
             std::unique_lock<std::mutex> lock(eq_mutex_);
-            eq_cv_.wait(lock, [this] { return eq_count_ > 0 || !host_running_.load(); });
+            eq_cv_.wait_for(lock, kIdlePoll, [this] {
+                return eq_count_ > 0 || !host_running_.load() ||
+                       keepalive_kick_.load(std::memory_order_relaxed);
+            });
             if (eq_count_ == 0 && !host_running_.load()) break;
-            job = encode_queue_[eq_tail_];
-            eq_tail_ = (eq_tail_ + 1) % ENCODE_QUEUE_CAP;
-            eq_count_--;
+            if (eq_count_ > 0) {
+                job = encode_queue_[eq_tail_];
+                eq_tail_ = (eq_tail_ + 1) % ENCODE_QUEUE_CAP;
+                eq_count_--;
+            } else {
+                const bool kicked = keepalive_kick_.exchange(false, std::memory_order_relaxed);
+                const uint64_t now = now_us();
+                if (!idle_repeat_due(have_last_job, kicked, now, last_new_frame_us, last_encode_us)) {
+                    continue;
+                }
+                job = last_job;
+                job.timestamp_us = now;
+                idle_repeat = true;
+            }
+        }
+
+        if (!idle_repeat) {
+            last_job = job;
+            have_last_job = true;
+            last_new_frame_us = now_us();
         }
 
         auto t0 = std::chrono::steady_clock::now();
@@ -592,12 +720,17 @@ void VideoPipeline::encode_thread_func() {
                     last_convert_ms_, last_encode_ms_, eq_count_, eq_drops_);
             }
 
-            maybe_reduce_encoder_cost();
+            if (idle_repeat) {
+                idle_repeat_frames_.fetch_add(1, std::memory_order_relaxed);
+            } else {
+                maybe_reduce_encoder_cost();
+            }
 
             if (packet_cb_) {
                 packet_cb_(packet.data.data(), packet.data.size(), packet.is_keyframe, job.timestamp_us);
             }
         }
+        last_encode_us = now_us();
     }
 }
 

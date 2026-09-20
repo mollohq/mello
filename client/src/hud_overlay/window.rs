@@ -88,6 +88,13 @@ impl Win32OverlayWindow {
 
             log::info!("[overlay] window created hwnd={:?}", hwnd);
 
+            // Keep the HUD out of every screen capture, our own streams
+            // included. Desktop duplication captures the whole monitor, so
+            // without this viewers of a fullscreen game see our overlay.
+            // Needs Windows 10 2004 or later; older builds keep the overlay
+            // visible to capture and log the failure.
+            exclude_from_capture(hwnd, "overlay");
+
             // D3D11 device
             let mut d3d_device: Option<ID3D11Device> = None;
             D3D11CreateDevice(
@@ -180,6 +187,7 @@ impl Win32OverlayWindow {
             )?;
 
             SetWindowLongPtrW(grip_hwnd, GWLP_USERDATA, hwnd.0 as isize);
+            exclude_from_capture(grip_hwnd, "overlay grip");
 
             Ok(Self {
                 hwnd,
@@ -802,5 +810,21 @@ unsafe extern "system" fn grip_wndproc(
             LRESULT(0)
         }
         _ => DefWindowProcW(hwnd, msg, wparam, lparam),
+    }
+}
+
+/// Exclude a window from screen capture (desktop duplication, Windows Graphics
+/// Capture, screenshots). Failure is logged, not fatal.
+fn exclude_from_capture(hwnd: windows::Win32::Foundation::HWND, what: &str) {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        SetWindowDisplayAffinity, WDA_EXCLUDEFROMCAPTURE,
+    };
+    match unsafe { SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE) } {
+        Ok(()) => log::info!("[overlay] {} excluded from screen capture", what),
+        Err(e) => log::warn!(
+            "[overlay] {} could not be excluded from screen capture: {}",
+            what,
+            e
+        ),
     }
 }

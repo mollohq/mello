@@ -6,6 +6,7 @@
 #include <wrl/client.h>
 #include <thread>
 #include <atomic>
+#include <future>
 #include <mutex>
 
 using Microsoft::WRL::ComPtr;
@@ -23,6 +24,12 @@ public:
     const char* backend_name() const override { return "DXGI-DDI"; }
 
     bool get_cursor(CursorData& out) override;
+    bool failed() const override { return failed_.load(std::memory_order_relaxed); }
+    bool stop_timed_out() const override { return detached_.load(std::memory_order_relaxed); }
+
+    /// How long `stop()` waits for the capture thread before detaching it.
+    static constexpr std::chrono::milliseconds kStopDeadline{1500};
+    void set_present_delay_histogram(PresentDelayHistogram* hist) override { delay_hist_ = hist; }
 
 private:
     void capture_thread();
@@ -46,6 +53,13 @@ private:
     uint32_t           target_fps_ = 60;
     std::thread        thread_;
     std::atomic<bool>  running_{false};
+    std::atomic<bool>  failed_{false};
+    std::atomic<bool>  detached_{false};
+    // Set by the capture thread as its last action, so stop() can wait for the
+    // thread with a deadline. std::thread has no timed join.
+    std::promise<void> exited_;
+    std::future<void>  exited_future_;
+    PresentDelayHistogram* delay_hist_ = nullptr;
     FrameCallback      callback_;
 
     std::mutex         cursor_mutex_;

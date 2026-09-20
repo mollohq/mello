@@ -80,6 +80,17 @@ impl PacketSink for SfuSink {
         self.apply_native_pacing();
     }
 
+    async fn send_control(&self, data: &[u8]) {
+        if data.is_empty() {
+            return;
+        }
+        // The relay fans host control out to viewers (same channel the
+        // cursor packet was designed for). Best-effort by trait contract.
+        if let Err(e) = self.connection.send_control(data) {
+            log::debug!("SFU sink: control send failed: {}", e);
+        }
+    }
+
     async fn native_rtp_telemetry(&self) -> Option<NativeRtpTelemetry> {
         let stats = self.connection.video_stats().ok()?;
         Some(NativeRtpTelemetry {

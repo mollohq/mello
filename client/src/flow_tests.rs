@@ -1120,6 +1120,47 @@ fn failed_restore_stops_the_spinner() {
 
 use crate::onboarding::{advance, resume, Input, OnboardingState};
 
+/// END STREAM must change the screen on click, before the core answers. On
+/// 2026-09-15 the core was blocked in a native stop and the button looked dead.
+#[test]
+fn end_stream_click_updates_ui_before_core_confirms() {
+    let mut h = Harness::new();
+    h.app().set_is_hosting(true);
+    let _ = h.commands();
+
+    h.app().invoke_stop_stream();
+
+    assert!(
+        !h.app().get_is_hosting(),
+        "END STREAM must leave the hosting state without waiting for StreamEnded"
+    );
+    let cmds = h.commands();
+    assert!(
+        cmds.iter().any(|c| matches!(c, Command::StopStream)),
+        "END STREAM must still send StopStream, got {cmds:?}"
+    );
+}
+
+/// Hangup must change the screen on click, before the core answers.
+#[test]
+fn hangup_click_updates_ui_before_core_confirms() {
+    let mut h = Harness::new();
+    h.app().set_in_voice(true);
+    let _ = h.commands();
+
+    h.app().invoke_voice_toggle();
+
+    assert!(
+        !h.app().get_in_voice(),
+        "hangup must leave the in-voice state without waiting for VoiceStateChanged"
+    );
+    let cmds = h.commands();
+    assert!(
+        cmds.iter().any(|c| matches!(c, Command::LeaveVoice)),
+        "hangup must still send LeaveVoice, got {cmds:?}"
+    );
+}
+
 fn listed_audio_devices(cmds: &[Command]) -> bool {
     cmds.iter().any(|c| matches!(c, Command::ListAudioDevices))
 }
@@ -1833,5 +1874,20 @@ fn the_quick_stream_path_uses_the_chosen_quality() {
         preset,
         Some(0),
         "STREAM must send the preset the pills chose, got {cmds:?}"
+    );
+}
+
+/// A quit game ends the hosted stream: the core reports the exited target
+/// and the UI must route it to the normal stop path, not leave the session
+/// streaming a dead process.
+#[test]
+fn quit_game_stops_the_hosted_stream() {
+    let mut h = Harness::new();
+    h.emit(Event::StreamTargetExited);
+
+    let cmds = h.commands();
+    assert!(
+        cmds.iter().any(|c| matches!(c, Command::StopStream)),
+        "StreamTargetExited must emit Command::StopStream, got {cmds:?}"
     );
 }

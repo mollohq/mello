@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 #include "video/video_pipeline.hpp"
 #include <vector>
+#include <algorithm>
 #include <mutex>
 #include <atomic>
 #include <thread>
@@ -138,10 +139,16 @@ TEST_F(VideoPipelineTest, HostToViewerLoopback) {
             else continue;
         }
         pipeline.feed_packet(p.data.data(), p.data.size(), p.is_keyframe);
+        if (frames_decoded.load() > 0) break;
     }
 
-    // Decoder may need a moment to flush
-    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    // The viewer does not push frames: the client pulls one per tick via
+    // present_frame(). Poll it until a frame arrives or the wait expires
+    // (same shape as HookLoopback::run_loopback).
+    for (int i = 0; i < 400 && frames_decoded.load() == 0; ++i) {
+        pipeline.present_frame();
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
 
     pipeline.stop_viewer();
 
@@ -198,9 +205,15 @@ TEST_F(VideoPipelineTest, SaveDecodedFrame) {
         }
         pipeline.feed_packet(p.data.data(), p.data.size(), p.is_keyframe);
         if (!saved_rgba.empty()) break;
+        // Pull decoded frames; the viewer only fires on_frame from
+        // present_frame().
+        pipeline.present_frame();
     }
 
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    for (int i = 0; i < 200 && saved_rgba.empty(); ++i) {
+        pipeline.present_frame();
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
     pipeline.stop_viewer();
 
     if (saved_rgba.empty()) {
@@ -401,3 +414,330 @@ TEST(FramerateDecimation, ClockResetDoesNotWedgeTheStream) {
     uint64_t deadline = 9'000'000;
     EXPECT_TRUE(VideoPipeline::decimation_accepts(5, deadline, 30));
 }
+
+// Idle keepalive: a quiet capture still needs video, or a viewer who joins a
+// static stream waits for a keyframe that never comes.
+TEST(IdleKeepalive, NothingToRepeatBeforeTheFirstFrame) {
+    EXPECT_FALSE(VideoPipeline::idle_repeat_due(false, true, 10'000'000, 0, 0));
+}
+
+TEST(IdleKeepalive, NoRepeatWhileFramesFlow) {
+    const uint64_t now = 10'000'000;
+    EXPECT_FALSE(VideoPipeline::idle_repeat_due(true, false, now, now - 16'000, now - 16'000));
+}
+
+TEST(IdleKeepalive, RepeatsAfterTheIdleThreshold) {
+    const uint64_t now = 10'000'000;
+    const uint64_t last_new = now - VideoPipeline::kIdleAfterUs;
+    EXPECT_TRUE(VideoPipeline::idle_repeat_due(true, false, now, last_new, last_new));
+}
+
+TEST(IdleKeepalive, RepeatsAtTheKeepaliveRateNotFaster) {
+    const uint64_t now = 10'000'000;
+    const uint64_t last_new = now - 5'000'000;
+    EXPECT_FALSE(VideoPipeline::idle_repeat_due(true, false, now, last_new, now - 100'000));
+    EXPECT_TRUE(VideoPipeline::idle_repeat_due(
+        true, false, now, last_new, now - VideoPipeline::kIdleRepeatIntervalUs));
+}
+
+TEST(IdleKeepalive, KeyframeRequestOnAQuietStreamRepeatsAtOnce) {
+    const uint64_t now = 10'000'000;
+    // Quiet for 200 ms, last encode 10 ms ago: only the kick makes it due.
+    EXPECT_FALSE(VideoPipeline::idle_repeat_due(true, false, now, now - 200'000, now - 10'000));
+    EXPECT_TRUE(VideoPipeline::idle_repeat_due(true, true, now, now - 200'000, now - 10'000));
+}
+
+TEST(IdleKeepalive, KeyframeRequestWhileFramesFlowWaitsForTheNextFrame) {
+    const uint64_t now = 10'000'000;
+    EXPECT_FALSE(VideoPipeline::idle_repeat_due(true, true, now, now - 16'000, now - 16'000));
+}
+
+#ifdef _WIN32
+#include "video/capture_process.hpp"
+
+// Capture ladder: a method that does not deliver video fails; a method that
+// went quiet after delivering is a static screen and stays.
+TEST(CaptureLadder, SilentFromTheStartFailsAfterTheDeadline) {
+    const uint64_t started = 1'000'000;
+    for (bool continuous : {false, true}) {
+        EXPECT_FALSE(ladder::startup_failed(continuous, 0, started, started + 1'999'999));
+        EXPECT_TRUE(ladder::startup_failed(continuous, 0, started,
+                                           started + ladder::kFirstFrameDeadlineUs));
+    }
+}
+
+// Desktop duplication hands over one initial desktop image and then goes
+// silent under a game. Measured against Unigine Heaven on 2026-09-16: the
+// ladder accepted DXGI forever on the strength of that single frame.
+TEST(CaptureLadder, OneFrameThenSilenceIsAFailureForDuplication) {
+    const uint64_t started = 1'000'000;
+    EXPECT_FALSE(ladder::startup_failed(true, 1, started, started + 2'999'999));
+    EXPECT_TRUE(ladder::startup_failed(true, 1, started, started + ladder::kProbationUs));
+}
+
+// Window capture delivers a frame only when the captured content changes.
+// Measured against Unigine Heaven on 2026-09-16: the game sat on a static
+// screen, window capture delivered one frame, and the probation rule threw
+// away a method that worked. Only desktop duplication gets that rule.
+TEST(CaptureLadder, OneFrameThenSilenceIsNormalForWindowCapture) {
+    const uint64_t started = 1'000'000;
+    EXPECT_FALSE(ladder::startup_failed(false, 1, started, started + 1'800'000'000ULL));
+    EXPECT_FALSE(ladder::expects_continuous_frames(LadderStep::WgcWindow));
+    EXPECT_FALSE(ladder::expects_continuous_frames(LadderStep::WgcMonitor));
+    EXPECT_TRUE(ladder::expects_continuous_frames(LadderStep::Dxgi));
+}
+
+// A person starts the stream and then goes to their game. Loading, switching
+// window and taking fullscreen all take seconds, and the hook reports that the
+// game has drawn nothing at all in that time. Moving the ladder on there cost a
+// real user a stream of their desktop on 2026-09-16.
+TEST(CaptureLadder, AMethodWaitsWhileTheGameHasDrawnNothing) {
+    const uint64_t started = 1'000'000;
+
+    // Without that knowledge, two seconds of silence is a failure.
+    EXPECT_TRUE(ladder::startup_failed(false, 0, started,
+                                       started + ladder::kFirstFrameDeadlineUs, false));
+
+    // With it, the same silence is a game that has not drawn yet.
+    EXPECT_FALSE(ladder::startup_failed(false, 0, started,
+                                        started + ladder::kFirstFrameDeadlineUs, true));
+    EXPECT_FALSE(ladder::startup_failed(false, 0, started,
+                                        started + ladder::kWaitingForGameUs - 1, true));
+
+    // The wait is bounded: a game that draws through an API the hook does not
+    // cover is silent in exactly the same way, and stays silent.
+    EXPECT_TRUE(ladder::startup_failed(false, 0, started,
+                                       started + ladder::kWaitingForGameUs, true));
+}
+
+TEST(CaptureLadder, DeliveringMethodIsNeverFailed) {
+    const uint64_t started = 1'000'000;
+    // Delivered its quota, then 30 minutes of nothing: a paused game.
+    EXPECT_FALSE(ladder::startup_failed(true, ladder::kProbationFrames, started,
+                                        started + 1'800'000'000ULL));
+}
+
+TEST(CaptureLadder, ClockBeforeStepStartIsNotOverdue) {
+    EXPECT_FALSE(ladder::startup_failed(true, 0, 5'000'000, 1'000'000));
+}
+
+TEST(CaptureLadder, EveryMethodIsInTheOrder) {
+    auto order = ladder::initial_order(false);
+    ASSERT_EQ(order.size(), 3u);
+    EXPECT_NE(std::find(order.begin(), order.end(), LadderStep::Dxgi), order.end());
+    EXPECT_NE(std::find(order.begin(), order.end(), LadderStep::WgcWindow), order.end());
+    EXPECT_NE(std::find(order.begin(), order.end(), LadderStep::WgcMonitor), order.end());
+}
+
+TEST(CaptureLadder, WindowCaptureRunsFirstAndDuplicationLast) {
+    // Measured on 2026-09-16 against a fullscreen game: desktop duplication
+    // delivered one frame, then nothing, then wedged in the display driver and
+    // left the device unusable. Window capture ran the same game at 48 fps.
+    auto order = ladder::initial_order(false);
+    EXPECT_EQ(order.front(), LadderStep::WgcWindow);
+    EXPECT_EQ(order.back(), LadderStep::Dxgi);
+}
+
+// The hook is the only method that sees an exclusive-fullscreen game, so it
+// goes first - but only when the caller allows it. A client with no capture
+// policy from the backend never hooks anything (plan 3.6).
+TEST(CaptureLadder, TheHookRunsFirstOnlyWhenTheCallerAllowsIt) {
+    auto without = ladder::initial_order(false);
+    EXPECT_EQ(std::find(without.begin(), without.end(), LadderStep::Hook), without.end());
+
+    auto with = ladder::initial_order(true);
+    ASSERT_EQ(with.size(), 4u);
+    EXPECT_EQ(with.front(), LadderStep::Hook);
+    EXPECT_EQ(with.back(), LadderStep::Dxgi);
+}
+
+// The hook delivers a frame for every present, like duplication, but it sees
+// only the game. A game that renders nothing is silent on it, and that is not
+// a failure.
+TEST(CaptureLadder, TheHookIsNotJudgedOnFrameCount) {
+    EXPECT_FALSE(ladder::expects_continuous_frames(LadderStep::Hook));
+}
+
+// What a still stream tells the person watching. A wrong answer here shows a
+// pause card over a live game, or leaves a frozen picture unexplained.
+TEST(CaptureState, TheHookKeepsStreamingAMinimizedGame) {
+    using ladder::capture_state_for;
+    // Minimized, on the hook: the frame is taken inside the game, so the
+    // stream is live and there is nothing to tell the viewer.
+    EXPECT_EQ(capture_state_for(false, false, false, true, false, false),
+              CaptureState::Capturing);
+    // Minimized, on screen capture: the viewer is looking at a still picture.
+    EXPECT_EQ(capture_state_for(false, false, false, false, false, false),
+              CaptureState::WaitingMinimized);
+}
+
+TEST(CaptureState, WaitingAndFailedAreDifferentSentences) {
+    using ladder::capture_state_for;
+    EXPECT_EQ(capture_state_for(false, true, false, true, true, false),
+              CaptureState::WaitingMinimized)
+        << "the stream began with the game minimized, so nothing started";
+    EXPECT_EQ(capture_state_for(false, false, true, true, true, false),
+              CaptureState::WaitingForGame);
+    EXPECT_EQ(capture_state_for(true, false, false, true, true, false), CaptureState::Failed)
+        << "a proven failure outranks every wait";
+    EXPECT_EQ(capture_state_for(false, false, false, false, true, false),
+              CaptureState::Capturing);
+}
+
+// The pause card is method-agnostic: an exclusive-fullscreen game on a
+// screen-level method is blind with OS proof, hook or no hook.
+TEST(CaptureState, ABlindMethodInExclusiveFullscreenIsFailedWithProof) {
+    using ladder::capture_state_for;
+    // WGC window serving an exclusive-fullscreen game: the compositor frames
+    // are the desktop, not the game, and QUNS plus the foreground pid prove
+    // the game is drawing.
+    EXPECT_EQ(capture_state_for(false, false, false, false, true, true), CaptureState::Failed);
+    // Same proof on DXGI: also blind, also failed.
+    EXPECT_EQ(capture_state_for(false, false, false, false, true, true), CaptureState::Failed);
+    // The hook sees exclusive fullscreen from inside the game: still live.
+    EXPECT_EQ(capture_state_for(false, false, false, true, true, true), CaptureState::Capturing)
+        << "captures_while_minimized short-circuits before the fullscreen proof";
+    // Windowed and borderless never report fullscreen: a live game stays live.
+    EXPECT_EQ(capture_state_for(false, false, false, false, true, false),
+              CaptureState::Capturing);
+    // A minimized game that is not fullscreen waits, it does not fail.
+    EXPECT_EQ(capture_state_for(false, false, false, false, false, false),
+              CaptureState::WaitingMinimized);
+}
+
+#include "video/hook_policy.hpp"
+
+// Choosing what to capture from what the user picked. A window picker lists
+// every window a game has, including ones that can never carry a stream.
+TEST(CaptureTarget, AProxyWindowCannotCarryAStream) {
+    // Direct3D 9 leaves this behind when a game takes exclusive fullscreen.
+    // Measured on 2026-09-16: picking Unigine Heaven in the window list gave a
+    // 160x28 D3DProxyWindow and the stream refused to start.
+    EXPECT_FALSE(window_is_capturable(160, 28, "D3DProxyWindow"));
+    EXPECT_FALSE(window_is_capturable(1920, 1080, "D3DProxyWindow"))
+        << "a proxy window is never the game, whatever size it claims";
+    EXPECT_FALSE(window_is_capturable(1920, 1080, "d3dproxywindow"));
+}
+
+TEST(CaptureTarget, AWindowBelowTheEncoderMinimumCannotCarryAStream) {
+    EXPECT_FALSE(window_is_capturable(kMinEncodeWidth - 1, 720, "UnigineWindowClass"));
+    EXPECT_FALSE(window_is_capturable(1280, kMinEncodeHeight - 1, "UnigineWindowClass"));
+    EXPECT_TRUE(window_is_capturable(kMinEncodeWidth, kMinEncodeHeight, "UnigineWindowClass"));
+    EXPECT_TRUE(window_is_capturable(1280, 720, "UnigineWindowClass"));
+}
+
+// The run-time hook checks. Bob's rule is that the hook must not get anyone
+// banned, so each of these is a refusal, and a refusal only costs a fallback to
+// screen capture.
+TEST(HookPolicy, KnownAntiCheatModulesAreRefused) {
+    using namespace mello::video::hook;
+    EXPECT_TRUE(is_anticheat_module("EasyAntiCheat_x64.dll"));
+    EXPECT_TRUE(is_anticheat_module("C:\\Games\\x\\BEClient_x64.dll"));
+    EXPECT_TRUE(is_anticheat_module("ACE-BASE.dll"));
+    EXPECT_TRUE(is_anticheat_module("vgk.sys"));
+    EXPECT_TRUE(is_anticheat_module("mhyprot3.sys"));
+    EXPECT_TRUE(is_anticheat_module("xhunter1.sys"));
+
+    EXPECT_FALSE(is_anticheat_module("d3d11.dll"));
+    EXPECT_FALSE(is_anticheat_module("Heaven.exe"));
+    EXPECT_FALSE(is_anticheat_module(""));
+
+    // The names are matched from the start. A module that merely contains the
+    // letters of a short pattern is not an anti-cheat, and refusing it would
+    // cost every player of that game the hook.
+    EXPECT_FALSE(is_anticheat_module("reach.dll"));
+    EXPECT_FALSE(is_anticheat_module("svgc_helper.dll"));
+    EXPECT_FALSE(is_anticheat_module("nvgameguardian.dll"));
+}
+
+TEST(HookPolicy, KnownAntiCheatProcessesAreRefused) {
+    using namespace mello::video::hook;
+    EXPECT_TRUE(is_anticheat_process("EasyAntiCheat.exe"));
+    EXPECT_TRUE(is_anticheat_process("BEService.exe"));
+    EXPECT_TRUE(is_anticheat_process("vgc.exe"));
+    EXPECT_FALSE(is_anticheat_process("explorer.exe"));
+}
+
+TEST(HookPolicy, StorePackagedAndChromiumGamesAreRefused) {
+    using namespace mello::video::hook;
+    EXPECT_TRUE(is_store_packaged("C:\\Program Files\\WindowsApps\\Game_1.0\\game.exe"));
+    EXPECT_FALSE(is_store_packaged("C:\\Games\\game.exe"));
+
+    EXPECT_TRUE(is_chromium_window_class("Chrome_WidgetWin_1"));
+    EXPECT_TRUE(is_chromium_window_class("Chrome_WidgetWin_0"));
+    EXPECT_FALSE(is_chromium_window_class("UnigineWindowClass"));
+}
+
+// The developer override stands in for the backend safe list. It names one
+// executable, and a partial name must not widen it to other games.
+TEST(HookPolicy, TheDeveloperOverrideNamesOneExecutable) {
+    using namespace mello::video::hook;
+    EXPECT_TRUE(developer_allows("Heaven.exe", R"(C:\Games\Heaven\bin\Heaven.exe)"));
+    EXPECT_TRUE(developer_allows("heaven.exe", R"(C:\Games\Heaven.exe)"));
+    EXPECT_TRUE(developer_allows(R"(C:\Games\Heaven.exe)", R"(D:\other\Heaven.exe)"));
+
+    EXPECT_FALSE(developer_allows("Heaven", R"(C:\Games\Heaven.exe)")) << "whole name only";
+    EXPECT_FALSE(developer_allows("Heav", R"(C:\Games\Heaven.exe)"));
+    EXPECT_FALSE(developer_allows("Heaven.exe", R"(C:\Games\HeavenBenchmark.exe)"));
+    EXPECT_FALSE(developer_allows("", R"(C:\Games\Heaven.exe)")) << "unset allows nothing";
+    EXPECT_FALSE(developer_allows("Heaven.exe", ""));
+}
+
+// The catalogue and the backend decide first. With no decision there is no
+// hook, whatever the process looks like.
+TEST(HookPolicy, NothingIsHookedWithoutTheCallersPermission) {
+    using namespace mello::video::hook;
+    const PolicyResult result = check_process(GetCurrentProcessId(), false);
+    EXPECT_FALSE(result.allowed());
+    EXPECT_EQ(result.verdict, PolicyVerdict::NotAllowedByCaller);
+}
+#endif
+
+// Present-to-capture delay histogram used by the DXGI vs WGC benchmark.
+TEST(PresentDelayHistogram, BucketsAreOneMillisecondWide) {
+    EXPECT_EQ(PresentDelayHistogram::bucket_for_ms(0.4), 0u);
+    EXPECT_EQ(PresentDelayHistogram::bucket_for_ms(1.0), 1u);
+    EXPECT_EQ(PresentDelayHistogram::bucket_for_ms(8.9), 8u);
+}
+
+TEST(PresentDelayHistogram, NegativeAndLargeDelaysAreClamped) {
+    // A frame timestamp slightly in the future (clock rounding) is not a crash.
+    EXPECT_EQ(PresentDelayHistogram::bucket_for_ms(-3.0), 0u);
+    EXPECT_EQ(PresentDelayHistogram::bucket_for_ms(500.0), PresentDelayHistogram::kBuckets - 1);
+}
+
+TEST(PresentDelayHistogram, SnapshotIsCumulative) {
+    PresentDelayHistogram h;
+    h.record_ms(2.5);
+    h.record_ms(2.1);
+    h.record_ms(40.0);
+    uint32_t out[PresentDelayHistogram::kBuckets]{};
+    h.snapshot(out);
+    EXPECT_EQ(out[2], 2u);
+    EXPECT_EQ(out[PresentDelayHistogram::kBuckets - 1], 1u);
+}
+
+// The ladder is Windows-only (capture_process.hpp is _WIN32-guarded), so the
+// tests below are too. They lived past the mid-file #endif unguarded and
+// broke the macOS build on the first CI run that compiled this branch there.
+#ifdef _WIN32
+TEST(CaptureLadder, TheFirstFrameDeadlineIsTheSameForEveryMethod) {
+    // A method that delivers nothing at all gets exactly one chance, whichever
+    // method it is.
+    const uint64_t started = 0;
+    EXPECT_TRUE(ladder::startup_failed(true, 0, started, ladder::kFirstFrameDeadlineUs));
+    EXPECT_FALSE(ladder::startup_failed(true, 2, started, ladder::kFirstFrameDeadlineUs));
+    EXPECT_TRUE(ladder::startup_failed(true, 2, started, ladder::kProbationUs));
+}
+
+// A quiet stream is only an error when the game is provably rendering. A
+// visible game that renders nothing looks exactly like a blind capture method,
+// and telling that user to change a setting would be wrong.
+TEST(CaptureLadder, QuietGameIsNotReportedAsAFailure) {
+    EXPECT_FALSE(ladder::should_report_failure(false));
+}
+
+TEST(CaptureLadder, ExclusiveFullscreenIsReported) {
+    EXPECT_TRUE(ladder::should_report_failure(true));
+}
+#endif // _WIN32 ladder tests

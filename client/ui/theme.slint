@@ -114,9 +114,9 @@ export global Theme {
 
     // --- Compatibility aliases -------------------------------------------
     //  `accent` used to mean both "press this" and "something is happening".
-    //  The system splits those. Until every call site is triaged (Step B of
-    //  plans/GRAPHITE-UI-MIGRATION.md) `accent` resolves to ACTION, which is
-    //  the more common of the two readings.
+    //  The system splits those. Until every call site is triaged, `accent`
+    //  resolves to ACTION, which is the more common of the two readings.
+    //  See designs/design-system.html for what each colour means.
     out property <color> accent:       action;
     out property <color> accent-bg:    action-dim;
     out property <color> accent-red:   live;

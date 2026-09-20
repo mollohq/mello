@@ -162,6 +162,20 @@ mod platform {
         _handle: std::thread::JoinHandle<()>,
     }
 
+    /// Whether a failed ConnectNamedPipe still leaves bytes to read.
+    /// ERROR_PIPE_CONNECTED: the client connected between CreateNamedPipeW
+    /// and ConnectNamedPipe and is waiting. ERROR_NO_DATA: it did that and
+    /// disconnected again before this thread got here — a fast sender (open,
+    /// write, close) wins that race, and the bytes it wrote sit in the pipe
+    /// buffer. Anything else is a real failure. Pure so the mapping is
+    /// unit-testable without named pipes.
+    #[cfg(windows)]
+    pub(super) fn may_still_hold_bytes(raw_os_error: Option<i32>) -> bool {
+        use windows::Win32::Foundation::{ERROR_NO_DATA, ERROR_PIPE_CONNECTED};
+        raw_os_error == Some(ERROR_PIPE_CONNECTED.0 as i32)
+            || raw_os_error == Some(ERROR_NO_DATA.0 as i32)
+    }
+
     impl PlatformListener {
         pub fn bind(endpoint: &str) -> std::io::Result<Self> {
             let pipe_name = endpoint.to_string();
@@ -236,9 +250,11 @@ mod platform {
             // Blocks until a client connects (or pipe is broken)
             let connected = unsafe { ConnectNamedPipe(pipe, None) };
             if connected.is_err() {
-                // ERROR_PIPE_CONNECTED means client connected before we called ConnectNamedPipe
+                // A failed connect can still leave bytes to read (see
+                // may_still_hold_bytes): fall through to the read instead of
+                // dropping a message send_to_running already confirmed.
                 let err = std::io::Error::last_os_error();
-                if err.raw_os_error() != Some(ERROR_PIPE_CONNECTED.0 as i32) {
+                if !may_still_hold_bytes(err.raw_os_error()) {
                     log::warn!("[ipc] ConnectNamedPipe error: {}", err);
                     unsafe {
                         let _ = CloseHandle(pipe);
@@ -329,5 +345,54 @@ mod tests {
     fn send_to_nonexistent_returns_false() {
         let ep = endpoint_name("mello-ipc-test-nonexistent");
         assert!(!send_to_running(&ep, "mello://join/X"));
+    }
+
+    /// The ConnectNamedPipe error mapping the accept loop runs on: a client
+    /// that connected, or connected and left, leaves bytes behind. Anything
+    /// else is a real failure. Windows-only, like the function.
+    #[cfg(windows)]
+    #[test]
+    fn connect_errors_that_leave_bytes_are_read() {
+        use super::platform::may_still_hold_bytes;
+        use windows::Win32::Foundation::{
+            ERROR_ACCESS_DENIED, ERROR_NO_DATA, ERROR_PIPE_CONNECTED,
+        };
+        assert!(may_still_hold_bytes(Some(ERROR_PIPE_CONNECTED.0 as i32)));
+        assert!(may_still_hold_bytes(Some(ERROR_NO_DATA.0 as i32)));
+        assert!(!may_still_hold_bytes(Some(ERROR_ACCESS_DENIED.0 as i32)));
+        assert!(!may_still_hold_bytes(None));
+    }
+
+    /// A sender that opens, writes and closes before the accept thread
+    /// reaches ConnectNamedPipe must still be heard. The bind barrier only
+    /// guarantees the pipe exists, not that the server is waiting on it; a
+    /// fast sender wins that race and the server sees ERROR_NO_DATA, whose
+    /// bytes sit in the pipe buffer. Dropping them loses a message that
+    /// send_to_running already confirmed — exactly the CI flake.
+    #[test]
+    fn fast_sender_before_accept_still_delivers() {
+        for i in 0..5 {
+            let ep = endpoint_name(&format!("mello-ipc-race-{}.{}", std::process::id(), i));
+            // Hammer connects from another thread: pre-bind attempts fail
+            // fast, and the first landing write races the accept thread.
+            let sender = std::thread::spawn({
+                let ep = ep.clone();
+                move || {
+                    for _ in 0..10_000 {
+                        if send_to_running(&ep, "mello://join/RACE") {
+                            return true;
+                        }
+                        std::thread::yield_now();
+                    }
+                    false
+                }
+            });
+            let listener = IpcListener::bind(&ep).expect("bind failed");
+            assert!(sender.join().expect("sender panicked"), "no send landed");
+            let msg = listener
+                .recv_timeout(std::time::Duration::from_secs(10))
+                .expect("fast sender's message was lost");
+            assert_eq!(msg, "mello://join/RACE");
+        }
     }
 }

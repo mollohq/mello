@@ -22,6 +22,83 @@ type StartStreamRequest struct {
 	Width       uint32 `json:"width,omitempty"`
 	Height      uint32 `json:"height,omitempty"`
 	BitrateKbps uint32 `json:"bitrate_kbps,omitempty"`
+	// Exe is the game executable name (e.g. "Heaven.exe"), for logging and
+	// policy-mismatch diagnostics only. The server never trusts it to allow
+	// a hook; the client still matches exe against the capture block lists.
+	Exe string `json:"exe,omitempty"`
+}
+
+// CapturePolicy is the backend `capture` block in the start_stream response
+// (streaming-reliability plan §8). Three gates must all hold before the client
+// hooks a game: this block allows it, the catalogue policy is `hook`, and the
+// runtime checks pass. With no block, or with hook_enabled=false, the client
+// never hooks.
+//
+// The lists are matched case-insensitively by executable name. Deny wins over
+// allow; unknown executables are never hooked. hook_review games appear in
+// neither list. Counter-Strike 2 is in hook_deny permanently.
+//
+// Source data: mello-backlog/plans/game-capture-hook-games/games.csv
+// (policy==hook -> hook_allow, policy==no_hook -> hook_deny). Stored as a
+// versioned blob in Nakama storage so exposure is controlled from the backend,
+// not by who installed what. See loadCapturePolicy.
+type CapturePolicy struct {
+	HookEnabled   bool     `json:"hook_enabled"`
+	PolicyVersion string   `json:"policy_version"`
+	HookAllow     []string `json:"hook_allow"`
+	HookDeny      []string `json:"hook_deny"`
+}
+
+const (
+	CapturePolicyCollection = "capture_config"
+	CapturePolicyKey        = "hook_policy"
+)
+
+// defaultCapturePolicy is the safe default: no hook until a policy is stored.
+func defaultCapturePolicy() CapturePolicy {
+	return CapturePolicy{
+		HookEnabled:   false,
+		PolicyVersion: "none",
+		HookAllow:     []string{},
+		HookDeny:      []string{},
+	}
+}
+
+// parseCapturePolicy parses a stored policy blob. Unknown fields are ignored
+// and missing lists become empty, so an old blob never enables a hook by
+// accident and never fails the stream start.
+func parseCapturePolicy(raw string) CapturePolicy {
+	policy := defaultCapturePolicy()
+	if raw == "" {
+		return policy
+	}
+	var stored CapturePolicy
+	if err := json.Unmarshal([]byte(raw), &stored); err != nil {
+		return policy
+	}
+	policy.HookEnabled = stored.HookEnabled
+	policy.PolicyVersion = stored.PolicyVersion
+	if stored.HookAllow != nil {
+		policy.HookAllow = stored.HookAllow
+	}
+	if stored.HookDeny != nil {
+		policy.HookDeny = stored.HookDeny
+	}
+	return policy
+}
+
+// loadCapturePolicy reads the versioned hook policy from Nakama storage.
+// Any failure (missing object, corrupt JSON, storage error) returns the safe
+// default, so a stream never fails because the policy is unreadable — it just
+// runs without the hook. The client treats a missing block the same way.
+func loadCapturePolicy(ctx context.Context, nk runtime.NakamaModule) CapturePolicy {
+	objects, err := nk.StorageRead(ctx, []*runtime.StorageRead{
+		{Collection: CapturePolicyCollection, Key: CapturePolicyKey, UserID: SystemUserID},
+	})
+	if err != nil || len(objects) == 0 {
+		return defaultCapturePolicy()
+	}
+	return parseCapturePolicy(objects[0].GetValue())
 }
 
 const (
@@ -215,6 +292,7 @@ func StartStreamRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk r
 				"mode":         "sfu",
 				"sfu_endpoint": endpoint,
 				"sfu_token":    token,
+				"capture":      loadCapturePolicy(ctx, nk),
 			})
 			return string(resp), nil
 		}
@@ -233,6 +311,7 @@ func StartStreamRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk r
 		"session_id":  streamID,
 		"mode":        "p2p",
 		"max_viewers": MaxP2PViewers,
+		"capture":     loadCapturePolicy(ctx, nk),
 	})
 	return string(resp), nil
 }

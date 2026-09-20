@@ -24,18 +24,109 @@ fn catalogue() -> Option<&'static crate::catalogue::Head> {
 }
 use super::stream_ffi::{
     feed_viewer_audio_packet, flush_ice_buffer, log_viewer_native_stats, on_viewer_native_frame,
-    poll_p2p_viewer_access_units, poll_sfu_viewer_access_units, stream_audio_track_callback,
-    stream_ice_callback, stream_state_callback, tick_viewer_congestion_p2p,
-    tick_viewer_congestion_sfu, FrameCallbackData, StreamAudioCallbackData, StreamHostHandle,
-    StreamHostPeer, StreamIceCallbackData, StreamPeerDisconnect, ViewerState,
+    poll_p2p_viewer_access_units, poll_sfu_viewer_access_units, register_pause_callback,
+    stream_audio_track_callback, stream_ice_callback, stream_state_callback,
+    tick_viewer_congestion_p2p, tick_viewer_congestion_sfu, unregister_pause_callback,
+    FrameCallbackData, PauseSlot, StreamAudioCallbackData, StreamHostHandle, StreamHostPeer,
+    StreamIceCallbackData, StreamPeerDisconnect, ViewerState,
 };
 use super::FRAME_STATE_PRESENTED;
 
 const STREAM_DEBUG_EVENT_INTERVAL_SECS: f32 = 1.0;
+/// Longest wait for the SFU leave message when a viewer stops watching.
+const SFU_LEAVE_DEADLINE: std::time::Duration = std::time::Duration::from_millis(1500);
 /// Viewer report cadence to the SFU. Above the server's 5s rate limit so a
 /// message is never dropped for arriving too soon.
 const VIEWER_STATS_INTERVAL_SECS: u64 = 10;
 const HOST_PACING_DEBUG_EVENT_INTERVAL_SECS: f32 = 1.0;
+
+// ---------------------------------------------------------------------------
+// Async stream start: the native host starts off the command loop
+// ---------------------------------------------------------------------------
+//
+// `mello_stream_start_host` blocks for about 2 s with the hook in the path
+// (injection wait plus first-frame deadline). The command loop also drives
+// the 20 ms voice tick and every other command, so awaiting it there stalls
+// all three. The start therefore runs on its own OS thread; the loop polls
+// the join handle on the stream tick and finishes the start when it lands.
+//
+// Stop-during-start is safe: dropping the join handle detaches the thread,
+// and when it finishes its outcome drops, which stops the host through the
+// bounded teardown guard. The advertised session is retracted either way.
+
+/// What the background start thread hands back: everything the loop needs
+/// to finish the start without touching native code again.
+pub(super) struct NativeStartOutcome {
+    host: StreamHostHandle,
+    video_rx: tokio::sync::mpsc::Receiver<crate::stream::manager::VideoPacket>,
+    audio_rx: tokio::sync::mpsc::Receiver<crate::stream::manager::AudioPacket>,
+    teardown: crate::stream::teardown::NativeTeardownGuard,
+    actual_w: u32,
+    actual_h: u32,
+}
+
+/// A native start in flight. Owned by the command loop; polled on the
+/// stream tick, never awaited.
+pub(super) struct PendingStreamStart {
+    crew_id: String,
+    config: crate::stream::StreamConfig,
+    configured_bitrate_kbps: u32,
+    resp: crate::stream::host::StartStreamResponse,
+    thread: std::thread::JoinHandle<Result<NativeStartOutcome, String>>,
+}
+
+/// The blocking half of stream start. Runs on its own thread: capture
+/// backend init (including hook injection), resolution query, audio start.
+/// Touches no `Client` state; every parameter is a plain value. The HWND
+/// travels as an address because a raw pointer is not `Send`; the capture
+/// source struct is rebuilt on the thread.
+struct NativeStartParams {
+    ctx: usize,
+    mode: mello_sys::MelloCaptureMode,
+    monitor_index: u32,
+    hwnd: usize,
+    pid: u32,
+    allow_hook: bool,
+    width: u32,
+    height: u32,
+    fps: u32,
+    bitrate_kbps: u32,
+}
+
+fn start_host_blocking(params: NativeStartParams) -> Result<NativeStartOutcome, String> {
+    let source = mello_sys::MelloCaptureSource {
+        mode: params.mode,
+        monitor_index: params.monitor_index,
+        hwnd: params.hwnd as *mut std::ffi::c_void,
+        pid: params.pid,
+        allow_hook: params.allow_hook,
+    };
+    let mello_config = mello_sys::MelloStreamConfig {
+        width: params.width,
+        height: params.height,
+        fps: params.fps,
+        bitrate_kbps: params.bitrate_kbps,
+    };
+    let ctx = params.ctx as *mut mello_sys::MelloContext;
+    let (host, video_rx, audio_rx, teardown) =
+        unsafe { crate::stream::host::start_host(ctx, &source, &mello_config) }
+            .map_err(|e| e.to_string())?;
+    let (mut actual_w, mut actual_h) = (mello_config.width, mello_config.height);
+    unsafe {
+        mello_sys::mello_stream_get_host_resolution(host, &mut actual_w, &mut actual_h);
+    }
+    unsafe {
+        mello_sys::mello_stream_start_audio(host);
+    }
+    Ok(NativeStartOutcome {
+        host: StreamHostHandle(host),
+        video_rx,
+        audio_rx,
+        teardown,
+        actual_w,
+        actual_h,
+    })
+}
 
 impl super::Client {
     pub(super) fn handle_stream_signal(&mut self, from: &str, envelope: SignalEnvelope) {
@@ -419,6 +510,25 @@ impl super::Client {
     }
 
     pub(super) async fn stream_tick(&mut self) {
+        // 0. Every capture method failed (for a game: probably exclusive
+        // fullscreen). Report once per failure. The UI only logs StreamError
+        // today; a visible message needs a design.
+        if self
+            .stream_session
+            .as_ref()
+            .is_some_and(|session| session.take_capture_failed())
+        {
+            let _ = self.event_tx.send(Event::StreamError {
+                message: "m3llo cannot see this game. It is probably in exclusive fullscreen. \
+                          Switch the game to borderless or windowed fullscreen."
+                    .to_string(),
+            });
+        }
+
+        // 0b. A native start in flight on its thread. Polled, never awaited:
+        // the completion below only runs fast async steps from here.
+        self.poll_pending_stream_start().await;
+
         // 1. Drain stream signal queue and send via Nakama
         let signals: Vec<(String, SignalEnvelope)> = {
             match self.stream_signal_queue.lock() {
@@ -476,6 +586,36 @@ impl super::Client {
                 // Same reasoning as the SFU path above.
                 let _ = poll_p2p_viewer_access_units(vs, viewer, peer);
             }
+        }
+
+        // Pause UX: host tab-out arrives on the reliable control channel into
+        // the pause slot. Report transitions to the UI; while paused the
+        // freeze clock is frozen too — a paused picture is deliberate, not a
+        // stall, and must not accrue freeze time or trip the resume with a
+        // phantom freeze.
+        let paused_now = vs.pause_slot.is_paused();
+        let reason_now = vs.pause_slot.reason().as_str().to_string();
+        if paused_now != vs.last_reported_paused
+            || (paused_now && reason_now != vs.last_reported_pause_reason)
+        {
+            vs.last_reported_paused = paused_now;
+            vs.last_reported_pause_reason = reason_now.clone();
+            log::info!(
+                "Stream pause state changed: host={} paused={} reason={}",
+                vs.host_id,
+                paused_now,
+                reason_now
+            );
+            let _ = self.event_tx.send(Event::StreamPaused {
+                host_id: vs.host_id.clone(),
+                paused: paused_now,
+                reason: reason_now,
+            });
+        }
+        if paused_now {
+            vs.last_new_frame_at = Instant::now();
+            vs.in_freeze = false;
+            vs.freeze_accounted_ms = 0;
         }
 
         // Present at most one frame per stream tick so visual cadence tracks
@@ -1039,8 +1179,9 @@ impl super::Client {
         hwnd: Option<u64>,
         pid: Option<u32>,
         preset_idx: u32,
+        exe: &str,
     ) {
-        if self.stream_session.is_some() {
+        if self.stream_session.is_some() || self.pending_stream_start.is_some() {
             let _ = self.event_tx.send(Event::StreamError {
                 message: "Already streaming".to_string(),
             });
@@ -1097,6 +1238,7 @@ impl super::Client {
             config.width,
             config.height,
             config.bitrate_kbps,
+            exe,
         )
         .await
         {
@@ -1110,80 +1252,174 @@ impl super::Client {
             }
         };
 
-        // Step 2: sync FFI calls (raw pointer ctx must NOT live across await)
-        // Scope ctx so it's dropped before any SFU .await calls.
-        let (host, video_rx, audio_rx, resources) = {
-            let ctx = self.voice.mello_ctx();
-
-            if !unsafe { crate::stream::encoder_available(ctx) } {
-                let msg = "Streaming requires a hardware encoder \
+        // Step 2: native start, off the command loop. `start_host_blocking`
+        // holds the capture backend init (hook injection included, about 2 s)
+        // on its own thread; the loop polls it on the stream tick. The guard
+        // above ran before the RPC await, so a second start queued during it
+        // reaches here advertised: take it back before reporting, or a viewer
+        // presses "watch" on a stream that never started (2026-09-16).
+        if self.stream_session.is_some() || self.pending_stream_start.is_some() {
+            log::warn!("Stream start raced a live session; retracting the duplicate");
+            self.retract_advertised_stream(crew_id).await;
+            let _ = self.event_tx.send(Event::StreamError {
+                message: "Already streaming".to_string(),
+            });
+            return;
+        }
+        let ctx = self.voice.mello_ctx();
+        if !unsafe { crate::stream::encoder_available(ctx) } {
+            let message = "Streaming requires a hardware encoder \
                            (NVIDIA, AMD, or Intel). None was found on this machine.";
-                log::error!("{}", msg);
+            log::error!("{}", message);
+            self.retract_advertised_stream(crew_id).await;
+            let _ = self.event_tx.send(Event::StreamError {
+                message: message.to_string(),
+            });
+            return;
+        }
+
+        let (mode, monitor_index, hwnd_addr, pid, allow_hook) = match target {
+            crate::stream::config::CaptureTarget::Window { hwnd } => (
+                mello_sys::MelloCaptureMode_MELLO_CAPTURE_WINDOW,
+                0,
+                hwnd as usize,
+                0,
+                false,
+            ),
+            crate::stream::config::CaptureTarget::Process { pid } => {
+                // Gate 1 of the hook policy (plan §8): the backend
+                // `capture` block carries the kill switch and the safe
+                // lists. No block, or no match, means no hook. Gates 2
+                // (catalogue) and 3 (runtime checks) run in libmello.
+                let allow_hook =
+                    crate::stream::host::hook_allowed_for_exe(exe, resp.capture.as_ref());
+                let version = resp
+                    .capture
+                    .as_ref()
+                    .map(|c| c.policy_version.as_str())
+                    .unwrap_or("none");
+                log::info!(
+                    "Hook policy: exe={:?} allow_hook={} policy_version={}",
+                    exe,
+                    allow_hook,
+                    version
+                );
+                (
+                    mello_sys::MelloCaptureMode_MELLO_CAPTURE_PROCESS,
+                    0,
+                    0,
+                    pid,
+                    allow_hook,
+                )
+            }
+            crate::stream::config::CaptureTarget::Monitor { index } => (
+                mello_sys::MelloCaptureMode_MELLO_CAPTURE_MONITOR,
+                index,
+                0,
+                0,
+                false,
+            ),
+        };
+
+        // Pointers travel as addresses; the thread touches no Client state
+        // and every parameter is Send, so the closure is Send.
+        let params = NativeStartParams {
+            ctx: ctx as usize,
+            mode,
+            monitor_index,
+            hwnd: hwnd_addr,
+            pid,
+            allow_hook,
+            width: config.width,
+            height: config.height,
+            fps: config.fps,
+            bitrate_kbps: config.bitrate_kbps,
+        };
+        let thread = match std::thread::Builder::new()
+            .name("stream_start".to_string())
+            .spawn(move || start_host_blocking(params))
+        {
+            Ok(thread) => thread,
+            Err(e) => {
+                log::error!("Stream start thread failed to spawn: {}", e);
+                self.retract_advertised_stream(crew_id).await;
                 let _ = self.event_tx.send(Event::StreamError {
-                    message: msg.to_string(),
+                    message: "Could not start capture (thread spawn failed)".to_string(),
                 });
                 return;
             }
+        };
+        log::info!(
+            "Stream native start on background thread for crew {}; loop stays responsive",
+            crew_id
+        );
+        self.pending_stream_start = Some(PendingStreamStart {
+            crew_id: crew_id.to_string(),
+            config,
+            configured_bitrate_kbps,
+            resp,
+            thread,
+        });
+    }
 
-            let mello_config = mello_sys::MelloStreamConfig {
-                width: config.width,
-                height: config.height,
-                fps: config.fps,
-                bitrate_kbps: config.bitrate_kbps,
-            };
-
-            let source = match target {
-                crate::stream::config::CaptureTarget::Window { hwnd } => {
-                    mello_sys::MelloCaptureSource {
-                        mode: mello_sys::MelloCaptureMode_MELLO_CAPTURE_WINDOW,
-                        monitor_index: 0,
-                        hwnd: hwnd as *mut std::ffi::c_void,
-                        pid: 0,
-                    }
-                }
-                crate::stream::config::CaptureTarget::Process { pid } => {
-                    mello_sys::MelloCaptureSource {
-                        mode: mello_sys::MelloCaptureMode_MELLO_CAPTURE_PROCESS,
-                        monitor_index: 0,
-                        hwnd: std::ptr::null_mut(),
-                        pid,
-                    }
-                }
-                crate::stream::config::CaptureTarget::Monitor { index } => {
-                    mello_sys::MelloCaptureSource {
-                        mode: mello_sys::MelloCaptureMode_MELLO_CAPTURE_MONITOR,
-                        monitor_index: index,
-                        hwnd: std::ptr::null_mut(),
-                        pid: 0,
-                    }
-                }
-            };
-
-            let (host, video_rx, audio_rx, resources) =
-                match unsafe { crate::stream::host::start_host(ctx, &source, &mello_config) } {
-                    Ok(v) => v,
-                    Err(e) => {
-                        let _ = self.event_tx.send(Event::StreamError {
-                            message: e.to_string(),
-                        });
-                        return;
-                    }
-                };
-
-            let (mut actual_w, mut actual_h) = (config.width, config.height);
-            unsafe {
-                mello_sys::mello_stream_get_host_resolution(host, &mut actual_w, &mut actual_h);
+    /// Poll the in-flight native start. Runs on the stream tick; never blocks.
+    /// On success the start finishes below (resolution RPC, SFU, session).
+    /// On failure the advertised session is retracted so no viewer watches a
+    /// stream that never started (2026-09-16).
+    pub(super) async fn poll_pending_stream_start(&mut self) {
+        let Some(pending) = self.pending_stream_start.take() else {
+            return;
+        };
+        if !pending.thread.is_finished() {
+            // Still running; put it back and keep the loop moving.
+            self.pending_stream_start = Some(pending);
+            return;
+        }
+        let PendingStreamStart {
+            crew_id,
+            config,
+            configured_bitrate_kbps,
+            resp,
+            thread,
+        } = pending;
+        let joined = match thread.join() {
+            Ok(outcome) => outcome,
+            Err(_) => Err("Stream start thread panicked".to_string()),
+        };
+        match joined {
+            Ok(outcome) => {
+                self.finish_stream_start(&crew_id, outcome, config, configured_bitrate_kbps, resp)
+                    .await;
             }
-            log::info!("Host encode resolution: {}x{}", actual_w, actual_h);
-            self.stream_encode_width = actual_w;
-            self.stream_encode_height = actual_h;
-
-            unsafe {
-                mello_sys::mello_stream_start_audio(host);
+            Err(message) => {
+                log::error!("Stream native start failed: {}", message);
+                self.retract_advertised_stream(&crew_id).await;
+                let _ = self.event_tx.send(Event::StreamError { message });
             }
+        }
+    }
 
-            (StreamHostHandle(host), video_rx, audio_rx, resources)
-        }; // ctx and raw pointers drop here — safe to .await below
+    /// The second half of stream start: resolution RPC, sink selection, SFU
+    /// connect, session creation. Runs on the loop; every await yields it.
+    async fn finish_stream_start(
+        &mut self,
+        crew_id: &str,
+        outcome: NativeStartOutcome,
+        config: crate::stream::StreamConfig,
+        configured_bitrate_kbps: u32,
+        resp: crate::stream::host::StartStreamResponse,
+    ) {
+        let NativeStartOutcome {
+            host,
+            video_rx,
+            audio_rx,
+            teardown,
+            actual_w,
+            actual_h,
+        } = outcome;
+        log::info!("Host encode resolution: {}x{}", actual_w, actual_h);
+        self.stream_encode_width = actual_w;
+        self.stream_encode_height = actual_h;
 
         // Update backend with actual encode resolution (may differ from preset)
         if let Err(e) = self
@@ -1242,10 +1478,8 @@ impl super::Client {
             let message =
                 "SFU stream setup failed on host; aborting stream start (no silent P2P fallback)";
             log::error!("{}", message);
-            unsafe {
-                mello_sys::mello_stream_stop_audio(host.0);
-                mello_sys::mello_stream_stop_host(host.0);
-            }
+            // Bounded native stop on the teardown thread, never inline here.
+            drop(teardown);
             let _ = self.event_tx.send(Event::StreamError {
                 message: message.to_string(),
             });
@@ -1265,8 +1499,9 @@ impl super::Client {
             config,
             video_rx,
             audio_rx,
-            resources,
+            teardown,
             Arc::clone(&sink),
+            Some(self.event_tx.clone()),
         ) {
             Ok(session) => {
                 let _ = self.event_tx.send(Event::StreamStarted {
@@ -1282,11 +1517,9 @@ impl super::Client {
                 self.host_pacing_last_at = Instant::now();
             }
             Err(e) => {
+                // The teardown guard moved into create_stream_session and was
+                // dropped there, which already stopped the host.
                 log::error!("Failed to create stream session: {}", e);
-                unsafe {
-                    mello_sys::mello_stream_stop_audio(host);
-                    mello_sys::mello_stream_stop_host(host);
-                }
                 let _ = self.event_tx.send(Event::StreamError {
                     message: e.to_string(),
                 });
@@ -1295,43 +1528,101 @@ impl super::Client {
         }
     }
 
+    /// Tells the backend to drop a stream session that never carried a frame.
+    ///
+    /// `start_stream` announces the stream to the crew before the host starts,
+    /// which is what makes the button feel instant. When the host then fails,
+    /// that announcement is wrong: viewers see a live stream and get black.
+    /// This is the other half of that trade.
+    pub(super) async fn retract_advertised_stream(&mut self, crew_id: &str) {
+        log::info!(
+            "Stream host did not start; retracting the session for crew {}",
+            crew_id
+        );
+        let payload = serde_json::json!({ "crew_id": crew_id });
+        if let Err(e) = self.nakama.rpc("stop_stream", &payload).await {
+            // Nothing else to try here. The backend drops a session when the
+            // host stops sending, so this is a delay, not a permanent lie.
+            log::warn!("stop_stream RPC failed while retracting: {}", e);
+        }
+    }
+
     pub(super) async fn handle_stop_stream(&mut self) {
-        if let Some(session) = self.stream_session.take() {
-            session.stop_and_wait().await;
+        // A native start in flight on its thread. END STREAM answers at
+        // once: the UI is told first, the advertised session is retracted,
+        // and the detached thread's outcome drops when it lands, which stops
+        // the host through the bounded teardown guard.
+        if let Some(pending) = self.pending_stream_start.take() {
+            log::info!(
+                "Stopping stream while native start is in flight for crew {}",
+                pending.crew_id
+            );
+            let crew_id = pending.crew_id.clone();
+            drop(pending.thread);
+            let _ = self.event_tx.send(Event::StreamEnded {
+                crew_id: crew_id.clone(),
+            });
+            self.retract_advertised_stream(&crew_id).await;
+            return;
+        }
+        let Some(session) = self.stream_session.take() else {
+            return;
+        };
+        log::info!("Stopping stream session {}", session.session_id);
 
-            // The manager has exited. Remove every sink membership before
-            // destroying its native peer and callback state.
-            for (id, hp) in self.stream_host_peers.drain() {
-                if let Some(ref sink) = self.stream_sink {
-                    sink.remove_viewer(&id);
-                }
-                unsafe {
-                    mello_sys::mello_peer_destroy(hp.peer);
-                    if !hp.ice_cb_data.is_null() {
-                        drop(Box::from_raw(hp.ice_cb_data));
+        // The UI is told first. Nothing below may delay END STREAM: the manager
+        // join is bounded, native teardown runs on its own thread, and the RPC
+        // is best effort. On 2026-09-15 this event waited behind a native stop
+        // that never returned, and the button looked dead.
+        let crew_id = self.nakama.active_crew_id().map(String::from);
+        let _ = self.event_tx.send(Event::StreamEnded {
+            crew_id: crew_id.clone().unwrap_or_default(),
+        });
+
+        // Bounded. The native host stops on the teardown thread when the
+        // manager task ends or is aborted.
+        session.stop_and_wait().await;
+
+        // The manager has exited. Remove every sink membership before handing
+        // the native peers to the teardown thread.
+        let mut peers = Vec::new();
+        for (id, hp) in self.stream_host_peers.drain() {
+            if let Some(ref sink) = self.stream_sink {
+                sink.remove_viewer(&id);
+            }
+            peers.push((id, hp));
+        }
+        if !peers.is_empty() {
+            crate::stream::teardown::spawn("stream_host_peers", move |steps| {
+                for (id, hp) in peers {
+                    steps.step("mello_peer_destroy");
+                    unsafe {
+                        mello_sys::mello_peer_destroy(hp.peer);
+                        if !hp.ice_cb_data.is_null() {
+                            drop(Box::from_raw(hp.ice_cb_data));
+                        }
                     }
+                    log::info!("Destroyed stream host peer {}", id);
                 }
-                log::info!("Destroyed stream host peer {}", id);
-            }
-            self.stream_sink = None;
-            self.stream_host_sink = None;
-            self.stream_sfu_connection = None;
-            self.host_pacing_last = None;
-            self.host_pacing_last_at = Instant::now();
-            self.pending_remote_ice.clear();
-            if let Ok(mut queue) = self.stream_disconnect_queue.lock() {
-                queue.clear();
-            }
-            self.stream_encode_width = 0;
-            self.stream_encode_height = 0;
-            self.stream_bitrate_kbps = 0;
+            });
+        }
+        self.stream_sink = None;
+        self.stream_host_sink = None;
+        self.stream_sfu_connection = None;
+        self.host_pacing_last = None;
+        self.host_pacing_last_at = Instant::now();
+        self.pending_remote_ice.clear();
+        if let Ok(mut queue) = self.stream_disconnect_queue.lock() {
+            queue.clear();
+        }
+        self.stream_encode_width = 0;
+        self.stream_encode_height = 0;
+        self.stream_bitrate_kbps = 0;
 
-            if let Some(crew_id) = self.nakama.active_crew_id().map(String::from) {
-                let payload = serde_json::json!({ "crew_id": crew_id });
-                if let Err(e) = self.nakama.rpc("stop_stream", &payload).await {
-                    log::warn!("stop_stream RPC failed: {}", e);
-                }
-                let _ = self.event_tx.send(Event::StreamEnded { crew_id });
+        if let Some(crew_id) = crew_id {
+            let payload = serde_json::json!({ "crew_id": crew_id });
+            if let Err(e) = self.nakama.rpc("stop_stream", &payload).await {
+                log::warn!("stop_stream RPC failed: {}", e);
             }
         }
     }
@@ -1497,6 +1788,22 @@ impl super::Client {
         log::info!("SFU viewer connected to session {}", session_id);
         let conn = Arc::new(conn);
 
+        // Pause state arrives on the reliable control channel (host tab-out).
+        // Registered late — messages before this are lost, but the host
+        // re-broadcasts on viewer joins and periodically while paused.
+        let pause_slot = Arc::new(PauseSlot::new());
+        let mut pause_cb_data: *mut std::ffi::c_void = std::ptr::null_mut();
+        let mut pause_cb_peer: *mut mello_sys::MelloPeerConnection = std::ptr::null_mut();
+        match conn.peer_nonnull() {
+            Ok(peer) => {
+                pause_cb_peer = peer.as_ptr();
+                pause_cb_data = unsafe { register_pause_callback(peer, &pause_slot) };
+            }
+            Err(e) => {
+                log::warn!("SFU viewer: pause callback registration failed: {}", e);
+            }
+        }
+
         // Prefer actual encode resolution from watch_stream response (set by host
         // via update_stream_resolution RPC), fall back to crew-state UI values.
         let (w, h) = if resp.width > 0 && resp.height > 0 {
@@ -1601,6 +1908,11 @@ impl super::Client {
             _frame_cb_data: frame_cb_data,
             _ice_cb_data: std::ptr::null_mut(),
             _audio_cb_data: std::ptr::null_mut(),
+            pause_slot,
+            last_reported_paused: false,
+            last_reported_pause_reason: String::new(),
+            _pause_cb_data: pause_cb_data,
+            pause_cb_peer,
             frames_presented: 0,
             stream_tick_count: 0,
             present_attempts: 0,
@@ -1696,11 +2008,22 @@ impl super::Client {
                 audio_cb_data as *mut std::ffi::c_void,
             );
         }
+        // Pause state arrives on the reliable control channel (host tab-out).
+        // Same late-registration caveat as the SFU path: the host
+        // re-broadcasts on joins and periodically while paused.
+        let pause_slot = Arc::new(PauseSlot::new());
+        let mut pause_cb_data: *mut std::ffi::c_void = std::ptr::null_mut();
+        if let Some(peer_nn) = NonNull::new(peer) {
+            pause_cb_data = unsafe { register_pause_callback(peer_nn, &pause_slot) };
+        }
 
         let sdp_ptr = unsafe { mello_sys::mello_peer_create_offer(peer) };
         if sdp_ptr.is_null() {
             log::error!("Failed to create stream offer");
             unsafe {
+                if let Some(peer_nn) = NonNull::new(peer) {
+                    unregister_pause_callback(peer_nn, pause_cb_data);
+                }
                 mello_sys::mello_peer_destroy(peer);
                 drop(Box::from_raw(ice_cb_data));
                 drop(Box::from_raw(audio_cb_data));
@@ -1757,6 +2080,11 @@ impl super::Client {
             _frame_cb_data: frame_cb_data,
             _ice_cb_data: ice_cb_data,
             _audio_cb_data: audio_cb_data,
+            pause_slot,
+            last_reported_paused: false,
+            last_reported_pause_reason: String::new(),
+            _pause_cb_data: pause_cb_data,
+            pause_cb_peer: peer,
             frames_presented: 0,
             stream_tick_count: 0,
             present_attempts: 0,
@@ -1801,14 +2129,42 @@ impl super::Client {
     pub(super) async fn handle_stop_watching(&mut self) {
         if let Some(vs) = self.viewer_state.take() {
             log::info!("Stopping stream viewer for host {}", vs.host_id);
+            // UI first; the SFU leave and the native teardown below are bounded
+            // or off-loop and must not delay it.
+            let _ = self.event_tx.send(Event::StreamWatchingStopped);
             if let Some(ref conn) = vs.sfu_connection {
-                conn.leave().await;
+                if tokio::time::timeout(SFU_LEAVE_DEADLINE, conn.leave())
+                    .await
+                    .is_err()
+                {
+                    log::warn!(
+                        "SFU viewer leave did not finish within {} ms; dropping the connection",
+                        SFU_LEAVE_DEADLINE.as_millis()
+                    );
+                }
             }
+            // Native stop runs on the teardown thread (ViewerState::drop).
             drop(vs);
             self.frame_lifecycle
                 .store(FRAME_STATE_PRESENTED, std::sync::atomic::Ordering::Release);
-            let _ = self.event_tx.send(Event::StreamWatchingStopped);
         }
+    }
+}
+
+#[cfg(test)]
+mod async_start_tests {
+    use super::{NativeStartOutcome, NativeStartParams};
+
+    fn assert_send<T: Send>() {}
+
+    /// The start thread's params and outcome must cross threads. This fails
+    /// to compile if a non-Send field (e.g. a raw HWND pointer) sneaks back
+    /// into either type — the exact regression that blocked the off-loop
+    /// start.
+    #[test]
+    fn start_thread_types_are_send() {
+        assert_send::<NativeStartParams>();
+        assert_send::<NativeStartOutcome>();
     }
 }
 

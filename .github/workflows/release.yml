@@ -86,6 +86,18 @@ jobs:
         shell: pwsh
         run: .\scripts\run-signup-smoke.ps1 target\release\mello.exe
 
+      # Game capture hook, both architectures. The hook is Windows-only and
+      # lives in its own CMake project (x86 + x64, static CRT). Smart App
+      # Control blocks unsigned DLLs, so these must be built here and packed
+      # into dist/ below, where the Velopack step signs everything listed in
+      # client/windows/signing-metadata.json. Test-only fakegame binaries are
+      # never packed.
+      - name: Build hook (x64 + x86)
+        shell: pwsh
+        run: |
+          pwsh hook/build.ps1 -Bits 64 -Config Release
+          pwsh hook/build.ps1 -Bits 32 -Config Release
+
       - name: Assemble dist
         shell: pwsh
         run: |
@@ -95,6 +107,12 @@ jobs:
           cp libmello/third_party/onnxruntime/onnxruntime-win-x64-*/lib/onnxruntime_providers_shared.dll dist/
           cp (Get-ChildItem target/release/build -Recurse -Filter silero_vad.onnx | Select -First 1).FullName dist/
           cp (Get-ChildItem target/release/build -Recurse -Filter echo_suppressor.onnx | Select -First 1).FullName dist/
+          cp hook/bin/Release/mello-hook64.dll dist/
+          cp hook/bin/Release/mello-hook32.dll dist/
+          cp hook/bin/Release/mello-inject64.exe dist/
+          cp hook/bin/Release/mello-inject32.exe dist/
+          cp hook/bin/Release/mello-offsets64.exe dist/
+          cp hook/bin/Release/mello-offsets32.exe dist/
           del dist/*.lib -ErrorAction SilentlyContinue
 
       - name: Login to Azure

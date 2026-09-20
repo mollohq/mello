@@ -5,6 +5,7 @@ mod connection;
 mod crew;
 mod diagnostics;
 mod game_services;
+pub mod loop_watchdog;
 mod presence;
 mod reconnect;
 mod stats_emit;
@@ -38,6 +39,29 @@ use std::time::Instant;
 
 pub use stream_ffi::feed_viewer_audio_packet;
 use stream_ffi::{StreamHostPeer, StreamPeerDisconnect, ViewerState};
+
+/// LUID of the GPU adapter libmello decodes on, as `(HighPart << 32) | LowPart`.
+/// Zero when no adapter is usable, and always zero off Windows.
+///
+/// Anything that opens the shared texture handle in [`NativeSurfaceFrame`] must
+/// create its D3D11 device on this adapter. A shared handle belongs to the
+/// adapter that made it, so a device on the system default adapter fails every
+/// open with `E_INVALIDARG`. Those are the same adapter on a single-GPU machine
+/// and different ones on a laptop with an integrated and a discrete GPU, which
+/// is why the mismatch stays invisible until someone streams to a laptop.
+///
+/// Safe to call before any stream starts: it reads the adapter list and does
+/// not create a device.
+pub fn video_adapter_luid() -> u64 {
+    #[cfg(target_os = "windows")]
+    {
+        unsafe { mello_sys::mello_video_adapter_luid() }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        0
+    }
+}
 
 /// Shared single-slot buffer for decoded stream frames. The C++ callback
 /// overwrites the latest frame; the UI timer reads and takes it. This avoids
@@ -83,6 +107,9 @@ pub struct Client {
     stream_host_sink: Option<Arc<dyn PacketSink>>,
     stream_sfu_connection: Option<Arc<SfuConnection>>,
     stream_sink: Option<Arc<P2PFanoutSink>>,
+    /// Native host start in flight on its own thread. Polled on the stream
+    /// tick; never awaited. See `PendingStreamStart` in streaming.rs.
+    pending_stream_start: Option<crate::client::streaming::PendingStreamStart>,
     stream_host_peers: HashMap<String, StreamHostPeer>,
     viewer_state: Option<ViewerState>,
     stream_signal_queue: Arc<std::sync::Mutex<Vec<(String, SignalEnvelope)>>>,
@@ -222,6 +249,7 @@ impl Client {
             stream_host_sink: None,
             stream_sfu_connection: None,
             stream_sink: None,
+            pending_stream_start: None,
             stream_host_peers: HashMap::new(),
             viewer_state: None,
             stream_signal_queue: Arc::new(std::sync::Mutex::new(Vec::new())),
@@ -273,6 +301,8 @@ impl Client {
 
         let mut signal_rx = self.nakama.take_signal_rx().unwrap();
         let mut presence_rx = self.nakama.take_presence_rx().unwrap();
+        // Reports any loop step that holds the loop, while it still holds it.
+        let watchdog = loop_watchdog::LoopWatchdog::start();
         let mut voice_tick = tokio::time::interval(tokio::time::Duration::from_millis(20));
         voice_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         let mut stream_tick = tokio::time::interval(tokio::time::Duration::from_millis(16));
@@ -362,7 +392,10 @@ impl Client {
             tokio::select! {
                 cmd = cmd_rx.recv() => {
                     match cmd {
-                        Some(cmd) => self.handle_command(cmd).await,
+                        Some(cmd) => {
+                            let _step = watchdog.step(loop_watchdog::command_name(&cmd));
+                            self.handle_command(cmd).await;
+                        }
                         None => break,
                     }
                 }
@@ -377,18 +410,22 @@ impl Client {
                     }
                 }
                 _ = voice_tick.tick(), if self.needs_voice_tick() => {
+                    let _step = watchdog.step("voice_tick");
                     self.voice_tick().await;
                     if self.clip_was_playing {
                         self.clip_playback_tick();
                     }
                 }
                 _ = stream_tick.tick(), if self.needs_stream_tick() => {
+                    let _step = watchdog.step("stream_tick");
                     self.stream_tick().await;
                 }
                 _ = refresh_tick.tick() => {
+                    let _step = watchdog.step("refresh_token");
                     self.refresh_token().await;
                 }
                 _ = connection_tick.tick() => {
+                    let _step = watchdog.step("connection_tick");
                     self.connection_tick().await;
                 }
                 _ = stats_tick.tick(), if self.emit_process_stats => {
@@ -815,6 +852,7 @@ impl Client {
                 hwnd,
                 pid,
                 preset,
+                exe,
             } => {
                 self.handle_start_stream(
                     &crew_id,
@@ -824,6 +862,7 @@ impl Client {
                     hwnd,
                     pid,
                     preset,
+                    &exe,
                 )
                 .await;
             }

@@ -49,14 +49,172 @@ Capture → GPU Preprocess → Encode Queue → Encode Thread → Stream Manager
 
 ### 3.1 Capture
 
-Two backends, selected automatically per-process:
+Four methods, tried in order by the capture ladder:
 
-| Backend | API | When |
-|---------|-----|------|
-| **DXGI-DDI** | `IDXGIOutputDuplication` | Fullscreen / exclusive-fullscreen games |
-| **WGC** | `Windows.Graphics.Capture` | Windowed games |
+| Backend | API | Notes |
+|---------|-----|-------|
+| **Hook** | m3llo game capture hook, inside the game | The game's own back buffer. The only method that sees exclusive fullscreen. Needs permission; see 3.1.1. |
+| **DXGI-DDI** | `IDXGIOutputDuplication` | The game window's monitor. Cannot see exclusive-fullscreen content. |
+| **WGC** | `Windows.Graphics.Capture`, `CreateForWindow` | The game window. Cannot see exclusive-fullscreen content either. |
+| **WGC-Monitor** | `Windows.Graphics.Capture`, `CreateForMonitor` | Fallback when window capture fails. |
 
-`ProcessCapture` wraps both. Given a PID it finds the main game window (`EnumWindows`, largest restored-area, non-toolwindow), detects fullscreen (covers ≥90% of monitor), and picks the backend. A background `monitor_thread` periodically re-evaluates and hot-swaps if the game transitions windowed↔fullscreen — triggering a keyframe on swap.
+`ProcessCapture` owns the ladder. Given a PID it finds the main game window
+(`EnumWindows`, largest restored-area, non-toolwindow) and tries the methods in
+one order for every game: **the hook when it is allowed, then WGC window, WGC
+monitor, DXGI desktop duplication**.
+
+Measured on 2026-09-16 against Unigine Heaven (Direct3D11, borderless
+fullscreen, 3440x1440, NVIDIA):
+
+| Method | Delivered fps | Present-to-capture p50 / p95 / p99 |
+|---|---|---|
+| WGC window | 48 | 1 ms / 1 ms / 1 ms |
+| DXGI-DDI | 1 frame in 20 s, then nothing | n/a |
+
+Desktop duplication is last because of what the same runs showed:
+`AcquireNextFrame` blocks inside the NVIDIA display driver (`nvwgf2umx.dll`) and
+ignores its timeout. That wedged thread also leaves the shared D3D11 device
+unusable, so every later capture attempt on that device blocks. The ladder marks
+the device poisoned and stops using it.
+
+**A method fails only on evidence.** The evidence is:
+
+| Evidence | Applies to | Rule |
+|---|---|---|
+| No first frame | Every method | 2 s with no frame at all, or 15 s while the game has drawn nothing (see below) |
+| Too few frames | DXGI only | Under 3 frames in 3 s. Duplication delivers a frame for every change on screen, so silence under a game that presents means it is blind. WGC delivers a frame only when the captured content changes, so silence there is a static game. |
+| Backend stopped for good | Every method | Duplication rebuild gave up, or the capture item closed |
+| Game entered exclusive fullscreen | Every method | `SHQueryUserNotificationState`. Rebuilds the current method and restarts its deadline |
+
+While the game is minimized every deadline is held, because nothing can capture
+a minimized game.
+
+**A game that has drawn nothing is not a failed capture method.** A person
+starts the stream and then goes to their game: switching window, loading a
+level and taking fullscreen take seconds, and no method has anything to show in
+that time. Moving the ladder on there is worse than waiting, because monitor
+capture then delivers the desktop, keeps delivering, and nothing ever moves the
+ladder back. That is what a user saw on 2026-09-16: their viewer watched the
+whole desktop with the game as a small window inside it.
+
+Only the hook can tell the difference, because only the hook sees the game's
+presents from inside the game: it counts them in `presents_seen`, whether or
+not it captured them. No presents at all means the game has drawn nothing, and
+the first-frame deadline becomes 15 s. It stays bounded, because a game that
+draws through an API the hook does not cover looks exactly the same.
+
+**The ladder walks back up on evidence.** It only ever walks down by itself,
+since the method it settles on keeps delivering. When the game enters exclusive
+fullscreen, the best method becomes possible again, so the ladder restarts from
+the top.
+
+Every ladder move forces a keyframe. When every method has delivered nothing,
+the ladder goes back to the first method, waits 30 s, and tries them all again.
+The user sees an error only with proof that the game is rendering: the game is
+in exclusive fullscreen, or the capture device is stuck. Host stats then carry
+`cap_failed`, the method history rides in `cap_hist`, and the client sends one
+`StreamError`. Without that proof the stream is quiet, not broken, and the user
+is not told anything. Exclusive-fullscreen games need the game capture hook
+(plan work stream 3), which does not exist yet.
+
+**Target exit ends the stream.** Each backend holds the target process object
+through an open handle, so pid reuse cannot confuse it, and reports
+`target_exited` in host stats. The host manager polls it at 1 Hz; on exit the
+host stops and calls `stop_stream`, and viewers leave through the normal
+crew-event path.
+
+This is deliberately not a capture state. Every capture state recovers: the
+game is minimized, or loading, or drawing through an API no method can see. A
+quit game is final, and from outside it looks identical to a tabbed-out one.
+Folding them together would either end streams on an alt-tab or hold a stream
+open on a game that is gone. A minimized target only pauses; monitor capture
+has no target and never exits. Any ambiguous answer reads as alive, so a
+stream never ends on uncertainty.
+
+### 3.1.1 Game capture hook
+
+The hook is the first ladder step, and the only method that sees an
+exclusive-fullscreen game. It is off unless the caller allows that game.
+
+**How a frame travels.** The hook DLL runs inside the game. It detours
+`IDXGISwapChain::Present`, `Present1` and `ResizeBuffers`, and on each present
+it copies the back buffer into one of two shared textures and signals an event.
+`HookCapture` (`libmello/src/video/capture_hook.cpp`) opens those textures on
+the encoder's device, copies the newest one, and hands it to the pipeline as
+any other backend does. No frame is copied through system memory.
+
+**Binaries** (`hook/`, its own CMake project because it builds for x86 as well
+as x64 and links the static CRT):
+
+| Binary | Runs where | Does what |
+|---|---|---|
+| `mello-hook{32,64}.dll` | Inside the game | Detours DXGI and D3D9 present, copies, signals |
+| `mello-inject{32,64}.exe` | Its own process | `SetWindowsHookEx(WH_GETMESSAGE)` on the game's window thread |
+| `mello-offsets{32,64}.exe` | Its own process | Prints present-function offsets |
+
+**The shared block** (`hook/include/mello_hook_protocol.h`) is the whole
+contract. The client creates it, the events and the keepalive before it
+injects; the hook only opens them. Each field has one writer. Textures are
+shared with legacy DXGI handles (`D3D11_RESOURCE_MISC_SHARED`,
+`GetSharedHandle`), stored as `uint32_t`, so a 32-bit game's texture opens in
+the 64-bit client with no `DuplicateHandle`.
+
+**Offsets, not probes.** The hook never creates a device inside a game to find
+`Present`. The offsets helper builds a throwaway D3D11 swap chain in its own
+process, reads the addresses out of the COM virtual function table, and prints
+them as offsets from `dxgi.dll`. The client caches them against that file's
+version and writes them into the shared block before injection.
+
+**Safety rules the code keeps** (plan 3.7): `DllMain` starts a thread and
+returns; every detour body runs in a structured exception guard and a fault
+turns capture off for good; nothing on the present path allocates, locks or
+logs; the DLL pins itself and the detours are never removed, because a game
+thread can be inside one; the hook stops capturing 5 s after the client's
+heartbeat stops.
+
+**Permission.** Two gates, both needed:
+
+1. The caller allows this game. In the client that comes from the game
+   catalogue policy and the backend `capture` block (plan 3.6). Neither exists
+   yet, so the client passes `allow_hook: false` and nothing is hooked. The
+   environment variable `MELLO_HOOK_ALLOW_EXE` names one executable and stands
+   in for the backend list while the hook is being tested.
+2. The run-time checks in `hook_policy.cpp`, on every stream start: the process
+   can be opened for read, no anti-cheat module is loaded in it, no anti-cheat
+   service is running, it is not Store-packaged, not a Chromium shell, and not
+   elevated. Any one of these refuses the hook, and the ladder falls back to
+   screen capture.
+
+**The shared D3D11 context is thread protected.** Capture threads copy frames
+into the immediate context and the encode thread converts them. A D3D11
+immediate context is not thread safe by itself, and without
+`ID3D11Multithread::SetMultithreadProtected` the video processor refuses input
+views with `E_INVALIDARG` while another thread is inside a copy. Measured on
+2026-09-16 against a Direct3D 9 game: capture ran at 50 fps and every frame
+failed to convert. `create_d3d11_device` turns it on for every backend.
+
+**Direct3D 9 travels through memory.** A D3D9 surface cannot be opened on the
+client's D3D11 device, so that path does what plan 3.2 asks for first: on each
+present the hook reads the back buffer back with `GetRenderTargetData` into a
+system-memory surface, and copies the pixels into a second shared block
+(`Local\mello_hook_frames_<pid>`, two slots). The client uploads them into a
+texture and the pipeline sees the same thing as from any other backend. The
+hook sets `MELLO_HOOK_FLAG_CPU_COPY` and the `cpu_frame_bytes` and `cpu_pitch`
+fields; those are how the client knows which transport to use. The back buffer
+goes through a single-sample render target first (`StretchRect`), because a
+multisampled surface cannot be read back at all, and a game's back buffer often
+is one. `Reset` and
+`ResetEx` are detoured as well: a reset changes the back buffer, so the
+read-back surfaces are dropped and the next present rebuilds them.
+
+The shared-texture path for D3D9 comes later. It needs a D3D9Ex device, and a
+game that made a plain D3D9 device cannot share a surface at all without
+reaching into the device's internals.
+
+**What works today:** DXGI swap chains, which covers Direct3D 11 and 10, and
+Direct3D 9 through memory. Both for 32-bit and 64-bit games. D3D12 and OpenGL
+are later steps in the plan. Vulkan games use the WGC steps by decision
+(plan 3.10).
 
 **Deferred start:** If the target window is minimized at stream start (user tabbed out to launch the stream), capture waits. The monitor thread polls until the window is restored, then initializes the backend. Width/height return restored dimensions during the wait so the encoder can pre-initialize. This matches Discord's behaviour.
 
@@ -94,6 +252,12 @@ not what the user thinks it is: a minimized window, where WGC returns the ~160x2
 iconic size, or an auxiliary window sharing the game's title. The WGC hot-swap
 path refuses a minimized target for the same reason and waits for restore —
 a fullscreen game exiting to the desktop minimizes it, so that path is common.
+
+**Idle keepalive:** DXGI and WGC deliver a frame only when pixels change, so a
+quiet screen sends no video. After 500 ms without a new frame the encode thread
+re-encodes the last picture at 2 fps, and a keyframe request re-encodes it as an
+IDR at once. Without this a viewer who joined a static stream saw black: the IDR
+waited for a frame that never came. Counted as `idle_rep_hz` in host stats.
 
 **Adaptive DXGI throttle:** DXGI delivers at the monitor's refresh rate (60–360 Hz). We only want `target_fps` (typically 60). On startup, we calibrate the monitor's vsync interval from the first two acquired frames, then set a deadline of `target_interval - half_vsync`. This ensures we accept the closest vsync that satisfies the target on any refresh rate, without over- or under-delivering.
 
@@ -335,8 +499,8 @@ framerate — an encoder still told 60 while fed 30 hands out half the bits each
 frame deserves. Each switch forces an IDR.
 
 Stage 2 (geometry rungs: 540p/480p/360p) needs viewer-side work — mid-stream SPS
-geometry change and a `DCompPresenter` swap-chain resize — and is tracked in
-`plans/ADAPTIVE-QUALITY-LADDER.md`.
+geometry change and a `DCompPresenter` swap-chain resize — and is not built.
+See `plans/STREAM-CAPTURE-QUALITY.md`.
 
 ### 8.2 REMB congestion control
 
@@ -479,7 +643,7 @@ The host captures cursor state (position, visibility, shape RGBA) alongside vide
 
 ### Teardown
 
-Host: signal `StreamSession::stop_and_wait` so the manager drains sinks before peer teardown. Viewer: stop pipeline, release GPU resources, leave SFU/P2P session.
+Host: signal `StreamSession::stop_and_wait` so the manager drains sinks before peer teardown. Viewer: stop pipeline, release GPU resources, leave SFU/P2P session. The host also stops on user request and when the captured process quits (`target_exited`); both run the same teardown and `stop_stream` RPC.
 
 ---
 

@@ -21,7 +21,12 @@ struct MfSession {
     bool ok = false;
 
     MfSession() {
-        HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+        // STA, like every other COM thread in libmello (spec 03-LIBMELLO
+        // §4.1). This path uses the synchronous sink writer, which needs no
+        // MTA-only async callbacks. A thread the host already initialized
+        // yields RPC_E_CHANGED_MODE from CoInitializeEx; MFStartup still
+        // runs and must_uninit_com stays false so we never unbalance it.
+        HRESULT hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
         must_uninit_com = (hr == S_OK);
         ok = SUCCEEDED(MFStartup(MF_VERSION));
     }

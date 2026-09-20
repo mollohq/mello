@@ -130,6 +130,7 @@ public:
 
     // HOST SIDE
     bool start_host(const CaptureSourceDesc& source, const PipelineConfig& config, PacketCallback on_packet);
+    // Every wait inside is bounded. See "Teardown never waits without a bound".
     void stop_host();
     void request_keyframe();
     void set_bitrate(uint32_t kbps);
@@ -215,12 +216,16 @@ std::unique_ptr<CaptureSource> create_capture_source(const CaptureSourceDesc& de
 
 | Capture mode | Condition | Backend |
 |---|---|---|
-| `Monitor` | Always | DXGI DDI |
-| `Window` | Always | WGC |
-| `Process` | Target process owns a DXGI output (exclusive fullscreen) | DXGI DDI on that output |
-| `Process` | Otherwise (windowed / borderless) | WGC on process's main HWND |
+| `Monitor` | Default | DXGI DDI |
+| `Monitor` | `prefer_wgc` (benchmark, `MELLO_CAPTURE_MONITOR_WGC`) | WGC on that monitor |
+| `Window` | Always | WGC on the HWND |
+| `Process` | First ladder step, window covers its monitor | DXGI DDI on that monitor |
+| `Process` | First ladder step, windowed | WGC on the process's main HWND |
+| `Process` | Later ladder steps | The remaining methods, in order |
 
-Backend selection for `Process` mode is performed at `start()` time and re-evaluated periodically (see §4.5 Hot-swap).
+`Process` mode runs the capture ladder: the first method that delivers a frame
+within 2 s keeps the stream. See `12-STREAMING.md` §3.1 for the rules and
+`mello-backlog/plans/streaming-reliability.md` for why.
 
 ### 4.3 DXGI Desktop Duplication Backend
 
@@ -1304,3 +1309,23 @@ Normal operation is silent. Only log when something is wrong.
 ```
 [video/staging] WARN: Map() stall 4.2ms — possible GPU pipeline pressure (frame seq=7823)
 ```
+
+
+## Teardown never waits without a bound
+
+`stop_host` calls into a capture backend, a graphics driver and a hardware
+encoder. Each of them can block for as long as it likes, and each has:
+
+| Step | Bound | What happens when it passes |
+|---|---|---|
+| Capture stop | 5 s | The capture thread is detached and the backend is leaked, never destroyed |
+| Encode thread join | 5 s | The thread is left running, and its encoder, preprocessor and frames are leaked |
+
+A leak is the cheap outcome. Destroying an encoder or a texture under a thread
+that is still inside the driver is a crash, and holding the teardown is a frozen
+client: on 2026-09-15 a stuck capture stop took the command loop with it, and
+voice, the END STREAM button and hangup all died with it. On 2026-09-16 a
+stop sat in the encode-thread join for 25 minutes.
+
+Both leaks are counted and reported in host stats, so a machine that hits them
+is visible rather than merely slow.

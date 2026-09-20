@@ -5,6 +5,8 @@ use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+mod bench;
+
 use mello_core::stream::host::{self, StartStreamResponse};
 use mello_core::stream::sink::PacketSink;
 use mello_core::stream::StreamConfig;
@@ -116,6 +118,62 @@ fn main() {
     let source_title_substring = parse_arg_string(&args, "--source-title-substring");
     let nakama_start_stream = has_flag(&args, "--nakama-start-stream");
     let mut nakama_host_context: Option<NakamaHostContext> = None;
+
+    // Local capture benchmark (no network): DXGI vs WGC, plan section 2.6.
+    if let Some(csv_path) = parse_arg_string(&args, "--bench-csv") {
+        let backend = parse_arg_string(&args, "--capture-backend")
+            .and_then(|b| bench::BenchBackend::parse(&b))
+            .unwrap_or_else(|| {
+                eprintln!(
+                    "ERROR: --capture-backend must be dxgi, wgc-monitor, wgc-window or process"
+                );
+                unsafe { mello_sys::mello_destroy(ctx) };
+                std::process::exit(1);
+            });
+        let monitor_index: u32 = parse_arg(&args, "--monitor-index").unwrap_or(0);
+        let seconds: u64 = parse_arg(&args, "--bench-seconds").unwrap_or(60);
+        let window = source_title_substring
+            .as_deref()
+            .and_then(|needle| bench::find_window(ctx, needle));
+        let label = match &window {
+            Some((_, pid, title)) => format!("{:?} {} (pid {})", backend, title, pid),
+            None => format!("{:?} monitor {}", backend, monitor_index),
+        };
+        // --allow-hook stands in for the game catalogue and the backend
+        // switch, which the client has and this tool does not. It only makes
+        // the hook step available; libmello still runs every run-time check
+        // before it injects.
+        let allow_hook = has_flag(&args, "--allow-hook");
+        let source = match bench::source_for(
+            backend,
+            monitor_index,
+            window.as_ref().map(|(hwnd, pid, _)| (*hwnd, *pid)),
+            allow_hook,
+        ) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("ERROR: {}", e);
+                unsafe { mello_sys::mello_destroy(ctx) };
+                std::process::exit(1);
+            }
+        };
+        ctrlc::set_handler(|| {
+            RUNNING.store(false, Ordering::Relaxed);
+        })
+        .expect("Failed to set Ctrl+C handler");
+        let opts = bench::BenchOptions {
+            label,
+            fps,
+            bitrate_kbps: bitrate,
+            seconds,
+            csv_path,
+        };
+        if let Err(e) = bench::run(ctx, &source, &opts, &RUNNING) {
+            eprintln!("ERROR: {}", e);
+        }
+        unsafe { mello_sys::mello_destroy(ctx) };
+        return;
+    }
 
     if nakama_start_stream {
         if sfu_endpoint.is_some() || sfu_token.is_some() || sfu_session.is_some() {
@@ -313,6 +371,7 @@ fn enumerate_sources(
                 monitor_index: i,
                 hwnd: std::ptr::null_mut(),
                 pid: 0,
+                allow_hook: false,
             },
         ));
     }
@@ -349,6 +408,7 @@ fn enumerate_sources(
                     monitor_index: 0,
                     hwnd: std::ptr::null_mut(),
                     pid,
+                    allow_hook: false,
                 },
             ));
         }
@@ -377,6 +437,7 @@ fn enumerate_sources(
                     monitor_index: 0,
                     hwnd: std::ptr::null_mut(),
                     pid,
+                    allow_hook: false,
                 },
             ));
         }
@@ -610,6 +671,7 @@ fn run_sfu_mode(
         max_viewers: None,
         sfu_endpoint: Some(endpoint.to_string()),
         sfu_token: None,
+        capture: None,
     };
 
     let cfg = StreamConfig {
@@ -631,6 +693,7 @@ fn run_sfu_mode(
                 audio_rx,
                 resources,
                 sink_for_events,
+                None,
             )
         })
         .map_err(|e| format!("create_stream_session failed: {}", e))?;

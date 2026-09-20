@@ -23,6 +23,9 @@ impl Client {
 
     /// Whether the 16ms stream tick should run (signal drain, viewer decode, host pacing).
     pub(super) fn needs_stream_tick(&self) -> bool {
-        self.stream_session.is_some() || self.viewer_state.is_some()
+        self.stream_session.is_some()
+            || self.viewer_state.is_some()
+            // An in-flight native start is polled on the stream tick.
+            || self.pending_stream_start.is_some()
     }
 }

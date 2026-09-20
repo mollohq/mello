@@ -1,0 +1,57 @@
+# Builds the game capture hook set.
+#
+#   .\build.ps1            # 64-bit, Release
+#   .\build.ps1 -Bits 32   # 32-bit set, for 32-bit games
+#
+# The hook is a separate project from libmello because it builds for both
+# architectures and links the static CRT.
+param(
+    [ValidateSet(32, 64)][int]$Bits = 64,
+    [ValidateSet("Debug", "Release")][string]$Config = "Release"
+)
+
+$ErrorActionPreference = "Stop"
+$root = Split-Path -Parent $MyInvocation.MyCommand.Path
+$repo = Split-Path -Parent $root
+$vcpkg = Join-Path $repo "external/vcpkg"
+if (-not (Test-Path $vcpkg)) { throw "external/vcpkg not found - run: git submodule update --init" }
+
+$arch = if ($Bits -eq 64) { "x64" } else { "x86" }
+$triplet = "$arch-windows-static"
+$build = Join-Path $root "build/$arch"
+
+cmake -S $root -B $build -A $(if ($Bits -eq 64) { "x64" } else { "Win32" }) `
+    "-DCMAKE_TOOLCHAIN_FILE=$vcpkg/scripts/buildsystems/vcpkg.cmake" `
+    "-DVCPKG_TARGET_TRIPLET=$triplet" `
+    "-DVCPKG_OVERLAY_TRIPLETS=$root/triplets" `
+    "-DCMAKE_BUILD_TYPE=$Config"
+if ($LASTEXITCODE -ne 0) { throw "configure failed" }
+
+cmake --build $build --config $Config
+if ($LASTEXITCODE -ne 0) { throw "build failed" }
+
+Write-Host "[mello-hook] $Bits-bit set in $build/$Config"
+
+# Both architectures land in one folder, because that is how they ship and how
+# the client finds them: it picks the 32-bit or the 64-bit set from the game's
+# bitness, and both have to be in MELLO_HOOK_DIR. Heaven is a 32-bit game, and
+# a folder with only the 64-bit set gave it no hook at all.
+$stage = Join-Path $root "bin/$Config"
+New-Item -ItemType Directory -Force -Path $stage | Out-Null
+$locked = @()
+Get-ChildItem -Path (Join-Path $build $Config) -Include "mello-*.dll", "mello-*.exe" -File -Recurse |
+    ForEach-Object {
+        try { Copy-Item $_.FullName -Destination $stage -Force -ErrorAction Stop }
+        catch { $locked += $_.Name }
+    }
+if ($locked.Count -gt 0) {
+    # A game that has the hook loaded holds the DLL open, and the hook pins
+    # itself for the life of that process on purpose. Staging a new build over
+    # it is impossible until the game exits, and a partly staged folder is
+    # worse than none: the helpers and the DLL must match.
+    Write-Host "[mello-hook] NOT staged. A running game still holds:" -ForegroundColor Red
+    $locked | ForEach-Object { Write-Host "    $_" -ForegroundColor Red }
+    Write-Host "[mello-hook] Close the game and build again. The build itself is in $build/$Config."
+    throw "staging blocked by a running game"
+}
+Write-Host "[mello-hook] staged into $stage"

@@ -8,7 +8,8 @@
 //!
 //! This is the ladder's first stage. Framerate rungs need no viewer-side change
 //! at all — no SPS geometry change, no decoder re-init, no swap-chain resize.
-//! Geometry rungs are Stage 2; see `plans/ADAPTIVE-QUALITY-LADDER.md`.
+//! Geometry rungs are the second stage and are not built; see
+//! `plans/STREAM-CAPTURE-QUALITY.md`.
 
 use std::time::{Duration, Instant};
 

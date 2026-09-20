@@ -41,7 +41,11 @@ private:
     std::vector<AudioDeviceInfo> enumerate(EDataFlow flow) {
         std::vector<AudioDeviceInfo> result;
 
-        HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+        // STA, like every other WASAPI thread (spec 03-LIBMELLO §4.1). MTA
+        // silently breaks SetDuckingPreference/RegisterDuckNotification on
+        // threads that later do audio work, and RPC_E_CHANGED_MODE below
+        // tolerates a thread the host already initialized.
+        HRESULT hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
         bool did_init = (SUCCEEDED(hr) || hr == S_FALSE);
         if (FAILED(hr) && hr != RPC_E_CHANGED_MODE) {
             MELLO_LOG_ERROR("devices", "COM init failed hr=0x%08lx", hr);

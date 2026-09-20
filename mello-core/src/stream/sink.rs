@@ -69,6 +69,11 @@ pub trait PacketSink: Send + Sync {
     /// Send one Opus-encoded game-audio packet.
     async fn send_audio(&self, opus: &[u8]) -> Result<(), StreamError>;
 
+    /// Send a small reliable control message to every viewer (pause state,
+    /// rung changes, ...). Best-effort: a failed control send must never
+    /// disturb the media path, so implementations log and continue.
+    async fn send_control(&self, data: &[u8]);
+
     /// Propagate the pacing target to each native RTP sender (bits/sec internally).
     async fn set_pacing_kbps(&self, target_kbps: u32);
 

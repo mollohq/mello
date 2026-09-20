@@ -63,7 +63,7 @@ Committed on `feat/stream-quality-phase2` (mello):
 
 **ULPFEC (RFC 5109) — landed on `feat/stream-quality-phase2`:**
 
-Roadmap doc: `mello/plans/STREAM-QUALITY-ROADMAP.md` (kept current — update it when you finish items).
+Roadmap doc: `mello/plans/STREAM-CAPTURE-QUALITY.md` (kept current — update it when you finish items).
 
 ---
 
@@ -175,7 +175,7 @@ Windows validation (user runs; produce the checklist in your report): build on W
 
 ## 8. Update the roadmap as you go
 
-`mello/plans/STREAM-QUALITY-ROADMAP.md` is the program tracker. Mark items ✅ as they land with commit refs. Keep §"Deferred/open" honest.
+`mello/plans/STREAM-CAPTURE-QUALITY.md` is the program tracker. Mark items ✅ as they land with commit refs. Keep §"Deferred/open" honest.
 
 ---
 

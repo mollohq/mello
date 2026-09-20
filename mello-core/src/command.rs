@@ -283,6 +283,10 @@ pub enum Command {
         /// Quality preset index: 0=Ultra, 1=High, 2=Medium, 3=Low, 4=Potato
         #[serde(default = "default_preset")]
         preset: u32,
+        /// Game executable name (e.g. "Heaven.exe"), for the hook policy
+        /// decision. Empty when the source is not a game.
+        #[serde(default)]
+        exe: String,
     },
     StopStream,
     WatchStream {

@@ -21,6 +21,41 @@ fn source_name_from_model(
     None
 }
 
+fn source_exe_from_model(
+    model: slint::ModelRc<crate::CaptureSourceData>,
+    source_id: &str,
+) -> Option<String> {
+    for row in 0..model.row_count() {
+        if let Some(entry) = model.row_data(row) {
+            if entry.id == source_id {
+                let exe = entry.exe.to_string();
+                if !exe.is_empty() {
+                    return Some(exe);
+                }
+            }
+        }
+    }
+    None
+}
+
+fn resolve_stream_source_exe(
+    app: &crate::MainWindow,
+    source_id: &str,
+    source_mode: &str,
+) -> String {
+    let by_mode = match source_mode {
+        "monitor" => source_exe_from_model(app.get_stream_monitors(), source_id),
+        "process" | "game" => source_exe_from_model(app.get_stream_games(), source_id),
+        "window" => source_exe_from_model(app.get_stream_windows(), source_id),
+        _ => None,
+    };
+    by_mode
+        .or_else(|| source_exe_from_model(app.get_stream_monitors(), source_id))
+        .or_else(|| source_exe_from_model(app.get_stream_games(), source_id))
+        .or_else(|| source_exe_from_model(app.get_stream_windows(), source_id))
+        .unwrap_or_default()
+}
+
 fn resolve_stream_source_name(
     app: &crate::MainWindow,
     source_id: &str,
@@ -80,6 +115,10 @@ pub fn wire(ctx: &AppContext) {
                 };
 
                 let (monitor_index, hwnd, pid) = parse_capture_source_id(&id, &mode);
+                let exe = app_weak
+                    .upgrade()
+                    .map(|app| resolve_stream_source_exe(&app, &id, &mode))
+                    .unwrap_or_default();
 
                 let _ = cmd.send(Command::StopThumbnailRefresh);
                 let _ = cmd.send(Command::StartStream {
@@ -90,12 +129,20 @@ pub fn wire(ctx: &AppContext) {
                     hwnd,
                     pid,
                     preset: preset_idx as u32,
+                    exe,
                 });
             });
     }
     {
         let cmd = ctx.cmd_tx.clone();
+        let app_weak = ctx.app.as_weak();
         ctx.app.on_stop_stream(move || {
+            // Show the result of the click at once. The core confirms with
+            // StreamEnded, which clears the rest of the stream state. If the
+            // core is busy, the button must still respond (2026-09-15 beta).
+            if let Some(app) = app_weak.upgrade() {
+                app.set_is_hosting(false);
+            }
             let _ = cmd.send(Command::StopStream);
         });
     }

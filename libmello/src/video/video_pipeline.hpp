@@ -8,6 +8,7 @@
 #include <functional>
 #include <mutex>
 #include <atomic>
+#include <future>
 #include <array>
 #include <thread>
 #include <condition_variable>
@@ -136,6 +137,21 @@ public:
         float       encode_wait_ms      = 0.0f;
         float       encode_lock_ms      = 0.0f;
         int         encoder_cost_tier   = 0;
+        // Frames re-encoded from the last picture because capture delivered
+        // nothing new. A quiet stream, not a dead capture.
+        uint64_t    idle_repeat_frames  = 0;
+        // Every capture method failed (process capture ladder exhausted).
+        bool        capture_failed      = false;
+        // What the capture is doing, for the streamer's and viewers' screens.
+        uint32_t    capture_state       = 0;
+        // The process behind the capture target has exited. Separate from
+        // capture_state because it is final: every capture state recovers, a
+        // quit game does not. Sticky; false for monitor capture.
+        bool        target_exited       = false;
+        // Capture method changes and reasons, oldest first.
+        std::string capture_history;
+        // Cumulative present-to-capture delay, 1 ms buckets.
+        std::array<uint32_t, PresentDelayHistogram::kBuckets> present_delay_hist{};
     };
     void get_host_telemetry(HostTelemetry& out) const;
 
@@ -171,6 +187,10 @@ public:
     // Info
     const GraphicsDevice& device() const { return device_; }
     bool is_host_running()   const { return host_running_.load(); }
+    /// True when `stop_host` had to abandon a capture thread stuck in the
+    /// display driver. This pipeline owns objects that thread may still touch,
+    /// so the caller must leak it instead of destroying it.
+    bool abandoned() const { return abandoned_.load(std::memory_order_relaxed); }
     bool is_viewer_running() const { return viewer_running_.load(); }
     bool encoder_available() const;
 
@@ -196,6 +216,7 @@ private:
     PipelineConfig  config_{};
 
     std::atomic<bool> host_running_{false};
+    std::atomic<bool> abandoned_{false};
     std::atomic<bool> viewer_running_{false};
 
     mutable std::mutex cursor_mutex_;
@@ -226,6 +247,35 @@ private:
     std::condition_variable eq_cv_;
     std::thread encode_thread_;
     void encode_thread_func();
+    /// Set by the encode thread as it leaves. `stop_host` waits on this with a
+    /// deadline instead of joining without one: a thread stuck inside a
+    /// graphics driver must never hold the whole teardown (2026-09-16, where a
+    /// stream-host sat in this join for 25 minutes).
+    std::future<void> encode_exited_;
+    /// True when that deadline passed and the thread was left running.
+    std::atomic<bool> encode_thread_detached_{false};
+
+    // Idle keepalive (Windows encode thread). DXGI and WGC deliver a frame only
+    // when pixels change, so a paused game or an idle desktop sends no video at
+    // all. A viewer who joined then saw black: its keyframe request only set a
+    // flag that waited for the next encoded frame, which never came.
+public:
+    /// After this long without a new captured frame, the encode thread
+    /// re-encodes the last picture.
+    static constexpr uint64_t kIdleAfterUs = 500'000;
+    /// Interval between keepalive re-encodes while idle (2 fps).
+    static constexpr uint64_t kIdleRepeatIntervalUs = 500'000;
+    /// Pure decision for the encode thread, testable without a GPU. Returns
+    /// true when the last picture should be re-encoded now.
+    static bool idle_repeat_due(bool have_last_frame, bool kicked,
+                                uint64_t now_us, uint64_t last_new_frame_us,
+                                uint64_t last_encode_us);
+private:
+    // Set by request_keyframe(): wake the encode thread so an idle stream
+    // answers the keyframe request with the last picture at once.
+    std::atomic<bool> keepalive_kick_{false};
+    std::atomic<uint64_t> idle_repeat_frames_{0};
+    PresentDelayHistogram present_delay_hist_;
 #ifdef _WIN32
     // Called on the encode thread after each encoded frame.
     void maybe_reduce_encoder_cost();

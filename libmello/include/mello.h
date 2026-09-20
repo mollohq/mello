@@ -519,6 +519,9 @@ typedef enum MelloCaptureMode {
     MELLO_CAPTURE_MONITOR = 0,
     MELLO_CAPTURE_WINDOW  = 1,
     MELLO_CAPTURE_PROCESS = 2,
+    /* Monitor captured with Windows Graphics Capture instead of DXGI desktop
+     * duplication. For the DXGI vs WGC benchmark; Windows only. */
+    MELLO_CAPTURE_MONITOR_WGC = 3,
 } MelloCaptureMode;
 
 typedef struct MelloCaptureSource {
@@ -526,6 +529,12 @@ typedef struct MelloCaptureSource {
     uint32_t         monitor_index;
     void*            hwnd;
     uint32_t         pid;
+    /* Process mode only: the caller allows the game capture hook for this
+     * game. The client sets it from the catalogue policy and the backend
+     * switch; with neither, it stays false and no game is ever hooked.
+     * libmello still runs its own run-time checks before it injects.
+     * Appended field: existing offsets unchanged. */
+    bool             allow_hook;
 } MelloCaptureSource;
 
 typedef struct MelloMonitorInfo {
@@ -640,6 +649,10 @@ MELLO_API void mello_stream_stop_host(MelloStreamHost* host);
 /** Get the actual capture resolution after host pipeline has started. */
 MELLO_API void mello_stream_get_host_resolution(MelloStreamHost* host, uint32_t* width, uint32_t* height);
 
+/** Capture pipelines abandoned this session because a capture thread would not
+ *  stop (stuck in the display driver). Non-zero means leaked GPU resources. */
+MELLO_API uint32_t mello_stream_abandoned_pipelines(void);
+
 MELLO_API void mello_stream_request_keyframe(MelloStreamHost* host);
 
 /** Hot-reconfigure encoder bitrate without restarting the session. */
@@ -686,6 +699,17 @@ MELLO_API bool mello_stream_feed_packet(MelloStreamView* view, const uint8_t* da
 
 /** Number of decoded frames waiting in the ring buffer to be presented. */
 MELLO_API int mello_stream_viewer_decode_queue_depth(MelloStreamView* view);
+
+/** LUID of the GPU adapter libmello uses for video, as (HighPart << 32) | LowPart.
+ *  Returns 0 when no adapter is usable. Safe to call before any stream starts.
+ *
+ *  A caller that opens the shared texture handles from
+ *  MelloNativeFrameCallback must create its own D3D11 device on this adapter.
+ *  A shared handle is only valid on the adapter that made it, so a device on
+ *  the system default adapter fails every open with E_INVALIDARG. The two are
+ *  the same adapter on a single-GPU machine and differ on a laptop that has
+ *  both an integrated and a discrete GPU. */
+MELLO_API uint64_t mello_video_adapter_luid(void);
 
 /** Read back the latest decoded frame and deliver it via the frame callback.
  *  Call once per display frame after feeding all available packets. */
@@ -737,6 +761,34 @@ typedef struct MelloStreamStats {
     float    encode_lock_ms;
     /* Quality features given up to hold the frame budget; 0 = full quality. */
     int32_t  encoder_cost_tier;
+    /* Frames re-encoded from the last picture because capture delivered
+     * nothing new (idle keepalive). A quiet stream, not a dead capture. */
+    uint64_t idle_repeat_frames;
+    /* 1 when every capture method failed to deliver a first frame (for a game:
+     * probably exclusive fullscreen). Silence after frames never sets it. */
+    uint32_t capture_failed;
+    /* Capture method changes and reasons, "METHOD:reason;..." (truncated). */
+    char     capture_history[96];
+    /* What the capture is doing, for the streamer's screen and the viewers':
+     *   0  capturing
+     *   1  waiting, the game is minimized
+     *   2  waiting, the game has drawn nothing yet (loading, or the person has
+     *      not reached it)
+     *   3  failed, with proof that the game is drawing
+     * Anything but 0 means the viewer is looking at a still picture and should
+     * be told why. It replaces the earlier `target_available` flag, which could
+     * only say whether the window was there. Appended field: existing offsets
+     * unchanged. */
+    uint32_t capture_state;
+    /* Cumulative present-to-capture delay histogram: bucket i counts frames
+     * delayed [i, i+1) ms; the last bucket counts >= 31 ms. Diff two reads
+     * for a window. */
+    uint32_t present_delay_hist[32];
+    /* The process behind the capture target has exited. Ends the stream: a
+     * minimized game only pauses it, a quit game is never coming back. Sticky;
+     * 0 for monitor capture, which has no process behind it. Appended field:
+     * existing offsets unchanged. */
+    uint8_t  target_exited;
 } MelloStreamStats;
 
 MELLO_API void mello_stream_get_stats(MelloStreamHost* host, MelloStreamStats* stats);

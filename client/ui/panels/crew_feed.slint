@@ -2553,6 +2553,9 @@ export component CrewFeed inherits Rectangle {
     in property <string> active-streamer-id: "";
     in property <image> stream-frame;
     in property <float> stream-ui-render-fps: 0.0;
+    /// Viewer pause UX, forwarded to the stream panel.
+    in property <bool> stream-paused: false;
+    in property <string> stream-paused-reason: "";
 
     in property <string> clip-playing-path: "";
     in property <float> clip-progress: 0.0;
@@ -2685,6 +2688,8 @@ export component CrewFeed inherits Rectangle {
                             active-streamer-id: root.active-streamer-id;
                             stream-frame: root.stream-frame;
                             stream-ui-render-fps: root.stream-ui-render-fps;
+                            stream-paused: root.stream-paused;
+                            stream-paused-reason: root.stream-paused-reason;
                             viewport-abs-y: feed-flick.absolute-position.y / 1px;
                             viewport-height: feed-flick.height / 1px;
                             watch-stream-clicked(host-id, session-id, w, h) => {
@@ -2751,6 +2756,8 @@ export component CrewFeed inherits Rectangle {
                     active-streamer-id: root.active-streamer-id;
                     stream-frame: root.stream-frame;
                     stream-ui-render-fps: root.stream-ui-render-fps;
+                    stream-paused: root.stream-paused;
+                    stream-paused-reason: root.stream-paused-reason;
                     viewport-abs-y: feed-flick.absolute-position.y / 1px;
                     viewport-height: feed-flick.height / 1px;
                     watch-stream-clicked(host-id, session-id, w, h) => {
@@ -2773,6 +2780,8 @@ export component CrewFeed inherits Rectangle {
                     active-streamer-id: root.active-streamer-id;
                     stream-frame: root.stream-frame;
                     stream-ui-render-fps: root.stream-ui-render-fps;
+                    stream-paused: root.stream-paused;
+                    stream-paused-reason: root.stream-paused-reason;
                     viewport-abs-y: feed-flick.absolute-position.y / 1px;
                     viewport-height: feed-flick.height / 1px;
                     watch-stream-clicked(host-id, session-id, w, h) => {

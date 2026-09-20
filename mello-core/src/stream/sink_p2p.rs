@@ -216,6 +216,28 @@ impl PacketSink for P2PFanoutSink {
         self.apply_pacing_to_all_peers();
     }
 
+    async fn send_control(&self, data: &[u8]) {
+        if data.is_empty() {
+            return;
+        }
+        // Same lifetime barrier as send_video: the read lock keeps
+        // remove_viewer() from freeing a peer mid-send.
+        let Ok(viewers) = self.viewers.read() else {
+            return;
+        };
+        for vp in viewers.values() {
+            if !unsafe { mello_sys::mello_peer_is_connected(vp.peer) } {
+                continue;
+            }
+            let result = unsafe {
+                mello_sys::mello_peer_send_reliable(vp.peer, data.as_ptr(), data.len() as i32)
+            };
+            if result != mello_sys::MelloResult_MELLO_OK {
+                log::debug!("P2P sink: control send failed for viewer");
+            }
+        }
+    }
+
     async fn native_rtp_telemetry(&self) -> Option<NativeRtpTelemetry> {
         // Match send_video's lifetime barrier so removal waits for all native reads.
         let viewers = self.viewers.read().ok()?;

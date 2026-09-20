@@ -167,6 +167,7 @@ pub fn run() {
             platform::crash_handler::set_log_dir(dir.clone());
         }
         platform::crash_handler::install();
+        platform::hang_dump::install(log_dir.clone());
     }
 
     let _ = log_dir;

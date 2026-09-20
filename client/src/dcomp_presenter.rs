@@ -7,7 +7,7 @@
 
 use windows::core::Interface;
 use windows::Win32::Foundation::{HANDLE, HMODULE, HWND};
-use windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_HARDWARE;
+use windows::Win32::Graphics::Direct3D::{D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_UNKNOWN};
 use windows::Win32::Graphics::Direct3D11::{
     D3D11CreateDevice, ID3D11Device, ID3D11Device1, ID3D11DeviceContext, ID3D11Texture2D,
     D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_SDK_VERSION,
@@ -17,8 +17,9 @@ use windows::Win32::Graphics::DirectComposition::{
 };
 use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_SAMPLE_DESC};
 use windows::Win32::Graphics::Dxgi::{
-    CreateDXGIFactory1, IDXGIFactory2, IDXGISwapChain1, DXGI_PRESENT, DXGI_SWAP_CHAIN_DESC1,
-    DXGI_SWAP_CHAIN_FLAG, DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL, DXGI_USAGE_RENDER_TARGET_OUTPUT,
+    CreateDXGIFactory1, IDXGIAdapter, IDXGIFactory1, IDXGIFactory2, IDXGISwapChain1, DXGI_PRESENT,
+    DXGI_SWAP_CHAIN_DESC1, DXGI_SWAP_CHAIN_FLAG, DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL,
+    DXGI_USAGE_RENDER_TARGET_OUTPUT,
 };
 
 pub struct DCompPresenter {
@@ -36,18 +37,27 @@ pub struct DCompPresenter {
     // COM object is cached instead of re-opening the handle every frame.
     cached_shared_handle: usize,
     cached_shared_tex: Option<ID3D11Texture2D>,
+    // A present failure repeats at the display rate. Logging every one buried
+    // an hour of client log under 60 identical lines a second and hid the
+    // events around it, so the same message is logged once and then counted.
+    last_present_error: String,
+    repeated_present_errors: u64,
 }
 
 impl DCompPresenter {
+    /// `adapter_luid` must be the adapter libmello decodes on
+    /// (`mello_core::video_adapter_luid()`), because this presenter opens the
+    /// shared textures that libmello creates there.
     pub fn new(
         parent_hwnd: isize,
         stream_width: u32,
         stream_height: u32,
         offset_x: f32,
         offset_y: f32,
+        adapter_luid: u64,
     ) -> Result<Self, String> {
         let hwnd = HWND(parent_hwnd as *mut _);
-        let (device, device_ctx) = Self::create_d3d11_device()?;
+        let (device, device_ctx) = Self::create_d3d11_device(adapter_luid)?;
         let device1: ID3D11Device1 = device
             .cast()
             .map_err(|e| format!("cast to ID3D11Device1: {e}"))?;
@@ -77,6 +87,8 @@ impl DCompPresenter {
             presented_frames: 0,
             cached_shared_handle: 0,
             cached_shared_tex: None,
+            last_present_error: String::new(),
+            repeated_present_errors: 0,
         })
     }
 
@@ -94,13 +106,52 @@ impl DCompPresenter {
         match unsafe { self.present_inner(shared_handle) } {
             Ok(true) => {
                 self.presented_frames = self.presented_frames.saturating_add(1);
+                if !self.last_present_error.is_empty() {
+                    log::info!(
+                        "DComp present recovered after {} failed frames",
+                        self.repeated_present_errors.saturating_add(1)
+                    );
+                    self.last_present_error.clear();
+                    self.repeated_present_errors = 0;
+                }
                 true
             }
             Ok(false) => false,
             Err(e) => {
-                log::error!("DComp present failed: {}", e);
+                if self.last_present_error == e {
+                    self.repeated_present_errors = self.repeated_present_errors.saturating_add(1);
+                    // One line per 300 frames, about five seconds, so a stuck
+                    // presenter stays visible without drowning the log.
+                    if self.repeated_present_errors.is_multiple_of(300) {
+                        log::error!(
+                            "DComp present still failing after {} frames: {}",
+                            self.repeated_present_errors,
+                            e
+                        );
+                    }
+                } else {
+                    log::error!("DComp present failed: {}", e);
+                    self.last_present_error = e;
+                    self.repeated_present_errors = 0;
+                }
                 false
             }
+        }
+    }
+
+    /// Show or hide the video content without destroying the presenter.
+    /// Pause UX calls this: hiding reveals the Slint pause card underneath
+    /// (the DComp layer composites above Slint content, so a Slint overlay
+    /// alone would hide behind the frozen frame). Presenting resumes into
+    /// the same swap chain — no re-init, no geometry replay.
+    pub fn set_content_visible(&self, visible: bool) {
+        unsafe {
+            if visible {
+                let _ = self.dcomp_visual.SetContent(&self.swap_chain);
+            } else {
+                let _ = self.dcomp_visual.SetContent(None);
+            }
+            let _ = self.dcomp_device.Commit();
         }
     }
 
@@ -211,13 +262,74 @@ impl DCompPresenter {
 
     // -- private -----------------------------------------------------------
 
-    fn create_d3d11_device() -> Result<(ID3D11Device, ID3D11DeviceContext), String> {
+    /// The adapter whose LUID matches `luid`, or `None` to let D3D11 pick the
+    /// system default.
+    ///
+    /// The presenter opens shared textures that libmello created, and a shared
+    /// handle is only valid on the adapter that made it. Passing `None` to
+    /// `D3D11CreateDevice` takes the *first* enumerated adapter, which on a
+    /// laptop is the integrated GPU, while libmello decodes on the discrete one.
+    /// Every `OpenSharedResource1` then fails with `E_INVALIDARG` and the viewer
+    /// shows black while the decoder reports healthy frames. Measured on a
+    /// laptop with AMD integrated plus an RTX 3050 Ti on 2026-09-18: 524 frames
+    /// decoded, 0 presented.
+    fn find_adapter(luid: u64) -> Option<IDXGIAdapter> {
+        if luid == 0 {
+            log::warn!(
+                "no video adapter LUID from libmello; the presenter falls back to the default \
+                 adapter, which is wrong on a machine with two GPUs"
+            );
+            return None;
+        }
+        let factory: IDXGIFactory1 = match unsafe { CreateDXGIFactory1() } {
+            Ok(f) => f,
+            Err(e) => {
+                log::warn!("CreateDXGIFactory1 while matching adapter LUID: {e}");
+                return None;
+            }
+        };
+        for index in 0.. {
+            let adapter: IDXGIAdapter = match unsafe { factory.EnumAdapters(index) } {
+                Ok(a) => a,
+                Err(_) => break,
+            };
+            let Ok(desc) = (unsafe { adapter.GetDesc() }) else {
+                continue;
+            };
+            let found =
+                ((desc.AdapterLuid.HighPart as u32 as u64) << 32) | desc.AdapterLuid.LowPart as u64;
+            if found == luid {
+                let name = String::from_utf16_lossy(&desc.Description)
+                    .trim_end_matches('\0')
+                    .to_string();
+                log::info!("DComp presenter uses adapter \"{name}\" (luid 0x{luid:016X})");
+                return Some(adapter);
+            }
+        }
+        log::warn!(
+            "no adapter with luid 0x{luid:016X}; the presenter falls back to the default adapter \
+             and shared frames will not open"
+        );
+        None
+    }
+
+    fn create_d3d11_device(
+        adapter_luid: u64,
+    ) -> Result<(ID3D11Device, ID3D11DeviceContext), String> {
+        let adapter = Self::find_adapter(adapter_luid);
+        // D3D_DRIVER_TYPE must be UNKNOWN when an adapter is given, and
+        // HARDWARE when it is not; D3D11CreateDevice rejects any other pairing.
+        let driver_type = if adapter.is_some() {
+            D3D_DRIVER_TYPE_UNKNOWN
+        } else {
+            D3D_DRIVER_TYPE_HARDWARE
+        };
         let mut device = None;
         let mut device_ctx = None;
         unsafe {
             D3D11CreateDevice(
-                None,
-                D3D_DRIVER_TYPE_HARDWARE,
+                adapter.as_ref(),
+                driver_type,
                 HMODULE::default(),
                 D3D11_CREATE_DEVICE_BGRA_SUPPORT,
                 None,
@@ -376,5 +488,37 @@ impl Drop for DCompPresenter {
             "DComp presenter destroyed (presented {} frames)",
             self.presented_frames
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The presenter must land on the adapter libmello decodes on, not on
+    /// whichever adapter Windows enumerates first. Passing `None` to
+    /// `D3D11CreateDevice` takes adapter 0, and on a machine where that is not
+    /// libmello's adapter every shared texture fails to open, which the viewer
+    /// shows as a black stream.
+    #[test]
+    fn adapter_lookup_returns_the_adapter_libmello_decodes_on() {
+        let luid = mello_core::video_adapter_luid();
+        if luid == 0 {
+            eprintln!("skipped: no usable GPU adapter on this machine");
+            return;
+        }
+
+        let adapter = DCompPresenter::find_adapter(luid).expect("adapter with libmello's LUID");
+        let desc = unsafe { adapter.GetDesc() }.expect("adapter description");
+        let found =
+            ((desc.AdapterLuid.HighPart as u32 as u64) << 32) | desc.AdapterLuid.LowPart as u64;
+        assert_eq!(found, luid);
+    }
+
+    /// Without a LUID there is nothing to match, so the caller falls back to
+    /// the default adapter rather than guessing.
+    #[test]
+    fn adapter_lookup_without_a_luid_falls_back() {
+        assert!(DCompPresenter::find_adapter(0).is_none());
     }
 }

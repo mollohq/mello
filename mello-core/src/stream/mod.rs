@@ -6,10 +6,12 @@ pub mod input;
 pub mod ladder;
 pub mod manager;
 pub mod pacer;
+pub mod pause;
 pub mod rtp_peer;
 pub mod sink;
 pub mod sink_p2p;
 pub mod sink_sfu;
+pub mod teardown;
 
 pub use config::{Codec, QualityPreset, StreamConfig};
 pub use error::StreamError;

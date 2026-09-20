@@ -234,6 +234,9 @@ fn main() {
                 "d3dcompiler",
                 "windowsapp",
                 "gdi32",
+                // SHQueryUserNotificationState: exclusive-fullscreen detection
+                // in the process capture ladder.
+                "shell32",
             ] {
                 println!("cargo:rustc-link-lib=dylib={}", lib);
             }

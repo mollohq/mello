@@ -1,0 +1,6 @@
+; The injection helper looks up this name with GetProcAddress. On x86 the
+; __stdcall calling convention decorates it to _mello_hook_proc@12, and the
+; helper cannot find it. A module definition file exports the plain name on
+; both architectures.
+EXPORTS
+    mello_hook_proc
