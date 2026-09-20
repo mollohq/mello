@@ -717,6 +717,10 @@ TEST(PresentDelayHistogram, SnapshotIsCumulative) {
     EXPECT_EQ(out[PresentDelayHistogram::kBuckets - 1], 1u);
 }
 
+// The ladder is Windows-only (capture_process.hpp is _WIN32-guarded), so the
+// tests below are too. They lived past the mid-file #endif unguarded and
+// broke the macOS build on the first CI run that compiled this branch there.
+#ifdef _WIN32
 TEST(CaptureLadder, TheFirstFrameDeadlineIsTheSameForEveryMethod) {
     // A method that delivers nothing at all gets exactly one chance, whichever
     // method it is.
@@ -736,3 +740,4 @@ TEST(CaptureLadder, QuietGameIsNotReportedAsAFailure) {
 TEST(CaptureLadder, ExclusiveFullscreenIsReported) {
     EXPECT_TRUE(ladder::should_report_failure(true));
 }
+#endif // _WIN32 ladder tests
