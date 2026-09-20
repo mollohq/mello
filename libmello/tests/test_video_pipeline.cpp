@@ -564,20 +564,45 @@ TEST(CaptureState, TheHookKeepsStreamingAMinimizedGame) {
     using ladder::capture_state_for;
     // Minimized, on the hook: the frame is taken inside the game, so the
     // stream is live and there is nothing to tell the viewer.
-    EXPECT_EQ(capture_state_for(false, false, false, true, false), CaptureState::Capturing);
+    EXPECT_EQ(capture_state_for(false, false, false, true, false, false),
+              CaptureState::Capturing);
     // Minimized, on screen capture: the viewer is looking at a still picture.
-    EXPECT_EQ(capture_state_for(false, false, false, false, false),
+    EXPECT_EQ(capture_state_for(false, false, false, false, false, false),
               CaptureState::WaitingMinimized);
 }
 
 TEST(CaptureState, WaitingAndFailedAreDifferentSentences) {
     using ladder::capture_state_for;
-    EXPECT_EQ(capture_state_for(false, true, false, true, true), CaptureState::WaitingMinimized)
+    EXPECT_EQ(capture_state_for(false, true, false, true, true, false),
+              CaptureState::WaitingMinimized)
         << "the stream began with the game minimized, so nothing started";
-    EXPECT_EQ(capture_state_for(false, false, true, true, true), CaptureState::WaitingForGame);
-    EXPECT_EQ(capture_state_for(true, false, false, true, true), CaptureState::Failed)
+    EXPECT_EQ(capture_state_for(false, false, true, true, true, false),
+              CaptureState::WaitingForGame);
+    EXPECT_EQ(capture_state_for(true, false, false, true, true, false), CaptureState::Failed)
         << "a proven failure outranks every wait";
-    EXPECT_EQ(capture_state_for(false, false, false, false, true), CaptureState::Capturing);
+    EXPECT_EQ(capture_state_for(false, false, false, false, true, false),
+              CaptureState::Capturing);
+}
+
+// The pause card is method-agnostic: an exclusive-fullscreen game on a
+// screen-level method is blind with OS proof, hook or no hook.
+TEST(CaptureState, ABlindMethodInExclusiveFullscreenIsFailedWithProof) {
+    using ladder::capture_state_for;
+    // WGC window serving an exclusive-fullscreen game: the compositor frames
+    // are the desktop, not the game, and QUNS plus the foreground pid prove
+    // the game is drawing.
+    EXPECT_EQ(capture_state_for(false, false, false, false, true, true), CaptureState::Failed);
+    // Same proof on DXGI: also blind, also failed.
+    EXPECT_EQ(capture_state_for(false, false, false, false, true, true), CaptureState::Failed);
+    // The hook sees exclusive fullscreen from inside the game: still live.
+    EXPECT_EQ(capture_state_for(false, false, false, true, true, true), CaptureState::Capturing)
+        << "captures_while_minimized short-circuits before the fullscreen proof";
+    // Windowed and borderless never report fullscreen: a live game stays live.
+    EXPECT_EQ(capture_state_for(false, false, false, false, true, false),
+              CaptureState::Capturing);
+    // A minimized game that is not fullscreen waits, it does not fail.
+    EXPECT_EQ(capture_state_for(false, false, false, false, false, false),
+              CaptureState::WaitingMinimized);
 }
 
 #include "video/hook_policy.hpp"

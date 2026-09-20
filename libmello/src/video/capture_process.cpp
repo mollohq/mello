@@ -227,7 +227,8 @@ bool should_report_failure(bool target_in_exclusive_fullscreen) {
 }
 
 CaptureState capture_state_for(bool exhausted, bool deferred_start, bool waiting_for_the_game,
-                               bool captures_while_minimized, bool target_can_present) {
+                               bool captures_while_minimized, bool target_can_present,
+                               bool target_in_exclusive_fullscreen) {
     if (exhausted) return CaptureState::Failed;
     // No capture has started at all: the game was minimized when the stream
     // began, and nothing can capture a minimized window from outside.
@@ -240,6 +241,13 @@ CaptureState capture_state_for(bool exhausted, bool deferred_start, bool waiting
     // drawing keeps streaming, and its window state says nothing about what
     // viewers see.
     if (captures_while_minimized) return CaptureState::Capturing;
+    // Exclusive fullscreen owns the scanout: WGC and DXGI cannot see the game,
+    // and whatever the compositor still delivers (desktop, black, a frozen
+    // frame) is not the game. The OS proves the game is drawing, so this is a
+    // failure with proof, and the viewer gets the pause card with the reason.
+    // Windowed and borderless games never report fullscreen here, and the hook
+    // returned above, so neither path regresses.
+    if (target_in_exclusive_fullscreen) return CaptureState::Failed;
     if (!target_can_present) return CaptureState::WaitingMinimized;
     return CaptureState::Capturing;
 }
@@ -873,7 +881,8 @@ CaptureState ProcessCapture::state() const {
     }
     return ladder::capture_state_for(exhausted_.load(std::memory_order_relaxed), deferred,
                                      waiting_for_the_game, captures_while_minimized,
-                                     target_can_present(pid_));
+                                     target_can_present(pid_),
+                                     process_in_exclusive_fullscreen(pid_));
 }
 
 // --- Choosing what to capture ---

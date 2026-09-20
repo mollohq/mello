@@ -52,8 +52,14 @@ static constexpr uint64_t kProbationFrames = 3;
 ///
 /// Pure, because it is the sentence a viewer reads: a wrong answer here shows a
 /// pause card over a live game, or leaves a still picture unexplained.
+///
+/// `target_in_exclusive_fullscreen` is proven by the OS (QUNS plus the
+/// foreground pid): the game owns the scanout, so a screen-level method is
+/// blind whatever frames the compositor still delivers. That proof outranks
+/// every wait, the same way `exhausted` does.
 CaptureState capture_state_for(bool exhausted, bool deferred_start, bool waiting_for_the_game,
-                               bool captures_while_minimized, bool target_can_present);
+                               bool captures_while_minimized, bool target_can_present,
+                               bool target_in_exclusive_fullscreen);
 
 /// True when this method delivers a frame for every change on screen.
 ///

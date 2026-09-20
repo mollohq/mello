@@ -1465,9 +1465,9 @@ mod tests {
 
     use super::{
         coalesce_video_packet, CoalesceOutcome, StreamManager, StreamSession, VideoPacket,
-        ViewerRembState, CAPTURE_STATE_CAPTURING, CAPTURE_STATE_WAITING_FOR_GAME,
-        CAPTURE_STATE_WAITING_MINIMIZED, MAX_VIDEO_COALESCE_DRAIN, REMB_STALE_SECS,
-        VIEWER_KEYFRAME_REQUEST_COOLDOWN_MS,
+        ViewerRembState, CAPTURE_STATE_CAPTURING, CAPTURE_STATE_FAILED,
+        CAPTURE_STATE_WAITING_FOR_GAME, CAPTURE_STATE_WAITING_MINIMIZED, MAX_VIDEO_COALESCE_DRAIN,
+        REMB_STALE_SECS, VIEWER_KEYFRAME_REQUEST_COOLDOWN_MS,
     };
     use crate::stream::config::{Codec, QualityPreset, StreamConfig};
     use crate::stream::error::StreamError;
@@ -1889,6 +1889,41 @@ mod tests {
             rt.block_on(mgr.tick_stream_pause());
         }
         assert!(mgr.is_paused());
+        std::mem::forget(mgr);
+    }
+
+    // A blind screen-level method in exclusive fullscreen pauses with the
+    // failed reason, hook or no hook: the OS proves the game is drawing and
+    // the method cannot see it.
+    #[test]
+    fn blind_method_in_exclusive_fullscreen_pauses_as_failed() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        let config = StreamConfig::from_preset(QualityPreset::High, Codec::H264);
+        let sink = Arc::new(FakeSink::new());
+        let (_video_tx, video_rx) = mpsc::channel(4);
+        let (_audio_tx, audio_rx) = mpsc::channel(4);
+        let mut mgr = StreamManager::new(
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            sink.clone(),
+            config,
+            video_rx,
+            audio_rx,
+        );
+        mgr.capture_state_last = CAPTURE_STATE_FAILED;
+        for _ in 0..PAUSE_ENTER_UNAVAILABLE_TICKS {
+            rt.block_on(mgr.tick_stream_pause());
+        }
+        assert!(mgr.is_paused());
+        let control = sink.control.lock().expect("lock");
+        assert!(
+            control.contains(&vec![0x04, 0x03, 0x01, 0x03]),
+            "v2 carries the failed reason, got {:?}",
+            *control
+        );
         std::mem::forget(mgr);
     }
 
