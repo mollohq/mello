@@ -69,7 +69,17 @@ struct Resources {
     // on no other adapter.
     IDirect3DTexture9* shared_tex[MELLO_HOOK_TEXTURE_COUNT] = {};
     IDirect3DSurface9* shared_surf[MELLO_HOOK_TEXTURE_COUNT] = {};
+    // One event query per slot. Direct3D 9 queues the StretchRect and the
+    // client's device has no lock to wait on, so a slot is only safe to hand
+    // over once its copy has retired on the GPU. `test_d3d9ex_share.cpp`
+    // proves the need: without the wait the texture opens and reads zeros.
+    IDirect3DQuery9*   fence[MELLO_HOOK_TEXTURE_COUNT] = {};
     bool               gpu_path    = false;
+    // The slot written but not yet handed over, and when it was written.
+    // Checked at the next present, so the game's thread never waits.
+    uint32_t           pending      = 0;
+    uint64_t           pending_qpc  = 0;
+    bool               has_pending  = false;
     HANDLE             mapping     = nullptr;   // the frame block
     uint8_t*           frames      = nullptr;   // MELLO_HOOK_TEXTURE_COUNT slots
     uint32_t           frame_bytes = 0;
@@ -93,7 +103,14 @@ void release_shared_pair() {
             g_res.shared_tex[i]->Release();
             g_res.shared_tex[i] = nullptr;
         }
+        // A query is a device resource like any other: Direct3D 9 refuses a
+        // Reset while one is alive, so these go with the textures.
+        if (g_res.fence[i]) {
+            g_res.fence[i]->Release();
+            g_res.fence[i] = nullptr;
+        }
     }
+    g_res.has_pending = false;
 }
 
 void release_resources() {
@@ -193,11 +210,17 @@ bool build_shared_textures(IDirect3DDevice9* device, const D3DSURFACE_DESC& desc
         HANDLE shared = nullptr;
         IDirect3DTexture9* tex = nullptr;
         IDirect3DSurface9* surf = nullptr;
+        IDirect3DQuery9* fence = nullptr;
         bool ok = SUCCEEDED(device->CreateTexture(
                       desc.Width, desc.Height, 1, D3DUSAGE_RENDERTARGET, desc.Format,
                       D3DPOOL_DEFAULT, &tex, &shared)) &&
-                  tex && shared && SUCCEEDED(tex->GetSurfaceLevel(0, &surf)) && surf;
+                  tex && shared && SUCCEEDED(tex->GetSurfaceLevel(0, &surf)) && surf &&
+                  // No query, no GPU path. Handing over a slot whose copy may
+                  // not have retired sends the client zeros or a torn frame,
+                  // and the memory path below is correct on every device.
+                  SUCCEEDED(device->CreateQuery(D3DQUERYTYPE_EVENT, &fence)) && fence;
         if (!ok) {
+            if (fence) fence->Release();
             if (surf) surf->Release();
             if (tex) tex->Release();
             HookState::instance().set_error(MELLO_HOOK_ERR_SHARED_TEXTURE);
@@ -206,6 +229,7 @@ bool build_shared_textures(IDirect3DDevice9* device, const D3DSURFACE_DESC& desc
         }
         g_res.shared_tex[i] = tex;
         g_res.shared_surf[i] = surf;
+        g_res.fence[i] = fence;
         handles[i] = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(shared));
     }
 
@@ -216,6 +240,7 @@ bool build_shared_textures(IDirect3DDevice9* device, const D3DSURFACE_DESC& desc
     g_res.next = 0;
     g_res.ready = true;
     g_res.gpu_path = true;
+    g_res.has_pending = false;
 
     HookState::instance().publish_description(MELLO_HOOK_API_D3D9, desc.Width, desc.Height,
                                               dxgi_format, game_luid, handles, 0);
@@ -223,6 +248,41 @@ bool build_shared_textures(IDirect3DDevice9* device, const D3DSURFACE_DESC& desc
     log_line("capturing D3D9 %ux%u fmt=%u through shared textures, no read-back", desc.Width,
              desc.Height, desc.Format);
     return true;
+}
+
+// Hands the pending slot to the client once its copy has retired on the GPU.
+//
+// Direct3D 9 queues StretchRect, and the client reads the shared texture from
+// a different device with no lock between them. Publishing the slot straight
+// after issuing the copy is a race the client loses silently: it reads the
+// previous contents, or a torn frame. `test_d3d9ex_share.cpp` measured that
+// as zeros. The DXGI hook has the same rule and solves it with Flush.
+//
+// The check is non-blocking and runs one present later, so the game's thread
+// never waits on its own GPU. The cost is one frame of delivery latency; a
+// stall here would cost frame rate in the game itself, which is worse. The
+// pair is double-buffered, so the slot being written is never the slot the
+// client was handed.
+void publish_retired_slot(HookState& state) {
+    if (!g_res.has_pending) return;
+    IDirect3DQuery9* fence = g_res.fence[g_res.pending];
+    if (!fence) {
+        g_res.has_pending = false;
+        return;
+    }
+    BOOL done = FALSE;
+    // D3DGETDATA_FLUSH is required, not an optimisation: without it Direct3D 9
+    // never has to push the batch holding this query, and GetData can answer
+    // S_FALSE for ever. Measured on 2026-09-21: polling without the flag
+    // delivered one frame instead of sixty. The flag asks the driver to flush
+    // and returns S_FALSE if the copy has not retired; it never waits, so the
+    // game's thread still does not block. The DXGI hook flushes every present
+    // for the same reason.
+    if (fence->GetData(&done, sizeof(done), D3DGETDATA_FLUSH) != S_OK) return;
+
+    state.publish_frame(g_res.pending, g_res.pending_qpc);
+    state.signal_frame();
+    g_res.has_pending = false;
 }
 
 // Builds the read-back surfaces and the shared frame block for this device.
@@ -422,9 +482,22 @@ void capture_present(IDirect3DDevice9* device) {
             return;
         }
         state.set_error(MELLO_HOOK_OK);
+
+        // Mark this slot as the one waiting to be handed over, and hand over
+        // the one from last present if its copy has retired. A slot that never
+        // retired before the next present is dropped rather than sent half
+        // written; on a healthy GPU that does not happen, and the count makes
+        // it visible if it does.
+        if (FAILED(g_res.fence[slot]->Issue(D3DISSUE_END))) {
+            state.count_drop();
+            return;
+        }
+        publish_retired_slot(state);
+        if (g_res.has_pending) state.count_drop();
+        g_res.pending = slot;
+        g_res.pending_qpc = static_cast<uint64_t>(qpc_now());
+        g_res.has_pending = true;
         g_res.next = (slot + 1) % MELLO_HOOK_TEXTURE_COUNT;
-        state.publish_frame(slot, static_cast<uint64_t>(qpc_now()));
-        state.signal_frame();
         return;
     }
 
