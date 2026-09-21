@@ -19,9 +19,15 @@ import json
 import sys
 from pathlib import Path
 
-REPO = Path(__file__).resolve().parents[4]
-CSV = REPO / "mello-backlog" / "plans" / "game-capture-hook-games" / "games.csv"
-OUT = Path(__file__).resolve().parent / "hook_policy_seed.json"
+# mello-backlog is a sibling of the mello checkout, not a folder inside it.
+# parents[4] is the mello repo; its parent is the workspace that holds both.
+_HERE = Path(__file__).resolve()
+_RELATIVE = Path("mello-backlog") / "plans" / "game-capture-hook-games" / "games.csv"
+CSV = next(
+    (c for c in (_HERE.parents[5] / _RELATIVE, _HERE.parents[4] / _RELATIVE) if c.is_file()),
+    _HERE.parents[5] / _RELATIVE,
+)
+OUT = _HERE.parent / "hook_policy_seed.json"
 
 
 def main() -> int:
