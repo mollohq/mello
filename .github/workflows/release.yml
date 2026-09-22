@@ -26,7 +26,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
           submodules: recursive
@@ -140,7 +140,7 @@ jobs:
             --azureTrustedSignFile client/windows/signing-metadata.json
 
       - name: Upload build artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: mello-windows-x64
           path: vpk-out/*
@@ -158,7 +158,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
           submodules: recursive
@@ -191,7 +191,7 @@ jobs:
             || /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $RELEASE_VERSION" "$PLIST"
 
       - name: Import build certificate
-        uses: apple-actions/import-codesign-certs@v2
+        uses: apple-actions/import-codesign-certs@v7
         with:
           keychain: ${{ env.CODE_SIGNING_KEYCHAIN }}
           keychain-password: ${{ secrets.KEYCHAIN_PASSWORD }}
@@ -199,7 +199,7 @@ jobs:
           p12-password: ${{ secrets.P12_PASSWORD }}
 
       - name: Import installer certificate
-        uses: apple-actions/import-codesign-certs@v2
+        uses: apple-actions/import-codesign-certs@v7
         with:
           keychain: ${{ env.CODE_SIGNING_KEYCHAIN }}
           keychain-password: ${{ secrets.KEYCHAIN_PASSWORD }}
@@ -296,7 +296,7 @@ jobs:
           fi
 
       - name: Upload build artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: mello-macos-arm64
           path: vpk-out/*
@@ -314,13 +314,13 @@ jobs:
 
     steps:
       - name: Download Windows artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: mello-windows-x64
           path: assets/
 
       - name: Download macOS artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: mello-macos-arm64
           path: assets/
