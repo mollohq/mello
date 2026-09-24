@@ -63,16 +63,25 @@ func TestSnapshotActiveVoiceRooms(t *testing.T) {
 	}
 }
 
-func TestLiveSnapshotContract(t *testing.T) {
-	seedLiveSnapshotRooms()
-	defer clearLiveSnapshotRooms()
+func TestDisplayCrewName(t *testing.T) {
+	names := map[string]string{"crew_a": "Vault"}
+	if got := displayCrewName(names, "crew_a"); got != "Vault" {
+		t.Fatalf("known crew = %q, want Vault", got)
+	}
+	if got := displayCrewName(names, "1a4595f4zzz"); got != "1a4595f4…" {
+		t.Fatalf("unknown crew = %q, want id prefix", got)
+	}
+}
 
-	rooms := snapshotActiveVoiceRooms()
-	rooms[0].ChannelName = "General"
+func TestLiveSnapshotContract(t *testing.T) {
 	snap := &LiveSnapshot{
-		VoiceRooms: rooms,
+		VoiceRooms: []LiveVoiceRoom{{
+			ChannelID: "ch_general", CrewID: "crew_a", CrewName: "Vault",
+			ChannelName: "General",
+			Members:     []*VoiceMemberState{{UserID: "u1", Username: "a"}},
+		}},
 		Streams: []LiveStream{{
-			StreamID: "s1", CrewID: "crew_a", StreamerID: "u1",
+			StreamID: "s1", CrewID: "crew_a", CrewName: "Vault", StreamerID: "u1",
 			StreamerUsername: "a", Title: "T", StartedAt: "2026-03-08T14:00:00Z",
 			ViewerCount: 3,
 		}},
@@ -94,9 +103,14 @@ func TestLiveSnapshotContract(t *testing.T) {
 	}
 	vr := decoded["voice_rooms"].([]any)
 	m := vr[0].(map[string]any)
-	for _, key := range []string{"channel_id", "crew_id", "channel_name", "members"} {
+	for _, key := range []string{"channel_id", "crew_id", "crew_name", "channel_name", "members"} {
 		if _, ok := m[key]; !ok {
 			t.Fatalf("room missing key %s", key)
 		}
+	}
+	st := decoded["streams"].([]any)
+	sm := st[0].(map[string]any)
+	if _, ok := sm["crew_name"]; !ok {
+		t.Fatalf("stream missing key crew_name")
 	}
 }
