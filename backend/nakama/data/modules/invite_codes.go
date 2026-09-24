@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/rand"
 	"strings"
@@ -87,6 +88,72 @@ func lookupInviteCode(ctx context.Context, nk runtime.NakamaModule, code string)
 	return data.CrewID, data.InviterUserID, nil
 }
 
+// Typed errors returned by JoinByInviteCodeRPC. The client maps each gRPC code
+// to its own message, so keep the code for each case stable.
+var (
+	errInviteJoinBanned     = runtime.NewError("you cannot join this crew", 7)
+	errInviteJoinCrewFull   = runtime.NewError("crew is full", 8)
+	errInviteJoinCrewGone   = runtime.NewError("crew no longer exists", 5)
+	errInviteJoinUserLookup = runtime.NewError("failed to look up user", 13)
+	errInviteJoinFailed     = runtime.NewError("failed to join crew", 13)
+)
+
+// Nakama group_edge states.
+const (
+	groupStateSuperadmin = 0
+	groupStateAdmin      = 1
+	groupStateMember     = 2
+	groupStateBanned     = 4
+)
+
+// inviteJoinPrecheck decides from the caller's current state in the crew
+// whether GroupUserJoin must run. state is nil when the caller has no
+// relationship with the crew.
+//
+// GroupUserJoin checks capacity before membership, so an existing member of a
+// full crew gets ErrGroupFull. For a banned user it returns nil without adding
+// them. The RPC therefore answers both cases itself.
+func inviteJoinPrecheck(state *int) (alreadyMember bool, err error) {
+	if state == nil {
+		return false, nil
+	}
+	switch *state {
+	case groupStateSuperadmin, groupStateAdmin, groupStateMember:
+		return true, nil
+	case groupStateBanned:
+		return false, errInviteJoinBanned
+	}
+	return false, nil
+}
+
+// inviteJoinError maps a GroupUserJoin error to a typed RPC error.
+func inviteJoinError(err error) error {
+	switch {
+	case errors.Is(err, runtime.ErrGroupFull):
+		return errInviteJoinCrewFull
+	case errors.Is(err, runtime.ErrGroupNotFound):
+		return errInviteJoinCrewGone
+	}
+	return errInviteJoinFailed
+}
+
+// callerCrewState returns the caller's group_edge state in the crew, or nil
+// when the caller has none. A user is in at most MaxCrewsPerUser crews, so
+// one page covers them all.
+func callerCrewState(ctx context.Context, nk runtime.NakamaModule, userID, crewID string) (*int, error) {
+	groups, _, err := nk.UserGroupsList(ctx, userID, MaxCrewsPerUser, nil, "")
+	if err != nil {
+		return nil, err
+	}
+	for _, g := range groups {
+		if g.GetGroup().GetId() == crewID {
+			state := int(g.GetState().GetValue())
+			return &state, nil
+		}
+	}
+	return nil, nil
+}
+
 // JoinByInviteCodeRPC resolves an invite code to a crew and joins the caller.
 func JoinByInviteCodeRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, payload string) (string, error) {
 	userID, ok := ctx.Value(runtime.RUNTIME_CTX_USER_ID).(string)
@@ -104,28 +171,44 @@ func JoinByInviteCodeRPC(ctx context.Context, logger runtime.Logger, db *sql.DB,
 	if err != nil {
 		return "", err
 	}
-	data := struct{ CrewID string }{CrewID: crewID}
 
-	// Join the group
-	if err := nk.GroupUserJoin(ctx, data.CrewID, userID, ""); err != nil {
-		logger.Error("join_by_invite_code: GroupUserJoin failed for user %s crew %s: %v", userID, data.CrewID, err)
-		return "", runtime.NewError("failed to join crew", 13)
+	state, err := callerCrewState(ctx, nk, userID, crewID)
+	if err != nil {
+		logger.Error("join_by_invite_code: UserGroupsList failed for user %s: %v", userID, err)
+		return "", errInviteJoinFailed
+	}
+	alreadyMember, err := inviteJoinPrecheck(state)
+	if err != nil {
+		logger.Warn("join_by_invite_code: user %s refused for crew %s: %v", userID, crewID, err)
+		return "", err
+	}
+
+	if alreadyMember {
+		logger.Info("join_by_invite_code: user %s is already in crew %s", userID, crewID)
+	} else {
+		// GroupUserJoin requires the username: it signs the crew's join
+		// message with it and refuses an empty string.
+		users, err := nk.UsersGetId(ctx, []string{userID}, nil)
+		if err != nil || len(users) == 0 || users[0].GetUsername() == "" {
+			logger.Error("join_by_invite_code: username lookup failed for user %s: %v", userID, err)
+			return "", errInviteJoinUserLookup
+		}
+
+		if err := nk.GroupUserJoin(ctx, crewID, userID, users[0].GetUsername()); err != nil {
+			logger.Error("join_by_invite_code: GroupUserJoin failed for user %s crew %s: %v", userID, crewID, err)
+			return "", inviteJoinError(err)
+		}
+		logger.Info("User %s joined crew %s via invite code %s", userID, crewID, code)
 	}
 
 	// Fetch group name for the response
-	groups, err := nk.GroupsGetId(ctx, []string{data.CrewID})
+	groups, err := nk.GroupsGetId(ctx, []string{crewID})
 	name := ""
 	if err == nil && len(groups) > 0 {
 		name = groups[0].GetName()
 	}
 
-	resp := JoinByInviteCodeResponse{
-		CrewID: data.CrewID,
-		Name:   name,
-	}
-	respJSON, _ := json.Marshal(resp)
-
-	logger.Info("User %s joined crew %s via invite code %s", userID, data.CrewID, code)
+	respJSON, _ := json.Marshal(JoinByInviteCodeResponse{CrewID: crewID, Name: name})
 	return string(respJSON), nil
 }
 

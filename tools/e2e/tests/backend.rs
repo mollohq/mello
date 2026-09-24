@@ -260,3 +260,73 @@ fn voice_join_returns_a_usable_room() {
         let _ = client.delete_account().await;
     });
 }
+
+/// Joining a crew through an invite link.
+///
+/// `join_by_invite_code` passed an empty username to `GroupUserJoin`, which
+/// Nakama 3.21 rejects with "expects a username string". Every invite join
+/// failed, and the only other join path (Discover) uses Nakama's built-in
+/// group join, so nothing else covered it.
+#[test]
+fn a_second_user_can_join_a_crew_by_invite_code() {
+    if !e2e_enabled("a_second_user_can_join_a_crew_by_invite_code") {
+        return;
+    }
+
+    rt().block_on(async {
+        // User A creates an open crew and shares a fresh invite code.
+        let mut owner = NakamaClient::new(e2e_config());
+        owner
+            .authenticate_device(&random_device_id())
+            .await
+            .expect("device auth for the owner");
+        let crew_name = format!("E2E Invite {:x}", rand::random::<u32>());
+        let (crew, _) = owner
+            .create_crew(&crew_name, "", true, None, &[])
+            .await
+            .expect("create_crew");
+        let code = owner
+            .create_invite_code(&crew.id)
+            .await
+            .expect("create_invite_code");
+
+        // User B signs up and follows the link.
+        let mut joiner = NakamaClient::new(e2e_config());
+        let (joiner_user, _) = joiner
+            .authenticate_device(&random_device_id())
+            .await
+            .expect("device auth for the joiner");
+
+        let (joined_id, joined_name) = joiner
+            .join_by_invite_code(&code)
+            .await
+            .expect("join_by_invite_code must succeed for a valid code");
+        assert_eq!(joined_id, crew.id, "the RPC must return the invited crew");
+        assert_eq!(joined_name, crew_name);
+
+        let joiner_crews = joiner.list_user_groups().await.expect("list_user_groups");
+        assert!(
+            joiner_crews.iter().any(|c| c.id == crew.id),
+            "the joiner must now be in the crew. Got: {joiner_crews:?}"
+        );
+        let members = owner
+            .list_group_users(&crew.id)
+            .await
+            .expect("list_group_users");
+        assert!(
+            members.iter().any(|m| m.id == joiner_user.id),
+            "the owner must see the joiner as a member. Got: {members:?}"
+        );
+
+        // Following the same link again is not an error: the client opens the
+        // crew.
+        let (again_id, _) = joiner
+            .join_by_invite_code(&code)
+            .await
+            .expect("an existing member following the link again must succeed");
+        assert_eq!(again_id, crew.id);
+
+        let _ = joiner.delete_account().await;
+        let _ = owner.delete_account().await;
+    });
+}
