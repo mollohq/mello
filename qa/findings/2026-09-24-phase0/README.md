@@ -9,20 +9,20 @@ Screenshots are in this folder. Each is 1440 px wide.
 
 ## Summary
 
-| ID | Title | Area | Severity |
-|---|---|---|---|
-| UI-1 | "Sign in" on a fresh install is a dead end | Onboarding | P1 |
-| UI-2 | An invite link does not offer the invited crew at step 1 | Onboarding, invites | P1 |
-| UI-3 | A failed join closes the modal with no error | Invites | P0 (with the backend bug) |
-| UI-4 | A returning user sees two "Sign in" controls | Onboarding | P2 |
-| UI-5 | A returning device user with a lost session goes back to step 1 | Onboarding | P2, needs a decision |
-| UI-6 | The Apple button shows on desktop, where it cannot work | Onboarding, sign-in | P3 |
-| UI-7 | "Email + password" looks disabled on step 3 | Onboarding | P3 |
-| UI-8 | The "or" divider in the email sign-in form is wrong | Sign-in | P3 |
-| DS-1 | Onboarding buttons are rounded; buttons must cut two corners | Design system | P2 |
-| DS-2 | The returning-user control is a pill | Design system | P3 |
-| DS-3 | People are circles and rounded squares; a person is an octagon | Design system | P3 |
-| DS-4 | The "+" tile in "Create your own crew" is a rounded square | Design system | P3 |
+| ID | Title | Area | Severity | Issue |
+|---|---|---|---|---|
+| UI-1 | "Sign in" on a fresh install is a dead end | Onboarding | P1 | [#67](https://github.com/mollohq/mello/issues/67) |
+| UI-2 | An invite link does not offer the invited crew at step 1 | Onboarding, invites | P1 | [#68](https://github.com/mollohq/mello/issues/68) |
+| UI-3 | A failed join closes the modal with no error | Invites | P0 (with the backend bug) | [#69](https://github.com/mollohq/mello/issues/69) |
+| UI-4 | A returning user sees two "Sign in" controls | Onboarding | P2 | [#70](https://github.com/mollohq/mello/issues/70) |
+| UI-5 | A returning device user with a lost session goes back to step 1 | Onboarding | P2, needs a decision | [#71](https://github.com/mollohq/mello/issues/71) |
+| UI-6 | The Apple button shows on desktop, where it cannot work | Onboarding, sign-in | P3 | [#72](https://github.com/mollohq/mello/issues/72) |
+| UI-7 | "Email + password" looks disabled on step 3 | Onboarding | P3 | [#73](https://github.com/mollohq/mello/issues/73) |
+| UI-8 | The "or" divider in the email sign-in form is wrong | Sign-in | P3 | [#74](https://github.com/mollohq/mello/issues/74) |
+| DS-1 | Onboarding buttons are rounded; buttons must cut two corners | Design system | P2 | [#75](https://github.com/mollohq/mello/issues/75) |
+| DS-2 | The returning-user control is a pill | Design system | P3 | [#76](https://github.com/mollohq/mello/issues/76) |
+| DS-3 | People are circles and rounded squares; a person is an octagon | Design system | P3 | [#77](https://github.com/mollohq/mello/issues/77) |
+| DS-4 | The "+" tile in "Create your own crew" is a rounded square | Design system | P3 | [#78](https://github.com/mollohq/mello/issues/78) |
 
 ---
 
