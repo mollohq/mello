@@ -105,6 +105,9 @@ func InitModule(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runti
 	if err := initializer.RegisterRpc("admin_dashboard_stats", AdminDashboardStatsRPC); err != nil {
 		return err
 	}
+	if err := initializer.RegisterRpc("admin_live_snapshot", AdminLiveSnapshotRPC); err != nil {
+		return err
+	}
 	if err := initializer.RegisterRpc("admin_recent_signups", AdminRecentSignupsRPC); err != nil {
 		return err
 	}

@@ -96,6 +96,7 @@ All custom server logic is written in Go and loaded as Nakama runtime modules. M
 | `crew_feed.go` | `CrewFeedRPC` — server-side feed curation (order, role, size, locked card) |
 | `stream_sessions_store.go` | Durable `crew_stream_sessions` store (`UpsertStreamSession`, cap) so stream replays outlive the ledger trim |
 | `s3.go` | S3/R2 presign client singleton, `GeneratePresignedPUT`, `S3PublicURL` helpers |
+| `admin_live_snapshot.go` | `AdminLiveSnapshotRPC` — server-to-server snapshot of non-empty voice rooms (channel, crew, members) plus active streams (`stream_meta` scan). Powers the admin Live view. |
 | `dev_seed.go` | Development seed data |
 
 ---
@@ -124,8 +125,35 @@ All custom server logic is written in Go and loaded as Nakama runtime modules. M
 | `crew_recaps` | Yes | Paginated access to durable recaps. |
 | `clip_upload_url` | Yes | Returns a presigned PUT URL for direct S3/R2 upload and the public `media_url`. |
 | `clip_upload_complete` | Yes | Updates the clip's `media_url` after successful upload. |
+| `admin_live_snapshot` | No (`http_key`, server-to-server only) | Returns live voice rooms and active streams (see §4.1). Rejects client sessions. Cached 15s, stale served on collect failure. |
 
 Every RPC validates its input and returns typed Nakama errors (`UNAUTHENTICATED`, `INVALID_ARGUMENT`, `NOT_FOUND`, `PERMISSION_DENIED`, `INTERNAL`).
+
+### 4.1 `admin_live_snapshot` contract
+
+Request: empty payload. Response:
+
+```json
+{
+  "voice_rooms": [
+    {"channel_id": "ch_abc12345", "crew_id": "crew_xyz", "channel_name": "General",
+     "members": [{"user_id": "user_a", "username": "vex_r", "speaking": false,
+                  "muted": false, "deafened": false, "joined_at": 1711900000000}]}
+  ],
+  "streams": [
+    {"stream_id": "stream_123", "crew_id": "crew_xyz", "streamer_id": "user_c",
+     "streamer_username": "k0ji_tech", "title": "PROJECT AVALON",
+     "started_at": "2026-03-08T14:00:00Z", "viewer_count": 3,
+     "thumbnail_url": "https://..."}
+  ]
+}
+```
+
+Rules:
+
+- Voice rooms come from the in-memory `voiceRooms` map. Empty rooms never appear.
+- Channel names resolve from `voice_channels/{crew_id}` storage. A missing definition falls back to the channel ID.
+- Streams come from the `stream_meta` collection scan (same read as stream GC). A record younger than the 60s GC interval can linger briefly after its host leaves.
 
 ---
 
