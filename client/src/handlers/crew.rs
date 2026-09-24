@@ -1,6 +1,7 @@
 use std::rc::Rc;
 
 use base64::Engine as _;
+use mello_core::crew::InviteError;
 use mello_core::{Command, Event};
 use slint::Model;
 
@@ -408,14 +409,40 @@ pub fn handle(ctx: &AppContext, event: Event) {
                 ctx.app.set_join_crew_avatar_seed(invite.avatar_seed.into());
                 ctx.app.set_join_crew_error("".into());
                 ctx.app.set_join_crew_loading(false);
+                ctx.app.set_join_crew_joining(false);
+                ctx.app.set_join_crew_join_error("".into());
                 ctx.app.set_join_crew_modal_open(true);
             }
         }
-        Event::CrewInviteResolveFailed { reason } => {
-            log::warn!("[invite] resolve failed: {}", reason);
-            ctx.app.set_join_crew_error(reason.into());
+        Event::CrewInviteResolveFailed { reason, error } => {
+            log::warn!("[invite] resolve failed: {:?}: {}", error, reason);
+            ctx.app
+                .set_join_crew_error(invite_resolve_error_message(error).into());
             ctx.app.set_join_crew_loading(false);
             ctx.app.set_join_crew_modal_open(true);
+        }
+        Event::InviteJoined { crew_id } => {
+            log::info!("[invite] joined crew {}", crew_id);
+            ctx.app.set_join_crew_joining(false);
+            ctx.app.set_join_crew_join_error("".into());
+            ctx.app.set_join_crew_modal_open(false);
+            ctx.app.set_discover_invite_error("".into());
+        }
+        Event::InviteJoinFailed { error } => {
+            ctx.app.set_join_crew_joining(false);
+            // Two surfaces send JoinByInviteCode: the join modal (a followed
+            // link) and the code field in Discover. The open modal wins.
+            if ctx.app.get_join_crew_modal_open() {
+                log::warn!("[invite] join failed, shown in the join modal: {:?}", error);
+                ctx.app.set_join_crew_join_error(
+                    invite_join_error_message(error, InviteSource::Link).into(),
+                );
+            } else {
+                log::warn!("[invite] join failed, shown in Discover: {:?}", error);
+                ctx.app.set_discover_invite_error(
+                    invite_join_error_message(error, InviteSource::TypedCode).into(),
+                );
+            }
         }
         Event::InviteCodeCreated { code } => {
             let url = format!("https://m3llo.app/join/{}", code);
@@ -502,5 +529,33 @@ pub fn handle(ctx: &AppContext, event: Event) {
             log::error!("[crew] kick failed: {}", reason);
         }
         _ => {}
+    }
+}
+
+/// How the user reached an invite. The same failure reads differently for a
+/// followed link and for a code the user typed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum InviteSource {
+    Link,
+    TypedCode,
+}
+
+/// The text shown when `join_by_invite_code` fails. Only `InvalidCode` blames
+/// the invite: a server failure is not a bad code.
+pub(crate) fn invite_join_error_message(error: InviteError, source: InviteSource) -> &'static str {
+    match (error, source) {
+        (InviteError::InvalidCode, InviteSource::Link) => "This invite link is no longer valid.",
+        (InviteError::InvalidCode, InviteSource::TypedCode) => "This invite code is not valid.",
+        (InviteError::CrewFull, _) => "This crew is full.",
+        (InviteError::NotAllowed, _) => "You cannot join this crew.",
+        (InviteError::Failed, _) => "Could not join the crew. Try again.",
+    }
+}
+
+/// The text shown when `resolve_crew_invite` fails.
+pub(crate) fn invite_resolve_error_message(error: InviteError) -> &'static str {
+    match error {
+        InviteError::InvalidCode => "This invite link is no longer valid.",
+        _ => "Could not load this invite. Try again.",
     }
 }

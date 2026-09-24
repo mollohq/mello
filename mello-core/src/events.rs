@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::crew::{Crew, Member, ResolvedInvite};
+use crate::crew::{Crew, InviteError, Member, ResolvedInvite};
 use crate::crew_state::{
     CrewEvent, CrewSidebarState, CrewState, MessagePreview, PresenceChange, VoiceChannelState,
     VoiceMember,
@@ -161,6 +161,15 @@ pub enum Event {
     },
     CrewInviteResolveFailed {
         reason: String,
+        error: InviteError,
+    },
+    /// `join_by_invite_code` succeeded. The crew is selected next.
+    InviteJoined {
+        crew_id: String,
+    },
+    /// `join_by_invite_code` failed.
+    InviteJoinFailed {
+        error: InviteError,
     },
     InviteCodeCreated {
         code: String,

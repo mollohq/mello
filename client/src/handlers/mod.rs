@@ -42,6 +42,8 @@ pub fn handle_event(ctx: &AppContext, event: Event) {
         | Event::DiscoverCrewsFailed { .. }
         | Event::CrewInviteResolved { .. }
         | Event::CrewInviteResolveFailed { .. }
+        | Event::InviteJoined { .. }
+        | Event::InviteJoinFailed { .. }
         | Event::InviteCodeCreated { .. }
         | Event::InviteCodeCreateFailed { .. }
         | Event::CrewUpdated { .. }
