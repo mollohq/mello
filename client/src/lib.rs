@@ -1,3 +1,5 @@
+#[cfg(test)]
+mod a11y_lint;
 mod app_context;
 mod autolaunch;
 mod avatar;
@@ -11,6 +13,8 @@ mod diag_capture;
 #[cfg(feature = "e2e")]
 mod e2e_state;
 mod emoji_font;
+#[cfg(test)]
+mod flow_catalogue;
 #[cfg(test)]
 mod flow_tests;
 mod foreground_monitor;

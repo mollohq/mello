@@ -1,0 +1,440 @@
+# The user flows that mello must keep working. See plans/E2E-QA.md §9.
+#
+# One entry for each flow. Three keys list what exercises the flow today:
+#   harness  — test functions in client/src (headless, fake core events)
+#   journeys — scripts that drive the real app against the local stack
+#   protocol — case IDs in qa/protocol/*.md (agent and human runs)
+# `issues` lists open GitHub issues that block or break the flow.
+#
+# client/src/flow_catalogue.rs checks this file in `cargo test`: unique IDs,
+# a valid priority, and every harness test and journey that it names exists.
+# Keep to the flat format below: one key per line, lists in [ ].
+#
+# Priority: P0 = a user cannot use mello without it. P1 = core but has a
+# workaround. P2 = secondary. P3 = polish.
+
+flows:
+
+  # ── Onboarding ────────────────────────────────────────────────
+  - id: ONB-01
+    title: Fresh install, create a crew, pick an avatar, skip linking, reach the app
+    priority: P0
+    users: 1
+    harness: [discover_crews_loaded_advances_to_step_one, onboarding_ready_logs_in_but_stays_on_step_three, clicking_continue_twice_only_finalizes_once, retrying_finalize_reuses_the_same_device_id]
+    journeys: [tools/mello-driver/spike/invite-journey.sh]
+    protocol: []
+    issues: []
+
+  - id: ONB-02
+    title: Fresh install, join a public crew from step 1
+    priority: P0
+    users: 1
+    harness: [entering_step_2_by_choosing_a_crew_loads_its_data, onboarding_with_crews_shows_cards_and_one_create_card]
+    journeys: []
+    protocol: []
+    issues: []
+
+  - id: ONB-03
+    title: Link an identity at step 3 (Google, Discord, Twitch, Steam, email)
+    priority: P0
+    users: 1
+    harness: [onboarding_social_buttons_link_rather_than_sign_in, failed_social_link_clears_the_spinner_and_shows_why, failed_email_link_shows_why]
+    journeys: []
+    protocol: []
+    issues: [72, 73]
+
+  - id: ONB-04
+    title: No discoverable crews, the create card still shows
+    priority: P1
+    users: 1
+    harness: [onboarding_with_zero_crews_still_offers_a_way_forward]
+    journeys: []
+    protocol: []
+    issues: []
+
+  - id: ONB-05
+    title: Crew discovery fails, an error and a retry show
+    priority: P1
+    users: 1
+    harness: [discover_failure_shows_an_error_and_a_way_forward, retry_after_discover_failure_reissues_the_request, successful_discover_clears_a_previous_error]
+    journeys: []
+    protocol: []
+    issues: []
+
+  - id: ONB-06
+    title: A full crew cannot be picked
+    priority: P1
+    users: 1
+    harness: [discovered_crews_carry_their_capacity, unknown_capacity_does_not_read_as_full]
+    journeys: []
+    protocol: []
+    issues: []
+
+  - id: ONB-07
+    title: Quit during onboarding, relaunch, resume at the same step
+    priority: P1
+    users: 1
+    harness: [resuming_into_step_2_loads_its_data, navigating_back_into_step_2_loads_its_data]
+    journeys: []
+    protocol: []
+    issues: []
+
+  - id: ONB-08
+    title: An existing account on a new computer gets back into its crews
+    priority: P1
+    users: 1
+    harness: []
+    journeys: []
+    protocol: []
+    issues: [67]
+
+  # ── Sign-in and session ───────────────────────────────────────
+  - id: AUTH-01
+    title: Returning user, session restore, reach the app
+    priority: P0
+    users: 1
+    harness: [session_restore_success_ends_on_the_app_screen, login_success_shows_the_app]
+    journeys: []
+    protocol: []
+    issues: []
+
+  - id: AUTH-02
+    title: Session restore fails, the returning user signs in again
+    priority: P0
+    users: 1
+    harness: [session_restore_failure_ends_somewhere_usable, failed_restore_stops_the_spinner, empty_login_failure_reason_means_restore_failed]
+    journeys: []
+    protocol: []
+    issues: [70, 71]
+
+  - id: AUTH-03
+    title: Sign out, then sign in with email and password
+    priority: P0
+    users: 1
+    harness: [logout_returns_to_a_visible_screen, email_login_carries_credentials_and_sets_loading, real_login_failure_surfaces_an_error_and_stays_put, successful_login_clears_the_spinner_and_panel]
+    journeys: []
+    protocol: []
+    issues: []
+
+  - id: AUTH-04
+    title: Sign in with each social provider (fake OAuth)
+    priority: P0
+    users: 1
+    harness: [each_social_button_emits_its_own_provider, social_signin_dismisses_the_sign_in_panel, apple_signin_currently_sends_an_empty_token]
+    journeys: []
+    protocol: []
+    issues: [72]
+
+  - id: AUTH-05
+    title: A fresh install never sees "Sign in"
+    priority: P1
+    users: 1
+    harness: []
+    journeys: []
+    protocol: []
+    issues: [67]
+
+  # ── Invites ───────────────────────────────────────────────────
+  - id: INV-01
+    title: Create and copy an invite link
+    priority: P0
+    users: 1
+    harness: []
+    journeys: [tools/mello-driver/spike/invite-journey.sh]
+    protocol: []
+    issues: []
+
+  - id: INV-02
+    title: Accept an invite by deep link while the app runs
+    priority: P0
+    users: 2
+    harness: []
+    journeys: []
+    protocol: []
+    issues: []
+
+  - id: INV-03
+    title: Accept an invite by deep link on a fresh install
+    priority: P0
+    users: 2
+    harness: []
+    journeys: [tools/mello-driver/spike/invite-journey.sh]
+    protocol: []
+    issues: [68, 69]
+
+  - id: INV-04
+    title: A guest joins voice through the web lounge, members see the guest
+    priority: P0
+    users: 2
+    harness: []
+    journeys: []
+    protocol: []
+    issues: []
+
+  - id: INV-05
+    title: An invalid or expired invite code shows a clear error
+    priority: P1
+    users: 1
+    harness: []
+    journeys: []
+    protocol: []
+    issues: []
+
+  - id: INV-06
+    title: An invite to a full crew shows a clear error
+    priority: P1
+    users: 2
+    harness: []
+    journeys: []
+    protocol: []
+    issues: []
+
+  - id: INV-07
+    title: Join by typing an invite code in Discover
+    priority: P1
+    users: 2
+    harness: [joining_from_discover_uses_the_crew_id_and_invite_code_paths]
+    journeys: []
+    protocol: []
+    issues: []
+
+  # ── Crew ──────────────────────────────────────────────────────
+  - id: CREW-01
+    title: Create a crew from the app
+    priority: P1
+    users: 1
+    harness: []
+    journeys: []
+    protocol: []
+    issues: []
+
+  - id: CREW-02
+    title: Join a crew from Discover
+    priority: P1
+    users: 2
+    harness: [selecting_a_crew_sends_its_id, crews_loaded_populates_the_sidebar, active_crew_name_follows_the_active_crew]
+    journeys: []
+    protocol: []
+    issues: []
+
+  - id: CREW-03
+    title: Leave a crew
+    priority: P1
+    users: 2
+    harness: []
+    journeys: []
+    protocol: []
+    issues: []
+
+  - id: CREW-04
+    title: Crew settings — name, description, privacy, invite policy
+    priority: P2
+    users: 1
+    harness: []
+    journeys: []
+    protocol: []
+    issues: []
+
+  - id: CREW-05
+    title: Voice channels — add, rename, delete
+    priority: P2
+    users: 1
+    harness: []
+    journeys: []
+    protocol: []
+    issues: []
+
+  - id: CREW-06
+    title: Members — promote, demote, kick
+    priority: P2
+    users: 2
+    harness: []
+    journeys: []
+    protocol: []
+    issues: []
+
+  - id: CREW-07
+    title: Delete a crew
+    priority: P2
+    users: 1
+    harness: []
+    journeys: []
+    protocol: []
+    issues: []
+
+  # ── Voice ─────────────────────────────────────────────────────
+  - id: VOICE-01
+    title: Join a voice channel, both users see each other and hear each other
+    priority: P0
+    users: 2
+    harness: [voice_state_change_updates_the_ui]
+    journeys: []
+    protocol: []
+    issues: []
+
+  - id: VOICE-02
+    title: Mute, unmute, deafen, undeafen
+    priority: P0
+    users: 2
+    harness: [mute_toggle_emits_set_mute_and_broadcast, deafen_mutes_and_undeafen_restores_previous_mic_state, undeafen_keeps_mic_muted_when_it_was_muted_before]
+    journeys: []
+    protocol: []
+    issues: []
+
+  - id: VOICE-03
+    title: Switch voice channel
+    priority: P1
+    users: 2
+    harness: []
+    journeys: []
+    protocol: []
+    issues: []
+
+  - id: VOICE-04
+    title: Leave voice
+    priority: P0
+    users: 2
+    harness: [hangup_click_updates_ui_before_core_confirms]
+    journeys: []
+    protocol: []
+    issues: []
+
+  - id: VOICE-05
+    title: Reconnect after a network drop, rejoin voice without user action
+    priority: P0
+    users: 2
+    harness: []
+    journeys: []
+    protocol: []
+    issues: []
+
+  - id: VOICE-06
+    title: Microphone permission denied, the user reaches the OS setting
+    priority: P1
+    users: 1
+    harness: []
+    journeys: []
+    protocol: []
+    issues: []
+
+  # ── Chat ──────────────────────────────────────────────────────
+  - id: CHAT-01
+    title: Send a message, the other user receives it
+    priority: P0
+    users: 2
+    harness: [sending_a_message_carries_its_content]
+    journeys: []
+    protocol: []
+    issues: []
+
+  - id: CHAT-02
+    title: Reply, edit and delete a message
+    priority: P1
+    users: 2
+    harness: [replying_carries_both_body_and_parent, editing_and_deleting_messages_target_the_right_id]
+    journeys: []
+    protocol: []
+    issues: []
+
+  - id: CHAT-03
+    title: Send a GIF, an emoji and a mention
+    priority: P2
+    users: 2
+    harness: []
+    journeys: []
+    protocol: []
+    issues: []
+
+  # ── Streaming ─────────────────────────────────────────────────
+  - id: STREAM-01
+    title: Start a stream, a second user watches it
+    priority: P0
+    users: 2
+    harness: []
+    journeys: []
+    protocol: []
+    issues: []
+
+  - id: STREAM-02
+    title: Change stream quality
+    priority: P1
+    users: 2
+    harness: [the_quick_stream_path_uses_the_chosen_quality]
+    journeys: []
+    protocol: []
+    issues: []
+
+  - id: STREAM-03
+    title: End a stream, and a quit game ends its stream
+    priority: P0
+    users: 2
+    harness: [end_stream_click_updates_ui_before_core_confirms, quit_game_stops_the_hosted_stream]
+    journeys: []
+    protocol: []
+    issues: []
+
+  # ── Feed and clips ────────────────────────────────────────────
+  - id: FEED-01
+    title: Clip 30 s in voice, the clip card shows, play, pause and seek
+    priority: P1
+    users: 2
+    harness: [clip_captured_populates_feed_card_waveform, feed_loaded_decodes_clip_waveform, pause_and_resume_clip_toggle_paused_property, seek_clip_forwards_absolute_position_ms]
+    journeys: []
+    protocol: []
+    issues: []
+
+  - id: FEED-02
+    title: Game session and weekly cards render from real sessions
+    priority: P2
+    users: 2
+    harness: [zero_telemetry_game_session_renders_compact_card_without_record, game_rollup_renders_card_with_lines]
+    journeys: []
+    protocol: []
+    issues: []
+
+  # ── Settings ──────────────────────────────────────────────────
+  - id: SET-01
+    title: Change the profile avatar
+    priority: P2
+    users: 1
+    harness: []
+    journeys: []
+    protocol: []
+    issues: []
+
+  - id: SET-02
+    title: Change audio devices and input mode (voice activity, push to talk)
+    priority: P1
+    users: 1
+    harness: []
+    journeys: []
+    protocol: []
+    issues: []
+
+  - id: SET-03
+    title: Game integrations on and off, Riot account link
+    priority: P2
+    users: 1
+    harness: []
+    journeys: []
+    protocol: []
+    issues: []
+
+  # ── Updates ───────────────────────────────────────────────────
+  - id: UPD-01
+    title: The update banner installs a new version
+    priority: P1
+    users: 1
+    harness: []
+    journeys: []
+    protocol: []
+    issues: []
+
+  - id: UPD-02
+    title: A forced update blocks the app until it installs
+    priority: P1
+    users: 1
+    harness: []
+    journeys: []
+    protocol: []
+    issues: []
