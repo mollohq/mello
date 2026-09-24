@@ -8,6 +8,10 @@ license.workspace = true
 # Test/dev-only fault-injection commands (force disconnects, simulate suspend).
 # Off by default so production and the FFI/Swift Command mirror are unaffected.
 test-faults = []
+# Test-only: keep the refresh token in the file named by MELLO_E2E_SESSION_FILE
+# instead of the OS keyring. Rebuilt test binaries otherwise trigger keychain
+# prompts that no CI runner can answer. Never enabled in shipped builds.
+e2e-session = []
 
 [dependencies]
 tokio = { workspace = true }

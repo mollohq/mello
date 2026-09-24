@@ -8,6 +8,8 @@ mod converters;
 pub mod dcomp_presenter;
 mod deep_link;
 mod diag_capture;
+#[cfg(feature = "e2e")]
+mod e2e_state;
 mod emoji_font;
 #[cfg(test)]
 mod flow_tests;
@@ -370,6 +372,10 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
             log::info!("[mcp] MCP server listening on http://localhost:{port}/mcp");
         }
     }
+
+    // Test-only state port for the e2e driver. No-op unless MELLO_E2E_STATE_PORT is set.
+    #[cfg(feature = "e2e")]
+    e2e_state::start(&app);
 
     #[cfg(target_os = "windows")]
     let dcomp_presenter: Rc<RefCell<Option<dcomp_presenter::DCompPresenter>>> =

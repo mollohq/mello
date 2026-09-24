@@ -192,6 +192,8 @@ impl PollState {
                         | Event::CrewStateLoaded { .. }
                 );
 
+                #[cfg(feature = "e2e")]
+                crate::e2e_state::record_event(&event);
                 crate::handlers::handle_event(poll_ctx, event);
 
                 if should_push_hud && poll_ctx.hud_manager.is_enabled() {
