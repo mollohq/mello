@@ -50,6 +50,8 @@ export component DeviceDropdown inherits Rectangle {
         }
 
         dropdown-hover := TouchArea {
+            accessible-role: combobox;
+            accessible-label: root.label;
             clicked => { dropdown-popup.show(); }
         }
     }
@@ -113,6 +115,8 @@ export component DeviceDropdown inherits Rectangle {
                     }
 
                     item-hover := TouchArea {
+                        accessible-role: button;
+                        accessible-label: dev.name;
                         clicked => {
                             selected-name = dev.name;
                             device-selected(dev.id);
@@ -154,6 +158,8 @@ component VuBar inherits Rectangle {
 // ─── Toggle Switch ─────────────────────────────────────────────────────────
 export component SettingsToggle inherits Rectangle {
     in-out property <bool> checked: false;
+    /// Accessible label: what the switch controls, for screen readers and the e2e driver.
+    in property <string> label;
     callback toggled(bool);
 
     width: 44px;
@@ -180,6 +186,8 @@ export component SettingsToggle inherits Rectangle {
     }
 
     TouchArea {
+        accessible-role: switch;
+        accessible-label: root.label;
         clicked => {
             checked = !checked;
             toggled(checked);
@@ -190,6 +198,8 @@ export component SettingsToggle inherits Rectangle {
 // ─── Small Toggle (for cards) ──────────────────────────────────────────────
 component SmallToggle inherits Rectangle {
     in-out property <bool> checked: false;
+    /// Accessible label: what the switch controls, for screen readers and the e2e driver.
+    in property <string> label;
     callback toggled(bool);
 
     width: 40px;
@@ -215,6 +225,8 @@ component SmallToggle inherits Rectangle {
     }
 
     TouchArea {
+        accessible-role: switch;
+        accessible-label: root.label;
         clicked => {
             checked = !checked;
             toggled(checked);
@@ -267,6 +279,8 @@ component ToggleRow inherits Rectangle {
     }
 
     row-ta := TouchArea {
+        accessible-role: switch;
+        accessible-label: root.title;
         clicked => {
             checked = !checked;
             toggled(checked);
@@ -308,6 +322,7 @@ component ToggleRow inherits Rectangle {
             alignment: center;
             SettingsToggle {
                 checked <=> root.checked;
+                label: root.title;
                 toggled(v) => { root.toggled(v); }
             }
         }
@@ -409,6 +424,8 @@ component VolumeSlider inherits VerticalLayout {
             }
 
             slider-ta := TouchArea {
+                accessible-role: slider;
+                accessible-label: root.label;
                 moved => {
                     if self.pressed {
                         value = clamp(self.mouse-x / parent.width, 0.0, 1.0);
@@ -449,6 +466,8 @@ component ProcessingCard inherits Rectangle {
     }
 
     card-ta := TouchArea {
+        accessible-role: switch;
+        accessible-label: root.title;
         clicked => {
             checked = !checked;
             toggled(checked);
@@ -484,6 +503,7 @@ component ProcessingCard inherits Rectangle {
 
         SmallToggle {
             checked <=> root.checked;
+            label: root.title;
             toggled(v) => { root.toggled(v); }
         }
     }
@@ -595,6 +615,8 @@ component SensitivitySlider inherits Rectangle {
             }
 
             sens-ta := TouchArea {
+                accessible-role: slider;
+                accessible-label: "Sensitivity";
                 moved => {
                     if self.pressed {
                         root.value = clamp(self.mouse-x / parent.width * 100.0 - 100.0, -100.0, 0.0);
@@ -861,6 +883,7 @@ component AudioTab inherits VerticalLayout {
                 }
 
                 DeviceDropdown {
+                    label: "INPUT DEVICE";
                     devices: root.capture-devices;
                     selected-id: root.selected-capture-id;
                     selected-name <=> root.selected-capture-name;
@@ -883,6 +906,7 @@ component AudioTab inherits VerticalLayout {
                 }
 
                 DeviceDropdown {
+                    label: "OUTPUT DEVICE";
                     devices: root.playback-devices;
                     selected-id: root.selected-playback-id;
                     selected-name <=> root.selected-playback-name;
@@ -1075,6 +1099,8 @@ component AudioTab inherits VerticalLayout {
                                     }
 
                                     TouchArea {
+                                        accessible-role: button;
+                                        accessible-label: "Voice Activity";
                                         clicked => {
                                             if root.ptt-mode {
                                                 root.ptt-mode = false;
@@ -1102,6 +1128,8 @@ component AudioTab inherits VerticalLayout {
                                     }
 
                                     TouchArea {
+                                        accessible-role: button;
+                                        accessible-label: "Push to Talk";
                                         clicked => {
                                             if !root.ptt-mode {
                                                 root.ptt-mode = true;
@@ -1193,6 +1221,8 @@ component AudioTab inherits VerticalLayout {
                             }
 
                             ptt-bind-hover := TouchArea {
+                                accessible-role: button;
+                                accessible-label: "Push-to-talk Key";
                                 clicked => {
                                     if root.ptt-mode && !root.ptt-binding {
                                         root.ptt-binding = true;
@@ -1264,6 +1294,8 @@ component AudioTab inherits VerticalLayout {
                 }
 
                 test-hover := TouchArea {
+                    accessible-role: button;
+                    accessible-label: root.mic-testing ? "Stop Testing" : "Start Test";
                     clicked => { mic-test-toggled(); }
                 }
             }
@@ -1316,6 +1348,8 @@ component ProfileAvatarSlot inherits Rectangle {
         background: Theme.scrim;
 
         use-ta := TouchArea {
+            accessible-role: button;
+            accessible-label: "Use";
             clicked => { root.use-clicked(); }
         }
 
@@ -1433,6 +1467,8 @@ component ProfileTab inherits VerticalLayout {
                 }
 
                 change-ta := TouchArea {
+                    accessible-role: button;
+                    accessible-label: avatar-grid-expanded ? "Hide" : "Change";
                     clicked => {
                         avatar-grid-expanded = !avatar-grid-expanded;
                         if avatar-grid-expanded {
@@ -1568,6 +1604,8 @@ component ProfileTab inherits VerticalLayout {
                 border-color: profile-selected-avatar == 7 ? Theme.accent : (upload-ta.has-hover ? Theme.raised : Theme.graphic-light);
 
                 upload-ta := TouchArea {
+                    accessible-role: button;
+                    accessible-label: "Upload avatar";
                     clicked => { profile-upload-clicked(); }
                 }
 
@@ -1614,6 +1652,8 @@ component ProfileTab inherits VerticalLayout {
                     background: Theme.scrim;
 
                     upload-use-ta := TouchArea {
+                        accessible-role: button;
+                        accessible-label: "Use";
                         clicked => { profile-use-avatar(7); }
                     }
 
@@ -1664,6 +1704,8 @@ component ProfileTab inherits VerticalLayout {
                 }
 
                 reroll-ta := TouchArea {
+                    accessible-role: button;
+                    accessible-label: "Reroll all";
                     clicked => { profile-reroll(); }
                 }
 
@@ -1715,6 +1757,8 @@ component GameIntegrationRow inherits Rectangle {
     }
 
     game-row-ta := TouchArea {
+        accessible-role: switch;
+        accessible-label: game.name;
         clicked => { toggled(!game.enabled); }
     }
 
@@ -1789,6 +1833,7 @@ component GameIntegrationRow inherits Rectangle {
             alignment: center;
             SettingsToggle {
                 checked: game.enabled;
+                label: game.name;
                 toggled(v) => { root.toggled(v); }
             }
         }
@@ -1937,6 +1982,8 @@ component GamesTab inherits VerticalLayout {
                         }
 
                         riot-btn-ta := TouchArea {
+                            accessible-role: button;
+                            accessible-label: riot-linked ? "DISCONNECT" : "CONNECT";
                             mouse-cursor: pointer;
                             enabled: riot-available || riot-linked;
                             clicked => {
@@ -2099,6 +2146,7 @@ export component SettingsModal inherits Rectangle {
     background: Theme.scrim;
 
     TouchArea {
+        // a11y: none (backdrop: a click outside the dialog closes it)
         clicked => { close-requested(); }
     }
 
@@ -2126,7 +2174,9 @@ export component SettingsModal inherits Rectangle {
         }
 
         // Block clicks from reaching backdrop
-        TouchArea {}
+        TouchArea {
+            // a11y: none (input blocker: stops clicks reaching the backdrop)
+        }
 
         VerticalLayout {
             // ─── Header ──────────────────────────────────────────
@@ -2192,6 +2242,8 @@ export component SettingsModal inherits Rectangle {
                     }
 
                     close-btn-ta := TouchArea {
+                        accessible-role: button;
+                        accessible-label: "Close";
                         clicked => { close-requested(); }
                     }
                 }
@@ -2265,6 +2317,8 @@ export component SettingsModal inherits Rectangle {
                                 }
 
                                 profile-ta := TouchArea {
+                                    accessible-role: tab;
+                                    accessible-label: "PROFILE";
                                     clicked => { active-tab = 0; }
                                 }
                             }
@@ -2310,6 +2364,8 @@ export component SettingsModal inherits Rectangle {
                                 }
 
                                 general-ta := TouchArea {
+                                    accessible-role: tab;
+                                    accessible-label: "GENERAL";
                                     clicked => { active-tab = 1; }
                                 }
                             }
@@ -2355,6 +2411,8 @@ export component SettingsModal inherits Rectangle {
                                 }
 
                                 audio-ta := TouchArea {
+                                    accessible-role: tab;
+                                    accessible-label: "AUDIO & VIDEO";
                                     clicked => { active-tab = 2; }
                                 }
                             }
@@ -2400,6 +2458,8 @@ export component SettingsModal inherits Rectangle {
                                 }
 
                                 games-ta := TouchArea {
+                                    accessible-role: tab;
+                                    accessible-label: "GAMES";
                                     clicked => { active-tab = 3; }
                                 }
                             }
@@ -2659,6 +2719,8 @@ export component SettingsModal inherits Rectangle {
                     }
 
                     reset-ta := TouchArea {
+                        accessible-role: button;
+                        accessible-label: "RESET TO DEFAULTS";
                         clicked => { reset-defaults(); }
                     }
                 }
@@ -2713,6 +2775,8 @@ export component SettingsModal inherits Rectangle {
                     }
 
                     close-footer-ta := TouchArea {
+                        accessible-role: button;
+                        accessible-label: "Close";
                         clicked => { close-requested(); }
                     }
                 }

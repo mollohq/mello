@@ -20,6 +20,8 @@ component LinkPill inherits Rectangle {
     border-color: Theme.graphic-light;
 
     pill-touch := TouchArea {
+        accessible-role: button;
+        accessible-label: root.label;
         mouse-cursor: pointer;
         clicked => { root.clicked(root.url); }
     }
@@ -74,6 +76,8 @@ component MessageMoreMenu inherits Rectangle {
     background: more-touch.has-hover ? Theme.bg-tertiary : Theme.surface;
 
     more-touch := TouchArea {
+        accessible-role: button;
+        accessible-label: "More actions";
         width: parent.width;
         height: parent.height;
         mouse-cursor: pointer;
@@ -122,6 +126,8 @@ component MessageMoreMenu inherits Rectangle {
                     }
 
                     menu-edit-touch := TouchArea {
+                        accessible-role: button;
+                        accessible-label: "Edit";
                         clicked => { root.edit-requested(); }
                     }
                 }
@@ -142,6 +148,8 @@ component MessageMoreMenu inherits Rectangle {
                     }
 
                     menu-del-touch := TouchArea {
+                        accessible-role: button;
+                        accessible-label: "Delete";
                         clicked => { root.delete-requested(); }
                     }
                 }
@@ -162,6 +170,8 @@ component MessageMoreMenu inherits Rectangle {
                     }
 
                     menu-copy-touch := TouchArea {
+                        accessible-role: button;
+                        accessible-label: "Copy text";
                         clicked => { root.copy-requested(); }
                     }
                 }
@@ -191,6 +201,8 @@ component PillButton inherits Rectangle {
     border-color: Theme.action;
 
     touch := TouchArea {
+        accessible-role: button;
+        accessible-label: root.label;
         clicked => { root.clicked(); }
     }
 
@@ -325,6 +337,8 @@ component ChatClipCard inherits Rectangle {
     }
 
     clip-touch := TouchArea {
+        accessible-role: button;
+        accessible-label: "Play clip";
         mouse-cursor: pointer;
         clicked => { play-clicked(); }
     }
@@ -418,6 +432,8 @@ component GifPopover inherits Rectangle {
                             background: gif-cell-touch.has-hover ? Theme.action-dim : transparent;
 
                             gif-cell-touch := TouchArea {
+                                accessible-role: button;
+                                accessible-label: "GIF";
                                 clicked => {
                                     if gif-index < gifs.length {
                                         root.gif-selected(
@@ -765,6 +781,7 @@ export component ChatPanel inherits Rectangle {
                             width: 28px;
 
                             hover-bar-hover := TouchArea {
+                                // a11y: none (hover detector: shows the message action bar)
                                 x: 0;
                                 y: actions-y;
                                 width: 28px;
@@ -793,6 +810,8 @@ export component ChatPanel inherits Rectangle {
                                         }
 
                                         reply-touch := TouchArea {
+                                            accessible-role: button;
+                                            accessible-label: "Reply";
                                             clicked => {
                                                 root.reply-mode = true;
                                                 root.reply-to-id = msg.message-id;
@@ -836,11 +855,13 @@ export component ChatPanel inherits Rectangle {
                             border-radius: Theme.radius-sm;
 
                             body-hover := TouchArea {
+                                // a11y: none (hover detector: shows the message action bar)
                                 width: parent.width;
                                 height: parent.height;
                             }
 
                             if root.more-menu-message-id != "": TouchArea {
+                                // a11y: none (click-away: a click outside closes the open message menu)
                                 width: parent.width;
                                 height: parent.height;
                                 clicked => { root.more-menu-message-id = ""; }
@@ -989,6 +1010,7 @@ export component ChatPanel inherits Rectangle {
                                 }
 
                                 gif-touch := TouchArea {
+                                    // a11y: none (hover detector: previews the GIF)
                                     mouse-cursor: pointer;
                                     moved => {
                                         root.gif-hovered(msg.gif-preview-url);
@@ -1049,6 +1071,8 @@ export component ChatPanel inherits Rectangle {
             }
 
             new-msg-touch := TouchArea {
+                accessible-role: button;
+                accessible-label: "New messages";
                 clicked => {
                     root.scroll-to-bottom-request = true;
                 }
@@ -1145,6 +1169,8 @@ export component ChatPanel inherits Rectangle {
                 }
 
                 close-reply-touch := TouchArea {
+                    accessible-role: button;
+                    accessible-label: "Cancel reply";
                     clicked => {
                         root.reply-mode = false;
                         root.reply-to-id = "";
@@ -1188,6 +1214,8 @@ export component ChatPanel inherits Rectangle {
                 }
 
                 close-edit-touch := TouchArea {
+                    accessible-role: button;
+                    accessible-label: "Cancel edit";
                     clicked => {
                         root.edit-mode = false;
                         root.edit-message-id = "";
@@ -1235,6 +1263,8 @@ export component ChatPanel inherits Rectangle {
                     }
 
                     del-cancel-touch := TouchArea {
+                        accessible-role: button;
+                        accessible-label: "Cancel";
                         clicked => { root.delete-confirm-message-id = ""; }
                     }
                 }
@@ -1256,6 +1286,8 @@ export component ChatPanel inherits Rectangle {
                     }
 
                     del-ok-touch := TouchArea {
+                        accessible-role: button;
+                        accessible-label: "Delete";
                         clicked => {
                             root.delete-message(root.delete-confirm-message-id);
                             root.delete-confirm-message-id = "";
@@ -1310,6 +1342,8 @@ export component ChatPanel inherits Rectangle {
                         }
 
                         mention-row-touch := TouchArea {
+                            accessible-role: button;
+                            accessible-label: m.display-name;
                             clicked => {
                                 root.mention-selected(m.user-id, m.display-name);
                             }
@@ -1374,6 +1408,8 @@ export component ChatPanel inherits Rectangle {
                                 }
 
                                 emoji-cell-touch := TouchArea {
+                                    accessible-role: button;
+                                    accessible-label: emoji-list[emoji-index].name;
                                     clicked => {
                                         chat-input.text += emoji-list[emoji-index].emoji;
                                         chat-input.focus();

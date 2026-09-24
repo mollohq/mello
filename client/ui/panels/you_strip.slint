@@ -92,6 +92,8 @@ export component YouStrip inherits Rectangle {
         }
 
         strip-ta := TouchArea {
+            accessible-role: button;
+            accessible-label: "YOUR STATS";
             mouse-cursor: pointer;
             clicked => { root.clicked(); }
         }

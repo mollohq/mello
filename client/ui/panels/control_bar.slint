@@ -7,6 +7,8 @@ import { CutShape, CutButtonShape, OctAvatar, OctMask } from "../components/cut.
 /// keyline. `danger` = leave call, the one red fill in the bar.
 component IconButton inherits Rectangle {
     in property <image> icon;
+    /// Accessible label: what the button does, for screen readers and the e2e driver.
+    in property <string> label;
     in property <bool> on: false;
     in property <bool> alert: false;
     in property <bool> danger: false;
@@ -49,6 +51,8 @@ component IconButton inherits Rectangle {
     }
 
     ib-hover := TouchArea {
+        accessible-role: button;
+        accessible-label: root.label;
         mouse-cursor: pointer;
         clicked => {
             root.clicked();
@@ -58,6 +62,8 @@ component IconButton inherits Rectangle {
 
 component ReactionButton inherits Rectangle {
     in property <image> icon;
+    /// Accessible label: what the button does, for screen readers and the e2e driver.
+    in property <string> label;
     in property <color> icon-color;
     in property <color> bg;
     in property <color> border-clr;
@@ -78,6 +84,8 @@ component ReactionButton inherits Rectangle {
     }
 
     react-hover := TouchArea {
+        accessible-role: button;
+        accessible-label: root.label;
         mouse-cursor: pointer;
         clicked => {
             root.clicked();
@@ -126,6 +134,8 @@ component MenuItem inherits Rectangle {
     }
 
     item-hover := TouchArea {
+        accessible-role: button;
+        accessible-label: root.label;
         clicked => {
             root.clicked();
         }
@@ -263,6 +273,8 @@ export component ControlBar inherits Rectangle {
                 }
 
                 avatar-touch := TouchArea {
+                    accessible-role: button;
+                    accessible-label: "Account menu";
                     mouse-cursor: pointer;
                     clicked => {
                         user-menu.show();
@@ -413,6 +425,7 @@ export component ControlBar inherits Rectangle {
             // --- mic + headset, then a divider, then leave ---
             if mic-permission-granted: IconButton {
                 icon: mic-muted ? @image-url("../icons/mic-off.svg") : @image-url("../icons/mic.svg");
+                label: mic-muted ? "Unmute" : "Mute";
                 on: in-voice && !mic-muted;
                 alert: in-voice && mic-muted;
                 clicked => {
@@ -421,6 +434,7 @@ export component ControlBar inherits Rectangle {
             }
             if mic-permission-granted: IconButton {
                 icon: deafened ? @image-url("../icons/headphone-off.svg") : @image-url("../icons/headphones.svg");
+                label: deafened ? "Undeafen" : "Deafen";
                 on: in-voice && !deafened;
                 alert: in-voice && deafened;
                 clicked => {
@@ -441,6 +455,7 @@ export component ControlBar inherits Rectangle {
             }
             if in-voice: IconButton {
                 icon: @image-url("../icons/phone-off.svg");
+                label: "Leave voice";
                 danger: true;
                 clicked => {
                     voice-toggled();
@@ -563,6 +578,8 @@ export component ControlBar inherits Rectangle {
                     }
 
                     stream-ta := TouchArea {
+                        accessible-role: button;
+                        accessible-label: is-hosting ? "LIVE" : "STREAM";
                         mouse-cursor: pointer;
                         clicked => {
                             // With a game detected, STREAM streams it: that
@@ -608,6 +625,8 @@ export component ControlBar inherits Rectangle {
                     }
 
                     caret-ta := TouchArea {
+                        accessible-role: button;
+                        accessible-label: "Stream options";
                         mouse-cursor: pointer;
                         clicked => {
                             go-live-clicked();
@@ -674,6 +693,8 @@ export component ControlBar inherits Rectangle {
                 }
 
                 mic-btn-touch := TouchArea {
+                    accessible-role: button;
+                    accessible-label: mic-permission-denied ? "OPEN SETTINGS" : "ALLOW MICROPHONE";
                     mouse-cursor: pointer;
                     clicked => {
                         if (root.mic-permission-denied) {
@@ -715,6 +736,7 @@ export component ControlBar inherits Rectangle {
                     spacing: 10px;
                     ReactionButton {
                         icon: @image-url("../icons/trophy.svg");
+                        label: "Win";
                         icon-color: Theme.text-primary;
                         bg: Theme.raised;
                         border-clr: Theme.graphic-med;
@@ -725,6 +747,7 @@ export component ControlBar inherits Rectangle {
 
                     ReactionButton {
                         icon: @image-url("../icons/sad-face.svg");
+                        label: "Loss";
                         icon-color: Theme.text-secondary;
                         bg: Theme.raised;
                         border-clr: Theme.graphic-med;
@@ -735,6 +758,7 @@ export component ControlBar inherits Rectangle {
 
                     ReactionButton {
                         icon: @image-url("../icons/star.svg");
+                        label: "Highlight";
                         icon-color: Theme.text-secondary;
                         bg: Theme.raised;
                         border-clr: Theme.graphic-med;
@@ -781,6 +805,8 @@ export component ControlBar inherits Rectangle {
                     }
 
                     riot-cta-ta := TouchArea {
+                        accessible-role: button;
+                        accessible-label: "GET VERIFIED STATS";
                         mouse-cursor: pointer;
                         clicked => {
                             riot-cta-clicked();
@@ -801,6 +827,8 @@ export component ControlBar inherits Rectangle {
                     }
 
                     riot-cta-x-ta := TouchArea {
+                        accessible-role: button;
+                        accessible-label: "Dismiss verified stats";
                         mouse-cursor: pointer;
                         clicked => {
                             riot-cta-dismissed();
@@ -874,6 +902,8 @@ export component ControlBar inherits Rectangle {
                     }
 
                     send-ta := TouchArea {
+                        accessible-role: button;
+                        accessible-label: "Send";
                         mouse-cursor: pointer;
                         clicked => {
                             if moment-input.text != "" {
@@ -960,6 +990,8 @@ export component ControlBar inherits Rectangle {
                 }
 
                 clip-hover := TouchArea {
+                    accessible-role: button;
+                    accessible-label: "CLIP 30S";
                     mouse-cursor: pointer;
                     clicked => {
                         clip-captured();
@@ -971,6 +1003,7 @@ export component ControlBar inherits Rectangle {
             // permission CTA lives in the centre slot, never here.
             IconButton {
                 icon: @image-url("../icons/settings.svg");
+                label: "Settings";
                 clicked => {
                     settings-clicked();
                 }

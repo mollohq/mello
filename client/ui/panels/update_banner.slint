@@ -101,6 +101,8 @@ export component UpdateToast inherits Rectangle {
                 }
 
                 ta := TouchArea {
+                    accessible-role: button;
+                    accessible-label: "UPDATE";
                     mouse-cursor: pointer;
                     clicked => { root.update-clicked(); }
                 }

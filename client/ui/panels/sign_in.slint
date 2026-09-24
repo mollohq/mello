@@ -51,6 +51,8 @@ component AccentButton inherits Rectangle {
     }
 
     btn-touch := TouchArea {
+        accessible-role: button;
+        accessible-label: root.label;
         clicked => {
             if root.enabled {
                 root.clicked();
@@ -107,6 +109,8 @@ component AuthButton inherits Rectangle {
     }
 
     auth-touch := TouchArea {
+        accessible-role: button;
+        accessible-label: root.label;
         clicked => {
             root.clicked();
         }
@@ -183,6 +187,8 @@ export component SignInPanel inherits Rectangle {
                 }
 
                 back-touch := TouchArea {
+                    accessible-role: button;
+                    accessible-label: "Back";
                     clicked => {
                         root.back();
                     }

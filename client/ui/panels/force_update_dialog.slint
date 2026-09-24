@@ -27,6 +27,8 @@ component ForceUpdateButton inherits Rectangle {
     }
 
     touch := TouchArea {
+        accessible-role: button;
+        accessible-label: root.text;
         mouse-cursor: pointer;
         clicked => { root.clicked(); }
     }

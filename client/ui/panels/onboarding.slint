@@ -41,6 +41,8 @@ component CrewCard inherits Rectangle {
     opacity: root.is-full ? 0.55 : 1.0;
 
     card-touch := TouchArea {
+        accessible-role: button;
+        accessible-label: root.crew-name;
         enabled: !root.is-full;
         mouse-cursor: root.is-full ? MouseCursor.not-allowed : MouseCursor.pointer;
         clicked => {
@@ -191,6 +193,8 @@ component CreateCrewCard inherits Rectangle {
     }
 
     create-touch := TouchArea {
+        accessible-role: button;
+        accessible-label: "Create your own crew";
         clicked => {
             root.clicked();
         }
@@ -292,6 +296,8 @@ component StepIndicator inherits Rectangle {
                 height: 2px;
                 background: current-step >= 1 ? Theme.accent : Theme.graphic-light;
                 TouchArea {
+                    accessible-role: button;
+                    accessible-label: "Go to step 1";
                     clicked => {
                         root.step-clicked(1);
                     }
@@ -305,6 +311,8 @@ component StepIndicator inherits Rectangle {
                 height: 2px;
                 background: current-step >= 2 ? Theme.accent : Theme.graphic-light;
                 TouchArea {
+                    accessible-role: button;
+                    accessible-label: "Go to step 2";
                     clicked => {
                         root.step-clicked(2);
                     }
@@ -318,6 +326,8 @@ component StepIndicator inherits Rectangle {
                 height: 2px;
                 background: current-step >= 3 ? Theme.accent : Theme.graphic-light;
                 TouchArea {
+                    accessible-role: button;
+                    accessible-label: "Go to step 3";
                     clicked => {
                         root.step-clicked(3);
                     }
@@ -371,6 +381,8 @@ component AccentButton inherits Rectangle {
     border-radius: Theme.r-inner;
 
     btn-touch := TouchArea {
+        accessible-role: button;
+        accessible-label: root.label;
         clicked => {
             if root.enabled {
                 root.clicked();
@@ -418,6 +430,8 @@ component AuthButton inherits Rectangle {
     opacity: subdued ? 0.6 : 1.0;
 
     auth-touch := TouchArea {
+        accessible-role: button;
+        accessible-label: root.label;
         clicked => {
             root.clicked();
         }
@@ -599,6 +613,8 @@ export component Onboarding inherits Rectangle {
                 }
 
                 signin-link-touch := TouchArea {
+                    accessible-role: button;
+                    accessible-label: "Sign in";
                     clicked => {
                         root.open-sign-in();
                     }
@@ -693,6 +709,8 @@ export component Onboarding inherits Rectangle {
                         }
 
                         pill-cta-touch := TouchArea {
+                            accessible-role: button;
+                            accessible-label: "Sign in";
                             clicked => {
                                 root.login-requested();
                             }
@@ -797,6 +815,8 @@ export component Onboarding inherits Rectangle {
                             }
 
                             retry-touch := TouchArea {
+                                accessible-role: button;
+                                accessible-label: "Retry";
                                 clicked => { root.retry-discover(); }
                             }
                         }
@@ -1156,6 +1176,8 @@ export component Onboarding inherits Rectangle {
                                 animate up-opacity { duration: 350ms; easing: cubic-bezier(0.34, 1.56, 0.64, 1); }
 
                                 upload-touch := TouchArea {
+                                    accessible-role: button;
+                                    accessible-label: "Upload avatar";
                                     clicked => { root.upload-clicked(); }
                                 }
 
@@ -1215,6 +1237,8 @@ export component Onboarding inherits Rectangle {
                             border-color: reroll-touch.has-hover ? Theme.accent : Theme.graphic-light;
 
                             reroll-touch := TouchArea {
+                                accessible-role: button;
+                                accessible-label: "Reroll all";
                                 clicked => { root.reroll-clicked(); }
                             }
 
@@ -1275,6 +1299,7 @@ export component Onboarding inherits Rectangle {
 
                         SettingsToggle {
                             checked <=> root.share-game-activity;
+                            label: "Show crew what I'm playing";
                         }
 
                         Text {
@@ -1307,6 +1332,7 @@ export component Onboarding inherits Rectangle {
                     }
 
                     DeviceDropdown {
+                        label: "MICROPHONE INPUT";
                         devices: root.capture-devices;
                         selected-id: root.selected-capture-id;
                         selected-name <=> root.selected-capture-name;
@@ -1333,6 +1359,7 @@ export component Onboarding inherits Rectangle {
                     }
 
                     DeviceDropdown {
+                        label: "SPEAKER OUTPUT";
                         devices: root.playback-devices;
                         selected-id: root.selected-playback-id;
                         selected-name <=> root.selected-playback-name;
@@ -1618,6 +1645,8 @@ export component Onboarding inherits Rectangle {
                         }
 
                         skip-touch := TouchArea {
+                            accessible-role: button;
+                            accessible-label: "Skip for now";
                             clicked => {
                                 root.skip-identity();
                             }
@@ -1695,6 +1724,8 @@ export component Onboarding inherits Rectangle {
                                 border-color: Theme.graphic-light;
 
                                 email-back-touch := TouchArea {
+                                    accessible-role: button;
+                                    accessible-label: "Back";
                                     clicked => {
                                         root.show-email-form = false;
                                     }
@@ -1733,6 +1764,8 @@ export component Onboarding inherits Rectangle {
                                 background: root.link-email-value != "" && root.link-password-value != "" ? Theme.confirm : Theme.graphic-med;
 
                                 link-touch := TouchArea {
+                                    accessible-role: button;
+                                    accessible-label: "Link account";
                                     clicked => {
                                         if root.link-email-value != "" && root.link-password-value != "" {
                                             root.link-email(root.link-email-value, root.link-password-value);

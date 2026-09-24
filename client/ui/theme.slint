@@ -258,6 +258,7 @@ export component MelloScrollArea inherits Rectangle {
     }
 
     wheel := TouchArea {
+        // a11y: none (scroll-wheel handler for the scroll area, not a control)
         width: parent.width;
         height: parent.height;
         scroll-event(e) => {

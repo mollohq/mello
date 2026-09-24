@@ -36,6 +36,7 @@ export component NewCrewModal inherits Rectangle {
     background: Theme.scrim;
 
     TouchArea {
+        // a11y: none (backdrop: a click outside the dialog closes it)
         clicked => { close-requested(); }
     }
 
@@ -61,7 +62,9 @@ export component NewCrewModal inherits Rectangle {
             fill: Theme.surface;
         }
 
-        TouchArea {}
+        TouchArea {
+            // a11y: none (input blocker: stops clicks reaching the backdrop)
+        }
 
         VerticalLayout {
 
@@ -124,6 +127,8 @@ export component NewCrewModal inherits Rectangle {
                     }
 
                     close-touch := TouchArea {
+                        accessible-role: button;
+                        accessible-label: "Close";
                         mouse-cursor: pointer;
                         clicked => { close-requested(); }
                     }
@@ -179,6 +184,8 @@ export component NewCrewModal inherits Rectangle {
                     }
 
                     copy-touch := TouchArea {
+                        accessible-role: button;
+                        accessible-label: "Copy link";
                         mouse-cursor: pointer;
                         clicked => {
                             copy-invite-code();
@@ -205,6 +212,8 @@ export component NewCrewModal inherits Rectangle {
                     }
 
                     done-touch := TouchArea {
+                        accessible-role: button;
+                        accessible-label: "Done";
                         mouse-cursor: pointer;
                         clicked => { close-requested(); }
                     }
@@ -291,6 +300,8 @@ export component NewCrewModal inherits Rectangle {
                         }
 
                         avatar-touch := TouchArea {
+                            accessible-role: button;
+                            accessible-label: "Upload crew avatar";
                             mouse-cursor: pointer;
                             clicked => { avatar-pick-requested(); }
                         }
@@ -484,6 +495,8 @@ export component NewCrewModal inherits Rectangle {
                             }
 
                             chip-remove := TouchArea {
+                                accessible-role: button;
+                                accessible-label: "Remove " + user.display-name;
                                 mouse-cursor: pointer;
                                 clicked => { uninvite-user(user.id); }
                             }
@@ -559,6 +572,8 @@ export component NewCrewModal inherits Rectangle {
                                 }
 
                                 result-touch := TouchArea {
+                                    accessible-role: button;
+                                    accessible-label: result.display-name;
                                     mouse-cursor: pointer;
                                     clicked => {
                                         invite-user(result.id);
@@ -607,6 +622,8 @@ export component NewCrewModal inherits Rectangle {
                                 }
 
                                 TouchArea {
+                                    accessible-role: button;
+                                    accessible-label: "Private";
                                     mouse-cursor: pointer;
                                     clicked => { is-private = true; }
                                 }
@@ -627,6 +644,8 @@ export component NewCrewModal inherits Rectangle {
                                 }
 
                                 TouchArea {
+                                    accessible-role: button;
+                                    accessible-label: "Public";
                                     mouse-cursor: pointer;
                                     clicked => { is-private = false; }
                                 }
@@ -696,6 +715,8 @@ export component NewCrewModal inherits Rectangle {
                             }
 
                             cancel-touch := TouchArea {
+                                accessible-role: button;
+                                accessible-label: "Cancel";
                                 mouse-cursor: pointer;
                                 clicked => { close-requested(); }
                             }
@@ -727,6 +748,8 @@ export component NewCrewModal inherits Rectangle {
                             }
 
                             create-touch := TouchArea {
+                                accessible-role: button;
+                                accessible-label: onboarding-mode ? "Save & Continue" : "Establish Crew";
                                 mouse-cursor: crew-name-text != "" ? pointer : default;
                                 clicked => {
                                     if crew-name-text != "" {

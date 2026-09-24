@@ -34,6 +34,7 @@ component DiscoverCrewCard inherits Rectangle {
     }
 
     card-touch := TouchArea {
+        // a11y: none (hover detector: highlights the card; the Join button is the control)
         mouse-cursor: pointer;
     }
 
@@ -271,6 +272,8 @@ component DiscoverCrewCard inherits Rectangle {
                     }
 
                     join-touch := TouchArea {
+                        accessible-role: button;
+                        accessible-label: "Join " + root.crew-name;
                         mouse-cursor: pointer;
                         clicked => {
                             join-clicked(crew-id);
@@ -355,6 +358,8 @@ export component DiscoverPanel inherits Rectangle {
                 }
 
                 back-ta := TouchArea {
+                    accessible-role: button;
+                    accessible-label: "BACK TO " + root.back-to;
                     mouse-cursor: pointer;
                     clicked => { root.back-requested(); }
                 }
@@ -496,6 +501,8 @@ export component DiscoverPanel inherits Rectangle {
                                 }
 
                                 invite-btn-ta := TouchArea {
+                                    accessible-role: button;
+                                    accessible-label: "Join Crew";
                                     mouse-cursor: pointer;
                                     clicked => {
                                         if invite-input.text != "" {

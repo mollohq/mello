@@ -16,6 +16,8 @@ component VoiceChannelRow inherits Rectangle {
 
     // Row-level touch BEFORE layout so the join button renders on top
     touch := TouchArea {
+        accessible-role: button;
+        accessible-label: root.channel-name;
         clicked => { root.clicked(); }
     }
 
@@ -90,6 +92,8 @@ component VoiceChannelRow inherits Rectangle {
             }
 
             join-touch := TouchArea {
+                accessible-role: button;
+                accessible-label: "Join " + root.channel-name;
                 clicked => { root.join-clicked(); }
             }
         }
@@ -204,6 +208,8 @@ component VoiceChannelExpanded inherits Rectangle {
             }
 
             header-touch := TouchArea {
+                accessible-role: button;
+                accessible-label: root.channel-name;
                 clicked => { root.clicked(); }
             }
         }
@@ -253,6 +259,8 @@ component VoiceChannelExpanded inherits Rectangle {
                     }
 
                     join-tile-touch := TouchArea {
+                        accessible-role: button;
+                        accessible-label: "Join " + root.channel-name;
                         mouse-cursor: pointer;
                         clicked => { root.join-clicked(); }
                     }
@@ -399,6 +407,8 @@ export component VoiceChannelView inherits Rectangle {
                 height: 36px;
 
                 add-touch := TouchArea {
+                    accessible-role: button;
+                    accessible-label: "New channel";
                     mouse-cursor: pointer;
                     clicked => { root.creating = true; }
                 }
@@ -455,6 +465,7 @@ export component VoiceChannelView inherits Rectangle {
 
                         // Click anywhere on this row to focus the input
                         TouchArea {
+                            // a11y: none (focus helper: a click on the row focuses the labelled text input)
                             clicked => { channel-input.focus(); }
                         }
 

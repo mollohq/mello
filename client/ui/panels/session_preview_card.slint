@@ -252,6 +252,8 @@ export component SessionPreviewCard inherits Rectangle {
                         }
 
                         TouchArea {
+                            accessible-role: button;
+                            accessible-label: root.paused ? "Play" : "Pause";
                             mouse-cursor: pointer;
                             clicked => { root.paused = !root.paused; }
                         }
@@ -448,6 +450,8 @@ export component SessionPreviewCard inherits Rectangle {
     }
 
     card-hover := TouchArea {
+        accessible-role: button;
+        accessible-label: root.title;
         mouse-cursor: pointer;
         clicked => {
             if root.playing && !root.finished {

@@ -1142,7 +1142,9 @@ export component MainWindow inherits Window {
     if logged-in && audio-device-warning != "": Rectangle {
         background: #000000AA;
 
-        TouchArea {}
+        TouchArea {
+            // a11y: none (backdrop of a blocking warning; clicks do nothing)
+        }
 
         Rectangle {
             x: (parent.width - self.width) / 2;
@@ -1157,7 +1159,9 @@ export component MainWindow inherits Window {
             drop-shadow-color: #000000E6;
             drop-shadow-offset-y: 24px;
 
-            TouchArea {}
+            TouchArea {
+                // a11y: none (input blocker: stops clicks reaching the backdrop)
+            }
 
             VerticalLayout {
                 padding: 24px;
@@ -1201,6 +1205,8 @@ export component MainWindow inherits Window {
                         }
 
                         adw-settings-ta := TouchArea {
+                            accessible-role: button;
+                            accessible-label: "Go to Settings";
                             mouse-cursor: pointer;
                             clicked => {
                                 root.audio-device-warning = "";
@@ -1227,6 +1233,8 @@ export component MainWindow inherits Window {
                         }
 
                         adw-ok-ta := TouchArea {
+                            accessible-role: button;
+                            accessible-label: "Continue";
                             mouse-cursor: pointer;
                             clicked => { root.audio-device-warning = ""; }
                         }

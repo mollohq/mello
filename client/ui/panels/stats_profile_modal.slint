@@ -162,6 +162,7 @@ export component StatsProfileModal inherits Rectangle {
     background: Theme.scrim;
 
     TouchArea {
+        // a11y: none (backdrop: a click outside the dialog closes it)
         clicked => { dismiss-requested(); }
     }
 
@@ -189,7 +190,9 @@ export component StatsProfileModal inherits Rectangle {
         }
 
         // Block clicks from reaching backdrop
-        TouchArea {}
+        TouchArea {
+            // a11y: none (input blocker: stops clicks reaching the backdrop)
+        }
 
         Flickable {
             width: parent.width;
@@ -226,6 +229,8 @@ export component StatsProfileModal inherits Rectangle {
                         }
 
                         close-ta := TouchArea {
+                            accessible-role: button;
+                            accessible-label: "Close";
                             mouse-cursor: pointer;
                             clicked => { dismiss-requested(); }
                         }

@@ -22,6 +22,7 @@ export component InviteShareModal inherits Rectangle {
     }
 
     bg-touch := TouchArea {
+        // a11y: none (backdrop: a click outside the dialog closes it)
         clicked => { close-requested(); }
     }
 
@@ -47,7 +48,9 @@ export component InviteShareModal inherits Rectangle {
             fill: Theme.surface;
         }
 
-        card-touch := TouchArea {}
+        card-touch := TouchArea {
+            // a11y: none (input blocker: stops clicks reaching the backdrop)
+        }
 
         inner := VerticalLayout {
             padding: 24px;
@@ -118,6 +121,8 @@ export component InviteShareModal inherits Rectangle {
                     }
 
                     copy-touch := TouchArea {
+                        accessible-role: button;
+                        accessible-label: "Copy link";
                         mouse-cursor: pointer;
                         clicked => {
                             copy-link();

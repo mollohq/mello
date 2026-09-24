@@ -176,6 +176,8 @@ component SidebarActionButton inherits Rectangle {
     }
 
     btn-touch := TouchArea {
+        accessible-role: button;
+        accessible-label: root.label;
         mouse-cursor: pointer;
         clicked => {
             tapped();
@@ -465,6 +467,8 @@ component CompactCrewCard inherits Rectangle {
     }
 
     card-touch := TouchArea {
+        accessible-role: button;
+        accessible-label: crew.name;
         mouse-cursor: pointer;
         clicked => {
             selected(crew.id);
@@ -622,6 +626,8 @@ component ActiveCrewCard inherits Rectangle {
                         }
 
                         invite-touch := TouchArea {
+                            accessible-role: button;
+                            accessible-label: "Invite";
                             mouse-cursor: pointer;
                             clicked => { root.invite-clicked(); }
                         }
@@ -648,6 +654,8 @@ component ActiveCrewCard inherits Rectangle {
                         }
 
                         chevron-touch := TouchArea {
+                            accessible-role: button;
+                            accessible-label: "Crew menu";
                             mouse-cursor: pointer;
                             clicked => { crew-context-popup.show(); }
                         }
@@ -700,6 +708,8 @@ component ActiveCrewCard inherits Rectangle {
                         }
 
                         ctx-edit-ta := TouchArea {
+                            accessible-role: button;
+                            accessible-label: "Crew settings";
                             mouse-cursor: pointer;
                             clicked => { root.crew-edit-requested(); }
                         }
@@ -732,6 +742,8 @@ component ActiveCrewCard inherits Rectangle {
                         }
 
                         ctx-add-ch-ta := TouchArea {
+                            accessible-role: button;
+                            accessible-label: "Add channel";
                             mouse-cursor: pointer;
                             clicked => { root.crew-add-channel-requested(); }
                         }
@@ -764,6 +776,8 @@ component ActiveCrewCard inherits Rectangle {
                         }
 
                         ctx-invite-ta := TouchArea {
+                            accessible-role: button;
+                            accessible-label: "Invite";
                             mouse-cursor: pointer;
                             clicked => { root.invite-clicked(); }
                         }
@@ -801,6 +815,8 @@ component ActiveCrewCard inherits Rectangle {
                         }
 
                         ctx-leave-ta := TouchArea {
+                            accessible-role: button;
+                            accessible-label: "Leave crew";
                             mouse-cursor: pointer;
                             clicked => { root.crew-leave-requested(); }
                         }
@@ -881,6 +897,8 @@ component ActiveCrewCard inherits Rectangle {
                             }
 
                             ch-touch := TouchArea {
+                                accessible-role: button;
+                                accessible-label: ch.name;
                                 mouse-cursor: pointer;
                                 clicked => {
                                     join-voice(ch.id);
@@ -933,6 +951,8 @@ component ActiveCrewCard inherits Rectangle {
                             }
 
                             ch-touch-empty := TouchArea {
+                                accessible-role: button;
+                                accessible-label: ch.name;
                                 mouse-cursor: pointer;
                                 clicked => {
                                     join-voice(ch.id);

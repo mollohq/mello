@@ -5,6 +5,8 @@ import { StreamCardData, VideoRect } from "../types.slint";
 
 component StreamIconButton inherits Rectangle {
     in property <image> icon;
+    /// Accessible label: what the button does, for screen readers and the e2e driver.
+    in property <string> label;
 
     width: 32px;
     height: 32px;
@@ -34,6 +36,8 @@ component StreamIconButton inherits Rectangle {
     }
 
     btn-hover := TouchArea {
+        accessible-role: button;
+        accessible-label: root.label;
         mouse-cursor: pointer;
     }
 }
@@ -276,6 +280,8 @@ component StreamCard inherits Rectangle {
                             }
 
                             stop-hover := TouchArea {
+                                accessible-role: button;
+                                accessible-label: "END STREAM";
                                 mouse-cursor: pointer;
                                 clicked => {
                                     root.stop-stream-clicked();
@@ -287,6 +293,8 @@ component StreamCard inherits Rectangle {
             }
 
             if root.card.can-watch: watch-click := TouchArea {
+                accessible-role: button;
+                accessible-label: "Watch " + root.card.streamer-name;
                 mouse-cursor: pointer;
                 clicked => {
                     root.watch-stream-clicked(
@@ -424,10 +432,12 @@ component StreamCard inherits Rectangle {
 
                             StreamIconButton {
                                 icon: @image-url("../icons/volume.svg");
+                                label: "Volume";
                             }
 
                             StreamIconButton {
                                 icon: @image-url("../icons/settings.svg");
+                                label: "Stream settings";
                             }
 
                             if root.card.can-watch: StreamIconButton {
@@ -458,6 +468,8 @@ component StreamCard inherits Rectangle {
                             }
 
                             leave-hover := TouchArea {
+                                accessible-role: button;
+                                accessible-label: "Leave";
                                 mouse-cursor: pointer;
                                 clicked => {
                                     root.stop-watching-clicked();

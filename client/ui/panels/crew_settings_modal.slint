@@ -114,6 +114,8 @@ component OverviewTab inherits VerticalLayout {
                     }
 
                     avatar-change-ta := TouchArea {
+                        accessible-role: button;
+                        accessible-label: "Change";
                         mouse-cursor: pointer;
                         clicked => { avatar-upload-clicked(); }
                     }
@@ -224,6 +226,8 @@ component OverviewTab inherits VerticalLayout {
                 }
 
                 privacy-ta := TouchArea {
+                    accessible-role: switch;
+                    accessible-label: "Open crew";
                     mouse-cursor: pointer;
                     clicked => { is-open = !is-open; }
                 }
@@ -285,6 +289,8 @@ component OverviewTab inherits VerticalLayout {
                     }
 
                     inv-everyone-ta := TouchArea {
+                        accessible-role: button;
+                        accessible-label: "Everyone";
                         mouse-cursor: pointer;
                         clicked => { invite-policy = "everyone"; }
                     }
@@ -309,6 +315,8 @@ component OverviewTab inherits VerticalLayout {
                     }
 
                     inv-admins-ta := TouchArea {
+                        accessible-role: button;
+                        accessible-label: "Admins";
                         mouse-cursor: pointer;
                         clicked => { invite-policy = "admins"; }
                     }
@@ -416,6 +424,8 @@ component VoiceChannelsTab inherits VerticalLayout {
                         }
 
                         del-ta := TouchArea {
+                            accessible-role: button;
+                            accessible-label: "Delete " + ch.name;
                             mouse-cursor: pointer;
                             clicked => { delete-channel(ch.id); }
                         }
@@ -475,6 +485,8 @@ component VoiceChannelsTab inherits VerticalLayout {
                 }
 
                 add-ch-ta := TouchArea {
+                    accessible-role: button;
+                    accessible-label: "Add channel";
                     mouse-cursor: pointer;
                     clicked => {
                         if new-channel-name != "" {
@@ -509,7 +521,9 @@ component MemberRow inherits Rectangle {
         fill: Theme.bg-app;
     }
 
-    row-ta := TouchArea {}
+    row-ta := TouchArea {
+        // a11y: none (hover detector: highlights the member row)
+    }
 
     HorizontalLayout {
         padding-left: 16px;
@@ -606,6 +620,8 @@ component MemberRow inherits Rectangle {
             }
 
             role-btn-ta := TouchArea {
+                accessible-role: button;
+                accessible-label: member.role == 2 ? "Promote " + member.name : "Demote " + member.name;
                 mouse-cursor: pointer;
                 clicked => {
                     if member.role == 2 {
@@ -634,6 +650,8 @@ component MemberRow inherits Rectangle {
             }
 
             kick-ta := TouchArea {
+                accessible-role: button;
+                accessible-label: "Kick " + member.name;
                 mouse-cursor: pointer;
                 clicked => { kick(member.id); }
             }
@@ -770,6 +788,7 @@ export component CrewSettingsModal inherits Rectangle {
     background: Theme.scrim;
 
     TouchArea {
+        // a11y: none (backdrop: a click outside the dialog closes it)
         clicked => { close-requested(); }
     }
 
@@ -796,7 +815,9 @@ export component CrewSettingsModal inherits Rectangle {
             fill: Theme.bg-app;
         }
 
-        TouchArea {}
+        TouchArea {
+            // a11y: none (input blocker: stops clicks reaching the backdrop)
+        }
 
         VerticalLayout {
             // ─── Header ──────────────────────────────────────────
@@ -856,6 +877,8 @@ export component CrewSettingsModal inherits Rectangle {
                     }
 
                     close-btn-ta := TouchArea {
+                        accessible-role: button;
+                        accessible-label: "Close";
                         clicked => { close-requested(); }
                     }
                 }
@@ -926,6 +949,8 @@ export component CrewSettingsModal inherits Rectangle {
                                 }
 
                                 overview-ta := TouchArea {
+                                    accessible-role: tab;
+                                    accessible-label: "OVERVIEW";
                                     clicked => { active-tab = 0; }
                                 }
                             }
@@ -971,6 +996,8 @@ export component CrewSettingsModal inherits Rectangle {
                                 }
 
                                 channels-ta := TouchArea {
+                                    accessible-role: tab;
+                                    accessible-label: "CHANNELS";
                                     clicked => { active-tab = 1; }
                                 }
                             }
@@ -1016,6 +1043,8 @@ export component CrewSettingsModal inherits Rectangle {
                                 }
 
                                 members-ta := TouchArea {
+                                    accessible-role: tab;
+                                    accessible-label: "MEMBERS";
                                     clicked => { active-tab = 2; }
                                 }
                             }
@@ -1106,6 +1135,8 @@ export component CrewSettingsModal inherits Rectangle {
                     }
 
                     delete-ta := TouchArea {
+                        accessible-role: button;
+                        accessible-label: "DELETE CREW";
                         mouse-cursor: pointer;
                         clicked => { delete-crew-requested(); }
                     }
@@ -1141,6 +1172,8 @@ export component CrewSettingsModal inherits Rectangle {
                     }
 
                     save-ta := TouchArea {
+                        accessible-role: button;
+                        accessible-label: "Save";
                         mouse-cursor: pointer;
                         clicked => {
                             root.save-crew(root.crew-name-value, root.crew-description-value);
@@ -1195,6 +1228,8 @@ export component CrewSettingsModal inherits Rectangle {
                     }
 
                     close-footer-ta := TouchArea {
+                        accessible-role: button;
+                        accessible-label: "Close";
                         clicked => { close-requested(); }
                     }
                 }
