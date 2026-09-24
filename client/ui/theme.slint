@@ -203,6 +203,8 @@ export component MelloTextInput inherits TextInput {
 export component MelloInputField inherits Rectangle {
     in-out property <string> text <=> input.text;
     in property <string> placeholder: "";
+    /// Accessible label: the field's visible caption, for screen readers and the e2e driver.
+    in property <string> label;
     in property <bool> single-line: true;
     in property <bool> read-only: false;
     in property <length> pad-x: 14px;
@@ -219,6 +221,7 @@ export component MelloInputField inherits Rectangle {
     border-color: input.has-focus ? Theme.action : Theme.graphic-light;
 
     input := MelloTextInput {
+        accessible-label: root.label;
         x: pad-x;
         y: pad-y;
         width: parent.width - 2 * pad-x;

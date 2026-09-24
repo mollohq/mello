@@ -10,6 +10,10 @@
 //! `accessible-label` itself, or its direct parent element does. A `TouchArea`
 //! that is not a control — a backdrop or an input blocker — says so with a
 //! `// a11y: none (<reason>)` comment inside its block.
+//!
+//! Text fields follow the same idea: a `TextInput` or `MelloTextInput` instance
+//! declares `accessible-label`, and a `MelloInputField` instance sets `label`.
+//! The label is the field's visible caption, or its placeholder when it has none.
 
 use std::path::{Path, PathBuf};
 
@@ -28,8 +32,19 @@ struct Block {
     close: usize,
     /// Index of the enclosing block, if any.
     parent: Option<usize>,
-    /// True when the block is a `TouchArea` instance or a component inheriting it.
-    touch_area: bool,
+    /// What the rule needs to know about the element that opens this block.
+    kind: Kind,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Kind {
+    Other,
+    /// A `TouchArea` instance, or a component inheriting `TouchArea`.
+    TouchArea,
+    /// A `TextInput` or `MelloTextInput` instance (not a component definition).
+    TextInput,
+    /// A `MelloInputField` instance.
+    InputField,
 }
 
 /// Replace the contents of string literals and comments with spaces, keeping
@@ -90,14 +105,24 @@ fn blocks(masked: &str) -> Vec<Block> {
     for (i, c) in masked.char_indices() {
         match c {
             '{' => {
-                // Matches `t := TouchArea {`, `TouchArea {` and
-                // `component Foo inherits TouchArea {`.
-                let touch_area = element_before(masked, i) == "TouchArea";
+                let element = element_before(masked, i);
+                let definition = masked[..i]
+                    .trim_end()
+                    .ends_with(&format!("inherits {element}"));
+                // A component inheriting `TouchArea` is itself a touch area; a
+                // component inheriting `TextInput` is a definition, and its
+                // instances are checked where they are used.
+                let kind = match element {
+                    "TouchArea" => Kind::TouchArea,
+                    "TextInput" | "MelloTextInput" if !definition => Kind::TextInput,
+                    "MelloInputField" if !definition => Kind::InputField,
+                    _ => Kind::Other,
+                };
                 out.push(Block {
                     open: i,
                     close: masked.len(),
                     parent: stack.last().copied(),
-                    touch_area,
+                    kind,
                 });
                 stack.push(out.len() - 1);
             }
@@ -143,17 +168,21 @@ fn check_source(file: &str, src: &str) -> Vec<Violation> {
     let all = blocks(&masked);
     let mut out = Vec::new();
     for (idx, b) in all.iter().enumerate() {
-        if !b.touch_area {
-            continue;
-        }
-        let own = own_text(&masked, &all, idx);
-        if own.contains("a11y: none") || labelled(&own) {
-            continue;
-        }
-        if let Some(p) = b.parent {
-            if labelled(&own_text(&masked, &all, p)) {
-                continue;
+        let own = || own_text(&masked, &all, idx);
+        let ok = match b.kind {
+            Kind::Other => true,
+            Kind::TextInput => declares(&own(), "accessible-label"),
+            Kind::InputField => declares(&own(), "label"),
+            Kind::TouchArea => {
+                let own = own();
+                own.contains("a11y: none")
+                    || labelled(&own)
+                    || b.parent
+                        .is_some_and(|p| labelled(&own_text(&masked, &all, p)))
             }
+        };
+        if ok {
+            continue;
         }
         out.push(Violation {
             file: file.to_string(),
@@ -198,9 +227,11 @@ fn every_touch_area_has_a_role_and_a_label() {
 
     assert!(
         violations.is_empty(),
-        "{} TouchArea(s) have no accessible-role + accessible-label on themselves \
-         or their parent. Add both (the label is the text the user reads), or mark \
-         a non-control with `// a11y: none (<reason>)`. See plans/E2E-QA.md §4.\n{}",
+        "{} control(s) have no label. A TouchArea needs accessible-role + \
+         accessible-label on itself or its parent (or `// a11y: none (<reason>)` \
+         when it is not a control). A TextInput needs accessible-label; a \
+         MelloInputField needs label. The label is the text the user reads. \
+         See plans/E2E-QA.md §4.\n{}",
         violations.len(),
         violations
             .iter()
@@ -220,8 +251,9 @@ mod runtime {
 
     use crate::testkit::{Harness, MainWindow};
 
-    const CONTROL_ROLES: [AccessibleRole; 5] = [
+    const CONTROL_ROLES: [AccessibleRole; 6] = [
         AccessibleRole::Button,
+        AccessibleRole::TextInput,
         AccessibleRole::Switch,
         AccessibleRole::Tab,
         AccessibleRole::Slider,
@@ -389,6 +421,24 @@ mod tests {
     #[test]
     fn braces_and_words_in_strings_and_comments_do_not_count() {
         let src = "Rectangle {\n    // TouchArea { accessible-role: button; }\n    Text { text: \"TouchArea { }\"; }\n}\n";
+        assert!(lines(src).is_empty());
+    }
+
+    #[test]
+    fn a_text_input_needs_an_accessible_label() {
+        let src = "Rectangle {\n    a := MelloTextInput {\n        text: \"x\";\n    }\n    b := TextInput {\n        accessible-label: \"Email\";\n    }\n}\n";
+        assert_eq!(lines(src), vec![2]);
+    }
+
+    #[test]
+    fn an_input_field_needs_a_label() {
+        let src = "Rectangle {\n    MelloInputField { placeholder: \"x\"; }\n    MelloInputField {\n        label: \"RIOT ID\";\n    }\n}\n";
+        assert_eq!(lines(src), vec![2]);
+    }
+
+    #[test]
+    fn a_text_input_definition_is_not_an_instance() {
+        let src = "export component MelloTextInput inherits TextInput {\n    selection-foreground-color: red;\n}\n";
         assert!(lines(src).is_empty());
     }
 

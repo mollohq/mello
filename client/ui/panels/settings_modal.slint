@@ -1499,6 +1499,7 @@ component ProfileTab inherits VerticalLayout {
             SectionHeader { title: "DISPLAY NAME"; }
 
             nick-input := MelloInputField {
+                label: "DISPLAY NAME";
                 text <=> profile-nickname-value;
                 accepted => {
                     profile-nickname-accepted(profile-nickname-value);

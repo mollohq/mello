@@ -157,6 +157,7 @@ export component NewCrewModal inherits Rectangle {
                     border-color: Theme.graphic-light;
 
                     MelloTextInput {
+                        accessible-label: "Invite link";
                         text: "m3llo.app/join/" + invite-code;
                         font-family: Theme.font-mono;
                         font-size: 12px;
@@ -351,6 +352,7 @@ export component NewCrewModal inherits Rectangle {
                         border-color: name-input.has-focus ? Theme.accent : Theme.graphic-light;
 
                         name-input := MelloTextInput {
+                            accessible-label: "CREW NAME";
                             x: 16px;
                             width: parent.width - 32px;
                             height: parent.height;
@@ -393,6 +395,7 @@ export component NewCrewModal inherits Rectangle {
                         border-color: desc-input.has-focus ? Theme.accent : Theme.graphic-light;
 
                         desc-input := MelloTextInput {
+                            accessible-label: "DESCRIPTION";
                             x: 16px;
                             y: 12px;
                             width: parent.width - 32px;
@@ -510,6 +513,7 @@ export component NewCrewModal inherits Rectangle {
                         border-color: invite-input.has-focus ? Theme.accent : Theme.graphic-light;
 
                         invite-input := MelloTextInput {
+                            accessible-label: "INVITE MEMBERS";
                             x: 16px;
                             width: parent.width - 32px;
                             height: parent.height;

@@ -90,6 +90,7 @@ export component RiotLinkModal inherits Rectangle {
                 }
 
                 riot-id-input := MelloInputField {
+                    label: "RIOT ID";
                     placeholder: "GameName#TAG";
                     accepted => {
                         if self.text != "" && !busy {

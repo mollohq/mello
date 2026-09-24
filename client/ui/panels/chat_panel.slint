@@ -380,6 +380,7 @@ component GifPopover inherits Rectangle {
             border-color: Theme.graphic-light;
 
             gif-search := MelloTextInput {
+                accessible-label: "Search GIFs";
                 x: 10px;
                 width: parent.width - 20px;
                 height: parent.height;
@@ -1491,6 +1492,7 @@ export component ChatPanel inherits Rectangle {
             }
 
             chat-input := MelloTextInput {
+                accessible-label: "Message crewmates";
                 text <=> root.chat-input-text;
                 x: 18px;
                 y: 0;

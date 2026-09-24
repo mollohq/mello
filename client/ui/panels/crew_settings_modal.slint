@@ -151,6 +151,7 @@ component OverviewTab inherits VerticalLayout {
                     }
 
                     MelloInputField {
+                        label: "CREW NAME";
                         text <=> crew-name-value;
                     }
                 }
@@ -168,6 +169,7 @@ component OverviewTab inherits VerticalLayout {
                     }
 
                     MelloInputField {
+                        label: "DESCRIPTION";
                         text <=> crew-description-value;
                     }
                 }
@@ -445,6 +447,7 @@ component VoiceChannelsTab inherits VerticalLayout {
             spacing: 12px;
 
             add-ch-input := MelloInputField {
+                label: "New channel";
                 horizontal-stretch: 1;
                 text <=> new-channel-name;
                 placeholder: "channel-name";

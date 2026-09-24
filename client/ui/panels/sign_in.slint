@@ -4,6 +4,8 @@ import { CutButtonShape } from "../components/cut.slint";
 component InputField inherits Rectangle {
     in-out property <string> text <=> ti.text;
     in property <string> placeholder;
+    /// Accessible label. Defaults to the placeholder, which is the only caption most fields show.
+    in property <string> label: root.placeholder;
     in property <bool> is-password: false;
 
     height: 52px;
@@ -12,6 +14,7 @@ component InputField inherits Rectangle {
     border-color: ti.has-focus ? Theme.graphic-med : Theme.graphic-light;
 
     ti := MelloTextInput {
+        accessible-label: root.label;
         x: 16px;
         width: parent.width - 32px;
         height: parent.height;
