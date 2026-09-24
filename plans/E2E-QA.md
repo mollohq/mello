@@ -406,6 +406,8 @@ This review found these items. They are not part of this plan.
 | 9 | Loading history for a new crew logs `400 Invalid channel ID`. | P3 | Open |
 | 10 | Step 3 shows an Apple button. Desktop Apple sign-in is not implemented. | P3 | Open |
 
+UI and design-system findings, with repro steps and screenshots: [qa/findings/2026-09-24-phase0](../qa/findings/2026-09-24-phase0/README.md).
+
 Suspect, not confirmed: after onboarding, `active-crew-name` is empty while `active-crew-id` is set.
 `main.slint` uses it for the "back to" label in the stream view.
 
