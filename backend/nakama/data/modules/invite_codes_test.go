@@ -2,8 +2,12 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/heroiclabs/nakama-common/runtime"
 )
 
 func TestInviteCodeFormat(t *testing.T) {
@@ -201,5 +205,74 @@ func TestJoinByInviteCodeRequestParsing(t *testing.T) {
 	code := strings.TrimSpace(strings.ToUpper(req.Code))
 	if code != "ABCD-1234" {
 		t.Errorf("expected ABCD-1234, got %s", code)
+	}
+}
+
+func TestInviteJoinPrecheck(t *testing.T) {
+	state := func(s int) *int { return &s }
+	cases := []struct {
+		name          string
+		state         *int
+		alreadyMember bool
+		wantErr       error
+	}{
+		{"no relationship joins", nil, false, nil},
+		{"superadmin is already a member", state(0), true, nil},
+		{"admin is already a member", state(1), true, nil},
+		{"member is already a member", state(2), true, nil},
+		{"pending join request goes through GroupUserJoin", state(3), false, nil},
+		// GroupUserJoin returns nil for a banned user without adding them, so
+		// the RPC must refuse before calling it.
+		{"banned is refused", state(4), false, errInviteJoinBanned},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			alreadyMember, err := inviteJoinPrecheck(c.state)
+			if alreadyMember != c.alreadyMember || err != c.wantErr {
+				t.Errorf("got (%v, %v), want (%v, %v)", alreadyMember, err, c.alreadyMember, c.wantErr)
+			}
+		})
+	}
+}
+
+func TestInviteJoinErrorMapsGroupUserJoinErrors(t *testing.T) {
+	cases := []struct {
+		name string
+		in   error
+		want error
+	}{
+		{"full crew", runtime.ErrGroupFull, errInviteJoinCrewFull},
+		{"wrapped full crew", fmt.Errorf("join: %w", runtime.ErrGroupFull), errInviteJoinCrewFull},
+		{"deleted crew", runtime.ErrGroupNotFound, errInviteJoinCrewGone},
+		// The Nakama 3.21 message for an empty username. Anything unknown is an
+		// internal failure, never an invalid invite code.
+		{"unknown error", errors.New("expects a username string"), errInviteJoinFailed},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := inviteJoinError(c.in); got != c.want {
+				t.Errorf("inviteJoinError(%v) = %v, want %v", c.in, got, c.want)
+			}
+		})
+	}
+}
+
+// The client picks its message from these codes. Changing one silently
+// changes what a user sees.
+func TestInviteJoinErrorCodesAreStable(t *testing.T) {
+	cases := []struct {
+		err  *runtime.Error
+		code int
+	}{
+		{errInviteJoinBanned, 7},
+		{errInviteJoinCrewFull, 8},
+		{errInviteJoinCrewGone, 5},
+		{errInviteJoinUserLookup, 13},
+		{errInviteJoinFailed, 13},
+	}
+	for _, c := range cases {
+		if c.err.Code != c.code {
+			t.Errorf("%q: code %d, want %d", c.err.Message, c.err.Code, c.code)
+		}
 	}
 }

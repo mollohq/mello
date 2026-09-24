@@ -744,6 +744,153 @@ fn joining_from_discover_uses_the_crew_id_and_invite_code_paths() {
     );
 }
 
+fn sample_invite() -> mello_core::crew::ResolvedInvite {
+    mello_core::crew::ResolvedInvite {
+        crew_name: "Night Stones".into(),
+        avatar_seed: "Night Stones".into(),
+        crew_id: "crew-inv".into(),
+        highlight: String::new(),
+    }
+}
+
+fn join_crew_modal_is_visible(h: &Harness) -> bool {
+    ElementHandle::find_by_element_type_name(h.app(), "JoinCrewModal")
+        .next()
+        .is_some()
+}
+
+/// The text of the join modal's error line, when it is on screen.
+fn join_error_on_screen(h: &Harness) -> Option<String> {
+    h.find("JoinCrewModal::join-error-text")
+        .first()
+        .and_then(|e| e.accessible_label())
+        .map(|l| l.to_string())
+}
+
+/// A new user who opens `mello://join/<code>` joins the crew at the end of
+/// onboarding. The join modal opens on top of onboarding step 3.
+fn open_join_modal_during_onboarding(h: &mut Harness) {
+    *h.ctx().pending_deep_link.borrow_mut() = Some(crate::deep_link::DeepLink::Join {
+        code: "NITE-0001".into(),
+    });
+    h.emit(Event::OnboardingReady {
+        user: sample_user(),
+    });
+    let cmds = h.commands();
+    assert!(
+        cmds.iter()
+            .any(|c| matches!(c, Command::ResolveCrewInvite { code } if code == "NITE-0001")),
+        "the pending link must be resolved once the account exists, got {cmds:?}"
+    );
+
+    h.emit(Event::CrewInviteResolved {
+        code: "NITE-0001".into(),
+        invite: sample_invite(),
+    });
+    assert!(join_crew_modal_is_visible(h));
+    assert_eq!(visible_screens(h), vec![Screen::Onboarding]);
+}
+
+/// ★ Regression: a failed invite join during onboarding was invisible.
+///
+/// Clicking "Join crew" closed the modal at once, and the failure went to the
+/// generic error path, which only logs. The user was back on onboarding step 3
+/// with no error. The error also said "Invalid invite code" for a server
+/// failure.
+#[test]
+fn a_failed_invite_join_during_onboarding_is_visible() {
+    let mut h = Harness::new();
+    open_join_modal_during_onboarding(&mut h);
+
+    h.click("JoinCrewModal::join-touch");
+    let cmds = h.commands();
+    assert!(
+        cmds.iter()
+            .any(|c| matches!(c, Command::JoinByInviteCode { code } if code == "NITE-0001")),
+        "Join crew must send JoinByInviteCode, got {cmds:?}"
+    );
+    assert!(
+        join_crew_modal_is_visible(&h),
+        "the modal must stay open until the join succeeds or fails"
+    );
+    assert!(h.app().get_join_crew_joining());
+
+    h.emit(Event::InviteJoinFailed {
+        error: mello_core::crew::InviteError::Failed,
+    });
+
+    assert!(
+        join_crew_modal_is_visible(&h),
+        "the modal is the only surface above onboarding; it must stay open"
+    );
+    assert_eq!(visible_screens(&h), vec![Screen::Onboarding]);
+    let shown = join_error_on_screen(&h).expect("the join error must be on screen");
+    assert_eq!(shown, "Could not join the crew. Try again.");
+    assert!(
+        !shown.to_lowercase().contains("invalid"),
+        "a server failure must not blame the invite code: {shown:?}"
+    );
+    assert!(
+        !h.app().get_join_crew_joining(),
+        "the user must be able to retry"
+    );
+    assert!(
+        !h.find("JoinCrewModal::join-touch").is_empty(),
+        "the Join crew button must stay available for a retry"
+    );
+}
+
+/// A successful join closes the modal and clears any earlier error.
+#[test]
+fn a_successful_invite_join_closes_the_modal() {
+    let mut h = Harness::new();
+    open_join_modal_during_onboarding(&mut h);
+    h.click("JoinCrewModal::join-touch");
+    h.emit(Event::InviteJoinFailed {
+        error: mello_core::crew::InviteError::CrewFull,
+    });
+    assert_eq!(
+        join_error_on_screen(&h).as_deref(),
+        Some("This crew is full.")
+    );
+
+    h.click("JoinCrewModal::join-touch");
+    assert!(
+        join_error_on_screen(&h).is_none(),
+        "a retry clears the previous error"
+    );
+    h.emit(Event::InviteJoined {
+        crew_id: "crew-inv".into(),
+    });
+
+    assert!(!join_crew_modal_is_visible(&h));
+    assert!(!h.app().get_join_crew_joining());
+}
+
+/// A code typed into Discover has no modal. Its failure shows under the field.
+#[test]
+fn a_failed_join_from_the_discover_code_field_is_shown_there() {
+    let mut h = Harness::new();
+    h.app().invoke_discover_join_invite("NOPE-0000".into());
+
+    h.emit(Event::InviteJoinFailed {
+        error: mello_core::crew::InviteError::InvalidCode,
+    });
+
+    assert!(!join_crew_modal_is_visible(&h));
+    assert_eq!(
+        h.app().get_discover_invite_error().as_str(),
+        "This invite code is not valid."
+    );
+
+    h.app().invoke_discover_join_invite("NITE-0001".into());
+    assert_eq!(
+        h.app().get_discover_invite_error().as_str(),
+        "",
+        "a new attempt clears the previous error"
+    );
+}
+
 /// core → UI: joining a crew must make the app screen usable rather than
 /// leaving the user in a half-populated state.
 #[test]

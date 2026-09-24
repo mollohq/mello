@@ -288,6 +288,8 @@ export component DiscoverPanel inherits Rectangle {
     /// The crew the user was in when they opened discover. Empty means
     /// there is nowhere to go back to, so the control is not drawn.
     in property <string> back-to: "";
+    /// Why the last invite code did not join. Shown under the code field.
+    in property <string> invite-error: "";
     callback join-crew(string);
     callback join-invite(string);
     callback back-requested();
@@ -515,6 +517,21 @@ export component DiscoverPanel inherits Rectangle {
                                     vertical-alignment: center;
                                 }
                             }
+                        }
+                    }
+
+                    // Same treatment as the error line in riot_link_modal.slint.
+                    if invite-error != "": VerticalLayout {
+                        padding-top: 12px;
+
+                        invite-error-text := Text {
+                            font-weight: Theme.weight-sentence;
+                            font-family: Theme.font-body;
+                            text: invite-error;
+                            font-size: Theme.font-md;
+                            color: Theme.live;
+                            horizontal-alignment: center;
+                            wrap: word-wrap;
                         }
                     }
                 }

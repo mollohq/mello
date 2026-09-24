@@ -334,6 +334,21 @@ Invite codes are 8-character alphanumeric strings (format: `XXXX-XXXX`), generat
 3. Recipient enters code → `join_by_invite_code` RPC looks up code → joins the crew
 4. Invited users (selected during crew creation) receive Nakama notifications with crew details
 
+**`join_by_invite_code`** calls `GroupUserJoin` with the caller's username.
+Nakama 3.21 refuses an empty username. The RPC reads the caller's state in the
+crew first, because `GroupUserJoin` checks capacity before membership and
+returns no error for a banned user.
+
+| Case | Result | gRPC code |
+|---|---|---|
+| Unknown code, or the crew is deleted | `NOT_FOUND` | 5 |
+| Caller is already a member | Success. The client opens the crew | — |
+| Caller is banned | `PERMISSION_DENIED` | 7 |
+| Crew is full | `RESOURCE_EXHAUSTED` | 8 |
+| Username lookup or join fails for another reason | `INTERNAL` | 13 |
+
+The client maps these codes to its text. Keep them stable.
+
 ---
 
 ## 9. Scaling Considerations

@@ -293,9 +293,32 @@ Full-screen modal overlay shown when `DeepLink::Join` is dispatched:
 - Primary button: **"Join crew"** — calls `join_by_invite_code` RPC, navigates to the crew on success
 - Secondary text link: **"Not now"** — dismisses the modal
 
-**Error states:**
-- `NOT_FOUND`: "This invite link is no longer valid." with a dismiss button.
-- Network error: retry option.
+The modal stays open while the join runs. The button reads "Joining…" and does
+not accept a click. `InviteJoined` closes the modal. `InviteJoinFailed` keeps it
+open with the error above the button, and the button accepts a retry.
+
+> **Do not close the modal before the join returns.** For a new user the modal
+> sits on top of onboarding step 3. No other surface there can show the error.
+
+**Error states.** mello-core maps the gRPC code of the RPC error to
+`InviteError`. The client picks the text.
+
+| `InviteError` | gRPC code | Resolve failure | Join failure |
+|---|---|---|---|
+| `InvalidCode` | 3, 5 | "This invite link is no longer valid." with a dismiss button | Same text |
+| `CrewFull` | 8 | — | "This crew is full." |
+| `NotAllowed` | 7 | — | "You cannot join this crew." |
+| `Failed` | Any other, or no code | "Could not load this invite. Try again." | "Could not join the crew. Try again." |
+
+Only `InvalidCode` blames the invite. A server or network failure is `Failed`.
+
+### 8.4 Invite code field in Discover
+
+**File:** `client/ui/panels/discover_panel.slint`
+
+The "Join a Private Crew" field also calls `join_by_invite_code`. When the join
+modal is not open, `InviteJoinFailed` shows under the field. `InvalidCode` reads
+"This invite code is not valid." The other texts are the join texts in §8.3.
 
 ---
 

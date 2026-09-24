@@ -251,8 +251,12 @@ pub fn wire(ctx: &AppContext) {
     }
     {
         let cmd = ctx.cmd_tx.clone();
+        let app_weak = ctx.app.as_weak();
         ctx.app.on_discover_join_invite(move |code| {
             log::info!("[discover] join-by-invite code={}", code);
+            if let Some(app) = app_weak.upgrade() {
+                app.set_discover_invite_error("".into());
+            }
             let _ = cmd.send(Command::JoinByInviteCode {
                 code: code.to_string(),
             });
@@ -281,12 +285,16 @@ pub fn wire(ctx: &AppContext) {
         let app_weak = ctx.app.as_weak();
         ctx.app.on_join_crew_confirmed(move |invite_code| {
             log::info!("[invite] join confirmed with code={}", invite_code);
+            // The modal stays open until InviteJoined or InviteJoinFailed.
+            // It can sit on top of onboarding, where it is the only place a
+            // failure can be shown.
+            if let Some(app) = app_weak.upgrade() {
+                app.set_join_crew_join_error("".into());
+                app.set_join_crew_joining(true);
+            }
             let _ = cmd.send(Command::JoinByInviteCode {
                 code: invite_code.to_string(),
             });
-            if let Some(app) = app_weak.upgrade() {
-                app.set_join_crew_modal_open(false);
-            }
         });
     }
     {
