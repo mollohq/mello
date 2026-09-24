@@ -31,10 +31,12 @@ would need `--features testkit`, and CI would silently skip them.
 
 Three things that are easy to get wrong:
 
-- **Assert structurally, not via accessibility.** These panels declare almost no
-  `accessible-role`, so `accessible_enabled()` returns `None` even on a healthy
-  screen. Measured: 3 crews renders 620 elements and **zero** with
-  `accessible_enabled == Some(true)`. Query component type names instead.
+- **Find controls by label, other elements by type.** Every control declares
+  `accessible-role` and `accessible-label`, so `find_by_accessible_label` works.
+  Two tests in `client/src/a11y_lint.rs` keep it so: a static check over every
+  `.slint` file, and a runtime check that no control on the main screens renders
+  an empty label. Non-controls declare no role, and `accessible_enabled()`
+  returns `None` for them; query those by component type name.
 - **Hidden elements are absent from queries.** There is no visibility predicate.
   "The screen is blank" is expressed as "no screen root matched", which is what
   `assert_not_blank()` does.

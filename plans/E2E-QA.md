@@ -1,6 +1,6 @@
 # E2E QA: Real-App Journeys and Agent Test Runners
 
-> **Status:** Phase 0 in progress. macOS spike done 2026-09-24 (§14). Windows run and the 20-run gate are open.
+> **Status:** Phase 1 done 2026-09-24 (§15). Phase 0 exit is open: the Windows run and the 20-run gate.
 > **Figures:** `plans/e2e-qa/*.svg`
 > **Related:** [TESTING.md](../TESTING.md), [06-SOCIAL-LOGIN.md](../specs/06-SOCIAL-LOGIN.md),
 > [CREW-INVITES.md](../specs/features/CREW-INVITES.md), [20-PERF-HARNESS.md](../specs/20-PERF-HARNESS.md)
@@ -330,7 +330,7 @@ The coverage report has two parts:
 | Phase | Work | Exit criterion |
 |---|---|---|
 | 0. Spike (about 3 days) — in progress, see §14 | Two instances, Slint MCP and a state port prototype on Windows and macOS. Run the invite flow by hand with `curl`. Confirm the Google key-host redirect (§8.4). | The invite flow passes 20 of 20 runs on both OSes |
-| 1. Addressable UI | Labels on all interactive elements. The label gate in `check.sh`. `qa/flows.yaml` v1. | The gate is green. Every P0 flow is listed. |
+| 1. Addressable UI — done, see §15 | Labels on all interactive elements. The label gate in `check.sh`. `qa/flows.yaml` v1. | The gate is green. Every P0 flow is listed. |
 | 2. Driver and journeys | `tools/mello-driver`, the journey runner, the fake OAuth provider, 8 P0 journeys, a nightly lane | 14 days with zero flakes, then the PR gate |
 | 3. Protocol and agents | P0 protocol documents, the agent runner, issue filing with deduplication | One nightly run files real, reproducible issues |
 | 4. Coverage and ratchet | Coverage report, `Preview` pixel goldens, a `CLAUDE.md` rule: "a UI change updates a journey or a protocol case" | A coverage number shows on every PR |
@@ -415,3 +415,48 @@ Suspect, not confirmed: after onboarding, `active-crew-name` is empty while `act
 
 - Run the same journey on the Windows self-hosted runner.
 - 20 of 20 passes, after bug 1 is fixed.
+
+## 15. Phase 1 Results (2026-09-24)
+
+### 15.1 Addressable UI
+
+| Item | Result |
+|---|---|
+| `TouchArea`s in `client/ui` | 180 |
+| Labelled controls | 151. Roles: `button`, `switch`, `tab`, `slider`, `combobox`. |
+| Exempt (`// a11y: none`) | 29: backdrops, input blockers, hover detectors, focus and scroll helpers |
+| Static gate | `a11y_lint::every_touch_area_has_a_role_and_a_label`. It failed with 180 violations before the labels. |
+| Runtime gate | `a11y_lint::runtime::every_control_on_screen_has_a_label`. It renders 15 screen states and fails on an empty label. It found 4 unlabelled device dropdowns. |
+| Driver | `tools/mello-driver/spike/click_label.py` clicks a control by its label through Slint MCP. Checked on the real app. |
+
+New components props: `label` on `IconButton`, `ReactionButton`, `SettingsToggle`, `SmallToggle` and `StreamIconButton`.
+`DeviceDropdown.label` existed but no instance set it. All four instances now set it.
+
+### 15.2 Flow catalogue
+
+`qa/flows.yaml` lists 46 flows. `client/src/flow_catalogue.rs` fails `cargo test` when an ID repeats,
+a priority is not P0–P3, or a named harness test or journey does not exist.
+
+| Priority | Flows | With harness tests | With a journey | With no coverage | With open issues |
+|---|---|---|---|---|---|
+| P0 | 18 | 12 | 3 | 4 | 4 |
+| P1 | 20 | 9 | 0 | 11 | 2 |
+| P2 | 8 | 1 | 0 | 7 | 0 |
+
+The P0 flows with no coverage: INV-02 (accept an invite, app running), INV-04 (guest in the web lounge),
+VOICE-05 (reconnect after a network drop), STREAM-01 (start a stream, a second user watches).
+Harness tests use synthetic core events. No P0 flow except onboarding and invites has a real-app journey yet.
+
+### 15.3 Bugs found by the lint
+
+| Bug | Severity |
+|---|---|
+| The volume and settings buttons on a stream card show a pointer cursor but have no click handler. They do nothing. | P2 |
+| A Discover crew card shows a pointer cursor over the whole card. Only its Join button responds. | P3 |
+
+### 15.4 Next: Phase 2
+
+- `tools/mello-driver` as an MCP server with batched reads. The spike tools take 9 s for one click by label.
+- The fake OAuth provider and the e2e Docker profile.
+- Journeys for the 18 P0 flows. Start with the 4 that have no coverage.
+- An `e2e` lane in `check.sh` that builds, lints and tests the `e2e` feature.
