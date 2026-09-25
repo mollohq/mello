@@ -94,7 +94,7 @@ flows:
     priority: P0
     users: 1
     harness: [session_restore_success_ends_on_the_app_screen, login_success_shows_the_app]
-    journeys: []
+    journeys: [qa/journeys/session-restore.ts]
     protocol: []
     issues: []
 
@@ -149,9 +149,9 @@ flows:
     priority: P0
     users: 2
     harness: []
-    journeys: []
+    journeys: [qa/journeys/invite-accept-while-running.ts]
     protocol: []
-    issues: []
+    issues: [84]
 
   - id: INV-03
     title: Accept an invite by deep link on a fresh install
