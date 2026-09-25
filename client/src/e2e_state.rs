@@ -54,7 +54,35 @@ struct Snapshot {
     join_crew_modal_open: bool,
     join_crew_name: String,
     join_crew_error: String,
+    mic_muted: bool,
+    deafened: bool,
+    /// Modals that are open, by name. The driver waits on these to close.
+    open_modals: Vec<&'static str>,
+    /// The last 20 chat messages in the active crew, oldest first.
+    messages: Vec<MessageSnap>,
+    voice_channels: Vec<VoiceChannelSnap>,
     last_event_seq: u64,
+}
+
+#[derive(Serialize)]
+struct MessageSnap {
+    sender: String,
+    text: String,
+}
+
+#[derive(Serialize)]
+struct VoiceChannelSnap {
+    name: String,
+    active: bool,
+    members: Vec<VoiceMemberSnap>,
+}
+
+#[derive(Serialize)]
+struct VoiceMemberSnap {
+    name: String,
+    speaking: bool,
+    muted: bool,
+    deafened: bool,
 }
 
 /// Record a core event before the UI handles it. Called from the poll loop.
@@ -181,6 +209,54 @@ fn read(app: &MainWindow) -> Snapshot {
         join_crew_modal_open: app.get_join_crew_modal_open(),
         join_crew_name: app.get_join_crew_name().into(),
         join_crew_error: app.get_join_crew_error().into(),
+        mic_muted: app.get_mic_muted(),
+        open_modals: [
+            ("settings", app.get_settings_open()),
+            ("crew_settings", app.get_crew_settings_open()),
+            ("new_crew", app.get_new_crew_open()),
+            ("join_crew", app.get_join_crew_modal_open()),
+            ("invite_share", app.get_invite_share_open()),
+            ("stats_profile", app.get_stats_profile_open()),
+            ("source_picker", app.get_source_picker_open()),
+            ("source_menu", app.get_source_menu_open()),
+            ("riot_link", app.get_riot_dialog_open()),
+            ("discover", app.get_show_discover()),
+        ]
+        .into_iter()
+        .filter_map(|(name, open)| open.then_some(name))
+        .collect(),
+        deafened: app.get_deafened(),
+        messages: {
+            let all: Vec<MessageSnap> = app
+                .get_messages()
+                .iter()
+                .filter(|m| !m.is_system && !m.is_unread_divider)
+                .map(|m| MessageSnap {
+                    sender: m.sender_name.to_string(),
+                    text: m.text.to_string(),
+                })
+                .collect();
+            let skip = all.len().saturating_sub(20);
+            all.into_iter().skip(skip).collect()
+        },
+        voice_channels: app
+            .get_voice_channels()
+            .iter()
+            .map(|c| VoiceChannelSnap {
+                name: c.name.to_string(),
+                active: c.active,
+                members: c
+                    .members
+                    .iter()
+                    .map(|m| VoiceMemberSnap {
+                        name: m.name.to_string(),
+                        speaking: m.speaking,
+                        muted: m.muted,
+                        deafened: m.deafened,
+                    })
+                    .collect(),
+            })
+            .collect(),
         last_event_seq: *EVENT_SEQ.lock().expect("event seq lock"),
     }
 }

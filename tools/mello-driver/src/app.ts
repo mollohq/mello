@@ -25,8 +25,24 @@ export type AppState = {
   join_crew_modal_open: boolean;
   join_crew_name: string;
   join_crew_error: string;
+  mic_muted: boolean;
+  deafened: boolean;
+  /** Open modals by name: settings, crew_settings, new_crew, join_crew, invite_share, … */
+  open_modals: string[];
+  /** The last 20 chat messages in the active crew, oldest first. */
+  messages: { sender: string; text: string }[];
+  voice_channels: {
+    name: string;
+    active: boolean;
+    members: { name: string; speaking: boolean; muted: boolean; deafened: boolean }[];
+  }[];
   last_event_seq: number;
 };
+
+/** The names in a voice channel, or [] when the channel is not listed. */
+export function voiceMembers(s: AppState, channel: string): string[] {
+  return s.voice_channels.find((c) => c.name === channel)?.members.map((m) => m.name) ?? [];
+}
 
 export type AppEvent = { seq: number; ts_ms: number; type: string; message?: string };
 
@@ -221,6 +237,17 @@ export class App {
     await this.ui.click(c.handle);
     if (c.value !== "") await this.ui.setValue(c.handle, "");
     await this.ui.key(text);
+  }
+
+  /**
+   * Close a modal the way a user does when it has no close button: click
+   * outside its card. The click lands on the backdrop at the center of a
+   * control that the backdrop covers.
+   */
+  async dismiss(modal: string, outside = "Settings"): Promise<void> {
+    const c = await this.find(outside);
+    await this.ui.click(c.handle);
+    await this.waitFor(`${modal} closed`, (s) => !s.open_modals.includes(modal), 5_000);
   }
 
   /** Press a key, for example "\n" for Enter. */

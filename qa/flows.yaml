@@ -140,7 +140,7 @@ flows:
     priority: P0
     users: 1
     harness: []
-    journeys: [qa/journeys/invite-accept-deeplink-cold.ts]
+    journeys: [qa/journeys/invite-accept-deeplink-cold.ts, qa/journeys/chat-two-users.ts, qa/journeys/voice-two-users.ts]
     protocol: []
     issues: []
 
@@ -268,7 +268,7 @@ flows:
     priority: P0
     users: 2
     harness: [voice_state_change_updates_the_ui]
-    journeys: []
+    journeys: [qa/journeys/voice-two-users.ts]
     protocol: []
     issues: []
 
@@ -277,7 +277,7 @@ flows:
     priority: P0
     users: 2
     harness: [mute_toggle_emits_set_mute_and_broadcast, deafen_mutes_and_undeafen_restores_previous_mic_state, undeafen_keeps_mic_muted_when_it_was_muted_before]
-    journeys: []
+    journeys: [qa/journeys/voice-two-users.ts]
     protocol: []
     issues: []
 
@@ -295,7 +295,7 @@ flows:
     priority: P0
     users: 2
     harness: [hangup_click_updates_ui_before_core_confirms]
-    journeys: []
+    journeys: [qa/journeys/voice-two-users.ts]
     protocol: []
     issues: []
 
@@ -323,9 +323,9 @@ flows:
     priority: P0
     users: 2
     harness: [sending_a_message_carries_its_content]
-    journeys: []
+    journeys: [qa/journeys/chat-two-users.ts]
     protocol: []
-    issues: []
+    issues: [84]
 
   - id: CHAT-02
     title: Reply, edit and delete a message
