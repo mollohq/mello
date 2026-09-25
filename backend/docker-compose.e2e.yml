@@ -1,0 +1,49 @@
+# e2e profile: the local stack plus a fake OAuth provider (plans/E2E-QA.md §8).
+#
+#   docker compose -f backend/docker-compose.yml -f backend/docker-compose.e2e.yml up -d --build
+#
+# Inside the Docker network, the provider host names (discord.com, …) resolve to
+# fake-oauth, and Nakama trusts its test CA. So the Go auth hooks and Nakama's
+# Google check run unmodified against the fake. Nakama can no longer reach the
+# real providers while this profile runs: start the stack without this file to
+# go back.
+#
+# The browser side of the fake is on http://127.0.0.1:18080 (the SFU holds 8080).
+services:
+  fake-oauth:
+    build: ../tools/fake-oauth
+    container_name: mello-fake-oauth
+    ports:
+      - "18080:8080"
+    volumes:
+      - fake-oauth-trust:/trust
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+    networks:
+      default:
+        aliases:
+          - discord.com
+          - api.twitch.tv
+          - id.twitch.tv
+          - steamcommunity.com
+          - api.steampowered.com
+          - www.googleapis.com
+          - oauth2.googleapis.com
+          - accounts.google.com
+
+  nakama:
+    depends_on:
+      fake-oauth:
+        condition: service_healthy
+    environment:
+      - SSL_CERT_FILE=/trust/bundle.pem
+      # Enables the Steam persona lookup, which the fake answers.
+      - STEAM_WEB_API_KEY=fake-e2e-key
+    volumes:
+      - fake-oauth-trust:/trust:ro
+
+volumes:
+  fake-oauth-trust: {}
