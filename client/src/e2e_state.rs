@@ -46,6 +46,10 @@ struct Snapshot {
     user_id: String,
     user_name: String,
     login_error: String,
+    /// Onboarding step 3: why linking an identity failed.
+    link_error: String,
+    /// A sign-in or link is in progress (the spinner shows).
+    login_loading: bool,
     active_crew_id: String,
     active_crew_name: String,
     crews: Vec<String>,
@@ -201,6 +205,8 @@ fn read(app: &MainWindow) -> Snapshot {
         user_id: app.get_user_id().into(),
         user_name: app.get_user_name().into(),
         login_error: app.get_login_error().into(),
+        link_error: app.get_link_error().into(),
+        login_loading: app.get_login_loading(),
         active_crew_id: app.get_active_crew_id().into(),
         active_crew_name: app.get_active_crew_name().into(),
         crews: crews.iter().map(|c| c.name.to_string()).collect(),

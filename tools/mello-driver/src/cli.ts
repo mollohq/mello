@@ -13,6 +13,7 @@
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
+import { closeBrowser } from "./browser.ts";
 import { defaultOptions, preflight } from "./config.ts";
 import { runJourney, type Journey } from "./journey.ts";
 import { serveMcp } from "./mcp.ts";
@@ -60,6 +61,7 @@ async function run(args: string[]): Promise<number> {
       tally.set(j.id, t);
     }
   }
+  await closeBrowser();
   console.log("\nSummary");
   for (const [id, t] of tally) console.log(`  ${t.fail === 0 ? "✓" : "✗"} ${id}: ${t.pass}/${t.pass + t.fail} passed`);
   return failed === 0 ? 0 : 1;

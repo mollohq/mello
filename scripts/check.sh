@@ -74,6 +74,32 @@ else
     printf '  ! go not installed, skipping backend tests\n'
 fi
 
+step "e2e tooling (e2e feature, fake-oauth, driver)"
+# The e2e feature is off in default builds, so the steps above never compile
+# the state port, the OAuth seams or the session file. Lint and test them here.
+run cargo clippy -p mello-client --no-default-features --features development,e2e --all-targets -- -D warnings
+run cargo test -p mello-core --lib --features e2e-oauth,e2e-session
+if command -v go >/dev/null 2>&1; then
+    (
+        cd tools/fake-oauth
+        unformatted=$(gofmt -l .)
+        if [ -n "$unformatted" ]; then
+            printf '\033[31m  ? gofmt: %s\033[0m\n' "$unformatted"
+            exit 1
+        fi
+        go vet ./... && go test ./...
+    ) || FAILED=1
+else
+    printf '  ! go not installed, skipping fake-oauth\n'
+fi
+if command -v node >/dev/null 2>&1 && [ "$(node -p 'process.versions.node.split(".")[0]')" -ge 24 ]; then
+    for f in tools/mello-driver/src/*.ts qa/journeys/*.ts qa/journeys/lib/*.ts; do
+        run node --check "$f"
+    done
+else
+    printf '  ! node >= 24 not installed, skipping the driver syntax check\n'
+fi
+
 ELAPSED=$(( $(date +%s) - START ))
 
 printf '\n'

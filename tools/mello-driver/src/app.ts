@@ -17,6 +17,10 @@ export type AppState = {
   user_id: string;
   user_name: string;
   login_error: string;
+  /** Onboarding step 3: why linking an identity failed. */
+  link_error: string;
+  /** A sign-in or link is in progress (the spinner shows). */
+  login_loading: boolean;
   active_crew_id: string;
   active_crew_name: string;
   crews: string[];
@@ -61,6 +65,27 @@ export type AppOptions = {
 
 export class DriverError extends Error {}
 
+/** The fake OAuth provider's browser-side address (backend/docker-compose.e2e.yml). */
+export const FAKE_OAUTH = process.env.MELLO_E2E_OAUTH_BASE ?? "http://127.0.0.1:18080";
+
+/** Every app process this driver started and has not reaped yet. */
+const live = new Set<ChildProcess>();
+
+/**
+ * Kill every app this driver started. Installed on SIGINT and SIGTERM so an
+ * interrupted run never leaves test apps holding their ports and windows.
+ */
+export function killAllApps(): void {
+  for (const p of live) p.kill("SIGKILL");
+  live.clear();
+}
+for (const sig of ["SIGINT", "SIGTERM"] as const) {
+  process.once(sig, () => {
+    killAllApps();
+    process.exit(130);
+  });
+}
+
 export class App {
   readonly name: string;
   readonly dir: string;
@@ -85,6 +110,11 @@ export class App {
     return join(this.dir, "app.log");
   }
 
+  /** Where the app writes an OAuth URL instead of opening the system browser. */
+  get browserFile(): string {
+    return join(this.dir, "browser-url.txt");
+  }
+
   /**
    * Start the app. A deep link goes first on the command line: the client
    * reads it only from argv[1] (client/src/deep_link.rs).
@@ -104,12 +134,20 @@ export class App {
         SLINT_MCP_PORT: String(this.opts.mcpPort),
         MELLO_E2E_STATE_PORT: String(this.statePort),
         NAKAMA_SERVER_KEY: "mello_dev_key",
+        // e2e-oauth seams (mello-core/src/oauth.rs): the fake provider, the
+        // browser handoff, and a short wait for a callback that never comes.
+        MELLO_E2E_OAUTH_BASE: FAKE_OAUTH,
+        MELLO_E2E_BROWSER_FILE: this.browserFile,
+        MELLO_E2E_OAUTH_TIMEOUT_MS: "8000",
         RUST_LOG: "info,mello=debug,mello_core=debug",
         ...this.opts.env,
       },
     });
-    this.proc.on("exit", () => {
-      this.proc = null;
+    const child = this.proc;
+    live.add(child);
+    child.on("exit", () => {
+      live.delete(child);
+      if (this.proc === child) this.proc = null;
     });
     const deadline = Date.now() + 30_000;
     while (Date.now() < deadline) {
@@ -197,6 +235,23 @@ export class App {
     );
   }
 
+  /**
+   * Wait until events of these types have arrived at least once and then
+   * stopped for `quietMs`. Use it where the app loads data more than once
+   * and re-renders the screen each time, so an action lands on the final
+   * screen, not on one that is about to be replaced.
+   */
+  async settle(types: string[], quietMs = 500, timeoutMs = 10_000): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const hits = (await this.events()).filter((e) => types.includes(e.type));
+      const last = hits.at(-1);
+      if (last && Date.now() - last.ts_ms >= quietMs) return;
+      await sleep(100);
+    }
+    throw new DriverError(`${this.name}: ${types.join("/")} did not settle within ${timeoutMs} ms`);
+  }
+
   // ── UI ────────────────────────────────────────────────────────
 
   async controls(): Promise<Control[]> {
@@ -221,21 +276,45 @@ export class App {
     throw new DriverError(`${this.name}: no control labelled "${label}" (#${n}). On screen: ${on}`);
   }
 
+  /**
+   * Resolve a label and act on the control at once. Slint can rebuild an
+   * element between two MCP calls (a list model resets, a step re-renders),
+   * which leaves the handle pointing at a destroyed element. A user's click
+   * lands on whatever is at that point, so the driver does the same: it
+   * resolves the label again and acts on the current element. This is not a
+   * test retry. The action still fails when the control is not there.
+   */
+  private async onControl(label: string, n: number, act: (c: Control) => Promise<void>, timeoutMs = 5_000): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      const c = await this.find(label, n, Math.max(500, deadline - Date.now()));
+      try {
+        await act(c);
+        return;
+      } catch (e) {
+        const stale = /destroyed|Invalid handle/i.test(String(e));
+        if (!stale || Date.now() > deadline) throw e;
+      }
+    }
+  }
+
   /** A real pointer click at the control's center. */
   async click(label: string, n = 0): Promise<void> {
-    const c = await this.find(label, n);
-    if (c.width <= 0 || c.height <= 0) {
-      throw new DriverError(`${this.name}: "${label}" has zero size (${c.width}x${c.height})`);
-    }
-    await this.ui.click(c.handle);
+    await this.onControl(label, n, async (c) => {
+      if (c.width <= 0 || c.height <= 0) {
+        throw new DriverError(`${this.name}: "${label}" has zero size (${c.width}x${c.height})`);
+      }
+      await this.ui.click(c.handle);
+    });
   }
 
   /** Focus a text field by label, clear it, and type with real key events. */
   async type(label: string, text: string): Promise<void> {
-    const c = await this.find(label);
-    if (c.role !== "TextInput") throw new DriverError(`${this.name}: "${label}" is a ${c.role}, not a text field`);
-    await this.ui.click(c.handle);
-    if (c.value !== "") await this.ui.setValue(c.handle, "");
+    await this.onControl(label, 0, async (c) => {
+      if (c.role !== "TextInput") throw new DriverError(`${this.name}: "${label}" is a ${c.role}, not a text field`);
+      await this.ui.click(c.handle);
+      if (c.value !== "") await this.ui.setValue(c.handle, "");
+    });
     await this.ui.key(text);
   }
 
@@ -245,8 +324,7 @@ export class App {
    * control that the backdrop covers.
    */
   async dismiss(modal: string, outside = "Settings"): Promise<void> {
-    const c = await this.find(outside);
-    await this.ui.click(c.handle);
+    await this.onControl(outside, 0, (c) => this.ui.click(c.handle));
     await this.waitFor(`${modal} closed`, (s) => !s.open_modals.includes(modal), 5_000);
   }
 

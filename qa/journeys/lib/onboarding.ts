@@ -8,6 +8,9 @@ export type Visibility = "Private" | "Public";
 /** Step 1: create a new crew with this name, which moves to step 2. Private is the app's default. */
 export async function createCrewAtStep1(app: App, crewName: string, visibility: Visibility = "Private"): Promise<void> {
   await app.waitFor("onboarding step 1", (s) => s.screen === "onboarding" && s.onboarding_step === 1, 30_000);
+  // A fresh install loads the crew list twice and rebuilds step 1 each time
+  // (#85). Act on the final grid, not the one about to be replaced.
+  await app.settle(["DiscoverCrewsLoaded"]);
   await app.click("Create your own crew");
   await app.type("CREW NAME", crewName);
   if (visibility === "Public") await app.click("Public");
