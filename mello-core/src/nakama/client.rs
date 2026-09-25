@@ -176,7 +176,9 @@ impl NakamaClient {
 
         let token_resp = self
             .http
-            .post("https://oauth2.googleapis.com/token")
+            .post(crate::oauth::provider_url(
+                "https://oauth2.googleapis.com/token",
+            ))
             .form(&[
                 ("code", code),
                 ("client_id", google_client_id),

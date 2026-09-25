@@ -104,7 +104,7 @@ development = []
 mcp = ["dep:i-slint-backend-testing"]
 # Test-only driver surface for e2e journeys and agent runners (plans/E2E-QA.md).
 # Adds the state port on top of the MCP server. Never enabled in shipped builds.
-e2e = ["mcp", "mello-core/e2e-session"]
+e2e = ["mcp", "mello-core/e2e-session", "mello-core/e2e-oauth"]
 # Exposes AppContext::for_test and the headless UI harness to integration
 # tests in client/tests/. Never enabled in shipped builds. Activates the
 # testing backend as a real (non-dev) dependency; note this does NOT turn on

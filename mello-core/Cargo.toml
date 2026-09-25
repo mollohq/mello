@@ -12,6 +12,10 @@ test-faults = []
 # instead of the OS keyring. Rebuilt test binaries otherwise trigger keychain
 # prompts that no CI runner can answer. Never enabled in shipped builds.
 e2e-session = []
+# Test-only: point OAuth providers at the e2e fake (MELLO_E2E_OAUTH_BASE), hand
+# the browser URL to the driver (MELLO_E2E_BROWSER_FILE) and shorten the
+# callback wait (MELLO_E2E_OAUTH_TIMEOUT_MS). Never enabled in shipped builds.
+e2e-oauth = []
 
 [dependencies]
 tokio = { workspace = true }
