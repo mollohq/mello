@@ -1,0 +1,11 @@
+{
+  "name": "mello-driver",
+  "private": true,
+  "description": "Drives real mello apps for e2e journeys and QA agents. See plans/E2E-QA.md §5.",
+  "type": "module",
+  "engines": { "node": ">=24" },
+  "scripts": {
+    "journey": "node src/cli.ts run",
+    "mcp": "node src/cli.ts mcp"
+  }
+}

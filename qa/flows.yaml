@@ -21,7 +21,7 @@ flows:
     priority: P0
     users: 1
     harness: [discover_crews_loaded_advances_to_step_one, onboarding_ready_logs_in_but_stays_on_step_three, clicking_continue_twice_only_finalizes_once, retrying_finalize_reuses_the_same_device_id]
-    journeys: [tools/mello-driver/spike/invite-journey.sh]
+    journeys: [qa/journeys/invite-accept-deeplink-cold.ts]
     protocol: []
     issues: []
 
@@ -140,7 +140,7 @@ flows:
     priority: P0
     users: 1
     harness: []
-    journeys: [tools/mello-driver/spike/invite-journey.sh]
+    journeys: [qa/journeys/invite-accept-deeplink-cold.ts]
     protocol: []
     issues: []
 
@@ -158,9 +158,9 @@ flows:
     priority: P0
     users: 2
     harness: []
-    journeys: [tools/mello-driver/spike/invite-journey.sh]
+    journeys: [qa/journeys/invite-accept-deeplink-cold.ts]
     protocol: []
-    issues: [68, 69]
+    issues: [68, 83, 84]
 
   - id: INV-04
     title: A guest joins voice through the web lounge, members see the guest

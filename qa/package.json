@@ -1,0 +1,5 @@
+{
+  "private": true,
+  "description": "Journeys are TypeScript modules run by tools/mello-driver (Node >= 24 strips the types).",
+  "type": "module"
+}
