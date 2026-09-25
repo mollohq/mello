@@ -39,7 +39,7 @@ flows:
     priority: P0
     users: 1
     harness: [onboarding_social_buttons_link_rather_than_sign_in, failed_social_link_clears_the_spinner_and_shows_why, failed_email_link_shows_why]
-    journeys: []
+    journeys: [qa/journeys/social-signin.ts]
     protocol: []
     issues: [72, 73]
 
@@ -84,7 +84,7 @@ flows:
     priority: P1
     users: 1
     harness: []
-    journeys: []
+    journeys: [qa/journeys/social-signin.ts]
     protocol: []
     issues: [67]
 
@@ -121,7 +121,7 @@ flows:
     priority: P0
     users: 1
     harness: [each_social_button_emits_its_own_provider, social_signin_dismisses_the_sign_in_panel, apple_signin_currently_sends_an_empty_token]
-    journeys: []
+    journeys: [qa/journeys/social-signin.ts]
     protocol: []
     issues: [72]
 

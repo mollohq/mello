@@ -1,6 +1,6 @@
 # E2E QA: Real-App Journeys and Agent Test Runners
 
-> **Status:** Phase 1 done 2026-09-24 (§15). Phase 0 exit is open: the Windows run and the 20-run gate.
+> **Status:** Phase 2 in progress (§16). Phase 1 done (§15). Phase 0 exit: 20/20 on macOS; the Windows run is open.
 > **Figures:** `plans/e2e-qa/*.svg`
 > **Related:** [TESTING.md](../TESTING.md), [06-SOCIAL-LOGIN.md](../specs/06-SOCIAL-LOGIN.md),
 > [CREW-INVITES.md](../specs/features/CREW-INVITES.md), [20-PERF-HARNESS.md](../specs/20-PERF-HARNESS.md)
@@ -460,3 +460,54 @@ Harness tests use synthetic core events. No P0 flow except onboarding and invite
 - The fake OAuth provider and the e2e Docker profile.
 - Journeys for the 18 P0 flows. Start with the 4 that have no coverage.
 - An `e2e` lane in `check.sh` that builds, lints and tests the `e2e` feature.
+
+## 16. Phase 2 Progress (2026-09-25)
+
+### 16.1 Built
+
+| Part | Where | Notes |
+|---|---|---|
+| Driver | `tools/mello-driver/src/` | Node 24 TypeScript, no build step. Finds controls by label through Slint MCP and waits on the state port. Parallel reads: a click by label takes milliseconds. |
+| Journey runner | `node tools/mello-driver/src/cli.ts run <file>[#export] [--repeat N]` | Writes screenshots, state, log tails and `report.md` for each failure. |
+| MCP server for agents | `node tools/mello-driver/src/cli.ts mcp` | 14 tools: launch, restart, kill, open_link, controls, click, type, key, screenshot, state, events, wait_for, read_text, log_tail. No MCP SDK. |
+| State port additions | `client/src/e2e_state.rs` | Chat messages, voice channels and members, mic and deafen, open modals, link error, sign-in spinner. |
+| Fake OAuth provider | `tools/fake-oauth/`, `backend/docker-compose.e2e.yml` | Go, standard library only. Discord, Twitch, Steam, Google on their real paths. Scripted outcomes. 11 unit tests. |
+| Client OAuth seams | `mello-core/src/oauth.rs`, feature `e2e-oauth` | Provider base URL, browser handoff file, short callback wait. |
+| Browser step | `tools/mello-driver/src/browser.ts` | Playwright 1.63.0, the one npm dependency. |
+| `check.sh` e2e lane | `scripts/check.sh` | Lints and tests the e2e feature, fake-oauth and the driver. |
+
+Design changes from §5 and §6:
+
+- Journeys are TypeScript modules, not YAML: no parser dependency, and a wrong step is a type error.
+- The driver resolves a label again when Slint rebuilt the element between two calls. A user's click lands on whatever is at that point; the driver does the same. The action still fails when the control is absent.
+- `App.settle(types)` waits until repeated data loads stop, so an action lands on the final screen (#85).
+- The fake's browser port is 18080. The local SFU holds 8080.
+
+### 16.2 Journeys
+
+| Journey | Flows | Result |
+|---|---|---|
+| `voice-two-users.ts` | VOICE-01, VOICE-02, VOICE-04 (setup covers INV-01, INV-03 for a public crew) | **20/20** |
+| `session-restore.ts` | AUTH-01 | **20/20** |
+| `chat-two-users.ts` | CHAT-01 | Fails on #84 |
+| `invite-accept-deeplink-cold.ts#publicCrew` | INV-01, INV-03 | Fails on #84 |
+| `invite-accept-deeplink-cold.ts#privateCrew` | INV-01, INV-03 | Fails on #83 |
+| `invite-accept-while-running.ts` | INV-02 | Fails on #84 |
+| `social-signin.ts` (9 journeys) | ONB-03, AUTH-04, ONB-08 | Not run yet: needs the e2e Docker profile |
+
+The first 20-run check found a driver race in 4 of 12 runs. The cause was an app bug (#85). The fix in the driver waits on the real state, and the next 20-run check passed 40 of 40.
+
+### 16.3 Bugs found in Phase 2
+
+| Issue | Bug | Severity |
+|---|---|---|
+| #83 | An invite into a private crew makes a join request, not a member. Private is the default. | P0 |
+| #84 | A member who joins or comes online shows their random username, in the member list and in chat. | P2 |
+| #85 | A fresh install loads the crew list twice and rebuilds step 1 about 200 ms after it shows. | P3 |
+| — | The invite modal has no close button and does not close on Escape. Only a click on the backdrop closes it. | P3, not filed yet |
+
+### 16.4 Open
+
+- Run the social sign-in journeys on the e2e Docker profile.
+- Journeys for INV-04 (web lounge guest), VOICE-05 (reconnect after a network drop, needs a fault port) and STREAM-01.
+- The agent runner (Phase 3).
