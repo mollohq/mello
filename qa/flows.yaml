@@ -41,7 +41,7 @@ flows:
     harness: [onboarding_social_buttons_link_rather_than_sign_in, failed_social_link_clears_the_spinner_and_shows_why, failed_email_link_shows_why]
     journeys: [qa/journeys/social-signin.ts]
     protocol: []
-    issues: [72, 73]
+    issues: [72, 73, 87, 88]
 
   - id: ONB-04
     title: No discoverable crews, the create card still shows
@@ -123,7 +123,7 @@ flows:
     harness: [each_social_button_emits_its_own_provider, social_signin_dismisses_the_sign_in_panel, apple_signin_currently_sends_an_empty_token]
     journeys: [qa/journeys/social-signin.ts]
     protocol: []
-    issues: [72]
+    issues: [72, 88]
 
   - id: AUTH-05
     title: A fresh install never sees "Sign in"
@@ -142,7 +142,7 @@ flows:
     harness: []
     journeys: [qa/journeys/invite-accept-deeplink-cold.ts, qa/journeys/chat-two-users.ts, qa/journeys/voice-two-users.ts]
     protocol: []
-    issues: []
+    issues: [86]
 
   - id: INV-02
     title: Accept an invite by deep link while the app runs

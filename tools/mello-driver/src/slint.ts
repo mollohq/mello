@@ -25,6 +25,8 @@ export type Control = {
   label: string;
   value: string;
   checked: boolean;
+  x: number;
+  y: number;
   width: number;
   height: number;
 };
@@ -135,6 +137,8 @@ export class SlintMcp {
         label: p.accessibleLabel ?? "",
         value: p.accessibleValue ?? "",
         checked: p.accessibleChecked ?? false,
+        x: p.absolutePosition?.x ?? 0,
+        y: p.absolutePosition?.y ?? 0,
         width: p.size?.width ?? 0,
         height: p.size?.height ?? 0,
       });

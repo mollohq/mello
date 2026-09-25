@@ -64,11 +64,22 @@ function linkThenSignInElsewhere(provider: Provider): Journey {
   });
 }
 
-/** A link that fails in the browser or at the provider must leave step 3 usable and say why. */
-function linkFails(provider: Provider, outcome: OAuthOutcome, expectError: boolean): Journey {
+/**
+ * A link that fails in the browser or at the provider must leave step 3 usable
+ * and say why. `endsWithinMs`: a refusal the app can see must end the attempt
+ * promptly, not at the callback timeout (8 s in e2e builds, 120 s in production).
+ */
+function linkFails(
+  provider: Provider,
+  outcome: OAuthOutcome,
+  expectError: boolean,
+  endsWithinMs = 20_000,
+  knownIssues: number[] = [],
+): Journey {
   return journey({
     id: `auth.social.${provider.toLowerCase()}.${outcome.replace("_", "-")}`,
     flows: ["ONB-03"],
+    knownIssues,
     async run(ctx) {
       await needFake();
       const { step, expect } = ctx;
@@ -83,7 +94,7 @@ function linkFails(provider: Provider, outcome: OAuthOutcome, expectError: boole
         const s = await frank.waitFor(
           "the link attempt ends",
           (st) => !st.login_loading && (!expectError || st.link_error !== ""),
-          20_000,
+          endsWithinMs,
         );
         expect(s.onboarding_step === 3, `still on step 3, got step ${s.onboarding_step}`);
         if (expectError) expect(s.link_error !== "", "a reason shows");
@@ -101,10 +112,11 @@ export const twitchLink = linkThenSignInElsewhere("Twitch");
 export const steamLink = linkThenSignInElsewhere("Steam");
 export const googleLink = linkThenSignInElsewhere("Google");
 
-export const discordDeny = linkFails("Discord", "deny", true);
+// A deny and a rejected token are answers the app receives: end at once (#87).
+export const discordDeny = linkFails("Discord", "deny", true, 5_000, [87]);
 export const discordWrongState = linkFails("Discord", "wrong_state", true);
 export const discordNoCallback = linkFails("Discord", "no_callback", true);
-export const discordRejected = linkFails("Discord", "reject_token", true);
-export const googleDeny = linkFails("Google", "deny", true);
+export const discordRejected = linkFails("Discord", "reject_token", true, 5_000);
+export const googleDeny = linkFails("Google", "deny", true, 5_000);
 
 export default discordLink;

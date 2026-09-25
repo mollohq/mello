@@ -143,6 +143,16 @@ function report(j: Journey, r: RunResult, users: Map<string, App>): string {
     ...r.steps.map((s) => `| ${s.title} | ${s.ms} | ${s.ok ? "ok" : "FAIL"} |`),
     "",
   ];
+  // The core's loop watchdog logs when one command stalls voice and every
+  // other command (#88). Not a failure by itself, but always worth seeing.
+  const stalls = [...users.values()].flatMap((u) =>
+    u
+      .logTail(100_000)
+      .split("\n")
+      .filter((l) => l.includes("loop watchdog") && l.includes("has blocked"))
+      .map((l) => `- ${u.name}: ${l.replace(/\x1b\[[0-9;]*m/g, "").replace(/^.*loop watchdog: /, "")}`),
+  );
+  if (stalls.length) lines.push("## Command loop stalls", "", ...stalls, "");
   if (r.error) {
     lines.push("## Error", "", "```", r.error, "```", "");
     for (const u of users.values()) {

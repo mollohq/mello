@@ -2,7 +2,7 @@
 // from the developer's own client (plans/E2E-QA.md §5.2).
 
 import { spawn, type ChildProcess } from "node:child_process";
-import { mkdirSync, openSync, writeFileSync, readFileSync, existsSync } from "node:fs";
+import { appendFileSync, mkdirSync, openSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 
@@ -298,12 +298,22 @@ export class App {
     }
   }
 
+  /**
+   * One line per action in actions.log, for post-mortems: what the driver
+   * acted on, where it was, and when, next to the app's own log.
+   */
+  private trace(action: string, label: string, c?: Control): void {
+    const where = c ? ` ${c.role} at (${c.x.toFixed(0)},${c.y.toFixed(0)}) ${c.width.toFixed(0)}x${c.height.toFixed(0)}` : "";
+    appendFileSync(join(this.dir, "actions.log"), `${new Date().toISOString()} ${action} "${label}"${where}\n`);
+  }
+
   /** A real pointer click at the control's center. */
   async click(label: string, n = 0): Promise<void> {
     await this.onControl(label, n, async (c) => {
       if (c.width <= 0 || c.height <= 0) {
         throw new DriverError(`${this.name}: "${label}" has zero size (${c.width}x${c.height})`);
       }
+      this.trace("click", label, c);
       await this.ui.click(c.handle);
     });
   }
@@ -312,6 +322,7 @@ export class App {
   async type(label: string, text: string): Promise<void> {
     await this.onControl(label, 0, async (c) => {
       if (c.role !== "TextInput") throw new DriverError(`${this.name}: "${label}" is a ${c.role}, not a text field`);
+      this.trace("type", label, c);
       await this.ui.click(c.handle);
       if (c.value !== "") await this.ui.setValue(c.handle, "");
     });
