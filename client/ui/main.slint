@@ -348,6 +348,8 @@ export component MainWindow inherits Window {
     in property <string> join-crew-avatar-seed: "";
     in property <string> join-crew-error: "";
     in property <bool> join-crew-loading: false;
+    in property <bool> join-crew-joining: false;
+    in property <string> join-crew-join-error: "";
     callback join-crew-confirmed(/* invite_code */ string);
     callback join-crew-dismissed();
 
@@ -637,6 +639,8 @@ export component MainWindow inherits Window {
     callback discover-requested();
     callback discover-join-crew(string);
     callback discover-join-invite(string);
+    /// Why the last invite code typed into Discover did not join.
+    in property <string> discover-invite-error: "";
 
     // ===================== ONBOARDING =====================
     if onboarding-step >= 1 && onboarding-step <= 3 && !show-sign-in: Onboarding {
@@ -853,6 +857,7 @@ export component MainWindow inherits Window {
                     crews: root.discover-crews-list;
                     bento-set-bases: root.discover-bento-bases;
                     back-to: root.active-crew-name;
+                    invite-error: root.discover-invite-error;
                     join-crew(id) => {
                         root.discover-join-crew(id);
                     }
@@ -1405,6 +1410,8 @@ export component MainWindow inherits Window {
         avatar-seed: root.join-crew-avatar-seed;
         error: root.join-crew-error;
         loading: root.join-crew-loading;
+        joining: root.join-crew-joining;
+        join-error: root.join-crew-join-error;
         join-requested => {
             root.join-crew-confirmed(root.join-crew-invite-code);
         }

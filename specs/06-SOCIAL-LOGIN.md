@@ -1,7 +1,7 @@
 # MELLO Social Login Specification
 
 > **Component:** Authentication (Social Login)  
-> **Version:** 0.3  
+> **Version:** 0.4  
 > **Status:** Planned  
 > **Parent:** [00-ARCHITECTURE.md](./00-ARCHITECTURE.md)  
 > **Setup Guide:** [06a-SOCIAL-LOGIN-SETUP.md](./06a-SOCIAL-LOGIN-SETUP.md)
@@ -210,170 +210,91 @@ The login screen adapts: if only `["email"]` is returned, show the email/passwor
 
 ## 5. Shared OAuth Flow
 
-Google, Twitch, and Discord all use a localhost callback server to receive tokens from the browser. This is extracted into a reusable `OAuthFlow` struct.
+The desktop client receives browser sign-in results on a localhost callback server. `OAuthFlow` in `mello-core/src/oauth.rs` runs this server. Each provider module builds its authorize URL and calls `OAuthFlow::execute(auth_url, state, mode)` from a blocking task.
+
+### 5.1 Flows
+
+| Provider | Module | `OAuthMode` | Result arrives as | `state` travels in |
+|----------|--------|-------------|-------------------|--------------------|
+| Google | `auth_google.rs` | `AuthorizationCode` (code + PKCE S256) | `?code=` | The `state` query parameter. Google returns it in the callback query. |
+| Discord | `auth_discord.rs` | `Implicit` | `#access_token=` | The `state` query parameter. Discord returns it in the fragment. |
+| Twitch | `auth_twitch.rs` | `Implicit` | `#access_token=` | The `state` query parameter. Twitch returns it in the fragment. |
+| Steam | `auth_steam.rs` | `OpenIDQuery` (OpenID 2.0) | `openid.*` query | `?state=` inside `openid.return_to`. OpenID 2.0 has no `state` parameter. |
+
+Sections 6 and 8 describe earlier designs for Steam and Twitch. The table above shows the current flows.
+
+### 5.2 Callback Server
+
+| Item | Value |
+|------|-------|
+| Bind address | `127.0.0.1:29405` |
+| Redirect URI | `http://localhost:29405/callback` |
+| Timeout | 120 s for the full flow, across all requests |
+| Maximum `/token` body | 8 KiB |
+
+### 5.3 The `state` Parameter
+
+Any local process and any web page in the browser can send requests to the callback server. The `state` parameter binds a callback to the flow that this client started. Without it, a page can send its own token during the wait. The client then links the attacker's identity, or signs in to the attacker's account.
+
+1. `generate_state()` makes 32 random alphanumeric characters for each flow.
+2. The provider module puts `state` in the authorize URL (for Steam, in `return_to`).
+3. The server compares the returned `state` with the expected value in constant time.
+4. The server rejects a missing or different `state` with `400`. The flow continues to wait.
+
+### 5.4 Request Rules
+
+The server handles each request in the order below. A rejected request does not end the flow. Only a request with the correct `state` can end it.
+
+| Mode | Request | Response | Flow |
+|------|---------|----------|------|
+| All | A method or path not listed for the mode | `404` | Continues to wait |
+| `AuthorizationCode` | `GET /callback`, `state` missing or wrong | `400` | Continues to wait |
+| `AuthorizationCode` | `GET /callback`, correct `state`, `code` present | `200` success page | Returns the code |
+| `AuthorizationCode` | `GET /callback`, correct `state`, no `code` (for example `error=access_denied`) | `400` failure page | Fails with `NoToken` |
+| `OpenIDQuery` | `GET /callback`, `state` missing or wrong | `400` | Continues to wait |
+| `OpenIDQuery` | `GET /callback`, correct `state`, other pairs present | `200` success page | Returns the query without the `state` pair |
+| `OpenIDQuery` | `GET /callback`, correct `state`, no other pairs | `400` failure page | Fails with `NoToken` |
+| `Implicit` | `GET /callback` | `200` extractor page | Continues to wait |
+| `Implicit` | `POST /token`, `state` missing or wrong | `400` | Continues to wait |
+| `Implicit` | `POST /token`, correct `state`, `access_token` present | `200` | Returns the token |
+| `Implicit` | `POST /token`, correct `state`, no `access_token` | `400` | Fails with `NoToken` |
+
+Browsers request `/favicon.ico` after a page loads. The `404` rule keeps this request from ending the flow.
+
+### 5.5 Implicit Flow Page
+
+The browser does not send the URL fragment to the server. The extractor page reads the fragment and sends it back.
+
+1. The script reads `access_token`, `state` and `error` from the fragment.
+2. The script sends `access_token` and `state` to `POST /token` as `application/x-www-form-urlencoded`.
+3. The script shows the result. It writes fragment text with `textContent`, never with `innerHTML`.
+
+The page holds no secret. The server returns the page for each `GET /callback`.
+
+### 5.6 Steam `return_to`
+
+1. `return_to` is `http://localhost:29405/callback?state=<state>`. It is under `realm` (`http://localhost:29405`).
+2. Steam appends the `openid.*` response to `return_to`.
+3. The server removes the `state` pair. It forwards the other pairs byte-for-byte.
+4. The backend sends the pairs to Steam `check_authentication` (`validateSteamOpenID` in `backend/nakama/data/modules/auth.go`).
+
+The signed `openid.return_to` value contains `state`. The backend does not compare `openid.return_to`.
+
+### 5.7 Known Limits
+
+- The port is fixed at 29405. A second flow that starts while one waits fails with `ServerStart`.
+- Discord and Twitch use the implicit flow, so they have no PKCE. The token passes through the browser.
+
+### 5.8 Errors
 
 ```rust
-// client/src/auth/oauth.rs
-
-use tiny_http::{Server, Response, Header};
-use std::time::Duration;
-use rand::Rng;
-use sha2::{Sha256, Digest};
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
-
-const REDIRECT_PORT: u16 = 29405;
-const REDIRECT_URI: &str = "http://localhost:29405/callback";
-
-/// PKCE challenge pair
-pub struct PkceChallenge {
-    pub verifier: String,
-    pub challenge: String,
-}
-
-impl PkceChallenge {
-    pub fn generate() -> Self {
-        let verifier: String = rand::thread_rng()
-            .sample_iter(&rand::distributions::Alphanumeric)
-            .take(64)
-            .map(char::from)
-            .collect();
-
-        let digest = Sha256::digest(verifier.as_bytes());
-        let challenge = URL_SAFE_NO_PAD.encode(digest);
-
-        Self { verifier, challenge }
-    }
-}
-
-pub enum OAuthMode {
-    /// Authorization Code flow — token arrives as ?code= query param
-    AuthorizationCode,
-    /// Implicit flow — token arrives as #access_token= fragment
-    Implicit,
-}
-
-pub struct OAuthFlow;
-
-impl OAuthFlow {
-    /// Opens the browser to `auth_url` and waits for the callback.
-    /// Returns the authorization code (AuthorizationCode) or access token (Implicit).
-    pub fn execute(auth_url: &str, mode: OAuthMode) -> Result<String, OAuthError> {
-        let server = Server::http(format!("127.0.0.1:{}", REDIRECT_PORT))
-            .map_err(|e| OAuthError::ServerStart(e.to_string()))?;
-
-        webbrowser::open(auth_url)?;
-
-        match mode {
-            OAuthMode::AuthorizationCode => Self::wait_for_code(&server),
-            OAuthMode::Implicit => Self::wait_for_fragment(&server),
-        }
-    }
-
-    /// Authorization Code: code is in the query string, server reads it directly.
-    fn wait_for_code(server: &Server) -> Result<String, OAuthError> {
-        let request = server
-            .recv_timeout(Duration::from_secs(120))
-            .map_err(|_| OAuthError::Timeout)?
-            .ok_or(OAuthError::Timeout)?;
-
-        let url = request.url().to_string();
-        let code = url::Url::parse(&format!("http://localhost{}", url))
-            .ok()
-            .and_then(|u| u.query_pairs()
-                .find(|(k, _)| k == "code")
-                .map(|(_, v)| v.to_string()))
-            .ok_or(OAuthError::NoToken)?;
-
-        // Respond with success page
-        let html = Self::success_html();
-        let response = Response::from_string(html)
-            .with_header(Header::from_bytes("Content-Type", "text/html").unwrap());
-        let _ = request.respond(response);
-
-        Ok(code)
-    }
-
-    /// Implicit: token is in the URL fragment (not sent to server).
-    /// Serve JS that extracts it and POSTs it back.
-    fn wait_for_fragment(server: &Server) -> Result<String, OAuthError> {
-        let request = server
-            .recv_timeout(Duration::from_secs(120))
-            .map_err(|_| OAuthError::Timeout)?
-            .ok_or(OAuthError::Timeout)?;
-
-        let extractor_html = r#"<!DOCTYPE html>
-<html>
-<head><title>Mello - Authenticating</title></head>
-<body style="font-family: system-ui; display: flex; justify-content: center;
-             align-items: center; height: 100vh; margin: 0;
-             background: #1a1a1a; color: white;">
-    <div id="status">
-        <h1>Authenticating...</h1>
-        <p>Please wait while we complete sign-in.</p>
-    </div>
-    <script>
-        const fragment = window.location.hash.substring(1);
-        const params = new URLSearchParams(fragment);
-        const token = params.get('access_token');
-        const error = params.get('error');
-
-        if (error) {
-            document.getElementById('status').innerHTML =
-                '<h1>Authentication Failed</h1><p>' + error + '</p>';
-        } else if (token) {
-            fetch('/token', { method: 'POST', body: token }).then(() => {
-                document.getElementById('status').innerHTML =
-                    '<h1>Success!</h1><p>You can close this tab and return to Mello.</p>';
-            });
-        } else {
-            document.getElementById('status').innerHTML =
-                '<h1>No Token</h1><p>Authentication failed. Please try again.</p>';
-        }
-    </script>
-</body>
-</html>"#;
-
-        let response = Response::from_string(extractor_html)
-            .with_header(Header::from_bytes("Content-Type", "text/html").unwrap());
-        let _ = request.respond(response);
-
-        // Wait for JS to POST the token
-        let token_request = server
-            .recv_timeout(Duration::from_secs(30))
-            .map_err(|_| OAuthError::Timeout)?
-            .ok_or(OAuthError::Timeout)?;
-
-        let mut body = String::new();
-        token_request.as_reader().read_to_string(&mut body)?;
-
-        if body.is_empty() {
-            return Err(OAuthError::NoToken);
-        }
-
-        let _ = token_request.respond(Response::from_string("OK"));
-        Ok(body)
-    }
-
-    fn success_html() -> &'static str {
-        r#"<!DOCTYPE html>
-<html>
-<head><title>Mello</title></head>
-<body style="font-family: system-ui; display: flex; justify-content: center;
-             align-items: center; height: 100vh; margin: 0;
-             background: #1a1a1a; color: white;">
-    <div><h1>Success!</h1><p>You can close this tab and return to Mello.</p></div>
-</body>
-</html>"#
-    }
-}
-
 #[derive(Debug, thiserror::Error)]
 pub enum OAuthError {
     #[error("Failed to start callback server: {0}")]
     ServerStart(String),
 
     #[error("Failed to open browser: {0}")]
-    Browser(#[from] webbrowser::Error),
+    Browser(String),
 
     #[error("Timeout waiting for authentication")]
     Timeout,
@@ -599,7 +520,7 @@ Uses **Authorization Code + PKCE** (no client secret on the native side).
 ```rust
 // client/src/auth/google.rs
 
-use crate::auth::oauth::{OAuthFlow, OAuthMode, PkceChallenge, OAuthError};
+use crate::auth::oauth::{generate_state, OAuthFlow, OAuthMode, PkceChallenge, OAuthError};
 
 const GOOGLE_CLIENT_ID: &str = env!("GOOGLE_CLIENT_ID");
 const REDIRECT_URI: &str = "http://localhost:29405/callback";
@@ -612,6 +533,7 @@ impl GoogleAuth {
     /// for an id_token and validates it.
     pub fn authenticate() -> Result<(String, String), OAuthError> {
         let pkce = PkceChallenge::generate();
+        let state = generate_state();
 
         let auth_url = format!(
             "https://accounts.google.com/o/oauth2/v2/auth\
@@ -620,13 +542,14 @@ impl GoogleAuth {
              &response_type=code\
              &scope=openid%20profile%20email\
              &code_challenge={challenge}\
-             &code_challenge_method=S256",
+             &code_challenge_method=S256\
+             &state={state}",
             client_id = GOOGLE_CLIENT_ID,
             redirect_uri = urlencoding::encode(REDIRECT_URI),
             challenge = pkce.challenge,
         );
 
-        let code = OAuthFlow::execute(&auth_url, OAuthMode::AuthorizationCode)?;
+        let code = OAuthFlow::execute(&auth_url, &state, OAuthMode::AuthorizationCode)?;
         Ok((code, pkce.verifier))
     }
 }
@@ -734,7 +657,7 @@ Uses **Authorization Code + PKCE**. Since Nakama has no native Twitch support, w
 ```rust
 // client/src/auth/twitch.rs
 
-use crate::auth::oauth::{OAuthFlow, OAuthMode, PkceChallenge, OAuthError};
+use crate::auth::oauth::{generate_state, OAuthFlow, OAuthMode, PkceChallenge, OAuthError};
 
 const TWITCH_CLIENT_ID: &str = env!("TWITCH_CLIENT_ID");
 const REDIRECT_URI: &str = "http://localhost:29405/callback";
@@ -746,6 +669,7 @@ impl TwitchAuth {
     /// Returns an access token (code exchange happens client-side).
     pub async fn authenticate(http: &reqwest::Client) -> Result<String, OAuthError> {
         let pkce = PkceChallenge::generate();
+        let state = generate_state();
 
         let auth_url = format!(
             "https://id.twitch.tv/oauth2/authorize\
@@ -755,13 +679,14 @@ impl TwitchAuth {
              &scope=user:read:email\
              &code_challenge={challenge}\
              &code_challenge_method=S256\
-             &force_verify=true",
+             &force_verify=true\
+             &state={state}",
             client_id = TWITCH_CLIENT_ID,
             redirect_uri = urlencoding::encode(REDIRECT_URI),
             challenge = pkce.challenge,
         );
 
-        let code = OAuthFlow::execute(&auth_url, OAuthMode::AuthorizationCode)?;
+        let code = OAuthFlow::execute(&auth_url, &state, OAuthMode::AuthorizationCode)?;
 
         // Exchange code for access token
         let token_resp = http
@@ -874,7 +799,7 @@ Uses **implicit flow** (token in URL fragment). Lower priority since Discord is 
 ```rust
 // client/src/auth/discord.rs
 
-use crate::auth::oauth::{OAuthFlow, OAuthMode, OAuthError};
+use crate::auth::oauth::{generate_state, OAuthFlow, OAuthMode, OAuthError};
 
 const DISCORD_CLIENT_ID: &str = env!("DISCORD_CLIENT_ID");
 const REDIRECT_URI: &str = "http://localhost:29405/callback";
@@ -884,17 +809,19 @@ pub struct DiscordAuth;
 impl DiscordAuth {
     /// Initiates Discord OAuth flow and returns access token.
     pub fn authenticate() -> Result<String, OAuthError> {
+        let state = generate_state();
         let auth_url = format!(
             "https://discord.com/api/oauth2/authorize\
              ?client_id={client_id}\
              &redirect_uri={redirect_uri}\
              &response_type=token\
-             &scope=identify",
+             &scope=identify\
+             &state={state}",
             client_id = DISCORD_CLIENT_ID,
             redirect_uri = urlencoding::encode(REDIRECT_URI),
         );
 
-        OAuthFlow::execute(&auth_url, OAuthMode::Implicit)
+        OAuthFlow::execute(&auth_url, &state, OAuthMode::Implicit)
     }
 }
 ```
@@ -984,7 +911,7 @@ Required for future macOS App Store distribution (Apple mandates Sign in with Ap
 ```rust
 // client/src/auth/apple.rs
 
-use crate::auth::oauth::{OAuthFlow, OAuthMode, OAuthError};
+use crate::auth::oauth::{generate_state, OAuthFlow, OAuthMode, OAuthError};
 
 const APPLE_CLIENT_ID: &str = env!("APPLE_CLIENT_ID");
 const REDIRECT_URI: &str = "http://localhost:29405/callback";
@@ -995,19 +922,21 @@ impl AppleAuth {
     /// Initiates Apple Sign In flow and returns id_token.
     /// Apple uses response_mode=fragment for native apps.
     pub fn authenticate() -> Result<String, OAuthError> {
+        let state = generate_state();
         let auth_url = format!(
             "https://appleid.apple.com/auth/authorize\
              ?client_id={client_id}\
              &redirect_uri={redirect_uri}\
              &response_type=code%20id_token\
              &scope=name%20email\
-             &response_mode=fragment",
+             &response_mode=fragment\
+             &state={state}",
             client_id = APPLE_CLIENT_ID,
             redirect_uri = urlencoding::encode(REDIRECT_URI),
         );
 
         // id_token comes in the fragment, same as implicit flow
-        OAuthFlow::execute(&auth_url, OAuthMode::Implicit)
+        OAuthFlow::execute(&auth_url, &state, OAuthMode::Implicit)
     }
 }
 ```
@@ -1547,7 +1476,9 @@ For setup instructions on obtaining these credentials, see [06a-SOCIAL-LOGIN-SET
 | Token storage | OS-native secure storage (Credential Manager / Keychain) |
 | Token in memory | Clear on logout, minimize lifetime |
 | OAuth callback | Fixed port 29405, localhost only, binds 127.0.0.1 |
-| PKCE | Google and Twitch use S256 challenge — prevents code interception |
+| Callback CSRF | A random `state` per flow. The server rejects a missing or wrong `state` and any other path. See §5.3 and §5.4. |
+| Extractor page | Fragment text goes into the page with `textContent`, never `innerHTML` |
+| PKCE | Google uses the S256 challenge. Discord and Twitch use the implicit flow and have no PKCE. |
 | Steam ticket replay | Nakama validates with Steam Web API |
 | Discord token scope | `identify` only, no write access |
 | Twitch token scope | `user:read:email` only |
@@ -1588,6 +1519,9 @@ For setup instructions on obtaining these credentials, see [06a-SOCIAL-LOGIN-SET
 - [ ] Email signup creates account
 
 ### General
+- [ ] Callback with a missing or wrong `state` is rejected and the flow continues to wait
+- [ ] Request to a path other than the callback is rejected and the flow continues to wait
+- [ ] Steam `return_to` carries `state`, and the forwarded query has no `state` pair
 - [ ] Session persists across restarts
 - [ ] Logout clears stored credentials
 - [ ] Session refresh works when token near expiry

@@ -1,3 +1,4 @@
+use crate::crew::InviteError;
 use crate::events::Event;
 
 impl super::Client {
@@ -131,6 +132,7 @@ impl super::Client {
                 log::error!("[invite] failed to resolve invite code: {}", e);
                 let _ = self.event_tx.send(Event::CrewInviteResolveFailed {
                     reason: e.to_string(),
+                    error: InviteError::from_error(&e),
                 });
             }
         }
@@ -161,14 +163,16 @@ impl super::Client {
                     crew_id,
                     name
                 );
+                let _ = self.event_tx.send(Event::InviteJoined {
+                    crew_id: crew_id.clone(),
+                });
                 self.handle_select_crew(&crew_id).await;
                 self.load_crews().await;
             }
             Err(e) => {
-                log::error!("[invite] failed to join by invite code: {}", e);
-                let _ = self.event_tx.send(Event::Error {
-                    message: format!("Invalid invite code: {}", e),
-                });
+                let error = InviteError::from_error(&e);
+                log::error!("[invite] failed to join by invite code: {:?}: {}", error, e);
+                let _ = self.event_tx.send(Event::InviteJoinFailed { error });
             }
         }
     }

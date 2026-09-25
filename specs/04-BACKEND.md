@@ -136,12 +136,14 @@ Request: empty payload. Response:
 ```json
 {
   "voice_rooms": [
-    {"channel_id": "ch_abc12345", "crew_id": "crew_xyz", "channel_name": "General",
+    {"channel_id": "ch_abc12345", "crew_id": "crew_xyz", "crew_name": "Vault",
+     "channel_name": "General",
      "members": [{"user_id": "user_a", "username": "vex_r", "speaking": false,
                   "muted": false, "deafened": false, "joined_at": 1711900000000}]}
   ],
   "streams": [
-    {"stream_id": "stream_123", "crew_id": "crew_xyz", "streamer_id": "user_c",
+    {"stream_id": "stream_123", "crew_id": "crew_xyz", "crew_name": "Vault",
+     "streamer_id": "user_c",
      "streamer_username": "k0ji_tech", "title": "PROJECT AVALON",
      "started_at": "2026-03-08T14:00:00Z", "viewer_count": 3,
      "thumbnail_url": "https://..."}
@@ -153,6 +155,7 @@ Rules:
 
 - Voice rooms come from the in-memory `voiceRooms` map. Empty rooms never appear.
 - Channel names resolve from `voice_channels/{crew_id}` storage. A missing definition falls back to the channel ID.
+- Crew names resolve with one batched group read. A missing group falls back to the crew ID prefix. Every crew runs a `General` channel, so the crew name is what tells rooms apart.
 - Streams come from the `stream_meta` collection scan (same read as stream GC). A record younger than the 60s GC interval can linger briefly after its host leaves.
 
 ---
@@ -330,6 +333,21 @@ Invite codes are 8-character alphanumeric strings (format: `XXXX-XXXX`), generat
 2. Creator shares code (copy-to-clipboard in the new-crew modal)
 3. Recipient enters code → `join_by_invite_code` RPC looks up code → joins the crew
 4. Invited users (selected during crew creation) receive Nakama notifications with crew details
+
+**`join_by_invite_code`** calls `GroupUserJoin` with the caller's username.
+Nakama 3.21 refuses an empty username. The RPC reads the caller's state in the
+crew first, because `GroupUserJoin` checks capacity before membership and
+returns no error for a banned user.
+
+| Case | Result | gRPC code |
+|---|---|---|
+| Unknown code, or the crew is deleted | `NOT_FOUND` | 5 |
+| Caller is already a member | Success. The client opens the crew | — |
+| Caller is banned | `PERMISSION_DENIED` | 7 |
+| Crew is full | `RESOURCE_EXHAUSTED` | 8 |
+| Username lookup or join fails for another reason | `INTERNAL` | 13 |
+
+The client maps these codes to its text. Keep them stable.
 
 ---
 

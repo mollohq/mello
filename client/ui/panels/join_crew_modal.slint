@@ -8,8 +8,13 @@ export component JoinCrewModal inherits Rectangle {
     in property <string> crew-id: "";
     in property <string> highlight: "";
     in property <string> avatar-seed: "";
+    /// Why the invite could not be loaded. Replaces the crew card.
     in property <string> error: "";
     in property <bool> loading: false;
+    /// A join request is in flight.
+    in property <bool> joining: false;
+    /// Why the last join failed. Shown on the crew card, above the button.
+    in property <string> join-error: "";
 
     callback join-requested();
     callback dismiss-requested();
@@ -93,10 +98,11 @@ export component JoinCrewModal inherits Rectangle {
                 Text {
                     font-weight: Theme.weight-sentence;
                     font-family: Theme.font-body;
-                    text: "This invite link is no longer valid.";
+                    text: error;
                     font-size: Theme.font-lg;
                     color: Theme.text-primary;
                     horizontal-alignment: center;
+                    wrap: word-wrap;
                 }
 
                 Rectangle {
@@ -182,6 +188,17 @@ export component JoinCrewModal inherits Rectangle {
                     horizontal-alignment: center;
                 }
 
+                // Same treatment as the error line in riot_link_modal.slint.
+                if join-error != "": join-error-text := Text {
+                    font-weight: Theme.weight-sentence;
+                    font-family: Theme.font-body;
+                    text: join-error;
+                    font-size: Theme.font-md;
+                    color: Theme.live;
+                    horizontal-alignment: center;
+                    wrap: word-wrap;
+                }
+
                 // Spacer
                 Rectangle { height: 8px; }
 
@@ -196,12 +213,12 @@ export component JoinCrewModal inherits Rectangle {
                         width: parent.width;
                         height: parent.height;
                         n: Theme.cut;
-                        fill: join-touch.has-hover ? Theme.confirm-press : Theme.confirm;
+                        fill: join-touch.has-hover || joining ? Theme.confirm-press : Theme.confirm;
                     }
 
                     Text {
                         font-family: Theme.font-display;
-                        text: "Join crew";
+                        text: joining ? "Joining…" : "Join crew";
                         font-size: Theme.font-lg;
                         font-weight: Theme.weight-display;
                         color: Theme.on-confirm;
@@ -212,7 +229,8 @@ export component JoinCrewModal inherits Rectangle {
                     join-touch := TouchArea {
                         accessible-role: button;
                         accessible-label: "Join crew";
-                        mouse-cursor: pointer;
+                        enabled: !joining;
+                        mouse-cursor: joining ? default : pointer;
                         clicked => { join-requested(); }
                     }
                 }
@@ -252,5 +270,6 @@ export component Preview inherits Rectangle {
         crew-name: "Night Stones";
         crew-initials: "NI";
         crew-id: "c1";
+        join-error: "Could not join the crew. Try again.";
     }
 }
