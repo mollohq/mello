@@ -91,28 +91,27 @@ func lookupInviteCode(ctx context.Context, nk runtime.NakamaModule, code string)
 // Typed errors returned by JoinByInviteCodeRPC. The client maps each gRPC code
 // to its own message, so keep the code for each case stable.
 var (
-	errInviteJoinBanned     = runtime.NewError("you cannot join this crew", 7)
-	errInviteJoinCrewFull   = runtime.NewError("crew is full", 8)
-	errInviteJoinCrewGone   = runtime.NewError("crew no longer exists", 5)
-	errInviteJoinUserLookup = runtime.NewError("failed to look up user", 13)
-	errInviteJoinFailed     = runtime.NewError("failed to join crew", 13)
+	errInviteJoinBanned   = runtime.NewError("you cannot join this crew", 7)
+	errInviteJoinCrewFull = runtime.NewError("crew is full", 8)
+	errInviteJoinCrewGone = runtime.NewError("crew no longer exists", 5)
+	errInviteJoinFailed   = runtime.NewError("failed to join crew", 13)
 )
 
 // Nakama group_edge states.
 const (
-	groupStateSuperadmin = 0
-	groupStateAdmin      = 1
-	groupStateMember     = 2
-	groupStateBanned     = 4
+	groupStateSuperadmin  = 0
+	groupStateAdmin       = 1
+	groupStateMember      = 2
+	groupStateJoinRequest = 3
+	groupStateBanned      = 4
 )
 
 // inviteJoinPrecheck decides from the caller's current state in the crew
-// whether GroupUserJoin must run. state is nil when the caller has no
+// whether the RPC must add the caller. state is nil when the caller has no
 // relationship with the crew.
 //
-// GroupUserJoin checks capacity before membership, so an existing member of a
-// full crew gets ErrGroupFull. For a banned user it returns nil without adding
-// them. The RPC therefore answers both cases itself.
+// For a banned user, GroupUsersAdd returns nil without adding them, so the RPC
+// must refuse before it calls GroupUsersAdd. An existing member skips the add.
 func inviteJoinPrecheck(state *int) (alreadyMember bool, err error) {
 	if state == nil {
 		return false, nil
@@ -120,13 +119,16 @@ func inviteJoinPrecheck(state *int) (alreadyMember bool, err error) {
 	switch *state {
 	case groupStateSuperadmin, groupStateAdmin, groupStateMember:
 		return true, nil
+	case groupStateJoinRequest:
+		// A pending request is not a membership. GroupUsersAdd accepts it.
+		return false, nil
 	case groupStateBanned:
 		return false, errInviteJoinBanned
 	}
 	return false, nil
 }
 
-// inviteJoinError maps a GroupUserJoin error to a typed RPC error.
+// inviteJoinError maps a GroupUsersAdd error to a typed RPC error.
 func inviteJoinError(err error) error {
 	switch {
 	case errors.Is(err, runtime.ErrGroupFull):
@@ -186,16 +188,12 @@ func JoinByInviteCodeRPC(ctx context.Context, logger runtime.Logger, db *sql.DB,
 	if alreadyMember {
 		logger.Info("join_by_invite_code: user %s is already in crew %s", userID, crewID)
 	} else {
-		// GroupUserJoin requires the username: it signs the crew's join
-		// message with it and refuses an empty string.
-		users, err := nk.UsersGetId(ctx, []string{userID}, nil)
-		if err != nil || len(users) == 0 || users[0].GetUsername() == "" {
-			logger.Error("join_by_invite_code: username lookup failed for user %s: %v", userID, err)
-			return "", errInviteJoinUserLookup
-		}
-
-		if err := nk.GroupUserJoin(ctx, crewID, userID, users[0].GetUsername()); err != nil {
-			logger.Error("join_by_invite_code: GroupUserJoin failed for user %s crew %s: %v", userID, crewID, err)
+		// The invite code is the authorization, so add the caller with system
+		// authority (empty caller ID). GroupUserJoin cannot do this: for a
+		// closed crew it only files a join request, and new crews are closed.
+		// GroupUsersAdd also accepts a pending join request.
+		if err := nk.GroupUsersAdd(ctx, "", crewID, []string{userID}); err != nil {
+			logger.Error("join_by_invite_code: GroupUsersAdd failed for user %s crew %s: %v", userID, crewID, err)
 			return "", inviteJoinError(err)
 		}
 		logger.Info("User %s joined crew %s via invite code %s", userID, crewID, code)
