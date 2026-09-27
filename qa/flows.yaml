@@ -151,7 +151,7 @@ flows:
     harness: []
     journeys: [qa/journeys/invite-accept-while-running.ts]
     protocol: []
-    issues: [84]
+    issues: []
 
   - id: INV-03
     title: Accept an invite by deep link on a fresh install
@@ -160,7 +160,7 @@ flows:
     harness: []
     journeys: [qa/journeys/invite-accept-deeplink-cold.ts]
     protocol: []
-    issues: [68, 83, 84]
+    issues: [68]
 
   - id: INV-04
     title: A guest joins voice through the web lounge, members see the guest
@@ -325,7 +325,7 @@ flows:
     harness: [sending_a_message_carries_its_content]
     journeys: [qa/journeys/chat-two-users.ts]
     protocol: []
-    issues: [84]
+    issues: []
 
   - id: CHAT-02
     title: Reply, edit and delete a message
