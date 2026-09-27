@@ -206,6 +206,18 @@ The login screen adapts: if only `["email"]` is returned, show the email/passwor
 
 **Note:** Sessions are automatically persisted to OS secure storage. No "Remember me" checkbox needed.
 
+### 4.3 Desktop Client: Sign-in and Onboarding
+
+The desktop client has no separate login screen. A new user starts in onboarding (`01-CLIENT.md` §6).
+
+| Where | What the user does | Command |
+|-------|--------------------|---------|
+| Onboarding step 3 | Links one identity to the new device account. Required: step 3 has no skip. | `Link*`, `LinkEmail` |
+| Step 1, "I already have an account" (only on a machine with no device account) | Signs in to an existing account. | `Auth*`, `Login` |
+| Step 1, returning-user control (only after a logout) | Opens the app as the device account. | none |
+
+Sign-in authenticates with `create=false`. An identity with no account fails with "User account not found". The panel shows "No account found." and a "Start as a new player" button that returns to step 1. The panel never shows the server text.
+
 ---
 
 ## 5. Shared OAuth Flow

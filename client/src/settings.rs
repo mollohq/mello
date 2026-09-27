@@ -166,6 +166,16 @@ impl Settings {
     ///
     /// Reusing the id makes finalize idempotent: a second attempt authenticates
     /// back into the same account instead of creating another.
+    /// Does this machine have a device account?
+    ///
+    /// The signal is a persisted `device_id`. Onboarding writes it when the
+    /// user continues from step 2, just before the first device auth creates
+    /// the account. A fresh install, or a user who only ever signed in with
+    /// an existing account, has none.
+    pub fn has_device_account(&self) -> bool {
+        self.device_id.as_deref().is_some_and(|id| !id.is_empty())
+    }
+
     pub fn device_id_or_create(&mut self) -> String {
         if let Some(existing) = self.device_id.as_ref().filter(|id| !id.is_empty()) {
             return existing.clone();
@@ -193,6 +203,17 @@ mod tests {
         assert!(s.playback_device_id.is_none());
         assert!(s.dark_theme);
         assert!(s.share_game_activity);
+    }
+
+    /// An empty id is no account: `device_id_or_create` treats it the same.
+    #[test]
+    fn has_device_account_reads_a_non_empty_device_id() {
+        let mut s = Settings::default();
+        assert!(!s.has_device_account(), "a fresh install has none");
+        s.device_id = Some(String::new());
+        assert!(!s.has_device_account(), "an empty id is not an account");
+        s.device_id = Some("dev-abc".into());
+        assert!(s.has_device_account());
     }
 
     #[test]

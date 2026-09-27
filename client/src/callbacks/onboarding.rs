@@ -279,24 +279,6 @@ pub fn wire(ctx: &AppContext) {
         });
     }
 
-    // --- Onboarding: skip identity ---
-    {
-        let app_weak = ctx.app.as_weak();
-        let s = ctx.settings.clone();
-        let fx = crate::onboarding::EffectCtx::from_ctx(ctx);
-        ctx.app.on_onboarding_skip_identity(move || {
-            if let Some(app) = app_weak.upgrade() {
-                app.set_logged_in(true);
-                crate::onboarding::advance_with(
-                    &app,
-                    &s,
-                    &fx,
-                    crate::onboarding::Input::IdentitySettled,
-                );
-            }
-        });
-    }
-
     // --- Onboarding: device selection ---
     {
         let cmd = ctx.cmd_tx.clone();

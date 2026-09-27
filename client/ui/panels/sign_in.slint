@@ -1,5 +1,5 @@
 import { Theme, MelloTextInput } from "../theme.slint";
-import { CutButtonShape } from "../components/cut.slint";
+import { CutButtonShape, CutButton } from "../components/cut.slint";
 
 component InputField inherits Rectangle {
     in-out property <string> text <=> ti.text;
@@ -148,12 +148,17 @@ component AuthButton inherits Rectangle {
 
 export component SignInPanel inherits Rectangle {
     in property <string> error: "";
+    /// The last sign-in found no account. The panel says so and offers
+    /// "Start as a new player" instead of the raw server text (#67).
+    in property <bool> account-missing: false;
     in property <bool> loading: false;
 
     property <string> si-email;
     property <string> si-password;
 
     callback back();
+    /// Leave the panel for onboarding step 1, as a new player.
+    callback start-new-player();
     callback signin-steam();
     callback signin-google();
     callback signin-twitch();
@@ -347,7 +352,17 @@ export component SignInPanel inherits Rectangle {
                     is-password: true;
                 }
 
-                if show-email-form && error != "": Text {
+                if show-email-form: AccentButton {
+                    label: loading ? "SIGNING IN…" : "SIGN IN";
+                    enabled: !loading;
+                    clicked => {
+                        root.signin-email(root.si-email, root.si-password);
+                    }
+                }
+
+                // A failed sign-in, by email or by a provider. Outside the
+                // email form, so a provider failure shows too.
+                if error != "" && !account-missing: Text {
                     font-weight: Theme.weight-display;
                     font-family: Theme.font-display;
                     text: error;
@@ -355,11 +370,58 @@ export component SignInPanel inherits Rectangle {
                     font-size: 13px;
                 }
 
-                if show-email-form: AccentButton {
-                    label: loading ? "SIGNING IN…" : "SIGN IN";
-                    enabled: !loading;
-                    clicked => {
-                        root.signin-email(root.si-email, root.si-password);
+                if account-missing: HorizontalLayout {
+                    spacing: 16px;
+                    cross-axis-alignment: center;
+
+                    VerticalLayout {
+                        horizontal-stretch: 1;
+                        spacing: 4px;
+
+                        Text {
+                            font-weight: Theme.weight-display;
+                            font-family: Theme.font-display;
+                            text: error;
+                            color: Theme.accent;
+                            font-size: 15px;
+                        }
+
+                        Text {
+                            letter-spacing: Theme.track-label;
+                            font-weight: Theme.weight-label;
+                            font-family: Theme.font-label;
+                            text: "Start as a new player to make one.";
+                            color: Theme.text-secondary;
+                            font-size: 13px;
+                        }
+                    }
+
+                    CutButton {
+                        horizontal-stretch: 0;
+                        width: new-player-text.preferred-width + 40px;
+                        height: 44px;
+                        outlined: true;
+                        line-color: new-player-touch.has-hover ? Theme.action : Theme.action-line;
+                        surface-color: Theme.bg-app;
+
+                        new-player-text := Text {
+                            letter-spacing: Theme.track-label;
+                            font-weight: 600;
+                            font-family: Theme.font-label;
+                            text: "Start as a new player";
+                            color: Theme.action;
+                            font-size: 13px;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+
+                        new-player-touch := TouchArea {
+                            accessible-role: button;
+                            accessible-label: "Start as a new player";
+                            clicked => {
+                                root.start-new-player();
+                            }
+                        }
                     }
                 }
             }
