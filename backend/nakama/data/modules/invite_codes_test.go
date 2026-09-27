@@ -220,8 +220,9 @@ func TestInviteJoinPrecheck(t *testing.T) {
 		{"superadmin is already a member", state(0), true, nil},
 		{"admin is already a member", state(1), true, nil},
 		{"member is already a member", state(2), true, nil},
-		{"pending join request goes through GroupUserJoin", state(3), false, nil},
-		// GroupUserJoin returns nil for a banned user without adding them, so
+		// A join request is not a membership. The invite code completes it.
+		{"pending join request is added", state(3), false, nil},
+		// GroupUsersAdd returns nil for a banned user without adding them, so
 		// the RPC must refuse before calling it.
 		{"banned is refused", state(4), false, errInviteJoinBanned},
 	}
@@ -235,7 +236,7 @@ func TestInviteJoinPrecheck(t *testing.T) {
 	}
 }
 
-func TestInviteJoinErrorMapsGroupUserJoinErrors(t *testing.T) {
+func TestInviteJoinErrorMapsGroupUsersAddErrors(t *testing.T) {
 	cases := []struct {
 		name string
 		in   error
@@ -244,9 +245,9 @@ func TestInviteJoinErrorMapsGroupUserJoinErrors(t *testing.T) {
 		{"full crew", runtime.ErrGroupFull, errInviteJoinCrewFull},
 		{"wrapped full crew", fmt.Errorf("join: %w", runtime.ErrGroupFull), errInviteJoinCrewFull},
 		{"deleted crew", runtime.ErrGroupNotFound, errInviteJoinCrewGone},
-		// The Nakama 3.21 message for an empty username. Anything unknown is an
-		// internal failure, never an invalid invite code.
-		{"unknown error", errors.New("expects a username string"), errInviteJoinFailed},
+		// Anything else is an internal failure, never an invalid invite code.
+		{"user not found", runtime.ErrGroupUserNotFound, errInviteJoinFailed},
+		{"unknown error", errors.New("connection reset"), errInviteJoinFailed},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -267,7 +268,6 @@ func TestInviteJoinErrorCodesAreStable(t *testing.T) {
 		{errInviteJoinBanned, 7},
 		{errInviteJoinCrewFull, 8},
 		{errInviteJoinCrewGone, 5},
-		{errInviteJoinUserLookup, 13},
 		{errInviteJoinFailed, 13},
 	}
 	for _, c := range cases {
