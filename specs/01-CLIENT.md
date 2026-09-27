@@ -120,9 +120,41 @@ Onboarding is a 3-step full-screen flow for new users (when `onboarding_step < 4
 |------|--------|-------------|
 | 1 | Discover Crews | Bento grid of public crews (fetched unauthenticated via `http_key`). "Create Your Own Crew" opens the new-crew modal in onboarding mode (invite section disabled, button says "Save & Continue"). Crew details stored locally, creation deferred. |
 | 2 | Profile Setup | User sets nickname and picks an avatar. |
-| 3 | Identity Linking | Optional social login or email. "Continue" sends `FinalizeOnboarding` which: device-auths → creates account → creates/joins crew (with stored details + avatar) → enters main app. |
+| 3 | Identity Linking | Required. The user links one identity: a provider (Steam, Twitch, Google, Apple, Discord) or email + password. There is no skip. A successful link enters the main app. |
+
+"Continue" on step 2 sends `FinalizeOnboarding`, which device-auths, creates the account, and creates or joins the crew (with the stored details and avatar). Step 3 follows.
 
 The `pending_crew_name`, `pending_crew_description`, and `pending_crew_open` fields are persisted in `Settings` (survives restart). The crew avatar base64 is held in memory only (`Arc<Mutex<Option<String>>>`).
+
+A restart on step 3 sends `DeviceAuth` with the stored device id. Linking needs a session in core, and only a finished onboarding restores one.
+
+### 6.1 Sign-in Entry Points
+
+"Has a device account" means `Settings::device_id` is set. Onboarding writes it when the user continues from step 2.
+
+| Case | Step 1 shows |
+|------|--------------|
+| No device account (fresh install) | "I already have an account" (top right). It opens the sign-in panel. |
+| Device account, the user logged out | The returning-user control ("DEVICE USER … \| SIGN IN") after `DeviceAuthed { created: false }`. It opens the app as the device account. |
+| Device account, any other case | No sign-in control. |
+
+Step 1 never shows two sign-in controls.
+
+The sign-in panel:
+
+- Stays open while a provider flow runs. A failure shows on the panel.
+- Shows plain messages, never the server text. "User account not found" becomes "No account found." with a "Start as a new player" button. "Invalid credentials" becomes "Wrong email or password.".
+- "Back" and "Start as a new player" close the panel and clear the error. Both return to step 1.
+
+### 6.2 Lost Session
+
+At startup with onboarding done (`onboarding_step > 3`) the client sends `TryRestore`. When the restore fails and a device account exists:
+
+1. The client sends `DeviceAuth`. The window stays on the restore wait.
+2. `DeviceAuthed { created: false }`: the account exists. The app opens, the same as a restored session.
+3. `DeviceAuthed { created: true }` or a failed device auth: step 1.
+
+With no device account, a failed restore goes to step 1.
 
 ---
 

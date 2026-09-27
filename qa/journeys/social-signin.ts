@@ -7,7 +7,7 @@
 
 import { completeOAuth, fakeOAuthUp, type OAuthOutcome } from "../../tools/mello-driver/src/browser.ts";
 import { journey, type Journey, type JourneyContext } from "../../tools/mello-driver/src/journey.ts";
-import { createCrewAtStep1, profileAtStep2 } from "./lib/onboarding.ts";
+import { createCrewAtStep1, linkEmailAtStep3, profileAtStep2 } from "./lib/onboarding.ts";
 
 type Provider = "Discord" | "Twitch" | "Steam" | "Google";
 
@@ -33,10 +33,6 @@ function linkThenSignInElsewhere(provider: Provider): Journey {
   return journey({
     id: `auth.social.${provider.toLowerCase()}.link-then-sign-in`,
     flows: ["ONB-03", "AUTH-04", "ONB-08"],
-    // #67: the only way to sign in on a fresh install today is the "Sign in"
-    // link on step 1, which #67 removes. When it goes, this journey signs in
-    // through step 3's link-or-switch instead.
-    knownIssues: [67],
     async run(ctx) {
       await needFake();
       const { runId, step, expect } = ctx;
@@ -53,7 +49,8 @@ function linkThenSignInElsewhere(provider: Provider): Journey {
       await step(`on a new computer, dana signs in with ${provider}`, async () => {
         await erin.waitFor("step 1", (s) => s.onboarding_step === 1, 30_000);
         await erin.settle(["DiscoverCrewsLoaded"]);
-        await erin.click("Sign in");
+        // A fresh install has no device account, so step 1 offers this entry (#67).
+        await erin.click("I already have an account");
         await erin.click(provider);
         await completeOAuth(erin, { identity });
         const s = await erin.waitFor("the app as dana", (st) => st.screen === "app" && st.logged_in, 20_000);
@@ -82,7 +79,7 @@ function linkFails(
     knownIssues,
     async run(ctx) {
       await needFake();
-      const { step, expect } = ctx;
+      const { runId, step, expect } = ctx;
       const frank = await atStep3(ctx, "frank");
 
       await step(`frank starts ${provider}, the provider answers "${outcome}"`, async () => {
@@ -99,9 +96,8 @@ function linkFails(
         expect(s.onboarding_step === 3, `still on step 3, got step ${s.onboarding_step}`);
         if (expectError) expect(s.link_error !== "", "a reason shows");
         await frank.checkpoint(`after-${outcome}`);
-        // Usable: skipping still works.
-        await frank.click("Skip for now");
-        await frank.waitFor("the app", (st) => st.screen === "app");
+        // Usable: linking email + password still works. Step 3 has no skip.
+        await linkEmailAtStep3(frank, `frank${runId}`);
       });
     },
   });

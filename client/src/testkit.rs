@@ -207,6 +207,35 @@ impl Harness {
         self.pump();
     }
 
+    /// Visible controls with this accessible label: the text the user reads.
+    ///
+    /// A `Text` carries its own text as its label, so a control's caption
+    /// matches too; only elements with a control role count.
+    pub fn controls_labelled(&self, label: &str) -> Vec<ElementHandle> {
+        ElementHandle::find_by_accessible_label(self.app(), label)
+            .filter(|e| {
+                !matches!(
+                    e.accessible_role(),
+                    None | Some(i_slint_backend_testing::AccessibleRole::None)
+                        | Some(i_slint_backend_testing::AccessibleRole::Text)
+                )
+            })
+            .collect()
+    }
+
+    /// Click the first visible control with this accessible label, then pump.
+    ///
+    /// Panics when nothing matches, for the same reason as [`Harness::click`].
+    pub fn click_label(&mut self, label: &str) {
+        let matches = self.controls_labelled(label);
+        assert!(
+            !matches.is_empty(),
+            "no visible control labelled {label:?} in this state"
+        );
+        matches[0].mock_single_click(slint::platform::PointerEventButton::Left);
+        self.pump();
+    }
+
     /// Type text into whatever currently has focus.
     ///
     /// Slint 1.17 exposes no public keyboard helper, so this drives

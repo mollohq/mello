@@ -400,8 +400,8 @@ This review found these items. They are not part of this plan.
 | 3 | `Event::Error` is only logged. It never reaches the UI. Seven core paths end there, including voice channel create, rename and delete, and joining a crew. | P1 | Open |
 | 4 | A fresh install opened from an invite link does not offer the invited crew at step 1. The user must create or join another crew first. The join modal then opens on top of step 3. | P1 | Open, to fix later |
 | 5 | Session restore blocks the core command loop while the keychain prompt waits. The window stays blank. | P1 | Open |
-| 6 | A returning device user with a lost session goes back to "Discover your crew". The account already owns a crew. | P2 | Open, needs a product decision |
-| 7 | Step 1 for a returning user shows two "Sign in" controls: the pill and the old link. | P2 | Open |
+| 6 | A returning device user with a lost session goes back to "Discover your crew". The account already owns a crew. | P2 | Fixed (#71): the app opens directly |
+| 7 | Step 1 for a returning user shows two "Sign in" controls: the pill and the old link. | P2 | Fixed (#70) |
 | 8 | The returning-user pill and its round avatar break the design system shapes. A person is an octagon. A button cuts two corners. | P3 | Open |
 | 9 | Loading history for a new crew logs `400 Invalid channel ID`. | P3 | Open |
 | 10 | Step 3 shows an Apple button. Desktop Apple sign-in is not implemented. | P3 | Open |
@@ -493,6 +493,9 @@ Design changes from §5 and §6:
 | `invite-accept-deeplink-cold.ts#publicCrew` | INV-01, INV-03 | Fails on #84 |
 | `invite-accept-deeplink-cold.ts#privateCrew` | INV-01, INV-03 | Fails on #83 |
 | `invite-accept-while-running.ts` | INV-02 | Fails on #84 |
+| `signin-fresh-install.ts` | AUTH-05 | New with #67 |
+| `signout-returning-user.ts` | AUTH-02 | New with #70 |
+| `session-lost.ts` | AUTH-02 | New with #71 |
 | `social-signin.ts` (9 journeys) | ONB-03, AUTH-04, ONB-08 | 9/9 on the e2e Docker profile. Discord, Twitch, Steam and Google sign up and sign in end to end. `discordDeny` requires a refusal to end within 5 s (#87, fixed). |
 
 The first 20-run check found a driver race in 4 of 12 runs. The cause was an app bug (#85). The fix in the driver waits on the real state, and the next 20-run check passed 40 of 40.

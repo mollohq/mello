@@ -489,8 +489,8 @@ fn sample_user() -> mello_core::events::User {
 // ---------------------------------------------------------------------------
 
 /// `OnboardingReady` lands the user on step **3**, not 4 — reaching "done"
-/// needs a separate later event (`EmailLinked` / `SocialLinked` / `LoggedIn`)
-/// or one of the local skip shortcuts. Pinned because it is surprising: an
+/// needs a separate later event (`EmailLinked` / `SocialLinked` / `LoggedIn`).
+/// Step 3 has no skip. Pinned because it is surprising: an
 /// account exists and `logged-in` is true while onboarding is still on screen.
 #[test]
 fn onboarding_ready_logs_in_but_stays_on_step_three() {
@@ -564,13 +564,13 @@ fn real_login_failure_surfaces_an_error_and_stays_put() {
     h.app().set_onboarding_step(4);
 
     h.emit(Event::LoginFailed {
-        reason: "invalid credentials".into(),
+        reason: "Authentication failed: Invalid credentials.".into(),
     });
 
     assert_eq!(
         h.app().get_login_error().as_str(),
-        "invalid credentials",
-        "a real failure must be shown to the user"
+        "Wrong email or password.",
+        "a real failure must be shown to the user, in plain words"
     );
     assert_eq!(
         h.app().get_onboarding_step(),
@@ -1077,16 +1077,33 @@ fn each_social_button_emits_its_own_provider() {
     }
 }
 
-/// Social sign-in dismisses the panel, so the user is not left looking at a
-/// sign-in form while the provider flow runs.
+/// ★ Regression (#67): social sign-in keeps the panel open while the provider
+/// flow runs, so a failure shows on it with a way forward. The panel used to
+/// close at once, and a failed sign-in landed on step 1 with no message.
 #[test]
-fn social_signin_dismisses_the_sign_in_panel() {
-    let h = Harness::new();
+fn social_signin_keeps_the_panel_open_until_it_ends() {
+    let mut h = Harness::new();
     h.app().set_show_sign_in(true);
+    h.app().set_login_error("No account found.".into());
+    h.app().set_login_account_missing(true);
 
     h.app().invoke_signin_google();
 
-    assert!(!h.app().get_show_sign_in());
+    assert!(h.app().get_show_sign_in(), "the panel stays open");
+    assert!(h.app().get_login_loading(), "the attempt shows progress");
+    assert_eq!(
+        h.app().get_login_error().as_str(),
+        "",
+        "the old error clears"
+    );
+    assert!(!h.app().get_login_account_missing());
+
+    h.emit(Event::LoginFailed {
+        reason: "Authentication failed: User account not found.".into(),
+    });
+    assert!(h.app().get_show_sign_in(), "the failure shows on the panel");
+    assert_eq!(visible_screens(&h), vec![Screen::SignIn]);
+    assert_eq!(h.app().get_login_error().as_str(), "No account found.");
 }
 
 /// Documented gap, not an endorsement: desktop has no native Apple flow, so
@@ -1250,6 +1267,241 @@ fn failed_restore_stops_the_spinner() {
     assert!(
         !h.app().get_login_loading(),
         "the restore spinner must stop when restore fails"
+    );
+}
+
+// ── Sign-in entry points on step 1 (#67, #70) and a lost session (#71) ──────
+
+const HAVE_ACCOUNT: &str = "I already have an account";
+const RETURNING_SIGN_IN: &str = "Sign in";
+
+fn with_device_account(h: &Harness) {
+    h.settings().borrow_mut().device_id = Some("dev-abc".into());
+}
+
+/// The sign-in controls on screen, by label.
+fn sign_in_controls(h: &Harness) -> Vec<&'static str> {
+    [HAVE_ACCOUNT, RETURNING_SIGN_IN]
+        .into_iter()
+        .flat_map(|label| std::iter::repeat_n(label, h.controls_labelled(label).len()))
+        .collect()
+}
+
+/// ★ Regression (#67, R1): a fresh install has no device account, so step 1
+/// offers "I already have an account", and nothing else to sign in with.
+#[test]
+fn fresh_install_step_one_offers_i_already_have_an_account() {
+    let h = Harness::new();
+
+    resume(h.ctx(), OnboardingState::PickCrew);
+
+    assert!(!h.app().get_has_device_account());
+    assert_eq!(sign_in_controls(&h), vec![HAVE_ACCOUNT]);
+}
+
+/// ★ Regression (#67, R1): a machine with a device account shows no
+/// "I already have an account" on step 1.
+#[test]
+fn a_device_account_hides_i_already_have_an_account() {
+    let h = Harness::new();
+    with_device_account(&h);
+
+    resume(h.ctx(), OnboardingState::PickCrew);
+
+    assert!(h.app().get_has_device_account());
+    assert!(
+        h.controls_labelled(HAVE_ACCOUNT).is_empty(),
+        "this machine has a device account"
+    );
+}
+
+/// ★ Regression (#70, R5): a returning user who logged out sees exactly one
+/// sign-in control, the returning-user one.
+#[test]
+fn a_returning_user_sees_exactly_one_sign_in_control() {
+    let mut h = Harness::new();
+    with_device_account(&h);
+    h.emit(Event::LoggedIn {
+        user: sample_user(),
+    });
+
+    h.app().invoke_logout();
+    let cmds = h.commands();
+    assert!(
+        cmds.iter().any(|c| matches!(c, Command::DeviceAuth { .. })),
+        "logout authenticates the device account for the returning-user control, got {cmds:?}"
+    );
+    h.emit(Event::DeviceAuthed {
+        user: sample_user(),
+        created: false,
+    });
+
+    assert_eq!(h.app().get_onboarding_step(), 1);
+    assert_eq!(sign_in_controls(&h), vec![RETURNING_SIGN_IN]);
+}
+
+/// ★ Regression (#67, R2): an unknown account gets a plain message and a way
+/// to start as a new player, which returns to step 1 with no error left.
+#[test]
+fn an_unknown_account_gets_a_plain_message_and_a_way_back_to_step_one() {
+    let mut h = Harness::new();
+    resume(h.ctx(), OnboardingState::PickCrew);
+    h.click_label(HAVE_ACCOUNT);
+    assert_eq!(visible_screens(&h), vec![Screen::SignIn]);
+
+    h.app()
+        .invoke_login("nobody@example.test".into(), "whatever".into());
+    h.emit(Event::LoginFailed {
+        reason: "Authentication failed: User account not found.".into(),
+    });
+
+    assert_eq!(h.app().get_login_error().as_str(), "No account found.");
+    assert!(h.app().get_login_account_missing());
+    assert!(!h.app().get_login_loading());
+
+    h.click_label("Start as a new player");
+
+    assert_eq!(visible_screens(&h), vec![Screen::Onboarding]);
+    assert_eq!(h.app().get_onboarding_step(), 1);
+    assert_eq!(
+        h.app().get_login_error().as_str(),
+        "",
+        "no sign-in error is left on step 1"
+    );
+    assert!(!h.app().get_login_account_missing());
+}
+
+/// ★ Regression (#67, R2): "Back" also clears the error, so the panel never
+/// opens again on an old failure.
+#[test]
+fn leaving_the_sign_in_panel_clears_its_error() {
+    let mut h = Harness::new();
+    resume(h.ctx(), OnboardingState::PickCrew);
+    h.click_label(HAVE_ACCOUNT);
+    h.emit(Event::LoginFailed {
+        reason: "Authentication failed: Invalid credentials.".into(),
+    });
+    assert_eq!(
+        h.app().get_login_error().as_str(),
+        "Wrong email or password."
+    );
+
+    h.click_label("Back");
+
+    assert_eq!(visible_screens(&h), vec![Screen::Onboarding]);
+    assert_eq!(h.app().get_login_error().as_str(), "");
+}
+
+/// ★ Regression (#71, R4): the saved session is lost, and device auth finds
+/// the account that finished onboarding. The app opens directly.
+#[test]
+fn a_lost_session_with_a_device_account_opens_the_app() {
+    let mut h = Harness::new();
+    with_device_account(&h);
+    resume(h.ctx(), OnboardingState::Done);
+    let _ = h.commands();
+
+    h.emit(Event::LoginFailed {
+        reason: String::new(),
+    });
+    let cmds = h.commands();
+    assert!(
+        cmds.iter()
+            .any(|c| matches!(c, Command::DeviceAuth { device_id } if device_id == "dev-abc")),
+        "a failed restore tries the device account, got {cmds:?}"
+    );
+    assert_eq!(
+        h.app().get_onboarding_step(),
+        4,
+        "no step 1 while device auth runs"
+    );
+
+    h.emit(Event::DeviceAuthed {
+        user: sample_user(),
+        created: false,
+    });
+
+    assert!(h.app().get_logged_in());
+    assert_eq!(visible_screens(&h), vec![Screen::App]);
+    assert_eq!(h.settings().borrow().onboarding_step, 4);
+    let cmds = h.commands();
+    assert!(
+        cmds.iter().any(|c| matches!(c, Command::LoadMyCrews)),
+        "the user's crews load, got {cmds:?}"
+    );
+}
+
+/// A lost session whose device account turns out to be new (the server no
+/// longer has it) starts onboarding as a new player.
+#[test]
+fn a_lost_session_with_a_new_device_account_goes_to_step_one() {
+    let mut h = Harness::new();
+    with_device_account(&h);
+    resume(h.ctx(), OnboardingState::Done);
+
+    h.emit(Event::LoginFailed {
+        reason: String::new(),
+    });
+    h.emit(Event::DeviceAuthed {
+        user: sample_user(),
+        created: true,
+    });
+
+    assert!(!h.app().get_logged_in());
+    assert_eq!(h.app().get_onboarding_step(), 1);
+    h.assert_not_blank();
+}
+
+/// Device auth after a lost session can fail too (the server is down). The
+/// user lands on step 1, not on the blank restore wait, with no sign-in error:
+/// nobody was signing in.
+#[test]
+fn a_lost_session_whose_device_auth_fails_goes_to_step_one() {
+    let mut h = Harness::new();
+    with_device_account(&h);
+    resume(h.ctx(), OnboardingState::Done);
+
+    h.emit(Event::LoginFailed {
+        reason: String::new(),
+    });
+    h.emit(Event::LoginFailed {
+        reason: "HTTP error: connection refused".into(),
+    });
+
+    assert_eq!(h.app().get_onboarding_step(), 1);
+    assert_eq!(h.app().get_login_error().as_str(), "");
+    h.assert_not_blank();
+}
+
+/// ★ Regression (R3): step 3 has no skip. A restart at step 3 has no session
+/// in core, so resuming it authenticates the device account; without that,
+/// linking fails with "Not connected" and the user could not leave step 3.
+#[test]
+fn resuming_step_three_authenticates_the_device_account() {
+    let mut h = Harness::new();
+    with_device_account(&h);
+
+    resume(h.ctx(), OnboardingState::LinkIdentity);
+
+    let cmds = h.commands();
+    assert!(
+        cmds.iter()
+            .any(|c| matches!(c, Command::DeviceAuth { device_id } if device_id == "dev-abc")),
+        "step 3 needs a session to link an identity, got {cmds:?}"
+    );
+}
+
+/// ★ Regression (R3): step 3 offers only ways to link an identity.
+#[test]
+fn step_three_has_no_skip() {
+    let h = Harness::new();
+
+    resume(h.ctx(), OnboardingState::LinkIdentity);
+
+    assert!(!h.controls_labelled("Email + password").is_empty());
+    assert!(
+        h.controls_labelled("Skip for now").is_empty(),
+        "step 3 requires linking one identity"
     );
 }
 

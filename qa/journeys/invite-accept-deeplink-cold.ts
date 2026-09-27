@@ -7,7 +7,7 @@ import {
   createCrewAtStep1,
   onboardWithNewCrew,
   profileAtStep2,
-  skipLinkingAtStep3,
+  linkEmailAtStep3,
   type Visibility,
 } from "./lib/onboarding.ts";
 
@@ -67,7 +67,7 @@ async function run({ runId, launch, step, expect }: JourneyContext, visibility: 
   });
 
   await step("bob: finishes onboarding into the app", async () => {
-    await skipLinkingAtStep3(bob);
+    await linkEmailAtStep3(bob, bobName);
     await bob.checkpoint("bob-in-app");
   });
 

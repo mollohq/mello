@@ -10,8 +10,7 @@ pub fn wire(ctx: &AppContext) {
         let app_weak = ctx.app.as_weak();
         ctx.app.on_login(move |email, password| {
             if let Some(app) = app_weak.upgrade() {
-                app.set_login_loading(true);
-                app.set_login_error("".into());
+                begin_sign_in(&app);
             }
             let _ = cmd.send(Command::Login {
                 email: email.to_string(),
@@ -55,13 +54,42 @@ pub fn wire(ctx: &AppContext) {
         });
     }
 
+    // --- Sign-in panel: open and leave ---
+    //
+    // Both clear the last failure, so the panel never opens on an old error
+    // and step 1 never keeps one (#67).
+    {
+        let app_weak = ctx.app.as_weak();
+        ctx.app.on_open_sign_in(move || {
+            if let Some(app) = app_weak.upgrade() {
+                log::info!("[auth] sign-in panel opened");
+                clear_sign_in_error(&app);
+                app.set_show_sign_in(true);
+            }
+        });
+    }
+    {
+        let app_weak = ctx.app.as_weak();
+        ctx.app.on_close_sign_in(move || {
+            if let Some(app) = app_weak.upgrade() {
+                log::info!("[auth] sign-in panel closed — back to step 1");
+                clear_sign_in_error(&app);
+                app.set_show_sign_in(false);
+            }
+        });
+    }
+
     // --- Sign-in panel: social auth (returning user) ---
+    //
+    // The panel stays open while the provider flow runs, so a failure shows
+    // on it with a way forward. It used to close at once: a failed sign-in
+    // then landed on step 1 with no message, and the user went round again.
     {
         let cmd = ctx.cmd_tx.clone();
         let app_weak = ctx.app.as_weak();
         ctx.app.on_signin_steam(move || {
             if let Some(app) = app_weak.upgrade() {
-                app.set_show_sign_in(false);
+                begin_sign_in(&app);
             }
             let _ = cmd.send(Command::AuthSteam);
         });
@@ -71,7 +99,7 @@ pub fn wire(ctx: &AppContext) {
         let app_weak = ctx.app.as_weak();
         ctx.app.on_signin_google(move || {
             if let Some(app) = app_weak.upgrade() {
-                app.set_show_sign_in(false);
+                begin_sign_in(&app);
             }
             let _ = cmd.send(Command::AuthGoogle);
         });
@@ -81,7 +109,7 @@ pub fn wire(ctx: &AppContext) {
         let app_weak = ctx.app.as_weak();
         ctx.app.on_signin_twitch(move || {
             if let Some(app) = app_weak.upgrade() {
-                app.set_show_sign_in(false);
+                begin_sign_in(&app);
             }
             let _ = cmd.send(Command::AuthTwitch);
         });
@@ -91,7 +119,7 @@ pub fn wire(ctx: &AppContext) {
         let app_weak = ctx.app.as_weak();
         ctx.app.on_signin_discord(move || {
             if let Some(app) = app_weak.upgrade() {
-                app.set_show_sign_in(false);
+                begin_sign_in(&app);
             }
             let _ = cmd.send(Command::AuthDiscord);
         });
@@ -101,7 +129,7 @@ pub fn wire(ctx: &AppContext) {
         let app_weak = ctx.app.as_weak();
         ctx.app.on_signin_apple(move || {
             if let Some(app) = app_weak.upgrade() {
-                app.set_show_sign_in(false);
+                begin_sign_in(&app);
             }
             // No native Apple flow on desktop yet; empty token → handler reports unsupported.
             let _ = cmd.send(Command::AuthApple {
@@ -109,4 +137,15 @@ pub fn wire(ctx: &AppContext) {
             });
         });
     }
+}
+
+/// A sign-in attempt starts: show progress and drop the last failure.
+fn begin_sign_in(app: &crate::MainWindow) {
+    app.set_login_loading(true);
+    clear_sign_in_error(app);
+}
+
+fn clear_sign_in_error(app: &crate::MainWindow) {
+    app.set_login_error("".into());
+    app.set_login_account_missing(false);
 }

@@ -34,7 +34,7 @@ pub enum OnboardingState {
     PickCrew,
     /// Step 2: nickname and avatar.
     PickAvatar,
-    /// Step 3: link an identity, or skip.
+    /// Step 3: link an identity. Required: step 3 has no skip.
     LinkIdentity,
     /// Onboarding finished; the main app is shown.
     Done,
@@ -50,11 +50,14 @@ pub enum Input {
     CrewChosen,
     /// The account now exists (`OnboardingReady`).
     AccountReady,
-    /// An identity was linked, or the user chose to skip.
+    /// An identity was linked. This is the only way out of step 3.
     IdentitySettled,
     /// A previous session was restored (`LoggedIn`).
     SessionRestored,
-    /// Session restore failed; fall back to signing up again.
+    /// Session restore failed and the device account cannot open the app;
+    /// fall back to signing up again. A restore that fails for a user who
+    /// finished onboarding first tries device auth (see `handlers::auth`),
+    /// and sends this input only when that does not find the account.
     RestoreFailed,
     /// The user logged out.
     LoggedOut,
@@ -114,8 +117,8 @@ impl OnboardingState {
 
             (PickCrew, CrewChosen) => PickAvatar,
 
-            // The account exists but onboarding is not finished: the user is
-            // still offered identity linking, and may skip it.
+            // The account exists but onboarding is not finished: the user
+            // must still link an identity.
             //
             // Unconditional on the previous state. Signup having succeeded is
             // decisive regardless of where the UI thought the user was, and
@@ -283,6 +286,10 @@ pub fn apply_to(
 }
 
 /// Persist the state to the UI property and to settings, together.
+///
+/// Also refreshes `has-device-account`, which decides whether step 1 offers
+/// "I already have an account" (#67). Every entry into step 1 passes here, so
+/// the entry cannot read a stale value.
 fn write_state(
     app: &crate::MainWindow,
     settings: &Rc<RefCell<crate::Settings>>,
@@ -290,6 +297,7 @@ fn write_state(
 ) {
     app.set_onboarding_step(state.to_step());
     let mut s = settings.borrow_mut();
+    app.set_has_device_account(s.has_device_account());
     s.onboarding_step = state.to_step() as u8;
     s.save();
 }
@@ -322,6 +330,24 @@ pub fn resume(ctx: &AppContext, state: OnboardingState) {
     // That is the blank window the whole module exists to prevent.
     write_state(&ctx.app, &ctx.settings, state);
     run_entry_effects(&ctx.app, &EffectCtx::from_ctx(ctx), state);
+
+    // Step 3 links an identity to the device account, which needs a session
+    // in core. After a restart core has none: only a finished onboarding
+    // restores one. Step 3 has no skip, so without this the user could not
+    // leave it. Not an entry effect: entering step 3 from step 2 already has
+    // the session that finalize opened.
+    if state == OnboardingState::LinkIdentity {
+        let device_id = ctx.settings.borrow().device_id.clone();
+        match device_id.filter(|id| !id.is_empty()) {
+            Some(device_id) => {
+                log::info!("[onboarding] resuming step 3 — device auth for a session");
+                let _ = ctx
+                    .cmd_tx
+                    .send(mello_core::Command::DeviceAuth { device_id });
+            }
+            None => log::warn!("[onboarding] resuming step 3 with no device id"),
+        }
+    }
 }
 
 #[cfg(test)]

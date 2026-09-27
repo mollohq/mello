@@ -2,7 +2,7 @@
 
 import type { App } from "../../../tools/mello-driver/src/app.ts";
 import type { JourneyContext } from "../../../tools/mello-driver/src/journey.ts";
-import { createCrewAtStep1, onboardWithNewCrew, profileAtStep2, skipLinkingAtStep3, type Visibility } from "./onboarding.ts";
+import { createCrewAtStep1, linkEmailAtStep3, onboardWithNewCrew, profileAtStep2, type Visibility } from "./onboarding.ts";
 
 export type Crew = { alice: App; bob: App; crew: string; aliceName: string; bobName: string };
 
@@ -36,7 +36,7 @@ export async function twoUsersInOneCrew(ctx: JourneyContext, visibility: Visibil
     await bob.waitFor("join modal", (s) => s.join_crew_modal_open && s.join_crew_name === crew, 30_000);
     await bob.click("Join crew");
     await bob.waitFor(`${crew} in bob's crews`, (s) => s.crews.includes(crew));
-    await skipLinkingAtStep3(bob);
+    await linkEmailAtStep3(bob, bobName);
   });
 
   await step("setup: both have the crew active", async () => {

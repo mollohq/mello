@@ -17,7 +17,7 @@ flows:
 
   # ── Onboarding ────────────────────────────────────────────────
   - id: ONB-01
-    title: Fresh install, create a crew, pick an avatar, skip linking, reach the app
+    title: Fresh install, create a crew, pick an avatar, link an identity, reach the app
     priority: P0
     users: 1
     harness: [discover_crews_loaded_advances_to_step_one, onboarding_ready_logs_in_but_stays_on_step_three, clicking_continue_twice_only_finalizes_once, retrying_finalize_reuses_the_same_device_id]
@@ -38,7 +38,7 @@ flows:
     title: Link an identity at step 3 (Google, Discord, Twitch, Steam, email)
     priority: P0
     users: 1
-    harness: [onboarding_social_buttons_link_rather_than_sign_in, failed_social_link_clears_the_spinner_and_shows_why, failed_email_link_shows_why]
+    harness: [onboarding_social_buttons_link_rather_than_sign_in, failed_social_link_clears_the_spinner_and_shows_why, failed_email_link_shows_why, step_three_has_no_skip]
     journeys: [qa/journeys/social-signin.ts]
     protocol: []
     issues: [72, 73]
@@ -74,19 +74,19 @@ flows:
     title: Quit during onboarding, relaunch, resume at the same step
     priority: P1
     users: 1
-    harness: [resuming_into_step_2_loads_its_data, navigating_back_into_step_2_loads_its_data]
+    harness: [resuming_into_step_2_loads_its_data, navigating_back_into_step_2_loads_its_data, resuming_step_three_authenticates_the_device_account]
     journeys: []
     protocol: []
     issues: []
 
   - id: ONB-08
-    title: An existing account on a new computer gets back into its crews
+    title: An existing account on a new computer gets back into its crews ("I already have an account")
     priority: P1
     users: 1
-    harness: []
+    harness: [fresh_install_step_one_offers_i_already_have_an_account]
     journeys: [qa/journeys/social-signin.ts]
     protocol: []
-    issues: [67]
+    issues: []
 
   # ── Sign-in and session ───────────────────────────────────────
   - id: AUTH-01
@@ -99,13 +99,13 @@ flows:
     issues: []
 
   - id: AUTH-02
-    title: Session restore fails, the returning user signs in again
+    title: A returning user whose session is lost, or who logged out, gets back in
     priority: P0
     users: 1
-    harness: [session_restore_failure_ends_somewhere_usable, failed_restore_stops_the_spinner, empty_login_failure_reason_means_restore_failed]
-    journeys: []
+    harness: [session_restore_failure_ends_somewhere_usable, failed_restore_stops_the_spinner, empty_login_failure_reason_means_restore_failed, a_lost_session_with_a_device_account_opens_the_app, a_lost_session_with_a_new_device_account_goes_to_step_one, a_lost_session_whose_device_auth_fails_goes_to_step_one, a_returning_user_sees_exactly_one_sign_in_control, a_device_account_hides_i_already_have_an_account]
+    journeys: [qa/journeys/session-lost.ts, qa/journeys/signout-returning-user.ts]
     protocol: []
-    issues: [70, 71]
+    issues: []
 
   - id: AUTH-03
     title: Sign out, then sign in with email and password
@@ -120,19 +120,19 @@ flows:
     title: Sign in with each social provider (fake OAuth)
     priority: P0
     users: 1
-    harness: [each_social_button_emits_its_own_provider, social_signin_dismisses_the_sign_in_panel, apple_signin_currently_sends_an_empty_token]
+    harness: [each_social_button_emits_its_own_provider, social_signin_keeps_the_panel_open_until_it_ends, apple_signin_currently_sends_an_empty_token]
     journeys: [qa/journeys/social-signin.ts]
     protocol: []
     issues: [72]
 
   - id: AUTH-05
-    title: A fresh install never sees "Sign in"
+    title: Fresh install, "I already have an account" with no account, a plain message and a way back to step 1
     priority: P1
     users: 1
-    harness: []
-    journeys: []
+    harness: [fresh_install_step_one_offers_i_already_have_an_account, an_unknown_account_gets_a_plain_message_and_a_way_back_to_step_one, leaving_the_sign_in_panel_clears_its_error, an_unknown_account_reads_as_a_plain_message_with_a_way_forward]
+    journeys: [qa/journeys/signin-fresh-install.ts]
     protocol: []
-    issues: [67]
+    issues: []
 
   # ── Invites ───────────────────────────────────────────────────
   - id: INV-01

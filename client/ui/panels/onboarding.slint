@@ -562,6 +562,9 @@ export component Onboarding inherits Rectangle {
     in property <string> device-user-name: "";
     in property <string> device-user-initials: "";
     in property <bool> is-returning-user: false;
+    /// This machine has a device account. Step 1 then shows no
+    /// "I already have an account" entry (#67).
+    in property <bool> has-device-account: false;
 
     // Email link form state (step 3)
     property <bool> show-email-form: false;
@@ -577,7 +580,6 @@ export component Onboarding inherits Rectangle {
     callback login-requested();
     callback open-sign-in();
     callback link-email(string, string);
-    callback skip-identity();
     callback capture-device-selected(string);
     callback playback-device-selected(string);
 
@@ -597,15 +599,17 @@ export component Onboarding inherits Rectangle {
         // ── Crew discovery view ──
         Rectangle {
 
-            // "Sign in" text link — top-right
-            Rectangle {
+            // "I already have an account" text link — top-right. Only on a
+            // machine with no device account (#67). A returning user has the
+            // pill below instead, so step 1 never shows two sign-in controls (#70).
+            if !has-device-account && !is-returning-user: Rectangle {
                 x: parent.width - 120px - self.width;
-                y: is-returning-user ? 80px + 48px + 12px : 80px;
+                y: 80px;
                 width: signin-link-text.preferred-width + 16px;
                 height: 32px;
 
                 signin-link-text := Text {
-                    text: "Sign in";
+                    text: "I already have an account";
                     font-family: Theme.font-label;
                     font-size: 13px;
                     font-weight: 600;
@@ -617,7 +621,7 @@ export component Onboarding inherits Rectangle {
 
                 signin-link-touch := TouchArea {
                     accessible-role: button;
-                    accessible-label: "Sign in";
+                    accessible-label: "I already have an account";
                     clicked => {
                         root.open-sign-in();
                     }
@@ -1621,38 +1625,6 @@ export component Onboarding inherits Rectangle {
                                 clicked => {
                                     root.show-email-form = true;
                                 }
-                            }
-                        }
-                    }
-                }
-
-                if !show-email-form: Rectangle {
-                    height: 48px;
-                }
-
-                if !show-email-form: HorizontalLayout {
-                    alignment: center;
-
-                    Rectangle {
-                        width: skip-text.preferred-width + 16px;
-                        height: 24px;
-
-                        skip-text := Text {
-                            font-weight: Theme.weight-label;
-                            text: "Skip for now — continue as guest";
-                            font-family: Theme.font-label;
-                            font-size: 11px;
-                            color: skip-touch.has-hover ? Theme.text-secondary : Theme.text-tertiary;
-                            letter-spacing: 0.5px;
-                            horizontal-alignment: center;
-                            vertical-alignment: center;
-                        }
-
-                        skip-touch := TouchArea {
-                            accessible-role: button;
-                            accessible-label: "Skip for now";
-                            clicked => {
-                                root.skip-identity();
                             }
                         }
                     }

@@ -58,6 +58,9 @@ export component MainWindow inherits Window {
     // --- Auth state ---
     in property <bool> logged-in: false;
     in property <string> login-error: "";
+    // The last sign-in found no account for its identity. The sign-in panel
+    // then offers "Start as a new player" (#67).
+    in property <bool> login-account-missing: false;
     in property <bool> login-loading: false;
 
     // --- Onboarding (0 = show onboarding, 1-3 = step, 4+ = done) ---
@@ -74,6 +77,9 @@ export component MainWindow inherits Window {
     in property <string> discover-error: "";
     in property <string> link-error: "";
     in property <bool> is-returning-user: false;
+    // This machine has a device account (a persisted device id). Step 1
+    // offers "I already have an account" only when it has none (#67).
+    in property <bool> has-device-account: false;
     out property <string> onboarding-nickname;
     in-out property <bool> onboarding-share-game-activity: true;
     in-out property <int> selected-avatar: -1;
@@ -617,7 +623,6 @@ export component MainWindow inherits Window {
     callback onboarding-continue(int);
     callback onboarding-login-requested();
     callback onboarding-link-email(string, string);
-    callback onboarding-skip-identity();
     callback onboarding-capture-device-selected(string);
     callback onboarding-playback-device-selected(string);
 
@@ -629,6 +634,9 @@ export component MainWindow inherits Window {
     callback onboarding-auth-apple();
 
     // --- Sign-in callbacks (returning user) ---
+    // Open and leave the sign-in panel. Both clear the last sign-in error.
+    callback open-sign-in();
+    callback close-sign-in();
     callback signin-steam();
     callback signin-google();
     callback signin-twitch();
@@ -654,6 +662,7 @@ export component MainWindow inherits Window {
         device-user-name: root.user-name;
         device-user-initials: root.user-initials;
         is-returning-user: root.is-returning-user;
+        has-device-account: root.has-device-account;
         capture-devices: root.capture-devices;
         playback-devices: root.playback-devices;
         selected-capture-id: root.selected-capture-id;
@@ -735,13 +744,10 @@ export component MainWindow inherits Window {
             root.onboarding-login-requested();
         }
         open-sign-in => {
-            root.show-sign-in = true;
+            root.open-sign-in();
         }
         link-email(email, pw) => {
             root.onboarding-link-email(email, pw);
-        }
-        skip-identity => {
-            root.onboarding-skip-identity();
         }
         capture-device-selected(id) => {
             root.onboarding-capture-device-selected(id);
@@ -766,12 +772,16 @@ export component MainWindow inherits Window {
         }
     }
 
-    // ===================== SIGN-IN PANEL (from onboarding "Sign in" link) =====================
+    // ===================== SIGN-IN PANEL (from "I already have an account" on step 1) =====================
     if show-sign-in && !logged-in: SignInPanel {
         error: root.login-error;
+        account-missing: root.login-account-missing;
         loading: root.login-loading;
         back => {
-            root.show-sign-in = false;
+            root.close-sign-in();
+        }
+        start-new-player => {
+            root.close-sign-in();
         }
         signin-steam => {
             root.signin-steam();
