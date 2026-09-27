@@ -18,6 +18,56 @@ const CALLBACK_TIMEOUT: Duration = Duration::from_secs(120);
 /// Upper bound on a `/token` body. A real body holds one token and one state.
 const MAX_TOKEN_BODY: u64 = 8 * 1024;
 
+/// The URL to use for a provider endpoint.
+///
+/// Test builds only (`e2e-oauth` feature): with `MELLO_E2E_OAUTH_BASE` set, the
+/// scheme and host are replaced by the fake provider's, and the path and query
+/// are kept, because the fake serves each provider's real paths
+/// (plans/E2E-QA.md §8). Every other build returns the URL unchanged.
+pub fn provider_url(real: &str) -> String {
+    #[cfg(feature = "e2e-oauth")]
+    if let Some(base) = std::env::var("MELLO_E2E_OAUTH_BASE")
+        .ok()
+        .filter(|b| !b.is_empty())
+    {
+        return rebase(real, &base);
+    }
+    real.to_string()
+}
+
+/// `https://discord.com/api/x?y` on base `http://127.0.0.1:8080` gives
+/// `http://127.0.0.1:8080/api/x?y`.
+#[cfg(any(feature = "e2e-oauth", test))]
+fn rebase(real: &str, base: &str) -> String {
+    let rest = real.split_once("://").map_or(real, |(_, r)| r);
+    let path = rest.find('/').map_or("", |i| &rest[i..]);
+    format!("{}{}", base.trim_end_matches('/'), path)
+}
+
+/// Open the system browser. In a test build with `MELLO_E2E_BROWSER_FILE` set,
+/// write the URL to that file instead: the e2e driver opens it in a headless
+/// browser, so a test never opens the developer's real browser.
+fn open_browser(url: &str) -> Result<(), OAuthError> {
+    #[cfg(feature = "e2e-oauth")]
+    if let Some(path) = std::env::var_os("MELLO_E2E_BROWSER_FILE").filter(|p| !p.is_empty()) {
+        return std::fs::write(path, url).map_err(|e| OAuthError::Browser(e.to_string()));
+    }
+    webbrowser::open(url).map_err(|e| OAuthError::Browser(e.to_string()))
+}
+
+/// The callback wait. Test builds can shorten it with
+/// `MELLO_E2E_OAUTH_TIMEOUT_MS`, so the "browser closed" case does not take 2 minutes.
+fn callback_timeout() -> Duration {
+    #[cfg(feature = "e2e-oauth")]
+    if let Some(ms) = std::env::var("MELLO_E2E_OAUTH_TIMEOUT_MS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+    {
+        return Duration::from_millis(ms);
+    }
+    CALLBACK_TIMEOUT
+}
+
 /// Decoded `key=value` pairs from a query string or a form body.
 type Pairs = Vec<(String, String)>;
 
@@ -82,10 +132,10 @@ impl OAuthFlow {
         let server = Server::http(format!("127.0.0.1:{REDIRECT_PORT}"))
             .map_err(|e| OAuthError::ServerStart(e.to_string()))?;
 
-        webbrowser::open(auth_url).map_err(|e| OAuthError::Browser(e.to_string()))?;
+        open_browser(&provider_url(auth_url))?;
         log::info!("[oauth] browser opened, waiting for callback");
 
-        Self::wait(&server, state, &mode, CALLBACK_TIMEOUT)
+        Self::wait(&server, state, &mode, callback_timeout())
     }
 
     /// Serve requests until one completes the flow or `timeout` elapses. Any
@@ -380,6 +430,30 @@ pub enum OAuthError {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn rebase_keeps_path_and_query_and_swaps_the_host() {
+        assert_eq!(
+            rebase(
+                "https://discord.com/api/oauth2/authorize?client_id=c&state=s",
+                "http://127.0.0.1:8080/"
+            ),
+            "http://127.0.0.1:8080/api/oauth2/authorize?client_id=c&state=s"
+        );
+        assert_eq!(
+            rebase("https://oauth2.googleapis.com/token", "http://h:1"),
+            "http://h:1/token"
+        );
+    }
+
+    #[test]
+    fn provider_url_is_unchanged_without_the_override() {
+        // No e2e override in unit tests: production behaviour.
+        let url = "https://steamcommunity.com/openid/login?openid.mode=checkid_setup";
+        if std::env::var("MELLO_E2E_OAUTH_BASE").is_err() {
+            assert_eq!(provider_url(url), url);
+        }
+    }
+
     use super::*;
     use std::io::Write;
     use std::net::TcpStream;

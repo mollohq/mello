@@ -52,6 +52,8 @@ export component QualityPills inherits VerticalLayout {
             }
 
             chip-ta := TouchArea {
+                accessible-role: button;
+                accessible-label: preset-label;
                 mouse-cursor: pointer;
                 clicked => { root.selected = idx; }
             }

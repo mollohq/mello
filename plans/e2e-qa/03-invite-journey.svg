@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="680" viewBox="0 0 680 700" role="img"><title>Invite journey across two users</title><desc>Swimlane with three lanes: alice's app, the local stack, and bob's app. Alice onboards and creates a crew, the stack issues an invite code, alice reads the link, bob opens the deep link and sees the crew name, the stack adds bob, alice sees bob in the crew, bob sends a message, and alice sees it. Four steps are cross-user checks.</desc>
+<style>
+text{font-family:-apple-system,"Segoe UI",system-ui,sans-serif}
+.ts{font-size:12px;font-weight:400;fill:#5F5E5A}
+.th{font-size:14px;font-weight:600;fill:#2C2C2A}
+.arr{stroke:#888780;stroke-width:1.5;fill:none}
+.lane{stroke:#D3D1C7;stroke-width:0.5;stroke-dasharray:4 4}
+.c-purple rect,rect.c-purple{fill:#EEEDFE;stroke:#534AB7}
+.c-purple .th{fill:#3C3489}
+.c-teal rect,rect.c-teal{fill:#E1F5EE;stroke:#0F6E56}
+.c-teal .th{fill:#085041}
+.c-gray rect,rect.c-gray{fill:#F1EFE8;stroke:#5F5E5A}
+.c-gray .th{fill:#444441}
+</style>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="#888780" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+<rect width="680" height="700" rx="12" fill="#FFFFFF"/>
+<text class="th" x="140" y="40" text-anchor="middle" dominant-baseline="central">alice (app)</text>
+<text class="th" x="340" y="40" text-anchor="middle" dominant-baseline="central">local stack</text>
+<text class="th" x="540" y="40" text-anchor="middle" dominant-baseline="central">bob (app)</text>
+<line class="lane" x1="240" y1="56" x2="240" y2="640"/>
+<line class="lane" x1="440" y1="56" x2="440" y2="640"/>
+<g class="c-purple"><rect x="55" y="70" width="170" height="44" rx="8" stroke-width="0.5"/><text class="th" x="140" y="92" text-anchor="middle" dominant-baseline="central">Onboard, new crew</text></g>
+<path d="M140 114 L140 124 L340 124 L340 132" class="arr" marker-end="url(#arrow)"/>
+<g class="c-gray"><rect x="255" y="134" width="170" height="44" rx="8" stroke-width="0.5"/><text class="th" x="340" y="156" text-anchor="middle" dominant-baseline="central">Issue invite code</text></g>
+<path d="M340 178 L340 188 L140 188 L140 196" class="arr" marker-end="url(#arrow)"/>
+<g class="c-teal"><rect x="55" y="198" width="170" height="44" rx="8" stroke-width="0.5"/><text class="th" x="140" y="220" text-anchor="middle" dominant-baseline="central">Read invite link</text></g>
+<path d="M140 242 L140 252 L540 252 L540 260" class="arr" marker-end="url(#arrow)"/>
+<g class="c-purple"><rect x="455" y="262" width="170" height="44" rx="8" stroke-width="0.5"/><text class="th" x="540" y="284" text-anchor="middle" dominant-baseline="central">Open join deep link</text></g>
+<line x1="540" y1="306" x2="540" y2="324" class="arr" marker-end="url(#arrow)"/>
+<g class="c-teal"><rect x="455" y="326" width="170" height="44" rx="8" stroke-width="0.5"/><text class="th" x="540" y="348" text-anchor="middle" dominant-baseline="central">Sees crew name</text></g>
+<path d="M540 370 L540 380 L340 380 L340 388" class="arr" marker-end="url(#arrow)"/>
+<g class="c-gray"><rect x="255" y="390" width="170" height="44" rx="8" stroke-width="0.5"/><text class="th" x="340" y="412" text-anchor="middle" dominant-baseline="central">Add bob to crew</text></g>
+<path d="M340 434 L340 444 L140 444 L140 452" class="arr" marker-end="url(#arrow)"/>
+<g class="c-teal"><rect x="55" y="454" width="170" height="44" rx="8" stroke-width="0.5"/><text class="th" x="140" y="476" text-anchor="middle" dominant-baseline="central">Sees bob in crew</text></g>
+<path d="M140 498 L140 508 L540 508 L540 516" class="arr" marker-end="url(#arrow)"/>
+<g class="c-purple"><rect x="455" y="518" width="170" height="44" rx="8" stroke-width="0.5"/><text class="th" x="540" y="540" text-anchor="middle" dominant-baseline="central">Sends a message</text></g>
+<path d="M540 562 L540 572 L140 572 L140 580" class="arr" marker-end="url(#arrow)"/>
+<g class="c-teal"><rect x="55" y="582" width="170" height="44" rx="8" stroke-width="0.5"/><text class="th" x="140" y="604" text-anchor="middle" dominant-baseline="central">Sees the message</text></g>
+<rect class="c-purple" x="55" y="663" width="14" height="14" rx="3" stroke-width="0.5"/>
+<text class="ts" x="77" y="670" dominant-baseline="central">User action (real click)</text>
+<rect class="c-teal" x="240" y="663" width="14" height="14" rx="3" stroke-width="0.5"/>
+<text class="ts" x="262" y="670" dominant-baseline="central">Check + screenshot</text>
+<rect class="c-gray" x="410" y="663" width="14" height="14" rx="3" stroke-width="0.5"/>
+<text class="ts" x="432" y="670" dominant-baseline="central">Backend effect</text>
+</svg>

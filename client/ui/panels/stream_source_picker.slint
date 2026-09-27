@@ -156,6 +156,8 @@ component SourceCard inherits Rectangle {
     }
 
     card-ta := TouchArea {
+        accessible-role: button;
+        accessible-label: root.source-name;
         clicked => { root.clicked(); }
     }
 }
@@ -176,6 +178,7 @@ export component StreamSourcePicker inherits Rectangle {
     background: Theme.scrim;
 
     TouchArea {
+        // a11y: none (backdrop: a click outside the dialog closes it)
         clicked => { close-requested(); }
     }
 
@@ -202,7 +205,9 @@ export component StreamSourcePicker inherits Rectangle {
             fill: Theme.surface;
         }
 
-        TouchArea {}
+        TouchArea {
+            // a11y: none (input blocker: stops clicks reaching the backdrop)
+        }
 
         VerticalLayout {
             // Header
@@ -276,6 +281,8 @@ export component StreamSourcePicker inherits Rectangle {
                     }
 
                     close-ta := TouchArea {
+                        accessible-role: button;
+                        accessible-label: "Close";
                         clicked => { close-requested(); }
                     }
                 }
@@ -401,6 +408,8 @@ export component StreamSourcePicker inherits Rectangle {
                     }
 
                     start-btn-ta := TouchArea {
+                        accessible-role: button;
+                        accessible-label: "START STREAMING";
                         clicked => {
                             if has-selection {
                                 start-stream(selected-id, selected-mode, selected-preset);

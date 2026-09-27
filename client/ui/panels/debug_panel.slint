@@ -231,6 +231,8 @@ component SectionHeader inherits Rectangle {
     }
 
     hdr := TouchArea {
+        accessible-role: button;
+        accessible-label: root.title;
         clicked => {
             root.collapsed = !root.collapsed;
         }
@@ -346,6 +348,8 @@ export component DebugPanel inherits Rectangle {
                 }
 
                 close-hover := TouchArea {
+                    accessible-role: button;
+                    accessible-label: "Close";
                     clicked => { root.close-requested(); }
                 }
             }
@@ -945,6 +949,8 @@ export component DebugPanel inherits Rectangle {
             }
 
             diag-hover := TouchArea {
+                accessible-role: button;
+                accessible-label: root.diag-capturing ? "Stop & upload" : "Start diagnostic capture";
                 clicked => { root.diagnostic-capture-toggled(); }
             }
         }

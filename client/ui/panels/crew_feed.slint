@@ -51,6 +51,8 @@ component ClipPlayRing inherits Rectangle {
     }
 
     ring-hover := TouchArea {
+        accessible-role: button;
+        accessible-label: root.is-playing && !root.is-paused ? "Pause" : "Play";
         mouse-cursor: pointer;
         clicked => { root.ring-clicked(); }
     }
@@ -224,6 +226,8 @@ component DotWaveform inherits Rectangle {
     }
 
     touch := TouchArea {
+        accessible-role: slider;
+        accessible-label: "Clip position";
         mouse-cursor: crosshair;
 
         changed pressed => {
@@ -301,6 +305,8 @@ component HeroClipCard inherits Rectangle {
     // play ring) sit on top and receive their own pointer events — a full-card
     // touch declared after the content would swallow every click.
     card-hover := TouchArea {
+        accessible-role: button;
+        accessible-label: card.title != "" ? card.title : card.actor-name + " clipped that";
         mouse-cursor: pointer;
         clicked => { play-clicked(card.clip-path); }
     }
@@ -528,6 +534,8 @@ component ClipCard inherits Rectangle {
 
     // Same ordering rule as HeroClipCard: content touches must win.
     clip-hover := TouchArea {
+        accessible-role: button;
+        accessible-label: card.title != "" ? card.title : card.actor-name + " clipped that";
         mouse-cursor: pointer;
         clicked => { play-clicked(card.clip-path); }
     }
@@ -2336,6 +2344,8 @@ component InviteCard inherits Rectangle {
                 }
 
                 invite-btn-touch := TouchArea {
+                    accessible-role: button;
+                    accessible-label: "Share invite link";
                     mouse-cursor: pointer;
                     clicked => { invite-clicked(); }
                 }
@@ -2357,6 +2367,8 @@ component InviteCard inherits Rectangle {
                 y: (parent.height - self.height) / 2;
 
                 hide-touch := TouchArea {
+                    accessible-role: button;
+                    accessible-label: "Hide";
                     mouse-cursor: pointer;
                     clicked => { hide-clicked(); }
                 }
@@ -3040,6 +3052,8 @@ export component CrewFeed inherits Rectangle {
                         }
 
                         show-more-touch := TouchArea {
+                            accessible-role: button;
+                            accessible-label: "Show more";
                             mouse-cursor: pointer;
                             clicked => { root.feed-show-more-clicked(); }
                         }

@@ -1,0 +1,78 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="680" viewBox="0 0 680 590" role="img"><title>Proposed end-to-end test architecture</title><desc>A journey runner and an agent runner both call one mello-driver MCP server. The driver controls one isolated process per user: alice and bob as real mello binaries, and a guest in the browser lounge. All of them talk to a local stack of Nakama, the SFU, the lounge site and a fake OAuth provider, reset for each run.</desc>
+<style>
+text{font-family:-apple-system,"Segoe UI",system-ui,sans-serif}
+.ts{font-size:12px;font-weight:400;fill:#5F5E5A}
+.th{font-size:14px;font-weight:600;fill:#2C2C2A}
+.arr{stroke:#888780;stroke-width:1.5;fill:none}
+.c-purple rect,rect.c-purple{fill:#EEEDFE;stroke:#534AB7}
+.c-purple .th{fill:#3C3489}.c-purple .ts{fill:#534AB7}
+.c-gray rect,rect.c-gray{fill:#F1EFE8;stroke:#5F5E5A}
+.c-gray .th{fill:#444441}.c-gray .ts{fill:#5F5E5A}
+</style>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="#888780" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+<rect width="680" height="590" rx="12" fill="#FFFFFF"/>
+<g class="c-purple">
+<rect x="100" y="40" width="210" height="56" rx="8" stroke-width="0.5"/>
+<text class="th" x="205" y="60" text-anchor="middle" dominant-baseline="central">Journey runner</text>
+<text class="ts" x="205" y="80" text-anchor="middle" dominant-baseline="central">Scripted, gates every PR</text>
+</g>
+<g class="c-purple">
+<rect x="370" y="40" width="210" height="56" rx="8" stroke-width="0.5"/>
+<text class="th" x="475" y="60" text-anchor="middle" dominant-baseline="central">Agent runner</text>
+<text class="ts" x="475" y="80" text-anchor="middle" dominant-baseline="central">Claude, runs protocols</text>
+</g>
+<line x1="205" y1="96" x2="205" y2="138" class="arr" marker-end="url(#arrow)"/>
+<line x1="475" y1="96" x2="475" y2="138" class="arr" marker-end="url(#arrow)"/>
+<g class="c-purple">
+<rect x="100" y="140" width="480" height="56" rx="8" stroke-width="0.5"/>
+<text class="th" x="340" y="160" text-anchor="middle" dominant-baseline="central">mello-driver</text>
+<text class="ts" x="340" y="180" text-anchor="middle" dominant-baseline="central">One MCP server for every user</text>
+</g>
+<rect x="80" y="226" width="520" height="144" rx="16" fill="none" stroke="#B4B2A9" stroke-width="0.5" stroke-dasharray="4 4"/>
+<line x1="180" y1="196" x2="180" y2="244" class="arr" marker-end="url(#arrow)"/>
+<line x1="340" y1="196" x2="340" y2="244" class="arr" marker-end="url(#arrow)"/>
+<line x1="500" y1="196" x2="500" y2="244" class="arr" marker-end="url(#arrow)"/>
+<g class="c-gray">
+<rect x="110" y="246" width="140" height="56" rx="8" stroke-width="0.5"/>
+<text class="th" x="180" y="266" text-anchor="middle" dominant-baseline="central">alice</text>
+<text class="ts" x="180" y="286" text-anchor="middle" dominant-baseline="central">Real binary</text>
+</g>
+<g class="c-gray">
+<rect x="270" y="246" width="140" height="56" rx="8" stroke-width="0.5"/>
+<text class="th" x="340" y="266" text-anchor="middle" dominant-baseline="central">bob</text>
+<text class="ts" x="340" y="286" text-anchor="middle" dominant-baseline="central">Real binary</text>
+</g>
+<g class="c-gray">
+<rect x="430" y="246" width="140" height="56" rx="8" stroke-width="0.5"/>
+<text class="th" x="500" y="266" text-anchor="middle" dominant-baseline="central">guest</text>
+<text class="ts" x="500" y="286" text-anchor="middle" dominant-baseline="central">Browser lounge</text>
+</g>
+<text class="ts" x="110" y="340" dominant-baseline="central">One process per user: own instance, config dir, keyring</text>
+<line x1="340" y1="370" x2="340" y2="408" class="arr" marker-end="url(#arrow)"/>
+<rect x="80" y="410" width="520" height="120" rx="16" fill="none" stroke="#B4B2A9" stroke-width="0.5" stroke-dasharray="4 4"/>
+<g class="c-gray">
+<rect x="96" y="426" width="110" height="56" rx="8" stroke-width="0.5"/>
+<text class="th" x="151" y="446" text-anchor="middle" dominant-baseline="central">Nakama</text>
+<text class="ts" x="151" y="466" text-anchor="middle" dominant-baseline="central">Docker, seeded</text>
+</g>
+<g class="c-gray">
+<rect x="222" y="426" width="110" height="56" rx="8" stroke-width="0.5"/>
+<text class="th" x="277" y="446" text-anchor="middle" dominant-baseline="central">SFU</text>
+<text class="ts" x="277" y="466" text-anchor="middle" dominant-baseline="central">Local</text>
+</g>
+<g class="c-gray">
+<rect x="348" y="426" width="110" height="56" rx="8" stroke-width="0.5"/>
+<text class="th" x="403" y="446" text-anchor="middle" dominant-baseline="central">Lounge site</text>
+<text class="ts" x="403" y="466" text-anchor="middle" dominant-baseline="central">mello-site</text>
+</g>
+<g class="c-purple">
+<rect x="474" y="426" width="110" height="56" rx="8" stroke-width="0.5"/>
+<text class="th" x="529" y="446" text-anchor="middle" dominant-baseline="central">Fake OAuth</text>
+<text class="ts" x="529" y="466" text-anchor="middle" dominant-baseline="central">Test-only</text>
+</g>
+<text class="ts" x="96" y="510" dominant-baseline="central">Local stack, reset for each run</text>
+<rect class="c-purple" x="80" y="553" width="14" height="14" rx="3" stroke-width="0.5"/>
+<text class="ts" x="102" y="560" dominant-baseline="central">New, to build</text>
+<rect class="c-gray" x="220" y="553" width="14" height="14" rx="3" stroke-width="0.5"/>
+<text class="ts" x="242" y="560" dominant-baseline="central">Exists today</text>
+</svg>

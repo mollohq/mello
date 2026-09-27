@@ -62,9 +62,10 @@ Read `TESTING.md` before adding tests. In short:
   production wiring changes. Inject an `Event` and assert on `MainWindow`; invoke a
   callback and assert on the emitted `Command`s. Journey tests live in
   `client/src/flow_tests.rs`.
-- **Assert structurally, not via accessibility.** These panels declare almost no
-  `accessible-role`, so `accessible_enabled()` reads as absent even on a healthy
-  screen. Query component type names instead.
+- **Find controls by label, other elements by type.** Every control carries
+  `accessible-role` and `accessible-label` (gated by `client/src/a11y_lint.rs`),
+  so use `find_by_accessible_label`. Non-controls declare no role and no
+  `accessible-enabled`; query those by component type name.
 - **Prove a new regression test actually fails** without its fix. A test that
   cannot fail is decoration. `./scripts/mutation-check.sh` checks the suite still
   catches deliberate breakage.
@@ -141,6 +142,11 @@ Two failure modes have each cost a day. Check for both:
   keyline, or it erases the outline.
 
 ## Slint UI Rules
+- **Every control has a role and a label.** A `TouchArea` carries `accessible-role` and
+  `accessible-label` itself, or its direct parent does. The label is the text the user
+  reads. A `TouchArea` that is not a control (a backdrop, an input blocker, a hover
+  detector) gets `// a11y: none (<reason>)` in its block. `cargo test` enforces both, and
+  the e2e driver finds controls by these labels (plans/E2E-QA.md §4).
 - Use `MelloTextInput` from `theme.slint` instead of raw `TextInput` — it applies `Theme.selection-bg` / `selection-fg` (accent-tinted highlight) instead of Slint’s default cupertino blue.
 - For bordered form fields (settings, modals), use `MelloInputField` — it fills the field height so mouse drag-selection works; do not vertically center a bare `MelloTextInput` with `preferred-height` only.
 - Do not put `TextInput` / `MelloTextInput` inside `Flickable` (breaks double/triple-click word selection; slint#6514). Use `MelloScrollArea` for scrollable settings/content instead.

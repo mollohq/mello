@@ -25,6 +25,7 @@ export component JoinCrewModal inherits Rectangle {
 
     // Close on background click
     bg-touch := TouchArea {
+        // a11y: none (backdrop: a click outside the dialog closes it)
         clicked => { dismiss-requested(); }
     }
 
@@ -51,7 +52,9 @@ export component JoinCrewModal inherits Rectangle {
             fill: Theme.surface;
         }
 
-        card-touch := TouchArea {}
+        card-touch := TouchArea {
+            // a11y: none (input blocker: stops clicks reaching the backdrop)
+        }
 
         content := VerticalLayout {
             padding: 32px;
@@ -126,6 +129,8 @@ export component JoinCrewModal inherits Rectangle {
                     }
 
                     dismiss-touch := TouchArea {
+                        accessible-role: button;
+                        accessible-label: "Dismiss";
                         mouse-cursor: pointer;
                         clicked => { dismiss-requested(); }
                     }
@@ -222,6 +227,8 @@ export component JoinCrewModal inherits Rectangle {
                     }
 
                     join-touch := TouchArea {
+                        accessible-role: button;
+                        accessible-label: "Join crew";
                         enabled: !joining;
                         mouse-cursor: joining ? default : pointer;
                         clicked => { join-requested(); }
@@ -238,6 +245,8 @@ export component JoinCrewModal inherits Rectangle {
                     horizontal-alignment: center;
 
                     not-now-touch := TouchArea {
+                        accessible-role: button;
+                        accessible-label: "Not now";
                         mouse-cursor: pointer;
                         clicked => { dismiss-requested(); }
                     }

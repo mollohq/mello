@@ -118,6 +118,8 @@ export component StreamView inherits Rectangle {
                 }
 
                 stop-ta := TouchArea {
+                    accessible-role: button;
+                    accessible-label: is-hosting ? "STOP" : "LEAVE";
                     clicked => {
                         if is-hosting { stop-stream-clicked(); }
                         else { stop-watching-clicked(); }
@@ -208,6 +210,8 @@ export component StreamView inherits Rectangle {
                     }
 
                     watch-ta := TouchArea {
+                        accessible-role: button;
+                        accessible-label: "WATCH STREAM";
                         clicked => { watch-stream-clicked(active-streamer-id, active-stream-session-id, stream-width, stream-height); }
                     }
                 }
@@ -261,6 +265,8 @@ export component StreamView inherits Rectangle {
                     }
 
                     go-live-ta := TouchArea {
+                        accessible-role: button;
+                        accessible-label: "GO LIVE";
                         clicked => { start-stream-clicked(); }
                     }
                 }

@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="680" viewBox="0 0 680 660" role="img"><title>Social login test path with a fake provider</title><desc>Swimlane with four lanes: the mello app, the driver with its headless browser, the fake provider, and Nakama. The app starts the flow, the driver opens the auth URL, the fake provider shows a consent page, the driver approves, the app's callback server receives the token, Nakama's auth hook validates it against the fake provider, Nakama creates a session, and the app shows the next step. Every mello step runs unmodified.</desc>
+<style>
+text{font-family:-apple-system,"Segoe UI",system-ui,sans-serif}
+.ts{font-size:12px;font-weight:400;fill:#5F5E5A}
+.th{font-size:14px;font-weight:600;fill:#2C2C2A}
+.arr{stroke:#888780;stroke-width:1.5;fill:none}
+.lane{stroke:#D3D1C7;stroke-width:0.5;stroke-dasharray:4 4}
+.c-purple rect,rect.c-purple{fill:#EEEDFE;stroke:#534AB7}
+.c-purple .th{fill:#3C3489}
+.c-teal rect,rect.c-teal{fill:#E1F5EE;stroke:#0F6E56}
+.c-teal .th{fill:#085041}
+.c-gray rect,rect.c-gray{fill:#F1EFE8;stroke:#5F5E5A}
+.c-gray .th{fill:#444441}
+</style>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="#888780" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+<rect width="680" height="660" rx="12" fill="#FFFFFF"/>
+<text class="th" x="115" y="40" text-anchor="middle" dominant-baseline="central">mello app</text>
+<text class="th" x="265" y="40" text-anchor="middle" dominant-baseline="central">driver</text>
+<text class="th" x="415" y="40" text-anchor="middle" dominant-baseline="central">fake provider</text>
+<text class="th" x="565" y="40" text-anchor="middle" dominant-baseline="central">Nakama</text>
+<line class="lane" x1="190" y1="56" x2="190" y2="600"/>
+<line class="lane" x1="340" y1="56" x2="340" y2="600"/>
+<line class="lane" x1="490" y1="56" x2="490" y2="600"/>
+<g class="c-purple"><rect x="50" y="70" width="130" height="44" rx="8" stroke-width="0.5"/><text class="th" x="115" y="92" text-anchor="middle" dominant-baseline="central">Click Discord</text></g>
+<path d="M115 114 L115 122 L265 122 L265 128" class="arr" marker-end="url(#arrow)"/>
+<g class="c-gray"><rect x="200" y="130" width="130" height="44" rx="8" stroke-width="0.5"/><text class="th" x="265" y="152" text-anchor="middle" dominant-baseline="central">Open auth URL</text></g>
+<path d="M265 174 L265 182 L415 182 L415 188" class="arr" marker-end="url(#arrow)"/>
+<g class="c-gray"><rect x="350" y="190" width="130" height="44" rx="8" stroke-width="0.5"/><text class="th" x="415" y="212" text-anchor="middle" dominant-baseline="central">Consent page</text></g>
+<path d="M415 234 L415 242 L265 242 L265 248" class="arr" marker-end="url(#arrow)"/>
+<g class="c-gray"><rect x="200" y="250" width="130" height="44" rx="8" stroke-width="0.5"/><text class="th" x="265" y="272" text-anchor="middle" dominant-baseline="central">Click Approve</text></g>
+<path d="M265 294 L265 302 L115 302 L115 308" class="arr" marker-end="url(#arrow)"/>
+<g class="c-purple"><rect x="50" y="310" width="130" height="44" rx="8" stroke-width="0.5"/><text class="th" x="115" y="332" text-anchor="middle" dominant-baseline="central">Callback :29405</text></g>
+<path d="M115 354 L115 362 L565 362 L565 368" class="arr" marker-end="url(#arrow)"/>
+<g class="c-purple"><rect x="500" y="370" width="130" height="44" rx="8" stroke-width="0.5"/><text class="th" x="565" y="392" text-anchor="middle" dominant-baseline="central">Custom auth hook</text></g>
+<path d="M565 414 L565 422 L415 422 L415 428" class="arr" marker-end="url(#arrow)"/>
+<g class="c-gray"><rect x="350" y="430" width="130" height="44" rx="8" stroke-width="0.5"/><text class="th" x="415" y="452" text-anchor="middle" dominant-baseline="central">Validate token</text></g>
+<path d="M415 474 L415 482 L565 482 L565 488" class="arr" marker-end="url(#arrow)"/>
+<g class="c-purple"><rect x="500" y="490" width="130" height="44" rx="8" stroke-width="0.5"/><text class="th" x="565" y="512" text-anchor="middle" dominant-baseline="central">Create session</text></g>
+<path d="M565 534 L565 542 L115 542 L115 548" class="arr" marker-end="url(#arrow)"/>
+<g class="c-teal"><rect x="50" y="550" width="130" height="44" rx="8" stroke-width="0.5"/><text class="th" x="115" y="572" text-anchor="middle" dominant-baseline="central">Next step shown</text></g>
+<rect class="c-purple" x="50" y="623" width="14" height="14" rx="3" stroke-width="0.5"/>
+<text class="ts" x="72" y="630" dominant-baseline="central">Our code, under test</text>
+<rect class="c-gray" x="220" y="623" width="14" height="14" rx="3" stroke-width="0.5"/>
+<text class="ts" x="242" y="630" dominant-baseline="central">Test stand-in</text>
+<rect class="c-teal" x="360" y="623" width="14" height="14" rx="3" stroke-width="0.5"/>
+<text class="ts" x="382" y="630" dominant-baseline="central">Check + screenshot</text>
+</svg>
