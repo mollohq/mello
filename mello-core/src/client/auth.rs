@@ -1,6 +1,17 @@
+use super::browser_flow::{Credential, FlowIntent, FlowOutcome, SocialProvider};
 use crate::events::Event;
+use crate::oauth::OAuthError;
 use crate::presence::PresenceStatus;
 use crate::session;
+
+/// The reason the user reads when a browser flow ends without an identity.
+fn flow_failure_reason(provider: SocialProvider, error: &OAuthError) -> String {
+    let label = provider.label();
+    match error {
+        OAuthError::Cancelled => format!("You cancelled the {} sign-in.", label),
+        other => format!("{} sign-in failed: {}", label, other),
+    }
+}
 
 impl super::Client {
     pub(super) async fn handle_device_auth(&mut self, device_id: &str) {
@@ -116,6 +127,9 @@ impl super::Client {
     }
 
     pub(super) async fn handle_logout(&mut self) {
+        // A browser flow that ends after logout must not sign in or link.
+        self.browser_flows.cancel();
+
         // Notify server we're going offline
         if let Err(e) = self
             .nakama
@@ -178,192 +192,105 @@ impl super::Client {
         let _ = self.event_tx.send(Event::AccountDeleted);
     }
 
-    pub(super) async fn handle_auth_google(&mut self) {
-        let client_id = match self.nakama.config().google_client_id.clone() {
-            Some(id) => id,
-            None => {
-                log::warn!("[auth] GOOGLE_CLIENT_ID not configured");
-                let _ = self.event_tx.send(Event::LoginFailed {
-                    reason: "Google login not configured".into(),
-                });
+    /// Start a browser sign-in or link, and return at once (#88).
+    ///
+    /// The flow runs on its own thread. The loop keeps handling commands and
+    /// voice ticks, and `on_browser_flow_finished` completes the flow. While
+    /// a flow waits, a new request is ignored with a log line.
+    pub(super) fn start_browser_flow(&mut self, provider: SocialProvider, intent: FlowIntent) {
+        let label = provider.label();
+        let Some(client_id) = provider.client_id(self.nakama.config()) else {
+            log::warn!("[auth] {} client id not configured", label);
+            self.send_flow_failure(intent, format!("{} login not configured", label));
+            return;
+        };
+        self.browser_flows.start(provider, intent, move |cancel| {
+            provider.run(&client_id, cancel)
+        });
+    }
+
+    /// Complete a browser flow with its outcome: sign in, or link.
+    pub(super) async fn on_browser_flow_finished(&mut self, outcome: FlowOutcome) {
+        let FlowOutcome {
+            provider,
+            intent,
+            result,
+        } = outcome;
+        let label = provider.label();
+
+        let credential = match result {
+            Ok(Ok(credential)) => credential,
+            Ok(Err(OAuthError::Aborted)) => {
+                // The app stopped it (logout, shutdown). Nobody waits for a reason.
+                log::info!("[auth] {} browser flow stopped by the app", label);
                 return;
             }
-        };
-
-        let oauth_result = tokio::task::spawn_blocking(move || {
-            crate::auth_google::GoogleAuth::authenticate(&client_id)
-        })
-        .await;
-
-        let (code, verifier) = match oauth_result {
-            Ok(Ok(pair)) => pair,
+            Ok(Err(OAuthError::Cancelled)) => {
+                log::info!("[auth] {} browser flow cancelled by the user", label);
+                self.send_flow_failure(
+                    intent,
+                    flow_failure_reason(provider, &OAuthError::Cancelled),
+                );
+                return;
+            }
             Ok(Err(e)) => {
-                log::error!("[auth] Google OAuth flow failed: {}", e);
-                let _ = self.event_tx.send(Event::LoginFailed {
-                    reason: format!("Google sign-in failed: {}", e),
-                });
+                log::error!("[auth] {} browser flow failed: {}", label, e);
+                self.send_flow_failure(intent, flow_failure_reason(provider, &e));
                 return;
             }
             Err(e) => {
-                log::error!("[auth] Google OAuth task panicked: {}", e);
-                let _ = self.event_tx.send(Event::LoginFailed {
-                    reason: "Google sign-in failed unexpectedly".into(),
-                });
+                log::error!("[auth] {} browser flow task panicked: {}", label, e);
+                self.send_flow_failure(intent, format!("{} sign-in failed unexpectedly", label));
                 return;
             }
         };
 
-        let id_token = match self.nakama.google_exchange_code(&code, &verifier).await {
-            Ok(t) => t,
-            Err(e) => {
-                log::error!("[auth] Google token exchange failed: {}", e);
-                let _ = self.event_tx.send(Event::LoginFailed {
-                    reason: e.to_string(),
-                });
-                return;
+        // Google returns a code: exchange it for the id_token here.
+        let token = match credential {
+            Credential::GoogleCode { code, verifier } => {
+                match self.nakama.google_exchange_code(&code, &verifier).await {
+                    Ok(id_token) => id_token,
+                    Err(e) => {
+                        log::error!("[auth] Google token exchange failed: {}", e);
+                        self.send_flow_failure(intent, e.to_string());
+                        return;
+                    }
+                }
             }
+            Credential::Token(token) => token,
         };
 
-        match self.nakama.authenticate_google(&id_token).await {
-            Ok(user) => self.on_social_login(user).await,
-            Err(e) => {
-                log::error!("[auth] Google Nakama auth failed: {}", e);
-                let _ = self.event_tx.send(Event::LoginFailed {
-                    reason: e.to_string(),
-                });
+        match (intent, provider.custom_id()) {
+            (FlowIntent::SignIn, None) => match self.nakama.authenticate_google(&token).await {
+                Ok(user) => self.on_social_login(user).await,
+                Err(e) => {
+                    log::error!("[auth] Google Nakama auth failed: {}", e);
+                    self.send_flow_failure(intent, e.to_string());
+                }
+            },
+            (FlowIntent::SignIn, Some(custom_id)) => {
+                match self.nakama.authenticate_custom(&token, custom_id).await {
+                    Ok(user) => self.on_social_login(user).await,
+                    Err(e) => {
+                        log::error!("[auth] {} Nakama auth failed: {}", label, e);
+                        self.send_flow_failure(intent, e.to_string());
+                    }
+                }
+            }
+            (FlowIntent::Link, None) => self.link_or_switch_google(&token).await,
+            (FlowIntent::Link, Some(custom_id)) => {
+                self.link_or_switch(&token, custom_id, label).await
             }
         }
     }
 
-    pub(super) async fn handle_auth_discord(&mut self) {
-        let client_id = match self.nakama.config().discord_client_id.clone() {
-            Some(id) => id,
-            None => {
-                log::warn!("[auth] DISCORD_CLIENT_ID not configured");
-                let _ = self.event_tx.send(Event::LoginFailed {
-                    reason: "Discord login not configured".into(),
-                });
-                return;
-            }
+    /// Report a failed sign-in or link to the screen that started it.
+    fn send_flow_failure(&self, intent: FlowIntent, reason: String) {
+        let event = match intent {
+            FlowIntent::SignIn => Event::LoginFailed { reason },
+            FlowIntent::Link => Event::SocialLinkFailed { reason },
         };
-
-        let oauth_result = tokio::task::spawn_blocking(move || {
-            crate::auth_discord::DiscordAuth::authenticate(&client_id)
-        })
-        .await;
-
-        let token = match oauth_result {
-            Ok(Ok(t)) => t,
-            Ok(Err(e)) => {
-                log::error!("[auth] Discord OAuth flow failed: {}", e);
-                let _ = self.event_tx.send(Event::LoginFailed {
-                    reason: format!("Discord sign-in failed: {}", e),
-                });
-                return;
-            }
-            Err(e) => {
-                log::error!("[auth] Discord OAuth task panicked: {}", e);
-                let _ = self.event_tx.send(Event::LoginFailed {
-                    reason: "Discord sign-in failed unexpectedly".into(),
-                });
-                return;
-            }
-        };
-
-        match self.nakama.authenticate_custom(&token, "discord").await {
-            Ok(user) => self.on_social_login(user).await,
-            Err(e) => {
-                log::error!("[auth] Discord Nakama auth failed: {}", e);
-                let _ = self.event_tx.send(Event::LoginFailed {
-                    reason: e.to_string(),
-                });
-            }
-        }
-    }
-
-    /// Authenticate (login or create) via the Twitch OAuth2 implicit browser flow
-    /// (desktop). The access_token is sent to Nakama's custom endpoint; the backend
-    /// hook validates it via Helix and derives the Twitch user id.
-    pub(super) async fn handle_auth_twitch(&mut self) {
-        let client_id = match self.nakama.config().twitch_client_id.clone() {
-            Some(id) => id,
-            None => {
-                log::warn!("[auth] TWITCH_CLIENT_ID not configured");
-                let _ = self.event_tx.send(Event::LoginFailed {
-                    reason: "Twitch login not configured".into(),
-                });
-                return;
-            }
-        };
-
-        let oauth_result = tokio::task::spawn_blocking(move || {
-            crate::auth_twitch::TwitchAuth::authenticate(&client_id)
-        })
-        .await;
-
-        let token = match oauth_result {
-            Ok(Ok(t)) => t,
-            Ok(Err(e)) => {
-                log::error!("[auth] Twitch OAuth flow failed: {}", e);
-                let _ = self.event_tx.send(Event::LoginFailed {
-                    reason: format!("Twitch sign-in failed: {}", e),
-                });
-                return;
-            }
-            Err(e) => {
-                log::error!("[auth] Twitch OAuth task panicked: {}", e);
-                let _ = self.event_tx.send(Event::LoginFailed {
-                    reason: "Twitch sign-in failed unexpectedly".into(),
-                });
-                return;
-            }
-        };
-
-        match self.nakama.authenticate_custom(&token, "twitch").await {
-            Ok(user) => self.on_social_login(user).await,
-            Err(e) => {
-                log::error!("[auth] Twitch Nakama auth failed: {}", e);
-                let _ = self.event_tx.send(Event::LoginFailed {
-                    reason: e.to_string(),
-                });
-            }
-        }
-    }
-
-    /// Authenticate (login or create) via the Steam OpenID 2.0 browser flow
-    /// (desktop). The raw `openid.*` response is sent to Nakama's custom endpoint;
-    /// the backend hook verifies it with Steam and derives the steamid.
-    pub(super) async fn handle_auth_steam(&mut self) {
-        let oauth_result =
-            tokio::task::spawn_blocking(crate::auth_steam::SteamAuth::authenticate).await;
-
-        let openid = match oauth_result {
-            Ok(Ok(q)) => q,
-            Ok(Err(e)) => {
-                log::error!("[auth] Steam OpenID flow failed: {}", e);
-                let _ = self.event_tx.send(Event::LoginFailed {
-                    reason: format!("Steam sign-in failed: {}", e),
-                });
-                return;
-            }
-            Err(e) => {
-                log::error!("[auth] Steam OpenID task panicked: {}", e);
-                let _ = self.event_tx.send(Event::LoginFailed {
-                    reason: "Steam sign-in failed unexpectedly".into(),
-                });
-                return;
-            }
-        };
-
-        match self.nakama.authenticate_custom(&openid, "steam").await {
-            Ok(user) => self.on_social_login(user).await,
-            Err(e) => {
-                log::error!("[auth] Steam Nakama auth failed: {}", e);
-                let _ = self.event_tx.send(Event::LoginFailed {
-                    reason: e.to_string(),
-                });
-            }
-        }
+        let _ = self.event_tx.send(event);
     }
 
     /// Authenticate with an Apple identity token captured natively on the client.
@@ -476,60 +403,18 @@ impl super::Client {
         }
     }
 
-    pub(super) async fn handle_link_google(&mut self) {
-        let client_id = match self.nakama.config().google_client_id.clone() {
-            Some(id) => id,
-            None => {
-                log::warn!("[auth] GOOGLE_CLIENT_ID not configured");
-                let _ = self.event_tx.send(Event::SocialLinkFailed {
-                    reason: "Google login not configured".into(),
-                });
-                return;
-            }
-        };
-
-        let oauth_result = tokio::task::spawn_blocking(move || {
-            crate::auth_google::GoogleAuth::authenticate(&client_id)
-        })
-        .await;
-
-        let (code, verifier) = match oauth_result {
-            Ok(Ok(pair)) => pair,
-            Ok(Err(e)) => {
-                log::error!("[auth] Google OAuth flow failed: {}", e);
-                let _ = self.event_tx.send(Event::SocialLinkFailed {
-                    reason: format!("Google sign-in failed: {}", e),
-                });
-                return;
-            }
-            Err(e) => {
-                log::error!("[auth] Google OAuth task panicked: {}", e);
-                let _ = self.event_tx.send(Event::SocialLinkFailed {
-                    reason: "Google sign-in failed unexpectedly".into(),
-                });
-                return;
-            }
-        };
-
-        let id_token = match self.nakama.google_exchange_code(&code, &verifier).await {
-            Ok(t) => t,
-            Err(e) => {
-                log::error!("[auth] Google token exchange failed: {}", e);
-                let _ = self.event_tx.send(Event::SocialLinkFailed {
-                    reason: e.to_string(),
-                });
-                return;
-            }
-        };
-
-        match self.nakama.link_google(&id_token).await {
+    /// Attach a Google identity (an id_token from the browser flow) to the
+    /// current account. Falls back to signing in when that identity already
+    /// belongs to another account, like `link_or_switch`.
+    async fn link_or_switch_google(&mut self, id_token: &str) {
+        match self.nakama.link_google(id_token).await {
             Ok(()) => {
                 log::info!("[auth] Google identity linked to device account");
                 let _ = self.event_tx.send(Event::SocialLinked);
             }
             Err(e) if e.to_string().contains("already in use") => {
                 log::info!("[auth] Google already linked elsewhere, falling back to authenticate");
-                match self.nakama.authenticate_google(&id_token).await {
+                match self.nakama.authenticate_google(id_token).await {
                     Ok(user) => self.on_social_login(user).await,
                     Err(e2) => {
                         log::error!("[auth] Google authenticate fallback failed: {}", e2);
@@ -548,145 +433,10 @@ impl super::Client {
         }
     }
 
-    pub(super) async fn handle_link_discord(&mut self) {
-        let client_id = match self.nakama.config().discord_client_id.clone() {
-            Some(id) => id,
-            None => {
-                log::warn!("[auth] DISCORD_CLIENT_ID not configured");
-                let _ = self.event_tx.send(Event::SocialLinkFailed {
-                    reason: "Discord login not configured".into(),
-                });
-                return;
-            }
-        };
-
-        let oauth_result = tokio::task::spawn_blocking(move || {
-            crate::auth_discord::DiscordAuth::authenticate(&client_id)
-        })
-        .await;
-
-        let token = match oauth_result {
-            Ok(Ok(t)) => t,
-            Ok(Err(e)) => {
-                log::error!("[auth] Discord OAuth flow failed: {}", e);
-                let _ = self.event_tx.send(Event::SocialLinkFailed {
-                    reason: format!("Discord sign-in failed: {}", e),
-                });
-                return;
-            }
-            Err(e) => {
-                log::error!("[auth] Discord OAuth task panicked: {}", e);
-                let _ = self.event_tx.send(Event::SocialLinkFailed {
-                    reason: "Discord sign-in failed unexpectedly".into(),
-                });
-                return;
-            }
-        };
-
-        match self.nakama.link_custom(&token, "discord").await {
-            Ok(()) => {
-                log::info!("[auth] Discord identity linked to device account");
-                let _ = self.event_tx.send(Event::SocialLinked);
-            }
-            Err(e) if e.to_string().contains("already in use") => {
-                log::info!("[auth] Discord already linked elsewhere, falling back to authenticate");
-                match self.nakama.authenticate_custom(&token, "discord").await {
-                    Ok(user) => self.on_social_login(user).await,
-                    Err(e2) => {
-                        log::error!("[auth] Discord authenticate fallback failed: {}", e2);
-                        let _ = self.event_tx.send(Event::SocialLinkFailed {
-                            reason: e2.to_string(),
-                        });
-                    }
-                }
-            }
-            Err(e) => {
-                log::error!("[auth] Discord link failed: {}", e);
-                let _ = self.event_tx.send(Event::SocialLinkFailed {
-                    reason: e.to_string(),
-                });
-            }
-        }
-    }
-
-    /// Link a Steam identity to the current device account.
-    ///
-    /// Onboarding step 3 used to send `AuthSteam` here, because no link command
-    /// existed. That path calls `authenticate_custom` with `create=false`, so a
-    /// new user — who by definition has no Steam-linked account yet — got
-    /// "User account not found" and could not link Steam at all. Worse, a user
-    /// who *did* have one would have been silently switched to it, abandoning
-    /// the account and crew they had just created.
-    pub(super) async fn handle_link_steam(&mut self) {
-        let openid_result =
-            tokio::task::spawn_blocking(crate::auth_steam::SteamAuth::authenticate).await;
-
-        let openid = match openid_result {
-            Ok(Ok(id)) => id,
-            Ok(Err(e)) => {
-                log::error!("[auth] Steam OpenID flow failed: {}", e);
-                let _ = self.event_tx.send(Event::SocialLinkFailed {
-                    reason: format!("Steam sign-in failed: {}", e),
-                });
-                return;
-            }
-            Err(e) => {
-                log::error!("[auth] Steam OpenID task panicked: {}", e);
-                let _ = self.event_tx.send(Event::SocialLinkFailed {
-                    reason: "Steam sign-in failed unexpectedly".into(),
-                });
-                return;
-            }
-        };
-
-        self.link_or_switch(&openid, "steam", "Steam").await;
-    }
-
-    /// Link a Twitch identity to the current device account. Same gap as Steam:
-    /// onboarding sent the sign-in command because no link command existed.
-    pub(super) async fn handle_link_twitch(&mut self) {
-        let client_id = match self.nakama.config().twitch_client_id.clone() {
-            Some(id) => id,
-            None => {
-                log::warn!("[auth] TWITCH_CLIENT_ID not configured");
-                let _ = self.event_tx.send(Event::SocialLinkFailed {
-                    reason: "Twitch login not configured".into(),
-                });
-                return;
-            }
-        };
-
-        let oauth_result = tokio::task::spawn_blocking(move || {
-            crate::auth_twitch::TwitchAuth::authenticate(&client_id)
-        })
-        .await;
-
-        let token = match oauth_result {
-            Ok(Ok(t)) => t,
-            Ok(Err(e)) => {
-                log::error!("[auth] Twitch OAuth flow failed: {}", e);
-                let _ = self.event_tx.send(Event::SocialLinkFailed {
-                    reason: format!("Twitch sign-in failed: {}", e),
-                });
-                return;
-            }
-            Err(e) => {
-                log::error!("[auth] Twitch OAuth task panicked: {}", e);
-                let _ = self.event_tx.send(Event::SocialLinkFailed {
-                    reason: "Twitch sign-in failed unexpectedly".into(),
-                });
-                return;
-            }
-        };
-
-        self.link_or_switch(&token, "twitch", "Twitch").await;
-    }
-
     /// Attach a custom-provider identity to the current account, falling back to
     /// signing in when that identity already belongs to another account.
     ///
-    /// Shared by Steam and Twitch; mirrors what `handle_link_discord` does
-    /// inline. The fallback matters: without it a returning user who reinstalled
+    /// Shared by Discord, Steam and Twitch. The fallback matters: without it a returning user who reinstalled
     /// would be told their own identity is "already in use" and be stuck.
     async fn link_or_switch(&mut self, token: &str, provider: &str, label: &str) {
         match self.nakama.link_custom(token, provider).await {
@@ -971,5 +721,38 @@ impl super::Client {
         let _ = self
             .event_tx
             .send(Event::OnboardingReady { user: updated_user });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_refusal_at_the_provider_reads_as_a_cancel() {
+        // #87: not "Timeout waiting for authentication".
+        assert_eq!(
+            flow_failure_reason(SocialProvider::Discord, &OAuthError::Cancelled),
+            "You cancelled the Discord sign-in."
+        );
+        assert_eq!(
+            flow_failure_reason(SocialProvider::Steam, &OAuthError::Cancelled),
+            "You cancelled the Steam sign-in."
+        );
+    }
+
+    #[test]
+    fn other_flow_failures_name_the_provider_and_the_cause() {
+        assert_eq!(
+            flow_failure_reason(SocialProvider::Twitch, &OAuthError::Timeout),
+            "Twitch sign-in failed: Timeout waiting for authentication"
+        );
+        assert_eq!(
+            flow_failure_reason(
+                SocialProvider::Google,
+                &OAuthError::Provider("server_error".into())
+            ),
+            "Google sign-in failed: The provider returned an error: server_error"
+        );
     }
 }
