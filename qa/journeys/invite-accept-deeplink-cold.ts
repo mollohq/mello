@@ -23,10 +23,8 @@ function inviteJourney(visibility: Visibility, knownIssues: number[]): Journey {
   });
 }
 
-// #83: a private-crew invite makes a join request, not a member.
-// #84: alice sees bob by his random username, not his display name.
-export const privateCrew = inviteJourney("Private", [68, 83, 84]);
-export const publicCrew = inviteJourney("Public", [68, 84]);
+export const privateCrew = inviteJourney("Private", [68]);
+export const publicCrew = inviteJourney("Public", [68]);
 export default privateCrew;
 
 async function run({ runId, launch, step, expect }: JourneyContext, visibility: Visibility): Promise<void> {

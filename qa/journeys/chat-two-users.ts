@@ -7,8 +7,6 @@ import { twoUsersInOneCrew } from "./lib/setup.ts";
 export default journey({
   id: "chat.two-users",
   flows: ["CHAT-01"],
-  // #84: a new member's messages show their random username.
-  knownIssues: [84],
   async run(ctx) {
     const { runId, step, expect } = ctx;
     const { alice, bob, aliceName, bobName } = await twoUsersInOneCrew(ctx);

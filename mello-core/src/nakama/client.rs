@@ -13,6 +13,7 @@ const WS_PING_INTERVAL: std::time::Duration = std::time::Duration::from_secs(20)
 /// reconnect supervisor can rebuild it.
 const WS_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(45);
 
+use super::member_names::{shown_name, HttpUserLookup, MemberNames, SharedToken};
 use super::types::*;
 use crate::config::Config;
 use crate::crew::{Crew, Member};
@@ -44,7 +45,8 @@ pub enum InternalPresence {
 pub struct NakamaClient {
     config: Config,
     http: reqwest::Client,
-    token: Option<String>,
+    /// Shared with the WS reader task, which uses it to look up a new member's name.
+    token: SharedToken,
     refresh_token: Option<String>,
     current_user: Option<User>,
     active_crew_id: Option<String>,
@@ -55,8 +57,8 @@ pub struct NakamaClient {
     signal_tx_template: Option<mpsc::Sender<InternalSignal>>,
     presence_rx: Option<mpsc::Receiver<InternalPresence>>,
     presence_tx_template: Option<mpsc::Sender<InternalPresence>>,
-    /// user_id -> display_name cache, shared with the WS reader task
-    member_names: Arc<RwLock<HashMap<String, String>>>,
+    /// user_id -> display name, shared with the WS reader task
+    member_names: MemberNames,
     /// True while the *current* generation's WS reader+writer tasks are alive.
     /// Replaced with a fresh Arc on every `connect_ws` so a dying task from a
     /// previous generation can't clobber the new connection's liveness flag.
@@ -71,10 +73,17 @@ impl NakamaClient {
     pub fn new(config: Config) -> Self {
         let (sig_tx, sig_rx) = mpsc::channel(256);
         let (pres_tx, pres_rx) = mpsc::channel(256);
+        let http = reqwest::Client::new();
+        let token: SharedToken = Arc::new(std::sync::RwLock::new(None));
+        let member_names = MemberNames::new(Arc::new(HttpUserLookup {
+            http: http.clone(),
+            http_base: config.http_base(),
+            token: token.clone(),
+        }));
         Self {
             config,
-            http: reqwest::Client::new(),
-            token: None,
+            http,
+            token,
             refresh_token: None,
             current_user: None,
             active_crew_id: None,
@@ -83,7 +92,7 @@ impl NakamaClient {
             next_cid: 1,
             signal_rx: Some(sig_rx),
             signal_tx_template: Some(sig_tx),
-            member_names: Arc::new(RwLock::new(HashMap::new())),
+            member_names,
             presence_rx: Some(pres_rx),
             presence_tx_template: Some(pres_tx),
             ws_connected: Arc::new(AtomicBool::new(false)),
@@ -97,8 +106,16 @@ impl NakamaClient {
         cid
     }
 
+    fn token(&self) -> Option<String> {
+        self.token.read().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    fn set_token(&self, token: Option<String>) {
+        *self.token.write().unwrap_or_else(|e| e.into_inner()) = token;
+    }
+
     fn bearer(&self) -> Result<String> {
-        self.token.clone().ok_or(Error::NotConnected)
+        self.token().ok_or(Error::NotConnected)
     }
 
     pub fn config(&self) -> &Config {
@@ -146,7 +163,7 @@ impl NakamaClient {
         }
 
         let session: ApiSession = resp.json().await?;
-        self.token = Some(session.token.clone());
+        self.set_token(Some(session.token.clone()));
         self.refresh_token = session.refresh_token;
 
         let user = self.get_account().await?;
@@ -234,7 +251,7 @@ impl NakamaClient {
         }
 
         let session: ApiSession = resp.json().await?;
-        self.token = Some(session.token.clone());
+        self.set_token(Some(session.token.clone()));
         self.refresh_token = session.refresh_token;
 
         let user = self.get_account().await?;
@@ -275,7 +292,7 @@ impl NakamaClient {
         }
 
         let session: ApiSession = resp.json().await?;
-        self.token = Some(session.token.clone());
+        self.set_token(Some(session.token.clone()));
         self.refresh_token = session.refresh_token;
 
         let user = self.get_account().await?;
@@ -340,7 +357,7 @@ impl NakamaClient {
         }
 
         let session: ApiSession = resp.json().await?;
-        self.token = Some(session.token.clone());
+        self.set_token(Some(session.token.clone()));
         self.refresh_token = session.refresh_token;
 
         let user = self.get_account().await?;
@@ -433,7 +450,7 @@ impl NakamaClient {
 
         let session: ApiSession = resp.json().await?;
         let created = session.created.unwrap_or(false);
-        self.token = Some(session.token.clone());
+        self.set_token(Some(session.token.clone()));
         self.refresh_token = session.refresh_token;
 
         let user = self.get_account().await?;
@@ -460,7 +477,7 @@ impl NakamaClient {
         }
 
         let session: ApiSession = resp.json().await?;
-        self.token = Some(session.token.clone());
+        self.set_token(Some(session.token.clone()));
         self.refresh_token = session.refresh_token;
 
         let user = self.get_account().await?;
@@ -574,7 +591,7 @@ impl NakamaClient {
     /// True once we hold an access token (i.e. the client is authenticated and
     /// a WS reconnect is meaningful).
     pub fn has_session(&self) -> bool {
-        self.token.is_some()
+        self.token().is_some()
     }
 
     /// Force the realtime socket down. Used when we detect a likely half-open
@@ -592,7 +609,7 @@ impl NakamaClient {
     /// stays inert (`has_session()` -> false) until the next login.
     pub fn clear_session(&mut self) {
         self.force_ws_disconnect();
-        self.token = None;
+        self.set_token(None);
         self.refresh_token = None;
         self.current_user = None;
         self.active_crew_id = None;
@@ -672,7 +689,8 @@ impl NakamaClient {
         };
         let body = serde_json::Value::String(body);
 
-        let request = match self.token.as_deref() {
+        let token = self.token();
+        let request = match token.as_deref() {
             Some(token) => {
                 let url = format!("{}/v2/rpc/discover_crews", self.config.http_base());
                 self.http.post(&url).bearer_auth(token)
@@ -1982,16 +2000,10 @@ impl NakamaClient {
             })
             .collect();
 
-        {
-            let mut names = self.member_names.write().await;
-            for m in &members {
-                let name = if m.display_name.is_empty() {
-                    &m.username
-                } else {
-                    &m.display_name
-                };
-                names.insert(m.id.clone(), name.clone());
-            }
+        for m in &members {
+            self.member_names
+                .insert(m.id.clone(), shown_name(&m.display_name, &m.username))
+                .await;
         }
 
         Ok(members)
@@ -2173,7 +2185,7 @@ async fn ws_reader_task(
     shared: Arc<RwLock<WsShared>>,
     signal_tx: mpsc::Sender<InternalSignal>,
     presence_tx: mpsc::Sender<InternalPresence>,
-    member_names: Arc<RwLock<HashMap<String, String>>>,
+    member_names: MemberNames,
     connected: Arc<AtomicBool>,
 ) {
     loop {
@@ -2226,7 +2238,7 @@ async fn handle_ws_message(
     shared: &Arc<RwLock<WsShared>>,
     signal_tx: &mpsc::Sender<InternalSignal>,
     presence_tx: &mpsc::Sender<InternalPresence>,
-    member_names: &Arc<RwLock<HashMap<String, String>>>,
+    member_names: &MemberNames,
 ) {
     let envelope: WsEnvelope = match serde_json::from_str(text) {
         Ok(e) => e,
@@ -2304,13 +2316,10 @@ async fn handle_ws_message(
         };
 
         let sender_id = msg.sender_id.unwrap_or_default();
-        let sender_name = {
-            let names = member_names.read().await;
-            names
-                .get(&sender_id)
-                .cloned()
-                .unwrap_or_else(|| msg.username.unwrap_or_default())
-        };
+        // The message carries the random username, not the display name (#84).
+        let sender_name = member_names
+            .resolve(&sender_id, msg.username.as_deref().unwrap_or_default())
+            .await;
 
         let create_time = msg.create_time.unwrap_or_default();
         let update_time = msg.update_time.unwrap_or_default();
@@ -2348,13 +2357,16 @@ async fn handle_ws_message(
     if let Some(presence) = envelope.channel_presence_event {
         if let Some(joins) = presence.joins {
             for p in joins {
-                let user_id = p.user_id.clone().unwrap_or_default();
+                let user_id = p.user_id.unwrap_or_default();
+                let username = p.username.unwrap_or_default();
+                // A presence carries the random username, not the display name (#84).
+                let display_name = member_names.resolve(&user_id, &username).await;
                 let _ = event_tx.send(Event::MemberJoined {
                     crew_id: presence.channel_id.clone().unwrap_or_default(),
                     member: Member {
                         id: user_id.clone(),
-                        username: p.username.clone().unwrap_or_default(),
-                        display_name: p.username.unwrap_or_default(),
+                        username,
+                        display_name,
                         online: true,
                     },
                 });
@@ -2786,5 +2798,143 @@ mod tests {
         assert_eq!(result[0].timestamp, "2026-03-08T11:01:00Z");
         assert_eq!(result[1].sender_name, "carol");
         assert_eq!(result[1].content, "yo bob!");
+    }
+
+    // --- #84: a new member's display name, from realtime events ---
+
+    use super::super::member_names::testing::FakeLookup;
+
+    struct WsHarness {
+        names: MemberNames,
+        lookup: Arc<FakeLookup>,
+        event_tx: std::sync::mpsc::Sender<Event>,
+        event_rx: std::sync::mpsc::Receiver<Event>,
+        shared: Arc<RwLock<WsShared>>,
+        signal_tx: mpsc::Sender<InternalSignal>,
+        presence_tx: mpsc::Sender<InternalPresence>,
+        // Kept so that `presence_tx.try_send` does not send to a closed channel.
+        _signal_rx: mpsc::Receiver<InternalSignal>,
+        _presence_rx: mpsc::Receiver<InternalPresence>,
+    }
+
+    impl WsHarness {
+        /// The server knows bob (`u-bob`) by the display name "bob-display".
+        fn new() -> Self {
+            let lookup = FakeLookup::with(&[("u-bob", "bob-display")]);
+            let (event_tx, event_rx) = std::sync::mpsc::channel();
+            let (signal_tx, _signal_rx) = mpsc::channel(8);
+            let (presence_tx, _presence_rx) = mpsc::channel(8);
+            Self {
+                names: MemberNames::new(lookup.clone()),
+                lookup,
+                event_tx,
+                event_rx,
+                shared: Arc::new(RwLock::new(WsShared::default())),
+                signal_tx,
+                presence_tx,
+                _signal_rx,
+                _presence_rx,
+            }
+        }
+
+        async fn receive(&self, frame: serde_json::Value) -> Vec<Event> {
+            handle_ws_message(
+                &frame.to_string(),
+                &self.event_tx,
+                &self.shared,
+                &self.signal_tx,
+                &self.presence_tx,
+                &self.names,
+            )
+            .await;
+            self.event_rx.try_iter().collect()
+        }
+    }
+
+    fn presence_join(user_id: &str, username: &str) -> serde_json::Value {
+        serde_json::json!({
+            "channel_presence_event": {
+                "channel_id": "ch-1",
+                "joins": [{ "user_id": user_id, "username": username }]
+            }
+        })
+    }
+
+    fn chat_frame(message_id: &str, user_id: &str, username: &str) -> serde_json::Value {
+        serde_json::json!({
+            "channel_message": {
+                "channel_id": "ch-1",
+                "message_id": message_id,
+                "code": 0,
+                "sender_id": user_id,
+                "username": username,
+                "content": r#"{"text":"hi"}"#,
+                "create_time": "2026-03-08T12:00:00Z",
+                "update_time": "2026-03-08T12:00:00Z"
+            }
+        })
+    }
+
+    fn joined_name(events: &[Event]) -> String {
+        match events {
+            [Event::MemberJoined { member, .. }] => member.display_name.clone(),
+            other => panic!("expected one MemberJoined, got {other:?}"),
+        }
+    }
+
+    fn sender_name(events: &[Event]) -> String {
+        match events {
+            [Event::MessageReceived { message }] => message.sender_name.clone(),
+            other => panic!("expected one MessageReceived, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_new_member_joins_with_their_display_name() {
+        let h = WsHarness::new();
+        let events = h.receive(presence_join("u-bob", "UXljDftxYv")).await;
+        assert_eq!(joined_name(&events), "bob-display");
+    }
+
+    #[tokio::test]
+    async fn a_new_members_messages_show_their_display_name_with_one_lookup() {
+        let h = WsHarness::new();
+        h.receive(presence_join("u-bob", "dQZnuZnbSh")).await;
+        for i in 0..3 {
+            let events = h
+                .receive(chat_frame(&format!("m{i}"), "u-bob", "dQZnuZnbSh"))
+                .await;
+            assert_eq!(sender_name(&events), "bob-display");
+        }
+        assert_eq!(
+            h.lookup.calls(),
+            vec!["u-bob".to_string()],
+            "the join and three messages must cost one lookup"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_message_from_an_unseen_member_shows_their_display_name() {
+        let h = WsHarness::new();
+        let events = h.receive(chat_frame("m1", "u-bob", "dQZnuZnbSh")).await;
+        assert_eq!(sender_name(&events), "bob-display");
+    }
+
+    #[tokio::test]
+    async fn a_known_member_comes_online_without_a_lookup() {
+        let h = WsHarness::new();
+        h.names
+            .insert("u-carol".into(), "carol-display".into())
+            .await;
+        let events = h.receive(presence_join("u-carol", "RnDmCarol1")).await;
+        assert_eq!(joined_name(&events), "carol-display");
+        assert!(h.lookup.calls().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_failed_lookup_shows_the_username() {
+        let h = WsHarness::new();
+        let events = h.receive(presence_join("u-dave", "RnDmDave01")).await;
+        assert_eq!(joined_name(&events), "RnDmDave01");
     }
 }
