@@ -8,8 +8,6 @@ import { onboardWithNewCrew } from "./lib/onboarding.ts";
 export default journey({
   id: "invite.accept-while-running",
   flows: ["INV-02"],
-  // #84: alice sees bob by username after he joins.
-  knownIssues: [84],
   async run({ runId, launch, step, expect }) {
     const crew = `Owls ${runId}`;
     const aliceName = `alice${runId}`;
