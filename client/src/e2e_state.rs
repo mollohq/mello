@@ -50,6 +50,10 @@ struct Snapshot {
     link_error: String,
     /// A sign-in or link is in progress (the spinner shows).
     login_loading: bool,
+    /// Onboarding step 2: the crew of the invite link that the user joins.
+    onboarding_invite_crew_name: String,
+    /// Onboarding step 1: why the invite link could not be used.
+    onboarding_invite_error: String,
     active_crew_id: String,
     active_crew_name: String,
     crews: Vec<String>,
@@ -207,6 +211,8 @@ fn read(app: &MainWindow) -> Snapshot {
         login_error: app.get_login_error().into(),
         link_error: app.get_link_error().into(),
         login_loading: app.get_login_loading(),
+        onboarding_invite_crew_name: app.get_onboarding_invite_crew_name().into(),
+        onboarding_invite_error: app.get_onboarding_invite_error().into(),
         active_crew_id: app.get_active_crew_id().into(),
         active_crew_name: app.get_active_crew_name().into(),
         crews: crews.iter().map(|c| c.name.to_string()).collect(),

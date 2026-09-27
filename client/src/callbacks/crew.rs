@@ -107,6 +107,9 @@ pub fn wire(ctx: &AppContext) {
                 };
 
                 if app.get_onboarding_step() < 4 {
+                    // A crew created at step 1 replaces the invite (#68).
+                    crate::onboarding_invite::clear(&app, &s);
+                    app.set_onboarding_invite_error(slint::SharedString::new());
                     {
                         let mut settings = s.borrow_mut();
                         settings.pending_crew_id = None;

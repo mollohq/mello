@@ -595,6 +595,7 @@ impl Client {
             }
             Command::FinalizeOnboarding {
                 device_id,
+                invite_code,
                 crew_id,
                 crew_name,
                 crew_description,
@@ -608,6 +609,7 @@ impl Client {
             } => {
                 self.handle_finalize_onboarding(
                     &device_id,
+                    invite_code,
                     crew_id,
                     crew_name,
                     crew_description,

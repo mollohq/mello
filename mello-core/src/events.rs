@@ -109,6 +109,11 @@ pub enum Event {
     OnboardingFailed {
         reason: String,
     },
+    /// Finalize could not join the crew of the invite link. The account
+    /// exists. The client picks the text from `error`.
+    OnboardingInviteFailed {
+        error: InviteError,
+    },
     /// The account was deleted server-side and the local session cleared.
     AccountDeleted,
     AccountDeleteFailed {

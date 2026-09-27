@@ -76,6 +76,12 @@ export component MainWindow inherits Window {
     // instead of leaving the user on a blank screen.
     in property <string> discover-error: "";
     in property <string> link-error: "";
+    // The crew of the invite link that opened a fresh install (#68). Step 2
+    // shows it: finalize joins this crew. Empty when there is no invite.
+    in property <string> onboarding-invite-crew-name: "";
+    in property <string> onboarding-invite-crew-initials: "";
+    // Non-empty when the invite link could not be used. Step 1 shows it.
+    in property <string> onboarding-invite-error: "";
     in property <bool> is-returning-user: false;
     // This machine has a device account (a persisted device id). Step 1
     // offers "I already have an account" only when it has none (#67).
@@ -659,6 +665,9 @@ export component MainWindow inherits Window {
         discover-error: root.discover-error;
         retry-discover => { root.retry-discover(); }
         link-error: root.link-error;
+        invite-crew-name: root.onboarding-invite-crew-name;
+        invite-crew-initials: root.onboarding-invite-crew-initials;
+        invite-error: root.onboarding-invite-error;
         device-user-name: root.user-name;
         device-user-initials: root.user-initials;
         is-returning-user: root.is-returning-user;

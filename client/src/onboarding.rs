@@ -48,6 +48,9 @@ pub enum Input {
     DiscoverySettled,
     /// A crew was chosen, or creation of a new one was started.
     CrewChosen,
+    /// A fresh install was opened from an invite link and the invite
+    /// resolved. The invited crew is the choice, so step 1 is skipped (#68).
+    InviteResolved,
     /// The account now exists (`OnboardingReady`).
     AccountReady,
     /// An identity was linked. This is the only way out of step 3.
@@ -116,6 +119,8 @@ impl OnboardingState {
             (Loading, DiscoverySettled) => PickCrew,
 
             (PickCrew, CrewChosen) => PickAvatar,
+            // Before the account exists only: the invite chooses the crew.
+            (Loading | PickCrew | PickAvatar, InviteResolved) => PickAvatar,
 
             // The account exists but onboarding is not finished: the user
             // must still link an identity.
@@ -358,6 +363,7 @@ mod tests {
     const INPUTS: &[Input] = &[
         Input::DiscoverySettled,
         Input::CrewChosen,
+        Input::InviteResolved,
         Input::AccountReady,
         Input::IdentitySettled,
         Input::SessionRestored,
@@ -546,6 +552,26 @@ mod tests {
                 !state.entry_effects().is_empty(),
                 "{state:?} renders a screen but declares no entry effects; if it \
                  needs data, whichever path forgot to load it is a dead end"
+            );
+        }
+    }
+
+    /// #68: an invite link on a fresh install skips step 1, from the startup
+    /// wait or from step 1. After the account exists it changes nothing.
+    #[test]
+    fn a_resolved_invite_skips_step_one_only_before_the_account_exists() {
+        for state in [OnboardingState::Loading, OnboardingState::PickCrew] {
+            assert_eq!(
+                state.next(Input::InviteResolved),
+                OnboardingState::PickAvatar,
+                "{state:?} + InviteResolved must open step 2"
+            );
+        }
+        for state in [OnboardingState::LinkIdentity, OnboardingState::Done] {
+            assert_eq!(
+                state.next(Input::InviteResolved),
+                state,
+                "{state:?}: the account exists; the join modal handles the invite"
             );
         }
     }

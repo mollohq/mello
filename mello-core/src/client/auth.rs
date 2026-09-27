@@ -581,6 +581,7 @@ impl super::Client {
     pub(super) async fn handle_finalize_onboarding(
         &mut self,
         device_id: &str,
+        invite_code: Option<String>,
         crew_id: Option<String>,
         crew_name: Option<String>,
         crew_description: Option<String>,
@@ -671,7 +672,31 @@ impl super::Client {
             }
         }
 
-        let final_crew_id = if let Some(id) = crew_id {
+        let final_crew_id = if let Some(code) = invite_code {
+            // The invite code is the authorization, so a private crew works
+            // too. `join_by_invite_code` is idempotent: a retry after a later
+            // step failed finds the user already a member.
+            match self.nakama.join_by_invite_code(&code).await {
+                Ok((id, name)) => {
+                    log::info!(
+                        "[onboarding] joined crew id={} name={:?} with the invite code",
+                        id,
+                        name
+                    );
+                    Some(id)
+                }
+                Err(e) => {
+                    let error = crate::crew::InviteError::from_error(&e);
+                    log::error!(
+                        "[onboarding] failed to join the invited crew: {:?}: {}",
+                        error,
+                        e
+                    );
+                    let _ = self.event_tx.send(Event::OnboardingInviteFailed { error });
+                    return;
+                }
+            }
+        } else if let Some(id) = crew_id {
             if let Err(e) = self.nakama.join_group(&id).await {
                 log::error!("[onboarding] failed to join crew {}: {}", id, e);
                 let _ = self.event_tx.send(Event::OnboardingFailed {

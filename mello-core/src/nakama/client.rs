@@ -1021,9 +1021,30 @@ impl NakamaClient {
         Ok((result.crew_id, result.name))
     }
 
+    /// Resolve an invite code to public crew info.
+    ///
+    /// Works with a session and before an account exists: a fresh install
+    /// opened from an invite link resolves it before onboarding step 2, so
+    /// without a session the call uses the `http_key` (CREW-INVITES.md §3).
     pub async fn resolve_crew_invite(&self, code: &str) -> Result<crate::crew::ResolvedInvite> {
         let payload = serde_json::json!({ "code": code });
-        let resp_str = self.rpc("resolve_crew_invite", &payload).await?;
+        let resp_str = match self.token() {
+            Some(_) => self.rpc("resolve_crew_invite", &payload).await?,
+            None => {
+                let url = format!(
+                    "{}/v2/rpc/resolve_crew_invite?http_key={}",
+                    self.config.http_base(),
+                    self.config.nakama_http_key,
+                );
+                let body = serde_json::Value::String(payload.to_string());
+                let resp = self.http.post(&url).json(&body).send().await?;
+                if !resp.status().is_success() {
+                    return Err(Error::Server(resp.text().await.unwrap_or_default()));
+                }
+                let rpc_resp: ApiRpcResponse = resp.json().await?;
+                rpc_resp.payload.unwrap_or_default()
+            }
+        };
         let result: ResolveCrewInviteResult = serde_json::from_str(&resp_str)?;
         Ok(crate::crew::ResolvedInvite {
             crew_name: result.crew_name,
@@ -2936,5 +2957,106 @@ mod tests {
         let h = WsHarness::new();
         let events = h.receive(presence_join("u-dave", "RnDmDave01")).await;
         assert_eq!(joined_name(&events), "RnDmDave01");
+    }
+}
+
+#[cfg(test)]
+mod invite_tests {
+    use super::*;
+    use std::io::{BufRead, BufReader, Read, Write};
+
+    /// Serve one HTTP request on a local port. The join handle returns the
+    /// request line and the headers.
+    fn serve_once(
+        status: &'static str,
+        body: &'static str,
+    ) -> (u16, std::thread::JoinHandle<String>) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        let handle = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept");
+            let mut reader = BufReader::new(stream.try_clone().expect("clone"));
+            let mut head = String::new();
+            let mut content_length = 0usize;
+            loop {
+                let mut line = String::new();
+                reader.read_line(&mut line).expect("read");
+                if let Some(v) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                    content_length = v.trim().parse().unwrap_or(0);
+                }
+                if line == "\r\n" || line.is_empty() {
+                    break;
+                }
+                head.push_str(&line);
+            }
+            let mut req_body = vec![0u8; content_length];
+            reader.read_exact(&mut req_body).expect("body");
+            write!(
+                stream,
+                "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            )
+            .expect("write");
+            head
+        });
+        (port, handle)
+    }
+
+    fn client_for(port: u16) -> NakamaClient {
+        let mut config = Config::development();
+        config.nakama_host = "127.0.0.1".into();
+        config.nakama_port = port;
+        config.nakama_ssl = false;
+        config.nakama_http_key = "test-http-key".into();
+        NakamaClient::new(config)
+    }
+
+    /// ★ Regression (#68): a fresh install resolves the invite before step 2,
+    /// when no account and no session exist. The call used only the session,
+    /// so it failed with `NotConnected` and the invite was lost.
+    #[tokio::test]
+    async fn resolve_crew_invite_without_a_session_uses_the_http_key() {
+        let (port, server) = serve_once(
+            "200 OK",
+            r#"{"payload":"{\"crew_name\":\"Night Owls\",\"avatar_seed\":\"Night Owls\",\"crew_id\":\"crew-1\"}"}"#,
+        );
+        let client = client_for(port);
+
+        let invite = client
+            .resolve_crew_invite("NITE-0001")
+            .await
+            .expect("resolve without a session");
+        assert_eq!(invite.crew_name, "Night Owls");
+        assert_eq!(invite.crew_id, "crew-1");
+
+        let head = server.join().expect("server thread");
+        assert!(
+            head.starts_with("POST /v2/rpc/resolve_crew_invite?http_key=test-http-key "),
+            "the request must use the http_key, got: {head}"
+        );
+        assert!(
+            !head.to_ascii_lowercase().contains("authorization:"),
+            "no session exists, so there is no bearer token to send: {head}"
+        );
+    }
+
+    /// A bad code keeps its gRPC code, so the UI can say the link is invalid.
+    #[tokio::test]
+    async fn an_invalid_code_without_a_session_keeps_its_grpc_code() {
+        let (port, server) = serve_once(
+            "404 Not Found",
+            r#"{"code":5,"error":{"Message":"invalid invite code","Code":5},"message":"invalid invite code"}"#,
+        );
+        let client = client_for(port);
+
+        let err = client
+            .resolve_crew_invite("NOPE-0000")
+            .await
+            .expect_err("an unknown code must fail");
+        assert_eq!(
+            crate::crew::InviteError::from_error(&err),
+            crate::crew::InviteError::InvalidCode
+        );
+        server.join().expect("server thread");
     }
 }
