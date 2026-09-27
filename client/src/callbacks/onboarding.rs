@@ -31,6 +31,9 @@ pub fn wire(ctx: &AppContext) {
         let fx = crate::onboarding::EffectCtx::from_ctx(ctx);
         ctx.app.on_onboarding_crew_selected(move |crew_id| {
             if let Some(app) = app_weak.upgrade() {
+                // A crew picked at step 1 replaces the invite (#68).
+                crate::onboarding_invite::clear(&app, &s);
+                app.set_onboarding_invite_error(slint::SharedString::new());
                 {
                     let mut settings = s.borrow_mut();
                     settings.pending_crew_id = Some(crew_id.to_string());
@@ -84,6 +87,8 @@ pub fn wire(ctx: &AppContext) {
                         return;
                     }
                     app.set_onboarding_busy(true);
+                    // The error of the last attempt, if any, no longer applies.
+                    app.set_link_error(slint::SharedString::new());
 
                     stop_ambient_shuffle(&shuffle_timer);
 
@@ -131,6 +136,7 @@ pub fn wire(ctx: &AppContext) {
                     // Stable across attempts — see Settings::device_id_or_create.
                     let device_id = s.borrow_mut().device_id_or_create();
                     let settings = s.borrow();
+                    let invite_code = settings.pending_invite_code.clone();
                     let crew_id = settings.pending_crew_id.clone();
                     let crew_name = settings.pending_crew_name.clone();
                     let crew_description = settings.pending_crew_description.clone();
@@ -173,14 +179,16 @@ pub fn wire(ctx: &AppContext) {
                     };
 
                     log::info!(
-                        "[onboarding] finalizing — nickname={} crew_id={:?} crew_name={:?} has_avatar={}",
+                        "[onboarding] finalizing — nickname={} invite={:?} crew_id={:?} crew_name={:?} has_avatar={}",
                         nickname,
+                        invite_code,
                         crew_id,
                         crew_name,
                         avatar_data.is_some(),
                     );
                     let _ = cmd.send(Command::FinalizeOnboarding {
                         device_id,
+                        invite_code,
                         crew_id,
                         crew_name,
                         crew_description,

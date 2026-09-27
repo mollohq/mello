@@ -21,6 +21,10 @@ export type AppState = {
   link_error: string;
   /** A sign-in or link is in progress (the spinner shows). */
   login_loading: boolean;
+  /** Onboarding step 2: the crew of the invite link that the user joins. */
+  onboarding_invite_crew_name: string;
+  /** Onboarding step 1: why the invite link could not be used. */
+  onboarding_invite_error: string;
   active_crew_id: string;
   active_crew_name: string;
   crews: string[];

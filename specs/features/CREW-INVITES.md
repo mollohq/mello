@@ -54,7 +54,7 @@ Every caller uses them. Do not read the collection directly.
 
 **File:** `backend/nakama/data/modules/invite_codes.go`
 
-**Purpose:** Return public crew info for a given invite code. Called by the Cloudflare landing page (server key), the OG image generator (server key), and the client (bearer token) to populate the join confirmation screen.
+**Purpose:** Return public crew info for a given invite code. Called by the Cloudflare landing page (server key), the OG image generator (server key), and the client. The client uses its bearer token, or the HTTP key when no session exists (a fresh install opened from an invite link, §7).
 
 **Request:** `{ "code": "XXXX-XXXX" }`
 
@@ -248,10 +248,14 @@ The poll loop (`poll_loop.rs`, 50ms timer) calls `ipc_listener.try_recv()` each 
 
 **File:** `client/src/main.rs`, `client/src/handlers/auth.rs`
 
-On startup, `extract_deep_link()` parses `argv[1]` into a `DeepLink` and stores it in `AppContext::pending_deep_link`. The link is dispatched after authentication completes:
+On startup, `extract_deep_link()` parses `argv[1]` into a `DeepLink` and stores it in `AppContext::pending_deep_link`.
+
+**Fresh install** (no session, no device account, onboarding before the account exists): a join link is resolved at once, before an account exists, and onboarding skips step 1. Finalize joins the crew by its invite code. See [01-CLIENT.md](../01-CLIENT.md) §6.2. File: `client/src/onboarding_invite.rs`.
+
+**Any other case:** the link is dispatched after authentication completes:
 
 - **Returning user:** dispatched on `Event::LoggedIn` (after `Command::LoadMyCrews`).
-- **New user:** dispatched on `Event::OnboardingReady` (after onboarding finishes and crews are loaded).
+- **Device account in onboarding:** dispatched on `Event::OnboardingReady` (after onboarding finishes and crews are loaded).
 
 `dispatch_pending_deep_link()` takes the pending link and sends the appropriate command to mello-core.
 
@@ -297,8 +301,10 @@ The modal stays open while the join runs. The button reads "Joining…" and does
 not accept a click. `InviteJoined` closes the modal. `InviteJoinFailed` keeps it
 open with the error above the button, and the button accepts a retry.
 
-> **Do not close the modal before the join returns.** For a new user the modal
-> sits on top of onboarding step 3. No other surface there can show the error.
+> **Do not close the modal before the join returns.** For a user with a device
+> account who is in onboarding, the modal sits on top of step 3. No other
+> surface there can show the error. A fresh install does not get the modal: it
+> joins the crew in onboarding (§7).
 
 **Error states.** mello-core maps the gRPC code of the RPC error to
 `InviteError`. The client picks the text.

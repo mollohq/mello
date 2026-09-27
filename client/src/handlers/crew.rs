@@ -388,6 +388,11 @@ pub fn handle(ctx: &AppContext, event: Event) {
                 invite.crew_name,
                 invite.crew_id,
             );
+            // A fresh install joins the crew in onboarding, not in the modal.
+            if crate::onboarding_invite::opens_onboarding(&ctx.app, &ctx.settings.borrow()) {
+                crate::onboarding_invite::accept(ctx, code, invite);
+                return;
+            }
             let crews = ctx.app.get_crews();
             let already_member = (0..crews.row_count())
                 .filter_map(|i| crews.row_data(i))
@@ -416,6 +421,10 @@ pub fn handle(ctx: &AppContext, event: Event) {
         }
         Event::CrewInviteResolveFailed { reason, error } => {
             log::warn!("[invite] resolve failed: {:?}: {}", error, reason);
+            if crate::onboarding_invite::opens_onboarding(&ctx.app, &ctx.settings.borrow()) {
+                crate::onboarding_invite::resolve_failed(ctx, error);
+                return;
+            }
             ctx.app
                 .set_join_crew_error(invite_resolve_error_message(error).into());
             ctx.app.set_join_crew_loading(false);

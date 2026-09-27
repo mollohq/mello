@@ -124,7 +124,7 @@ Onboarding is a 3-step full-screen flow for new users (when `onboarding_step < 4
 
 "Continue" on step 2 sends `FinalizeOnboarding`, which device-auths, creates the account, and creates or joins the crew (with the stored details and avatar). Step 3 follows.
 
-The `pending_crew_name`, `pending_crew_description`, and `pending_crew_open` fields are persisted in `Settings` (survives restart). The crew avatar base64 is held in memory only (`Arc<Mutex<Option<String>>>`).
+The `pending_crew_name`, `pending_crew_description`, `pending_crew_open`, `pending_invite_code` and `pending_invite_crew_name` fields are persisted in `Settings` (survives restart). The crew avatar base64 is held in memory only (`Arc<Mutex<Option<String>>>`).
 
 A restart on step 3 sends `DeviceAuth` with the stored device id. Linking needs a session in core, and only a finished onboarding restores one.
 
@@ -146,7 +146,24 @@ The sign-in panel:
 - Shows plain messages, never the server text. "User account not found" becomes "No account found." with a "Start as a new player" button. "Invalid credentials" becomes "Wrong email or password.".
 - "Back" and "Start as a new player" close the panel and clear the error. Both return to step 1.
 
-### 6.2 Lost Session
+### 6.2 Invite Link on a Fresh Install
+
+A fresh install opened from `mello://join/{code}` skips step 1 (#68). "Fresh install" means no session, no device account, and a step before the account exists (0, 1 or 2).
+
+1. At startup, before crew discovery, the client sends `ResolveCrewInvite`. Without a session, core calls `resolve_crew_invite` with the `http_key`.
+2. `CrewInviteResolved`: the client stores the code and the crew name, and opens step 2. Step 2 shows "JOINING CREW" and the crew name.
+3. "Continue" sends `FinalizeOnboarding` with `invite_code`. Core joins the crew with `join_by_invite_code`, so a private crew works too. Step 3 follows as usual.
+
+| Case | Result |
+|------|--------|
+| The code does not resolve | Step 1, with the message above the crews. No join modal. |
+| Finalize: the join fails with a server or network error (`OnboardingInviteFailed`, `Failed`) | Step 2, with the message above "Continue". "Continue" retries. |
+| Finalize: the code is no longer valid, the crew is full, or the server refuses the user | Step 1, with the message. The invite is forgotten. |
+| The user goes back to step 1 and picks or creates a crew | The crew replaces the invite. |
+| The user goes back to step 1 and signs in to an existing account | The stored invite opens the join modal after sign-in. |
+| A device account exists, or the user is logged in | No change: the join modal opens after sign-in. |
+
+### 6.3 Lost Session
 
 At startup with onboarding done (`onboarding_step > 3`) the client sends `TryRestore`. When the restore fails and a device account exists:
 

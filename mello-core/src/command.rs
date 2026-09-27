@@ -95,6 +95,12 @@ pub enum Command {
         /// every attempt: it is what makes finalize idempotent. A fresh id here
         /// authenticates as a new device and Nakama creates another account.
         device_id: String,
+        /// The invite code of the link that opened a fresh install. When set,
+        /// finalize joins that crew with `join_by_invite_code`: the code is
+        /// the authorization, so a private crew works too. It wins over
+        /// `crew_id` and `crew_name`.
+        #[serde(default)]
+        invite_code: Option<String>,
         crew_id: Option<String>,
         crew_name: Option<String>,
         #[serde(default)]

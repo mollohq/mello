@@ -68,11 +68,17 @@ pub fn handle(ctx: &AppContext, event: Event) {
                 s.pending_crew_id = None;
                 s.pending_crew_name = None;
             }
+            // Finalize joined the invited crew, if any. Forget the invite
+            // before the pending link below, so it does not open again.
+            crate::onboarding_invite::clear(&ctx.app, &ctx.settings);
             // The account exists, but identity linking is still offered — so
             // this is LinkIdentity, not Done.
             crate::onboarding::advance(ctx, crate::onboarding::Input::AccountReady);
             let _ = ctx.cmd_tx.send(Command::LoadMyCrews);
             dispatch_pending_deep_link(ctx);
+        }
+        Event::OnboardingInviteFailed { error } => {
+            crate::onboarding_invite::join_failed(ctx, error);
         }
         Event::OnboardingFailed { reason } => {
             // Release the guard: the user is still on the same step and must be
@@ -229,6 +235,20 @@ impl SignInFailure {
 }
 
 fn dispatch_pending_deep_link(ctx: &AppContext) {
+    // An invite that onboarding stored, when the user signed in to an
+    // existing account instead of finishing onboarding (#68). The account
+    // exists now, so the invite opens the join modal.
+    let stored_invite = ctx.settings.borrow().pending_invite_code.clone();
+    if let Some(code) = stored_invite {
+        crate::onboarding_invite::clear(&ctx.app, &ctx.settings);
+        ctx.settings.borrow().save();
+        log::info!(
+            "[deep_link] dispatching the invite stored by onboarding code={}",
+            code
+        );
+        let _ = ctx.cmd_tx.send(Command::ResolveCrewInvite { code });
+    }
+
     let link = ctx.pending_deep_link.borrow_mut().take();
     if let Some(deep_link) = link {
         match deep_link {

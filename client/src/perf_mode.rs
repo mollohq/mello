@@ -129,6 +129,7 @@ fn run_scenario(
                     cmd_tx,
                     Command::FinalizeOnboarding {
                         device_id: device_id.to_string(),
+                        invite_code: None,
                         crew_id: crew_id.clone(),
                         crew_name: crew_name.clone(),
                         crew_description: None,

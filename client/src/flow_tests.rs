@@ -891,6 +891,299 @@ fn a_failed_join_from_the_discover_code_field_is_shown_there() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// An invite link on a fresh install (#68)
+// ---------------------------------------------------------------------------
+
+/// Start a fresh install from `mello://join/NITE-0001`, the way `lib.rs` does:
+/// the startup dispatch, then resume at `Loading`.
+fn start_fresh_install_from_invite(h: &mut Harness) -> Vec<Command> {
+    *h.ctx().pending_deep_link.borrow_mut() = Some(crate::deep_link::DeepLink::Join {
+        code: "NITE-0001".into(),
+    });
+    crate::onboarding_invite::dispatch_at_startup(
+        h.ctx(),
+        crate::onboarding::OnboardingState::Loading,
+    );
+    crate::onboarding::resume(h.ctx(), crate::onboarding::OnboardingState::Loading);
+    h.commands()
+}
+
+/// The invite resolved: the fresh install is on step 2 with the crew shown.
+fn accept_invite_on_fresh_install(h: &mut Harness) {
+    start_fresh_install_from_invite(h);
+    h.emit(Event::CrewInviteResolved {
+        code: "NITE-0001".into(),
+        invite: sample_invite(),
+    });
+}
+
+fn text_on_screen(h: &Harness, element_id: &str) -> Option<String> {
+    h.find(element_id)
+        .first()
+        .and_then(|e| e.accessible_label())
+        .map(|l| l.to_string())
+}
+
+fn finalize_invite(cmds: &[Command]) -> Option<(Option<String>, Option<String>, Option<String>)> {
+    cmds.iter().find_map(|c| match c {
+        Command::FinalizeOnboarding {
+            invite_code,
+            crew_id,
+            crew_name,
+            ..
+        } => Some((invite_code.clone(), crew_id.clone(), crew_name.clone())),
+        _ => None,
+    })
+}
+
+/// ★ Regression (#68): a fresh install opened from an invite link skips
+/// step 1, shows the invited crew on step 2, and finalize joins that crew by
+/// its invite code.
+///
+/// Before the fix the link resolved only after the account existed. The user
+/// made or joined another crew at step 1, and a join modal for the invited
+/// crew opened on top of step 3.
+#[test]
+fn an_invite_link_on_a_fresh_install_skips_step_one() {
+    let mut h = Harness::new();
+
+    let cmds = start_fresh_install_from_invite(&mut h);
+    let resolve = cmds
+        .iter()
+        .position(|c| matches!(c, Command::ResolveCrewInvite { code } if code == "NITE-0001"));
+    let discover = cmds
+        .iter()
+        .position(|c| matches!(c, Command::DiscoverCrews { .. }));
+    assert!(
+        resolve.is_some(),
+        "the invite must resolve before an account exists, got {cmds:?}"
+    );
+    assert!(
+        resolve < discover,
+        "the invite resolves before crew discovery, so step 1 does not show first: {cmds:?}"
+    );
+
+    h.emit(Event::CrewInviteResolved {
+        code: "NITE-0001".into(),
+        invite: sample_invite(),
+    });
+    assert_eq!(h.app().get_onboarding_step(), 2, "step 1 is skipped");
+    assert!(
+        !join_crew_modal_is_visible(&h),
+        "no join modal: onboarding joins the crew"
+    );
+    assert_eq!(
+        text_on_screen(&h, "Onboarding::invite-crew-text").as_deref(),
+        Some("Night Stones"),
+        "step 2 shows the crew that the user joins"
+    );
+
+    // A late discovery answer does not move the user back to step 1.
+    h.emit(Event::DiscoverCrewsLoaded {
+        crews: sample_crews(3),
+        cursor: None,
+    });
+    assert_eq!(h.app().get_onboarding_step(), 2);
+
+    finalize(&h);
+    assert_eq!(
+        finalize_invite(&h.commands()),
+        Some((Some("NITE-0001".into()), None, None)),
+        "finalize joins by the invite code and neither joins nor creates another crew"
+    );
+
+    h.emit(Event::OnboardingReady {
+        user: sample_user(),
+    });
+    assert_eq!(h.app().get_onboarding_step(), 3, "step 3 follows as usual");
+    let after = h.commands();
+    assert!(
+        !after
+            .iter()
+            .any(|c| matches!(c, Command::ResolveCrewInvite { .. })),
+        "the invite is used; it must not open the join modal on step 3: {after:?}"
+    );
+    assert!(h.settings().borrow().pending_invite_code.is_none());
+}
+
+/// The retry behavior of finalize holds with an invite: one device id, the
+/// same code on each attempt.
+#[test]
+fn retrying_finalize_with_an_invite_keeps_the_device_id_and_the_code() {
+    let mut h = Harness::new();
+    accept_invite_on_fresh_install(&mut h);
+
+    finalize(&h);
+    let first = h.commands();
+    h.emit(Event::OnboardingFailed {
+        reason: "Connection failed: timed out".into(),
+    });
+    finalize(&h);
+    let second = h.commands();
+
+    assert_eq!(finalize_device_ids(&first), finalize_device_ids(&second));
+    assert_eq!(
+        finalize_invite(&second),
+        Some((Some("NITE-0001".into()), None, None))
+    );
+}
+
+/// INV-05: an invalid invite code on a fresh install shows step 1 with a
+/// message. Step 1 offers a way forward. No join modal opens.
+#[test]
+fn an_invalid_invite_on_a_fresh_install_shows_step_one_with_a_message() {
+    let mut h = Harness::new();
+    start_fresh_install_from_invite(&mut h);
+
+    h.emit(Event::CrewInviteResolveFailed {
+        reason: "invalid invite code".into(),
+        error: mello_core::crew::InviteError::InvalidCode,
+    });
+    h.emit(Event::DiscoverCrewsLoaded {
+        crews: sample_crews(3),
+        cursor: None,
+    });
+
+    assert_eq!(h.app().get_onboarding_step(), 1);
+    assert!(!join_crew_modal_is_visible(&h));
+    assert_eq!(
+        text_on_screen(&h, "Onboarding::invite-error-text").as_deref(),
+        Some("This invite link is no longer valid.")
+    );
+    assert_eq!(
+        ElementHandle::find_by_element_type_name(h.app(), "CreateCrewCard").count(),
+        1,
+        "step 1 still offers a way forward"
+    );
+
+    // Picking a crew clears the message and moves on.
+    h.app().invoke_onboarding_crew_selected("crew-0".into());
+    assert_eq!(h.app().get_onboarding_step(), 2);
+    assert_eq!(h.app().get_onboarding_invite_error().as_str(), "");
+}
+
+/// A crew picked at step 1 replaces the invite.
+#[test]
+fn a_crew_picked_at_step_one_replaces_the_invite() {
+    let mut h = Harness::new();
+    accept_invite_on_fresh_install(&mut h);
+
+    h.app().invoke_onboarding_continue(1);
+    assert_eq!(
+        h.app().get_onboarding_step(),
+        1,
+        "the step indicator goes back"
+    );
+    h.app().invoke_onboarding_crew_selected("crew-0".into());
+    assert_eq!(h.app().get_onboarding_step(), 2);
+    assert!(
+        text_on_screen(&h, "Onboarding::invite-crew-text").is_none(),
+        "step 2 no longer shows the invited crew"
+    );
+
+    h.commands();
+    finalize(&h);
+    assert_eq!(
+        finalize_invite(&h.commands()),
+        Some((None, Some("crew-0".into()), None))
+    );
+}
+
+/// Finalize could not join the invited crew. A transient failure stays on
+/// step 2 with a retry. A crew that cannot take the user goes back to step 1.
+#[test]
+fn a_failed_invite_join_at_finalize_is_never_a_dead_end() {
+    let mut h = Harness::new();
+    accept_invite_on_fresh_install(&mut h);
+
+    finalize(&h);
+    h.emit(Event::OnboardingInviteFailed {
+        error: mello_core::crew::InviteError::Failed,
+    });
+    assert_eq!(h.app().get_onboarding_step(), 2);
+    assert!(!h.app().get_onboarding_busy(), "Continue accepts a retry");
+    assert_eq!(
+        text_on_screen(&h, "Onboarding::step2-error-text").as_deref(),
+        Some("Could not join the crew. Try again.")
+    );
+
+    finalize(&h);
+    assert_eq!(
+        text_on_screen(&h, "Onboarding::step2-error-text"),
+        None,
+        "a retry clears the previous error"
+    );
+    h.emit(Event::OnboardingInviteFailed {
+        error: mello_core::crew::InviteError::CrewFull,
+    });
+    assert_eq!(
+        h.app().get_onboarding_step(),
+        1,
+        "the user picks another crew"
+    );
+    assert!(!h.app().get_onboarding_busy());
+    assert_eq!(
+        text_on_screen(&h, "Onboarding::invite-error-text").as_deref(),
+        Some("This crew is full.")
+    );
+    assert!(h.settings().borrow().pending_invite_code.is_none());
+}
+
+/// A machine with a device account keeps today's path: the link waits for
+/// sign-in and then opens the join modal.
+#[test]
+fn an_invite_on_a_machine_with_a_device_account_waits_for_sign_in() {
+    let mut h = Harness::new();
+    h.settings().borrow_mut().device_id = Some("dev-abc".into());
+    *h.ctx().pending_deep_link.borrow_mut() = Some(crate::deep_link::DeepLink::Join {
+        code: "NITE-0001".into(),
+    });
+
+    crate::onboarding_invite::dispatch_at_startup(
+        h.ctx(),
+        crate::onboarding::OnboardingState::PickCrew,
+    );
+    let cmds = h.commands();
+    assert!(
+        !cmds
+            .iter()
+            .any(|c| matches!(c, Command::ResolveCrewInvite { .. })),
+        "{cmds:?}"
+    );
+    assert!(h.ctx().pending_deep_link.borrow().is_some());
+}
+
+/// A restart on step 2 still shows the invited crew and still joins it.
+#[test]
+fn a_restart_on_step_two_keeps_the_invite() {
+    let mut h = Harness::new();
+    {
+        let settings = h.settings();
+        let mut s = settings.borrow_mut();
+        s.pending_invite_code = Some("NITE-0001".into());
+        s.pending_invite_crew_name = Some("Night Stones".into());
+    }
+
+    crate::onboarding_invite::dispatch_at_startup(
+        h.ctx(),
+        crate::onboarding::OnboardingState::PickAvatar,
+    );
+    crate::onboarding::resume(h.ctx(), crate::onboarding::OnboardingState::PickAvatar);
+    h.pump();
+
+    assert_eq!(
+        text_on_screen(&h, "Onboarding::invite-crew-text").as_deref(),
+        Some("Night Stones")
+    );
+    h.commands();
+    finalize(&h);
+    assert_eq!(
+        finalize_invite(&h.commands()),
+        Some((Some("NITE-0001".into()), None, None))
+    );
+}
+
 /// core → UI: joining a crew must make the app screen usable rather than
 /// leaving the user in a half-populated state.
 #[test]

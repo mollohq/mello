@@ -19,6 +19,11 @@ pub struct Settings {
     pub pending_crew_name: Option<String>,
     pub pending_crew_description: Option<String>,
     pub pending_crew_open: Option<bool>,
+    /// The invite code of the link that opened a fresh install (#68).
+    /// Finalize joins its crew. Survives a restart on step 2.
+    pub pending_invite_code: Option<String>,
+    /// The name of the invited crew, shown on step 2.
+    pub pending_invite_crew_name: Option<String>,
     pub start_on_boot: bool,
     pub ptt_key: Option<String>,
     // General tab
@@ -70,6 +75,8 @@ impl Default for Settings {
             pending_crew_name: None,
             pending_crew_description: None,
             pending_crew_open: None,
+            pending_invite_code: None,
+            pending_invite_crew_name: None,
             start_on_boot: false,
             ptt_key: None,
             start_minimized: false,
