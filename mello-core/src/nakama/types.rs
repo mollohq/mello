@@ -25,6 +25,12 @@ pub struct ApiUser {
     pub online: Option<bool>,
 }
 
+/// `GET /v2/user` response.
+#[derive(Debug, Deserialize)]
+pub struct ApiUsers {
+    pub users: Option<Vec<ApiUser>>,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct ApiUserGroupList {
     pub user_groups: Option<Vec<ApiUserGroup>>,
