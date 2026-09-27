@@ -317,6 +317,11 @@ fn a_second_user_can_join_a_crew_by_invite_code() {
             members.iter().any(|m| m.id == joiner_user.id),
             "the owner must see the joiner as a member. Got: {members:?}"
         );
+        assert_eq!(
+            crew_member_state(&owner, &crew.id, &joiner_user.id).await,
+            Some(GROUP_STATE_MEMBER),
+            "the joiner must be a member, not a join request"
+        );
 
         // Following the same link again is not an error: the client opens the
         // crew.
@@ -325,6 +330,144 @@ fn a_second_user_can_join_a_crew_by_invite_code() {
             .await
             .expect("an existing member following the link again must succeed");
         assert_eq!(again_id, crew.id);
+
+        let _ = joiner.delete_account().await;
+        let _ = owner.delete_account().await;
+    });
+}
+
+/// Nakama `group_edge` states the invite tests assert on.
+const GROUP_STATE_MEMBER: i64 = 2;
+const GROUP_STATE_JOIN_REQUEST: i64 = 3;
+
+/// The caller's view of `user_id`'s edge state in the crew, or `None` when the
+/// user has no edge.
+///
+/// Nakama lists a join request next to the real members, so a membership
+/// check that only looks for the user ID passes for a pending request.
+/// `crew_state_get` reports each member's edge state as `role`.
+async fn crew_member_state(viewer: &NakamaClient, crew_id: &str, user_id: &str) -> Option<i64> {
+    let raw = viewer
+        .rpc("crew_state_get", &serde_json::json!({ "crew_id": crew_id }))
+        .await
+        .expect("crew_state_get");
+    let body: serde_json::Value = serde_json::from_str(&raw).expect("crew_state_get returns JSON");
+    let members = body
+        .get("members")
+        .and_then(|m| m.as_array())
+        .unwrap_or_else(|| panic!("crew_state_get has no members list. Got: {body}"));
+    members
+        .iter()
+        .find(|m| m.get("user_id").and_then(|v| v.as_str()) == Some(user_id))
+        .map(|m| {
+            m.get("role")
+                .and_then(|v| v.as_i64())
+                .unwrap_or_else(|| panic!("member has no role. Got: {m}"))
+        })
+}
+
+/// A new owner with a crew and a fresh invite code for it.
+async fn crew_with_invite(open: bool) -> (NakamaClient, String, String) {
+    let mut owner = NakamaClient::new(e2e_config());
+    owner
+        .authenticate_device(&random_device_id())
+        .await
+        .expect("device auth for the owner");
+    let crew_name = format!("E2E Invite {:x}", rand::random::<u32>());
+    let (crew, _) = owner
+        .create_crew(&crew_name, "", open, None, &[])
+        .await
+        .expect("create_crew");
+    let code = owner
+        .create_invite_code(&crew.id)
+        .await
+        .expect("create_invite_code");
+    (owner, crew.id, code)
+}
+
+/// Joining a private crew through an invite link.
+///
+/// New crews are private (a closed Nakama group). `join_by_invite_code` called
+/// `GroupUserJoin`, which only files a join request for a closed group. The
+/// RPC reported success, but no one was asked to approve the request, and the
+/// crew chat refused the user as a non-member (issue #83).
+#[test]
+fn a_second_user_can_join_a_private_crew_by_invite_code() {
+    if !e2e_enabled("a_second_user_can_join_a_private_crew_by_invite_code") {
+        return;
+    }
+
+    rt().block_on(async {
+        let (owner, crew_id, code) = crew_with_invite(false).await;
+
+        let mut joiner = NakamaClient::new(e2e_config());
+        let (joiner_user, _) = joiner
+            .authenticate_device(&random_device_id())
+            .await
+            .expect("device auth for the joiner");
+
+        let (joined_id, _) = joiner
+            .join_by_invite_code(&code)
+            .await
+            .expect("join_by_invite_code must succeed for a valid code");
+        assert_eq!(joined_id, crew_id, "the RPC must return the invited crew");
+        assert_eq!(
+            crew_member_state(&owner, &crew_id, &joiner_user.id).await,
+            Some(GROUP_STATE_MEMBER),
+            "a valid invite code must make the joiner a member of a private crew, \
+             not a join request"
+        );
+
+        let (again_id, _) = joiner
+            .join_by_invite_code(&code)
+            .await
+            .expect("an existing member following the link again must succeed");
+        assert_eq!(again_id, crew_id);
+
+        let _ = joiner.delete_account().await;
+        let _ = owner.delete_account().await;
+    });
+}
+
+/// An invite code completes a join request the user filed before.
+///
+/// A user who asked to join a private crew through Nakama's own group join
+/// has a pending request. The invite code is the authorization, so following
+/// it must make that user a member.
+#[test]
+fn an_invite_code_completes_a_pending_join_request() {
+    if !e2e_enabled("an_invite_code_completes_a_pending_join_request") {
+        return;
+    }
+
+    rt().block_on(async {
+        let (owner, crew_id, code) = crew_with_invite(false).await;
+
+        let mut joiner = NakamaClient::new(e2e_config());
+        let (joiner_user, _) = joiner
+            .authenticate_device(&random_device_id())
+            .await
+            .expect("device auth for the joiner");
+
+        joiner
+            .join_group(&crew_id)
+            .await
+            .expect("Nakama group join on a private crew files a request");
+        assert_eq!(
+            crew_member_state(&owner, &crew_id, &joiner_user.id).await,
+            Some(GROUP_STATE_JOIN_REQUEST),
+            "precondition: the joiner must hold a pending join request"
+        );
+
+        joiner
+            .join_by_invite_code(&code)
+            .await
+            .expect("join_by_invite_code must succeed for a pending request");
+        assert_eq!(
+            crew_member_state(&owner, &crew_id, &joiner_user.id).await,
+            Some(GROUP_STATE_MEMBER),
+            "the invite code must turn the join request into a membership"
+        );
 
         let _ = joiner.delete_account().await;
         let _ = owner.delete_account().await;
