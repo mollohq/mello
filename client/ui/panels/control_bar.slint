@@ -136,6 +136,12 @@ component MenuItem inherits Rectangle {
     item-hover := TouchArea {
         accessible-role: button;
         accessible-label: root.label;
+        // The item lives in a PopupWindow. A pointer click by element
+        // position misses there in the e2e driver, so the item also takes
+        // the default accessibility action, as a screen reader sends it.
+        accessible-action-default => {
+            root.clicked();
+        }
         clicked => {
             root.clicked();
         }

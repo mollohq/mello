@@ -163,6 +163,11 @@ export class SlintMcp {
     await this.call("click_element", { elementHandle: handle });
   }
 
+  /** The control's default accessibility action, as a screen reader sends it. */
+  async activate(handle: Handle): Promise<void> {
+    await this.call("invoke_accessibility_action", { elementHandle: handle, action: "Default_" });
+  }
+
   async setValue(handle: Handle, value: string): Promise<void> {
     await this.call("set_element_value", { elementHandle: handle, value });
   }

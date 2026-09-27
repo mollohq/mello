@@ -30,6 +30,7 @@ mod image_cache;
 mod ipc;
 mod notifications;
 mod onboarding;
+mod onboarding_invite;
 mod perf_mode;
 mod platform;
 mod poll_loop;
@@ -553,6 +554,7 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
         diag_autostop_timer: Rc::new(RefCell::new(None)),
         post_game_timer: Rc::new(RefCell::new(None)),
         riot_cta_pending: Rc::new(Cell::new(false)),
+        session_recovery: Rc::new(Cell::new(false)),
         games_integrations: Rc::new(RefCell::new(Vec::new())),
         muted_before_deafen: Rc::new(Cell::new(false)),
         updater,
@@ -603,6 +605,9 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
             } else {
                 log::info!("[auth] onboarding in progress — resuming {state:?}");
             }
+            // Before resume: an invite link on a fresh install resolves ahead
+            // of crew discovery and opens step 2 (#68).
+            crate::onboarding_invite::dispatch_at_startup(&ctx, state);
             crate::onboarding::resume(&ctx, state);
         }
         let _ = ctx.cmd_tx.send(Command::CheckMicPermission);

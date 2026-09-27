@@ -1,4 +1,6 @@
 use std::io::Read;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
@@ -17,6 +19,10 @@ const TOKEN_PATH: &str = "/token";
 const CALLBACK_TIMEOUT: Duration = Duration::from_secs(120);
 /// Upper bound on a `/token` body. A real body holds one token and one state.
 const MAX_TOKEN_BODY: u64 = 8 * 1024;
+/// The OAuth 2.0 `error` code for a user who refuses consent (RFC 6749 §4.1.2.1).
+const ACCESS_DENIED: &str = "access_denied";
+/// Upper bound on a provider error code that the app keeps and shows.
+const MAX_ERROR_CODE: usize = 64;
 
 /// The URL to use for a provider endpoint.
 ///
@@ -117,6 +123,55 @@ pub enum OAuthMode {
     OpenIDQuery,
 }
 
+/// Stops a waiting [`OAuthFlow`] from another thread.
+///
+/// The app uses it when the flow result is no longer wanted, for example at
+/// logout. The flow then returns [`OAuthError::Aborted`] at once and releases
+/// the callback port. Clones share one flag.
+#[derive(Clone, Default)]
+pub struct FlowCancel(Arc<CancelState>);
+
+#[derive(Default)]
+struct CancelState {
+    cancelled: AtomicBool,
+    /// The callback server while the flow waits. `cancel` wakes its wait.
+    server: Mutex<Option<Arc<Server>>>,
+}
+
+impl FlowCancel {
+    /// Stop the flow. A flow that has not started yet returns at its start.
+    pub fn cancel(&self) {
+        // Set the flag before the wake-up: the wait loop reads the flag after
+        // each wake-up, so it cannot miss the cancel.
+        self.0.cancelled.store(true, Ordering::SeqCst);
+        if let Some(server) = self.lock_server().as_ref() {
+            server.unblock();
+        }
+    }
+
+    /// True after [`FlowCancel::cancel`].
+    pub fn is_cancelled(&self) -> bool {
+        self.0.cancelled.load(Ordering::SeqCst)
+    }
+
+    fn attach(&self, server: Arc<Server>) {
+        *self.lock_server() = Some(server);
+    }
+
+    /// Drop the reference to the server, so the port closes when the flow ends.
+    fn detach(&self) {
+        *self.lock_server() = None;
+    }
+
+    fn lock_server(&self) -> std::sync::MutexGuard<'_, Option<Arc<Server>>> {
+        // The lock guards one assignment. A panic cannot leave it half-written.
+        self.0
+            .server
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+}
+
 /// Blocking OAuth flow using a localhost callback server.
 /// Must be called from a blocking context (e.g. `tokio::task::spawn_blocking`).
 pub struct OAuthFlow;
@@ -127,33 +182,59 @@ impl OAuthFlow {
     /// `state` must be the value that `auth_url` carries (for Steam, inside
     /// `return_to`). Use [`generate_state`] to make it. The server rejects a
     /// callback with a missing or different `state`, and a request to any other
-    /// path, and continues to wait until the timeout.
-    pub fn execute(auth_url: &str, state: &str, mode: OAuthMode) -> Result<String, OAuthError> {
-        let server = Server::http(format!("127.0.0.1:{REDIRECT_PORT}"))
-            .map_err(|e| OAuthError::ServerStart(e.to_string()))?;
+    /// path, and continues to wait until the timeout. `cancel` stops the wait.
+    pub fn execute(
+        auth_url: &str,
+        state: &str,
+        mode: OAuthMode,
+        cancel: &FlowCancel,
+    ) -> Result<String, OAuthError> {
+        if cancel.is_cancelled() {
+            return Err(OAuthError::Aborted);
+        }
+        let server = Arc::new(
+            Server::http(format!("127.0.0.1:{REDIRECT_PORT}"))
+                .map_err(|e| OAuthError::ServerStart(e.to_string()))?,
+        );
 
-        open_browser(&provider_url(auth_url))?;
-        log::info!("[oauth] browser opened, waiting for callback");
-
-        Self::wait(&server, state, &mode, callback_timeout())
+        cancel.attach(Arc::clone(&server));
+        let result = open_browser(&provider_url(auth_url)).and_then(|()| {
+            log::info!("[oauth] browser opened, waiting for callback");
+            Self::wait(&server, state, &mode, callback_timeout(), cancel)
+        });
+        cancel.detach();
+        result
     }
 
-    /// Serve requests until one completes the flow or `timeout` elapses. Any
-    /// local page can reach this server, so a request that fails the path or
-    /// `state` check is answered and ignored. It must not end the flow.
+    /// Serve requests until one completes the flow, `timeout` elapses, or
+    /// `cancel` stops it. Any local page can reach this server, so a request
+    /// that fails the path or `state` check is answered and ignored. It must
+    /// not end the flow.
     fn wait(
         server: &Server,
         state: &str,
         mode: &OAuthMode,
         timeout: Duration,
+        cancel: &FlowCancel,
     ) -> Result<String, OAuthError> {
         let deadline = Instant::now() + timeout;
         loop {
+            if cancel.is_cancelled() {
+                log::info!("[oauth] flow stopped by the app");
+                return Err(OAuthError::Aborted);
+            }
             let remaining = deadline.saturating_duration_since(Instant::now());
-            let request = server
+            if remaining.is_zero() {
+                return Err(OAuthError::Timeout);
+            }
+            // `None` is the timeout or a wake-up from `cancel`. The loop start
+            // tells them apart.
+            let Some(request) = server
                 .recv_timeout(remaining)
                 .map_err(|_| OAuthError::Timeout)?
-                .ok_or(OAuthError::Timeout)?;
+            else {
+                continue;
+            };
 
             let outcome = match mode {
                 OAuthMode::AuthorizationCode => Self::handle_code(request, state),
@@ -169,6 +250,11 @@ impl OAuthFlow {
     /// Authorization Code: code and `state` are in the callback query string.
     fn handle_code(request: Request, state: &str) -> Option<Result<String, OAuthError>> {
         let (request, _, pairs) = Self::checked_callback(request, state)?;
+
+        // The provider's answer to this flow: a refusal ends the flow at once.
+        if let Some(error) = param(&pairs, "error") {
+            return Some(Err(Self::answer_error(request, error)));
+        }
 
         match param(&pairs, "code") {
             Some(code) => {
@@ -188,7 +274,18 @@ impl OAuthFlow {
     /// Steam OpenID: forward the callback query string (the `openid.*`
     /// response) without our `state`, for server-side `check_authentication`.
     fn handle_openid(request: Request, state: &str) -> Option<Result<String, OAuthError>> {
-        let (request, raw_query, _) = Self::checked_callback(request, state)?;
+        let (request, raw_query, pairs) = Self::checked_callback(request, state)?;
+
+        // OpenID 2.0 §10.2: a refusal is `openid.mode=cancel`, a provider
+        // failure is `openid.mode=error` with `openid.error`.
+        match param(&pairs, "openid.mode") {
+            Some("cancel") => return Some(Err(Self::answer_error(request, ACCESS_DENIED))),
+            Some("error") => {
+                let error = param(&pairs, "openid.error").unwrap_or_default();
+                return Some(Err(Self::answer_error(request, error)));
+            }
+            _ => {}
+        }
 
         // Drop only the `state` pair and keep every other pair byte-for-byte, so
         // the signed `openid.*` values reach Steam unchanged.
@@ -244,6 +341,12 @@ impl OAuthFlow {
                     return None;
                 }
 
+                // The page forwards the fragment's `error`: the provider's
+                // answer to this flow. A refusal ends the flow at once.
+                if let Some(error) = param(&params, "error") {
+                    return Some(Err(Self::answer_error(request, error)));
+                }
+
                 match param(&params, "access_token").filter(|t| !t.is_empty()) {
                     Some(token) => {
                         log::info!("[oauth] access token received");
@@ -263,6 +366,24 @@ impl OAuthFlow {
                 respond_text(request, 404, "Not found");
                 None
             }
+        }
+    }
+
+    /// Answer a callback that carries the provider's `error` for this flow,
+    /// and return the error that ends the flow. The caller checked `state`.
+    ///
+    /// The answer is the same for each mode. The implicit-flow page shows its
+    /// own text, so the body there is for logs only.
+    fn answer_error(request: Request, error: &str) -> OAuthError {
+        if error == ACCESS_DENIED {
+            log::info!("[oauth] the user refused consent at the provider");
+            respond_html(request, 200, CANCELLED_HTML);
+            OAuthError::Cancelled
+        } else {
+            let code = error_code(error);
+            log::warn!("[oauth] the provider returned an error: {code}");
+            respond_html(request, 400, FAILURE_HTML);
+            OAuthError::Provider(code)
         }
     }
 
@@ -309,6 +430,22 @@ fn param<'a>(pairs: &'a [(String, String)], key: &str) -> Option<&'a str> {
         .map(|(_, v)| v.as_str())
 }
 
+/// A provider error code that is safe to log and show: printable ASCII only,
+/// at most [`MAX_ERROR_CODE`] characters.
+fn error_code(raw: &str) -> String {
+    let code: String = raw
+        .chars()
+        .filter(|c| c.is_ascii_graphic() || *c == ' ')
+        .take(MAX_ERROR_CODE)
+        .collect();
+    let code = code.trim();
+    if code.is_empty() {
+        "unknown_error".to_string()
+    } else {
+        code.to_string()
+    }
+}
+
 /// Compare in constant time, so response timing does not show how much of a
 /// guessed `state` is correct. An empty expected value never matches.
 fn state_matches(received: Option<&str>, expected: &str) -> bool {
@@ -341,8 +478,9 @@ fn respond(request: Request, status: u16, content_type: &str, body: &str) {
     let _ = request.respond(response);
 }
 
-/// Reads `access_token` and `state` from the fragment and POSTs both to
-/// `/token`. Text goes in via `textContent`: the fragment is untrusted input.
+/// Reads `access_token` (or `error`) and `state` from the fragment and POSTs
+/// them to `/token`. Text goes in via `textContent`: the fragment is untrusted
+/// input.
 const EXTRACTOR_HTML: &str = r#"<!DOCTYPE html>
 <html>
 <head><title>Mello - Authenticating</title></head>
@@ -369,7 +507,19 @@ const EXTRACTOR_HTML: &str = r#"<!DOCTYPE html>
         }
 
         if (error) {
-            show('Authentication Failed', error);
+            // Tell the app, so the flow ends now and not at the timeout. The
+            // server checks `state` and ignores a report without it.
+            if (state) {
+                fetch('/token', {
+                    method: 'POST',
+                    body: new URLSearchParams({ error: error, state: state }),
+                }).catch(() => {});
+            }
+            if (error === 'access_denied') {
+                show('Sign-in Cancelled', 'You can close this tab and return to Mello.');
+            } else {
+                show('Authentication Failed', error);
+            }
         } else if (token && state) {
             fetch('/token', {
                 method: 'POST',
@@ -410,6 +560,16 @@ const FAILURE_HTML: &str = r#"<!DOCTYPE html>
 </body>
 </html>"#;
 
+const CANCELLED_HTML: &str = r#"<!DOCTYPE html>
+<html>
+<head><title>Mello</title></head>
+<body style="font-family: system-ui; display: flex; justify-content: center;
+             align-items: center; height: 100vh; margin: 0;
+             background: #1a1a1a; color: white;">
+    <div><h1>Sign-in Cancelled</h1><p>You can close this tab and return to Mello.</p></div>
+</body>
+</html>"#;
+
 #[derive(Debug, thiserror::Error)]
 pub enum OAuthError {
     #[error("Failed to start callback server: {0}")]
@@ -423,6 +583,19 @@ pub enum OAuthError {
 
     #[error("No token/code received")]
     NoToken,
+
+    /// The user refused consent at the provider (`access_denied`, or Steam
+    /// `openid.mode=cancel`).
+    #[error("The sign-in was cancelled")]
+    Cancelled,
+
+    /// The provider answered this flow with an error other than a refusal.
+    #[error("The provider returned an error: {0}")]
+    Provider(String),
+
+    /// The app stopped the flow with [`FlowCancel`].
+    #[error("The sign-in was stopped")]
+    Aborted,
 
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
@@ -470,7 +643,13 @@ mod tests {
         let server = Server::http("127.0.0.1:0").expect("bind ephemeral port");
         let port = server.server_addr().to_ip().expect("ip listener").port();
         let flow = std::thread::spawn(move || {
-            OAuthFlow::wait(&server, STATE, &mode, Duration::from_secs(30))
+            OAuthFlow::wait(
+                &server,
+                STATE,
+                &mode,
+                Duration::from_secs(30),
+                &FlowCancel::default(),
+            )
         });
         let out = client(port);
         (flow.join().expect("flow thread"), out)
@@ -579,15 +758,52 @@ mod tests {
     }
 
     #[test]
-    fn code_flow_provider_error_with_matching_state_ends_the_flow() {
+    fn code_flow_refusal_with_matching_state_ends_the_flow_as_cancelled() {
         let (result, status) = run_flow(OAuthMode::AuthorizationCode, |port| {
             get(
                 port,
                 &callback(&format!("error=access_denied&state={STATE}")),
             )
         });
-        assert!(matches!(result, Err(OAuthError::NoToken)));
+        assert!(matches!(result, Err(OAuthError::Cancelled)), "{result:?}");
+        assert_eq!(status, 200);
+    }
+
+    #[test]
+    fn code_flow_other_provider_error_ends_the_flow_with_the_code() {
+        let (result, status) = run_flow(OAuthMode::AuthorizationCode, |port| {
+            get(
+                port,
+                &callback(&format!("error=server_error&state={STATE}")),
+            )
+        });
+        assert!(
+            matches!(&result, Err(OAuthError::Provider(code)) if code == "server_error"),
+            "{result:?}"
+        );
         assert_eq!(status, 400);
+    }
+
+    #[test]
+    fn code_flow_callback_without_code_or_error_has_no_token() {
+        let (result, status) = run_flow(OAuthMode::AuthorizationCode, |port| {
+            get(port, &callback(&format!("state={STATE}")))
+        });
+        assert!(matches!(result, Err(OAuthError::NoToken)), "{result:?}");
+        assert_eq!(status, 400);
+    }
+
+    #[test]
+    fn code_flow_ignores_a_refusal_with_missing_or_wrong_state() {
+        let (result, statuses) = run_flow(OAuthMode::AuthorizationCode, |port| {
+            vec![
+                get(port, &callback("error=access_denied")),
+                get(port, &callback("error=access_denied&state=wrong")),
+                get(port, &callback(&format!("code=good&state={STATE}"))),
+            ]
+        });
+        assert_eq!(result.unwrap(), "good");
+        assert_eq!(statuses, vec![400, 400, 200]);
     }
 
     #[test]
@@ -652,6 +868,179 @@ mod tests {
     }
 
     #[test]
+    fn implicit_flow_refusal_with_matching_state_ends_the_flow_as_cancelled() {
+        // #87: the extractor page forwards the fragment's `error`. Before the
+        // fix, the flow answered "No token" and waited for the timeout.
+        let (result, statuses) = run_flow(OAuthMode::Implicit, |port| {
+            vec![
+                get(port, CALLBACK_PATH),
+                send(
+                    port,
+                    "POST",
+                    TOKEN_PATH,
+                    &format!("error=access_denied&state={STATE}"),
+                ),
+            ]
+        });
+        assert!(matches!(result, Err(OAuthError::Cancelled)), "{result:?}");
+        assert_eq!(statuses, vec![200, 200]);
+    }
+
+    #[test]
+    fn implicit_flow_other_provider_error_ends_the_flow_with_the_code() {
+        let (result, status) = run_flow(OAuthMode::Implicit, |port| {
+            send(
+                port,
+                "POST",
+                TOKEN_PATH,
+                &format!("error=temporarily_unavailable&state={STATE}"),
+            )
+        });
+        assert!(
+            matches!(&result, Err(OAuthError::Provider(code)) if code == "temporarily_unavailable"),
+            "{result:?}"
+        );
+        assert_eq!(status, 400);
+    }
+
+    #[test]
+    fn implicit_flow_ignores_a_refusal_with_missing_or_wrong_state() {
+        // PR #80: only this flow's `state` can end it, also with an error.
+        let (result, statuses) = run_flow(OAuthMode::Implicit, |port| {
+            vec![
+                send(port, "POST", TOKEN_PATH, "error=access_denied"),
+                send(port, "POST", TOKEN_PATH, "error=access_denied&state=wrong"),
+                send(
+                    port,
+                    "POST",
+                    TOKEN_PATH,
+                    &format!("access_token=good&state={STATE}"),
+                ),
+            ]
+        });
+        assert_eq!(result.unwrap(), "good");
+        assert_eq!(statuses, vec![400, 400, 200]);
+    }
+
+    #[test]
+    fn extractor_page_reports_a_fragment_error_with_state() {
+        // The page is the only way the fragment's `error` reaches the server.
+        assert!(EXTRACTOR_HTML.contains("new URLSearchParams({ error: error, state: state })"));
+    }
+
+    #[test]
+    fn openid_flow_cancel_with_matching_state_ends_the_flow_as_cancelled() {
+        let (result, status) = run_flow(OAuthMode::OpenIDQuery, |port| {
+            get(
+                port,
+                &callback(&format!(
+                    "state={STATE}&openid.ns=http%3A%2F%2Fspecs.openid.net%2Fauth%2F2.0&openid.mode=cancel"
+                )),
+            )
+        });
+        assert!(matches!(result, Err(OAuthError::Cancelled)), "{result:?}");
+        assert_eq!(status, 200);
+    }
+
+    #[test]
+    fn openid_flow_error_mode_ends_the_flow_with_the_provider_error() {
+        let (result, status) = run_flow(OAuthMode::OpenIDQuery, |port| {
+            get(
+                port,
+                &callback(&format!(
+                    "state={STATE}&openid.mode=error&openid.error=Bad%20realm%0A"
+                )),
+            )
+        });
+        assert!(
+            matches!(&result, Err(OAuthError::Provider(code)) if code == "Bad realm"),
+            "{result:?}"
+        );
+        assert_eq!(status, 400);
+    }
+
+    #[test]
+    fn openid_flow_ignores_a_cancel_with_missing_or_wrong_state() {
+        let (result, statuses) = run_flow(OAuthMode::OpenIDQuery, |port| {
+            vec![
+                get(port, &callback("openid.mode=cancel")),
+                get(port, &callback("state=wrong&openid.mode=cancel")),
+                get(
+                    port,
+                    &callback(&format!("state={STATE}&openid.mode=id_res")),
+                ),
+            ]
+        });
+        assert_eq!(result.unwrap(), "openid.mode=id_res");
+        assert_eq!(statuses, vec![400, 400, 200]);
+    }
+
+    #[test]
+    fn error_code_keeps_printable_ascii_and_bounds_the_length() {
+        assert_eq!(error_code("access_denied"), "access_denied");
+        assert_eq!(error_code(" a\u{7}b\n "), "ab");
+        assert_eq!(error_code("\u{e9}\u{7}"), "unknown_error");
+        assert_eq!(error_code(&"x".repeat(500)).len(), MAX_ERROR_CODE);
+    }
+
+    #[test]
+    fn cancel_wakes_a_receive_on_the_attached_server() {
+        // The wait loop blocks in `recv_timeout`. `cancel` must wake it, not
+        // only set the flag that the loop reads at the next request.
+        let server = Arc::new(Server::http("127.0.0.1:0").expect("bind ephemeral port"));
+        let cancel = FlowCancel::default();
+        cancel.attach(Arc::clone(&server));
+        cancel.cancel();
+
+        let started = Instant::now();
+        let request = server
+            .recv_timeout(Duration::from_secs(20))
+            .expect("no receive error");
+        assert!(request.is_none());
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "the receive waited for its timeout"
+        );
+    }
+
+    #[test]
+    fn detach_releases_the_server() {
+        let server = Arc::new(Server::http("127.0.0.1:0").expect("bind ephemeral port"));
+        let cancel = FlowCancel::default();
+        cancel.attach(Arc::clone(&server));
+        cancel.detach();
+        // Only the flow holds the server now, so the port closes when it ends.
+        assert_eq!(Arc::strong_count(&server), 1);
+    }
+
+    #[test]
+    fn cancel_ends_a_waiting_flow_at_once() {
+        let server = Arc::new(Server::http("127.0.0.1:0").expect("bind ephemeral port"));
+        let cancel = FlowCancel::default();
+        cancel.attach(Arc::clone(&server));
+        let flow = {
+            let cancel = cancel.clone();
+            std::thread::spawn(move || {
+                let started = Instant::now();
+                let result = OAuthFlow::wait(
+                    &server,
+                    STATE,
+                    &OAuthMode::Implicit,
+                    Duration::from_secs(60),
+                    &cancel,
+                );
+                (result, started.elapsed())
+            })
+        };
+        cancel.cancel();
+        let (result, elapsed) = flow.join().expect("flow thread");
+        assert!(matches!(result, Err(OAuthError::Aborted)), "{result:?}");
+        // The wait is 60 s. A cancel that took effect only at the timeout
+        // fails here.
+        assert!(elapsed < Duration::from_secs(30), "took {elapsed:?}");
+    }
+
+    #[test]
     fn openid_flow_accepts_matching_state_and_forwards_only_openid_pairs() {
         let (result, status) = run_flow(OAuthMode::OpenIDQuery, |port| {
             get(
@@ -705,6 +1094,7 @@ mod tests {
             STATE,
             &OAuthMode::AuthorizationCode,
             Duration::from_millis(50),
+            &FlowCancel::default(),
         );
         assert!(matches!(result, Err(OAuthError::Timeout)));
     }

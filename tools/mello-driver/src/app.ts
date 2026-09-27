@@ -21,6 +21,10 @@ export type AppState = {
   link_error: string;
   /** A sign-in or link is in progress (the spinner shows). */
   login_loading: boolean;
+  /** Onboarding step 2: the crew of the invite link that the user joins. */
+  onboarding_invite_crew_name: string;
+  /** Onboarding step 1: why the invite link could not be used. */
+  onboarding_invite_error: string;
   active_crew_id: string;
   active_crew_name: string;
   crews: string[];
@@ -110,6 +114,14 @@ export class App {
     return join(this.dir, "app.log");
   }
 
+  /**
+   * The saved session (the refresh token) in an e2e build. Delete it while the
+   * app is stopped to simulate a lost keychain entry.
+   */
+  get sessionFile(): string {
+    return join(this.dir, "session.token");
+  }
+
   /** Where the app writes an OAuth URL instead of opening the system browser. */
   get browserFile(): string {
     return join(this.dir, "browser-url.txt");
@@ -130,7 +142,7 @@ export class App {
         ...process.env,
         MELLO_CONFIG_DIR: join(this.dir, "config"),
         MELLO_SESSION_KEY: `e2e-${this.name}`,
-        MELLO_E2E_SESSION_FILE: join(this.dir, "session.token"),
+        MELLO_E2E_SESSION_FILE: this.sessionFile,
         SLINT_MCP_PORT: String(this.opts.mcpPort),
         MELLO_E2E_STATE_PORT: String(this.statePort),
         NAKAMA_SERVER_KEY: "mello_dev_key",
@@ -315,6 +327,19 @@ export class App {
       }
       this.trace("click", label, c);
       await this.ui.click(c.handle);
+    });
+  }
+
+  /**
+   * Activate a control through its default accessibility action. Use it only
+   * for items in a PopupWindow (for example the account menu): Slint reports
+   * their position relative to the popup, so a pointer click at that position
+   * misses. Every other control takes a real click.
+   */
+  async activate(label: string, n = 0): Promise<void> {
+    await this.onControl(label, n, async (c) => {
+      this.trace("activate", label, c);
+      await this.ui.activate(c.handle);
     });
   }
 

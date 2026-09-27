@@ -120,9 +120,58 @@ Onboarding is a 3-step full-screen flow for new users (when `onboarding_step < 4
 |------|--------|-------------|
 | 1 | Discover Crews | Bento grid of public crews (fetched unauthenticated via `http_key`). "Create Your Own Crew" opens the new-crew modal in onboarding mode (invite section disabled, button says "Save & Continue"). Crew details stored locally, creation deferred. |
 | 2 | Profile Setup | User sets nickname and picks an avatar. |
-| 3 | Identity Linking | Optional social login or email. "Continue" sends `FinalizeOnboarding` which: device-auths → creates account → creates/joins crew (with stored details + avatar) → enters main app. |
+| 3 | Identity Linking | Required. The user links one identity: a provider (Steam, Twitch, Google, Apple, Discord) or email + password. There is no skip. A successful link enters the main app. |
 
-The `pending_crew_name`, `pending_crew_description`, and `pending_crew_open` fields are persisted in `Settings` (survives restart). The crew avatar base64 is held in memory only (`Arc<Mutex<Option<String>>>`).
+"Continue" on step 2 sends `FinalizeOnboarding`, which device-auths, creates the account, and creates or joins the crew (with the stored details and avatar). Step 3 follows.
+
+The `pending_crew_name`, `pending_crew_description`, `pending_crew_open`, `pending_invite_code` and `pending_invite_crew_name` fields are persisted in `Settings` (survives restart). The crew avatar base64 is held in memory only (`Arc<Mutex<Option<String>>>`).
+
+A restart on step 3 sends `DeviceAuth` with the stored device id. Linking needs a session in core, and only a finished onboarding restores one.
+
+### 6.1 Sign-in Entry Points
+
+"Has a device account" means `Settings::device_id` is set. Onboarding writes it when the user continues from step 2.
+
+| Case | Step 1 shows |
+|------|--------------|
+| No device account (fresh install) | "I already have an account" (top right). It opens the sign-in panel. |
+| Device account, the user logged out | The returning-user control ("DEVICE USER … \| SIGN IN") after `DeviceAuthed { created: false }`. It opens the app as the device account. |
+| Device account, any other case | No sign-in control. |
+
+Step 1 never shows two sign-in controls.
+
+The sign-in panel:
+
+- Stays open while a provider flow runs. A failure shows on the panel.
+- Shows plain messages, never the server text. "User account not found" becomes "No account found." with a "Start as a new player" button. "Invalid credentials" becomes "Wrong email or password.".
+- "Back" and "Start as a new player" close the panel and clear the error. Both return to step 1.
+
+### 6.2 Invite Link on a Fresh Install
+
+A fresh install opened from `mello://join/{code}` skips step 1 (#68). "Fresh install" means no session, no device account, and a step before the account exists (0, 1 or 2).
+
+1. At startup, before crew discovery, the client sends `ResolveCrewInvite`. Without a session, core calls `resolve_crew_invite` with the `http_key`.
+2. `CrewInviteResolved`: the client stores the code and the crew name, and opens step 2. Step 2 shows "JOINING CREW" and the crew name.
+3. "Continue" sends `FinalizeOnboarding` with `invite_code`. Core joins the crew with `join_by_invite_code`, so a private crew works too. Step 3 follows as usual.
+
+| Case | Result |
+|------|--------|
+| The code does not resolve | Step 1, with the message above the crews. No join modal. |
+| Finalize: the join fails with a server or network error (`OnboardingInviteFailed`, `Failed`) | Step 2, with the message above "Continue". "Continue" retries. |
+| Finalize: the code is no longer valid, the crew is full, or the server refuses the user | Step 1, with the message. The invite is forgotten. |
+| The user goes back to step 1 and picks or creates a crew | The crew replaces the invite. |
+| The user goes back to step 1 and signs in to an existing account | The stored invite opens the join modal after sign-in. |
+| A device account exists, or the user is logged in | No change: the join modal opens after sign-in. |
+
+### 6.3 Lost Session
+
+At startup with onboarding done (`onboarding_step > 3`) the client sends `TryRestore`. When the restore fails and a device account exists:
+
+1. The client sends `DeviceAuth`. The window stays on the restore wait.
+2. `DeviceAuthed { created: false }`: the account exists. The app opens, the same as a restored session.
+3. `DeviceAuthed { created: true }` or a failed device auth: step 1.
+
+With no device account, a failed restore goes to step 1.
 
 ---
 

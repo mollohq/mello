@@ -1,4 +1,5 @@
 mod auth;
+mod browser_flow;
 mod chat;
 mod clip;
 mod connection;
@@ -32,6 +33,7 @@ use crate::stream::sink_p2p::P2PFanoutSink;
 use crate::telemetry::{AdapterRegistry, TelemetryListener, TELEMETRY_PORT};
 use crate::transport::SfuConnection;
 use crate::voice::{SignalEnvelope, SignalMessage, SignalPurpose, VoiceManager};
+use browser_flow::{FlowIntent, SocialProvider};
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
@@ -171,6 +173,9 @@ pub struct Client {
     /// sleep/wake gap, heartbeat cadence). Pure decision logic, unit-tested in
     /// `reconnect.rs`; `connection_tick` is its IO adapter.
     reconnect: reconnect::ReconnectSupervisor,
+    /// The social sign-in or link that waits for the browser. It runs on its
+    /// own thread; the loop takes its outcome in `select!` (#88).
+    browser_flows: browser_flow::BrowserFlows,
 }
 
 impl Client {
@@ -284,6 +289,7 @@ impl Client {
             host_pacing_last_at: Instant::now(),
             host_sfu_ping_ticks: 0,
             reconnect: reconnect::ReconnectSupervisor::new(),
+            browser_flows: browser_flow::BrowserFlows::default(),
         }
     }
 
@@ -409,6 +415,12 @@ impl Client {
                         self.handle_presence(p);
                     }
                 }
+                // Never completes while no flow waits. Borrows only
+                // `self.browser_flows`; the other branch futures are locals.
+                outcome = self.browser_flows.finished() => {
+                    let _step = watchdog.step("browser_flow_finished");
+                    self.on_browser_flow_finished(outcome).await;
+                }
                 _ = voice_tick.tick(), if self.needs_voice_tick() => {
                     let _step = watchdog.step("voice_tick");
                     self.voice_tick().await;
@@ -433,6 +445,9 @@ impl Client {
                 }
             }
         }
+        // A waiting browser flow would hold its thread (and the runtime's
+        // shutdown) until the callback timeout.
+        self.browser_flows.cancel();
         log::info!("Mello client shutting down");
     }
 
@@ -519,19 +534,19 @@ impl Client {
             // Social auth
             Command::AuthSteam => {
                 log::info!("[auth] Steam auth requested");
-                self.handle_auth_steam().await;
+                self.start_browser_flow(SocialProvider::Steam, FlowIntent::SignIn);
             }
             Command::AuthGoogle => {
                 log::info!("[auth] Google auth requested");
-                self.handle_auth_google().await;
+                self.start_browser_flow(SocialProvider::Google, FlowIntent::SignIn);
             }
             Command::AuthTwitch => {
                 log::info!("[auth] Twitch auth requested");
-                self.handle_auth_twitch().await;
+                self.start_browser_flow(SocialProvider::Twitch, FlowIntent::SignIn);
             }
             Command::AuthDiscord => {
                 log::info!("[auth] Discord auth requested");
-                self.handle_auth_discord().await;
+                self.start_browser_flow(SocialProvider::Discord, FlowIntent::SignIn);
             }
             Command::AuthApple { identity_token } => {
                 log::info!("[auth] Apple auth requested");
@@ -549,19 +564,19 @@ impl Client {
             // Social link (onboarding — attaches identity to current device account)
             Command::LinkGoogle => {
                 log::info!("[auth] Google link requested");
-                self.handle_link_google().await;
+                self.start_browser_flow(SocialProvider::Google, FlowIntent::Link);
             }
             Command::LinkSteam => {
                 log::info!("[auth] Steam link requested");
-                self.handle_link_steam().await;
+                self.start_browser_flow(SocialProvider::Steam, FlowIntent::Link);
             }
             Command::LinkTwitch => {
                 log::info!("[auth] Twitch link requested");
-                self.handle_link_twitch().await;
+                self.start_browser_flow(SocialProvider::Twitch, FlowIntent::Link);
             }
             Command::LinkDiscord => {
                 log::info!("[auth] Discord link requested");
-                self.handle_link_discord().await;
+                self.start_browser_flow(SocialProvider::Discord, FlowIntent::Link);
             }
             Command::LinkApple { identity_token } => {
                 log::info!("[auth] Apple link requested");
@@ -580,6 +595,7 @@ impl Client {
             }
             Command::FinalizeOnboarding {
                 device_id,
+                invite_code,
                 crew_id,
                 crew_name,
                 crew_description,
@@ -593,6 +609,7 @@ impl Client {
             } => {
                 self.handle_finalize_onboarding(
                     &device_id,
+                    invite_code,
                     crew_id,
                     crew_name,
                     crew_description,

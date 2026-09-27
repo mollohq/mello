@@ -1,32 +1,27 @@
 // INV-01 + INV-03: alice shares an invite link; bob, on a fresh install,
-// opens it as a deep link and joins alice's crew. Both sides are checked.
-// Two journeys: a private crew (the app's default) and a public crew.
+// opens it as a deep link. Step 1 is skipped (#68): step 2 names alice's
+// crew, and bob is a member of it when onboarding ends. Both sides are
+// checked. Two journeys: a private crew (the app's default) and a public crew.
 
 import { journey, type Journey, type JourneyContext } from "../../tools/mello-driver/src/journey.ts";
 import {
-  createCrewAtStep1,
+  inviteAtStep2,
+  linkEmailAtStep3,
   onboardWithNewCrew,
   profileAtStep2,
-  skipLinkingAtStep3,
   type Visibility,
 } from "./lib/onboarding.ts";
 
-// #68: a fresh install does not offer the invited crew at step 1, so bob makes
-// a crew first and the join modal opens on step 3. When #68 is fixed, these
-// journeys must change to join at step 1.
-function inviteJourney(visibility: Visibility, knownIssues: number[]): Journey {
+function inviteJourney(visibility: Visibility): Journey {
   return journey({
     id: `invite.accept-deeplink-cold.${visibility.toLowerCase()}`,
     flows: ["INV-01", "INV-03", "ONB-01"],
-    knownIssues,
     run: (ctx) => run(ctx, visibility),
   });
 }
 
-// #83: a private-crew invite makes a join request, not a member.
-// #84: alice sees bob by his random username, not his display name.
-export const privateCrew = inviteJourney("Private", [68, 83, 84]);
-export const publicCrew = inviteJourney("Public", [68, 84]);
+export const privateCrew = inviteJourney("Private");
+export const publicCrew = inviteJourney("Public");
 export default privateCrew;
 
 async function run({ runId, launch, step, expect }: JourneyContext, visibility: Visibility): Promise<void> {
@@ -51,25 +46,28 @@ async function run({ runId, launch, step, expect }: JourneyContext, visibility: 
   });
 
   const bob = await launch("bob", `mello://join/${code}`);
-  await step("bob: cold start from the deep link, onboards", async () => {
-    await createCrewAtStep1(bob, `Bob Placeholder ${runId}`);
+  await step("bob: cold start from the deep link skips step 1 and names alice's crew", async () => {
+    await inviteAtStep2(bob, crew);
+    const s = await bob.state();
+    expect(!s.join_crew_modal_open, "no join modal: onboarding joins the crew");
+    await bob.checkpoint("step2-invited-crew");
+  });
+
+  await step("bob: finishes onboarding (profile, then email at step 3)", async () => {
     await profileAtStep2(bob, bobName, 2);
+    const s = await bob.state();
+    expect(!s.join_crew_modal_open, "no join modal on step 3");
+    await linkEmailAtStep3(bob, bobName);
   });
 
-  await step("bob: sees the invited crew in the join modal", async () => {
-    await bob.waitFor("join modal for the invited crew", (s) => s.join_crew_modal_open && s.join_crew_name === crew, 30_000);
-    await bob.checkpoint("join-modal");
-  });
-
-  await step("bob: joins, the crew is in his list", async () => {
-    await bob.click("Join crew");
-    await bob.waitFor(`${crew} in bob's crews`, (s) => s.crews.includes(crew));
+  await step("bob: alice's crew is his only crew, and it is active", async () => {
+    const s = await bob.waitFor(`${crew} in bob's crews`, (st) => st.crews.includes(crew));
+    expect(s.crews.length === 1, `only the invited crew, no other crew, got: ${s.crews.join(", ")}`);
+    expect(!s.join_crew_modal_open, "no join modal in the app");
+    const crewId = (await alice.state()).active_crew_id;
+    await bob.waitFor(`${crew} is bob's active crew`, (st) => st.active_crew_id === crewId);
     const errors = (await bob.events()).filter((e) => e.message);
     expect(errors.length === 0, `no Error events on bob, got: ${errors.map((e) => e.message).join(" | ")}`);
-  });
-
-  await step("bob: finishes onboarding into the app", async () => {
-    await skipLinkingAtStep3(bob);
     await bob.checkpoint("bob-in-app");
   });
 

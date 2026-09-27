@@ -12,6 +12,8 @@ mod voice;
 
 use mello_core::Event;
 
+pub(crate) use crew::{invite_join_error_message, invite_resolve_error_message, InviteSource};
+
 use crate::app_context::AppContext;
 
 pub fn handle_event(ctx: &AppContext, event: Event) {
@@ -27,6 +29,7 @@ pub fn handle_event(ctx: &AppContext, event: Event) {
         | Event::SocialLinkFailed { .. }
         | Event::OnboardingReady { .. }
         | Event::OnboardingFailed { .. }
+        | Event::OnboardingInviteFailed { .. }
         | Event::AccountDeleted
         | Event::AccountDeleteFailed { .. } => auth::handle(ctx, event),
 

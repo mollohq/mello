@@ -1,5 +1,5 @@
 import { Theme, MelloTextInput } from "../theme.slint";
-import { CutShape, CutButtonShape } from "../components/cut.slint";
+import { CutShape, CutButtonShape, CutCard } from "../components/cut.slint";
 import { CrewData, AudioDeviceData } from "../types.slint";
 import { DeviceDropdown, SettingsToggle } from "settings_modal.slint";
 import { AvatarCard } from "../components/avatar_card.slint";
@@ -474,6 +474,12 @@ export component Onboarding inherits Rectangle {
     in property <[CrewData]> discover-crews: [];
     in property <[int]> bento-set-bases: [];
     in property <string> link-error: "";
+    // The crew of the invite link that opened a fresh install (#68). Step 2
+    // shows the crew the user joins. Empty when there is no invite.
+    in property <string> invite-crew-name: "";
+    in property <string> invite-crew-initials: "";
+    // Why the invite link could not be used. Step 1 shows it above the crews.
+    in property <string> invite-error: "";
     // Non-empty when crew discovery failed; step 1 surfaces it with a retry.
     in property <string> discover-error: "";
     callback retry-discover();
@@ -562,6 +568,9 @@ export component Onboarding inherits Rectangle {
     in property <string> device-user-name: "";
     in property <string> device-user-initials: "";
     in property <bool> is-returning-user: false;
+    /// This machine has a device account. Step 1 then shows no
+    /// "I already have an account" entry (#67).
+    in property <bool> has-device-account: false;
 
     // Email link form state (step 3)
     property <bool> show-email-form: false;
@@ -577,7 +586,6 @@ export component Onboarding inherits Rectangle {
     callback login-requested();
     callback open-sign-in();
     callback link-email(string, string);
-    callback skip-identity();
     callback capture-device-selected(string);
     callback playback-device-selected(string);
 
@@ -597,15 +605,17 @@ export component Onboarding inherits Rectangle {
         // ── Crew discovery view ──
         Rectangle {
 
-            // "Sign in" text link — top-right
-            Rectangle {
+            // "I already have an account" text link — top-right. Only on a
+            // machine with no device account (#67). A returning user has the
+            // pill below instead, so step 1 never shows two sign-in controls (#70).
+            if !has-device-account && !is-returning-user: Rectangle {
                 x: parent.width - 120px - self.width;
-                y: is-returning-user ? 80px + 48px + 12px : 80px;
+                y: 80px;
                 width: signin-link-text.preferred-width + 16px;
                 height: 32px;
 
                 signin-link-text := Text {
-                    text: "Sign in";
+                    text: "I already have an account";
                     font-family: Theme.font-label;
                     font-size: 13px;
                     font-weight: 600;
@@ -617,7 +627,7 @@ export component Onboarding inherits Rectangle {
 
                 signin-link-touch := TouchArea {
                     accessible-role: button;
-                    accessible-label: "Sign in";
+                    accessible-label: "I already have an account";
                     clicked => {
                         root.open-sign-in();
                     }
@@ -826,6 +836,42 @@ export component Onboarding inherits Rectangle {
                     }
                 }
 
+                // The invite link could not be used (#68). Step 1 is the way
+                // forward, so the message says what to do here.
+                if root.invite-error != "": VerticalLayout {
+                    padding-bottom: 20px;
+
+                    CutCard {
+                        height: 72px;
+
+                        HorizontalLayout {
+                            padding-left: 20px;
+                            padding-right: 20px;
+
+                            VerticalLayout {
+                                alignment: center;
+                                spacing: 2px;
+
+                                invite-error-text := Text {
+                                    font-family: Theme.font-display;
+                                    text: root.invite-error;
+                                    font-size: 15px;
+                                    font-weight: Theme.weight-display;
+                                    color: Theme.text-primary;
+                                }
+
+                                Text {
+                                    font-family: Theme.font-body;
+                                    font-weight: Theme.weight-sentence;
+                                    text: "Pick a crew below, or create your own.";
+                                    font-size: Theme.font-md;
+                                    color: Theme.text-body;
+                                }
+                            }
+                        }
+                    }
+                }
+
                 // Bento grid — repeating 5-item sets, 240px row heights
                 VerticalLayout {
                     spacing: 20px;
@@ -998,6 +1044,61 @@ export component Onboarding inherits Rectangle {
                     font-weight: Theme.weight-display;
                     color: Theme.text-primary;
                     letter-spacing: -0.7px;
+                }
+
+                // A fresh install opened from an invite link skips step 1
+                // (#68). Show the crew that the user joins.
+                if root.invite-crew-name != "": HorizontalLayout {
+                    padding-top: 8px;
+                    spacing: 14px;
+                    alignment: start;
+
+                    // A crew is a thing, so it wears the two-corner tile.
+                    Rectangle {
+                        width: 44px;
+                        height: 44px;
+
+                        CutButtonShape {
+                            width: parent.width;
+                            height: parent.height;
+                            n: Theme.cut;
+                            fill: Theme.raised;
+                        }
+
+                        Text {
+                            font-family: Theme.font-display;
+                            text: root.invite-crew-initials != "" ? root.invite-crew-initials : "?";
+                            font-size: 15px;
+                            font-weight: Theme.weight-display-bold;
+                            color: Theme.text-secondary;
+                            width: parent.width;
+                            height: parent.height;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    VerticalLayout {
+                        alignment: center;
+                        spacing: 2px;
+
+                        Text {
+                            text: "JOINING CREW";
+                            font-family: Theme.font-label;
+                            font-size: 10px;
+                            font-weight: Theme.weight-label;
+                            color: Theme.text-secondary;
+                            letter-spacing: 1.4px;
+                        }
+
+                        invite-crew-text := Text {
+                            font-family: Theme.font-display;
+                            text: root.invite-crew-name;
+                            font-size: 17px;
+                            font-weight: Theme.weight-display;
+                            color: Theme.text-primary;
+                        }
+                    }
                 }
             }
 
@@ -1379,12 +1480,30 @@ export component Onboarding inherits Rectangle {
                 vertical-stretch: 1;
             }
 
-            // Footer with Continue button
+            // Footer: why the last Continue failed, and the Continue button
             HorizontalLayout {
                 height: 52px;
-                alignment: end;
+                spacing: 20px;
+
+                Rectangle {
+                    horizontal-stretch: 1;
+
+                    if root.link-error != "": step2-error-text := Text {
+                        width: parent.width;
+                        height: parent.height;
+                        font-family: Theme.font-body;
+                        font-weight: Theme.weight-sentence;
+                        text: root.link-error;
+                        font-size: Theme.font-md;
+                        color: Theme.live;
+                        horizontal-alignment: right;
+                        vertical-alignment: center;
+                        wrap: word-wrap;
+                    }
+                }
 
                 AccentButton {
+                    horizontal-stretch: 0;
                     width: 200px;
                     label: root.busy ? "Setting up…" : "Continue";
                     enabled: nickname != "" && root.selected-avatar >= 0 && !root.busy;
@@ -1621,38 +1740,6 @@ export component Onboarding inherits Rectangle {
                                 clicked => {
                                     root.show-email-form = true;
                                 }
-                            }
-                        }
-                    }
-                }
-
-                if !show-email-form: Rectangle {
-                    height: 48px;
-                }
-
-                if !show-email-form: HorizontalLayout {
-                    alignment: center;
-
-                    Rectangle {
-                        width: skip-text.preferred-width + 16px;
-                        height: 24px;
-
-                        skip-text := Text {
-                            font-weight: Theme.weight-label;
-                            text: "Skip for now — continue as guest";
-                            font-family: Theme.font-label;
-                            font-size: 11px;
-                            color: skip-touch.has-hover ? Theme.text-secondary : Theme.text-tertiary;
-                            letter-spacing: 0.5px;
-                            horizontal-alignment: center;
-                            vertical-alignment: center;
-                        }
-
-                        skip-touch := TouchArea {
-                            accessible-role: button;
-                            accessible-label: "Skip for now";
-                            clicked => {
-                                root.skip-identity();
                             }
                         }
                     }

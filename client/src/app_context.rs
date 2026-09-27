@@ -54,6 +54,11 @@ pub struct AppContext {
     /// Set when a Riot-linkable game session just ended; the next RiotStatus
     /// event decides whether to surface the post-game "connect" CTA.
     pub riot_cta_pending: Rc<Cell<bool>>,
+    /// Set while device auth runs after a failed session restore for a user
+    /// who finished onboarding. Its answer decides between the app (the
+    /// device account exists) and step 1 (#71). The window stays on the
+    /// restore wait until then.
+    pub session_recovery: Rc<Cell<bool>>,
     /// Games settings rows as last received from core; merged with the
     /// disabled set from Settings when pushed to the UI.
     pub games_integrations: Rc<RefCell<Vec<mello_core::events::GameIntegrationStatus>>>,
@@ -151,6 +156,7 @@ impl AppContext {
             diag_autostop_timer: Rc::new(RefCell::new(None)),
             post_game_timer: Rc::new(RefCell::new(None)),
             riot_cta_pending: Rc::new(Cell::new(false)),
+            session_recovery: Rc::new(Cell::new(false)),
             games_integrations: Rc::new(RefCell::new(Vec::new())),
             muted_before_deafen: Rc::new(Cell::new(false)),
             updater: Rc::new(RefCell::new(None)),
@@ -206,6 +212,7 @@ impl Clone for AppContext {
             diag_autostop_timer: self.diag_autostop_timer.clone(),
             post_game_timer: self.post_game_timer.clone(),
             riot_cta_pending: self.riot_cta_pending.clone(),
+            session_recovery: self.session_recovery.clone(),
             games_integrations: self.games_integrations.clone(),
             muted_before_deafen: self.muted_before_deafen.clone(),
             updater: self.updater.clone(),

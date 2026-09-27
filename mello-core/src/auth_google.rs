@@ -1,16 +1,21 @@
-use crate::oauth::{generate_state, OAuthError, OAuthFlow, OAuthMode, PkceChallenge, REDIRECT_URI};
+use crate::oauth::{
+    generate_state, FlowCancel, OAuthError, OAuthFlow, OAuthMode, PkceChallenge, REDIRECT_URI,
+};
 
 pub struct GoogleAuth;
 
 impl GoogleAuth {
     /// Run the full Google OAuth2 PKCE browser flow (blocking).
     /// Returns `(authorization_code, pkce_verifier)`.
-    pub fn authenticate(client_id: &str) -> Result<(String, String), OAuthError> {
+    pub fn authenticate(
+        client_id: &str,
+        cancel: &FlowCancel,
+    ) -> Result<(String, String), OAuthError> {
         let pkce = PkceChallenge::generate();
         let state = generate_state();
         let auth_url = Self::authorize_url(client_id, &pkce.challenge, &state);
 
-        let code = OAuthFlow::execute(&auth_url, &state, OAuthMode::AuthorizationCode)?;
+        let code = OAuthFlow::execute(&auth_url, &state, OAuthMode::AuthorizationCode, cancel)?;
         Ok((code, pkce.verifier))
     }
 

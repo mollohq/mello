@@ -1,4 +1,4 @@
-use crate::oauth::{generate_state, OAuthError, OAuthFlow, OAuthMode, REDIRECT_URI};
+use crate::oauth::{generate_state, FlowCancel, OAuthError, OAuthFlow, OAuthMode, REDIRECT_URI};
 
 pub struct SteamAuth;
 
@@ -6,11 +6,11 @@ impl SteamAuth {
     /// Run the Steam OpenID 2.0 browser flow (blocking). Returns the raw `openid.*`
     /// response query string; the backend verifies it via `check_authentication`
     /// and derives the steamid. Must be called from a blocking context.
-    pub fn authenticate() -> Result<String, OAuthError> {
+    pub fn authenticate(cancel: &FlowCancel) -> Result<String, OAuthError> {
         let state = generate_state();
         let auth_url = Self::authorize_url(&state);
 
-        OAuthFlow::execute(&auth_url, &state, OAuthMode::OpenIDQuery)
+        OAuthFlow::execute(&auth_url, &state, OAuthMode::OpenIDQuery, cancel)
     }
 
     /// OpenID 2.0 has no `state` parameter. The nonce goes in `return_to`, and

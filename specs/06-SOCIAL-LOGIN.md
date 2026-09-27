@@ -206,11 +206,23 @@ The login screen adapts: if only `["email"]` is returned, show the email/passwor
 
 **Note:** Sessions are automatically persisted to OS secure storage. No "Remember me" checkbox needed.
 
+### 4.3 Desktop Client: Sign-in and Onboarding
+
+The desktop client has no separate login screen. A new user starts in onboarding (`01-CLIENT.md` §6).
+
+| Where | What the user does | Command |
+|-------|--------------------|---------|
+| Onboarding step 3 | Links one identity to the new device account. Required: step 3 has no skip. | `Link*`, `LinkEmail` |
+| Step 1, "I already have an account" (only on a machine with no device account) | Signs in to an existing account. | `Auth*`, `Login` |
+| Step 1, returning-user control (only after a logout) | Opens the app as the device account. | none |
+
+Sign-in authenticates with `create=false`. An identity with no account fails with "User account not found". The panel shows "No account found." and a "Start as a new player" button that returns to step 1. The panel never shows the server text.
+
 ---
 
 ## 5. Shared OAuth Flow
 
-The desktop client receives browser sign-in results on a localhost callback server. `OAuthFlow` in `mello-core/src/oauth.rs` runs this server. Each provider module builds its authorize URL and calls `OAuthFlow::execute(auth_url, state, mode)` from a blocking task.
+The desktop client receives browser sign-in results on a localhost callback server. `OAuthFlow` in `mello-core/src/oauth.rs` runs this server. Each provider module builds its authorize URL and calls `OAuthFlow::execute(auth_url, state, mode, cancel)` from a blocking task. Section 5.9 describes how the command loop runs this task.
 
 ### 5.1 Flows
 
@@ -249,15 +261,23 @@ The server handles each request in the order below. A rejected request does not 
 |------|---------|----------|------|
 | All | A method or path not listed for the mode | `404` | Continues to wait |
 | `AuthorizationCode` | `GET /callback`, `state` missing or wrong | `400` | Continues to wait |
+| `AuthorizationCode` | `GET /callback`, correct `state`, `error=access_denied` | `200` cancelled page | Fails with `Cancelled` |
+| `AuthorizationCode` | `GET /callback`, correct `state`, other `error` | `400` failure page | Fails with `Provider(error)` |
 | `AuthorizationCode` | `GET /callback`, correct `state`, `code` present | `200` success page | Returns the code |
-| `AuthorizationCode` | `GET /callback`, correct `state`, no `code` (for example `error=access_denied`) | `400` failure page | Fails with `NoToken` |
+| `AuthorizationCode` | `GET /callback`, correct `state`, no `code` and no `error` | `400` failure page | Fails with `NoToken` |
 | `OpenIDQuery` | `GET /callback`, `state` missing or wrong | `400` | Continues to wait |
+| `OpenIDQuery` | `GET /callback`, correct `state`, `openid.mode=cancel` | `200` cancelled page | Fails with `Cancelled` |
+| `OpenIDQuery` | `GET /callback`, correct `state`, `openid.mode=error` | `400` failure page | Fails with `Provider(openid.error)` |
 | `OpenIDQuery` | `GET /callback`, correct `state`, other pairs present | `200` success page | Returns the query without the `state` pair |
 | `OpenIDQuery` | `GET /callback`, correct `state`, no other pairs | `400` failure page | Fails with `NoToken` |
 | `Implicit` | `GET /callback` | `200` extractor page | Continues to wait |
 | `Implicit` | `POST /token`, `state` missing or wrong | `400` | Continues to wait |
+| `Implicit` | `POST /token`, correct `state`, `error=access_denied` | `200` | Fails with `Cancelled` |
+| `Implicit` | `POST /token`, correct `state`, other `error` | `400` | Fails with `Provider(error)` |
 | `Implicit` | `POST /token`, correct `state`, `access_token` present | `200` | Returns the token |
-| `Implicit` | `POST /token`, correct `state`, no `access_token` | `400` | Fails with `NoToken` |
+| `Implicit` | `POST /token`, correct `state`, no `access_token` and no `error` | `400` | Fails with `NoToken` |
+
+A refusal at the provider ends the flow at once, but only with the correct `state`. The server keeps printable ASCII of a provider error, at most 64 characters.
 
 Browsers request `/favicon.ico` after a page loads. The `404` rule keeps this request from ending the flow.
 
@@ -266,8 +286,9 @@ Browsers request `/favicon.ico` after a page loads. The `404` rule keeps this re
 The browser does not send the URL fragment to the server. The extractor page reads the fragment and sends it back.
 
 1. The script reads `access_token`, `state` and `error` from the fragment.
-2. The script sends `access_token` and `state` to `POST /token` as `application/x-www-form-urlencoded`.
-3. The script shows the result. It writes fragment text with `textContent`, never with `innerHTML`.
+2. With a token, the script sends `access_token` and `state` to `POST /token` as `application/x-www-form-urlencoded`.
+3. With an `error`, the script sends `error` and `state` to `POST /token`. The flow then ends at once (#87). Without `state`, the script sends nothing.
+4. The script shows the result. It writes fragment text with `textContent`, never with `innerHTML`.
 
 The page holds no secret. The server returns the page for each `GET /callback`.
 
@@ -282,7 +303,7 @@ The signed `openid.return_to` value contains `state`. The backend does not compa
 
 ### 5.7 Known Limits
 
-- The port is fixed at 29405. A second flow that starts while one waits fails with `ServerStart`.
+- The port is fixed at 29405. One flow can wait at a time. Section 5.9 gives the result of a second request.
 - Discord and Twitch use the implicit flow, so they have no PKCE. The token passes through the browser.
 
 ### 5.8 Errors
@@ -302,10 +323,39 @@ pub enum OAuthError {
     #[error("No token/code received")]
     NoToken,
 
+    /// The user refused consent at the provider.
+    #[error("The sign-in was cancelled")]
+    Cancelled,
+
+    /// The provider answered this flow with an error other than a refusal.
+    #[error("The provider returned an error: {0}")]
+    Provider(String),
+
+    /// The app stopped the flow with `FlowCancel`.
+    #[error("The sign-in was stopped")]
+    Aborted,
+
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 }
 ```
+
+The user reads these reasons:
+
+| Error | Reason (`LoginFailed` or `SocialLinkFailed`) |
+|-------|---------------------------------------------|
+| `Cancelled` | `You cancelled the <Provider> sign-in.` |
+| `Aborted` | No event. The app stopped the flow. |
+| Other | `<Provider> sign-in failed: <error text>` |
+
+### 5.9 The Flow and the Command Loop
+
+A flow waits for the user for up to 120 s. The core command loop must not wait with it (#88). The loop also runs the voice tick and every other command.
+
+1. `Command::Auth<Provider>` and `Command::Link<Provider>` start the flow on a blocking thread and return at once. `BrowserFlows` in `mello-core/src/client/browser_flow.rs` keeps the waiting flow.
+2. The loop takes the outcome in its `select!`. It then exchanges the Google code, and signs in or links as before. Link uses `link_or_switch` (Google: `link_or_switch_google`).
+3. While a flow waits, a second sign-in or link request is ignored. The core logs `[auth] <Provider> <sign-in|link> ignored: the <Provider> <sign-in|link> still waits for the browser`. The waiting flow continues. The port is fixed, and a stopped flow cannot give its port to a new flow at once.
+4. Logout, account delete and loop shutdown stop the waiting flow with `FlowCancel`. The flow returns `Aborted` at once and releases the port. An identity that arrives before the stop is discarded.
 
 ---
 
@@ -1520,6 +1570,9 @@ For setup instructions on obtaining these credentials, see [06a-SOCIAL-LOGIN-SET
 
 ### General
 - [ ] Callback with a missing or wrong `state` is rejected and the flow continues to wait
+- [ ] A refusal at the provider with the correct `state` ends the flow at once: "You cancelled the <Provider> sign-in."
+- [ ] The command loop handles commands and voice ticks while a flow waits
+- [ ] A second sign-in or link request while a flow waits is ignored
 - [ ] Request to a path other than the callback is rejected and the flow continues to wait
 - [ ] Steam `return_to` carries `state`, and the forwarded query has no `state` pair
 - [ ] Session persists across restarts
