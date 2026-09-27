@@ -1254,6 +1254,23 @@ async fn handle_logout(&mut self) {
 }
 ```
 
+### 8.4 Member Names
+
+A Nakama channel presence event and a realtime chat message carry the user ID
+and the random Nakama username. They do not carry the display name.
+`mello-core/src/nakama/member_names.rs` maps a user ID to the name to show:
+
+| Step | What happens |
+|---|---|
+| Crew select | `list_group_users` puts every crew member in the map. |
+| Presence join or chat message, known user | The WS reader uses the name in the map. No request. |
+| Presence join or chat message, unknown user | The WS reader gets the user once with `GET /v2/user?ids=`, puts the name in the map, then emits the event. |
+| The request fails | The event carries the username. The map stays empty for that user, so the next event tries again. |
+
+The WS reader waits for the request, so a new member's `MemberJoined` and
+chat messages keep their order. The name to show is the display name, or the
+username when the display name is empty.
+
 ---
 
 ## 9. Event Flows
