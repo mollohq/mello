@@ -113,7 +113,7 @@ export const steamLink = linkThenSignInElsewhere("Steam");
 export const googleLink = linkThenSignInElsewhere("Google");
 
 // A deny and a rejected token are answers the app receives: end at once (#87).
-export const discordDeny = linkFails("Discord", "deny", true, 5_000, [87]);
+export const discordDeny = linkFails("Discord", "deny", true, 5_000);
 export const discordWrongState = linkFails("Discord", "wrong_state", true);
 export const discordNoCallback = linkFails("Discord", "no_callback", true);
 export const discordRejected = linkFails("Discord", "reject_token", true, 5_000);

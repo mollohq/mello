@@ -493,7 +493,7 @@ Design changes from §5 and §6:
 | `invite-accept-deeplink-cold.ts#publicCrew` | INV-01, INV-03 | Fails on #84 |
 | `invite-accept-deeplink-cold.ts#privateCrew` | INV-01, INV-03 | Fails on #83 |
 | `invite-accept-while-running.ts` | INV-02 | Fails on #84 |
-| `social-signin.ts` (9 journeys) | ONB-03, AUTH-04, ONB-08 | 9/9 on the e2e Docker profile. Discord, Twitch, Steam and Google sign up and sign in end to end. `discordDeny` now also requires a refusal to end within 5 s, so it fails on #87. |
+| `social-signin.ts` (9 journeys) | ONB-03, AUTH-04, ONB-08 | 9/9 on the e2e Docker profile. Discord, Twitch, Steam and Google sign up and sign in end to end. `discordDeny` requires a refusal to end within 5 s (#87, fixed). |
 
 The first 20-run check found a driver race in 4 of 12 runs. The cause was an app bug (#85). The fix in the driver waits on the real state, and the next 20-run check passed 40 of 40.
 
@@ -505,8 +505,8 @@ The first 20-run check found a driver race in 4 of 12 runs. The cause was an app
 | #84 | A member who joins or comes online shows their random username, in the member list and in chat. | P2 |
 | #85 | A fresh install loads the crew list twice and rebuilds step 1 about 200 ms after it shows. | P3 |
 | #86 | The invite modal has no close button and does not close on Escape. Only a click on the backdrop closes it. | P3 |
-| #87 | Denying a Discord or Twitch sign-in waits for the 2-minute callback timeout, then shows "timeout". | P2 |
-| #88 | A social sign-in or link blocks the core command loop (voice and all commands) for up to 2 minutes. | P1 |
+| #87 | Denying a Discord or Twitch sign-in waits for the 2-minute callback timeout, then shows "timeout". Fixed. | P2 |
+| #88 | A social sign-in or link blocks the core command loop (voice and all commands) for up to 2 minutes. Fixed. | P1 |
 
 ### 16.4 Running the sign-in journeys
 
