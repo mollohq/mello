@@ -154,13 +154,13 @@ flows:
     issues: []
 
   - id: INV-03
-    title: Accept an invite by deep link on a fresh install
+    title: Accept an invite by deep link on a fresh install (step 1 is skipped, step 2 names the crew)
     priority: P0
     users: 2
-    harness: []
-    journeys: [qa/journeys/invite-accept-deeplink-cold.ts]
+    harness: [an_invite_link_on_a_fresh_install_skips_step_one, retrying_finalize_with_an_invite_keeps_the_device_id_and_the_code, a_crew_picked_at_step_one_replaces_the_invite, a_failed_invite_join_at_finalize_is_never_a_dead_end, a_restart_on_step_two_keeps_the_invite, an_invite_on_a_machine_with_a_device_account_waits_for_sign_in, a_resolved_invite_skips_step_one_only_before_the_account_exists]
+    journeys: [qa/journeys/invite-accept-deeplink-cold.ts, qa/journeys/chat-two-users.ts, qa/journeys/voice-two-users.ts]
     protocol: []
-    issues: [68]
+    issues: []
 
   - id: INV-04
     title: A guest joins voice through the web lounge, members see the guest
@@ -175,8 +175,8 @@ flows:
     title: An invalid or expired invite code shows a clear error
     priority: P1
     users: 1
-    harness: []
-    journeys: []
+    harness: [an_invalid_invite_on_a_fresh_install_shows_step_one_with_a_message, a_failed_join_from_the_discover_code_field_is_shown_there]
+    journeys: [qa/journeys/invite-invalid-code-cold.ts]
     protocol: []
     issues: []
 

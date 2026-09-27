@@ -2,14 +2,14 @@
 
 import type { App } from "../../../tools/mello-driver/src/app.ts";
 import type { JourneyContext } from "../../../tools/mello-driver/src/journey.ts";
-import { createCrewAtStep1, linkEmailAtStep3, onboardWithNewCrew, profileAtStep2, type Visibility } from "./onboarding.ts";
+import { onboardFromInvite, onboardWithNewCrew, type Visibility } from "./onboarding.ts";
 
 export type Crew = { alice: App; bob: App; crew: string; aliceName: string; bobName: string };
 
 /**
- * alice creates a crew and invites bob; bob joins with the link and both reach
- * the app with the crew active. Public by default: a private-crew invite does
- * not make a member today (#83).
+ * alice creates a crew and invites bob. bob opens the link on a fresh install:
+ * onboarding skips step 1 and joins alice's crew (#68). Both reach the app
+ * with the crew active.
  */
 export async function twoUsersInOneCrew(ctx: JourneyContext, visibility: Visibility = "Public"): Promise<Crew> {
   const { runId, launch, step, expect } = ctx;
@@ -30,13 +30,8 @@ export async function twoUsersInOneCrew(ctx: JourneyContext, visibility: Visibil
   });
 
   const bob = await launch("bob", `mello://join/${code}`);
-  await step("setup: bob joins with the link and reaches the app", async () => {
-    await createCrewAtStep1(bob, `Bob Placeholder ${runId}`); // #68
-    await profileAtStep2(bob, bobName, 2);
-    await bob.waitFor("join modal", (s) => s.join_crew_modal_open && s.join_crew_name === crew, 30_000);
-    await bob.click("Join crew");
-    await bob.waitFor(`${crew} in bob's crews`, (s) => s.crews.includes(crew));
-    await linkEmailAtStep3(bob, bobName);
+  await step("setup: bob opens the link on a fresh install, joins in onboarding, reaches the app", async () => {
+    await onboardFromInvite(bob, crew, bobName);
   });
 
   await step("setup: both have the crew active", async () => {

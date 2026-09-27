@@ -3,7 +3,7 @@
 
 import { randomBytes } from "node:crypto";
 
-import type { App } from "../../../tools/mello-driver/src/app.ts";
+import { DriverError, type App } from "../../../tools/mello-driver/src/app.ts";
 
 export type Visibility = "Private" | "Public";
 
@@ -21,6 +21,20 @@ export async function createCrewAtStep1(app: App, crewName: string, visibility: 
   if (visibility === "Public") await app.click("Public");
   await app.click("Save & Continue");
   await app.waitFor("onboarding step 2", (s) => s.onboarding_step === 2);
+}
+
+/**
+ * A fresh install opened from an invite link skips step 1 (#68): it opens
+ * step 2, which names the invited crew. Waits for that step 2 and checks the
+ * crew name is on screen.
+ */
+export async function inviteAtStep2(app: App, crewName: string): Promise<void> {
+  await app.waitFor(
+    `onboarding step 2 that joins ${crewName}`,
+    (s) => s.screen === "onboarding" && s.onboarding_step === 2 && s.onboarding_invite_crew_name === crewName,
+    30_000,
+  );
+  if (!(await app.text(crewName))) throw new DriverError(`expectation failed: step 2 shows the invited crew "${crewName}"`);
 }
 
 /** Step 2: pick an avatar and a nickname, which creates the account and moves to step 3. */
@@ -55,6 +69,18 @@ export async function onboardWithNewCrew(
 ): Promise<Credentials> {
   await createCrewAtStep1(app, crewName, visibility);
   await profileAtStep2(app, nickname);
+  const creds = await linkEmailAtStep3(app, nickname);
+  await app.waitFor(`crew ${crewName} in the sidebar`, (s) => s.crews.includes(crewName));
+  return creds;
+}
+
+/**
+ * A fresh install opened from an invite link: step 2 names the crew, step 3
+ * links email, and the app opens with the invited crew as the only crew.
+ */
+export async function onboardFromInvite(app: App, crewName: string, nickname: string, avatar = 2): Promise<Credentials> {
+  await inviteAtStep2(app, crewName);
+  await profileAtStep2(app, nickname, avatar);
   const creds = await linkEmailAtStep3(app, nickname);
   await app.waitFor(`crew ${crewName} in the sidebar`, (s) => s.crews.includes(crewName));
   return creds;
