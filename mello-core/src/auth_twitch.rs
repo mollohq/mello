@@ -1,15 +1,15 @@
-use crate::oauth::{generate_state, OAuthError, OAuthFlow, OAuthMode, REDIRECT_URI};
+use crate::oauth::{generate_state, FlowCancel, OAuthError, OAuthFlow, OAuthMode, REDIRECT_URI};
 
 pub struct TwitchAuth;
 
 impl TwitchAuth {
     /// Run the Twitch OAuth2 implicit browser flow (blocking).
     /// Returns the `access_token`, which the backend validates via Helix.
-    pub fn authenticate(client_id: &str) -> Result<String, OAuthError> {
+    pub fn authenticate(client_id: &str, cancel: &FlowCancel) -> Result<String, OAuthError> {
         let state = generate_state();
         let auth_url = Self::authorize_url(client_id, &state);
 
-        OAuthFlow::execute(&auth_url, &state, OAuthMode::Implicit)
+        OAuthFlow::execute(&auth_url, &state, OAuthMode::Implicit, cancel)
     }
 
     fn authorize_url(client_id: &str, state: &str) -> String {
