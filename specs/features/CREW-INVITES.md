@@ -335,7 +335,7 @@ A user who typed the code (§8.5) did not follow a link. For this user the `Inva
 
 **File:** `client/ui/panels/discover_panel.slint`
 
-The "Join a Private Crew" field also calls `join_by_invite_code`. When the join
+The "Join a Private Crew" field also calls `join_by_invite_code`. It takes the same input as the invite-code card (§8.5): a link or a code. The client reads the input with `parse_invite_input` and sends the normalised code. An input that is no invite shows "This invite code is not valid." under the field, and no command goes to core. When the join
 modal is not open, `InviteJoinFailed` shows under the field. `InvalidCode` reads
 "This invite code is not valid." The other texts are the join texts in §8.3.
 

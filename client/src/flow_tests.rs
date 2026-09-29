@@ -732,7 +732,7 @@ fn joining_from_discover_uses_the_crew_id_and_invite_code_paths() {
     let mut h = Harness::new();
 
     h.app().invoke_discover_join_crew("crew-7".into());
-    h.app().invoke_discover_join_invite("ABC123".into());
+    h.app().invoke_discover_join_invite("ABCD-1234".into());
 
     let cmds = h.commands();
     assert!(
@@ -742,7 +742,7 @@ fn joining_from_discover_uses_the_crew_id_and_invite_code_paths() {
     );
     assert!(
         cmds.iter()
-            .any(|c| matches!(c, Command::JoinByInviteCode { code } if code == "ABC123")),
+            .any(|c| matches!(c, Command::JoinByInviteCode { code } if code == "ABCD-1234")),
         "an invite code must go through JoinByInviteCode, got {cmds:?}"
     );
 }
@@ -1947,6 +1947,47 @@ fn a_resolve_the_card_did_not_send_keeps_the_device_account_path() {
 
     assert!(!welcome_is_visible(&h));
     assert!(join_crew_modal_is_visible(&h));
+}
+
+/// ★ The Discover field takes a link, as the card does. Before, only a bare
+/// code in the exact stored form worked.
+#[test]
+fn the_discover_code_field_accepts_a_link() {
+    let mut h = Harness::new();
+    for input in [
+        "https://m3llo.app/join/nite-0001",
+        "m3llo.app/join/NITE-0001/",
+        "mello://join/NITE-0001",
+        "  nite0001  ",
+    ] {
+        h.app().invoke_discover_join_invite(input.into());
+        let cmds = h.commands();
+        assert!(
+            cmds.iter()
+                .any(|c| matches!(c, Command::JoinByInviteCode { code } if code == "NITE-0001")),
+            "{input:?} must join by NITE-0001, got {cmds:?}"
+        );
+        assert_eq!(h.app().get_discover_invite_error().as_str(), "");
+    }
+}
+
+/// An input that is no invite gets the message under the Discover field, and
+/// no command.
+#[test]
+fn the_discover_code_field_refuses_what_is_no_invite() {
+    let mut h = Harness::new();
+
+    h.app()
+        .invoke_discover_join_invite("https://example.com/join/NITE-0001".into());
+
+    assert_eq!(h.app().get_discover_invite_error().as_str(), CODE_NOT_VALID);
+    let cmds = h.commands();
+    assert!(
+        !cmds
+            .iter()
+            .any(|c| matches!(c, Command::JoinByInviteCode { .. })),
+        "{cmds:?}"
+    );
 }
 
 // ---------------------------------------------------------------------------

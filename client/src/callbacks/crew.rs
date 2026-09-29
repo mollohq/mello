@@ -257,14 +257,26 @@ pub fn wire(ctx: &AppContext) {
     {
         let cmd = ctx.cmd_tx.clone();
         let app_weak = ctx.app.as_weak();
-        ctx.app.on_discover_join_invite(move |code| {
-            log::info!("[discover] join-by-invite code={}", code);
+        ctx.app.on_discover_join_invite(move |text| {
+            // The field takes the same input as the invite-code card on
+            // step 1: a link or a code, in any form.
+            let code = crate::deep_link::parse_invite_input(text.as_str());
+            log::info!("[discover] join-by-invite input={text:?} code={code:?}");
             if let Some(app) = app_weak.upgrade() {
                 app.set_discover_invite_error("".into());
+                if code.is_none() {
+                    app.set_discover_invite_error(
+                        crate::handlers::invite_join_error_message(
+                            mello_core::crew::InviteError::InvalidCode,
+                            crate::handlers::InviteSource::TypedCode,
+                        )
+                        .into(),
+                    );
+                }
             }
-            let _ = cmd.send(Command::JoinByInviteCode {
-                code: code.to_string(),
-            });
+            if let Some(code) = code {
+                let _ = cmd.send(Command::JoinByInviteCode { code });
+            }
         });
     }
     {

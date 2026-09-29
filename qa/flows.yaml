@@ -193,7 +193,7 @@ flows:
     title: Join by typing an invite code in Discover
     priority: P1
     users: 2
-    harness: [joining_from_discover_uses_the_crew_id_and_invite_code_paths]
+    harness: [joining_from_discover_uses_the_crew_id_and_invite_code_paths, the_discover_code_field_accepts_a_link, the_discover_code_field_refuses_what_is_no_invite]
     journeys: []
     protocol: []
     issues: []
