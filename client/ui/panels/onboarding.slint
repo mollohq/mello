@@ -97,36 +97,6 @@ component CrewCard inherits Rectangle {
                             horizontal-stretch: 1;
                         }
 
-                        if online-count > 0: Rectangle {
-                            width: pill-text.preferred-width + 28px;
-                            height: 24px;
-                            border-radius: 4px;
-                            border-width: 1px;
-                            border-color: #FFFFFF4D;
-                            background: Theme.action-dim;
-
-                            HorizontalLayout {
-                                alignment: center;
-                                spacing: 6px;
-
-                                Rectangle {
-                                    width: 6px;
-                                    height: 6px;
-                                    border-radius: 3px;
-                                    background: Theme.accent;
-                                }
-
-                                pill-text := Text {
-                                    letter-spacing: Theme.track-label;
-                                    font-weight: Theme.weight-label;
-                                    text: "LIVE";
-                                    font-family: Theme.font-label;
-                                    font-size: 10px;
-                                    color: Theme.accent;
-                                    vertical-alignment: center;
-                                }
-                            }
-                        }
                     }
                 }
             }
@@ -198,6 +168,7 @@ component CreateCrewCard inherits Rectangle {
     create-touch := TouchArea {
         accessible-role: button;
         accessible-label: "Create your own crew";
+        mouse-cursor: pointer;
         clicked => {
             root.clicked();
         }
@@ -221,7 +192,8 @@ component CreateCrewCard inherits Rectangle {
                     text: "+";
                     font-size: 28px;
                     font-weight: Theme.weight-display;
-                    color: Theme.text-primary;
+                    // The tile turns white on hover, so the plus turns dark.
+                    color: create-touch.has-hover ? Theme.on-action : Theme.text-primary;
                     horizontal-alignment: center;
                     vertical-alignment: center;
                 }
@@ -303,7 +275,7 @@ component InviteCodeCard inherits Rectangle {
 
         field := MelloInputField {
             label: "GOT AN INVITE?";
-            placeholder: "m3llo.app/join/…  or  ABCD-1234";
+            placeholder: "Invite link or code";
             invalid: root.error != "";
             accepted => {
                 if !root.checking {
@@ -567,6 +539,7 @@ component AuthButton inherits Rectangle {
 
     height: 56px;
     preferred-width: 0px;
+    min-width: 0px;
     background: auth-touch.has-hover ? Theme.hover-overlay : transparent;
     border-radius: Theme.r-inner;
     border-width: 1px;
@@ -946,7 +919,7 @@ export component Onboarding inherits Rectangle {
                     Text {
                         font-weight: Theme.weight-display;
                         font-family: Theme.font-display;
-                        text: "Join a specialized squad to begin your deployment, or establish a new unit and lead the way.";
+                        text: "Pick a crew to hang out with, start your own, or open an invite from a friend.";
                         font-size: 18px;
                         color: Theme.text-secondary;
                         max-width: 540px;
@@ -1071,15 +1044,22 @@ export component Onboarding inherits Rectangle {
                         height: 240px;
                         spacing: 20px;
 
+                        // Create is always the bigger card; the invite card
+                        // is the secondary way in. A zero preferred width
+                        // lets the stretch factors alone set the sizes.
                         CreateCrewCard {
-                            horizontal-stretch: 1;
+                            horizontal-stretch: 1.5;
+                            preferred-width: 0px;
+                            min-width: 0px;
                             clicked => { root.create-crew-requested("New Crew"); }
                         }
 
                         // An invite is another way in, so the card is here
                         // too: a user who has no crew to pick still has it.
                         InviteCodeCard {
-                            horizontal-stretch: 1;
+                            horizontal-stretch: 1.2;
+                            preferred-width: 0px;
+                            min-width: 0px;
                             text <=> root.invite-code-text;
                             error: root.invite-code-error;
                             checking: root.invite-code-checking;
@@ -1097,13 +1077,19 @@ export component Onboarding inherits Rectangle {
                         // so no crew loses its card.
                         property <int> row2: base == 0 ? 1 : 2;
 
-                        // Row 1: [featured 2x] [create CTA or 1x] [1x]
+                        // Row 1: [featured 2x] [create CTA or 1x] [invite card or 1x].
+                        // Every card here has a zero preferred and min width, so
+                        // the stretch factors alone set the sizes. In the first
+                        // set, Create (1.5) is always bigger than the invite
+                        // card (1.2).
                         if discover-crews.length > base: HorizontalLayout {
                             height: 240px;
                             spacing: 20px;
 
                             CrewCard {
                                 horizontal-stretch: 2;
+                                preferred-width: 0px;
+                                min-width: 0px;
                                 featured: true;
                                 crew-name: discover-crews[base].name;
                                 crew-description: discover-crews[base].description;
@@ -1115,13 +1101,20 @@ export component Onboarding inherits Rectangle {
                                 clicked => { root.crew-selected(discover-crews[base].id); }
                             }
 
+                            // Create is always bigger than the invite card.
+                            // Zero preferred widths let the stretch factors
+                            // alone set the sizes in the first set's row 1.
                             if base == 0: CreateCrewCard {
-                                horizontal-stretch: 1;
+                                horizontal-stretch: 1.5;
+                                preferred-width: 0px;
+                                min-width: 0px;
                                 clicked => { root.create-crew-requested("New Crew"); }
                             }
 
                             if base != 0: CrewCard {
                                 horizontal-stretch: 1;
+                                preferred-width: 0px;
+                                min-width: 0px;
                                 crew-name: discover-crews.length > base + 1 ? discover-crews[base + 1].name : "";
                                 crew-description: discover-crews.length > base + 1 ? discover-crews[base + 1].description : "";
                                 member-count: discover-crews.length > base + 1 ? discover-crews[base + 1].member-count : 0;
@@ -1138,7 +1131,9 @@ export component Onboarding inherits Rectangle {
                             // The first set puts the invite-code card here, in
                             // the slot right of "Create your own crew".
                             if base == 0: InviteCodeCard {
-                                horizontal-stretch: 1;
+                                horizontal-stretch: 1.2;
+                                preferred-width: 0px;
+                                min-width: 0px;
                                 text <=> root.invite-code-text;
                                 error: root.invite-code-error;
                                 checking: root.invite-code-checking;
@@ -1148,6 +1143,8 @@ export component Onboarding inherits Rectangle {
 
                             if base != 0: CrewCard {
                                 horizontal-stretch: 1;
+                                preferred-width: 0px;
+                                min-width: 0px;
                                 crew-name: discover-crews.length > base + 1 ? discover-crews[base + 1].name : "";
                                 crew-description: discover-crews.length > base + 1 ? discover-crews[base + 1].description : "";
                                 member-count: discover-crews.length > base + 1 ? discover-crews[base + 1].member-count : 0;
