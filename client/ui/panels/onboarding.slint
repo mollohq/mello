@@ -3,6 +3,8 @@ import { CutShape, CutButtonShape, CutCard } from "../components/cut.slint";
 import { CrewData, AudioDeviceData } from "../types.slint";
 import { DeviceDropdown, SettingsToggle } from "settings_modal.slint";
 import { AvatarCard } from "../components/avatar_card.slint";
+import { InviteWelcome } from "invite_welcome.slint";
+import { InvitePersonData } from "../types.slint";
 
 // ─── Reusable components ───
 
@@ -266,8 +268,17 @@ export component AvatarFallback inherits Rectangle {
 }
 
 component StepIndicator inherits Rectangle {
+    /// The onboarding step (1..3) of the screen that shows the indicator.
     in property <int> current-step: 1;
+    /// An invite link skips step 1: the indicator then counts steps 2 and 3
+    /// as "01 / 02" and "02 / 02".
+    in property <bool> skips-first: false;
+    /// Emits the onboarding step (1..3), not the shown number.
     callback step-clicked(int);
+
+    property <int> first: skips-first ? 2 : 1;
+    property <int> shown: current-step - first + 1;
+    property <int> total: 4 - first;
 
     height: 20px;
 
@@ -275,9 +286,9 @@ component StepIndicator inherits Rectangle {
         spacing: 16px;
         alignment: start;
 
-        Text {
+        step-text := Text {
             font-weight: Theme.weight-label;
-            text: current-step < 10 ? "STEP 0" + current-step + " / 03" : "STEP " + current-step + " / 03";
+            text: "STEP 0" + shown + " / 0" + total;
             font-family: Theme.font-label;
             font-size: 13px;
             color: Theme.accent;
@@ -287,19 +298,19 @@ component StepIndicator inherits Rectangle {
 
         // Dots container — explicit centering via y offset
         Rectangle {
-            width: 24px * 3 + 8px * 2;
+            width: 24px * total + 8px * (total - 1);
 
             Rectangle {
                 x: 0;
                 y: (parent.height - 2px) / 2;
                 width: 24px;
                 height: 2px;
-                background: current-step >= 1 ? Theme.accent : Theme.graphic-light;
+                background: shown >= 1 ? Theme.accent : Theme.graphic-light;
                 TouchArea {
                     accessible-role: button;
                     accessible-label: "Go to step 1";
                     clicked => {
-                        root.step-clicked(1);
+                        root.step-clicked(first);
                     }
                 }
             }
@@ -309,27 +320,27 @@ component StepIndicator inherits Rectangle {
                 y: (parent.height - 2px) / 2;
                 width: 24px;
                 height: 2px;
-                background: current-step >= 2 ? Theme.accent : Theme.graphic-light;
+                background: shown >= 2 ? Theme.accent : Theme.graphic-light;
                 TouchArea {
                     accessible-role: button;
                     accessible-label: "Go to step 2";
                     clicked => {
-                        root.step-clicked(2);
+                        root.step-clicked(first + 1);
                     }
                 }
             }
 
-            Rectangle {
+            if total >= 3: Rectangle {
                 x: (24px + 8px) * 2;
                 y: (parent.height - 2px) / 2;
                 width: 24px;
                 height: 2px;
-                background: current-step >= 3 ? Theme.accent : Theme.graphic-light;
+                background: shown >= 3 ? Theme.accent : Theme.graphic-light;
                 TouchArea {
                     accessible-role: button;
                     accessible-label: "Go to step 3";
                     clicked => {
-                        root.step-clicked(3);
+                        root.step-clicked(first + 2);
                     }
                 }
             }
@@ -478,6 +489,16 @@ export component Onboarding inherits Rectangle {
     // shows the crew the user joins. Empty when there is no invite.
     in property <string> invite-crew-name: "";
     in property <string> invite-crew-initials: "";
+    // The rest of the invite, for the welcome screen (step 5).
+    in property <string> invite-highlight: "";
+    in property <int> invite-member-count: 0;
+    in property <[InvitePersonData]> invite-members: [];
+    in property <InvitePersonData> invite-inviter;
+    // Onboarding started from an invite and skipped step 1: steps 2 and 3
+    // show "01 / 02" and "02 / 02".
+    in property <bool> invite-path: false;
+    callback invite-accepted();
+    callback invite-declined();
     // Why the invite link could not be used. Step 1 shows it above the crews.
     in property <string> invite-error: "";
     // Non-empty when crew discovery failed; step 1 surfaces it with a retry.
@@ -597,6 +618,26 @@ export component Onboarding inherits Rectangle {
     callback auth-apple();
 
     background: Theme.bg-app;
+
+    // ===================== The invite welcome screen =====================
+    // Step 5 is after "done" (4) in the numbers, and before step 2 in the
+    // flow (client/src/onboarding.rs). It shows no step indicator.
+    if step == 5: InviteWelcome {
+        width: parent.width;
+        height: parent.height;
+        crew-name: root.invite-crew-name;
+        crew-initials: root.invite-crew-initials;
+        highlight: root.invite-highlight;
+        member-count: root.invite-member-count;
+        members: root.invite-members;
+        inviter: root.invite-inviter;
+        join-requested => {
+            root.invite-accepted();
+        }
+        not-now-requested => {
+            root.invite-declined();
+        }
+    }
 
     // ===================== STEP 1: Discover crews =====================
     if step == 1: Rectangle {
@@ -1032,6 +1073,7 @@ export component Onboarding inherits Rectangle {
 
                 StepIndicator {
                     current-step: 2;
+                    skips-first: root.invite-path;
                     step-clicked(s) => {
                         root.continue-to-step(s);
                     }
@@ -1532,6 +1574,7 @@ export component Onboarding inherits Rectangle {
 
                 StepIndicator {
                     current-step: 3;
+                    skips-first: root.invite-path;
                     step-clicked(s) => {
                         root.continue-to-step(s);
                     }

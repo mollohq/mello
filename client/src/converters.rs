@@ -5,8 +5,8 @@ use slint::Model;
 use slint::StyledText;
 
 use crate::{
-    ChatLinkData, ChatMessageData, CrewData, DebugHistory, MainWindow, MemberData,
-    VoiceChannelData, VoiceChannelMember,
+    ChatLinkData, ChatMessageData, CrewData, DebugHistory, InvitePersonData, MainWindow,
+    MemberData, VoiceChannelData, VoiceChannelMember,
 };
 
 pub fn parse_capture_source_id(id: &str, mode: &str) -> (Option<u32>, Option<u64>, Option<u32>) {
@@ -29,6 +29,25 @@ pub fn make_initials(name: &str) -> String {
             let last = parts[parts.len() - 1].chars().next().unwrap_or('?');
             format!("{}{}", first, last).to_uppercase()
         }
+    }
+}
+
+/// The identity colour of a person, from a stable seed: one of the five
+/// `Theme.id-*` colours that `UserAvatar` maps `color-index` to.
+pub fn avatar_color_index(seed: &str) -> i32 {
+    if seed.is_empty() {
+        return 0;
+    }
+
+    (seed.bytes().fold(0u32, |acc, b| acc.wrapping_add(b as u32)) % 5) as i32
+}
+
+/// A person shown with an invite (the inviter, or a member), as an octagon.
+pub fn invite_person(p: &mello_core::crew::InvitePerson) -> InvitePersonData {
+    InvitePersonData {
+        name: p.display_name.as_str().into(),
+        initials: make_initials(&p.display_name).into(),
+        color_index: avatar_color_index(&p.avatar_seed),
     }
 }
 

@@ -330,6 +330,15 @@ export struct CaptureSourceData {
     has-thumbnail: bool,
 }
 
+/// A person shown with an invite: the inviter, or a member preview.
+/// An empty `name` means no person.
+export struct InvitePersonData {
+    name: string,
+    initials: string,
+    /// The identity colour, 0..4, as `UserAvatar` maps it.
+    color-index: int,
+}
+
 export struct DiscoverCrewData {
     id: string,
     name: string,

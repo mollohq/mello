@@ -114,7 +114,7 @@ SVG icons from mockups are extracted into `client/ui/icons/` as `.svg` files and
 
 ## 6. Onboarding Flow
 
-Onboarding is a 3-step full-screen flow for new users (when `onboarding_step < 4`):
+Onboarding is a 3-step full-screen flow for new users (when `onboarding_step` is 0 to 3, or 5 for the invite welcome screen of §6.2):
 
 | Step | Screen | What happens |
 |------|--------|-------------|
@@ -124,7 +124,7 @@ Onboarding is a 3-step full-screen flow for new users (when `onboarding_step < 4
 
 "Continue" on step 2 sends `FinalizeOnboarding`, which device-auths, creates the account, and creates or joins the crew (with the stored details and avatar). Step 3 follows.
 
-The `pending_crew_name`, `pending_crew_description`, `pending_crew_open`, `pending_invite_code` and `pending_invite_crew_name` fields are persisted in `Settings` (survives restart). The crew avatar base64 is held in memory only (`Arc<Mutex<Option<String>>>`).
+The `pending_crew_name`, `pending_crew_description`, `pending_crew_open`, `pending_invite_code`, `pending_invite_crew_name`, `pending_invite` and `onboarding_via_invite` fields are persisted in `Settings` (survives restart). The crew avatar base64 is held in memory only (`Arc<Mutex<Option<String>>>`).
 
 A restart on step 3 sends `DeviceAuth` with the stored device id. Linking needs a session in core, and only a finished onboarding restores one.
 
@@ -148,15 +148,34 @@ The sign-in panel:
 
 ### 6.2 Invite Link on a Fresh Install
 
-A fresh install opened from `mello://join/{code}` skips step 1 (#68). "Fresh install" means no session, no device account, and a step before the account exists (0, 1 or 2).
+A fresh install opened from `mello://join/{code}` skips step 1 (#68). "Fresh install" means no session, no device account, and a state before the account exists (`Loading`, step 1, the welcome screen or step 2).
 
 1. At startup, before crew discovery, the client sends `ResolveCrewInvite`. Without a session, core calls `resolve_crew_invite` with the `http_key`.
-2. `CrewInviteResolved`: the client stores the code and the crew name, and opens step 2. Step 2 shows "JOINING CREW" and the crew name.
-3. "Continue" sends `FinalizeOnboarding` with `invite_code`. Core joins the crew with `join_by_invite_code`, so a private crew works too. Step 3 follows as usual.
+2. `CrewInviteResolved`: the client stores the code and the resolved invite, and opens the welcome screen (`InviteWelcome`).
+3. "Join {crew}" opens step 2. Step 2 shows "JOINING CREW" and the crew name.
+4. "Continue" sends `FinalizeOnboarding` with `invite_code`. Core joins the crew with `join_by_invite_code`, so a private crew works too. Step 3 follows as usual.
+
+**The welcome screen** (`client/ui/panels/invite_welcome.slint`) shows no step indicator. It shows:
+
+| Element | Content |
+|---|---|
+| Label | "YOU'RE INVITED" |
+| Inviter row | The inviter as an octagon, and "{inviter} invited you to join". With no inviter: "You're invited to join". |
+| Crew | The crew tile with initials, the crew name, the highlight (if present), up to 5 member octagons and "{n} members" |
+| Next steps | "Pick a name and an avatar, check your mic, and you're in. It takes about a minute." |
+| Primary button (red) | "Join {crew}". Long names elide. Opens step 2. |
+| Text link | "Not now — show me other crews". Opens step 1 and forgets the invite. Finalize then does not join the invited crew. |
+
+The welcome screen is onboarding step 5 in `Settings` and in the Slint property. Steps 0 to 4 keep their numbers from earlier builds. In the flow it comes before step 2.
+
+A restart on the welcome screen shows it again. The screen reads the invite from `Settings::pending_invite`, so it needs no network call. With no stored invite, startup opens step 1.
+
+**Step numbers.** The invite path has two steps: step 2 shows "STEP 01 / 02", step 3 shows "STEP 02 / 02". `Settings::onboarding_via_invite` keeps this through a restart. It is set when the invite resolves, and cleared on step 1 and when onboarding is done. Without an invite, onboarding has three steps.
 
 | Case | Result |
 |------|--------|
 | The code does not resolve | Step 1, with the message above the crews. No join modal. |
+| "Not now" on the welcome screen | Step 1, three steps. The invite is forgotten. |
 | Finalize: the join fails with a server or network error (`OnboardingInviteFailed`, `Failed`) | Step 2, with the message above "Continue". "Continue" retries. |
 | Finalize: the code is no longer valid, the crew is full, or the server refuses the user | Step 1, with the message. The invite is forgotten. |
 | The user goes back to step 1 and picks or creates a crew | The crew replaces the invite. |
@@ -165,7 +184,7 @@ A fresh install opened from `mello://join/{code}` skips step 1 (#68). "Fresh ins
 
 ### 6.3 Lost Session
 
-At startup with onboarding done (`onboarding_step > 3`) the client sends `TryRestore`. When the restore fails and a device account exists:
+At startup with onboarding done (`onboarding_step` 4, or a step the build does not know) the client sends `TryRestore`. When the restore fails and a device account exists:
 
 1. The client sends `DeviceAuth`. The window stays on the restore wait.
 2. `DeviceAuthed { created: false }`: the account exists. The app opens, the same as a restored session.

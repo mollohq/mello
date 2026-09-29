@@ -2,8 +2,10 @@
 //!
 //! A fresh install opened from `mello://join/<code>` skips step 1. The client
 //! resolves the code before an account exists (core uses the `http_key`), and
-//! opens step 2 with the invited crew shown. Finalize then joins that crew by
-//! its invite code, so a private crew works too.
+//! opens the welcome screen: who invited the user, to which crew. "Join" opens
+//! step 2 with the invited crew shown. Finalize then joins that crew by its
+//! invite code, so a private crew works too. "Not now" opens step 1 and
+//! forgets the invite.
 //!
 //! An invite that cannot be used lands on step 1 with a message. Step 1 always
 //! offers a crew or "create your own", so the user is never stuck.
@@ -20,7 +22,7 @@ use mello_core::Command;
 use crate::app_context::AppContext;
 use crate::deep_link::DeepLink;
 use crate::handlers::{invite_join_error_message, InviteSource};
-use crate::onboarding::{Input, OnboardingState};
+use crate::onboarding::{EffectCtx, Input, OnboardingState};
 
 /// Does an invite link go into onboarding, instead of the join modal?
 ///
@@ -37,7 +39,10 @@ pub fn opens_onboarding(app: &crate::MainWindow, settings: &crate::Settings) -> 
 fn opens_onboarding_at(state: OnboardingState, logged_in: bool, has_device_account: bool) -> bool {
     let before_account = matches!(
         state,
-        OnboardingState::Loading | OnboardingState::PickCrew | OnboardingState::PickAvatar
+        OnboardingState::Loading
+            | OnboardingState::PickCrew
+            | OnboardingState::InviteWelcome
+            | OnboardingState::PickAvatar
     );
     !logged_in && !has_device_account && before_account
 }
@@ -65,6 +70,19 @@ pub fn dispatch_at_startup(ctx: &AppContext, state: OnboardingState) {
     }
 }
 
+/// The step that startup resumes, given the persisted one.
+///
+/// The welcome screen shows the stored invite. With no stored invite it has
+/// nothing to show, so startup opens step 1 instead of an empty screen.
+pub fn resume_state(settings: &crate::Settings, state: OnboardingState) -> OnboardingState {
+    let stored = settings.pending_invite_code.is_some() && settings.pending_invite.is_some();
+    if state == OnboardingState::InviteWelcome && !stored {
+        log::warn!("[invite] welcome screen persisted with no stored invite — resuming step 1");
+        return OnboardingState::PickCrew;
+    }
+    state
+}
+
 /// Show an invite that a previous run stored, for a restart on step 2.
 fn show_pending(ctx: &AppContext) {
     let name = ctx.settings.borrow().pending_invite_crew_name.clone();
@@ -73,25 +91,60 @@ fn show_pending(ctx: &AppContext) {
     }
 }
 
-/// The invite resolved: store it and open step 2 with the crew shown.
+/// The invite resolved: store it and open the welcome screen.
+///
+/// Stores the whole invite, not only the code: a restart on the welcome
+/// screen shows it again from Settings. Resolving again would need the
+/// network, and a failure there would leave the screen with nothing to show.
 pub fn accept(ctx: &AppContext, code: String, invite: ResolvedInvite) {
     log::info!(
-        "[invite] onboarding joins crew={:?} id={} — opening step 2",
+        "[invite] onboarding invite crew={:?} id={} inviter={:?} — opening the welcome screen",
         invite.crew_name,
-        invite.crew_id
+        invite.crew_id,
+        invite.inviter.as_ref().map(|p| p.display_name.as_str()),
     );
     {
         let mut s = ctx.settings.borrow_mut();
         s.pending_invite_code = Some(code);
         s.pending_invite_crew_name = Some(invite.crew_name.clone());
+        s.pending_invite = Some(invite);
+        s.onboarding_via_invite = true;
         // One crew only: the invite replaces a crew picked before.
         s.pending_crew_id = None;
         s.pending_crew_name = None;
         s.save();
     }
-    set_crew(&ctx.app, &invite.crew_name);
+    // Also when the welcome screen is already open: a second link replaces
+    // the first, and the entry effect runs only on a change of state.
+    show_stored(&ctx.app, &ctx.settings);
     ctx.app.set_onboarding_invite_error("".into());
     crate::onboarding::advance(ctx, Input::InviteResolved);
+}
+
+/// "Join" on the welcome screen: step 2, which keeps the invite.
+pub fn join(app: &crate::MainWindow, settings: &Rc<RefCell<crate::Settings>>, fx: &EffectCtx) {
+    log::info!("[invite] welcome screen: join — opening step 2");
+    crate::onboarding::advance_with(app, settings, fx, Input::InviteAccepted);
+}
+
+/// "Not now" on the welcome screen: step 1, and the invite is forgotten.
+/// Finalize then joins or creates the crew that the user picks there.
+pub fn decline(app: &crate::MainWindow, settings: &Rc<RefCell<crate::Settings>>, fx: &EffectCtx) {
+    log::info!("[invite] welcome screen: not now — forgetting the invite, opening step 1");
+    clear(app, settings);
+    crate::onboarding::advance_with(app, settings, fx, Input::InviteDeclined);
+}
+
+/// Put the stored invite on the welcome screen and on step 2.
+///
+/// The entry effect of the welcome screen, so every way in shows the same
+/// data, a restart included.
+pub fn show_stored(app: &crate::MainWindow, settings: &Rc<RefCell<crate::Settings>>) {
+    let invite = settings.borrow().pending_invite.clone();
+    match invite {
+        Some(invite) => show(app, &invite),
+        None => log::warn!("[invite] welcome screen with no stored invite"),
+    }
 }
 
 /// The invite did not resolve: step 1 says why. Discovery moves `Loading` on
@@ -130,11 +183,35 @@ pub fn clear(app: &crate::MainWindow, settings: &Rc<RefCell<crate::Settings>>) {
         let mut s = settings.borrow_mut();
         s.pending_invite_code = None;
         s.pending_invite_crew_name = None;
+        s.pending_invite = None;
     }
     set_crew(app, "");
+    app.set_onboarding_invite_highlight("".into());
+    app.set_onboarding_invite_member_count(0);
+    app.set_onboarding_invite_members(Rc::new(slint::VecModel::default()).into());
+    app.set_onboarding_invite_inviter(Default::default());
 }
 
 fn set_crew(app: &crate::MainWindow, name: &str) {
     app.set_onboarding_invite_crew_name(name.into());
     app.set_onboarding_invite_crew_initials(crate::converters::make_initials(name).into());
+}
+
+fn show(app: &crate::MainWindow, invite: &ResolvedInvite) {
+    set_crew(app, &invite.crew_name);
+    app.set_onboarding_invite_highlight(invite.highlight.as_str().into());
+    app.set_onboarding_invite_member_count(invite.member_count);
+    let members: Vec<_> = invite
+        .members
+        .iter()
+        .map(crate::converters::invite_person)
+        .collect();
+    app.set_onboarding_invite_members(Rc::new(slint::VecModel::from(members)).into());
+    app.set_onboarding_invite_inviter(
+        invite
+            .inviter
+            .as_ref()
+            .map(crate::converters::invite_person)
+            .unwrap_or_default(),
+    );
 }

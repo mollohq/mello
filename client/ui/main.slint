@@ -20,6 +20,7 @@ import {
     YouStripData,
     GameStatsCardData,
     GameIntegrationData,
+    InvitePersonData,
     VideoRect,
 } from "types.slint";
 import { CrewPanel } from "panels/crew_panel.slint";
@@ -44,7 +45,7 @@ import { RiotLinkModal } from "panels/riot_link_modal.slint";
 import { StatsProfileModal } from "panels/stats_profile_modal.slint";
 
 
-export { CrewData, MemberData, ChatMessageData, AudioDeviceData, VoiceChannelData, VoiceChannelMember, CaptureSourceData, DiscoverCrewData, SearchUserData, FeedCardData, RecapLbRow, RecapAwardRow, GameRollupLine, StreamCardData, YouStripData, GameStatsCardData, GameIntegrationData, Theme, VideoRect, ForceUpdateWindow }
+export { CrewData, MemberData, ChatMessageData, AudioDeviceData, VoiceChannelData, VoiceChannelMember, CaptureSourceData, DiscoverCrewData, SearchUserData, FeedCardData, RecapLbRow, RecapAwardRow, GameRollupLine, StreamCardData, YouStripData, GameStatsCardData, GameIntegrationData, InvitePersonData, Theme, VideoRect, ForceUpdateWindow }
 
 export component MainWindow inherits Window {
     title: "Mello";
@@ -63,7 +64,8 @@ export component MainWindow inherits Window {
     in property <bool> login-account-missing: false;
     in property <bool> login-loading: false;
 
-    // --- Onboarding (0 = show onboarding, 1-3 = step, 4+ = done) ---
+    // --- Onboarding (0 = show onboarding, 1-3 = step, 4 = done,
+    //     5 = the invite welcome screen; see client/src/onboarding.rs) ---
     in-out property <int> onboarding-step: 0;
     // True while FinalizeOnboarding is in flight. Gates the step-2 Continue
     // button: it fires seven sequential network calls, and every extra click
@@ -80,6 +82,15 @@ export component MainWindow inherits Window {
     // shows it: finalize joins this crew. Empty when there is no invite.
     in property <string> onboarding-invite-crew-name: "";
     in property <string> onboarding-invite-crew-initials: "";
+    // The rest of the invite, for the welcome screen (step 5).
+    in property <string> onboarding-invite-highlight: "";
+    in property <int> onboarding-invite-member-count: 0;
+    in property <[InvitePersonData]> onboarding-invite-members: [];
+    // Who made the invite. An empty name means no inviter.
+    in property <InvitePersonData> onboarding-invite-inviter;
+    // Onboarding started from an invite and skipped step 1: the step
+    // indicator counts two steps.
+    in property <bool> onboarding-invite-path: false;
     // Non-empty when the invite link could not be used. Step 1 shows it.
     in property <string> onboarding-invite-error: "";
     in property <bool> is-returning-user: false;
@@ -627,6 +638,9 @@ export component MainWindow inherits Window {
     callback retry-discover();
     callback onboarding-create-crew(string);
     callback onboarding-continue(int);
+    // The welcome screen: "Join {crew}" and "Not now".
+    callback onboarding-invite-accepted();
+    callback onboarding-invite-declined();
     callback onboarding-login-requested();
     callback onboarding-link-email(string, string);
     callback onboarding-capture-device-selected(string);
@@ -657,7 +671,7 @@ export component MainWindow inherits Window {
     in property <string> discover-invite-error: "";
 
     // ===================== ONBOARDING =====================
-    if onboarding-step >= 1 && onboarding-step <= 3 && !show-sign-in: Onboarding {
+    if ((onboarding-step >= 1 && onboarding-step <= 3) || onboarding-step == 5) && !show-sign-in: Onboarding {
         step: root.onboarding-step;
         busy: root.onboarding-busy;
         discover-crews: root.discover-crews;
@@ -667,6 +681,11 @@ export component MainWindow inherits Window {
         link-error: root.link-error;
         invite-crew-name: root.onboarding-invite-crew-name;
         invite-crew-initials: root.onboarding-invite-crew-initials;
+        invite-highlight: root.onboarding-invite-highlight;
+        invite-member-count: root.onboarding-invite-member-count;
+        invite-members: root.onboarding-invite-members;
+        invite-inviter: root.onboarding-invite-inviter;
+        invite-path: root.onboarding-invite-path;
         invite-error: root.onboarding-invite-error;
         device-user-name: root.user-name;
         device-user-initials: root.user-initials;
@@ -749,6 +768,12 @@ export component MainWindow inherits Window {
         continue-to-step(s) => {
             root.onboarding-continue(s);
         }
+        invite-accepted => {
+            root.onboarding-invite-accepted();
+        }
+        invite-declined => {
+            root.onboarding-invite-declined();
+        }
         login-requested => {
             root.onboarding-login-requested();
         }
@@ -813,7 +838,7 @@ export component MainWindow inherits Window {
     }
 
     // ===================== MAIN APP =====================
-    if logged-in && (onboarding-step == 0 || onboarding-step > 3): Rectangle {
+    if logged-in && (onboarding-step == 0 || (onboarding-step > 3 && onboarding-step != 5)): Rectangle {
         background: Theme.bg-app;
 
         HorizontalLayout {
@@ -1145,7 +1170,7 @@ export component MainWindow inherits Window {
     }
 
     // ===================== UPDATE TOAST =====================
-    if logged-in && (onboarding-step == 0 || onboarding-step > 3): UpdateToast {
+    if logged-in && (onboarding-step == 0 || (onboarding-step > 3 && onboarding-step != 5)): UpdateToast {
         width: min(420px, root.width - 32px);
         x: (root.width - self.width) / 2;
         y: 6px;

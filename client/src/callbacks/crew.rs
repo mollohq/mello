@@ -106,7 +106,9 @@ pub fn wire(ctx: &AppContext) {
                     return;
                 };
 
-                if app.get_onboarding_step() < 4 {
+                if crate::onboarding::OnboardingState::from_step(app.get_onboarding_step())
+                    != crate::onboarding::OnboardingState::Done
+                {
                     // A crew created at step 1 replaces the invite (#68).
                     crate::onboarding_invite::clear(&app, &s);
                     app.set_onboarding_invite_error(slint::SharedString::new());

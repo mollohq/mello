@@ -44,8 +44,10 @@ pub fn handle(ctx: &AppContext, event: Event) {
                 .map(|c| c.id.clone())
                 .collect();
 
-            let step = ctx.app.get_onboarding_step();
-            if step <= 3 && !is_append {
+            let in_onboarding =
+                crate::onboarding::OnboardingState::from_step(ctx.app.get_onboarding_step())
+                    != crate::onboarding::OnboardingState::Done;
+            if in_onboarding && !is_append {
                 let onboard_count = crews.len().min(5);
                 let model: Vec<CrewData> = crews[..onboard_count]
                     .iter()
@@ -384,9 +386,11 @@ pub fn handle(ctx: &AppContext, event: Event) {
         }
         Event::CrewInviteResolved { code, invite } => {
             log::info!(
-                "[invite] resolved: crew={} id={}",
+                "[invite] resolved: crew={} id={} members={} inviter={:?}",
                 invite.crew_name,
                 invite.crew_id,
+                invite.member_count,
+                invite.inviter.as_ref().map(|p| p.display_name.as_str()),
             );
             // A fresh install joins the crew in onboarding, not in the modal.
             if crate::onboarding_invite::opens_onboarding(&ctx.app, &ctx.settings.borrow()) {

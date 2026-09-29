@@ -1,16 +1,8 @@
 use std::rc::Rc;
 
 use crate::app_context::AppContext;
-use crate::converters::make_initials;
+use crate::converters::{avatar_color_index, make_initials};
 use crate::StreamCardData;
-
-fn avatar_color_index(seed: &str) -> i32 {
-    if seed.is_empty() {
-        return 0;
-    }
-
-    (seed.bytes().fold(0u32, |acc, b| acc.wrapping_add(b as u32)) % 5) as i32
-}
 
 pub fn sync_active_stream_cards(ctx: &AppContext) {
     let mut cards: Vec<StreamCardData> = Vec::new();

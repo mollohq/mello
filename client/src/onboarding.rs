@@ -32,6 +32,10 @@ pub enum OnboardingState {
     Loading,
     /// Step 1: choose a crew to join, or create one.
     PickCrew,
+    /// A fresh install opened from an invite link: who invited the user, to
+    /// which crew, and what comes next. "Join" opens step 2; "Not now" opens
+    /// step 1 and forgets the invite. It shows no step indicator.
+    InviteWelcome,
     /// Step 2: nickname and avatar.
     PickAvatar,
     /// Step 3: link an identity. Required: step 3 has no skip.
@@ -49,8 +53,12 @@ pub enum Input {
     /// A crew was chosen, or creation of a new one was started.
     CrewChosen,
     /// A fresh install was opened from an invite link and the invite
-    /// resolved. The invited crew is the choice, so step 1 is skipped (#68).
+    /// resolved. The welcome screen shows the invite; step 1 is skipped (#68).
     InviteResolved,
+    /// "Join" on the welcome screen: the invited crew is the choice.
+    InviteAccepted,
+    /// "Not now" on the welcome screen: the user picks a crew at step 1.
+    InviteDeclined,
     /// The account now exists (`OnboardingReady`).
     AccountReady,
     /// An identity was linked. This is the only way out of step 3.
@@ -80,6 +88,7 @@ impl OnboardingState {
             1 => Self::PickCrew,
             2 => Self::PickAvatar,
             3 => Self::LinkIdentity,
+            5 => Self::InviteWelcome,
             _ => Self::Done,
         }
     }
@@ -91,13 +100,29 @@ impl OnboardingState {
             Self::PickAvatar => 2,
             Self::LinkIdentity => 3,
             Self::Done => 4,
+            // After `Done`: steps 0..=4 were written by earlier builds and
+            // keep their numbers. An earlier build reads 5 as `Done`.
+            Self::InviteWelcome => 5,
+        }
+    }
+
+    /// The position in the flow, for "backwards only" checks. Not the
+    /// numeric step: `InviteWelcome` is 5 there, but it comes before step 2.
+    fn order(self) -> u8 {
+        match self {
+            Self::Loading => 0,
+            Self::PickCrew => 1,
+            Self::InviteWelcome => 2,
+            Self::PickAvatar => 3,
+            Self::LinkIdentity => 4,
+            Self::Done => 5,
         }
     }
 
     /// Does this state render anything on its own?
     ///
     /// `Loading` does not: `main.slint` shows onboarding only for steps 1..=3
-    /// and the app only when logged in. Any path that can rest here without a
+    /// and 5 (`InviteWelcome`), and the app only when logged in. Any path that can rest here without a
     /// session shows the user an empty window.
     pub fn renders_without_session(self) -> bool {
         !matches!(self, Self::Loading | Self::Done)
@@ -119,8 +144,11 @@ impl OnboardingState {
             (Loading, DiscoverySettled) => PickCrew,
 
             (PickCrew, CrewChosen) => PickAvatar,
-            // Before the account exists only: the invite chooses the crew.
-            (Loading | PickCrew | PickAvatar, InviteResolved) => PickAvatar,
+            // Before the account exists only: the welcome screen shows the
+            // invite, and the user chooses there.
+            (Loading | PickCrew | InviteWelcome | PickAvatar, InviteResolved) => InviteWelcome,
+            (InviteWelcome, InviteAccepted) => PickAvatar,
+            (InviteWelcome, InviteDeclined) => PickCrew,
 
             // The account exists but onboarding is not finished: the user
             // must still link an identity.
@@ -140,7 +168,7 @@ impl OnboardingState {
 
             // The step indicator only goes backwards, never forwards past work
             // the user has not done.
-            (current, GoBackTo(target)) if target.to_step() < current.to_step() => target,
+            (current, GoBackTo(target)) if target.order() < current.order() => target,
 
             (current, _) => current,
         }
@@ -165,6 +193,9 @@ impl OnboardingState {
             Self::Loading => &[Effect::DiscoverCrews],
             // Nothing to pick without the crew list.
             Self::PickCrew => &[Effect::DiscoverCrews],
+            // The screen shows the stored invite. From Settings, so a
+            // restart shows it again without a network call.
+            Self::InviteWelcome => &[Effect::ShowInvite],
             // Continue is gated on a chosen avatar, and the step shows mic and
             // speaker pickers.
             Self::PickAvatar => &[Effect::LoadAvatarGrid, Effect::ListAudioDevices],
@@ -174,9 +205,10 @@ impl OnboardingState {
 
     /// Every state, for exhaustive tests.
     #[cfg(any(test, feature = "testkit"))]
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::Loading,
         Self::PickCrew,
+        Self::InviteWelcome,
         Self::PickAvatar,
         Self::LinkIdentity,
         Self::Done,
@@ -192,6 +224,8 @@ pub enum Effect {
     LoadAvatarGrid,
     /// Enumerate microphones and speakers.
     ListAudioDevices,
+    /// Show the invite stored in Settings on the welcome screen.
+    ShowInvite,
 }
 
 /// Handles needed to run [`Effect`]s.
@@ -203,6 +237,7 @@ pub enum Effect {
 /// three.
 #[derive(Clone)]
 pub struct EffectCtx {
+    pub settings: Rc<RefCell<crate::Settings>>,
     pub cmd_tx: tokio::sync::mpsc::UnboundedSender<mello_core::Command>,
     pub avatar_state: std::sync::Arc<std::sync::Mutex<crate::avatar::AvatarGridState>>,
     pub avatar_shuffle_timer: Rc<RefCell<Option<slint::Timer>>>,
@@ -212,6 +247,7 @@ pub struct EffectCtx {
 impl EffectCtx {
     pub fn from_ctx(ctx: &AppContext) -> Self {
         Self {
+            settings: ctx.settings.clone(),
             cmd_tx: ctx.cmd_tx.clone(),
             avatar_state: ctx.avatar_state.clone(),
             avatar_shuffle_timer: ctx.avatar_shuffle_timer.clone(),
@@ -234,6 +270,7 @@ pub fn run_entry_effects(app: &crate::MainWindow, fx: &EffectCtx, state: Onboard
             Effect::ListAudioDevices => {
                 let _ = fx.cmd_tx.send(mello_core::Command::ListAudioDevices);
             }
+            Effect::ShowInvite => crate::onboarding_invite::show_stored(app, &fx.settings),
             Effect::LoadAvatarGrid => {
                 *fx.avatar_state.lock().unwrap() = crate::avatar::AvatarGridState::new();
                 crate::callbacks::onboarding::load_avatar_grid(
@@ -295,6 +332,9 @@ pub fn apply_to(
 /// Also refreshes `has-device-account`, which decides whether step 1 offers
 /// "I already have an account" (#67). Every entry into step 1 passes here, so
 /// the entry cannot read a stale value.
+///
+/// Also ends the invite path on step 1, at startup and when onboarding is
+/// done. The invite path has two steps, not three: it skips step 1.
 fn write_state(
     app: &crate::MainWindow,
     settings: &Rc<RefCell<crate::Settings>>,
@@ -303,6 +343,13 @@ fn write_state(
     app.set_onboarding_step(state.to_step());
     let mut s = settings.borrow_mut();
     app.set_has_device_account(s.has_device_account());
+    if matches!(
+        state,
+        OnboardingState::Loading | OnboardingState::PickCrew | OnboardingState::Done
+    ) {
+        s.onboarding_via_invite = false;
+    }
+    app.set_onboarding_invite_path(s.onboarding_via_invite);
     s.onboarding_step = state.to_step() as u8;
     s.save();
 }
@@ -321,6 +368,26 @@ pub fn advance_with(
 /// [`advance_with`] for callers that already hold an [`AppContext`].
 pub fn advance(ctx: &AppContext, input: Input) {
     advance_with(&ctx.app, &ctx.settings, &EffectCtx::from_ctx(ctx), input);
+}
+
+/// Startup: resume the persisted step, or restore the session when onboarding
+/// is done.
+pub fn start(ctx: &AppContext) {
+    let step = ctx.settings.borrow().onboarding_step;
+    let state = OnboardingState::from_step(step as i32);
+    // A welcome screen with no stored invite has nothing to show.
+    let state = crate::onboarding_invite::resume_state(&ctx.settings.borrow(), state);
+    // By state, not by number: the welcome screen is 5, after `Done` (4).
+    if state == OnboardingState::Done {
+        log::info!("[auth] onboarding done — attempting session restore");
+        let _ = ctx.cmd_tx.send(mello_core::Command::TryRestore);
+    } else {
+        log::info!("[auth] onboarding in progress — resuming {state:?}");
+    }
+    // Before resume: an invite link on a fresh install resolves ahead of
+    // crew discovery and opens the welcome screen (#68).
+    crate::onboarding_invite::dispatch_at_startup(ctx, state);
+    resume(ctx, state);
 }
 
 /// Enter a state directly, running its effects — used at startup to resume the
@@ -364,6 +431,8 @@ mod tests {
         Input::DiscoverySettled,
         Input::CrewChosen,
         Input::InviteResolved,
+        Input::InviteAccepted,
+        Input::InviteDeclined,
         Input::AccountReady,
         Input::IdentitySettled,
         Input::SessionRestored,
@@ -385,7 +454,7 @@ mod tests {
     /// Settings written by an older or newer build must not strand the user.
     #[test]
     fn unknown_steps_decode_to_done() {
-        for step in [4, 5, 9, 127, -1] {
+        for step in [4, 6, 9, 127, -1] {
             assert_eq!(
                 OnboardingState::from_step(step),
                 OnboardingState::Done,
@@ -557,14 +626,20 @@ mod tests {
     }
 
     /// #68: an invite link on a fresh install skips step 1, from the startup
-    /// wait or from step 1. After the account exists it changes nothing.
+    /// wait or from step 1: it opens the welcome screen. After the account
+    /// exists it changes nothing.
     #[test]
     fn a_resolved_invite_skips_step_one_only_before_the_account_exists() {
-        for state in [OnboardingState::Loading, OnboardingState::PickCrew] {
+        for state in [
+            OnboardingState::Loading,
+            OnboardingState::PickCrew,
+            OnboardingState::InviteWelcome,
+            OnboardingState::PickAvatar,
+        ] {
             assert_eq!(
                 state.next(Input::InviteResolved),
-                OnboardingState::PickAvatar,
-                "{state:?} + InviteResolved must open step 2"
+                OnboardingState::InviteWelcome,
+                "{state:?} + InviteResolved must open the welcome screen"
             );
         }
         for state in [OnboardingState::LinkIdentity, OnboardingState::Done] {
@@ -574,6 +649,77 @@ mod tests {
                 "{state:?}: the account exists; the join modal handles the invite"
             );
         }
+    }
+
+    /// The welcome screen has two ways out: "Join" opens step 2, "Not now"
+    /// opens step 1.
+    #[test]
+    fn the_welcome_screen_opens_step_two_or_step_one() {
+        assert_eq!(
+            OnboardingState::InviteWelcome.next(Input::InviteAccepted),
+            OnboardingState::PickAvatar
+        );
+        assert_eq!(
+            OnboardingState::InviteWelcome.next(Input::InviteDeclined),
+            OnboardingState::PickCrew
+        );
+        // A late crew list does not move the user off the welcome screen.
+        assert_eq!(
+            OnboardingState::InviteWelcome.next(Input::DiscoverySettled),
+            OnboardingState::InviteWelcome
+        );
+    }
+
+    /// "Join" and "Not now" belong to the welcome screen. From any other
+    /// state they change nothing.
+    #[test]
+    fn welcome_inputs_do_nothing_elsewhere() {
+        for state in OnboardingState::ALL {
+            if state == OnboardingState::InviteWelcome {
+                continue;
+            }
+            for input in [Input::InviteAccepted, Input::InviteDeclined] {
+                assert_eq!(state.next(input), state, "{state:?} + {input:?}");
+            }
+        }
+    }
+
+    /// The welcome screen is numbered 5, after `Done` (4), so that settings
+    /// of earlier builds keep their meaning. "Backwards only" must follow the
+    /// flow, not the number: from the welcome screen nothing is backwards
+    /// except step 1 and the startup wait.
+    #[test]
+    fn the_step_indicator_cannot_jump_forward_from_the_welcome_screen() {
+        for target in [
+            OnboardingState::PickAvatar,
+            OnboardingState::LinkIdentity,
+            OnboardingState::Done,
+        ] {
+            assert_eq!(
+                OnboardingState::InviteWelcome.next(Input::GoBackTo(target)),
+                OnboardingState::InviteWelcome,
+                "GoBackTo({target:?}) from the welcome screen is a forward jump"
+            );
+        }
+        assert_eq!(
+            OnboardingState::PickAvatar.next(Input::GoBackTo(OnboardingState::InviteWelcome)),
+            OnboardingState::InviteWelcome,
+            "the welcome screen comes before step 2"
+        );
+    }
+
+    /// A restart on the welcome screen shows the invite again. The screen
+    /// reads it from Settings, so it must declare that as its entry effect.
+    #[test]
+    fn the_welcome_screen_shows_the_stored_invite_on_entry() {
+        assert_eq!(
+            OnboardingState::InviteWelcome.entry_effects(),
+            &[Effect::ShowInvite]
+        );
+        assert_eq!(
+            OnboardingState::from_step(5),
+            OnboardingState::InviteWelcome
+        );
     }
 
     /// Stray events must not teleport a user mid-signup.

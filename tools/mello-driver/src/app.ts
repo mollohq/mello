@@ -21,8 +21,16 @@ export type AppState = {
   link_error: string;
   /** A sign-in or link is in progress (the spinner shows). */
   login_loading: boolean;
-  /** Onboarding step 2: the crew of the invite link that the user joins. */
+  /** Onboarding step 2 and the welcome screen: the crew of the invite link. */
   onboarding_invite_crew_name: string;
+  /** The welcome screen: who made the invite. Empty when there is none. */
+  onboarding_invite_inviter: string;
+  /** The invite welcome screen (onboarding step 5) is on screen. */
+  invite_welcome: boolean;
+  /** Onboarding skipped step 1 for an invite: two steps, not three. */
+  onboarding_invite_path: boolean;
+  /** The join modal: who made the invite. Empty when there is none. */
+  join_crew_inviter: string;
   /** Onboarding step 1: why the invite link could not be used. */
   onboarding_invite_error: string;
   active_crew_id: string;

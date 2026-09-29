@@ -23,10 +23,41 @@ export async function createCrewAtStep1(app: App, crewName: string, visibility: 
   await app.waitFor("onboarding step 2", (s) => s.onboarding_step === 2);
 }
 
+function check(ok: unknown, what: string): void {
+  if (!ok) throw new DriverError(`expectation failed: ${what}`);
+}
+
 /**
- * A fresh install opened from an invite link skips step 1 (#68): it opens
- * step 2, which names the invited crew. Waits for that step 2 and checks the
- * crew name is on screen.
+ * A fresh install opened from an invite link skips step 1 (#68): it opens the
+ * welcome screen. Waits for it and checks that the inviter and the crew are
+ * on screen. With no `inviter`, checks only the crew.
+ */
+export async function inviteWelcome(app: App, crewName: string, inviter?: string): Promise<void> {
+  const s = await app.waitFor(
+    `the invite welcome screen for ${crewName}`,
+    (st) => st.screen === "onboarding" && st.invite_welcome && st.onboarding_invite_crew_name === crewName,
+    30_000,
+  );
+  check(!s.join_crew_modal_open, "no join modal on the welcome screen");
+  check(await app.text("YOU'RE INVITED"), `the welcome screen says "YOU'RE INVITED"`);
+  check(await app.text(crewName), `the welcome screen shows the crew "${crewName}"`);
+  if (inviter !== undefined) {
+    check(s.onboarding_invite_inviter === inviter, `the inviter is "${inviter}", got "${s.onboarding_invite_inviter}"`);
+    check(await app.text(`${inviter} invited you to join`), `the welcome screen says "${inviter} invited you to join"`);
+  }
+  check(!(await app.text("STEP 0")), "the welcome screen has no step indicator");
+}
+
+/** The welcome screen: "Join {crew}" opens step 2, which is step 1 of 2. */
+export async function joinFromWelcome(app: App, crewName: string): Promise<void> {
+  await app.click(`Join ${crewName}`);
+  await inviteAtStep2(app, crewName);
+  check(await app.text("STEP 01 / 02"), `step 2 shows "STEP 01 / 02": the invite skipped step 1`);
+}
+
+/**
+ * Step 2 after the welcome screen: it names the invited crew. Waits for that
+ * step 2 and checks the crew name is on screen.
  */
 export async function inviteAtStep2(app: App, crewName: string): Promise<void> {
   await app.waitFor(
@@ -34,7 +65,7 @@ export async function inviteAtStep2(app: App, crewName: string): Promise<void> {
     (s) => s.screen === "onboarding" && s.onboarding_step === 2 && s.onboarding_invite_crew_name === crewName,
     30_000,
   );
-  if (!(await app.text(crewName))) throw new DriverError(`expectation failed: step 2 shows the invited crew "${crewName}"`);
+  check(await app.text(crewName), `step 2 shows the invited crew "${crewName}"`);
 }
 
 /** Step 2: pick an avatar and a nickname, which creates the account and moves to step 3. */
@@ -75,11 +106,19 @@ export async function onboardWithNewCrew(
 }
 
 /**
- * A fresh install opened from an invite link: step 2 names the crew, step 3
- * links email, and the app opens with the invited crew as the only crew.
+ * A fresh install opened from an invite link: the welcome screen names the
+ * crew, "Join" opens step 2, step 3 links email, and the app opens with the
+ * invited crew as the only crew.
  */
-export async function onboardFromInvite(app: App, crewName: string, nickname: string, avatar = 2): Promise<Credentials> {
-  await inviteAtStep2(app, crewName);
+export async function onboardFromInvite(
+  app: App,
+  crewName: string,
+  nickname: string,
+  avatar = 2,
+  inviter?: string,
+): Promise<Credentials> {
+  await inviteWelcome(app, crewName, inviter);
+  await joinFromWelcome(app, crewName);
   await profileAtStep2(app, nickname, avatar);
   const creds = await linkEmailAtStep3(app, nickname);
   await app.waitFor(`crew ${crewName} in the sidebar`, (s) => s.crews.includes(crewName));

@@ -250,7 +250,7 @@ The poll loop (`poll_loop.rs`, 50ms timer) calls `ipc_listener.try_recv()` each 
 
 On startup, `extract_deep_link()` parses `argv[1]` into a `DeepLink` and stores it in `AppContext::pending_deep_link`.
 
-**Fresh install** (no session, no device account, onboarding before the account exists): a join link is resolved at once, before an account exists, and onboarding skips step 1. Finalize joins the crew by its invite code. See [01-CLIENT.md](../01-CLIENT.md) §6.2. File: `client/src/onboarding_invite.rs`.
+**Fresh install** (no session, no device account, onboarding before the account exists): a join link is resolved at once, before an account exists. Onboarding skips step 1 and opens the welcome screen. It names the inviter and the crew. "Join {crew}" opens step 2, and finalize joins the crew by its invite code. "Not now" opens step 1 and forgets the invite. See [01-CLIENT.md](../01-CLIENT.md) §6.2. File: `client/src/onboarding_invite.rs`.
 
 **Any other case:** the link is dispatched after authentication completes:
 
@@ -375,6 +375,12 @@ When a mockup in `designs/` disagrees with `theme.slint`, `theme.slint` wins.
 
 An **invite frame** wraps the client. The frame is not from the client: it
 carries the wordmark, the inviter, the crew name and the install button.
+
+The frame also has an **"Open in m3llo"** button. It opens `mello://join/{code}`
+for a guest who has the app installed. After a download, the same button reads
+"Installed? Open m3llo". The installed app then shows the welcome screen
+([01-CLIENT.md](../01-CLIENT.md) §6.2). The download URL has no `?invite=`
+parameter.
 
 ### 9.3 Joining voice
 
@@ -557,6 +563,5 @@ Overview tab.
 - Invite link in crew discovery or public directory
 - A `guest_policy` control in crew settings
 
-**Partly addressed:** deferred deep link. The lounge appends `?invite={code}` to
-the download URL. The client does not read it yet, so a guest who installs still
-has to open the link again.
+- Deferred deep link. The installer does not carry the code. The lounge's
+  "Open in m3llo" button (§9) opens the link in the installed app instead.

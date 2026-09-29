@@ -52,6 +52,28 @@ pub fn wire(ctx: &AppContext) {
         });
     }
 
+    // --- Onboarding: the invite welcome screen ---
+    {
+        let app_weak = ctx.app.as_weak();
+        let s = ctx.settings.clone();
+        let fx = crate::onboarding::EffectCtx::from_ctx(ctx);
+        ctx.app.on_onboarding_invite_accepted(move || {
+            if let Some(app) = app_weak.upgrade() {
+                crate::onboarding_invite::join(&app, &s, &fx);
+            }
+        });
+    }
+    {
+        let app_weak = ctx.app.as_weak();
+        let s = ctx.settings.clone();
+        let fx = crate::onboarding::EffectCtx::from_ctx(ctx);
+        ctx.app.on_onboarding_invite_declined(move || {
+            if let Some(app) = app_weak.upgrade() {
+                crate::onboarding_invite::decline(&app, &s, &fx);
+            }
+        });
+    }
+
     // --- Onboarding: create crew ---
     {
         let app_weak = ctx.app.as_weak();
