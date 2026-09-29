@@ -2537,6 +2537,53 @@ fn active_crew_name_follows_the_active_crew() {
     assert_eq!(h.app().get_active_crew_name(), "");
 }
 
+/// ★ Regression: the crew menu is a PopupWindow. The e2e driver, like a
+/// screen reader, presses its items through the default accessibility action,
+/// because a pointer click by element position misses inside a popup. The
+/// items answered only a click, so "Add channel" did nothing.
+#[test]
+fn crew_menu_add_channel_answers_the_accessibility_action() {
+    use crate::CrewData;
+
+    let mut h = Harness::new();
+    h.emit(Event::LoggedIn {
+        user: sample_user(),
+    });
+    h.app()
+        .set_crews(slint::ModelRc::new(slint::VecModel::from(vec![CrewData {
+            id: "crew-1".into(),
+            name: "M3LLO CREW".into(),
+            ..Default::default()
+        }])));
+    crate::converters::set_active_crew(h.app(), "crew-1");
+    h.app().set_can_manage_channels(true);
+    h.pump();
+
+    h.click_label("Crew menu");
+    let items = h.controls_labelled("Add channel");
+    assert_eq!(
+        items.len(),
+        1,
+        "the open crew menu shows one \"Add channel\""
+    );
+    items[0].invoke_accessible_default_action();
+    h.pump();
+
+    assert!(
+        h.app().get_crew_settings_open(),
+        "the accessibility action on \"Add channel\" opens crew settings"
+    );
+    assert_eq!(
+        h.app().get_crew_settings_active_tab(),
+        1,
+        "crew settings open on the channels tab"
+    );
+    assert!(
+        h.controls_labelled("Leave crew").is_empty(),
+        "the action closes the crew menu, as a click on an item does"
+    );
+}
+
 /// The quality pills in the STREAM menu and the window picker write one
 /// property. The quick path — STREAM with a game detected — used to send a
 /// hardcoded Medium, so the pills were a lie on the path most people take.

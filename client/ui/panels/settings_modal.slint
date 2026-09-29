@@ -56,6 +56,9 @@ export component DeviceDropdown inherits Rectangle {
         }
     }
 
+    // A pointer click by element position misses inside a PopupWindow, so
+    // each item also takes the default accessibility action. The action
+    // closes the list, as a click on an item does.
     dropdown-popup := PopupWindow {
         x: 0;
         y: 52px;
@@ -117,6 +120,11 @@ export component DeviceDropdown inherits Rectangle {
                     item-hover := TouchArea {
                         accessible-role: button;
                         accessible-label: dev.name;
+                        accessible-action-default => {
+                            selected-name = dev.name;
+                            device-selected(dev.id);
+                            dropdown-popup.close();
+                        }
                         clicked => {
                             selected-name = dev.name;
                             device-selected(dev.id);
